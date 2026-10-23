@@ -40,7 +40,7 @@ def seconds_ns(value):
         raise JitAnalysisError(f"Invalid duration in seconds: {value!r}") from error
 
 
-def parse_recording(events, role):
+def parse_recording(events, role, *, require_final=False):
     groups = defaultdict(list)
     count = 0
     ended = False
@@ -53,7 +53,7 @@ def parse_recording(events, role):
                 raise JitAnalysisError(f"{role}: incomplete reader output")
             ended = True
             continue
-        if kind not in ("anchor", "phase", "compilation", "deoptimization", "data_loss", "setting"):
+        if kind not in ("recording", "anchor", "phase", "compilation", "deoptimization", "data_loss", "setting"):
             raise JitAnalysisError(f"{role}: unknown record type {kind!r}")
         groups[kind].append(event)
         count += 1
@@ -61,6 +61,17 @@ def parse_recording(events, role):
         raise JitAnalysisError(f"{role}: missing reader end; output may be truncated")
     if groups["data_loss"]:
         raise JitAnalysisError(f"{role}: jdk.DataLoss occurred")
+    if len(groups["recording"]) != 1:
+        raise JitAnalysisError(f"{role}: missing or duplicate recording coverage")
+    bounds = groups["recording"][0]
+    coverage_start = integer(bounds, "start_epoch_ns", 1)
+    coverage_end = integer(bounds, "end_epoch_ns", 1)
+    if coverage_start >= coverage_end:
+        raise JitAnalysisError(f"{role}: invalid recording coverage")
+    if type(bounds.get("final_chunk")) is not bool:
+        raise JitAnalysisError(f"{role}: missing final chunk evidence")
+    if require_final and not bounds["final_chunk"]:
+        raise JitAnalysisError(f"{role}: recording has no final JVM-shutdown chunk")
     settings = defaultdict(list)
     for event in groups["setting"]:
         settings[(event.get("event"), event.get("name"))].append(event.get("value"))
@@ -80,6 +91,10 @@ def parse_recording(events, role):
     origin = integer(anchor, "timestamp_ns", 1)
     if upper < lower:
         raise JitAnalysisError(f"{role}: reversed anchor bounds")
+    guaranteed_start = upper + coverage_start - origin
+    guaranteed_end = lower + coverage_end - origin
+    if not -(2**63) <= guaranteed_start < guaranteed_end <= 2**63 - 1:
+        raise JitAnalysisError(f"{role}: invalid mapped recording coverage")
     ids = set()
     for event in groups["compilation"] + groups["deoptimization"]:
         timestamp = integer(event, "timestamp_ns", 1)
@@ -120,6 +135,8 @@ def parse_recording(events, role):
         if current["start_ns"] < previous["end_ns"]:
             raise JitAnalysisError(f"{role}: duplicate or overlapping phase windows")
     return {"anchor_uncertainty_ns": upper - lower,
+            "coverage_start_upper_ns": guaranteed_start, "coverage_end_lower_ns": guaranteed_end,
+            "recording_bounds": bounds,
             "phases": [phase for phase in phases if phase["phase"] == "active"],
             "compilations": groups["mapped_compilations"],
             "deoptimizations": groups["mapped_deoptimizations"]}
@@ -136,8 +153,8 @@ def analyze_recordings(source_events, target_events, *, required_clean=3, warmup
     expected_ns = seconds_ns(expected_active_seconds)
     if expected_ns == 0:
         raise JitAnalysisError("expected_active_seconds must be positive")
-    recordings = {"source": parse_recording(source_events, "source"),
-                  "target": parse_recording(target_events, "target")}
+    recordings = {"source": parse_recording(source_events, "source", require_final=not provisional),
+                  "target": parse_recording(target_events, "target", require_final=not provisional)}
     phases = recordings["source"]["phases"]
     if len(phases) <= warmup_windows:
         raise JitAnalysisError("Missing active measurement windows after warmup")
@@ -149,6 +166,9 @@ def analyze_recordings(source_events, target_events, *, required_clean=3, warmup
     candidates = []
     for index, phase in enumerate(phases[warmup_windows:], warmup_windows + 1):
         start, end = phase["start_ns"], phase["end_ns"]
+        for role, recording in recordings.items():
+            if recording["coverage_start_upper_ns"] > start or recording["coverage_end_lower_ns"] < end:
+                raise JitAnalysisError(f"{role}: recording coverage does not contain candidate window {index}")
         window = {"window_index": index, "candidate_index": index - warmup_windows,
                   "cell_id": phase.get("cell_id", ""), "start_ns": start, "end_ns": end,
                   "roles": {}}
@@ -176,7 +196,10 @@ def analyze_recordings(source_events, target_events, *, required_clean=3, warmup
             "discarded_count": len(discarded), "selected_windows": selected,
             "discarded_windows": discarded, "candidate_windows": candidates,
             "recording_totals": {role: {"compilations": len(r["compilations"]),
-                                        "deoptimizations": len(r["deoptimizations"])}
+                                        "deoptimizations": len(r["deoptimizations"]),
+                                        "coverage_start_upper_ns": r["coverage_start_upper_ns"],
+                                        "coverage_end_lower_ns": r["coverage_end_lower_ns"],
+                                        "bounds": r["recording_bounds"]}
                                  for role, r in recordings.items()},
             "finalization_requirement": "Both JVMs exited successfully; recordings belong to this condition.",
             "limitation": "Live dumps omit compilations that have not completed; final recordings must be rechecked."

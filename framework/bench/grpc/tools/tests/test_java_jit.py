@@ -37,6 +37,10 @@ def recording(windows=9, extras=(), uncertainty=0):
 
 def finish(events):
     rows = [event for event in events if event["type"] != "end"]
+    if not any(event["type"] == "recording" for event in rows):
+        rows.append({"type": "recording", "start_epoch_ns": ORIGIN - SECOND,
+                     "end_epoch_ns": ORIGIN + 1000 * SECOND, "final_chunk": True,
+                     "file_size": 68, "chunks": []})
     return rows + [{"type": "end", "records": len(rows)}]
 
 
@@ -83,7 +87,7 @@ class JavaJitTest(unittest.TestCase):
         self.assertTrue(result["valid"])
         self.assertEqual(30 * SECOND, result["warmup_duration_ns"])
         self.assertEqual([83, 84, 85], [window["window_index"] for window in result["selected_windows"]])
-        rows[5]["duration_ns"] -= 1
+        next(row for row in rows if row.get("phase") == "active")["duration_ns"] -= 1
         with self.assertRaisesRegex(JIT.JitAnalysisError, "warmup duration"):
             self.analyze(finish(rows), warmup_windows=82)
 
@@ -201,6 +205,51 @@ class JavaJitTest(unittest.TestCase):
         self.assertFalse(result["valid"])
         self.assertTrue(result["provisional"])
 
+    def test_complete_chunk_prefix_cannot_certify_uncovered_target_windows(self):
+        target = recording(0)
+        bounds = next(row for row in target if row["type"] == "recording")
+        bounds.update(end_epoch_ns=ORIGIN + 41 * SECOND, final_chunk=False)
+        with self.assertRaisesRegex(JIT.JitAnalysisError, "final JVM-shutdown chunk"):
+            self.analyze(target=target)
+        with self.assertRaisesRegex(JIT.JitAnalysisError, "coverage does not contain"):
+            self.analyze(target=target, provisional=True)
+        bounds["final_chunk"] = True
+        with self.assertRaisesRegex(JIT.JitAnalysisError, "coverage does not contain"):
+            self.analyze(target=target)
+
+    def test_source_and_target_coverage_include_all_candidates_conservatively(self):
+        for role in ("source", "target"):
+            source, target = recording(), recording(0)
+            rows = source if role == "source" else target
+            bounds = next(row for row in rows if row["type"] == "recording")
+            # Final candidate ends at monotonic origin + 59 seconds.
+            bounds["end_epoch_ns"] = ORIGIN + 59 * SECOND
+            self.assertTrue(self.analyze(source, target)["valid"])
+            bounds["end_epoch_ns"] -= 1
+            with self.assertRaisesRegex(JIT.JitAnalysisError, "coverage does not contain"):
+                self.analyze(source, target)
+        target = recording(0, uncertainty=2)
+        bounds = next(row for row in target if row["type"] == "recording")
+        bounds["start_epoch_ns"] = ORIGIN + 42 * SECOND - 1
+        with self.assertRaisesRegex(JIT.JitAnalysisError, "coverage does not contain"):
+            self.analyze(target=target)
+        bounds["start_epoch_ns"] -= 1
+        self.assertTrue(self.analyze(target=target)["valid"])
+
+    def test_snapshot_final_flag_is_required_only_for_final_analysis(self):
+        source, target = recording(), recording(0)
+        for rows in (source, target):
+            next(row for row in rows if row["type"] == "recording")["final_chunk"] = False
+        self.assertTrue(self.analyze(source, target, provisional=True)["complete"])
+        with self.assertRaisesRegex(JIT.JitAnalysisError, "final JVM-shutdown chunk"):
+            self.analyze(source, target)
+
+    def test_missing_recording_coverage_fails_closed(self):
+        rows = [row for row in recording() if row["type"] not in ("recording", "end")]
+        rows.append({"type": "end", "records": len(rows)})
+        with self.assertRaisesRegex(JIT.JitAnalysisError, "recording coverage"):
+            self.analyze(rows)
+
     def test_missing_jfr_writes_invalid_result_and_returns_nonzero(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -241,6 +290,69 @@ public class Fixture {
             (root / "truncated.jfr").write_bytes((root / "fixture.jfr").read_bytes()[:100])
             with self.assertRaises(JIT.JitAnalysisError):
                 JIT.read_pair(root / "truncated.jfr", root / "fixture.jfr")
+
+    @unittest.skipUnless(shutil.which("java") and shutil.which("javac"), "JDK required")
+    def test_real_final_jfr_rejects_complete_prefix_and_bad_chunk_headers(self):
+        source = '''
+import java.nio.file.Path;
+import jdk.jfr.*;
+public class FinalFixture {
+ @Name("measure.MonotonicAnchor") static class Anchor extends Event {long lowerNs; long upperNs;}
+ @Name("measure.Phase") static class Phase extends Event {String phase; String cellId; long startNs; long durationNs;}
+ public static void main(String[] args) throws Exception {
+  new Phase().commit();
+  Anchor a=new Anchor();a.lowerNs=System.nanoTime();a.begin();a.upperNs=System.nanoTime();a.commit();
+  FlightRecorder.getFlightRecorder().getRecordings().get(0).dump(Path.of(args[0]));
+  Phase p=new Phase();p.phase="active";p.cellId="final";p.startNs=System.nanoTime();p.durationNs=1;p.commit();
+ }
+}
+'''
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "FinalFixture.java").write_text(source)
+            subprocess.run([JIT.java_tool("javac"), str(root / "FinalFixture.java")], check=True, capture_output=True)
+            final = root / "final.jfr"
+            subprocess.run([JIT.java_tool("java"),
+                            f"-XX:StartFlightRecording=settings={TOOLS / 'jit' / 'compilation.jfc'},filename={final},dumponexit=true",
+                            "-cp", str(root), "FinalFixture", str(root / "snapshot.jfr")],
+                           check=True, capture_output=True)
+            data = final.read_bytes()
+            first_size = int.from_bytes(data[8:16], "big")
+            self.assertLess(first_size, len(data), "Fixture must contain a complete prefix plus a later chunk")
+            prefix = root / "prefix.jfr"
+            prefix.write_bytes(data[:first_size])
+            evidence = JIT.read_pair(final, prefix)
+            options = {"required_clean": 1, "warmup_windows": 0,
+                       "minimum_warmup_seconds": 0, "expected_active_seconds": "0.000000001"}
+            # Compilation activity can vary; the complete recording must pass structural/coverage checks.
+            JIT.analyze_recordings(evidence["source"], evidence["source"], **options)
+            with self.assertRaisesRegex(JIT.JitAnalysisError, "final JVM-shutdown chunk"):
+                JIT.analyze_recordings(evidence["source"], evidence["target"], **options)
+            with self.assertRaisesRegex(JIT.JitAnalysisError, "coverage does not contain"):
+                JIT.analyze_recordings(evidence["source"], evidence["target"], provisional=True, **options)
+            mutations = {}
+            altered = bytearray(data)
+            altered[0] = 0
+            mutations["magic"] = altered
+            altered = bytearray(data)
+            altered[4:6] = (3).to_bytes(2, "big")
+            mutations["version"] = altered
+            altered = bytearray(data)
+            altered[8:16] = (len(data) + 1).to_bytes(8, "big")
+            mutations["size"] = altered
+            altered = bytearray(data)
+            altered[64] = 255
+            mutations["unfinished"] = altered
+            altered = bytearray(data)
+            first_end = int.from_bytes(data[32:40], "big") + int.from_bytes(data[40:48], "big")
+            altered[first_size + 32:first_size + 40] = (first_end + 1).to_bytes(8, "big")
+            mutations["coverage-gap"] = altered
+            for name, altered in mutations.items():
+                with self.subTest(header=name):
+                    broken = root / f"{name}.jfr"
+                    broken.write_bytes(altered)
+                    with self.assertRaises(JIT.JitAnalysisError):
+                        JIT.read_pair(final, broken)
 
 
 if __name__ == "__main__":
