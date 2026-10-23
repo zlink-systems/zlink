@@ -407,3 +407,34 @@ test('custom JSON replacement preserves holder, key order and strict value valid
   assert.throws(() => json.stringifyFrameworkJsonV1(0, undefined, () => { throw failure; }),
     error => error === failure);
 });
+
+function nativeReplyParts(header, payload) { return [header, payload]; }
+
+test('service reply allocates only its final multipart array', async t => {
+  if (runAllocationTest(t)) return;
+  const { fixture } = require('./fixtures/raw-mesh-close');
+  const wire = require('../../packages/framework/dist/runtime/foundation/service-wire-m6a-codec');
+  const f = fixture();
+  const payload = Buffer.alloc(1024, 7);
+  const header = wire.encodeReplyHeader(1n, 0, 0);
+  let captured;
+  const request = { correlation: 1n, reply(parts) { captured = parts; } };
+  const reply = () => f.runtime.reply(request, payload);
+  const control = () => nativeReplyParts(header, payload);
+  try {
+    for (let index = 0; index < 1000; index++) { reply(); control(); }
+    const baseline = await trackedCodecAllocations('/node-envelope-codec-cost.test.js', control);
+    const allocations = await trackedCodecAllocations('/runtime/foundation/raw-service-mesh-runtime.js', reply);
+    const actual = allocationTotal(allocations);
+    const expected = baseline.get('nativeReplyParts').objects;
+    t.diagnostic(`1000 calls: final-array=${expected}, reply=${actual} objects`);
+    assert.deepEqual(captured[0], header);
+    assert.equal(captured[1], payload);
+    assert.ok(actual <= expected, `${actual} allocations exceed the final array's ${expected}`);
+    const unreadablePayload = new Proxy({}, { get() { assert.fail('error reply must not encode a payload'); } });
+    const { RequestResult } = require('../../packages/framework/dist/runtime/backend/runtime-values');
+    f.runtime.reply(request, unreadablePayload, RequestResult.TimedOut, 0);
+    assert.equal(captured.length, 1);
+    assert.deepEqual(captured[0], wire.encodeReplyHeader(1n, RequestResult.TimedOut, 0));
+  } finally { await f.backend.close(); }
+});
