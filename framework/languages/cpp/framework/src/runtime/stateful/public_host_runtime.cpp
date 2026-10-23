@@ -7238,18 +7238,13 @@ task_t<std::size_t> public_host_runtime_t::dispatch_ready (
     (void) _transport->expire_requests (foundation::operation_registry_t::clock_t::now ());
     count += co_await dispatch_user_spot_operations ();
 
-    std::vector<stateful::object_inventory_t> stateful_owners;
+    std::vector<stateful::object_ref_t> stateful_owners;
     if (accept_application_receive && _stateful_dispatch && standalone) {
-        const auto local_node_id =
+        auto local_node_id =
           zlink::routing_id_t::from (_transport->topology ().local_descriptor ().node_routing_id)
             .to_string ();
-        stateful_owners = co_await _objects.inventory_async ();
-        std::erase_if (stateful_owners, [&] (const auto &item) {
-            return item.owner.node_id != local_node_id
-                   || (item.state != stateful::object_state_t::ready
-                       && item.state != stateful::object_state_t::moving
-                       && item.state != stateful::object_state_t::recovering);
-        });
+        stateful_owners =
+          co_await _objects.application_owner_refs_async (std::move (local_node_id));
     }
     auto next_stateful_owner = stateful_owners.begin ();
     receive_batch_budget_t budget;
@@ -7319,9 +7314,8 @@ task_t<std::size_t> public_host_runtime_t::dispatch_ready (
 
         if (accept_application_receive && !application_dispatch_started && _stateful_dispatch) {
             while (!application_dispatch_started && next_stateful_owner != stateful_owners.end ()) {
-                const auto &item = *next_stateful_owner++;
-                application_dispatch_started =
-                  co_await dispatch_stateful_owner (item.owner, dispatch);
+                const auto &owner = *next_stateful_owner++;
+                application_dispatch_started = co_await dispatch_stateful_owner (owner, dispatch);
                 if (application_dispatch_started)
                     ++count;
             }

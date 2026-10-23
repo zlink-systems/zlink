@@ -1379,6 +1379,24 @@ std::vector<logical_timer_t> stateful_object_runtime_t::timers (const object_ref
 }
 
 
+task_t<std::vector<object_ref_t>>
+stateful_object_runtime_t::application_owner_refs_async (std::string local_node_id) const
+{
+    return _lane.run_task ([this, local_node_id = std::move (local_node_id)] {
+        std::vector<object_ref_t> result;
+        for (const auto &[_, object] : _objects) {
+            if (object.reference.node_id != local_node_id
+                || (object.queue.application.empty () && !object.queue.yielded_continuation))
+                continue;
+            const auto state = state_on_lane (object);
+            if (state == object_state_t::ready || state == object_state_t::moving
+                || state == object_state_t::recovering)
+                result.push_back (object.reference);
+        }
+        return result;
+    });
+}
+
 task_t<std::vector<object_inventory_t>> stateful_object_runtime_t::inventory_async () const
 {
     return _lane.run_task ([this] { return inventory_on_lane (false); });
