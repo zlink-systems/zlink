@@ -310,7 +310,6 @@ raw_route_port_t::request (const raw_bytes_t &target_routing_id,
             || timeout <= std::chrono::milliseconds::zero ()) {
             throw std::invalid_argument ("raw route request requires target, parts and timeout");
         }
-        auto messages = materialize_binding_parts (std::move (parts));
         std::optional<request_submission_stages_t> stages;
         {
             std::lock_guard lock (*_socket_mutex);
@@ -323,9 +322,10 @@ raw_route_port_t::request (const raw_bytes_t &target_routing_id,
                 admission = _request_receive_source (target_routing_id);
             auto operation =
               std::move (_socket->request (zlink::routing_id_t::from (target_routing_id)))
-                .message (messages[0]);
-            for (std::size_t index = 1; index < messages.size (); ++index) {
-                operation = std::move (operation).message (messages[index]);
+                .message (materialize_binding_part (std::move (parts[0])));
+            for (std::size_t index = 1; index < parts.size (); ++index) {
+                operation = std::move (operation).message (
+                  materialize_binding_part (std::move (parts[index])));
             }
             stages.emplace (submit_request_once (
               [&] { return std::move (operation).timeout (timeout).async (); }));

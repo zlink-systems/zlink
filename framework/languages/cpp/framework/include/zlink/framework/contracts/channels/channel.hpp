@@ -877,14 +877,14 @@ class route_client_t
            request_value] (const std::string &packet_name, std::chrono::milliseconds timeout,
                            const channel_request_call_t::metadata_map_t &metadata)
             -> request_task_t<zlink::message_t> {
+              auto encode_payload = [request_value] (serializer_registry_t &serializers) {
+                  return serializers.template get<TRequest> ().serialize_with_content_type (
+                    *request_value);
+              };
+              // Erased submit consumes this encoder before its first suspension.
               return submit_request_reply_message_erased (
                 state, router_channel_id, target_node_rid, packet_name,
-                std::type_index (typeid (TRequest)),
-                [request_value] (serializer_registry_t &serializers) {
-                    return serializers.template get<TRequest> ().serialize_with_content_type (
-                      *request_value);
-                },
-                timeout, metadata);
+                std::type_index (typeid (TRequest)), std::ref (encode_payload), timeout, metadata);
           });
     }
 
@@ -899,13 +899,14 @@ class route_client_t
            request_value] (const std::string &packet_name, std::chrono::milliseconds timeout,
                            const channel_request_call_t::metadata_map_t &metadata)
             -> request_task_t<zlink::message_t> {
+              auto encode_payload = [request_value] (serializer_registry_t &serializers) {
+                  return serializers.template get<TRequest> ().serialize_with_content_type (
+                    *request_value);
+              };
+              // Erased submit consumes this encoder before its first suspension.
               return submit_channel_request_reply_message_erased (
                 state, channel_name, packet_name, std::type_index (typeid (TRequest)),
-                [request_value] (serializer_registry_t &serializers) {
-                    return serializers.template get<TRequest> ().serialize_with_content_type (
-                      *request_value);
-                },
-                timeout, metadata);
+                std::ref (encode_payload), timeout, metadata);
           });
     }
 

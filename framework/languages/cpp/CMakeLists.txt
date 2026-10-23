@@ -1003,7 +1003,8 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
 
   add_executable(test_cpp_framework_raw_route_port_contract
     tests/Zlink.Framework.ContractTests/test_cpp_framework_raw_route_port_contract.cpp
-    framework/src/runtime/backend/raw_route_port.cpp)
+    framework/src/runtime/backend/raw_route_port.cpp
+    tests/support/allocation_counter.cpp)
   target_compile_features(test_cpp_framework_raw_route_port_contract PRIVATE cxx_std_20)
   target_include_directories(test_cpp_framework_raw_route_port_contract PRIVATE
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/include
@@ -1506,6 +1507,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   function(add_zlink_framework_test target_name source_file labels)
     set(tier "${ARGV3}")
     add_executable(${target_name} ${source_file})
+    zlink_framework_cpp_add_boost_headers(${target_name})
     target_link_libraries(${target_name} PRIVATE zlink::framework)
     target_link_zlink_test_harness(${target_name})
     target_include_directories(${target_name} PRIVATE
@@ -2472,6 +2474,93 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_include_directories(test_cpp_framework_local_enqueue_allocations PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   add_zlink_framework_test(
+    test_cpp_framework_request_reply_cost
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_request_reply_cost.cpp
+    "framework-unit;framework-contract;framework-regression;messaging"
+    "unit")
+  target_sources(test_cpp_framework_request_reply_cost PRIVATE
+    tests/support/allocation_counter.cpp)
+  add_zlink_framework_test(
+    test_cpp_framework_reply_codec_cost
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_reply_codec_cost.cpp
+    "framework-unit;framework-contract;framework-regression;messaging"
+    "unit")
+  target_sources(test_cpp_framework_reply_codec_cost PRIVATE
+    tests/support/allocation_counter.cpp)
+  target_include_directories(test_cpp_framework_reply_codec_cost PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  add_zlink_framework_test(
+    test_cpp_framework_management_cost
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_management_cost.cpp
+    "framework-unit;framework-contract;framework-regression;messaging"
+    "unit")
+  target_sources(test_cpp_framework_management_cost PRIVATE
+    tests/support/allocation_counter.cpp)
+  target_include_directories(test_cpp_framework_management_cost PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND NOT ZLINK_FRAMEWORK_CPP_SHARED)
+    add_zlink_framework_test(
+      test_cpp_framework_idle_receive_cost
+      tests/Zlink.Framework.UnitTests/test_cpp_framework_idle_receive_cost.cpp
+      "framework-unit;framework-contract;framework-regression;messaging"
+      "unit")
+    target_include_directories(test_cpp_framework_idle_receive_cost PRIVATE
+      ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+    target_link_options(test_cpp_framework_idle_receive_cost PRIVATE
+      "-Wl,--wrap=_ZN5zlink9framework6detail19mesh_node_runtime_t14dispatch_readyESt8functionIFvRKNS0_7runtime4host14ready_record_tERKNS5_16receive_record_tESt6vectorINS_9message_tESaISD_EEEEbS3_IFbvEE"
+      "-Wl,--wrap=_ZN5zlink9framework6detail35dispatch_completion_receive_handoffERKSt8functionIFbvEERKPNS1_23completion_dispatcher_tE"
+      "-Wl,--wrap=_ZN5zlink9framework7runtime4host21public_host_runtime_t26wait_for_dispatch_activityENSt6chrono8durationIlSt5ratioILl1ELl1000EEEEbSt8optionalINS4_10time_pointINS4_3_V212steady_clockENS5_IlS6_ILl1ELl1000000000EEEEEEE"
+    )
+  endif()
+  add_zlink_framework_test(
+    test_cpp_framework_receive_dispatch_cost
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_receive_dispatch_cost.cpp
+    "framework-unit;framework-contract;framework-regression;messaging"
+    "unit")
+  target_sources(test_cpp_framework_receive_dispatch_cost PRIVATE
+    tests/support/allocation_counter.cpp)
+  target_include_directories(test_cpp_framework_receive_dispatch_cost PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  target_include_directories(test_cpp_framework_request_reply_cost PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  add_zlink_framework_test(
+    test_cpp_framework_request_encoder_allocations
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_request_encoder_allocations.cpp
+    "framework-unit;framework-contract;framework-regression;messaging"
+    "unit")
+  target_use_zlink_gtest_main(test_cpp_framework_request_encoder_allocations)
+  target_sources(test_cpp_framework_request_encoder_allocations PRIVATE
+    tests/support/allocation_counter.cpp)
+  add_zlink_framework_test(
+    test_cpp_framework_request_call_allocations
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_request_call_allocations.cpp
+    "framework-unit;framework-contract;framework-regression;messaging"
+    "unit")
+  target_use_zlink_gtest_main(test_cpp_framework_request_call_allocations)
+  target_sources(test_cpp_framework_request_call_allocations PRIVATE
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_request_transport.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_request_transport_projection.cpp
+    tests/support/allocation_counter.cpp)
+  target_include_directories(test_cpp_framework_request_call_allocations PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  add_zlink_framework_test(
+    test_cpp_framework_request_snapshots
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_request_snapshots.cpp
+    "framework-unit;framework-contract;framework-regression;messaging"
+    "unit")
+  target_use_zlink_gtest_main(test_cpp_framework_request_snapshots)
+  target_sources(test_cpp_framework_request_snapshots PRIVATE
+    tests/support/allocation_counter.cpp)
+  target_include_directories(test_cpp_framework_request_snapshots PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  add_zlink_framework_test(
+    test_cpp_framework_ambient_scope_cost
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_ambient_scope_cost.cpp
+    "framework-unit;framework-contract;framework-regression;messaging"
+    "unit")
+  target_sources(test_cpp_framework_ambient_scope_cost PRIVATE
+    tests/support/allocation_counter.cpp)
+  add_zlink_framework_test(
     test_cpp_framework_messaging
     tests/Zlink.Framework.UnitTests/test_cpp_framework_messaging.cpp
     "framework-unit;framework-regression;messaging")
@@ -2903,4 +2992,21 @@ if(TARGET zlink_framework_cpp_stage_native_runtime)
       endif()
     endforeach()
   endforeach()
+endif()
+
+if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS AND CMAKE_SYSTEM_NAME STREQUAL "Linux"
+   AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+  add_executable(test_cpp_framework_ready_task
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_ready_task.cpp)
+  target_compile_features(test_cpp_framework_ready_task PRIVATE cxx_std_20)
+  target_link_libraries(test_cpp_framework_ready_task PRIVATE
+    zlink::framework_provider_abstractions Threads::Threads)
+  target_link_options(test_cpp_framework_ready_task PRIVATE
+    "LINKER:--wrap=pthread_mutex_lock"
+    "LINKER:--wrap=_ZNSt18condition_variable10notify_allEv")
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_ready_task
+    COMMAND test_cpp_framework_ready_task
+    LABELS "framework-unit;framework-foundation;execution"
+    TIMEOUT 30)
 endif()

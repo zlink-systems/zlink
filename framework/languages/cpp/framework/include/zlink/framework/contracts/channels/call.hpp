@@ -193,32 +193,27 @@ class channel_request_call_t
   protected:
     template <typename TReply> request_task_t<TReply> start ()
     {
+        if (!_submit) {
+            return request_task_t<TReply> (
+              result_t<TReply>::failure (framework_error_kind_t::protocol_error,
+                                         "request call is not bound to a channel client"));
+        }
         /* `async()` and `yield()` are commonly called on a temporary returned
-         * by MessageBus::request(). Copy every value needed by the coroutine
-         * before the call object can be destroyed. The suspended operation must
-         * own its request state instead of retaining this object's address. */
-        return start_owned<TReply> (_packet_name, _serializers, _submit, _timeout, _metadata);
-    }
-
-    template <typename TReply>
-    static request_task_t<TReply> start_owned (std::string packet_name,
-                                               serializer_registry_t *serializers,
-                                               submit_fn_t submit,
-                                               std::chrono::milliseconds timeout,
-                                               metadata_map_t metadata)
-    {
-        if (!submit) {
-            co_return result_t<TReply>::failure (framework_error_kind_t::protocol_error,
-                                                 "request call is not bound to a channel client");
+         * by MessageBus::request(). The submit callable runs and returns
+         * before that temporary can be destroyed; every value the operation
+         * keeps afterwards is owned by the returned reply, never by this
+         * object. The reply is the selected operation's terminal decoded once
+         * (submit/completion §9, hot path E5); no task wraps it again. */
+        try {
+            auto selected = _submit (_packet_name, _timeout, _metadata);
+            return detail::public_request_reply<TReply> (
+              selected, [serializers = _serializers] (const result_t<zlink::message_t> &reply) {
+                  return decode<TReply> (serializers, reply.value ());
+              });
         }
-        zlink::message_t reply;
-        auto held = detail::held_serial_turn_await_scheduler ();
-        auto pending = submit (packet_name, timeout, metadata);
-        if (held) {
-            pending = detail::reschedule_task (std::move (pending), std::move (held));
+        catch (...) {
+            return request_task_t<TReply> (detail::current_exception_result<TReply> ());
         }
-        reply = co_await detail::request_submission (std::move (pending));
-        co_return decode<TReply> (serializers, reply);
     }
 
     template <typename TReply>

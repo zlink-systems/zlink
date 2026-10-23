@@ -4101,20 +4101,18 @@ task_t<result_t<runtime::messaging::message_parts_t>>
 mesh_node_runtime_t::await_request_reply (const host::pending_operation_t &operation,
                                           std::string_view operation_name)
 {
-    std::optional<result_t<host::operation_completion_t>> completion;
-    try {
-        completion =
-          result_t<host::operation_completion_t>::success (co_await await_completion (operation));
-    }
-    catch (const std::exception &) {
-        completion = detail::result_access_t::failure<host::operation_completion_t> (
-          std::current_exception ());
-    }
-    if (auto failure = request_completion_failure (*completion, operation_name))
-        co_return detail::result_access_t::failure<runtime::messaging::message_parts_t> (
-          std::move (failure));
-    co_return result_t<runtime::messaging::message_parts_t>::success (
-      runtime::messaging::message_parts_t (std::move (completion->value ().parts)));
+    using reply_result_t = result_t<runtime::messaging::message_parts_t>;
+    auto completion = await_completion (operation);
+    return detail::project_task_terminal<reply_result_t> (
+      completion, [operation_name] (const result_t<host::operation_completion_t> &result) {
+          auto failure = request_completion_failure (result, operation_name);
+          auto reply = failure
+                         ? detail::result_access_t::failure<runtime::messaging::message_parts_t> (
+                             std::move (failure))
+                         : reply_result_t::success (
+                             runtime::messaging::message_parts_t (result.value ().parts));
+          return result_t<reply_result_t>::success (std::move (reply));
+      });
 }
 
 std::optional<zlink::submit_result_t>
@@ -4133,7 +4131,14 @@ task_t<std::optional<zlink::submit_result_t>>
 mesh_node_runtime_t::classify_unknown_node_target (const zlink::routing_id_t &target) const
 {
     if (!_user_spot_store)
-        co_return std::nullopt;
+        return task_t<std::optional<zlink::submit_result_t>> (
+          result_t<std::optional<zlink::submit_result_t>>::success (std::nullopt));
+    return lookup_unknown_node_target (target);
+}
+
+task_t<std::optional<zlink::submit_result_t>>
+mesh_node_runtime_t::lookup_unknown_node_target (zlink::routing_id_t target) const
+{
     try {
         location_page_request_t page;
         for (;;) {
@@ -4217,23 +4222,155 @@ mesh_node_runtime_t::send_to_node (const zlink::routing_id_t &target,
     co_return co_await send_to_node (target, parts, std::vector<std::uint8_t> (encoded));
 }
 
+/* Submission of a known target is the host runtime's own task (hot path E4):
+ * no coroutine wraps it to forward the same result. Only a target unknown to
+ * the topology suspends, for the Location Store classification. A failure
+ * stays the returned task's result, as it was inside a coroutine. */
+template <typename Classified, typename Known, typename Unknown>
+auto mesh_node_runtime_t::dispatch_node_request (const zlink::routing_id_t &target,
+                                                 Classified &&classified,
+                                                 Known &&known,
+                                                 Unknown &&unknown) -> decltype (known ())
+{
+    if (!_node)
+        throw configuration_error ("MeshNode has not started");
+    bool unknown_target = false;
+    if (const auto result = classify_node_target_from_topology (target, unknown_target))
+        return classified (*result);
+    if (unknown_target) {
+        auto classification = classify_unknown_node_target (target);
+        if (!classification.await_ready ())
+            return unknown (std::move (classification));
+        if (const auto result = classification.result ().value ())
+            return classified (*result);
+    }
+    return known ();
+}
+
+namespace
+{
+using node_reply_t = result_t<runtime::messaging::message_parts_t>;
+node_reply_t node_submission_failure (zlink::submit_result_t submitted)
+{
+    if (submitted == zlink::submit_result_t::not_found)
+        return node_reply_t::failure (framework_error_kind_t::not_found,
+                                      "MeshNode request target was not found");
+    if (submitted == zlink::submit_result_t::terminated)
+        return detail::boundary_failure<runtime::messaging::message_parts_t> (
+          detail::boundary_error_t::shutdown, "MeshNode request runtime is stopped");
+    return node_reply_t::failure (runtime::messaging::map_submit_result_error_kind (submitted),
+                                  "MeshNode request was not submitted");
+}
+}
+
+request_task_t<node_reply_t>
+mesh_node_runtime_t::compose_node_request_reply (host::pending_operation_t operation,
+                                                 task_t<zlink::submit_result_t> submission)
+{
+    if (!submission.await_ready ())
+        return await_node_request_submission (std::move (operation), std::move (submission));
+    const auto submitted = submission.result ();
+    if (!submitted)
+        return request_task_t<node_reply_t> (result_t<node_reply_t>::success (
+          detail::result_access_t::failure<runtime::messaging::message_parts_t> (
+            submitted.exception ())));
+    if (submitted.value () != zlink::submit_result_t::ok)
+        return request_task_t<node_reply_t> (
+          result_t<node_reply_t>::success (node_submission_failure (submitted.value ())));
+    auto admitted = std::make_shared<task_completion_source_t<void>> ();
+    auto reply = await_request_reply (operation, "MeshNode request");
+    detail::observe_request_failure (reply, admitted);
+    admitted->complete (result_t<void>::success ());
+    return detail::request_task_access_t::from_admitted_reply (std::move (reply),
+                                                               std::move (admitted));
+}
+
+request_task_t<node_reply_t>
+mesh_node_runtime_t::await_node_request_submission (host::pending_operation_t operation,
+                                                    task_t<zlink::submit_result_t> submission)
+{
+    auto admitted = co_await detail::request_admission_source_t{};
+    observe_request_failure (operation, admitted, "MeshNode request");
+    const auto submitted = co_await submission;
+    if (submitted != zlink::submit_result_t::ok)
+        co_return node_submission_failure (submitted);
+    co_await detail::request_admitted_t{};
+    co_return co_await await_request_reply (operation, "MeshNode request");
+}
+
+request_task_t<node_reply_t>
+mesh_node_runtime_t::request_node_reply (const zlink::routing_id_t &target,
+                                         std::vector<zlink::message_t> parts,
+                                         std::chrono::milliseconds timeout)
+try {
+    return dispatch_node_request (
+      target,
+      [] (zlink::submit_result_t result) {
+          return request_task_t<node_reply_t> (
+            result_t<node_reply_t>::success (node_submission_failure (result)));
+      },
+      [&] {
+          host::pending_operation_t operation;
+          auto submission = _node->request_to_node (target, std::move (parts), operation, timeout);
+          return compose_node_request_reply (operation, std::move (submission));
+      },
+      [&] (auto classification) {
+          return request_unknown_node_reply (target, std::move (parts), timeout,
+                                             std::move (classification));
+      });
+}
+catch (...) {
+    return request_task_t<node_reply_t> (detail::current_exception_result<node_reply_t> ());
+}
+
+request_task_t<node_reply_t> mesh_node_runtime_t::request_unknown_node_reply (
+  zlink::routing_id_t target,
+  std::vector<zlink::message_t> parts,
+  std::chrono::milliseconds timeout,
+  task_t<std::optional<zlink::submit_result_t>> classification)
+{
+    if (const auto classified = co_await classification)
+        co_return node_submission_failure (*classified);
+    host::pending_operation_t operation;
+    auto submission = _node->request_to_node (target, std::move (parts), operation, timeout);
+    co_return co_await detail::request_submission (
+      compose_node_request_reply (operation, std::move (submission)));
+}
+
 task_t<zlink::submit_result_t>
 mesh_node_runtime_t::request_to_node (const zlink::routing_id_t &target,
                                       std::vector<zlink::message_t> parts,
                                       host::pending_operation_t &operation_id,
                                       std::chrono::milliseconds timeout,
                                       std::vector<std::uint8_t> metadata)
-{
-    if (!_node) {
-        throw configuration_error ("MeshNode has not started");
-    }
-    bool unknown_target = false;
-    if (const auto classified = classify_node_target_from_topology (target, unknown_target))
-        co_return *classified;
-    if (unknown_target)
-        if (const auto classified = co_await classify_unknown_node_target (target))
-            co_return *classified;
+try {
     (void) metadata;
+    return dispatch_node_request (
+      target,
+      [] (zlink::submit_result_t result) {
+          return task_t<zlink::submit_result_t> (
+            result_t<zlink::submit_result_t>::success (result));
+      },
+      [&] { return _node->request_to_node (target, std::move (parts), operation_id, timeout); },
+      [&] (auto classification) {
+          return request_to_unknown_node (target, std::move (parts), operation_id, timeout,
+                                          std::move (classification));
+      });
+}
+catch (...) {
+    return task_t<zlink::submit_result_t> (
+      detail::current_exception_result<zlink::submit_result_t> ());
+}
+
+task_t<zlink::submit_result_t> mesh_node_runtime_t::request_to_unknown_node (
+  const zlink::routing_id_t &target,
+  std::vector<zlink::message_t> parts,
+  host::pending_operation_t &operation_id,
+  std::chrono::milliseconds timeout,
+  task_t<std::optional<zlink::submit_result_t>> classification)
+{
+    if (const auto classified = co_await classification)
+        co_return *classified;
     co_return co_await _node->request_to_node (target, std::move (parts), operation_id, timeout);
 }
 
@@ -4243,10 +4380,14 @@ mesh_node_runtime_t::request_to_node (const zlink::routing_id_t &target,
                                       host::pending_operation_t &operation_id,
                                       std::chrono::milliseconds timeout,
                                       const std::map<std::string, std::string> &metadata)
-{
+try {
     const auto encoded = mesh_metadata_codec_t::encode (metadata);
-    co_return co_await request_to_node (target, parts, operation_id, timeout,
-                                        std::vector<std::uint8_t> (encoded));
+    return request_to_node (target, parts, operation_id, timeout,
+                            std::vector<std::uint8_t> (encoded));
+}
+catch (...) {
+    return task_t<zlink::submit_result_t> (
+      detail::current_exception_result<zlink::submit_result_t> ());
 }
 
 task_t<zlink::submit_result_t>
@@ -4276,12 +4417,16 @@ mesh_node_runtime_t::request_to_channel (const std::string &channel_name,
                                          host::pending_operation_t &operation_id,
                                          std::chrono::milliseconds timeout,
                                          std::vector<std::uint8_t> metadata)
-{
+try {
     if (!_node) {
         throw configuration_error ("MeshNode has not started");
     }
     (void) metadata;
-    co_return co_await _node->request_to_channel (channel_name, parts, operation_id, timeout);
+    return _node->request_to_channel (channel_name, parts, operation_id, timeout);
+}
+catch (...) {
+    return task_t<zlink::submit_result_t> (
+      detail::current_exception_result<zlink::submit_result_t> ());
 }
 
 task_t<zlink::submit_result_t>
@@ -4290,10 +4435,14 @@ mesh_node_runtime_t::request_to_channel (const std::string &channel_name,
                                          host::pending_operation_t &operation_id,
                                          std::chrono::milliseconds timeout,
                                          const std::map<std::string, std::string> &metadata)
-{
+try {
     const auto encoded = mesh_metadata_codec_t::encode (metadata);
-    co_return co_await request_to_channel (channel_name, parts, operation_id, timeout,
-                                           std::vector<std::uint8_t> (encoded));
+    return request_to_channel (channel_name, parts, operation_id, timeout,
+                               std::vector<std::uint8_t> (encoded));
+}
+catch (...) {
+    return task_t<zlink::submit_result_t> (
+      detail::current_exception_result<zlink::submit_result_t> ());
 }
 
 task_t<std::size_t>
@@ -4303,11 +4452,15 @@ mesh_node_runtime_t::dispatch_ready (std::function<void (const host::ready_recor
                                      bool accept_application_receive,
                                      std::function<bool ()> next_application_receive)
 {
-    if (!dispatch)
-        throw configuration_error ("MeshNode dispatch callback is required");
-
-    co_return co_await _node->dispatch_ready (std::move (dispatch), accept_application_receive,
-                                              std::move (next_application_receive));
+    try {
+        if (!dispatch)
+            throw configuration_error ("MeshNode dispatch callback is required");
+        return _node->dispatch_ready (std::move (dispatch), accept_application_receive,
+                                      std::move (next_application_receive));
+    }
+    catch (...) {
+        return task_t<std::size_t> (detail::current_exception_result<std::size_t> ());
+    }
 }
 
 host::node_status_t mesh_node_runtime_t::status () const
@@ -4354,12 +4507,12 @@ void mesh_node_runtime_t::configure_relocation_metric_context (
 
 std::string mesh_node_runtime_t::mesh_name () const
 {
-    return _state->lane.run ([&] { return _state->mesh_name; }).get ();
+    return _state->lane.run_sync ([&] { return _state->mesh_name; });
 }
 
 std::chrono::milliseconds mesh_node_runtime_t::default_request_timeout () const
 {
-    return _state->lane.run ([&] { return _state->default_request_timeout; }).get ();
+    return _state->lane.run_sync ([&] { return _state->default_request_timeout; });
 }
 
 std::optional<zlink::routing_id_t> mesh_node_runtime_t::routing_id () const

@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 
+#include "../support/allocation_counter.hpp"
 #include "runtime/backend/raw_dealer_port.hpp"
 #include "runtime/backend/raw_binding_adapter.hpp"
 #include "runtime/backend/raw_route_port.hpp"
@@ -962,9 +963,44 @@ static void verify_request_deadline_preserves_timeout_boundary ()
     assert (settled.exception () == expired.exception ());
 }
 
+void verify_request_materializes_only_the_binding_message_list ()
+{
+    using zlink::framework::tests::count_allocations;
+    zlink::context_t context;
+    zlink::router_socket_t source (context);
+    source.options ().linger (0ms);
+    backend::raw_route_port_t port (source);
+    const auto target = zlink::routing_id_t::from ("request-allocation-missing-peer").to_bytes ();
+    for (const std::size_t part_count : {7u, 11u}) {
+        backend::raw_message_t calibration (part_count);
+        std::vector<zlink::message_t> container;
+        const auto container_bytes = part_count * sizeof (zlink::message_t);
+        const auto container_allocations = count_allocations (
+          [&] { container = backend::materialize_binding_parts (std::move (calibration)); },
+          container_bytes);
+        assert (container_allocations == 1);
+        // A native request owns its multipart list. The transport must not
+        // allocate another list of materialized messages before that list.
+        backend::raw_message_t parts (part_count);
+        std::optional<zlink::framework::task_t<backend::raw_request_completion_t>> pending;
+        const auto observed = count_allocations (
+          [&] { pending.emplace (port.request (target, std::move (parts), 1s)); }, container_bytes);
+        assert (pending->await_ready ());
+        const auto &terminal = pending->result ();
+        assert (terminal && terminal.value ().terminal == zlink::request_result_t::not_connected);
+        std::fprintf (stderr,
+                      "request intermediate message list parts=%zu allocations=%zu expected=0 "
+                      "calibration=%zu\n",
+                      part_count, observed, container_allocations);
+        assert (observed == 0);
+    }
+    port.close ();
+}
+
 int main ()
 {
     zlink::framework::completion_owner_t completion_owner;
+    verify_request_materializes_only_the_binding_message_list ();
     verify_request_deadline_preserves_timeout_boundary ();
     verify_pending_send_route_removal_and_shutdown ();
     verify_immediate_request_has_no_framework_deadline ();
