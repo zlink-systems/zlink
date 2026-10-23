@@ -998,26 +998,30 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     dispatch_application_claim (const std::shared_ptr<application_claim_batch_t> &batch);
     task_t<std::size_t>
     continue_application_claim (std::shared_ptr<application_claim_batch_t> batch,
-                                task_t<void> pending);
+                                std::exception_ptr failure);
     void
     fail_application_claim (const std::shared_ptr<application_claim_batch_t> &batch,
                             std::exception_ptr error,
                             mesh::service_mailbox_settlement_t release_mailbox_reservation = {});
     task_t<bool>
-    dispatch_native_spot (stateful::object_ref_t object,
+    // The awaiting record continuation owns the owner, query and callback.
+    dispatch_native_spot (const stateful::object_ref_t &object,
                           mesh::service_mailbox_t::claim_handle_t slot,
-                          stateful::claimed_ingress_t query,
+                          stateful::claimed_ingress_t &&query,
                           std::shared_ptr<const local_application_dispatch_t> application,
                           std::optional<stateful::retained_relocation_source_t> retained,
-                          mesh::service_mailbox_t::application_dispatch_t dispatch);
+                          const mesh::service_mailbox_t::application_dispatch_t &dispatch);
     task_t<bool> notify_stateful_owner (const stateful::object_ref_t &owner);
     bool claim_stateful_owner (const stateful::object_ref_t &object,
                                const mesh::service_mailbox_t::application_dispatch_t &dispatch);
     task_t<bool>
-    dispatch_stateful_owner (const stateful::object_ref_t &object,
-                             const std::function<void (const ready_record_t &,
-                                                       const receive_record_t &,
-                                                       std::vector<zlink::message_t>)> &dispatch);
+    // A restoring seal is passed by the gate admission that observed it.
+    dispatch_stateful_owner (
+      const stateful::object_ref_t &object,
+      const std::function<void (
+        const ready_record_t &, const receive_record_t &, std::vector<zlink::message_t>)> &dispatch,
+      std::shared_ptr<runtime::serial_execution_queue_t> gate = {},
+      std::shared_ptr<stateful::relocation_seal_binding_t> restoring = {});
     bool
     dispatch_stateful_delivery (const stateful::object_ref_t &object,
                                 stateful::stateful_delivery_t delivery,
