@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #include "allocation_counter.hpp"
 #include "runtime/stateful/public_host_runtime.hpp"
+#include "runtime/stateful/raw_stateful_dispatch.hpp"
 #include "runtime/actors/actor_ref_access.hpp"
 #include <algorithm>
 #include <array>
@@ -11,6 +12,17 @@
 #include "runtime/execution/serial_execution_queue.hpp"
 #include <gtest/gtest.h>
 #include <cstdio>
+
+namespace zlink::framework::runtime::host
+{
+struct public_host_runtime_test_access_t
+{
+    static stateful::raw_stateful_dispatch_t &stateful_dispatch (public_host_runtime_t &host)
+    {
+        return *host._stateful_dispatch;
+    }
+};
+} // namespace zlink::framework::runtime::host
 
 namespace
 {
@@ -193,84 +205,111 @@ TEST (LocalEnqueueAllocations, SuccessfulLocalMessagesOnlyAllocateTheirPublished
     }
     runtime->close ();
 }
+// A Ready Store authority for one native Spot, as the stateful drain fixture.
+struct stateful_spot_fixture_t
+{
+    std::shared_ptr<fw::runtime::in_memory_location_repository_t> store =
+      std::make_shared<fw::runtime::in_memory_location_repository_t> ();
+    fw::runtime::live_location_reader_t reader{*store};
+    fw::runtime::offload_executor_t worker{1, "local-spot-owner"};
+    std::shared_ptr<host::public_host_runtime_t> runtime;
+    fw::runtime::stateful::object_ref_t object;
+    zlink::routing_id_t rid = zlink::routing_id_t::from ("n");
+
+    explicit stateful_spot_fixture_t (fw::runtime::serial_lane_policy_t policy)
+    {
+        using namespace fw;
+        using namespace fw::runtime;
+        const auto lease = std::make_shared<const location_owner_token_t> (
+          std::get<owner_lease_claimed_t> (
+            store->claim_owner_lease ("local-owner", std::chrono::seconds (60)).result ().value ())
+            .token);
+        mesh_node_descriptor_t descriptor;
+        descriptor.mesh_name = "local-allocation";
+        descriptor.rid = rid;
+        descriptor.lifecycle_generation = 1;
+        descriptor.descriptor_revision = 1;
+        descriptor.endpoint = "tcp://127.0.0.1:7188";
+        descriptor.owner_id = lease->owner_id;
+        descriptor.lease_generation = lease->lease_generation;
+        descriptor.object_role = object_role_t::server;
+        descriptor.state = framework_runtime_state_t::serving;
+        descriptor.application_version = 1;
+        descriptor.security_identity = "n";
+        descriptor.activation_concurrency.limit = 1;
+        descriptor.entry_spot_id = "entry";
+        descriptor.object_capabilities.push_back ({placement_object_kind_t::user_spot,
+                                                   "framework.spot",
+                                                   maintenance_policy_kind_t::disabled, false, 0});
+        descriptor.capacity.spots.limit = 1;
+        descriptor.capacity.spot_types.push_back (
+          {placement_object_kind_t::user_spot, "framework.spot", {1, 0, 0}});
+        EXPECT_EQ (store->update_mesh_node (descriptor, location_write_intent_t::new_claim)
+                     .result ()
+                     .value ()
+                     .status,
+                   location_write_status_t::stored);
+        object_reserve_request_t request;
+        request.key = {placement_object_kind_t::user_spot, "stateful"};
+        request.intent.stable_type = "framework.spot";
+        request.target = {descriptor.mesh_name, node_rid_t::from_string ("n"), 1, *lease};
+        request.creating_payload = {std::byte{'c'}};
+        request.capacity_bundle = {
+          0, 1,
+          spot_type_capacity_delta_t{placement_object_kind_t::user_spot, "framework.spot", 1}};
+        request.relocation_policy = detail::factory_relocation_kind_t::disabled;
+        const auto reserved = store->reserve (request).result ().value ();
+        EXPECT_TRUE (std::holds_alternative<object_reserved_t> (reserved));
+        const auto fence = std::get<object_reserved_t> (reserved).fence;
+        const auto ready = encode_user_spot_authority_payload (user_spot_authority_payload_t{
+          .state = user_spot_authority_state_t::ready,
+          .stable_type = "framework.spot",
+          .spot_id = "stateful",
+          .owner_id = lease->owner_id,
+          .owner_lease_generation = static_cast<std::uint64_t> (lease->lease_generation),
+          .mesh_name = descriptor.mesh_name,
+          .node_rid = node_rid_t::from_string ("n"),
+          .node_generation = 1});
+        EXPECT_TRUE (std::holds_alternative<object_committed_t> (
+          store->commit ({request.key, fence, ready}).result ().value ()));
+        runtime = make_host ();
+        runtime->configure_spot_route_fence_resolver ({});
+        runtime->configure_user_spot_operations (store,
+                                                 [] (const auto &, const auto &, const auto &) {
+                                                     return host::user_spot_materialize_result_t{};
+                                                 });
+        runtime->configure_stateful_dispatch ([lease] { return lease; }, &reader);
+        auto gate = std::make_shared<serial_execution_queue_t> (
+          worker, serial_execution_queue_options_t{}, serial_execution_queue_t::error_handler_t{},
+          std::move (policy));
+        runtime->configure_relocation_gate ([gate] (const auto &) {
+            return task_t<std::shared_ptr<serial_execution_queue_t>> (
+              result_t<std::shared_ptr<serial_execution_queue_t>>::success (gate));
+        });
+        object = {stateful::object_kind_t::user_spot, "stateful",           fence.object_generation,
+                  fence.authority_owner_generation,   descriptor.mesh_name, "n"};
+        const auto created =
+          runtime->objects ().begin_reserved_object (object, "framework.spot", {});
+        EXPECT_EQ (created.error, stateful::stateful_error_t::none);
+        EXPECT_EQ (runtime->objects ().commit_create (created.attempt),
+                   stateful::stateful_error_t::none);
+        runtime->start ();
+    }
+
+    ~stateful_spot_fixture_t ()
+    {
+        runtime->close ();
+        worker.drain ();
+    }
+};
+
 TEST (LocalEnqueueAllocations, StatefulSpotSendAndRequestDrainWithStoreAuthority)
 {
     using namespace fw;
     using namespace fw::runtime;
-    auto store = std::make_shared<in_memory_location_repository_t> ();
-    live_location_reader_t reader (*store);
-    const auto lease = std::make_shared<const location_owner_token_t> (
-      std::get<owner_lease_claimed_t> (
-        store->claim_owner_lease ("local-owner", std::chrono::seconds (60)).result ().value ())
-        .token);
-    mesh_node_descriptor_t descriptor;
-    descriptor.mesh_name = "local-allocation";
-    descriptor.rid = zlink::routing_id_t::from ("n");
-    descriptor.lifecycle_generation = 1;
-    descriptor.descriptor_revision = 1;
-    descriptor.endpoint = "tcp://127.0.0.1:7188";
-    descriptor.owner_id = lease->owner_id;
-    descriptor.lease_generation = lease->lease_generation;
-    descriptor.object_role = object_role_t::server;
-    descriptor.state = framework_runtime_state_t::serving;
-    descriptor.application_version = 1;
-    descriptor.security_identity = "n";
-    descriptor.activation_concurrency.limit = 1;
-    descriptor.entry_spot_id = "entry";
-    descriptor.object_capabilities.push_back ({placement_object_kind_t::user_spot, "framework.spot",
-                                               maintenance_policy_kind_t::disabled, false, 0});
-    descriptor.capacity.spots.limit = 1;
-    descriptor.capacity.spot_types.push_back (
-      {placement_object_kind_t::user_spot, "framework.spot", {1, 0, 0}});
-    ASSERT_EQ (store->update_mesh_node (descriptor, location_write_intent_t::new_claim)
-                 .result ()
-                 .value ()
-                 .status,
-               location_write_status_t::stored);
-    object_reserve_request_t request;
-    request.key = {placement_object_kind_t::user_spot, "stateful"};
-    request.intent.stable_type = "framework.spot";
-    request.target = {descriptor.mesh_name, node_rid_t::from_string ("n"), 1, *lease};
-    request.creating_payload = {std::byte{'c'}};
-    request.capacity_bundle = {
-      0, 1, spot_type_capacity_delta_t{placement_object_kind_t::user_spot, "framework.spot", 1}};
-    request.relocation_policy = detail::factory_relocation_kind_t::disabled;
-    const auto reserved = store->reserve (request).result ().value ();
-    ASSERT_TRUE (std::holds_alternative<object_reserved_t> (reserved));
-    const auto fence = std::get<object_reserved_t> (reserved).fence;
-    const auto ready = encode_user_spot_authority_payload (user_spot_authority_payload_t{
-      .state = user_spot_authority_state_t::ready,
-      .stable_type = "framework.spot",
-      .spot_id = "stateful",
-      .owner_id = lease->owner_id,
-      .owner_lease_generation = static_cast<std::uint64_t> (lease->lease_generation),
-      .mesh_name = descriptor.mesh_name,
-      .node_rid = node_rid_t::from_string ("n"),
-      .node_generation = 1});
-    ASSERT_TRUE (std::holds_alternative<object_committed_t> (
-      store->commit ({request.key, fence, ready}).result ().value ()));
-    auto runtime = make_host ();
-    runtime->configure_spot_route_fence_resolver ({});
-    runtime->configure_user_spot_operations (store, [] (const auto &, const auto &, const auto &) {
-        return host::user_spot_materialize_result_t{};
-    });
-    runtime->configure_stateful_dispatch ([lease] { return lease; }, &reader);
-    offload_executor_t worker (1, "local-spot-owner");
-    auto gate = std::make_shared<serial_execution_queue_t> (
-      worker, serial_execution_queue_options_t{}, serial_execution_queue_t::error_handler_t{},
-      serial_lane_policy_t::spot_wide ());
-    runtime->configure_relocation_gate ([gate] (const auto &) {
-        return task_t<std::shared_ptr<serial_execution_queue_t>> (
-          result_t<std::shared_ptr<serial_execution_queue_t>>::success (gate));
-    });
-    const stateful::object_ref_t object{
-      stateful::object_kind_t::user_spot, "stateful",           fence.object_generation,
-      fence.authority_owner_generation,   descriptor.mesh_name, "n"};
-    const auto created = runtime->objects ().begin_reserved_object (object, "framework.spot", {});
-    ASSERT_EQ (created.error, stateful::stateful_error_t::none);
-    ASSERT_EQ (runtime->objects ().commit_create (created.attempt),
-               stateful::stateful_error_t::none);
-    runtime->start ();
+    stateful_spot_fixture_t fixture (serial_lane_policy_t::spot_wide ());
+    auto &runtime = fixture.runtime;
+    const auto &object = fixture.object;
     auto spot = runtime->get_or_create_spot ("stateful");
     std::vector<zlink::message_t> parts;
     parts.push_back (zlink::message_t::from ("payload"));
@@ -282,12 +321,12 @@ TEST (LocalEnqueueAllocations, StatefulSpotSendAndRequestDrainWithStoreAuthority
             const auto submitted =
               request_message
                 ? spot
-                    .request_to_spot (descriptor.rid, "stateful", object.object_generation, parts,
+                    .request_to_spot (fixture.rid, "stateful", object.object_generation, parts,
                                       operation, zlink::send_flags_t::none,
                                       std::chrono::seconds (30))
                     .result ()
                     .value ()
-                : spot.send_to_spot (descriptor.rid, "stateful", object.object_generation, parts)
+                : spot.send_to_spot (fixture.rid, "stateful", object.object_generation, parts)
                     .result ()
                     .value ();
             ASSERT_EQ (submitted, zlink::submit_result_t::ok);
@@ -327,7 +366,45 @@ TEST (LocalEnqueueAllocations, StatefulSpotSendAndRequestDrainWithStoreAuthority
                      request_message ? "request" : "send", drain_count / 1000.0,
                      drain_bytes / 1000.0, drain_time.count () / 1000.0);
     }
-    runtime->close ();
-    worker.drain ();
 }
+TEST (LocalEnqueueAllocations, StatefulOwnerClaimWithoutQueuedTurnNeedsNoContinuationFrame)
+{
+    using namespace fw::runtime;
+    using delivery_result_t =
+      std::pair<stateful::stateful_error_t, std::optional<stateful::stateful_delivery_t>>;
+    stateful_spot_fixture_t fixture (serial_lane_policy_t::spot_wide ());
+    auto &objects = fixture.runtime->objects ();
+    auto &dispatch = host::public_host_runtime_test_access_t::stateful_dispatch (*fixture.runtime);
+    // A ready claim stores at most its delivery result; a continuation frame holds that
+    // result and every local live across its awaits, so it is larger on any ABI.
+    const auto result_storage = fw::tests::measure_allocations ([] {
+        const fw::task_t<delivery_result_t> ready (fw::result_t<delivery_result_t>::success ({}));
+        EXPECT_TRUE (ready.await_ready ());
+    });
+    std::function<void ()> before;
+    std::string stable_type;
+    const auto claim_object = [&] {
+        auto claim = objects.try_claim_async (fixture.object, stateful::turn_domain_t::application);
+        ASSERT_TRUE (claim.await_ready ());
+        EXPECT_EQ (claim.result ().value ().first, stateful::stateful_error_t::none);
+        EXPECT_FALSE (claim.result ().value ().second.has_value ());
+    };
+    const auto claim_dispatch = [&] {
+        auto claim = dispatch.try_claim_async (fixture.object, &before, &stable_type);
+        ASSERT_TRUE (claim.await_ready ());
+        EXPECT_EQ (claim.result ().value ().first, stateful::stateful_error_t::none);
+        EXPECT_FALSE (claim.result ().value ().second.has_value ());
+    };
+    claim_object ();
+    claim_dispatch ();
+    const auto object_cost = fw::tests::measure_allocations (claim_object);
+    const auto dispatch_cost = fw::tests::measure_allocations (claim_dispatch);
+    std::printf ("empty owner claim: object allocations=%zu bytes=%zu largest=%zu; "
+                 "dispatch allocations=%zu bytes=%zu largest=%zu; result_storage=%zu\n",
+                 object_cost.count, object_cost.bytes, object_cost.largest, dispatch_cost.count,
+                 dispatch_cost.bytes, dispatch_cost.largest, result_storage.largest);
+    EXPECT_LE (object_cost.largest, result_storage.largest);
+    EXPECT_LE (dispatch_cost.largest, result_storage.largest);
+}
+
 } // namespace

@@ -1060,10 +1060,13 @@ stateful_object_runtime_t::try_claim_async (object_ref_t owner,
                                             std::string *stable_type)
 {
     using claim_t = std::pair<stateful_error_t, std::optional<turn_record_t>>;
-    using wait_t = std::shared_ptr<task_completion_source_t<void>>;
-    for (;;) {
-        auto next = co_await _lane.run_task (
-          [this, &owner, domain, stable_type] () -> std::variant<claim_t, wait_t> {
+    using retry_t = std::pair<std::shared_ptr<task_completion_source_t<void>>, object_ref_t>;
+    using step_t = std::variant<claim_t, retry_t>;
+    // The lane turn owns the reference; only a busy owner hands it back with
+    // the quiescence waiter it registered in that same turn.
+    const auto attempt = [this, domain, stable_type] (object_ref_t owner) {
+        return _lane.run_task (
+          [this, owner = std::move (owner), domain, stable_type] () mutable -> step_t {
               auto claim = claim_on_lane (owner, domain, stable_type);
               if (claim.first != stateful_error_t::none || claim.second)
                   return claim;
@@ -1076,12 +1079,30 @@ stateful_object_runtime_t::try_claim_async (object_ref_t owner,
                   return claim;
               auto waiter = std::make_shared<task_completion_source_t<void>> ();
               _quiescence_waiters.push_back (waiter);
-              return waiter;
+              return retry_t{std::move (waiter), std::move (owner)};
           });
-        if (auto *claim = std::get_if<claim_t> (&next))
-            co_return std::move (*claim);
-        co_await std::get<wait_t> (next)->task ();
+    };
+    auto first = attempt (std::move (owner));
+    // An owner turn that claims or rejects in place needs no continuation frame (#2418).
+    if (first.await_ready ()) {
+        try {
+            if (const auto *claim = std::get_if<claim_t> (&first.result ().value ()))
+                return task_t<claim_t> (result_t<claim_t>::success (*claim));
+        }
+        catch (...) {
+            return task_t<claim_t> (detail::current_exception_result<claim_t> ());
+        }
     }
+    return [] (decltype (attempt) attempt, task_t<step_t> pending) -> task_t<claim_t> {
+        for (;;) {
+            auto step = co_await pending;
+            if (auto *claim = std::get_if<claim_t> (&step))
+                co_return std::move (*claim);
+            auto &retry = std::get<retry_t> (step);
+            co_await retry.first->task ();
+            pending = attempt (std::move (retry.second));
+        }
+    }(attempt, std::move (first));
 }
 
 stateful_error_t stateful_object_runtime_t::complete_claim (const object_ref_t &owner,
