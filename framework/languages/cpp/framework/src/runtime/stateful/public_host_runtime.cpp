@@ -3113,14 +3113,15 @@ try {
     operation.prepare_for_registration ();
     operation.id = next_operation ();
     const auto host = shared_from_this ();
+    auto target_bytes = target.to_bytes ();
     auto accepted = _transport->request_to_node (
-      target.to_bytes (), encode_application (std::move (parts)), timeout,
+      target_bytes, encode_application (std::move (parts)), timeout,
       [host, operation] (foundation::operation_terminal_t terminal,
                          zlink::message_t payload) mutable {
           host->complete_operation (operation, operation_kind_t::none, terminal,
                                     std::move (payload));
       });
-    auto classify = [host, &target] (const result_t<bool> &result) {
+    auto classify = [host, target_bytes = std::move (target_bytes)] (const result_t<bool> &result) {
         if (!result)
             return detail::result_access_t::failure<zlink::submit_result_t> (result.exception ());
         const auto accepted = result.value ();
@@ -3141,7 +3142,7 @@ try {
             //  TARGET_NOT_FOUND, i.e. NotFound) and Node's
             //  raw-service-mesh-runtime.ts knownTarget gate (unknown RID ->
             //  RequestResult.NotFound).
-            if (!host->_transport->topology ().peer (target.to_bytes ()))
+            if (!host->_transport->topology ().peer (target_bytes))
                 return result_t<zlink::submit_result_t>::success (
                   zlink::submit_result_t::not_found);
         }

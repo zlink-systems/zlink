@@ -490,10 +490,7 @@ TEST (RequestCallAllocations, HostNodeRequestAddsNoCoroutineAboveTheRawTask)
         pending.emplace (
           host->request_to_node (target, std::move (parts), operation, std::chrono::seconds (1)));
     });
-    const auto classification_count = fw::tests::count_allocations (
-      [&] { (void) host->transport ().topology ().peer (target.to_bytes ()); });
-    const auto baseline = raw_count + target_count + callback_count + result_count + payload_count
-                          + classification_count;
+    const auto baseline = raw_count + target_count + callback_count + result_count + payload_count;
     std::printf (
       "host request: measured=%zu baseline=%zu raw=%zu target=%zu callback=%zu result=%zu\n",
       measured, baseline, raw_count, target_count, callback_count, result_count);
