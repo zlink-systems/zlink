@@ -674,13 +674,19 @@ decode_actor_reply (const runtime::messaging::message_parts_t &parts)
               "Actor reply requires an unnamed Response or Error");
         if (header.kind () == stream_message_kind_t::error) {
             const auto payload = nlohmann::json::parse (body.to_string ());
+            const auto code = payload.at ("code").get<std::string> ();
+            const auto message = payload.at ("message").get<std::string> ();
             auto error = runtime::messaging::request_failure_mapper_t{}.error_header_exception (
-              payload.at ("code").get<std::string> (), payload.at ("message").get<std::string> (),
-              "Actor request");
+              code, message, "Actor request");
+            if (code != stream_error_code (error.kind ()))
+                return result_t<std::optional<zlink::message_t>>::failure (
+                  framework_error_kind_t::protocol_error,
+                  "Actor Error reply uses an unknown error code");
             runtime::messaging::envelope_header_t context;
             context.metadata = header.metadata ().values ();
             return detail::result_access_t::failure<std::optional<zlink::message_t>> (
-              runtime::messaging::restore_failure_origin (context, std::move (error)));
+              runtime::messaging::restore_failure_origin (
+                context, detail_with_message (std::move (error), message)));
         }
         return result_t<std::optional<zlink::message_t>>::success (std::move (body));
     }
