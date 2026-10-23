@@ -345,3 +345,29 @@ test('JSON parser policies are immutable and reused without per-decode option ob
   assert.equal(Object.isFrozen(channelPolicies[0]), true);
   assert.throws(() => channel.decodeChannelPayload({ header, payload: Buffer.from('{"__proto__":1}') }));
 });
+
+// Compare against V8's own stringify allocations in the same process so the
+// budget follows the runtime's object layout rather than fixed heap bytes.
+function nativeJsonEncoding(value) {
+  return JSON.stringify(value, identityJsonValue);
+}
+function identityJsonValue(_key, value) { return value; }
+function allocationTotal(allocations) {
+  return [...allocations.values()].reduce((sum, entry) => sum + entry.objects, 0);
+}
+
+test('default JSON encoding adds no unused custom-replacer context', async t => {
+  if (runAllocationTest(t)) return;
+  const json = require('../../packages/stream-wire/dist/internal/framework-json-v1');
+  const value = { body: 'x'.repeat(1024) };
+  const encode = () => json.stringifyFrameworkJsonV1(value);
+  const control = () => nativeJsonEncoding(value);
+  for (let index = 0; index < 1000; index++) { encode(); control(); }
+  const baseline = await trackedCodecAllocations('/node-envelope-codec-cost.test.js', control);
+  const allocations = await trackedCodecAllocations('/internal/framework-json-v1.js', encode);
+  const expected = baseline.get('nativeJsonEncoding').objects;
+  const actual = allocationTotal(allocations);
+  t.diagnostic(`1000 calls: native=${expected}, strict=${actual} objects`);
+  assert.equal(encode(), control());
+  assert.ok(actual <= expected, `${actual} strict allocations exceed ${expected} native allocations`);
+});
