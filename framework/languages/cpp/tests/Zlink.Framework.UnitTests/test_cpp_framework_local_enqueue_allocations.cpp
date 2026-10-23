@@ -377,8 +377,7 @@ TEST (LocalEnqueueAllocations, StatefulSpotSendAndRequestDrainWithStoreAuthority
 TEST (LocalEnqueueAllocations, StatefulOwnerClaimWithoutQueuedTurnNeedsNoContinuationFrame)
 {
     using namespace fw::runtime;
-    using delivery_result_t =
-      std::pair<stateful::stateful_error_t, std::optional<stateful::stateful_delivery_t>>;
+    using delivery_result_t = stateful::raw_stateful_dispatch_t::owner_delivery_t;
     stateful_spot_fixture_t fixture (serial_lane_policy_t::spot_wide ());
     auto &objects = fixture.runtime->objects ();
     auto &dispatch = host::public_host_runtime_test_access_t::stateful_dispatch (*fixture.runtime);
@@ -388,19 +387,17 @@ TEST (LocalEnqueueAllocations, StatefulOwnerClaimWithoutQueuedTurnNeedsNoContinu
         const fw::task_t<delivery_result_t> ready (fw::result_t<delivery_result_t>::success ({}));
         EXPECT_TRUE (ready.await_ready ());
     });
-    std::function<void ()> before;
-    std::string stable_type;
     const auto claim_object = [&] {
         auto claim = objects.try_claim_async (fixture.object, stateful::turn_domain_t::application);
         ASSERT_TRUE (claim.await_ready ());
-        EXPECT_EQ (claim.result ().value ().first, stateful::stateful_error_t::none);
-        EXPECT_FALSE (claim.result ().value ().second.has_value ());
+        EXPECT_EQ (claim.result ().value ().error, stateful::stateful_error_t::none);
+        EXPECT_FALSE (claim.result ().value ().turn.has_value ());
     };
     const auto claim_dispatch = [&] {
-        auto claim = dispatch.try_claim_async (fixture.object, &before, &stable_type);
+        auto claim = dispatch.try_claim_async (fixture.object);
         ASSERT_TRUE (claim.await_ready ());
-        EXPECT_EQ (claim.result ().value ().first, stateful::stateful_error_t::none);
-        EXPECT_FALSE (claim.result ().value ().second.has_value ());
+        EXPECT_EQ (claim.result ().value ().error, stateful::stateful_error_t::none);
+        EXPECT_FALSE (claim.result ().value ().delivery.has_value ());
     };
     claim_object ();
     claim_dispatch ();

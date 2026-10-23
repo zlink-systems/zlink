@@ -7314,34 +7314,41 @@ task_t<bool> public_host_runtime_t::dispatch_stateful_owner (
     }
     // The gate admission that observed a restoring seal (native publication or the
     // aborted cut's finish) hands it here; an owner claim without one asks the gate
-    // nothing. The claim's output storage lives in this frame.
+    // nothing, and a ready claim finishes on this stack (#2418).
+    using claim_t = stateful::raw_stateful_dispatch_t::owner_delivery_t;
+    const auto deliver = [this, &object, &dispatch] (claim_t &claim) {
+        return claim.error == stateful::stateful_error_t::none && claim.delivery
+               && dispatch_stateful_delivery (object, std::move (*claim.delivery),
+                                              std::move (claim.before_application_handler),
+                                              std::move (claim.stable_type), dispatch);
+    };
+    try {
+        if (!restoring)
+            return continue_task<bool> (
+              _stateful_dispatch->try_claim_async (object), [deliver] (claim_t claim) {
+                  return task_t<bool> (result_t<bool>::success (deliver (claim)));
+              });
+    }
+    catch (...) {
+        return task_t<bool> (detail::current_exception_result<bool> ());
+    }
+    // Restoring: the prefix enters the FIFO before the seal is released.
     return [] (public_host_runtime_t *self, const stateful::object_ref_t &object,
-               const std::function<void (const ready_record_t &, const receive_record_t &,
-                                         std::vector<zlink::message_t>)> &dispatch,
-               std::shared_ptr<runtime::serial_execution_queue_t> gate,
+               decltype (deliver) deliver, std::shared_ptr<runtime::serial_execution_queue_t> gate,
                std::shared_ptr<stateful::relocation_seal_binding_t> restoring) -> task_t<bool> {
         bool dispatched = false;
         for (;;) {
-            std::function<void ()> before;
-            std::string stable_type;
-            auto [error, delivery] =
-              co_await self->_stateful_dispatch->try_claim_async (object, &before, &stable_type);
-            if (error != stateful::stateful_error_t::none || !delivery) {
-                if (restoring)
-                    (void) co_await gate->release_relocation_seal (std::move (restoring));
+            auto claim = co_await self->_stateful_dispatch->try_claim_async (object);
+            if (claim.error != stateful::stateful_error_t::none || !claim.delivery) {
+                (void) co_await gate->release_relocation_seal (std::move (restoring));
                 co_return dispatched;
             }
-            dispatched =
-              self->dispatch_stateful_delivery (object, std::move (*delivery), std::move (before),
-                                                std::move (stable_type), dispatch)
-              || dispatched;
-            if (!restoring)
-                co_return dispatched;
+            dispatched = deliver (claim) || dispatched;
             // Publication import returns the native claim before the next owner claim.
             // New root handlers remain behind this same seal until the prefix is in the FIFO.
             (void) co_await gate->admit_native_application ({});
         }
-    }(this, object, dispatch, std::move (gate), std::move (restoring));
+    }(this, object, deliver, std::move (gate), std::move (restoring));
 }
 
 bool public_host_runtime_t::claim_stateful_owner (
