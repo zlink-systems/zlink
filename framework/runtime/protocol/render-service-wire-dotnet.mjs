@@ -562,15 +562,7 @@ function logicalDotnetFrame(type) {
         o.encoding === "i64"
           ? "unchecked((long)m.UInt(bytes))"
           : `checked((${intType(o.encoding)})m.UInt(bytes))`,
-      checks = [];
-    if (o.minimum !== undefined)
-      checks.push(
-        `if(value<${lit(o.minimum, o.encoding)})throw Error("${type.name}: range");`,
-      );
-    if (o.maximum !== undefined)
-      checks.push(
-        `if(value>${lit(o.maximum, o.encoding)})throw Error("${type.name}: range");`,
-      );
+      checks = [`if(${integerRange(o, "value")})throw Error("${type.name}: range");`];
     return `    private sealed class ${frame}:LogicalFrame{internal ${frame}(long end):base(end){}internal override void Resume(LogicalMachine m){var context=m.Context;var bytes=m.Take(this,${o.width},true);if(bytes is null)return;var value=${raw};${checks.join("")}${limit}m.Complete(new ${n}(value));}}`;
   }
   if (o.op === "enum") {
@@ -1186,6 +1178,14 @@ process.nextTick(() => {
     process.exitCode = 1;
   }
 });
+// Keep unsigned bounds in one unsigned comparison. In .NET 8 optimized code,
+// the paired lower/upper tests can become an unsigned test against zero.
+function integerRange(o, value) {
+  if (o.encoding === "u64")
+    return `unchecked(${value} - ${lit(o.minimum, o.encoding)}) > ${lit(BigInt(o.maximum) - BigInt(o.minimum), o.encoding)}`;
+  return `${value} < ${lit(o.minimum, o.encoding)} || ${value} > ${lit(o.maximum, o.encoding)}`;
+}
+
 function typeMethods(t) {
   const o = main(t),
     n = id(t.name),
@@ -1201,11 +1201,11 @@ function typeMethods(t) {
   if (o.op === "integer") {
     read = [
       `var raw = reader.${o.encoding.toUpperCase()}();`,
-      `if (raw < ${lit(o.minimum, o.encoding)} || raw > ${lit(o.maximum, o.encoding)}) throw Error("${t.name}: range");`,
+      `if (${integerRange(o, "raw")}) throw Error("${t.name}: range");`,
       `return new(raw);`,
     ];
     write = [
-      `if (value.Value < ${lit(o.minimum, o.encoding)} || value.Value > ${lit(o.maximum, o.encoding)}) throw Error("${t.name}: range");`,
+      `if (${integerRange(o, "value.Value")}) throw Error("${t.name}: range");`,
       `writer.${o.encoding.toUpperCase()}(value.Value);`,
     ];
   } else if (o.op === "enum") {
