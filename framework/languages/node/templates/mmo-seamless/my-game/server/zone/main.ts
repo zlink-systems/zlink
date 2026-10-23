@@ -21,7 +21,7 @@ runHost((_builder, config, mesh) => {
   if (!config.zoneIds || config.zoneCapacity === undefined)
     throw new Error('Zone configuration required');
   const objects = mesh.objects().server();
-  objects.addEntrySpot(Entry);
+  objects.addEntrySpot(Entry, Names.actor);
   objects.addActorFactory(Names.actor, PlayerFactory, (f) => f.preserveStateWith(PlayerRelocation));
   objects.addSpotFactory(Names.zone, Zone, (f) => {
     f.stableTypeLimit(config.zoneCapacity!);

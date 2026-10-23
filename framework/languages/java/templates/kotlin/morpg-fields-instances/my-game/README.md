@@ -1,6 +1,6 @@
 # my-game
 
-A Kotlin MORPG template using public ZLink Framework 0.30.1 packages. Field nodes host four fixed Field User Spots; parties enter dynamically allocated Dungeon User Spots. Player Actors preserve movement state across field boundaries, while Dungeon owns party membership and stage.
+A Kotlin MORPG template using public ZLink Framework 0.30.2 packages. Field nodes host four fixed Field User Spots; parties enter dynamically allocated Dungeon User Spots. Player Actors preserve movement state across field boundaries, while Dungeon owns party membership and stage.
 
 ```mermaid
 flowchart LR
@@ -56,7 +56,7 @@ Non-field scenarios share their party fixture. Selecting reconnect or update alo
 
 ## Known issues
 
-The template targets 0.30.1. Tests against public 0.30.0 encounter an Actor GetOrCreate from Session that does not complete ([#1782](https://github.com/zlink-systems/zlink/issues/1782)). Deferred cross-node join `DATA_LOST` is also a known 0.30.0 defect ([#1729](https://github.com/zlink-systems/zlink/issues/1729)); later join scenarios remain unverified when Actor creation fails. The Kotlin Spot handler registry cannot yet register a runtime `(channelName, topic)` subscription ([#1783](https://github.com/zlink-systems/zlink/issues/1783)), so `server/field/.../border/BorderRoutes.kt` declares one handler per adjacent-field topic; replace it with runtime registration once that API exists. Preserve the first failure and message-flow records. Do not change join timing, transport behavior or assertions to hide a Framework failure.
+The template targets 0.30.2. Tests against public 0.30.0 encounter an Actor GetOrCreate from Session that does not complete ([#1782](https://github.com/zlink-systems/zlink/issues/1782)). Deferred cross-node join `DATA_LOST` is also a known 0.30.0 defect ([#1729](https://github.com/zlink-systems/zlink/issues/1729)); later join scenarios remain unverified when Actor creation fails. The Kotlin Spot handler registry cannot yet register a runtime `(channelName, topic)` subscription ([#1783](https://github.com/zlink-systems/zlink/issues/1783)), so `server/field/.../border/BorderRoutes.kt` declares one handler per adjacent-field topic; replace it with runtime registration once that API exists. Preserve the first failure and message-flow records. Do not change join timing, transport behavior or assertions to hide a Framework failure.
 
 ## Deployment sequence
 

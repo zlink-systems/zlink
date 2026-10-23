@@ -14,7 +14,7 @@ flowchart LR
 
 ## Prerequisites
 
-Docker with Compose v2, and PowerShell 7 for Windows. The included Gradle wrapper downloads Gradle. Maven Central supplies Framework 0.30.1 and binding 1.19.1; versions are declared once in `build.gradle.kts`.
+Docker with Compose v2, and PowerShell 7 for Windows. The included Gradle wrapper downloads Gradle. Maven Central supplies Framework 0.30.2 and binding 1.20.0; versions are declared once in `build.gradle.kts`.
 
 ## Build
 
@@ -59,7 +59,7 @@ The runner validates `zlink.structure.json`, creates its own Redis Compose proje
 
 ## Known issues
 
-Framework 0.30.1 is pending publication. Verification against 0.30.0 reproduced Java deferred JoinSpot DATA_LOST ([#1729](https://github.com/zlink-systems/zlink/issues/1729)), blocking the first Room admission. The template does not compensate for Framework failures. Preserve node stderr, including message-flow diagnostics, when reporting a failure.
+Framework 0.30.2 is pending publication. Verification against 0.30.0 reproduced Java deferred JoinSpot DATA_LOST ([#1729](https://github.com/zlink-systems/zlink/issues/1729)), blocking the first Room admission. The template does not compensate for Framework failures. Preserve node stderr, including message-flow diagnostics, when reporting a failure.
 
 ## Deployment sequence
 

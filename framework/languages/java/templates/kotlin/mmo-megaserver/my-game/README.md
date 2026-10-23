@@ -60,7 +60,7 @@ The runner checks `zlink.structure.json`, creates its own Redis Compose project 
 
 ## Known issues
 
-Windows and Linux validation with Framework 0.30.0 is blocked by deferred cross-node join reporting DATA_LOST ([#1729](https://github.com/zlink-systems/zlink/issues/1729)). Keep the pinned version at 0.30.1 and verify the candidate release before deployment. Do not compensate with application retries or private API calls.
+Windows and Linux validation with Framework 0.30.0 is blocked by deferred cross-node join reporting DATA_LOST ([#1729](https://github.com/zlink-systems/zlink/issues/1729)). Keep the pinned version at 0.30.2 and verify the candidate release before deployment. Do not compensate with application retries or private API calls.
 
 ## Deployment sequence
 
@@ -74,6 +74,6 @@ Message Follow is explicitly set to 30 seconds. The `SAFE_TO_SHUTDOWN` observati
 
 ## 한국어 실행 안내
 
-기본 e2e는 Docker에서 실행합니다. 로컬 process 디버깅은 JDK 25를 준비하고 `--local` 또는 `-Local`로 실행합니다. Docker Compose를 설치한 뒤 이 디렉터리에서 위 Build 명령을 실행합니다. Linux에서는 `./run-e2e.sh`, Windows에서는 `pwsh -NoProfile -File ./run-e2e.ps1`로 전체 시나리오를 검증합니다. 공개 Framework 0.30.1이 게시되어 있어야 기본 버전의 의존성을 받을 수 있습니다.
+기본 e2e는 Docker에서 실행합니다. 로컬 process 디버깅은 JDK 25를 준비하고 `--local` 또는 `-Local`로 실행합니다. Docker Compose를 설치한 뒤 이 디렉터리에서 위 Build 명령을 실행합니다. Linux에서는 `./run-e2e.sh`, Windows에서는 `pwsh -NoProfile -File ./run-e2e.ps1`로 전체 시나리오를 검증합니다. 공개 Framework 0.30.2이 게시되어 있어야 기본 버전의 의존성을 받을 수 있습니다.
 
 실행별 설정과 node 로그는 `.logs/run-<id>/`에 보존됩니다. Region process에 `drain`을 보내고 `SAFE_TO_SHUTDOWN`을 확인한 뒤 `shutdown`을 보냅니다. process 종료 후 같은 설정으로 대체 process를 시작합니다.

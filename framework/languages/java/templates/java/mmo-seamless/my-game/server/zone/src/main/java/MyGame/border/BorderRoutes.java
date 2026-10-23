@@ -1,6 +1,7 @@
 package MyGame.border;
 
 import MyGame.BorderPresence;
+import MyGame.Names;
 import MyGame.Rules;
 import MyGame.zone.Zone;
 
@@ -42,7 +43,7 @@ public final class BorderRoutes {
         handlers.addHandler(type);
     }
 
-    @ZLinkSpotSubscription(topic = TOPIC_1_2)
+    @ZLinkSpotSubscription(channelName = Names.BORDER, topic = TOPIC_1_2)
     public static final class Route1To2
             implements ZLinkSpotSubscriptionHandler<Zone, BorderPresence> {
         public CompletionStage<Void> handle(Zone spot, BorderPresence presence) {
@@ -50,7 +51,7 @@ public final class BorderRoutes {
         }
     }
 
-    @ZLinkSpotSubscription(topic = TOPIC_2_1)
+    @ZLinkSpotSubscription(channelName = Names.BORDER, topic = TOPIC_2_1)
     public static final class Route2To1
             implements ZLinkSpotSubscriptionHandler<Zone, BorderPresence> {
         public CompletionStage<Void> handle(Zone spot, BorderPresence presence) {
@@ -58,7 +59,7 @@ public final class BorderRoutes {
         }
     }
 
-    @ZLinkSpotSubscription(topic = TOPIC_2_3)
+    @ZLinkSpotSubscription(channelName = Names.BORDER, topic = TOPIC_2_3)
     public static final class Route2To3
             implements ZLinkSpotSubscriptionHandler<Zone, BorderPresence> {
         public CompletionStage<Void> handle(Zone spot, BorderPresence presence) {
@@ -66,7 +67,7 @@ public final class BorderRoutes {
         }
     }
 
-    @ZLinkSpotSubscription(topic = TOPIC_3_2)
+    @ZLinkSpotSubscription(channelName = Names.BORDER, topic = TOPIC_3_2)
     public static final class Route3To2
             implements ZLinkSpotSubscriptionHandler<Zone, BorderPresence> {
         public CompletionStage<Void> handle(Zone spot, BorderPresence presence) {
@@ -74,7 +75,7 @@ public final class BorderRoutes {
         }
     }
 
-    @ZLinkSpotSubscription(topic = TOPIC_3_4)
+    @ZLinkSpotSubscription(channelName = Names.BORDER, topic = TOPIC_3_4)
     public static final class Route3To4
             implements ZLinkSpotSubscriptionHandler<Zone, BorderPresence> {
         public CompletionStage<Void> handle(Zone spot, BorderPresence presence) {
@@ -82,7 +83,7 @@ public final class BorderRoutes {
         }
     }
 
-    @ZLinkSpotSubscription(topic = TOPIC_4_3)
+    @ZLinkSpotSubscription(channelName = Names.BORDER, topic = TOPIC_4_3)
     public static final class Route4To3
             implements ZLinkSpotSubscriptionHandler<Zone, BorderPresence> {
         public CompletionStage<Void> handle(Zone spot, BorderPresence presence) {
@@ -90,7 +91,7 @@ public final class BorderRoutes {
         }
     }
 
-    @ZLinkSpotSubscription(topic = TOPIC_4_5)
+    @ZLinkSpotSubscription(channelName = Names.BORDER, topic = TOPIC_4_5)
     public static final class Route4To5
             implements ZLinkSpotSubscriptionHandler<Zone, BorderPresence> {
         public CompletionStage<Void> handle(Zone spot, BorderPresence presence) {
@@ -98,7 +99,7 @@ public final class BorderRoutes {
         }
     }
 
-    @ZLinkSpotSubscription(topic = TOPIC_5_4)
+    @ZLinkSpotSubscription(channelName = Names.BORDER, topic = TOPIC_5_4)
     public static final class Route5To4
             implements ZLinkSpotSubscriptionHandler<Zone, BorderPresence> {
         public CompletionStage<Void> handle(Zone spot, BorderPresence presence) {
@@ -106,7 +107,7 @@ public final class BorderRoutes {
         }
     }
 
-    @ZLinkSpotSubscription(topic = TOPIC_5_6)
+    @ZLinkSpotSubscription(channelName = Names.BORDER, topic = TOPIC_5_6)
     public static final class Route5To6
             implements ZLinkSpotSubscriptionHandler<Zone, BorderPresence> {
         public CompletionStage<Void> handle(Zone spot, BorderPresence presence) {
@@ -114,7 +115,7 @@ public final class BorderRoutes {
         }
     }
 
-    @ZLinkSpotSubscription(topic = TOPIC_6_5)
+    @ZLinkSpotSubscription(channelName = Names.BORDER, topic = TOPIC_6_5)
     public static final class Route6To5
             implements ZLinkSpotSubscriptionHandler<Zone, BorderPresence> {
         public CompletionStage<Void> handle(Zone spot, BorderPresence presence) {

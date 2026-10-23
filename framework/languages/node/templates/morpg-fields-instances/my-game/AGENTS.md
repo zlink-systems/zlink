@@ -2,7 +2,7 @@
 
 ## Project overview
 
-This Node.js 22 (TypeScript, NestJS) project is a MORPG server example in which players move between fixed public fields, form parties in a field, and enter party dungeons. It runs a Session gateway for connections, Field nodes A and B that host the fixed Field Spots, Instance nodes A and B that host Dungeons, and Redis for location and relocation state. `package.json` pins the ZLink Framework and connector packages to `0.30.1`.
+This Node.js 22 (TypeScript, NestJS) project is a MORPG server example in which players move between fixed public fields, form parties in a field, and enter party dungeons. It runs a Session gateway for connections, Field nodes A and B that host the fixed Field Spots, Instance nodes A and B that host Dungeons, and Redis for location and relocation state. `package.json` pins the ZLink Framework and connector packages to `0.30.2`.
 
 The project layout and feature procedure below describe where to add gameplay. The [README](README.md) covers prerequisites, deployment, and known issues in the public packages. [zlink.structure.json](zlink.structure.json) describes the initial node composition and scenarios; Framework and Redis manage object placement at runtime. [한국어](AGENTS.ko.md) provides the same guide in Korean.
 
@@ -198,7 +198,7 @@ The value applies to child processes started from that environment; preserve std
 export ZLINK_DEBUG_FRAMEWORK_RELOCATION=1
 ```
 
-`ZLINK_DEBUG_FRAMEWORK_RELOCATION` is a version-specific diagnostic switch in the public `0.30.1` package, so do not use it as a routing API. Let the runner clean up its own processes and Compose project, preserve cleanup failures, and avoid stopping unrelated processes or containers.
+`ZLINK_DEBUG_FRAMEWORK_RELOCATION` is a version-specific diagnostic switch in the public `0.30.2` package, so do not use it as a routing API. Let the runner clean up its own processes and Compose project, preserve cleanup failures, and avoid stopping unrelated processes or containers.
 
 ## Reporting ZLink defects
 

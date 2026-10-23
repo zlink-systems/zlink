@@ -19,7 +19,7 @@ flowchart LR
 ## Prerequisites
 
 Use Docker Compose v2 and PowerShell 7 on Windows.
-Install the public ZLink Framework 0.30.1 packages specified in `package.json`.
+Install the public ZLink Framework 0.30.2 packages specified in `package.json`.
 Redis ports and node listeners use OS-assigned ports in the e2e runner.
 
 ## Build
@@ -88,7 +88,7 @@ to #1690). Host drain can complete relocation without publishing a
 defect is not assigned an issue number here. WSL drain can also return the
 generic `RelocationFailed` result before completion (#1712/#1725 candidates;
 not confirmed as the same defects). Do not bypass either failure.
-The pinned 0.30.1 packages require verification when available.
+The pinned 0.30.2 packages require verification when available.
 
 ## Deployment sequence
 

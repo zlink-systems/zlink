@@ -2,7 +2,7 @@
 
 ## 프로젝트 개요
 
-이 Kotlin 프로젝트(Java 25 toolchain 위의 Kotlin 2.3.21, Gradle 빌드)는 월드 둘이 독립적으로 동작하고 월드마다 필드 channel을 바꿀 수 있는 MMORPG 예제다. 월드 목록을 HTTP로 제공하는 Accounts node, Session node 둘(`sessionA`·`sessionB`), Channel node 셋(`channelA1`·`channelA2`·`channelB`)과 위치·이전 상태를 저장하는 Redis를 실행한다. `build.gradle.kts`는 ZLink Framework package를 `0.30.1`(`frameworkVersion`)로, ZLink binding을 `1.19.1`(`bindingVersion`)으로 고정한다.
+이 Kotlin 프로젝트(Java 25 toolchain 위의 Kotlin 2.3.21, Gradle 빌드)는 월드 둘이 독립적으로 동작하고 월드마다 필드 channel을 바꿀 수 있는 MMORPG 예제다. 월드 목록을 HTTP로 제공하는 Accounts node, Session node 둘(`sessionA`·`sessionB`), Channel node 셋(`channelA1`·`channelA2`·`channelB`)과 위치·이전 상태를 저장하는 Redis를 실행한다. `build.gradle.kts`는 ZLink Framework package를 `0.30.2`(`frameworkVersion`)로, ZLink binding을 `1.20.0`(`bindingVersion`)으로 고정한다.
 
 게임 기능은 아래의 프로젝트 구성과 확장 절차에 따라 추가한다. 실행 환경·배포·공개 package의 알려진 문제는 [README](README.md)가 설명한다. 초기 node 구성과 scenario 목록은 [zlink.structure.json](zlink.structure.json)에 있으며, 실행 중 객체의 위치는 Framework와 Redis가 관리한다.
 
@@ -190,7 +190,7 @@ $env:ZLINK_JAVA_STREAM_TRACE = "1"
 export ZLINK_JAVA_STREAM_TRACE=1
 ```
 
-`ZLINK_JAVA_STREAM_TRACE`는 공개 `0.30.1` package에 있는 버전별 진단 switch이므로 routing API로 사용하지 않는다. runner는 자신이 만든 process와 Compose project를 정리하고 Docker socket 제어 경로를 유지하며, 정리 오류도 보존하고 다른 작업의 process나 container는 중단하지 않는다.
+`ZLINK_JAVA_STREAM_TRACE`는 공개 `0.30.2` package에 있는 버전별 진단 switch이므로 routing API로 사용하지 않는다. runner는 자신이 만든 process와 Compose project를 정리하고 Docker socket 제어 경로를 유지하며, 정리 오류도 보존하고 다른 작업의 process나 container는 중단하지 않는다.
 
 ## ZLink 결함 보고
 

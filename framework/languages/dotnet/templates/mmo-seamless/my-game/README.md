@@ -106,7 +106,7 @@ Every e2e run validates the composition before starting nodes. `--check-structur
 
 ## Known issues
 
-The pinned public Framework `0.30.0` has the following defects. The template preserves the assertions and reports failures; it does not compensate with retries or delays. Fixes for #1690 and #1691 are scheduled for `0.30.1`.
+The pinned public Framework `0.30.0` has the following defects. The template preserves the assertions and reports failures; it does not compensate with retries or delays. Fixes for #1690 and #1691 are scheduled for `0.30.2`.
 
 - [#1697](https://github.com/zlink-systems/zlink/issues/1697): Zone startup is blocked because startup validation calls `ZoneSpot.Configure()` with an empty `Context.SpotId`. The public Spot contract requires an instance identity, which this application uses to select adjacent-zone subscription topics. This fails with `ArgumentOutOfRangeException` through `ZLinkSpotStartupValidator.ValidateAsync` before scenarios run. No fixed topic is registered to compensate; the Framework must provide the contracted Context.
 

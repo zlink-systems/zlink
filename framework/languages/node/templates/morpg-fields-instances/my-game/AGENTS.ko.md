@@ -2,7 +2,7 @@
 
 ## 프로젝트 개요
 
-이 Node.js 22(TypeScript, NestJS) 프로젝트는 플레이어가 고정된 공용 필드 사이를 이동하고, 필드에서 파티를 구성해 파티 던전에 입장하는 MORPG server 예제다. 연결을 처리하는 Session gateway, 고정 Field Spot을 호스팅하는 Field node A·B, Dungeon을 호스팅하는 Instance node A·B와 위치·relocation 상태를 저장하는 Redis를 실행한다. `package.json`은 ZLink Framework와 connector package를 `0.30.1`으로 고정한다.
+이 Node.js 22(TypeScript, NestJS) 프로젝트는 플레이어가 고정된 공용 필드 사이를 이동하고, 필드에서 파티를 구성해 파티 던전에 입장하는 MORPG server 예제다. 연결을 처리하는 Session gateway, 고정 Field Spot을 호스팅하는 Field node A·B, Dungeon을 호스팅하는 Instance node A·B와 위치·relocation 상태를 저장하는 Redis를 실행한다. `package.json`은 ZLink Framework와 connector package를 `0.30.2`으로 고정한다.
 
 게임 기능은 아래의 프로젝트 구성과 확장 절차에 따라 추가한다. 실행 환경·배포·공개 package의 알려진 문제는 [README](README.md)가 설명한다. 초기 node 구성과 scenario 목록은 [zlink.structure.json](zlink.structure.json)에 있으며, 실행 중 객체의 위치는 Framework와 Redis가 관리한다. 같은 내용의 영어판은 [AGENTS.md](AGENTS.md)다.
 
@@ -198,7 +198,7 @@ $env:ZLINK_DEBUG_FRAMEWORK_RELOCATION = "1"
 export ZLINK_DEBUG_FRAMEWORK_RELOCATION=1
 ```
 
-`ZLINK_DEBUG_FRAMEWORK_RELOCATION`은 공개 `0.30.1` package에 있는 버전별 진단 switch이므로 routing API로 사용하지 않는다. runner는 자신이 만든 process와 Compose project를 정리하며, 정리 오류도 보존하고 다른 작업의 process나 container는 중단하지 않는다.
+`ZLINK_DEBUG_FRAMEWORK_RELOCATION`은 공개 `0.30.2` package에 있는 버전별 진단 switch이므로 routing API로 사용하지 않는다. runner는 자신이 만든 process와 Compose project를 정리하며, 정리 오류도 보존하고 다른 작업의 process나 container는 중단하지 않는다.
 
 ## ZLink 결함 보고
 

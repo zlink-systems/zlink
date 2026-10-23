@@ -30,32 +30,32 @@ object BorderRoutes {
     }
 }
 
-@ZLinkSpotSubscription(topic = BorderTopics.FIELD1_TO2)
+@ZLinkSpotSubscription(channelName = Names.BORDER, topic = BorderTopics.FIELD1_TO2)
 class Route1To2 : ZLinkSuspendingSpotSubscriptionHandler<Field, BorderPresence> {
     override suspend fun handle(spot: Field, event: BorderPresence) = spot.showBorder(event)
 }
 
-@ZLinkSpotSubscription(topic = BorderTopics.FIELD2_TO1)
+@ZLinkSpotSubscription(channelName = Names.BORDER, topic = BorderTopics.FIELD2_TO1)
 class Route2To1 : ZLinkSuspendingSpotSubscriptionHandler<Field, BorderPresence> {
     override suspend fun handle(spot: Field, event: BorderPresence) = spot.showBorder(event)
 }
 
-@ZLinkSpotSubscription(topic = BorderTopics.FIELD2_TO3)
+@ZLinkSpotSubscription(channelName = Names.BORDER, topic = BorderTopics.FIELD2_TO3)
 class Route2To3 : ZLinkSuspendingSpotSubscriptionHandler<Field, BorderPresence> {
     override suspend fun handle(spot: Field, event: BorderPresence) = spot.showBorder(event)
 }
 
-@ZLinkSpotSubscription(topic = BorderTopics.FIELD3_TO2)
+@ZLinkSpotSubscription(channelName = Names.BORDER, topic = BorderTopics.FIELD3_TO2)
 class Route3To2 : ZLinkSuspendingSpotSubscriptionHandler<Field, BorderPresence> {
     override suspend fun handle(spot: Field, event: BorderPresence) = spot.showBorder(event)
 }
 
-@ZLinkSpotSubscription(topic = BorderTopics.FIELD3_TO4)
+@ZLinkSpotSubscription(channelName = Names.BORDER, topic = BorderTopics.FIELD3_TO4)
 class Route3To4 : ZLinkSuspendingSpotSubscriptionHandler<Field, BorderPresence> {
     override suspend fun handle(spot: Field, event: BorderPresence) = spot.showBorder(event)
 }
 
-@ZLinkSpotSubscription(topic = BorderTopics.FIELD4_TO3)
+@ZLinkSpotSubscription(channelName = Names.BORDER, topic = BorderTopics.FIELD4_TO3)
 class Route4To3 : ZLinkSuspendingSpotSubscriptionHandler<Field, BorderPresence> {
     override suspend fun handle(spot: Field, event: BorderPresence) = spot.showBorder(event)
 }

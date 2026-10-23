@@ -1,8 +1,8 @@
 plugins { kotlin("jvm") version "2.3.21" apply false }
 
-extra["frameworkVersion"] = "0.30.1"
+extra["frameworkVersion"] = "0.30.2"
 
-extra["bindingVersion"] = "1.19.1"
+extra["bindingVersion"] = "1.20.0"
 
 extra["springBootVersion"] = "3.5.14"
 

@@ -2,7 +2,7 @@
 
 ## Project overview
 
-This C#/.NET 8 project is a MORPG server example in which players meet in a town channel, form parties of up to four, and enter a dedicated Dungeon for their party. It runs a Session gateway for connections, Town hosts A and B for the fixed town channels, Instance hosts A and B for Dungeons, and Redis for location and relocation state. `Directory.Packages.props` pins the ZLink Framework and connector packages to `0.30.1`.
+This C#/.NET 8 project is a MORPG server example in which players meet in a town channel, form parties of up to four, and enter a dedicated Dungeon for their party. It runs a Session gateway for connections, Town hosts A and B for the fixed town channels, Instance hosts A and B for Dungeons, and Redis for location and relocation state. `Directory.Packages.props` pins the ZLink Framework and connector packages to `0.30.2`.
 
 The project layout and feature procedure below describe where to add gameplay. The [README](README.md) covers prerequisites, deployment, and known issues in the public packages. [zlink.structure.json](zlink.structure.json) describes the initial node composition and scenarios; Framework and Redis manage object placement at runtime.
 
@@ -192,7 +192,7 @@ The value applies to child processes started from that environment; preserve std
 export ZLINK_DEBUG_FRAMEWORK_SPOT_DISCOVERY=1
 ```
 
-`ZLINK_DEBUG_FRAMEWORK_SPOT_DISCOVERY` is a version-specific diagnostic switch in the public `0.30.1` package, so do not use it as a routing API. Let the runner clean up its own processes and Compose project, preserve cleanup failures, and avoid stopping unrelated processes or containers.
+`ZLINK_DEBUG_FRAMEWORK_SPOT_DISCOVERY` is a version-specific diagnostic switch in the public `0.30.2` package, so do not use it as a routing API. Let the runner clean up its own processes and Compose project, preserve cleanup failures, and avoid stopping unrelated processes or containers.
 
 ## Reporting ZLink defects
 

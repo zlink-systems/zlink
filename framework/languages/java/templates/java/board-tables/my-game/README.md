@@ -13,7 +13,7 @@ flowchart LR
 
 - Docker with Compose v2, and PowerShell 7 on Windows.
 - Network access to Maven Central and the Redis container registry.
-- Published ZLink Framework 0.30.1 and binding 1.19.1. Versions are owned by `build.gradle.kts`.
+- Published ZLink Framework 0.30.2 and binding 1.20.0. Versions are owned by `build.gradle.kts`.
 
 The Gradle wrapper and all server modules are included. Copy this directory to build it independently. On Windows, run the commands in PowerShell 7; launchers use the JDK selected by Gradle and enable native access.
 
@@ -68,7 +68,7 @@ Use `./run-e2e.sh --check-structure` or `pwsh -NoProfile -File ./run-e2e.ps1 -Ch
 
 ## Known issues
 
-Public Framework 0.30.0 can fail cross-node deferred Actor join with `DATA_LOST` (`target rejected canonical relocation: 35`, #1729). Host relocation has also returned `BLOCKED/RELOCATION_FAILED` during the `update` scenario; WSL has also observed `RELOCATED` with `safeToShutdown=false` until the control wait expired. The underlying relocation causes remain unconfirmed. These failures prevent full e2e acceptance on 0.30.0. The template pins 0.30.1; validate all scenarios with that package before deployment.
+Public Framework 0.30.0 can fail cross-node deferred Actor join with `DATA_LOST` (`target rejected canonical relocation: 35`, #1729). Host relocation has also returned `BLOCKED/RELOCATION_FAILED` during the `update` scenario; WSL has also observed `RELOCATED` with `safeToShutdown=false` until the control wait expired. The underlying relocation causes remain unconfirmed. These failures prevent full e2e acceptance on 0.30.0. The template pins 0.30.2; validate all scenarios with that package before deployment.
 
 Message Follow is explicitly configured for 30 seconds. The `SAFE_TO_SHUTDOWN` observation budget is that period plus the existing relocation budget. Update waits for replacement `READY`, then asserts that the replacement hosts the new table and completes a hand.
 

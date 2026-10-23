@@ -2,7 +2,7 @@
 
 ## Project overview
 
-This Java 25 project is a traditional MMORPG example with independent worlds and switchable channels. An accounts service lists the worlds over HTTP; each world has its own Session node, channel nodes, and Redis database; a player's gold is application data in that world's database. `build.gradle.kts` pins the ZLink Framework to `0.30.1` and the binding to `1.19.1`.
+This Java 25 project is a traditional MMORPG example with independent worlds and switchable channels. An accounts service lists the worlds over HTTP; each world has its own Session node, channel nodes, and Redis database; a player's gold is application data in that world's database. `build.gradle.kts` pins the ZLink Framework to `0.30.2` and the binding to `1.20.0`.
 
 The project layout below describes where to add gameplay, and "Developing from this sample" describes how to carry its features into your own project. The [README](README.md) covers prerequisites, deployment, and known issues in the public packages. [zlink.structure.json](zlink.structure.json) describes the initial node composition and scenarios; Framework and Redis manage object placement at runtime.
 

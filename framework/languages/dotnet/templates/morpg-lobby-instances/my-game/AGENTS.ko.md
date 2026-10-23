@@ -2,7 +2,7 @@
 
 ## 프로젝트 개요
 
-이 C#/.NET 8 프로젝트는 town channel 없이 플레이어가 접속해 lobby에서 파티를 만들고 준비를 마친 뒤 전용 Dungeon에 입장하는 MORPG server 예제다. 연결을 처리하는 Session gateway, 파티를 담당하는 Lobby host, Dungeon을 담당하는 Instance host A·B와 위치·이동 상태를 저장하는 Redis를 실행한다. `Directory.Packages.props`는 ZLink Framework와 connector package를 `0.30.1`으로 고정한다.
+이 C#/.NET 8 프로젝트는 town channel 없이 플레이어가 접속해 lobby에서 파티를 만들고 준비를 마친 뒤 전용 Dungeon에 입장하는 MORPG server 예제다. 연결을 처리하는 Session gateway, 파티를 담당하는 Lobby host, Dungeon을 담당하는 Instance host A·B와 위치·이동 상태를 저장하는 Redis를 실행한다. `Directory.Packages.props`는 ZLink Framework와 connector package를 `0.30.2`으로 고정한다.
 
 게임 기능은 아래의 프로젝트 구성과 확장 절차에 따라 추가한다. 실행 환경·배포·공개 package의 알려진 문제는 [README](README.md)가 설명한다. 초기 node 구성과 scenario 목록은 [zlink.structure.json](zlink.structure.json)에 있으며, 실행 중 객체의 위치는 Framework와 Redis가 관리한다.
 
@@ -191,7 +191,7 @@ $env:ZLINK_DEBUG_FRAMEWORK_SPOT_DISCOVERY = "1"
 export ZLINK_DEBUG_FRAMEWORK_SPOT_DISCOVERY=1
 ```
 
-`ZLINK_DEBUG_FRAMEWORK_SPOT_DISCOVERY`는 공개 `0.30.1` package에 있는 버전별 진단 switch이므로 routing API로 사용하지 않는다. runner는 자신이 만든 process와 Compose project를 정리하며, 정리 오류도 보존하고 다른 작업의 process나 container는 중단하지 않는다.
+`ZLINK_DEBUG_FRAMEWORK_SPOT_DISCOVERY`는 공개 `0.30.2` package에 있는 버전별 진단 switch이므로 routing API로 사용하지 않는다. runner는 자신이 만든 process와 Compose project를 정리하며, 정리 오류도 보존하고 다른 작업의 process나 container는 중단하지 않는다.
 
 ## ZLink 결함 보고
 

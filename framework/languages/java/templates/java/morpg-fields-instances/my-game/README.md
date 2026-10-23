@@ -1,6 +1,6 @@
 # my-game
 
-A Java MORPG template using public ZLink Framework 0.30.1 packages. Field nodes host four fixed Field User Spots; parties enter dynamically allocated Dungeon User Spots. Player Actors preserve movement state across field boundaries, while Dungeon owns party membership and stage.
+A Java MORPG template using public ZLink Framework 0.30.2 packages. Field nodes host four fixed Field User Spots; parties enter dynamically allocated Dungeon User Spots. Player Actors preserve movement state across field boundaries, while Dungeon owns party membership and stage.
 
 ```mermaid
 flowchart LR
@@ -59,7 +59,7 @@ Non-field scenarios share their party fixture. Selecting reconnect or update alo
 
 ## Known issues
 
-The template targets 0.30.1. Tests against public 0.30.0 encounter deferred cross-node join `DATA_LOST` ([#1729](https://github.com/zlink-systems/zlink/issues/1729)) and a first Actor GetOrCreate from Session that never completes ([#1782](https://github.com/zlink-systems/zlink/issues/1782)). The Java Spot handler registry cannot yet register a runtime `(channelName, topic)` subscription ([#1783](https://github.com/zlink-systems/zlink/issues/1783)), so `server/field/.../border/BorderRoutes.java` declares one handler per adjacent-field topic; replace it with runtime registration once that API exists. Preserve the first failure and message-flow records. Do not change join timing, transport behavior or assertions to hide a Framework failure.
+The template targets 0.30.2. Tests against public 0.30.0 encounter deferred cross-node join `DATA_LOST` ([#1729](https://github.com/zlink-systems/zlink/issues/1729)) and a first Actor GetOrCreate from Session that never completes ([#1782](https://github.com/zlink-systems/zlink/issues/1782)). The Java Spot handler registry cannot yet register a runtime `(channelName, topic)` subscription ([#1783](https://github.com/zlink-systems/zlink/issues/1783)), so `server/field/.../border/BorderRoutes.java` declares one handler per adjacent-field topic; replace it with runtime registration once that API exists. Preserve the first failure and message-flow records. Do not change join timing, transport behavior or assertions to hide a Framework failure.
 
 ## Deployment sequence
 
