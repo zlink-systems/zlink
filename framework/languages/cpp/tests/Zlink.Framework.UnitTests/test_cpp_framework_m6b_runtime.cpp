@@ -161,6 +161,15 @@ struct public_host_runtime_test_access_t
                     == stateful::stateful_error_t::none;
     }
 
+    static bool dispatch_saved (public_host_runtime_t &host,
+                                stateful::stateful_delivery_t delivery,
+                                const mesh::service_mailbox_t::application_dispatch_t &dispatch)
+    {
+        const auto owner = delivery.owner;
+        return host.dispatch_stateful_delivery (owner, std::move (delivery), {}, "player",
+                                                dispatch);
+    }
+
     static void insert_unscheduled_target_attempt (public_host_runtime_t &host, const key_t &key)
     {
         host._relocation_session_terminal_lane
@@ -1376,13 +1385,6 @@ void verify_remote_bound_session_bind_returns_terminal_fences ()
     assert (target.has_admitted_peer (source.status ().routing_id (),
                                       source.status ().lifecycle_generation ()));
 
-    const auto cached = source.resolve_application_actor_route (actor).result ().value ();
-    assert (cached);
-    assert (cached->node_rid == route.node_rid);
-    assert (cached->node_generation == route.node_generation);
-    assert (cached->authority_owner_generation == route.authority_owner_generation);
-    assert (cached->owner.lease_generation == route.owner.lease_generation);
-    assert (route_resolutions == 1);
     const auto initial_route_resolutions = route_resolutions;
 
     const auto request_and_reply =
@@ -1557,14 +1559,6 @@ void verify_remote_bound_session_bind_returns_terminal_fences ()
     assert (reply_timeout.error_kind () == framework_error_kind_t::deadline_exceeded);
     assert (invalidations == 1);
     assert (route_resolutions - initial_route_resolutions == 0);
-
-    const auto refreshed = source.resolve_application_actor_route (actor).result ().value ();
-    assert (refreshed);
-    assert (refreshed->node_rid == current_route.node_rid);
-    assert (refreshed->node_generation == current_route.node_generation);
-    assert (refreshed->authority_owner_generation == current_route.authority_owner_generation);
-    assert (refreshed->owner.lease_generation == current_route.owner.lease_generation);
-    assert (route_resolutions - initial_route_resolutions == 1);
 
     source.stop ();
     target.stop ();
@@ -7194,12 +7188,220 @@ void verify_aggregate_saved_request_terminal_identity ()
                                                protocol::framework_error_code::none};
         const bool same_terminal = target->relocation_wire ().register_terminal_target (
           {expected, source, reply, [] (protocol::reply_relay_ack_status_t) { return true; },
-           [] { return true; }, coordinator.node_routing_id});
+           [] { return true; }});
         std::cerr << "aggregate-terminal participant=" << index + 1
                   << " expected-sequence=" << sequence << " matches=" << same_terminal << '\n';
         assert (same_terminal);
     }
     assert (target->relocation_wire ().pending_terminal_relays () == 2);
+}
+
+void verify_restored_request_completes_local_native_alias ()
+{
+    using namespace zlink::framework;
+    auto target = std::make_shared<host::public_host_runtime_t> (
+      host::host_options_t{mesh::raw_mesh_node_options_t{
+        .descriptor = descriptor ("alias-source-target"),
+        .runtime_failures = std::make_shared<runtime::runtime_failure_collector_t> ()}});
+    mesh::raw_mesh_node_owner_t coordinator_node (mesh::raw_mesh_node_options_t{
+      .descriptor = descriptor ("alias-coordinator"),
+      .runtime_failures = std::make_shared<runtime::runtime_failure_collector_t> ()});
+    auto lease = std::make_shared<const location_owner_token_t> (
+      location_owner_token_t{"alias-source-owner", 1});
+    target->transport ().configure_request_sources (nullptr, [lease] { return lease; });
+    target->objects ().configure_relocation_state (
+      [] (const auto &, const auto &, std::stop_token) -> task_t<stateful::frozen_object_state_t> {
+          co_return stateful::frozen_object_state_t{};
+      },
+      [] (const auto &, const auto &, std::stop_token) { return true; });
+    target->configure_stateful_dispatch (
+      [] (stateful::accepted_record_authority_query_t)
+        -> task_t<std::optional<stateful::accepted_record_authority_t>> {
+          co_return std::nullopt;
+      });
+    target->start ();
+    coordinator_node.start ();
+    const auto local = target->transport ().topology ().local_descriptor ();
+    const auto remote = coordinator_node.topology ().local_descriptor ();
+    assert (target->transport ().connect_peer (coordinator_node.endpoint (), remote));
+    const auto admission_deadline = std::chrono::steady_clock::now () + 5s;
+    while ((!ready_peer (target->transport ().topology (), remote.node_routing_id)
+            || !ready_peer (coordinator_node.topology (), local.node_routing_id))
+           && std::chrono::steady_clock::now () < admission_deadline) {
+        (void) target->transport ().observe_routes ();
+        (void) coordinator_node.observe_routes ();
+        (void) await_task (target->transport ().pump_one (std::chrono::steady_clock::now ()));
+        (void) await_task (coordinator_node.pump_one (std::chrono::steady_clock::now ()));
+    }
+    assert (ready_peer (target->transport ().topology (), remote.node_routing_id));
+    const protocol::wire_operation_id_t original{0x2507, 0x77};
+    constexpr std::uint64_t reply_route = 0x1786;
+    const protocol::request_source_fence_t source{lease->owner_id, 1, local.node_routing_id,
+                                                  local.lifecycle_generation};
+    const protocol::relocation_coordinator_fence_t coordinator{
+      "alias-coordinator-owner", 2, remote.node_routing_id, remote.lifecycle_generation, "v1"};
+    const stateful::object_ref_t owner{
+      stateful::object_kind_t::actor, "alias-actor", 1, 1, local.mesh_name, "previous-owner"};
+    auto restored = owner;
+    restored.node_id = "alias-source-target";
+    ++restored.authority_owner_generation;
+    const protocol::actor_route_fence_t old_route{
+      owner.key, 1, remote.node_routing_id, remote.lifecycle_generation, 1, 1};
+    std::atomic<int> completions{0};
+    std::vector<std::uint8_t> completed_payload;
+    assert (await_task (target->transport ().request_to_actor (
+      remote.node_routing_id, std::nullopt, old_route,
+      protocol::application_payload_t::from_parts ({zlink::message_t::from ("request")}), 10s,
+      [&] (foundation::operation_terminal_t terminal, zlink::message_t payload) {
+          assert (terminal == foundation::operation_terminal_t::completed);
+          const auto parts = protocol::decode_application_parts (
+            protocol::decode_application_payload (payload.to_bytes ()));
+          assert (parts.size () == 1);
+          completed_payload = parts.front ().to_bytes ();
+          ++completions;
+      },
+      original, std::nullopt, reply_route)));
+    assert (!target->transport ().operation_pending ({original.high, original.low}));
+    assert (target->transport ().operation_pending ({local.lifecycle_generation, reply_route}));
+    assert (target->transport ().relocated_request_source (original, reply_route) == source);
+    auto wrong_operation = original;
+    ++wrong_operation.low;
+    assert (!target->transport ().relocated_request_source (wrong_operation, reply_route));
+    assert (!target->transport ().relocated_request_source (original, reply_route + 1));
+
+    protocol::actor_message_header_t header;
+    header.target = old_route;
+    header.operation = original;
+    header.correlation = reply_route;
+    auto accepted = stateful::accepted_actor_record (
+      header, source,
+      protocol::application_payload_t::from_parts ({zlink::message_t::from ("request")}), true);
+    const auto request = protocol::encode_frozen_application_record (accepted);
+    protocol::relocation_prepare_t prepare;
+    prepare.relocation = {0x2507, 0x88};
+    prepare.target_attempt_generation = 1;
+    prepare.coordinator = coordinator;
+    const stateful::relocation_restore_identity_t identity{"alias-relocation"};
+    const auto dispatch = [] (const auto &, const auto &, auto) {};
+    const auto reply =
+      protocol::application_payload_t::from_parts ({zlink::message_t::from ("reply")});
+    protocol::reply_relay_t incorrect{wrong_operation,
+                                      reply_route,
+                                      prepare.relocation,
+                                      1,
+                                      coordinator,
+                                      1,
+                                      original.low,
+                                      0,
+                                      protocol::framework_error_code::none};
+    assert (
+      await_task (target->transport ().send_reply_relay (local.node_routing_id, incorrect, reply)));
+    (void) target->dispatch_ready (dispatch);
+    assert (completions == 0);
+    incorrect.operation = original;
+    ++incorrect.reply_route_id;
+    assert (
+      await_task (target->transport ().send_reply_relay (local.node_routing_id, incorrect, reply)));
+    (void) target->dispatch_ready (dispatch);
+    assert (completions == 0);
+    assert (target->transport ().operation_pending ({local.lifecycle_generation, reply_route}));
+    assert (host::public_host_runtime_test_access_t::restore_saved (
+      *target, prepare, {{owner, "actor", {}, {{1, {}, 0, {}, request}}, {}}}, {restored},
+      identity));
+    assert (target->objects ().commit_relocation_restore (restored, identity)
+            == stateful::stateful_error_t::none);
+    const bool handler_completed =
+      host::public_host_runtime_test_access_t::complete_saved (*target, restored, reply);
+    assert (handler_completed);
+    assert (target->relocation_wire ().pending_terminal_relays () == 1);
+    std::cerr << "restored-alias source=alias-source-target target=alias-source-target"
+              << " coordinator=alias-coordinator original=" << original.high << '/' << original.low
+              << " native=" << local.lifecycle_generation << '/' << reply_route
+              << " alias=registered handler-completed=" << handler_completed << '\n';
+    const auto deadline = std::chrono::steady_clock::now () + 1s;
+    while ((completions != 1 || target->relocation_wire ().pending_terminal_relays () != 0)
+           && std::chrono::steady_clock::now () < deadline) {
+        (void) target->dispatch_ready (dispatch);
+        (void) await_task (coordinator_node.pump_one (std::chrono::steady_clock::now ()));
+    }
+    std::cerr << "restored-alias completions=" << completions << " pending-terminal-relays="
+              << target->relocation_wire ().pending_terminal_relays () << '\n';
+    assert (completions == 1);
+    assert (completed_payload == bytes ("reply"));
+    assert (target->relocation_wire ().pending_terminal_relays () == 0);
+    assert (!target->transport ().operation_pending ({local.lifecycle_generation, reply_route}));
+    target->close ();
+    coordinator_node.close ();
+}
+
+void verify_local_control_admission ()
+{
+    mesh::raw_mesh_node_owner_t node (mesh::raw_mesh_node_options_t{
+      .descriptor = descriptor ("local-control"),
+      .runtime_failures =
+        std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()});
+    node.start ();
+    const auto local = node.topology ().local_descriptor ();
+    const protocol::relocation_coordinator_fence_t coordinator{
+      "local-coordinator", 1, local.node_routing_id, local.lifecycle_generation, "v1"};
+    protocol::session_relocation_route_t route{
+      {11, 12},
+      coordinator,
+      protocol::relocation_role_t::source,
+      {"actor", 1},
+      local.node_routing_id,
+      local.lifecycle_generation,
+      "session-owner",
+      1,
+      {'s'},
+      1,
+      {protocol::session_relocation_route_action_t::abort, 0, 0, {}, 0, 1, 0}};
+    assert (await_task (node.send_session_relocation_route (local.node_routing_id, route)));
+    assert (node.wait_for_activity (-1ms, false));
+    auto claim =
+      node.mailbox ().try_claim (mesh::service_mailbox_domain_t::infrastructure, 8, 65536);
+    assert (claim && claim->records.size () == 1);
+    const auto &record = *claim->records.front ();
+    assert (record.source_routing_id == local.node_routing_id);
+    assert (record.source_node_generation == local.lifecycle_generation);
+    assert (
+      protocol::decode_session_relocation_route (protocol::message_bytes (record.parts.front ()))
+      == route);
+    assert (node.mailbox ().release (*claim));
+    auto invalid_route = route;
+    ++invalid_route.coordinator.node_generation;
+    assert (
+      !await_task (node.send_session_relocation_route (local.node_routing_id, invalid_route)));
+    invalid_route = route;
+    invalid_route.coordinator.node_routing_id = bytes ("forged-coordinator");
+    assert (
+      !await_task (node.send_session_relocation_route (local.node_routing_id, invalid_route)));
+    invalid_route = route;
+    ++invalid_route.session_owner_node_generation;
+    assert (
+      !await_task (node.send_session_relocation_route (local.node_routing_id, invalid_route)));
+    protocol::reply_relay_ack_t ack{
+      route.relocation,
+      coordinator,
+      {13, 14},
+      15,
+      {"request-owner", 1, local.node_routing_id, local.lifecycle_generation},
+      protocol::reply_relay_ack_status_t::terminal_received};
+    auto invalid_ack = ack;
+    ++invalid_ack.request_source.node_generation;
+    assert (!await_task (node.send_reply_relay_ack (local.node_routing_id, invalid_ack)));
+    invalid_ack = ack;
+    invalid_ack.request_source.node_routing_id = bytes ("forged-source");
+    assert (!await_task (node.send_reply_relay_ack (local.node_routing_id, invalid_ack)));
+    assert (!node.mailbox ().try_claim (mesh::service_mailbox_domain_t::infrastructure, 8, 65536));
+    assert (await_task (node.send_reply_relay_ack (local.node_routing_id, ack)));
+    claim = node.mailbox ().try_claim (mesh::service_mailbox_domain_t::infrastructure, 8, 65536);
+    assert (claim && claim->records.size () == 1);
+    assert (protocol::decode_reply_relay_ack (
+              protocol::message_bytes (claim->records.front ()->parts.front ()))
+            == ack);
+    assert (node.mailbox ().release (*claim));
+    node.close ();
 }
 
 void verify_public_host_dispatches_durable_reply_relay ()
@@ -7571,7 +7773,8 @@ bool verify_remote_user_spot_create_close_terminal_once (bool cleanup_only = fal
         [&instance_activation_count, &store, &fail_recovery_dispatch_once,
          &close_during_instance_turn, &recovery_accepted_finishes, &injected_activation_failure,
          weak_target] (std::shared_ptr<const protocol::instance_activation_recovery_t> command,
-                       std::function<task_t<zlink::message_t> (std::function<void ()> &)>) {
+                       std::function<task_t<zlink::message_t> (std::function<void ()> &)>,
+                       std::function<void ()> accept_activation) {
             const auto &activation = command->activation;
             const auto &metadata = command->metadata;
             const auto &application = command->application_payload;
@@ -7584,6 +7787,7 @@ bool verify_remote_user_spot_create_close_terminal_once (bool cleanup_only = fal
                   result_t<host::instance_spot_activation_result_t>::success (
                     {failure->terminal_result, failure->failure_code, std::nullopt}));
             }
+            accept_activation ();
             ++instance_activation_count;
             assert (activation.target.stable_type == "quest");
             assert (activation.request);
@@ -9193,6 +9397,66 @@ void verify_dispatch_callbacks_survive_suspension (bool through_mesh, bool dispa
     mesh_node.stop ();
 }
 
+void verify_forwarded_request_return_dispatches_without_source_operation ()
+{
+    using namespace zlink::framework;
+    auto target = std::make_shared<host::public_host_runtime_t> (
+      host::host_options_t{mesh::raw_mesh_node_options_t{
+        .descriptor = descriptor ("returned-request-target"),
+        .runtime_failures = std::make_shared<runtime::runtime_failure_collector_t> ()}});
+    target->configure_stateful_dispatch (
+      [] (stateful::accepted_record_authority_query_t)
+        -> task_t<std::optional<stateful::accepted_record_authority_t>> {
+          co_return std::nullopt;
+      });
+    std::exception_ptr dispatch_error;
+    dispatch_options_t options;
+    detail::dispatch_options_access_t::set_dispatch_error_observer_for_tests (
+      options,
+      [&] (const message_dispatch_error_event_t &event) { dispatch_error = event.exception; });
+    host::public_host_runtime_test_access_t::set_dispatch (*target, std::move (options));
+    target->start ();
+    const auto local = target->transport ().topology ().local_descriptor ();
+    const stateful::object_ref_t owner{
+      stateful::object_kind_t::actor, "returned-request-actor", 7, 13, local.mesh_name,
+      "returned-request-target"};
+    const protocol::wire_operation_id_t operation{
+      local.lifecycle_generation == 79 ? std::uint64_t{80} : std::uint64_t{79}, 90};
+    assert (!target->transport ().operation_pending ({operation.high, operation.low}));
+    protocol::actor_message_header_t header;
+    header.target = {owner.key,
+                     owner.object_generation,
+                     local.node_routing_id,
+                     local.lifecycle_generation,
+                     owner.authority_owner_generation,
+                     1};
+    header.operation = operation;
+    header.correlation = 99;
+    header.message_follow_hop_count = 2;
+    auto accepted = stateful::accepted_actor_record (
+      header, {"previous-hop-owner", 1, local.node_routing_id, local.lifecycle_generation},
+      protocol::application_payload_t::from_parts ({zlink::message_t::from ("{}")}), true);
+    stateful::turn_record_t turn;
+    turn.sequence = 1;
+    turn.application_record = accepted;
+    const auto frozen = protocol::summarize_frozen_application_record (accepted);
+    std::size_t calls = 0;
+    const auto dispatched = host::public_host_runtime_test_access_t::dispatch_saved (
+      *target, {owner, std::move (turn), frozen, true, {}},
+      [&] (const auto &ready, const auto &record, auto parts) {
+          ++calls;
+          assert (ready.actor && ready.actor->actor_id ().value () == owner.key);
+          assert (record.operation_id.high == operation.high);
+          assert (record.operation_id.low == operation.low);
+          assert (!parts.empty ());
+      });
+    if (dispatch_error)
+        std::rethrow_exception (dispatch_error);
+    assert (dispatched);
+    assert (calls == 1);
+    target->close ();
+}
+
 } // namespace
 
 int main (int argc, char **argv)
@@ -9201,6 +9465,10 @@ int main (int argc, char **argv)
     // This test drives runtime parts without a host.
     zlink::framework::runtime::install_host_context_hooks ();
     verify_host_send_forwarding_allocations ();
+    if (argc == 2 && std::string_view (argv[1]) == "--returned-request-dispatch") {
+        verify_forwarded_request_return_dispatches_without_source_operation ();
+        return 0;
+    }
     if (argc == 2 && std::string_view (argv[1]) == "--send-forwarding-allocations")
         return 0;
     if (argc == 2 && std::string_view (argv[1]) == "--send-payload-lifetime") {
@@ -9216,6 +9484,11 @@ int main (int argc, char **argv)
     }
     if (argc == 2 && std::string_view (argv[1]) == "--aggregate-request-identity") {
         verify_aggregate_saved_request_terminal_identity ();
+        return 0;
+    }
+    if (argc == 2 && std::string_view (argv[1]) == "--restored-request-alias") {
+        verify_local_control_admission ();
+        verify_restored_request_completes_local_native_alias ();
         return 0;
     }
 
@@ -9341,10 +9614,13 @@ int main (int argc, char **argv)
     verify_raw_spot_and_actor_routing ();
     verify_atomic_raw_stateful_ingress_commit ();
     verify_relocated_source_reply_failure_keeps_terminal_record ();
+    verify_forwarded_request_return_dispatches_without_source_operation ();
     verify_node_request_requires_remote_admission ();
     verify_unadmitted_request_is_dropped_without_framework_queue ();
     verify_queued_owner_accepts_request_without_blocking_other_owner ();
     verify_aggregate_saved_request_terminal_identity ();
+    verify_restored_request_completes_local_native_alias ();
+    verify_local_control_admission ();
     verify_raw_terminal_reply_relay ();
     verify_relocation_data_duplicates_are_distinct_arrivals ();
     verify_relocation_ingress_boundary_owns_saved_and_follow_only_work ();
