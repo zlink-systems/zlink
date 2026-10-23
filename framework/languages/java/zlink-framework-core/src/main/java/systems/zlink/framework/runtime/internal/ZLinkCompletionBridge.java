@@ -1,5 +1,6 @@
 package systems.zlink.framework.runtime.internal;
 
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
@@ -46,7 +47,7 @@ public final class ZLinkCompletionBridge {
             CompletableFuture<?> caller, T first, U second, BiConsumer<T, U> action) {
         caller.whenComplete(
                 (ignored, failure) -> {
-                    if (caller.isCancelled()) action.accept(first, second);
+                    if (failure instanceof CancellationException) action.accept(first, second);
                 });
     }
 
