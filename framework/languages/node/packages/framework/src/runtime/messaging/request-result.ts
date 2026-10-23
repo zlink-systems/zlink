@@ -77,9 +77,11 @@ export class ZLinkRequestResult<TReply> {
     return this;
   }
 
+  // One terminal per request (01-submit-and-completion §10): a later terminal is ignored.
   complete(value: unknown): void {
-    const resolve = this.resolve!;
-    const reject = this.reject!;
+    const resolve = this.resolve;
+    const reject = this.reject;
+    if (resolve === undefined || reject === undefined) return;
     this.resolve = undefined;
     this.reject = undefined;
     this.capacityStop?.abort();
@@ -96,7 +98,8 @@ export class ZLinkRequestResult<TReply> {
   }
 
   fail(error: unknown): void {
-    const reject = this.reject!;
+    const reject = this.reject;
+    if (reject === undefined) return;
     this.resolve = undefined;
     this.reject = undefined;
     this.capacityStop?.abort();

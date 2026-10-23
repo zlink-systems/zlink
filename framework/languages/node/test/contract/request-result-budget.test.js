@@ -207,3 +207,27 @@ for (const failed of [false, true]) {
     assert.equal(currentFlowContext(), undefined);
   });
 }
+
+// One terminal per request (spec 01-submit-and-completion §10). A terminal that
+// arrives after the entry settled is ignored and raises no uncaught error.
+test('a later terminal after settlement is ignored', async () => {
+  const uncaught = [];
+  const onUncaught = (error) => uncaught.push(error);
+  process.on('uncaughtException', onUncaught);
+  try {
+    for (const first of ['complete', 'fail']) {
+      const entry = new ZLinkRequestResult();
+      const pending = entry.pending;
+      if (first === 'complete') entry.complete('reply');
+      else entry.fail(new Error('first'));
+      entry.fail(new Error('late failure'));
+      entry.complete('late reply');
+      if (first === 'complete') assert.equal(await pending, 'reply');
+      else await assert.rejects(pending, /first/);
+      await new Promise(setImmediate);
+    }
+    assert.deepEqual(uncaught, []);
+  } finally {
+    process.off('uncaughtException', onUncaught);
+  }
+});
