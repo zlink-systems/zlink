@@ -182,3 +182,26 @@ test('a synchronous failure after admission preserves the completed admission', 
   await admitted;
   assert.equal(request.admitted, admitted);
 });
+
+for (const failed of [false, true]) {
+  test(`prepared reply retains its captured flow in a later completion turn (failure=${failed})`, async () => {
+    const { currentFlowContext, runWithFlow } = require('../../packages/framework/dist/runtime/diagnostics/flow-context');
+    const flow = { flowId: 'captured', flowOrigin: 'Application' };
+    const pending = deferred();
+    const cause = new Error('reply failure');
+    let observed = false;
+    const result = runWithFlow(flow, () => prepareZLinkRequestReply(
+      pending.promise,
+      value => { observed = true; assert.equal(currentFlowContext(), flow); return value; },
+      error => { observed = true; assert.equal(currentFlowContext(), flow); return error; }
+    ));
+    assert.equal(currentFlowContext(), undefined);
+    const reply = createMappedRequest(() => result);
+    const settled = failed ? assert.rejects(reply, error => error === cause) : reply;
+    if (failed) pending.reject(cause); else pending.resolve(7);
+    assert.equal(observed, false, 'mapping must not run in the terminal publication stack');
+    await settled;
+    assert.equal(observed, true);
+    assert.equal(currentFlowContext(), undefined);
+  });
+}

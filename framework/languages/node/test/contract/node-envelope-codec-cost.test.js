@@ -438,3 +438,24 @@ test('service reply allocates only its final multipart array', async t => {
     assert.deepEqual(captured[0], wire.encodeReplyHeader(1n, RequestResult.TimedOut, 0));
   } finally { await f.backend.close(); }
 });
+
+function nativeRequestResult(pending, decode, mapFailure) { return { pending, decode, mapFailure }; }
+
+test('untraced request preparation allocates only its result descriptor', async t => {
+  if (runAllocationTest(t)) return;
+  const request = require('../../packages/framework/dist/runtime/messaging/request-result');
+  const { currentFlowContext } = require('../../packages/framework/dist/runtime/diagnostics/flow-context');
+  assert.equal(currentFlowContext(), undefined);
+  const pending = Promise.resolve(1);
+  const decode = request.identityRequestReply;
+  const prepare = () => request.prepareZLinkRequestReply(pending, decode, decode);
+  const control = () => nativeRequestResult(pending, decode, decode);
+  for (let index = 0; index < 1000; index++) { prepare(); control(); }
+  const baseline = await trackedCodecAllocations('/node-envelope-codec-cost.test.js', control);
+  const allocations = await trackedCodecAllocations('/runtime/messaging/request-result.js', prepare);
+  const expected = baseline.get('nativeRequestResult').objects;
+  const actual = allocationTotal(allocations);
+  t.diagnostic(`1000 calls: descriptor=${expected}, prepare=${actual} objects`);
+  assert.deepEqual(prepare(), control());
+  assert.ok(actual <= expected, `${actual} allocations exceed the result descriptor's ${expected}`);
+});

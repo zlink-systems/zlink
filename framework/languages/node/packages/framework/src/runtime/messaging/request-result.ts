@@ -1,4 +1,8 @@
-import { currentFlowContext, runWithFlow } from '../diagnostics/flow-context';
+import {
+  currentFlowContext,
+  runWithFlow,
+  type ZLinkFlowContextValue
+} from '../diagnostics/flow-context';
 import type { ZLinkRequest } from '../../contracts/Handlers/Attributes';
 
 const completedAdmission = Promise.resolve();
@@ -29,6 +33,15 @@ export function prepareZLinkRequestReply<TSource, TReply>(
 ): ZLinkRequestResult<TReply> {
   const flow = currentFlowContext();
   if (flow === undefined) return { pending, decode, mapFailure };
+  return prepareTracedRequestReply(pending, decode, mapFailure, flow);
+}
+
+function prepareTracedRequestReply<TSource, TReply>(
+  pending: Promise<TSource>,
+  decode: (value: TSource) => TReply,
+  mapFailure: (error: unknown) => unknown,
+  flow: ZLinkFlowContextValue
+): ZLinkRequestResult<TReply> {
   // The completion reaction is registered after the outbound flow scope returns.
   return {
     pending,
