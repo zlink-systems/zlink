@@ -12,6 +12,15 @@ Libraries` workflow for a `core/vX.Y.Z` tag embeds that version's section.
 
 ## [Unreleased]
 
+## [1.20.0]
+
+### Fixed
+
+- Fixed completion poller registration during handshake stopping the temporary
+  transport owner's executor, which could prevent a pair from reaching READY
+  within 30 seconds (#2504, PR #2505). The Core fix affects C++, .NET, Java,
+  and Node.js bindings.
+
 ## [1.19.0]
 
 ### Fixed

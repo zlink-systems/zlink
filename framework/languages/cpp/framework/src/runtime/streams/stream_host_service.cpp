@@ -1825,9 +1825,10 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
             throw framework_exception_t (framework_error_kind_t::not_configured,
                                          "STREAM Actor dispatch MeshNode has no routing id");
         }
-        auto actor_route = co_await _mesh_node->resolve_application_actor_route (actor);
+        auto actor_route = co_await services->get_required<actor_address_resolver_t> ()
+                             .resolve_actor_session_binding_address (actor);
         if (!actor_route) {
-            throw framework_exception_t (framework_error_kind_t::not_found,
+            throw framework_exception_t (framework_error_kind_t::unavailable,
                                          "Actor session binding route is unavailable");
         }
         runtime::stateful::stream_binding_t binding;
