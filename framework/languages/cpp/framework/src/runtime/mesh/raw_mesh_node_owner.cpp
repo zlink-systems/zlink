@@ -359,15 +359,23 @@ task_t<bool> submit_registered_infrastructure_request_with_retry (
 }
 
 task_t<bool> await_request_admission (task_t<void> admitted)
-{
-    try {
-        co_await admitted;
-        co_return true;
-    }
-    catch (const framework_exception_t &) {
-        // The existing native reply observer completes the operation failure.
-        co_return false;
-    }
+try {
+    auto convert = [] (const result_t<void> &result) {
+        try {
+            result.value ();
+            return result_t<bool>::success (true);
+        }
+        catch (const framework_exception_t &) {
+            // The native reply observer completes the operation failure.
+            return result_t<bool>::success (false);
+        }
+    };
+    if (admitted.await_ready ())
+        return task_t<bool> (convert (admitted.result ()));
+    return detail::project_task_terminal<bool> (admitted, std::move (convert));
+}
+catch (...) {
+    return task_t<bool> (detail::current_exception_result<bool> ());
 }
 
 task_t<bool> submit_registered_infrastructure_request (
@@ -1172,14 +1180,14 @@ task_t<bool> raw_mesh_node_owner_t::request_with_header (
   mesh_request_metric_t request_metric,
   service_liveness_registry_t::connection_t admission,
   std::optional<foundation::operation_registry_t::request_identity_t> request)
-{
+try {
     if (timeout <= std::chrono::milliseconds::zero ()) {
         throw std::invalid_argument ("raw mesh request timeout must be positive");
     }
     if (!target_claimed) {
         const auto peer = _topology.peer (target_routing_id);
         if (!peer || !peer->ready)
-            co_return false;
+            return task_t<bool> (result_t<bool>::success (false));
         admission = peer->liveness;
     }
     auto encoded_payload = protocol::encode_application_payload (application_payload);
@@ -1234,21 +1242,17 @@ task_t<bool> raw_mesh_node_owner_t::request_with_header (
         return std::optional<request_start_t>{std::move (value)};
     });
     if (!start)
-        co_return false;
+        return task_t<bool> (result_t<bool>::success (false));
     if (!start->registered) {
         throw framework_exception_t (framework_error_kind_t::shutting_down,
                                      "raw mesh request registry is closed");
     }
     auto admitted = start->admitted->task ();
     (void) observe_request (start->operation, start->correlation, std::move (start->running));
-    try {
-        co_await admitted;
-    }
-    catch (const framework_exception_t &) {
-        // The native reply observer completes the operation failure.
-        co_return false;
-    }
-    co_return true;
+    return await_request_admission (std::move (admitted));
+}
+catch (...) {
+    return task_t<bool> (detail::current_exception_result<bool> ());
 }
 
 struct raw_mesh_node_owner_t::send_completion_state_t

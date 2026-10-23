@@ -382,17 +382,11 @@ TEST (RequestCallAllocations, AdmissionFailureEndsThePublicReplyBeforeThePhysica
         EXPECT_EQ (pending.result ().error_kind (), fw::framework_error_kind_t::unavailable);
     }
 }
-// The raw request owns one pending admission coroutine; its node entry point
-// forwards that task without allocating another frame or promise state.
-#if defined(_MSC_VER)
-__declspec (noinline)
-#else
-__attribute__ ((noinline))
-#endif
-fw::task_t<bool>
-one_admission_coroutine ()
+// A rejected raw request has no pending admission and returns only its
+// ready result state. Neither the node entry nor header submission wraps it.
+fw::task_t<bool> one_ready_admission_result ()
 {
-    co_return false;
+    return fw::task_t<bool> (fw::result_t<bool>::success (false));
 }
 
 TEST (RequestCallAllocations, RawNodeRequestDoesNotWrapItsAdmissionTask)
@@ -408,12 +402,12 @@ TEST (RequestCallAllocations, RawNodeRequestDoesNotWrapItsAdmissionTask)
     std::vector<std::uint8_t> target{'b'};
     std::optional<fw::task_t<bool>> pending;
     const auto baseline =
-      fw::tests::count_allocations ([&] { pending.emplace (one_admission_coroutine ()); });
+      fw::tests::count_allocations ([&] { pending.emplace (one_ready_admission_result ()); });
     pending.reset ();
     const auto measured = fw::tests::count_allocations ([&] {
         pending.emplace (node.request_to_node (target, payload, std::chrono::seconds (1), {}));
     });
-    std::printf ("raw node request: measured=%zu admission_coroutine=%zu\n", measured, baseline);
+    std::printf ("raw node request: measured=%zu ready_admission=%zu\n", measured, baseline);
     EXPECT_EQ (measured, baseline);
     ASSERT_TRUE (pending->await_ready ());
     ASSERT_TRUE (pending->result ());
