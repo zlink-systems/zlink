@@ -60,7 +60,7 @@ public final class ZLinkCompletionCaptureAllocationTest {
         long[] actual = captures(2);
         System.out.printf(
                 "requests=%d requiredObjects=%d requiredBytes=%d positiveObjects=%d"
-                    + " positiveBytes=%d actualObjects=%d actualBytes=%d%n",
+                        + " positiveBytes=%d actualObjects=%d actualBytes=%d%n",
                 REQUESTS, required[0], required[1], positive[0], positive[1], actual[0], actual[1]);
         assertEquals(REQUESTS, required[0]);
         assertEquals(REQUESTS, positive[0]);

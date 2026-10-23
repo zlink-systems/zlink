@@ -84,7 +84,7 @@ final class ZLinkRequestAdmissionObserverTest {
             }
             System.out.printf(
                     "requests=%d outcome=%d consumesAdmission=%s admissionObservers=%d"
-                        + " replyObservers=%d%n",
+                            + " replyObservers=%d%n",
                     REQUESTS, outcome, consumesAdmission, admissionObservers, replyObservers);
             assertEquals(consumesAdmission ? REQUESTS : 0, admissionObservers);
             assertEquals(REQUESTS, replyObservers);
