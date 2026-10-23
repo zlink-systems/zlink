@@ -1477,65 +1477,26 @@ serial_execution_queue_t::take_application_suffix (
 task_t<std::shared_ptr<stateful::relocation_seal_binding_t>>
 serial_execution_queue_t::admit_native_application (std::function<void (bool)> publish)
 {
-    using seal_t = std::shared_ptr<stateful::relocation_seal_binding_t>;
-    // The admission itself, run by the gate's current owner.
-    const auto admit = [this] (const std::function<void (bool)> &publish) -> seal_t {
-        std::unique_lock lock (_mutex, std::defer_lock);
-        if (!owns_shared_gate ())
-            lock.lock ();
-        if (_relocation_seal && !_relocation_seal->bound.load (std::memory_order_acquire))
-            return _relocation_seal;
-        const bool sealed = bool (_relocation_seal);
-        if (lock.owns_lock ()) {
-            (void) schedule_drain_locked ();
-            lock.unlock ();
-        }
-        if (publish)
-            publish (sealed);
-        return {};
-    };
-    // A caller that wins the gate's own idle transition owns the gate for this one
-    // admission (execution gate §2: one owner at a time). Publications of other
-    // producers stay with the gate executor (execution gate §13): with any pending,
-    // or when the gate is not idle, the admission is posted as before.
-    if (_lane_policy.owns_spot_gate () && current_shared_gate == nullptr) {
-        std::unique_lock producer (_mutex);
-        auto idle = gate_state_t::idle;
-        if (_gate_state.compare_exchange_strong (idle, gate_state_t::running,
-                                                 std::memory_order_acq_rel)) {
-            current_shared_gate = this;
-            const bool published = _publication_cursor->next.load (std::memory_order_acquire);
-            producer.unlock ();
-            if (!published) {
-                std::optional<result_t<seal_t>> admitted;
-                try {
-                    admitted.emplace (result_t<seal_t>::success (admit (publish)));
-                }
-                catch (const framework_exception_t &error) {
-                    admitted.emplace (detail::result_access_t::failure<seal_t> (error));
-                }
-                catch (const std::exception &error) {
-                    admitted.emplace (result_t<seal_t>::failure (
-                      framework_error_kind_t::internal_failure, error.what ()));
-                }
-                catch (...) {
-                    release_shared_gate ();
-                    throw;
-                }
-                release_shared_gate ();
-                return task_t<seal_t> (std::move (*admitted));
-            }
-            release_shared_gate ();
-        }
-    }
-    return control_async<seal_t> ([this, admit, publish = std::move (publish)] {
-        if (owns_shared_gate ())
-            import_publications ();
-        auto restoring = admit (publish);
-        if (owns_shared_gate ())
-            import_publications ();
-        return restoring;
-    });
+    return control_async<std::shared_ptr<stateful::relocation_seal_binding_t>> (
+      [this, publish = std::move (publish)] {
+          if (owns_shared_gate ())
+              import_publications ();
+          std::unique_lock lock (_mutex, std::defer_lock);
+          if (!owns_shared_gate ())
+              lock.lock ();
+          if (_relocation_seal && !_relocation_seal->bound.load (std::memory_order_acquire))
+              return _relocation_seal;
+          const bool sealed = bool (_relocation_seal);
+          if (lock.owns_lock ()) {
+              (void) schedule_drain_locked ();
+              lock.unlock ();
+          }
+          if (publish)
+              publish (sealed);
+          if (owns_shared_gate ())
+              import_publications ();
+          return std::shared_ptr<stateful::relocation_seal_binding_t>{};
+      });
 }
 
 task_t<bool> serial_execution_queue_t::release_relocation_seal (
