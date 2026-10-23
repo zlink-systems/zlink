@@ -502,7 +502,7 @@ final class ZLinkSpringHandlerFactory implements ZLinkHandlerActivator {
      * whether Spring's destroy callback already closes the instance.
      */
     private record HandlerPlan(
-            List<ConstructorPlan> constructors, String beanName, boolean springInvokesClose) {
+            ConstructorPlan[] constructors, String beanName, boolean springInvokesClose) {
         static HandlerPlan create(Class<?> handlerType) {
             return new HandlerPlan(
                     Arrays.stream(handlerType.getConstructors())
@@ -512,7 +512,7 @@ final class ZLinkSpringHandlerFactory implements ZLinkHandlerActivator {
                                             .thenComparingInt(Constructor::getParameterCount)
                                             .reversed())
                             .map(ConstructorPlan::create)
-                            .toList(),
+                            .toArray(ConstructorPlan[]::new),
                     handlerType.getName() + ACTIVATION_BEAN_NAME_SUFFIX,
                     ZLinkSpringHandlerFactory.springInvokesClose(handlerType));
         }

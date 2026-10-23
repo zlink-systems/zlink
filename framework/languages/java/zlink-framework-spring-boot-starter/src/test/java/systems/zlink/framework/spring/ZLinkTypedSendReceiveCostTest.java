@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import com.google.protobuf.ByteString;
 import com.google.protobuf.BytesValue;
+import com.google.protobuf.CodedOutputStream;
 
 import jdk.jfr.Recording;
 import jdk.jfr.consumer.RecordingFile;
@@ -12,6 +13,11 @@ import org.junit.jupiter.api.Test;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.contracts.core.Zlink;
+import systems.zlink.contracts.messaging.Message;
+import systems.zlink.contracts.messaging.Received;
+import systems.zlink.contracts.sockets.RecvFlags;
+import systems.zlink.contracts.sockets.RouterSocket;
 import systems.zlink.framework.channels.ZLinkRouteClient;
 import systems.zlink.framework.channels.ZLinkRouteMessageContext;
 import systems.zlink.framework.channels.ZLinkRouteSendHandler;
@@ -85,15 +91,31 @@ public final class ZLinkTypedSendReceiveCostTest {
             awaitReady(source.getBean(ZLinkRouteMeshRuntime.class));
             var client = source.getBean(ZLinkRouteClient.class);
             send(client, sink, 200);
+            bindingRoundTrip(200);
             try (var recording = new Recording()) {
                 recording.enable("jdk.ObjectAllocationOutsideTLAB").withStackTrace();
                 recording.enable("jdk.DataLoss");
                 recording.start();
                 send(client, sink, SENDS);
+                bindingRoundTrip(SENDS);
                 recording.stop();
                 recording.dump(path);
             }
-            long headers = 0, views = 0, constructorIterators = 0, encoders = 0, messages = 0;
+            long headers = 0,
+                    views = 0,
+                    constructorIterators = 0,
+                    encoders = 0,
+                    messages = 0,
+                    payloadDecodes = 0,
+                    activations = 0;
+            long baselineSendBytes = 0,
+                    baselineSendObjects = 0,
+                    baselineReceiveBytes = 0,
+                    baselineReceiveObjects = 0;
+            long nativeAddresses = 0,
+                    baselineAddresses = 0,
+                    baselineEncoders = 0,
+                    baselineMessages = 0;
             long targetBytes = 0, targetObjects = 0, callerBytes = 0, callerObjects = 0;
             var classes = new TreeMap<String, Long>();
             try (var events = new RecordingFile(path)) {
@@ -106,10 +128,22 @@ public final class ZLinkTypedSendReceiveCostTest {
                     boolean decode = false,
                             activation = false,
                             serialize = false,
-                            targetPath = false;
+                            targetPath = false,
+                            baselineSend = false,
+                            baselineReceive = false,
+                            address = false;
                     for (var frame : e.getStackTrace().getFrames()) {
                         String owner = frame.getMethod().getType().getName();
                         String method = frame.getMethod().getName();
+                        baselineSend |=
+                                owner.equals(ZLinkTypedSendReceiveCostTest.class.getName())
+                                        && method.equals("bindingPayload");
+                        baselineReceive |=
+                                owner.equals(ZLinkTypedSendReceiveCostTest.class.getName())
+                                        && method.equals("bindingReceive");
+                        address |=
+                                owner.equals("systems.zlink.runtime.nativeapi.NativeMessage")
+                                        && method.equals("messageData");
                         decode |=
                                 owner.endsWith(".ZLinkChannelEnvelope")
                                         && method.equals("decodeDispatchHeader");
@@ -124,6 +158,25 @@ public final class ZLinkTypedSendReceiveCostTest {
                                         || owner.endsWith(".ZLinkJavaRawServicePort")
                                                 && method.equals("receiveOnLane");
                     }
+                    if (baselineSend) {
+                        baselineSendObjects++;
+                        baselineSendBytes += e.getLong("allocationSize");
+                    }
+                    if (baselineReceive) {
+                        baselineReceiveObjects++;
+                        baselineReceiveBytes += e.getLong("allocationSize");
+                    }
+                    if (address && type.equals("jdk.internal.foreign.NativeMemorySegmentImpl")) {
+                        if (serialize) nativeAddresses++;
+                        if (baselineSend) baselineAddresses++;
+                    }
+                    if (baselineSend && type.startsWith("com.google.protobuf.CodedOutputStream$"))
+                        baselineEncoders++;
+                    if (baselineSend && type.equals("systems.zlink.contracts.messaging.Message"))
+                        baselineMessages++;
+                    if (targetPath && type.equals(BytesValue.class.getName())) payloadDecodes++;
+                    if (targetPath && type.endsWith(".ZLinkSpringHandlerFactory$SpringActivation"))
+                        activations++;
                     if (targetPath) {
                         targetObjects++;
                         targetBytes += e.getLong("allocationSize");
@@ -156,18 +209,87 @@ public final class ZLinkTypedSendReceiveCostTest {
                     targetBytes,
                     callerObjects,
                     callerBytes);
+            System.out.printf(
+                    "baselineSendObjects=%d baselineSendBytes=%d baselineReceiveObjects=%d baselineReceiveBytes=%d nativePayloadAddresses=%d baselinePayloadAddresses=%d baselineEncoders=%d baselineMessages=%d%n",
+                    baselineSendObjects,
+                    baselineSendBytes,
+                    baselineReceiveObjects,
+                    baselineReceiveBytes,
+                    nativeAddresses,
+                    baselineAddresses,
+                    baselineEncoders,
+                    baselineMessages);
+            assertEquals(SENDS, baselineEncoders);
+            assertEquals(SENDS, baselineMessages);
+            assertTrue(
+                    baselineAddresses >= SENDS,
+                    "record real nonempty FFM address access in the binding control");
+            assertEquals(
+                    baselineAddresses,
+                    nativeAddresses,
+                    "codec adds no native payload address read");
             classes.forEach(
                     (type, count) -> System.out.printf("targetAllocation %s %d%n", type, count));
+            System.out.printf(
+                    "payloadDecodes=%d springActivations=%d%n", payloadDecodes, activations);
+            assertEquals(SENDS, payloadDecodes, "one typed payload decode per accepted send");
+            assertEquals(SENDS, activations, "one Spring dependency scope per dispatch");
             assertEquals(SENDS, headers, "one header decode per accepted send");
             assertEquals(SENDS, encoders, "one codec writer per payload");
             assertEquals(SENDS, messages, "one owned codec Message per payload");
             assertEquals(SENDS + 200, sink.created, "dispatch owns a fresh handler");
             assertEquals(sink.created, sink.closed, "dispatch releases each handler once");
             assertEquals(SENDS, views, "probe and decode share one borrowed header view");
+            assertEquals(
+                    0,
+                    constructorIterators,
+                    "prepared constructor traversal needs no cursor object");
 
         } finally {
             Files.deleteIfExists(path);
         }
+    }
+
+    private static void bindingRoundTrip(int count) throws Exception {
+        try (var context = Zlink.createContext();
+                var source = context.createRouterSocket();
+                var target = context.createRouterSocket();
+                var received = new Received()) {
+            source.setRoutingId(RoutingId.from("binding-cost-source"));
+            target.setRoutingId(TARGET);
+            String endpoint = "inproc://binding-cost-" + UUID.randomUUID();
+            target.bind(endpoint);
+            source.connect(endpoint);
+            for (int i = 0; i < count; i++) {
+                bindingSend(source);
+                bindingReceive(target, received);
+            }
+        }
+    }
+
+    private static void bindingSend(RouterSocket source) throws Exception {
+        try (var encoded = bindingPayload()) {
+            source.send(TARGET).message(encoded).submit_sync();
+        }
+    }
+
+    private static Message bindingPayload() throws Exception {
+        var encoded = Message.allocate(PAYLOAD.getSerializedSize());
+        try {
+            var output = CodedOutputStream.newInstance(encoded.mutableDataBuffer());
+            PAYLOAD.writeTo(output);
+            output.flush();
+            output.checkNoSpaceLeft();
+            return encoded;
+        } catch (Exception failure) {
+            encoded.close();
+            throw failure;
+        }
+    }
+
+    private static void bindingReceive(RouterSocket target, Received received) throws Exception {
+        assertTrue(target.recv(received, RecvFlags.NONE));
+        assertEquals(PAYLOAD, BytesValue.parseFrom(received.parts().getFirst().dataBuffer()));
     }
 
     private static AnnotationConfigApplicationContext host(Sink sink, String endpoint) {
