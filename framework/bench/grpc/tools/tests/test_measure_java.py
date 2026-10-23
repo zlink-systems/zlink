@@ -3,6 +3,8 @@
 
 from copy import deepcopy
 import importlib.util
+import json
+import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import tempfile
@@ -67,7 +69,8 @@ class FinalRecordingCollectionTest(unittest.TestCase):
             (root / "main.commit").write_text("exact-commit\n")
             (root / "main.cp").write_text("products.jar\n")
             args = SimpleNamespace(output=root / "results", classpath_dir=root,
-                harness_classpath="classes", deadline=datetime.now(timezone.utc) + timedelta(hours=1))
+                harness_classpath="classes", deadline=datetime.now(timezone.utc) + timedelta(hours=1),
+                version_inputs={"main": {"commit": "exact-commit", "classpath": "classes:products.jar"}})
             first = {"selected": [{"attempt": 1}], "discardedCount": 2, "candidateCount": 3}
             second = {"selected": [{"attempt": 2}, {"attempt": 2}],
                       "discardedCount": 1, "candidateCount": 3}
@@ -84,11 +87,100 @@ class FinalRecordingCollectionTest(unittest.TestCase):
             (root / "main.commit").write_text("exact-commit\n")
             (root / "main.cp").write_text("products.jar\n")
             args = SimpleNamespace(output=root / "results", classpath_dir=root,
-                harness_classpath="classes", deadline=datetime.now(timezone.utc) + timedelta(hours=1))
+                harness_classpath="classes", deadline=datetime.now(timezone.utc) + timedelta(hours=1),
+                version_inputs={"main": {"commit": "exact-commit", "classpath": "classes:products.jar"}})
             with patch.object(runner, "run_attempt", side_effect=RuntimeError("HTTP failure")) as run:
                 with self.assertRaises(RuntimeError):
                     runner.run_condition(args, "main", "send-saturation", "zlink-java", {"native"})
             self.assertEqual(run.call_count, 1)
+
+
+class ImmutableInputTest(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.classes = self.root / "classes"
+        self.classes.mkdir()
+        (self.classes / "Harness.class").write_bytes(b"harness bytecode")
+        self.core = self.root / "core.jar"
+        self.core.write_bytes(b"core artifact")
+        self.helper = self.root / "helper.jar"
+        self.helper.write_bytes(b"helper artifact")
+        self.alias = self.root / "core-link.jar"
+        self.alias.symlink_to(self.core)
+        self.cp = self.root / "main.cp"
+        self.cp.write_text(os.pathsep.join(map(str, (self.alias, self.helper))) + "\n")
+        self.commit = self.root / "main.commit"
+        self.commit.write_text("exact-commit\n")
+        self.manifest = {"versions": {"main": "exact-commit"}, "jars": {"main": {
+            path.name: {"path": str(path), "sha256": runner.digest(path)}
+            for path in (self.core, self.helper)}}}
+        self.manifest_path = self.root / "artifact-manifest.json"
+        self.manifest_path.write_text(json.dumps(self.manifest))
+        self.tool = self.root / "tool.py"
+        self.tool.write_text("frozen tool")
+        self.args = SimpleNamespace(versions=["main"], classpath_dir=self.root,
+            harness_classpath=str(self.classes), tool_hashes={str(self.tool): runner.digest(self.tool)})
+        runner.freeze_inputs(self.args, self.manifest_path, self.manifest)
+        self.classpath = self.args.version_inputs["main"]["classpath"]
+
+    def check(self):
+        return runner.verify_inputs(self.args, "main", self.classpath)
+
+    def test_frozen_inputs_pass(self):
+        actual = self.check()
+        self.assertEqual(set(actual), {str(self.core), str(self.helper), str(self.classes / "Harness.class")})
+
+    def test_added_shadow_jar_fails(self):
+        shadow = self.root / "shadow.jar"
+        shadow.write_bytes(b"shadow class")
+        self.cp.write_text(self.cp.read_text().strip() + os.pathsep + str(shadow))
+        with self.assertRaises(ValueError):
+            self.check()
+
+    def test_removed_jar_fails(self):
+        self.cp.write_text(str(self.alias))
+        with self.assertRaises(ValueError):
+            self.check()
+
+    def test_reordered_jars_fail(self):
+        self.cp.write_text(os.pathsep.join(map(str, (self.helper, self.alias))) + "\n")
+        with self.assertRaises(ValueError):
+            self.check()
+
+    def test_moved_jar_with_identical_bytes_fails(self):
+        moved = self.root / "moved.jar"
+        self.core.rename(moved)
+        self.alias.unlink()
+        self.alias.symlink_to(moved)
+        with self.assertRaises(ValueError):
+            self.check()
+
+    def test_commit_replacement_fails(self):
+        self.commit.write_text("different-commit\n")
+        with self.assertRaises(ValueError):
+            self.check()
+
+    def test_manifest_replacement_fails(self):
+        self.manifest_path.write_text(self.manifest_path.read_text() + "\n")
+        with self.assertRaises(ValueError):
+            self.check()
+
+    def test_product_bytes_replacement_fails(self):
+        self.core.write_bytes(b"different bytecode")
+        with self.assertRaises(ValueError):
+            self.check()
+
+    def test_shadow_class_added_to_harness_fails(self):
+        (self.classes / "Shadow.class").write_bytes(b"unexpected class")
+        with self.assertRaises(ValueError):
+            self.check()
+
+    def test_relative_classpath_is_rejected(self):
+        self.cp.write_text("core.jar" + os.pathsep + str(self.helper))
+        with self.assertRaisesRegex(ValueError, "absolute"):
+            runner.freeze_inputs(self.args, self.manifest_path, self.manifest)
 
 
 if __name__ == "__main__":

@@ -64,6 +64,49 @@ def hashes(classpath):
     return result
 
 
+def canonical_classpath(classpath):
+    entries = classpath.split(os.pathsep)
+    if any(not entry or not Path(entry).is_absolute() for entry in entries):
+        raise ValueError("classpath entries must be nonempty absolute paths")
+    resolved = tuple(str(Path(entry).resolve(strict=True)) for entry in entries)
+    if len(set(resolved)) != len(resolved):
+        raise ValueError("duplicate resolved classpath entry")
+    return resolved
+
+
+def file_identity(path):
+    return {"resolvedPath": str(path.resolve(strict=True)), "sha256": digest(path)}
+
+
+def freeze_inputs(args, manifest_path, manifest):
+    """Fix input files, ordered classpaths and exact artifact sets before launch."""
+    args.input_files = {str(manifest_path): file_identity(manifest_path)}
+    args.harness_paths = canonical_classpath(args.harness_classpath)
+    args.harness_hashes = hashes(os.pathsep.join(args.harness_paths))
+    args.version_inputs = {}
+    for version in args.versions:
+        commit_file = args.classpath_dir / f"{version}.commit"
+        classpath_file = args.classpath_dir / f"{version}.cp"
+        for path in (commit_file, classpath_file):
+            args.input_files[str(path)] = file_identity(path)
+        commit = commit_file.read_text().strip()
+        if commit != manifest["versions"][version]:
+            raise ValueError(f"commit identity mismatch: {version}")
+        paths = canonical_classpath(classpath_file.read_text().strip())
+        if any(not Path(path).is_file() for path in paths):
+            raise ValueError("product classpath entries must be files")
+        if any(not Path(item["path"]).is_absolute() for item in manifest["jars"][version].values()):
+            raise ValueError("manifest artifact paths must be absolute")
+        expected = {str(Path(item["path"]).resolve(strict=True)): item["sha256"]
+                    for item in manifest["jars"][version].values()}
+        actual = hashes(os.pathsep.join(paths))
+        if len(expected) != len(manifest["jars"][version]) or actual != expected:
+            raise ValueError(f"classpath artifact mismatch: {version}")
+        args.version_inputs[version] = {"commit": commit, "productPaths": paths,
+            "productHashes": actual,
+            "classpath": os.pathsep.join((*args.harness_paths, *paths))}
+
+
 def shell(log, script, *arguments):
     command = ["bash", "-c", 'set -euo pipefail\nsource "$1"\nshift\n' + script,
                "java-jit-phase", str(COMMON), *map(str, arguments)]
@@ -166,16 +209,24 @@ def validate_windows(summary, windows):
             raise ValueError("selected JFR window is not a clean candidate")
 
 
-def verify_inputs(args, classpath):
-    if hashes(args.harness_classpath) != args.harness_hashes:
+def verify_inputs(args, version, classpath):
+    for path, expected in args.input_files.items():
+        if file_identity(Path(path)) != expected:
+            raise ValueError(f"measurement input file changed: {path}")
+    harness_paths = canonical_classpath(args.harness_classpath)
+    if (harness_paths != args.harness_paths
+            or hashes(os.pathsep.join(harness_paths)) != args.harness_hashes):
         raise ValueError("harness classpath changed during collection")
     if {path: digest(Path(path)) for path in args.tool_hashes} != args.tool_hashes:
         raise ValueError("measurement tool or JFR settings changed during collection")
-    value = hashes(classpath)
-    if any(value.get(path) != sha for path, sha in args.product_hashes.items()
-           if path in classpath.split(os.pathsep)):
+    expected = args.version_inputs[version]
+    paths = canonical_classpath((args.classpath_dir / f"{version}.cp").read_text().strip())
+    product_hashes = hashes(os.pathsep.join(paths))
+    if (paths != expected["productPaths"] or product_hashes != expected["productHashes"]
+            or classpath != expected["classpath"]
+            or (args.classpath_dir / f"{version}.commit").read_text().strip() != expected["commit"]):
         raise ValueError("product classpath changed during collection")
-    return value
+    return {**args.harness_hashes, **product_hashes}
 
 
 def run_attempt(args, version, commit, classpath, pattern, implementation,
@@ -217,8 +268,9 @@ def run_attempt(args, version, commit, classpath, pattern, implementation,
         "warmupPlanMs": WARMUP_PLAN, "warmupActiveMs": sum(WARMUP_PLAN),
         "selection": "first clean windows in chronological order, final JFR validation",
         "officialBenchProtocol": False, "classpath": classpath,
-        "classpathHashes": verify_inputs(args, classpath), "commands": commands,
+        "classpathHashes": verify_inputs(args, version, classpath), "commands": commands,
         "toolHashes": args.tool_hashes,
+        "inputFileHashes": args.input_files,
         "environment": {key: environment.get(key) for key in
             ("JAVA_HOME", "JAVA_TOOL_OPTIONS", "JDK_JAVA_OPTIONS", "_JAVA_OPTIONS",
              "ZLINK_JAVA_NATIVE_CACHE", "XDG_CACHE_HOME", "ZLINK_CORE_CACHE_DIR")},
@@ -302,7 +354,7 @@ def run_attempt(args, version, commit, classpath, pattern, implementation,
             save(out / "status.json", status)
     if exits != {"target": 0, "source": 0}:
         raise RuntimeError(f"JVM exit failure: {status}")
-    verify_inputs(args, classpath)
+    verify_inputs(args, version, classpath)
     if len(windows) <= WARMUP_WINDOWS:
         summary = {"valid": False, "selected_windows": [],
                    "reason": "deadline reached before warmup and candidate completion"}
@@ -328,9 +380,8 @@ def run_attempt(args, version, commit, classpath, pattern, implementation,
 def run_condition(args, version, pattern, implementation, expected_native):
     out = args.output / version / pattern / implementation
     out.mkdir(parents=True)
-    commit = (args.classpath_dir / f"{version}.commit").read_text().strip()
-    products = (args.classpath_dir / f"{version}.cp").read_text().strip()
-    classpath = args.harness_classpath + os.pathsep + products
+    inputs = args.version_inputs[version]
+    commit, classpath = inputs["commit"], inputs["classpath"]
     selected = []
     attempt = 0
     discarded = candidates = 0
@@ -378,8 +429,11 @@ def summarize(args, conditions):
 
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--classpath-dir", type=Path, required=True)
-    parser.add_argument("--harness-classpath", required=True)
+    parser.add_argument("--classpath-dir", type=Path, required=True,
+                        help="Directory with VERSION.cp, VERSION.commit and artifact-manifest.json; "
+                             "classpath entries and manifest jar path fields must be absolute")
+    parser.add_argument("--harness-classpath", required=True,
+                        help="Ordered harness classpath with absolute entries only")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--versions", default="main,pr2354,pr2608")
     parser.add_argument("--patterns", default=",".join(PATTERNS))
@@ -419,19 +473,7 @@ def main():
     expected_native = set(manifest["nativeHashes"].values())
     if len(expected_native) != 1:
         raise ValueError("exactly one native library SHA256 is required")
-    args.product_hashes = {}
-    for version in args.versions:
-        commit = (args.classpath_dir / f"{version}.commit").read_text().strip()
-        if commit != manifest["versions"][version]:
-            raise ValueError(f"commit identity mismatch: {version}")
-        entries = (args.classpath_dir / f"{version}.cp").read_text().strip().split(os.pathsep)
-        actual = {Path(entry).name: digest(Path(entry)) for entry in entries}
-        expected = {name: value["sha256"] for name, value in manifest["jars"][version].items()}
-        if len(entries) != len(actual) or actual != expected:
-            raise ValueError(f"classpath artifact mismatch: {version}")
-        args.product_hashes.update({str(Path(entry).resolve()): actual[Path(entry).name]
-                                    for entry in entries})
-    args.harness_hashes = hashes(args.harness_classpath)
+    freeze_inputs(args, manifest_path, manifest)
     args.tool_hashes = {str(path): digest(path) for path in
                        (Path(__file__), COMMON, ANALYZER, args.settings, HERE / "ReadJit.java")}
     shutil.copy2(manifest_path, args.output / "artifact-manifest.json")
