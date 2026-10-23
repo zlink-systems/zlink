@@ -3109,38 +3109,51 @@ public_host_runtime_t::request_to_node (const zlink::routing_id_t &target,
                                         std::vector<zlink::message_t> parts,
                                         pending_operation_t &operation,
                                         std::chrono::milliseconds timeout)
-{
+try {
     operation.prepare_for_registration ();
     operation.id = next_operation ();
     const auto host = shared_from_this ();
-    const auto accepted = co_await _transport->request_to_node (
+    auto accepted = _transport->request_to_node (
       target.to_bytes (), encode_application (std::move (parts)), timeout,
       [host, operation] (foundation::operation_terminal_t terminal,
                          zlink::message_t payload) mutable {
           host->complete_operation (operation, operation_kind_t::none, terminal,
                                     std::move (payload));
       });
-    if (!accepted) {
-        //  Spec 32-framework-error-model:76-77 -- a target this runtime has
-        //  never admitted (absent from the live peer table) does not exist
-        //  from the requester's perspective and must complete NotFound, not
-        //  Unavailable. `submitted(false)` below collapses every rejected
-        //  request_to_node into `not_connected` (-> Unavailable via
-        //  boundary_error_t::disconnected, see call_facade_runtime.cpp), but
-        //  that is only correct for a target that WAS reachable and merely
-        //  is not right now. service_topology_registry_t has no "known but
-        //  currently unreachable" state distinct from "not a peer" --
-        //  disconnect() erases the peer entry outright -- so any target
-        //  absent from the live peer table is, by this runtime's own model,
-        //  simply a target that does not exist. Matches Java's
-        //  ZLinkJavaRawSpotNode.classifyNodeSendTarget (peerState absent ->
-        //  TARGET_NOT_FOUND, i.e. NotFound) and Node's
-        //  raw-service-mesh-runtime.ts knownTarget gate (unknown RID ->
-        //  RequestResult.NotFound).
-        if (!_transport->topology ().peer (target.to_bytes ()))
-            co_return zlink::submit_result_t::not_found;
-    }
-    co_return submitted (accepted);
+    auto classify = [host, &target] (const result_t<bool> &result) {
+        if (!result)
+            return detail::result_access_t::failure<zlink::submit_result_t> (result.exception ());
+        const auto accepted = result.value ();
+        if (!accepted) {
+            //  Spec 32-framework-error-model:76-77 -- a target this runtime has
+            //  never admitted (absent from the live peer table) does not exist
+            //  from the requester's perspective and must complete NotFound, not
+            //  Unavailable. `submitted(false)` below collapses every rejected
+            //  request_to_node into `not_connected` (-> Unavailable via
+            //  boundary_error_t::disconnected, see call_facade_runtime.cpp), but
+            //  that is only correct for a target that WAS reachable and merely
+            //  is not right now. service_topology_registry_t has no "known but
+            //  currently unreachable" state distinct from "not a peer" --
+            //  disconnect() erases the peer entry outright -- so any target
+            //  absent from the live peer table is, by this runtime's own model,
+            //  simply a target that does not exist. Matches Java's
+            //  ZLinkJavaRawSpotNode.classifyNodeSendTarget (peerState absent ->
+            //  TARGET_NOT_FOUND, i.e. NotFound) and Node's
+            //  raw-service-mesh-runtime.ts knownTarget gate (unknown RID ->
+            //  RequestResult.NotFound).
+            if (!host->_transport->topology ().peer (target.to_bytes ()))
+                return result_t<zlink::submit_result_t>::success (
+                  zlink::submit_result_t::not_found);
+        }
+        return result_t<zlink::submit_result_t>::success (submitted (accepted));
+    };
+    if (accepted.await_ready ())
+        return task_t<zlink::submit_result_t> (classify (accepted.result ()));
+    return detail::project_task_terminal<zlink::submit_result_t> (accepted, std::move (classify));
+}
+catch (...) {
+    return task_t<zlink::submit_result_t> (
+      detail::current_exception_result<zlink::submit_result_t> ());
 }
 
 task_t<zlink::submit_result_t>

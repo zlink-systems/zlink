@@ -439,4 +439,67 @@ TEST (RequestCallAllocations, RawNodeRequestKeepsInvalidTimeoutInTheReturnedTask
     }
 }
 
+TEST (RequestCallAllocations, HostNodeRequestAddsNoCoroutineAboveTheRawTask)
+{
+    fw::completion_owner_t completion_owner;
+    auto state =
+      fw::test::runtime_failure_fixture<fw::detail::mesh_node_builder_state_t> ("host-request");
+    state->core_context = std::make_shared<zlink::context_t> ();
+    state->listen_endpoint = "tcp://127.0.0.1:7485";
+    state->routing_id = zlink::routing_id_t::from ("host-source");
+    state->object_role = fw::object_role_t::none;
+    fw::detail::mesh_node_runtime_t runtime (state);
+    runtime.start ();
+    struct stop_t
+    {
+        fw::detail::mesh_node_runtime_t &runtime;
+        ~stop_t () { runtime.stop (); }
+    } stop{runtime};
+    auto host = runtime.native_node ().shared_from_this ();
+    const auto target = zlink::routing_id_t::from ("missing-host-target");
+    const auto target_bytes = target.to_bytes ();
+    fw::runtime::host::pending_operation_t operation;
+    fw::runtime::protocol::application_payload_t payload;
+    std::optional<fw::task_t<bool>> raw;
+    const auto raw_count = fw::tests::count_allocations ([&] {
+        raw.emplace (
+          host->transport ().request_to_node (target_bytes, payload, std::chrono::seconds (1), {}));
+    });
+    const auto target_count = fw::tests::count_allocations ([&] { (void) target.to_bytes (); });
+    const auto callback_count = fw::tests::count_allocations ([&] {
+        fw::runtime::foundation::operation_registry_t::callback_t callback =
+          [host, operation] (fw::runtime::foundation::operation_terminal_t, zlink::message_t) {
+              (void) host;
+              (void) operation;
+          };
+    });
+    const auto result_count = fw::tests::count_allocations ([] {
+        (void) fw::task_t<zlink::submit_result_t> (
+          fw::result_t<zlink::submit_result_t>::success (zlink::submit_result_t::not_found));
+    });
+    std::vector<zlink::message_t> calibrated_parts;
+    calibrated_parts.push_back (zlink::message_t::from (std::string ("request")));
+    const auto payload_count = fw::tests::count_allocations ([&] {
+        (void) fw::runtime::protocol::application_payload_t::from_parts (
+          std::move (calibrated_parts));
+    });
+    std::vector<zlink::message_t> parts;
+    parts.push_back (zlink::message_t::from (std::string ("request")));
+    std::optional<fw::task_t<zlink::submit_result_t>> pending;
+    const auto measured = fw::tests::count_allocations ([&] {
+        pending.emplace (
+          host->request_to_node (target, std::move (parts), operation, std::chrono::seconds (1)));
+    });
+    const auto classification_count = fw::tests::count_allocations (
+      [&] { (void) host->transport ().topology ().peer (target.to_bytes ()); });
+    const auto baseline = raw_count + target_count + callback_count + result_count + payload_count
+                          + classification_count;
+    std::printf (
+      "host request: measured=%zu baseline=%zu raw=%zu target=%zu callback=%zu result=%zu\n",
+      measured, baseline, raw_count, target_count, callback_count, result_count);
+    EXPECT_EQ (measured, baseline);
+    ASSERT_TRUE (pending->result ());
+    EXPECT_EQ (pending->result ().value (), zlink::submit_result_t::not_found);
+}
+
 } // namespace
