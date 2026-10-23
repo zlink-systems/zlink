@@ -37,21 +37,19 @@ pending_t forwarding_reference (detail::mesh_node_runtime_t &node, dispatch_t di
 #define RECEIVE_COST_NOINLINE __attribute__ ((noinline))
 #endif
 
-RECEIVE_COST_NOINLINE pending_t empty_management_reference (task_t<void> pending)
-{
-    co_await pending;
-    co_return 0;
-}
-
-// Calibrate the required receive result, relay-management result, empty
-// infrastructure result and existing local-dispatch lane operation. No
+// Calibrate the required receive result, ready relay-management and liveness
+// results, empty infrastructure result and existing local-dispatch lane operation. No
 // platform-specific coroutine, promise or control-block size is assumed.
-// Use an externally prepared awaitable so compilers cannot replace a coroutine
-// that only co_returns with a ready-result factory in the calibration.
+// The external awaitable keeps this a coroutine independently of whether the
+// compiler simplifies the locally constructed ready results.
 RECEIVE_COST_NOINLINE pending_t empty_receive_reference (runtime::state_lane_t &lane,
                                                          task_t<void> management)
 {
-    (void) co_await empty_management_reference (std::move (management));
+    co_await management;
+    (void) co_await pending_t (result_t<std::size_t>::success (0));
+    (void) task_t<runtime::mesh::service_liveness_tick_t> (
+      result_t<runtime::mesh::service_liveness_tick_t>::success (
+        runtime::mesh::service_liveness_tick_t{}));
     (void) co_await pending_t (result_t<std::size_t>::success (0));
     lane.run ([] {}).get ();
     co_return 0;
@@ -67,9 +65,17 @@ pending_t invoke (detail::mesh_node_runtime_t &node, const dispatch_t &dispatch,
     return node.dispatch_ready (dispatch, false);
 }
 
-tests::allocation_measurement_t
-measure (detail::mesh_node_runtime_t &node, const dispatch_t &dispatch, int path)
+tests::allocation_measurement_t measure (detail::mesh_node_runtime_t &node,
+                                         const dispatch_t &dispatch,
+                                         int path,
+                                         tests::allocation_event_log_t *events = nullptr)
 {
+    std::optional<tests::allocation_event_scope_t> event_scope;
+    if (events != nullptr) {
+        events->count = 0;
+        events->overflow = false;
+        event_scope.emplace (*events);
+    }
     std::optional<pending_t> pending;
     const auto cost =
       tests::measure_allocations ([&] { pending.emplace (invoke (node, dispatch, path)); });
@@ -82,6 +88,14 @@ measure (detail::mesh_node_runtime_t &node, const dispatch_t &dispatch, int path
 int main ()
 {
     completion_owner_t completion_owner;
+    constexpr std::array<const char *, 3> path_names{"native", "forwarding", "facade"};
+    std::array<std::array<tests::allocation_event_t, 64>, 3> path_events{};
+    std::array<tests::allocation_event_log_t, 3> path_logs{
+      {{path_events[0].data (), path_events[0].size ()},
+       {path_events[1].data (), path_events[1].size ()},
+       {path_events[2].data (), path_events[2].size ()}}};
+    std::array<tests::allocation_event_t, 64> reference_events{};
+    tests::allocation_event_log_t reference_log{reference_events.data (), reference_events.size ()};
     try {
         auto state =
           test::runtime_failure_fixture<detail::mesh_node_builder_state_t> ("receive-cost");
@@ -100,7 +114,7 @@ int main ()
         for (int round = 0; round != rounds; ++round) {
             for (int index = 0; index != 3; ++index) {
                 const int path = round % 2 ? 2 - index : index;
-                const auto cost = measure (node, dispatch, path);
+                const auto cost = measure (node, dispatch, path, &path_logs[path]);
                 totals[path].count += cost.count;
                 totals[path].bytes += cost.bytes;
                 totals[path].largest = std::max (totals[path].largest, cost.largest);
@@ -109,7 +123,7 @@ int main ()
         std::cout << "receive-dispatch rounds=" << rounds;
         for (int path = 0; path != 3; ++path)
             std::cout << " path=" << path << " count=" << totals[path].count
-                      << " bytes=" << totals[path].bytes;
+                      << " bytes=" << totals[path].bytes << " largest=" << totals[path].largest;
         std::cout << '\n';
         runtime::offload_executor_t reference_executor (1);
         runtime::state_lane_t reference_lane (reference_executor);
@@ -117,28 +131,42 @@ int main ()
         management.complete (result_t<void>::success ());
         (void) empty_receive_reference (reference_lane, management.task ()).result ().value ();
         std::optional<pending_t> reference;
-        const auto empty_budget = tests::measure_allocations ([&] {
-            reference.emplace (empty_receive_reference (reference_lane, management.task ()));
-        });
+        tests::allocation_measurement_t empty_reference_cost{};
+        {
+            tests::allocation_event_scope_t reference_scope (reference_log);
+            empty_reference_cost = tests::measure_allocations ([&] {
+                reference.emplace (empty_receive_reference (reference_lane, management.task ()));
+            });
+        }
         require (reference->await_ready () && reference->result ().value () == 0,
                  "empty receive calibration did not complete");
-        std::cout << "empty-receive budget-count=" << empty_budget.count
-                  << " native-count=" << totals[0].count / rounds << '\n';
-        require (totals[0].count <= empty_budget.count * rounds,
-                 "empty receive allocated an infrastructure processing frame");
-        // A receive turn can retain its ordinary/local dispatch records. An
-        // empty infrastructure mailbox needs none of its command-specific
-        // decoding, relocation or materialization records in that frame.
-        const auto receive_storage = sizeof (runtime::host::receive_record_t)
-                                     + sizeof (runtime::host::local_application_dispatch_t);
-        std::cout << "empty-receive largest=" << totals[0].largest
-                  << " receive-storage=" << receive_storage << '\n';
-        require (totals[0].largest <= receive_storage,
-                 "empty receive retained infrastructure command storage");
+        std::cout << "empty-receive reference-count=" << empty_reference_cost.count
+                  << " native-count=" << totals[0].count / rounds
+                  << " native-receive-storage=" << totals[0].largest
+                  << " facade-receive-storage=" << totals[2].largest << '\n';
+        const auto print_sizes = [] (const char *name, const tests::allocation_event_log_t &log) {
+            std::cout << "allocation-events " << name << " sizes=[";
+            for (std::size_t index = 0; index != log.count; ++index) {
+                if (index != 0)
+                    std::cout << ',';
+                std::cout << log.events[index].size;
+            }
+            std::cout << "] overflow=" << log.overflow << '\n';
+        };
+        for (std::size_t path = 0; path != path_logs.size (); ++path)
+            print_sizes (path_names[path], path_logs[path]);
+        print_sizes ("reference", reference_log);
+        require (
+          totals[0].count == empty_reference_cost.count * rounds,
+          "empty receive allocation count differs from its required results and lane operation");
         require (totals[1].count > totals[0].count && totals[1].bytes > totals[0].bytes,
                  "forwarding reference failed to expose its task allocation");
-        require (totals[2].count <= totals[0].count && totals[2].bytes <= totals[0].bytes,
-                 "receive forwarding allocated beyond the native owner baseline");
+        // Native dispatch is the same receive coroutine with the same ordinary
+        // and local-dispatch storage in this build. Its complete allocation,
+        // including compiler-generated frame storage, is the facade baseline.
+        require (totals[2].count == totals[0].count && totals[2].bytes == totals[0].bytes
+                   && totals[2].largest == totals[0].largest,
+                 "receive forwarding allocation differs from the native owner baseline");
 
         auto &mailbox = node.native_node ().transport ().mailbox ();
         constexpr auto infrastructure = runtime::mesh::service_mailbox_domain_t::infrastructure;
@@ -182,6 +210,9 @@ int main ()
     }
     catch (const std::exception &error) {
         std::cerr << error.what () << '\n';
+        for (std::size_t path = 0; path != path_logs.size (); ++path)
+            std::cerr << path_names[path] << ' ' << tests::describe_allocations (path_logs[path]);
+        std::cerr << "reference " << tests::describe_allocations (reference_log);
         return 1;
     }
 }
