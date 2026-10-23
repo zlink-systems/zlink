@@ -503,6 +503,33 @@ warmup은 공용 `WARMUP_SECONDS`(기본값 2초) 동안 같은 패턴을 warmup
 | gRPC server 구성 | 언어마다 기본 server 구현이 다르다. gRPC 쪽은 각 언어의 기본 구성으로 두고 그 구성을 결과에 남긴다. C++는 `CallbackService`와 기본 `ServerBuilder`를 사용한다. 호출별 동기 worker thread를 만들지 않는다. |
 | 런타임과 gRPC 라이브러리 version | SDK version, 런타임 version, gRPC 라이브러리 version을 셀 원본과 보고서에 함께 남긴다 |
 
+### 8.3 Java의 compilation 없는 반복 측정
+
+`tools/jit/measure_java.py`는 Java Framework와 binding을 같은 payload·패턴으로 비교할 때
+사용하는 별도 검증 runner다. 기본 예열은 실제 active 경로를 250ms씩 80회 실행한 뒤
+5초씩 2회 실행하는 총 부하 30초이며, 그 결과는 버린다. 짧은 phase는 제어·집계의 호출 횟수를
+확보하고 마지막 두 phase는 실제 측정 길이의 profile을 실행한다. reset·settle·기록도 반복하므로
+전체 경과 시간은 부하 시간 30초보다 길며 원본에 남긴다. 이후 5초 회차 중 source와 target 모두 측정 구간과 겹친
+`jdk.Compilation`이 0인 회차를 시간순으로 3개 선택한다. 처리량은 선택 기준이 아니다.
+이 반복은 같은 JVM을 사용하므로 §10.4의 셀마다 새 process를 사용하는 기본 결과와 구분한다.
+
+구간은 driver가 기록한 `active_started_at_ns`부터 `active_ended_at_ns`까지이며,
+완료 판정과 처리량 분모, JFR의 `measure.Phase`가 같은 구간을 사용한다. 두 JVM의
+`measure.MonotonicAnchor`로 시각을 대응시키고 기준점의 오차도 겹침에 포함한다.
+검사기는 compilation threshold 0 설정과 DataLoss 부재를 확인하며, 누락되거나 손상된
+기록은 유효 판정하지 않는다. Deoptimization은 별도로 보고한다.
+
+진행 중 JFR dump의 선택은 잠정 결과다. 두 JVM이 정상 종료한 뒤 최종 JFR로 다시 검사하고,
+겹친 회차는 버린 수와 메서드를 남긴 뒤 다시 측정한다. 최종 검증에서 유효 회차가 부족하면
+새 JVM에서 같은 예열을 거쳐 부족분을 채운다. 작업 종료 시각까지 3개를 확보하지 못하면
+실패로 종료하며 비율을 확정하지 않는다. 제품 오류·drain 초과·잘못된 기록은 재시도하지 않는다.
+`--help`에 classpath manifest·종료 시각 입력을 설명한다. `compilation.jfc`는 유효성 판정용,
+`profile.jfc`는 CPU·할당 귀속을 조사하는 별도 진단용이다.
+
+이 절은 JVM compiler 정책이나 측정 대상 코드를 바꾸지 않는다. C++·.NET·Node.js의
+driver·완료 수·처리량 정의는 그대로다. Java와 같은 driver·HTTP listener를 쓰는 Kotlin에는
+아래 완료 응답과 공통 예열 경로가 함께 적용된다.
+
 ## 9. 포트 대역
 
 구현 하나에 A trigger, A stats, B endpoint, B stats 네 포트가 필요하고(raw binding은 B의 request·
