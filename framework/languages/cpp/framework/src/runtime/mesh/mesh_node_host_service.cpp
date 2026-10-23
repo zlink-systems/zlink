@@ -13,6 +13,7 @@
 #include "runtime/actors/actor_manager_access.hpp"
 #include "runtime/locations/sha256.hpp"
 #include "runtime/locations/actor_authority_payload.hpp"
+#include "runtime/locations/relocation_authority_payload.hpp"
 #include "runtime/locations/authority_key_codec.hpp"
 
 #include "runtime/channels/route_handler_registry.hpp"
@@ -1682,6 +1683,8 @@ task_t<spot_create_result_t> mesh_node_host_service_t::create_user_spot (
                     co_return result_t<spot_create_result_t>::failure (
                       framework_error_kind_t::type_mismatch,
                       "User Spot stable type does not match");
+                stateful::authority_relocation_payload_codec_t::project_application_payload (
+                  current);
                 const auto authority = decode_direct_user_spot_authority_payload (current.payload);
                 if (current.allocation.state == placement_allocation_state_t::active && authority
                     && authority->state == user_spot_authority_state_t::ready)

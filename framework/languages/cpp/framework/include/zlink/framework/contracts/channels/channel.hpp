@@ -946,9 +946,9 @@ class route_client_t
                         const route_send_call_t::metadata_map_t &metadata);
 
     static task_t<void>
-    submit_channel_send_erased (const std::shared_ptr<detail::route_client_state_t> &state,
-                                const std::string &channel_name,
-                                const std::string &packet_name,
+    submit_channel_send_erased (std::shared_ptr<detail::route_client_state_t> state,
+                                std::string channel_name,
+                                std::string packet_name,
                                 std::type_index message_type,
                                 payload_encoder_t encode_payload,
                                 const route_send_call_t::metadata_map_t &metadata);
