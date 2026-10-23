@@ -40,6 +40,7 @@ import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
+import java.util.function.Predicate;
 
 /** Counts the public typed request caller against the same fake backend without its caller. */
 public final class ZLinkRequestCallerAllocationTest {
@@ -110,6 +111,12 @@ public final class ZLinkRequestCallerAllocationTest {
     /** Shared allocation recorder; only the supplied caller stack boundaries contribute. */
     public static AllocationCount allocations(
             Class<?> owner, List<String> methods, Runnable samples) throws Exception {
+        return allocations(owner, methods, samples, ignored -> true);
+    }
+
+    public static AllocationCount allocations(
+            Class<?> owner, List<String> methods, Runnable samples, Predicate<String> includeClass)
+            throws Exception {
         Path path = Files.createTempFile("zlink-request-caller-", ".jfr");
         try {
             try (Recording recording = new Recording()) {
@@ -141,6 +148,7 @@ public final class ZLinkRequestCallerAllocationTest {
                                                                     frame.getMethod().getName())))
                         continue;
                     String type = event.getClass("objectClass").getName();
+                    if (!includeClass.test(type)) continue;
                     objects++;
                     bytes += event.getLong("allocationSize");
                     if (type.equals("[B")) byteArrays++;
