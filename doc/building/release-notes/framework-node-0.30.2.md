@@ -1,0 +1,32 @@
+[English](./framework-node-0.30.2.md) | [한국어](./framework-node-0.30.2.ko.md)
+
+# ZLink Node.js Framework 0.30.2 Release Notes
+
+Framework 0.30.2 uses Node.js binding 1.20.0 and Core 1.20.0.
+
+## Changes
+
+- Records the request source owner at ingress and preserves the original requester after relocation. Actor and Spot requests are handled only when the source descriptor is valid. (#2103, #2140, #2151)
+- Reduced per-message Store reads and completion work, and aligned runtime metric labels and refresh points with the contract. (#1809, #1834, #1866, #2189, #2190)
+- Deferred Join and HTTP handler Yield now continue on the correct execution turn, including consecutive deferral. (#2003, #2064)
+- Transfers pending timers and frames to the new owner during Actor relocation and updates relocation outcome metrics. (#1987, #1960, #2013)
+
+## Defect Fixes
+
+- Fixed stalls when Spot close and Session seal could not wait for a running handler or the close of an open binding. (#1896, #1915, #2135, #1886)
+- Fixed mismatched lifetimes and authority during deferred Join, source settlement, and relocation completion. (#1903, #1938, #2050, #2003)
+- Requests without a source descriptor are rejected, and the original requester is preserved during relocation to prevent misrouted results. (#2103, #2140, #2151)
+- Location capacity metrics now refresh with descriptor polling, and outcome metrics use only the defined labels. (#2189, #2190)
+- Updated the Bingo sample so an observer looks up the room's current state and confirmed rewards after joining. (#2427)
+- The original exception from target Join lifecycle failure is reported through the error reporter. (#2459)
+- Core 1.20.0 no longer stalls the temporary transport owner's executor when a completion poller is registered during the handshake. (#2504)
+- Actor replies are sent as a single STREAM frame, and error payloads use the spec's `{code, message}` form. All four languages verify against the same shared vectors. (#2507)
+
+## Install
+
+```bash
+npm install @zlink-systems/framework@0.30.2 @zlink-systems/http-client@0.30.2
+```
+
+The release tag is [`framework-node/v0.30.2`](https://github.com/zlink-systems/zlink/releases/tag/framework-node%2Fv0.30.2).
+[한국어](./framework-node-0.30.2.ko.md) | [English](./framework-node-0.30.2.md)
