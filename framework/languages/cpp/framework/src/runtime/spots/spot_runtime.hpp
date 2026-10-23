@@ -1814,6 +1814,7 @@ class spot_node_runtime_t
       std::string correlation_id,
       service_provider_t &services,
       serializer_registry_t &serializers,
+      std::function<void ()> accept_activation,
       std::optional<std::string> flow_id = std::nullopt,
       std::optional<flow_origin_t> flow_origin = std::nullopt,
       std::function<void ()> *accepted_turn_terminal = nullptr,
