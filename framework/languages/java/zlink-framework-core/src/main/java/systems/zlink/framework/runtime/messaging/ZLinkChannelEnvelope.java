@@ -413,11 +413,12 @@ public final class ZLinkChannelEnvelope {
      * mistaken for a corrupt envelope.
      */
     public static Header tryDecodeHeader(List<Message> parts, boolean captureFlow) {
-        if (!looksLikeEnvelope(parts)) {
+        ByteBuffer first = envelopeHeader(parts);
+        if (first == null || !looksLikeEnvelope(first)) {
             return null;
         }
         try {
-            return decodeHeader(ZLinkFrameworkMultipartView.buffer(parts, 0), captureFlow);
+            return decodeHeader(first, captureFlow);
         } catch (RuntimeException ignored) {
             return null;
         }
@@ -429,10 +430,11 @@ public final class ZLinkChannelEnvelope {
      * PROTOCOL_ERROR} (task/spec parity with the C++ decoder).
      */
     public static Header decodeDispatchHeader(List<Message> parts, boolean captureFlow) {
-        if (!looksLikeEnvelope(parts)) {
+        ByteBuffer first = envelopeHeader(parts);
+        if (first == null || !looksLikeEnvelope(first)) {
             return null;
         }
-        return decodeHeader(ZLinkFrameworkMultipartView.buffer(parts, 0), captureFlow);
+        return decodeHeader(first, captureFlow);
     }
 
     /**
@@ -463,10 +465,17 @@ public final class ZLinkChannelEnvelope {
 
     /** Two or more parts whose first frame starts with a JSON object byte. */
     public static boolean looksLikeEnvelope(List<Message> parts) {
-        if (parts == null || parts.size() < 2) {
-            return false;
-        }
-        ByteBuffer first = ZLinkFrameworkMultipartView.buffer(parts, 0);
+        ByteBuffer first = envelopeHeader(parts);
+        return first != null && looksLikeEnvelope(first);
+    }
+
+    private static ByteBuffer envelopeHeader(List<Message> parts) {
+        return parts == null || parts.size() < 2
+                ? null
+                : ZLinkFrameworkMultipartView.buffer(parts, 0);
+    }
+
+    private static boolean looksLikeEnvelope(ByteBuffer first) {
         for (int index = first.position(); index < first.limit(); index++) {
             byte value = first.get(index);
             if (value == ' ' || value == '\t' || value == '\r' || value == '\n') {
