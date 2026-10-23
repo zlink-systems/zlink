@@ -1,6 +1,6 @@
 {
   "name": "@zlink-systems/framework-locations-redis",
-  "version": "0.30.1",
+  "version": "0.30.2",
   "license": "SEE LICENSE IN LICENSE",
   "repository": {
     "type": "git",
@@ -17,7 +17,7 @@
     }
   },
   "dependencies": {
-    "@zlink-systems/framework": "0.30.1",
+    "@zlink-systems/framework": "0.30.2",
     "@zlink-systems/zlink": "1.20.0",
     "redis": "^6.1.0"
   }
