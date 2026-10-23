@@ -2651,7 +2651,8 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                     [this, weak_registration = std::weak_ptr (registration), &services] (
                       std::shared_ptr<const protocol::instance_activation_recovery_t>
                         original_command,
-                      std::function<task_t<zlink::message_t> (std::function<void ()> &)> missing) {
+                      std::function<task_t<zlink::message_t> (std::function<void ()> &)> missing,
+                      std::function<void ()> accept_activation) {
                         const auto registration = detail::lock_runtime_owner (weak_registration);
                         const auto &request = original_command->activation;
                         const auto &metadata = original_command->metadata;
@@ -2691,8 +2692,9 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                               std::move (decoded), request.request,
                               std::to_string (request.operation.high) + ":"
                                 + std::to_string (request.operation.low),
-                              services, *_serializers, application.flow_id, application.flow_origin,
-                              terminal.get (), original));
+                              services, *_serializers, std::move (accept_activation),
+                              application.flow_id, application.flow_origin, terminal.get (),
+                              original));
                         detail::observe_task_completion (
                           *running, [this, running, original_command, terminal,
                                      done] (const result_t<zlink::message_t> &reply) {
