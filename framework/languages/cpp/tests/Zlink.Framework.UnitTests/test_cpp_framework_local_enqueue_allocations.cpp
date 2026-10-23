@@ -13,7 +13,9 @@
 #include "runtime/execution/serial_application_record.hpp"
 #include "runtime/execution/serial_execution_queue.hpp"
 #include <gtest/gtest.h>
+#include <atomic>
 #include <cstdio>
+#include <thread>
 
 namespace zlink::framework::runtime::host
 {
@@ -217,6 +219,8 @@ struct stateful_spot_fixture_t
     std::shared_ptr<host::public_host_runtime_t> runtime;
     fw::runtime::stateful::object_ref_t object;
     zlink::routing_id_t rid = zlink::routing_id_t::from ("n");
+    // Every gate lookup of the drain: one precedes each gate admission.
+    std::shared_ptr<std::atomic_size_t> gate_lookups = std::make_shared<std::atomic_size_t> (0);
 
     explicit stateful_spot_fixture_t (fw::runtime::serial_lane_policy_t policy)
     {
@@ -284,7 +288,8 @@ struct stateful_spot_fixture_t
         auto gate = std::make_shared<serial_execution_queue_t> (
           worker, serial_execution_queue_options_t{}, serial_execution_queue_t::error_handler_t{},
           std::move (policy));
-        runtime->configure_relocation_gate ([gate] (const auto &) {
+        runtime->configure_relocation_gate ([gate, lookups = gate_lookups] (const auto &) {
+            ++*lookups;
             return task_t<std::shared_ptr<serial_execution_queue_t>> (
               result_t<std::shared_ptr<serial_execution_queue_t>>::success (gate));
         });
@@ -497,5 +502,59 @@ TEST (LocalEnqueueAllocations, StatefulSpotDrainRecordContinuationStaysWithinRec
     ASSERT_FALSE (extra.empty ());
     std::printf ("record storage=%zu\n", storage.largest);
     EXPECT_LE (extra.back (), storage.largest);
+}
+TEST (LocalEnqueueAllocations, StatefulSpotDrainAdmitsOnceAndStaysOnIdleGateCaller)
+{
+    using namespace fw;
+    using namespace fw::runtime;
+    stateful_spot_fixture_t fixture (serial_lane_policy_t::spot_wide ());
+    auto &runtime = fixture.runtime;
+    auto spot = runtime->get_or_create_spot ("stateful");
+    std::vector<zlink::message_t> parts;
+    parts.push_back (zlink::message_t::from ("payload"));
+    const auto caller = std::this_thread::get_id ();
+    for (unsigned round = 0; round != 3; ++round) {
+        host::pending_operation_t operation;
+        ASSERT_EQ (spot
+                     .request_to_spot (fixture.rid, "stateful", fixture.object.object_generation,
+                                       parts, operation, zlink::send_flags_t::none,
+                                       std::chrono::seconds (30))
+                     .result ()
+                     .value (),
+                   zlink::submit_result_t::ok);
+        const auto lookups_before = fixture.gate_lookups->load ();
+        unsigned handled = 0, off_caller = 0;
+        auto drained = runtime->dispatch_ready ([&] (const auto &, const auto &record, auto) {
+            ++handled;
+            if (std::this_thread::get_id () != caller)
+                ++off_caller;
+            if (record.reply_token.local_reply)
+                EXPECT_TRUE (record.reply_token.local_reply (parts));
+            if (record.application_record)
+                record.application_record->release_native_claim ();
+        });
+        // An idle gate admits in the receive turn: the drain completes without a
+        // continuation on another thread.
+        const bool ready = drained.await_ready ();
+        const auto count = drained.result_for (std::chrono::seconds (5));
+        ASSERT_TRUE (count.has_value ());
+        EXPECT_EQ (count->value (), 1u);
+        EXPECT_EQ (handled, 1u);
+        // The native publication asks the gate; the owner claim does not ask it again.
+        EXPECT_EQ (fixture.gate_lookups->load () - lookups_before, 1u);
+        const auto idle_before = fixture.gate_lookups->load ();
+        EXPECT_EQ (runtime->dispatch_ready ([] (const auto &, const auto &, auto) {})
+                     .result_for (std::chrono::seconds (5))
+                     ->value (),
+                   0u);
+        EXPECT_EQ (fixture.gate_lookups->load (), idle_before);
+        const auto complete = operation.completion->task ().result_for (std::chrono::seconds (5));
+        ASSERT_TRUE (complete.has_value ());
+        EXPECT_TRUE (*complete);
+        std::printf ("stateful Spot request drain: gate lookups=%zu idle lookups=%zu ready=%d "
+                     "off_caller=%u\n",
+                     idle_before - lookups_before, fixture.gate_lookups->load () - idle_before,
+                     ready, off_caller);
+    }
 }
 } // namespace

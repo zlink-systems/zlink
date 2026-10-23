@@ -7344,10 +7344,10 @@ task_t<bool> public_host_runtime_t::notify_stateful_owner (const stateful::objec
 task_t<bool> public_host_runtime_t::dispatch_stateful_owner (
   const stateful::object_ref_t &object,
   const std::function<void (
-    const ready_record_t &, const receive_record_t &, std::vector<zlink::message_t>)> &dispatch)
+    const ready_record_t &, const receive_record_t &, std::vector<zlink::message_t>)> &dispatch,
+  std::shared_ptr<runtime::serial_execution_queue_t> gate,
+  std::shared_ptr<stateful::relocation_seal_binding_t> restoring)
 {
-    using seal_t = std::shared_ptr<stateful::relocation_seal_binding_t>;
-    using gate_t = std::shared_ptr<runtime::serial_execution_queue_t>;
     if (object.kind == stateful::object_kind_t::actor) {
         // A ready notification keeps the synchronous owner claim on this stack (#2418).
         try {
@@ -7361,13 +7361,14 @@ task_t<bool> public_host_runtime_t::dispatch_stateful_owner (
             return task_t<bool> (detail::current_exception_result<bool> ());
         }
     }
-    // The owner claims run after the gate admission; only that wait owns a frame.
-    const auto claim =
-      [] (public_host_runtime_t *self, const stateful::object_ref_t &object,
-          const std::function<void (const ready_record_t &, const receive_record_t &,
-                                    std::vector<zlink::message_t>)> &dispatch,
-          gate_t gate, task_t<seal_t> admitted) -> task_t<bool> {
-        auto restoring = co_await admitted;
+    // The gate admission that observed a restoring seal (native publication or the
+    // aborted cut's finish) hands it here; an owner claim without one asks the gate
+    // nothing. The claim's output storage lives in this frame.
+    return [] (public_host_runtime_t *self, const stateful::object_ref_t &object,
+               const std::function<void (const ready_record_t &, const receive_record_t &,
+                                         std::vector<zlink::message_t>)> &dispatch,
+               std::shared_ptr<runtime::serial_execution_queue_t> gate,
+               std::shared_ptr<stateful::relocation_seal_binding_t> restoring) -> task_t<bool> {
         bool dispatched = false;
         for (;;) {
             std::function<void ()> before;
@@ -7389,24 +7390,7 @@ task_t<bool> public_host_runtime_t::dispatch_stateful_owner (
             // New root handlers remain behind this same seal until the prefix is in the FIFO.
             (void) co_await gate->admit_native_application ({});
         }
-    };
-    // Configured before transport start; the lifecycle lane rejects later writes
-    // while the host is running or closing (as in dispatch_native_spot).
-    const auto &locate = _relocation_gate;
-    try {
-        if (!locate)
-            return claim (this, object, dispatch, {},
-                          task_t<seal_t> (result_t<seal_t>::success ({})));
-        return continue_task<bool> (
-          locate (object), [this, &object, &dispatch, claim] (gate_t gate) {
-              auto admitted = gate ? gate->admit_native_application ({})
-                                   : task_t<seal_t> (result_t<seal_t>::success ({}));
-              return claim (this, object, dispatch, std::move (gate), std::move (admitted));
-          });
-    }
-    catch (...) {
-        return task_t<bool> (detail::current_exception_result<bool> ());
-    }
+    }(this, object, dispatch, std::move (gate), std::move (restoring));
 }
 
 bool public_host_runtime_t::claim_stateful_owner (
@@ -7754,7 +7738,7 @@ task_t<bool> public_host_runtime_t::dispatch_native_spot (
     if (gate) {
         auto restoring = co_await gate->admit_native_application (publish);
         while (restoring) {
-            (void) co_await dispatch_stateful_owner (object, dispatch);
+            (void) co_await dispatch_stateful_owner (object, dispatch, gate, std::move (restoring));
             restoring = co_await gate->admit_native_application (publish);
         }
     } else {
@@ -8816,7 +8800,7 @@ public_host_runtime_t::cut_relocation_source (
             if (!binding || !gate)
                 co_return;
             if (restored && resume) {
-                (void) co_await dispatch_stateful_owner (owner, resume);
+                (void) co_await dispatch_stateful_owner (owner, resume, gate, binding);
             } else if (!restored) {
                 (void) co_await gate->release_relocation_seal (binding);
             }
