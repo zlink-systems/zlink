@@ -597,6 +597,14 @@ POST http://127.0.0.1:<A trigger>/bench/start
   are what settle (§3) polls.
 - The HTTP round trips of trigger and stats are not measured operations and don't enter
   `throughput` or `latency`.
+- Java/Kotlin respond to POST after phase accounting and result writing finish, with the driver's
+  actual start in `startedAt`. The runner waits for this response and does not poll stats during
+  active. Duplicate requests with an in-progress key await the same outcome; phase failures return
+  HTTP 500. Warmup uses the same reset, close snapshot, accounting, and writing path as active,
+  while preserving the warmup header and exclusion from measurement. The trigger owns each new
+  repetition's `cellId`.
+- Java sources and raw/Framework targets, and Kotlin sources, close normally when piped stdin
+  supplies a byte. EOF in existing background execution is not treated as a shutdown request.
 
 ### 10.3 Logical Streams and the Pattern Mapping
 

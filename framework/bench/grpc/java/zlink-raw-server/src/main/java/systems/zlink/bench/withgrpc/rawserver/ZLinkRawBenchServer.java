@@ -8,6 +8,7 @@ import java.util.List;
 import systems.zlink.bench.withgrpc.shared.Args;
 import systems.zlink.bench.withgrpc.shared.BenchServerMetrics;
 import systems.zlink.bench.withgrpc.shared.BenchStatsServer;
+import systems.zlink.bench.withgrpc.shared.MeasurementTiming;
 import systems.zlink.bench.withgrpc.shared.RawWire;
 import systems.zlink.contracts.core.Context;
 import systems.zlink.contracts.core.RoutingId;
@@ -36,6 +37,7 @@ public final class ZLinkRawBenchServer {
     }
 
     public static void main(String[] args) throws Exception {
+        MeasurementTiming.initialize();
         String endpoint = Args.value(args, "--endpoint", "tcp://127.0.0.1:5247");
         String commandEndpoint = Args.value(args, "--command-endpoint", "tcp://127.0.0.1:5248");
         String metricsUrl = Args.value(args, "--metrics-url", "http://127.0.0.1:5249");

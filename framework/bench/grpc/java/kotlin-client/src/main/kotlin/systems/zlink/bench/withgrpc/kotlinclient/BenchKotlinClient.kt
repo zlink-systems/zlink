@@ -12,9 +12,11 @@ import systems.zlink.bench.withgrpc.client.BenchOperation
 import systems.zlink.bench.withgrpc.client.BenchOptions
 import systems.zlink.bench.withgrpc.client.BenchResultWriter
 import systems.zlink.bench.withgrpc.shared.BenchHttpApplication
+import systems.zlink.bench.withgrpc.shared.MeasurementTiming
 
 /** One Kotlin source-A process for one selected auxiliary or validation cell. */
 fun main(args: Array<String>) {
+    MeasurementTiming.initialize()
     val options = BenchOptions(args)
     require(
         options.implementation == "grpc-kotlin" ||
@@ -30,41 +32,42 @@ fun main(args: Array<String>) {
     val holder = arrayOfNulls<BenchHttpApplication.Controller>(1)
     val controller =
         BenchHttpApplication.Controller(ready::get, drivers::counters) { trigger ->
-            if (trigger.phase() == "warmup") {
+            val result = if (trigger.phase() == "warmup") {
                 drivers.runWarmup(trigger, checkNotNull(operation[0]))
             } else {
-                val result = drivers.runActive(trigger, checkNotNull(operation[0]))
-                val streamImplementation =
-                    if (trigger.pattern() == "send-saturation") {
-                        "platform send workers; coroutine admission terminal per stream"
-                    } else if (options.implementation == "grpc-kotlin") {
-                        "one platform submit thread; uncapped coroutine set; grpc-kotlin coroutine stub"
-                    } else {
-                        "one platform submit thread; admission-paced requests; uncapped coroutine replies"
-                    }
-                val metadata =
-                    linkedMapOf<String, Any>(
-                        "kotlinVersion" to KotlinVersion.CURRENT.toString(),
-                        "grpcKotlinVersion" to "1.4.1",
-                        "coroutinesVersion" to "1.9.0",
-                        "grpcStub" to "BenchServiceCoroutineStub",
-                        "frameworkCall" to
-                            if (trigger.pattern() == "send-saturation") {
-                                "zlink-framework-kotlin submit await"
-                            } else {
-                                "zlink-framework-kotlin typed submit; suspend reply await"
-                            },
-                        "serverProcesses" to "Java target B binaries on the Java port band",
-                    )
-                BenchResultWriter.write(
-                    options,
-                    checkNotNull(holder[0]).lastTrigger(),
-                    result,
-                    "kotlin",
-                    streamImplementation,
-                    metadata,
-                )
+                drivers.runActive(trigger, checkNotNull(operation[0]))
             }
+            val streamImplementation =
+                if (trigger.pattern() == "send-saturation") {
+                    "platform send workers; coroutine admission terminal per stream"
+                } else if (options.implementation == "grpc-kotlin") {
+                    "one platform submit thread; uncapped coroutine set; grpc-kotlin coroutine stub"
+                } else {
+                    "one platform submit thread; admission-paced requests; uncapped coroutine replies"
+                }
+            val metadata =
+                linkedMapOf<String, Any>(
+                    "kotlinVersion" to KotlinVersion.CURRENT.toString(),
+                    "grpcKotlinVersion" to "1.4.1",
+                    "coroutinesVersion" to "1.9.0",
+                    "grpcStub" to "BenchServiceCoroutineStub",
+                    "frameworkCall" to
+                        if (trigger.pattern() == "send-saturation") {
+                            "zlink-framework-kotlin submit await"
+                        } else {
+                            "zlink-framework-kotlin typed submit; suspend reply await"
+                        },
+                    "serverProcesses" to "Java target B binaries on the Java port band",
+                )
+            BenchResultWriter.write(
+                options,
+                checkNotNull(holder[0]).lastTrigger(),
+                result,
+                "kotlin",
+                streamImplementation,
+                metadata,
+            )
+            (result["active_started_at_ns"] as Number).toLong()
         }
     holder[0] = controller
     val http = BenchHttpApplication.start(options.triggerUrl, options.statsUrl, controller)

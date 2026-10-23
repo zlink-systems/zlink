@@ -555,6 +555,13 @@ POST http://127.0.0.1:<A trigger>/bench/start
 - `GET http://127.0.0.1:<A stats>/bench/stats`와 `GET http://127.0.0.1:<B stats>/bench/stats`는
   phase, 제출·완료·오류 수, 수신 수, 현재 in-flight를 돌려준다. settle(§3)의 폴링 대상이다.
 - trigger·stats의 HTTP 왕복은 측정 operation이 아니며 `throughput`·`latency`에 들어가지 않는다.
+- Java/Kotlin은 phase 집계·결과 기록이 끝난 뒤 POST에 응답하며 `startedAt`에 driver의
+  실제 시작 시각을 넣는다. runner는 이 응답을 기다리므로 active 중 stats를 폴링하지 않는다.
+  진행 중 같은 key의 중복 요청도 같은 결과를 기다리며, phase 실패는 HTTP 500으로 반환한다.
+  warmup도 active와 같은 reset·종료 snapshot·집계·기록 경로를 사용하되 warmup header와
+  측정 제외 의미를 유지한다. 새 반복의 `cellId`는 trigger가 소유한다.
+- Java source와 raw/Framework target, Kotlin source는 piped stdin의 byte로 정상 종료한다.
+  stdin이 EOF인 기존 background 실행은 종료 요청으로 취급하지 않는다.
 
 ### 10.3 logical stream과 패턴 대응
 

@@ -44,7 +44,7 @@ public final class SourceLifecycleTest {
         System.setIn(input);
         try {
             BenchClient.main(new String[] {
-                "--implementation", "grpc-java", "--scenario", "request-serial", "--run-id", "source-lifecycle", "--cell-id", "source-lifecycle",
+                "--implementation", "grpc-java", "--scenario", "request-serial", "--run-id", "source-lifecycle",
                 "--trigger-url", "http://127.0.0.1:" + triggerPort, "--stats-url", "http://127.0.0.1:" + statsPort,
                 "--target-stats-url", "http://127.0.0.1:1", "--target-endpoint", "127.0.0.1:" + targetPort
             });

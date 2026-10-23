@@ -7,6 +7,7 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 import systems.zlink.bench.withgrpc.shared.BenchHttpApplication;
 import systems.zlink.bench.withgrpc.shared.RawWire;
+import systems.zlink.bench.withgrpc.shared.MeasurementTiming;
 import systems.zlink.contracts.core.Context;
 import systems.zlink.contracts.core.Zlink;
 
@@ -16,6 +17,7 @@ public final class BenchClient {
     }
 
     public static void main(String[] args) throws Exception {
+        MeasurementTiming.initialize();
         BenchOptions options = new BenchOptions(args);
         if (!java.util.List.of("grpc-java", "zlink-java", "zlink-framework-java")
             .contains(options.implementation)) {
@@ -34,13 +36,12 @@ public final class BenchClient {
             ready::get,
             drivers::counters,
             trigger -> {
-                if ("warmup".equals(trigger.phase())) {
-                    drivers.runWarmup(trigger, transport[0].operation());
-                    return;
-                }
-                Map<String, Object> result = drivers.runActive(trigger, transport[0].operation());
+                Map<String, Object> result = "warmup".equals(trigger.phase())
+                    ? drivers.runWarmup(trigger, transport[0].operation())
+                    : drivers.runActive(trigger, transport[0].operation());
                 BenchResultWriter.write(options, holder[0].lastTrigger(), result, "java",
                     streamImplementation(options), javaMetadata(options));
+                return ((Number) result.get("active_started_at_ns")).longValue();
             });
         holder[0] = controller;
         BenchHttpApplication http = BenchHttpApplication.start(

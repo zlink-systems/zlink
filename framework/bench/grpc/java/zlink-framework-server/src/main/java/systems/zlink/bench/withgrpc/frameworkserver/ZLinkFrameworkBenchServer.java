@@ -10,6 +10,7 @@ import systems.zlink.bench.withgrpc.shared.Args;
 import systems.zlink.bench.withgrpc.shared.BenchContract;
 import systems.zlink.bench.withgrpc.shared.BenchServerMetrics;
 import systems.zlink.bench.withgrpc.shared.BenchStatsServer;
+import systems.zlink.bench.withgrpc.shared.MeasurementTiming;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.codecs.protobuf.ZLinkProtobufCodec;
 import systems.zlink.framework.configuration.ZLinkUnhandledDispatchAction;
@@ -40,6 +41,7 @@ public class ZLinkFrameworkBenchServer {
     private static volatile String listenEndpoint = "tcp://127.0.0.1:5254";
 
     public static void main(String[] args) throws Exception {
+        MeasurementTiming.initialize();
         String endpoint = Args.value(args, "--endpoint", "tcp://127.0.0.1:5254");
         String metricsUrl = Args.value(args, "--metrics-url", "http://127.0.0.1:5255");
         BenchServerMetrics metrics = METRICS;
