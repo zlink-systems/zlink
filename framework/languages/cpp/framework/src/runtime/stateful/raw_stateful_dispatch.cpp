@@ -158,8 +158,7 @@ std::size_t retained_bytes (const raw_relocation_terminal_target_registration_t 
     if (registration.application_reply)
         total += protocol::encode_application_payload (*registration.application_reply).size ();
     total += registration.request_source.owner_id.size ()
-             + registration.request_source.node_routing_id.size ()
-             + registration.relay_destination_node_routing_id.size ();
+             + registration.request_source.node_routing_id.size ();
     return total;
 }
 
@@ -858,19 +857,31 @@ raw_stateful_dispatch_t::try_claim (const object_ref_t &owner,
     return result;
 }
 
-task_t<std::pair<stateful_error_t, std::optional<stateful_delivery_t>>>
-raw_stateful_dispatch_t::try_claim_async (object_ref_t owner,
-                                          std::function<void ()> *before_application_handler,
-                                          std::string *stable_type)
+task_t<raw_stateful_dispatch_t::owner_delivery_t>
+raw_stateful_dispatch_t::try_claim_async (object_ref_t owner)
 {
-    auto [error, turn] =
-      co_await _objects->try_claim_async (owner, turn_domain_t::application, stable_type);
-    if (error != stateful_error_t::none || !turn)
-        co_return std::make_pair (error, std::optional<stateful_delivery_t>{});
-    auto result = claim_turn (owner, std::move (*turn), before_application_handler);
-    if (!result.second)
-        (void) co_await _objects->complete_claim_async (owner, turn_domain_t::application);
-    co_return result;
+    using ready_t = task_t<owner_delivery_t>;
+    auto claimed = _objects->try_claim_async (owner, turn_domain_t::application);
+    // Only a claim or an unclaimed-turn release that is still pending owns a frame (#2418).
+    return continue_task<owner_delivery_t> (
+      std::move (claimed),
+      [this, owner = std::move (owner)] (
+        stateful_object_runtime_t::owner_claim_t claim) mutable -> ready_t {
+          owner_delivery_t result;
+          result.error = claim.error;
+          if (claim.error != stateful_error_t::none || !claim.turn)
+              return ready_t (result_t<owner_delivery_t>::success (std::move (result)));
+          result.stable_type = std::move (claim.stable_type);
+          std::tie (result.error, result.delivery) =
+            claim_turn (owner, std::move (*claim.turn), &result.before_application_handler);
+          if (result.delivery)
+              return ready_t (result_t<owner_delivery_t>::success (std::move (result)));
+          return continue_task<owner_delivery_t> (
+            _objects->complete_claim_async (std::move (owner), turn_domain_t::application),
+            [result = std::move (result)] (stateful_error_t) mutable {
+                return ready_t (result_t<owner_delivery_t>::success (std::move (result)));
+            });
+      });
 }
 
 std::pair<stateful_error_t, std::optional<stateful_delivery_t>>
@@ -1837,10 +1848,7 @@ raw_relocation_replay_coordinator_t::retry_due_terminal_relays (clock_t::time_po
                              if (state.acknowledging || state.next_retry > now)
                                  continue;
                              pending.push_back (
-                               {item_key,
-                                state.registration.relay_destination_node_routing_id.empty ()
-                                  ? state.registration.request_source.node_routing_id
-                                  : state.registration.relay_destination_node_routing_id,
+                               {item_key, state.registration.request_source.node_routing_id,
                                 state.registration.relay, state.registration.application_reply});
                              state.next_retry = now + _relay_retry_interval;
                          }

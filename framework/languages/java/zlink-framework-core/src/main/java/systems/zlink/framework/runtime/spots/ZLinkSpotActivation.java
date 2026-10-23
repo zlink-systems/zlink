@@ -569,9 +569,7 @@ final class SpotActivation extends SpotActivationBase<DefaultSpotContext> {
                                                                                 new ZLinkSpotClosingContext(
                                                                                         reason,
                                                                                         deadline)))));
-        return context.isCurrentSpotTurn()
-                ? context.runLifecycleExecution(callback)
-                : context.enqueueLifecycle(callback);
+        return context.enqueueLifecycle(callback);
     }
 
     private CompletionStage<Void> closeResourcesAsync() {

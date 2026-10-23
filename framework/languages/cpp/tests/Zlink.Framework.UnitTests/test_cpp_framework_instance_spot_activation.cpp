@@ -41,6 +41,17 @@ namespace zlink::framework::runtime::host
 {
 struct public_host_runtime_test_access_t
 {
+    static bool expire_activation (public_host_runtime_t &host, const std::string &spot_id)
+    {
+        const auto operation =
+          host._lifecycle_configuration_lane
+            .run ([&] { return host._instance_spot_activation_admissions.at (spot_id); })
+            .get ();
+        return operation->admission.complete (
+          result_t<public_host_runtime_t::instance_activation_admission_t>::failure (
+            framework_error_kind_t::deadline_exceeded, "Activation admission expired"));
+    }
+
     static task_t<void> activate (public_host_runtime_t &host,
                                   protocol::instance_activation_recovery_t command,
                                   std::function<void (instance_spot_activation_result_t)> done)
@@ -238,8 +249,10 @@ static void verify_same_target_activation_order (
       store, relocations, [owner] { return owner; },
       host::instance_spot_activation_materializer_t{
         [] (const auto &, const auto &, auto &) { return true; },
-        [&] (auto command, auto) -> fw::task_t<host::instance_spot_activation_result_t> {
+        [&] (auto command, auto,
+             auto accept_activation) -> fw::task_t<host::instance_spot_activation_result_t> {
             queued.push_back (command->activation.operation.low);
+            accept_activation ();
             if (read_after_delete && command->activation.operation.low == 1)
                 co_return co_await first_handler.task ();
             co_return host::instance_spot_activation_result_t{
@@ -601,8 +614,8 @@ TEST (ZLinkFrameworkInstanceSpotActivation, CloseFromRequestReturnsReplyBeforeCl
       runtime
         ->dispatch_instance_activation (
           spot_id, request_t::packet_name, serializers.get<request_t> ().content_type (),
-          payload.to_bytes (), {}, true, "close-request-1", provider, serializers, std::nullopt,
-          std::nullopt, &accepted_turn_terminal)
+          payload.to_bytes (), {}, true, "close-request-1", provider, serializers, [] {},
+          std::nullopt, std::nullopt, &accepted_turn_terminal)
         .result ();
     ASSERT_TRUE (first) << (first.error () ? first.error ()->what () : "unknown error");
     ASSERT_TRUE (accepted_turn_terminal);
@@ -619,7 +632,7 @@ TEST (ZLinkFrameworkInstanceSpotActivation, CloseFromRequestReturnsReplyBeforeCl
       runtime
         ->dispatch_instance_activation (
           spot_id, request_t::packet_name, serializers.get<request_t> ().content_type (),
-          payload.to_bytes (), {}, true, "close-request-2", provider, serializers)
+          payload.to_bytes (), {}, true, "close-request-2", provider, serializers, [] {})
         .result ();
     ASSERT_FALSE (second);
     EXPECT_EQ (zlink::framework::framework_error_kind_t::not_found, second.error_kind ());
@@ -1145,7 +1158,9 @@ void verify_reserve_loser (bool expire_deadline, bool one_way)
             ++prepares;
             return true;
         },
-        [&] (auto, auto) -> fw::task_t<host::instance_spot_activation_result_t> {
+        [&] (auto, auto,
+             auto accept_activation) -> fw::task_t<host::instance_spot_activation_result_t> {
+            accept_activation ();
             ++handlers;
             co_return host::instance_spot_activation_result_t{};
         }});
@@ -1951,7 +1966,7 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
         ->dispatch_instance_activation (
           zlink::framework::spot_id_t ("traced-player-1"), traced_event_t::packet_name,
           serializers.get<traced_event_t> ().content_type (), event_payload.to_bytes (), {}, false,
-          "operation-send", provider, serializers, activation_flow_id,
+          "operation-send", provider, serializers, [] {}, activation_flow_id,
           zlink::framework::flow_origin_t::application)
         .result ();
     ASSERT_TRUE (event_result);
@@ -1963,7 +1978,7 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
         ->dispatch_instance_activation (
           zlink::framework::spot_id_t ("traced-player-1"), traced_request_t::packet_name,
           serializers.get<traced_request_t> ().content_type (), request_payload.to_bytes (), {},
-          true, "operation-request", provider, serializers, activation_flow_id,
+          true, "operation-request", provider, serializers, [] {}, activation_flow_id,
           zlink::framework::flow_origin_t::application)
         .result ();
     ASSERT_TRUE (request_result);
@@ -2237,7 +2252,9 @@ TEST (ZLinkFrameworkInstanceSpotActivation, StoredActivationMismatchPreservesAut
                         ++factories;
                         return true;
                     },
-                    [] (auto, auto) -> fw::task_t<host::instance_spot_activation_result_t> {
+                    [] (auto, auto, auto accept_activation)
+                      -> fw::task_t<host::instance_spot_activation_result_t> {
+                        accept_activation ();
                         co_return host::instance_spot_activation_result_t{};
                     }});
                 target->start ();
@@ -2496,8 +2513,10 @@ TEST (CppFrameworkInstanceSpotActivation, StartupReleasesPreviousLifecycleBefore
             ADD_FAILURE () << "Old lifecycle must not prepare";
             return false;
         },
-        [] (auto, auto) -> fw::task_t<host::instance_spot_activation_result_t> {
+        [] (auto, auto,
+            auto accept_activation) -> fw::task_t<host::instance_spot_activation_result_t> {
             ADD_FAILURE () << "Old lifecycle must not activate";
+            accept_activation ();
             co_return host::instance_spot_activation_result_t{};
         }});
     ASSERT_TRUE (roots->exists);
@@ -2618,7 +2637,9 @@ static void verify_ready_recovery_root_deletion (bool local_available)
             return created.state == fw::spot_create_state_t::created
                    || created.state == fw::spot_create_state_t::existing;
         },
-        [&] (auto command, auto) -> fw::task_t<host::instance_spot_activation_result_t> {
+        [&] (auto command, auto,
+             auto accept_activation) -> fw::task_t<host::instance_spot_activation_result_t> {
+            accept_activation ();
             ++entered;
             if (command->activation.operation.low == 1)
                 co_return co_await first_handler.task ();
@@ -2770,7 +2791,8 @@ static void verify_activation_failure_terminal (bool local,
                                                 bool provider,
                                                 activation_failure_t failure,
                                                 bool registered_type = true,
-                                                bool hold_delivery = false)
+                                                bool hold_delivery = false,
+                                                bool expire_admission = false)
 {
     using namespace std::chrono_literals;
     namespace fw = zlink::framework;
@@ -2882,7 +2904,9 @@ static void verify_activation_failure_terminal (bool local,
                   std::chrono::milliseconds (request.target.deadline_unix_ms)));
             return true;
         },
-        [&] (auto, auto) -> fw::task_t<host::instance_spot_activation_result_t> {
+        [&] (auto, auto,
+             auto accept_activation) -> fw::task_t<host::instance_spot_activation_result_t> {
+            accept_activation ();
             ++dispatches;
             co_return host::instance_spot_activation_result_t{
               static_cast<std::uint32_t> (rt::protocol::request_terminal_result::internalError),
@@ -2902,7 +2926,8 @@ static void verify_activation_failure_terminal (bool local,
       target.get (), [&] (auto *) { target->close (); });
     if (failure == activation_failure_t::shutdown)
         target->close ();
-    const auto deadline = std::chrono::system_clock::now () + (deadline_failure ? 100ms : 3s);
+    const auto deadline =
+      std::chrono::system_clock::now () + (deadline_failure && !expire_admission ? 100ms : 3s);
     rt::protocol::instance_spot_activation_header_t header{
       {descriptor.rid.to_bytes (), 1, "terminal-room", "terminal", "room-type", "1",
        static_cast<std::uint64_t> (
@@ -2944,6 +2969,12 @@ static void verify_activation_failure_terminal (bool local,
             auto running = std::async (std::launch::async, run);
             EXPECT_EQ (std::future_status::ready,
                        initialization_entered.get_future ().wait_for (1s));
+            std::future<bool> expired;
+            if (expire_admission)
+                expired = std::async (std::launch::async, [&] {
+                    return host::public_host_runtime_test_access_t::expire_activation (
+                      *target, "terminal-room");
+                });
             EXPECT_EQ (std::future_status::ready, terminal_ready.get_future ().wait_for (1s));
             initialization_release.set_value ();
             if (hold_delivery) {
@@ -2955,6 +2986,8 @@ static void verify_activation_failure_terminal (bool local,
                            delivery_completed.get_future ().wait_for (1s));
             }
             running.get ();
+            if (expired.valid ())
+                EXPECT_TRUE (expired.get ());
         } else
             run ();
         EXPECT_EQ (1, terminals);
@@ -3067,6 +3100,11 @@ TEST (ZLinkFrameworkInstanceSpotActivation, ActivationTaskWaitsForTerminalDelive
 {
     verify_activation_failure_terminal (true, true, activation_failure_t::initialization, true,
                                         true);
+}
+TEST (ZLinkFrameworkInstanceSpotActivation, TerminalAdmissionPreventsLatePreparationDispatch)
+{
+    verify_activation_failure_terminal (true, true, activation_failure_t::initialization, true,
+                                        true, true);
 }
 TEST (ZLinkFrameworkInstanceSpotActivation, NonStandardFactoryFailureRemainsRejectedAndObservable)
 {

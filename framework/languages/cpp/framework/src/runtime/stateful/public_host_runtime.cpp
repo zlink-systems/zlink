@@ -52,6 +52,48 @@ namespace zlink::framework::runtime::host
 
 namespace
 {
+// Both immediate and suspended publication share the same terminal cleanup.
+template <typename Start>
+task_t<zlink::submit_result_t> finish_local_enqueue (mesh::raw_mesh_node_owner_t &transport,
+                                                     pending_operation_t *operation,
+                                                     Start start)
+{
+    const auto finish = [&transport, operation] (result_t<zlink::submit_result_t> result) {
+        if ((!result || result.value () != zlink::submit_result_t::ok) && operation)
+            transport.unregister_local_operation (operation->id);
+        if (result && result.value () == zlink::submit_result_t::ok)
+            transport.signal_activity ();
+        return result;
+    };
+    try {
+        auto pending = start ();
+        if (pending.await_ready ()) {
+            (void) finish (result_t<zlink::submit_result_t>::success (pending.await_resume ()));
+            return pending;
+        }
+        return [] (task_t<zlink::submit_result_t> pending,
+                   decltype (finish) finish) -> task_t<zlink::submit_result_t> {
+            std::optional<result_t<zlink::submit_result_t>> result;
+            try {
+                result.emplace (result_t<zlink::submit_result_t>::success (co_await pending));
+            }
+            catch (...) {
+                result.emplace (detail::current_exception_result<zlink::submit_result_t> ());
+            }
+            co_return finish (std::move (*result));
+        }(std::move (pending), finish);
+    }
+    catch (...) {
+        return task_t<zlink::submit_result_t> (
+          finish (detail::current_exception_result<zlink::submit_result_t> ()));
+    }
+}
+
+task_t<zlink::submit_result_t> local_enqueue_result (zlink::submit_result_t result)
+{
+    return task_t<zlink::submit_result_t> (result_t<zlink::submit_result_t>::success (result));
+}
+
 template <typename Peer> bool peer_route_ready (const Peer &peer, std::uint64_t generation)
 {
     return peer && peer->ready && peer->descriptor.lifecycle_generation == generation;
@@ -1667,18 +1709,18 @@ template <typename T> result_t<bool> close_store_failure (const result_t<T> &fai
     return detail::propagate_failure<bool> (failed, "Location Store operation failed");
 }
 
-/* Step 4: deletes the Closing authority with the same owner and generation
- * fence (the Closing StoreVersion). */
+/* Deletes only the authority version owned by this operation. The Store
+ * transaction also releases its active capacity. */
 task_t<bool>
-release_closing_authority_async (std::shared_ptr<zlink::framework::location_repository_t> store,
-                                 authority_key_t authority_key,
-                                 std::string closing_version,
-                                 std::function<task_t<bool> ()> before_delete)
+release_authority_async (std::shared_ptr<zlink::framework::location_repository_t> store,
+                         authority_key_t authority_key,
+                         std::string expected_store_version,
+                         std::function<task_t<bool> ()> before_delete)
 {
     if (before_delete)
         (void) co_await before_delete ();
-    const auto deleted = co_await await_result (
-      store->compare_exchange_authority (authority_key, closing_version, authority_delete_t{}));
+    const auto deleted = co_await await_result (store->compare_exchange_authority (
+      authority_key, expected_store_version, authority_delete_t{}));
     if (!deleted)
         co_return close_store_failure (deleted);
     if (!std::holds_alternative<authority_deleted_t> (deleted.value ()))
@@ -1688,17 +1730,17 @@ release_closing_authority_async (std::shared_ptr<zlink::framework::location_repo
 }
 
 std::function<task_t<bool> ()>
-release_closing_authority (std::shared_ptr<zlink::framework::location_repository_t> store,
-                           authority_key_t authority_key,
-                           std::string closing_version,
-                           std::function<task_t<bool> ()> before_delete)
+release_authority (std::shared_ptr<zlink::framework::location_repository_t> store,
+                   authority_key_t authority_key,
+                   std::string expected_store_version,
+                   std::function<task_t<bool> ()> before_delete)
 {
-    return
-      [store = std::move (store), authority_key = std::move (authority_key),
-       closing_version = std::move (closing_version), before_delete = std::move (before_delete)] {
-          return release_closing_authority_async (store, authority_key, closing_version,
-                                                  before_delete);
-      };
+    return [store = std::move (store), authority_key = std::move (authority_key),
+            expected_store_version = std::move (expected_store_version),
+            before_delete = std::move (before_delete)] {
+        return release_authority_async (store, authority_key, expected_store_version,
+                                        before_delete);
+    };
 }
 
 task_t<bool> release_user_spot_record_async (std::shared_ptr<public_host_runtime_t> host,
@@ -1788,15 +1830,14 @@ public_host_runtime_t::begin_instance_spot_close (const std::string &stable_type
                  .node_rid = snapshot->allocation.target.node_rid,
                  .node_generation = snapshot->allocation.target.node_lifecycle_generation});
               complete_close_step (
-                completion,
-                {result_t<bool>::success (true),
-                 release_closing_authority (store, authority_key, snapshot->store_version, {}),
-                 reincarnate_closing_authority (store, authority_key, snapshot->store_version,
-                                                ready_payload),
-                 [store, authority_key] (const authority_snapshot_t &next) {
-                     return release_closing_authority (store, authority_key, next.store_version,
-                                                       {}) ();
-                 }});
+                completion, {result_t<bool>::success (true),
+                             release_authority (store, authority_key, snapshot->store_version, {}),
+                             reincarnate_closing_authority (store, authority_key,
+                                                            snapshot->store_version, ready_payload),
+                             [store, authority_key] (const authority_snapshot_t &next) {
+                                 return release_authority (store, authority_key, next.store_version,
+                                                           {}) ();
+                             }});
               return;
           }
 
@@ -1833,13 +1874,11 @@ public_host_runtime_t::begin_instance_spot_close (const std::string &stable_type
                 complete_close_step (
                   completion,
                   {result_t<bool>::success (true),
-                   release_closing_authority (store, authority_key, closing->snapshot.store_version,
-                                              {}),
+                   release_authority (store, authority_key, closing->snapshot.store_version, {}),
                    reincarnate_closing_authority (store, authority_key,
                                                   closing->snapshot.store_version, ready_payload),
                    [store, authority_key] (const authority_snapshot_t &next) {
-                       return release_closing_authority (store, authority_key, next.store_version,
-                                                         {}) ();
+                       return release_authority (store, authority_key, next.store_version, {}) ();
                    }});
             });
       });
@@ -1944,9 +1983,9 @@ public_host_runtime_t::begin_user_spot_close (protocol::user_spot_close_fence_t 
     // Step 4 releases the local object record, then the authority row.
     const auto release_from = [self, store, authority_key] (std::string closing_version,
                                                             stateful::object_ref_t ref) {
-        return release_closing_authority (
-          store, authority_key, std::move (closing_version),
-          [self, ref] { return release_user_spot_record_async (self, ref); });
+        return release_authority (store, authority_key, std::move (closing_version), [self, ref] {
+            return release_user_spot_record_async (self, ref);
+        });
     };
 
     if (snapshot->payload == closing_payload) {
@@ -2577,7 +2616,7 @@ std::size_t public_host_runtime_t::recover_instance_spot_activations ()
                   materializer
                     ->dispatch (
                       std::make_shared<const protocol::instance_activation_recovery_t> (recovery),
-                      {})
+                      {}, [] {})
                     .result ()
                     .value ();
                 activation_terminal.accepted = std::move (dispatched.accepted_turn_terminal);
@@ -4906,8 +4945,7 @@ public_host_runtime_t::stage_relocation_record (const stateful::object_ref_t &ta
                                      : protocol::framework_error_code::requestFailed;
           return _relocation_wire->register_terminal_target (
             {relay, frozen_record.source, reply,
-             [] (protocol::reply_relay_ack_status_t) { return true; }, [] { return true; },
-             data.coordinator.node_routing_id});
+             [] (protocol::reply_relay_ack_status_t) { return true; }, [] { return true; }});
       });
     co_return staged == stateful::stateful_error_t::none;
 }
@@ -5155,14 +5193,15 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation (
     }(admission->task (), deadline, record_activation, deliver_terminal);
     const auto reply_terminal = [admission,
                                  deliver_terminal] (instance_spot_activation_result_t result) {
-        if (result.terminal_result != 0 && !result.accepted_turn_terminal) {
-            auto completed = admission->task ();
-            if (admission->complete (result_t<instance_activation_admission_t>::success (result)))
-                return;
-            const auto terminal = completed.result ();
-            if (!terminal
-                || !std::holds_alternative<instance_activation_ready_t> (terminal.value ()))
-                return;
+        auto completed = admission->task ();
+        if (result.terminal_result != 0
+            && admission->complete (result_t<instance_activation_admission_t>::success (result)))
+            return;
+        const auto terminal = completed.result ();
+        if (!terminal || !std::holds_alternative<instance_activation_ready_t> (terminal.value ())) {
+            if (result.accepted_turn_terminal)
+                result.accepted_turn_terminal ();
+            return;
         }
         deliver_terminal (std::move (result));
     };
@@ -5181,9 +5220,12 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation (
     }
     const auto result = co_await runtime::await_result (dispatch_instance_spot_activation_core (
       owned_command, mailbox_record, reply_terminal, admission, previous_admission));
-    if (!result)
-        admission->complete (
-          detail::result_access_t::failure<instance_activation_admission_t> (result.exception ()));
+    if (!result) {
+        const auto failure =
+          messaging::request_failure_mapper_t{}.target_failure_reply (result.exception ());
+        reply_terminal (
+          {failure->terminal_result, failure->failure_code, std::nullopt, {}, result.exception ()});
+    }
     const auto observed_result = co_await runtime::await_result (std::move (observed));
     if (previous)
         co_await previous->terminal.task ();
@@ -5228,6 +5270,33 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation_core (
         if (admission)
             admission->complete (
               result_t<instance_activation_admission_t>::success (std::move (result)));
+    };
+    const auto accepted_activation = [admission] {
+        if (!admission)
+            return true;
+        const auto completed = admission->task ();
+        return completed.await_ready () && completed.result ()
+               && std::holds_alternative<instance_activation_ready_t> (
+                 completed.result ().value ());
+    };
+    const auto accept_activation =
+      [admission, admission_command] (const authority_snapshot_t &ready) -> std::function<void ()> {
+        if (!admission)
+            return [] {};
+        return [admission, admission_command, ready] {
+            if (admission->complete (result_t<instance_activation_admission_t>::success (
+                  instance_activation_ready_t{ready, admission_command})))
+                return;
+            const auto terminal = admission->task ().result ();
+            terminal.value ();
+            if (const auto *failure =
+                  std::get_if<instance_spot_activation_result_t> (&terminal.value ())) {
+                if (failure->exception)
+                    std::rethrow_exception (failure->exception);
+                throw messaging::request_failure_mapper_t{}.reply_header_exception (
+                  failure->terminal_result, failure->failure_code, "Instance Spot activation");
+            }
+        };
     };
     const auto reply_terminal = [done,
                                  finish_admission] (instance_spot_activation_result_t result) {
@@ -5463,16 +5532,16 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation_core (
                 co_return true;
             }
             auto running = std::make_shared<task_t<instance_spot_activation_result_t>> (
-              instance_materializer->dispatch (owned_command, resume_missing));
-            finish_admission (instance_activation_ready_t{*snapshot, admission_command});
+              instance_materializer->dispatch (owned_command, resume_missing,
+                                               accept_activation (*snapshot)));
             detail::observe_task_terminal (
-              *running, [running, reply_terminal, activation_terminal] (
+              *running, [running, reply_terminal, activation_terminal, accepted_activation] (
                           const result_t<instance_spot_activation_result_t> &result) {
                   if (result) {
                       auto terminal = result.value ();
                       activation_terminal->accepted = std::move (terminal.accepted_turn_terminal);
-                      terminal.accepted_turn_terminal = [activation_terminal] {
-                          activation_terminal->finish ();
+                      terminal.accepted_turn_terminal = [activation_terminal, accepted_activation] {
+                          activation_terminal->finish (accepted_activation ());
                       };
                       reply_terminal (std::move (terminal));
                   } else {
@@ -5735,9 +5804,30 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation_core (
         co_return;
     }
     const auto &ready_snapshot = created->ready;
-    auto dispatched = instance_materializer->dispatch (owned_command, resume_missing);
-    finish_admission (instance_activation_ready_t{ready_snapshot, admission_command});
+    auto dispatched = instance_materializer->dispatch (owned_command, resume_missing,
+                                                       accept_activation (ready_snapshot));
     const auto dispatch_result = co_await await_result (std::move (dispatched));
+    if (!accepted_activation ()) {
+        if (dispatch_result)
+            activation_terminal->accepted = dispatch_result.value ().accepted_turn_terminal;
+        const auto release_failed_activation = [&] () -> task_t<void> {
+            co_await activation_terminal->finish (false);
+            (void) co_await release_authority_async (store, authority_key,
+                                                     ready_snapshot.store_version, {});
+            instance_relocations->remove (recovery_root.reference);
+        };
+        const auto cleanup = co_await await_result (release_failed_activation ());
+        if (!cleanup) {
+            _options.mesh.runtime_failures->capture ([&] { cleanup.value (); });
+            cleanup.value ();
+        }
+        if (!dispatch_result)
+            dispatch_result.value ();
+        auto terminal = dispatch_result.value ();
+        terminal.accepted_turn_terminal = {};
+        reply_terminal (std::move (terminal));
+        co_return;
+    }
     if (!dispatch_result) {
         co_await activation_terminal->finish (false);
         dispatch_result.value ();
@@ -7254,41 +7344,60 @@ task_t<bool> public_host_runtime_t::notify_stateful_owner (const stateful::objec
 task_t<bool> public_host_runtime_t::dispatch_stateful_owner (
   const stateful::object_ref_t &object,
   const std::function<void (
-    const ready_record_t &, const receive_record_t &, std::vector<zlink::message_t>)> &dispatch)
+    const ready_record_t &, const receive_record_t &, std::vector<zlink::message_t>)> &dispatch,
+  std::shared_ptr<runtime::serial_execution_queue_t> gate,
+  std::shared_ptr<stateful::relocation_seal_binding_t> restoring)
 {
     if (object.kind == stateful::object_kind_t::actor) {
-        if (co_await notify_stateful_owner (object))
-            co_return true;
-        co_return claim_stateful_owner (object, dispatch);
-    }
-    const auto locate =
-      co_await _lifecycle_configuration_lane.run_task ([this] { return _relocation_gate; });
-    std::shared_ptr<runtime::serial_execution_queue_t> gate;
-    if (locate)
-        gate = co_await locate (object);
-    std::shared_ptr<stateful::relocation_seal_binding_t> restoring;
-    if (gate)
-        restoring = co_await gate->admit_native_application ({});
-    bool dispatched = false;
-    for (;;) {
-        std::function<void ()> before;
-        std::string stable_type;
-        auto [error, delivery] =
-          co_await _stateful_dispatch->try_claim_async (object, &before, &stable_type);
-        if (error != stateful::stateful_error_t::none || !delivery) {
-            if (restoring)
-                (void) co_await gate->release_relocation_seal (std::move (restoring));
-            co_return dispatched;
+        // A ready notification keeps the synchronous owner claim on this stack (#2418).
+        try {
+            return continue_task<bool> (
+              notify_stateful_owner (object), [this, &object, &dispatch] (bool notified) {
+                  return task_t<bool> (
+                    result_t<bool>::success (notified || claim_stateful_owner (object, dispatch)));
+              });
         }
-        dispatched = dispatch_stateful_delivery (object, std::move (*delivery), std::move (before),
-                                                 std::move (stable_type), dispatch)
-                     || dispatched;
-        if (!restoring)
-            co_return dispatched;
-        // Publication import returns the native claim before the next owner claim.
-        // New root handlers remain behind this same seal until the prefix is in the FIFO.
-        (void) co_await gate->admit_native_application ({});
+        catch (...) {
+            return task_t<bool> (detail::current_exception_result<bool> ());
+        }
     }
+    // The gate admission that observed a restoring seal (native publication or the
+    // aborted cut's finish) hands it here; an owner claim without one asks the gate
+    // nothing, and a ready claim finishes on this stack (#2418).
+    using claim_t = stateful::raw_stateful_dispatch_t::owner_delivery_t;
+    const auto deliver = [this, &object, &dispatch] (claim_t &claim) {
+        return claim.error == stateful::stateful_error_t::none && claim.delivery
+               && dispatch_stateful_delivery (object, std::move (*claim.delivery),
+                                              std::move (claim.before_application_handler),
+                                              std::move (claim.stable_type), dispatch);
+    };
+    try {
+        if (!restoring)
+            return continue_task<bool> (
+              _stateful_dispatch->try_claim_async (object), [deliver] (claim_t claim) {
+                  return task_t<bool> (result_t<bool>::success (deliver (claim)));
+              });
+    }
+    catch (...) {
+        return task_t<bool> (detail::current_exception_result<bool> ());
+    }
+    // Restoring: the prefix enters the FIFO before the seal is released.
+    return [] (public_host_runtime_t *self, const stateful::object_ref_t &object,
+               decltype (deliver) deliver, std::shared_ptr<runtime::serial_execution_queue_t> gate,
+               std::shared_ptr<stateful::relocation_seal_binding_t> restoring) -> task_t<bool> {
+        bool dispatched = false;
+        for (;;) {
+            auto claim = co_await self->_stateful_dispatch->try_claim_async (object);
+            if (claim.error != stateful::stateful_error_t::none || !claim.delivery) {
+                (void) co_await gate->release_relocation_seal (std::move (restoring));
+                co_return dispatched;
+            }
+            dispatched = deliver (claim) || dispatched;
+            // Publication import returns the native claim before the next owner claim.
+            // New root handlers remain behind this same seal until the prefix is in the FIFO.
+            (void) co_await gate->admit_native_application ({});
+        }
+    }(this, object, deliver, std::move (gate), std::move (restoring));
 }
 
 bool public_host_runtime_t::claim_stateful_owner (
@@ -7316,15 +7425,6 @@ bool public_host_runtime_t::dispatch_stateful_delivery (
     auto delivery = std::optional<stateful::stateful_delivery_t>{std::move (claimed)};
     receive_record_t record;
     try {
-        if (delivery->request
-            && delivery->frozen.source.node_routing_id == _options.mesh.descriptor.node_routing_id
-            && delivery->frozen.source.node_generation
-                 == _options.mesh.descriptor.lifecycle_generation
-            && !_transport->operation_pending (
-              call_id_t{delivery->frozen.operation.high, delivery->frozen.operation.low})) {
-            (void) _stateful_dispatch->complete (*delivery, std::nullopt);
-            return false;
-        }
         const auto &frozen = delivery->frozen;
         ready_record_t owner;
         owner.domain = ready_domain_t::application;
@@ -7500,12 +7600,12 @@ bool public_host_runtime_t::dispatch_stateful_delivery (
 }
 
 task_t<bool> public_host_runtime_t::dispatch_native_spot (
-  stateful::object_ref_t object,
+  const stateful::object_ref_t &object,
   mesh::service_mailbox_t::claim_handle_t slot,
-  stateful::claimed_ingress_t query,
+  stateful::claimed_ingress_t &&query,
   std::shared_ptr<const local_application_dispatch_t> application,
   std::optional<stateful::retained_relocation_source_t> retained,
-  mesh::service_mailbox_t::application_dispatch_t dispatch)
+  const mesh::service_mailbox_t::application_dispatch_t &dispatch)
 {
     if (retained)
         co_return false; // The existing source proof owns hold and Message Follow ingress.
@@ -7645,7 +7745,7 @@ task_t<bool> public_host_runtime_t::dispatch_native_spot (
     if (gate) {
         auto restoring = co_await gate->admit_native_application (publish);
         while (restoring) {
-            (void) co_await dispatch_stateful_owner (object, dispatch);
+            (void) co_await dispatch_stateful_owner (object, dispatch, gate, std::move (restoring));
             restoring = co_await gate->admit_native_application (publish);
         }
     } else {
@@ -7728,94 +7828,137 @@ public_host_runtime_t::dispatch_application_claim (
             if (auto *kept = std::get_if<kept_t> (&step)) {
                 // Only stateful ingress needs a suspended cursor. The canonical
                 // slot remains the original owner throughout authority preparation.
-                auto pending = [] (std::shared_ptr<public_host_runtime_t> self,
-                                   std::shared_ptr<application_claim_batch_t> batch,
-                                   kept_t kept) -> task_t<void> {
-                    auto &claim = batch->claim;
-                    const auto index = batch->index;
-                    const mesh::service_mailbox_t::claim_handle_t slot{claim, index};
-                    auto &entry = batch->entries[index];
-                    const mesh::service_mailbox_t::application_dispatch_t dispatch =
-                      [batch] (const auto &ready, const auto &record, auto parts) {
-                          batch->handoff (ready, record, std::move (parts));
-                      };
-                    if (auto *local = std::get_if<kept_local_t> (&kept)) {
-                        if (!is_actor_application (local->application->record.kind)) {
+                // Each kept form suspends in its own continuation, which holds only
+                // that form's locals and then continues this claim's cursor.
+                using dispatch_t = mesh::service_mailbox_t::application_dispatch_t;
+                const auto local_fallback = [] (std::shared_ptr<public_host_runtime_t> self,
+                                                std::shared_ptr<application_claim_batch_t> batch,
+                                                kept_local_t local) -> task_t<void> {
+                    const mesh::service_mailbox_t::claim_handle_t slot{batch->claim, batch->index};
+                    auto &entry = batch->entries[batch->index];
+                    const dispatch_t dispatch = [batch] (const auto &ready, const auto &record,
+                                                         auto parts) {
+                        batch->handoff (ready, record, std::move (parts));
+                    };
+                    auto query = local_application_query (*local.application);
+                    const auto object = co_await self->accept_local_application (
+                      slot, std::move (query), std::move (local.application),
+                      std::move (local.source_original), entry.original);
+                    if (object) {
+                        (void) co_await self->dispatch_stateful_owner (*object, dispatch);
+                        ++batch->count;
+                    }
+                };
+                const auto local_owner =
+                  [] (std::shared_ptr<public_host_runtime_t> self,
+                      std::shared_ptr<application_claim_batch_t> batch, kept_local_t local,
+                      decltype (local_fallback) fallback) -> task_t<std::size_t> {
+                    std::exception_ptr failure;
+                    try {
+                        bool native = false;
+                        if (!is_actor_application (local.application->record.kind)) {
+                            const mesh::service_mailbox_t::claim_handle_t slot{batch->claim,
+                                                                               batch->index};
+                            const dispatch_t dispatch = [batch] (const auto &ready,
+                                                                 const auto &record, auto parts) {
+                                batch->handoff (ready, record, std::move (parts));
+                            };
                             std::optional<stateful::retained_relocation_source_t> retained;
                             const auto owner = co_await self->_objects.resolve_spot_async (
-                              local->application->owner.spot_id, &retained);
-                            stateful::claimed_ingress_t query;
-                            query.source_original = local->source_original;
-                            query.source_routing_id =
-                              local->application->record.source_node_rid.to_bytes ();
-                            query.source_node_generation =
-                              self->_options.mesh.descriptor.lifecycle_generation;
+                              local.application->owner.spot_id, &retained);
                             if (owner) {
-                                const bool native = co_await self->dispatch_native_spot (
-                                  *owner, slot, std::move (query), local->application,
+                                stateful::claimed_ingress_t query;
+                                query.source_original = local.source_original;
+                                query.source_routing_id =
+                                  local.application->record.source_node_rid.to_bytes ();
+                                query.source_node_generation =
+                                  self->_options.mesh.descriptor.lifecycle_generation;
+                                native = co_await self->dispatch_native_spot (
+                                  *owner, slot, std::move (query), local.application,
                                   std::move (retained), dispatch);
-                                if (native) {
-                                    ++batch->count;
-                                    ++batch->index;
-                                    co_return;
-                                }
                             }
                         }
-                        auto query = local_application_query (*local->application);
-                        const auto object = co_await self->accept_local_application (
-                          slot, std::move (query), std::move (local->application),
-                          std::move (local->source_original), entry.original);
-                        if (object) {
-                            (void) co_await self->dispatch_stateful_owner (*object, dispatch);
+                        if (native)
                             ++batch->count;
-                        }
+                        else
+                            co_await fallback (self, batch, std::move (local));
                         ++batch->index;
-                        co_return;
                     }
-                    std::optional<stateful::object_ref_t> native_owner;
-                    std::optional<stateful::retained_relocation_source_t> retained;
-                    const auto owner_kind = stateful_application_owner (claim->owner);
-                    if (owner_kind == owner_kind_t::actor)
-                        native_owner = co_await self->_objects.find_async (
-                          stateful::object_kind_t::actor,
-                          claim->owner.substr (
-                            detail::activation_admission_t::actor_key_prefix.size ()),
-                          std::nullopt, &retained);
-                    else if (owner_kind == owner_kind_t::spot) {
-                        const auto key = claim->owner.substr (
-                          detail::activation_admission_t::spot_key_prefix.size ());
-                        native_owner = co_await self->_objects.resolve_spot_async (key, &retained);
+                    catch (...) {
+                        failure = std::current_exception ();
                     }
-                    if (native_owner) {
-                        auto &query = std::get<stateful::claimed_ingress_t> (kept);
-                        std::optional<stateful::claimed_ingress_t> prepared;
-                        if (native_owner->kind != stateful::object_kind_t::actor) {
-                            const bool native = co_await self->dispatch_native_spot (
-                              *native_owner, slot, std::move (query), {}, retained, dispatch);
-                            if (native) {
-                                ++batch->count;
-                                ++batch->index;
-                                co_return;
+                    co_return co_await self->continue_application_claim (batch,
+                                                                         std::move (failure));
+                };
+                const auto ingress_owner =
+                  [] (std::shared_ptr<public_host_runtime_t> self,
+                      std::shared_ptr<application_claim_batch_t> batch,
+                      stateful::claimed_ingress_t query) -> task_t<std::size_t> {
+                    std::exception_ptr failure;
+                    try {
+                        auto &claim = batch->claim;
+                        const auto index = batch->index;
+                        const mesh::service_mailbox_t::claim_handle_t slot{claim, index};
+                        auto &entry = batch->entries[index];
+                        const dispatch_t dispatch = [batch] (const auto &ready, const auto &record,
+                                                             auto parts) {
+                            batch->handoff (ready, record, std::move (parts));
+                        };
+                        std::optional<stateful::object_ref_t> native_owner;
+                        std::optional<stateful::retained_relocation_source_t> retained;
+                        const auto owner_kind = stateful_application_owner (claim->owner);
+                        if (owner_kind == owner_kind_t::actor)
+                            native_owner = co_await self->_objects.find_async (
+                              stateful::object_kind_t::actor,
+                              claim->owner.substr (
+                                detail::activation_admission_t::actor_key_prefix.size ()),
+                              std::nullopt, &retained);
+                        else if (owner_kind == owner_kind_t::spot) {
+                            const auto key = claim->owner.substr (
+                              detail::activation_admission_t::spot_key_prefix.size ());
+                            native_owner =
+                              co_await self->_objects.resolve_spot_async (key, &retained);
+                        }
+                        bool native = false;
+                        if (native_owner) {
+                            std::optional<stateful::claimed_ingress_t> prepared;
+                            if (native_owner->kind != stateful::object_kind_t::actor) {
+                                native = co_await self->dispatch_native_spot (
+                                  *native_owner, slot, std::move (query), {}, retained, dispatch);
+                                // A cut or rejection keeps the original; only this cold
+                                // ingress prepares its immutable query again from that slot.
+                            } else {
+                                prepared.emplace (std::move (query));
                             }
-                            // A cut or rejection keeps the original; only this cold ingress
-                            // prepares its immutable query again from that same slot.
+                            if (!native) {
+                                const auto accepted =
+                                  co_await self->_stateful_dispatch->ingest_claimed (
+                                    *native_owner, slot, std::move (retained),
+                                    std::move (prepared));
+                                if (accepted == stateful::stateful_error_t::none)
+                                    (void) co_await self->dispatch_stateful_owner (*native_owner,
+                                                                                   dispatch);
+                                self->_transport->signal_activity ();
+                            }
+                            ++batch->count;
+                            ++batch->index;
                         } else {
-                            prepared.emplace (std::move (query));
+                            entry.original = self->_transport->mailbox ().take (slot);
+                            if (!entry.original)
+                                ++batch->index;
                         }
-                        const auto accepted = co_await self->_stateful_dispatch->ingest_claimed (
-                          *native_owner, slot, std::move (retained), std::move (prepared));
-                        if (accepted == stateful::stateful_error_t::none)
-                            (void) co_await self->dispatch_stateful_owner (*native_owner, dispatch);
-                        self->_transport->signal_activity ();
-                        ++batch->count;
-                        ++batch->index;
-                        co_return;
                     }
-                    entry.original = self->_transport->mailbox ().take (slot);
-                    if (!entry.original)
-                        ++batch->index;
-                }(shared_from_this (), batch, std::move (*kept));
-                return continue_application_claim (batch, std::move (pending));
+                    catch (...) {
+                        failure = std::current_exception ();
+                    }
+                    co_return co_await self->continue_application_claim (batch,
+                                                                         std::move (failure));
+                };
+                if (auto *local = std::get_if<kept_local_t> (kept))
+                    return local_owner (shared_from_this (), batch, std::move (*local),
+                                        local_fallback);
+                return ingress_owner (shared_from_this (), batch,
+                                      std::get<stateful::claimed_ingress_t> (std::move (*kept)));
             }
             if (auto *taken = std::get_if<mesh::service_mailbox_record_t> (&step))
                 entry.original.emplace (std::move (*taken));
@@ -8043,19 +8186,23 @@ void public_host_runtime_t::fail_application_claim (
 
 task_t<std::size_t>
 public_host_runtime_t::continue_application_claim (std::shared_ptr<application_claim_batch_t> batch,
-                                                   task_t<void> pending)
+                                                   std::exception_ptr failure)
 {
+    // The suspended record's continuation calls this; a ready rest of the claim
+    // returns its count without another frame.
     try {
-        co_await pending;
+        if (failure) {
+            fail_application_claim (batch, std::move (failure));
+            ++batch->index;
+        }
+        auto next = dispatch_application_claim (batch);
+        if (const auto count = std::get_if<std::size_t> (&next))
+            return task_t<std::size_t> (result_t<std::size_t>::success (*count));
+        return std::get<task_t<std::size_t>> (std::move (next));
     }
     catch (...) {
-        fail_application_claim (batch, std::current_exception ());
-        ++batch->index;
+        return task_t<std::size_t> (detail::current_exception_result<std::size_t> ());
     }
-    auto next = dispatch_application_claim (batch);
-    if (const auto count = std::get_if<std::size_t> (&next))
-        co_return *count;
-    co_return co_await std::get<task_t<std::size_t>> (std::move (next));
 }
 
 task_t<bool> public_host_runtime_t::dispatch_application_owner (
@@ -8660,7 +8807,7 @@ public_host_runtime_t::cut_relocation_source (
             if (!binding || !gate)
                 co_return;
             if (restored && resume) {
-                (void) co_await dispatch_stateful_owner (owner, resume);
+                (void) co_await dispatch_stateful_owner (owner, resume, gate, binding);
             } else if (!restored) {
                 (void) co_await gate->release_relocation_seal (binding);
             }
@@ -9014,101 +9161,130 @@ task_t<zlink::submit_result_t> public_host_runtime_t::enqueue_local_actor_messag
   std::uint64_t authority_owner_generation,
   std::uint64_t owner_lease_generation)
 {
-    if (!is_actor_application (kind)) {
-        co_return zlink::submit_result_t::invalid_argument;
-    }
-    // The Actor execution gate holds payloads during recovery and completion.
-    // Resolve identity here without a second Ready-only admission decision.
-    const auto current = co_await resolve_actor_async (std::string (target.actor_id ().value ()));
-    if (!current) {
-        co_return zlink::submit_result_t::not_found;
-    }
-
-    ready_record_t owner{
-      .owner_kind = owner_kind_t::actor,
-      .domain = ready_domain_t::application,
-      .actor = framework_actor_ref (
-        *current,
-        std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (target)))};
-    receive_record_t record;
-    record.kind = kind;
-    record.domain = ready_domain_t::application;
-    record.source_node_rid = status ().routing_id ();
-    if (bound_session_source) {
-        record.source_session_rid =
-          zlink::routing_id_t::from (bound_session_source->session_routing_id);
-        record.source_binding_generation = bound_session_source->binding_generation;
-        record.source_session_sequence = bound_session_source->session_sequence;
-    }
-
-    auto waiter = _options.mesh.application_jobs
-                    ? std::make_shared<application_job_queue_t::waiter_t> ()
-                    : nullptr;
-    std::optional<mesh::raw_mesh_node_owner_t::local_operation_reservation_t> reservation;
-    if (operation) {
-        reservation = co_await prepare_local_completion (*operation);
-        if (!reservation)
-            co_return zlink::submit_result_t::terminated;
-    } else if (_stateful_dispatch) {
-        const auto sequence = co_await _transport->next_operation_sequence_async ();
-        if (!sequence)
-            co_return zlink::submit_result_t::terminated;
-        record.operation_id = {_options.mesh.descriptor.lifecycle_generation, *sequence};
-    }
-
-    task_t<zlink::submit_result_t> dispatch{
-      result_t<zlink::submit_result_t>::success (zlink::submit_result_t::terminated)};
-    try {
-        co_await _lifecycle_configuration_lane.run_task ([&] {
-            if (!_started || _closing)
-                return;
-            if (operation) {
-                register_local_completion (*operation, *reservation, timeout, {},
-                                           local_request_wait_cleanup (waiter),
-                                           mesh_request_surface_t::actor);
-                record.operation_id = operation->id;
-                std::weak_ptr<public_host_runtime_t> weak = shared_from_this ();
-                record.reply_token.host = weak;
-                record.reply_token.local_reply =
-                  [weak, operation = *operation] (const std::vector<zlink::message_t> &reply) {
-                      const auto host = weak.lock ();
-                      return host && host->complete_local_request (operation, reply);
-                  };
-            }
-            dispatch = _local_dispatch_completion_lane.run_task ([&] {
-                if (_stateful_dispatch) {
-                    record.actor_route = {current->key,
-                                          current->object_generation,
-                                          _options.mesh.descriptor.node_routing_id,
-                                          _options.mesh.descriptor.lifecycle_generation,
-                                          authority_owner_generation != 0
-                                            ? authority_owner_generation
-                                            : current->authority_owner_generation,
-                                          owner_lease_generation};
-                    if (operation)
-                        record.reply_route_id = operation->id.low;
-                }
-                admit_local_application (
-                  local_application_dispatch_t{std::move (owner), std::move (record), parts},
-                  waiter);
-
-                return zlink::submit_result_t::ok;
-            });
-        });
-        const auto submitted = co_await dispatch;
-        if (submitted != zlink::submit_result_t::ok) {
-            if (operation)
-                _transport->unregister_local_operation (operation->id);
-        }
-        if (submitted == zlink::submit_result_t::ok)
-            _transport->signal_activity ();
-        co_return submitted;
-    }
-    catch (...) {
-        if (operation)
-            _transport->unregister_local_operation (operation->id);
-        throw;
-    }
+    if (!is_actor_application (kind))
+        return local_enqueue_result (zlink::submit_result_t::invalid_argument);
+    // Identity lookup does not duplicate the Actor gate's recovery admission.
+    return continue_task<zlink::submit_result_t> (
+      resolve_actor_async (std::string (target.actor_id ().value ())),
+      [this, &target, kind, &parts, operation,
+       bound_session_source = std::move (bound_session_source), timeout, authority_owner_generation,
+       owner_lease_generation] (
+        std::optional<stateful::object_ref_t> current) mutable -> task_t<zlink::submit_result_t> {
+          if (!current)
+              return local_enqueue_result (zlink::submit_result_t::not_found);
+          auto actor = framework_actor_ref (
+            *current,
+            std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (target)));
+          auto source_node_rid = status ().routing_id ();
+          std::optional<zlink::routing_id_t> source_session_rid;
+          std::uint64_t source_binding_generation = 0;
+          std::uint64_t source_session_sequence = 0;
+          if (bound_session_source) {
+              source_session_rid =
+                zlink::routing_id_t::from (bound_session_source->session_routing_id);
+              source_binding_generation = bound_session_source->binding_generation;
+              source_session_sequence = bound_session_source->session_sequence;
+          }
+          auto waiter = _options.mesh.application_jobs
+                          ? std::make_shared<application_job_queue_t::waiter_t> ()
+                          : nullptr;
+          auto enqueue =
+            [this, &parts, operation, kind, timeout, authority_owner_generation,
+             owner_lease_generation, current = std::move (*current), actor = std::move (actor),
+             source_node_rid = std::move (source_node_rid),
+             source_session_rid = std::move (source_session_rid), source_binding_generation,
+             source_session_sequence, waiter = std::move (waiter)] (
+              std::optional<mesh::raw_mesh_node_owner_t::local_operation_reservation_t> reservation,
+              std::optional<std::uint64_t> sequence) mutable -> task_t<zlink::submit_result_t> {
+              call_id_t operation_id;
+              if (sequence)
+                  operation_id = {_options.mesh.descriptor.lifecycle_generation, *sequence};
+              return finish_local_enqueue (*_transport, operation, [&] {
+                  return _lifecycle_configuration_lane.run_task (
+                    [this, &parts, operation, kind, reservation = std::move (reservation), timeout,
+                     authority_owner_generation, owner_lease_generation,
+                     current = std::move (current), actor = std::move (actor),
+                     source_node_rid = std::move (source_node_rid),
+                     source_session_rid = std::move (source_session_rid), source_binding_generation,
+                     source_session_sequence, operation_id,
+                     waiter = std::move (waiter)] () mutable -> task_t<zlink::submit_result_t> {
+                        if (!_started || _closing)
+                            return local_enqueue_result (zlink::submit_result_t::terminated);
+                        reply_token_t reply_token;
+                        if (operation) {
+                            register_local_completion (*operation, *reservation, timeout, {},
+                                                       local_request_wait_cleanup (waiter),
+                                                       mesh_request_surface_t::actor);
+                            operation_id = operation->id;
+                            std::weak_ptr<public_host_runtime_t> weak = shared_from_this ();
+                            reply_token.host = weak;
+                            reply_token.local_reply =
+                              [weak, operation =
+                                       *operation] (const std::vector<zlink::message_t> &reply) {
+                                  const auto host = weak.lock ();
+                                  return host && host->complete_local_request (operation, reply);
+                              };
+                        }
+                        return _local_dispatch_completion_lane.run_task (
+                          [this, &parts, operation, kind, authority_owner_generation,
+                           owner_lease_generation, current = std::move (current),
+                           actor = std::move (actor), source_node_rid = std::move (source_node_rid),
+                           source_session_rid = std::move (source_session_rid),
+                           source_binding_generation, source_session_sequence, operation_id,
+                           reply_token = std::move (reply_token),
+                           waiter = std::move (waiter)] () mutable {
+                              ready_record_t owner{.owner_kind = owner_kind_t::actor,
+                                                   .domain = ready_domain_t::application,
+                                                   .actor = std::move (actor)};
+                              receive_record_t record;
+                              record.kind = kind;
+                              record.domain = ready_domain_t::application;
+                              record.source_node_rid = std::move (source_node_rid);
+                              record.source_session_rid = std::move (source_session_rid);
+                              record.source_binding_generation = source_binding_generation;
+                              record.source_session_sequence = source_session_sequence;
+                              record.operation_id = operation_id;
+                              record.reply_token = std::move (reply_token);
+                              if (_stateful_dispatch) {
+                                  record.actor_route = {
+                                    current.key,
+                                    current.object_generation,
+                                    _options.mesh.descriptor.node_routing_id,
+                                    _options.mesh.descriptor.lifecycle_generation,
+                                    authority_owner_generation != 0
+                                      ? authority_owner_generation
+                                      : current.authority_owner_generation,
+                                    owner_lease_generation};
+                                  if (operation)
+                                      record.reply_route_id = operation->id.low;
+                              }
+                              admit_local_application (
+                                local_application_dispatch_t{std::move (owner), std::move (record),
+                                                             parts},
+                                waiter);
+                              return zlink::submit_result_t::ok;
+                          });
+                    });
+              });
+          };
+          if (operation)
+              return continue_task<zlink::submit_result_t> (
+                prepare_local_completion (*operation),
+                [enqueue = std::move (enqueue)] (auto reservation) mutable {
+                    if (!reservation)
+                        return local_enqueue_result (zlink::submit_result_t::terminated);
+                    return enqueue (std::move (reservation), std::nullopt);
+                });
+          if (_stateful_dispatch)
+              return continue_task<zlink::submit_result_t> (
+                _transport->next_operation_sequence_async (),
+                [enqueue = std::move (enqueue)] (auto sequence) mutable {
+                    if (!sequence)
+                        return local_enqueue_result (zlink::submit_result_t::terminated);
+                    return enqueue (std::nullopt, sequence);
+                });
+          return enqueue (std::nullopt, std::nullopt);
+      });
 }
 
 task_t<zlink::submit_result_t>
@@ -9116,44 +9292,59 @@ public_host_runtime_t::enqueue_local_spot_send (const protocol::spot_route_fence
                                                 const std::vector<zlink::message_t> &parts,
                                                 std::string source_spot_id)
 {
-    const auto local = status ();
+    auto local = status ();
     if (target.target_node_routing_id != local.routing_id ().to_bytes ()
-        || target.target_node_generation != local.lifecycle_generation ()) {
-        co_return zlink::submit_result_t::not_found;
-    }
-    const auto object = co_await resolve_spot_async (target.spot_id);
-    if (!object || object->node_id != local.routing_id ().to_string ()) {
-        co_return zlink::submit_result_t::not_found;
-    }
-
-    ready_record_t owner{.owner_kind = owner_kind_t::spot,
-                         .domain = ready_domain_t::application,
-                         .spot_id = target.spot_id};
-    receive_record_t record;
-    record.kind = record_kind_t::spot_send;
-    record.domain = ready_domain_t::application;
-    record.source_node_rid = local.routing_id ();
-    record.spot_route = target;
-    const auto sequence = co_await _transport->next_operation_sequence_async ();
-    if (!sequence)
-        co_return zlink::submit_result_t::terminated;
-    record.operation_id = {_options.mesh.descriptor.lifecycle_generation, *sequence};
-
-    task_t<zlink::submit_result_t> dispatch{
-      result_t<zlink::submit_result_t>::success (zlink::submit_result_t::terminated)};
-    co_await _lifecycle_configuration_lane.run_task ([&] {
-        if (!_started || _closing)
-            return;
-        dispatch = _local_dispatch_completion_lane.run_task ([&] {
-            admit_local_application (local_application_dispatch_t{
-              std::move (owner), std::move (record), parts, std::move (source_spot_id)});
-            return zlink::submit_result_t::ok;
-        });
-    });
-    const auto submitted = co_await dispatch;
-    if (submitted == zlink::submit_result_t::ok)
-        _transport->signal_activity ();
-    co_return submitted;
+        || target.target_node_generation != local.lifecycle_generation ())
+        return local_enqueue_result (zlink::submit_result_t::not_found);
+    return continue_task<zlink::submit_result_t> (
+      resolve_spot_async (target.spot_id),
+      [this, &target, &parts, local = std::move (local),
+       source_spot_id = std::move (source_spot_id)] (
+        std::optional<stateful::object_ref_t> object) mutable -> task_t<zlink::submit_result_t> {
+          if (!object || object->node_id != local.routing_id ().to_string ())
+              return local_enqueue_result (zlink::submit_result_t::not_found);
+          auto source_node_rid = local.routing_id ();
+          auto route = target;
+          return continue_task<zlink::submit_result_t> (
+            _transport->next_operation_sequence_async (),
+            [this, &parts, target = std::move (route),
+             source_node_rid = std::move (source_node_rid),
+             source_spot_id = std::move (source_spot_id)] (
+              std::optional<std::uint64_t> sequence) mutable -> task_t<zlink::submit_result_t> {
+                if (!sequence)
+                    return local_enqueue_result (zlink::submit_result_t::terminated);
+                const call_id_t operation_id{_options.mesh.descriptor.lifecycle_generation,
+                                             *sequence};
+                return finish_local_enqueue (*_transport, nullptr, [&] {
+                    return _lifecycle_configuration_lane.run_task (
+                      [this, &parts, target = std::move (target),
+                       source_node_rid = std::move (source_node_rid), operation_id,
+                       source_spot_id =
+                         std::move (source_spot_id)] () mutable -> task_t<zlink::submit_result_t> {
+                          if (!_started || _closing)
+                              return local_enqueue_result (zlink::submit_result_t::terminated);
+                          return _local_dispatch_completion_lane.run_task (
+                            [this, &parts, target = std::move (target),
+                             source_node_rid = std::move (source_node_rid), operation_id,
+                             source_spot_id = std::move (source_spot_id)] () mutable {
+                                ready_record_t owner{.owner_kind = owner_kind_t::spot,
+                                                     .domain = ready_domain_t::application,
+                                                     .spot_id = target.spot_id};
+                                receive_record_t record;
+                                record.kind = record_kind_t::spot_send;
+                                record.domain = ready_domain_t::application;
+                                record.source_node_rid = std::move (source_node_rid);
+                                record.spot_route = std::move (target);
+                                record.operation_id = operation_id;
+                                admit_local_application (local_application_dispatch_t{
+                                  std::move (owner), std::move (record), parts,
+                                  std::move (source_spot_id)});
+                                return zlink::submit_result_t::ok;
+                            });
+                      });
+                });
+            });
+      });
 }
 
 task_t<zlink::submit_result_t>
@@ -9165,75 +9356,81 @@ public_host_runtime_t::enqueue_local_spot_request (const protocol::spot_route_fe
                                                    spot_request_completion_t completion,
                                                    std::string source_spot_id)
 {
-    const auto local = status ();
+    auto local = status ();
     if (target.target_node_routing_id != local.routing_id ().to_bytes ()
-        || target.target_node_generation != local.lifecycle_generation ()) {
-        co_return zlink::submit_result_t::not_found;
-    }
-    const auto object = co_await resolve_spot_async (target.spot_id);
-    if (!object || object->node_id != local.routing_id ().to_string ()) {
-        co_return zlink::submit_result_t::not_found;
-    }
-
-    ready_record_t owner{.owner_kind = owner_kind_t::spot,
-                         .domain = ready_domain_t::application,
-                         .spot_id = target.spot_id};
-    receive_record_t record;
-    record.kind = record_kind_t::spot_request;
-    record.domain = ready_domain_t::application;
-    record.source_node_rid = local.routing_id ();
-    record.spot_route = target;
-
-    auto waiter = _options.mesh.application_jobs
-                    ? std::make_shared<application_job_queue_t::waiter_t> ()
-                    : nullptr;
-    const auto reservation = co_await prepare_local_completion (operation);
-    if (!reservation)
-        co_return zlink::submit_result_t::terminated;
-    task_t<zlink::submit_result_t> dispatch{
-      result_t<zlink::submit_result_t>::success (zlink::submit_result_t::terminated)};
-    try {
-        co_await _lifecycle_configuration_lane.run_task ([&] {
-            if (!_started || _closing)
-                return;
-            register_local_completion (operation, *reservation, timeout, std::move (completion),
-                                       local_request_wait_cleanup (waiter),
-                                       mesh_request_surface_t::spot);
-            record.operation_id = operation.id;
-            record.reply_route_id = operation.id.low;
-            std::weak_ptr<public_host_runtime_t> weak = shared_from_this ();
-            record.reply_token.host = weak;
-            record.reply_token.local_reply =
-              [weak, operation] (const std::vector<zlink::message_t> &reply) {
-                  const auto host = weak.lock ();
-                  if (!host) {
-                      return false;
-                  }
-                  return host->complete_local_request (operation, reply);
-              };
-
-
-            dispatch = _local_dispatch_completion_lane.run_task ([&] {
-                admit_local_application (local_application_dispatch_t{std::move (owner),
-                                                                      std::move (record), parts,
-                                                                      std::move (source_spot_id)},
-                                         waiter);
-
-                return zlink::submit_result_t::ok;
+        || target.target_node_generation != local.lifecycle_generation ())
+        return local_enqueue_result (zlink::submit_result_t::not_found);
+    return continue_task<zlink::submit_result_t> (
+      resolve_spot_async (target.spot_id),
+      [this, &target, &parts, &operation, timeout, local = std::move (local),
+       completion = std::move (completion), source_spot_id = std::move (source_spot_id)] (
+        std::optional<stateful::object_ref_t> object) mutable -> task_t<zlink::submit_result_t> {
+          if (!object || object->node_id != local.routing_id ().to_string ())
+              return local_enqueue_result (zlink::submit_result_t::not_found);
+          auto source_node_rid = local.routing_id ();
+          auto route = target;
+          auto waiter = _options.mesh.application_jobs
+                          ? std::make_shared<application_job_queue_t::waiter_t> ()
+                          : nullptr;
+          return continue_task<zlink::submit_result_t> (
+            prepare_local_completion (operation),
+            [this, &parts, &operation, timeout, target = std::move (route),
+             source_node_rid = std::move (source_node_rid), waiter = std::move (waiter),
+             completion = std::move (completion), source_spot_id = std::move (source_spot_id)] (
+              std::optional<mesh::raw_mesh_node_owner_t::local_operation_reservation_t>
+                reservation) mutable -> task_t<zlink::submit_result_t> {
+                if (!reservation)
+                    return local_enqueue_result (zlink::submit_result_t::terminated);
+                return finish_local_enqueue (*_transport, &operation, [&] {
+                    return _lifecycle_configuration_lane.run_task (
+                      [this, &parts, &operation, timeout, reservation = std::move (*reservation),
+                       target = std::move (target), source_node_rid = std::move (source_node_rid),
+                       waiter = std::move (waiter), completion = std::move (completion),
+                       source_spot_id =
+                         std::move (source_spot_id)] () mutable -> task_t<zlink::submit_result_t> {
+                          if (!_started || _closing)
+                              return local_enqueue_result (zlink::submit_result_t::terminated);
+                          register_local_completion (
+                            operation, reservation, timeout, std::move (completion),
+                            local_request_wait_cleanup (waiter), mesh_request_surface_t::spot);
+                          const auto operation_id = operation.id;
+                          const auto reply_route_id = operation.id.low;
+                          reply_token_t reply_token;
+                          std::weak_ptr<public_host_runtime_t> weak = shared_from_this ();
+                          reply_token.host = weak;
+                          reply_token.local_reply =
+                            [weak, operation] (const std::vector<zlink::message_t> &reply) {
+                                const auto host = weak.lock ();
+                                return host && host->complete_local_request (operation, reply);
+                            };
+                          return _local_dispatch_completion_lane.run_task (
+                            [this, &parts, target = std::move (target),
+                             source_node_rid = std::move (source_node_rid), operation_id,
+                             reply_route_id, reply_token = std::move (reply_token),
+                             waiter = std::move (waiter),
+                             source_spot_id = std::move (source_spot_id)] () mutable {
+                                ready_record_t owner{.owner_kind = owner_kind_t::spot,
+                                                     .domain = ready_domain_t::application,
+                                                     .spot_id = target.spot_id};
+                                receive_record_t record;
+                                record.kind = record_kind_t::spot_request;
+                                record.domain = ready_domain_t::application;
+                                record.source_node_rid = std::move (source_node_rid);
+                                record.spot_route = std::move (target);
+                                record.operation_id = operation_id;
+                                record.reply_route_id = reply_route_id;
+                                record.reply_token = std::move (reply_token);
+                                admit_local_application (
+                                  local_application_dispatch_t{std::move (owner),
+                                                               std::move (record), parts,
+                                                               std::move (source_spot_id)},
+                                  waiter);
+                                return zlink::submit_result_t::ok;
+                            });
+                      });
+                });
             });
-        });
-        const auto submitted = co_await dispatch;
-        if (submitted != zlink::submit_result_t::ok) {
-            _transport->unregister_local_operation (operation.id);
-        }
-        if (submitted == zlink::submit_result_t::ok)
-            _transport->signal_activity ();
-        co_return submitted;
-    }
-    catch (...) {
-        _transport->unregister_local_operation (operation.id);
-        throw;
-    }
+      });
 }
 
 bool public_host_runtime_t::complete_local_request (const pending_operation_t &operation,

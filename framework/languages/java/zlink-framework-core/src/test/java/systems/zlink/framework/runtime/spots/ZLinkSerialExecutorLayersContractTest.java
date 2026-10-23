@@ -6,6 +6,8 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import systems.zlink.framework.configuration.ZLinkUserSpotExecutionMode;
 import systems.zlink.framework.execution.ZLinkExecutionLanePolicy;
@@ -26,6 +28,41 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 final class ZLinkSerialExecutorLayersContractTest {
     private static final Duration TEST_TIMEOUT = Duration.ofSeconds(10);
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void nestedLifecycleRetainsTheOwningSpotTurnUntilCompletion(boolean lifecycleOwner)
+            throws Exception {
+        try (Fixture fixture = fixture(ZLinkUserSpotExecutionMode.SPOT_WIDE)) {
+            var entered = new CompletableFuture<Void>();
+            var release = new CompletableFuture<Void>();
+            java.util.function.Supplier<CompletionStage<Void>> operation =
+                    () ->
+                            fixture.serial.executeLifecycle(
+                                    () -> {
+                                        entered.complete(null);
+                                        return release;
+                                    });
+            var owner =
+                    lifecycleOwner
+                            ? fixture.serial.executeLifecycle(operation)
+                            : fixture.serial.executeSpot(0, operation);
+            try {
+                entered.get(3, TimeUnit.SECONDS);
+                var next =
+                        fixture.serial.executeSpot(
+                                0, () -> CompletableFuture.completedFuture(null));
+                assertThrows(
+                        TimeoutException.class,
+                        () -> next.toCompletableFuture().get(250, TimeUnit.MILLISECONDS));
+                assertFalse(owner.toCompletableFuture().isDone());
+                release.complete(null);
+                await(owner, next);
+            } finally {
+                release.complete(null);
+            }
+        }
+    }
 
     @Test
     void submissionEntrypointsSelectTheirQueuesWithoutAQueueArgument() throws Exception {
