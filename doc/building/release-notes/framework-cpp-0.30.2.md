@@ -25,6 +25,10 @@ Framework 0.30.2 uses C++ binding 1.20.0 and Core 1.20.0.
 - Fixed Session bind being rejected with a stale authority when an Actor returned to the same node after relocation, requests returning through Message Follow not being processed, and relocation terminal replies going to the coordinator instead of the original requester. (#2507)
 - Updated the GameQuest sample to send the next lookup after it observes Close. (#2507)
 
+## Known issues
+
+- The relocation and authority fix (#2128) increased the cost of stateful Spot requests. In a same-node measurement one request drain is about 5 times slower than in 0.30.1 (this release removes coroutine frames and allocations, which makes it 18% faster than right after the fix). The rest comes from admission passing through other threads even when the gate is idle, and is fixed in 0.31.0. (#1672)
+
 ## Install
 
 Select a platform Framework archive from the [`framework-cpp/v0.30.2` GitHub Release](https://github.com/zlink-systems/zlink/releases/tag/framework-cpp%2Fv0.30.2), or download it with `bootstrap.cmake`. A server Framework requires C++ binding 1.20.0 and Core 1.20.0. A client that uses only the Stream Connector does not require Core or the binding.
