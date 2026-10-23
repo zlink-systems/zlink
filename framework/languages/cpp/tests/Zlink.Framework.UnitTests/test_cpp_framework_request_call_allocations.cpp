@@ -13,9 +13,11 @@
 #include "runtime_failure_fixture.hpp"
 #include <array>
 #include <cstdio>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
+#include <variant>
 
 namespace
 {
@@ -41,9 +43,70 @@ void add_payload (fw::serializer_registry_t &serializers)
       "x/y");
 }
 
-// Allocation sizes of the task objects a request layer can add, calibrated on
-// this build: a reply state per reply type and an admission source.
-struct layer_sizes_t
+struct allocation_sample_t
+{
+    std::array<fw::tests::allocation_event_t, 256> events{};
+    std::size_t count = 0;
+    std::size_t total = 0;
+    std::string diagnostics;
+};
+
+template <typename TAction> allocation_sample_t sample_allocations (TAction &&action)
+{
+    allocation_sample_t sample;
+    fw::tests::allocation_event_log_t log{sample.events.data (), sample.events.size ()};
+    {
+        fw::tests::allocation_event_scope_t scope (log);
+        sample.total = fw::tests::count_allocations (std::forward<TAction> (action));
+    }
+    EXPECT_FALSE (log.overflow);
+    sample.count = log.count;
+    sample.diagnostics = fw::tests::describe_allocations (log);
+    return sample;
+}
+
+void print_allocation_sizes (const char *label, const allocation_sample_t &sample)
+{
+    std::printf ("%s: total=%zu sizes=", label, sample.total);
+    for (std::size_t i = 0; i < sample.count; ++i)
+        std::printf ("%s%zu", i == 0 ? "" : ",", sample.events[i].size);
+    std::printf ("\n");
+}
+
+// Locate a live result in the last recorded allocation containing its address.
+// Earlier temporary allocations may have reused the same storage. No object
+// representation or allocator size class is used to identify the reply.
+std::optional<std::size_t> allocation_containing (const allocation_sample_t &sample,
+                                                  const void *address)
+{
+    const std::less<const void *> before;
+    for (std::size_t i = sample.count; i > 0; --i) {
+        const auto &event = sample.events[i - 1];
+        const auto *end = static_cast<const unsigned char *> (event.memory) + event.size;
+        if (!before (address, event.memory) && before (address, end))
+            return i - 1;
+    }
+    return std::nullopt;
+}
+
+void expect_public_and_physical_reply_allocations (const allocation_sample_t &sample,
+                                                   const fw::request_task_t<payload_t> &pending)
+{
+    auto physical = fw::detail::request_task_access_t::physical_reply (pending);
+    ASSERT_TRUE (physical.await_ready ());
+    const auto public_allocation =
+      allocation_containing (sample, std::addressof (pending.result ()));
+    const auto physical_allocation =
+      allocation_containing (sample, std::addressof (physical.result ()));
+    ASSERT_TRUE (public_allocation.has_value ());
+    ASSERT_TRUE (physical_allocation.has_value ());
+    EXPECT_NE (*public_allocation, *physical_allocation);
+}
+
+// These legacy probes count size classes, not allocation types. The node and
+// channel tests below use stored-result addresses and measured primitives;
+// the existing Spot and App probes retain their size-class comparisons.
+struct layer_size_classes_t
 {
     std::size_t payload_state = 0;
     std::size_t message_state = 0;
@@ -51,79 +114,186 @@ struct layer_sizes_t
     std::size_t transport_state = 0;
 };
 
-std::size_t only_allocation_size (const auto &action)
+std::size_t only_allocation_size (const char *label, const auto &action)
 {
-    std::array<fw::tests::allocation_event_t, 4> events{};
-    fw::tests::allocation_event_log_t log{events.data (), events.size ()};
-    fw::tests::allocation_event_log = &log;
-    const auto count = fw::tests::count_allocations (action);
-    fw::tests::allocation_event_log = nullptr;
-    EXPECT_GE (count, 1u);
-    return count >= 1 ? events[count - 1].size : 0;
+    const auto sample = sample_allocations (action);
+    print_allocation_sizes (label, sample);
+    SCOPED_TRACE (sample.diagnostics);
+    EXPECT_GE (sample.total, 1u);
+    return sample.count >= 1 ? sample.events[sample.count - 1].size : 0;
 }
 
-layer_sizes_t calibrate_layer_sizes ()
+layer_size_classes_t calibrate_layer_size_classes ()
 {
-    layer_sizes_t sizes;
-    sizes.payload_state =
-      only_allocation_size ([] { (void) fw::task_completion_source_t<payload_t> (); });
-    sizes.message_state =
-      only_allocation_size ([] { (void) fw::task_completion_source_t<zlink::message_t> (); });
-    sizes.admission_state =
-      only_allocation_size ([] { (void) fw::task_completion_source_t<void> (); });
-    sizes.transport_state =
-      only_allocation_size ([] { (void) fw::task_completion_source_t<transport_reply_t> (); });
+    layer_size_classes_t sizes;
+    sizes.payload_state = only_allocation_size (
+      "payload size class reference", [] { (void) fw::task_completion_source_t<payload_t> (); });
+    sizes.message_state = only_allocation_size ("message size class reference", [] {
+        (void) fw::task_completion_source_t<zlink::message_t> ();
+    });
+    sizes.admission_state = only_allocation_size (
+      "admission size class reference", [] { (void) fw::task_completion_source_t<void> (); });
+    sizes.transport_state = only_allocation_size ("transport size class reference", [] {
+        (void) fw::task_completion_source_t<transport_reply_t> ();
+    });
     return sizes;
 }
 
-struct layer_counts_t
+struct layer_size_class_counts_t
 {
     std::size_t total = 0;
     std::size_t payload_states = 0;
     std::size_t message_states = 0;
     std::size_t admission_sources = 0;
     std::size_t transport_states = 0;
+    std::string diagnostics;
 };
 
 template <typename TAction>
-layer_counts_t count_layers (const layer_sizes_t &sizes, TAction &&action)
+layer_size_class_counts_t count_layer_size_classes (const layer_size_classes_t &sizes,
+                                                    TAction &&action)
 {
-    std::array<fw::tests::allocation_event_t, 256> events{};
-    fw::tests::allocation_event_log_t log{events.data (), events.size ()};
-    fw::tests::allocation_event_log = &log;
-    layer_counts_t counts;
-    counts.total = fw::tests::count_allocations (std::forward<TAction> (action));
-    fw::tests::allocation_event_log = nullptr;
-    EXPECT_FALSE (log.overflow);
-    for (std::size_t i = 0; i < log.count; ++i) {
-        counts.payload_states += events[i].size == sizes.payload_state;
-        counts.message_states += events[i].size == sizes.message_state;
-        counts.admission_sources += events[i].size == sizes.admission_state;
-        counts.transport_states += events[i].size == sizes.transport_state;
+    const auto sample = sample_allocations (std::forward<TAction> (action));
+    layer_size_class_counts_t counts;
+    counts.total = sample.total;
+    counts.diagnostics = sample.diagnostics;
+    print_allocation_sizes ("request size classes", sample);
+    for (std::size_t i = 0; i < sample.count; ++i) {
+        counts.payload_states += sample.events[i].size == sizes.payload_state;
+        counts.message_states += sample.events[i].size == sizes.message_state;
+        counts.admission_sources += sample.events[i].size == sizes.admission_state;
+        counts.transport_states += sample.events[i].size == sizes.transport_state;
     }
     return counts;
 }
 
-// One layer that turns a pending reply into another reply type: its reply
-// state, the terminal observer and that observer's registration.
-std::size_t projection_allocations ()
+using node_transport_t =
+  std::variant<std::monostate,
+               std::shared_ptr<fw::detail::route_channel_runtime_t>,
+               fw::detail::channel_runtime_state_t::mesh_node_transport_ptr_t>;
+using channel_transport_t =
+  std::variant<fw::detail::channel_runtime_state_t::client_server_request_t,
+               fw::detail::channel_runtime_state_t::mesh_channel_request_t>;
+
+// Minimal references compose existing request primitives. Their value argument
+// boundaries and capture types match the owning runtime layers so the current
+// standard library measures its own map heads and std::function storage. They
+// do not duplicate routing, decoding, admission or completion decisions.
+void encode_request_primitive (fw::serializer_registry_t &serializers,
+                               std::string channel_name,
+                               std::string packet_name,
+                               std::chrono::milliseconds timeout,
+                               fw::channel_request_call_t::metadata_map_t metadata)
 {
-    fw::task_completion_source_t<payload_t> source;
-    auto input = source.task ();
-    std::optional<fw::task_t<payload_t>> projected;
-    return fw::tests::count_allocations ([&] {
-        projected.emplace (fw::detail::project_task_terminal<payload_t> (
-          input, [] (const fw::result_t<payload_t> &result) { return result; }));
+    fw::runtime::messaging::client_call_codec_t codec;
+    auto header = codec.create_envelope (fw::runtime::messaging::message_kind_t::request,
+                                         channel_name, packet_name, timeout);
+    header.metadata = std::move (metadata);
+    (void) codec.encode_payload_parts (
+      std::move (header), serializers.get<payload_t> ().serialize_with_content_type (payload_t{}));
+}
+
+allocation_sample_t encode_allocations (fw::serializer_registry_t &serializers,
+                                        const std::string &channel_name)
+{
+    const fw::channel_request_call_t::metadata_map_t metadata;
+    const std::string packet_name = payload_t::packet_name;
+    return sample_allocations ([&] {
+        encode_request_primitive (serializers, channel_name, packet_name,
+                                  fw::runtime::configuration::default_request_timeout, metadata);
     });
 }
 
-// The observer of an already-admitted request's admission source.
-std::size_t ready_observer_allocations ()
+allocation_sample_t internal_projection_allocations (
+  std::optional<channel_transport_t> channel_transport = std::nullopt)
 {
-    auto admitted = fw::task_t<void> (fw::result_t<void>::success ());
-    auto reply = std::make_shared<int> ();
-    return fw::tests::count_allocations ([&] {
-        fw::detail::observe_task_terminal (admitted, [reply] (const fw::result_t<void> &) {});
+    fw::task_completion_source_t<transport_reply_t> source;
+    auto admitted = std::make_shared<fw::task_completion_source_t<void>> ();
+    admitted->complete (fw::result_t<void>::success ());
+    // The transport fixture has already registered its public-reply observer.
+    // Preserve that vector population before measuring the next registration.
+    fw::request_task_t<transport_reply_t> selected (source.task (), admitted);
+    std::optional<fw::request_task_t<zlink::message_t>> projected;
+    const std::shared_ptr<fw::detail::route_client_state_t> state;
+    std::string packet_name = payload_t::packet_name;
+    if (channel_transport) {
+        std::string channel_name = "c";
+        return sample_allocations ([&] {
+            projected.emplace (fw::detail::project_request_reply<zlink::message_t> (
+              selected,
+              [state, transport = std::move (*channel_transport),
+               packet_name = std::move (packet_name), channel_name = std::move (channel_name)] (
+                const fw::result_t<transport_reply_t> &) -> fw::result_t<zlink::message_t> {
+                  (void) state;
+                  (void) transport;
+                  (void) packet_name;
+                  (void) channel_name;
+                  return fw::result_t<zlink::message_t>::success (zlink::message_t{});
+              }));
+        });
+    }
+    node_transport_t transport;
+    std::string router_channel_id = "m";
+    std::shared_ptr<const zlink::routing_id_t> target_owner;
+    return sample_allocations ([&] {
+        projected.emplace (fw::detail::project_request_reply<zlink::message_t> (
+          selected,
+          [state, transport = std::move (transport), packet_name = std::move (packet_name),
+           router_channel_id = std::move (router_channel_id),
+           target_owner = std::move (target_owner)] (
+            const fw::result_t<transport_reply_t> &) -> fw::result_t<zlink::message_t> {
+              (void) state;
+              (void) transport;
+              (void) packet_name;
+              (void) router_channel_id;
+              (void) target_owner;
+              return fw::result_t<zlink::message_t>::success (zlink::message_t{});
+          }));
+    });
+}
+
+allocation_sample_t public_projection_allocations (fw::serializer_registry_t &registry)
+{
+    fw::task_completion_source_t<zlink::message_t> source;
+    auto admitted = std::make_shared<fw::task_completion_source_t<void>> ();
+    admitted->complete (fw::result_t<void>::success ());
+    auto selected =
+      fw::detail::request_task_access_t::from_admitted_reply (source.task (), admitted);
+    std::optional<fw::request_task_t<payload_t>> projected;
+    return sample_allocations ([&] {
+        projected.emplace (fw::detail::public_request_reply<payload_t> (
+          selected,
+          [serializers =
+             &registry] (const fw::result_t<zlink::message_t> &) -> fw::result_t<payload_t> {
+              (void) serializers;
+              return fw::result_t<payload_t>::success (payload_t{});
+          }));
+    });
+}
+
+allocation_sample_t channel_selection_allocations (
+  const fw::detail::channel_runtime_state_t::mesh_channel_request_t &requester)
+{
+    fw::runtime::offload_executor_t executor (1, "request-allocation-reference");
+    fw::runtime::state_lane_t lane (executor);
+    const std::string channel_name = "c";
+    const std::map<std::string, fw::detail::channel_runtime_state_t::client_server_request_t>
+      client_server_transports;
+    const std::map<std::string, fw::detail::channel_runtime_state_t::mesh_channel_request_t>
+      route_mesh_transports{{channel_name, requester}};
+    return sample_allocations ([&] {
+        (void) lane
+          .run_checked ([&] () -> std::optional<channel_transport_t> {
+              const auto client_server_transport = client_server_transports.find (channel_name);
+              if (client_server_transport != client_server_transports.end ())
+                  return channel_transport_t (std::in_place_index<0>,
+                                              client_server_transport->second);
+              const auto route_mesh_transport = route_mesh_transports.find (channel_name);
+              if (route_mesh_transport != route_mesh_transports.end ())
+                  return channel_transport_t (std::in_place_index<1>, route_mesh_transport->second);
+              return std::nullopt;
+          })
+          .get ();
     });
 }
 
@@ -162,48 +332,35 @@ TEST (RequestCallAllocations, NodeRequestAddsOneReplyPerReplyTypeAboveTheTranspo
         return selected;
     });
     auto client = builder.route_client (serializers);
-    const auto sizes = calibrate_layer_sizes ();
-
-    // The call's encode as the erased submit performs it, with the default timeout.
-    const auto encode_once = [&] {
-        return fw::tests::count_allocations ([&] {
-            fw::runtime::messaging::client_call_codec_t codec;
-            auto header =
-              codec.create_envelope (fw::runtime::messaging::message_kind_t::request, "m", "p",
-                                     fw::runtime::configuration::default_request_timeout);
-            header.metadata = {};
-            (void) codec.encode_payload_parts (
-              std::move (header),
-              serializers.get<payload_t> ().serialize_with_content_type (payload_t{}));
-        });
-    };
-    const auto first_encode = encode_once ();
-    const auto encode = encode_once ();
-    std::printf ("encode calibration: first=%zu steady=%zu\n", first_encode, encode);
+    const auto first_encode = encode_allocations (serializers, "m").total;
+    const auto encode = encode_allocations (serializers, "m");
+    std::printf ("encode calibration: first=%zu steady=%zu\n", first_encode, encode.total);
     // A transport may borrow its target until the physical terminal.
-    const auto target_owner = fw::tests::count_allocations (
+    const auto target_owner = sample_allocations (
       [] { (void) std::make_shared<const zlink::routing_id_t> (zlink::routing_id_t::from ("n")); });
-    const auto projection = projection_allocations ();
-    const auto admission_end = ready_observer_allocations ();
+    const auto internal_projection = internal_projection_allocations ();
+    const auto public_projection = public_projection_allocations (serializers);
+    print_allocation_sizes ("node encode reference", encode);
+    print_allocation_sizes ("node target reference", target_owner);
+    print_allocation_sizes ("node internal projection reference", internal_projection);
+    print_allocation_sizes ("node public projection reference", public_projection);
+    SCOPED_TRACE ("node encode reference\n" + encode.diagnostics);
+    SCOPED_TRACE ("node target reference\n" + target_owner.diagnostics);
+    SCOPED_TRACE ("node internal projection reference\n" + internal_projection.diagnostics);
+    SCOPED_TRACE ("node public projection reference\n" + public_projection.diagnostics);
 
     prepared.emplace (physical.task (), admitted);
     auto call = client.request_to_node ("m", zlink::routing_id_t::from ("n"), payload_t{});
     std::optional<fw::request_task_t<payload_t>> pending;
-    const auto counts = count_layers (sizes, [&] { pending.emplace (call.async<payload_t> ()); });
-    std::printf ("node request above transport: total=%zu payload_states=%zu message_states=%zu "
-                 "admission_sources=%zu encode=%zu target_owner=%zu projection=%zu "
-                 "admission_end=%zu\n",
-                 counts.total, counts.payload_states, counts.message_states,
-                 counts.admission_sources, encode, target_owner, projection, admission_end);
+    const auto actual = sample_allocations ([&] { pending.emplace (call.async<payload_t> ()); });
+    print_allocation_sizes ("node request above transport", actual);
+    SCOPED_TRACE ("node request above transport\n" + actual.diagnostics);
     EXPECT_EQ (submitted, 1u);
-    // The node call closure has the size of a message reply state, so the
-    // total below, not the size class, bounds the node message layer.
-    // Payload states: the physical reply and the public reply.
-    EXPECT_EQ (counts.payload_states, 2u);
-    EXPECT_EQ (counts.admission_sources, 0u);
-    EXPECT_EQ (counts.total, encode + target_owner + 2 * projection + 1 + admission_end);
+    EXPECT_EQ (actual.total, encode.total + target_owner.total + internal_projection.total
+                               + public_projection.total);
 
     ASSERT_TRUE (pending.has_value ());
+    EXPECT_EQ (fw::detail::request_task_access_t::admission_source (*pending), admitted);
     EXPECT_FALSE (pending->await_ready ());
     EXPECT_TRUE (pending->admitted ().result ());
     EXPECT_TRUE (physical.complete (
@@ -211,6 +368,7 @@ TEST (RequestCallAllocations, NodeRequestAddsOneReplyPerReplyTypeAboveTheTranspo
     const auto &reply = pending->result ();
     ASSERT_TRUE (reply);
     EXPECT_EQ (reply.value ().value, 41);
+    expect_public_and_physical_reply_allocations (actual, *pending);
 }
 
 TEST (RequestCallAllocations, ChannelRequestAddsOneReplyPerReplyTypeAboveTheTransport)
@@ -224,31 +382,44 @@ TEST (RequestCallAllocations, ChannelRequestAddsOneReplyPerReplyTypeAboveTheTran
     auto admitted = std::make_shared<fw::task_completion_source_t<void>> ();
     admitted->complete (fw::result_t<void>::success ());
     std::optional<fw::request_task_t<transport_reply_t>> prepared;
-    runtime.bind_mesh_channel_transport ("c", {}, [&] (auto, auto) {
+    fw::detail::channel_runtime_state_t::mesh_channel_request_t requester = [&] (auto, auto) {
         auto selected = std::move (*prepared);
         prepared.reset ();
         return selected;
-    });
+    };
+    runtime.bind_mesh_channel_transport ("c", {}, requester);
     auto client = builder.route_client (serializers);
-    const auto sizes = calibrate_layer_sizes ();
+    (void) encode_allocations (serializers, "c");
+    const auto encode = encode_allocations (serializers, "c");
+    const auto selection = channel_selection_allocations (requester);
+    const auto internal_projection =
+      internal_projection_allocations (channel_transport_t (std::in_place_index<1>, requester));
+    const auto public_projection = public_projection_allocations (serializers);
+    print_allocation_sizes ("channel encode reference", encode);
+    print_allocation_sizes ("channel selection reference", selection);
+    print_allocation_sizes ("channel internal projection reference", internal_projection);
+    print_allocation_sizes ("channel public projection reference", public_projection);
+    SCOPED_TRACE ("channel encode reference\n" + encode.diagnostics);
+    SCOPED_TRACE ("channel selection reference\n" + selection.diagnostics);
+    SCOPED_TRACE ("channel internal projection reference\n" + internal_projection.diagnostics);
+    SCOPED_TRACE ("channel public projection reference\n" + public_projection.diagnostics);
     prepared.emplace (physical.task (), admitted);
     auto call = client.request_to_channel ("c", payload_t{});
     std::optional<fw::request_task_t<payload_t>> pending;
-    const auto counts = count_layers (sizes, [&] { pending.emplace (call.async<payload_t> ()); });
-    std::printf ("channel request above transport: total=%zu payload_states=%zu "
-                 "message_states=%zu admission_sources=%zu\n",
-                 counts.total, counts.payload_states, counts.message_states,
-                 counts.admission_sources);
-    EXPECT_EQ (counts.payload_states, 2u);
-    EXPECT_EQ (counts.message_states, 1u);
-    EXPECT_EQ (counts.admission_sources, 0u);
+    const auto actual = sample_allocations ([&] { pending.emplace (call.async<payload_t> ()); });
+    print_allocation_sizes ("channel request above transport", actual);
+    SCOPED_TRACE ("channel request above transport\n" + actual.diagnostics);
+    EXPECT_EQ (actual.total, encode.total + selection.total + internal_projection.total
+                               + public_projection.total);
 
     ASSERT_TRUE (pending.has_value ());
+    EXPECT_EQ (fw::detail::request_task_access_t::admission_source (*pending), admitted);
     EXPECT_TRUE (physical.complete (
       fw::result_t<transport_reply_t>::success (transport_reply_t::success (reply_parts (43)))));
     const auto &reply = pending->result ();
     ASSERT_TRUE (reply);
     EXPECT_EQ (reply.value ().value, 43);
+    expect_public_and_physical_reply_allocations (actual, *pending);
 }
 
 class ready_spot_resolver_t final : public fw::runtime::spot_address_resolver_t
@@ -292,11 +463,13 @@ TEST (RequestCallAllocations, SpotRequestProjectsTheSelectedMeshRequestOnce)
           return selected;
       });
     auto client = builder.route_client (serializers);
-    const auto sizes = calibrate_layer_sizes ();
+    const auto sizes = calibrate_layer_size_classes ();
     prepared.emplace (physical.task (), admitted);
     auto call = client.request_to_spot (fw::spot_id_t ("spot"), payload_t{});
     std::optional<fw::request_task_t<payload_t>> pending;
-    const auto counts = count_layers (sizes, [&] { pending.emplace (call.async<payload_t> ()); });
+    const auto counts =
+      count_layer_size_classes (sizes, [&] { pending.emplace (call.async<payload_t> ()); });
+    SCOPED_TRACE (counts.diagnostics);
     std::printf ("spot request above transport: total=%zu payload_states=%zu message_states=%zu "
                  "admission_sources=%zu\n",
                  counts.total, counts.payload_states, counts.message_states,
@@ -622,11 +795,12 @@ TEST (RequestCallAllocations, AppClassifiedNodeFailureAddsNoTransportReplyState)
             fw::framework_error_kind_t::not_found, "MeshNode request target was not found")));
     });
     auto reference = builder.route_client (serializers);
-    const auto sizes = calibrate_layer_sizes ();
+    const auto sizes = calibrate_layer_size_classes ();
     std::optional<fw::request_task_t<payload_t>> pending;
     auto measure = [&] (fw::route_client_t &client) {
         auto call = client.request_to_node ("m", target, payload_t{});
-        auto counts = count_layers (sizes, [&] { pending.emplace (call.async<payload_t> ()); });
+        auto counts =
+          count_layer_size_classes (sizes, [&] { pending.emplace (call.async<payload_t> ()); });
         EXPECT_EQ (pending->result ().error_kind (), fw::framework_error_kind_t::not_found);
         return counts;
     };
@@ -634,6 +808,8 @@ TEST (RequestCallAllocations, AppClassifiedNodeFailureAddsNoTransportReplyState)
     (void) measure (*host->client);
     const auto baseline = measure (reference);
     const auto actual = measure (*host->client);
+    SCOPED_TRACE ("app classified reference\n" + baseline.diagnostics);
+    SCOPED_TRACE ("app classified actual\n" + actual.diagnostics);
     std::printf (
       "app classified transport: states=%zu reference=%zu total=%zu reference_total=%zu\n",
       actual.transport_states, baseline.transport_states, actual.total, baseline.total);
