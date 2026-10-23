@@ -424,6 +424,101 @@ class stopped_completion_executor_t final : public offload_executor_t
     std::function<void ()> _drain;
 };
 
+TEST (ZLinkStateLane, TaskReturningInlineTurnReusesItsInnerTaskWithoutAllocating)
+{
+    using namespace zlink::framework;
+    offload_executor_t executor (1);
+    state_lane_t lane (executor);
+    task_completion_source_t<int> source;
+    std::optional<task_t<int>> pending;
+    const auto measured = tests::measure_allocations (
+      [&] { pending.emplace (lane.run_task ([&] { return source.task (); })); });
+    EXPECT_EQ (measured.count, 0u);
+    EXPECT_FALSE (pending->await_ready ());
+    source.complete (result_t<int>::success (42));
+    EXPECT_EQ (pending->result ().value (), 42);
+    EXPECT_EQ (state_lane_t::current (), nullptr);
+}
+
+TEST (ZLinkStateLane, TaskReturningQueuedTurnReleasesLaneBeforeWaitingForInnerResult)
+{
+    using namespace zlink::framework;
+    offload_executor_t executor (1);
+    std::optional<state_lane_t> lane (std::in_place, executor);
+    std::promise<void> entered, release, invoked;
+    auto released = release.get_future ().share ();
+    ASSERT_TRUE (lane->try_post ([&] {
+        entered.set_value ();
+        released.wait ();
+    }));
+    entered.get_future ().wait ();
+    task_completion_source_t<int> source;
+    auto pending = lane->run_task ([&] {
+        EXPECT_TRUE (lane->is_on_lane ());
+        invoked.set_value ();
+        return source.task ();
+    });
+    release.set_value ();
+    invoked.get_future ().wait ();
+    EXPECT_FALSE (pending.await_ready ());
+    // A completed owner turn does not retain its lane until another task ends.
+    lane.reset ();
+    source.complete (result_t<int>::success (42));
+    EXPECT_EQ (pending.result ().value (), 42);
+    EXPECT_EQ (state_lane_t::current (), nullptr);
+}
+
+TEST (ZLinkStateLane, TaskReturningTurnPreservesInnerAndInvocationFailureFacets)
+{
+    using namespace zlink::framework;
+    for (const bool queued : {false, true}) {
+        for (const bool inner_failure : {false, true}) {
+            test::manual_internal_scheduler_t executor;
+            state_lane_t lane (executor);
+            if (queued)
+                ASSERT_TRUE (lane.try_post ([] {}));
+            const auto code =
+              static_cast<std::uint32_t> (runtime::protocol::framework_error_code::spotMoving);
+            auto pending = lane.run_task ([code, inner_failure] () -> task_t<int> {
+                const auto error = detail::with_failure_code (
+                  detail::make_framework_origin_exception (framework_error_kind_t::unavailable,
+                                                           "state owner refused the operation"),
+                  code);
+                if (!inner_failure)
+                    throw error;
+                return task_t<int> (detail::result_access_t::failure<int> (error));
+            });
+            executor.run_all ();
+            const auto &result = pending.result ();
+            ASSERT_FALSE (result);
+            ASSERT_NE (result.error (), nullptr);
+            EXPECT_EQ (result.error_kind (), framework_error_kind_t::unavailable);
+            EXPECT_EQ (detail::error_origin (*result.error ()), detail::error_origin_t::framework);
+            EXPECT_EQ (detail::failure_code (*result.error ()), code);
+        }
+    }
+}
+
+TEST (ZLinkStateLane, TaskReturningQueuedTurnKeepsShutdownCompletionOutsideTheLane)
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::runtime;
+    configure_handler_coroutine_executor (1);
+    install_host_context_hooks ();
+    stopped_completion_executor_t executor;
+    state_lane_t lane (executor);
+    ASSERT_TRUE (lane.try_post ([] {}));
+    auto pending = lane.run_task ([] { return task_t<int> (result_t<int>::success (42)); });
+    auto caller = wrap_completion_task (std::move (pending));
+    bool resumed_inside_lane = false;
+    detail::observe_task_terminal (
+      caller, [&] (const auto &) { resumed_inside_lane = state_lane_t::current () != nullptr; });
+    executor.finish_accepted_drain ();
+    shutdown_handler_coroutine_executor ();
+    EXPECT_FALSE (resumed_inside_lane);
+    EXPECT_EQ (framework_error_kind_t::shutting_down, caller.result ().error_kind ());
+}
+
 TEST (ZLinkStateLane, RejectedCompletionDoesNotResumeCallerInsideTheLane)
 {
     using namespace zlink::framework;
