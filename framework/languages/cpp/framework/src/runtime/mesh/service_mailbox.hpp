@@ -2,6 +2,7 @@
 #pragma once
 
 #include <zlink/framework/contracts/dispatch/task.hpp>
+#include <boost/container/small_vector.hpp>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -299,8 +300,10 @@ struct service_mailbox_claim_t
 {
     std::string owner;
     service_mailbox_domain_t domain;
-    std::vector<service_mailbox_record_t *> records;
-    std::vector<std::size_t> record_bytes;
+    // The standalone drain claims one slot; its metadata lives with the claim.
+    // Larger prefixes use the same containers and settlement protocol.
+    boost::container::small_vector<service_mailbox_record_t *, 1> records;
+    boost::container::small_vector<std::size_t, 1> record_bytes;
     std::size_t claimed_messages = 0;
     std::size_t claimed_bytes = 0;
 
