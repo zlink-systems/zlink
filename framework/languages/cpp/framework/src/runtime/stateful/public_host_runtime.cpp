@@ -52,24 +52,6 @@ namespace zlink::framework::runtime::host
 
 namespace
 {
-// Ready owner turns continue on the stack; only an unfinished turn owns a frame.
-// The continuation is a parameter, so its captures outlive every suspended await.
-template <typename T, typename Next>
-task_t<zlink::submit_result_t> continue_local_enqueue (task_t<T> pending, Next next)
-{
-    if (!pending.await_ready ())
-        return [] (task_t<T> pending, Next next) -> task_t<zlink::submit_result_t> {
-            co_return co_await next (co_await pending);
-        }(std::move (pending), std::move (next));
-    try {
-        return next (pending.await_resume ());
-    }
-    catch (...) {
-        return task_t<zlink::submit_result_t> (
-          detail::current_exception_result<zlink::submit_result_t> ());
-    }
-}
-
 // Both immediate and suspended publication share the same terminal cleanup.
 template <typename Start>
 task_t<zlink::submit_result_t> finish_local_enqueue (mesh::raw_mesh_node_owner_t &transport,
@@ -7364,38 +7346,66 @@ task_t<bool> public_host_runtime_t::dispatch_stateful_owner (
   const std::function<void (
     const ready_record_t &, const receive_record_t &, std::vector<zlink::message_t>)> &dispatch)
 {
+    using seal_t = std::shared_ptr<stateful::relocation_seal_binding_t>;
+    using gate_t = std::shared_ptr<runtime::serial_execution_queue_t>;
     if (object.kind == stateful::object_kind_t::actor) {
-        if (co_await notify_stateful_owner (object))
-            co_return true;
-        co_return claim_stateful_owner (object, dispatch);
-    }
-    const auto locate =
-      co_await _lifecycle_configuration_lane.run_task ([this] { return _relocation_gate; });
-    std::shared_ptr<runtime::serial_execution_queue_t> gate;
-    if (locate)
-        gate = co_await locate (object);
-    std::shared_ptr<stateful::relocation_seal_binding_t> restoring;
-    if (gate)
-        restoring = co_await gate->admit_native_application ({});
-    bool dispatched = false;
-    for (;;) {
-        std::function<void ()> before;
-        std::string stable_type;
-        auto [error, delivery] =
-          co_await _stateful_dispatch->try_claim_async (object, &before, &stable_type);
-        if (error != stateful::stateful_error_t::none || !delivery) {
-            if (restoring)
-                (void) co_await gate->release_relocation_seal (std::move (restoring));
-            co_return dispatched;
+        // A ready notification keeps the synchronous owner claim on this stack (#2418).
+        try {
+            return continue_task<bool> (
+              notify_stateful_owner (object), [this, &object, &dispatch] (bool notified) {
+                  return task_t<bool> (
+                    result_t<bool>::success (notified || claim_stateful_owner (object, dispatch)));
+              });
         }
-        dispatched = dispatch_stateful_delivery (object, std::move (*delivery), std::move (before),
-                                                 std::move (stable_type), dispatch)
-                     || dispatched;
-        if (!restoring)
-            co_return dispatched;
-        // Publication import returns the native claim before the next owner claim.
-        // New root handlers remain behind this same seal until the prefix is in the FIFO.
-        (void) co_await gate->admit_native_application ({});
+        catch (...) {
+            return task_t<bool> (detail::current_exception_result<bool> ());
+        }
+    }
+    // The owner claims run after the gate admission; only that wait owns a frame.
+    const auto claim =
+      [] (public_host_runtime_t *self, const stateful::object_ref_t &object,
+          const std::function<void (const ready_record_t &, const receive_record_t &,
+                                    std::vector<zlink::message_t>)> &dispatch,
+          gate_t gate, task_t<seal_t> admitted) -> task_t<bool> {
+        auto restoring = co_await admitted;
+        bool dispatched = false;
+        for (;;) {
+            std::function<void ()> before;
+            std::string stable_type;
+            auto [error, delivery] =
+              co_await self->_stateful_dispatch->try_claim_async (object, &before, &stable_type);
+            if (error != stateful::stateful_error_t::none || !delivery) {
+                if (restoring)
+                    (void) co_await gate->release_relocation_seal (std::move (restoring));
+                co_return dispatched;
+            }
+            dispatched =
+              self->dispatch_stateful_delivery (object, std::move (*delivery), std::move (before),
+                                                std::move (stable_type), dispatch)
+              || dispatched;
+            if (!restoring)
+                co_return dispatched;
+            // Publication import returns the native claim before the next owner claim.
+            // New root handlers remain behind this same seal until the prefix is in the FIFO.
+            (void) co_await gate->admit_native_application ({});
+        }
+    };
+    // Configured before transport start; the lifecycle lane rejects later writes
+    // while the host is running or closing (as in dispatch_native_spot).
+    const auto &locate = _relocation_gate;
+    try {
+        if (!locate)
+            return claim (this, object, dispatch, {},
+                          task_t<seal_t> (result_t<seal_t>::success ({})));
+        return continue_task<bool> (
+          locate (object), [this, &object, &dispatch, claim] (gate_t gate) {
+              auto admitted = gate ? gate->admit_native_application ({})
+                                   : task_t<seal_t> (result_t<seal_t>::success ({}));
+              return claim (this, object, dispatch, std::move (gate), std::move (admitted));
+          });
+    }
+    catch (...) {
+        return task_t<bool> (detail::current_exception_result<bool> ());
     }
 }
 
@@ -9116,7 +9126,7 @@ task_t<zlink::submit_result_t> public_host_runtime_t::enqueue_local_actor_messag
     if (!is_actor_application (kind))
         return local_enqueue_result (zlink::submit_result_t::invalid_argument);
     // Identity lookup does not duplicate the Actor gate's recovery admission.
-    return continue_local_enqueue (
+    return continue_task<zlink::submit_result_t> (
       resolve_actor_async (std::string (target.actor_id ().value ())),
       [this, &target, kind, &parts, operation,
        bound_session_source = std::move (bound_session_source), timeout, authority_owner_generation,
@@ -9220,7 +9230,7 @@ task_t<zlink::submit_result_t> public_host_runtime_t::enqueue_local_actor_messag
               });
           };
           if (operation)
-              return continue_local_enqueue (
+              return continue_task<zlink::submit_result_t> (
                 prepare_local_completion (*operation),
                 [enqueue = std::move (enqueue)] (auto reservation) mutable {
                     if (!reservation)
@@ -9228,7 +9238,7 @@ task_t<zlink::submit_result_t> public_host_runtime_t::enqueue_local_actor_messag
                     return enqueue (std::move (reservation), std::nullopt);
                 });
           if (_stateful_dispatch)
-              return continue_local_enqueue (
+              return continue_task<zlink::submit_result_t> (
                 _transport->next_operation_sequence_async (),
                 [enqueue = std::move (enqueue)] (auto sequence) mutable {
                     if (!sequence)
@@ -9248,7 +9258,7 @@ public_host_runtime_t::enqueue_local_spot_send (const protocol::spot_route_fence
     if (target.target_node_routing_id != local.routing_id ().to_bytes ()
         || target.target_node_generation != local.lifecycle_generation ())
         return local_enqueue_result (zlink::submit_result_t::not_found);
-    return continue_local_enqueue (
+    return continue_task<zlink::submit_result_t> (
       resolve_spot_async (target.spot_id),
       [this, &target, &parts, local = std::move (local),
        source_spot_id = std::move (source_spot_id)] (
@@ -9257,7 +9267,7 @@ public_host_runtime_t::enqueue_local_spot_send (const protocol::spot_route_fence
               return local_enqueue_result (zlink::submit_result_t::not_found);
           auto source_node_rid = local.routing_id ();
           auto route = target;
-          return continue_local_enqueue (
+          return continue_task<zlink::submit_result_t> (
             _transport->next_operation_sequence_async (),
             [this, &parts, target = std::move (route),
              source_node_rid = std::move (source_node_rid),
@@ -9312,7 +9322,7 @@ public_host_runtime_t::enqueue_local_spot_request (const protocol::spot_route_fe
     if (target.target_node_routing_id != local.routing_id ().to_bytes ()
         || target.target_node_generation != local.lifecycle_generation ())
         return local_enqueue_result (zlink::submit_result_t::not_found);
-    return continue_local_enqueue (
+    return continue_task<zlink::submit_result_t> (
       resolve_spot_async (target.spot_id),
       [this, &target, &parts, &operation, timeout, local = std::move (local),
        completion = std::move (completion), source_spot_id = std::move (source_spot_id)] (
@@ -9324,7 +9334,7 @@ public_host_runtime_t::enqueue_local_spot_request (const protocol::spot_route_fe
           auto waiter = _options.mesh.application_jobs
                           ? std::make_shared<application_job_queue_t::waiter_t> ()
                           : nullptr;
-          return continue_local_enqueue (
+          return continue_task<zlink::submit_result_t> (
             prepare_local_completion (operation),
             [this, &parts, &operation, timeout, target = std::move (route),
              source_node_rid = std::move (source_node_rid), waiter = std::move (waiter),
