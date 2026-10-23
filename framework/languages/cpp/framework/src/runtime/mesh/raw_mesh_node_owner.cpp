@@ -1008,14 +1008,17 @@ raw_mesh_node_owner_t::request_to_node (const std::vector<std::uint8_t> &target_
                                         std::chrono::milliseconds timeout,
                                         foundation::operation_registry_t::callback_t callback,
                                         std::optional<std::uint64_t> correlation)
-{
-    co_return co_await request_with_header (
+try {
+    return request_with_header (
       target_routing_id,
       [] (std::uint64_t request_correlation) {
           return protocol::encode_node_request_header (request_correlation);
       },
       application_payload, timeout, std::move (callback), correlation, false,
       mesh_request_metric_t (_request_metrics, mesh_request_surface_t::node));
+}
+catch (...) {
+    return task_t<bool> (detail::current_exception_result<bool> ());
 }
 
 task_t<bool> raw_mesh_node_owner_t::request_to_channel (

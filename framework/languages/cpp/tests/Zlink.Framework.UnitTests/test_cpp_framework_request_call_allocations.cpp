@@ -5,6 +5,7 @@
 #include "runtime/messaging/client_call_codec.hpp"
 #include "runtime/locations/spot_address_resolvers.hpp"
 #include "runtime/mesh/mesh_node_runtime.hpp"
+#include "runtime/mesh/raw_mesh_node_owner.hpp"
 #include "runtime_failure_fixture.hpp"
 #include <array>
 #include <cstdio>
@@ -381,4 +382,67 @@ TEST (RequestCallAllocations, AdmissionFailureEndsThePublicReplyBeforeThePhysica
         EXPECT_EQ (pending.result ().error_kind (), fw::framework_error_kind_t::unavailable);
     }
 }
+// The raw request owns one pending admission coroutine; its node entry point
+// forwards that task without allocating another frame or promise state.
+#if defined(_MSC_VER)
+__declspec (noinline)
+#else
+__attribute__ ((noinline))
+#endif
+fw::task_t<bool>
+one_admission_coroutine ()
+{
+    co_return false;
+}
+
+TEST (RequestCallAllocations, RawNodeRequestDoesNotWrapItsAdmissionTask)
+{
+    fw::runtime::mesh::raw_mesh_node_options_t options;
+    options.descriptor.mesh_name = "allocation-node";
+    options.descriptor.node_routing_id = {'a'};
+    options.descriptor.lifecycle_generation = options.descriptor.descriptor_revision = 1;
+    options.descriptor.advertised_endpoint = "tcp://127.0.0.1:0";
+    fw::runtime::mesh::raw_mesh_node_owner_t node (
+      fw::test::runtime_failure_options (std::move (options)));
+    fw::runtime::protocol::application_payload_t payload;
+    std::vector<std::uint8_t> target{'b'};
+    std::optional<fw::task_t<bool>> pending;
+    const auto baseline =
+      fw::tests::count_allocations ([&] { pending.emplace (one_admission_coroutine ()); });
+    pending.reset ();
+    const auto measured = fw::tests::count_allocations ([&] {
+        pending.emplace (node.request_to_node (target, payload, std::chrono::seconds (1), {}));
+    });
+    std::printf ("raw node request: measured=%zu admission_coroutine=%zu\n", measured, baseline);
+    EXPECT_EQ (measured, baseline);
+    ASSERT_TRUE (pending->await_ready ());
+    ASSERT_TRUE (pending->result ());
+    EXPECT_FALSE (pending->result ().value ());
+}
+TEST (RequestCallAllocations, RawNodeRequestKeepsInvalidTimeoutInTheReturnedTask)
+{
+    fw::runtime::mesh::raw_mesh_node_options_t options;
+    options.descriptor.mesh_name = "invalid-timeout-node";
+    options.descriptor.node_routing_id = {'a'};
+    options.descriptor.lifecycle_generation = options.descriptor.descriptor_revision = 1;
+    options.descriptor.advertised_endpoint = "tcp://127.0.0.1:0";
+    fw::runtime::mesh::raw_mesh_node_owner_t node (
+      fw::test::runtime_failure_options (std::move (options)));
+    fw::runtime::protocol::application_payload_t payload;
+    std::optional<fw::task_t<bool>> pending;
+    EXPECT_NO_THROW (pending.emplace (
+      node.request_to_node ({'b'}, payload, std::chrono::milliseconds::zero (), {})));
+    ASSERT_TRUE (pending.has_value ());
+    ASSERT_TRUE (pending->await_ready ());
+    const auto &result = pending->result ();
+    ASSERT_FALSE (result);
+    try {
+        (void) result.value ();
+        FAIL () << "invalid timeout did not remain a task failure";
+    }
+    catch (const std::invalid_argument &error) {
+        EXPECT_STREQ (error.what (), "raw mesh request timeout must be positive");
+    }
+}
+
 } // namespace
