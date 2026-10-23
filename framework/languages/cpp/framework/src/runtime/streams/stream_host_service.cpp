@@ -794,6 +794,9 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
                 std::function<void ()> deadline_changed) :
         _runtime (std::move (runtime)),
         _stream (std::move (stream)),
+        _metric_transport (stream_uses_websocket (_stream) ? "ws"
+                           : stream_uses_tls (_stream)     ? "tls"
+                                                           : "tcp"),
         _advertise_host (std::move (advertise_host)),
         _session_factory (std::move (session_factory)),
         _services (&services),
@@ -809,6 +812,17 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
         _acceptor (_io),
         _accept_retry_timer (_io)
     {
+        if (_monitoring && _monitoring->metric_meter) {
+            auto &meter = *_monitoring->metric_meter;
+            _opened_metric =
+              meter.CreateDoubleCounter ("zlink.stream.connections.opened", "", "{connection}");
+            _active_metric = meter.CreateDoubleUpDownCounter ("zlink.stream.connections.active", "",
+                                                              "{connection}");
+            _closed_metric =
+              meter.CreateDoubleCounter ("zlink.stream.connections.closed", "", "{connection}");
+            if (_active_metric)
+                _active_metric->Add (0, {{"transport", _metric_transport}});
+        }
     }
 
     using session_liveness_t = runtime::session_liveness_t;
@@ -1127,7 +1141,7 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
             case stream_close_reason_t::heartbeat_timeout:
                 return "heartbeat_timeout";
             case stream_close_reason_t::server_drain:
-                return "server_drain";
+                return "server_shutdown";
             case stream_close_reason_t::protocol_error:
                 return "protocol_error";
             default:
@@ -1137,21 +1151,19 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
 
     void record_connection_opened () const
     {
-        framework::runtime::runtime_metrics_t metrics (_monitoring);
-        if (metrics.enabled ()) {
-            metrics.counter ("zlink.stream.connections.opened", "{connection}", 1);
-            metrics.updown ("zlink.stream.connections.active", "{connection}", 1);
-        }
+        if (_opened_metric)
+            _opened_metric->Add (1, {{"transport", _metric_transport}});
+        if (_active_metric)
+            _active_metric->Add (1, {{"transport", _metric_transport}});
     }
 
     void record_connection_closed (const char *close_reason) const
     {
-        framework::runtime::runtime_metrics_t metrics (_monitoring);
-        if (metrics.enabled ()) {
-            metrics.counter ("zlink.stream.connections.closed", "{connection}", 1,
-                             {{"close_reason", close_reason}});
-            metrics.updown ("zlink.stream.connections.active", "{connection}", -1);
-        }
+        if (_closed_metric)
+            _closed_metric->Add (
+              1, {{"transport", _metric_transport}, {"close_reason", close_reason}});
+        if (_active_metric)
+            _active_metric->Add (-1, {{"transport", _metric_transport}});
     }
 
     bool draining () const noexcept
@@ -1461,7 +1473,7 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
                    * The Core loop drains it with no session lock held;
                    * begin_core_session_close is idempotent, so a duplicate
                    * request is a no-op. */
-                  request_core_peer_disconnect (rid, "error_reply_failed");
+                  request_core_peer_disconnect (rid, "transport_error");
               }
               if (completed) {
                   completed ();
@@ -2105,7 +2117,7 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
                           error.exception = std::current_exception ();
                           return error;
                       });
-                    disconnect_core_peer (*monitor_event->routing_id, "connected_dispatch_error");
+                    disconnect_core_peer (*monitor_event->routing_id, "transport_error");
                 }
             }
             if (monitor_event->event == zlink::monitor_event::disconnected
@@ -2135,8 +2147,7 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
         auto stream = _runtime.open_session (_stream.name);
         _runtime.set_session_identity (stream, rid);
         auto transport_connection = _mesh_node->native_node ().sessions ().open (
-          key,
-          [this, rid] { request_core_peer_disconnect (rid, "session_relocation_seal_timeout"); },
+          key, [this, rid] { request_core_peer_disconnect (rid, "transport_error"); },
           _mesh_node->routing_id (), _mesh_node->native_node ().status ().lifecycle_generation (),
           [this, rid] () -> task_t<void> {
               _core_socket->disconnect_rid (rid);
@@ -2149,9 +2160,10 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
         // Register before dispatch/configuration can fail so the caller's close
         // path retires the canonical connection and its bindings.
         _core_sessions.emplace (key, created);
+        record_connection_opened ();
         auto replacement = register_replacement_session (
           rid, created->stream,
-          [this, rid] { request_core_peer_disconnect (rid, "actor_binding_replaced"); },
+          [this, rid] { request_core_peer_disconnect (rid, "transport_error"); },
           [weak = std::weak_ptr<core_session_t> (created)] (stream_t &dispatch_stream,
                                                             std::string actor_id) {
               const auto owner = weak.lock ();
@@ -2186,7 +2198,7 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
               if (!result) {
                   // Completion can run while the creator holds the registry
                   // mutex. The Core loop owns the actual disconnect.
-                  request_core_peer_disconnect (rid, "connected_dispatch_error");
+                  request_core_peer_disconnect (rid, "transport_error");
               }
           });
         if (!connected) {
@@ -2195,7 +2207,6 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
                                                             : "STREAM connected dispatch failed");
         }
         created->connected = true;
-        record_connection_opened ();
         register_active_stream (
           created->stream, [this] { _core_wake_timer.signal (); },
           [this, rid] (stream_close_reason_t reason, std::string diagnostic) {
@@ -2288,12 +2299,13 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
                 return;
             }
             current->closing = true;
+            record_connection_closed (close_reason);
             if (current->replacement) {
                 current->replacement->deactivate ();
             }
         }
         track_retiring_session (retirement_id, current, current->stream);
-        auto complete_close = [this, retirement_id, current, close_reason] {
+        auto complete_close = [this, retirement_id, current] {
             bool dispatch_disconnected = false;
             {
                 const std::lock_guard session_lock (current->gate);
@@ -2318,8 +2330,6 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
                                                                        current->stream, finalize);
                 if (!submitted) {
                     finalize (submitted);
-                } else {
-                    record_connection_closed (close_reason);
                 }
             } else {
                 finalize (result_t<void>::success ());
@@ -2608,7 +2618,7 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
         return dispatched;
     }
 
-    void close_core_sessions (const char *close_reason = "server_stop",
+    void close_core_sessions (const char *close_reason = "server_shutdown",
                               std::optional<stream_close_reason_t> notify_reason = std::nullopt,
                               std::string_view diagnostic = {}) noexcept
     {
@@ -3518,19 +3528,19 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
                     completed (submitted);
                 }
             };
-            if (_stop->load (std::memory_order_acquire)) {
-                dispatch_disconnect ();
-            } else {
+            const auto forced = liveness->forced ();
+            const bool stopping = _stop->load (std::memory_order_acquire);
+            record_connection_closed (stopping                  ? "server_shutdown"
+                                      : forced                  ? liveness_close_label (*forced)
+                                      : session_transport_error ? "transport_error"
+                                                                : "client_close");
+            if (!stopping) {
                 trace_stream_host ("dispatch-disconnected-begin", _stream);
-                const auto forced = liveness->forced ();
-                record_connection_closed (forced                    ? liveness_close_label (*forced)
-                                          : session_transport_error ? "transport_error"
-                                                                    : "client_close");
                 if (session_transport_error && !forced) {
                     (void) _runtime.dispatch_error (session, stream, *session_transport_error);
                 }
-                dispatch_disconnect ();
             }
+            dispatch_disconnect ();
             _runtime.drain_async_dispatch (stream);
             // Connected/packet/disconnected callbacks have settled, and the
             // active entry is gone. Release their final IO posts on this owner.
@@ -3606,6 +3616,10 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
 
     detail::stream_runtime_t _runtime;
     stream_snapshot_t _stream;
+    const char *_metric_transport;
+    opentelemetry::nostd::unique_ptr<opentelemetry::metrics::Counter<double>> _opened_metric,
+      _closed_metric;
+    opentelemetry::nostd::unique_ptr<opentelemetry::metrics::UpDownCounter<double>> _active_metric;
     std::optional<std::string> _advertise_host;
     detail::stream_session_factory_t _session_factory;
     service_provider_t *_services;
