@@ -140,7 +140,8 @@ test('Actor reply encoder preserves response schema and uses default JSON for er
   const { encodeActorReply } = require('../../packages/framework/dist/runtime/actors/actor-reply');
   const { defineZLinkPacketJsonContract } = require('../../packages/framework/dist/contracts/Handlers/JsonContract');
   defineZLinkPacketJsonContract('ActorReplyCodecContract', {
-    payload: { type: 'object', properties: { value: { type: 'int32' } }, required: ['value'] }
+    payload: { type: 'object', properties: { ask: { type: 'string' } }, required: ['ask'] },
+    reply: { type: 'object', properties: { value: { type: 'int32' } }, required: ['value'] }
   });
   const request = framework.encodeStreamHeader({
     kind: framework.ZLinkStreamMessageKind.Request,
@@ -150,8 +151,13 @@ test('Actor reply encoder preserves response schema and uses default JSON for er
     name: 'ActorReplyCodecContract',
     metadata: new Map()
   });
+  // A Response is checked against the request packet's reply contract, never its payload contract.
   assert.throws(() => encodeActorReply(request, framework.ZLinkStreamMessageKind.Response,
     { value: 2147483648 }, undefined, false), /int32/);
+  const [response] = encodeActorReply(request, framework.ZLinkStreamMessageKind.Response,
+    { value: 7 }, undefined, false);
+  assert.deepEqual(JSON.parse(Buffer.from(framework.decodeStreamFrame(response).payload).toString()),
+    { value: 7 });
   const serializers = new Map([['application/x-msgpack', {
     canSerialize: () => true,
     serialize() { throw new Error('Actor error must use the default JSON codec'); }
