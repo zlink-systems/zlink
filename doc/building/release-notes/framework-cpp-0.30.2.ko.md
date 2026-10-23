@@ -27,7 +27,7 @@ Framework 0.30.2은 C++ binding 1.20.0과 Core 1.20.0을 사용합니다.
 
 ## 알려진 문제
 
-- relocation·authority 수정(#2128)으로 stateful Spot의 request 처리 비용이 늘었습니다. 같은 node 측정에서 request drain 1회가 0.30.1보다 약 5배 느립니다(이번 릴리스에서 코루틴 frame과 할당을 줄여 수정 직후보다 18% 빠릅니다). 나머지는 idle gate에서도 admission이 다른 thread를 거치는 구조 때문이며 0.31.0에서 고칩니다. (#1672)
+- relocation·authority 수정(#2128)으로 stateful Spot의 request 처리 비용이 늘었습니다. 같은 node 측정에서 request drain 1회가 #2128 이전 코드보다 약 5배 느립니다(이번 릴리스에서 코루틴 frame과 할당을 줄여 수정 직후보다 18% 빠릅니다). 나머지는 idle gate에서도 admission이 다른 thread를 거치는 구조 때문이며 0.31.0에서 고칩니다. (#1672)
 
 ## 설치
 

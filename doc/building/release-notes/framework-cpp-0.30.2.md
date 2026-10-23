@@ -27,7 +27,7 @@ Framework 0.30.2 uses C++ binding 1.20.0 and Core 1.20.0.
 
 ## Known issues
 
-- The relocation and authority fix (#2128) increased the cost of stateful Spot requests. In a same-node measurement one request drain is about 5 times slower than in 0.30.1 (this release removes coroutine frames and allocations, which makes it 18% faster than right after the fix). The rest comes from admission passing through other threads even when the gate is idle, and is fixed in 0.31.0. (#1672)
+- The relocation and authority fix (#2128) increased the cost of stateful Spot requests. In a same-node measurement one request drain is about 5 times slower than the code before #2128 (this release removes coroutine frames and allocations, which makes it 18% faster than right after the fix). The rest comes from admission passing through other threads even when the gate is idle, and is fixed in 0.31.0. (#1672)
 
 ## Install
 
