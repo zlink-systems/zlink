@@ -537,6 +537,8 @@ TEST (LocalEnqueueAllocations, StatefulSpotDrainAdmitsOnceAndStaysOnIdleGateCall
         ASSERT_TRUE (count.has_value ());
         EXPECT_EQ (count->value (), 1u);
         EXPECT_EQ (handled, 1u);
+        EXPECT_TRUE (ready);
+        EXPECT_EQ (off_caller, 0u);
         // The native publication asks the gate; the owner claim does not ask it again.
         EXPECT_EQ (fixture.gate_lookups->load () - lookups_before, 1u);
         const auto idle_before = fixture.gate_lookups->load ();
