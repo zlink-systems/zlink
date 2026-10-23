@@ -2530,6 +2530,8 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_use_zlink_gtest_main(test_cpp_framework_request_snapshots)
   target_sources(test_cpp_framework_request_snapshots PRIVATE
     tests/support/allocation_counter.cpp)
+  target_include_directories(test_cpp_framework_request_snapshots PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   add_zlink_framework_test(
     test_cpp_framework_ambient_scope_cost
     tests/Zlink.Framework.UnitTests/test_cpp_framework_ambient_scope_cost.cpp
