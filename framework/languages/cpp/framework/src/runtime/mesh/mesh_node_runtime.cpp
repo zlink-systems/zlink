@@ -4277,10 +4277,11 @@ mesh_node_runtime_t::compose_node_request_reply (host::pending_operation_t opera
         return request_task_t<node_reply_t> (
           result_t<node_reply_t>::success (node_submission_failure (submitted.value ())));
     auto admitted = std::make_shared<task_completion_source_t<void>> ();
-    auto output =
-      request_task_t<node_reply_t> (await_request_reply (operation, "MeshNode request"), admitted);
+    auto reply = await_request_reply (operation, "MeshNode request");
+    detail::observe_request_failure (reply, admitted);
     admitted->complete (result_t<void>::success ());
-    return output;
+    return detail::request_task_access_t::from_admitted_reply (std::move (reply),
+                                                               std::move (admitted));
 }
 
 request_task_t<node_reply_t>

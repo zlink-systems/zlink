@@ -148,6 +148,20 @@ template <typename TReply> class request_task_t : public task_t<TReply>
     friend struct detail::request_task_access_t;
     template <typename> friend class request_task_t;
 
+    // Admission is already fixed by the source. This reply is also the
+    // physical terminal, so it does not need an independent admission end.
+    request_task_t (detail::request_projection_t,
+                    task_t<TReply> reply,
+                    std::shared_ptr<task_completion_source_t<void>> admitted) :
+        task_t<TReply> (std::move (reply)),
+        _physical_reply (detail::with_task_resume_scheduler (
+          task_t<TReply> (this->_state),
+          this->_resume_scheduler ? *this->_resume_scheduler : detail::task_scheduler_t{})),
+        _admitted (std::move (admitted))
+    {
+        _physical_reply._release_turn_on_suspend = this->_release_turn_on_suspend;
+    }
+
     /* The reply of a selected request in this reply type (hot path E4·E5:
      * one operation, one terminal). The selected request keeps its admission;
      * its physical terminal completes this reply through `project`, which owns
@@ -240,6 +254,13 @@ struct request_task_access_t
     template <typename T> static auto admission_source (const request_task_t<T> &task)
     {
         return task._admitted;
+    }
+
+    template <typename T>
+    static request_task_t<T>
+    from_admitted_reply (task_t<T> reply, std::shared_ptr<task_completion_source_t<void>> admitted)
+    {
+        return request_task_t<T> (request_projection_t{}, std::move (reply), std::move (admitted));
     }
 
     template <typename TOutput, typename TInput, typename TProject>
