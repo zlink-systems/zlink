@@ -2,8 +2,10 @@
 
 #include "runtime/dispatch/offload_executor.hpp"
 #include "runtime/execution/state_lane.hpp"
+#include "runtime/execution/serial_application_record.hpp"
 #include "runtime/dispatch/coroutine_executor.hpp"
 #include "runtime/foundation/operation_registry.hpp"
+#include "runtime/actors/actor_gateway_runtime.hpp"
 #include "runtime/spots/spot_runtime.hpp"
 #include "runtime/stateful/stateful_object_runtime.hpp"
 #include "../support/runtime_failure_fixture.hpp"
@@ -198,6 +200,165 @@ TEST (ZLinkStateLaneDeathTest, CleanupContinuationReleasesWorkerForPendingLaneAn
           if (attachment.get ().state != spot_create_state_t::created)
               std::_Exit (7);
           node->lane_executor.drain ();
+          std::_Exit (0);
+      }()),
+      ::testing::ExitedWithCode (0), "");
+}
+
+TEST (ZLinkStateLaneDeathTest, PreparedSpotPublicationCompletesSameLaneAdmission)
+{
+    ASSERT_EXIT (
+      ([] {
+          using namespace zlink::framework;
+          using namespace zlink::framework::detail;
+          namespace host = runtime::host;
+          constexpr auto completion_timeout = std::chrono::seconds (2);
+          runtime::configure_handler_coroutine_executor (1);
+          runtime::install_host_context_hooks ();
+          auto node = test::runtime_failure_fixture<spot_node_builder_state_t> ("spot-admission");
+          node->worker_executor = std::make_shared<offload_executor_t> (1);
+          auto context = std::make_shared<spot_context_state_t> ();
+          context->node = node;
+          context->lane_owner = node;
+          context->spot_id = "prepared-spot";
+          context->execution_mode = user_spot_execution_mode_t::spot_wide;
+          context->spot_instance = std::make_shared<int> (0);
+          context->serial_queue = std::make_shared<runtime::serial_execution_queue_t> (
+            *node->worker_executor, runtime::serial_execution_queue_options_t{},
+            runtime::serial_execution_queue_t::error_handler_t{},
+            runtime::serial_lane_policy_t::spot_wide ());
+          std::atomic_int handlers{0}, terminals{0}, lane_turns{0};
+          const auto fail = [&] (int status, const char *stage, const char *error = "") {
+              std::fprintf (stderr,
+                            "Spot admission failed at %s: handlers=%d terminals=%d "
+                            "lane_turns=%d error=%s\n",
+                            stage, handlers.load (), terminals.load (), lane_turns.load (), error);
+              std::_Exit (status);
+          };
+          context->handlers.push_back (spot_handler_descriptor_t{spot_handler_kind_t::packet,
+                                                                 "admission",
+                                                                 {},
+                                                                 std::type_index (typeid (int)),
+                                                                 std::type_index (typeid (void)),
+                                                                 std::type_index (typeid (void)),
+                                                                 std::type_index (typeid (void))});
+          context->handler_invokers.push_back (
+            [&] (void *, void *, service_provider_t &, serializer_registry_t &,
+                 const zlink::message_t &, const spot_inbound_message_t &) {
+                ++handlers;
+                return task_t<zlink::message_t> (
+                  result_t<zlink::message_t>::success (zlink::message_t{}));
+            });
+          node->spot_contexts_by_id.emplace (context->spot_id,
+                                             spot_context_access_t::create (context));
+          spot_node_runtime_t spots (node);
+          spots.set_route_client (route_client_t{});
+          service_collection_t services;
+          services.add_singleton<actor_gateway_runtime_t> ();
+          auto provider = services.build_provider ();
+          serializer_registry_t serializers;
+          runtime::messaging::envelope_header_t header;
+          header.kind = runtime::messaging::message_kind_t::command;
+          header.message_name = "admission";
+          auto parts = runtime::messaging::envelope_codec_t{}
+                         .encode_raw_body_parts (header, zlink::message_t::from ("42"))
+                         .take_items ();
+          const host::ready_record_t owner{.owner_kind = host::owner_kind_t::spot,
+                                           .domain = host::ready_domain_t::application,
+                                           .spot_id = std::string (context->spot_id)};
+          host::receive_record_t record{.kind = host::record_kind_t::spot_send,
+                                        .domain = host::ready_domain_t::application};
+          record.application_record = std::make_shared<runtime::serial_application_record_t> ();
+
+          std::promise<void> occupied, release;
+          auto released = release.get_future ().share ();
+          if (!node->lane.try_post ([&] {
+                  occupied.set_value ();
+                  released.wait ();
+              }))
+              fail (2, "preparation blocker submission");
+          if (occupied.get_future ().wait_for (completion_timeout) != std::future_status::ready)
+              fail (3, "preparation blocker deadline");
+
+          std::promise<void> published;
+          auto publication = published.get_future ();
+          task_completion_source_t<void> terminal;
+          task_completion_source_t<bool> publication_result;
+          auto dispatched = publication_result.task ();
+          auto preparation = spots.prepare_spot_dispatch (context->spot_id, {});
+          if (preparation.await_ready ())
+              fail (4, "preparation did not queue");
+          bool handled = false;
+          // Observe the owner's actual completion thread without adding a caller scheduler.
+          detail::observe_task_terminal (preparation, [&] (const auto &prepared) {
+              try {
+                  const auto target = prepared.value ();
+                  record.application_record->target = target;
+                  auto admitted = target->queue->admit_native_application ([&] (bool sealed) {
+                      if (sealed)
+                          throw std::runtime_error ("fixture Spot gate was sealed");
+                      // Reserve the next lane drain regardless of the completion thread.
+                      // On the old path it sits behind this sole worker's publication,
+                      // whose real handler admission synchronously waits for that lane.
+                      if (!node->lane.try_post ([&] { ++lane_turns; }))
+                          throw std::runtime_error ("fixture lane rejected the successor");
+                      published.set_value ();
+                      handled = spots.dispatch_mesh_record (
+                        owner, record, parts, header, provider, serializers, [&] {
+                            ++terminals;
+                            terminal.complete (result_t<void>::success ());
+                        });
+                  });
+                  detail::observe_task_terminal (admitted, [&] (const auto &admission) {
+                      try {
+                          publication_result.complete (
+                            result_t<bool>::success (handled && !admission.value ()));
+                      }
+                      catch (...) {
+                          publication_result.complete (detail::current_exception_result<bool> ());
+                      }
+                  });
+              }
+              catch (...) {
+                  publication_result.complete (detail::current_exception_result<bool> ());
+              }
+          });
+          release.set_value ();
+          if (publication.wait_for (completion_timeout) != std::future_status::ready) {
+              const auto observed = dispatched.result_for (std::chrono::seconds (0));
+              fail (5, "publication entry deadline",
+                    observed && observed->error () ? observed->error ()->what () : "pending");
+          }
+          const auto admitted = dispatched.result_for (completion_timeout);
+          if (!admitted)
+              fail (6, "publication completion deadline", "blocked on its state lane");
+          if (!*admitted || !admitted->value ())
+              fail (7, "publication result",
+                    admitted->error () ? admitted->error ()->what () : "record was not dispatched");
+          const auto completed = terminal.task ().result_for (completion_timeout);
+          if (!completed)
+              fail (8, "handler terminal deadline");
+          if (!*completed)
+              fail (8, "handler terminal result",
+                    completed->error () ? completed->error ()->what () : "unsuccessful terminal");
+          if (handlers != 1 || terminals != 1 || lane_turns != 1)
+              fail (8, "handler/terminal/lane execution count");
+          context->serial_queue->drain ();
+          const auto callbacks = node->lane.run ([&] { return context->callback_depth; }).get ();
+          if (callbacks != 0) {
+              std::fprintf (stderr, "callback_depth=%zu\n", callbacks);
+              fail (9, "callback settlement");
+          }
+          node->lane.run ([&] { node->spot_contexts_by_id.clear (); }).get ();
+          context->spot_serial_executor->close ();
+          context->serial_queue->close ();
+          node->worker_executor->drain ();
+          node->lane_executor.drain ();
+          runtime::shutdown_handler_coroutine_executor ();
+          std::printf ("Spot admission completed: handlers=%d terminals=%d lane_turns=%d "
+                       "callback_depth=%zu\n",
+                       handlers.load (), terminals.load (), lane_turns.load (), callbacks);
+          std::fflush (stdout);
           std::_Exit (0);
       }()),
       ::testing::ExitedWithCode (0), "");
