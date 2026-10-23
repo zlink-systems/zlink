@@ -5996,10 +5996,9 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
     }
     std::size_t count = 0;
     receive_batch_budget_t infrastructure_budget;
-    while (auto claim = _transport->mailbox ().try_claim (
-             mesh::service_mailbox_domain_t::infrastructure,
-             dispatch_limits::receive_batch_messages, dispatch_limits::receive_batch_bytes)) {
-        load_configuration ();
+    // Record-processing storage belongs to a claimed infrastructure batch.
+    const auto dispatch_batch =
+      [&] (const std::shared_ptr<mesh::service_mailbox_claim_t> &claim) -> task_t<void> {
         for (std::size_t index = 0; index < claim->claimed_messages; ++index) {
             auto original = _transport->mailbox ().take ({claim, index});
             if (!original)
@@ -7168,6 +7167,13 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                                                       dispatch_failure->second);
             }
         }
+        co_return;
+    };
+    while (auto claim = _transport->mailbox ().try_claim (
+             mesh::service_mailbox_domain_t::infrastructure,
+             dispatch_limits::receive_batch_messages, dispatch_limits::receive_batch_bytes)) {
+        load_configuration ();
+        co_await dispatch_batch (claim);
         (void) _transport->mailbox ().release (*claim);
         if (infrastructure_budget.exhausted ())
             break;

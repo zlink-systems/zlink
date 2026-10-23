@@ -700,6 +700,80 @@ TEST (LocalEnqueueAllocations, IdleActorNotificationAddsOnlyMailboxAndClaimStora
     EXPECT_LE (measured.bytes + inventory_before.bytes, expected_bytes);
 }
 
+TEST (LocalEnqueueAllocations, IdleManagementDoesNotAllocateInfrastructureBatchStorage)
+{
+    using namespace fw;
+    using namespace fw::runtime;
+    auto runtime = make_host ();
+    std::array<unsigned, 8> seen{};
+    std::size_t seen_count = 0;
+    runtime->configure_message_follow_handler ([&] (const auto &notice) {
+        ASSERT_LT (seen_count, seen.size ());
+        seen[seen_count++] = notice.queued_messages;
+    });
+    const auto enqueue = [&] (unsigned sequence) {
+        const protocol::spot_route_fence_t source{"source", 1, {'n'}, 1, 1, 1};
+        const protocol::spot_route_fence_t target{"target", 1, {'n'}, 1, 1, 1};
+        const protocol::message_follow_notice_t notice{source, target,        1, sequence,
+                                                       1,      {1, sequence}, 0};
+        mesh::service_mailbox_record_t record;
+        record.domain = mesh::service_mailbox_domain_t::infrastructure;
+        record.owner = "management";
+        record.source_routing_id = {'n'};
+        record.source_node_generation = 1;
+        record.parts.push_back (zlink::message_t::from (protocol::encode_message_follow (notice)));
+        ASSERT_TRUE (runtime->transport ().mailbox ().try_enqueue (std::move (record)));
+    };
+    std::array<tests::allocation_event_t, 256> events{};
+    const auto drain = [&] (std::size_t expected_records) {
+        tests::allocation_event_log_t log{events.data (), events.size ()};
+        const auto previous = tests::allocation_event_log;
+        tests::allocation_event_log = &log;
+        const auto measured = tests::measure_allocations ([&] {
+            auto task = runtime->dispatch_ready ([] (const auto &, const auto &, auto) {}, false);
+            ASSERT_TRUE (task.await_ready ());
+            EXPECT_EQ (task.result ().value (), expected_records);
+        });
+        tests::allocation_event_log = previous;
+        EXPECT_FALSE (log.overflow);
+        const auto largest_count =
+          std::count_if (events.begin (), events.begin () + log.count,
+                         [&] (const auto &event) { return event.size == measured.largest; });
+        EXPECT_EQ (runtime->transport ().mailbox ().pending_messages (
+                     mesh::service_mailbox_domain_t::infrastructure),
+                   0u);
+        return std::pair{measured, largest_count};
+    };
+    (void) drain (0);
+    enqueue (1);
+    (void) drain (1);
+    seen_count = 0;
+    const auto [idle, idle_largest_count] = drain (0);
+    enqueue (2);
+    const auto [single, single_largest_count] = drain (1);
+    enqueue (3);
+    enqueue (4);
+    const auto [multiple, multiple_largest_count] = drain (2);
+    ASSERT_EQ (seen_count, 3u);
+    EXPECT_EQ (seen[0], 2u);
+    EXPECT_EQ (seen[1], 3u);
+    EXPECT_EQ (seen[2], 4u);
+    std::printf ("management allocation count/bytes/largest: idle=%zu/%zu/%zu "
+                 "one record=%zu/%zu/%zu two records=%zu/%zu/%zu; largest counts=%zu/%zu/%zu\n",
+                 idle.count, idle.bytes, idle.largest, single.count, single.bytes, single.largest,
+                 multiple.count, multiple.bytes, multiple.largest,
+                 static_cast<std::size_t> (idle_largest_count),
+                 static_cast<std::size_t> (single_largest_count),
+                 static_cast<std::size_t> (multiple_largest_count));
+    // The actual cold batch supplies the frame-size baseline on this ABI.
+    // An empty management turn must not allocate that record-processing storage.
+    EXPECT_LT (idle.largest, single.largest);
+    EXPECT_LE (idle.bytes + single.largest, single.bytes);
+    EXPECT_EQ (single.largest, multiple.largest);
+    EXPECT_EQ (single_largest_count, 1);
+    EXPECT_EQ (multiple_largest_count, 1);
+}
+
 TEST (LocalEnqueueAllocations, StatefulSpotDrainRecordContinuationStaysWithinRecordStorage)
 {
     using namespace fw;
