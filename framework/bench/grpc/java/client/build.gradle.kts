@@ -93,3 +93,10 @@ requestBackpressureMains.forEach { (taskName, entryPoint) ->
         }
     }
 }
+
+val sourceLifecycleTest by tasks.registering(JavaExec::class) {
+    classpath = sourceSets.test.get().runtimeClasspath
+    mainClass.set("systems.zlink.bench.withgrpc.client.SourceLifecycleTest")
+    dependsOn(tasks.testClasses)
+}
+tasks.check { dependsOn(sourceLifecycleTest) }

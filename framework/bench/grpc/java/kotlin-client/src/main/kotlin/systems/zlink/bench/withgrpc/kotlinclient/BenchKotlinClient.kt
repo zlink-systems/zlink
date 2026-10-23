@@ -68,6 +68,18 @@ fun main(args: Array<String>) {
         }
     holder[0] = controller
     val http = BenchHttpApplication.start(options.triggerUrl, options.statsUrl, controller)
+    fun closeSource() {
+        ready.set(false)
+        try {
+            http.close()
+        } finally {
+            try {
+                resource[0]?.close()
+            } finally {
+                scope.cancel()
+            }
+        }
+    }
     try {
         if (options.implementation == "grpc-kotlin") {
             val stack = GrpcKotlinStack(options, scope)
@@ -83,25 +95,20 @@ fun main(args: Array<String>) {
         drivers.waitForRouteReady(checkNotNull(operation[0]), 1024)
         ready.set(true)
     } catch (error: Throwable) {
-        http.close()
+        closeSource()
         throw error
     }
 
-    Runtime.getRuntime()
-        .addShutdownHook(
-            Thread(
-                {
-                    ready.set(false)
-                    http.close()
-                    resource[0]?.close()
-                    scope.cancel()
-                },
-                "bench-kotlin-source-shutdown",
-            )
-        )
+    val shutdown = Thread(::closeSource, "bench-kotlin-source-shutdown")
+    Runtime.getRuntime().addShutdownHook(shutdown)
     System.err.println(
         "[source] implementation=${options.implementation} trigger=${options.triggerUrl}" +
             " stats=${options.statsUrl} target=${options.targetEndpoint}"
     )
-    Thread.currentThread().join()
+    try {
+        if (System.`in`.read() < 0) Thread.currentThread().join()
+    } finally {
+        Runtime.getRuntime().removeShutdownHook(shutdown)
+        closeSource()
+    }
 }
