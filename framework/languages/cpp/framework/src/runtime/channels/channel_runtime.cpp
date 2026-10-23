@@ -1851,10 +1851,9 @@ try {
                 }),
               admitted);
         }();
-        auto admitted = detail::request_task_access_t::admission_source (reply_task);
-        auto physical = detail::request_task_access_t::physical_reply (reply_task);
-        auto converted = detail::project_task_terminal<zlink::message_t> (
-          physical,
+        // The reply decodes the selected operation's terminal once (hot path E5).
+        return detail::project_request_reply<zlink::message_t> (
+          reply_task,
           [state, transport = std::move (transport.value ()), packet_name = std::move (packet_name),
            router_channel_id = std::move (router_channel_id),
            target_owner = std::move (target_owner)] (
@@ -1911,7 +1910,6 @@ try {
                     framework_error_kind_t::internal_failure, error.what ());
               }
           });
-        return request_task_t<zlink::message_t> (std::move (converted), std::move (admitted));
     }
     catch (const framework_exception_t &error) {
         return detail::result_access_t::failure<zlink::message_t> (error);
