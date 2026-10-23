@@ -175,7 +175,7 @@ test('shared deadline maintenance completes a native request while its handler i
   try {
     const pending = table.submit(() =>
       node.requestToNode(node.status().routingId, Buffer.from('request'), { timeoutMs: 20 })
-    );
+    ).pending;
     await started;
     const completion = await pending;
     assert.equal(completion.terminalResult, RequestResult.TimedOut);

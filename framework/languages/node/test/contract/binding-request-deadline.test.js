@@ -1,6 +1,6 @@
 'use strict';
 
-const { prepareZLinkRequestReply, identityRequestReply } = require('../../packages/framework/dist/runtime/messaging/request-result');
+const { observeZLinkRequestReply, ZLinkRequestResult, identityRequestReply } = require('../../packages/framework/dist/runtime/messaging/request-result');
 
 const assert = require('node:assert/strict');
 const test = require('node:test');
@@ -106,7 +106,7 @@ for (const backpressured of [false, true]) {
     const registration = framework.createFrameworkRegistration({
       spotNodes: { mesh: { router: { bind: 'inproc://binding-admission' } } }
     });
-    const client = new framework.DefaultZLinkRouteClient(registration, { request(_mesh, _rid, _packet, _request, _timeout, _signal, _metadata, onAdmitted) { return prepareZLinkRequestReply(fixture.adapter(onAdmitted), identityRequestReply); } });
+    const client = new framework.DefaultZLinkRouteClient(registration, { request(entry, _mesh, _rid, _packet, _request, _timeout, _signal, _metadata, onAdmitted) { return observeZLinkRequestReply(fixture.adapter(onAdmitted), identityRequestReply, identityRequestReply, entry); } });
     const pending = client.requestToNode('mesh', 'peer', {}).submit();
     assert.ok(pending.admitted instanceof Promise);
     let accepted = false;
@@ -139,8 +139,8 @@ for (const terminal of ['timeout', 'cancellation']) {
     });
     const controller = new AbortController();
     const client = new framework.DefaultZLinkRouteClient(registration, {
-      request(_mesh, _rid, _packet, _request, _timeout, signal, _metadata, onAdmitted) {
-        return prepareZLinkRequestReply(awaitWithAbort(fixture.adapter(onAdmitted), signal), identityRequestReply);
+      request(entry, _mesh, _rid, _packet, _request, _timeout, signal, _metadata, onAdmitted) {
+        return observeZLinkRequestReply(awaitWithAbort(fixture.adapter(onAdmitted), signal), identityRequestReply, identityRequestReply, entry);
       }
     });
     t.mock.timers.enable({ apis: ['setTimeout'] });

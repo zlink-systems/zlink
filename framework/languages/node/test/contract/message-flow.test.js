@@ -1,3 +1,4 @@
+const { ZLinkRequestResult } = require('../../packages/framework/dist/runtime/messaging/request-result');
 'use strict';
 
 const { mapZLinkRequestReply, createZLinkRequest } = require('../../packages/framework/dist/runtime/messaging/request-result');
@@ -376,14 +377,17 @@ test(`node direct request records one source flow with sent and reply terminal (
     isObjectClientNodeDirectTarget() { return false; }
   };
   const table = {
-    submit(operation) {
-      operation();
+    submit(operation, _signal, resultOwner = new ZLinkRequestResult()) {
+return resultOwner.observe((async () => {
+      operation(resultOwner);
       const header = channelEnvelope.decodeChannelHeader(requestParts.map(part => ZLinkBufferMessage.from(part)));
       const parts = failure
         ? []
         : channelEnvelope.encodeChannelReplyParts(header, { ok: true }).map(part => ZLinkBufferMessage.from(part));
       return Promise.resolve({ terminalResult: failure ? 101 : 0, failureErrno: 0, parts });
-    }
+
+})());
+}
   };
   const transport = new ZLinkRuntimeRouteTransport(
     () => undefined, undefined,

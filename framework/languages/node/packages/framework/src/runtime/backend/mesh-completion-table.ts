@@ -1,3 +1,5 @@
+import { ZLinkRequestResult } from '../messaging/request-result';
+import { ZLinkBackendResultError, RequestResult } from './runtime-values';
 import { ZLinkBufferMessage as Message } from './runtime-message';
 import type { Message as ZLinkMessage } from '../../contracts/Common/Message';
 import type {
@@ -28,13 +30,11 @@ const COMPLETION_HASH_MULTIPLIER = 0x9e37_79b1;
 const COMPLETION_ABORT_OPTIONS = Object.freeze({ once: true });
 
 class CompletionSlot {
-  generation = 0;
   next = -1;
   high?: bigint;
   low?: bigint;
   hashNext = -1;
-  resolve?: (completion: ZLinkMeshCompletion) => void;
-  reject?: (error: unknown) => void;
+  entry?: ZLinkRequestResult<any>;
   signal?: AbortSignal;
 
   constructor(readonly abort: () => void) {}
@@ -61,11 +61,11 @@ export class ZLinkMeshCompletionTable {
     const start = this.slots.length;
     for (let index = start; index < start + COMPLETION_SLOT_BLOCK_SIZE; index++) {
       const slot = new CompletionSlot(() => {
-        const reject = slot.reject;
+        const entry = slot.entry;
         const signal = slot.signal;
-        if (reject === undefined) return;
+        if (entry === undefined) return;
         this.releaseSlot(index);
-        reject(signal?.reason ?? new DOMException('The operation was aborted.', 'AbortError'));
+        entry.fail(signal?.reason ?? new DOMException('The operation was aborted.', 'AbortError'));
       });
       slot.next = this.free;
       this.slots.push(slot);
@@ -136,11 +136,10 @@ export class ZLinkMeshCompletionTable {
     slot.low = undefined;
     slot.hashNext = -1;
     slot.signal = undefined;
-    slot.resolve = undefined;
-    slot.reject = undefined;
+    slot.entry = undefined;
+    this.activeCount--;
     slot.next = this.free;
     this.free = index;
-    this.activeCount--;
   }
 
   /**
@@ -148,43 +147,67 @@ export class ZLinkMeshCompletionTable {
    * observes native terminals through Promises, so identity binding finishes
    * before the terminal callback can run, without an infrastructure pump.
    */
-  submit(operation: () => MeshOperationId, signal?: AbortSignal): Promise<ZLinkMeshCompletion> {
+  submit<TReply = ZLinkMeshCompletion>(
+    operation: (entry: ZLinkRequestResult<TReply>) => MeshOperationId,
+    signal?: AbortSignal,
+    entry = new ZLinkRequestResult<TReply>()
+  ): ZLinkRequestResult<any> {
+    void entry.pending;
     if (this.isDisposed()) {
-      return Promise.reject(new Error('Mesh completion table is disposed.'));
+      entry.fail(new Error('Mesh completion table is disposed.'));
+      return entry;
     }
     if (signal?.aborted === true) {
-      return Promise.reject(
-        signal.reason ?? new DOMException('The operation was aborted.', 'AbortError')
-      );
+      entry.fail(signal.reason ?? new DOMException('The operation was aborted.', 'AbortError'));
+      return entry;
     }
-    return new Promise((resolve, reject) => {
-      if (this.free === -1) this.prepareSlots();
-      const index = this.free;
-      const slot = this.slots[index]!;
-      this.free = slot.next;
-      const generation = ++slot.generation;
-      slot.resolve = resolve;
-      slot.reject = reject;
-      slot.signal = signal;
-      this.activeCount++;
-      try {
-        signal?.addEventListener('abort', slot.abort, COMPLETION_ABORT_OPTIONS);
-        const operationId = operation();
-        // A reentrant abort may release and reuse this slot during submission.
-        if (slot.generation !== generation || slot.resolve !== resolve) return;
-        if (this.findSlot(operationId) !== -1) {
-          throw new Error(
-            `Mesh operation '${operationIdentityKey(operationId)}' is already pending.`
-          );
-        }
-        slot.high = operationId.high;
-        slot.low = operationId.low;
-        this.indexSlot(index);
-      } catch (error) {
-        if (slot.generation === generation && slot.resolve === resolve) this.releaseSlot(index);
-        reject(error);
+    if (this.free === -1) this.prepareSlots();
+    const index = this.free;
+    const slot = this.slots[index]!;
+    this.free = slot.next;
+    slot.entry = entry;
+    slot.signal = signal;
+    this.activeCount++;
+    try {
+      signal?.addEventListener('abort', slot.abort, COMPLETION_ABORT_OPTIONS);
+      const operationId = operation(entry);
+      if (slot.entry !== entry) return entry;
+      if (this.findSlot(operationId) !== -1)
+        throw new Error(
+          `Mesh operation '${operationIdentityKey(operationId)}' is already pending.`
+        );
+      slot.high = operationId.high;
+      slot.low = operationId.low;
+      this.indexSlot(index);
+    } catch (error) {
+      if (slot.entry === entry) {
+        this.releaseSlot(index);
+        entry.fail(error);
       }
-    });
+    }
+    return entry;
+  }
+
+  nextDeadlineMs(): number {
+    let deadline = Number.POSITIVE_INFINITY;
+    for (let index = 0; index < this.slots.length; index++) {
+      const candidate = this.slots[index]!.entry?.deadlineMs;
+      if (candidate !== undefined && candidate < deadline) deadline = candidate;
+    }
+    return deadline;
+  }
+
+  expire(nowMs: number): number {
+    let expired = 0;
+    for (let index = 0; index < this.slots.length; index++) {
+      const slot = this.slots[index]!;
+      if (slot.entry?.deadlineMs === undefined || slot.entry.deadlineMs > nowMs) continue;
+      const entry = slot.entry;
+      this.releaseSlot(index);
+      entry.fail(new ZLinkBackendResultError('request', RequestResult.TimedOut));
+      expired++;
+    }
+    return expired;
   }
 
   private isDisposed(): boolean {
@@ -204,15 +227,15 @@ export class ZLinkMeshCompletionTable {
       return;
     }
     const slot = this.slots[index]!;
-    const resolve = slot.resolve!;
-    const reject = slot.reject!;
+    const entry = slot.entry!;
     this.releaseSlot(index);
     try {
-      resolve(
-        retainCompletion(materialize === undefined ? (record as ReceiveRecord) : materialize())
+      const completion = retainCompletion(
+        materialize === undefined ? (record as ReceiveRecord) : materialize()
       );
+      entry.complete(completion);
     } catch (error) {
-      reject(error);
+      entry.fail(error);
     }
   }
 
@@ -222,10 +245,11 @@ export class ZLinkMeshCompletionTable {
     }
     this.disposed = true;
     for (let index = 0; index < this.slots.length; index++) {
-      const reject = this.slots[index]!.reject;
-      if (reject === undefined) continue;
+      const slot = this.slots[index]!;
+      const entry = slot.entry;
+      if (entry === undefined) continue;
       this.releaseSlot(index);
-      reject(reason);
+      entry.fail(reason);
     }
   }
 

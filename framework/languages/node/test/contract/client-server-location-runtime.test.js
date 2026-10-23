@@ -1,4 +1,4 @@
-const { mapZLinkRequestReply, prepareZLinkRequestReply, identityRequestReply } = require('../../packages/framework/dist/runtime/messaging/request-result');
+const { mapZLinkRequestReply, observeZLinkRequestReply, ZLinkRequestResult, identityRequestReply } = require('../../packages/framework/dist/runtime/messaging/request-result');
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const zlink = require('@zlink-systems/zlink');
@@ -1965,7 +1965,7 @@ function readyWaitClient(t, channelTimeoutMs = 60_000, sendTimeoutMs) {
     new ZLinkChannelDispatchServices(fixture.registration)
   );
   const client = new internal.DefaultZLinkChannelClient(fixture.registration, {
-    request(...args) { return prepareZLinkRequestReply(outbound.request(...args), identityRequestReply); }
+    request(entry, ...args) { return observeZLinkRequestReply(outbound.request(...args), identityRequestReply, identityRequestReply, entry); }
   });
   class Lookup { id = 1; }
   t.after(() => fixture.sockets.dispose());

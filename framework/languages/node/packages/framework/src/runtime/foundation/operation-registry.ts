@@ -105,6 +105,11 @@ export class OperationRegistry<T, Context = unknown> {
     return id;
   }
 
+  allocateId(): bigint {
+    if (this.closed) throw new Error('Operation registry is closed.');
+    return this.nextId++;
+  }
+
   /** The time the next expiry pass has work, as a lower bound (spec 08 §4.2). */
   nextDeadlineMs(): number {
     return this.earliestDeadlineMs;

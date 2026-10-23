@@ -3,14 +3,15 @@ const test = require('node:test');
 const { createHook } = require('node:async_hooks');
 const {
   createZLinkRequest: createMappedRequest,
-  prepareZLinkRequestReply,
+  observeZLinkRequestReply,
+  ZLinkRequestResult,
   identityRequestReply
 } = require('../../packages/framework/dist/runtime/messaging/request-result');
 
 // The source owns its result mapping; the public helper owns admission state.
 function createZLinkRequest(start, deliverReply) {
-  return createMappedRequest((admitted) =>
-    prepareZLinkRequestReply(start(admitted), identityRequestReply), deliverReply);
+  return createMappedRequest((entry) =>
+    observeZLinkRequestReply(start(entry.confirm), identityRequestReply, identityRequestReply, entry), deliverReply);
 }
 
 function deferred() {
@@ -100,9 +101,9 @@ test('admission notification and reply mapping use the same admission owner', as
   const pending = deferred();
   const failure = new Error('late decode failure');
   let markAdmitted;
-  const request = createMappedRequest((admitted) => {
-    markAdmitted = admitted;
-    return prepareZLinkRequestReply(pending.promise, () => { throw failure; });
+  const request = createMappedRequest((entry) => {
+    markAdmitted = entry.confirm;
+    return observeZLinkRequestReply(pending.promise, () => { throw failure; }, identityRequestReply, entry);
   });
   const admitted = request.admitted;
   markAdmitted();
@@ -190,13 +191,14 @@ for (const failed of [false, true]) {
     const pending = deferred();
     const cause = new Error('reply failure');
     let observed = false;
-    const result = runWithFlow(flow, () => prepareZLinkRequestReply(
+    const entry = new ZLinkRequestResult();
+    const result = runWithFlow(flow, () => observeZLinkRequestReply(
       pending.promise,
       value => { observed = true; assert.equal(currentFlowContext(), flow); return value; },
-      error => { observed = true; assert.equal(currentFlowContext(), flow); return error; }
+      error => { observed = true; assert.equal(currentFlowContext(), flow); return error; }, entry
     ));
     assert.equal(currentFlowContext(), undefined);
-    const reply = createMappedRequest(() => result);
+    const reply = result.pending;
     const settled = failed ? assert.rejects(reply, error => error === cause) : reply;
     if (failed) pending.reject(cause); else pending.resolve(7);
     assert.equal(observed, false, 'mapping must not run in the terminal publication stack');

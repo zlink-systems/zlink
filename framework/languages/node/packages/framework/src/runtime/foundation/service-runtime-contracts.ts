@@ -1,3 +1,4 @@
+import type { ZLinkRequestResult } from '../messaging/request-result';
 import type { RoutingId } from '../../contracts';
 import type { Message } from '../../contracts/Common/Message';
 import type { ApplicationJobPermitPort } from '../application-jobs/contracts';
@@ -433,11 +434,12 @@ export interface ServiceSpot {
   requestToChannel(
     channelName: string,
     parts: MessageLike | readonly MessageLike[],
-    options?: {
+    options: {
       flags?: number;
       timeoutMs?: number;
       applicationMetadata?: Buffer;
       onAdmitted?: () => void;
+      requestEntry: ZLinkRequestResult<any>;
     }
   ): MeshOperationId;
   sendToSpot(

@@ -1,5 +1,5 @@
 import {
-  prepareZLinkRequestReply,
+  observeZLinkRequestReply,
   identityRequestReply,
   rejectZLinkRequestReply,
   type ZLinkRequestResult
@@ -249,6 +249,7 @@ export class ZLinkChannelRuntimeManager {
   }
 
   request<TReply>(
+    entry: ZLinkRequestResult<TReply>,
     channelName: string,
     packetName: string | undefined,
     request: unknown,
@@ -267,9 +268,9 @@ export class ZLinkChannelRuntimeManager {
         metadata,
         onAdmitted
       );
-      return prepareZLinkRequestReply(pending, identityRequestReply);
+      return observeZLinkRequestReply(pending, identityRequestReply, identityRequestReply, entry);
     } catch (error) {
-      return rejectZLinkRequestReply(error);
+      return rejectZLinkRequestReply(error, entry);
     }
   }
 

@@ -1,4 +1,4 @@
-const { prepareZLinkRequestReply, identityRequestReply } = require('../../packages/framework/dist/runtime/messaging/request-result');
+const { observeZLinkRequestReply, ZLinkRequestResult, identityRequestReply } = require('../../packages/framework/dist/runtime/messaging/request-result');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -4330,14 +4330,14 @@ test('spot outbound routed send and request use SpotRef targets inside serial ex
       );
       return { status: ZLinkSubmitStatus.Submitted };
     },
-    requestToSpot(address, request, options) { return prepareZLinkRequestReply((async () => {
+    requestToSpot(address, request, options) { return observeZLinkRequestReply((async () => {
       events.push(
         `request:${address.routerChannelId}:${address.targetNodeRid}:${address.spotId}:${address.spotKind}:` +
         `${address.targetSpotGeneration}:${options.timeoutMs}:${request}`
       );
       resolveSendTarget(targetSpotRef);
       return 'routed-reply';
-    })(), identityRequestReply); }
+    })(), identityRequestReply, identityRequestReply, new ZLinkRequestResult()); }
   };
   const manager = new framework.DefaultZLinkSpotManager({
     detachedTaskRunner: detachedTaskRunner,
@@ -4400,10 +4400,10 @@ test('spot outbound one-way admission does not hold the serial executor during t
       events.push('send:end');
       return { status: ZLinkSubmitStatus.Submitted };
     },
-    requestToSpot() { return prepareZLinkRequestReply((async () => {
+    requestToSpot() { return observeZLinkRequestReply((async () => {
       events.push('request');
       return 'reply';
-    })(), identityRequestReply); }
+    })(), identityRequestReply, identityRequestReply, new ZLinkRequestResult()); }
   };
   const outbound = new framework.DefaultZLinkSpotOutbound({
     serial: new framework.ZLinkSpotSerialTurnExecutor(),

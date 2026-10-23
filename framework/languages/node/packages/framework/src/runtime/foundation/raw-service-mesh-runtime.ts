@@ -1,3 +1,4 @@
+import type { ZLinkRequestResult } from '../messaging/request-result';
 import { constants as osConstants } from 'node:os';
 import { ApplicationIngressRecordOwner } from '../application-jobs/application-ingress-record-owner';
 import type {
@@ -84,6 +85,8 @@ export type RawServiceRequestObserver = OperationObserver<RawServiceRequestResul
 export interface RawServiceObservedRequest {
   readonly id: bigint;
   readonly promise?: Promise<RawServiceRequestResult>;
+  readonly observer?: RawServiceRequestObserver;
+  readonly operationKind?: number;
 }
 
 type RawServiceChannelTargetSelection =
@@ -626,7 +629,8 @@ export class RawServiceMeshRuntime {
     timeoutMs: number,
     onAdmitted: (() => void) | undefined,
     observer: RawServiceRequestObserver,
-    operationKind: number
+    operationKind: number,
+    entry: ZLinkRequestResult<any>
   ): RawServiceObservedRequest;
   requestToNode(
     targetNodeRoutingId: string,
@@ -634,7 +638,8 @@ export class RawServiceMeshRuntime {
     timeoutMs: number,
     onAdmitted?: () => void,
     observer?: RawServiceRequestObserver,
-    operationKind?: number
+    operationKind?: number,
+    entry?: ZLinkRequestResult<any>
   ): RawServiceObservedRequest {
     return this.requestToTarget(
       targetNodeRoutingId,
@@ -643,7 +648,8 @@ export class RawServiceMeshRuntime {
       undefined,
       onAdmitted,
       observer,
-      operationKind
+      operationKind,
+      entry
     );
   }
 
@@ -659,7 +665,8 @@ export class RawServiceMeshRuntime {
     timeoutMs: number,
     onAdmitted: (() => void) | undefined,
     observer: RawServiceRequestObserver,
-    operationKind: number
+    operationKind: number,
+    entry: ZLinkRequestResult<any>
   ): RawServiceObservedRequest;
   requestToChannel(
     channelName: string,
@@ -667,12 +674,13 @@ export class RawServiceMeshRuntime {
     timeoutMs: number,
     onAdmitted?: () => void,
     observer?: RawServiceRequestObserver,
-    operationKind?: number
+    operationKind?: number,
+    entry?: ZLinkRequestResult<any>
   ): RawServiceObservedRequest {
     const selection = this.selectChannelTarget(channelName);
     if (selection.kind !== 'selected') {
       const pending = this.registerRequest(timeoutMs, observer, operationKind);
-      this.completeRequest(pending, selection.requestResult);
+      queueMicrotask(() => this.completeRequest(pending, selection.requestResult));
       return pending;
     }
     return this.requestToTarget(
@@ -682,7 +690,8 @@ export class RawServiceMeshRuntime {
       channelName,
       onAdmitted,
       observer,
-      operationKind
+      operationKind,
+      entry
     );
   }
 
@@ -697,7 +706,7 @@ export class RawServiceMeshRuntime {
   ): RawServiceObservedRequest {
     return observer === undefined
       ? this.operations.register(timeoutMs)
-      : { id: this.operations.registerObserved(timeoutMs, observer, operationKind) };
+      : { id: this.operations.allocateId(), observer, operationKind };
   }
 
   /**
@@ -708,14 +717,14 @@ export class RawServiceMeshRuntime {
     pending: RawServiceObservedRequest,
     result: RawServiceRequestResult
   ): void {
-    if (pending.promise === undefined)
-      queueMicrotask(() => this.operations.complete(pending.id, result));
+    if (pending.observer !== undefined)
+      pending.observer.operationCompleted(pending.id, result, pending.operationKind);
     else this.operations.complete(pending.id, result);
   }
 
   private failRequest(pending: RawServiceObservedRequest, error: unknown): void {
-    if (pending.promise === undefined)
-      queueMicrotask(() => this.operations.fail(pending.id, error));
+    if (pending.observer !== undefined)
+      pending.observer.operationFailed(pending.id, error, pending.operationKind);
     else this.operations.fail(pending.id, error);
   }
 
@@ -1530,7 +1539,8 @@ export class RawServiceMeshRuntime {
     channelName?: string,
     onAdmitted?: () => void,
     observer?: RawServiceRequestObserver,
-    operationKind?: number
+    operationKind?: number,
+    entry?: ZLinkRequestResult<any>
   ): RawServiceObservedRequest {
     const correlation = this.nextCorrelation++;
     const header =
@@ -1565,21 +1575,30 @@ export class RawServiceMeshRuntime {
       }
     }
     if (selectedTargetNodeRoutingId === this.descriptor.nodeRoutingId) {
-      // The local admission path aborts its capacity wait on the terminal
-      // Promise, so a local request always keeps the Promise entry.
-      const pending = this.operations.register(timeoutMs);
+      // The same stable completion entry owns local expiry and cancels the
+      // capacity wait when its terminal is taken.
+      const pending =
+        entry === undefined
+          ? this.operations.register(timeoutMs)
+          : this.registerRequest(timeoutMs, observer, operationKind);
       const parts = [header, encodedPayload];
       const capacityStop = new AbortController();
-      void pending.promise.finally(() => capacityStop.abort()).catch(() => undefined);
+      if (entry !== undefined) {
+        entry.deadlineMs = performance.now() + timeoutMs;
+        entry.capacityStop = capacityStop;
+      } else {
+        void pending.promise!.finally(() => capacityStop.abort()).catch(() => undefined);
+      }
       void (async () => {
         const applicationJobOwner = await this.reserveLocalIngress(capacityStop.signal);
         try {
-          if (!this.operations.isPending(pending.id)) return;
+          if (!(entry === undefined ? this.operations.isPending(pending.id) : entry.isPending))
+            return;
           const applicationJob = await applicationJobOwner.acquire(
             'application',
             capacityStop.signal
           );
-          if (!this.operations.isPending(pending.id)) {
+          if (!(entry === undefined ? this.operations.isPending(pending.id) : entry.isPending)) {
             applicationJob.close();
             return;
           }
@@ -1590,7 +1609,7 @@ export class RawServiceMeshRuntime {
             sourceRoutingId: this.descriptor.nodeRoutingId,
             correlation,
             localReply: (terminalResult, failureCode, reply) =>
-              this.operations.complete(pending.id, {
+              this.completeRequest(pending, {
                 terminalResult,
                 failureCode,
                 ...(reply === undefined ? {} : { payload: reply })
@@ -1599,7 +1618,7 @@ export class RawServiceMeshRuntime {
           });
           if (!accepted) {
             applicationJob.close();
-            this.operations.complete(pending.id, {
+            this.completeRequest(pending, {
               terminalResult: RequestResult.NotConnected,
               failureCode: 0
             });
@@ -1609,7 +1628,7 @@ export class RawServiceMeshRuntime {
         } finally {
           applicationJobOwner.close();
         }
-      })().catch((error) => this.operations.fail(pending.id, error));
+      })().catch((error) => this.failRequest(pending, error));
       return pending;
     }
     const pending = this.registerRequest(timeoutMs, observer, operationKind);
@@ -1618,10 +1637,12 @@ export class RawServiceMeshRuntime {
       // Logical target selection is the requester's decision: an RID that is
       // not an admitted peer is not a target. Whether an admitted target's
       // route can carry the request is Core's REQUEST result.
-      this.completeRequest(pending, {
-        terminalResult: RequestResult.NotFound,
-        failureCode: REQUEST_TARGET_NOT_FOUND_FAILURE_CODE
-      });
+      queueMicrotask(() =>
+        this.completeRequest(pending, {
+          terminalResult: RequestResult.NotFound,
+          failureCode: REQUEST_TARGET_NOT_FOUND_FAILURE_CODE
+        })
+      );
       return pending;
     }
     const parts = [header, encodedPayload];
@@ -1653,24 +1674,24 @@ export class RawServiceMeshRuntime {
               terminalResult: reply.terminalResult,
               failureCode: reply.failureCode
             };
-            this.operations.complete(
-              pending.id,
+            this.completeRequest(
+              pending,
               reply.terminalResult === 0
                 ? { ...result, payload: decodeApplicationPayloadView(replyParts[1]!) }
                 : result
             );
           } catch (error) {
-            this.operations.fail(pending.id, error);
+            this.failRequest(pending, error);
           }
         },
         (error) => {
-          this.operations.fail(pending.id, error);
+          this.failRequest(pending, error);
         },
         selectedPeer.liveness?.recordReceived,
         onAdmitted
       );
     } catch (error) {
-      this.failRequest(pending, error);
+      queueMicrotask(() => this.failRequest(pending, error));
     }
     return pending;
   }

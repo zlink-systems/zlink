@@ -230,7 +230,7 @@ export class ZLinkManagedStream implements ZLinkStream {
               () => this.close()
             ),
           signal
-        ),
+        ).pending,
         `Actor '${actor.actorId}' native session bind`
       );
       const binding = route.service
@@ -258,7 +258,7 @@ export class ZLinkManagedStream implements ZLinkStream {
                   timeoutMs
                 ),
               signal
-            ),
+            ).pending,
             `Actor '${actor.actorId}' native session unbind`,
             IDEMPOTENT_UNBIND_TERMINAL_RESULTS
           );
@@ -297,7 +297,7 @@ export class ZLinkManagedStream implements ZLinkStream {
     const completion = await route.completions.submit(
       () => route.service.lookupActor(actor.nodeRid, actor.actorId, timeoutMs),
       signal
-    );
+    ).pending;
     try {
       const resolved =
         completion.kindData?.kind === 'actorLookupCompletion'
@@ -355,7 +355,7 @@ export class ZLinkManagedStream implements ZLinkStream {
                 timeoutMs
               ),
             signal
-          ),
+          ).pending,
           `Actor '${actorId}' native session unbind`,
           // Destroy can remove the actor registry entry before the old
           // session owner processes its cleanup. Both a disconnected route and

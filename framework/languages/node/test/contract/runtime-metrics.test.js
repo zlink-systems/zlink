@@ -1,3 +1,4 @@
+const { ZLinkRequestResult } = require('../../packages/framework/dist/runtime/messaging/request-result');
 'use strict';
 
 const { mapZLinkRequestReply } = require('../../packages/framework/dist/runtime/messaging/request-result');
@@ -481,13 +482,16 @@ test('channel terminal metrics normalize all five outcomes including caller canc
     const caller = new AbortController();
     let parts;
     const node = { requestToChannel(_channel, requestParts) { parts = requestParts; return { high: 1n, low: 1n }; } };
-    const table = { async submit(operation) {
-      operation();
+    const table = {  submit(operation, _signal, resultOwner = new ZLinkRequestResult()) {
+return resultOwner.observe((async () => {
+      operation(resultOwner);
       if (outcome === 'cancelled') { caller.abort(); throw caller.signal.reason; }
       const terminalResult = outcome === 'timed_out' ? RequestResult.TimedOut : outcome === 'shutdown' ? RequestResult.Terminated : outcome === 'failed' ? RequestResult.NotFound : 0;
       const header = channelEnvelope.decodeChannelHeader(parts.map(part => ZLinkBufferMessage.from(part)));
       return { terminalResult, failureErrno: 0, parts: terminalResult === 0 ? channelEnvelope.encodeChannelReplyParts(header, { ok: true }).map(part => ZLinkBufferMessage.from(part)) : [] };
-    }};
+
+})());
+}};
     const transport = new ZLinkRuntimeRouteTransport(() => undefined, undefined,
       () => ({ meshNode: () => node, meshCompletionTable: () => table }),
       undefined, undefined, undefined, metrics, () => false);
