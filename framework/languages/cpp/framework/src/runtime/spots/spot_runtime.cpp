@@ -13488,6 +13488,7 @@ task_t<zlink::message_t> spot_node_runtime_t::dispatch_instance_activation (
   std::string correlation_id,
   service_provider_t &services,
   serializer_registry_t &serializers,
+  std::function<void ()> accept_activation,
   std::optional<std::string> flow_id,
   std::optional<flow_origin_t> flow_origin,
   std::function<void ()> *accepted_turn_terminal,
@@ -13567,8 +13568,11 @@ task_t<zlink::message_t> spot_node_runtime_t::dispatch_instance_activation (
                                      .mesh_name = state->mesh_name,
                                      .correlation_id = std::move (correlation_id)},
               true, {}, {}, {}, spot_handler_registry_t::actor_queue_dispatch_t::acquire,
-              [state] { state->spot_serial_executor->open_preparation_admission (); }, {}, {}, 0,
-              {}, {}, retained_message);
+              [state, accept_activation = std::move (accept_activation)] {
+                  accept_activation ();
+                  state->spot_serial_executor->open_preparation_admission ();
+              },
+              {}, {}, 0, {}, {}, retained_message);
         }
         catch (...) {
             if (release_accepted_turn)

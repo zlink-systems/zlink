@@ -7773,7 +7773,8 @@ bool verify_remote_user_spot_create_close_terminal_once (bool cleanup_only = fal
         [&instance_activation_count, &store, &fail_recovery_dispatch_once,
          &close_during_instance_turn, &recovery_accepted_finishes, &injected_activation_failure,
          weak_target] (std::shared_ptr<const protocol::instance_activation_recovery_t> command,
-                       std::function<task_t<zlink::message_t> (std::function<void ()> &)>) {
+                       std::function<task_t<zlink::message_t> (std::function<void ()> &)>,
+                       std::function<void ()> accept_activation) {
             const auto &activation = command->activation;
             const auto &metadata = command->metadata;
             const auto &application = command->application_payload;
@@ -7786,6 +7787,7 @@ bool verify_remote_user_spot_create_close_terminal_once (bool cleanup_only = fal
                   result_t<host::instance_spot_activation_result_t>::success (
                     {failure->terminal_result, failure->failure_code, std::nullopt}));
             }
+            accept_activation ();
             ++instance_activation_count;
             assert (activation.target.stable_type == "quest");
             assert (activation.request);
