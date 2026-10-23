@@ -514,7 +514,10 @@ warmup은 공용 `WARMUP_SECONDS`(기본값 2초) 동안 같은 패턴을 warmup
 이 반복은 같은 JVM을 사용하므로 §10.4의 셀마다 새 process를 사용하는 기본 결과와 구분한다.
 
 구간은 driver가 기록한 `active_started_at_ns`부터 `active_ended_at_ns`까지이며,
-완료 판정과 처리량 분모, JFR의 `measure.Phase`가 같은 구간을 사용한다. 두 JVM의
+request 완료 판정과 처리량 분모, JFR의 `measure.Phase`가 같은 구간을 사용한다. send의
+수신 수는 기존 방식대로 deadline 뒤 target HTTP snapshot에서 읽으므로 target의 실제
+집계 종료 시각은 늦을 수 있다. JIT 0 판정은 driver 구간에 적용하며, 이 snapshot까지
+확장한 target 구간의 JIT 부재나 두 process의 동시 집계를 보장하지 않는다. 두 JVM의
 `measure.MonotonicAnchor`로 시각을 대응시키고 기준점의 오차도 겹침에 포함한다.
 검사기는 compilation threshold 0 설정과 DataLoss 부재를 확인하며, 누락되거나 손상된
 기록은 유효 판정하지 않는다. Deoptimization은 별도로 보고한다.

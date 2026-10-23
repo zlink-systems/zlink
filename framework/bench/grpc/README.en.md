@@ -551,8 +551,11 @@ with zero overlapping `jdk.Compilation` events in both source and target. Throug
 selection criterion. Repetitions share a JVM pair and are distinct from the default fresh-process
 cells in §10.4.
 
-The driver records `active_started_at_ns` and `active_ended_at_ns`. Completion accounting,
+The driver records `active_started_at_ns` and `active_ended_at_ns`. Request completion accounting,
 the throughput denominator, and the JFR `measure.Phase` event use that same interval.
+For send, the existing target HTTP snapshot is read after the deadline, so the target's actual
+counting cutoff can be later. Zero compilation overlap applies to the driver interval; it does
+not certify an extended target interval through that snapshot or simultaneous process accounting.
 Each JVM's `measure.MonotonicAnchor` maps its recording to the host monotonic clock; overlap
 checks include anchor uncertainty. The analyzer requires a zero compilation threshold and no
 DataLoss. Missing or malformed evidence cannot certify a window. Deoptimization is reported
