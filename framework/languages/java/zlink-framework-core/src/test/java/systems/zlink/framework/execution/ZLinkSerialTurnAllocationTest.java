@@ -374,10 +374,10 @@ public final class ZLinkSerialTurnAllocationTest {
                                     "a skipped handler must not prepare invocation arguments"),
                     () ->
                             assertEquals(
-                                    3000,
+                                    2000,
                                     channelActions,
-                                    "unfiltered dispatch only needs its scope operation, reply"
-                                            + " mapping and scope cleanup actions"),
+                                    "unfiltered dispatch only needs reply mapping and terminal scope"
+                                            + " cleanup actions"),
                     () ->
                             assertEquals(
                                     1000,
