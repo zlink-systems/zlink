@@ -774,6 +774,124 @@ TEST (LocalEnqueueAllocations, IdleManagementDoesNotAllocateInfrastructureBatchS
     EXPECT_EQ (multiple_largest_count, 1);
 }
 
+TEST (LocalEnqueueAllocations, NativeSpotPublicationMovesCanonicalRecordStorage)
+{
+    using namespace fw;
+    using namespace fw::runtime;
+    struct reply_probe_t
+    {
+        std::size_t *copies;
+        std::size_t *calls;
+        std::array<unsigned char, 128> storage{};
+        reply_probe_t (std::size_t &copy_count, std::size_t &call_count) :
+            copies (&copy_count), calls (&call_count)
+        {
+        }
+        reply_probe_t (const reply_probe_t &other) :
+            copies (other.copies), calls (other.calls), storage (other.storage)
+        {
+            ++*copies;
+        }
+        reply_probe_t (reply_probe_t &&) = default;
+        bool operator() (const std::vector<zlink::message_t> &) const
+        {
+            ++*calls;
+            return true;
+        }
+    };
+    auto runtime = make_host ();
+    const std::string spot_id (97, 's');
+    const stateful::object_ref_t object{
+      stateful::object_kind_t::user_spot, spot_id, 1, 1, "local-allocation", "n"};
+    runtime->configure_stateful_dispatch ([] (const auto &) {
+        return task_t<std::optional<stateful::accepted_record_authority_t>> (
+          result_t<std::optional<stateful::accepted_record_authority_t>>::success (
+            stateful::accepted_record_authority_t{{"source", 1, {'n'}, 1}, 1}));
+    });
+    const auto created = runtime->objects ().begin_reserved_object (object, "framework.spot", {});
+    ASSERT_EQ (created.error, stateful::stateful_error_t::none);
+    ASSERT_EQ (runtime->objects ().commit_create (created.attempt),
+               stateful::stateful_error_t::none);
+    offload_executor_t worker (1, "native-copy-test");
+    auto gate = std::make_shared<serial_execution_queue_t> (
+      worker, serial_execution_queue_options_t{}, serial_execution_queue_t::error_handler_t{},
+      serial_lane_policy_t::spot_wide ());
+    runtime->configure_relocation_gate ([gate] (const auto &) {
+        return task_t<std::shared_ptr<serial_execution_queue_t>> (
+          result_t<std::shared_ptr<serial_execution_queue_t>>::success (gate));
+    });
+    runtime->start ();
+    auto application = std::make_shared<host::local_application_dispatch_t> ();
+    application->owner.owner_kind = host::owner_kind_t::spot;
+    application->owner.spot_id = spot_id;
+    application->owner.channel_name = std::string (127, 'c');
+    auto &record = application->record;
+    record.kind = host::record_kind_t::spot_request;
+    record.operation_id = {1, 55};
+    record.source_node_rid = zlink::routing_id_t::from ("n");
+    record.spot_route = protocol::spot_route_fence_t{spot_id, 1, {'n'}, 1, 1, 1};
+    record.reply_route_id = 55;
+    record.channel_name = std::string (131, 'd');
+    record.topic = std::string (137, 't');
+    std::size_t copies = 0, replies = 0;
+    record.reply_token.host = runtime;
+    record.reply_token.local_reply = reply_probe_t (copies, replies);
+    application->parts.push_back (zlink::message_t::from ("payload"));
+    const auto token_storage = tests::measure_allocations ([&] {
+        const auto token = record.reply_token;
+        EXPECT_TRUE (static_cast<bool> (token.local_reply));
+    });
+    copies = 0;
+    {
+        const auto token = record.reply_token;
+        EXPECT_TRUE (static_cast<bool> (token.local_reply));
+    }
+    const auto token_copies = copies;
+    ASSERT_EQ (token_copies, 1u);
+    mesh::service_mailbox_record_t original;
+    original.owner = mesh::service_mailbox_t::application_owner (application->owner);
+    original.domain = mesh::service_mailbox_domain_t::application;
+    original.source_routing_id = {'n'};
+    original.source_node_generation = 1;
+    original.correlation = 55;
+    original.operation = std::pair<std::uint64_t, std::uint64_t>{1, 55};
+    original.application = std::move (application);
+    ASSERT_TRUE (runtime->transport ().mailbox ().try_enqueue (std::move (original)));
+    copies = 0;
+    std::size_t handled = 0;
+    const auto measured = tests::measure_allocations ([&] {
+        auto drained =
+          runtime->dispatch_ready ([&] (const auto &owner, const auto &received, auto parts) {
+              ++handled;
+              EXPECT_EQ (owner.spot_id, spot_id);
+              EXPECT_EQ (owner.channel_name.size (), 127u);
+              EXPECT_EQ (received.channel_name.size (), 131u);
+              EXPECT_EQ (received.topic.size (), 137u);
+              EXPECT_EQ (received.operation_id.low, 55u);
+              ASSERT_TRUE (received.application_record);
+              ASSERT_TRUE (static_cast<bool> (received.reply_token.local_reply));
+              EXPECT_TRUE (received.reply_token.local_reply (parts));
+              received.application_record->release_native_claim ();
+          });
+        EXPECT_EQ (drained.result ().value (), 1u);
+    });
+    EXPECT_EQ (handled, 1u);
+    EXPECT_EQ (replies, 1u);
+    EXPECT_EQ (runtime->transport ().mailbox ().pending_messages (
+                 mesh::service_mailbox_domain_t::application),
+               0u);
+    EXPECT_EQ (
+      runtime->transport ().mailbox ().pending_bytes (mesh::service_mailbox_domain_t::application),
+      0u);
+    std::printf ("native canonical record: drain=%zu/%zu callback copies=%zu "
+                 "token baseline copies=%zu allocation=%zu/%zu\n",
+                 measured.count, measured.bytes, copies, token_copies, token_storage.count,
+                 token_storage.bytes);
+    EXPECT_EQ (copies, token_copies);
+    runtime->close ();
+    worker.drain ();
+}
+
 TEST (LocalEnqueueAllocations, StatefulSpotDrainRecordContinuationStaysWithinRecordStorage)
 {
     using namespace fw;

@@ -7720,8 +7720,8 @@ task_t<bool> public_host_runtime_t::dispatch_native_spot (
         receive_record_t record;
         if (application) {
             parts = std::move (original->application->parts);
-            owner = application->owner;
-            record = application->record;
+            owner = std::move (original->application->owner);
+            record = std::move (original->application->record);
         } else {
             owner.owner_kind = owner_kind_t::spot;
             owner.domain = ready_domain_t::application;
