@@ -4214,23 +4214,42 @@ mesh_node_runtime_t::send_to_node (const zlink::routing_id_t &target,
     co_return co_await send_to_node (target, parts, std::vector<std::uint8_t> (encoded));
 }
 
+/* Submission of a known target is the host runtime's own task (hot path E4):
+ * no coroutine wraps it to forward the same result. Only a target unknown to
+ * the topology suspends, for the Location Store classification. A failure
+ * stays the returned task's result, as it was inside a coroutine. */
 task_t<zlink::submit_result_t>
 mesh_node_runtime_t::request_to_node (const zlink::routing_id_t &target,
                                       std::vector<zlink::message_t> parts,
                                       host::pending_operation_t &operation_id,
                                       std::chrono::milliseconds timeout,
                                       std::vector<std::uint8_t> metadata)
-{
+try {
     if (!_node) {
         throw configuration_error ("MeshNode has not started");
     }
     bool unknown_target = false;
     if (const auto classified = classify_node_target_from_topology (target, unknown_target))
-        co_return *classified;
+        return task_t<zlink::submit_result_t> (
+          result_t<zlink::submit_result_t>::success (*classified));
     if (unknown_target)
-        if (const auto classified = co_await classify_unknown_node_target (target))
-            co_return *classified;
+        return request_to_unknown_node (target, std::move (parts), operation_id, timeout);
     (void) metadata;
+    return _node->request_to_node (target, std::move (parts), operation_id, timeout);
+}
+catch (...) {
+    return task_t<zlink::submit_result_t> (
+      detail::current_exception_result<zlink::submit_result_t> ());
+}
+
+task_t<zlink::submit_result_t>
+mesh_node_runtime_t::request_to_unknown_node (const zlink::routing_id_t &target,
+                                              std::vector<zlink::message_t> parts,
+                                              host::pending_operation_t &operation_id,
+                                              std::chrono::milliseconds timeout)
+{
+    if (const auto classified = co_await classify_unknown_node_target (target))
+        co_return *classified;
     co_return co_await _node->request_to_node (target, std::move (parts), operation_id, timeout);
 }
 
@@ -4240,10 +4259,14 @@ mesh_node_runtime_t::request_to_node (const zlink::routing_id_t &target,
                                       host::pending_operation_t &operation_id,
                                       std::chrono::milliseconds timeout,
                                       const std::map<std::string, std::string> &metadata)
-{
+try {
     const auto encoded = mesh_metadata_codec_t::encode (metadata);
-    co_return co_await request_to_node (target, parts, operation_id, timeout,
-                                        std::vector<std::uint8_t> (encoded));
+    return request_to_node (target, parts, operation_id, timeout,
+                            std::vector<std::uint8_t> (encoded));
+}
+catch (...) {
+    return task_t<zlink::submit_result_t> (
+      detail::current_exception_result<zlink::submit_result_t> ());
 }
 
 task_t<zlink::submit_result_t>
@@ -4273,12 +4296,16 @@ mesh_node_runtime_t::request_to_channel (const std::string &channel_name,
                                          host::pending_operation_t &operation_id,
                                          std::chrono::milliseconds timeout,
                                          std::vector<std::uint8_t> metadata)
-{
+try {
     if (!_node) {
         throw configuration_error ("MeshNode has not started");
     }
     (void) metadata;
-    co_return co_await _node->request_to_channel (channel_name, parts, operation_id, timeout);
+    return _node->request_to_channel (channel_name, parts, operation_id, timeout);
+}
+catch (...) {
+    return task_t<zlink::submit_result_t> (
+      detail::current_exception_result<zlink::submit_result_t> ());
 }
 
 task_t<zlink::submit_result_t>
@@ -4287,10 +4314,14 @@ mesh_node_runtime_t::request_to_channel (const std::string &channel_name,
                                          host::pending_operation_t &operation_id,
                                          std::chrono::milliseconds timeout,
                                          const std::map<std::string, std::string> &metadata)
-{
+try {
     const auto encoded = mesh_metadata_codec_t::encode (metadata);
-    co_return co_await request_to_channel (channel_name, parts, operation_id, timeout,
-                                           std::vector<std::uint8_t> (encoded));
+    return request_to_channel (channel_name, parts, operation_id, timeout,
+                               std::vector<std::uint8_t> (encoded));
+}
+catch (...) {
+    return task_t<zlink::submit_result_t> (
+      detail::current_exception_result<zlink::submit_result_t> ());
 }
 
 task_t<std::size_t>
