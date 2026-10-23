@@ -4,6 +4,17 @@
 
 Framework 0.30.2은 Java·Kotlin binding 1.20.0과 Core 1.20.0을 사용합니다.
 
+## 호환성 변경
+
+- `@ZLinkSpotSubscription`에 `channelName`이 필수가 되었습니다. Spot 구독은 channel과 topic의 쌍으로 식별되며, 이전에는 channel이 catalog와 dispatch에서 사라졌습니다. 구독하는 channel 이름을 함께 적습니다. 같은 동작을 등록 API `addSubscribe(handlerType, channelName, topic)`으로도 씁니다. (#1783)
+
+  ```java
+  // 0.30.1
+  @ZLinkSpotSubscription(topic = "zone.border")
+  // 0.30.2
+  @ZLinkSpotSubscription(channelName = "zoneworld.zones", topic = "zone.border")
+  ```
+
 ## 변경
 
 - request admission과 reply 완료를 구분해 수락을 확인할 수 있습니다. deferred Join 완료와 HTTP handler의 Yield가 실행 turn과 올바르게 이어집니다. (#2065, #2044, #1916, #1912)

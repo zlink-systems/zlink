@@ -4,6 +4,17 @@
 
 Framework 0.30.2 uses Node.js binding 1.20.0 and Core 1.20.0.
 
+## Compatibility changes
+
+- `addEntrySpot` takes the Actor stable type that the Entry Spot accepts, together with the Entry Spot type. TypeScript Actor type arguments do not exist at run time, so without this value a new Actor could be created on a node that does not accept its type. Pass the same name that `addActorFactory` uses. (#1772)
+
+  ```ts
+  // 0.30.1
+  objects.addEntrySpot(LobbySpot);
+  // 0.30.2
+  objects.addEntrySpot(LobbySpot, 'player');
+  ```
+
 ## Changes
 
 - Records the request source owner at ingress and preserves the original requester after relocation. Actor and Spot requests are handled only when the source descriptor is valid. (#2103, #2140, #2151)
@@ -21,6 +32,7 @@ Framework 0.30.2 uses Node.js binding 1.20.0 and Core 1.20.0.
 - The original exception from target Join lifecycle failure is reported through the error reporter. (#2459)
 - Core 1.20.0 no longer stalls the temporary transport owner's executor when a completion poller is registered during the handshake. (#2504)
 - Actor replies are sent as a single STREAM frame, and error payloads use the spec's `{code, message}` form. All four languages verify against the same shared vectors. (#2507)
+- An Actor Response is validated against the request packet's reply contract. It was validated against the payload contract, so a typed response to an Entry Spot Actor request could be rejected. (#2507)
 
 ## Install
 

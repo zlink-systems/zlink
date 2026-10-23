@@ -4,6 +4,17 @@
 
 Framework 0.30.2 uses Java·Kotlin binding 1.20.0 and Core 1.20.0.
 
+## Compatibility changes
+
+- `@ZLinkSpotSubscription` now requires `channelName`. A Spot subscription is identified by its channel and topic pair; previously the channel was lost in the catalog and in dispatch. Add the subscribed channel name. The registration API `addSubscribe(handlerType, channelName, topic)` expresses the same subscription. (#1783)
+
+  ```java
+  // 0.30.1
+  @ZLinkSpotSubscription(topic = "zone.border")
+  // 0.30.2
+  @ZLinkSpotSubscription(channelName = "zoneworld.zones", topic = "zone.border")
+  ```
+
 ## Changes
 
 - Request admission is distinct from reply completion, so callers can observe acceptance. Deferred Join completion and HTTP handler Yield now continue on the correct execution turn. (#2065, #2044, #1916, #1912)
