@@ -9082,50 +9082,53 @@ task_t<zlink::submit_result_t> public_host_runtime_t::enqueue_local_actor_messag
         std::optional<stateful::object_ref_t> current) mutable -> task_t<zlink::submit_result_t> {
           if (!current)
               return local_enqueue_result (zlink::submit_result_t::not_found);
-          ready_record_t owner{
-            .owner_kind = owner_kind_t::actor,
-            .domain = ready_domain_t::application,
-            .actor = framework_actor_ref (
-              *current,
-              std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (target)))};
-          receive_record_t record;
-          record.kind = kind;
-          record.domain = ready_domain_t::application;
-          record.source_node_rid = status ().routing_id ();
+          auto actor = framework_actor_ref (
+            *current,
+            std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (target)));
+          auto source_node_rid = status ().routing_id ();
+          std::optional<zlink::routing_id_t> source_session_rid;
+          std::uint64_t source_binding_generation = 0;
+          std::uint64_t source_session_sequence = 0;
           if (bound_session_source) {
-              record.source_session_rid =
+              source_session_rid =
                 zlink::routing_id_t::from (bound_session_source->session_routing_id);
-              record.source_binding_generation = bound_session_source->binding_generation;
-              record.source_session_sequence = bound_session_source->session_sequence;
+              source_binding_generation = bound_session_source->binding_generation;
+              source_session_sequence = bound_session_source->session_sequence;
           }
           auto waiter = _options.mesh.application_jobs
                           ? std::make_shared<application_job_queue_t::waiter_t> ()
                           : nullptr;
           auto enqueue =
-            [this, &parts, operation, timeout, authority_owner_generation, owner_lease_generation,
-             current = std::move (*current), owner = std::move (owner), record = std::move (record),
-             waiter = std::move (waiter)] (
+            [this, &parts, operation, kind, timeout, authority_owner_generation,
+             owner_lease_generation, current = std::move (*current), actor = std::move (actor),
+             source_node_rid = std::move (source_node_rid),
+             source_session_rid = std::move (source_session_rid), source_binding_generation,
+             source_session_sequence, waiter = std::move (waiter)] (
               std::optional<mesh::raw_mesh_node_owner_t::local_operation_reservation_t> reservation,
               std::optional<std::uint64_t> sequence) mutable -> task_t<zlink::submit_result_t> {
+              call_id_t operation_id;
               if (sequence)
-                  record.operation_id = {_options.mesh.descriptor.lifecycle_generation, *sequence};
+                  operation_id = {_options.mesh.descriptor.lifecycle_generation, *sequence};
               return finish_local_enqueue (*_transport, operation, [&] {
                   return _lifecycle_configuration_lane.run_task (
-                    [this, &parts, operation, reservation = std::move (reservation), timeout,
+                    [this, &parts, operation, kind, reservation = std::move (reservation), timeout,
                      authority_owner_generation, owner_lease_generation,
-                     current = std::move (current), owner = std::move (owner),
-                     record = std::move (record),
+                     current = std::move (current), actor = std::move (actor),
+                     source_node_rid = std::move (source_node_rid),
+                     source_session_rid = std::move (source_session_rid), source_binding_generation,
+                     source_session_sequence, operation_id,
                      waiter = std::move (waiter)] () mutable -> task_t<zlink::submit_result_t> {
                         if (!_started || _closing)
                             return local_enqueue_result (zlink::submit_result_t::terminated);
+                        reply_token_t reply_token;
                         if (operation) {
                             register_local_completion (*operation, *reservation, timeout, {},
                                                        local_request_wait_cleanup (waiter),
                                                        mesh_request_surface_t::actor);
-                            record.operation_id = operation->id;
+                            operation_id = operation->id;
                             std::weak_ptr<public_host_runtime_t> weak = shared_from_this ();
-                            record.reply_token.host = weak;
-                            record.reply_token.local_reply =
+                            reply_token.host = weak;
+                            reply_token.local_reply =
                               [weak, operation =
                                        *operation] (const std::vector<zlink::message_t> &reply) {
                                   const auto host = weak.lock ();
@@ -9133,10 +9136,25 @@ task_t<zlink::submit_result_t> public_host_runtime_t::enqueue_local_actor_messag
                               };
                         }
                         return _local_dispatch_completion_lane.run_task (
-                          [this, &parts, operation, authority_owner_generation,
+                          [this, &parts, operation, kind, authority_owner_generation,
                            owner_lease_generation, current = std::move (current),
-                           owner = std::move (owner), record = std::move (record),
+                           actor = std::move (actor), source_node_rid = std::move (source_node_rid),
+                           source_session_rid = std::move (source_session_rid),
+                           source_binding_generation, source_session_sequence, operation_id,
+                           reply_token = std::move (reply_token),
                            waiter = std::move (waiter)] () mutable {
+                              ready_record_t owner{.owner_kind = owner_kind_t::actor,
+                                                   .domain = ready_domain_t::application,
+                                                   .actor = std::move (actor)};
+                              receive_record_t record;
+                              record.kind = kind;
+                              record.domain = ready_domain_t::application;
+                              record.source_node_rid = std::move (source_node_rid);
+                              record.source_session_rid = std::move (source_session_rid);
+                              record.source_binding_generation = source_binding_generation;
+                              record.source_session_sequence = source_session_sequence;
+                              record.operation_id = operation_id;
+                              record.reply_token = std::move (reply_token);
                               if (_stateful_dispatch) {
                                   record.actor_route = {
                                     current.key,
@@ -9195,32 +9213,39 @@ public_host_runtime_t::enqueue_local_spot_send (const protocol::spot_route_fence
         std::optional<stateful::object_ref_t> object) mutable -> task_t<zlink::submit_result_t> {
           if (!object || object->node_id != local.routing_id ().to_string ())
               return local_enqueue_result (zlink::submit_result_t::not_found);
-          ready_record_t owner{.owner_kind = owner_kind_t::spot,
-                               .domain = ready_domain_t::application,
-                               .spot_id = target.spot_id};
-          receive_record_t record;
-          record.kind = record_kind_t::spot_send;
-          record.domain = ready_domain_t::application;
-          record.source_node_rid = local.routing_id ();
-          record.spot_route = target;
+          auto source_node_rid = local.routing_id ();
+          auto route = target;
           return continue_local_enqueue (
             _transport->next_operation_sequence_async (),
-            [this, &parts, owner = std::move (owner), record = std::move (record),
+            [this, &parts, target = std::move (route),
+             source_node_rid = std::move (source_node_rid),
              source_spot_id = std::move (source_spot_id)] (
               std::optional<std::uint64_t> sequence) mutable -> task_t<zlink::submit_result_t> {
                 if (!sequence)
                     return local_enqueue_result (zlink::submit_result_t::terminated);
-                record.operation_id = {_options.mesh.descriptor.lifecycle_generation, *sequence};
+                const call_id_t operation_id{_options.mesh.descriptor.lifecycle_generation,
+                                             *sequence};
                 return finish_local_enqueue (*_transport, nullptr, [&] {
                     return _lifecycle_configuration_lane.run_task (
-                      [this, &parts, owner = std::move (owner), record = std::move (record),
+                      [this, &parts, target = std::move (target),
+                       source_node_rid = std::move (source_node_rid), operation_id,
                        source_spot_id =
                          std::move (source_spot_id)] () mutable -> task_t<zlink::submit_result_t> {
                           if (!_started || _closing)
                               return local_enqueue_result (zlink::submit_result_t::terminated);
                           return _local_dispatch_completion_lane.run_task (
-                            [this, &parts, owner = std::move (owner), record = std::move (record),
+                            [this, &parts, target = std::move (target),
+                             source_node_rid = std::move (source_node_rid), operation_id,
                              source_spot_id = std::move (source_spot_id)] () mutable {
+                                ready_record_t owner{.owner_kind = owner_kind_t::spot,
+                                                     .domain = ready_domain_t::application,
+                                                     .spot_id = target.spot_id};
+                                receive_record_t record;
+                                record.kind = record_kind_t::spot_send;
+                                record.domain = ready_domain_t::application;
+                                record.source_node_rid = std::move (source_node_rid);
+                                record.spot_route = std::move (target);
+                                record.operation_id = operation_id;
                                 admit_local_application (local_application_dispatch_t{
                                   std::move (owner), std::move (record), parts,
                                   std::move (source_spot_id)});
@@ -9252,21 +9277,15 @@ public_host_runtime_t::enqueue_local_spot_request (const protocol::spot_route_fe
         std::optional<stateful::object_ref_t> object) mutable -> task_t<zlink::submit_result_t> {
           if (!object || object->node_id != local.routing_id ().to_string ())
               return local_enqueue_result (zlink::submit_result_t::not_found);
-          ready_record_t owner{.owner_kind = owner_kind_t::spot,
-                               .domain = ready_domain_t::application,
-                               .spot_id = target.spot_id};
-          receive_record_t record;
-          record.kind = record_kind_t::spot_request;
-          record.domain = ready_domain_t::application;
-          record.source_node_rid = local.routing_id ();
-          record.spot_route = target;
+          auto source_node_rid = local.routing_id ();
+          auto route = target;
           auto waiter = _options.mesh.application_jobs
                           ? std::make_shared<application_job_queue_t::waiter_t> ()
                           : nullptr;
           return continue_local_enqueue (
             prepare_local_completion (operation),
-            [this, &parts, &operation, timeout, owner = std::move (owner),
-             record = std::move (record), waiter = std::move (waiter),
+            [this, &parts, &operation, timeout, target = std::move (route),
+             source_node_rid = std::move (source_node_rid), waiter = std::move (waiter),
              completion = std::move (completion), source_spot_id = std::move (source_spot_id)] (
               std::optional<mesh::raw_mesh_node_owner_t::local_operation_reservation_t>
                 reservation) mutable -> task_t<zlink::submit_result_t> {
@@ -9275,7 +9294,7 @@ public_host_runtime_t::enqueue_local_spot_request (const protocol::spot_route_fe
                 return finish_local_enqueue (*_transport, &operation, [&] {
                     return _lifecycle_configuration_lane.run_task (
                       [this, &parts, &operation, timeout, reservation = std::move (*reservation),
-                       owner = std::move (owner), record = std::move (record),
+                       target = std::move (target), source_node_rid = std::move (source_node_rid),
                        waiter = std::move (waiter), completion = std::move (completion),
                        source_spot_id =
                          std::move (source_spot_id)] () mutable -> task_t<zlink::submit_result_t> {
@@ -9284,19 +9303,33 @@ public_host_runtime_t::enqueue_local_spot_request (const protocol::spot_route_fe
                           register_local_completion (
                             operation, reservation, timeout, std::move (completion),
                             local_request_wait_cleanup (waiter), mesh_request_surface_t::spot);
-                          record.operation_id = operation.id;
-                          record.reply_route_id = operation.id.low;
+                          const auto operation_id = operation.id;
+                          const auto reply_route_id = operation.id.low;
+                          reply_token_t reply_token;
                           std::weak_ptr<public_host_runtime_t> weak = shared_from_this ();
-                          record.reply_token.host = weak;
-                          record.reply_token.local_reply =
+                          reply_token.host = weak;
+                          reply_token.local_reply =
                             [weak, operation] (const std::vector<zlink::message_t> &reply) {
                                 const auto host = weak.lock ();
                                 return host && host->complete_local_request (operation, reply);
                             };
                           return _local_dispatch_completion_lane.run_task (
-                            [this, &parts, owner = std::move (owner), record = std::move (record),
+                            [this, &parts, target = std::move (target),
+                             source_node_rid = std::move (source_node_rid), operation_id,
+                             reply_route_id, reply_token = std::move (reply_token),
                              waiter = std::move (waiter),
                              source_spot_id = std::move (source_spot_id)] () mutable {
+                                ready_record_t owner{.owner_kind = owner_kind_t::spot,
+                                                     .domain = ready_domain_t::application,
+                                                     .spot_id = target.spot_id};
+                                receive_record_t record;
+                                record.kind = record_kind_t::spot_request;
+                                record.domain = ready_domain_t::application;
+                                record.source_node_rid = std::move (source_node_rid);
+                                record.spot_route = std::move (target);
+                                record.operation_id = operation_id;
+                                record.reply_route_id = reply_route_id;
+                                record.reply_token = std::move (reply_token);
                                 admit_local_application (
                                   local_application_dispatch_t{std::move (owner),
                                                                std::move (record), parts,
