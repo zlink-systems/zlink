@@ -3731,14 +3731,15 @@ request_task_t<std::optional<zlink::message_t>> mesh_node_runtime_t::relay_appli
             co_return result_t<std::optional<zlink::message_t>>::failure (
               framework_error_kind_t::unavailable, "Actor Message Follow route has expired");
         }
-        const bool has_exact_remote_route =
-          has_exact_stale_route && !exact_route_targets_local_source;
-        if (has_exact_remote_route) {
+        if (has_exact_stale_route) {
             /* A committed Session binding is already an exact route snapshot.
              * Use its authority and owner fence together instead of combining
              * its target node with a Location cache entry from the previous
              * owner. Before command 44, the same rule sends the old exact
-             * route to its source, where Message Follow can relay it. */
+             * route to its source, where Message Follow can relay it. The
+             * route names the target node (checked above), so this holds for
+             * a binding to this node too: an Actor that just relocated here
+             * may still have the previous owner's fence in the Location cache. */
             authority_owner_generation = stale_route.authority_owner_generation;
             owner_lease_generation = stale_route.owner_lease_generation;
         } else if (_actor_route_resolver) {
