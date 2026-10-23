@@ -450,8 +450,14 @@ class stateful_object_runtime_t
     }
     std::pair<stateful_error_t, std::optional<turn_record_t>>
     try_claim (const object_ref_t &owner, turn_domain_t domain, std::string *stable_type = nullptr);
-    task_t<std::pair<stateful_error_t, std::optional<turn_record_t>>>
-    try_claim_async (object_ref_t owner, turn_domain_t domain, std::string *stable_type = nullptr);
+    // The claimed turn and the owner's stable type, both read in the claiming lane turn.
+    struct owner_claim_t
+    {
+        stateful_error_t error = stateful_error_t::none;
+        std::optional<turn_record_t> turn;
+        std::string stable_type;
+    };
+    task_t<owner_claim_t> try_claim_async (object_ref_t owner, turn_domain_t domain);
     task_t<stateful_error_t> complete_claim_async (object_ref_t owner, turn_domain_t domain);
     stateful_error_t complete_claim (const object_ref_t &owner, turn_domain_t domain);
     stateful_error_t yield_claim (const object_ref_t &owner, turn_record_t continuation);
