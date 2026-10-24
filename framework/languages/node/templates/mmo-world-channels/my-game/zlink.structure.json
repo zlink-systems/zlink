@@ -1,0 +1,164 @@
+{
+  "version": 1,
+  "id": "mmo-world-channels",
+  "name": "my-game",
+  "language": "node",
+  "run": {
+    "commands": {
+      "sh": [
+        "./run-e2e.sh --build-only",
+        "./run-e2e.sh",
+        "./run-e2e.sh --scenario worlds,channel,reconnect,update"
+      ],
+      "powershell": [
+        "pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly",
+        "pwsh -NoProfile -File ./run-e2e.ps1",
+        "pwsh -NoProfile -File ./run-e2e.ps1 -Scenario worlds,channel,reconnect,update"
+      ]
+    },
+    "scenarios": ["worlds", "channel", "reconnect", "update"]
+  },
+  "nodes": [
+    {
+      "id": "players",
+      "role": "external",
+      "title": "Players",
+      "config": null
+    },
+    {
+      "id": "accounts",
+      "role": "accounts",
+      "title": "accounts",
+      "config": "server/config/accounts.json"
+    },
+    {
+      "id": "sessionA",
+      "role": "session",
+      "title": "sessionA",
+      "config": "server/config/sessionA.json"
+    },
+    {
+      "id": "sessionB",
+      "role": "session",
+      "title": "sessionB",
+      "config": "server/config/sessionB.json"
+    },
+    {
+      "id": "channelA1",
+      "role": "channel",
+      "title": "channelA1",
+      "config": "server/config/channelA1.json"
+    },
+    {
+      "id": "channelA2",
+      "role": "channel",
+      "title": "channelA2",
+      "config": "server/config/channelA2.json"
+    },
+    {
+      "id": "channelB",
+      "role": "channel",
+      "title": "channelB",
+      "config": "server/config/channelB.json"
+    },
+    {
+      "id": "dbA",
+      "role": "world-db",
+      "title": "dbA",
+      "config": "docker-compose.yml"
+    },
+    {
+      "id": "dbB",
+      "role": "world-db",
+      "title": "dbB",
+      "config": "docker-compose.yml"
+    }
+  ],
+  "channels": [],
+  "spots": [
+    {
+      "id": "channelA1-entry",
+      "kind": "entry",
+      "type": null,
+      "owner": "channelA1"
+    },
+    {
+      "id": "channelA1-zone",
+      "kind": "user",
+      "type": "Zone",
+      "owner": "channelA1",
+      "logicalId": "field@1",
+      "mesh": "my-game-world-a"
+    },
+    {
+      "id": "channelA2-entry",
+      "kind": "entry",
+      "type": null,
+      "owner": "channelA2"
+    },
+    {
+      "id": "channelA2-zone",
+      "kind": "user",
+      "type": "Zone",
+      "owner": "channelA2",
+      "logicalId": "field@2",
+      "mesh": "my-game-world-a"
+    },
+    {
+      "id": "channelB-entry",
+      "kind": "entry",
+      "type": null,
+      "owner": "channelB"
+    },
+    {
+      "id": "channelB-zone",
+      "kind": "user",
+      "type": "Zone",
+      "owner": "channelB",
+      "logicalId": "field@1",
+      "mesh": "my-game-world-b"
+    }
+  ],
+  "edges": [
+    {
+      "from": "players",
+      "to": "accounts",
+      "label": "HTTP"
+    },
+    {
+      "from": "players",
+      "to": "sessionA",
+      "label": "STREAM"
+    },
+    {
+      "from": "players",
+      "to": "sessionB",
+      "label": "STREAM"
+    },
+    {
+      "from": "sessionA",
+      "to": "channelA1",
+      "label": "relay"
+    },
+    {
+      "from": "sessionB",
+      "to": "channelB",
+      "label": "relay"
+    },
+    {
+      "from": "channelA1",
+      "to": "channelA2",
+      "label": "relocation"
+    },
+    {
+      "from": "channelA2",
+      "to": "dbA",
+      "label": "game data"
+    },
+    {
+      "from": "channelB",
+      "to": "dbB",
+      "label": "game data"
+    }
+  ]
+}

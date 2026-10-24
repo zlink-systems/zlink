@@ -1,0 +1,44 @@
+services:
+  dbA:
+    image: redis:7-alpine
+    ports:
+      - '127.0.0.1::6379'
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 1s
+      timeout: 1s
+      retries: 30
+  dbB:
+    image: redis:7-alpine
+    ports:
+      - '127.0.0.1::6379'
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 1s
+      timeout: 1s
+      retries: 30
+  node-image:
+    profiles: [docker]
+    image: ${COMPOSE_PROJECT_NAME}-node
+    build:
+      context: ${MY_GAME_BUILD_CONTEXT:-.}
+      target: node
+  runner:
+    profiles: [docker]
+    image: ${COMPOSE_PROJECT_NAME}-runner
+    user: "${MY_GAME_RUNNER_USER:-0:0}"
+    group_add:
+      - "${MY_GAME_DOCKER_GID:-0}"
+    build:
+      context: ${MY_GAME_BUILD_CONTEXT:-.}
+      target: runner
+    environment:
+      DOCKER_CONFIG: /template/.logs/docker-config
+      MY_GAME_DOCKER_PROJECT: ${COMPOSE_PROJECT_NAME}
+      MY_GAME_NODE_IMAGE: ${COMPOSE_PROJECT_NAME}-node
+      MY_GAME_RUNNER_CONTAINER: ${COMPOSE_PROJECT_NAME}-control
+    labels:
+      my-game.e2e: ${COMPOSE_PROJECT_NAME}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./.logs:/template/.logs

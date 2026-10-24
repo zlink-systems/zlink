@@ -1,0 +1,3 @@
+package MyGame;
+
+public record DungeonPrepared(String dungeonId) {}

@@ -1,0 +1,10 @@
+{
+  "id": "sessionB",
+  "redisEndpoint": "localhost:6380",
+  "keyPrefix": "my-game-world-b:",
+  "meshEndpoint": "tcp://127.0.0.1:0",
+  "worldId": "B",
+  "streamEndpoint": "ws://127.0.0.1:0",
+  "zoneIds": [],
+  "zoneCapacity": 2
+}
