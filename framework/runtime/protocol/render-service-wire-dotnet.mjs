@@ -562,7 +562,8 @@ function logicalDotnetFrame(type) {
         o.encoding === "i64"
           ? "unchecked((long)m.UInt(bytes))"
           : `checked((${intType(o.encoding)})m.UInt(bytes))`,
-      checks = [`if(${integerRange(o, "value")})throw Error("${type.name}: range");`];
+      range = integerRange(o, "value"),
+      checks = range ? [`if(${range})throw Error("${type.name}: range");`] : [];
     return `    private sealed class ${frame}:LogicalFrame{internal ${frame}(long end):base(end){}internal override void Resume(LogicalMachine m){var context=m.Context;var bytes=m.Take(this,${o.width},true);if(bytes is null)return;var value=${raw};${checks.join("")}${limit}m.Complete(new ${n}(value));}}`;
   }
   if (o.op === "enum") {
@@ -1181,9 +1182,18 @@ process.nextTick(() => {
 // Keep unsigned bounds in one unsigned comparison. In .NET 8 optimized code,
 // the paired lower/upper tests can become an unsigned test against zero.
 function integerRange(o, value) {
-  if (o.encoding === "u64")
+  if (
+    o.encoding === "u64" &&
+    o.minimum !== undefined &&
+    o.maximum !== undefined
+  )
     return `unchecked(${value} - ${lit(o.minimum, o.encoding)}) > ${lit(BigInt(o.maximum) - BigInt(o.minimum), o.encoding)}`;
-  return `${value} < ${lit(o.minimum, o.encoding)} || ${value} > ${lit(o.maximum, o.encoding)}`;
+  const checks = [];
+  if (o.minimum !== undefined)
+    checks.push(`${value} < ${lit(o.minimum, o.encoding)}`);
+  if (o.maximum !== undefined)
+    checks.push(`${value} > ${lit(o.maximum, o.encoding)}`);
+  return checks.join(" || ");
 }
 
 function typeMethods(t) {
