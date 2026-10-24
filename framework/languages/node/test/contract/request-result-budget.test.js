@@ -141,6 +141,25 @@ test('reply delivery retains its Promise identity and admission getter attribute
   assert.equal(request.admitted, admitted);
 });
 
+// A getter closure per request gives every public reply Promise its own hidden
+// class; V8 then stores each request's properties in a dictionary. The getter
+// is shared so request results keep one shape.
+test('public requests share one admission getter', async () => {
+  const requests = [0, 1].map(() => createZLinkRequest((admitted) => {
+    admitted();
+    return Promise.resolve('reply');
+  }));
+  const [first, second] = requests.map((request) => Object.getOwnPropertyDescriptor(request, 'admitted'));
+  assert.equal(typeof first.get, 'function');
+  assert.equal(first.get, second.get);
+  assert.deepEqual(Object.keys(requests[0]), []);
+  for (const request of requests) {
+    assert.equal(await request, 'reply');
+    await request.admitted;
+    assert.equal(request.admitted, request.admitted);
+  }
+});
+
 test('reply-only failure is observed before a later admission read', async () => {
   const failure = new DOMException('cancelled before admission', 'AbortError');
   const request = createZLinkRequest(() => Promise.reject(failure));

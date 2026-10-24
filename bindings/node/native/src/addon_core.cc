@@ -61,8 +61,8 @@ void release_shared_context_env (napi_env, void *data, void *)
     delete instance;
 }
 
-// Inline slots cover common records. Receive calls reuse this storage on the
-// owning JS thread; close() releases frames while retaining the array capacity.
+// Inline slots cover common records. Each receive owns its staging because
+// the JavaScript buffer allocator can reenter a receive before copying finishes.
 // Send staging releases ownership after Core consumes every slot, even on error.
 class small_msg_storage_t
 {
@@ -121,14 +121,6 @@ class small_msg_storage_t
     size_t capacity_;
     size_t size_;
 };
-
-small_msg_storage_t &recv_msg_storage ()
-{
-    // N-API materialization finishes and closes/moves all frames before another
-    // JS receive can enter. No socket-owned record or routing metadata is cached.
-    static thread_local small_msg_storage_t parts;
-    return parts;
-}
 
 template <typename Receive>
 int collect_recv_parts (small_msg_storage_t *parts, Receive receive)
@@ -431,6 +423,7 @@ napi_value create_recv_message_value (napi_env env,
                                       const zlink_routing_id_t &routing_id,
                                       zlink_msg_t *parts,
                                       size_t part_count,
+                                      napi_value allocator,
                                       napi_value routing_id_storage = NULL)
 {
     // Hot path: this is an internal raw shape consumed by the TypeScript
@@ -443,7 +436,7 @@ napi_value create_recv_message_value (napi_env env,
         napi_value parts_array;
         napi_create_array_with_length (env, part_count, &parts_array);
         for (size_t i = 0; i < part_count; ++i) {
-            napi_value data = create_received_message_buffer (env, &parts[i]);
+            napi_value data = create_received_message_buffer (env, &parts[i], allocator);
             if (!data)
                 return NULL;
             napi_set_element (env, parts_array, static_cast<uint32_t> (i), data);
@@ -458,7 +451,7 @@ napi_value create_recv_message_value (napi_env env,
         // A one-part receive needs neither a parts array nor a part snapshot.
         // Allocate the payload as a JS-owned Buffer immediately. This keeps
         // data() and close() on the JS side for every payload size.
-        napi_value data = create_received_message_buffer (env, &parts[0]);
+        napi_value data = create_received_message_buffer (env, &parts[0], allocator);
         if (!data)
             return NULL;
         napi_set_named_property (env, obj, "data", data);
@@ -489,7 +482,7 @@ napi_value create_recv_message_value (napi_env env,
                 return NULL;
             napi_set_named_property (env, part, "nativeMessage", native_message);
         } else {
-            part = create_message_snapshot_value (env, NULL, &parts[i]);
+            part = create_message_snapshot_value (env, NULL, &parts[i], allocator);
         }
         if (!part)
             return NULL;
@@ -512,6 +505,7 @@ napi_value create_router_recv_message_value (napi_env env,
                                              uint64_t reply_token,
                                              zlink_msg_t *parts,
                                              size_t part_count,
+                                             napi_value allocator,
                                              bool prefer_managed_parts,
                                              napi_value routing_id_storage)
 {
@@ -522,7 +516,7 @@ napi_value create_router_recv_message_value (napi_env env,
         // JS side regardless of multipart width.
         napi_create_array_with_length (env, part_count, &obj);
         for (size_t i = 0; i < part_count; ++i) {
-            napi_value data = create_received_message_buffer (env, &parts[i]);
+            napi_value data = create_received_message_buffer (env, &parts[i], allocator);
             if (!data)
                 return NULL;
             napi_set_element (env, obj, static_cast<uint32_t> (i), data);
@@ -541,7 +535,7 @@ napi_value create_router_recv_message_value (napi_env env,
         napi_set_named_property (env, obj, "routingId", rid);
     } else {
         obj = create_recv_message_value (
-          env, routing_id, parts, part_count, routing_id_storage);
+          env, routing_id, parts, part_count, allocator, routing_id_storage);
     }
     if (!obj)
         return NULL;
@@ -556,6 +550,7 @@ napi_value create_router_recv_message_value (napi_env env,
 int router_recv_message_value (napi_env env,
                                void *router,
                                int32_t flags,
+                               napi_value allocator,
                                bool prefer_managed_parts,
                                napi_value routing_id_storage,
                                napi_value *out)
@@ -563,7 +558,7 @@ int router_recv_message_value (napi_env env,
     const zlink_routing_id_t *peer_rid_ptr = NULL;
     zlink_routing_id_t peer_rid;
     uint64_t reply_token = 0;
-    small_msg_storage_t &parts = recv_msg_storage ();
+    small_msg_storage_t parts;
     const int rc = collect_recv_parts (
       &parts, [&] (zlink_msg_t *buffer, size_t capacity, size_t *count) {
           return zlink_router_recv (
@@ -577,7 +572,7 @@ int router_recv_message_value (napi_env env,
     copy_routing_id (&peer_rid, peer_rid_ptr);
     *out = create_router_recv_message_value (
       env, peer_rid, reply_token, parts.data (), parts.size (),
-      prefer_managed_parts, routing_id_storage);
+      allocator, prefer_managed_parts, routing_id_storage);
     parts.close ();
     if (!*out)
         return ZLINK_RECV_INTERNAL_ERROR;
@@ -649,20 +644,20 @@ napi_value create_subscribed_value (napi_env env,
                                     const char *topic,
                                     size_t topic_len,
                                     zlink_msg_t *parts,
-                                    size_t part_count)
+                                    size_t part_count, napi_value allocator)
 {
     napi_value obj;
 
     if (routing_id.size == 0) {
         napi_value payload;
         if (part_count == 1) {
-            payload = create_received_message_buffer (env, &parts[0]);
+            payload = create_received_message_buffer (env, &parts[0], allocator);
             if (!payload)
                 return NULL;
         } else {
             napi_create_array_with_length (env, part_count, &payload);
             for (size_t i = 0; i < part_count; ++i) {
-                napi_value data = create_received_message_buffer (env, &parts[i]);
+                napi_value data = create_received_message_buffer (env, &parts[i], allocator);
                 if (!data)
                     return NULL;
                 napi_set_element (env, payload, static_cast<uint32_t> (i), data);
@@ -678,7 +673,7 @@ napi_value create_subscribed_value (napi_env env,
 
     napi_create_object (env, &obj);
     if (part_count == 1) {
-        napi_value data = create_received_message_buffer (env, &parts[0]);
+        napi_value data = create_received_message_buffer (env, &parts[0], allocator);
         if (!data)
             return NULL;
         napi_set_named_property (env, obj, "data", data);
@@ -686,7 +681,7 @@ napi_value create_subscribed_value (napi_env env,
         napi_value parts_array;
         napi_create_array_with_length (env, part_count, &parts_array);
         for (size_t i = 0; i < part_count; ++i) {
-            napi_value part = create_message_snapshot_value (env, &routing_id, &parts[i]);
+            napi_value part = create_message_snapshot_value (env, &routing_id, &parts[i], allocator);
             napi_set_element (env, parts_array, static_cast<uint32_t> (i), part);
         }
         napi_set_named_property (env, obj, "parts", parts_array);
@@ -1024,6 +1019,12 @@ void consume_native_message_value (napi_env env, napi_value value)
     napi_valuetype value_type = napi_undefined;
     if (napi_typeof (env, value, &value_type) != napi_ok || value_type != napi_object)
         return;
+    // HOT PATH: init_msg_from_value copies napi_is_buffer parts as
+    // bytes, so they never carry Message ownership. Skip the property probe,
+    // which walks the whole Buffer prototype chain on every successful send.
+    bool is_buffer = false;
+    if (napi_is_buffer (env, value, &is_buffer) == napi_ok && is_buffer)
+        return;
     bool has_native_message = false;
     if (napi_has_named_property (env, value, "nativeMessage", &has_native_message) != napi_ok
         || !has_native_message)
@@ -1138,7 +1139,8 @@ napi_value message_frame_copy_data (napi_env env, napi_callback_info info)
       env, argv[0], "messageFrameCopyData requires a native message frame");
     if (!frame)
         return NULL;
-    return create_received_message_buffer (env, &frame->message);
+    return create_buffer_copy_or_empty (
+      env, zlink_msg_data (&frame->message), zlink_msg_size (&frame->message));
 }
 
 napi_value message_frame_copy (napi_env env, napi_callback_info info)
@@ -2111,7 +2113,7 @@ class completion_close_guard_t
 };
 
 static napi_value create_completion_value (
-  napi_env env, zlink_completion_t *completion)
+  napi_env env, zlink_completion_t *completion, napi_value allocator)
 {
     completion_close_guard_t guard (completion);
     napi_value out;
@@ -2139,7 +2141,7 @@ static napi_value create_completion_value (
           env, completion->reply_part_count, &parts);
         for (size_t index = 0; index < completion->reply_part_count; ++index) {
             napi_value part = create_received_message_buffer (
-              env, &completion->reply_parts[index]);
+              env, &completion->reply_parts[index], allocator);
             if (!part)
                 return NULL;
             napi_set_element (
@@ -2152,12 +2154,12 @@ static napi_value create_completion_value (
 
 napi_value socket_completion_recv (napi_env env, napi_callback_info info)
 {
-    napi_value argv[2];
-    size_t argc = 2;
+    napi_value argv[3];
+    size_t argc = 3;
     napi_get_cb_info (env, info, &argc, argv, NULL, NULL);
-    if (argc < 2) {
+    if (argc < 3) {
         napi_throw_type_error (
-          env, NULL, "socketCompletionRecv requires (socket, flags)");
+          env, NULL, "socketCompletionRecv requires (socket, flags, allocator)");
         return NULL;
     }
     void *socket = NULL;
@@ -2176,7 +2178,7 @@ napi_value socket_completion_recv (napi_env env, napi_callback_info info)
     }
     if (result != ZLINK_RECV_OK)
         return throw_result_error (env, "completion recv failed", result);
-    return create_completion_value (env, &completion);
+    return create_completion_value (env, &completion, argv[2]);
 }
 
 namespace
@@ -2483,13 +2485,13 @@ napi_value test_completion_close_count (napi_env env, napi_callback_info info)
 
 napi_value socket_request_sync (napi_env env, napi_callback_info info)
 {
-    napi_value argv[4];
-    size_t argc = 4;
+    napi_value argv[5];
+    size_t argc = 5;
     napi_get_cb_info (env, info, &argc, argv, NULL, NULL);
-    if (argc < 4) {
+    if (argc < 5) {
         napi_throw_type_error (
           env, NULL,
-          "socketRequestSync requires (socket, targetOrNull, parts, timeoutMs)");
+          "socketRequestSync requires (socket, targetOrNull, parts, timeoutMs, allocator)");
         return NULL;
     }
     void *socket = NULL;
@@ -2538,7 +2540,7 @@ napi_value socket_request_sync (napi_env env, napi_callback_info info)
         if (recv_result != ZLINK_RECV_OK)
             return throw_result_error (env, "request completion recv failed", recv_result);
         found = completion.completion_id == completion_id;
-        napi_value value = create_completion_value (env, &completion);
+        napi_value value = create_completion_value (env, &completion, argv[4]);
         if (!value)
             return NULL;
         napi_set_element (env, completions, index++, value);
@@ -2667,6 +2669,7 @@ napi_value socket_try_publish (napi_env env, napi_callback_info info)
 int recv_message_value (napi_env env,
                         void *sock,
                         int32_t flags,
+                        napi_value allocator,
                         napi_value *out,
                         size_t *received_bytes = NULL)
 {
@@ -2676,7 +2679,7 @@ int recv_message_value (napi_env env,
     *out = NULL;
     zlink_routing_id_t routing_id;
     const zlink_routing_id_t *source_rid = NULL;
-    small_msg_storage_t &parts = recv_msg_storage ();
+    small_msg_storage_t parts;
     const int rc = collect_recv_parts (
       &parts, [&] (zlink_msg_t *buffer, size_t capacity, size_t *count) {
           return zlink_recv (sock, &source_rid, buffer, capacity, count,
@@ -2691,16 +2694,16 @@ int recv_message_value (napi_env env,
             *received_bytes += zlink_msg_size (&parts[index]);
     }
     *out = parts.size () == 1 && routing_id.size == 0
-             ? create_received_message_buffer (env, &parts[0])
-             : create_recv_message_value (env, routing_id, parts.data (), parts.size ());
+             ? create_received_message_buffer (env, &parts[0], allocator)
+             : create_recv_message_value (env, routing_id, parts.data (), parts.size (), allocator);
     parts.close ();
     return *out ? ZLINK_RECV_OK : ZLINK_RECV_INTERNAL_ERROR;
 }
 
 napi_value socket_recv_message (napi_env env, napi_callback_info info)
 {
-    napi_value argv[2];
-    size_t argc = 2;
+    napi_value argv[3];
+    size_t argc = 3;
     napi_get_cb_info (env, info, &argc, argv, NULL, NULL);
     void *sock = NULL;
     napi_get_value_external (env, argv[0], &sock);
@@ -2709,7 +2712,7 @@ napi_value socket_recv_message (napi_env env, napi_callback_info info)
         napi_get_value_int32 (env, argv[1], &flags);
 
     napi_value out;
-    int rc = recv_message_value (env, sock, flags, &out);
+    int rc = recv_message_value (env, sock, flags, argv[2], &out);
     if (rc != ZLINK_RECV_OK)
         return throw_result_error (env, "recv failed", rc);
     return out;
@@ -2717,15 +2720,15 @@ napi_value socket_recv_message (napi_env env, napi_callback_info info)
 
 napi_value socket_try_recv_message (napi_env env, napi_callback_info info)
 {
-    napi_value argv[1];
-    size_t argc = 1;
+    napi_value argv[2];
+    size_t argc = 2;
     napi_get_cb_info (env, info, &argc, argv, NULL, NULL);
     void *sock = NULL;
     napi_get_value_external (env, argv[0], &sock);
 
     napi_value out;
     int rc = recv_message_value (env, sock, static_cast<int32_t> (ZLINK_RECV_FLAGS_DONTWAIT),
-                                 &out);
+                                 argv[1], &out);
     if (rc != ZLINK_RECV_OK) {
         if (rc == ZLINK_RECV_NO_DATA) {
             napi_value none;
@@ -2761,15 +2764,15 @@ class subscribe_topic_buffer_t
 
 napi_value socket_subscribe_message (napi_env env, napi_callback_info info)
 {
-    napi_value argv[1];
-    size_t argc = 1;
+    napi_value argv[3];
+    size_t argc = 3;
     napi_get_cb_info (env, info, &argc, argv, NULL, NULL);
     void *sock = NULL;
     napi_get_value_external (env, argv[0], &sock);
 
     subscribe_topic_buffer_t topic;
     zlink_routing_id_t routing_id;
-    small_msg_storage_t &parts = recv_msg_storage ();
+    small_msg_storage_t parts;
     size_t topic_len = topic.size ();
 
     for (;;) {
@@ -2778,7 +2781,7 @@ napi_value socket_subscribe_message (napi_env env, napi_callback_info info)
                                   &parts, ZLINK_RECV_FLAGS_NONE);
         if (rc == ZLINK_RECV_OK) {
             napi_value out = create_subscribed_value (env, routing_id, topic.data (), topic_len,
-                                                      parts.data (), parts.size ());
+                                                      parts.data (), parts.size (), argv[2]);
             parts.close ();
             return out;
         }
@@ -2790,6 +2793,7 @@ napi_value socket_subscribe_message (napi_env env, napi_callback_info info)
 
 int try_subscribe_message_value (napi_env env,
                                  void *sock,
+                                 napi_value allocator,
                                  napi_value *out,
                                  size_t *received_bytes = NULL)
 {
@@ -2799,7 +2803,7 @@ int try_subscribe_message_value (napi_env env,
 
     for (;;) {
         memset (&routing_id, 0, sizeof (routing_id));
-        small_msg_storage_t &parts = recv_msg_storage ();
+        small_msg_storage_t parts;
         const int rc = subscribe_parts (sock, &routing_id, topic.data (), topic.size (), &topic_len,
                                         &parts, ZLINK_RECV_FLAGS_DONTWAIT);
         if (rc == ZLINK_RECV_OK) {
@@ -2809,7 +2813,7 @@ int try_subscribe_message_value (napi_env env,
                     *received_bytes += zlink_msg_size (&parts[index]);
             }
             *out = create_subscribed_value (env, routing_id, topic.data (), topic_len,
-                                            parts.data (), parts.size ());
+                                            parts.data (), parts.size (), allocator);
             parts.close ();
             return *out ? ZLINK_RECV_OK : ZLINK_RECV_INTERNAL_ERROR;
         }
@@ -2823,13 +2827,13 @@ int try_subscribe_message_value (napi_env env,
 
 napi_value socket_try_subscribe_message (napi_env env, napi_callback_info info)
 {
-    napi_value argv[1];
-    size_t argc = 1;
+    napi_value argv[2];
+    size_t argc = 2;
     napi_get_cb_info (env, info, &argc, argv, NULL, NULL);
     void *sock = NULL;
     napi_get_value_external (env, argv[0], &sock);
     napi_value out = NULL;
-    const int rc = try_subscribe_message_value (env, sock, &out);
+    const int rc = try_subscribe_message_value (env, sock, argv[1], &out);
     if (rc == ZLINK_RECV_OK)
         return out;
     if (rc == ZLINK_RECV_NO_DATA) {
@@ -2948,12 +2952,12 @@ napi_value subscription_at (napi_env env, napi_callback_info info)
 
 napi_value socket_stream_recv_packet (napi_env env, napi_callback_info info)
 {
-    napi_value argv[2];
-    size_t argc = 2;
+    napi_value argv[3];
+    size_t argc = 3;
     napi_get_cb_info (env, info, &argc, argv, NULL, NULL);
-    if (argc < 2) {
+    if (argc < 3) {
         napi_throw_type_error (
-          env, NULL, "socketStreamRecvPacket requires (socket, flags)");
+          env, NULL, "socketStreamRecvPacket requires (socket, flags, allocator)");
         return NULL;
     }
     void *socket = NULL;
@@ -2991,8 +2995,8 @@ napi_value socket_stream_recv_packet (napi_env env, napi_callback_info info)
     napi_value out;
     napi_create_object (env, &out);
     napi_value rid = create_routing_id_value (env, *source_rid);
-    napi_value header_value = create_received_message_buffer (env, &header);
-    napi_value body_value = create_received_message_buffer (env, &body);
+    napi_value header_value = create_received_message_buffer (env, &header, argv[2]);
+    napi_value body_value = create_received_message_buffer (env, &body, argv[2]);
     zlink_msg_close (&header);
     zlink_msg_close (&body);
     if (!rid || !header_value || !body_value)
@@ -3210,8 +3214,8 @@ napi_value router_routes_snapshot (napi_env env, napi_callback_info info)
 
 napi_value router_recv_message (napi_env env, napi_callback_info info)
 {
-    napi_value argv[4];
-    size_t argc = 4;
+    napi_value argv[5];
+    size_t argc = 5;
     napi_get_cb_info (env, info, &argc, argv, NULL, NULL);
     void *router = NULL;
     napi_get_value_external (env, argv[0], &router);
@@ -3225,7 +3229,7 @@ napi_value router_recv_message (napi_env env, napi_callback_info info)
 
     napi_value out = NULL;
     const int rc = router_recv_message_value (
-      env, router, flags, prefer_managed_parts, routing_id_storage, &out);
+      env, router, flags, argv[4], prefer_managed_parts, routing_id_storage, &out);
     if (rc != ZLINK_RECV_OK)
         return throw_result_error (env, "routerRecvMessage failed", rc);
     return out;
@@ -3233,8 +3237,8 @@ napi_value router_recv_message (napi_env env, napi_callback_info info)
 
 napi_value router_try_recv_message (napi_env env, napi_callback_info info)
 {
-    napi_value argv[3];
-    size_t argc = 3;
+    napi_value argv[4];
+    size_t argc = 4;
     napi_get_cb_info (env, info, &argc, argv, NULL, NULL);
     void *router = NULL;
     napi_get_value_external (env, argv[0], &router);
@@ -3245,7 +3249,7 @@ napi_value router_try_recv_message (napi_env env, napi_callback_info info)
 
     napi_value out = NULL;
     const int rc = router_recv_message_value (
-      env, router, ZLINK_RECV_FLAGS_DONTWAIT, prefer_managed_parts,
+      env, router, ZLINK_RECV_FLAGS_DONTWAIT, argv[3], prefer_managed_parts,
       routing_id_storage, &out);
     if (rc != ZLINK_RECV_OK) {
         if (rc == ZLINK_RECV_NO_DATA) {

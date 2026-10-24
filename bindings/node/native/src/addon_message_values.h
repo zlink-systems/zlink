@@ -4,6 +4,7 @@
 
 #include "addon_common_api.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cstring>
 #include <new>
@@ -243,10 +244,25 @@ inline napi_value create_buffer_copy_or_empty (napi_env env, const void *data, s
     return out;
 }
 
-// Receive materialization copies payload bytes into a JS-owned Buffer.
-inline napi_value create_received_message_buffer (napi_env env, zlink_msg_t *msg)
+// Receive storage comes from Node's existing allocator, without an addon pool.
+inline napi_value create_received_message_buffer (napi_env env, zlink_msg_t *msg,
+                                                  napi_value allocator)
 {
-    return create_buffer_copy_or_empty (env, zlink_msg_data (msg), zlink_msg_size (msg));
+    const size_t size = zlink_msg_size (msg);
+    void *bytes = NULL;
+    size_t capacity = 0;
+    napi_value out, length, receiver;
+    napi_create_double (env, static_cast<double> (size), &length);
+    napi_get_undefined (env, &receiver);
+    if (napi_call_function (env, receiver, allocator, 1, &length, &out) != napi_ok
+        || napi_get_buffer_info (env, out, &bytes, &capacity) != napi_ok
+        || capacity < size) {
+        napi_throw_error (env, NULL, "message buffer allocation failed");
+        return NULL;
+    }
+    std::copy_n (static_cast<const unsigned char *> (zlink_msg_data (msg)),
+                 size, static_cast<unsigned char *> (bytes));
+    return out;
 }
 
 inline napi_value create_routing_id_value (napi_env env, const zlink_routing_id_t &rid)
@@ -318,6 +334,7 @@ inline napi_value create_message_properties_snapshot (napi_env env,
 inline napi_value create_message_snapshot_value (napi_env env,
                                                  const zlink_routing_id_t *routing_id,
                                                  zlink_msg_t *msg,
+                                                 napi_value allocator,
                                                  int flags = MESSAGE_SNAPSHOT_DEFAULT)
 {
     napi_value obj;
@@ -335,7 +352,7 @@ inline napi_value create_message_snapshot_value (napi_env env,
             return throw_result_error (env, "message refcnt failed", refcnt_err);
     }
 
-    napi_value data = create_received_message_buffer (env, msg);
+    napi_value data = create_received_message_buffer (env, msg, allocator);
     if (!data)
         return NULL;
 

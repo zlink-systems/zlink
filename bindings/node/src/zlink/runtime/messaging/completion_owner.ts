@@ -474,7 +474,8 @@ export class CompletionOwner {
         this.handle,
         target,
         normalizeOperationPayload(payload),
-        timeoutMs
+        timeoutMs,
+        Buffer.allocUnsafe
       ) as NativeSyncRequestResult;
     } catch (error) {
       this.failEntry(entry, submitNativeError(error, 'request submit failed'));
@@ -539,7 +540,9 @@ export class CompletionOwner {
     if (this.publicOwner !== null && this.publicOwner !== caller) return 0;
     let processed = 0;
     for (;;) {
-      const completion = this.native.socketCompletionRecv(this.handle, 1) as NativeCompletion | null;
+      const completion = this.native.socketCompletionRecv(
+        this.handle, 1, Buffer.allocUnsafe
+      ) as NativeCompletion | null;
       if (!completion) break;
       this.capture(completion);
       processed += 1;
