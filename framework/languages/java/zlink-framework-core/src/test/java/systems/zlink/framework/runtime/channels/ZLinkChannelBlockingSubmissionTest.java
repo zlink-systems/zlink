@@ -359,7 +359,7 @@ final class ZLinkChannelBlockingSubmissionTest {
             var failure =
                     new ZLinkFrameworkException(ZLinkFrameworkErrorKind.UNAVAILABLE, "route lost");
             f.admission.completeExceptionally(failure);
-            f.reply.completeExceptionally(failure);
+            f.replyReady.completeExceptionally(failure);
             assertSame(failure, assertThrows(ZLinkFrameworkException.class, f.send::submit_sync));
             assertSame(
                     failure,
@@ -394,7 +394,7 @@ final class ZLinkChannelBlockingSubmissionTest {
     private static final class Fixture implements AutoCloseable {
         final ZLinkChannelSocketRegistry sockets = new ZLinkChannelSocketRegistry();
         final CompletableFuture<Void> admission = new CompletableFuture<>();
-        final CompletableFuture<ZLinkBackendReceived> reply = new CompletableFuture<>();
+        final CompletableFuture<Void> replyReady = new CompletableFuture<>();
         final AtomicInteger submissions = new AtomicInteger();
         final CountDownLatch submitted = new CountDownLatch(1);
         final Message sendPayload = Message.from("send");
@@ -438,7 +438,24 @@ final class ZLinkChannelBlockingSubmissionTest {
                                                     () -> {
                                                         submissions.incrementAndGet();
                                                         submitted.countDown();
-                                                        return reply;
+                                                        return replyReady.thenApply(
+                                                                ignored -> {
+                                                                    var bytes =
+                                                                            new ZLinkJsonMessageSerializer()
+                                                                                    .serialize(
+                                                                                            new Reply(
+                                                                                                    "accepted"))
+                                                                                    .bytes();
+                                                                    return new ZLinkBackendReceived(
+                                                                            ZLinkBackendRequestResult
+                                                                                    .OK,
+                                                                            Optional.empty(),
+                                                                            Optional.empty(),
+                                                                            Optional.empty(),
+                                                                            List.of(
+                                                                                    Message.from(
+                                                                                            bytes)));
+                                                                });
                                                     },
                                                     ZLinkBackendReceived::close);
                                         }
@@ -467,19 +484,7 @@ final class ZLinkChannelBlockingSubmissionTest {
 
         void complete() {
             admission.complete(null);
-            if (!reply.isDone()) {
-                reply.complete(
-                        new ZLinkBackendReceived(
-                                ZLinkBackendRequestResult.OK,
-                                Optional.empty(),
-                                Optional.empty(),
-                                Optional.empty(),
-                                List.of(
-                                        Message.from(
-                                                new ZLinkJsonMessageSerializer()
-                                                        .serialize(new Reply("accepted"))
-                                                        .bytes()))));
-            }
+            replyReady.complete(null);
         }
 
         void assertRejected() {
@@ -508,9 +513,6 @@ final class ZLinkChannelBlockingSubmissionTest {
         @Override
         public void close() {
             runtime.beginClose();
-            if (reply.isDone() && !reply.isCompletedExceptionally()) {
-                reply.join().close();
-            }
             sendPayload.close();
             requestPayload.close();
         }
