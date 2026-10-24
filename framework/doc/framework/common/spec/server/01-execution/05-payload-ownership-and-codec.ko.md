@@ -127,8 +127,10 @@ Raw byte를 다루는 API는 transport 검사와 codec extension 구현에만 �
 
 ## 6. 역직렬화를 언제 하는가
 
-**헤더는 먼저 읽고, payload 역직렬화는 실행 권한을 얻은 뒤 handler 직전에 한다.** 전체
+**수신 application message의 헤더는 먼저 읽고, payload 역직렬화는 실행 권한을 얻은 뒤 handler 직전에 한다.** 전체
 경로의 owner 전이는 §4의 그림을 참고한다.
+
+Request의 응답을 requester의 결과로 변환하는 decode는 completion 실행 자원에서 수행할 수 있다. 각 codec 소유자는 응답을 한 번만 해석한다. 최종 수신자의 구조와 수명은 [Submit과 완료 §9](01-submit-and-completion.ko.md#9-request-completion--완료-경쟁과-timeout-budget)를 따른다.
 
 헤더를 먼저 읽는 것은 선택이 아니다 — 어느 owner에게 보낼지 정하려면 필요하다. 반면
 payload는 handler가 실행되기 전까지 아무도 보지 않는다.
