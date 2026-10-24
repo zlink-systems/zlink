@@ -491,7 +491,7 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
     {
         std::function<void (const result_t<T> &)> invoke;
         ambient_context_snapshot_t ambient;
-        std::shared_ptr<serial_turn_t> owner;
+        std::shared_ptr<void> lifetime;
     };
 
   public:
@@ -626,14 +626,15 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
         }();
     }
 
-    void on_terminal (std::function<void (const result_t<T> &)> callback)
+    void on_terminal (std::function<void (const result_t<T> &)> callback,
+                      std::shared_ptr<void> lifetime = capture_current_serial_turn ())
     {
         auto snapshot = capture_ambient_context ();
         {
             std::lock_guard lock (_mutex);
             if (!_result) {
-                _terminal_callbacks.push_back (callback_t{
-                  std::move (callback), std::move (snapshot), capture_current_serial_turn ()});
+                _terminal_callbacks.push_back (
+                  callback_t{std::move (callback), std::move (snapshot), std::move (lifetime)});
                 return;
             }
         }
@@ -679,7 +680,7 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
     std::vector<callback_t> _terminal_callbacks;
 };
 
-template <typename T> class application_task_shared_state_t final : public task_shared_state_t<T>
+template <typename T> class application_task_shared_state_t : public task_shared_state_t<T>
 {
   private:
     void bind_wait_owner (const std::shared_ptr<task_wait_registration_t> &registration,
@@ -756,6 +757,39 @@ inline task_scheduler_t task_suspend_scheduler (const std::unique_ptr<task_sched
 template <typename T> result_t<T> current_exception_result ()
 {
     return result_access_t::failure<T> (std::current_exception ());
+}
+
+// A terminal projection's capture belongs to its existing result slot. The
+// source registration retains that slot in the same lifetime field that
+// ordinarily retains the serial turn; the slot retains the captured turn.
+template <typename T, typename TCallback>
+class terminal_task_shared_state_t final : public application_task_shared_state_t<T>
+{
+  public:
+    explicit terminal_task_shared_state_t (TCallback callback) :
+        _callback (std::move (callback)), _owner (capture_current_serial_turn ())
+    {
+    }
+
+    template <typename TInput> void operator() (const result_t<TInput> &result)
+    {
+        const auto owner = std::move (_owner);
+        _callback (*this, result);
+    }
+
+  private:
+    TCallback _callback;
+    std::shared_ptr<serial_turn_t> _owner;
+};
+
+template <typename TOutput, typename TInput, typename TCallback>
+std::shared_ptr<task_shared_state_t<TOutput>>
+make_terminal_task_state (task_shared_state_t<TInput> &source, TCallback &&callback)
+{
+    using state_t = terminal_task_shared_state_t<TOutput, std::decay_t<TCallback>>;
+    auto state = std::make_shared<state_t> (std::forward<TCallback> (callback));
+    source.on_terminal (std::ref (*state), state);
+    return state;
 }
 
 template <typename T> class coroutine_promise_t
@@ -961,16 +995,17 @@ void observe_task_terminal (task_t<T> &task, TCallback &&callback)
 template <typename TOutput, typename TInput, typename TProject>
 task_t<TOutput> project_task_terminal (task_t<TInput> &task, TProject &&project)
 {
-    auto state = std::make_shared<application_task_shared_state_t<TOutput>> ();
-    observe_task_terminal (task, [state, project = std::forward<TProject> (project)] (
-                                   const result_t<TInput> &result) mutable {
-        try {
-            state->complete (project (result));
-        }
-        catch (...) {
-            state->complete (current_exception_result<TOutput> ());
-        }
-    });
+    auto state = make_terminal_task_state<TOutput> (
+      *task._state, [project = std::forward<TProject> (project)] (
+                      auto &reply, const result_t<TInput> &result) mutable {
+          try {
+              auto convert = std::move (project);
+              reply.complete (convert (result));
+          }
+          catch (...) {
+              reply.complete (current_exception_result<TOutput> ());
+          }
+      });
     return task_t<TOutput> (std::move (state));
 }
 

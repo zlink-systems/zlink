@@ -171,21 +171,11 @@ template <typename TReply> class request_task_t : public task_t<TReply>
     request_task_t (detail::request_projection_t,
                     request_task_t<TInput> &selected,
                     TProject &&project) :
-        task_t<TReply> (std::make_shared<detail::application_task_shared_state_t<TReply>> ()),
+        task_t<TReply> (detail::project_task_terminal<TReply> (selected._physical_reply,
+                                                               std::forward<TProject> (project))),
         _physical_reply (this->_state),
         _admitted (selected._admitted)
     {
-        detail::observe_task_terminal (
-          selected._physical_reply,
-          [reply = this->_state,
-           project = std::forward<TProject> (project)] (const auto &result) mutable {
-              try {
-                  reply->complete (project (result));
-              }
-              catch (...) {
-                  reply->complete (detail::current_exception_result<TReply> ());
-              }
-          });
     }
 
     /* The public reply of a request call over a selected request. Its physical
@@ -197,24 +187,25 @@ template <typename TReply> class request_task_t : public task_t<TReply>
                     request_task_t<TInput> &selected,
                     TProject &&project) :
         task_t<TReply> (std::make_shared<detail::application_task_shared_state_t<TReply>> ()),
-        _physical_reply (std::make_shared<detail::application_task_shared_state_t<TReply>> ()),
-        _admitted (selected._admitted)
-    {
-        detail::observe_task_terminal (
-          selected._physical_reply,
-          [reply = this->_state, physical = _physical_reply._state,
-           project = std::forward<TProject> (project)] (const auto &result) mutable {
+        _physical_reply (detail::make_terminal_task_state<TReply> (
+          *selected._physical_reply._state,
+          [reply = this->_state, project = std::forward<TProject> (project)] (
+            auto &physical, const result_t<TInput> &result) mutable {
+              auto public_reply = std::move (reply);
               auto projected = [&] () -> result_t<TReply> {
                   try {
-                      return project (result);
+                      auto convert = std::move (project);
+                      return convert (result);
                   }
                   catch (...) {
                       return detail::current_exception_result<TReply> ();
                   }
               }();
-              physical->complete (projected);
-              reply->complete (std::move (projected));
-          });
+              physical.complete (projected);
+              public_reply->complete (std::move (projected));
+          })),
+        _admitted (selected._admitted)
+    {
         end_at_admission_failure ();
     }
 

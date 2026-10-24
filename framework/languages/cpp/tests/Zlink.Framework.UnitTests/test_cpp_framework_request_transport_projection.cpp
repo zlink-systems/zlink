@@ -96,4 +96,106 @@ TEST (RequestCallAllocations, AdoptedReplyPreservesBothResumeSchedulers)
     EXPECT_EQ (public_wait.result ().value (), 42);
     EXPECT_EQ (scheduled.load (), 2u);
 }
+// Compare against the same runtime's result slot plus a non-owning terminal
+// registration. The test retains that slot itself; production must put the
+// callback lifetime in the registration without another allocation.
+TEST (RequestCallAllocations, TerminalProjectionUsesOnlyTheResultSlotAndRegistration)
+{
+    fw::task_completion_source_t<int> reference_source;
+    auto reference_input = reference_source.task ();
+    std::optional<fw::task_t<int>> reference;
+    const auto baseline = fw::tests::count_allocations ([&] {
+        reference.emplace (fw::result_t<int>::success (0));
+        fw::detail::observe_task_terminal (reference_input,
+                                           [slot = &reference] (const auto &) { (void) slot; });
+    });
+    for (const bool ready : {false, true}) {
+        fw::task_completion_source_t<int> source;
+        auto input = source.task ();
+        if (ready)
+            source.complete (fw::result_t<int>::success (41));
+        std::optional<fw::task_t<int>> projected;
+        unsigned calls = 0;
+        const auto measured = fw::tests::count_allocations ([&] {
+            projected.emplace (fw::detail::project_task_terminal<int> (
+              input, [&calls] (const fw::result_t<int> &value) {
+                  ++calls;
+                  return fw::result_t<int>::success (value.value () + 1);
+              }));
+        });
+        // A ready source has no registration vector allocation.
+        const auto slot = fw::tests::count_allocations (
+          [] { fw::task_t<int> result (fw::result_t<int>::success (0)); });
+        std::printf ("terminal projection ready=%d allocations=%zu baseline=%zu\n", ready, measured,
+                     ready ? slot : baseline);
+        EXPECT_EQ (measured, ready ? slot : baseline);
+        if (!ready)
+            source.complete (fw::result_t<int>::success (41));
+        EXPECT_EQ (projected->result ().value (), 42);
+        EXPECT_EQ (calls, 1u);
+    }
+}
+TEST (RequestCallAllocations, PublicProjectionAddsOnlyPublicPhysicalSlotsAndTheirRegistrations)
+{
+    auto admitted = std::make_shared<fw::task_completion_source_t<void>> ();
+    admitted->complete (fw::result_t<void>::success ());
+    auto stage = admitted->task ();
+    auto admission_reply = std::make_shared<fw::task_completion_source_t<int>> ();
+    fw::task_completion_source_t<int> reference_source;
+    auto reference_input = reference_source.task ();
+    std::optional<fw::task_t<int>> public_slot;
+    std::optional<fw::task_t<int>> physical_slot;
+    const auto baseline = fw::tests::count_allocations ([&] {
+        public_slot.emplace (fw::result_t<int>::success (0));
+        physical_slot.emplace (fw::result_t<int>::success (0));
+        fw::detail::observe_task_terminal (reference_input,
+                                           [slot = &physical_slot] (const auto &) { (void) slot; });
+        fw::detail::observe_task_terminal (
+          stage, [reply = admission_reply] (const auto &) { (void) reply; });
+    });
+    fw::task_completion_source_t<int> source;
+    auto selected =
+      fw::detail::request_task_access_t::from_admitted_reply (source.task (), admitted);
+    std::optional<fw::request_task_t<int>> projected;
+    unsigned calls = 0;
+    const auto measured = fw::tests::count_allocations ([&] {
+        projected.emplace (fw::detail::public_request_reply<int> (
+          selected, [&calls] (const fw::result_t<int> &value) {
+              ++calls;
+              return fw::result_t<int>::success (value.value () + 1);
+          }));
+    });
+    std::printf ("public terminal projection allocations=%zu baseline=%zu\n", measured, baseline);
+    EXPECT_EQ (measured, baseline);
+    source.complete (fw::result_t<int>::success (41));
+    EXPECT_EQ (projected->result ().value (), 42);
+    auto physical = fw::detail::request_task_access_t::physical_reply (*projected);
+    EXPECT_EQ (physical.result ().value (), 42);
+    EXPECT_NE (std::addressof (projected->result ()), std::addressof (physical.result ()));
+    EXPECT_EQ (calls, 1u);
+}
+TEST (RequestCallAllocations, TerminalProjectionReleasesProducerCapturesAtPhysicalCompletion)
+{
+    for (const bool retain_reply : {false, true}) {
+        fw::task_completion_source_t<int> source;
+        auto input = source.task ();
+        auto lifetime = std::make_shared<int> (41);
+        const std::weak_ptr<int> weak = lifetime;
+        auto projected = fw::detail::project_task_terminal<int> (
+          input, [lifetime = std::move (lifetime)] (const auto &result) {
+              return fw::result_t<int>::success (*lifetime + result.value ());
+          });
+        std::optional<fw::task_t<int>> retained;
+        if (retain_reply)
+            retained.emplace (std::move (projected));
+        else {
+            auto discarded = std::move (projected);
+        }
+        EXPECT_FALSE (weak.expired ());
+        source.complete (fw::result_t<int>::success (1));
+        EXPECT_TRUE (weak.expired ());
+        if (retained)
+            EXPECT_EQ (retained->result ().value (), 42);
+    }
+}
 } // namespace
