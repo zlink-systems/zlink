@@ -8,6 +8,7 @@
 #include <functional>
 #include <memory>
 #include <deque>
+#include <list>
 #include <unordered_map>
 #include <mutex>
 #include <optional>
@@ -141,7 +142,7 @@ class service_mailbox_t
     void begin_application_receive_turn ();
     void end_application_receive_turn ();
     using application_ready_batch_t =
-      std::optional<std::pair<std::deque<std::string>, application_ready_t>>;
+      std::optional<std::pair<std::list<std::string>, application_ready_t>>;
     application_ready_batch_t take_application_receive_turn ();
     static void notify_application_ready (application_ready_batch_t &ready);
     bool begin_application_drain (const std::string &owner);
@@ -254,7 +255,7 @@ class service_mailbox_t
     struct domain_t
     {
         std::unordered_map<std::string, owner_queue_t> owners;
-        std::deque<std::string> ready;
+        std::list<std::string> ready;
         std::size_t messages = 0;
         std::size_t bytes = 0;
         std::size_t active_messages = 0;
