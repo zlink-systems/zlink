@@ -42,6 +42,7 @@
         <Compile Include="Transport/ActorBindingTests.cs"/>
         <Compile Include="Transport/CloseAndWriteCompletionTests.cs"/>
         <Compile Include="Transport/ConnectionEndingTests.cs"/>
+        <Compile Include="Transport/DirectConnectionTests.cs"/>
         <Compile Include="Transport/DispatchTests.cs"/>
         <Compile Include="Transport/LifecycleTests.cs"/>
         <Compile Include="Transport/R3RegressionTests.cs"/>
