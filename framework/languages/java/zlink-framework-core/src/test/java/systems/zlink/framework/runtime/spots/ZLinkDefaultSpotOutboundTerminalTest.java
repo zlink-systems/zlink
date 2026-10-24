@@ -136,6 +136,12 @@ final class ZLinkDefaultSpotOutboundTerminalTest {
             assertSame(terminal, failure.getCause());
             assertEquals(missing ? 0 : 1, probe.submissions);
             assertEquals(1, probe.resolves);
+            if (instance && !missing) {
+                assertEquals(
+                        0,
+                        probe.coordinatorCalls,
+                        "Instance Ready route must bypass the coordinator Store read");
+            }
             assertEquals(stale && (request || !missing) ? 1 : 0, probe.invalidations);
             assertEquals(
                     missing ? 1 : 0,
