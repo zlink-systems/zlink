@@ -123,7 +123,7 @@ final class ZLinkJavaLivenessNativeContractTest {
                     // next clock read before enqueuing the public connection-close request.
                     try (var packet = Message.from("BeforeCleanup");
                             var payload = Message.from("{}")) {
-                        expired.sendNode(sourceRid, null, List.of(packet, payload), false, null)
+                        expired.sendNode(sourceRid, null, List.of(packet, payload))
                                 .toCompletableFuture()
                                 .get(5, TimeUnit.SECONDS);
                     }
@@ -169,10 +169,10 @@ final class ZLinkJavaLivenessNativeContractTest {
                 awaitAdmission(healthy, sourceRid, () -> {});
                 try (var packet = Message.from("LivenessAfterCleanup");
                         var payload = Message.from("{}")) {
-                    source.sendNode(healthyRid, null, List.of(packet, payload), false, null)
+                    source.sendNode(healthyRid, null, List.of(packet, payload))
                             .toCompletableFuture()
                             .get(5, TimeUnit.SECONDS);
-                    healthy.sendNode(sourceRid, null, List.of(packet, payload), false, null)
+                    healthy.sendNode(sourceRid, null, List.of(packet, payload))
                             .toCompletableFuture()
                             .get(5, TimeUnit.SECONDS);
                 }

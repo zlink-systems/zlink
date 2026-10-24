@@ -18,6 +18,7 @@ import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerInstanceOwner;
 import systems.zlink.framework.runtime.messaging.ZLinkMessagePayloads;
 
+import java.nio.ByteBuffer;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -69,7 +70,7 @@ final class ZLinkChannelHandlerInvoker {
 
     @SuppressWarnings({"unchecked", "rawtypes"})
     CompletionStage<Void> invokeSendHandler(
-            String channelName, ChannelSendHandlerRegistration registration, Message payload) {
+            String channelName, ChannelSendHandlerRegistration registration, ByteBuffer payload) {
         return invokeSendHandler(channelName, registration, payload, Map.of());
     }
 
@@ -77,7 +78,7 @@ final class ZLinkChannelHandlerInvoker {
     CompletionStage<Void> invokeSendHandler(
             String channelName,
             ChannelSendHandlerRegistration registration,
-            Message payload,
+            ByteBuffer payload,
             Map<String, String> metadata) {
         return invokeSendHandler(channelName, registration, payload, metadata, null);
     }
@@ -86,7 +87,7 @@ final class ZLinkChannelHandlerInvoker {
     CompletionStage<Void> invokeSendHandler(
             String channelName,
             ChannelSendHandlerRegistration registration,
-            Message payload,
+            ByteBuffer payload,
             Map<String, String> metadata,
             String wireContentType) {
         return invokeSendHandler(
@@ -96,7 +97,7 @@ final class ZLinkChannelHandlerInvoker {
     CompletionStage<Void> invokeSendHandler(
             String channelName,
             ChannelSendHandlerRegistration registration,
-            Message payload,
+            ByteBuffer payload,
             Map<String, String> metadata,
             String wireContentType,
             Runnable beforeHandler) {
@@ -133,7 +134,9 @@ final class ZLinkChannelHandlerInvoker {
 
     @SuppressWarnings({"unchecked", "rawtypes"})
     CompletionStage<Message> invokeRequestHandler(
-            String channelName, ChannelRequestHandlerRegistration registration, Message payload) {
+            String channelName,
+            ChannelRequestHandlerRegistration registration,
+            ByteBuffer payload) {
         return invokeRequestHandler(channelName, registration, payload, Map.of());
     }
 
@@ -141,7 +144,7 @@ final class ZLinkChannelHandlerInvoker {
     CompletionStage<Message> invokeRequestHandler(
             String channelName,
             ChannelRequestHandlerRegistration registration,
-            Message payload,
+            ByteBuffer payload,
             Map<String, String> metadata) {
         return invokeRequestHandler(channelName, registration, payload, metadata, null);
     }
@@ -150,7 +153,7 @@ final class ZLinkChannelHandlerInvoker {
     CompletionStage<Message> invokeRequestHandler(
             String channelName,
             ChannelRequestHandlerRegistration registration,
-            Message payload,
+            ByteBuffer payload,
             Map<String, String> metadata,
             String wireContentType) {
         return invokeRequestHandler(
@@ -160,7 +163,7 @@ final class ZLinkChannelHandlerInvoker {
     CompletionStage<Message> invokeRequestHandler(
             String channelName,
             ChannelRequestHandlerRegistration registration,
-            Message payload,
+            ByteBuffer payload,
             Map<String, String> metadata,
             String wireContentType,
             Runnable beforeHandler) {
@@ -203,7 +206,7 @@ final class ZLinkChannelHandlerInvoker {
             String channelName,
             ChannelPublishHandlerRegistration registration,
             String topic,
-            Message payload) {
+            ByteBuffer payload) {
         return invokePublishHandler(channelName, registration, topic, payload, null);
     }
 
@@ -212,7 +215,7 @@ final class ZLinkChannelHandlerInvoker {
             String channelName,
             ChannelPublishHandlerRegistration registration,
             String topic,
-            Message payload,
+            ByteBuffer payload,
             String wireContentType) {
         Object message;
         try {
@@ -248,7 +251,7 @@ final class ZLinkChannelHandlerInvoker {
             String channelName,
             ChannelRouteSendHandlerRegistration registration,
             RoutingId sourceRoutingId,
-            Message payload) {
+            ByteBuffer payload) {
         return invokeRouteSendHandler(
                 channelName, registration, sourceRoutingId, payload, Map.of());
     }
@@ -258,7 +261,7 @@ final class ZLinkChannelHandlerInvoker {
             String channelName,
             ChannelRouteSendHandlerRegistration registration,
             RoutingId sourceRoutingId,
-            Message payload,
+            ByteBuffer payload,
             Map<String, String> metadata) {
         return invokeRouteSendHandler(
                 channelName, registration, sourceRoutingId, payload, metadata, null);
@@ -269,7 +272,7 @@ final class ZLinkChannelHandlerInvoker {
             String channelName,
             ChannelRouteSendHandlerRegistration registration,
             RoutingId sourceRoutingId,
-            Message payload,
+            ByteBuffer payload,
             Map<String, String> metadata,
             String wireContentType) {
         return invokeRouteSendHandler(
@@ -286,7 +289,7 @@ final class ZLinkChannelHandlerInvoker {
             String channelName,
             ChannelRouteSendHandlerRegistration registration,
             RoutingId sourceRoutingId,
-            Message payload,
+            ByteBuffer payload,
             Map<String, String> metadata,
             String wireContentType,
             Runnable beforeHandler) {
@@ -327,7 +330,7 @@ final class ZLinkChannelHandlerInvoker {
             String channelName,
             ChannelRouteRequestHandlerRegistration registration,
             RoutingId sourceRoutingId,
-            Message payload) {
+            ByteBuffer payload) {
         return invokeRouteRequestHandler(
                 channelName, registration, sourceRoutingId, payload, Map.of());
     }
@@ -337,7 +340,7 @@ final class ZLinkChannelHandlerInvoker {
             String channelName,
             ChannelRouteRequestHandlerRegistration registration,
             RoutingId sourceRoutingId,
-            Message payload,
+            ByteBuffer payload,
             Map<String, String> metadata) {
         return invokeRouteRequestHandler(
                 channelName, registration, sourceRoutingId, payload, metadata, null);
@@ -348,7 +351,7 @@ final class ZLinkChannelHandlerInvoker {
             String channelName,
             ChannelRouteRequestHandlerRegistration registration,
             RoutingId sourceRoutingId,
-            Message payload,
+            ByteBuffer payload,
             Map<String, String> metadata,
             String wireContentType) {
         return invokeRouteRequestHandler(
@@ -365,7 +368,7 @@ final class ZLinkChannelHandlerInvoker {
             String channelName,
             ChannelRouteRequestHandlerRegistration registration,
             RoutingId sourceRoutingId,
-            Message payload,
+            ByteBuffer payload,
             Map<String, String> metadata,
             String wireContentType,
             Runnable beforeHandler) {
@@ -426,7 +429,7 @@ final class ZLinkChannelHandlerInvoker {
     }
 
     private <T> T deserializePayload(
-            Message payload, Class<T> payloadType, String wireContentType) {
+            ByteBuffer payload, Class<T> payloadType, String wireContentType) {
         ZLinkMessageSerializer selected =
                 wireContentType == null
                         ? serializer

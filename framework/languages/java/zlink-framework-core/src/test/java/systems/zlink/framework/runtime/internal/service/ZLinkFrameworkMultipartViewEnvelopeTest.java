@@ -46,11 +46,12 @@ final class ZLinkFrameworkMultipartViewEnvelopeTest {
     @Test
     void emptyAndRawPartsKeepTheirEnvelopeClassification() {
         assertFalse(ZLinkChannelEnvelope.looksLikeEnvelope(null));
-        try (var empty = new ZLinkFrameworkMultipartView(new Object[0])) {
+        try (var empty = new ZLinkFrameworkMultipartView(new Object[0], null)) {
             assertFalse(ZLinkChannelEnvelope.looksLikeEnvelope(empty));
         }
         try (var single =
-                new ZLinkFrameworkMultipartView(new Object[] {ByteBuffer.wrap(new byte[] {'{'})})) {
+                new ZLinkFrameworkMultipartView(
+                        new Object[] {ByteBuffer.wrap(new byte[] {'{'})}, null)) {
             assertFalse(ZLinkChannelEnvelope.looksLikeEnvelope(single));
         }
         for (String first : List.of("", " \t\r\n", "probe", " \t[1]", " \n42")) {
@@ -105,6 +106,7 @@ final class ZLinkFrameworkMultipartViewEnvelopeTest {
                 new Object[] {
                     ByteBuffer.wrap(first.getBytes(StandardCharsets.UTF_8)),
                     ByteBuffer.wrap(new byte[] {1, 2, 3})
-                });
+                },
+                null);
     }
 }
