@@ -103,70 +103,6 @@ void expect_public_and_physical_reply_allocations (const allocation_sample_t &sa
     EXPECT_NE (*public_allocation, *physical_allocation);
 }
 
-// These legacy probes count size classes, not allocation types. The node and
-// channel tests below use stored-result addresses and measured primitives;
-// the existing Spot and App probes retain their size-class comparisons.
-struct layer_size_classes_t
-{
-    std::size_t payload_state = 0;
-    std::size_t message_state = 0;
-    std::size_t admission_state = 0;
-    std::size_t transport_state = 0;
-};
-
-std::size_t only_allocation_size (const char *label, const auto &action)
-{
-    const auto sample = sample_allocations (action);
-    print_allocation_sizes (label, sample);
-    SCOPED_TRACE (sample.diagnostics);
-    EXPECT_GE (sample.total, 1u);
-    return sample.count >= 1 ? sample.events[sample.count - 1].size : 0;
-}
-
-layer_size_classes_t calibrate_layer_size_classes ()
-{
-    layer_size_classes_t sizes;
-    sizes.payload_state = only_allocation_size (
-      "payload size class reference", [] { (void) fw::task_completion_source_t<payload_t> (); });
-    sizes.message_state = only_allocation_size ("message size class reference", [] {
-        (void) fw::task_completion_source_t<zlink::message_t> ();
-    });
-    sizes.admission_state = only_allocation_size (
-      "admission size class reference", [] { (void) fw::task_completion_source_t<void> (); });
-    sizes.transport_state = only_allocation_size ("transport size class reference", [] {
-        (void) fw::task_completion_source_t<transport_reply_t> ();
-    });
-    return sizes;
-}
-
-struct layer_size_class_counts_t
-{
-    std::size_t total = 0;
-    std::size_t payload_states = 0;
-    std::size_t message_states = 0;
-    std::size_t admission_sources = 0;
-    std::size_t transport_states = 0;
-    std::string diagnostics;
-};
-
-template <typename TAction>
-layer_size_class_counts_t count_layer_size_classes (const layer_size_classes_t &sizes,
-                                                    TAction &&action)
-{
-    const auto sample = sample_allocations (std::forward<TAction> (action));
-    layer_size_class_counts_t counts;
-    counts.total = sample.total;
-    counts.diagnostics = sample.diagnostics;
-    print_allocation_sizes ("request size classes", sample);
-    for (std::size_t i = 0; i < sample.count; ++i) {
-        counts.payload_states += sample.events[i].size == sizes.payload_state;
-        counts.message_states += sample.events[i].size == sizes.message_state;
-        counts.admission_sources += sample.events[i].size == sizes.admission_state;
-        counts.transport_states += sample.events[i].size == sizes.transport_state;
-    }
-    return counts;
-}
-
 using node_transport_t =
   std::variant<std::monostate,
                std::shared_ptr<fw::detail::route_channel_runtime_t>,
@@ -440,6 +376,96 @@ class ready_spot_resolver_t final : public fw::runtime::spot_address_resolver_t
     void invalidate_all_routes_after_store_recovery () override {}
 };
 
+// Measure the operation's promise, admission and selected-submission await with
+// the same value boundaries as the Spot submit. The frame size is deliberately
+// not compared: its compiler-owned locals differ from the real resolver path.
+fw::request_task_t<zlink::message_t>
+spot_operation_primitive (fw::route_client_t::payload_encoder_t encode_payload,
+                          fw::channel_request_call_t::metadata_map_t metadata,
+                          fw::request_task_t<zlink::message_t> selected,
+                          fw::runtime::spot_address_resolver_t &resolver)
+{
+    (void) encode_payload;
+    (void) metadata;
+    (void) co_await resolver.resolve_spot_address ({}, "spot", false);
+    co_return co_await fw::detail::request_submission (std::move (selected));
+}
+
+allocation_sample_t spot_operation_allocations (fw::runtime::spot_address_resolver_t &resolver)
+{
+    fw::task_completion_source_t<zlink::message_t> source;
+    auto admitted = std::make_shared<fw::task_completion_source_t<void>> ();
+    admitted->complete (fw::result_t<void>::success ());
+    auto selected =
+      fw::detail::request_task_access_t::from_admitted_reply (source.task (), admitted);
+    auto request_value = std::make_shared<payload_t> ();
+    const fw::channel_request_call_t::metadata_map_t metadata;
+    std::optional<fw::request_task_t<zlink::message_t>> operation;
+    const auto sample = sample_allocations ([&] {
+        operation.emplace (spot_operation_primitive (
+          [request_value] (fw::serializer_registry_t &serializers) {
+              return serializers.get<payload_t> ().serialize_with_content_type (*request_value);
+          },
+          metadata, std::move (selected), resolver));
+    });
+    EXPECT_TRUE (source.complete (fw::result_t<zlink::message_t>::success (zlink::message_t{})));
+    EXPECT_TRUE (operation->result ());
+    return sample;
+}
+
+allocation_sample_t spot_selection_allocations (
+  const fw::detail::channel_runtime_state_t::spot_mesh_request_t &requester)
+{
+    fw::runtime::offload_executor_t executor (1, "request-allocation-reference");
+    fw::runtime::state_lane_t lane (executor);
+    const std::string mesh_name = "s";
+    const std::map<std::string, fw::detail::channel_runtime_state_t::spot_mesh_request_t>
+      requesters{{mesh_name, requester}};
+    return sample_allocations ([&] {
+        (void) lane
+          .run_checked ([&] {
+              const auto found = requesters.find (mesh_name);
+              return found == requesters.end ()
+                       ? std::nullopt
+                       : std::optional<fw::detail::channel_runtime_state_t::spot_mesh_request_t> (
+                           found->second);
+          })
+          .get ();
+    });
+}
+
+allocation_sample_t spot_projection_allocations (
+  const fw::detail::channel_runtime_state_t::spot_mesh_request_t &requester)
+{
+    fw::task_completion_source_t<transport_reply_t> source;
+    auto admitted = std::make_shared<fw::task_completion_source_t<void>> ();
+    admitted->complete (fw::result_t<void>::success ());
+    fw::request_task_t<transport_reply_t> selected (source.task (), admitted);
+    std::optional<fw::request_task_t<zlink::message_t>> projected;
+    const std::shared_ptr<fw::detail::route_client_state_t> state;
+    std::optional<fw::detail::channel_runtime_state_t::spot_mesh_request_t> mesh_requester (
+      requester);
+    std::string packet_name = payload_t::packet_name;
+    std::string router_channel_id = "s";
+    const std::shared_ptr<const std::pair<zlink::routing_id_t, fw::spot_id_t>> target;
+    const auto sample = sample_allocations ([&] {
+        projected.emplace (fw::detail::project_request_reply<zlink::message_t> (
+          selected,
+          [state, requester = std::move (mesh_requester), packet_name = std::move (packet_name),
+           router_channel_id = std::move (router_channel_id),
+           target] (const fw::result_t<transport_reply_t> &) -> fw::result_t<zlink::message_t> {
+              (void) state;
+              (void) requester;
+              (void) packet_name;
+              (void) router_channel_id;
+              (void) target;
+              return fw::result_t<zlink::message_t>::success (zlink::message_t{});
+          }));
+    });
+    EXPECT_EQ (fw::detail::request_task_access_t::admission_source (*projected), admitted);
+    return sample;
+}
+
 /* A Spot request resolves its address in its own operation coroutine, which
  * owns the operation's admission source and message reply (Spot address
  * messaging: one resolve per operation). The selected mesh request below it
@@ -451,41 +477,69 @@ TEST (RequestCallAllocations, SpotRequestProjectsTheSelectedMeshRequestOnce)
     auto builder = fw::test::runtime_failure_builder ();
     auto runtime = fw::detail::channel_runtime_t::from (builder.message_bus ());
     runtime.bind_serializers (serializers);
-    runtime.bind_spot_address_resolver (std::make_shared<ready_spot_resolver_t> ());
+    auto resolver = std::make_shared<ready_spot_resolver_t> ();
+    runtime.bind_spot_address_resolver (resolver);
     fw::task_completion_source_t<transport_reply_t> physical;
     auto admitted = std::make_shared<fw::task_completion_source_t<void>> ();
     admitted->complete (fw::result_t<void>::success ());
     std::optional<fw::request_task_t<transport_reply_t>> prepared;
-    runtime.bind_spot_mesh_transport (
-      "s", {}, [&] (const zlink::routing_id_t &, const std::string &, std::uint64_t, auto, auto) {
+    unsigned submitted = 0;
+    fw::detail::channel_runtime_state_t::spot_mesh_request_t requester =
+      [&] (const zlink::routing_id_t &, const std::string &, std::uint64_t, auto, auto) {
+          ++submitted;
           auto selected = std::move (*prepared);
           prepared.reset ();
           return selected;
-      });
+      };
+    runtime.bind_spot_mesh_transport ("s", {}, requester);
     auto client = builder.route_client (serializers);
-    const auto sizes = calibrate_layer_size_classes ();
+    (void) encode_allocations (serializers, "s");
+    const auto encode = encode_allocations (serializers, "s");
+    const auto operation = spot_operation_allocations (*resolver);
+    const auto selection = spot_selection_allocations (requester);
+    const auto target_owner = sample_allocations ([] {
+        (void) std::make_shared<const std::pair<zlink::routing_id_t, fw::spot_id_t>> (
+          zlink::routing_id_t::from ("n"), "spot");
+    });
+    const auto projection = spot_projection_allocations (requester);
+    const auto public_projection = public_projection_allocations (serializers);
+    print_allocation_sizes ("spot encode reference", encode);
+    print_allocation_sizes ("spot operation reference", operation);
+    print_allocation_sizes ("spot selection reference", selection);
+    print_allocation_sizes ("spot target reference", target_owner);
+    print_allocation_sizes ("spot internal projection reference", projection);
+    print_allocation_sizes ("spot public projection reference", public_projection);
+    SCOPED_TRACE ("spot encode reference\n" + encode.diagnostics);
+    SCOPED_TRACE ("spot operation reference\n" + operation.diagnostics);
+    SCOPED_TRACE ("spot selection reference\n" + selection.diagnostics);
+    SCOPED_TRACE ("spot target reference\n" + target_owner.diagnostics);
+    SCOPED_TRACE ("spot internal projection reference\n" + projection.diagnostics);
+    SCOPED_TRACE ("spot public projection reference\n" + public_projection.diagnostics);
     prepared.emplace (physical.task (), admitted);
     auto call = client.request_to_spot (fw::spot_id_t ("spot"), payload_t{});
     std::optional<fw::request_task_t<payload_t>> pending;
-    const auto counts =
-      count_layer_size_classes (sizes, [&] { pending.emplace (call.async<payload_t> ()); });
-    SCOPED_TRACE (counts.diagnostics);
-    std::printf ("spot request above transport: total=%zu payload_states=%zu message_states=%zu "
-                 "admission_sources=%zu\n",
-                 counts.total, counts.payload_states, counts.message_states,
-                 counts.admission_sources);
-    // Message states: the Spot operation coroutine's physical and public
-    // replies, and one projection of the selected mesh request.
-    EXPECT_EQ (counts.payload_states, 2u);
-    EXPECT_EQ (counts.message_states, 3u);
-    EXPECT_EQ (counts.admission_sources, 1u);
+    const auto actual = sample_allocations ([&] { pending.emplace (call.async<payload_t> ()); });
+    print_allocation_sizes ("spot request above transport", actual);
+    SCOPED_TRACE (actual.diagnostics);
+    EXPECT_EQ (submitted, 1u);
+    EXPECT_EQ (actual.total, encode.total + operation.total + selection.total + target_owner.total
+                               + projection.total + public_projection.total);
 
     ASSERT_TRUE (pending.has_value ());
+    const auto operation_admission = fw::detail::request_task_access_t::admission_source (*pending);
+    ASSERT_NE (operation_admission, admitted);
+    EXPECT_TRUE (allocation_containing (actual, operation_admission.get ()).has_value ());
+    EXPECT_TRUE (
+      allocation_containing (actual, std::addressof (operation_admission->task ().result ()))
+        .has_value ());
+    EXPECT_TRUE (pending->admitted ().result ());
+    EXPECT_FALSE (pending->await_ready ());
     EXPECT_TRUE (physical.complete (
       fw::result_t<transport_reply_t>::success (transport_reply_t::success (reply_parts (47)))));
     const auto &reply = pending->result ();
     ASSERT_TRUE (reply);
     EXPECT_EQ (reply.value ().value, 47);
+    expect_public_and_physical_reply_allocations (actual, *pending);
 }
 
 /* Hot path E4: the MeshNode request submit of a target the topology already
@@ -713,8 +767,9 @@ struct allocation_host_capture_t final : fw::hosted_service_t
 
 // The real app transport must not allocate an operation or a coroutine when
 // topology has already classified an Object Client as an invalid Node target.
-// Compare the reply-state sizes with the same route layer over an immediate
-// transport; this excludes codec/container sizes specific to this build.
+// Compare the same route layer over an immediate transport, plus the real
+// topology classifier's routing-id byte vector. No allocation size identifies
+// a reply state or an admission source.
 TEST (RequestCallAllocations, AppClassifiedNodeFailureAddsNoTransportReplyState)
 {
     struct app_host_t
@@ -795,14 +850,18 @@ TEST (RequestCallAllocations, AppClassifiedNodeFailureAddsNoTransportReplyState)
             fw::framework_error_kind_t::not_found, "MeshNode request target was not found")));
     });
     auto reference = builder.route_client (serializers);
-    const auto sizes = calibrate_layer_size_classes ();
+    const auto target_bytes = sample_allocations ([&] { (void) target.to_bytes (); });
     std::optional<fw::request_task_t<payload_t>> pending;
     auto measure = [&] (fw::route_client_t &client) {
         auto call = client.request_to_node ("m", target, payload_t{});
-        auto counts =
-          count_layer_size_classes (sizes, [&] { pending.emplace (call.async<payload_t> ()); });
+        auto sample = sample_allocations ([&] { pending.emplace (call.async<payload_t> ()); });
         EXPECT_EQ (pending->result ().error_kind (), fw::framework_error_kind_t::not_found);
-        return counts;
+        expect_public_and_physical_reply_allocations (sample, *pending);
+        const auto admission = fw::detail::request_task_access_t::admission_source (*pending);
+        EXPECT_TRUE (allocation_containing (sample, admission.get ()).has_value ());
+        EXPECT_TRUE (allocation_containing (sample, std::addressof (admission->task ().result ()))
+                       .has_value ());
+        return sample;
     };
     (void) measure (reference);
     (void) measure (*host->client);
@@ -810,12 +869,9 @@ TEST (RequestCallAllocations, AppClassifiedNodeFailureAddsNoTransportReplyState)
     const auto actual = measure (*host->client);
     SCOPED_TRACE ("app classified reference\n" + baseline.diagnostics);
     SCOPED_TRACE ("app classified actual\n" + actual.diagnostics);
-    std::printf (
-      "app classified transport: states=%zu reference=%zu total=%zu reference_total=%zu\n",
-      actual.transport_states, baseline.transport_states, actual.total, baseline.total);
-    EXPECT_EQ (actual.transport_states, baseline.transport_states);
-    EXPECT_EQ (actual.message_states, baseline.message_states);
-    EXPECT_EQ (actual.payload_states, baseline.payload_states);
-    EXPECT_EQ (actual.admission_sources, baseline.admission_sources);
+    print_allocation_sizes ("app classified reference", baseline);
+    print_allocation_sizes ("app classified target bytes reference", target_bytes);
+    print_allocation_sizes ("app classified actual", actual);
+    EXPECT_EQ (actual.total, baseline.total + target_bytes.total);
 }
 } // namespace
