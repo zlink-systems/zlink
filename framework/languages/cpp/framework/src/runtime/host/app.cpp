@@ -608,12 +608,48 @@ class framework_runtime_status_source_t
 
     ~framework_runtime_status_source_t () { close (); }
 
-    framework_runtime_status_t snapshot () const
+    framework_runtime_status_t snapshot ()
+    {
+        std::shared_lock state_lock (_access->mutex);
+        std::lock_guard lock (_mutex);
+        return snapshot_locked ();
+    }
+
+    void reset_capacity_metrics ()
     {
         std::shared_lock state_lock (_access->mutex);
         auto *state = _access->state;
         if (!state) {
-            std::lock_guard lock (_mutex);
+            throw framework_exception_t (
+              framework_error_kind_t::shutting_down,
+              "Framework runtime is no longer attached to a Core context");
+        }
+        if (!state->host_capacity) {
+            throw framework_exception_t (framework_error_kind_t::not_configured,
+                                         "Framework Host Capacity is not configured");
+        }
+        state->host_capacity->reset_metrics ();
+    }
+
+    void close () noexcept
+    {
+        if (_closed.exchange (true, std::memory_order_acq_rel))
+            return;
+        _changed.notify_all ();
+        if (_worker.joinable ())
+            _worker.join ();
+    }
+
+    std::shared_ptr<framework_observer_state_t>
+    observe (std::size_t capacity,
+             std::function<void (const observed_status_t<framework_runtime_status_t> &)> observer);
+
+  private:
+    // Both the lifetime and source locks cover collection, publication and enqueueing.
+    framework_runtime_status_t snapshot_locked ()
+    {
+        auto *state = _access->state;
+        if (!state) {
             return _last.value_or (framework_runtime_status_t{});
         }
         framework_runtime_status_t result;
@@ -655,58 +691,32 @@ class framework_runtime_status_source_t
                 // remains available through the source snapshot.
             }
         }
-        {
-            std::lock_guard lock (_mutex);
-            if (_last && same_runtime_status (*_last, result))
-                return *_last;
-            result.observed_at = std::chrono::system_clock::now ();
-            result.sequence = ++_sequence;
-            _last = result;
+        if (_last && same_runtime_status (*_last, result))
+            return *_last;
+        result.observed_at = std::chrono::system_clock::now ();
+        result.sequence = _last ? _last->sequence + 1 : 1;
+        _last = result;
+
+        const bool terminal = result.state == framework_runtime_state_t::stopped
+                              || result.state == framework_runtime_state_t::error;
+        for (auto iterator = _observers.begin (); iterator != _observers.end ();) {
+            if (auto observer = iterator->lock ()) {
+                observer->enqueue ("framework-runtime", result, terminal);
+                ++iterator;
+            } else {
+                iterator = _observers.erase (iterator);
+            }
         }
         return result;
     }
 
-    bool closed () const noexcept { return _closed.load (std::memory_order_acquire); }
-
-    void reset_capacity_metrics ()
-    {
-        std::shared_lock state_lock (_access->mutex);
-        auto *state = _access->state;
-        if (!state) {
-            throw framework_exception_t (
-              framework_error_kind_t::shutting_down,
-              "Framework runtime is no longer attached to a Core context");
-        }
-        if (!state->host_capacity) {
-            throw framework_exception_t (framework_error_kind_t::not_configured,
-                                         "Framework Host Capacity is not configured");
-        }
-        state->host_capacity->reset_metrics ();
-    }
-
-    void close () noexcept
-    {
-        if (_closed.exchange (true, std::memory_order_acq_rel))
-            return;
-        _changed.notify_all ();
-        if (_worker.joinable ())
-            _worker.join ();
-    }
-
-    std::shared_ptr<framework_observer_state_t>
-    observe (std::size_t capacity,
-             std::function<void (const observed_status_t<framework_runtime_status_t> &)> observer);
-
-  private:
     void run () noexcept;
 
     std::shared_ptr<app_state_access_t> _access;
-    mutable std::mutex _mutex;
-    mutable std::optional<framework_runtime_status_t> _last;
-    mutable std::uint64_t _sequence = 0;
+    std::mutex _mutex;
+    std::optional<framework_runtime_status_t> _last;
     std::atomic_bool _closed{false};
     std::condition_variable _changed;
-    std::mutex _observers_mutex;
     std::vector<std::weak_ptr<framework_observer_state_t>> _observers;
     std::thread _worker;
 };
@@ -717,14 +727,13 @@ std::shared_ptr<framework_observer_state_t> framework_runtime_status_source_t::o
 {
     auto state = std::make_shared<framework_observer_state_t> (capacity, std::move (observer));
     state->start ();
-    {
-        std::lock_guard lock (_observers_mutex);
-        _observers.erase (std::remove_if (_observers.begin (), _observers.end (),
-                                          [] (const auto &item) { return item.expired (); }),
-                          _observers.end ());
-        _observers.emplace_back (state);
-    }
-    auto initial = snapshot ();
+    std::shared_lock state_lock (_access->mutex);
+    std::lock_guard lock (_mutex);
+    auto initial = snapshot_locked ();
+    _observers.erase (std::remove_if (_observers.begin (), _observers.end (),
+                                      [] (const auto &item) { return item.expired (); }),
+                      _observers.end ());
+    _observers.emplace_back (state);
     const bool terminal = initial.state == framework_runtime_state_t::stopped
                           || initial.state == framework_runtime_state_t::error;
     state->enqueue ("framework-runtime", std::move (initial), terminal);
@@ -733,29 +742,9 @@ std::shared_ptr<framework_observer_state_t> framework_runtime_status_source_t::o
 
 void framework_runtime_status_source_t::run () noexcept
 {
-    std::uint64_t last_sequence = 0;
     while (!_closed.load (std::memory_order_acquire)) {
-        auto status = snapshot ();
-        if (status.sequence != last_sequence) {
-            last_sequence = status.sequence;
-            std::vector<std::shared_ptr<framework_observer_state_t>> observers;
-            {
-                std::lock_guard lock (_observers_mutex);
-                for (auto iterator = _observers.begin (); iterator != _observers.end ();) {
-                    if (auto observer = iterator->lock ()) {
-                        observers.push_back (std::move (observer));
-                        ++iterator;
-                    } else {
-                        iterator = _observers.erase (iterator);
-                    }
-                }
-            }
-            const bool terminal = status.state == framework_runtime_state_t::stopped
-                                  || status.state == framework_runtime_state_t::error;
-            for (const auto &observer : observers)
-                observer->enqueue ("framework-runtime", status, terminal);
-        }
-        std::unique_lock lock (_observers_mutex);
+        snapshot ();
+        std::unique_lock lock (_mutex);
         _changed.wait_for (lock, std::chrono::milliseconds (10),
                            [&] { return _closed.load (std::memory_order_acquire); });
     }
