@@ -44,7 +44,7 @@ for (const surface of ['instance', 'user', 'entry', 'actor', 'node', 'channel'])
       gate.register(mesh);
       gate.seal(mesh, ZLinkFrameworkInternalErrorKind.RuntimeShutdown);
       const admit = (work, onRejected) =>
-        gate.run(mesh, 'sealed test ingress', work, undefined, onRejected);
+        gate.run(mesh, 'sealed test ingress', work, onRejected);
       const errors = [];
       const reporter = {
         captureEnabled: () => true,
@@ -227,7 +227,7 @@ for (const request of [true, false]) {
           },
           undefined,
           (work, onRejected) =>
-            gate.run('policy', 'policy test ingress', work, undefined, onRejected)
+            gate.run('policy', 'policy test ingress', work, onRejected)
         )
       );
       assert.equal(replies, 0, 'Throw policy must not be converted to a reply');
