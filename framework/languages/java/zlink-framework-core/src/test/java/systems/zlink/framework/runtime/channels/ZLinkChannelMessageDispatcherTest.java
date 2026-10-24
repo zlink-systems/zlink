@@ -164,13 +164,13 @@ final class ZLinkChannelMessageDispatcherTest {
         AllocationSendHandler.calls = 0;
         try (var payload = Message.from("send".getBytes(StandardCharsets.UTF_8))) {
             for (int index = 0; index < 20000; index++)
-                invoker.invokeSendHandler("orders", registration, payload)
+                invoker.invokeSendHandler("orders", registration, payload.dataBuffer())
                         .toCompletableFuture()
                         .join();
             long thread = Thread.currentThread().threadId();
             long before = bean.getThreadAllocatedBytes(thread);
             for (int index = 0; index < 20000; index++)
-                invoker.invokeSendHandler("orders", registration, payload)
+                invoker.invokeSendHandler("orders", registration, payload.dataBuffer())
                         .toCompletableFuture()
                         .join();
             long allocated = bean.getThreadAllocatedBytes(thread) - before;

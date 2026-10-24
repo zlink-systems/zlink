@@ -87,7 +87,8 @@ final class ZLinkStandaloneActorRelocationLateIngressTest {
                                 try (var message = parts.getFirst()) {
                                     reply.complete(
                                             new ZLinkJsonMessageSerializer()
-                                                    .deserializeBorrowed(message, String.class));
+                                                    .deserializeBorrowed(
+                                                            message.dataBuffer(), String.class));
                                 }
                             },
                             failure::complete));
