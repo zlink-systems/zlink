@@ -232,21 +232,22 @@ string(JSON test_count LENGTH "${test_json_output}" tests)
 if(test_count GREATER 0)
   math(EXPR test_last_index "${test_count} - 1")
   foreach(test_index RANGE ${test_last_index})
-    string(JSON test_name GET "${test_json_output}" tests ${test_index} name)
-    string(JSON property_count LENGTH "${test_json_output}" tests ${test_index} properties)
+    # Each string(JSON) call parses its whole input; read one test's object from the
+    # full metadata once and query that object, so the scan stays linear in the test count.
+    string(JSON test_json GET "${test_json_output}" tests ${test_index})
+    string(JSON test_name GET "${test_json}" name)
+    string(JSON property_count LENGTH "${test_json}" properties)
     set(test_tiers)
     if(property_count GREATER 0)
       math(EXPR property_last_index "${property_count} - 1")
       foreach(property_index RANGE ${property_last_index})
-        string(JSON property_name GET "${test_json_output}" tests ${test_index}
-          properties ${property_index} name)
+        string(JSON property_name GET "${test_json}" properties ${property_index} name)
         if(property_name STREQUAL "LABELS")
-          string(JSON label_count LENGTH "${test_json_output}" tests ${test_index}
-            properties ${property_index} value)
+          string(JSON label_count LENGTH "${test_json}" properties ${property_index} value)
           if(label_count GREATER 0)
             math(EXPR label_last_index "${label_count} - 1")
             foreach(label_index RANGE ${label_last_index})
-              string(JSON test_label GET "${test_json_output}" tests ${test_index}
+              string(JSON test_label GET "${test_json}"
                 properties ${property_index} value ${label_index})
               list(FIND ZLINK_FRAMEWORK_CPP_TEST_TIERS "${test_label}" tier_index)
               if(NOT tier_index EQUAL -1)
