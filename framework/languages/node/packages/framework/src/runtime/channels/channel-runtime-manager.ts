@@ -1,3 +1,4 @@
+import type { ZLinkMeshDispatchAdmission } from '../admission';
 import type { ZLinkListenerRecords } from '../foundation/listener-records';
 import type { ZLinkLocationOptionOverrides } from '../../contracts/Locations/Options';
 import type { RoutingId } from '../../contracts';
@@ -207,17 +208,19 @@ export class ZLinkChannelRuntimeManager {
   dispatchMeshChannel(
     meshName: string,
     record: ReceiveRecord,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    admit?: ZLinkMeshDispatchAdmission
   ): void | Promise<void> {
-    return this.lifecycle.dispatchMeshChannel(meshName, record, signal);
+    return this.lifecycle.dispatchMeshChannel(meshName, record, signal, admit);
   }
 
   dispatchMeshRoute(
     meshName: string,
     record: ReceiveRecord,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    admit?: ZLinkMeshDispatchAdmission
   ): void | Promise<void> {
-    return this.lifecycle.dispatchMeshRoute(meshName, record, signal);
+    return this.lifecycle.dispatchMeshRoute(meshName, record, signal, admit);
   }
 
   dispatchLocalMeshRoute(
