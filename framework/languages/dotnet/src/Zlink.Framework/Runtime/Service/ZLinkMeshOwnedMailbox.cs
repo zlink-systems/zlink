@@ -96,34 +96,40 @@ internal sealed class ZLinkMeshNodeOwnedMailbox(
     }
 
     internal ValueTask<bool> ClaimAndDrainAsync(MeshReceiveBatch batch, int maximumRecords) =>
-        _lane.RunAsync(() =>
+        _lane.RunAsync(
+            static state => state.Mailbox.ClaimAndDrainOnLane(state.Batch, state.MaximumRecords),
+            (Mailbox: this, Batch: batch, MaximumRecords: maximumRecords)
+        );
+
+    private bool ClaimAndDrainOnLane(MeshReceiveBatch batch, int maximumRecords)
+    {
+        if (_claimedRecordCount < 0)
+            _claimedRecordCount = _records.Count;
+        var count = 0;
+        var limit = Math.Min(maximumRecords, _claimedRecordCount);
+        while (count < limit && _records.Count != 0)
         {
-            if (_claimedRecordCount < 0)
-                _claimedRecordCount = _records.Count;
-            var count = 0;
-            var limit = Math.Min(maximumRecords, _claimedRecordCount);
-            while (count < limit && _records.Count != 0)
-            {
-                var candidate = _records.Peek();
-                if (!batch.CanAdd(checked((long)candidate.PayloadBytes)))
-                    break;
-                var record = _records.Dequeue();
-                _claimedRecordCount--;
-                onRecordDequeued(record.PendingBytes);
-                batch.Add(record.Record, record.TakeParts(), record.TakePayloadOwner());
-                count++;
-            }
-            return count != 0;
-        });
+            var candidate = _records.Peek();
+            if (!batch.CanAdd(checked((long)candidate.PayloadBytes)))
+                break;
+            var record = _records.Dequeue();
+            _claimedRecordCount--;
+            onRecordDequeued(record.PendingBytes);
+            batch.Add(record.Record, record.TakeParts(), record.TakePayloadOwner());
+            count++;
+        }
+        return count != 0;
+    }
 
     // Releasing a claim decides nothing for the releasing worker. The release
     // joins the mailbox FIFO before this returns, so the next claim observes it.
-    internal void Release() =>
-        _lane.TryPost(() =>
-        {
-            _claimedRecordCount = -1;
-            onReleased?.Invoke(_records.Count != 0);
-        });
+    internal void Release() => _lane.TryPost(static mailbox => mailbox.ReleaseOnLane(), this);
+
+    private void ReleaseOnLane()
+    {
+        _claimedRecordCount = -1;
+        onReleased?.Invoke(_records.Count != 0);
+    }
 
     internal void Dispose()
     {
