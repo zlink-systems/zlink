@@ -1572,12 +1572,15 @@ public final class ZLinkSerialExecutionQueue {
     private boolean applicationStartAllowed(Entry candidate) {
         ZLinkSerialExecutionQueue owner = timerOwner == null ? this : timerOwner;
         if (timerOwner != null && owner.relocation != null) return false;
-        ActivationPreparation<?> preparation = owner.activationPreparation;
+        Entry lifecycle = suspendedLifecycle == null ? active : suspendedLifecycle;
+        ActivationPreparation<?> preparation =
+                lifecycle != null && lifecycle.operation instanceof ActivationPreparation<?> owned
+                        ? owned
+                        : owner.activationPreparation;
         if (preparation != null) {
             return candidate != null
                     && preparation.admission.getNow(null) == candidate.turnOrigin();
         }
-        Entry lifecycle = suspendedLifecycle == null ? active : suspendedLifecycle;
         return lifecycle == null || !(lifecycle.operation instanceof LifecycleTransition);
     }
 
