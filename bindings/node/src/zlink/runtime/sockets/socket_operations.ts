@@ -68,8 +68,8 @@ export class ReceiveSocket extends ConnectableSocket {
     let raw;
     try {
       raw = ((flags | 0) & (RecvFlags.DontWait | 0))
-        ? native.socketRecvMessageNoWait(this.receiveHandle())
-        : native.socketRecvMessage(this.receiveHandle(), flags | 0);
+        ? native.socketRecvMessageNoWait(this.receiveHandle(), Buffer.allocUnsafe)
+        : native.socketRecvMessage(this.receiveHandle(), flags | 0, Buffer.allocUnsafe);
     } catch (error) {
       throw recvNativeError(error, 'recv failed');
     }
@@ -163,8 +163,8 @@ export class SubscriberSocket extends ConnectableSocket {
     let raw;
     try {
       raw = ((flags | 0) & (RecvFlags.DontWait | 0))
-        ? native.socketTrySubscribeMessage(this.receiveHandle())
-        : native.socketSubscribeMessage(this.receiveHandle(), flags | 0);
+        ? native.socketTrySubscribeMessage(this.receiveHandle(), Buffer.allocUnsafe)
+        : native.socketSubscribeMessage(this.receiveHandle(), flags | 0, Buffer.allocUnsafe);
     } catch (error) {
       throw recvNativeError(error, 'subscribe failed');
     }
@@ -231,13 +231,15 @@ export class RoutedMessageSocket extends ConnectableSocket {
         ? native.routerRecvMessageNoWait(
             this.receiveHandle(),
             preferManagedParts,
-            routingIdStorage
+            routingIdStorage,
+            Buffer.allocUnsafe
           )
         : native.routerRecvMessage(
             this.receiveHandle(),
             flags | 0,
             preferManagedParts,
-            routingIdStorage
+            routingIdStorage,
+            Buffer.allocUnsafe
           );
     } catch (error) {
       throw recvNativeError(error, 'recv failed');
