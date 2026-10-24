@@ -6,6 +6,8 @@
 #include "runtime/channels/channel_runtime.hpp"
 #include "runtime/messaging/envelope_codec.hpp"
 
+#include "runtime/diagnostics/dispatch_options_access.hpp"
+
 #include <zlink/Contracts/Core/context.hpp>
 #include <zlink/Contracts/Eventing/monitor.hpp>
 #include <zlink/Contracts/Eventing/poller.hpp>
@@ -210,6 +212,107 @@ TEST (CppFrameworkRouteClientChannelRouting, OneWaySendDoesNotCreateCorrelation)
                         .result ();
     ASSERT_TRUE (sent) << error_message (sent);
     EXPECT_EQ (received, 1);
+}
+
+TEST (CppFrameworkRouteClientChannelRouting, PendingClientServerSendOwnsCallArguments)
+{
+    using namespace zlink::framework;
+    serializer_registry_t serializers;
+    add_int_serializer<route_event_t> (serializers, "application/x-route-event");
+    std::vector<message_flow_event_t> events;
+    dispatch_options_t options;
+    options.message_flow (message_flow_log_mode_t::normal);
+    detail::dispatch_options_access_t::set_observer_for_tests (
+      options, [&] (const auto &event) { events.push_back (event); });
+    auto builder = test::runtime_failure_builder ();
+    detail::apply_dispatch_options (builder, options);
+    auto runtime = detail::channel_runtime_t::from (builder.message_bus ());
+    runtime.bind_serializers (serializers);
+    task_completion_source_t<void> release;
+    bool entered = false;
+    const std::string channel_name = "client-server-suspended-send-channel";
+    runtime.bind_client_server_transport (
+      channel_name,
+      [&] (std::string packet_name, std::string content_type, zlink::message_t payload,
+           std::map<std::string, std::string> metadata) -> task_t<void> {
+          entered = true;
+          co_await release.task ();
+          EXPECT_EQ (packet_name, route_event_t::packet_name);
+          EXPECT_EQ (content_type, "application/x-route-event");
+          EXPECT_EQ (payload.to_string (), "31");
+          EXPECT_EQ (metadata, (std::map<std::string, std::string>{{"tenant-id", "tenant-42"}}));
+      },
+      {});
+    auto client = builder.route_client (serializers);
+    // The temporary call and its submit closure are gone before release.
+    auto pending = client.send_to_channel (channel_name, route_event_t{31})
+                     .metadata ("tenant-id", "tenant-42")
+                     .async ();
+    EXPECT_TRUE (entered);
+    EXPECT_FALSE (pending.await_ready ());
+    EXPECT_TRUE (events.empty ());
+    release.complete (result_t<void>::success ());
+    const auto sent = pending.result ();
+    ASSERT_TRUE (sent) << error_message (sent);
+    ASSERT_EQ (events.size (), 1u);
+    EXPECT_EQ (events[0].outcome, message_flow_outcome_t::sent);
+    EXPECT_EQ (events[0].message_kind, dispatch_message_kind_t::send);
+    EXPECT_EQ (events[0].packet_name, route_event_t::packet_name);
+    EXPECT_EQ (events[0].channel_name, channel_name);
+    EXPECT_EQ (events[0].channel_route_kind, "client_server");
+}
+
+TEST (CppFrameworkRouteClientChannelRouting, PendingClientServerRequestOwnsCallArguments)
+{
+    using namespace zlink::framework;
+    using namespace std::chrono_literals;
+    serializer_registry_t serializers;
+    add_int_serializer<route_request_t> (serializers, "application/x-route-request");
+    add_int_serializer<route_reply_t> (serializers, "application/x-route-reply");
+    std::vector<message_flow_event_t> events;
+    dispatch_options_t options;
+    options.message_flow (message_flow_log_mode_t::normal);
+    detail::dispatch_options_access_t::set_observer_for_tests (
+      options, [&] (const auto &event) { events.push_back (event); });
+    auto builder = test::runtime_failure_builder ();
+    detail::apply_dispatch_options (builder, options);
+    auto runtime = detail::channel_runtime_t::from (builder.message_bus ());
+    runtime.bind_serializers (serializers);
+    task_completion_source_t<void> release;
+    bool entered = false;
+    const std::string channel_name = "client-server-suspended-request-channel";
+    runtime.bind_client_server_transport (
+      channel_name, {},
+      [&] (std::string packet_name, std::string content_type, zlink::message_t payload,
+           std::chrono::milliseconds timeout,
+           std::map<std::string, std::string> metadata) -> request_task_t<zlink::message_t> {
+          entered = true;
+          co_await release.task ();
+          EXPECT_EQ (packet_name, route_request_t::packet_name);
+          EXPECT_EQ (content_type, "application/x-route-request");
+          EXPECT_EQ (payload.to_string (), "19");
+          EXPECT_EQ (timeout, 41ms);
+          EXPECT_EQ (metadata, (std::map<std::string, std::string>{{"tenant-id", "tenant-42"}}));
+          co_await detail::request_admitted_t{};
+          co_return zlink::message_t::from (std::string ("38"));
+      });
+    auto client = builder.route_client (serializers);
+    auto pending = client.request_to_channel (channel_name, route_request_t{19})
+                     .metadata ("tenant-id", "tenant-42")
+                     .timeout (41ms)
+                     .async<route_reply_t> ();
+    EXPECT_TRUE (entered);
+    EXPECT_FALSE (pending.await_ready ());
+    release.complete (result_t<void>::success ());
+    const auto reply = pending.result ();
+    ASSERT_TRUE (reply) << error_message (reply);
+    EXPECT_EQ (reply.value ().value, 38);
+    ASSERT_EQ (events.size (), 1u);
+    EXPECT_EQ (events[0].outcome, message_flow_outcome_t::sent);
+    EXPECT_EQ (events[0].message_kind, dispatch_message_kind_t::request);
+    EXPECT_EQ (events[0].packet_name, route_request_t::packet_name);
+    EXPECT_EQ (events[0].channel_name, channel_name);
+    EXPECT_EQ (events[0].channel_route_kind, "client_server");
 }
 
 TEST (CppFrameworkRouteClientChannelRouting, OneWayPublishDoesNotCreateCorrelation)
