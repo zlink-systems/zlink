@@ -767,22 +767,17 @@ class terminal_task_shared_state_t final : public application_task_shared_state_
 {
   public:
     explicit terminal_task_shared_state_t (TCallback callback) :
-        _storage (std::move (callback)),
-        _callback (std::addressof (_storage.value)),
-        _owner (capture_current_serial_turn ())
+        terminal_task_shared_state_t (std::move (callback), capture_current_serial_turn ())
     {
     }
 
     template <typename TInput> void operator() (const result_t<TInput> &result)
     {
-        const auto owner = std::move (_owner);
-        auto callback = std::move (_callback);
-        (*callback) (*this, result);
+        auto callback = std::move (_owner);
+        callback.get () (*this, result);
     }
 
   private:
-    // The result owns the storage; this unique owner ends the capture lifetime
-    // at terminal delivery, including const captures that a move cannot clear.
     union callback_storage_t
     {
         TCallback value;
@@ -793,9 +788,37 @@ class terminal_task_shared_state_t final : public application_task_shared_state_
     {
         void operator() (TCallback *callback) const noexcept { std::destroy_at (callback); }
     };
+    // The existing lifetime handle retains the turn and points at the capture.
+    // Moving it transfers both lifetimes without another pointer or flag.
+    class callback_owner_t
+    {
+      public:
+        callback_owner_t (std::shared_ptr<serial_turn_t> turn, TCallback *callback) noexcept :
+            _lifetime (std::move (turn), callback)
+        {
+        }
+        callback_owner_t (callback_owner_t &&) noexcept = default;
+        callback_owner_t (const callback_owner_t &) = delete;
+        callback_owner_t &operator= (const callback_owner_t &) = delete;
+        callback_owner_t &operator= (callback_owner_t &&) = delete;
+        ~callback_owner_t ()
+        {
+            std::unique_ptr<TCallback, destroy_callback_t> callback (
+              static_cast<TCallback *> (_lifetime.get ()));
+        }
+        TCallback &get () const { return *static_cast<TCallback *> (_lifetime.get ()); }
+
+      private:
+        std::shared_ptr<void> _lifetime;
+    };
+
+    terminal_task_shared_state_t (TCallback &&callback, std::shared_ptr<serial_turn_t> turn) :
+        _storage (std::move (callback)), _owner (std::move (turn), std::addressof (_storage.value))
+    {
+    }
+
     callback_storage_t _storage;
-    std::unique_ptr<TCallback, destroy_callback_t> _callback;
-    std::shared_ptr<serial_turn_t> _owner;
+    callback_owner_t _owner;
 };
 
 template <typename TOutput, typename TInput, typename TCallback>

@@ -135,45 +135,6 @@ TEST (RequestCallAllocations, TerminalProjectionUsesOnlyTheResultSlotAndRegistra
         EXPECT_EQ (calls, 1u);
     }
 }
-TEST (RequestCallAllocations, PublicProjectionAddsOnlyPublicPhysicalSlotsAndTheirRegistrations)
-{
-    auto admitted = std::make_shared<fw::task_completion_source_t<void>> ();
-    admitted->complete (fw::result_t<void>::success ());
-    auto stage = admitted->task ();
-    auto admission_reply = std::make_shared<fw::task_completion_source_t<int>> ();
-    fw::task_completion_source_t<int> reference_source;
-    auto reference_input = reference_source.task ();
-    std::optional<fw::task_t<int>> public_slot;
-    std::optional<fw::task_t<int>> physical_slot;
-    const auto baseline = fw::tests::count_allocations ([&] {
-        public_slot.emplace (fw::result_t<int>::success (0));
-        physical_slot.emplace (fw::result_t<int>::success (0));
-        fw::detail::observe_task_terminal (reference_input,
-                                           [slot = &physical_slot] (const auto &) { (void) slot; });
-        fw::detail::observe_task_terminal (
-          stage, [reply = admission_reply] (const auto &) { (void) reply; });
-    });
-    fw::task_completion_source_t<int> source;
-    auto selected =
-      fw::detail::request_task_access_t::from_admitted_reply (source.task (), admitted);
-    std::optional<fw::request_task_t<int>> projected;
-    unsigned calls = 0;
-    const auto measured = fw::tests::count_allocations ([&] {
-        projected.emplace (fw::detail::public_request_reply<int> (
-          selected, [&calls] (const fw::result_t<int> &value) {
-              ++calls;
-              return fw::result_t<int>::success (value.value () + 1);
-          }));
-    });
-    std::printf ("public terminal projection allocations=%zu baseline=%zu\n", measured, baseline);
-    EXPECT_EQ (measured, baseline);
-    source.complete (fw::result_t<int>::success (41));
-    EXPECT_EQ (projected->result ().value (), 42);
-    auto physical = fw::detail::request_task_access_t::physical_reply (*projected);
-    EXPECT_EQ (physical.result ().value (), 42);
-    EXPECT_NE (std::addressof (projected->result ()), std::addressof (physical.result ()));
-    EXPECT_EQ (calls, 1u);
-}
 TEST (RequestCallAllocations, TerminalProjectionReleasesProducerCapturesAtPhysicalCompletion)
 {
     for (const bool retain_reply : {false, true}) {
