@@ -3092,11 +3092,7 @@ export class ZLinkFrameworkRuntimeHost
         return dispatch();
       }
     }
-<<<<<<< HEAD
-    return this.admission.run(meshName, operation, dispatch);
-=======
-    return this.admission.run(meshName, operation, dispatch, record.kind, onRejected);
->>>>>>> 7d35d13 (fix(node): complete admission rejections through domain replies (#2625))
+    return this.admission.run(meshName, operation, dispatch, onRejected);
   }
 
   private async dispatchMeshActorBinding(

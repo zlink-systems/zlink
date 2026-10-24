@@ -87,17 +87,12 @@ export class ZLinkRuntimeAdmissionGate {
    * admission in the same turn; asynchronous work leaves it from the single
    * continuation on its result.
    */
-<<<<<<< HEAD
-  run<T>(meshName: string, operation: string, work: () => T | Promise<T>): T | Promise<T> {
-=======
   run<T>(
     meshName: string,
     operation: string,
     work: () => T | Promise<T>,
-    kind?: ReceiveRecord['kind'],
     onRejected?: (error: unknown) => T | Promise<T>
   ): T | Promise<T> {
->>>>>>> 7d35d13 (fix(node): complete admission rejections through domain replies (#2625))
     let state: ZLinkMeshAdmissionState;
     let result: T | Promise<T>;
     try {

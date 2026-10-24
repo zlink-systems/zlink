@@ -1,13 +1,4 @@
-<<<<<<< HEAD
-=======
 import type { ZLinkMeshDispatchAdmission } from '../admission';
-import {
-  prepareZLinkRequestReply,
-  identityRequestReply,
-  rejectZLinkRequestReply,
-  type ZLinkRequestResult
-} from '../messaging/request-result';
->>>>>>> 7d35d13 (fix(node): complete admission rejections through domain replies (#2625))
 import type { ZLinkListenerRecords } from '../foundation/listener-records';
 import type { ZLinkLocationOptionOverrides } from '../../contracts/Locations/Options';
 import type { RoutingId } from '../../contracts';
