@@ -89,6 +89,8 @@ await SendAsync(claim);           // 장기 외부 호출은 turn 밖에서 — 
 
 ## 4. 상태 분류와 판별 기준
 
+Configuration identity의 권위와 lifecycle 수락 판정은 [MeshNode의 identity 절](../03-spot-actor/03-mesh-node.ko.md#3-routing-id)을 따른다.
+
 컴포넌트의 mutable 상태는 다음 분류 중 하나로 분류한다. 분류가 정해지면 그 상태를
 지키는 메커니즘은 기계적으로 정해진다.
 
