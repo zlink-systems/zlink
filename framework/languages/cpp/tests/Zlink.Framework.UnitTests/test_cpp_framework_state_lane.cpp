@@ -127,9 +127,9 @@ TEST (ZLinkStateLane, UncontendedRunOnlyAllocatesItsReturnedFuture)
                    ::operator delete (allocation);
                }));
     const auto returned_future_allocations = count_allocations ([] {
-        auto completion = std::make_shared<std::promise<int>> ();
-        auto result = completion->get_future ();
-        completion->set_value (42);
+        std::promise<int> completion;
+        auto result = completion.get_future ();
+        completion.set_value (42);
         (void) result.get ();
     });
     int observed = 0;
@@ -137,6 +137,225 @@ TEST (ZLinkStateLane, UncontendedRunOnlyAllocatesItsReturnedFuture)
       count_allocations ([&] { observed = lane.run (work).get (); });
     EXPECT_EQ (42, observed);
     EXPECT_EQ (returned_future_allocations, submission_allocations);
+}
+
+TEST (ZLinkStateLane, UncontendedSynchronousTurnDoesNotAllocate)
+{
+    using namespace zlink::framework::tests;
+    offload_executor_t executor (1);
+    state_lane_t lane (executor);
+    int observed = 0;
+    const auto allocations =
+      count_allocations ([&] { observed = lane.run_sync ([] { return 42; }); });
+    EXPECT_EQ (42, observed);
+    EXPECT_EQ (0u, allocations);
+}
+
+TEST (ZLinkStateLane, SynchronousTurnPreservesResultLifetimeAndOriginalException)
+{
+    offload_executor_t executor (1);
+    state_lane_t lane (executor);
+    bool called = false;
+    lane.run_sync ([&] {
+        EXPECT_TRUE (lane.is_on_lane ());
+        called = true;
+    });
+    EXPECT_TRUE (called);
+    EXPECT_EQ (nullptr, state_lane_t::current ());
+    int value = 42;
+    EXPECT_EQ (&value, &lane.run_sync ([&] () -> int & { return value; }));
+    auto owned = lane.run_sync ([] { return std::make_unique<int> (42); });
+    EXPECT_EQ (42, *owned);
+    auto snapshot = lane.run_sync ([] { return move_constructible_snapshot_t (42); });
+    EXPECT_EQ (42, snapshot.value);
+    struct original_error_t
+    {
+        int *identity;
+    };
+    try {
+        lane.run_sync ([&] () -> void { throw original_error_t{&value}; });
+        FAIL () << "the original exception must reach the caller";
+    }
+    catch (const original_error_t &error) {
+        EXPECT_EQ (&value, error.identity);
+        EXPECT_EQ (nullptr, state_lane_t::current ());
+    }
+    EXPECT_EQ (42, lane.run_sync ([] { return 42; }));
+    EXPECT_THROW (lane.run_sync ([&] { lane.run_sync ([] {}); }), std::logic_error);
+}
+
+TEST (ZLinkStateLane, SynchronousTurnNeedsNoAllocationAndSurvivesAllocationFailure)
+{
+    using namespace zlink::framework::tests;
+    offload_executor_t executor (1);
+    state_lane_t lane (executor);
+    bool called = false;
+    allocations_before_failure = 0;
+    try {
+        lane.run_sync ([&] { called = true; });
+    }
+    catch (...) {
+        allocations_before_failure.reset ();
+        throw;
+    }
+    allocations_before_failure.reset ();
+    EXPECT_TRUE (called);
+    EXPECT_EQ (42, lane.run_sync ([] { return 42; }));
+}
+
+TEST (ZLinkStateLane, SynchronousTurnQueuesAfterAcceptedPredecessors)
+{
+    offload_executor_t executor (2);
+    state_lane_t lane (executor);
+    std::promise<void> entered;
+    std::promise<void> release;
+    auto released = release.get_future ();
+    std::vector<int> order;
+    std::thread owner ([&] {
+        lane.run_sync ([&] {
+            entered.set_value ();
+            released.wait ();
+            order.push_back (0);
+        });
+    });
+    entered.get_future ().wait ();
+    auto predecessor = lane.run ([&] { order.push_back (1); });
+    std::promise<void> queued;
+    struct queued_work_t
+    {
+        std::vector<int> &order;
+        std::promise<void> *queued;
+        queued_work_t (std::vector<int> &order_, std::promise<void> *queued_) :
+            order (order_), queued (queued_)
+        {
+        }
+        queued_work_t (const queued_work_t &) = default;
+        queued_work_t (queued_work_t &&other) : order (other.order), queued (nullptr)
+        {
+            // Moving the work occurs only after inline admission has failed.
+            if (other.queued)
+                std::exchange (other.queued, nullptr)->set_value ();
+        }
+        void operator() () { order.push_back (2); }
+    };
+    std::thread caller ([&] {
+        lane.run_sync (queued_work_t{order, &queued});
+        EXPECT_EQ (nullptr, state_lane_t::current ());
+    });
+    queued.get_future ().wait ();
+    release.set_value ();
+    predecessor.get ();
+    owner.join ();
+    caller.join ();
+    EXPECT_EQ ((std::vector<int>{0, 1, 2}), order);
+}
+
+TEST (ZLinkStateLane, SynchronousQueuedAllocationFailureLeavesTheLaneUsable)
+{
+    using namespace zlink::framework::tests;
+    offload_executor_t executor (1);
+    state_lane_t lane (executor);
+    std::promise<void> entered;
+    std::promise<void> release;
+    auto released = release.get_future ();
+    std::thread owner ([&] {
+        lane.run_sync ([&] {
+            entered.set_value ();
+            released.wait ();
+        });
+    });
+    entered.get_future ().wait ();
+    bool called = false;
+    bool allocation_failed = false;
+    allocations_before_failure = 0;
+    try {
+        lane.run_sync ([&] { called = true; });
+    }
+    catch (const std::bad_alloc &) {
+        allocation_failed = true;
+    }
+    allocations_before_failure.reset ();
+    release.set_value ();
+    owner.join ();
+    EXPECT_TRUE (allocation_failed);
+    EXPECT_FALSE (called);
+    EXPECT_EQ (42, lane.run_sync ([] { return 42; }));
+    executor.request_stop ();
+    EXPECT_EQ (42, lane.run_sync ([] { return 42; }));
+}
+
+TEST (ZLinkStateLane, SynchronousTurnRejectsCloseDuringAcceptedWork)
+{
+    offload_executor_t executor (2);
+    state_lane_t lane (executor);
+    std::promise<void> entered;
+    std::promise<void> release;
+    auto released = release.get_future ();
+    std::thread owner ([&] {
+        lane.run_sync ([&] {
+            entered.set_value ();
+            released.wait ();
+        });
+    });
+    entered.get_future ().wait ();
+    std::thread closer ([&] { lane.close (); });
+    while (!lane.closed ())
+        std::this_thread::yield ();
+    EXPECT_THROW (lane.run_sync ([] {}), std::runtime_error);
+    release.set_value ();
+    owner.join ();
+    closer.join ();
+    EXPECT_THROW (lane.run_sync ([] { return 42; }), std::runtime_error);
+}
+
+TEST (ZLinkStateLane, IdleRunPreservesVoidReferenceAndOriginalException)
+{
+    offload_executor_t executor (1);
+    state_lane_t lane (executor);
+    bool called = false;
+    lane.run ([&] { called = true; }).get ();
+    EXPECT_TRUE (called);
+    int value = 42;
+    EXPECT_EQ (&value, &lane.run ([&] () -> int & { return value; }).get ());
+    struct original_error_t : std::runtime_error
+    {
+        original_error_t () : std::runtime_error ("original lane error") {}
+    };
+    auto failed = lane.run ([] () -> int { throw original_error_t{}; });
+    EXPECT_THROW (failed.get (), original_error_t);
+    EXPECT_EQ (42, lane.run ([] { return 42; }).get ());
+}
+
+TEST (ZLinkStateLane, FailedFutureAllocationDoesNotClaimTheLane)
+{
+    using namespace zlink::framework::tests;
+    offload_executor_t executor (1);
+    state_lane_t lane (executor);
+    const auto future_allocations = count_allocations ([] {
+        std::promise<int> completion;
+        auto result = completion.get_future ();
+        completion.set_value (42);
+        (void) result.get ();
+    });
+    for (std::size_t admitted_allocations = 0; admitted_allocations < future_allocations;
+         ++admitted_allocations) {
+        bool called = false;
+        bool failed = false;
+        allocations_before_failure = admitted_allocations;
+        try {
+            (void) lane.run ([&] {
+                called = true;
+                return 42;
+            });
+        }
+        catch (const std::bad_alloc &) {
+            failed = true;
+        }
+        allocations_before_failure.reset ();
+        EXPECT_TRUE (failed);
+        EXPECT_FALSE (called);
+        EXPECT_EQ (42, lane.run ([] { return 42; }).get ());
+    }
 }
 
 TEST (ZLinkStateLaneDeathTest, CleanupContinuationReleasesWorkerForPendingLaneAndAttachment)

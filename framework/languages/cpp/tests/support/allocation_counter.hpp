@@ -1,10 +1,14 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #pragma once
 #include <cstddef>
+#include <array>
+#include <optional>
+#include <string>
 #include <utility>
 namespace zlink::framework::tests
 {
 extern thread_local bool tracking_allocations;
+extern thread_local std::optional<std::size_t> allocations_before_failure;
 extern thread_local std::size_t tracked_allocation_count;
 extern thread_local std::size_t tracked_allocation_size;
 extern thread_local std::size_t tracked_allocation_bytes;
@@ -13,6 +17,8 @@ struct allocation_event_t
 {
     const void *memory;
     std::size_t size;
+    std::array<void *, 16> stack{};
+    std::size_t stack_depth = 0;
 };
 
 struct allocation_event_log_t
@@ -24,6 +30,24 @@ struct allocation_event_log_t
 };
 
 extern thread_local allocation_event_log_t *allocation_event_log;
+
+class allocation_event_scope_t
+{
+  public:
+    explicit allocation_event_scope_t (allocation_event_log_t &log) noexcept :
+        _previous (std::exchange (allocation_event_log, &log))
+    {
+    }
+    ~allocation_event_scope_t () { allocation_event_log = _previous; }
+    allocation_event_scope_t (const allocation_event_scope_t &) = delete;
+    allocation_event_scope_t &operator= (const allocation_event_scope_t &) = delete;
+
+  private:
+    allocation_event_log_t *_previous;
+};
+
+// Format only after measurement: diagnostics must not count their own storage.
+std::string describe_allocations (const allocation_event_log_t &log);
 template <typename TAction>
 std::size_t count_allocations (TAction &&action, std::size_t allocation_size = 0)
 {

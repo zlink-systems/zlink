@@ -163,6 +163,8 @@ void verify_node_send_forwarding_allocations ()
             })
             == 1);
     std::vector<std::uint8_t> copied_target, encoded_header;
+    const auto target_copy_allocations = count_allocations ([&] { copied_target = target; });
+    std::vector<std::uint8_t> ().swap (copied_target);
     std::shared_ptr<const mesh::admitted_peer_t> peer;
     const auto argument_allocations = count_allocations ([&] {
         copied_target = target;
@@ -188,6 +190,98 @@ void verify_node_send_forwarding_allocations ()
                   "node send allocations observed=%zu allowed=%zu arguments=%zu result=%zu\n",
                   observed, allowed, argument_allocations, result_allocations);
     assert (observed <= allowed);
+    // Synchronous forwarding borrows the routing id until native submission;
+    // only the encoded header and the terminal task own new storage here.
+    const auto borrowed_arguments = argument_allocations - target_copy_allocations;
+    assert (observed == borrowed_arguments + result_allocations);
+    auto temporary_target = source.send_to_node_result (
+      bytes ("missing-forwarding-temporary"), {"Forwarding", "application/octet-stream", {}});
+    assert (temporary_target.await_ready ());
+    assert (temporary_target.result ().value () == zlink::submit_result_t::not_connected);
+    const auto admitted = descriptor ("temporary-admitted-target");
+    assert (source.topology ().admit (admitted, admitted.node_routing_id)
+            == mesh::peer_admission_result_t::admitted);
+    auto temporary_admitted_target = source.send_to_node_result (
+      bytes ("temporary-admitted-target"), {"Forwarding", "application/octet-stream", {}});
+    assert (temporary_admitted_target.await_ready ());
+    assert (temporary_admitted_target.result ().value () == zlink::submit_result_t::terminated);
+}
+
+void verify_node_request_submit_cost ()
+{
+    namespace fw = zlink::framework;
+    using fw::tests::count_allocations;
+    bool no_target_copies = true;
+    bool no_extra_lane_allocations = true;
+    for (const std::size_t target_size : {127u, 193u}) {
+        std::size_t missing_peer_allocations = 0;
+        for (const bool ready_peer : {false, true}) {
+            mesh::raw_mesh_node_owner_t source (mesh::raw_mesh_node_options_t{
+              .descriptor = descriptor ("request-submit-source"),
+              .runtime_failures = std::make_shared<runtime::runtime_failure_collector_t> ()});
+            const std::vector<std::uint8_t> target (target_size, 't');
+            if (ready_peer) {
+                auto remote = descriptor ("request-submit-target");
+                remote.node_routing_id = target;
+                remote.state = mesh::service_node_state_t::serving;
+                assert (
+                  source.topology ().admit (remote, bytes ("request-submit-connection"), remote)
+                  == mesh::peer_admission_result_t::admitted);
+                const auto peer = source.topology ().peer (target);
+                assert (peer && peer->ready);
+            }
+            std::vector<std::uint8_t> copied;
+            const auto copied_allocations =
+              count_allocations ([&] { copied = target; }, target.size ());
+            assert (copied == target && copied_allocations > 0);
+            const auto borrowed_baseline = count_allocations ([] {}, target.size ());
+            protocol::application_payload_t payload{"RequestSubmit", "x/y", {}};
+            bool callback_called = false;
+            std::optional<fw::task_t<bool>> submission;
+            const auto observed = count_allocations (
+              [&] {
+                  submission.emplace (source.request_to_node (
+                    target, payload, 1s, [&] (auto, auto) { callback_called = true; }));
+              },
+              target.size ());
+            assert (submission->await_ready ());
+            assert (submission->result () && !submission->result ().value ());
+            std::vector<std::uint8_t> encoded;
+            const auto encode_allocations =
+              count_allocations ([&] { encoded = protocol::encode_application_payload (payload); });
+            assert (!encoded.empty ());
+            const auto full_allocations = count_allocations ([&] {
+                submission.emplace (source.request_to_node (
+                  target, payload, 1s, [&] (auto, auto) { callback_called = true; }));
+            });
+            assert (submission->await_ready ());
+            assert (submission->result () && !submission->result ().value ());
+            if (!ready_peer) {
+                missing_peer_allocations = full_allocations;
+            } else {
+                // Both public calls create the same request task layers. The
+                // Ready/no-port path additionally encodes the payload and enters
+                // the owner lane; that synchronous turn needs no future state.
+                const auto expected = missing_peer_allocations + encode_allocations;
+                std::fprintf (
+                  stderr,
+                  "node request lane target=%zu missing=%zu ready=%zu encode=%zu expected=%zu\n",
+                  target_size, missing_peer_allocations, full_allocations, encode_allocations,
+                  expected);
+                no_extra_lane_allocations =
+                  no_extra_lane_allocations && full_allocations == expected;
+            }
+            assert (!callback_called);
+            assert (source.expire_requests (foundation::operation_registry_t::clock_t::now ())
+                    == 0);
+            std::fprintf (stderr,
+                          "node request target=%zu ready=%d copied=%zu borrowed=%zu observed=%zu\n",
+                          target_size, ready_peer, copied_allocations, borrowed_baseline, observed);
+            no_target_copies = no_target_copies && observed == borrowed_baseline;
+        }
+    }
+    assert (no_extra_lane_allocations);
+    assert (no_target_copies);
 }
 
 protocol::actor_create_header_t actor_create_request (const mesh::service_node_descriptor_t &source,
@@ -4332,6 +4426,11 @@ void verify_unadmitted_route (bool repeat_hello)
 int main (int argc, char **argv)
 {
     zlink::framework::completion_owner_t completion_owner;
+    if (argc == 2 && std::string_view (argv[1]) == "--request-submit-cost") {
+        verify_node_request_submit_cost ();
+        return 0;
+    }
+    verify_node_request_submit_cost ();
     verify_node_send_forwarding_allocations ();
     if (argc == 2 && std::string_view (argv[1]) == "--send-forwarding-allocations")
         return 0;

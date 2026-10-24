@@ -1942,6 +1942,25 @@ next_receive_activity_async (std::shared_ptr<detail::mesh_node_runtime_t> node,
     co_return receive_activity_t{local_pending, next};
 }
 
+auto mesh_node_host_service_t::make_application_owner_work (
+  std::shared_ptr<detail::mesh_node_runtime_t> node,
+  std::shared_ptr<detail::mesh_node_builder_state_t> registration,
+  std::string owner)
+{
+    return
+      [node = std::move (node), registration = std::move (registration), owner = std::move (owner),
+       services = _services, serializers = _serializers, filters = _filters,
+       failures = _runtime_failures, options = _dispatch_options] (bool reject_only) {
+          detail::ambient_context_scope_t infrastructure (nullptr, nullptr, {}, false, true);
+          auto pending = std::make_shared<task_t<void>> (drain_application_owner (
+            node, registration, owner, reject_only, services, serializers, filters, options));
+          detail::observe_task_completion (*pending,
+                                           [pending, failures] (const result_t<void> &result) {
+                                               failures->capture ([&] { result.value (); });
+                                           });
+      };
+}
+
 struct mesh_node_host_service_t::node_receive_role_t final
     : offload_executor_t::role_t,
       std::enable_shared_from_this<node_receive_role_t>
@@ -2137,7 +2156,7 @@ struct mesh_node_host_service_t::node_receive_role_t final
               accept_application_receive, next_application_receive))
             .result ()
             .value ();
-        mailbox.end_application_receive_turn ();
+        auto ready = mailbox.take_application_receive_turn ();
         receive_turn.dismiss ();
         application_permit.reset ();
         application_permit_budget.release_without_handler ();
@@ -2173,18 +2192,35 @@ struct mesh_node_host_service_t::node_receive_role_t final
                 next_activity = activity.second;
             }
         }
-        if (detail::dispatch_completion_receive_handoff (
-              [&] { return host._application_dispatch->try_assign_role (shared_from_this ()); },
-              host._completion_dispatcher))
-            return true;
         // A pump may consume the wake for supply delivered after this turn's
         // take. Recheck its owner state before waiting for the next rotation.
-        if (!local_pending && !host._stop.load (std::memory_order_acquire)
+        if (!local_pending && !ready && !host._stop.load (std::memory_order_acquire)
             && !supply.has_supply ()) {
             (void) node->native_node ().wait_for_dispatch_activity (
               std::chrono::milliseconds (-1), accept_application_receive, next_activity);
         }
-        return false;
+        if (static_cast<bool> (ready)) {
+            const bool handed_off =
+              host._application_dispatch->try_assign_role (shared_from_this ());
+            if (handed_off) {
+                auto owner = std::move (ready->first.back ());
+                ready->first.pop_back ();
+                auto start =
+                  host.make_application_owner_work (node, registration, std::move (owner));
+                // Publish the other owners first so a blocked direct handler
+                // cannot delay independent owner turns.
+                mesh::service_mailbox_t::notify_application_ready (ready);
+                // Completion workers remain independent while this resource
+                // uses its new application turn instead of polling a callback.
+                offload_executor_t::run_application_turn ([&] { start (false); });
+                return true;
+            }
+            mesh::service_mailbox_t::notify_application_ready (ready);
+            return false;
+        }
+        return detail::dispatch_completion_receive_handoff (
+          [&] { return host._application_dispatch->try_assign_role (shared_from_this ()); },
+          host._completion_dispatcher);
     }
 
     struct pending_management_t
@@ -3081,21 +3117,9 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
             auto receive_permit =
               std::make_shared<std::optional<application_job_queue_t::permit_t>> ();
             mesh::service_mailbox_t::application_ready_t submit_owner =
-              [executor = _application_dispatch, node, registration, services = _services,
-               serializers = _serializers, filters = _filters, failures = _runtime_failures,
-               options = _dispatch_options] (const std::string &owner) {
-                  auto start = [node, registration, owner, services, serializers, filters, failures,
-                                options] (bool reject_only) {
-                      detail::ambient_context_scope_t infrastructure (nullptr, nullptr, {}, false,
-                                                                      true);
-                      auto pending = std::make_shared<task_t<void>> (
-                        drain_application_owner (node, registration, owner, reject_only, services,
-                                                 serializers, filters, options));
-                      detail::observe_task_completion (
-                        *pending, [pending, failures] (const result_t<void> &result) {
-                            failures->capture ([&] { result.value (); });
-                        });
-                  };
+              [this, executor = _application_dispatch, node,
+               registration] (const std::string &owner) {
+                  auto start = make_application_owner_work (node, registration, owner);
                   if (!executor->try_submit_internal ([start] { start (false); }))
                       start (true);
               };

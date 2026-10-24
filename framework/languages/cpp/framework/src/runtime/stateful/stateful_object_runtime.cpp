@@ -423,14 +423,12 @@ bool stateful_object_runtime_t::finalized_relocation_source (object_kind_t kind,
                                                              const std::string &key,
                                                              std::uint64_t object_generation) const
 {
-    return _lane
-      .run ([&] {
-          const auto object = _objects.find (object_key_t{kind, key});
-          return object != _objects.end ()
-                 && object->second.reference.object_generation == object_generation
-                 && finalized_relocation_source_on_lane (object->second);
-      })
-      .get ();
+    return _lane.run_sync ([&] {
+        const auto object = _objects.find (object_key_t{kind, key});
+        return object != _objects.end ()
+               && object->second.reference.object_generation == object_generation
+               && finalized_relocation_source_on_lane (object->second);
+    });
 }
 
 bool stateful_object_runtime_t::finalized_relocation_source_on_lane (

@@ -2174,27 +2174,7 @@ void app_t::_apply_zlink_framework ()
           [mesh] (const zlink::routing_id_t &target, runtime::messaging::message_parts_t parts,
                   std::chrono::milliseconds timeout)
             -> request_task_t<result_t<runtime::messaging::message_parts_t>> {
-              detail::host::pending_operation_t operation;
-              auto submission =
-                mesh->request_to_node (target, std::move (parts).take_items (), operation, timeout);
-              auto admitted = co_await detail::request_admission_source_t{};
-              mesh->observe_request_failure (operation, admitted, "MeshNode request");
-              const auto submitted = co_await submission;
-              if (submitted != zlink::submit_result_t::ok) {
-                  if (submitted == zlink::submit_result_t::not_found) {
-                      co_return result_t<runtime::messaging::message_parts_t>::failure (
-                        framework_error_kind_t::not_found, "MeshNode request target was not found");
-                  }
-                  if (submitted == zlink::submit_result_t::terminated) {
-                      co_return detail::boundary_failure<runtime::messaging::message_parts_t> (
-                        detail::boundary_error_t::shutdown, "MeshNode request runtime is stopped");
-                  }
-                  co_return result_t<runtime::messaging::message_parts_t>::failure (
-                    runtime::messaging::map_submit_result_error_kind (submitted),
-                    "MeshNode request was not submitted");
-              }
-              co_await detail::request_admitted_t{};
-              co_return co_await mesh->await_request_reply (operation, "MeshNode request");
+              return mesh->request_node_reply (target, std::move (parts).take_items (), timeout);
           });
         for (const auto &channel_name : mesh->channel_names ()) {
             channel_runtime.bind_mesh_channel_transport (

@@ -619,6 +619,25 @@ void verify_invalid_metadata_never_dispatches (const std::string &endpoint)
             assert (metadata_request_handler_t::calls.load () == calls);
         }
     }
+    const auto calls = metadata_request_handler_t::calls.load ();
+    const auto malformed = await_metadata_wire_reply (source.request ()
+                                                        .message (zlink::message_t::from ("{"))
+                                                        .message (zlink::message_t::from ("{}"))
+                                                        .timeout (5s)
+                                                        .async ()
+                                                        .reply)
+                             .result ();
+    assert (malformed && malformed.value ().size () == 2);
+    const auto fallback = zlink::framework::runtime::messaging::envelope_codec_t{}.decode_header (
+      malformed.value ().front (), false);
+    assert (fallback
+            && fallback.value ().kind
+                 == zlink::framework::runtime::messaging::message_kind_t::error);
+    assert (fallback.value ().channel_name == "metadata");
+    assert (fallback.value ().content_type
+            == zlink::framework::runtime::messaging::envelope_codec_t::default_content_type);
+    assert (malformed.value ()[1].to_string () == "null");
+    assert (metadata_request_handler_t::calls.load () == calls);
 }
 
 void verify_invalid_metadata_is_a_protocol_error ()
