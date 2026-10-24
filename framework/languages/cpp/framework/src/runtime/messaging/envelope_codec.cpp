@@ -8,14 +8,21 @@
 #include <service_wire_constants.hpp>
 
 #include <algorithm>
+#include <bit>
 #include <charconv>
+#include <cmath>
 #include <cstring>
 #include <limits>
 #include <new>
+#include <span>
 #include <stdexcept>
 #include <string_view>
 #include <utility>
 #include <vector>
+
+#if defined(__SSE2__) || defined(_M_X64) || (defined(_M_IX86_FP) && _M_IX86_FP >= 2)
+#include <emmintrin.h>
+#endif
 
 namespace zlink::framework::runtime::messaging
 {
@@ -111,9 +118,120 @@ result_t<void> validate_protocol_header (const envelope_header_t &header,
     return result_t<void>::success ();
 }
 
+// Inspect ordinary ASCII a word at a time. Quote, backslash, controls and
+// non-ASCII bytes return to the same string grammar/UTF-8 owner below.
+const char *plain_string_end (const char *first, const char *end) noexcept
+{
+#if defined(__SSE2__) || defined(_M_X64) || (defined(_M_IX86_FP) && _M_IX86_FP >= 2)
+    while (end - first >= static_cast<std::ptrdiff_t> (sizeof (__m128i))) {
+        __m128i block;
+        std::memcpy (&block, first, sizeof (block));
+        // Signed byte comparison also selects all non-ASCII bytes. They go
+        // through the same strict UTF-8 sequence validator as on other CPUs.
+        const auto special =
+          _mm_or_si128 (_mm_cmplt_epi8 (block, _mm_set1_epi8 (0x20)),
+                        _mm_or_si128 (_mm_cmpeq_epi8 (block, _mm_set1_epi8 ('"')),
+                                      _mm_cmpeq_epi8 (block, _mm_set1_epi8 ('\\'))));
+        const auto mask = static_cast<unsigned> (_mm_movemask_epi8 (special));
+        if (mask != 0)
+            return first + std::countr_zero (mask);
+        first += sizeof (block);
+    }
+#endif
+    constexpr std::uint64_t low_bits = 0x0101010101010101ULL;
+    constexpr std::uint64_t high_bits = 0x8080808080808080ULL;
+    constexpr std::uint64_t spaces = 0x2020202020202020ULL;
+    constexpr std::uint64_t quotes = 0x2222222222222222ULL;
+    constexpr std::uint64_t slashes = 0x5c5c5c5c5c5c5c5cULL;
+    while (end - first >= static_cast<std::ptrdiff_t> (sizeof (std::uint64_t))) {
+        std::uint64_t word;
+        std::memcpy (&word, first, sizeof (word));
+        const auto quote = word ^ quotes;
+        const auto slash = word ^ slashes;
+        const auto special = ((quote - low_bits) & ~quote & high_bits)
+                             | ((slash - low_bits) & ~slash & high_bits)
+                             | ((word - spaces) & ~word & high_bits) | (word & high_bits);
+        if (special != 0) {
+            if constexpr (std::endian::native == std::endian::little)
+                return first + std::countr_zero (special) / 8;
+            break;
+        }
+        first += sizeof (word);
+    }
+    while (first != end) {
+        const auto byte = static_cast<unsigned char> (*first);
+        if (byte < 0x20 || byte >= 0x80 || byte == '"' || byte == '\\')
+            break;
+        ++first;
+    }
+    return first;
+}
+
+// A sequence length of zero means malformed UTF-8. The optional failure
+// position is the offending byte, or end for an incomplete sequence.
+std::size_t
+utf8_sequence_length (const char *first, const char *end, const char **invalid = nullptr) noexcept
+{
+    const auto lead = static_cast<unsigned char> (*first);
+    const std::size_t length = lead >= 0xc2 && lead <= 0xdf   ? 2
+                               : lead >= 0xe0 && lead <= 0xef ? 3
+                               : lead >= 0xf0 && lead <= 0xf4 ? 4
+                                                              : 0;
+    if (length == 0) {
+        if (invalid)
+            *invalid = first;
+        return 0;
+    }
+    for (std::size_t index = 1; index < length; ++index) {
+        if (first + index == end) {
+            if (invalid)
+                *invalid = end;
+            return 0;
+        }
+        const auto byte = static_cast<unsigned char> (first[index]);
+        if (byte < 0x80 || byte > 0xbf
+            || (index == 1
+                && ((lead == 0xe0 && byte < 0xa0) || (lead == 0xed && byte >= 0xa0)
+                    || (lead == 0xf0 && byte < 0x90) || (lead == 0xf4 && byte >= 0x90)))) {
+            if (invalid)
+                *invalid = first + index;
+            return 0;
+        }
+    }
+    return length;
+}
+
+[[noreturn]] void invalid_utf8 (std::string_view value, const char *invalid)
+{
+    // Keep the writer's established nlohmann exception type, id and message.
+    constexpr char digits[] = "0123456789ABCDEF";
+    if (invalid == value.data () + value.size ()) {
+        const auto last = static_cast<unsigned char> (value.back ());
+        const char hex[] = {digits[last >> 4], digits[last & 15]};
+        throw nlohmann::detail::type_error::create (
+          316, "incomplete UTF-8 string; last byte: 0x" + std::string (hex, 2), nullptr);
+    }
+    const auto byte = static_cast<unsigned char> (*invalid);
+    const char hex[] = {digits[byte >> 4], digits[byte & 15]};
+    throw nlohmann::detail::type_error::create (316,
+                                                "invalid UTF-8 byte at index "
+                                                  + std::to_string (invalid - value.data ())
+                                                  + ": 0x" + std::string (hex, 2),
+                                                nullptr);
+}
+
 // The envelope has a fixed field order. Count the escaped bytes first, then
 // write directly into its native message; there is no header DOM or byte copy.
-class header_writer_t
+enum class header_output_t
+{
+    measure,
+    native_message,
+    plan_string
+};
+
+// The three existing sinks use one writer grammar. Their output operation is
+// selected at compile time instead of branching on pointers for every append.
+template <header_output_t Output> class header_writer_t
 {
   public:
     explicit header_writer_t (char *output = nullptr) : _output (output) {}
@@ -121,10 +239,12 @@ class header_writer_t
 
     void append (std::string_view text)
     {
-        if (_output && !text.empty ())
-            std::memcpy (_output + _size, text.data (), text.size ());
-        else if (_string_output != nullptr)
+        if constexpr (Output == header_output_t::native_message) {
+            if (!text.empty ())
+                std::memcpy (_output + _size, text.data (), text.size ());
+        } else if constexpr (Output == header_output_t::plan_string) {
             _string_output->append (text);
+        }
         _size += text.size ();
     }
 
@@ -137,17 +257,28 @@ class header_writer_t
 
     void string (const std::string &value)
     {
-        if (!_output && !valid_utf8 (value)) {
-            // Keep the JSON library's strict UTF-8 exception and diagnostic.
-            // Only malformed input takes this path; valid headers have no DOM.
-            (void) nlohmann::json (value).dump ();
-        }
         append ("\"");
         std::size_t start = 0;
-        for (std::size_t index = 0; index < value.size (); ++index) {
+        for (std::size_t index = 0; index < value.size ();) {
+            index = static_cast<std::size_t> (
+              plain_string_end (value.data () + index, value.data () + value.size ())
+              - value.data ());
+            if (index == value.size ())
+                break;
             const auto byte = static_cast<unsigned char> (value[index]);
-            if (byte >= 0x20 && byte != '"' && byte != '\\')
+            if (byte >= 0x80) {
+                if constexpr (Output != header_output_t::native_message) {
+                    const char *invalid;
+                    const auto length = utf8_sequence_length (
+                      value.data () + index, value.data () + value.size (), &invalid);
+                    if (length == 0)
+                        invalid_utf8 (value, invalid);
+                    index += length;
+                } else {
+                    ++index;
+                }
                 continue;
+            }
             append (std::string_view (value).substr (start, index - start));
             switch (byte) {
                 case '"':
@@ -178,7 +309,7 @@ class header_writer_t
                     break;
                 }
             }
-            start = index + 1;
+            start = ++index;
         }
         append (std::string_view (value).substr (start));
         append ("\"");
@@ -193,46 +324,28 @@ class header_writer_t
     }
 
     std::size_t size () const noexcept { return _size; }
-
-  private:
-    static bool valid_utf8 (std::string_view value) noexcept
+    static constexpr bool measuring () noexcept
     {
-        for (std::size_t index = 0; index < value.size ();) {
-            const auto lead = static_cast<unsigned char> (value[index++]);
-            if (lead < 0x80)
-                continue;
-            const auto remaining = lead >= 0xc2 && lead <= 0xdf   ? 1
-                                   : lead >= 0xe0 && lead <= 0xef ? 2
-                                   : lead >= 0xf0 && lead <= 0xf4 ? 3
-                                                                  : 0;
-            if (remaining == 0 || value.size () - index < static_cast<std::size_t> (remaining))
-                return false;
-            const auto second = static_cast<unsigned char> (value[index]);
-            if ((lead == 0xe0 && second < 0xa0) || (lead == 0xed && second >= 0xa0)
-                || (lead == 0xf0 && second < 0x90) || (lead == 0xf4 && second >= 0x90))
-                return false;
-            for (int part = 0; part < remaining; ++part) {
-                const auto byte = static_cast<unsigned char> (value[index++]);
-                if (byte < 0x80 || byte > 0xbf)
-                    return false;
-            }
-        }
-        return true;
+        return Output != header_output_t::native_message;
     }
 
+  private:
     char *_output = nullptr;
     std::string *_string_output = nullptr;
     std::size_t _size = 0;
 };
 
-void write_metadata (header_writer_t &writer, const std::map<std::string, std::string> &metadata)
+template <header_output_t Output>
+void write_metadata (header_writer_t<Output> &writer,
+                     const std::map<std::string, std::string> &metadata)
 {
     const auto start = writer.size ();
     writer.append ("{");
     bool first = true;
     for (const auto &[key, value] : metadata) {
-        if (key.empty () || key.find ('\0') != std::string::npos
-            || value.find ('\0') != std::string::npos)
+        if (writer.measuring ()
+            && (key.empty () || key.find ('\0') != std::string::npos
+                || value.find ('\0') != std::string::npos))
             throw framework_exception_t (framework_error_kind_t::protocol_error,
                                          "ZLink envelope metadata key/value is invalid");
         if (!first)
@@ -243,12 +356,12 @@ void write_metadata (header_writer_t &writer, const std::map<std::string, std::s
             writer.append (":");
             writer.string (value);
         }
-        catch (const nlohmann::json::exception &error) {
+        catch (const nlohmann::detail::exception &error) {
             throw framework_exception_t (framework_error_kind_t::protocol_error, error.what ());
         }
     }
     writer.append ("}");
-    if (writer.size () - start > protocol::metadataBytes)
+    if (writer.measuring () && writer.size () - start > protocol::metadataBytes)
         throw framework_exception_t (framework_error_kind_t::protocol_error,
                                      "ZLink envelope metadata exceeds "
                                        + std::to_string (protocol::metadataBytes) + " bytes");
@@ -286,14 +399,14 @@ struct header_plan_t
         message_name = header.message_name;
         content_type = selected_content_type;
 
-        header_writer_t prefix_writer (prefix);
+        header_writer_t<header_output_t::plan_string> prefix_writer (prefix);
         prefix_writer.append ("{\"channelName\":");
         prefix_writer.string (channel_name);
         prefix_writer.append (",\"contentType\":");
         prefix_writer.string (content_type);
         prefix_writer.append (",\"correlationId\":");
 
-        header_writer_t middle_writer (middle);
+        header_writer_t<header_output_t::plan_string> middle_writer (middle);
         middle_writer.append (",\"formatMarker\":");
         middle_writer.number (static_cast<int> (flow_id_t::format_marker));
         middle_writer.append (",\"kind\":");
@@ -311,7 +424,8 @@ header_plan_t &header_plan ()
     return value;
 }
 
-void write_header (header_writer_t &writer,
+template <header_output_t Output>
+void write_header (header_writer_t<Output> &writer,
                    const envelope_header_t &header,
                    const std::string *flow_id,
                    const std::optional<flow_origin_t> &flow_origin,
@@ -370,12 +484,13 @@ zlink::message_t envelope_codec_t::encode_header (const envelope_header_t &heade
     auto &plan = header_plan ();
     if (!plan.matches (header, content_type))
         plan.rebuild (header, content_type);
-    header_writer_t measure;
+    header_writer_t<header_output_t::measure> measure;
     write_header (measure, header, flow_id, flow_origin, plan);
     auto message = zlink::message_t::allocate (measure.size ());
     if (!message.valid ())
         throw std::bad_alloc ();
-    header_writer_t writer (reinterpret_cast<char *> (message.data ()));
+    header_writer_t<header_output_t::native_message> writer (
+      reinterpret_cast<char *> (message.data ()));
     write_header (writer, header, flow_id, flow_origin, plan);
     return message;
 }
@@ -595,7 +710,7 @@ class header_sax_t final : public nlohmann::json_sax<nlohmann::json>
             return reject ("ZLink envelope header metadata must be an object");
         if (!_invalid_metadata_keys.empty ())
             return reject ("ZLink envelope header metadata value is invalid");
-        header_writer_t metadata_measure;
+        header_writer_t<header_output_t::measure> metadata_measure;
         try {
             write_metadata (metadata_measure, _metadata);
         }
