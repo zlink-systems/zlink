@@ -1046,3 +1046,104 @@ TEST (LocalEnqueueAllocations, StatefulSpotDrainAdmitsOnceAndStaysOnIdleGateCall
     }
 }
 } // namespace
+
+TEST (LocalEnqueueAllocations, ReadyNativePublicationMovesFinalIdentityStorage)
+{
+    using namespace fw;
+    using namespace fw::runtime;
+    auto runtime = make_host ();
+    const stateful::object_ref_t object{
+      stateful::object_kind_t::user_spot, std::string (197, 'k'), 1, 1, "local-allocation", "n"};
+    runtime->configure_stateful_dispatch ([] (const auto &) {
+        return task_t<std::optional<stateful::accepted_record_authority_t>> (
+          result_t<std::optional<stateful::accepted_record_authority_t>>::success (
+            stateful::accepted_record_authority_t{{"source", 1, {'n'}, 1}, 1}));
+    });
+    const auto created = runtime->objects ().begin_reserved_object (object, "framework.spot", {});
+    ASSERT_EQ (created.error, stateful::stateful_error_t::none);
+    ASSERT_EQ (runtime->objects ().commit_create (created.attempt),
+               stateful::stateful_error_t::none);
+    const protocol::spot_route_fence_t route{object.key, 1, {'n'}, 1, 1, 1};
+    const auto key_storage = tests::measure_allocations ([&] {
+        const auto copied = object.key;
+        EXPECT_EQ (copied, object.key);
+    });
+    protocol::spot_message_header_t identity_header;
+    identity_header.target = route;
+    auto reused_route = route;
+    const auto required_copies = tests::count_allocations (
+      [&] {
+          // The projection and its ready result, plus admission's result, are
+          // required even if their allocation size shares this ABI's string bucket.
+          auto target = std::make_shared<serial_application_target_t> ();
+          const task_t<std::shared_ptr<serial_application_target_t>> prepared (
+            result_t<std::shared_ptr<serial_application_target_t>>::success (target));
+          const task_t<bool> admitted (result_t<bool>::success (true));
+          EXPECT_TRUE (prepared.await_ready ());
+          EXPECT_TRUE (admitted.await_ready ());
+          reused_route = identity_header.target;
+          const serial_application_record_t::spot_identity_t identity{std::move (identity_header),
+                                                                      {}};
+          EXPECT_EQ (identity.header.target.spot_id, object.key);
+      },
+      key_storage.largest);
+    std::size_t publication_begin = 0;
+    runtime->configure_relocation_gate (
+      {}, [&] (std::string, std::optional<protocol::spot_route_fence_t>) {
+          if (tests::allocation_event_log)
+              publication_begin = tests::allocation_event_log->count;
+          return task_t<std::shared_ptr<serial_application_target_t>> (
+            result_t<std::shared_ptr<serial_application_target_t>>::success (
+              std::make_shared<serial_application_target_t> ()));
+      });
+    const auto drain = [&] () {
+        auto application = std::make_shared<host::local_application_dispatch_t> ();
+        application->owner.owner_kind = host::owner_kind_t::spot;
+        application->owner.spot_id = object.key;
+        application->record.kind = host::record_kind_t::spot_send;
+        application->record.source_node_rid = zlink::routing_id_t::from ("n");
+        application->record.operation_id = {1, 9};
+        application->record.spot_route = route;
+        application->parts.push_back (zlink::message_t::from ("payload"));
+        mesh::service_mailbox_record_t original;
+        original.owner = mesh::service_mailbox_t::application_owner (application->owner);
+        const auto owner = original.owner;
+        original.domain = mesh::service_mailbox_domain_t::application;
+        original.application = std::move (application);
+        EXPECT_TRUE (runtime->transport ().mailbox ().try_enqueue (std::move (original)));
+        std::array<tests::allocation_event_t, 256> events{};
+        tests::allocation_event_log_t log{events.data (), events.size ()};
+        const auto previous_log = tests::allocation_event_log;
+        tests::allocation_event_log = &log;
+        unsigned handled = 0;
+        const auto cost = tests::measure_allocations ([&] {
+            auto pending = runtime->dispatch_application_owner (
+              owner,
+              [&] (const auto &, const auto &received, auto) {
+                  ++handled;
+                  const auto copied = std::count_if (
+                    events.begin () + publication_begin, events.begin () + log.count,
+                    [&] (const auto &event) { return event.size == key_storage.largest; });
+                  std::printf ("publication key-sized allocations=%zu required=%zu storage=%zu\n",
+                               static_cast<std::size_t> (copied), required_copies,
+                               key_storage.largest);
+                  EXPECT_LE (static_cast<std::size_t> (copied), required_copies);
+                  if (received.application_record)
+                      received.application_record->release_native_claim ();
+              },
+              [] {}, [] {});
+            EXPECT_TRUE (pending.await_ready ());
+            EXPECT_TRUE (pending.result ().value ());
+        });
+        tests::allocation_event_log = previous_log;
+        EXPECT_FALSE (log.overflow);
+        EXPECT_EQ (handled, 1u);
+        EXPECT_EQ (runtime->transport ().mailbox ().pending_messages (
+                     mesh::service_mailbox_domain_t::application),
+                   0u);
+        std::printf ("ready native owner count=%zu bytes=%zu\n", cost.count, cost.bytes);
+    };
+    drain ();
+    drain ();
+    runtime->close ();
+}

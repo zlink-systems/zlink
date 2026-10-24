@@ -7656,7 +7656,7 @@ task_t<bool> public_host_runtime_t::dispatch_native_spot (
         const auto bytes = protocol::message_bytes (*query.header);
         header = protocol::decode_spot_message_header (bytes, protocol::decode_header (bytes).kind);
     }
-    const auto [error, authority] = co_await _stateful_dispatch->accepted_spot_authority (
+    auto [error, authority] = co_await _stateful_dispatch->accepted_spot_authority (
       object, header, std::move (query.source_routing_id), query.source_node_generation,
       std::move (query.source_original), std::move (retained));
     if (error != stateful::stateful_error_t::none)
@@ -7739,7 +7739,6 @@ task_t<bool> public_host_runtime_t::dispatch_native_spot (
         auto accepted = std::make_shared<runtime::serial_application_record_t> ();
         accepted->target = std::move (target);
         accepted->admission.jobs = _options.mesh.application_jobs;
-        accepted->set_spot_identity ({header, authority->source}, parts.front ().copy ());
         record.application_record = accepted;
         // The FIFO owns the original reply capability through capture and source abort.
         if (header.correlation) {
@@ -7767,6 +7766,8 @@ task_t<bool> public_host_runtime_t::dispatch_native_spot (
                   protocol::application_payload_t::from_parts (reply));
             };
         }
+        accepted->set_spot_identity ({std::move (header), std::move (authority->source)},
+                                     parts.front ().copy ());
         record.retain_mailbox_reservation = [] {};
         accepted->transferred = std::exchange (credit, {});
         record.release_mailbox_reservation = [accepted] { accepted->release_native_claim (); };
