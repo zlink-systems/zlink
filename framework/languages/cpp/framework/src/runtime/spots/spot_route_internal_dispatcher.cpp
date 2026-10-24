@@ -523,7 +523,7 @@ task_t<void> spot_route_internal_dispatcher_t::dispatch_actor_commit_request_asy
                       framework_error_kind_t::protocol_error,
                       "Actor authority owner generation is invalid");
                 }
-                (void) native->create_reserved_actor (
+                (void) co_await native->create_reserved_actor_async (
                   request.actor_type,
                   runtime::stateful::object_ref_t{
                     runtime::stateful::object_kind_t::actor, request.actor_id,

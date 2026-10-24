@@ -5186,8 +5186,11 @@ TEST (ActorMaintenanceJoin, CreateEntryJoinWaitsOutsideConfigurationTurn)
                        {},
                        fw::runtime::mesh::service_node_state_t::preparing}})});
     node->start ();
-    auto actor = node->create_reserved_actor (
-      actor_type, {sf::object_kind_t::actor, actor_id, 1, 1, mesh_name, rid.to_string ()});
+    auto actor = node
+                   ->create_reserved_actor_async (actor_type, {sf::object_kind_t::actor, actor_id,
+                                                               1, 1, mesh_name, rid.to_string ()})
+                   .result ()
+                   .value ();
     const sf::object_ref_t target{
       sf::object_kind_t::user_spot, access_t::entry_id (*node), 1, 1, mesh_name, rid.to_string ()};
     auto created = node->objects ().begin_reserved_object (target, room_type, {});
@@ -5227,8 +5230,11 @@ TEST (ActorMaintenanceJoin, DestroyStatefulActorYieldsWhileObjectsLaneIsBusy)
                        {},
                        fw::runtime::mesh::service_node_state_t::preparing}})});
     node->start ();
-    (void) node->create_reserved_actor (
-      actor_type, {sf::object_kind_t::actor, actor_id, 1, 1, mesh_name, rid.to_string ()});
+    (void) node
+      ->create_reserved_actor_async (
+        actor_type, {sf::object_kind_t::actor, actor_id, 1, 1, mesh_name, rid.to_string ()})
+      .result ()
+      .value ();
     auto release = access_t::hold_objects (*node);
     fw::runtime::offload_executor_t executor (1, "destroy-submission");
     fw::runtime::state_lane_t source (executor);
@@ -5274,8 +5280,11 @@ TEST_P (ActorLocalJoinLane, PendingSubmissionDoesNotHoldLifecycleTurn)
                        fw::runtime::mesh::service_node_state_t::preparing}})});
     node->start ();
     auto actor =
-      node->create_reserved_actor (actor_type, {fw::runtime::stateful::object_kind_t::actor,
-                                                actor_id, 1, 1, mesh_name, rid.to_string ()});
+      node
+        ->create_reserved_actor_async (actor_type, {fw::runtime::stateful::object_kind_t::actor,
+                                                    actor_id, 1, 1, mesh_name, rid.to_string ()})
+        .result ()
+        .value ();
     const fw::runtime::stateful::object_ref_t target{
       fw::runtime::stateful::object_kind_t::user_spot,
       maintenance_spot,
@@ -5343,10 +5352,13 @@ TEST (ActorMaintenanceJoin, LocalDirectAdmissionUsesCurrentActorId)
                                                      {},
                                                      mesh::service_node_state_t::preparing}})});
     node->start ();
-    auto actor = node->create_reserved_actor (
-      actor_type,
-      stateful::object_ref_t{stateful::object_kind_t::actor, actor_id, current_generation,
-                             current_generation, mesh_name, rid.to_string ()});
+    auto actor = node
+                   ->create_reserved_actor_async (
+                     actor_type, stateful::object_ref_t{stateful::object_kind_t::actor, actor_id,
+                                                        current_generation, current_generation,
+                                                        mesh_name, rid.to_string ()})
+                   .result ()
+                   .value ();
     const auto stale =
       host::public_host_runtime_t::remote_actor_ref (rid, actor_id, stale_generation);
     EXPECT_FALSE (node->resolve_actor_async (stale).result ().value ());
@@ -5642,7 +5654,8 @@ TEST (ActorMaintenanceJoin, PreservesEarlierIdentityWhenRestoreIsRejected)
       previous_generation,
       mesh_name,
       zlink::routing_id_t::from (second_rid).to_string ()};
-    auto previous_actor = target->create_reserved_actor (actor_type, previous);
+    auto previous_actor =
+      target->create_reserved_actor_async (actor_type, previous).result ().value ();
     ASSERT_TRUE (peer_ready (services.get_required<fw::route_mesh_runtime_t> ()));
     services.get_required<fw::route_mesh_runtime_options_t> ().mesh (mesh_name).placement_weight (
       0);

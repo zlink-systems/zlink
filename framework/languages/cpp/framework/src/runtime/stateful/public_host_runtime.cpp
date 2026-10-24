@@ -2950,8 +2950,9 @@ actor_handle_t public_host_runtime_t::create_actor (std::string actor_type, std:
     return actor_handle_t (shared_from_this (), framework_actor_ref (*object, actor_type), *object);
 }
 
-actor_handle_t public_host_runtime_t::create_reserved_actor (std::string actor_type,
-                                                             stateful::object_ref_t reserved)
+task_t<actor_handle_t>
+public_host_runtime_t::create_reserved_actor_async (std::string actor_type,
+                                                    stateful::object_ref_t reserved)
 {
     if (reserved.kind != stateful::object_kind_t::actor)
         throw std::invalid_argument ("reserved Actor reference has an invalid object kind");
@@ -2982,20 +2983,25 @@ actor_handle_t public_host_runtime_t::create_reserved_actor (std::string actor_t
         })
         .get ();
     if (existing)
-        return std::move (*existing);
+        co_return std::move (*existing);
     auto created = _objects.begin_reserved_object (reserved, actor_type, {});
     if (created.error != stateful::stateful_error_t::none)
         throw std::runtime_error ("reserved framework Actor authority creation failed");
+    //  State lanes §blocking boundary (06:211-226): an internal caller has no public sync
+    //  signature to keep, so the object lane results are awaited. Blocking here would hold a
+    //  completion worker until that same dispatcher delivered them.
     if (created.factory_owner
-        && _objects.commit_create (created.attempt) != stateful::stateful_error_t::none)
+        && co_await _objects.commit_create_async (created.attempt)
+             != stateful::stateful_error_t::none)
         throw std::runtime_error ("reserved framework Actor Ready commit failed");
-    auto object = _objects.find (stateful::object_kind_t::actor, reserved.key);
+    auto object = co_await _objects.find_async (stateful::object_kind_t::actor, reserved.key);
     if (!object)
         throw std::runtime_error ("reserved framework Actor authority is unavailable");
     _spot_actor_index_lane
       .run ([&] { _actors.insert_or_assign (reserved.key, std::make_pair (actor_type, *object)); })
       .get ();
-    return actor_handle_t (shared_from_this (), framework_actor_ref (*object, actor_type), *object);
+    co_return actor_handle_t (shared_from_this (), framework_actor_ref (*object, actor_type),
+                              *object);
 }
 
 task_t<std::optional<route_fence_t>>

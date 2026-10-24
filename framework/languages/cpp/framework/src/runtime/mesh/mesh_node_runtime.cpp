@@ -2263,13 +2263,11 @@ mesh_node_runtime_t::create_application_actor (std::string actor_type,
     }
 }
 
-result_t<actor_ref_t>
-mesh_node_runtime_t::create_application_actor (std::string actor_type,
-                                               std::string actor_id,
-                                               const std::optional<zlink::message_t> &,
-                                               std::uint64_t object_generation,
-                                               std::uint64_t authority_owner_generation,
-                                               std::chrono::milliseconds timeout)
+task_t<actor_ref_t>
+mesh_node_runtime_t::create_application_actor_async (std::string actor_type,
+                                                     std::string actor_id,
+                                                     std::uint64_t object_generation,
+                                                     std::uint64_t authority_owner_generation)
 {
     _state->spot_state->lane
       .run ([&] {
@@ -2280,7 +2278,7 @@ mesh_node_runtime_t::create_application_actor (std::string actor_type,
     try {
         if (!_node)
             throw configuration_error ("MeshNode has not started");
-        auto native = _node->create_reserved_actor (
+        auto native = co_await _node->create_reserved_actor_async (
           actor_type,
           runtime::stateful::object_ref_t{runtime::stateful::object_kind_t::actor, actor_id,
                                           object_generation, authority_owner_generation,
@@ -2288,7 +2286,7 @@ mesh_node_runtime_t::create_application_actor (std::string actor_type,
         _state->spot_state->lane
           .run ([&] { _state->spot_state->core_actor_membership_epochs.try_emplace (actor_id, 1); })
           .get ();
-        return result_t<actor_ref_t>::success (native.ref ());
+        co_return native.ref ();
     }
     catch (const std::exception &error) {
         _state->spot_state->lane
@@ -2297,8 +2295,8 @@ mesh_node_runtime_t::create_application_actor (std::string actor_type,
               _state->spot_state->mesh_runtime_owned_native_actor_ids.erase (actor_id);
           })
           .get ();
-        return result_t<actor_ref_t>::failure (framework_error_kind_t::internal_failure,
-                                               error.what ());
+        co_return result_t<actor_ref_t>::failure (framework_error_kind_t::internal_failure,
+                                                  error.what ());
     }
 }
 

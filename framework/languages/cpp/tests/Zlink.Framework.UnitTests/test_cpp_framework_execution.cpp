@@ -7794,9 +7794,11 @@ bool verify_remote_actor_cutover_completion_is_target_owned (bool cancel_source_
         return false;
     }
     const auto created_actor =
-      source.create_application_actor ("actor.cutover.probe", "actor-cutover-probe", std::nullopt,
-                                       actor_reserved->fence.object_generation,
-                                       actor_reserved->fence.authority_owner_generation, 1s);
+      source
+        .create_application_actor_async ("actor.cutover.probe", "actor-cutover-probe",
+                                         actor_reserved->fence.object_generation,
+                                         actor_reserved->fence.authority_owner_generation)
+        .result ();
     if (source_spot.state != spot_create_state_t::created
         || target_spot.state != spot_create_state_t::created || !created_actor) {
         std::cerr << "cutover production setup: application materialization failed\n";
