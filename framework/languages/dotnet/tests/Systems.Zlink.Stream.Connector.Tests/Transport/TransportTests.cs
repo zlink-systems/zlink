@@ -417,7 +417,6 @@ public sealed partial class StreamConnectorTests
             {
                 Endpoint = new Uri($"ws://127.0.0.1:{address.Port}/ws/"),
                 Heartbeat = DisabledHeartbeat(),
-                ConnectTimeout = TimeSpan.FromSeconds(15),
                 MaxReceivePayloadSize = 1,
                 Reconnect = new ZlinkStreamReconnectOptions { Enabled = false },
             }
