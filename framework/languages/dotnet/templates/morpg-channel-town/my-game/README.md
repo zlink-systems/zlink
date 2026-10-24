@@ -57,7 +57,6 @@ pwsh -NoProfile -File ./run-e2e.ps1 -Local
 pwsh -NoProfile -File ./run-e2e.ps1 -Local -NoBuild
 ```
 
-
 Bash:
 
 ```sh
@@ -78,7 +77,7 @@ pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
 
 ## Known issues
 
-Framework 0.30.2 candidate validation is pending package availability. Public 0.30.0 reproduces cross-node join message loss ([#1723](https://github.com/zlink-systems/zlink/issues/1723)); channel and party setup cannot complete reliably on that version. Keep 0.30.2 pinned and verify all four scenarios when its packages are available. Preserve failed node logs instead of changing deadlines or join ordering.
+Validated against the published Framework 0.30.2 packages.
 
 ## Deployment sequence
 

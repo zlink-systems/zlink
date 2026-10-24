@@ -58,7 +58,9 @@ Message Follow is configured explicitly to 30 seconds. After `RELOCATED`, the sa
 
 ## Known issues
 
-Framework 0.30.2 is required for Node relocation inventory (#1725). The typed push delivery table restores declared DTO classes for the public typed-handler limitation tracked in #1731. Do not replace it with a manual codec.
+Validated against the published Framework 0.30.2 packages.
+
+The typed push delivery table restores declared DTO classes for the public typed-handler limitation tracked in #1731. Do not replace it with a manual codec.
 
 ## Deployment sequence
 

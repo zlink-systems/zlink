@@ -12,7 +12,7 @@ flowchart LR
 
 Docker with Compose v2 and a running Linux-container daemon is required. Use Bash on Linux or PowerShell 7 on Windows. The Docker build installs the C++ toolchain and CMake; the host does not need them for the default run. The `Dockerfile` defines the Ubuntu 24.04 base in `UBUNTU_IMAGE` and Docker CLI 28.5.1 in `DOCKER_CLI_IMAGE`.
 
-`bootstrap.cmake` is the only file that names the Framework version, `0.30.1`. `cmake -P bootstrap.cmake` downloads this platform's prebuilt from the `framework-cpp/v0.30.2` GitHub Release, checks it against the SHA-256 checksum published with it, and extracts it into `.zlink/install`. The prebuilt carries Core, the C++ binding, the Framework libraries, Boost headers, and nlohmann_json, so no package manager runs. The Docker build and local mode run the same script. That release must be published before this setup can build. Do not add repository source references or a private feed.
+`bootstrap.cmake` is the only file that names the Framework version, `0.30.2`. `cmake -P bootstrap.cmake` downloads this platform's prebuilt from the `framework-cpp/v0.30.2` GitHub Release, checks it against the SHA-256 checksum published with it, and extracts it into `.zlink/install`. The prebuilt carries Core, the C++ binding, the Framework libraries, Boost headers, and nlohmann_json, so no package manager runs. The Docker build and local mode run the same script. Do not add repository source references or a private feed.
 
 ## Build
 
@@ -77,7 +77,7 @@ Add `--no-build` or `-NoBuild` only after a local build. Local build-only uses `
 
 ## Known issues
 
-On Framework 0.30.x for C++, `drain` on this Session-only host ends in `Blocked/TargetUnavailable` after the relocation deadline, so the `connect` scenario fails at `RELOCATED` and the runner exits with code 1 (#1947, https://github.com/zlink-systems/zlink/issues/1947). The relocation specification ends a host that owns no Actor or Spot with `Relocated/None` without searching for a target; the .NET starter completes the same sequence. The setup does not work around the failure; validate the scenario with a Framework release that fixes #1947 before deployment.
+Validated against the published Framework 0.30.2 packages.
 
 ## Deployment sequence
 
@@ -89,6 +89,6 @@ After clients disconnect, write `drain` to stdin. Wait for `RELOCATION_REQUESTED
 
 ## 한국어 실행 안내
 
-이 셋업은 STREAM 연결을 받는 Session node와 Redis를 실행한다. Docker 환경에서 Bash의 `./run-e2e.sh` 또는 PowerShell의 `pwsh -NoProfile -File ./run-e2e.ps1`을 실행하면 접속·종료와 drain·shutdown을 검사한다. Framework 버전은 `bootstrap.cmake` 한 곳에서 정하며, 빌드는 그 버전의 GitHub Release prebuilt를 받아 함께 게시된 SHA-256 체크섬으로 확인한다. Framework 0.30.2 릴리스가 게시되어야 빌드할 수 있다.
+이 셋업은 STREAM 연결을 받는 Session node와 Redis를 실행한다. Docker 환경에서 Bash의 `./run-e2e.sh` 또는 PowerShell의 `pwsh -NoProfile -File ./run-e2e.ps1`을 실행하면 접속·종료와 drain·shutdown을 검사한다. Framework 버전은 `bootstrap.cmake` 한 곳에서 정하며, 빌드는 그 버전의 GitHub Release prebuilt를 받아 함께 게시된 SHA-256 체크섬으로 확인한다.
 
 게임 기능은 포함하지 않는다. [한국어 개발 지침](AGENTS.ko.md)에 따라 필요한 샘플을 별도로 받아 실행한 뒤 Spot·Actor·Entry 등을 추가한다. 기능을 추가할 때 구조 선언과 구조 검사, e2e 시나리오도 함께 확장한다. 로컬 디버깅은 C++20 컴파일러, CMake, Ninja를 설치한 뒤 `./run-e2e.sh --local` 또는 `pwsh -NoProfile -File ./run-e2e.ps1 -Local`로 실행한다.

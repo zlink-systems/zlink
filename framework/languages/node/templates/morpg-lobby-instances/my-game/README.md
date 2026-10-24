@@ -55,9 +55,9 @@ pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
 
 ## Known issues
 
-Framework 0.30.2 is pending publication. Validate candidate packages in a separate copy; successful build alone does not establish relocation correctness. Node typed handler payloads require the packet-name-to-class restoration table before forwarding (#1731, planned for 0.32.0). Keep this table until the published Framework preserves declared DTO classes.
+Validated against the published Framework 0.30.2 packages.
 
-Initial Player placement can use any Object Server that registers its factory (#1772). Each such node now registers the shared Entry and admission handlers. This composition does not change Framework placement policy.
+Node typed handler payloads require the packet-name-to-class restoration table before forwarding (#1731, planned for 0.32.0). Keep this table until the published Framework preserves declared DTO classes.
 
 ## Deployment sequence
 

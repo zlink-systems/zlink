@@ -56,7 +56,9 @@ The runner checks `zlink.structure.json`, starts Redis with a unique Compose pro
 
 ## Known issues
 
-Public 0.30.0 validation can stop at host relocation inventory (#1725, fixed in 0.30.2). Keep the pinned target version. Node typed pushes are restored through one packet-name-to-class table for #1731; no custom message codec is used.
+Validated against the published Framework 0.30.2 packages.
+
+Node typed pushes are restored through one packet-name-to-class table for #1731; no custom message codec is used.
 
 ## Deployment sequence
 

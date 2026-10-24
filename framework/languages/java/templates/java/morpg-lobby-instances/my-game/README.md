@@ -15,7 +15,7 @@ The Lobby and Instance roles (`lobby`, `instanceA`, and `instanceB`) explicitly 
 
 ## Prerequisites
 
-Docker with Compose v2, and PowerShell 7 on Windows. Gradle Wrapper is included. Public Framework packages are pinned to 0.30.2 and the binding to 1.20.0 in `build.gradle.kts`. Framework 0.30.2 must be available in Maven Central before these commands can resolve it.
+Docker with Compose v2, and PowerShell 7 on Windows. Gradle Wrapper is included. Public Framework packages are pinned to 0.30.2 and the binding to 1.20.0 in `build.gradle.kts`.
 
 ## Build
 
@@ -34,7 +34,6 @@ Docker runs the Java e2e runner and every node role in containers. Nodes share t
 For local process debugging, install JDK 25 and use `./run-e2e.sh --local` or `pwsh -NoProfile -File ./run-e2e.ps1 -Local`. Add `--no-build` or `-NoBuild` to reuse a local build. Docker uses its image layer cache.
 
 > **Base images.** Dockerfile ARG defaults pin Eclipse Temurin JDK/JRE 25.0.2+10 and Docker CLI 28.5.1. Replace these defaults when adopting a deployment base image.
-
 
 ```sh
 ./run-e2e.sh
@@ -58,7 +57,7 @@ For structure checks only, pass `--check-structure` to the shell runner or `-Che
 
 ## Known issues
 
-Public 0.30.0 validation reached party readiness on Linux, then failed cross-node deferred Dungeon joins with `DATA_LOST` ([#1729](https://github.com/zlink-systems/zlink/issues/1729)). Other runs stopped before the first lobby response because the Session's first Actor GetOrCreate never completed and no node recorded the request ([#1782](https://github.com/zlink-systems/zlink/issues/1782)). No runtime workaround is included. Validation of the pinned 0.30.2 candidate remains necessary.
+Validated against the published Framework 0.30.2 packages.
 
 ## Deployment sequence
 
@@ -74,4 +73,4 @@ The first party member is the leader. A party accepts at most four distinct play
 
 Docker Compose v2를 준비한 뒤 위 Build 명령으로 빌드합니다. `run-e2e.sh` 또는 `run-e2e.ps1`을 실행하면 구조 검사, Redis와 node 기동, 시나리오 실행, 자원 정리를 순서대로 수행합니다. 실행 설정과 로그는 `.logs/run-<id>/`에 보존합니다.
 
-`party`는 준비 여부와 던전 입장을, `reconnect`는 Actor와 게임 상태 유지를, `update`는 instance node의 relocation과 교체를 검증합니다. 기본 실행은 세 시나리오를 모두 수행합니다. 공개 0.30.2 패키지가 게시되기 전에는 해당 버전의 실행 검증이 완료되지 않은 상태입니다.
+`party`는 준비 여부와 던전 입장을, `reconnect`는 Actor와 게임 상태 유지를, `update`는 instance node의 relocation과 교체를 검증합니다. 기본 실행은 세 시나리오를 모두 수행합니다.

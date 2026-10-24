@@ -38,7 +38,6 @@ For local process debugging, install JDK 25 and use `./run-e2e.sh --local` or `p
 
 > **Base images.** Dockerfile ARG defaults pin Eclipse Temurin JDK/JRE 25.0.2+10 and Docker CLI 28.5.1. Replace these defaults when adopting a deployment base image.
 
-
 Bash:
 
 ```sh
@@ -59,7 +58,7 @@ The runner validates `zlink.structure.json`, creates its own Redis Compose proje
 
 ## Known issues
 
-Framework 0.30.2 is pending publication. Verification against 0.30.0 reproduced Java deferred JoinSpot DATA_LOST ([#1729](https://github.com/zlink-systems/zlink/issues/1729)), blocking the first Room admission. The template does not compensate for Framework failures. Preserve node stderr, including message-flow diagnostics, when reporting a failure.
+Validated against the published Framework 0.30.2 packages.
 
 ## Deployment sequence
 

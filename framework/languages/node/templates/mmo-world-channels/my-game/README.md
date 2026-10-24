@@ -81,14 +81,7 @@ It stops after the first failure to preserve its evidence.
 
 ## Known issues
 
-Public 0.30.0 validation reaches game assertions for worlds, channel and reconnect,
-but channel cleanup can return `ForceStopped / TeardownFailed` (candidate related
-to #1690). Host drain can complete relocation without publishing a
-`safeToShutdown` observation before the existing deadline. This observation
-defect is not assigned an issue number here. WSL drain can also return the
-generic `RelocationFailed` result before completion (#1712/#1725 candidates;
-not confirmed as the same defects). Do not bypass either failure.
-The pinned 0.30.2 packages require verification when available.
+Validated against the published Framework 0.30.2 packages.
 
 ## Deployment sequence
 

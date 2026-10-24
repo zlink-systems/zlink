@@ -60,9 +60,7 @@ To check only the structure, run `./run-e2e.sh --check-structure` or `pwsh -NoPr
 
 ## Known issues
 
-Windows Node 25.6.0 and WSL Node 22.23.2 passed `table` and `reconnect` on public `0.30.0`. `update` did not reach `RELOCATED` because the target runtime failed with `Relocation payload participant inventory does not match Location Store`. This is the existing #1725, a Node host relocation participant inventory mismatch. The template reports the failure without deadlines, retries, or state workarounds, so the node replacement scenario is not considered verified on public `0.30.0`.
-
-In the selected `table,reconnect` run, all game assertions also passed, but Table shutdown returned `ForceStopped/TeardownFailed` after the physical close. This corresponds to #1690, which is fixed in public `0.30.1`; this template uses `0.30.0` as specified. The runner therefore still returns exit code 1 in this case. Distinguish the passing scenario lines from overall run success.
+Validated against the published Framework 0.30.2 packages.
 
 Message Follow is explicitly configured for 30 seconds. The `SAFE_TO_SHUTDOWN` observation budget is that period plus the existing relocation budget. Update waits for replacement `READY`, then asserts that the replacement hosts the new table and completes a hand.
 
@@ -98,4 +96,4 @@ The e2e runner sets each node's optional `tableCapacity` to the number of select
 
 기본 빌드와 e2e는 Docker에서 runner와 node를 실행한다. Bash는 `./run-e2e.sh`, PowerShell 7은 `pwsh -NoProfile -File ./run-e2e.ps1`을 사용한다. 로컬 프로세스 디버깅은 Node.js와 npm을 설치한 뒤 `--local` 또는 `-Local`로 실행한다. Docker 빌드·정리 로그는 `.logs/docker-<project>/`에 남는다.
 
-이 프로젝트는 Session node와 Table node 두 개, 그리고 Redis Location Store를 실행한다. `run-e2e.sh`와 `run-e2e.ps1`은 같은 runner를 사용하며, 착석과 카드 비공개, 재접속, node 교체(update)를 공개 stream connector로 확인한 뒤 자신이 시작한 process와 Compose project를 정리한다. 처음에는 `./run-e2e.sh --build-only`로 빌드하고, 전체 시나리오 또는 `--scenario table,reconnect`로 선택하여 실행한다. 실패하면 종료 코드 1을 반환하고 첫 실패의 node stderr와 client JSONL을 `.logs/run-<id>/` 아래에 남긴다. 공개 0.30.0에서는 `update`가 #1725 때문에, `table,reconnect`는 종료 단계의 #1690 때문에 종료 코드 1이 될 수 있으므로 시나리오 통과 줄과 전체 성공을 구분하여 확인한다. 게임 규칙을 추가할 위치와 공개 API 사용 규칙은 `AGENTS.md`를 따른다.
+이 프로젝트는 Session node와 Table node 두 개, 그리고 Redis Location Store를 실행한다. `run-e2e.sh`와 `run-e2e.ps1`은 같은 runner를 사용하며, 착석과 카드 비공개, 재접속, node 교체(update)를 공개 stream connector로 확인한 뒤 자신이 시작한 process와 Compose project를 정리한다. 처음에는 `./run-e2e.sh --build-only`로 빌드하고, 전체 시나리오 또는 `--scenario table,reconnect`로 선택하여 실행한다. 실패하면 종료 코드 1을 반환하고 첫 실패의 node stderr와 client JSONL을 `.logs/run-<id>/` 아래에 남긴다. 공개 Framework 0.30.2 패키지로 검증했다. 게임 규칙을 추가할 위치와 공개 API 사용 규칙은 `AGENTS.md`를 따른다.

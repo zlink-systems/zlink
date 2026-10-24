@@ -37,7 +37,6 @@ For local process debugging, install JDK 25 and use `./run-e2e.sh --local` or `p
 
 > **Base images.** Dockerfile ARG defaults pin Eclipse Temurin JDK/JRE 25.0.2+10 and Docker CLI 28.5.1. Replace these defaults when adopting a deployment base image.
 
-
 Bash:
 ```sh
 ./run-e2e.sh
@@ -62,7 +61,7 @@ The runner checks `zlink.structure.json`, starts its own two Redis containers an
 
 ## Known issues
 
-Framework 0.30.2 publication is pending. Validation against 0.30.0 uses a separate copy. Cross-node deferred Actor Join fails with `DATA_LOST: target rejected canonical relocation: 35` ([#1729](https://github.com/zlink-systems/zlink/issues/1729)). This blocks channel transfer, reconnect after transfer, and update verification. Initial entry can also require this path when Actor placement selects a different channel node. After `RELOCATED`, the source may never publish `safeToShutdown=true` ([#1740](https://github.com/zlink-systems/zlink/issues/1740)). The template retains the public join path and its assertions.
+Validated against the published Framework 0.30.2 packages.
 
 ## Deployment sequence
 

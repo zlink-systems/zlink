@@ -41,7 +41,6 @@ For local process debugging, install JDK 25 and use `./run-e2e.sh --local` or `p
 
 > **Base images.** Dockerfile ARG defaults pin Eclipse Temurin JDK/JRE 25.0.2+10 and Docker CLI 28.5.1. Replace these defaults when adopting a deployment base image.
 
-
 Linux or WSL:
 
 ```sh
@@ -68,7 +67,7 @@ Use `./run-e2e.sh --check-structure` or `pwsh -NoProfile -File ./run-e2e.ps1 -Ch
 
 ## Known issues
 
-Public Framework 0.30.0 can fail cross-node deferred Actor join with `DATA_LOST` (`target rejected canonical relocation: 35`, #1729). Host relocation has also returned `BLOCKED/RELOCATION_FAILED` during the `update` scenario; WSL has also observed `RELOCATED` with `safeToShutdown=false` until the control wait expired. The underlying relocation causes remain unconfirmed. These failures prevent full e2e acceptance on 0.30.0. The template pins 0.30.2; validate all scenarios with that package before deployment.
+Validated against the published Framework 0.30.2 packages.
 
 Message Follow is explicitly configured for 30 seconds. The `SAFE_TO_SHUTDOWN` observation budget is that period plus the existing relocation budget. Update waits for replacement `READY`, then asserts that the replacement hosts the new table and completes a hand.
 

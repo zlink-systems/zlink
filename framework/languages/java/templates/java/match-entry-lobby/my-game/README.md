@@ -32,7 +32,6 @@ For local process debugging, install JDK 25 and use `./run-e2e.sh --local` or `p
 
 > **Base images.** Dockerfile ARG defaults pin Eclipse Temurin JDK/JRE 25.0.2+10 and Docker CLI 28.5.1. Replace these defaults when adopting a deployment base image.
 
-
 ```sh
 ./run-e2e.sh
 ./run-e2e.sh --scenario hit,reconnect,update
@@ -59,7 +58,7 @@ Message Follow is configured explicitly to 30 seconds. After `RELOCATED`, the sa
 
 ## Known issues
 
-Public 0.30.0 validation reaches READY but cross-node deferred Actor join to Matchmaking fails with DATA_LOST ([#1729](https://github.com/zlink-systems/zlink/issues/1729)). On Linux, one update run reached RELOCATED but did not observe SafeToShutdown within the host deadline ([#1740](https://github.com/zlink-systems/zlink/issues/1740)). The template keeps the public 0.30.2 version; its candidate feed is required to finish `hit,reconnect,update` verification. The template does not compensate for these Framework failures.
+Validated against the published Framework 0.30.2 packages.
 
 ## Deployment sequence
 

@@ -56,7 +56,8 @@ Non-field scenarios share their party fixture. Selecting reconnect or update alo
 
 ## Known issues
 
-The template targets 0.30.2. Tests against public 0.30.0 encounter an Actor GetOrCreate from Session that does not complete ([#1782](https://github.com/zlink-systems/zlink/issues/1782)). Deferred cross-node join `DATA_LOST` is also a known 0.30.0 defect ([#1729](https://github.com/zlink-systems/zlink/issues/1729)); later join scenarios remain unverified when Actor creation fails. The Kotlin Spot handler registry cannot yet register a runtime `(channelName, topic)` subscription ([#1783](https://github.com/zlink-systems/zlink/issues/1783)), so `server/field/.../border/BorderRoutes.kt` declares one handler per adjacent-field topic; replace it with runtime registration once that API exists. Preserve the first failure and message-flow records. Do not change join timing, transport behavior or assertions to hide a Framework failure.
+Validated against the published Framework 0.30.2 packages.
+This template declares one handler per adjacent-field topic; Framework 0.30.2 adds runtime `(channelName, topic)` registration (#1783), which the template has not adopted.
 
 ## Deployment sequence
 

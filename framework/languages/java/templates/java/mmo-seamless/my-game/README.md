@@ -57,7 +57,9 @@ Structure-only validation: `./run-e2e.sh --check-structure` or `pwsh -NoProfile 
 
 ## Known issues
 
-Public Framework 0.30.0 can reject a cross-node deferred Actor join with `DATA_LOST` (issue #1729). The template targets 0.30.2, which includes the correction. Preserve the first node stderr and message-flow records when a scenario fails; do not alter join timing or assertions.
+Validated against the published Framework 0.30.2 packages.
+
+Preserve the first node stderr and message-flow records when a scenario fails; do not alter join timing or assertions.
 
 Message Follow is explicitly configured to 30 seconds in shared hosting. The wait for `SAFE_TO_SHUTDOWN` is derived from that period plus the existing host relocation budget. Packet deadlines and the relocation operation budget remain unchanged.
 

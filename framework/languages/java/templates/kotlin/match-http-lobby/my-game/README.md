@@ -56,7 +56,7 @@ The runner validates `zlink.structure.json`, creates its own Redis Compose proje
 
 ## Known issues
 
-Framework 0.30.2 is pending publication. Verification against 0.30.0 reproduced Java/Kotlin deferred JoinSpot DATA_LOST ([#1729](https://github.com/zlink-systems/zlink/issues/1729)), blocking the first Room admission. The template does not compensate for Framework failures. Preserve node stderr, including message-flow diagnostics, when reporting a failure.
+Validated against the published Framework 0.30.2 packages.
 
 ## Deployment sequence
 

@@ -60,7 +60,6 @@ pwsh -NoProfile -File ./run-e2e.ps1 -Local
 pwsh -NoProfile -File ./run-e2e.ps1 -Local -NoBuild
 ```
 
-
 Linux:
 
 ```sh
@@ -90,7 +89,7 @@ Use `--check-structure` through the default script to validate without starting 
 
 ## Known issues
 
-Framework 0.30.2 is pending publication. Public 0.30.0 validation failed at initial cross-node admission (#1723) and at a signed 64-bit `EarnRequest` on world B (#1692, typed JSON integer profile). These defects must be resolved in Framework; do not add template retries, alternate codecs or internal API access.
+Validated against the published Framework 0.30.2 packages.
 
 ## Deployment sequence
 
@@ -118,4 +117,4 @@ derived from that duration and the existing operation budget.
 
 기본 실행은 Docker에서 node와 e2e runner를 함께 실행하므로 호스트 .NET SDK가 필요하지 않습니다. Docker Compose v2와 Linux container 환경을 준비하십시오. 로컬 process 디버깅은 .NET 8 SDK를 설치한 뒤 `./run-e2e.sh --local` 또는 `pwsh -NoProfile -File ./run-e2e.ps1 -Local`로 실행합니다. 이미지 빌드·정리 로그는 `.logs/docker-<project>/`, node 로그는 `.logs/run-<id>/`에 남습니다. 이 디렉터리에서 `./run-e2e.sh --build-only`으로 빌드합니다. Windows에서는 `pwsh -NoProfile -File ./run-e2e.ps1`, Linux에서는 `./run-e2e.sh`로 전체 시나리오를 실행합니다. 실행에 사용하는 Redis와 node는 매번 별도로 생성되며 로그는 `.logs/run-<id>/`에 보존됩니다.
 
-월드 A와 B는 Redis와 mesh를 분리합니다. Player Actor가 gold를 소유하며 채널 변경과 재접속에서도 동일한 Actor 상태를 유지합니다. 유지보수에서는 drain 완료와 SafeToShutdown을 확인한 뒤 원본 node를 종료하고 같은 설정으로 대체 node를 시작합니다. Framework 0.30.2 게시 전에는 공개 패키지 복원이 제한되며, 0.30.0의 알려진 결함을 템플릿에서 우회하지 않습니다.
+월드 A와 B는 Redis와 mesh를 분리합니다. Player Actor가 gold를 소유하며 채널 변경과 재접속에서도 동일한 Actor 상태를 유지합니다. 유지보수에서는 drain 완료와 SafeToShutdown을 확인한 뒤 원본 node를 종료하고 같은 설정으로 대체 node를 시작합니다. 공개 Framework 0.30.2 패키지로 검증했습니다.

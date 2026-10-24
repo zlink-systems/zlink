@@ -56,7 +56,9 @@ The runner validates structure before starting an isolated Compose project. It s
 
 ## Known issues
 
-Framework 0.30.2 includes Node relocation inventory fixes (#1725). Typed push delivery restores the declared DTO class through the packet-name-to-class table in `handlers.ts` (#1731). Framework defects must be recorded with their first message-flow failure rather than compensated for in game code.
+Validated against the published Framework 0.30.2 packages.
+
+Typed push delivery restores the declared DTO class through the packet-name-to-class table in `handlers.ts` (#1731).
 
 ## Deployment sequence
 

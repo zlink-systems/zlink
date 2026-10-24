@@ -14,7 +14,7 @@ flowchart LR
 
 ## Prerequisites
 
-Docker Compose v2, and PowerShell 7 for the PowerShell runner are required. The project pins public Framework packages to 0.30.2 and the binding to 1.20.0 in `package.json`. Framework 0.30.2 must be published before the normal install commands can resolve it. A license, when required by the deployment, is provided externally and is never committed.
+Docker Compose v2, and PowerShell 7 for the PowerShell runner are required. The project pins public Framework packages to 0.30.2 and the binding to 1.20.0 in `package.json`. A license, when required by the deployment, is provided externally and is never committed.
 
 ## Build
 
@@ -61,7 +61,7 @@ The runner checks the structure before startup, creates a unique Redis Compose p
 
 ## Known issues
 
-The 0.30.0 baseline does not pass the complete suite. A new Player can be placed on an instance node without an application Entry Spot, leaving its first JoinWorldRequest without a handler ([#1772](https://github.com/zlink-systems/zlink/issues/1772)). Dungeon entry can fail because the bound-session send route is not connected ([#1775](https://github.com/zlink-systems/zlink/issues/1775)). Cleanup can return `ForceStopped/TeardownFailed`, and SafeToShutdown may not be observed after `RELOCATED` ([#1740](https://github.com/zlink-systems/zlink/issues/1740)). These failures remain visible, and 0.30.2 candidate verification is pending.
+Validated against the published Framework 0.30.2 packages.
 
 ## Deployment sequence
 
@@ -79,4 +79,4 @@ Initial Field placement uses public stable-type capacity and sequential startup.
 
 기본 빌드와 e2e는 Docker에서 runner와 node를 실행한다. Bash는 `./run-e2e.sh`, PowerShell 7은 `pwsh -NoProfile -File ./run-e2e.ps1`을 사용한다. 로컬 프로세스 디버깅은 Node.js와 npm을 설치한 뒤 `--local` 또는 `-Local`로 실행한다. Docker 빌드·정리 로그는 `.logs/docker-<project>/`에 남는다.
 
-이 디렉터리에서 Build와 Docker e2e의 명령을 실행합니다. `field`, `dungeon`, `reconnect`, `update`는 각각 필드 이동과 경계 표시, 파티 던전 입장, 던전 안 재접속, instance 교체를 검증합니다. 공개 패키지 0.30.2 게시 전에는 일반 설치 명령이 해당 버전을 받을 수 없습니다. 실행 로그와 message-flow 기록은 `.logs/run-<id>/`에 남습니다. 배포 시 Redis, fieldA, fieldB, 두 instance, Session 순서로 시작하고 READY를 확인합니다. instance 교체 시 drain의 relocation 및 SafeToShutdown 결과를 확인한 뒤 shutdown하고 같은 설정으로 대체 프로세스를 시작합니다.
+이 디렉터리에서 Build와 Docker e2e의 명령을 실행합니다. `field`, `dungeon`, `reconnect`, `update`는 각각 필드 이동과 경계 표시, 파티 던전 입장, 던전 안 재접속, instance 교체를 검증합니다. 실행 로그와 message-flow 기록은 `.logs/run-<id>/`에 남습니다. 배포 시 Redis, fieldA, fieldB, 두 instance, Session 순서로 시작하고 READY를 확인합니다. instance 교체 시 drain의 relocation 및 SafeToShutdown 결과를 확인한 뒤 shutdown하고 같은 설정으로 대체 프로세스를 시작합니다.

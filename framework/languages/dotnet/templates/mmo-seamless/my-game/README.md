@@ -21,7 +21,7 @@ The initial `zlink.structure.json` uses the landing page's `mmo-seamless` compos
 - Bash for Linux, WSL, or macOS; PowerShell 7 for Windows.
 - Linux native assets supported by the published `Zlink` package. Local process debugging additionally requires the .NET 8 SDK and ASP.NET Core 8 runtime.
 
-Packages come from public NuGet only. `Directory.Packages.props` pins the Framework package family to `0.30.0`. This project has no dependency on a ZLink source checkout or local package feed.
+Packages come from public NuGet only. `Directory.Packages.props` pins the Framework package family to `0.30.2`. This project has no dependency on a ZLink source checkout or local package feed.
 
 ## Build
 
@@ -106,12 +106,7 @@ Every e2e run validates the composition before starting nodes. `--check-structur
 
 ## Known issues
 
-The pinned public Framework `0.30.0` has the following defects. The template preserves the assertions and reports failures; it does not compensate with retries or delays. Fixes for #1690 and #1691 are scheduled for `0.30.2`.
-
-- [#1697](https://github.com/zlink-systems/zlink/issues/1697): Zone startup is blocked because startup validation calls `ZoneSpot.Configure()` with an empty `Context.SpotId`. The public Spot contract requires an instance identity, which this application uses to select adjacent-zone subscription topics. This fails with `ArgumentOutOfRangeException` through `ZLinkSpotStartupValidator.ValidateAsync` before scenarios run. No fixed topic is registered to compensate; the Framework must provide the contracted Context.
-
-- [#1690](https://github.com/zlink-systems/zlink/issues/1690): Session node `ShutdownAsync` with a bound connection can return `TeardownFailed` with native errno 110. Cleanup errors remain in the result and process logs, even if selected scenarios passed.
-- [#1691](https://github.com/zlink-systems/zlink/issues/1691): After relocation admission seal, an already accepted handler's `BoundSession.Send` can fail with `application admission is sealed`. Once startup is available, the default `update` scenario also requires this fix; passing cross, border, and reconnect does not establish update continuity.
+Validated against the published Framework 0.30.2 packages.
 
 ## Deployment sequence
 
@@ -141,4 +136,4 @@ Fixed Zones are bootstrapped serially: Zone A fills its three-Spot capacity befo
 
 Docker와 Compose v2를 설치한 뒤 Bash에서 `./run-e2e.sh`, PowerShell 7에서 `pwsh -NoProfile -File ./run-e2e.ps1`을 실행한다. 기본 실행은 빌드부터 node와 e2e client 실행까지 컨테이너에서 처리하므로 호스트 .NET SDK가 필요 없다. 로그는 `.logs/`에 남으며 자신이 만든 컨테이너·network·이미지 태그를 자동으로 제거한다.
 
-로컬 디버깅은 .NET 8 SDK를 설치한 뒤 `--local` 또는 `-Local`로 실행한다. 공개 0.30.0에서는 #1697로 Zone이 READY 이전에 실패한다. 시나리오의 기대값을 유지하고 최초 실패 로그와 종료 코드를 보존한다. 게임 확장 위치와 공개 API 규칙은 `AGENTS.md`를 따른다.
+로컬 디버깅은 .NET 8 SDK를 설치한 뒤 `--local` 또는 `-Local`로 실행한다. 공개 Framework 0.30.2 패키지로 검증했다. 게임 확장 위치와 공개 API 규칙은 `AGENTS.md`를 따른다.
