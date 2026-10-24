@@ -131,6 +131,8 @@ is no normal-completion value; completion only means the source-local admission 
 defined by the operation family accepted the message. Remote handler execution, subscriber
 receipt, remote Spot queue acceptance, or application callback completion are not awaited.
 
+An already settled one-way result is carried directly by the language's completion representation. The Framework does not create another operation or intermediate completion owner solely to deliver it. This rule does not change the inter-submission stage isolation in §2 or completion delivery in §11.
+
 <a id="41-nodejs-provides-no-synchronous-blocking-terminator"></a>
 ### 4.1 Node.js Provides No Synchronous Blocking Terminator
 
@@ -316,6 +318,10 @@ The one-shot [reply token](../00-foundation/02-glossary.en.md#reply-token) rules
 
 ## 9. Request Completion — The Completion Race and Timeout Budget
 
+A request prepares its final result consumer before submission. The existing terminal owner delivers its settled result through value conversions owned by the codecs to one final typed publisher. No separate asynchronous results or observation links are introduced solely for conversions between internal layers.
+
+Early completion of the public result does not release the final consumer prepared before submission or the resources it needs until physical-result processing finishes. This also applies when admission fails. A successful physical reply delivered to that consumer passes through each codec owner's conversion once, regardless of whether the public result has completed. The conversion's value or failure does not change an already settled public result, and the payload is cleaned up exactly once. [Cancellation and Shutdown §3](03-cancellation-and-shutdown.en.md#3-handling-the-cancellation-race) owns the handling of late native replies that are not delivered to the final consumer because the correlation is closed.
+
 The caller of a request observes exactly one result: whichever of reply, remote error, timeout,
 cancellation, or shutdown is decided first. Timeout and cancellation end the caller's wait,
 but do not roll back work the remote handler already started. A late reply for a Framework
@@ -358,6 +364,8 @@ The resubmission boundary after target connection closure or timeout is defined 
 [§5](#5-backpressure-and-error-classification).
 
 ## 10. Operation Identity and Where Completion Happens (Implementation)
+
+The final typed result delivery structure follows [§9](#9-request-completion--the-completion-race-and-timeout-budget).
 
 Each call has one completion slot, and several paths compete for it. Only the path that
 claims it releases the caller's wait. The losing paths do nothing.
@@ -458,9 +466,9 @@ decides which execution resource runs that turn.
 **Where a wait started doesn't change this condition.** Even when it started outside a runtime execution
 context, such as on an application thread, and has no lane to return to, the completion callbacks and
 asynchronous resumptions that the Framework delivers follow the new-execution-turn conditions above and the
-execution-resource placement in Messaging Hot Path "4.4". Where dependent actions that the application registers directly on a
-language future, task, or promise run, and the thread on which a synchronous blocking wait returns, follow
-that language API's contract.
+execution-resource placement in Messaging Hot Path "4.4".
+
+Value conversion and resource cleanup for internal results are not application callback delivery. Callbacks and suspended continuations delivered by the Framework follow this section's new execution turn regardless of whether the result settles immediately. Directly consuming an already completed value or registering dependent actions on a language completion representation follows that language API's contract. The thread on which a synchronous blocking wait returns also follows that language API's contract.
 
 **Putting a completion callback on the dispatcher cannot fail.** The dispatcher has no limit.
 Nothing rejects a request for lack of a slot, and nothing throws away the completion of a

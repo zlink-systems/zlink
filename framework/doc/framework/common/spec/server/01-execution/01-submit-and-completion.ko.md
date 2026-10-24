@@ -122,6 +122,8 @@ Send, publish, bound session send, session Actor relay와 명시적인 STREAM se
 boundary가 message를 수락했다는 뜻이다. Remote handler 실행, subscriber 수신, remote Spot queue
 수락 또는 application callback 완료는 기다리지 않는다.
 
+이미 확정된 one-way 결과는 해당 언어의 완료 표현으로 직접 전달한다. Framework는 그 결과를 전달하기 위한 별도 operation이나 중간 완료 소유자를 만들지 않는다. 이 규칙은 §2의 제출 간 stage 격리와 §11의 완료 배달 규칙을 바꾸지 않는다.
+
 <a id="41-nodejs는-동기-blocking-종결자를-제공하지-않는다"></a>
 ### 4.1 Node.js는 동기 blocking 종결자를 제공하지 않는다
 
@@ -290,6 +292,10 @@ STREAM reply의 one-shot [reply token](../00-foundation/02-glossary.ko.md#reply-
 
 ## 9. Request completion — 완료 경쟁과 timeout budget
 
+Request는 제출 전에 최종 결과의 수신자를 준비한다. 기존 terminal 소유자가 확정한 결과는 각 codec 소유자의 값 변환을 거쳐 최종 typed 결과에 한 곳에서 전달한다. 내부 계층 사이의 변환만을 위한 별도 비동기 결과와 관찰 연결을 두지 않는다.
+
+Public 결과가 먼저 끝나도 제출 전에 준비한 최종 수신자는 physical 결과 처리에 필요한 자원을 그 처리의 완료까지 유지한다. Admission 실패로 public 결과가 먼저 끝나는 경우에도 같다. 그 수신자에 전달된 정상 physical 응답은 public 결과의 완료 여부와 관계없이 각 codec 소유자의 변환을 한 번 거친다. 이 변환의 값이나 실패는 이미 확정된 public 결과를 바꾸지 않으며, payload는 정확히 한 번 정리한다. 닫힌 correlation 때문에 최종 수신자에 전달되지 않는 late native reply의 처리는 [Cancellation과 shutdown §3](03-cancellation-and-shutdown.ko.md#3-cancellation의-경쟁-처리)의 소유 경계를 따른다.
+
 Request caller는 reply, remote 오류, timeout, cancellation 또는 shutdown 가운데 먼저
 확정된 결과 하나를 관찰한다. Timeout과 cancellation은 호출자의 대기를 끝내지만
 원격 handler가 이미 시작한 업무를 되돌리지 않는다. Framework service operation의
@@ -328,6 +334,8 @@ Reply, timeout, cancellation과 Spot shutdown이 경쟁하면 먼저 확정된 t
 activation의 늦은 reply를 새 Spot에 전달하지 않는다. Target 연결 종료·timeout 뒤 재제출 경계는 [§5](#5-backpressure와-오류-분류)가 정의한다.
 
 ## 10. Operation identity와 완료 자리 (구현)
+
+최종 typed 결과의 전달 구조는 [§9](#9-request-completion--완료-경쟁과-timeout-budget)를 따른다.
 
 호출마다 완료 자리를 하나 두고, 여러 경로가 그 자리를 두고 경쟁한다. 차지한 경로만
 caller의 대기를 푼다. 진 경로는 아무것도 하지 않는다.
@@ -421,8 +429,9 @@ dispatcher에 넣고, 아래에서 정한 새 execution turn 조건에 따라 �
 
 **대기를 어디서 시작했는지는 이 조건을 바꾸지 않는다.** Application thread처럼 runtime 실행 문맥 밖에서
 시작해 돌아갈 lane이 없어도, Framework가 전달하는 완료 callback과 비동기 재개는 위 새 execution turn 조건과
-Messaging hot path 「4.4」의 실행 자원 배치를 따른다. Application이 언어의 future·task·promise에 직접 등록한 의존 작업의 실행
-위치와 동기 blocking 대기가 반환하는 thread는 그 언어 API의 계약을 따른다.
+Messaging hot path 「4.4」의 실행 자원 배치를 따른다.
+
+내부 결과의 값 변환과 자원 정리는 application callback 배달이 아니다. Framework가 배달하는 callback과 suspended continuation은 결과의 즉시 확정 여부와 관계없이 이 절의 새 execution turn을 따른다. 언어 완료 표현의 이미 완료된 값을 직접 소비하거나 의존 작업을 직접 등록하는 동작은 해당 언어 API 계약을 따른다. 동기 blocking 대기가 반환하는 thread도 해당 언어 API 계약을 따른다.
 
 **완료 callback을 dispatcher에 넣는 일은 실패하지 않는다.** Dispatcher에 상한이 없기
 때문이다. 자리가 없다는 이유로 request를 거부하거나, 이미 수락한 호출의 완료를 버리는
