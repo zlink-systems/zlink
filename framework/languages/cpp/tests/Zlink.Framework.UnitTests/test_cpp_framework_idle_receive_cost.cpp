@@ -113,7 +113,7 @@ int main ()
     app.add_zlink_framework ()
       .add_route_mesh ("idle-receive")
       .set_object_role (fw::object_role_t::none)
-      .listen ("tcp://127.0.0.1:6589")
+      .listen ("tcp://127.0.0.1:0")
       .set_routing_id (zlink::routing_id_t::from ("idle-receive"));
     std::thread host ([&] { app.run (0, nullptr); });
     bool valid = false;

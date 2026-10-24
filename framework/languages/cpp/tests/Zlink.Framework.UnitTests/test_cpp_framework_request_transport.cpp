@@ -84,7 +84,7 @@ TEST (RequestCallAllocations, UnknownLookupRetainsTheTargetAfterTheCallerReturns
     auto state =
       fw::test::runtime_failure_fixture<fw::detail::mesh_node_builder_state_t> ("lookup-request");
     state->core_context = std::make_shared<zlink::context_t> ();
-    state->listen_endpoint = "tcp://127.0.0.1:7484";
+    state->listen_endpoint = "tcp://127.0.0.1:0";
     state->routing_id = zlink::routing_id_t::from ("lookup-source");
     state->object_role = fw::object_role_t::none;
     auto store = std::make_shared<deferred_node_lookup_t> ();
@@ -131,7 +131,7 @@ TEST (RequestCallAllocations, PendingNodeLookupDoesNotCreateAnOperationBeforeRes
     auto state = fw::test::runtime_failure_fixture<fw::detail::mesh_node_builder_state_t> (
       "lookup-operation-cost");
     state->core_context = std::make_shared<zlink::context_t> ();
-    state->listen_endpoint = "tcp://127.0.0.1:7486";
+    state->listen_endpoint = "tcp://127.0.0.1:0";
     state->routing_id = zlink::routing_id_t::from ("lookup-cost-source");
     state->object_role = fw::object_role_t::none;
     auto store = std::make_shared<deferred_node_lookup_t> ();

@@ -681,7 +681,7 @@ TEST (RequestCallAllocations, HostNodeRequestAddsNoCoroutineAboveTheRawTask)
     auto state =
       fw::test::runtime_failure_fixture<fw::detail::mesh_node_builder_state_t> ("host-request");
     state->core_context = std::make_shared<zlink::context_t> ();
-    state->listen_endpoint = "tcp://127.0.0.1:7485";
+    state->listen_endpoint = "tcp://127.0.0.1:0";
     state->routing_id = zlink::routing_id_t::from ("host-source");
     state->object_role = fw::object_role_t::none;
     fw::detail::mesh_node_runtime_t runtime (state);
@@ -811,7 +811,7 @@ TEST (RequestCallAllocations, AppClassifiedNodeFailureAddsNoTransportReplyState)
       std::make_shared<fw::runtime::in_memory_location_store_t> ());
     target_options.add_route_mesh ("m")
       .set_object_role (fw::object_role_t::client)
-      .listen ("tcp://127.0.0.1:7482")
+      .listen ("tcp://127.0.0.1:0")
       .set_routing_id (target);
     target_host.start ();
     const auto endpoint =
@@ -820,7 +820,7 @@ TEST (RequestCallAllocations, AppClassifiedNodeFailureAddsNoTransportReplyState)
     options.codecs ().use (allocation_codec_t{});
     options.add_route_mesh ("m")
       .set_object_role (fw::object_role_t::none)
-      .listen ("tcp://127.0.0.1:7483")
+      .listen ("tcp://127.0.0.1:0")
       .set_routing_id (zlink::routing_id_t::from ("allocation-source"))
       .peer_connections ()
       .connect (target, endpoint);

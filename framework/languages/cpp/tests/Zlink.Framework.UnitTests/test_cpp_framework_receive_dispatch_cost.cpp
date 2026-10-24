@@ -100,7 +100,7 @@ int main ()
         auto state =
           test::runtime_failure_fixture<detail::mesh_node_builder_state_t> ("receive-cost");
         state->core_context = std::make_shared<zlink::context_t> ();
-        state->listen_endpoint = "tcp://127.0.0.1:5685";
+        state->listen_endpoint = "tcp://127.0.0.1:0";
         state->routing_id = zlink::routing_id_t::from ("receive-cost");
         detail::mesh_node_runtime_t node (state);
         node.start ();
@@ -304,7 +304,7 @@ zlink_receive_dispatch_measure (std::size_t iterations,
         auto state =
           test::runtime_failure_fixture<detail::mesh_node_builder_state_t> ("receive-cost-dso");
         state->core_context = std::make_shared<zlink::context_t> ();
-        state->listen_endpoint = "tcp://127.0.0.1:5686";
+        state->listen_endpoint = "tcp://127.0.0.1:0";
         state->routing_id = zlink::routing_id_t::from ("receive-cost-dso");
         detail::mesh_node_runtime_t node (state);
         node.start ();
