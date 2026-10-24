@@ -33,6 +33,8 @@ Framework 0.30.2은 Node.js binding 1.20.0과 Core 1.20.0을 사용합니다.
 - Core 1.20.0은 handshake 중 completion poller를 등록할 때 임시 transport owner의 executor가 멈추던 문제를 수정했습니다. (#2504)
 - Actor reply를 STREAM frame 한 개로 보내고 오류 payload를 스펙의 `{code, message}` 형식으로 맞췄습니다. 네 언어가 같은 공유 vector로 검증합니다. (#2507)
 - Actor Response를 요청 packet의 reply 계약으로 검사합니다. 이전에는 payload 계약으로 검사해 Entry Spot Actor 요청의 typed 응답이 거부될 수 있었습니다. (#2507)
+- 종료 중 admission이 거절한 request가 요청자에게 `ShuttingDown` 오류로 돌아가지 않아, 그 request를 기다리던 작업 때문에 종료가 30초 뒤 강제 종료로 끝나던 문제를 수정했습니다. 거절된 one-way send는 reply 없이 버립니다. (#2620)
+- User Spot retire를 중단할 때 `Continued` callback이 보류된 application job보다 늦게 실행되던 문제를 수정했습니다. (#2623)
 
 ## 설치
 

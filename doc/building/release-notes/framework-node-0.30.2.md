@@ -33,6 +33,8 @@ Framework 0.30.2 uses Node.js binding 1.20.0 and Core 1.20.0.
 - Core 1.20.0 no longer stalls the temporary transport owner's executor when a completion poller is registered during the handshake. (#2504)
 - Actor replies are sent as a single STREAM frame, and error payloads use the spec's `{code, message}` form. All four languages verify against the same shared vectors. (#2507)
 - An Actor Response is validated against the request packet's reply contract. It was validated against the payload contract, so a typed response to an Entry Spot Actor request could be rejected. (#2507)
+- A request rejected by admission during shutdown now returns a `ShuttingDown` error to the requester. Work waiting on that request kept shutdown open until a forced stop after 30 seconds. A rejected one-way send is dropped without a reply. (#2620)
+- Fixed the `Continued` callback running after a held application job when a User Spot retire is aborted. (#2623)
 
 ## Install
 

@@ -4,6 +4,10 @@
 
 Framework 0.30.2 uses .NET binding 1.20.0 and Core 1.20.0.
 
+## Compatibility changes
+
+- Stream Connector `ws://` and `wss://` connections no longer use the OS or system proxy settings and connect directly to the endpoint. In 0.30.1 they followed the system proxy, so Windows proxy auto-detection could run inside the connect timeout and make the first connection time out. A native connector connects directly on every transport (stream-connector spec §3.2). (#2534)
+
 ## Changes
 
 - Request admission is distinct from reply completion, so callers can observe acceptance. Deferred Join deadlines use the registration clock, and callback suspension after cancellation is observed. (#2069, #2070, #2270, #2253)
@@ -25,6 +29,7 @@ Framework 0.30.2 uses .NET binding 1.20.0 and Core 1.20.0.
 - Actor replies are sent as a single STREAM frame, and error payloads use the spec's `{code, message}` form. All four languages verify against the same shared vectors. (#2507)
 - Service wire commands 21, 22, 24, and 25 are read and written with the schema-generated codec and use the same layout as the other languages. (#2507)
 - The Session bind fence is built only from the row that describes the submitted ActorRef, which fixes bind rejections caused by values from another row after relocation. (#2507)
+- The generated codec keeps the range check for unsigned generation values. (#2515)
 
 ## Install
 

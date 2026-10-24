@@ -28,6 +28,10 @@ Framework 0.30.2은 C++ binding 1.20.0과 Core 1.20.0을 사용합니다.
 - Actor reply를 STREAM frame 한 개로 보내고 오류 payload를 스펙의 `{code, message}` 형식으로 맞췄습니다. 네 언어가 같은 공유 vector로 검증합니다. (#2507)
 - relocation 뒤 같은 node로 돌아온 Actor에 Session을 bind하면 오래된 authority로 거부되던 문제, Message Follow로 돌아온 요청이 처리되지 않던 문제, relocation terminal reply가 원래 요청자 대신 coordinator로 전달되던 문제를 수정했습니다. (#2507)
 - GameQuest sample이 Close를 확인한 뒤 다음 조회를 보내도록 수정했습니다. (#2507)
+- relocation으로 옮겨 온 User Spot에 `get_or_create`를 호출하면 기존 Spot 대신 새 Spot을 만들던 문제를 수정했습니다. (#2607)
+- Channel send가 suspend 뒤에도 쓰는 call 인자를 소유해, 호출자의 인자가 먼저 사라질 때 잘못된 값을 보내던 문제를 수정했습니다. (#2507)
+- STREAM host의 port `*`를 빈 port 선택으로 해석합니다. Windows resolver가 service `*`를 거부해 host가 비정상 종료하던 문제를 수정했습니다. (#2618)
+- runtime status 조회와 관찰이 같은 게시 status를 쓰고, 관찰의 첫 항목이 구독 시점의 현재 status가 되도록 수정했습니다. (#2629)
 
 ## 알려진 문제
 

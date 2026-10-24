@@ -15,6 +15,8 @@ Framework 0.30.2 uses Java·Kotlin binding 1.20.0 and Core 1.20.0.
   @ZLinkSpotSubscription(channelName = "zoneworld.zones", topic = "zone.border")
   ```
 
+- Stream Connector `ws://` and `wss://` connections no longer use the JDK default `ProxySelector` and connect directly to the endpoint. A native connector connects directly on every transport (stream-connector spec §3.2). (#2534)
+
 ## Changes
 
 - Request admission is distinct from reply completion, so callers can observe acceptance. Deferred Join completion and HTTP handler Yield now continue on the correct execution turn. (#2065, #2044, #1916, #1912)
@@ -35,6 +37,8 @@ Framework 0.30.2 uses Java·Kotlin binding 1.20.0 and Core 1.20.0.
 - Core 1.20.0 no longer stalls the temporary transport owner's executor when a completion poller is registered during the handshake. (#2504)
 - Actor replies are sent as a single STREAM frame, and error payloads use the spec's `{code, message}` form. All four languages verify against the same shared vectors. (#2507)
 - Join callbacks run in the Spot lifecycle turn, and defects in turn restoration and teardown owner resolution are fixed. (#2507)
+- Fixed the `Continued` callback of a User Spot retire running after a held application job once seal preparation finished. (#2623)
+- Fixed observation delivering a status from before the subscription as its first item. The first item is the current status at subscription. (#2629)
 
 ## Install
 

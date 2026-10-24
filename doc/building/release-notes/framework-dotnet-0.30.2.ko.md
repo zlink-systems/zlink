@@ -4,6 +4,10 @@
 
 Framework 0.30.2은 .NET binding 1.20.0과 Core 1.20.0을 사용합니다.
 
+## 호환성 변경
+
+- Stream Connector의 `ws://`·`wss://` 연결이 OS·시스템 proxy 설정을 쓰지 않고 endpoint에 직접 연결합니다. 0.30.1은 시스템 proxy를 따라 Windows의 proxy 자동 검색이 connect timeout 안에서 실행돼 첫 연결이 시간 초과로 실패할 수 있었습니다. 네이티브 connector는 모든 transport에서 직접 연결합니다(stream-connector 스펙 §3.2). (#2534)
+
 ## 변경
 
 - request admission과 reply 완료를 분리해 수락 시점을 확인할 수 있게 했습니다. deferred Join의 deadline은 등록 clock을 따르고 cancellation 뒤 callback suspension도 관찰합니다. (#2069, #2070, #2270, #2253)
@@ -25,6 +29,7 @@ Framework 0.30.2은 .NET binding 1.20.0과 Core 1.20.0을 사용합니다.
 - Actor reply를 STREAM frame 한 개로 보내고 오류 payload를 스펙의 `{code, message}` 형식으로 맞췄습니다. 네 언어가 같은 공유 vector로 검증합니다. (#2507)
 - service wire command 21·22·24·25를 schema 생성 codec으로 읽고 써, 다른 언어와 같은 배치를 사용합니다. (#2507)
 - Session bind fence를 제출된 ActorRef를 설명하는 row에서만 만들어, relocation 뒤 다른 row의 값으로 bind가 거부되던 문제를 수정했습니다. (#2507)
+- 생성 codec이 unsigned generation 값의 범위 검사를 잃던 문제를 수정했습니다. (#2515)
 
 ## 설치
 

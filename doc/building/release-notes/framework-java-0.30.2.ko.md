@@ -15,6 +15,8 @@ Framework 0.30.2은 Java·Kotlin binding 1.20.0과 Core 1.20.0을 사용합니�
   @ZLinkSpotSubscription(channelName = "zoneworld.zones", topic = "zone.border")
   ```
 
+- Stream Connector의 `ws://`·`wss://` 연결이 JDK 기본 `ProxySelector`를 쓰지 않고 endpoint에 직접 연결합니다. 네이티브 connector는 모든 transport에서 직접 연결합니다(stream-connector 스펙 §3.2). (#2534)
+
 ## 변경
 
 - request admission과 reply 완료를 구분해 수락을 확인할 수 있습니다. deferred Join 완료와 HTTP handler의 Yield가 실행 turn과 올바르게 이어집니다. (#2065, #2044, #1916, #1912)
@@ -35,6 +37,8 @@ Framework 0.30.2은 Java·Kotlin binding 1.20.0과 Core 1.20.0을 사용합니�
 - Core 1.20.0은 handshake 중 completion poller를 등록할 때 임시 transport owner의 executor가 멈추던 문제를 수정했습니다. (#2504)
 - Actor reply를 STREAM frame 한 개로 보내고 오류 payload를 스펙의 `{code, message}` 형식으로 맞췄습니다. 네 언어가 같은 공유 vector로 검증합니다. (#2507)
 - Join 콜백을 Spot lifecycle turn에서 실행하고, turn 복원과 teardown owner 판정 결함을 수정했습니다. (#2507)
+- User Spot retire에서 seal 준비가 끝난 뒤 `Continued` callback이 보류된 application job보다 늦게 실행되던 문제를 수정했습니다. (#2623)
+- 관찰이 구독 전의 status를 첫 항목으로 받던 문제를 수정했습니다. 첫 항목은 구독 시점의 현재 status입니다. (#2629)
 
 ## 설치
 

@@ -28,6 +28,10 @@ Framework 0.30.2 uses C++ binding 1.20.0 and Core 1.20.0.
 - Actor replies are sent as a single STREAM frame, and error payloads use the spec's `{code, message}` form. All four languages verify against the same shared vectors. (#2507)
 - Fixed Session bind being rejected with a stale authority when an Actor returned to the same node after relocation, requests returning through Message Follow not being processed, and relocation terminal replies going to the coordinator instead of the original requester. (#2507)
 - Updated the GameQuest sample to send the next lookup after it observes Close. (#2507)
+- Fixed `get_or_create` on a User Spot that moved in by relocation creating a new Spot instead of returning the existing one. (#2607)
+- A Channel send owns the call arguments it uses after suspension, which fixes sending wrong values when the caller's arguments end first. (#2507)
+- A STREAM host reads port `*` as a request for a free port. The Windows resolver rejected service `*` and the host terminated abnormally. (#2618)
+- Runtime status queries and observation use the same published status, and the first observed item is the current status at subscription. (#2629)
 
 ## Known issues
 
