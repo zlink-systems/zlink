@@ -902,6 +902,8 @@ in the public API.
 
 ## 4. Messaging API
 
+The final typed result delivery structure follows [Submit and Completion §9](../../../01-execution/01-submit-and-completion.en.md#9-request-completion--the-completion-race-and-timeout-budget).
+
 The messaging surface user code injects and uses instead of a raw
 socket is below.
 

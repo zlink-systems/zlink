@@ -135,9 +135,9 @@ violation.
 
 ## 6. When Deserialization Happens
 
-**The header is read first, and payload deserialization happens only right before the
-handler, after execution authority is acquired.** See §4's diagram for the owner transition
-across the full path.
+**The header of an incoming application message is read first, and payload deserialization happens only right before the handler, after execution authority is acquired.** See §4's diagram for the owner transition across the full path.
+
+The handler-gate rule applies to deserialization of incoming application messages. A requester may decode a reply on the completion execution resource; application continuation delivery follows [Submit and Completion §11](01-submit-and-completion.en.md#11-the-execution-turn-of-the-completion-callback-implementation). Each codec owner interprets the reply only once.
 
 Reading the header first isn't a choice — it's needed to decide which owner to send it to. The
 payload, on the other hand, is seen by no one until the handler runs.

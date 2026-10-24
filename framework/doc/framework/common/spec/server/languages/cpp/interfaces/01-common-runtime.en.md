@@ -151,6 +151,10 @@ specified in the
 
 ## 4. Common Result, Coroutine, And Message
 
+Completion delivery follows [Submit and Completion §11](../../../01-execution/01-submit-and-completion.en.md#11-the-execution-turn-of-the-completion-callback-implementation). Public source signatures, move-only semantics, and the result-reference semantics of `result()` are retained. Layout, `sizeof`, and eager state allocation are not contractual guarantees.
+
+The change to the result storage representation of `task_t` changes the C++ binary ABI. Rebuild the Framework, consumers, plugins, fake/test adapters, and engine bridges with the same header; do not mix in objects built with an earlier header.
+
 ```cpp
 namespace zlink::framework {
 
