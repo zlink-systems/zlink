@@ -1,3 +1,4 @@
+const { ZLinkRequestResult } = require('../../packages/framework/dist/runtime/messaging/request-result');
 'use strict';
 
 const assert = require('node:assert/strict');
@@ -23,15 +24,15 @@ function fixture(surface) {
     }
   };
   // The reply never arrives during the test: the request stays pending.
-  const table = { submit(operation) { operation(); return new Promise(() => {}); } };
+  const table = { submit(operation, _signal, entry) { operation(entry); return entry; } };
   const transport = new framework.ZLinkRuntimeRouteTransport(
     () => undefined, undefined,
     () => ({ meshNode: () => node, meshCompletionTable: () => table }),
     undefined, undefined, undefined, undefined, () => false
   );
   const request = () => surface === 'node'
-    ? transport.request('mesh', 'peer', 'Packet', { body: 'x'.repeat(1024) }, 1000)
-    : transport.requestToChannel('mesh', 'channel', 'Packet', { body: 'x'.repeat(1024) }, 1000);
+    ? transport.request(new ZLinkRequestResult(), 'mesh', 'peer', 'Packet', { body: 'x'.repeat(1024) }, 1000)
+    : transport.requestToChannel(new ZLinkRequestResult(), 'mesh', 'channel', 'Packet', { body: 'x'.repeat(1024) }, 1000);
   return { submitted, request };
 }
 

@@ -1,3 +1,4 @@
+const { ZLinkRequestResult } = require('../../packages/framework/dist/runtime/messaging/request-result');
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const framework = require('../../packages/framework/dist');
@@ -258,9 +259,12 @@ async function fixture(
       }
     }),
     completions: () => ({
-      submit(operation) {
-        return operation();
-      }
+      submit(operation, _signal, resultOwner = new ZLinkRequestResult()) {
+return resultOwner.observe((async () => {
+        return operation(resultOwner);
+
+})());
+}
     }),
     defaultRequestTimeoutMs: 5000
   });

@@ -1,3 +1,4 @@
+const { ZLinkRequestResult } = require('../../packages/framework/dist/runtime/messaging/request-result');
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const { setImmediate } = require('node:timers/promises');
@@ -100,7 +101,7 @@ for (const kind of ['spot', 'actor']) {
         completionTableProvider: () => ({
           submit(start) {
             start();
-            return operation.promise;
+            return new ZLinkRequestResult().observe(operation.promise);
           }
         }),
         locationResolver: () => ({

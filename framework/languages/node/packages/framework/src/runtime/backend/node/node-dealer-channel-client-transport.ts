@@ -1,5 +1,6 @@
 import {
-  prepareZLinkRequestReply,
+  observeZLinkRequestReply,
+  identityRequestReply,
   rejectZLinkRequestReply,
   type ZLinkRequestResult
 } from '../../messaging/request-result';
@@ -57,6 +58,7 @@ export class ZLinkDealerChannelClientTransport implements ZLinkChannelClientTran
   }
 
   request<TReply>(
+    entry: ZLinkRequestResult<TReply>,
     channelName: string,
     packetName: string | undefined,
     request: Message,
@@ -97,15 +99,20 @@ export class ZLinkDealerChannelClientTransport implements ZLinkChannelClientTran
         },
         'channel request'
       );
-      return prepareZLinkRequestReply(pending, (reply) => {
-        try {
-          return decodeChannelReply<TReply>(reply);
-        } finally {
-          for (const part of reply) part.close();
-        }
-      });
+      return observeZLinkRequestReply(
+        pending,
+        (reply) => {
+          try {
+            return decodeChannelReply<TReply>(reply);
+          } finally {
+            for (const part of reply) part.close();
+          }
+        },
+        identityRequestReply,
+        entry
+      );
     } catch (error) {
-      return rejectZLinkRequestReply(error);
+      return rejectZLinkRequestReply(error, entry);
     }
   }
 

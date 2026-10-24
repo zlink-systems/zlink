@@ -42,6 +42,7 @@ for (const pending of [false, true, 'native']) {
         pending
           ? `
       const table = new backend.ZLinkMeshCompletionTable();
+      node.setCompletionTable(table);
       const { ReceiveKind } = require('./packages/framework/dist/runtime/foundation/service-runtime-contracts');
       const { RequestResult } = require('./packages/framework/dist/runtime/backend/runtime-values');
       const pump = new backend.ZLinkMeshDispatchPump(node, {
@@ -53,7 +54,7 @@ for (const pending of [false, true, 'native']) {
         }
       });
       pump.start();
-      table.submit(() => node.requestToNode(node.status().routingId, Buffer.from('request'), { timeoutMs: 1000 }))
+      table.submit((entry) => node.requestToNode(node.status().routingId, Buffer.from('request'), { timeoutMs: 1000, requestEntry: entry })).pending
         .then(completion => {
           if (completion.terminalResult !== RequestResult.Ok) throw new Error('reply failed');
           backend.closeMeshCompletion(completion);
@@ -123,9 +124,9 @@ test('deadline maintenance yields its live iterator and resumes through deletion
   registry.close();
 });
 
-test('shared deadline maintenance completes a native request while its handler is suspended', async () => {
+test('shared deadline maintenance completes a native request while its handler is suspended', async (t) => {
   const backend = require('../../packages/framework/dist/runtime/backend');
-  const { RequestResult } = require('../../packages/framework/dist/runtime/backend/runtime-values');
+  const { RequestResult, ZLinkBackendResultError } = require('../../packages/framework/dist/runtime/backend/runtime-values');
   const factory = new backend.ZLinkNodeBackendAdapterFactory();
   const context = factory.createChannelAdapter().createContext();
   const suffix = `node-dispatch-deadline-${process.pid}`;
@@ -139,7 +140,9 @@ test('shared deadline maintenance completes a native request while its handler i
     .createMeshNode(context, { meshName: suffix, routingId: suffix, applicationJobQueue: queue });
   node.setBind(`inproc://${suffix}`);
   node.start();
-  const table = new backend.ZLinkMeshCompletionTable();
+  const diagnostics = [];
+  const table = new backend.ZLinkMeshCompletionTable((diagnostic) => diagnostics.push(diagnostic));
+  node.setCompletionTable(table);
   let entered;
   const started = new Promise((resolve) => {
     entered = resolve;
@@ -152,7 +155,6 @@ test('shared deadline maintenance completes a native request while its handler i
   const replied = new Promise((resolve) => {
     late = resolve;
   });
-  let completions = 0;
   const pump = new backend.ZLinkMeshDispatchPump(node, {
     applicationJobQueue: queue,
     async dispatch(_owner, record) {
@@ -161,7 +163,6 @@ test('shared deadline maintenance completes a native request while its handler i
         require('../../packages/framework/dist/runtime/foundation/service-runtime-contracts')
           .ReceiveKind.Completion
       ) {
-        completions++;
         table.complete(record);
         return;
       }
@@ -173,18 +174,26 @@ test('shared deadline maintenance completes a native request while its handler i
   });
   pump.start();
   try {
-    const pending = table.submit(() =>
-      node.requestToNode(node.status().routingId, Buffer.from('request'), { timeoutMs: 20 })
+    const entry = table.submit((entry) =>
+      node.requestToNode(node.status().routingId, Buffer.from('request'), { timeoutMs: 20, requestEntry: entry })
+    );
+    const failed = t.mock.method(entry, 'fail');
+    const pending = assert.rejects(entry.pending, (error) =>
+      error instanceof ZLinkBackendResultError && error.result === RequestResult.TimedOut
     );
     await started;
-    const completion = await pending;
-    assert.equal(completion.terminalResult, RequestResult.TimedOut);
-    backend.closeMeshCompletion(completion);
+    await pending;
     assert.equal(table.pendingCount, 0);
+    assert.equal(failed.mock.callCount(), 1);
+    assert.equal(diagnostics.length, 0);
     release();
     await replied;
     await new Promise(setImmediate);
-    assert.equal(completions, 1, 'late native reply cannot establish another terminal');
+    assert.equal(failed.mock.callCount(), 1, 'late native reply cannot establish another terminal');
+    assert.equal(table.pendingCount, 0);
+    assert.equal(diagnostics.length, 1);
+    assert.equal(diagnostics[0].kind, 'unknownOrLate');
+    assert.equal(diagnostics[0].terminalResult, RequestResult.Ok);
   } finally {
     release();
     table.dispose();
@@ -252,11 +261,18 @@ test('backend shared maintenance gives raw and stateful registries one divided b
     .createMeshAdapter()
     .createMeshNode(context, { meshName: suffix, routingId: suffix, applicationJobQueue: queue });
   node.setBind(`inproc://${suffix}`);
+  const table = new backend.ZLinkMeshCompletionTable();
+  node.setCompletionTable(table);
+  const cleanupReason = new Error('maintenance budget test cleanup');
+  let cleanup;
   try {
     node.start();
     // Maintenance runs at the nearest management deadline (spec 08 §4.2); a
     // pending request gives this idle node one.
-    node.requestToNode('budget-missing-peer', [Buffer.from('budget')], { timeoutMs: 5 });
+    const pending = table.submit((entry) =>
+      node.requestToNode(node.status().routingId, [Buffer.from('budget')], { timeoutMs: 5, requestEntry: entry })
+    ).pending;
+    cleanup = assert.rejects(pending, (error) => error === cleanupReason);
     await observed;
     await new Promise(setImmediate);
     assert.equal(observations[0].now, observations[1].now);
@@ -266,6 +282,8 @@ test('backend shared maintenance gives raw and stateful registries one divided b
     );
     assert.equal(observations[1].deadline, observations[1].now + RAW_MESH_RECEIVE_TIME_BUDGET_MS);
   } finally {
+    table.dispose(cleanupReason);
+    await cleanup;
     await node.close();
     await context.dispose();
   }

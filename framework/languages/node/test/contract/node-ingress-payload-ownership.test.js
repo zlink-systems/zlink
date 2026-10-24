@@ -53,7 +53,7 @@ test('completion retention keeps managed and binding payload views after source 
   const table = new ZLinkMeshCompletionTable();
   const ownedBytes = Buffer.from('managed completion');
   const owned = ZLinkBufferMessage.fromOwned(ownedBytes);
-  const ownedCompletion = table.submit(() => ({ high: 1n, low: 1n }));
+  const ownedCompletion = table.submit(() => ({ high: 1n, low: 1n })).pending;
   table.complete(completionRecord(1n, [owned]));
   owned.close();
   const retainedOwned = await ownedCompletion;
@@ -66,7 +66,7 @@ test('completion retention keeps managed and binding payload views after source 
 
   const native = zlink.Message.from(Buffer.from('native completion'));
   const nativeView = native.data();
-  const nativeCompletion = table.submit(() => ({ high: 1n, low: 2n }));
+  const nativeCompletion = table.submit(() => ({ high: 1n, low: 2n })).pending;
   try {
     table.complete(completionRecord(2n, [native]));
   } finally {
@@ -102,7 +102,7 @@ test('native received binary payload has one retained view across completion and
     dealer.send().message(parts[0]).message(parts[1]).submit_sync();
     assert.equal(router.recv(received), true);
     const nativeView = received.parts[1].data();
-    const pending = table.submit(() => ({ high: 1n, low: 3n }));
+    const pending = table.submit(() => ({ high: 1n, low: 3n })).pending;
     table.complete(completionRecord(3n, received.parts));
     const directReply = decodeChannelReply(received.parts);
     received.close();

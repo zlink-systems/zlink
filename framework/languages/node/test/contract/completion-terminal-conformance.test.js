@@ -38,8 +38,8 @@ test('mesh completion table consumes the shared identity and terminal fixture', 
   assert.equal(alpha.low, gamma.low);
   assert.notEqual(alpha.high, gamma.high);
   const identityTable = new completion.ZLinkMeshCompletionTable();
-  const alphaPending = identityTable.submit(() => alpha);
-  const gammaPending = identityTable.submit(() => gamma);
+  const alphaPending = identityTable.submit(() => alpha).pending;
+  const gammaPending = identityTable.submit(() => gamma).pending;
   identityTable.complete(record(gamma, 'reply:success'));
   identityTable.complete(record(alpha, 'reply:success'));
   assert.equal((await alphaPending).terminalResult, 0);
@@ -54,7 +54,7 @@ test('mesh completion table consumes the shared identity and terminal fixture', 
     let applicationCompletionCount = 0;
     const pending = scenario.registered === false
       ? undefined
-      : table.submit(() => operationId, controller.signal).then(
+      : table.submit(() => operationId, controller.signal).pending.then(
         (value) => {
           applicationCompletionCount += 1;
           return { kind: 'reply', value };
@@ -95,7 +95,7 @@ test('mesh completion table consumes the shared identity and terminal fixture', 
 test('mesh completion registrations above 4,096 all reach their replies', async () => {
   const table = new completion.ZLinkMeshCompletionTable();
   const operations = Array.from({ length: 4_097 }, (_, index) => ({ high: BigInt(index + 1), low: 0n }));
-  const pending = operations.map(operationId => table.submit(() => operationId));
+  const pending = operations.map(operationId => table.submit(() => operationId).pending);
   assert.equal(table.pendingCount, 4_097);
   for (const operationId of operations) table.complete(record(operationId, 'reply:success'));
   assert.equal((await Promise.all(pending)).every(value => value.terminalResult === 0), true);
@@ -106,7 +106,7 @@ test('mesh completion registrations above 4,096 all reach their replies', async 
 test('mesh completion dispatch occurs after the atomic entry take', async () => {
   const table = new completion.ZLinkMeshCompletionTable();
   let callbackObserved = false;
-  const pending = table.submit(() => operation('alpha')).then(() => {
+  const pending = table.submit(() => operation('alpha')).pending.then(() => {
     callbackObserved = true;
     assert.equal(table.pendingCount, 0);
   });
@@ -120,7 +120,7 @@ test('mesh completion payload access failure still consumes the terminal winner'
   const diagnostics = [];
   const table = new completion.ZLinkMeshCompletionTable((diagnostic) => diagnostics.push(diagnostic));
   const operationId = operation('alpha');
-  const pending = table.submit(() => operationId);
+  const pending = table.submit(() => operationId).pending;
   const broken = record(operationId, 'reply:success');
   broken.parts = [{ data: () => { throw new Error('payload access failed'); } }];
 

@@ -424,7 +424,7 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
           call.onAdmitted
         ),
       deadline.signal
-    );
+    ).pending;
     this.traceInstanceAddress(
       ZLinkMessageFlowOutcome.Sent,
       ZLinkDispatchMessageKind.Request,

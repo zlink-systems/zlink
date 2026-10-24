@@ -1,5 +1,6 @@
+import type { ZLinkMeshDispatchAdmission } from '../admission';
 import {
-  prepareZLinkRequestReply,
+  observeZLinkRequestReply,
   identityRequestReply,
   rejectZLinkRequestReply,
   type ZLinkRequestResult
@@ -213,17 +214,19 @@ export class ZLinkChannelRuntimeManager {
   dispatchMeshChannel(
     meshName: string,
     record: ReceiveRecord,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    admit?: ZLinkMeshDispatchAdmission
   ): void | Promise<void> {
-    return this.lifecycle.dispatchMeshChannel(meshName, record, signal);
+    return this.lifecycle.dispatchMeshChannel(meshName, record, signal, admit);
   }
 
   dispatchMeshRoute(
     meshName: string,
     record: ReceiveRecord,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    admit?: ZLinkMeshDispatchAdmission
   ): void | Promise<void> {
-    return this.lifecycle.dispatchMeshRoute(meshName, record, signal);
+    return this.lifecycle.dispatchMeshRoute(meshName, record, signal, admit);
   }
 
   dispatchLocalMeshRoute(
@@ -249,6 +252,7 @@ export class ZLinkChannelRuntimeManager {
   }
 
   request<TReply>(
+    entry: ZLinkRequestResult<TReply>,
     channelName: string,
     packetName: string | undefined,
     request: unknown,
@@ -267,9 +271,9 @@ export class ZLinkChannelRuntimeManager {
         metadata,
         onAdmitted
       );
-      return prepareZLinkRequestReply(pending, identityRequestReply);
+      return observeZLinkRequestReply(pending, identityRequestReply, identityRequestReply, entry);
     } catch (error) {
-      return rejectZLinkRequestReply(error);
+      return rejectZLinkRequestReply(error, entry);
     }
   }
 

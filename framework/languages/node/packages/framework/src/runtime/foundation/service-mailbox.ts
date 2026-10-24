@@ -18,7 +18,7 @@ export interface ServiceMailboxRecord {
   readonly requestSource?: import('../locations/request-source-resolver').ZLinkRequestSourceFence;
   readonly sourceRoute?: Uint8Array;
   readonly requestSequence?: bigint;
-  readonly reply?: (parts: readonly Uint8Array[]) => void;
+  readonly reply?: (parts: readonly (Uint8Array | string)[]) => void;
   readonly correlation?: bigint;
   readonly localReply?: (
     terminalResult: number,

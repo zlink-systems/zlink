@@ -1237,7 +1237,9 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
         const auto resolve_host = wildcard ? std::string () : endpoint.host;
         const auto resolve_flags =
           wildcard ? tcp::resolver::flags::passive : tcp::resolver::flags ();
-        const auto endpoints = resolver.resolve (resolve_host, endpoint.port, resolve_flags, error);
+        // Port `*` selects a free port as on the Core STREAM path; resolvers take only `0` for it.
+        const auto resolve_port = endpoint.port == "*" ? std::string ("0") : endpoint.port;
+        const auto endpoints = resolver.resolve (resolve_host, resolve_port, resolve_flags, error);
         if (error || endpoints.begin () == endpoints.end ()) {
             throw framework_exception_t (framework_error_kind_t::internal_failure,
                                          "STREAM endpoint address resolution failed: "

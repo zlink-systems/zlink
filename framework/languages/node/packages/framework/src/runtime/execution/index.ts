@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { startOutsideStateLane } from './state-lane';
 import { isAbortError } from '../abort';
 import {
   ZLinkFrameworkInternalErrorKind,
@@ -30,6 +31,11 @@ const spotSerialTurnStorage = new AsyncLocalStorage<ZLinkSpotSerialTurnContext>(
 export type ZLinkExecutionArea = 'application' | 'infrastructure';
 
 const executionAreaStorage = new AsyncLocalStorage<ZLinkExecutionArea>();
+
+// Capture once through the execution owners, independently of module load scope.
+export const detachedMeshDispatchScope = startOutsideStateLane(() =>
+  executionAreaStorage.exit(() => spotSerialTurnStorage.exit(() => AsyncLocalStorage.snapshot()))
+);
 
 export function runZLinkExecutionArea<T>(area: ZLinkExecutionArea, operation: () => T): T {
   return executionAreaStorage.run(area, operation);

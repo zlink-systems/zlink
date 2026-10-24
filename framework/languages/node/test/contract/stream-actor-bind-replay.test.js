@@ -56,7 +56,7 @@ function bindFixture(request) {
   backend.stateful = runtime;
   const diagnostics = [];
   const completions = new ZLinkMeshCompletionTable(d => diagnostics.push(d));
-  backend.setCompletionHandler((terminal, materialize) => completions.complete(terminal, materialize));
+  backend.setCompletionTable(completions);
   const service = backend.createStreamSessionService({});
   // Location resolution succeeds before the bind transport scenario starts.
   service.lookupActor = () => backend.observeStateful(OperationKind.ActorLookup, {

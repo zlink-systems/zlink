@@ -1864,6 +1864,16 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       abortSeal: async () => {
         const failures: unknown[] = [];
         if (spotCapture !== undefined) {
+          // Spot model §5.1: Continued completes while the source seal still holds jobs.
+          if (readinessBoundaryConsumed) {
+            try {
+              await activation.completeConsumedRelocationBoundary(
+                ZLinkSpotRelocationReadyOutcome.Continued
+              );
+            } catch (error) {
+              failures.push(error);
+            }
+          }
           try {
             activation.abortRelocation(spotCapture);
           } catch (error) {

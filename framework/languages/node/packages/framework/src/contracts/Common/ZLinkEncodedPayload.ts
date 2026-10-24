@@ -1,16 +1,12 @@
-import {
-  adoptEncodedPayload,
-  borrowEncodedPayload,
-  storeEncodedPayload
-} from './encoded-payload-storage';
-
 export class ZLinkEncodedPayload {
+  readonly #bytes: Buffer;
+
   private constructor(bytes: Uint8Array, owned: boolean) {
-    if (owned) {
-      adoptEncodedPayload(this, bytes);
-    } else {
-      storeEncodedPayload(this, bytes);
-    }
+    this.#bytes = !owned
+      ? Buffer.from(bytes)
+      : Buffer.isBuffer(bytes)
+        ? bytes
+        : Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   }
 
   /** Copies the supplied bytes. */
@@ -25,12 +21,12 @@ export class ZLinkEncodedPayload {
 
   /** Returns a copy of the stored bytes. */
   data(): Uint8Array {
-    return new Uint8Array(this.stored());
+    return new Uint8Array(this.#bytes);
   }
 
   /** Returns the stored bytes without copying. Do not modify this view or its backing buffer. */
   view(): Readonly<Uint8Array> {
-    return this.stored();
+    return this.#bytes;
   }
 
   toBytes(): Uint8Array {
@@ -38,30 +34,22 @@ export class ZLinkEncodedPayload {
   }
 
   copy(): ZLinkEncodedPayload {
-    return ZLinkEncodedPayload.from(this.stored());
+    return ZLinkEncodedPayload.from(this.#bytes);
   }
 
   size(): number {
-    return this.stored().length;
+    return this.#bytes.length;
   }
 
   isEmpty(): boolean {
-    return this.stored().length === 0;
+    return this.#bytes.length === 0;
   }
 
   getString(encoding: BufferEncoding = 'utf8'): string {
-    return this.stored().toString(encoding);
+    return this.#bytes.toString(encoding);
   }
 
   close(): void {
     // ZLinkEncodedPayload owns managed memory only; this mirrors Message-like readers.
-  }
-
-  private stored(): Buffer {
-    const payload = borrowEncodedPayload(this);
-    if (payload === undefined) {
-      throw new Error('ZLink encoded payload storage is unavailable.');
-    }
-    return payload;
   }
 }

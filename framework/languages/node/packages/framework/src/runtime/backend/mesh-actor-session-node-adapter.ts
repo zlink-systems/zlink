@@ -24,7 +24,7 @@ export function meshActorSessionNodeAdapter(
       const completion = await completions.submit(
         () => node.closeActorBoundSession(actor, expectedBindingGeneration, timeoutMs),
         signal
-      );
+      ).pending;
       try {
         if (completion.terminalResult !== 0 || completion.failureErrno !== 0) {
           throw wireReplyFailureException(

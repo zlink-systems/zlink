@@ -23,7 +23,7 @@ test('completion table growth rebuilds buckets only when they double', async (t)
   const table = new ZLinkMeshCompletionTable();
   const pending = [];
   for (let low = 1n; low <= 1024n; low++) {
-    pending.push(table.submit(() => ({ high: 1n, low })));
+    pending.push(table.submit(() => ({ high: 1n, low })).pending);
   }
   t.mock.restoreAll();
   // The empty initial array, then 128 doubling to 2048 entries for 1024 pending.

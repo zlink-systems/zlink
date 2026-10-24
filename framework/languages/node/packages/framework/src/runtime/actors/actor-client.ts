@@ -4,7 +4,7 @@ import { routingIdsEqual } from '../routing-id';
 import { ZlinkStreamContentType } from '@zlink-systems/stream-wire';
 import {
   createZLinkRequest,
-  prepareZLinkRequestReply,
+  observeZLinkRequestReply,
   identityRequestReply
 } from '../messaging/request-result';
 import type { ZLinkRequest } from '../../contracts/Handlers/Attributes';
@@ -510,7 +510,7 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
           onAdmitted
         }),
       signal
-    );
+    ).pending;
     if (completion.terminalResult !== RequestResult.Ok) {
       closeMeshCompletion(completion);
       throw mapRequestResult(completion.terminalResult, completion.failureErrno, 'Actor request');
@@ -727,10 +727,12 @@ class DefaultZLinkActorRequestCall implements ZLinkActorRequestCall {
 
   submit<TReply>(signal?: AbortSignal): ZLinkRequest<TReply> {
     this.rejectSelfActorRequest();
-    return createZLinkRequest((onAdmitted) =>
-      prepareZLinkRequestReply(
-        this.execute<TReply>('async', signal, onAdmitted),
-        identityRequestReply
+    return createZLinkRequest<TReply>((entry) =>
+      observeZLinkRequestReply(
+        this.execute<TReply>('async', signal, entry.confirm),
+        identityRequestReply,
+        identityRequestReply,
+        entry
       )
     );
   }

@@ -961,7 +961,8 @@ test('degraded host rejects object messages and timers until owner lease recover
   let registry;
   try {
     await scenario.runtime.start();
-    scenario.runtime.spotManager.dispatchMeshActor = async () => { actorMessages += 1; };
+    scenario.runtime.spotManager.dispatchMeshActor = (_origin, _mesh, _owner, _record, admit) =>
+      admit(async () => { actorMessages += 1; });
     registry = new framework.ZLinkSpotTimerRegistry(
       undefined,
       undefined,
@@ -1069,10 +1070,11 @@ test('degraded host rejects stateful target, relocation and peer capacity admiss
   let targetCallbacks = 0;
   try {
     await scenario.runtime.start();
-    scenario.runtime.spotManager.dispatchMeshInstance = async () => {
-      targetCallbacks += 1;
-      return true;
-    };
+    scenario.runtime.spotManager.dispatchMeshInstance = (_mesh, _owner, _record, admit) =>
+      admit(async () => {
+        targetCallbacks += 1;
+        return true;
+      });
     assert.equal(scenario.runtime.status.acceptingWork, false);
     assert.equal(scenario.runtime.spotNodeRuntime.options.peerAdmissionSealed('play'), true);
     await assert.rejects(
@@ -1518,7 +1520,7 @@ function fakeBackendAdapterFactory(calls, nodeRid) {
             createPublisher() { return { close() {} }; },
             start() {},
             setReadyHandler() {},
-            setCompletionHandler() {},
+            setCompletionTable() {},
             createReadyBatch() { return fakeReadyBatch(); },
             createReceiveBatch() { return fakeReceiveBatch(); },
             drainReady() { return { ok: false, hasResidue: false, records: [] }; },

@@ -1,3 +1,4 @@
+import type { ZLinkMeshDispatchAdmission } from '../admission';
 import {
   ZLinkFrameworkInternalErrorKind,
   createInternalFrameworkException,
@@ -93,8 +94,12 @@ export class ZLinkChannelDispatchPipeline {
    * for its terminal trace or error record.
    */
   dispatchOneWay<TContext extends ZLinkMessageContext>(
-    dispatch: ZLinkOneWayDispatch<TContext>
+    dispatch: ZLinkOneWayDispatch<TContext>,
+    admit?: ZLinkMeshDispatchAdmission
   ): void | Promise<void> {
+    if (admit !== undefined) {
+      return admit(this.dispatchOneWay, this.failOneWay, this, dispatch);
+    }
     this.trace(ZLinkMessageFlowOutcome.Received, dispatch.fields);
     this.trace(ZLinkMessageFlowOutcome.Admitted, dispatch.fields);
     if (dispatch.handler === undefined) return this.dispatchMissingOneWay(dispatch.fields);
@@ -102,7 +107,7 @@ export class ZLinkChannelDispatchPipeline {
     try {
       invocation = this.invokeInFlow(dispatch, dispatch.handler);
     } catch (error) {
-      this.failOneWay(dispatch.fields, error);
+      this.failOneWay(error, dispatch);
       return;
     }
     if (!isPromiseLike(invocation)) {
@@ -115,7 +120,7 @@ export class ZLinkChannelDispatchPipeline {
       const record = dispatch;
       return Promise.resolve(invocation).then(
         (value) => pipeline.completeOneWay(record.fields, value),
-        (error: unknown) => pipeline.failOneWay(record.fields, error)
+        (error: unknown) => pipeline.failOneWay(error, record)
       );
     }
   }
@@ -135,7 +140,8 @@ export class ZLinkChannelDispatchPipeline {
     }
   }
 
-  private failOneWay(fields: ZLinkChannelDispatchFields, error: unknown): void {
+  private failOneWay(error: unknown, dispatch: ZLinkOneWayDispatch<ZLinkMessageContext>): void {
+    const fields = dispatch.fields;
     this.report(fields, this.failureReason(error), ZLinkDispatchErrorAction.Drop, error);
   }
 
@@ -145,8 +151,12 @@ export class ZLinkChannelDispatchPipeline {
    * handler adds exactly one continuation that writes the reply.
    */
   dispatchRequest<TContext extends ZLinkMessageContext>(
-    dispatch: ZLinkRequestDispatch<TContext>
+    dispatch: ZLinkRequestDispatch<TContext>,
+    admit?: ZLinkMeshDispatchAdmission
   ): void | Promise<void> {
+    if (admit !== undefined) {
+      return admit(this.dispatchRequest, this.failRequest, this, dispatch);
+    }
     this.trace(ZLinkMessageFlowOutcome.Received, dispatch.fields);
     this.trace(ZLinkMessageFlowOutcome.Admitted, dispatch.fields);
     if (dispatch.handler === undefined) return this.dispatchMissingRequest(dispatch);
@@ -154,7 +164,7 @@ export class ZLinkChannelDispatchPipeline {
     try {
       invocation = this.invokeInFlow(dispatch, dispatch.handler);
     } catch (error) {
-      return this.failRequest(dispatch, error);
+      return this.failRequest(error, dispatch);
     }
     if (!isPromiseLike(invocation)) return this.completeRequest(dispatch, invocation);
     {
@@ -162,7 +172,7 @@ export class ZLinkChannelDispatchPipeline {
       const record = dispatch;
       return Promise.resolve(invocation).then(
         (value) => pipeline.completeRequest(record, value),
-        (error: unknown) => pipeline.failRequest(record, error)
+        (error: unknown) => pipeline.failRequest(error, record)
       );
     }
   }
@@ -210,11 +220,11 @@ export class ZLinkChannelDispatchPipeline {
   ): void | Promise<void> {
     if (invocation === HANDLER_FILTER_REJECTED) {
       return this.failRequest(
-        dispatch,
         createInternalFrameworkException(
           ZLinkFrameworkInternalErrorKind.RequestRejected,
           `A handler filter rejected '${this.options.channelName}:${dispatch.fields.packetName}'.`
-        )
+        ),
+        dispatch
       );
     }
     let written: void | Promise<void>;
@@ -250,8 +260,8 @@ export class ZLinkChannelDispatchPipeline {
   }
 
   private async failRequest<TContext extends ZLinkMessageContext>(
-    dispatch: ZLinkRequestDispatch<TContext>,
-    error: unknown
+    error: unknown,
+    dispatch: ZLinkRequestDispatch<TContext>
   ): Promise<void> {
     try {
       await dispatch.writeError(error);
