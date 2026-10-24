@@ -125,6 +125,8 @@ declaration은 [언어별 interface 목차](README.ko.md)에서 지정한 단 �
 
 ## 4. Common result, coroutine과 message
 
+완료 배달은 [Submit과 완료 §11](../../../01-execution/01-submit-and-completion.ko.md#11-완료-callback의-execution-turn-구현)을 따른다. `task_t`의 공개 signature, move-only 의미와 `result()`의 결과 참조 의미는 아래 선언을 따른다. Layout·`sizeof`와 eager state allocation은 계약으로 보장하지 않는다.
+
 ```cpp
 namespace zlink::framework {
 

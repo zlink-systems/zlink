@@ -49,6 +49,8 @@ descriptor를 공개한 뒤에는 다음 설정을 바꿀 수 없다.
 
 ## 3. Routing ID
 
+Local 여부에 사용하는 configured identity는 node configuration의 한 소유자가 보존한다. Runtime은 native node가 존재하기 전과 종료된 뒤에도 같은 configuration 수명 동안 그 identity를 참조한다. 이 조회는 local 수락 여부를 뜻하지 않으며, 수락·종료 결과는 기존 admission 소유자가 판정한다. Descriptor와 wire에 담긴 identity는 이 원천에서 파생하며 별도 local 판별 권위로 사용하지 않는다.
+
 ### 3.1 Automatic RID
 
 MeshNode automatic RID의 발급·형식·충돌·lifecycle 규칙은
