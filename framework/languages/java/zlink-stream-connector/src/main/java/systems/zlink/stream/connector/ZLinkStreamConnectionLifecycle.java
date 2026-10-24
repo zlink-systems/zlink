@@ -1,5 +1,6 @@
 package systems.zlink.stream.connector;
 
+import java.net.ProxySelector;
 import java.net.http.HttpClient;
 import java.security.GeneralSecurityException;
 import java.security.SecureRandom;
@@ -342,7 +343,7 @@ final class ZLinkStreamConnectionLifecycle {
     }
 
     private CompletionStage<ZLinkWebSocketTransportConnection> connectWebSocketStage() {
-        HttpClient.Builder clientBuilder = HttpClient.newBuilder();
+        HttpClient.Builder clientBuilder = HttpClient.newBuilder().proxy(ProxySelector.of(null));
         if (configuration.transport().skipServerCertificateValidation()) {
             clientBuilder.sslContext(insecureSslContext());
         }
