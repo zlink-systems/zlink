@@ -209,3 +209,15 @@ jobs:
           retention-days: 14
           if-no-files-found: error
           overwrite: true
+
+      # This job is the merge check, so it passes only when both platform test
+      # jobs passed; the comparison above is diagnosis, not the verdict.
+      - name: Require both platform test jobs to pass
+        if: always()
+        env:
+          PLATFORM_RESULT: ${{ needs.framework-java.result }}
+        run: |
+          if [ "$PLATFORM_RESULT" != "success" ]; then
+            echo "Framework Java platform tests ended with '$PLATFORM_RESULT'"
+            exit 1
+          fi
