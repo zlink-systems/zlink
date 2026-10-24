@@ -117,6 +117,8 @@ public final class ZLinkRequestCallerAllocationTest {
     public static AllocationCount allocations(
             Class<?> owner, List<String> methods, Runnable samples, Predicate<String> includeClass)
             throws Exception {
+        Class<?> completionNode =
+                Class.forName("java.util.concurrent.CompletableFuture$Completion", false, null);
         Path path = Files.createTempFile("zlink-request-caller-", ".jfr");
         try {
             try (Recording recording = new Recording()) {
@@ -152,8 +154,13 @@ public final class ZLinkRequestCallerAllocationTest {
                     objects++;
                     bytes += event.getLong("allocationSize");
                     if (type.equals("[B")) byteArrays++;
-                    if (type.equals("java.util.concurrent.CompletableFuture")) futures++;
-                    if (type.startsWith("java.util.concurrent.CompletableFuture$")) continuations++;
+                    if ((type.startsWith("java.util.concurrent.CompletableFuture")
+                                    || type.startsWith("systems.zlink."))
+                            && !type.contains("$$Lambda")) {
+                        Class<?> allocated = Class.forName(type, false, owner.getClassLoader());
+                        if (CompletableFuture.class.isAssignableFrom(allocated)) futures++;
+                        if (completionNode.isAssignableFrom(allocated)) continuations++;
+                    }
                 }
             }
             return new AllocationCount(objects, bytes, byteArrays, futures, continuations);
