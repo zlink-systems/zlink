@@ -257,7 +257,8 @@ final class ZLinkJavaRawMeshNodeHelloRetryTest {
     private static byte[] receiveFrame(ZLinkJavaRawServicePort port, RouterSocket router) {
         while (true) {
             assertTrue(port.waitForReadable(router, IO_DEADLINE), "expected protocol record");
-            try (var inbound = port.receive(router).orElseThrow()) {
+            try (var inbound = port.receive(router)) {
+                assertNotNull(inbound);
                 if (inbound.frames().getFirst().length == 0) continue;
                 return inbound.frames().getFirst();
             }
@@ -269,7 +270,8 @@ final class ZLinkJavaRawMeshNodeHelloRetryTest {
             throws Exception {
         while (true) {
             assertTrue(port.waitForReadable(router, IO_DEADLINE));
-            var inbound = port.receive(router).orElseThrow();
+            var inbound = port.receive(router);
+            assertNotNull(inbound);
             if (inbound.frames().getFirst().length == 0) {
                 inbound.close();
                 continue;

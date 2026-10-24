@@ -5092,12 +5092,10 @@ final class ZLinkJavaRawMeshNode
             Optional<ZLinkServiceTopologyRegistry.Peer> source) {}
 
     private ClaimedRecord claimRecord(RouterSocket pumpSocket) {
-        Optional<ZLinkJavaRawServicePort.Inbound> inbound = port.receiveNow(pumpSocket);
-        return inbound.isEmpty()
+        ZLinkJavaRawServicePort.Inbound inbound = port.receiveNow(pumpSocket);
+        return inbound == null
                 ? null
-                : new ClaimedRecord(
-                        inbound.orElseThrow(),
-                        topology.peerFromOwner(inbound.orElseThrow().source()));
+                : new ClaimedRecord(inbound, topology.peerFromOwner(inbound.source()));
     }
 
     private void dispatch(ZLinkJavaRawServicePort.Inbound inbound) {

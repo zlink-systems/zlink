@@ -844,11 +844,10 @@ TEST (FrameworkSessionSealRelay, bound_request_to_relocated_local_actor_keeps_bi
     namespace host = runtime::host;
     namespace protocol = runtime::protocol;
     runtime::in_memory_location_repository_t authority_repository;
-    const auto target_owner = std::get<owner_lease_claimed_t> (
-                                authority_repository.claim_owner_lease ("relocated-owner", 30s)
-                                  .result ()
-                                  .value ())
-                                .token;
+    const auto target_owner =
+      std::get<owner_lease_claimed_t> (
+        authority_repository.claim_owner_lease ("relocated-owner", 30s).result ().value ())
+        .token;
     auto source_state = zlink::framework::test::runtime_failure_fixture<
       zlink::framework::detail::mesh_node_builder_state_t> ("relocated-mesh");
     source_state->core_context = std::make_shared<zlink::context_t> ();
@@ -978,8 +977,10 @@ TEST (FrameworkSessionSealRelay, bound_request_to_relocated_local_actor_keeps_bi
     // As the application gateway does, the relay carries the native Session
     // binding's exact route: the Actor on this node with its new fence.
     const protocol::actor_route_fence_t binding_route{
-      std::string (actor.actor_id ().value ()), native_object->object_generation,
-      status.routing_id ().to_bytes (),         status.lifecycle_generation (),
+      std::string (actor.actor_id ().value ()),
+      native_object->object_generation,
+      status.routing_id ().to_bytes (),
+      status.lifecycle_generation (),
       native_object->authority_owner_generation,
       static_cast<std::uint64_t> (target_owner.lease_generation)};
     actor_gateway_runtime_t gateway;

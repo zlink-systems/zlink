@@ -1,5 +1,6 @@
 package systems.zlink.framework.runtime.binding;
 
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -42,7 +43,8 @@ final class ZLinkJavaRawMeshNodeHandshakeTest {
             if (remaining <= 0 || !port.waitForReadable(peer, Duration.ofNanos(remaining))) {
                 return null;
             }
-            try (var received = port.receive(peer).orElseThrow()) {
+            try (var received = port.receive(peer)) {
+                assertNotNull(received);
                 if (received.frames().size() == 1 && received.frames().getFirst().length == 0) {
                     continue;
                 }

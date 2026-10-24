@@ -19,6 +19,29 @@ import java.util.function.BiConsumer;
 
 final class ZLinkCompletionBridgeTest {
     @Test
+    void cancellationUsesTheDeliveredTerminalWithoutRereadingCallerState() {
+        for (int terminal = 0; terminal < 4; terminal++) {
+            var reads = new AtomicInteger();
+            var caller =
+                    new CompletableFuture<String>() {
+                        @Override
+                        public boolean isCancelled() {
+                            reads.incrementAndGet();
+                            return super.isCancelled();
+                        }
+                    };
+            var waiter = new CompletableFuture<String>();
+            ZLinkCompletionBridge.forwardCancellation(caller, waiter);
+            if (terminal == 0) caller.complete("reply");
+            else if (terminal == 1) caller.completeExceptionally(new IllegalStateException());
+            else if (terminal == 2) caller.completeExceptionally(new CancellationException());
+            else caller.completeExceptionally(new CompletionException(new CancellationException()));
+            assertEquals(terminal == 2, waiter.isCancelled());
+            assertEquals(0, reads.get(), "the callback already receives the terminal failure");
+        }
+    }
+
+    @Test
     void cancellationReachesEachPendingWaiter() {
         var caller = new CompletableFuture<String>();
         var admission = new CompletableFuture<Void>();

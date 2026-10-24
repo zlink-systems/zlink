@@ -553,7 +553,8 @@ final class ZLinkJavaRawMeshNodeM6ATest {
         while (System.nanoTime() < deadline) {
             assertTrue(
                     port.waitForReadable(router, Duration.ofNanos(deadline - System.nanoTime())));
-            var received = port.receive(router).orElseThrow();
+            var received = port.receive(router);
+            assertNotNull(received);
             if (received.frames().size() != 1 || received.frames().getFirst().length != 0) {
                 var codec = new ZLinkServiceM6AWireCodec();
                 if (codec.decodeHeader(received.frames().getFirst()).command()
