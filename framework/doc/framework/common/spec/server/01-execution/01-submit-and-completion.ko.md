@@ -292,7 +292,9 @@ STREAM reply의 one-shot [reply token](../00-foundation/02-glossary.ko.md#reply-
 
 ## 9. Request completion — 완료 경쟁과 timeout budget
 
-Request는 제출 전에 최종 결과의 수신자를 준비한다. 기존 terminal 소유자가 확정한 결과는 각 codec 소유자의 값 변환을 거쳐 최종 typed 결과에 한 곳에서 전달한다. 내부 계층 사이의 변환만을 위한 별도 비동기 결과와 관찰 연결을 두지 않는다. Admission 실패로 public 결과가 먼저 끝나더라도 physical terminal의 관찰과 payload 정리 의무는 유지한다.
+Request는 제출 전에 최종 결과의 수신자를 준비한다. 기존 terminal 소유자가 확정한 결과는 각 codec 소유자의 값 변환을 거쳐 최종 typed 결과에 한 곳에서 전달한다. 내부 계층 사이의 변환만을 위한 별도 비동기 결과와 관찰 연결을 두지 않는다.
+
+Public 결과가 먼저 끝나도 제출 전에 준비한 최종 수신자는 physical 결과 처리에 필요한 자원을 그 처리의 완료까지 유지한다. Admission 실패로 public 결과가 먼저 끝나는 경우에도 같다. 그 수신자에 전달된 정상 physical 응답은 public 결과의 완료 여부와 관계없이 각 codec 소유자의 변환을 한 번 거친다. 이 변환의 값이나 실패는 이미 확정된 public 결과를 바꾸지 않으며, payload는 정확히 한 번 정리한다. 닫힌 correlation 때문에 최종 수신자에 전달되지 않는 late native reply의 처리는 [Cancellation과 shutdown §3](03-cancellation-and-shutdown.ko.md#3-cancellation의-경쟁-처리)의 소유 경계를 따른다.
 
 Request caller는 reply, remote 오류, timeout, cancellation 또는 shutdown 가운데 먼저
 확정된 결과 하나를 관찰한다. Timeout과 cancellation은 호출자의 대기를 끝내지만

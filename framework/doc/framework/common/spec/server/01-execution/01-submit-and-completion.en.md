@@ -318,7 +318,9 @@ The one-shot [reply token](../00-foundation/02-glossary.en.md#reply-token) rules
 
 ## 9. Request Completion — The Completion Race and Timeout Budget
 
-A request prepares its final result consumer before submission. The existing terminal owner delivers its settled result through value conversions owned by the codecs to one final typed publisher. No separate asynchronous results or observation links are introduced solely for conversions between internal layers. Early completion of the public result does not end physical observation or payload cleanup. This also applies when admission fails.
+A request prepares its final result consumer before submission. The existing terminal owner delivers its settled result through value conversions owned by the codecs to one final typed publisher. No separate asynchronous results or observation links are introduced solely for conversions between internal layers.
+
+Early completion of the public result does not release the final consumer prepared before submission or the resources it needs until physical-result processing finishes. This also applies when admission fails. A successful physical reply delivered to that consumer passes through each codec owner's conversion once, regardless of whether the public result has completed. The conversion's value or failure does not change an already settled public result, and the payload is cleaned up exactly once. [Cancellation and Shutdown §3](03-cancellation-and-shutdown.en.md#3-handling-the-cancellation-race) owns the handling of late native replies that are not delivered to the final consumer because the correlation is closed.
 
 The caller of a request observes exactly one result: whichever of reply, remote error, timeout,
 cancellation, or shutdown is decided first. Timeout and cancellation end the caller's wait,

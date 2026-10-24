@@ -83,7 +83,7 @@ sequenceDiagram
     R->>R: E2 selector 소유자의 turn에서 준비된 후보 목록의 target 읽기
     R->>R: E3 (request) operation 소유자의 turn에서 pending entry·dispatcher 자리·reply route 등록
     R->>B: E4 같은 turn에서 binding 비동기 operation 시작, 결과 객체 반환
-    R-->>C: (send, 즉시 admission) E3·E5 없이 결과 확정 — continuation은 새 execution turn
+    R-->>C: (send, 즉시 admission) E3·E5 없이 결과 확정 — 소비·배달은 Submit §11
     R->>R: E3 (send, BACKPRESSURED) 같은 turn에서 pending entry·dispatcher 자리 등록 후 admitted 소비
     B-->>R: (send) 나중의 local admission completion
     B->>R: (request) reply·error·timeout 알림 → terminal 권한 확정
@@ -115,7 +115,7 @@ binding에 모두 도달한다.
 Send의 완료 경계는 [Submit과 완료 §4](01-submit-and-completion.ko.md#4-one-way-submit--admission-경계)가
 정의하고, 즉시 admission과 HWM pending의 완료 확정은 [Submit과 완료 「10」](01-submit-and-completion.ko.md#10-operation-identity와-완료-자리-구현)이
 정한다. 이 문서의 단계로는 즉시 admission이 E3·E5를 거치지 않고, pending이면 E4 결과를 본 뒤 E3에 등록한
-entry를 나중의 completion이 E5로 꺼내 전달한다. 어느 경우든 caller continuation은 새 turn에서 실행되며, 그 turn의 실행 자원은 §4.4가 정한다.
+entry를 나중의 completion이 E5로 꺼내 전달한다. 즉시 admission과 pending completion의 완료 소비·배달은 [Submit과 완료 §11](01-submit-and-completion.ko.md#11-완료-callback의-execution-turn-구현)을 따른다. Framework가 배달하는 turn의 실행 자원은 §4.4가 정한다.
 `Yield`로 gate를 반납한 caller의 continuation은 [Handler turn 「3」](02-handler-turn-and-execution-gate.ko.md#3-yield-시-gate와-claim)대로
 gate를 다시 얻은 뒤 실행되며, 그 재획득은 이 전환 수에 포함되지 않는다.
 

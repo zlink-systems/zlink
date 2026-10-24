@@ -89,7 +89,7 @@ sequenceDiagram
     R->>R: E2 read the target from the prepared candidate list in the selector owner's turn
     R->>R: E3 (request) register pending entry, dispatcher slot and reply route in the operation owner's turn
     R->>B: E4 start the binding's async operation in the same turn, get the result object
-    R-->>C: (send, immediate admission) result decided without E3 or E5 — continuation in a new execution turn
+    R-->>C: (send, immediate admission) result decided without E3 or E5 — consumption and delivery follow Submit §11
     R->>R: E3 (send, BACKPRESSURED) register pending entry and dispatcher slot in the same turn, then consume admitted
     B-->>R: (send) later local admission completion
     B->>R: (request) reply·error·timeout notification → terminal authority decided
@@ -127,7 +127,7 @@ How the result is decided for immediate admission and for admission pending on H
 [Submit And Completion "10"](01-submit-and-completion.en.md#10-operation-identity-and-where-completion-happens-implementation).
 In this page's steps, immediate admission goes through neither E3 nor E5; when admission is pending,
 the entry registered in E3 after seeing the E4 result is taken out by a later completion through E5.
-Either way the caller continuation runs in a new turn, and §4.4 decides the resource that runs it. The continuation of a caller that released its gate with `Yield` runs
+Consumption and delivery of both immediately admitted and pending completions follow [Submit and Completion §11](01-submit-and-completion.en.md#11-the-execution-turn-of-the-completion-callback-implementation). Section 4.4 determines the execution resource for a turn delivered by the Framework. The continuation of a caller that released its gate with `Yield` runs
 after the gate is re-acquired as in [Handler Turn "3"](02-handler-turn-and-execution-gate.en.md#3-gate-and-claim-on-yield);
 that re-acquisition is not part of the switch count.
 
