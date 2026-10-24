@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { ZLinkFrameworkRuntimeHost } from '../../packages/framework/src/runtime/host';
-import { ZLinkRuntimeAdmissionGate } from '../../packages/framework/src/runtime/admission';
+import {
+  ZLinkRuntimeAdmissionGate,
+  type ZLinkMeshDispatchAdmission
+} from '../../packages/framework/src/runtime/admission';
 import { ZLinkBufferMessage } from '../../packages/framework/src/runtime/backend/runtime-message';
 import { SubmitResult } from '../../packages/framework/src/runtime/backend/runtime-values';
 import {
@@ -12,6 +15,7 @@ import {
 } from '../../packages/framework/src/runtime/foundation/service-runtime-contracts';
 import {
   encodeChannelEnvelopeParts,
+  decodeChannelReply,
   ZLinkChannelMessageKind
 } from '../../packages/framework/src/runtime/channels/channel-envelope';
 import {
@@ -81,9 +85,15 @@ function hostFixture() {
     flowCreationEnabled: () => false,
     serviceRelocation: { tryHandleControl: () => false },
     channelRuntime: {
-      dispatchMeshRoute: () => {
-        delivered += 1;
-      }
+      dispatchMeshRoute: (
+        _mesh: string,
+        _record: ReceiveRecord,
+        _signal: AbortSignal | undefined,
+        admit: ZLinkMeshDispatchAdmission
+      ) =>
+        admit(() => {
+          delivered += 1;
+        })
     },
     boundSessionRelay: {
       actorPackets: {
@@ -104,13 +114,29 @@ function hostFixture() {
   return {
     admission,
     delivered: () => delivered,
-    dispatch: (record: ReceiveRecord) =>
-      fixture.dispatchMeshRecord(
+    dispatch: async (record: ReceiveRecord) => {
+      let reply: ZLinkBufferMessage[] | undefined;
+      const result = await fixture.dispatchMeshRecord(
         () => 'remote',
         'mesh',
         { ownerKind: 1, domain: record.domain, spotId: null, actor: null },
-        record
-      )
+        {
+          ...record,
+          reply: (parts) => {
+            const values = Array.isArray(parts) ? parts : [parts];
+            reply = values.map((part) => ZLinkBufferMessage.from(part));
+            return SubmitResult.Ok;
+          }
+        }
+      );
+      // Observe the request terminal emitted by its domain completion owner.
+      if (reply === undefined) return result;
+      try {
+        return decodeChannelReply(reply);
+      } finally {
+        for (const part of reply) part.close();
+      }
+    }
   };
 }
 
