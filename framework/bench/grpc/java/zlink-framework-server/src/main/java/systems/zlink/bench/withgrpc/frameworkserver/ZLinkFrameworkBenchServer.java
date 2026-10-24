@@ -10,6 +10,7 @@ import systems.zlink.bench.withgrpc.shared.Args;
 import systems.zlink.bench.withgrpc.shared.BenchContract;
 import systems.zlink.bench.withgrpc.shared.BenchServerMetrics;
 import systems.zlink.bench.withgrpc.shared.BenchStatsServer;
+import systems.zlink.bench.withgrpc.shared.MeasurementTiming;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.codecs.protobuf.ZLinkProtobufCodec;
 import systems.zlink.framework.configuration.ZLinkUnhandledDispatchAction;
@@ -39,24 +40,33 @@ public class ZLinkFrameworkBenchServer {
     private static final BenchServerMetrics METRICS = new BenchServerMetrics();
     private static volatile String listenEndpoint = "tcp://127.0.0.1:5254";
 
-    public static void main(String[] args) {
+    public static void main(String[] args) throws Exception {
+        MeasurementTiming.initialize();
         String endpoint = Args.value(args, "--endpoint", "tcp://127.0.0.1:5254");
         String metricsUrl = Args.value(args, "--metrics-url", "http://127.0.0.1:5255");
         BenchServerMetrics metrics = METRICS;
         listenEndpoint = endpoint;
 
-        new SpringApplicationBuilder(ZLinkFrameworkBenchServer.class)
+        try (var context = new SpringApplicationBuilder(ZLinkFrameworkBenchServer.class)
             .web(WebApplicationType.NONE)
             .bannerMode(org.springframework.boot.Banner.Mode.OFF)
-            .run(args);
+            .run(args)) {
 
-        BenchStatsServer.start(metricsUrl, metrics,
-            "{\"implementation\":\"zlink-framework-java\","
-            + "\"host\":\"zlink-framework-spring-boot-starter\","
-            + "\"codec\":\"zlink-framework-codec-protobuf\","
-            + "\"endpoint\":\"" + endpoint + "\"}");
-        System.err.println("[framework-server] endpoint=" + endpoint
-            + " stats=" + metricsUrl);
+            var stats = BenchStatsServer.start(metricsUrl, metrics,
+                "{\"implementation\":\"zlink-framework-java\","
+                + "\"host\":\"zlink-framework-spring-boot-starter\","
+                + "\"codec\":\"zlink-framework-codec-protobuf\","
+                + "\"endpoint\":\"" + endpoint + "\"}");
+            try {
+                System.err.println("[framework-server] endpoint=" + endpoint
+                    + " stats=" + metricsUrl);
+                if (System.in.read() < 0) {
+                    Thread.currentThread().join();
+                }
+            } finally {
+                stats.stop(0);
+            }
+        }
     }
 
     /** Carries the listen endpoint into the configurer without a system property. */

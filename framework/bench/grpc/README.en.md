@@ -539,6 +539,40 @@ to leave the values used in the result.
 | gRPC server configuration | The default server implementation differs per language. The gRPC side is left at each language's default configuration, and that configuration is recorded in the result C++ uses `CallbackService` with default `ServerBuilder` settings, without a synchronous worker thread per call. |
 | Runtime and gRPC library version | The SDK version, runtime version, and gRPC library version are recorded in the cell's raw output and in the report |
 
+### 8.3 Java Repetitions Without Compilation Overlap
+
+`tools/jit/measure_java.py` is a separate validation runner for comparing Java Framework and
+binding with the same payload and pattern. The default warmup runs 80 complete 250ms active phases,
+then two five-second phases, discarding those 30 seconds of load. Short phases exercise control and
+accounting frequently; the last two exercise the actual measurement duration. Repeated reset, settle,
+and writing make total elapsed time longer than 30 seconds of load, and that time is recorded.
+The runner then selects the first three five-second windows
+with zero overlapping `jdk.Compilation` events in both source and target. Throughput is not a
+selection criterion. Repetitions share a JVM pair and are distinct from the default fresh-process
+cells in §10.4.
+
+The driver records `active_started_at_ns` and `active_ended_at_ns`. Request completion accounting,
+the throughput denominator, and the JFR `measure.Phase` event use that same interval.
+For send, the existing target HTTP snapshot is read after the deadline, so the target's actual
+counting cutoff can be later. Zero compilation overlap applies to the driver interval; it does
+not certify an extended target interval through that snapshot or simultaneous process accounting.
+Each JVM's `measure.MonotonicAnchor` maps its recording to the host monotonic clock; overlap
+checks include anchor uncertainty. The analyzer requires a zero compilation threshold and no
+DataLoss. Missing or malformed evidence cannot certify a window. Deoptimization is reported
+separately.
+
+Selections from live JFR dumps are provisional. After both JVMs exit normally, the runner checks
+their final recordings, records discarded windows and methods, and measures again. If final
+validation leaves too few clean windows, a fresh JVM pair performs the same warmup and fills the
+remaining repetitions. Reaching the supplied end time without three valid windows exits with a
+failure and no definitive ratio. Product errors, drain overruns, and invalid recordings are not
+retried. `--help` describes the classpath manifest and end-time inputs. `compilation.jfc` validates
+windows; `profile.jfc` supports separate CPU and allocation diagnostics.
+
+This procedure changes neither JVM compiler policy nor measured product code. C++, .NET, and
+Node.js retain their driver, completion-count, and throughput definitions. Kotlin shares Java's
+driver and HTTP listener, so the completion response and common warmup path below apply to it too.
+
 ## 9. Port Bands
 
 One implementation needs four ports (A trigger, A stats, B endpoint, B stats; the raw binding needs
@@ -597,6 +631,14 @@ POST http://127.0.0.1:<A trigger>/bench/start
   are what settle (§3) polls.
 - The HTTP round trips of trigger and stats are not measured operations and don't enter
   `throughput` or `latency`.
+- Java/Kotlin respond to POST after phase accounting and result writing finish, with the driver's
+  actual start in `startedAt`. The runner waits for this response and does not poll stats during
+  active. Duplicate requests with an in-progress key await the same outcome; phase failures return
+  HTTP 500. Warmup uses the same reset, close snapshot, accounting, and writing path as active,
+  while preserving the warmup header and exclusion from measurement. The trigger owns each new
+  repetition's `cellId`.
+- Java sources and raw/Framework targets, and Kotlin sources, close normally when piped stdin
+  supplies a byte. EOF in existing background execution is not treated as a shutdown request.
 
 ### 10.3 Logical Streams and the Pattern Mapping
 
