@@ -198,4 +198,32 @@ TEST (RequestCallAllocations, TerminalProjectionReleasesProducerCapturesAtPhysic
             EXPECT_EQ (retained->result ().value (), 42);
     }
 }
+TEST (RequestCallAllocations, TerminalProjectionDestroysConstCapturesAtPhysicalCompletion)
+{
+    for (const bool complete : {false, true}) {
+        fw::task_completion_source_t<int> source;
+        auto input = source.task ();
+        std::weak_ptr<int> weak;
+        std::optional<fw::task_t<int>> output;
+        {
+            const auto capture = std::make_shared<int> (41);
+            weak = capture;
+            output.emplace (fw::detail::project_task_terminal<int> (
+              input, [capture] (const fw::result_t<int> &result) {
+                  return fw::result_t<int>::success (*capture + result.value ());
+              }));
+        }
+        EXPECT_FALSE (weak.expired ());
+        if (complete) {
+            source.complete (fw::result_t<int>::success (1));
+            EXPECT_EQ (output->result ().value (), 42);
+            EXPECT_TRUE (weak.expired ());
+        } else {
+            // An abandoned pending projection still owns its capture through
+            // the source registration, which releases it when the source dies.
+            output.reset ();
+            EXPECT_FALSE (weak.expired ());
+        }
+    }
+}
 } // namespace

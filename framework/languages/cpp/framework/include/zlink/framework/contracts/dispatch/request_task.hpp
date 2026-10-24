@@ -191,18 +191,16 @@ template <typename TReply> class request_task_t : public task_t<TReply>
           *selected._physical_reply._state,
           [reply = this->_state, project = std::forward<TProject> (project)] (
             auto &physical, const result_t<TInput> &result) mutable {
-              auto public_reply = std::move (reply);
               auto projected = [&] () -> result_t<TReply> {
                   try {
-                      auto convert = std::move (project);
-                      return convert (result);
+                      return project (result);
                   }
                   catch (...) {
                       return detail::current_exception_result<TReply> ();
                   }
               }();
               physical.complete (projected);
-              public_reply->complete (std::move (projected));
+              reply->complete (std::move (projected));
           })),
         _admitted (selected._admitted)
     {

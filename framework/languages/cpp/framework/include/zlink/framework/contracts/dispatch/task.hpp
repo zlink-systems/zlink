@@ -767,18 +767,34 @@ class terminal_task_shared_state_t final : public application_task_shared_state_
 {
   public:
     explicit terminal_task_shared_state_t (TCallback callback) :
-        _callback (std::move (callback)), _owner (capture_current_serial_turn ())
+        _storage (std::move (callback)),
+        _callback (std::addressof (_storage.value)),
+        _owner (capture_current_serial_turn ())
     {
     }
 
     template <typename TInput> void operator() (const result_t<TInput> &result)
     {
         const auto owner = std::move (_owner);
-        _callback (*this, result);
+        auto callback = std::move (_callback);
+        (*callback) (*this, result);
     }
 
   private:
-    TCallback _callback;
+    // The result owns the storage; this unique owner ends the capture lifetime
+    // at terminal delivery, including const captures that a move cannot clear.
+    union callback_storage_t
+    {
+        TCallback value;
+        explicit callback_storage_t (TCallback &&callback) : value (std::move (callback)) {}
+        ~callback_storage_t () {}
+    };
+    struct destroy_callback_t
+    {
+        void operator() (TCallback *callback) const noexcept { std::destroy_at (callback); }
+    };
+    callback_storage_t _storage;
+    std::unique_ptr<TCallback, destroy_callback_t> _callback;
     std::shared_ptr<serial_turn_t> _owner;
 };
 
@@ -999,8 +1015,7 @@ task_t<TOutput> project_task_terminal (task_t<TInput> &task, TProject &&project)
       *task._state, [project = std::forward<TProject> (project)] (
                       auto &reply, const result_t<TInput> &result) mutable {
           try {
-              auto convert = std::move (project);
-              reply.complete (convert (result));
+              reply.complete (project (result));
           }
           catch (...) {
               reply.complete (current_exception_result<TOutput> ());
