@@ -1,10 +1,13 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #include <zlink/framework.hpp>
 #include "runtime/locations/in_memory_store_providers.hpp"
+#include "runtime/locations/authority_key_codec.hpp"
+#include "runtime/locations/relocation_authority_payload.hpp"
 #include "runtime/mesh/mesh_node_runtime.hpp"
 #include "runtime/spots/spot_runtime.hpp"
 #include <gtest/gtest.h>
 #include <chrono>
+#include <atomic>
 #include <condition_variable>
 #include <mutex>
 #include <thread>
@@ -289,6 +292,91 @@ TEST (SpotWideHostRelocation, FrameworkManagedMembersKeepUserSpotHandler)
     std::lock_guard lock (joins.mutex);
     EXPECT_EQ (joins.accepted, 2u);
 }
+TEST (SpotWideHostRelocation, GetOrCreateReturnsExistingRelocationTarget)
+{
+    auto locations = std::make_shared<fw::runtime::in_memory_location_store_t> ();
+    auto relocations = std::make_shared<fw::runtime::in_memory_relocation_store_t> ();
+    std::atomic<unsigned> factory_calls = 0;
+    const auto configure = [&] (host_t &host, const char *rid) {
+        auto &options = host.app.add_zlink_framework ();
+        options.add_location_store (locations);
+        options.add_relocation_store (relocations);
+        options.configure_dispatch ().message_flow (fw::message_flow_log_mode_t::normal);
+        host.app.logging ().use_file (std::string (rid) + "-existing.flow");
+        options.add_route_mesh (mesh_name)
+          .set_object_role (fw::object_role_t::server)
+          .set_routing_id (zlink::routing_id_t::from (rid))
+          .listen ("tcp://127.0.0.1:0")
+          .add_spot_factory<room_t> (
+            room_type,
+            [&] (fw::spot_context_t context) {
+                ++factory_calls;
+                return std::make_shared<room_t> (std::move (context));
+            },
+            [] (auto &factory) { factory.recreate_on_relocation (); });
+    };
+    host_t source, target;
+    configure (source, source_rid);
+    source.start ();
+    ASSERT_TRUE (observe ([&] { return source.app.is_ready (); }));
+    auto services = source.app.advanced ().services ().build_provider ();
+    const auto created = services.get_required<fw::spot_manager_t> ()
+                           .get_or_create (fw::spot_id_t (room_id), room_type)
+                           .async ()
+                           .result ();
+    ASSERT_TRUE (created);
+    ASSERT_EQ (created.value ().state, fw::spot_create_state_t::created);
+    ASSERT_EQ (created.value ().spot.node_rid ().value (), source_rid);
+    configure (target, target_rid);
+    target.start ();
+    ASSERT_TRUE (observe ([&] { return target.app.is_ready (); }));
+    ASSERT_TRUE (observe ([&] {
+        return services.get_required<fw::route_mesh_runtime_t> ()
+                 .snapshot (mesh_name)
+                 .ready_peer_count
+               == 1;
+    }));
+    const auto moved =
+      source.app
+        .relocate ({.mode = fw::relocation_mode_t::planned_maintenance, .deadline = wait_budget})
+        .result ();
+    ASSERT_TRUE (moved);
+    ASSERT_EQ (moved.value ().outcome, fw::relocation_outcome_t::relocated);
+    const auto read = services.get_required<fw::location_repository_t> ()
+                        .read_authority (fw::runtime::spot_authority_key (fw::spot_id_t (room_id)))
+                        .result ();
+    ASSERT_TRUE (read);
+    const auto *current = std::get_if<fw::authority_snapshot_t> (&read.value ());
+    ASSERT_NE (current, nullptr);
+    ASSERT_EQ (current->allocation.state, fw::placement_allocation_state_t::active);
+    ASSERT_EQ (current->allocation.target.node_rid.value (), target_rid);
+    const auto relocation =
+      fw::runtime::stateful::authority_relocation_payload_codec_t::decode (*current);
+    ASSERT_TRUE (relocation);
+    const auto ready =
+      fw::runtime::decode_direct_user_spot_authority_payload (relocation->application_payload);
+    ASSERT_TRUE (ready);
+    ASSERT_EQ (ready->state, fw::runtime::user_spot_authority_state_t::ready);
+    ASSERT_EQ (ready->node_rid.value (), source_rid);
+    ASSERT_NE (ready->node_rid.value (), current->allocation.target.node_rid.value ());
+    const auto calls_after_relocation = factory_calls.load ();
+    ASSERT_EQ (calls_after_relocation, 2u);
+    auto target_services = target.app.advanced ().services ().build_provider ();
+    const auto existing = target_services.get_required<fw::spot_manager_t> ()
+                            .get_or_create (fw::spot_id_t (room_id), room_type)
+                            .async ()
+                            .result ();
+    ASSERT_TRUE (existing) << (existing.error () ? existing.error ()->what () : "");
+    EXPECT_EQ (existing.value ().state, fw::spot_create_state_t::existing);
+    EXPECT_EQ (existing.value ().spot.spot_id (), fw::spot_id_t (room_id));
+    EXPECT_EQ (existing.value ().spot.mesh_name (), current->allocation.target.mesh_name);
+    EXPECT_EQ (existing.value ().spot.node_rid ().value (),
+               current->allocation.target.node_rid.value ());
+    EXPECT_EQ (existing.value ().spot.object_generation (), current->object_generation);
+    EXPECT_EQ (current->object_generation, created.value ().spot.object_generation ());
+    EXPECT_EQ (factory_calls.load (), calls_after_relocation);
+}
+
 TEST (SpotWideHostRelocation, AbortRunsAcceptedSpotPrefixWithoutNewIngress)
 {
     auto locations = std::make_shared<fw::runtime::in_memory_location_store_t> ();
