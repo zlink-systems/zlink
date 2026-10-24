@@ -1,3 +1,4 @@
+import type { ZLinkMeshDispatchAdmission } from '../admission';
 import {
   ZLinkFrameworkInternalErrorKind,
   createInternalFrameworkException,
@@ -93,8 +94,17 @@ export class ZLinkChannelDispatchPipeline {
    * for its terminal trace or error record.
    */
   dispatchOneWay<TContext extends ZLinkMessageContext>(
-    dispatch: ZLinkOneWayDispatch<TContext>
+    dispatch: ZLinkOneWayDispatch<TContext>,
+    admit?: ZLinkMeshDispatchAdmission
   ): void | Promise<void> {
+    if (admit !== undefined) {
+      const pipeline = this;
+      const record = dispatch;
+      return admit(
+        () => pipeline.dispatchOneWay(record),
+        (error) => pipeline.failOneWay(record.fields, error)
+      );
+    }
     this.trace(ZLinkMessageFlowOutcome.Received, dispatch.fields);
     this.trace(ZLinkMessageFlowOutcome.Admitted, dispatch.fields);
     if (dispatch.handler === undefined) return this.dispatchMissingOneWay(dispatch.fields);
@@ -140,8 +150,17 @@ export class ZLinkChannelDispatchPipeline {
    * handler adds exactly one continuation that writes the reply.
    */
   dispatchRequest<TContext extends ZLinkMessageContext>(
-    dispatch: ZLinkRequestDispatch<TContext>
+    dispatch: ZLinkRequestDispatch<TContext>,
+    admit?: ZLinkMeshDispatchAdmission
   ): void | Promise<void> {
+    if (admit !== undefined) {
+      const pipeline = this;
+      const record = dispatch;
+      return admit(
+        () => pipeline.dispatchRequest(record),
+        (error) => pipeline.failRequest(record, error)
+      );
+    }
     this.trace(ZLinkMessageFlowOutcome.Received, dispatch.fields);
     this.trace(ZLinkMessageFlowOutcome.Admitted, dispatch.fields);
     if (dispatch.handler === undefined) return this.dispatchMissingRequest(dispatch);
