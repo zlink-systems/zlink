@@ -961,7 +961,8 @@ test('degraded host rejects object messages and timers until owner lease recover
   let registry;
   try {
     await scenario.runtime.start();
-    scenario.runtime.spotManager.dispatchMeshActor = async () => { actorMessages += 1; };
+    scenario.runtime.spotManager.dispatchMeshActor = (_origin, _mesh, _owner, _record, admit) =>
+      admit(async () => { actorMessages += 1; });
     registry = new framework.ZLinkSpotTimerRegistry(
       undefined,
       undefined,
@@ -1069,10 +1070,18 @@ test('degraded host rejects relocation and peer capacity admission until owner l
   let targetControls = 0;
   try {
     await scenario.runtime.start();
+<<<<<<< HEAD
     scenario.runtime.serviceRelocation.tryHandleControl = async () => {
       targetControls += 1;
       return true;
     };
+=======
+    scenario.runtime.spotManager.dispatchMeshInstance = (_mesh, _owner, _record, admit) =>
+      admit(async () => {
+        targetCallbacks += 1;
+        return true;
+      });
+>>>>>>> 7d35d13 (fix(node): complete admission rejections through domain replies (#2625))
     assert.equal(scenario.runtime.status.acceptingWork, false);
     assert.equal(scenario.runtime.spotNodeRuntime.options.peerAdmissionSealed('play'), true);
     await assert.rejects(
