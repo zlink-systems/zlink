@@ -7,7 +7,6 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
-#include <deque>
 #include <list>
 #include <unordered_map>
 #include <mutex>
@@ -244,7 +243,7 @@ class service_mailbox_t
     // credit settles.
     struct owner_queue_t
     {
-        std::deque<service_mailbox_record_t> records;
+        std::list<service_mailbox_record_t> records;
         std::size_t messages = 0;
         std::size_t bytes = 0;
         std::size_t active_messages = 0;

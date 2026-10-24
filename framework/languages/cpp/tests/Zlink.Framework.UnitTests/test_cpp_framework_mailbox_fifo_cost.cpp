@@ -54,18 +54,28 @@ void rotate (mailbox_t &mailbox, std::size_t count)
 
 void verify_cost ()
 {
+    // Calibrate the owning FIFO, its owner index and its ready index on this
+    // ABI/runtime. Record payload storage is prepared before either measurement.
+    std::unordered_map<std::string, std::list<record_t>> owners;
+    std::list<std::string> ready_owners;
+    auto reference_record = record ();
+    const auto reference = fw::tests::measure_allocations ([&] {
+        owners["node"].push_back (std::move (reference_record));
+        ready_owners.push_back ("node");
+    });
     mailbox_t mailbox;
     std::size_t notifications = 0;
     const mailbox_t::application_ready_t ready_callback = [&] (const auto &) { ++notifications; };
     mailbox.bind_application_dispatch ({}, ready_callback);
     mailbox.begin_application_receive_turn ();
-    require (mailbox.try_enqueue (record ()), "cost enqueue failed");
+    auto original = record ();
+    const auto enqueue = fw::tests::measure_allocations (
+      [&] { require (mailbox.try_enqueue (std::move (original)), "cost enqueue failed"); });
     std::optional<mailbox_t::application_ready_batch_t> batch;
     const auto transfer = fw::tests::measure_allocations (
       [&] { batch.emplace (mailbox.take_application_receive_turn ()); });
     // Calibrate construction/move too: some standard libraries allocate a list
     // sentinel even for an empty/moved-from container.
-    std::list<std::string> ready_owners{"node"};
     using ready_reference_t =
       std::optional<std::pair<std::list<std::string>, mailbox_t::application_ready_t>>;
     const auto take_reference = [&] {
@@ -77,10 +87,14 @@ void verify_cost ()
     std::optional<ready_reference_t> reference_batch;
     const auto transfer_reference =
       fw::tests::measure_allocations ([&] { reference_batch.emplace (take_reference ()); });
-    std::cout << "transfer_count=" << transfer.count << " transfer_bytes=" << transfer.bytes
-              << '\n';
+    std::cout << "record_size=" << sizeof (record_t) << " enqueue_count=" << enqueue.count
+              << " enqueue_bytes=" << enqueue.bytes << " reference_count=" << reference.count
+              << " reference_bytes=" << reference.bytes << " transfer_count=" << transfer.count
+              << " transfer_bytes=" << transfer.bytes << '\n';
     mailbox_t::notify_application_ready (*batch);
     require (notifications == 1, "ready owner notification was lost or duplicated");
+    require (enqueue.count == reference.count,
+             "enqueue allocations differ from owning FIFO and owner/ready indices");
     require (transfer.count == transfer_reference.count
                && transfer.bytes == transfer_reference.bytes,
              "ready FIFO transfer allocates additional storage");
