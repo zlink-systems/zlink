@@ -482,6 +482,7 @@ void contract_rejects_wrong_metadata ()
 } // namespace
 int main ()
 {
+    completion_owner_t completion_owner;
     try {
         host_close_does_not_wait_for_population_retirement ();
         population_retirement_orders_after_pending_configuration ();

@@ -470,6 +470,10 @@ class stateful_object_runtime_t
                                          std::uint64_t timer_id,
                                          std::vector<std::uint8_t> payload);
     std::vector<logical_timer_t> timers (const object_ref_t &owner) const;
+    // Projects queued work in the state lane; the existing claim gate still
+    // decides execution eligibility when the caller visits each owner.
+    task_t<std::vector<object_ref_t>>
+    application_owner_refs_async (std::string local_node_id) const;
     task_t<std::vector<object_inventory_t>> inventory_async () const;
     task_t<std::vector<object_inventory_t>> actor_inventory () const;
     task_t<std::optional<std::vector<object_inventory_t>>>
