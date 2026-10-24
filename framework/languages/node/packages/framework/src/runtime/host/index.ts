@@ -73,7 +73,7 @@ import {
   ZLINK_INTERNAL_ACTOR_TRANSPORT_DELIVERY_GATE,
   type ZLinkInternalActorTransportDeliveryGate
 } from '../actors/actor-transport-delivery-gate';
-import { ZLinkRuntimeAdmissionGate } from '../admission';
+import { ZLinkRuntimeAdmissionGate, type ZLinkMeshDispatchAdmission } from '../admission';
 import {
   ZLINK_INTERNAL_APPLICATION_JOB_QUEUE_HANDLER_START_GATE,
   type ZLinkInternalApplicationJobQueueHandlerStartGate
@@ -2893,20 +2893,22 @@ export class ZLinkFrameworkRuntimeHost
   private dispatchMeshNodeRecord(
     meshName: string,
     record: ReceiveRecord,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    admit?: ZLinkMeshDispatchAdmission
   ): void | Promise<void> {
     const control = this.serviceRelocation.tryHandleControl(meshName, record, signal);
     if (control instanceof Promise)
       return control.then((handled) =>
-        handled ? undefined : this.dispatchMeshNodePayload(meshName, record, signal)
+        handled ? undefined : this.dispatchMeshNodePayload(meshName, record, signal, admit)
       );
-    if (!control) return this.dispatchMeshNodePayload(meshName, record, signal);
+    if (!control) return this.dispatchMeshNodePayload(meshName, record, signal, admit);
   }
 
   private dispatchMeshNodePayload(
     meshName: string,
     record: ReceiveRecord,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    admit?: ZLinkMeshDispatchAdmission
   ): void | Promise<void> {
     if (record.kind === ReceiveKind.NodeRequest && record.parts.length === 1) {
       const terminal = decodeRemoteActorSourceLeaveTerminal(record.parts[0]!.data());
@@ -2920,7 +2922,7 @@ export class ZLinkFrameworkRuntimeHost
         'MeshNode node-direct dispatch requires the channel runtime.'
       );
     }
-    return channelRuntime.dispatchMeshRoute(meshName, record, signal);
+    return channelRuntime.dispatchMeshRoute(meshName, record, signal, admit);
   }
 
   private async completeFormalSourceLeave(
@@ -2978,22 +2980,32 @@ export class ZLinkFrameworkRuntimeHost
             'MeshNode channel dispatch requires the channel runtime.'
           );
         }
-        return this.admitMeshDispatch(meshName, record, 'RouteMesh channel dispatch', () =>
-          channelRuntime.dispatchMeshChannel(meshName, record, signal)
+        return channelRuntime.dispatchMeshChannel(
+          meshName,
+          record,
+          signal,
+          (dispatch, onRejected) =>
+            this.admitMeshDispatch(
+              meshName,
+              record,
+              'RouteMesh channel dispatch',
+              dispatch,
+              onRejected
+            )
         );
       }
       case ReceiveKind.NodeSend:
       case ReceiveKind.NodeRequest: {
-        return this.admitMeshDispatch(meshName, record, 'RouteMesh node dispatch', () =>
-          this.dispatchMeshNodeRecord(meshName, record, signal)
+        return this.dispatchMeshNodeRecord(meshName, record, signal, (dispatch, onRejected) =>
+          this.admitMeshDispatch(meshName, record, 'RouteMesh node dispatch', dispatch, onRejected)
         );
       }
 
       case ReceiveKind.SpotSend:
       case ReceiveKind.SpotRequest:
       case ReceiveKind.SpotMulticast:
-        return this.admitMeshDispatch(meshName, record, 'RouteMesh Spot dispatch', () =>
-          this.dispatchMeshSpotRecord(meshName, owner, record)
+        return this.dispatchMeshSpotRecord(meshName, owner, record, (dispatch, onRejected) =>
+          this.admitMeshDispatch(meshName, record, 'RouteMesh Spot dispatch', dispatch, onRejected)
         );
       case ReceiveKind.InstanceSpotActivation:
         if (this.spotManager === undefined) {
@@ -3001,8 +3013,18 @@ export class ZLinkFrameworkRuntimeHost
             'MeshNode Instance Spot dispatch requires the Spot manager.'
           );
         }
-        return this.admitMeshDispatch(meshName, record, 'RouteMesh Instance Spot dispatch', () =>
-          this.spotManager!.dispatchMeshInstance(meshName, owner, record)
+        return this.spotManager.dispatchMeshInstance(
+          meshName,
+          owner,
+          record,
+          (dispatch, onRejected) =>
+            this.admitMeshDispatch(
+              meshName,
+              record,
+              'RouteMesh Instance Spot dispatch',
+              dispatch,
+              onRejected
+            )
         );
       case ReceiveKind.SpotControl:
         if (this.spotManager === undefined) {
@@ -3018,8 +3040,19 @@ export class ZLinkFrameworkRuntimeHost
             'MeshNode Actor dispatch requires the Spot manager.'
           );
         }
-        return this.admitMeshDispatch(meshName, record, 'RouteMesh Actor dispatch', () =>
-          this.spotManager!.dispatchMeshActor(applicationJobOrigin(), meshName, owner, record)
+        return this.spotManager.dispatchMeshActor(
+          applicationJobOrigin(),
+          meshName,
+          owner,
+          record,
+          (dispatch, onRejected) =>
+            this.admitMeshDispatch(
+              meshName,
+              record,
+              'RouteMesh Actor dispatch',
+              dispatch,
+              onRejected
+            )
         );
       case ReceiveKind.SendReady:
         return Promise.resolve();
@@ -3034,7 +3067,8 @@ export class ZLinkFrameworkRuntimeHost
     meshName: string,
     record: ReceiveRecord,
     operation: string,
-    dispatch: () => void | Promise<void>
+    dispatch: () => void | Promise<void>,
+    onRejected?: (error: unknown) => void | Promise<void>
   ): void | Promise<void> {
     // Execution gate §13 and host relocation §14 keep control progress independent
     // of new application admission. Disconnect callbacks still use their owner gate.
@@ -3059,7 +3093,7 @@ export class ZLinkFrameworkRuntimeHost
         return dispatch();
       }
     }
-    return this.admission.run(meshName, operation, dispatch, record.kind);
+    return this.admission.run(meshName, operation, dispatch, record.kind, onRejected);
   }
 
   private async dispatchMeshActorBinding(
@@ -3229,7 +3263,8 @@ export class ZLinkFrameworkRuntimeHost
   private async dispatchMeshSpotRecord(
     meshName: string,
     owner: ReadyRecord,
-    record: ReceiveRecord
+    record: ReceiveRecord,
+    admit?: ZLinkMeshDispatchAdmission
   ): Promise<void> {
     const envelope = decodeChannelEnvelope(record.parts, undefined, this.flowCreationEnabled());
     if (envelope.packetName === ZLINK_REMOTE_ACTOR_PACKET_RELAY_PACKET) {
@@ -3245,33 +3280,32 @@ export class ZLinkFrameworkRuntimeHost
         correlationId: envelope.header.correlationId ?? undefined
       };
       try {
-        const response = await this.boundSessionRelay.actorPackets.receiveRemoteActorPacketRelay(
-          payload,
-          context
-        );
-        if (record.kind === ReceiveKind.SpotRequest) {
-          record.reply(encodeChannelReplyParts(envelope.header, response));
-        }
+        const dispatch = async () => {
+          const response = await this.boundSessionRelay.actorPackets.receiveRemoteActorPacketRelay(
+            payload,
+            context
+          );
+          if (record.kind === ReceiveKind.SpotRequest)
+            record.reply(encodeChannelReplyParts(envelope.header, response));
+        };
+        await (admit === undefined ? dispatch() : admit(dispatch));
       } catch (error) {
         if (record.kind !== ReceiveKind.SpotRequest) {
           throw error;
         }
-        record.reply(
-          encodeChannelErrorReplyParts(
-            envelope.header,
-            error instanceof Error ? error.message : String(error)
-          )
-        );
+        record.reply(encodeChannelErrorReplyParts(envelope.header, error));
       }
       return;
     }
-    if ((await this.spotNodeRuntime?.dispatchEntrySpotRecord(meshName, owner, record)) === true) {
+    if (
+      (await this.spotNodeRuntime?.dispatchEntrySpotRecord(meshName, owner, record, admit)) === true
+    ) {
       return;
     }
     if (this.spotManager === undefined) {
       throw new ZLinkConfigurationException('MeshNode Spot dispatch requires the Spot manager.');
     }
-    await this.spotManager.dispatchMeshSpot(meshName, owner, record);
+    await this.spotManager.dispatchMeshSpot(meshName, owner, record, admit);
   }
 
   private createDispatchErrorReporter(

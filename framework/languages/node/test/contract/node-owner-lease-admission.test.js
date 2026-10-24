@@ -17,15 +17,16 @@ function scenario(t, ownerUsable) {
     get ownerLeaseUsable() { ownerReads++; return ownerUsable; }
   };
   const dispatch = () => { dispatched++; };
+  const dispatchAdmitted = (...args) => args.at(-1)(dispatch);
   host.channelRuntime = {
-    dispatchMeshRoute: dispatch,
-    dispatchMeshChannel: dispatch,
+    dispatchMeshRoute: dispatchAdmitted,
+    dispatchMeshChannel: dispatchAdmitted,
     canDispatchLocalMeshRoute: () => true,
     dispatchLocalMeshRoute: dispatch
   };
-  host.spotManager = { dispatchMeshActor: dispatch, dispatchMeshInstance: dispatch };
+  host.spotManager = { dispatchMeshActor: dispatchAdmitted, dispatchMeshInstance: dispatchAdmitted };
   t.mock.method(host.serviceRelocation, 'tryHandleControl', () => false);
-  t.mock.method(host, 'dispatchMeshSpotRecord', dispatch);
+  t.mock.method(host, 'dispatchMeshSpotRecord', dispatchAdmitted);
   return { host, ownerReads: () => ownerReads, dispatched: () => dispatched, setOwnerUsable: value => { ownerUsable = value; } };
 }
 
@@ -192,11 +193,11 @@ for (const entry of [true, false]) {
       });
       parts.forEach(part => part.close());
       let result;
-      s.host.channelRuntime.dispatchMeshRoute = async () => {
+      s.host.channelRuntime.dispatchMeshRoute = (_mesh, _record, _signal, admit) => admit(async () => {
         result = await s.host.boundSessionRelay.actorPackets.receiveRemoteActorPacketRelay(payload, {
           meshName: 'mesh', sourceNodeRid: 'source'
         });
-      };
+      });
       await s.host.dispatchMeshRecord(() => 'remote', 'mesh', {}, {
         kind: framework.ReceiveKind.NodeRequest, domain: framework.ReadyDomain.Application, parts: []
       });
