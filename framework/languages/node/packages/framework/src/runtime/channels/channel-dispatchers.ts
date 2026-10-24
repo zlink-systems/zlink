@@ -1,3 +1,4 @@
+import type { ZLinkMeshDispatchAdmission } from '../admission';
 import type {
   RoutingId,
   ZLinkMessageContext,
@@ -239,7 +240,11 @@ export class ZLinkChannelRequestDispatcher {
     });
   }
 
-  dispatchMesh(record: ReceiveRecord, signal?: AbortSignal): void | Promise<void> {
+  dispatchMesh(
+    record: ReceiveRecord,
+    signal?: AbortSignal,
+    admit?: ZLinkMeshDispatchAdmission
+  ): void | Promise<void> {
     if (record.parts.length === 0 || record.parts[0].data().length === 0) {
       return completedChannelReply;
     }
@@ -271,20 +276,23 @@ export class ZLinkChannelRequestDispatcher {
     }
     const correlationId = envelope.header.correlationId ?? undefined;
     if (envelope.header.kind === ZLinkChannelMessageKind.Command) {
-      return this.pipeline.dispatchOneWay({
-        fields: {
-          messageKind: ZLinkDispatchMessageKind.Send,
-          packetName,
-          correlationId,
-          flowId: envelope.header.flowId,
-          flowOrigin: envelope.header.flowOrigin
+      return this.pipeline.dispatchOneWay(
+        {
+          fields: {
+            messageKind: ZLinkDispatchMessageKind.Send,
+            packetName,
+            correlationId,
+            flowId: envelope.header.flowId,
+            flowOrigin: envelope.header.flowOrigin
+          },
+          envelope,
+          codecs: this.options.codecs,
+          handler: this.options.sendHandlers?.get(packetName),
+          context: this.createMeshContext(envelope, record.sourceNodeRid),
+          signal
         },
-        envelope,
-        codecs: this.options.codecs,
-        handler: this.options.sendHandlers?.get(packetName),
-        context: this.createMeshContext(envelope, record.sourceNodeRid),
-        signal
-      });
+        admit
+      );
     }
     if (envelope.header.kind !== ZLinkChannelMessageKind.Request) {
       return completedChannelReply;
@@ -307,7 +315,8 @@ export class ZLinkChannelRequestDispatcher {
         record,
         'channel',
         this.options.channelName
-      )
+      ),
+      admit
     );
   }
 
@@ -717,7 +726,11 @@ export class ZLinkRoutePacketDispatcher {
     });
   }
 
-  dispatchMesh(record: ReceiveRecord, signal?: AbortSignal): void | Promise<void> {
+  dispatchMesh(
+    record: ReceiveRecord,
+    signal?: AbortSignal,
+    admit?: ZLinkMeshDispatchAdmission
+  ): void | Promise<void> {
     if (record.parts.length === 0 || record.parts[0].data().length === 0) {
       return completedChannelReply;
     }
@@ -755,7 +768,8 @@ export class ZLinkRoutePacketDispatcher {
         packetName,
         sourceNodeRid,
         record.sourceNodeRid,
-        signal
+        signal,
+        admit
       );
     }
     if (envelope.header.kind !== ZLinkChannelMessageKind.Request) {
@@ -780,7 +794,8 @@ export class ZLinkRoutePacketDispatcher {
         record,
         'routed',
         this.routerChannelId
-      )
+      ),
+      admit
     );
   }
 
@@ -826,23 +841,27 @@ export class ZLinkRoutePacketDispatcher {
     packetName: string,
     sourceRid: string,
     sourceNodeRid: unknown,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    admit?: ZLinkMeshDispatchAdmission
   ): void | Promise<void> {
-    return this.pipeline.dispatchOneWay({
-      fields: {
-        messageKind: ZLinkDispatchMessageKind.Send,
-        packetName,
-        sourceRid,
-        correlationId: envelope.header.correlationId ?? undefined,
-        flowId: envelope.header.flowId,
-        flowOrigin: envelope.header.flowOrigin
+    return this.pipeline.dispatchOneWay(
+      {
+        fields: {
+          messageKind: ZLinkDispatchMessageKind.Send,
+          packetName,
+          sourceRid,
+          correlationId: envelope.header.correlationId ?? undefined,
+          flowId: envelope.header.flowId,
+          flowOrigin: envelope.header.flowOrigin
+        },
+        envelope,
+        codecs: codecsForFrameworkPacket(packetName, this.codecs),
+        handler: this.sendHandlers.get(packetName),
+        context: this.createRouteContext(envelope, sourceNodeRid),
+        signal
       },
-      envelope,
-      codecs: codecsForFrameworkPacket(packetName, this.codecs),
-      handler: this.sendHandlers.get(packetName),
-      context: this.createRouteContext(envelope, sourceNodeRid),
-      signal
-    });
+      admit
+    );
   }
 
   private submitReply(operation: ZLinkMultipartReplyOperation): Promise<void> {
