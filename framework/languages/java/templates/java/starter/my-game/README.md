@@ -12,7 +12,7 @@ flowchart LR
 
 Install Docker with Compose v2 and access to a Linux container daemon. Bash or PowerShell 7 runs the scripts. Docker builds use Eclipse Temurin JDK and JRE `25.0.2+10` and Docker CLI `28.5.1`; the image references are at the top of `Dockerfile`. Network access to Maven Central and the Redis container registry is required. Host debugging also requires JDK 25.
 
-`build.gradle.kts` pins Framework `0.30.1` and binding `1.19.1`. Gradle resolves them from Maven Central only. That Framework version must be published before building this setup; do not add repository source references or a private repository.
+`build.gradle.kts` pins Framework `0.30.2` and binding `1.20.0`. Gradle resolves them from Maven Central only. Do not add repository source references or a private repository.
 
 The Gradle wrapper and both server modules are included. Copy this directory to build it independently.
 
@@ -66,7 +66,7 @@ Changes to registrations, settings, structure, and scenarios must be made togeth
 
 ## Known issues
 
-On Framework 0.30.x for Java, a node that registers a RouteMesh listener cannot finish `drain` while no other live node is in that mesh. The `connect` scenario's drain stops with `BLOCKED/DEADLINE_EXCEEDED` after the 30-second host deadline and the runner exits with code 1 (#1947, https://github.com/zlink-systems/zlink/issues/1947). The .NET starter passes the same scenario. The setup keeps the mesh listener and does not work around the failure; validate the scenario with a Framework release that fixes #1947 before deployment.
+Validated against the published Framework 0.30.2 packages.
 
 ## Deployment sequence
 
@@ -78,6 +78,6 @@ After clients disconnect, write `drain` to stdin. Wait for `RELOCATION_REQUESTED
 
 ## 한국어 실행 안내
 
-이 셋업은 STREAM 연결을 받는 Session node와 Redis를 실행한다. Docker 환경에서 Bash의 `./run-e2e.sh` 또는 PowerShell의 `pwsh -NoProfile -File ./run-e2e.ps1`을 실행하면 접속과 drain·shutdown을 검사한다. Framework pin 0.30.1이 Maven Central에 게시되어 있어야 빌드할 수 있다.
+이 셋업은 STREAM 연결을 받는 Session node와 Redis를 실행한다. Docker 환경에서 Bash의 `./run-e2e.sh` 또는 PowerShell의 `pwsh -NoProfile -File ./run-e2e.ps1`을 실행하면 접속과 drain·shutdown을 검사한다.
 
 게임 기능은 포함하지 않는다. [한국어 개발 지침](AGENTS.ko.md)에 따라 필요한 샘플을 별도로 받아 실행한 뒤 Spot·Actor·Entry 등을 추가한다. 기능을 추가할 때 구조 선언과 구조 검사, e2e 시나리오도 함께 확장한다.

@@ -55,7 +55,7 @@ Run the structure checker alone with `./run-e2e.sh --check-structure` or `pwsh -
 
 ## Known issues
 
-Framework 0.30.1 is the target package version. Public 0.30.0 validation stops at the first lobby response: the Session's first Actor GetOrCreate for a player never completes and no node records the request ([#1782](https://github.com/zlink-systems/zlink/issues/1782)). Do not compensate with internal APIs, manual codecs, retries, sleeps, or longer deadlines. Preserve the first failure and message-flow logs.
+Validated against the published Framework 0.30.2 packages.
 
 ## Deployment sequence
 

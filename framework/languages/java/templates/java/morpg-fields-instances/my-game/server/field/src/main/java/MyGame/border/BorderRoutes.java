@@ -1,6 +1,7 @@
 package MyGame.border;
 
 import MyGame.BorderPresence;
+import MyGame.Names;
 import MyGame.Rules;
 import MyGame.field.Field;
 
@@ -34,7 +35,7 @@ public final class BorderRoutes {
         handlers.addHandler(type);
     }
 
-    @ZLinkSpotSubscription(topic = TOPIC_1_2)
+    @ZLinkSpotSubscription(channelName = Names.BORDER, topic = TOPIC_1_2)
     public static final class Route1To2
             implements ZLinkSpotSubscriptionHandler<Field, BorderPresence> {
         public CompletionStage<Void> handle(Field spot, BorderPresence presence) {
@@ -42,7 +43,7 @@ public final class BorderRoutes {
         }
     }
 
-    @ZLinkSpotSubscription(topic = TOPIC_2_1)
+    @ZLinkSpotSubscription(channelName = Names.BORDER, topic = TOPIC_2_1)
     public static final class Route2To1
             implements ZLinkSpotSubscriptionHandler<Field, BorderPresence> {
         public CompletionStage<Void> handle(Field spot, BorderPresence presence) {
@@ -50,7 +51,7 @@ public final class BorderRoutes {
         }
     }
 
-    @ZLinkSpotSubscription(topic = TOPIC_2_3)
+    @ZLinkSpotSubscription(channelName = Names.BORDER, topic = TOPIC_2_3)
     public static final class Route2To3
             implements ZLinkSpotSubscriptionHandler<Field, BorderPresence> {
         public CompletionStage<Void> handle(Field spot, BorderPresence presence) {
@@ -58,7 +59,7 @@ public final class BorderRoutes {
         }
     }
 
-    @ZLinkSpotSubscription(topic = TOPIC_3_2)
+    @ZLinkSpotSubscription(channelName = Names.BORDER, topic = TOPIC_3_2)
     public static final class Route3To2
             implements ZLinkSpotSubscriptionHandler<Field, BorderPresence> {
         public CompletionStage<Void> handle(Field spot, BorderPresence presence) {
@@ -66,7 +67,7 @@ public final class BorderRoutes {
         }
     }
 
-    @ZLinkSpotSubscription(topic = TOPIC_3_4)
+    @ZLinkSpotSubscription(channelName = Names.BORDER, topic = TOPIC_3_4)
     public static final class Route3To4
             implements ZLinkSpotSubscriptionHandler<Field, BorderPresence> {
         public CompletionStage<Void> handle(Field spot, BorderPresence presence) {
@@ -74,7 +75,7 @@ public final class BorderRoutes {
         }
     }
 
-    @ZLinkSpotSubscription(topic = TOPIC_4_3)
+    @ZLinkSpotSubscription(channelName = Names.BORDER, topic = TOPIC_4_3)
     public static final class Route4To3
             implements ZLinkSpotSubscriptionHandler<Field, BorderPresence> {
         public CompletionStage<Void> handle(Field spot, BorderPresence presence) {

@@ -41,6 +41,7 @@ export class Field implements ZLinkSpot<Player> {
     @Inject(ZLINK_SPOT_MANAGER) private readonly spots: ZLinkSpotManager
   ) {}
   configure(): void {
+    this.context.handlers.addTimerHandler(BorderTick);
     for (const adjacent of adjacentFields(String(this.context.spotId)))
       this.context.handlers.addSubscribe(
         BorderHandler,

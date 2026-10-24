@@ -56,7 +56,7 @@ Message Follow is configured explicitly to 30 seconds. After `RELOCATED`, the sa
 
 ## Known issues
 
-Public 0.30.0 validation is blocked by #1729: cross-node deferred Actor Join reports `DATA_LOST` during initial matchmaking. A `RoomAssignment` can then reach the old Entry Spot and be dropped with `no_handler`. This template does not compensate for that Framework failure. Validation with the 0.30.1 candidate feed remains pending.
+Validated against the published Framework 0.30.2 packages.
 
 ## Deployment sequence
 

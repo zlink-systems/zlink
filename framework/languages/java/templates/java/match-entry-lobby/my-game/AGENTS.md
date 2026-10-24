@@ -2,7 +2,7 @@
 
 ## Project overview
 
-This Java 25 project is a match server example in which two players queue by mode and fight in a dynamically created Room. It runs a Session gateway for connections, Match hosts A and B (an Entry Spot, a fixed Matchmaking Spot, and dynamic Room Spots), and Redis for location and relocation state. `build.gradle.kts` pins the ZLink Framework to `0.30.1` and the binding to `1.19.1`.
+This Java 25 project is a match server example in which two players queue by mode and fight in a dynamically created Room. It runs a Session gateway for connections, Match hosts A and B (an Entry Spot, a fixed Matchmaking Spot, and dynamic Room Spots), and Redis for location and relocation state. `build.gradle.kts` pins the ZLink Framework to `0.30.2` and the binding to `1.20.0`.
 
 The project layout below describes where to add gameplay, and "Developing from this sample" describes how to carry its features into your own project. The [README](README.md) covers prerequisites, deployment, and known issues in the public packages. [zlink.structure.json](zlink.structure.json) describes the initial node composition and scenarios; Framework and Redis manage object placement at runtime.
 

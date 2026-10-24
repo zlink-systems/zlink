@@ -27,6 +27,7 @@ export class Zone implements ZLinkSpot<Player> {
   private readonly arrivals = new Map<string, EnterZone>();
   constructor(@Inject(ZLINK_ACTOR_CLIENT) private readonly actors: ZLinkActorClient) {}
   configure(): void {
+    this.context.handlers.addTimerHandler(BorderTick);
     for (const adjacent of adjacentZones(String(this.context.spotId)))
       this.context.handlers.addSubscribe(
         BorderHandler,

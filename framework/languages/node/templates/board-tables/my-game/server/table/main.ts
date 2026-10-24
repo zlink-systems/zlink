@@ -6,7 +6,7 @@ import { PlayerFactory, PlayerRelocation } from './infrastructure/player';
 import { EntryJoin, Rejoin, View, Start, Bet, Deliver } from './infrastructure/handlers';
 runHost((_builder, config, mesh) => {
   const objects = mesh.objects().server();
-  objects.addEntrySpot(Entry);
+  objects.addEntrySpot(Entry, Names.actor);
   objects.addActorFactory(Names.actor, PlayerFactory, (f) => f.preserveStateWith(PlayerRelocation));
   objects.addSpotFactory(Names.table, Table, (f) => {
     if (config.tableCapacity) f.stableTypeLimit(config.tableCapacity);

@@ -2,7 +2,7 @@
 
 ## 프로젝트 개요
 
-이 Java 25 프로젝트는 독립된 월드와 변경 가능한 채널을 가진 전통적인 MMORPG 예제다. accounts 서비스가 HTTP로 월드 목록을 주고, 월드마다 Session node, 채널 node와 Redis 데이터베이스를 따로 두며, 플레이어의 gold는 그 월드 데이터베이스에 저장하는 application 데이터다. `build.gradle.kts`는 ZLink Framework를 `0.30.1`, binding을 `1.19.1`으로 고정한다.
+이 Java 25 프로젝트는 독립된 월드와 변경 가능한 채널을 가진 전통적인 MMORPG 예제다. accounts 서비스가 HTTP로 월드 목록을 주고, 월드마다 Session node, 채널 node와 Redis 데이터베이스를 따로 두며, 플레이어의 gold는 그 월드 데이터베이스에 저장하는 application 데이터다. `build.gradle.kts`는 ZLink Framework를 `0.30.2`, binding을 `1.20.0`으로 고정한다.
 
 게임 기능을 추가할 위치는 아래의 프로젝트 구성에, 이 샘플의 기능을 자기 프로젝트로 옮기는 절차는 "이 샘플을 보며 개발하기"에 있다. 실행 환경·배포·공개 package의 알려진 문제는 [README](README.md)가 설명한다. 초기 node 구성과 scenario 목록은 [zlink.structure.json](zlink.structure.json)에 있으며, 실행 중 객체의 위치는 Framework와 Redis가 관리한다.
 

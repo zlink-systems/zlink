@@ -16,7 +16,7 @@ flowchart LR
 
 ## Prerequisites
 
-Docker with Compose v2, and PowerShell 7 on Windows. Gradle 9.3 is included. Dependencies come from Maven Central; Framework 0.30.1 and binding 1.19.1 are pinned in `build.gradle.kts`. No repository checkout is required.
+Docker with Compose v2, and PowerShell 7 on Windows. Gradle 9.3 is included. Dependencies come from Maven Central; Framework 0.30.2 and binding 1.20.0 are pinned in `build.gradle.kts`. No repository checkout is required.
 
 ## Build
 
@@ -36,7 +36,6 @@ Docker runs the Java e2e runner and every node role in containers. Nodes share t
 For local process debugging, install JDK 25 and use `./run-e2e.sh --local` or `pwsh -NoProfile -File ./run-e2e.ps1 -Local`. Add `--no-build` or `-NoBuild` to reuse a local build. Docker uses its image layer cache.
 
 > **Base images.** Dockerfile ARG defaults pin Eclipse Temurin JDK/JRE 25.0.2+10 and Docker CLI 28.5.1. Replace these defaults when adopting a deployment base image.
-
 
 Bash:
 ```sh
@@ -62,7 +61,7 @@ The runner checks `zlink.structure.json`, starts its own two Redis containers an
 
 ## Known issues
 
-Framework 0.30.1 publication is pending. Validation against 0.30.0 uses a separate copy. Cross-node deferred Actor Join fails with `DATA_LOST: target rejected canonical relocation: 35` ([#1729](https://github.com/zlink-systems/zlink/issues/1729)). This blocks channel transfer, reconnect after transfer, and update verification. Initial entry can also require this path when Actor placement selects a different channel node. After `RELOCATED`, the source may never publish `safeToShutdown=true` ([#1740](https://github.com/zlink-systems/zlink/issues/1740)). The template retains the public join path and its assertions.
+Validated against the published Framework 0.30.2 packages.
 
 ## Deployment sequence
 

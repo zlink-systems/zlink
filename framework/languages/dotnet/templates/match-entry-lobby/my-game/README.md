@@ -15,7 +15,7 @@ flowchart LR
 
 Default execution requires Docker Linux containers; no host .NET SDK is needed.
 
-Docker with Compose v2 (Linux containers), and PowerShell 7 on Windows or Bash on Linux. Public ZLink packages are pinned centrally to 0.30.1. No repository checkout is required. Supply any required ZLink license through the public package's license configuration; license files must not be committed.
+Docker with Compose v2 (Linux containers), and PowerShell 7 on Windows or Bash on Linux. Public ZLink packages are pinned centrally to 0.30.2. No repository checkout is required. Supply any required ZLink license through the public package's license configuration; license files must not be committed.
 
 ## Build
 
@@ -57,7 +57,6 @@ pwsh -NoProfile -File ./run-e2e.ps1 -Local
 pwsh -NoProfile -File ./run-e2e.ps1 -Local -NoBuild
 ```
 
-
 ```sh
 ./run-e2e.sh
 ./run-e2e.sh --scenario hit,reconnect,update
@@ -84,7 +83,7 @@ Message Follow is configured explicitly to 30 seconds. After `RELOCATED`, the sa
 
 ## Known issues
 
-Public 0.30.0 validation is blocked by the cross-node Actor join/relay failure tracked as #1723: MatchFound is not delivered after RoomAssignment and node message-flow logs report a stale relay peer identity. This template pins 0.30.1, which contains the scheduled fix; its candidate feed is required to complete e2e validation. No workaround is applied.
+Validated against the published Framework 0.30.2 packages.
 
 ## Deployment sequence
 

@@ -13,7 +13,7 @@ flowchart LR
 
 ## Prerequisites
 
-Docker with Compose v2 and PowerShell 7 on Windows. Local process debugging requires Node.js 22 or later and npm. Framework packages are pinned to 0.30.1; the native binding is pinned in `package.json`. Copy this directory to build independently. No repository source or local feed is required. Application configuration is in `server/config/`.
+Docker with Compose v2 and PowerShell 7 on Windows. Local process debugging requires Node.js 22 or later and npm. Framework packages are pinned to 0.30.2; the native binding is pinned in `package.json`. Copy this directory to build independently. No repository source or local feed is required. Application configuration is in `server/config/`.
 
 ## Build
 
@@ -56,7 +56,9 @@ The runner checks `zlink.structure.json`, starts Redis with a unique Compose pro
 
 ## Known issues
 
-Public 0.30.0 validation can stop at host relocation inventory (#1725, fixed in 0.30.1). Keep the pinned target version. Node typed pushes are restored through one packet-name-to-class table for #1731; no custom message codec is used.
+Validated against the published Framework 0.30.2 packages.
+
+Node typed pushes are restored through one packet-name-to-class table for #1731; no custom message codec is used.
 
 ## Deployment sequence
 
