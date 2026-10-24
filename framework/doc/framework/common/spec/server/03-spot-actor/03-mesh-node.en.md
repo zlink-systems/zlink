@@ -53,6 +53,8 @@ MeshNode descriptor is published, the following settings can't be changed.
 
 ## 3. Routing ID
 
+One node-configuration owner retains the configured local identity throughout the configuration lifetime, including before native startup and after native shutdown. Reading that identity does not grant admission. The existing admission owner decides admission and shutdown outcomes. Descriptor and wire identities derive from this source and are not separate authorities for deciding whether a target is local.
+
 ### 3.1 Automatic RID
 
 MeshNode automatic RID issuance, format, conflict, and lifecycle rules are defined by

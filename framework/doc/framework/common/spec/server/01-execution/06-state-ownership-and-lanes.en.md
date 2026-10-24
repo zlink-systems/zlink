@@ -96,6 +96,8 @@ is what §4 forbids.
 
 ## 4. State Classifications and How to Tell Them Apart
 
+Configuration identity authority and lifecycle admission decisions follow [the MeshNode identity section](../03-spot-actor/03-mesh-node.en.md#3-routing-id).
+
 A component's mutable state falls into one of the following classifications. Once classified,
 the mechanism that guards it follows mechanically.
 
