@@ -101,7 +101,7 @@ struct fixture_t
         (void) owner.pump_one (std::chrono::steady_clock::now ()).result ().value ();
     }
 
-    mesh::service_mailbox_claim_t claim ()
+    std::shared_ptr<mesh::service_mailbox_claim_t> claim ()
     {
         const auto deadline = std::chrono::steady_clock::now () + 5s;
         for (;;) {
@@ -109,16 +109,16 @@ struct fixture_t
             auto claim =
               replier.mailbox ().try_claim (mesh::service_mailbox_domain_t::application, 1, 4096);
             if (claim)
-                return std::move (*claim);
+                return claim;
             require (std::chrono::steady_clock::now () < deadline, "request did not arrive");
             std::this_thread::yield ();
         }
     }
 
-    void deliver (mesh::service_mailbox_claim_t claim)
+    void deliver (std::shared_ptr<mesh::service_mailbox_claim_t> claim)
     {
-        require (replier.reply (*claim.records.front (), reply_payload), "reply rejected");
-        require (replier.mailbox ().release (claim), "claim release failed");
+        require (replier.reply (*claim->records.front (), reply_payload), "reply rejected");
+        require (replier.mailbox ().release (*claim), "claim release failed");
     }
 
     void wait (const std::atomic_size_t &completed, std::size_t expected)
