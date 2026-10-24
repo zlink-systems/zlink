@@ -51,7 +51,7 @@ static_assert (
                  std::optional<backend::raw_received_t>>);
 static_assert (std::is_same_v<decltype (std::declval<backend::raw_route_port_t &> ().request (
                                 std::declval<const backend::raw_bytes_t &> (),
-                                std::declval<const backend::raw_message_t &> (),
+                                std::declval<std::span<zlink::message_t>> (),
                                 std::chrono::milliseconds (1))),
                               zlink::framework::task_t<backend::raw_request_completion_t>>);
 static_assert (std::is_same_v<decltype (std::declval<backend::raw_route_port_t &> ().reply (
@@ -320,9 +320,10 @@ void verify_writable_request_timeout_remains_deadline_exceeded ()
     assert (blocked_send);
     const auto caller_deadline = std::chrono::steady_clock::now () + raw_request_capacity_timeout;
     auto acceptance = std::make_shared<zlink::framework::task_completion_source_t<void>> ();
+    auto native_parts = backend::materialize_binding_parts (request_parts ());
     auto pending = zlink::framework::runtime::messaging::with_request_deadline (
       zlink::framework::request_task_t<backend::raw_request_completion_t> (
-        port.request (target_rid.to_bytes (), request_parts (), raw_route_fixture_timeout, {},
+        port.request (target_rid.to_bytes (), native_parts, raw_route_fixture_timeout, {},
                       acceptance),
         acceptance),
       caller_deadline);
@@ -487,8 +488,8 @@ void verify_binding_completion_bypasses_handler_executor ()
 
     backend::raw_route_port_t source_port (source), target_port (target);
     auto acceptance = std::make_shared<zlink::framework::task_completion_source_t<void>> ();
-    auto pending =
-      source_port.request (target_rid.to_bytes (), request_parts (), 2s, {}, acceptance);
+    auto native_parts = backend::materialize_binding_parts (request_parts ());
+    auto pending = source_port.request (target_rid.to_bytes (), native_parts, 2s, {}, acceptance);
     auto admitted = acceptance->task ();
     assert (admitted.await_ready () && admitted.result ());
     assert (!pending.await_ready ());
@@ -575,13 +576,14 @@ void verify_raw_send_uses_binding_owned_message_list ()
     // The first pair warms the binding's existing operation storage. Both
     // measurements then use the same parts and native failure outcome.
     for (int pass = 0; pass < 2; ++pass) {
-        backend::raw_message_t direct_parts{{'h', 'e', 'a', 'd', 'e', 'r'}, {'b', 'o', 'd', 'y'}};
+        auto direct_parts = backend::materialize_binding_parts (
+          backend::raw_message_t{{'h', 'e', 'a', 'd', 'e', 'r'}, {'b', 'o', 'd', 'y'}});
         bool direct_not_connected = false;
         direct_allocations = count_allocations ([&] {
             try {
                 (void) source.send (target)
-                  .message (backend::materialize_binding_part (std::move (direct_parts[0])))
-                  .message (backend::materialize_binding_part (std::move (direct_parts[1])))
+                  .message (std::move (direct_parts[0]))
+                  .message (std::move (direct_parts[1]))
                   .async ();
             }
             catch (const zlink::submit_error_t &error) {
@@ -589,10 +591,10 @@ void verify_raw_send_uses_binding_owned_message_list ()
             }
         });
         assert (direct_not_connected);
-        backend::raw_message_t framework_parts{{'h', 'e', 'a', 'd', 'e', 'r'},
-                                               {'b', 'o', 'd', 'y'}};
+        auto framework_parts = backend::materialize_binding_parts (
+          backend::raw_message_t{{'h', 'e', 'a', 'd', 'e', 'r'}, {'b', 'o', 'd', 'y'}});
         framework_allocations = count_allocations ([&] {
-            auto submitted = port.submit_send (target_bytes, std::move (framework_parts));
+            auto submitted = port.submit_send (target_bytes, framework_parts);
             assert (submitted.state == backend::raw_send_submission_state_t::immediate);
             assert (submitted.immediate_result->value () == zlink::submit_result_t::not_connected);
         });
@@ -809,8 +811,9 @@ void verify_missing_rid_is_initial_not_connected_without_wait_token ()
     router.options ().mandatory (true);
     backend::raw_route_port_t port (router);
 
+    auto native_parts = backend::materialize_binding_parts (request_parts ());
     auto request =
-      port.request (zlink::routing_id_t::from ("missing-route").to_bytes (), request_parts (), 1s);
+      port.request (zlink::routing_id_t::from ("missing-route").to_bytes (), native_parts, 1s);
     assert (request.await_ready ());
     const auto &settled = request.result ();
     assert (settled);
@@ -847,7 +850,8 @@ void verify_handover_request_completion_is_replayable ()
     assert (wait_for_monitor_event (ready, zlink::monitor_event::connection_ready, 2s));
     backend::raw_route_port_t source_port (source), target_port (target);
     const auto deadline = std::chrono::steady_clock::now () + 2s;
-    auto pending = source_port.request (target_rid.to_bytes (), request_parts (), 2s);
+    auto native_parts = backend::materialize_binding_parts (request_parts ());
+    auto pending = source_port.request (target_rid.to_bytes (), native_parts, 2s);
     std::optional<backend::raw_received_t> admitted;
     while (!admitted && std::chrono::steady_clock::now () < deadline)
         admitted = target_port.receive_if_ready (target_port.poll (1ms));
@@ -901,7 +905,8 @@ void verify_disconnect_rid_ends_issued_wait_token_with_enoent ()
     assert (wait_for_monitor_event (client_monitor, zlink::monitor_event::connection_ready, 2s));
 
     backend::raw_route_port_t port (client);
-    auto request = port.request (server_rid.to_bytes (), request_parts (), 2s);
+    auto native_parts = backend::materialize_binding_parts (request_parts ());
+    auto request = port.request (server_rid.to_bytes (), native_parts, 2s);
     assert (!request.await_ready ());
 
     client.disconnect_rid (server_rid);
@@ -1024,10 +1029,10 @@ void verify_request_materializes_only_the_binding_message_list ()
         assert (container_allocations == 1);
         // A native request owns its multipart list. The transport must not
         // allocate another list of materialized messages before that list.
-        backend::raw_message_t parts (part_count);
+        auto parts = backend::materialize_binding_parts (backend::raw_message_t (part_count));
         std::optional<zlink::framework::task_t<backend::raw_request_completion_t>> pending;
         const auto observed = count_allocations (
-          [&] { pending.emplace (port.request (target, std::move (parts), 1s)); }, container_bytes);
+          [&] { pending.emplace (port.request (target, parts, 1s)); }, container_bytes);
         assert (pending->await_ready ());
         const auto &terminal = pending->result ();
         assert (terminal && terminal.value ().terminal == zlink::request_result_t::not_connected);

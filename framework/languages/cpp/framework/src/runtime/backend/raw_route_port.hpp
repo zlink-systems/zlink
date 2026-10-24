@@ -118,7 +118,7 @@ class raw_route_port_t
       std::uintptr_t poller_slot = 1);
 
     raw_send_submission_t submit_send (const raw_bytes_t &target_routing_id,
-                                       raw_message_t parts,
+                                       std::span<zlink::message_t> parts,
                                        raw_send_stage_trace_t trace = {});
     task_t<zlink::submit_result_t> send_result (const raw_bytes_t &target_routing_id,
                                                 raw_message_t parts,
@@ -132,7 +132,7 @@ class raw_route_port_t
     }
     task_t<raw_request_completion_t>
     request (const raw_bytes_t &target_routing_id,
-             raw_message_t parts,
+             std::span<zlink::message_t> parts,
              std::chrono::milliseconds timeout,
              runtime::mesh::service_liveness_registry_t::connection_t admission = {},
              std::shared_ptr<task_completion_source_t<void>> admitted = {});

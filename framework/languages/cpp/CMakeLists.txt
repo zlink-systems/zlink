@@ -2655,6 +2655,13 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_include_directories(test_cpp_framework_send_allocations PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   add_zlink_framework_test(
+    test_cpp_framework_source_wire_allocations
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_source_wire_allocations.cpp
+    "framework-unit;framework-regression;messaging" "unit")
+  target_use_zlink_gtest_main(test_cpp_framework_source_wire_allocations)
+  target_sources(test_cpp_framework_source_wire_allocations PRIVATE
+    tests/support/allocation_counter.cpp)
+  add_zlink_framework_test(
     test_cpp_framework_request_observer_lifetime
     tests/Zlink.Framework.UnitTests/test_cpp_framework_request_observer_lifetime.cpp
     "framework-unit;framework-regression;messaging" "unit")

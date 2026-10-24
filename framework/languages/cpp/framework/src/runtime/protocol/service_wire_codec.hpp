@@ -910,6 +910,8 @@ struct client_server_server_admission_t
 
 std::vector<std::uint8_t> encode_node_send_header ();
 std::vector<std::uint8_t> encode_node_request_header (std::uint64_t correlation);
+zlink::message_t encode_node_send_header_message ();
+zlink::message_t encode_node_request_header_message (std::uint64_t correlation);
 std::uint64_t decode_node_request_header (std::span<const std::uint8_t> bytes);
 std::vector<std::uint8_t> encode_channel_request_header (std::uint64_t correlation,
                                                          const std::string &channel_name);
@@ -1001,6 +1003,7 @@ user_spot_close_header_t decode_user_spot_close_header (std::span<const std::uin
 service_wire_header_t decode_header (std::span<const std::uint8_t> bytes);
 std::string decode_channel_send_header (std::span<const std::uint8_t> bytes);
 std::vector<std::uint8_t> encode_application_payload (const application_payload_t &payload);
+zlink::message_t encode_application_payload_message (const application_payload_t &payload);
 /* capture_flow gates the observation-only flow pair (flow-correlation §4):
  * false skips it structurally — no semantic validation, no materialization —
  * so malformed observation fields cannot fail a frame at Off or at pure

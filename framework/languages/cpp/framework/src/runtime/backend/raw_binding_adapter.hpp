@@ -17,6 +17,9 @@
 namespace zlink::framework::detail::backend
 {
 
+raw_send_submission_t raw_send_submission_failure (std::exception_ptr failure,
+                                                   const raw_send_stage_trace_t &trace);
+
 struct binding_completion_observer_t
 {
     struct promise_type
@@ -88,6 +91,21 @@ inline result_t<raw_request_completion_t> raw_request_failure_result (
           std::current_exception ());
     return result_t<raw_request_completion_t>::failure (framework_error_kind_t::internal_failure,
                                                         error.what ());
+}
+
+inline result_t<raw_request_completion_t>
+raw_request_submission_failure (std::exception_ptr failure)
+{
+    try {
+        std::rethrow_exception (failure);
+    }
+    catch (const std::exception &error) {
+        return raw_request_failure_result (error, raw_request_failure_phase_t::initial_admission);
+    }
+    catch (...) {
+        return result_t<raw_request_completion_t>::failure (
+          framework_error_kind_t::internal_failure, "raw route request submission failed");
+    }
 }
 
 inline result_t<void>

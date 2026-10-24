@@ -52,6 +52,77 @@ const char *submit_result_name (zlink::submit_result_t result) noexcept
     return "unknown";
 }
 
+} // namespace
+
+raw_send_submission_t raw_send_submission_failure (std::exception_ptr failure,
+                                                   const raw_send_stage_trace_t &trace)
+{
+    try {
+        std::rethrow_exception (failure);
+    }
+    catch (const zlink::submit_error_t &error) {
+        if (trace) {
+            try {
+                trace ("router_admission_submit", submit_result_name (error.result ()));
+                trace ("router_admission_complete", submit_result_name (error.result ()));
+            }
+            catch (const std::exception &trace_error) {
+                return {
+                  raw_send_submission_state_t::immediate,
+                  result_t<zlink::submit_result_t>::failure (
+                    framework_error_kind_t::internal_failure,
+                    std::string ("raw route send submission trace failed: ") + trace_error.what ()),
+                  {}};
+            }
+            catch (...) {
+                return {raw_send_submission_state_t::immediate,
+                        result_t<zlink::submit_result_t>::failure (
+                          framework_error_kind_t::internal_failure,
+                          "raw route send submission trace failed"),
+                        {}};
+            }
+        }
+        return {raw_send_submission_state_t::immediate,
+                result_t<zlink::submit_result_t>::success (error.result ()),
+                {}};
+    }
+    catch (const std::exception &error) {
+        if (trace) {
+            try {
+                trace ("router_admission_submit", "exception");
+            }
+            catch (const std::exception &trace_error) {
+                return {
+                  raw_send_submission_state_t::immediate,
+                  result_t<zlink::submit_result_t>::failure (
+                    framework_error_kind_t::internal_failure,
+                    std::string ("raw route send submission trace failed: ") + trace_error.what ()),
+                  {}};
+            }
+            catch (...) {
+                return {raw_send_submission_state_t::immediate,
+                        result_t<zlink::submit_result_t>::failure (
+                          framework_error_kind_t::internal_failure,
+                          "raw route send submission trace failed"),
+                        {}};
+            }
+        }
+        return {raw_send_submission_state_t::immediate,
+                result_t<zlink::submit_result_t>::failure (framework_error_kind_t::internal_failure,
+                                                           error.what ()),
+                {}};
+    }
+    catch (...) {
+        return {raw_send_submission_state_t::immediate,
+                result_t<zlink::submit_result_t>::failure (framework_error_kind_t::internal_failure,
+                                                           "raw route send submission failed"),
+                {}};
+    }
+}
+
+namespace
+{
+
 binding_completion_observer_t
 observe_send_completion (zlink::async_result_t<void> pending,
                          raw_send_stage_trace_t trace,
@@ -134,7 +205,7 @@ raw_route_port_t::raw_route_port_t (zlink::router_socket_t &socket,
 }
 
 raw_send_submission_t raw_route_port_t::submit_send (const raw_bytes_t &target_routing_id,
-                                                     raw_message_t parts,
+                                                     std::span<zlink::message_t> parts,
                                                      raw_send_stage_trace_t trace)
 {
     // The binding owns DONTWAIT backpressure retry and its payload snapshot.
@@ -176,10 +247,9 @@ raw_send_submission_t raw_route_port_t::submit_send (const raw_bytes_t &target_r
             }
             auto operation =
               std::move (_socket->send (zlink::routing_id_t::from (target_routing_id)))
-                .message (materialize_binding_part (std::move (parts[0])));
+                .message (std::move (parts[0]));
             for (std::size_t index = 1; index < parts.size (); ++index) {
-                operation = std::move (operation).message (
-                  materialize_binding_part (std::move (parts[index])));
+                operation = std::move (operation).message (std::move (parts[index]));
             }
             auto submission = std::move (operation).async ();
             pending = take_submission_admission (submission);
@@ -216,63 +286,8 @@ raw_send_submission_t raw_route_port_t::submit_send (const raw_bytes_t &target_r
         return {raw_send_submission_state_t::pending_backpressure, std::nullopt,
                 std::move (result)};
     }
-    catch (const zlink::submit_error_t &error) {
-        if (trace) {
-            try {
-                trace ("router_admission_submit", submit_result_name (error.result ()));
-                trace ("router_admission_complete", submit_result_name (error.result ()));
-            }
-            catch (const std::exception &trace_error) {
-                return {
-                  raw_send_submission_state_t::immediate,
-                  result_t<zlink::submit_result_t>::failure (
-                    framework_error_kind_t::internal_failure,
-                    std::string ("raw route send submission trace failed: ") + trace_error.what ()),
-                  {}};
-            }
-            catch (...) {
-                return {raw_send_submission_state_t::immediate,
-                        result_t<zlink::submit_result_t>::failure (
-                          framework_error_kind_t::internal_failure,
-                          "raw route send submission trace failed"),
-                        {}};
-            }
-        }
-        return {raw_send_submission_state_t::immediate,
-                result_t<zlink::submit_result_t>::success (error.result ()),
-                {}};
-    }
-    catch (const std::exception &error) {
-        if (trace) {
-            try {
-                trace ("router_admission_submit", "exception");
-            }
-            catch (const std::exception &trace_error) {
-                return {
-                  raw_send_submission_state_t::immediate,
-                  result_t<zlink::submit_result_t>::failure (
-                    framework_error_kind_t::internal_failure,
-                    std::string ("raw route send submission trace failed: ") + trace_error.what ()),
-                  {}};
-            }
-            catch (...) {
-                return {raw_send_submission_state_t::immediate,
-                        result_t<zlink::submit_result_t>::failure (
-                          framework_error_kind_t::internal_failure,
-                          "raw route send submission trace failed"),
-                        {}};
-            }
-        }
-        return {raw_send_submission_state_t::immediate,
-                result_t<zlink::submit_result_t>::failure (framework_error_kind_t::internal_failure,
-                                                           error.what ()),
-                {}};
-    }
     catch (...) {
-        return {raw_send_submission_state_t::immediate,
-                result_t<zlink::submit_result_t>::failure (framework_error_kind_t::internal_failure,
-                                                           "raw route send submission failed"),
-                {}};
+        return raw_send_submission_failure (std::current_exception (), trace);
     }
 }
 
@@ -280,7 +295,14 @@ task_t<zlink::submit_result_t> raw_route_port_t::send_result (const raw_bytes_t 
                                                               raw_message_t parts,
                                                               raw_send_stage_trace_t trace)
 {
-    auto submission = submit_send (target_routing_id, std::move (parts), std::move (trace));
+    raw_send_submission_t submission;
+    try {
+        auto messages = materialize_binding_parts (std::move (parts));
+        submission = submit_send (target_routing_id, messages, std::move (trace));
+    }
+    catch (...) {
+        submission = raw_send_submission_failure (std::current_exception (), trace);
+    }
     if (submission.state == raw_send_submission_state_t::immediate)
         co_return std::move (*submission.immediate_result);
     co_return co_await *submission.pending_completion;
@@ -294,7 +316,7 @@ task_t<bool> raw_route_port_t::send (const raw_bytes_t &target_routing_id, raw_m
 
 task_t<raw_request_completion_t>
 raw_route_port_t::request (const raw_bytes_t &target_routing_id,
-                           raw_message_t parts,
+                           std::span<zlink::message_t> parts,
                            std::chrono::milliseconds timeout,
                            runtime::mesh::service_liveness_registry_t::connection_t admission,
                            std::shared_ptr<task_completion_source_t<void>> admitted)
@@ -322,23 +344,17 @@ raw_route_port_t::request (const raw_bytes_t &target_routing_id,
                 admission = _request_receive_source (target_routing_id);
             auto operation =
               std::move (_socket->request (zlink::routing_id_t::from (target_routing_id)))
-                .message (materialize_binding_part (std::move (parts[0])));
+                .message (std::move (parts[0]));
             for (std::size_t index = 1; index < parts.size (); ++index) {
-                operation = std::move (operation).message (
-                  materialize_binding_part (std::move (parts[index])));
+                operation = std::move (operation).message (std::move (parts[index]));
             }
             stages.emplace (submit_request_once (
               [&] { return std::move (operation).timeout (timeout).async (); }));
         }
         observe_request_completion (std::move (*stages), source, std::move (admission), admitted);
     }
-    catch (const std::exception &error) {
-        source->complete (
-          raw_request_failure_result (error, raw_request_failure_phase_t::initial_admission));
-    }
     catch (...) {
-        source->complete (result_t<raw_request_completion_t>::failure (
-          framework_error_kind_t::internal_failure, "raw route request submission failed"));
+        source->complete (raw_request_submission_failure (std::current_exception ()));
     }
     return result;
 }

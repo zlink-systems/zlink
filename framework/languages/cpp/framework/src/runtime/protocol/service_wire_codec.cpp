@@ -13,6 +13,9 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cstring>
+#include <memory>
+#include <new>
 #include <limits>
 #include <string_view>
 #include <type_traits>
@@ -44,6 +47,39 @@ enum class descriptor_tlv_t : std::uint8_t
 constexpr std::uint8_t application_payload_version = 1;
 constexpr std::uint8_t application_payload_flow_version = 2;
 
+// The native and byte-storage encoders share every field and validation rule.
+// This cursor only adapts append operations to the already-sized native buffer.
+class wire_buffer_t
+{
+  public:
+    explicit wire_buffer_t (std::span<std::uint8_t> bytes) : _bytes (bytes) {}
+    std::uint8_t *end () const { return _bytes.data () + _written; }
+    void push_back (std::uint8_t value) { _bytes[_written++] = value; }
+    template <typename Iterator> void insert (std::uint8_t *, Iterator first, Iterator last)
+    {
+        if (first == last)
+            return;
+        const auto count = static_cast<std::size_t> (last - first);
+        std::memcpy (end (), std::to_address (first), count);
+        _written += count;
+    }
+
+  private:
+    std::span<std::uint8_t> _bytes;
+    std::size_t _written = 0;
+};
+
+template <typename Writer> zlink::message_t encode_wire_message (std::size_t size, Writer writer)
+{
+    auto result = zlink::message_t::allocate (size);
+    if (!result.valid ())
+        throw std::bad_alloc ();
+    wire_buffer_t output (
+      std::span<std::uint8_t> (reinterpret_cast<std::uint8_t *> (result.data ()), result.size ()));
+    writer (output);
+    return result;
+}
+
 void append_nonzero_u64 (std::vector<std::uint8_t> &bytes, std::uint64_t value, const char *field);
 std::uint64_t
 read_nonzero_u64 (std::span<const std::uint8_t> bytes, std::size_t &offset, const char *field);
@@ -54,7 +90,7 @@ bool valid_flow_origin (std::uint8_t value) noexcept
            && value <= static_cast<std::uint8_t> (flow_origin_t::lifecycle);
 }
 
-void append_u32 (std::vector<std::uint8_t> &bytes, std::uint32_t value)
+template <typename Output> void append_u32 (Output &bytes, std::uint32_t value)
 {
     bytes.push_back (static_cast<std::uint8_t> ((value >> 24u) & 0xffu));
     bytes.push_back (static_cast<std::uint8_t> ((value >> 16u) & 0xffu));
@@ -68,11 +104,33 @@ void append_u16 (std::vector<std::uint8_t> &bytes, std::uint16_t value)
     bytes.push_back (static_cast<std::uint8_t> (value & 0xffu));
 }
 
-void append_u64 (std::vector<std::uint8_t> &bytes, std::uint64_t value)
+template <typename Output> void append_u64 (Output &bytes, std::uint64_t value)
 {
     for (std::size_t index = 0; index < 8; ++index) {
         bytes.push_back (static_cast<std::uint8_t> ((value >> ((7 - index) * 8)) & 0xffu));
     }
+}
+
+template <typename Output> void write_node_header (Output &bytes, command kind)
+{
+    bytes.push_back (magic[0]);
+    bytes.push_back (magic[1]);
+    bytes.push_back (wire_major);
+    bytes.push_back (static_cast<std::uint8_t> (kind));
+    bytes.push_back (0);
+}
+
+std::size_t node_request_header_size (std::uint64_t correlation)
+{
+    if (correlation == 0)
+        throw service_wire_error_t ("request correlation must be nonzero");
+    return prefix_size + sizeof (correlation);
+}
+
+template <typename Output> void write_node_request_header (Output &bytes, std::uint64_t correlation)
+{
+    write_node_header (bytes, command::nodeRequest);
+    append_u64 (bytes, correlation);
 }
 
 std::uint16_t read_u16 (std::span<const std::uint8_t> bytes, std::size_t &offset)
@@ -110,7 +168,8 @@ std::uint64_t read_u64 (std::span<const std::uint8_t> bytes, std::size_t &offset
     return value;
 }
 
-void append_text8 (std::vector<std::uint8_t> &bytes, const std::string &value, const char *field)
+template <typename Output>
+void append_text8 (Output &bytes, const std::string &value, const char *field)
 {
     if (value.empty () || value.size () > std::numeric_limits<std::uint8_t>::max ()
         || !zlink::framework::detail::is_valid_non_nul_utf8 (value)) {
@@ -368,18 +427,31 @@ unpack_infrastructure_reply (std::span<const std::uint8_t> packed)
 
 std::vector<std::uint8_t> encode_node_send_header ()
 {
-    return {magic[0], magic[1], wire_major, static_cast<std::uint8_t> (command::nodeSend), 0};
+    std::vector<std::uint8_t> result;
+    result.reserve (prefix_size);
+    write_node_header (result, command::nodeSend);
+    return result;
 }
 
 std::vector<std::uint8_t> encode_node_request_header (std::uint64_t correlation)
 {
-    if (correlation == 0) {
-        throw service_wire_error_t ("request correlation must be nonzero");
-    }
-    std::vector<std::uint8_t> result{magic[0], magic[1], wire_major,
-                                     static_cast<std::uint8_t> (command::nodeRequest), 0};
-    append_u64 (result, correlation);
+    std::vector<std::uint8_t> result;
+    result.reserve (node_request_header_size (correlation));
+    write_node_request_header (result, correlation);
     return result;
+}
+
+zlink::message_t encode_node_send_header_message ()
+{
+    return encode_wire_message (
+      prefix_size, [] (auto &output) { write_node_header (output, command::nodeSend); });
+}
+
+zlink::message_t encode_node_request_header_message (std::uint64_t correlation)
+{
+    return encode_wire_message (
+      node_request_header_size (correlation),
+      [correlation] (auto &output) { write_node_request_header (output, correlation); });
 }
 
 std::uint64_t decode_node_request_header (std::span<const std::uint8_t> bytes)
@@ -2819,7 +2891,19 @@ bool operator== (const application_payload_t &left, const application_payload_t 
     return offset == bytes.size ();
 }
 
-std::vector<std::uint8_t> encode_application_payload (const application_payload_t &payload)
+namespace
+{
+constexpr std::size_t application_payload_prefix_size =
+  sizeof (std::uint8_t) + sizeof (std::uint32_t);
+
+struct application_payload_layout_t
+{
+    std::size_t frame_size;
+    std::uint32_t payload_size;
+    std::uint32_t body_size;
+};
+
+application_payload_layout_t application_payload_layout (const application_payload_t &payload)
 {
     if (payload.flow_id.has_value () != payload.flow_origin.has_value ()) {
         throw service_wire_error_t (
@@ -2837,7 +2921,7 @@ std::vector<std::uint8_t> encode_application_payload (const application_payload_
         for (const auto &part : *parts) {
             if (part.size () > std::numeric_limits<std::uint32_t>::max ())
                 throw std::length_error ("framework multipart part is too large");
-            payload_size += 4 + part.size ();
+            payload_size += std::uint64_t{4} + part.size ();
             if (payload_size > std::numeric_limits<std::uint32_t>::max ())
                 throw service_wire_error_t ("application payload exceeds u32");
         }
@@ -2850,14 +2934,26 @@ std::vector<std::uint8_t> encode_application_payload (const application_payload_
     if (body_size > std::numeric_limits<std::uint32_t>::max ()) {
         throw service_wire_error_t ("application payload envelope exceeds u32");
     }
-    std::vector<std::uint8_t> result;
-    result.reserve (5 + body_size);
+    const auto frame_size = application_payload_prefix_size + body_size;
+    if (frame_size > std::numeric_limits<std::size_t>::max ())
+        throw std::length_error ("application payload frame exceeds addressable storage");
+    return {static_cast<std::size_t> (frame_size), static_cast<std::uint32_t> (payload_size),
+            static_cast<std::uint32_t> (body_size)};
+}
+
+
+template <typename Output>
+void write_application_payload (Output &result,
+                                const application_payload_t &payload,
+                                application_payload_layout_t layout)
+{
+    const auto *parts = payload.parts ();
     result.push_back (payload.flow_id ? application_payload_flow_version
                                       : application_payload_version);
-    append_u32 (result, static_cast<std::uint32_t> (body_size));
+    append_u32 (result, layout.body_size);
     append_text8 (result, payload.packet_name, "packet name");
     append_text8 (result, payload.content_type, "content type");
-    append_u32 (result, static_cast<std::uint32_t> (payload_size));
+    append_u32 (result, layout.payload_size);
     if (parts) {
         append_u32 (result, static_cast<std::uint32_t> (parts->size ()));
         for (const auto &part : *parts) {
@@ -2876,7 +2972,24 @@ std::vector<std::uint8_t> encode_application_payload (const application_payload_
         append_text8 (result, *payload.flow_id, "flow id");
         result.push_back (static_cast<std::uint8_t> (*payload.flow_origin));
     }
+}
+} // namespace
+
+std::vector<std::uint8_t> encode_application_payload (const application_payload_t &payload)
+{
+    const auto layout = application_payload_layout (payload);
+    std::vector<std::uint8_t> result;
+    result.reserve (layout.frame_size);
+    write_application_payload (result, payload, layout);
     return result;
+}
+
+zlink::message_t encode_application_payload_message (const application_payload_t &payload)
+{
+    const auto layout = application_payload_layout (payload);
+    return encode_wire_message (layout.frame_size, [&] (auto &output) {
+        write_application_payload (output, payload, layout);
+    });
 }
 
 namespace

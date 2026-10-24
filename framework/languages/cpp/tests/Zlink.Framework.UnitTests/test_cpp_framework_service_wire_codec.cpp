@@ -930,6 +930,10 @@ int main (int argc, char **argv)
     }
 
     const auto node_send = protocol::encode_node_send_header ();
+    const auto node_send_message = protocol::encode_node_send_header_message ();
+    assert (node_send_message.size () == node_send.size ());
+    assert (std::equal (node_send.begin (), node_send.end (),
+                        reinterpret_cast<const std::uint8_t *> (node_send_message.data ())));
     const auto decoded_node_send = protocol::decode_header (node_send);
     assert (decoded_node_send.kind == protocol::command::nodeSend);
     assert (decoded_node_send.flags == 0);
@@ -941,6 +945,10 @@ int main (int argc, char **argv)
       1,   0,   0,   0,   30,  5,   'P', 'r', 'o', 'b', 'e', 16, 'a', 'p', 'p', 'l', 'i', 'c',
       'a', 't', 'i', 'o', 'n', '/', 'j', 's', 'o', 'n', 0,   0,  0,   3,   1,   2,   3};
     assert (application_wire == expected_application_wire);
+    const auto application_message = protocol::encode_application_payload_message (application);
+    assert (application_message.size () == expected_application_wire.size ());
+    assert (std::equal (expected_application_wire.begin (), expected_application_wire.end (),
+                        reinterpret_cast<const std::uint8_t *> (application_message.data ())));
     assert (protocol::decode_application_payload (application_wire) == application);
     assert (protocol::application_payload_hwm_bytes (application) == 3);
     assert (protocol::application_payload_hwm_bytes (application_wire) == 3);
@@ -1053,6 +1061,19 @@ int main (int argc, char **argv)
               protocol::command::admit)
             == server_admission);
     constexpr std::uint64_t correlation = 0x0102030405060708ULL;
+    const auto node_request = protocol::encode_node_request_header (correlation);
+    const auto node_request_message = protocol::encode_node_request_header_message (correlation);
+    assert (node_request_message.size () == node_request.size ());
+    assert (std::equal (node_request.begin (), node_request.end (),
+                        reinterpret_cast<const std::uint8_t *> (node_request_message.data ())));
+    bool rejected_native_zero_correlation = false;
+    try {
+        static_cast<void> (protocol::encode_node_request_header_message (0));
+    }
+    catch (const protocol::service_wire_error_t &) {
+        rejected_native_zero_correlation = true;
+    }
+    assert (rejected_native_zero_correlation);
     assert (
       protocol::decode_node_request_header (protocol::encode_node_request_header (correlation))
       == correlation);
