@@ -35,7 +35,10 @@ public final class Actions {
     @ZLinkSpotActorSend
     public CompletionStage<Void> deliver(
             Field spot, Player actor, ZLinkMessageContext dispatch, BorderVisible message) {
-        return actor.context().boundSession().send(message).submit();
+        return actor.deliver(
+                message.observerFieldId(),
+                message,
+                spot.state.visiblePlayers.containsKey(actor.context().actorId()));
     }
 
     @ZLinkSpotActorSend
@@ -66,6 +69,18 @@ public final class Actions {
     @ZLinkSpotActorSend
     public CompletionStage<Void> deliverField(
             Field spot, Player actor, ZLinkMessageContext dispatch, FieldView message) {
-        return actor.context().boundSession().send(message).submit();
+        return actor.deliver(
+                message.fieldId(),
+                message,
+                spot.state.visiblePlayers.containsKey(actor.context().actorId()));
+    }
+
+    @ZLinkSpotActorSend
+    public CompletionStage<Void> pendingDungeon(
+            Field spot, Player actor, ZLinkMessageContext context, DungeonView message) {
+        return actor.deliver(
+                message.dungeonId(),
+                message,
+                spot.state.visiblePlayers.containsKey(actor.context().actorId()));
     }
 }

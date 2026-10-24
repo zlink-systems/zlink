@@ -18,6 +18,16 @@ data class ZoneState(
 
 class Zone(override val context: ZLinkSpotContext, private val actors: ZLinkActorClient) :
     ZLinkSuspendingSpot<Player>() {
+    suspend fun deliver(actor: Player, message: BorderVisible) {
+        // Membership or visibility may change before a queued notification is handled.
+        if (
+            actor.context.spotId().orElse(null) != message.observerZoneId ||
+                actor.context.actorId() !in state.visiblePlayers
+        )
+            return
+        actor.context.boundSession().kotlin().send(message).await()
+    }
+
     var state = ZoneState()
     private val adjacent by lazy { Rules.adjacentZones(context.spotId()) }
 

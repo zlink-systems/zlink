@@ -48,6 +48,14 @@ class Actions {
         dispatch: ZLinkMessageContext,
         message: DungeonView,
     ) {
-        actor.context.boundSession().kotlin().send(message).await()
+        actor.deliver(message.dungeonId, message)
     }
+
+    @ZLinkSpotActorSend
+    suspend fun departed(
+        spot: Dungeon,
+        actor: Player,
+        dispatch: ZLinkMessageContext,
+        message: TownView,
+    ) = actor.deliver(message.townId, message)
 }

@@ -4,7 +4,15 @@ import { Names } from '../shared/constants';
 import { Entry, EnterWorld } from '../shared/entry';
 import { PlayerFactory, PlayerRelocation } from '../shared/player';
 import { Dungeon, DungeonRelocation } from './spots';
-import { Reconnect, View, Advance, Prepare, Delivery } from './handlers';
+import {
+  DepartedBorderVisible,
+  DepartedFieldView,
+  Reconnect,
+  View,
+  Advance,
+  Prepare,
+  Delivery
+} from './handlers';
 runHost((_builder, config, mesh) => {
   const objects = mesh.objects().server();
   objects.addEntrySpot(Entry, Names.actor);
@@ -16,6 +24,8 @@ runHost((_builder, config, mesh) => {
   });
   return {
     providers: [
+      DepartedBorderVisible,
+      DepartedFieldView,
       Entry,
       EnterWorld,
       Dungeon,

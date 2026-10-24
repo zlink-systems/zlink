@@ -18,6 +18,7 @@ public sealed class DungeonSpot(
 
     public void Configure()
     {
+        Context.Handlers.AddActorPacket<DepartedPartyView, PlayerActor>(nameof(PartyView));
         Context.Handlers.AddActorPacket<DungeonReconnect, PlayerActor>(nameof(JoinLobbyRequest));
         Context.Handlers.AddActorPacket<DungeonQuery, PlayerActor>(nameof(ViewRequest));
         Context.Handlers.AddActorPacket<Advance, PlayerActor>(nameof(AdvanceRequest));

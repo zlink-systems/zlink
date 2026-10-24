@@ -2,9 +2,16 @@ import { ZLinkUserSpotExecutionMode } from '@zlink-systems/framework';
 import { runHost, failHost } from '../shared/hosting';
 import { Names } from '../shared/constants';
 import { PlayerFactory, PlayerRelocation } from '../shared/player';
-import { Entry, EnterTown } from '../shared/entry';
+import { EntryTownViewDelivery, Entry, EnterTown } from '../shared/entry';
 import { Dungeon, DungeonRelocation } from './dungeon';
-import { Prepare, DungeonQuery, DungeonReconnect, Advance, DungeonDelivery } from './handlers';
+import {
+  DepartedDelivery,
+  Prepare,
+  DungeonQuery,
+  DungeonReconnect,
+  Advance,
+  DungeonDelivery
+} from './handlers';
 runHost((_builder, config, mesh) => {
   if (!Number.isInteger(config.dungeonCapacity) || config.dungeonCapacity! < 1)
     throw new Error('Dungeon capacity required');
@@ -18,6 +25,8 @@ runHost((_builder, config, mesh) => {
   });
   return {
     providers: [
+      EntryTownViewDelivery,
+      DepartedDelivery,
       Entry,
       EnterTown,
       PlayerFactory,

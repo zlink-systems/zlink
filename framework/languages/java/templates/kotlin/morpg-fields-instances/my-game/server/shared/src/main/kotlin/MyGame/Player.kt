@@ -30,6 +30,11 @@ class Player(override val context: ZLinkActorContext, private val config: NodeCo
             .await()
     }
 
+    suspend fun deliver(sourceSpotId: String, message: Any, visible: Boolean) {
+        if (context.spotId().orElse(null) != sourceSpotId || !visible) return
+        context.boundSession().kotlin().send(message).await()
+    }
+
     override suspend fun onJoinCompletedSuspending(completion: ZLinkActorJoinCompletion) {
         check(completion is ZLinkActorJoinCompletion.Accepted) { "Field join failed: $completion" }
         if (context.spotId().orElse(null) == Rules.fieldId(position.x)) sendState()

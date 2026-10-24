@@ -47,7 +47,11 @@ class Actions {
         dispatch: ZLinkMessageContext,
         message: BorderVisible,
     ) {
-        actor.context.boundSession().kotlin().send(message).await()
+        actor.deliver(
+            message.observerFieldId,
+            message,
+            actor.context.actorId() in spot.state.visiblePlayers,
+        )
     }
 
     @ZLinkSpotActorSend
@@ -91,8 +95,25 @@ class Actions {
         dispatch: ZLinkMessageContext,
         message: FieldView,
     ) {
-        actor.context.boundSession().kotlin().send(message).await()
+        actor.deliver(
+            message.fieldId,
+            message,
+            actor.context.actorId() in spot.state.visiblePlayers,
+        )
     }
+
+    @ZLinkSpotActorSend
+    suspend fun pendingDungeon(
+        spot: Field,
+        actor: Player,
+        context: ZLinkMessageContext,
+        message: DungeonView,
+    ) =
+        actor.deliver(
+            message.dungeonId,
+            message,
+            actor.context.actorId() in spot.state.visiblePlayers,
+        )
 }
 
 class BorderTick : ZLinkSuspendingSpotTimerHandler<Field> {

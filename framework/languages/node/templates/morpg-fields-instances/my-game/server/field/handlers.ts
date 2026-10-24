@@ -7,6 +7,7 @@ import type {
 } from '@zlink-systems/framework';
 import { PacketNames, fieldId } from '../shared/constants';
 import {
+  DungeonView,
   JoinWorldRequest,
   MoveRequest,
   EnterField,
@@ -144,31 +145,58 @@ export class BorderHandler {
     await spot.showBorder(message);
   }
 }
-const deliveryPackets: ReadonlyMap<string, new () => object> = new Map<string, new () => object>([
-  [PacketNames.fieldView, FieldView],
-  [PacketNames.borderVisible, BorderVisible]
-]);
 @Injectable()
 @zlinkSpotActorSendHandler({
   spot: () => Field,
   actor: () => Player,
   packetName: PacketNames.fieldView
 })
+export class FieldDelivery {
+  handle(
+    spot: Field,
+    actor: Player,
+    context: ZLinkMessageContext,
+    message: FieldView
+  ): Promise<void> {
+    return actor.deliver(message.fieldId, context.packetName, message, spot.isVisible(actor));
+  }
+}
+
+@Injectable()
 @zlinkSpotActorSendHandler({
   spot: () => Field,
   actor: () => Player,
   packetName: PacketNames.borderVisible
 })
-export class Delivery {
-  async handle(
-    _spot: Field,
+export class BorderDelivery {
+  handle(
+    spot: Field,
     actor: Player,
     context: ZLinkMessageContext,
-    message: FieldView | BorderVisible
+    message: BorderVisible
   ): Promise<void> {
-    const type = deliveryPackets.get(context.packetName);
-    if (!type) throw new Error(`Unregistered field push: ${context.packetName}`);
-    // Restore the declared public DTO class before forwarding (#1731).
-    await actor.context.boundSession.send(Object.assign(new type(), message)).submit();
+    return actor.deliver(
+      message.observerFieldId,
+      context.packetName,
+      message,
+      spot.isVisible(actor)
+    );
+  }
+}
+
+@Injectable()
+@zlinkSpotActorSendHandler({
+  spot: () => Field,
+  actor: () => Player,
+  packetName: PacketNames.dungeonView
+})
+export class DepartedDungeonView {
+  handle(
+    spot: Field,
+    actor: Player,
+    context: ZLinkMessageContext,
+    message: DungeonView
+  ): Promise<void> {
+    return actor.deliver(message.dungeonId, context.packetName, message, spot.isVisible(actor));
   }
 }

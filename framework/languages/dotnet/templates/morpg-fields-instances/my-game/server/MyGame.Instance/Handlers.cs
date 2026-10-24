@@ -65,6 +65,30 @@ public sealed class DungeonDelivery
         CancellationToken ct
     )
     {
-        return actor.Context.BoundSession.Send(request).Async();
+        return actor.DeliverAsync(request.DungeonId, request, true);
     }
+}
+
+public sealed class DepartedBorderVisible
+    : IZLinkSpotActorSendHandler<DungeonSpot, PlayerActor, BorderVisible>
+{
+    public ValueTask HandleAsync(
+        DungeonSpot spot,
+        PlayerActor actor,
+        IZLinkMessageContext context,
+        BorderVisible message,
+        CancellationToken ct
+    ) => actor.DeliverAsync(message.ObserverFieldId, message, true);
+}
+
+public sealed class DepartedFieldView
+    : IZLinkSpotActorSendHandler<DungeonSpot, PlayerActor, FieldView>
+{
+    public ValueTask HandleAsync(
+        DungeonSpot spot,
+        PlayerActor actor,
+        IZLinkMessageContext context,
+        FieldView message,
+        CancellationToken ct
+    ) => actor.DeliverAsync(message.FieldId, message, true);
 }

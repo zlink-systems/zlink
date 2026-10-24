@@ -10,6 +10,7 @@ public sealed class LobbyEntry(IZLinkEntrySpotContext context, IZLinkSpotManager
 
     public void Configure()
     {
+        Context.Handlers.AddActorPacket<EntryPartyViewDelivery, PlayerActor>(nameof(PartyView));
         Context.Handlers.AddActorPacket<LobbyLogin, PlayerActor>(nameof(JoinLobbyRequest));
         Context.Handlers.AddActorPacket<CreateParty, PlayerActor>(nameof(CreatePartyRequest));
         Context.Handlers.AddActorPacket<JoinParty, PlayerActor>(nameof(JoinPartyRequest));
@@ -85,4 +86,16 @@ public sealed class JoinParty
         JoinPartyRequest request,
         CancellationToken ct
     ) => spot.JoinAsync(actor, request.PartyId, false, ct);
+}
+
+public sealed class EntryPartyViewDelivery
+    : IZLinkEntrySpotActorSendHandler<LobbyEntry, PlayerActor, PartyView>
+{
+    public ValueTask HandleAsync(
+        LobbyEntry entry,
+        PlayerActor actor,
+        IZLinkMessageContext context,
+        PartyView message,
+        CancellationToken ct
+    ) => actor.DeliverAsync(GameNames.PartyId(message.PartyId), message);
 }

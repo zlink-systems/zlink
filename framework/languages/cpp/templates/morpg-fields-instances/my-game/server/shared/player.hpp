@@ -29,6 +29,14 @@ class Player final : public fx::actor_t
           .send (WorldState{Names::field_id (state.x), config_.Id, state.x, state.sequence})
           .async ();
     }
+    // Decide synchronously because source IDs may be temporary name values.
+    template <class Message>
+    fx::task_t<void> deliver (const std::string &sourceSpotId, const Message &message, bool visible)
+    {
+        if (context_.spot_id () != sourceSpotId || !visible)
+            return fx::task_t<void> (fx::result_t<void>::success ());
+        return context_.bound_session ().send (message).async ();
+    }
     fx::task_t<void> on_join_completed (const fx::actor_join_completion_t &completion) override
     {
         if (!std::holds_alternative<fx::actor_join_accepted_t> (completion))

@@ -1,8 +1,9 @@
 import { Injectable } from '@nestjs/common';
 import { zlinkSpotActorSendHandler } from '@zlink-systems/nestjs';
 import type { ZLinkMessageContext } from '@zlink-systems/framework';
-import { PacketNames } from '../shared/constants';
+import { Names, PacketNames } from '../shared/constants';
 import {
+  DungeonView,
   PartyView,
   JoinDungeon,
   type JoinLobbyRequest,
@@ -102,18 +103,29 @@ export class Travel {
   packetName: PacketNames.partyView
 })
 export class Delivery {
-  async handle(
+  handle(
     _spot: Party,
     actor: Player,
     context: ZLinkMessageContext,
     request: PartyView
   ): Promise<void> {
-    // Restore the declared DTO class before forwarding (#1731).
-    const type = deliveryPackets.get(context.packetName);
-    if (!type) throw new Error('Unregistered party push');
-    await actor.context.boundSession.send(Object.assign(new type(), request)).submit();
+    return actor.deliver(Names.partyPrefix + request.partyId, context.packetName, request);
   }
 }
-const deliveryPackets: ReadonlyMap<string, new () => object> = new Map([
-  [PacketNames.partyView, PartyView]
-]);
+
+@Injectable()
+@zlinkSpotActorSendHandler({
+  spot: () => Party,
+  actor: () => Player,
+  packetName: PacketNames.dungeonView
+})
+export class DepartedDungeonView {
+  handle(
+    _spot: Party,
+    actor: Player,
+    context: ZLinkMessageContext,
+    message: DungeonView
+  ): Promise<void> {
+    return actor.deliver(message.dungeonId, context.packetName, message);
+  }
+}

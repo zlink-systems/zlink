@@ -3,6 +3,8 @@ import { zlinkSpotActorSendHandler, zlinkSpotPacketHandler } from '@zlink-system
 import type { ZLinkMessageContext } from '@zlink-systems/framework';
 import { PacketNames } from '../shared/constants';
 import {
+  BorderVisible,
+  FieldView,
   JoinWorldRequest,
   ViewRequest,
   AdvanceRequest,
@@ -72,9 +74,6 @@ export class Prepare {
     return spot.prepare(request);
   }
 }
-const deliveryPackets: ReadonlyMap<string, new () => object> = new Map([
-  [PacketNames.dungeonView, DungeonView]
-]);
 @Injectable()
 @zlinkSpotActorSendHandler({
   spot: () => Dungeon,
@@ -82,15 +81,46 @@ const deliveryPackets: ReadonlyMap<string, new () => object> = new Map([
   packetName: PacketNames.dungeonView
 })
 export class Delivery {
-  async handle(
+  handle(
     _spot: Dungeon,
     actor: Player,
     context: ZLinkMessageContext,
     message: DungeonView
   ): Promise<void> {
-    const type = deliveryPackets.get(context.packetName);
-    if (!type) throw new Error(`Unregistered dungeon push: ${context.packetName}`);
-    // Restore the declared public DTO class before forwarding (#1731).
-    await actor.context.boundSession.send(Object.assign(new type(), message)).submit();
+    return actor.deliver(message.dungeonId, context.packetName, message, true);
+  }
+}
+
+@Injectable()
+@zlinkSpotActorSendHandler({
+  spot: () => Dungeon,
+  actor: () => Player,
+  packetName: PacketNames.borderVisible
+})
+export class DepartedBorderVisible {
+  handle(
+    _spot: Dungeon,
+    actor: Player,
+    context: ZLinkMessageContext,
+    message: BorderVisible
+  ): Promise<void> {
+    return actor.deliver(message.observerFieldId, context.packetName, message, true);
+  }
+}
+
+@Injectable()
+@zlinkSpotActorSendHandler({
+  spot: () => Dungeon,
+  actor: () => Player,
+  packetName: PacketNames.fieldView
+})
+export class DepartedFieldView {
+  handle(
+    _spot: Dungeon,
+    actor: Player,
+    context: ZLinkMessageContext,
+    message: FieldView
+  ): Promise<void> {
+    return actor.deliver(message.fieldId, context.packetName, message, true);
   }
 }

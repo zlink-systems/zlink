@@ -27,4 +27,10 @@ public final class EntryActions {
             Entry spot, Player actor, ZLinkMessageContext context, JoinPartyRequest request) {
         return spot.join(actor, request.partyId(), false);
     }
+
+    @ZLinkSpotActorSend
+    public CompletionStage<Void> pending(
+            Entry entry, Player actor, ZLinkMessageContext context, PartyView message) {
+        return actor.deliver(Names.PARTY_PREFIX + message.partyId(), message);
+    }
 }

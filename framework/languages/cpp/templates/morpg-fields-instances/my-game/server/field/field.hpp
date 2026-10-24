@@ -52,6 +52,7 @@ class Field final : public fx::spot_t<Player>
     const fx::spot_context_t &context () const noexcept override { return context_; }
     void configure () override
     {
+        context_.handlers ().add_actor_send<&Field::pending_dungeon> ();
         context_.handlers ()
           .add_actor_send<&Field::reconnect> ()
           .add_actor_send<&Field::move> ()
@@ -93,6 +94,13 @@ class Field final : public fx::spot_t<Player>
         remember (actor);
         co_return;
     }
+    fx::task_t<void>
+    pending_dungeon (Player &actor, fx::message_context_t &, const DungeonView &message)
+    {
+        return actor.deliver (
+          message.dungeonId, message,
+          state.visiblePlayers.contains (std::string (actor.context ().actor_id ().value ())));
+    }
     fx::task_t<void> on_leave_actor (Player &actor) override
     {
         state.leave (std::string (actor.context ().actor_id ().value ()));
@@ -125,7 +133,9 @@ class Field final : public fx::spot_t<Player>
     }
     fx::task_t<void> deliver (Player &actor, fx::message_context_t &, const BorderVisible &event)
     {
-        co_await actor.context ().bound_session ().send (event).async ();
+        return actor.deliver (
+          event.observerFieldId, event,
+          state.visiblePlayers.contains (std::string (actor.context ().actor_id ().value ())));
     }
     FieldView view () const
     {
@@ -164,7 +174,9 @@ class Field final : public fx::spot_t<Player>
     }
     fx::task_t<void> deliver_field (Player &actor, fx::message_context_t &, const FieldView &event)
     {
-        co_await actor.context ().bound_session ().send (event).async ();
+        return actor.deliver (
+          event.fieldId, event,
+          state.visiblePlayers.contains (std::string (actor.context ().actor_id ().value ())));
     }
     fx::task_t<void> travel (Player &actor, fx::message_context_t &, const JoinDungeon &request)
     {

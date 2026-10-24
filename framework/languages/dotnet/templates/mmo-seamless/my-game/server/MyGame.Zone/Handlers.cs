@@ -80,7 +80,7 @@ public sealed class BorderDelivery
         IZLinkMessageContext context,
         BorderVisible presence,
         CancellationToken cancellationToken
-    ) => actor.Context.BoundSession.Send(presence).Async();
+    ) => spot.DeliverAsync(actor, presence);
 }
 
 [ZLinkSpotActorSendHandler(nameof(OpenDungeonRequest))]

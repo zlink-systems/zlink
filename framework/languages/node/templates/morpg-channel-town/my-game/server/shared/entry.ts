@@ -6,7 +6,7 @@ import type {
   ZLinkMessageContext
 } from '@zlink-systems/framework';
 import { PacketNames, townId } from './constants';
-import { JoinTownRequest } from './messages';
+import { TownView, JoinTownRequest } from './messages';
 import { Player } from './player';
 @Injectable({ scope: Scope.TRANSIENT })
 export class Entry implements ZLinkEntrySpot<Player> {
@@ -31,5 +31,22 @@ export class EnterTown {
     actor.context
       .joinSpot(townId(request.channel), new JoinTownRequest(request.playerId, request.channel))
       .defer();
+  }
+}
+
+@Injectable()
+@zlinkEntrySpotActorSendHandler({
+  entrySpot: () => Entry,
+  actor: () => Player,
+  packetName: PacketNames.townView
+})
+export class EntryTownViewDelivery {
+  handle(
+    _entry: Entry,
+    actor: Player,
+    context: ZLinkMessageContext,
+    message: TownView
+  ): Promise<void> {
+    return actor.deliver(message.townId, context.packetName, message);
   }
 }

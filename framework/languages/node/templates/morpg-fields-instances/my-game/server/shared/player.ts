@@ -8,7 +8,7 @@ import type {
 } from '@zlink-systems/framework';
 import { NODE_CONFIG, type NodeConfig } from './config';
 import { fieldId } from './constants';
-import { EnterField, WorldState } from './messages';
+import { EnterField, WorldState, restoreNotification, type GameNotification } from './messages';
 export class Player implements ZLinkActor {
   x = 0;
   sequence = 0;
@@ -27,6 +27,15 @@ export class Player implements ZLinkActor {
     await this.context.boundSession
       .send(new WorldState(fieldId(this.x), this.config.id, this.x, this.sequence))
       .submit();
+  }
+  async deliver(
+    sourceSpotId: string,
+    packetName: string,
+    message: GameNotification,
+    visible: boolean
+  ): Promise<void> {
+    if (this.context.spotId !== sourceSpotId || !visible) return;
+    await this.context.boundSession.send(restoreNotification(packetName, message)).submit();
   }
   async onJoinCompleted(completion: ZLinkActorJoinCompletion): Promise<void> {
     if (completion.status !== 'accepted') throw new Error(`Spot join failed: ${completion.status}`);

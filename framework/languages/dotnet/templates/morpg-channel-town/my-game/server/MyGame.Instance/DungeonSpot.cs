@@ -22,6 +22,7 @@ public sealed class DungeonSpot(
         Context.Handlers.AddActorPacket<DungeonQuery, PlayerActor>(nameof(ViewRequest));
         Context.Handlers.AddActorPacket<Advance, PlayerActor>(nameof(AdvanceRequest));
         Context.Handlers.AddActorPacket<DungeonDelivery, PlayerActor>(nameof(DungeonView));
+        Context.Handlers.AddActorPacket<DepartedDelivery, PlayerActor>(nameof(TownView));
     }
 
     public DungeonPrepared Prepare(PrepareDungeon request)

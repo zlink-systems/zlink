@@ -73,6 +73,8 @@ class Zone final : public fx::spot_t<Player>
     }
     fx::task_t<void> deliver (Player &actor, fx::message_context_t &, const PlayerView &event)
     {
+        if (actor.context ().spot_id () != Names::zone_id (event.channel))
+            co_return;
         co_await actor.context ().bound_session ().send (event).async ();
     }
 };

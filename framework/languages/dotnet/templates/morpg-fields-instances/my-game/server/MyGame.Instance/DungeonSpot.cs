@@ -18,6 +18,8 @@ public sealed class DungeonSpot(
 
     public void Configure()
     {
+        Context.Handlers.AddActorPacket<DepartedFieldView, PlayerActor>(nameof(FieldView));
+        Context.Handlers.AddActorPacket<DepartedBorderVisible, PlayerActor>(nameof(BorderVisible));
         Context.Handlers.AddActorPacket<DungeonReconnect, PlayerActor>(nameof(JoinWorldRequest));
         Context.Handlers.AddActorPacket<DungeonQuery, PlayerActor>(nameof(ViewRequest));
         Context.Handlers.AddActorPacket<Advance, PlayerActor>(nameof(AdvanceRequest));

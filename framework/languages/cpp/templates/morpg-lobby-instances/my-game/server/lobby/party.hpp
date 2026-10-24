@@ -25,6 +25,7 @@ class Party final : public fx::spot_t<Player>
     const fx::spot_context_t &context () const noexcept override { return context_; }
     void configure () override
     {
+        context_.handlers ().add_actor_send<&Party::pending_dungeon> ();
         context_.handlers ()
           .add_actor_send<&Party::reconnect> ()
           .add_actor_send<&Party::show> ()
@@ -43,6 +44,11 @@ class Party final : public fx::spot_t<Player>
           : fx::spot_actor_join_result_t::reject ();
     }
     fx::task_t<void> on_actor_joined (Player &) override { co_await broadcast (); }
+    fx::task_t<void>
+    pending_dungeon (Player &actor, fx::message_context_t &, const DungeonView &message)
+    {
+        return actor.deliver (message.dungeonId, message);
+    }
     fx::task_t<void> on_leave_actor (Player &actor) override
     {
         state.leave (std::string (actor.context ().actor_id ().value ()));
@@ -93,7 +99,7 @@ class Party final : public fx::spot_t<Player>
     }
     fx::task_t<void> deliver (Player &actor, fx::message_context_t &, const PartyView &view)
     {
-        co_await actor.context ().bound_session ().send (view).async ();
+        return actor.deliver (std::string (Names::party_prefix) + view.partyId, view);
     }
 };
 using PartyRelocation = StateRelocation<Party, PartyState>;

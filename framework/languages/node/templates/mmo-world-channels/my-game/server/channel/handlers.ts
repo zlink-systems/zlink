@@ -114,6 +114,7 @@ export class DeliverView {
     context: ZLinkMessageContext,
     message: PlayerView
   ): Promise<void> {
+    if (actor.context.spotId !== zoneId(message.channel)) return;
     const type = deliveryPackets.get(context.packetName);
     if (!type) throw new Error(`Unregistered player push: ${context.packetName}`);
     // Restore the declared public DTO class before forwarding (#1731).

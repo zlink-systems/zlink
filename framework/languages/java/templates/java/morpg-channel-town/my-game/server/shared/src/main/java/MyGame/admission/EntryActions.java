@@ -16,4 +16,10 @@ public final class EntryActions {
         actor.context().joinSpot(Names.townId(request.channel()), request).defer();
         return CompletableFuture.completedFuture(null);
     }
+
+    @ZLinkSpotActorSend
+    public CompletionStage<Void> pending(
+            Entry entry, Player actor, ZLinkMessageContext context, TownView message) {
+        return actor.deliver(message.townId(), message);
+    }
 }

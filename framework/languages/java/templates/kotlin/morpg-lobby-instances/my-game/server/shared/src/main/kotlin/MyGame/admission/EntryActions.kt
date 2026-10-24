@@ -33,4 +33,12 @@ class EntryActions {
         context: ZLinkMessageContext,
         request: JoinPartyRequest,
     ) = spot.join(actor, request.partyId, false)
+
+    @ZLinkSpotActorSend
+    suspend fun pending(
+        entry: Entry,
+        actor: Player,
+        context: ZLinkMessageContext,
+        message: PartyView,
+    ) = actor.deliver(Names.PARTY_PREFIX + message.partyId, message)
 }

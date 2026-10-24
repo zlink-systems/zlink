@@ -3,13 +3,13 @@ import { zlinkSpotActorSendHandler } from '@zlink-systems/nestjs';
 import type { ZLinkMessageContext } from '@zlink-systems/framework';
 import { PacketNames, townId } from '../shared/constants';
 import {
+  DungeonView,
   JoinTownRequest,
   ChangeChannelRequest,
   CreatePartyRequest,
   JoinPartyRequest,
   JoinDungeon,
-  TownView,
-  restorePush
+  TownView
 } from '../shared/messages';
 import { Player } from '../shared/player';
 import { Town } from './town';
@@ -130,12 +130,24 @@ export class DungeonTravel {
   packetName: PacketNames.townView
 })
 export class TownDelivery {
-  async handle(
+  handle(_spot: Town, actor: Player, context: ZLinkMessageContext, view: TownView): Promise<void> {
+    return actor.deliver(view.townId, context.packetName, view);
+  }
+}
+
+@Injectable()
+@zlinkSpotActorSendHandler({
+  spot: () => Town,
+  actor: () => Player,
+  packetName: PacketNames.dungeonView
+})
+export class DepartedDelivery {
+  handle(
     _spot: Town,
     actor: Player,
     context: ZLinkMessageContext,
-    view: TownView
+    message: DungeonView
   ): Promise<void> {
-    await actor.context.boundSession.send(restorePush(context.packetName, view)).submit();
+    return actor.deliver(message.dungeonId, context.packetName, message);
   }
 }

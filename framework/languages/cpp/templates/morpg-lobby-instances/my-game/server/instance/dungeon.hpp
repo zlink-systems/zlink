@@ -24,6 +24,7 @@ class Dungeon final : public fx::spot_t<Player>
     const fx::spot_context_t &context () const noexcept override { return context_; }
     void configure () override
     {
+        context_.handlers ().add_actor_send<&Dungeon::departed_party_view> ();
         context_.handlers ()
           .add_handler<&Dungeon::prepare> ()
           .add_actor_send<&Dungeon::reconnect> ()
@@ -48,6 +49,11 @@ class Dungeon final : public fx::spot_t<Player>
     {
         co_await actors_.send (actor.context ().actor_id (), view ()).async ();
     }
+    fx::task_t<void>
+    departed_party_view (Player &actor, fx::message_context_t &, const PartyView &message)
+    {
+        return actor.deliver (std::string (Names::party_prefix) + message.partyId, message);
+    }
     fx::task_t<void> on_leave_actor (Player &) override { co_return; }
     fx::task_t<void>
     reconnect (Player &actor, fx::message_context_t &ctx, const JoinLobbyRequest &request)
@@ -69,7 +75,7 @@ class Dungeon final : public fx::spot_t<Player>
     }
     fx::task_t<void> deliver (Player &actor, fx::message_context_t &, const DungeonView &update)
     {
-        co_await actor.context ().bound_session ().send (update).async ();
+        return actor.deliver (update.dungeonId, update);
     }
 };
 using DungeonRelocation = StateRelocation<Dungeon, DungeonState>;

@@ -41,8 +41,16 @@ class DungeonActions {
         context: ZLinkMessageContext,
         request: DungeonView,
     ) {
-        actor.context.boundSession().kotlin().send(request).await()
+        actor.deliver(request.dungeonId, request)
     }
+
+    @ZLinkSpotActorSend
+    suspend fun departedPartyView(
+        spot: Dungeon,
+        actor: Player,
+        context: ZLinkMessageContext,
+        message: PartyView,
+    ) = actor.deliver(Names.PARTY_PREFIX + message.partyId, message)
 }
 
 @ZLinkHandlerGroup(Names.DUNGEON)

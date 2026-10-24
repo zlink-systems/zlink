@@ -46,6 +46,22 @@ class DungeonActions {
         dispatch: ZLinkMessageContext,
         message: DungeonView,
     ) {
-        actor.context.boundSession().kotlin().send(message).await()
+        actor.deliver(message.dungeonId, message, true)
     }
+
+    @ZLinkSpotActorSend
+    suspend fun departedBorderVisible(
+        spot: Dungeon,
+        actor: Player,
+        dispatch: ZLinkMessageContext,
+        message: BorderVisible,
+    ) = actor.deliver(message.observerFieldId, message, true)
+
+    @ZLinkSpotActorSend
+    suspend fun departedFieldView(
+        spot: Dungeon,
+        actor: Player,
+        dispatch: ZLinkMessageContext,
+        message: FieldView,
+    ) = actor.deliver(message.fieldId, message, true)
 }

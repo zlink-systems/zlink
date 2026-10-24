@@ -89,6 +89,18 @@ public sealed class PartyDelivery : IZLinkSpotActorSendHandler<PartySpot, Player
         CancellationToken ct
     )
     {
-        return actor.Context.BoundSession.Send(request).Async();
+        return actor.DeliverAsync(GameNames.PartyId(request.PartyId), request);
     }
+}
+
+public sealed class DepartedDungeonView
+    : IZLinkSpotActorSendHandler<PartySpot, PlayerActor, DungeonView>
+{
+    public ValueTask HandleAsync(
+        PartySpot spot,
+        PlayerActor actor,
+        IZLinkMessageContext context,
+        DungeonView message,
+        CancellationToken ct
+    ) => actor.DeliverAsync(message.DungeonId, message);
 }

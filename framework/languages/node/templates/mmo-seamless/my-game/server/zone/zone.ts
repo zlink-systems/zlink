@@ -93,6 +93,15 @@ export class Zone implements ZLinkSpot<Player> {
         .submit();
     }
   }
+  async deliver(actor: Player, presence: BorderVisible): Promise<void> {
+    // Membership or visibility may change before a queued notification is handled.
+    if (
+      presence.observerZoneId !== actor.context.spotId ||
+      !this.visible.has(actor.context.actorId)
+    )
+      return;
+    await actor.context.boundSession.send(presence).submit();
+  }
   capture(): ZoneSnapshot {
     return { visible: [...this.visible], arrivals: [...this.arrivals] };
   }

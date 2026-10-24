@@ -47,7 +47,7 @@ class Actions(private val spots: ZLinkSpotManager) {
         dispatch: ZLinkMessageContext,
         message: BorderVisible,
     ) {
-        actor.context.boundSession().kotlin().send(message).await()
+        spot.deliver(actor, message)
     }
 
     @ZLinkSpotActorSend

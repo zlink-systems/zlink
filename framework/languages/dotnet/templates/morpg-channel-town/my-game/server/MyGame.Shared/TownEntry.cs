@@ -8,8 +8,11 @@ public sealed class TownEntry(IZLinkEntrySpotContext context) : IZLinkEntrySpot<
 {
     public IZLinkEntrySpotContext Context { get; } = context;
 
-    public void Configure() =>
+    public void Configure()
+    {
         Context.Handlers.AddActorPacket<EnterTownHandler, PlayerActor>(nameof(JoinTownRequest));
+        Context.Handlers.AddActorPacket<EntryTownViewDelivery, PlayerActor>(nameof(TownView));
+    }
 
     public ValueTask OnJoinedActorAsync(PlayerActor actor, CancellationToken ct) =>
         ValueTask.CompletedTask;
@@ -35,4 +38,16 @@ public sealed class EnterTownHandler
         actor.Context.JoinSpot(GameNames.TownId(request.Channel), request).Defer();
         return ValueTask.CompletedTask;
     }
+}
+
+public sealed class EntryTownViewDelivery
+    : IZLinkEntrySpotActorSendHandler<TownEntry, PlayerActor, TownView>
+{
+    public ValueTask HandleAsync(
+        TownEntry entry,
+        PlayerActor actor,
+        IZLinkMessageContext context,
+        TownView message,
+        CancellationToken ct
+    ) => actor.DeliverAsync(message.TownId, message);
 }

@@ -65,6 +65,18 @@ public sealed class DungeonDelivery
         CancellationToken ct
     )
     {
-        return actor.Context.BoundSession.Send(request).Async();
+        return actor.DeliverAsync(request.DungeonId, request);
     }
+}
+
+public sealed class DepartedDelivery
+    : IZLinkSpotActorSendHandler<DungeonSpot, PlayerActor, TownView>
+{
+    public ValueTask HandleAsync(
+        DungeonSpot spot,
+        PlayerActor actor,
+        IZLinkMessageContext context,
+        TownView message,
+        CancellationToken ct
+    ) => actor.DeliverAsync(message.TownId, message);
 }

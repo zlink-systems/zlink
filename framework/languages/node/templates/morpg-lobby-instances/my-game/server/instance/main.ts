@@ -3,9 +3,9 @@ import { runHost, failHost } from '../shared/hosting';
 import { Names } from '../shared/constants';
 import { PlayerFactory, PlayerRelocation } from '../shared/player';
 import { Entry } from '../shared/entry';
-import { Login, CreateParty, JoinParty } from '../shared/entry-handlers';
+import { EntryPartyViewDelivery, Login, CreateParty, JoinParty } from '../shared/entry-handlers';
 import { Dungeon, DungeonRelocation } from './dungeon';
-import { Prepare, Reconnect, View, Advance, Delivery } from './handlers';
+import { DepartedPartyView, Prepare, Reconnect, View, Advance, Delivery } from './handlers';
 runHost((_builder, config, mesh) => {
   const objects = mesh.objects().server();
   objects.addEntrySpot(Entry, Names.actor);
@@ -17,6 +17,8 @@ runHost((_builder, config, mesh) => {
   });
   return {
     providers: [
+      EntryPartyViewDelivery,
+      DepartedPartyView,
       Entry,
       Login,
       CreateParty,
