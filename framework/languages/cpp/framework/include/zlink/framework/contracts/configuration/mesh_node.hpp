@@ -541,54 +541,80 @@ mesh_channel_server_builder_t &mesh_channel_server_builder_t::add_handler (bool 
 {
     static_assert (!std::is_same_v<TMessage, void>);
     detail::register_mesh_handler_service_for<THandler> (_state);
+    const auto invoke_handler = [] (THandler &owner, const TMessage &payload,
+                                    const route_message_context_t &context) -> decltype (auto) {
+        if constexpr (requires {
+                          static_cast<void (THandler::*) (
+                            const TMessage &, const route_message_context_t &)> (&THandler::handle);
+                      }) {
+            return (owner
+                    .*static_cast<void (THandler::*) (
+                      const TMessage &, const route_message_context_t &)> (&THandler::handle)) (
+              payload, context);
+        } else if constexpr (requires {
+                                 static_cast<task_t<void> (THandler::*) (
+                                   const TMessage &, const route_message_context_t &)> (
+                                   &THandler::handle);
+                             }) {
+            return (owner
+                    .*static_cast<task_t<void> (THandler::*) (
+                      const TMessage &, const route_message_context_t &)> (&THandler::handle)) (
+              payload, context);
+        } else if constexpr (requires {
+                                 static_cast<void (THandler::*) (const TMessage &)> (
+                                   &THandler::handle);
+                             }) {
+            return (owner.*static_cast<void (THandler::*) (const TMessage &)> (&THandler::handle)) (
+              payload);
+        } else {
+            return (owner
+                    .*static_cast<task_t<void> (THandler::*) (const TMessage &)> (
+                      &THandler::handle)) (payload);
+        }
+    };
+    using invocation_result_t =
+      decltype (invoke_handler (std::declval<THandler &> (), std::declval<const TMessage &> (),
+                                std::declval<const route_message_context_t &> ()));
+    const auto invoke = [invoke_handler] {
+        if constexpr (std::is_void_v<invocation_result_t>) {
+            return [invoke_handler] (
+                     service_provider_t &services, serializer_registry_t &serializers,
+                     const zlink::message_t &message,
+                     const route_message_context_t &context) -> task_t<zlink::message_t> {
+                try {
+                    auto &owner = services.get_required<THandler> ();
+                    auto payload = detail::deserialize_typed_payload<TMessage> (
+                      serializers, message, context.content_type.value_or (""));
+                    invoke_handler (owner, payload, context);
+                    return task_t<zlink::message_t> (
+                      result_t<zlink::message_t>::success (zlink::message_t{}));
+                }
+                catch (...) {
+                    return task_t<zlink::message_t> (
+                      detail::current_exception_result<zlink::message_t> ());
+                }
+            };
+        } else {
+            return [invoke_handler] (
+                     service_provider_t &services, serializer_registry_t &serializers,
+                     const zlink::message_t &message,
+                     const route_message_context_t &context) -> task_t<zlink::message_t> {
+                try {
+                    auto &owner = services.get_required<THandler> ();
+                    auto payload = detail::deserialize_typed_payload<TMessage> (
+                      serializers, message, context.content_type.value_or (""));
+                    co_await invoke_handler (owner, payload, context);
+                    co_return result_t<zlink::message_t>::success (zlink::message_t{});
+                }
+                catch (...) {
+                    co_return detail::current_exception_result<zlink::message_t> ();
+                }
+            };
+        }
+    }();
     return add_handler_registration (detail::mesh_handler_registration_t{
       request, _channel_name, std::move (packet_name), std::type_index (typeid (THandler)),
-      std::type_index (typeid (TMessage)), std::type_index (typeid (void)),
-      [] (service_provider_t &services, serializer_registry_t &serializers,
-          const zlink::message_t &message,
-          const route_message_context_t &context) -> task_t<zlink::message_t> {
-          try {
-              auto &owner = services.get_required<THandler> ();
-              auto payload = detail::deserialize_typed_payload<TMessage> (
-                serializers, message, context.content_type.value_or (""));
-              if constexpr (requires {
-                                static_cast<void (THandler::*) (const TMessage &,
-                                                                const route_message_context_t &)> (
-                                  &THandler::handle);
-                            }) {
-                  (owner
-                   .*static_cast<void (THandler::*) (
-                     const TMessage &, const route_message_context_t &)> (&THandler::handle)) (
-                    payload, context);
-                  co_return result_t<zlink::message_t>::success (zlink::message_t{});
-              } else if constexpr (requires {
-                                       static_cast<task_t<void> (THandler::*) (
-                                         const TMessage &, const route_message_context_t &)> (
-                                         &THandler::handle);
-                                   }) {
-                  co_await (owner
-                            .*static_cast<task_t<void> (THandler::*) (
-                              const TMessage &, const route_message_context_t &)> (
-                              &THandler::handle)) (payload, context);
-                  co_return result_t<zlink::message_t>::success (zlink::message_t{});
-              } else if constexpr (requires {
-                                       static_cast<void (THandler::*) (const TMessage &)> (
-                                         &THandler::handle);
-                                   }) {
-                  (owner.*static_cast<void (THandler::*) (const TMessage &)> (&THandler::handle)) (
-                    payload);
-                  co_return result_t<zlink::message_t>::success (zlink::message_t{});
-              } else {
-                  co_await (owner
-                            .*static_cast<task_t<void> (THandler::*) (const TMessage &)> (
-                              &THandler::handle)) (payload);
-                  co_return result_t<zlink::message_t>::success (zlink::message_t{});
-              }
-          }
-          catch (...) {
-              co_return detail::current_exception_result<zlink::message_t> ();
-          }
-      }});
+      std::type_index (typeid (TMessage)), std::type_index (typeid (void)), invoke});
 }
 
 template <typename THandler, typename TRequest, typename TReply>
@@ -596,60 +622,83 @@ mesh_channel_server_builder_t &mesh_channel_server_builder_t::add_handler (bool 
                                                                            std::string packet_name)
 {
     detail::register_mesh_handler_service_for<THandler> (_state);
+    const auto invoke_handler = [] (THandler &owner, const TRequest &payload,
+                                    const route_message_context_t &context) -> decltype (auto) {
+        if constexpr (requires {
+                          static_cast<TReply (THandler::*) (
+                            const TRequest &, const route_message_context_t &)> (&THandler::handle);
+                      }) {
+            return (owner
+                    .*static_cast<TReply (THandler::*) (
+                      const TRequest &, const route_message_context_t &)> (&THandler::handle)) (
+              payload, context);
+        } else if constexpr (requires {
+                                 static_cast<task_t<TReply> (THandler::*) (
+                                   const TRequest &, const route_message_context_t &)> (
+                                   &THandler::handle);
+                             }) {
+            return (owner
+                    .*static_cast<task_t<TReply> (THandler::*) (
+                      const TRequest &, const route_message_context_t &)> (&THandler::handle)) (
+              payload, context);
+        } else if constexpr (requires {
+                                 static_cast<TReply (THandler::*) (const TRequest &)> (
+                                   &THandler::handle);
+                             }) {
+            return (owner
+                    .*static_cast<TReply (THandler::*) (const TRequest &)> (&THandler::handle)) (
+              payload);
+        } else {
+            return (owner
+                    .*static_cast<task_t<TReply> (THandler::*) (const TRequest &)> (
+                      &THandler::handle)) (payload);
+        }
+    };
+    using invocation_result_t =
+      decltype (invoke_handler (std::declval<THandler &> (), std::declval<const TRequest &> (),
+                                std::declval<const route_message_context_t &> ()));
+    const auto invoke = [invoke_handler] {
+        if constexpr (std::is_same_v<invocation_result_t, TReply>) {
+            return [invoke_handler] (
+                     service_provider_t &services, serializer_registry_t &serializers,
+                     const zlink::message_t &message,
+                     const route_message_context_t &context) -> task_t<zlink::message_t> {
+                try {
+                    auto &owner = services.get_required<THandler> ();
+                    auto payload = detail::deserialize_typed_payload<TRequest> (
+                      serializers, message, context.content_type.value_or (""));
+                    auto reply = invoke_handler (owner, payload, context);
+                    return task_t<zlink::message_t> (
+                      result_t<zlink::message_t>::success (detail::encoded_payload_to_raw (
+                        serializers.get<TReply> ().serialize (reply))));
+                }
+                catch (...) {
+                    return task_t<zlink::message_t> (
+                      detail::current_exception_result<zlink::message_t> ());
+                }
+            };
+        } else {
+            return [invoke_handler] (
+                     service_provider_t &services, serializer_registry_t &serializers,
+                     const zlink::message_t &message,
+                     const route_message_context_t &context) -> task_t<zlink::message_t> {
+                try {
+                    auto &owner = services.get_required<THandler> ();
+                    auto payload = detail::deserialize_typed_payload<TRequest> (
+                      serializers, message, context.content_type.value_or (""));
+                    auto reply = co_await invoke_handler (owner, payload, context);
+                    co_return result_t<zlink::message_t>::success (detail::encoded_payload_to_raw (
+                      serializers.get<TReply> ().serialize (reply)));
+                }
+                catch (...) {
+                    co_return detail::current_exception_result<zlink::message_t> ();
+                }
+            };
+        }
+    }();
     return add_handler_registration (detail::mesh_handler_registration_t{
       request, _channel_name, std::move (packet_name), std::type_index (typeid (THandler)),
-      std::type_index (typeid (TRequest)), std::type_index (typeid (TReply)),
-      [] (service_provider_t &services, serializer_registry_t &serializers,
-          const zlink::message_t &message,
-          const route_message_context_t &context) -> task_t<zlink::message_t> {
-          try {
-              auto &owner = services.get_required<THandler> ();
-              auto payload = detail::deserialize_typed_payload<TRequest> (
-                serializers, message, context.content_type.value_or (""));
-              if constexpr (requires {
-                                static_cast<TReply (THandler::*) (
-                                  const TRequest &, const route_message_context_t &)> (
-                                  &THandler::handle);
-                            }) {
-                  auto reply = (owner
-                                .*static_cast<TReply (THandler::*) (
-                                  const TRequest &, const route_message_context_t &)> (
-                                  &THandler::handle)) (payload, context);
-                  co_return result_t<zlink::message_t>::success (
-                    detail::encoded_payload_to_raw (serializers.get<TReply> ().serialize (reply)));
-              } else if constexpr (requires {
-                                       static_cast<task_t<TReply> (THandler::*) (
-                                         const TRequest &, const route_message_context_t &)> (
-                                         &THandler::handle);
-                                   }) {
-                  auto reply = co_await (owner
-                                         .*static_cast<task_t<TReply> (THandler::*) (
-                                           const TRequest &, const route_message_context_t &)> (
-                                           &THandler::handle)) (payload, context);
-                  co_return result_t<zlink::message_t>::success (
-                    detail::encoded_payload_to_raw (serializers.get<TReply> ().serialize (reply)));
-              } else if constexpr (requires {
-                                       static_cast<TReply (THandler::*) (const TRequest &)> (
-                                         &THandler::handle);
-                                   }) {
-                  auto reply = (owner
-                                .*static_cast<TReply (THandler::*) (const TRequest &)> (
-                                  &THandler::handle)) (payload);
-                  co_return result_t<zlink::message_t>::success (
-                    detail::encoded_payload_to_raw (serializers.get<TReply> ().serialize (reply)));
-              } else {
-                  auto reply =
-                    co_await (owner
-                              .*static_cast<task_t<TReply> (THandler::*) (const TRequest &)> (
-                                &THandler::handle)) (payload);
-                  co_return result_t<zlink::message_t>::success (
-                    detail::encoded_payload_to_raw (serializers.get<TReply> ().serialize (reply)));
-              }
-          }
-          catch (...) {
-              co_return detail::current_exception_result<zlink::message_t> ();
-          }
-      }});
+      std::type_index (typeid (TRequest)), std::type_index (typeid (TReply)), invoke});
 }
 
 template <typename THandler, typename TMessage>

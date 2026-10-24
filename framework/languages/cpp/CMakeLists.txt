@@ -2585,6 +2585,19 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND NOT ZLINK_FRAMEWORK_CPP_SHARED)
     add_zlink_framework_test(
+      test_cpp_framework_mesh_handler_cost
+      tests/Zlink.Framework.UnitTests/test_cpp_framework_mesh_handler_cost.cpp
+      "framework-unit;framework-contract;framework-regression;messaging"
+      "unit")
+    target_use_zlink_gtest_main(test_cpp_framework_mesh_handler_cost)
+    target_sources(test_cpp_framework_mesh_handler_cost PRIVATE
+      tests/support/allocation_counter.cpp)
+    target_include_directories(test_cpp_framework_mesh_handler_cost PRIVATE
+      ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+    target_link_options(test_cpp_framework_mesh_handler_cost PRIVATE
+      "-Wl,--wrap=_ZNK5zlink9framework6detail24mesh_record_dispatcher_t8dispatchERKNS0_7runtime4host16receive_record_tESt6vectorINS_9message_tESaIS9_EENS3_9messaging17envelope_header_tE"
+      "-Wl,--wrap=_ZNK5zlink9framework6detail24route_handler_registry_t12invoke_asyncESt17basic_string_viewIcSt11char_traitsIcEENS0_7runtime9messaging14message_kind_tES6_RNS0_18service_provider_tERNS0_21serializer_registry_tERKNS_9message_tERKNS0_23route_message_context_tE")
+    add_zlink_framework_test(
       test_cpp_framework_idle_receive_cost
       tests/Zlink.Framework.UnitTests/test_cpp_framework_idle_receive_cost.cpp
       "framework-unit;framework-contract;framework-regression;messaging"
