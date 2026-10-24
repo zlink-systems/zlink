@@ -117,7 +117,7 @@ struct fixture_t
 
     void deliver (mesh::service_mailbox_claim_t claim)
     {
-        require (replier.reply (claim.records.front (), reply_payload), "reply rejected");
+        require (replier.reply (*claim.records.front (), reply_payload), "reply rejected");
         require (replier.mailbox ().release (claim), "claim release failed");
     }
 
