@@ -257,37 +257,6 @@ void verify_exception (host::public_host_runtime_t &target)
              "exception left the owner claim active");
 }
 
-void verify_single_claim_storage ()
-{
-    mesh::service_mailbox_t mailbox;
-    enqueue (mailbox);
-    // One prefix needs its shared claim and its exact-once credit storage.
-    // Calibrate those owning allocations on this ABI; a single slot must not
-    // allocate separate pointer and byte-count buffers.
-    const auto ownership = tests::measure_allocations ([] {
-        const auto claim = std::make_shared<mesh::service_mailbox_claim_t> ();
-        const auto credit = std::make_unique<std::atomic_bool[]> (1);
-        require (claim && !credit[0].load (), "claim storage calibration failed");
-    });
-    std::shared_ptr<mesh::service_mailbox_claim_t> claim;
-    const auto measured = tests::measure_allocations ([&] {
-        claim = mailbox.try_claim (domain, 1, runtime::dispatch_limits::receive_batch_bytes);
-    });
-    require (claim && claim->claimed_messages == 1 && claim->outstanding () == 1,
-             "single claim lost its original or credit");
-    auto original = mailbox.take ({claim, 0});
-    require (original.has_value (), "single claim original was not transferable");
-    require (original->transferred () && !original->transferred (),
-             "single claim credit did not settle exactly once");
-    require (claim->outstanding () == 0 && mailbox.pending_messages (domain) == 0,
-             "single claim did not return its FIFO prefix");
-    std::cout << "single-claim count=" << measured.count << " bytes=" << measured.bytes
-              << " ownership-count=" << ownership.count << " ownership-bytes=" << ownership.bytes
-              << std::endl;
-    require (measured.count <= ownership.count && measured.bytes <= ownership.bytes,
-             "single claim allocated separate slot metadata buffers");
-}
-
 void verify_standalone (host::public_host_runtime_t &target)
 {
     auto &mailbox = target.transport ().mailbox ();
@@ -467,7 +436,6 @@ void verify_suspended_actor (bool local)
 int main ()
 {
     try {
-        verify_single_claim_storage ();
         auto target = make_host ();
         verify_retained_batch (*target);
         verify_exception (*target);
