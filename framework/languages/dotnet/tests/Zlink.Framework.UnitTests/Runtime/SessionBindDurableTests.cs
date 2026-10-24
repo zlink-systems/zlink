@@ -267,7 +267,9 @@ public sealed partial class EntrySpotActorDispatchTests
             );
             var authorityKey = ZLinkActorAuthorityPayloadCodec.AuthorityKey(actor.ActorId);
             var before = Assert
-                .IsType<ZLinkAuthorityReadResult.Found>(await store.ReadAuthorityAsync(authorityKey))
+                .IsType<ZLinkAuthorityReadResult.Found>(
+                    await store.ReadAuthorityAsync(authorityKey)
+                )
                 .Snapshot;
             var current = Assert
                 .IsType<ZLinkAuthorityCompareExchangeResult.Stored>(
@@ -277,7 +279,10 @@ public sealed partial class EntrySpotActorDispatchTests
                         new ZLinkAuthorityMutation.Put(
                             before.Payload,
                             ZLinkAuthorityGenerationTransition.NewOwner,
-                            new ZLinkLocationOwnerToken(before.OwnerId, before.OwnerLeaseGeneration),
+                            new ZLinkLocationOwnerToken(
+                                before.OwnerId,
+                                before.OwnerLeaseGeneration
+                            ),
                             before.Allocation,
                             before.AuthorityOwnerGeneration + 2
                         )

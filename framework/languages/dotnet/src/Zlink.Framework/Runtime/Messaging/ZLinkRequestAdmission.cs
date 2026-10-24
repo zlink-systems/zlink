@@ -4,13 +4,43 @@ namespace Zlink.Framework.Runtime.Messaging;
 // It never grants capacity or determines whether an operation may be submitted.
 internal sealed class ZLinkRequestAdmission
 {
-    private readonly TaskCompletionSource _completion = new(
-        TaskCreationOptions.RunContinuationsAsynchronously
-    );
+    // The existing completion slot holds either the successful admission task or
+    // the source needed when admission is still pending at observation time.
+    private object? _completion;
 
-    internal void Complete() => _completion.TrySetResult();
+    internal void Complete()
+    {
+        if (
+            Interlocked.CompareExchange(ref _completion, Task.CompletedTask, null)
+            is TaskCompletionSource pending
+        )
+            pending.TrySetResult();
+    }
 
-    internal bool IsAdmitted => _completion.Task.IsCompletedSuccessfully;
+    internal bool IsAdmitted =>
+        Volatile.Read(ref _completion) switch
+        {
+            Task completed => completed.IsCompletedSuccessfully,
+            TaskCompletionSource pending => pending.Task.IsCompletedSuccessfully,
+            _ => false,
+        };
+
+    private object ObserveCompletion()
+    {
+        var completion = Volatile.Read(ref _completion);
+        if (completion is not null)
+            return completion;
+        var pending = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        return Interlocked.CompareExchange(ref _completion, pending, null) ?? pending;
+    }
+
+    private ValueTask Admitted =>
+        ObserveCompletion() switch
+        {
+            Task completed => new ValueTask(completed),
+            TaskCompletionSource pending => new ValueTask(pending.Task),
+            _ => throw new InvalidOperationException("Unknown admission completion storage."),
+        };
 
     internal static ZLinkRequest<TReply> Run<TReply>(
         Func<ZLinkRequestAdmission, ValueTask<TReply>> execute
@@ -32,16 +62,14 @@ internal sealed class ZLinkRequestAdmission
         catch (Exception error)
         {
             return new ZLinkRequest<TReply>(
-                new ValueTask(admission._completion.Task),
+                admission.Admitted,
                 ObserveAsync(ValueTask.FromException<TReply>(error), admission)
             );
         }
         // Once transport/mailbox has completed admission, the existing async
         // execution owns the reply without a further admission observer.
-        return new ZLinkRequest<TReply>(
-            new ValueTask(admission._completion.Task),
-            admission.IsAdmitted ? reply : ObserveAsync(reply, admission)
-        );
+        reply = admission.IsAdmitted ? reply : ObserveAsync(reply, admission);
+        return new ZLinkRequest<TReply>(admission.Admitted, reply);
 
         static async ValueTask<TReply> ObserveAsync(
             ValueTask<TReply> completion,
@@ -58,7 +86,8 @@ internal sealed class ZLinkRequestAdmission
             }
             catch (Exception error)
             {
-                admission._completion.TrySetException(error);
+                if (admission.ObserveCompletion() is TaskCompletionSource pending)
+                    pending.TrySetException(error);
                 throw;
             }
         }

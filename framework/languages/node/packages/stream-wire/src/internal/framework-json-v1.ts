@@ -214,11 +214,15 @@ function schemaFailure(path: string, expected: string): never {
 
 class JsonPropertyScanner {
   private index = 0;
+  private readonly firstEscape: number;
 
   constructor(
     private readonly text: string,
     private readonly options: FrameworkJsonParseOptions
-  ) {}
+  ) {
+    const escape = text.indexOf('\\');
+    this.firstEscape = escape === -1 ? text.length : escape;
+  }
 
   scan(): void {
     this.skipWhitespace();
@@ -289,23 +293,38 @@ class JsonPropertyScanner {
   }
 
   private scanString(): string {
-    const start = this.index++;
+    const text = this.text;
+    const start = this.index;
+    let index = start + 1;
+    //  Before the first backslash of the document every token ends at the
+    //  next quote, so native search finds it; later tokens walk the escapes.
+    const end = text.indexOf('"', index);
+    if (end !== -1 && end < this.firstEscape) {
+      this.index = end + 1;
+      return text.slice(index, end);
+    }
     let sawEscape = false;
     for (;;) {
-      if (this.index >= this.text.length) this.fail('unterminated string');
-      const character = this.text[this.index++]!;
+      if (index >= text.length) {
+        this.index = index;
+        this.fail('unterminated string');
+      }
+      const character = text[index++];
       if (character === '"') {
+        this.index = index;
         //  Without escapes the token content is verbatim; the outer
         //  JSON.parse pass still rejects any raw control characters.
         return sawEscape
-          ? (JSON.parse(this.text.slice(start, this.index)) as string)
-          : this.text.slice(start + 1, this.index - 1);
+          ? (JSON.parse(text.slice(start, index)) as string)
+          : text.slice(start + 1, index - 1);
       }
       if (character === '\\') {
         sawEscape = true;
-        if (this.index >= this.text.length) this.fail('unterminated escape');
-        const escaped = this.text[this.index++]!;
-        if (escaped === 'u') this.index += 4;
+        if (index >= text.length) {
+          this.index = index;
+          this.fail('unterminated escape');
+        }
+        if (text[index++] === 'u') index += 4;
       }
     }
   }

@@ -19,6 +19,7 @@ import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessage
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowEvent;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowOutcome;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkRequestMetrics;
+import systems.zlink.framework.runtime.internal.service.ZLinkFrameworkMultipartView;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationIds;
 import systems.zlink.framework.runtime.messaging.ZLinkApplicationMetadata;
 import systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope;
@@ -33,14 +34,18 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-final class RouteSendCall implements ZLinkSendCall {
+final class RouteSendCall
+        implements ZLinkSendCall,
+                java.util.function.BiFunction<
+                        ZLinkInternalSpotNode, Duration, CompletionStage<Void>>,
+                java.util.function.Consumer<Throwable> {
     private final AtomicBoolean submitGate;
     private final ZLinkChannelCallRuntime runtime;
     private final String channelName;
     private final ZLinkChannelSocketRegistry sockets;
     private final RoutingId target;
     private final Message payload;
-    private final Optional<String> packetName;
+    private final String packetName;
     private final String contentType;
     private final ZLinkApplicationMetadata metadata;
 
@@ -50,7 +55,7 @@ final class RouteSendCall implements ZLinkSendCall {
             ZLinkChannelSocketRegistry sockets,
             RoutingId target,
             Message payload,
-            Optional<String> packetName,
+            String packetName,
             String contentType,
             ZLinkApplicationMetadata metadata) {
         this(
@@ -71,7 +76,7 @@ final class RouteSendCall implements ZLinkSendCall {
             ZLinkChannelSocketRegistry sockets,
             RoutingId target,
             Message payload,
-            Optional<String> packetName,
+            String packetName,
             String contentType,
             ZLinkApplicationMetadata metadata,
             AtomicBoolean submitGate) {
@@ -84,19 +89,6 @@ final class RouteSendCall implements ZLinkSendCall {
         this.packetName = packetName;
         this.contentType = contentType;
         this.metadata = metadata;
-    }
-
-    public ZLinkSendCall packetName(String name) {
-        return new RouteSendCall(
-                runtime,
-                channelName,
-                sockets,
-                target,
-                payload,
-                Optional.of(name),
-                contentType,
-                metadata,
-                submitGate);
     }
 
     @Override
@@ -135,12 +127,7 @@ final class RouteSendCall implements ZLinkSendCall {
         }
         try (var flowScope = runtime.enterApplicationFlow()) {
             return sockets.submitToNode(
-                    channelName,
-                    null,
-                    null,
-                    (router, timeout) -> submitRouter(router),
-                    (node, timeout) -> submitNode(node),
-                    failure -> payload.close());
+                    channelName, null, null, (router, timeout) -> submitRouter(router), this, this);
         }
     }
 
@@ -158,15 +145,21 @@ final class RouteSendCall implements ZLinkSendCall {
                         contentType,
                         Map.of());
         try {
-            return ZLinkOneWayCalls.adaptOneWay(router.send(target, parts))
-                    .whenComplete((ignored, failure) -> parts.forEach(Message::close));
+            return ZLinkOneWayCalls.adaptOneWay(
+                    ZLinkOneWayCalls.closeAfterAdmission(router.send(target, parts), parts));
         } catch (RuntimeException | Error failure) {
-            parts.forEach(Message::close);
+            ZLinkFrameworkMultipartView.closeAll(parts);
             return CompletableFuture.failedFuture(failure);
         }
     }
 
-    private CompletionStage<Void> submitNode(ZLinkInternalSpotNode node) {
+    @Override
+    public void accept(Throwable failure) {
+        payload.close();
+    }
+
+    @Override
+    public CompletionStage<Void> apply(ZLinkInternalSpotNode node, Duration timeout) {
         ZLinkApplicationMetadata metadata =
                 this.metadata == null ? ZLinkApplicationMetadata.empty() : this.metadata;
         traceSent();
@@ -180,25 +173,21 @@ final class RouteSendCall implements ZLinkSendCall {
                         metadata.values());
         try {
             if (node.routingId().equals(target)) {
-                return submitLocal(node, target, metadata.encode(), sendParts)
-                        .thenCompose(ZLinkOneWayCalls::oneWayStatus)
-                        .whenComplete((ignored, failure) -> sendParts.forEach(Message::close));
+                return ZLinkOneWayCalls.closeAfterAdmission(
+                                submitLocal(node, target, metadata.encode(), sendParts), sendParts)
+                        .thenCompose(ZLinkOneWayCalls::oneWayStatus);
             }
             Optional<Integer> classified = node.classifyNodeSendTarget(target);
             if (classified.isPresent()) {
-                sendParts.forEach(Message::close);
+                ZLinkFrameworkMultipartView.closeAll(sendParts);
                 return ZLinkOneWayCalls.oneWayStatus(classified.orElseThrow());
             }
             CompletionStage<Void> submission =
                     node.sendToNode(target, metadata.encode(), sendParts);
-            if (ZLinkOneWayCalls.isImmediateAdmission(submission)) {
-                sendParts.forEach(Message::close);
-                return submission;
-            }
-            return ZLinkOneWayCalls.adaptOneWay(submission)
-                    .whenComplete((ignored, failure) -> sendParts.forEach(Message::close));
+            return ZLinkOneWayCalls.adaptOneWay(
+                    ZLinkOneWayCalls.closeAfterAdmission(submission, sendParts));
         } catch (RuntimeException | Error failure) {
-            sendParts.forEach(Message::close);
+            ZLinkFrameworkMultipartView.closeAll(sendParts);
             return CompletableFuture.failedFuture(failure);
         }
     }
@@ -211,7 +200,7 @@ final class RouteSendCall implements ZLinkSendCall {
                             ZLinkMessageFlowOutcome.SENT,
                             ZLinkDispatchErrorSurface.ROUTE_MESH_CHANNEL,
                             ZLinkDispatchMessageKind.SEND,
-                            packetName.orElse(null),
+                            packetName,
                             null,
                             null,
                             null,
@@ -417,7 +406,7 @@ final class RouteRequestCall implements ZLinkRequestCall {
             ZLinkCompletionBridge.forwardCancellation(result, operation);
             operation.whenComplete(
                     (reply, failure) -> {
-                        requestParts.forEach(Message::close);
+                        ZLinkFrameworkMultipartView.closeAll(requestParts);
                         if (failure != null) {
                             result.completeExceptionally(
                                     ZLinkChannelCallRuntime.requestFailure(failure));
@@ -436,7 +425,7 @@ final class RouteRequestCall implements ZLinkRequestCall {
                         }
                     });
         } catch (RuntimeException | Error failure) {
-            requestParts.forEach(Message::close);
+            ZLinkFrameworkMultipartView.closeAll(requestParts);
             result.completeExceptionally(failure);
         }
         return result;
@@ -505,7 +494,7 @@ final class RouteRequestCall implements ZLinkRequestCall {
         } catch (RuntimeException | Error error) {
             result.completeExceptionally(error);
         } finally {
-            requestParts.forEach(Message::close);
+            ZLinkFrameworkMultipartView.closeAll(requestParts);
         }
         return result;
     }
@@ -583,14 +572,17 @@ final class RouteRequestCall implements ZLinkRequestCall {
     }
 }
 
-final class ChannelSendCall implements ZLinkSendCall {
+final class ChannelSendCall
+        implements ZLinkSendCall,
+                java.util.function.BiFunction<
+                        ZLinkInternalSpotNode, Duration, CompletionStage<Void>>,
+                java.util.function.Consumer<Throwable> {
     private final AtomicBoolean submitGate;
     private final ZLinkChannelCallRuntime runtime;
     private final String channelName;
     private final ZLinkChannelSocketRegistry sockets;
-    private final Duration defaultTimeout;
     private final Message payload;
-    private final Optional<String> packetName;
+    private final String packetName;
     private final String contentType;
     private final ZLinkApplicationMetadata metadata;
 
@@ -598,14 +590,12 @@ final class ChannelSendCall implements ZLinkSendCall {
             ZLinkChannelCallRuntime runtime,
             String channelName,
             ZLinkChannelSocketRegistry sockets,
-            Duration defaultTimeout,
             Message payload,
-            Optional<String> packetName) {
+            String packetName) {
         this(
                 runtime,
                 channelName,
                 sockets,
-                defaultTimeout,
                 payload,
                 packetName,
                 ZLinkChannelContentTypeFrame.DEFAULT_CONTENT_TYPE,
@@ -616,16 +606,14 @@ final class ChannelSendCall implements ZLinkSendCall {
             ZLinkChannelCallRuntime runtime,
             String channelName,
             ZLinkChannelSocketRegistry sockets,
-            Duration defaultTimeout,
             Message payload,
-            Optional<String> packetName,
+            String packetName,
             String contentType,
             ZLinkApplicationMetadata metadata) {
         this(
                 runtime,
                 channelName,
                 sockets,
-                defaultTimeout,
                 payload,
                 packetName,
                 contentType,
@@ -637,9 +625,8 @@ final class ChannelSendCall implements ZLinkSendCall {
             ZLinkChannelCallRuntime runtime,
             String channelName,
             ZLinkChannelSocketRegistry sockets,
-            Duration defaultTimeout,
             Message payload,
-            Optional<String> packetName,
+            String packetName,
             String contentType,
             ZLinkApplicationMetadata metadata,
             AtomicBoolean submitGate) {
@@ -647,24 +634,10 @@ final class ChannelSendCall implements ZLinkSendCall {
         this.runtime = runtime;
         this.channelName = channelName;
         this.sockets = sockets;
-        this.defaultTimeout = defaultTimeout;
         this.payload = payload;
         this.packetName = packetName;
         this.contentType = contentType;
         this.metadata = metadata;
-    }
-
-    public ZLinkSendCall packetName(String name) {
-        return new ChannelSendCall(
-                runtime,
-                channelName,
-                sockets,
-                defaultTimeout,
-                payload,
-                Optional.of(name),
-                contentType,
-                metadata,
-                submitGate);
     }
 
     @Override
@@ -673,7 +646,6 @@ final class ChannelSendCall implements ZLinkSendCall {
                 runtime,
                 channelName,
                 sockets,
-                defaultTimeout,
                 payload,
                 packetName,
                 contentType,
@@ -687,7 +659,6 @@ final class ChannelSendCall implements ZLinkSendCall {
                 runtime,
                 channelName,
                 sockets,
-                defaultTimeout,
                 payload,
                 packetName,
                 contentType,
@@ -708,8 +679,8 @@ final class ChannelSendCall implements ZLinkSendCall {
                             null,
                             null,
                             (client, remaining) -> submitClient(client),
-                            (node, timeout) -> submitMesh(node),
-                            failure -> payload.close()));
+                            this,
+                            this));
         }
     }
 
@@ -721,7 +692,7 @@ final class ChannelSendCall implements ZLinkSendCall {
                             ZLinkMessageFlowOutcome.SENT,
                             ZLinkDispatchErrorSurface.CHANNEL,
                             ZLinkDispatchMessageKind.SEND,
-                            packetName.orElse(null),
+                            packetName,
                             null,
                             null,
                             null,
@@ -739,15 +710,20 @@ final class ChannelSendCall implements ZLinkSendCall {
                         contentType,
                         metadata == null ? Map.of() : metadata.values());
         try {
-            return client.send(parts)
-                    .whenComplete((ignored, failure) -> parts.forEach(Message::close));
+            return ZLinkOneWayCalls.closeAfterAdmission(client.send(parts), parts);
         } catch (RuntimeException | Error failure) {
-            parts.forEach(Message::close);
+            ZLinkFrameworkMultipartView.closeAll(parts);
             return CompletableFuture.failedFuture(failure);
         }
     }
 
-    private CompletionStage<Void> submitMesh(ZLinkInternalSpotNode node) {
+    @Override
+    public void accept(Throwable failure) {
+        payload.close();
+    }
+
+    @Override
+    public CompletionStage<Void> apply(ZLinkInternalSpotNode node, Duration timeout) {
         ZLinkApplicationMetadata metadata =
                 this.metadata == null ? ZLinkApplicationMetadata.empty() : this.metadata;
         List<Message> parts =
@@ -759,10 +735,10 @@ final class ChannelSendCall implements ZLinkSendCall {
                         contentType,
                         metadata.values());
         try {
-            return node.sendToChannel(channelName, metadata.encode(), parts)
-                    .whenComplete((ignored, failure) -> parts.forEach(Message::close));
+            return ZLinkOneWayCalls.closeAfterAdmission(
+                    node.sendToChannel(channelName, metadata.encode(), parts), parts);
         } catch (RuntimeException | Error failure) {
-            parts.forEach(Message::close);
+            ZLinkFrameworkMultipartView.closeAll(parts);
             return CompletableFuture.failedFuture(failure);
         }
     }
@@ -962,7 +938,7 @@ final class ChannelRequestCall implements ZLinkRequestCall {
                         payload,
                         contentType,
                         metadata == null ? Map.of() : metadata.values());
-        result.whenComplete((ignored, error) -> requestParts.forEach(Message::close));
+        result.whenComplete((ignored, error) -> ZLinkFrameworkMultipartView.closeAll(requestParts));
         try {
             Duration remaining = timeout;
             if (remaining.isZero() || remaining.isNegative()) {
@@ -1049,7 +1025,7 @@ final class ChannelRequestCall implements ZLinkRequestCall {
             ZLinkCompletionBridge.forwardCancellation(result, operation);
             operation.whenComplete(
                     (reply, failure) -> {
-                        parts.forEach(Message::close);
+                        ZLinkFrameworkMultipartView.closeAll(parts);
                         if (failure != null) {
                             result.completeExceptionally(
                                     ZLinkChannelCallRuntime.requestFailure(failure));
@@ -1064,7 +1040,7 @@ final class ChannelRequestCall implements ZLinkRequestCall {
                         }
                     });
         } catch (RuntimeException | Error failure) {
-            parts.forEach(Message::close);
+            ZLinkFrameworkMultipartView.closeAll(parts);
             result.completeExceptionally(failure);
         }
         return result;

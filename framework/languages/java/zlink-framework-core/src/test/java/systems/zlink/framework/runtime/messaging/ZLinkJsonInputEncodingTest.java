@@ -53,7 +53,7 @@ final class ZLinkJsonInputEncodingTest {
                                             IllegalArgumentException.class,
                                             () ->
                                                     serializer.deserializeBorrowed(
-                                                            input, Value.class),
+                                                            input.dataBuffer(), Value.class),
                                             context);
                             assertEquals(
                                     error.getClass(), nativeError.getCause().getClass(), context);
@@ -72,7 +72,7 @@ final class ZLinkJsonInputEncodingTest {
                     try (Message input = Message.from(bytes)) {
                         assertEquals(
                                 expected,
-                                serializer.deserializeBorrowed(input, Value.class),
+                                serializer.deserializeBorrowed(input.dataBuffer(), Value.class),
                                 context);
                     }
                 }

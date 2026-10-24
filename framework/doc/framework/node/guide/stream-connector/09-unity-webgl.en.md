@@ -33,7 +33,7 @@ The C# surface is the same on both. The namespace
 Package Manager → **Add package from git URL**:
 
 ```
-https://github.com/zlink-systems/zlink.git?path=framework/languages/unity/com.zlink.stream-connector.webgl#framework-node/v0.30.1
+https://github.com/zlink-systems/zlink.git?path=framework/languages/unity/com.zlink.stream-connector.webgl#framework-node/v0.30.2
 ```
 
 Always pin the tag. `framework-node/v<version>` is the tag of the

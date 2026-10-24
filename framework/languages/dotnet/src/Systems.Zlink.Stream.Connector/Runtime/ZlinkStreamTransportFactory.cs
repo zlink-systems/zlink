@@ -32,6 +32,7 @@ internal static class ZlinkStreamTransportFactory
         var webSocket = new ClientWebSocket();
         try
         {
+            webSocket.Options.Proxy = null;
             webSocket.Options.RemoteCertificateValidationCallback = CertificateValidationCallback(
                 options.SkipServerCertificateValidation
             );

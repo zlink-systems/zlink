@@ -38,7 +38,8 @@ final class ZLinkInboundPayloadOwner {
             if (outcome.compareAndSet(null, candidate)) {
                 try {
                     Object value =
-                            ZLinkMessagePayloads.deserialize(serializer, payload, declaredType);
+                            ZLinkMessagePayloads.deserialize(
+                                    serializer, payload.dataBuffer(), declaredType);
                     candidate.complete(new Decoded(declaredType, value));
                 } catch (Throwable failure) {
                     candidate.complete(new DecodeFailed(failure));
