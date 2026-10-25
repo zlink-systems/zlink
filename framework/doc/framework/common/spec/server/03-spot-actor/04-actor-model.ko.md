@@ -547,36 +547,12 @@ Handler가 없거나 decode가 실패하거나 application handler가 예외를 
 Drain 중에는 새로운 Actor 생성과 membership 배정을 막는다. 이미 수락한 Actor turn과
 control transaction은 deadline까지 진행한다.
 
-`OperationId`를 가진 durable lifecycle operation(Actor create·join, session bind 등)의 재전송(replay)과
-종료는 다음 규칙이 정한다. Target이 terminal record를 보존·재인코딩하는 방법은
-[membership §2](05-spot-actor-membership.ko.md#2-object를-하나만-생성하도록-확정하는-과정)가 소유한다.
+`OperationId`를 가진 durable lifecycle operation(Actor create·join, session bind 등)의 최초 수락·실패와
+재제출 경계는 application request와 같이 [Submit과 완료 §5](../01-execution/01-submit-and-completion.ko.md#5-backpressure와-오류-분류)와
+[§9](../01-execution/01-submit-and-completion.ko.md#9-request-completion--완료-경쟁과-timeout-budget)가 정한다. Framework는 이 operation을
+다시 보내지 않는다. `OperationId`와 target의 terminal record는 operation identity와 결과의 소유 계약이며
+([membership §2](05-spot-actor-membership.ko.md#2-object를-하나만-생성하도록-확정하는-과정)) 자동 재전송의 근거가 아니다.
 
-- **Replay의 주체는 그 operation을 시작한 Framework runtime이고, 대상은 `OperationId`를 가진 durable
-  lifecycle operation뿐이다.** Application request의 재제출 경계는
-  [Submit과 완료 §5](../01-execution/01-submit-and-completion.ko.md#5-backpressure와-오류-분류)가 정의한다. Core socket 계약의 "Caller는 handover 뒤 다시 보낸다"는 application request에서는
-  application, durable operation에서는 Framework를 뜻한다.
-- **Replay 조건은 terminal envelope를 받지 못한 typed transient transport 실패(route 부재, 제출할 때
-  ready였던 route generation과 다른 그 peer의 선택 route를 제출 뒤 관찰함, reply 유실, 단절)뿐이다.** Protocol error, encode·configuration 실패, typed
-  non-replayable terminal은 그 실패로 즉시 끝난다 — 같은 입력을 다시 보내도 결과가 달라지지 않기
-  때문이다. Terminal envelope(`Created`·`Existing`·`Rejected`·`Failed` 등)를 받은 operation은 다시
-  보내지 않는다.
-- **Replay는 재전송이 필요하다는 사실과 target peer가 현재 route에서 ready라는 사실이 함께 성립할 때
-  제출한다.** 실패를 처리할 때 이미 ready이면 바로 제출하고, 아니면 ready가 되는 전이에서 제출한다.
-  별도 재시도 timer나 주기적 확인을 두지 않는다.
-- **각 attempt는 남은 deadline 전부를 사용하고 횟수 제한이 없다.** Deadline 소진의 종류는 원인이 정한다:
-  한 번도 admission되지 못한 채 소진되면 [오류 모델](../00-foundation/07-framework-error-model.ko.md)의
-  `Unavailable`, admission된 request의 reply를 받지 못한 채 소진되면 `DeadlineExceeded`다. 중복
-  실행 방지는 target의 terminal record가 보장하므로 sender는 실행 여부를 추정하지 않는다.
-
-- **Replay를 deadline 전에 멈추는 신호는 target node의 lifecycle 종료 하나다.** 그 판정은
-  logical owner(Location·auto-connect 소유자)가 target node의
-  [connection intent](../00-foundation/02-glossary.ko.md#connection-intent)를 제거했고 그
-  node에 admitted peer가 남아 있지 않다는 사실이며([MeshNode §7.1](03-mesh-node.ko.md#71-peer-연결)),
-  이때 sender는 [08-routing §2.6](08-routing.ko.md#26-objectgeneration을-어디에-사용하고-어디에-사용하지-않는가)의
-  "owner process 종료"대로 operation을 즉시 `Unavailable`로 끝낸다. Transport 단절이나 peer
-  부재 단독은 재연결로 회복될 수 있으므로 replay를 계속한다. Sender는 이 판정을 위해 별도
-  상태·timer·monitor를 두지 않고 이미 존재하는 intent 제거 전이를 조회한다 — 판정 주체가
-  둘이면 같은 target을 한쪽은 종료로, 다른 쪽은 transient로 보는 구간이 생긴다.
 - **Deadline의 소유자는 operation(sender) 하나다.** Deferred join이나 remote transaction
   wrapper처럼 operation을 감싸는 층은 deadline을 operation에 전달하고 그 terminal을 기다리며,
   admission 대기 중 자기 timer로 경쟁하지 않는다 — timer가 둘이면 같은 operation이 서로 다른
@@ -638,15 +614,10 @@ Gate·Yield·Actor claim과 self-request의 관찰은
   5분 안에서는 처음과 같은 semantic 결과(`Created`·`Rejected`·`Failed`와 optional reply)를 받고,
   그 뒤 Ready authority가 없으면 새 reservation으로 다시 생성된다.
 - `Rejected`·`Failed` 뒤에는 `Find`가 Actor를 찾지 못하고 reserved capacity가 반환된다.
-- Durable lifecycle operation(Actor create·join, session bind)은 route 부재·제출 뒤 선택 route
-  변경·reply 유실 뒤에도 같은 `OperationId`로 이어져 deadline 안에 원래 terminal을 받고,
-  application request의 재제출은 [Submit과 완료 §5](../01-execution/01-submit-and-completion.ko.md#5-backpressure와-오류-분류)를 따른다.
-- Durable operation이 deadline까지 한 번도 admission되지 못하면 `Unavailable`, admission된 뒤 reply
-  없이 deadline이 지나면 `DeadlineExceeded`로 끝나며, protocol error·encode 실패 같은 typed
-  non-transient 실패는 그 실패로 즉시 끝난다.
-- Replay 중인 durable operation의 target node에 대해 logical owner가 connection intent를
-  제거하고 그 node에 admitted peer가 없으면, operation이 deadline 전에 `Unavailable`로 끝난다.
-  Transport 단절만 일어난 경우에는 끝나지 않고 재연결 뒤 같은 `OperationId`로 replay가 이어진다.
+- Durable lifecycle operation(Actor create·join, session bind)은 [Submit과 완료 §5](../01-execution/01-submit-and-completion.ko.md#5-backpressure와-오류-분류)의
+  판정 순서를 따르며 binding request를 0번 또는 1번 시작한다. 검증에는 선택 route가 준비된 상태에서 무관한
+  outgoing 연결만 실패한 경우, 최초 대기 중 실패가 확정된 경우, 시작 뒤 handover가 일어난 경우를 포함하며, 각
+  결과는 Submit §5·§9와 같고 같은 operation을 다시 시작하지 않는다.
 - Deferred join과 remote transaction wrapper를 거친 호출은 감싼 operation의 terminal과 같은
   종류·같은 시점에 끝나며, admission 대기 중 wrapper가 먼저 timeout을 만들지 않는다.
 - Destroy가 같은 generation만 인정하고 새 incarnation으로 다시 지정하지 않는다.
