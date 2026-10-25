@@ -85,8 +85,14 @@ class Room(
 
     suspend fun move(actor: Player, request: MoveRequest) {
         val rejection = state.move(actor.context.actorId(), request)
-        if (rejection == null) broadcast(view())
-        else actor.context.boundSession().kotlin().send(rejection).await()
+        if (rejection != null) {
+            actor.context.boundSession().kotlin().send(rejection).await()
+            return
+        }
+        val player = state.view().single { it.playerId == actor.context.actorId() }
+        actor.context.boundSession().kotlin()
+            .send(MoveResult(player.x, player.y, request.sequence)).await()
+        broadcast(view())
     }
 
     suspend fun shoot(actor: Player, request: ShootRequest) {
@@ -95,6 +101,8 @@ class Room(
             actor.context.boundSession().kotlin().send(rejection).await()
             return
         }
+        actor.context.boundSession().kotlin()
+            .send(ShotResult("hit", request.targetId, request.sequence)).await()
         broadcast(view())
         state.winner?.let { broadcast(MatchEnded(it)) }
     }

@@ -207,57 +207,91 @@ public final class Scenarios {
     }
 
     private static void input(Client p1, Client p2) throws Exception {
-        hit(p1, p2, 1, Rules.INITIAL_HP - Rules.SHOT_DAMAGE, true);
-        var fireDelay = rejectAction(
-                p1,
-                new ShootRequest(p2.playerId, 2),
-                Rules.FIRE_TOO_SOON);
-        TimeUnit.MILLISECONDS.sleep(fireDelay.retryAfterMs());
-        hit(p1, p2, 2, Rules.INITIAL_HP - 2 * Rules.SHOT_DAMAGE, false);
-
-        var initial = p1.view();
-        var firstSpawn = initial.players().stream()
+        var beforeMove = p1.view();
+        var firstSpawn = beforeMove.players().stream()
                 .filter(candidate -> candidate.x() == Rules.FIRST_SPAWN_X
                         && candidate.y() == Rules.FIRST_SPAWN_Y)
                 .findFirst()
                 .orElseThrow();
         var mover = firstSpawn.playerId().equals(p1.playerId) ? p1 : p2;
-        var movementStart = player(initial, mover).lastSequence() + 1;
-        var budgetSequence = movementStart + 1;
-        var firstMove = moveBy(p1, p2, mover, 1, 0, movementStart, initial, false);
-        moveBy(p1, p2, mover, 1, 0, budgetSequence, firstMove, true);
-        rejectAction(mover, new MoveRequest(0, 0, budgetSequence), Rules.STALE_SEQUENCE);
-        rejectAction(mover, new MoveRequest(0, 0, movementStart), Rules.STALE_SEQUENCE);
-        var stepTooLargeSequence = budgetSequence + 1;
-        rejectAction(
-                mover,
+        var other = mover == p1 ? p2 : p1;
+        var source = player(beforeMove, mover);
+        var target = player(beforeMove, other);
+        var moveDelta = target.x() >= source.x() ? Rules.MAX_STEP : -Rules.MAX_STEP;
+        var moveSequence = source.lastSequence() + 1;
+        var acceptedMove = new MoveRequest(moveDelta, 0, moveSequence);
+        var rejectedMove = new MoveRequest(moveDelta, 0, moveSequence + 1);
+        mover.send(acceptedMove);
+        mover.send(rejectedMove);
+        var moveResult = mover.next(MoveResult.class);
+        var moveRejection = mover.next(ActionRejected.class);
+        check(moveResult.sequence() == moveSequence, "Accepted move result sequence differs");
+        check(moveRejection.reason().equals(Rules.MOVE_BUDGET) && moveRejection.retryAfterMs() > 0,
+                "Expected movement-budget rejection");
+        var afterMoveA = mover.view();
+        var afterMover = player(afterMoveA, mover);
+        check(afterMover.x() == moveResult.x() && afterMover.y() == moveResult.y()
+                        && afterMover.lastSequence() == moveSequence
+                        && player(afterMoveA, other).hp() == target.hp(),
+                "Movement-budget rejection changed the accepted movement state");
+        Thread.sleep(moveRejection.retryAfterMs());
+        mover.send(rejectedMove);
+        var retriedMove = mover.next(MoveResult.class);
+        check(retriedMove.sequence() == rejectedMove.sequence(), "Server movement retry delay was insufficient");
+        var afterMoveB = mover.view();
+        var afterRetryMove = player(afterMoveB, mover);
+        check(afterRetryMove.lastSequence() == rejectedMove.sequence()
+                        && afterRetryMove.x() == retriedMove.x()
+                        && afterRetryMove.y() == retriedMove.y(),
+                "Retried movement result differs from RoomView");
+
+        var beforeShot = p1.view();
+        var shotTarget = player(beforeShot, p2);
+        var shotSequence = player(beforeShot, p1).lastSequence() + 1;
+        var acceptedShot = new ShootRequest(p2.playerId, shotSequence);
+        var rejectedShot = new ShootRequest(p2.playerId, shotSequence + 1);
+        p1.send(acceptedShot);
+        p1.send(rejectedShot);
+        var shotResult = p1.next(ShotResult.class);
+        var fireRejection = p1.next(ActionRejected.class);
+        check(shotResult.sequence() == shotSequence && shotResult.outcome().equals("hit"),
+                "Expected accepted hit before fire-too-soon rejection");
+        check(fireRejection.reason().equals(Rules.FIRE_TOO_SOON) && fireRejection.retryAfterMs() > 0,
+                "Expected fire-interval rejection");
+        var afterShotA = p1.view();
+        check(player(afterShotA, p2).hp() == shotTarget.hp() - Rules.SHOT_DAMAGE
+                        && player(afterShotA, p1).lastSequence() == shotSequence,
+                "Fire-too-soon rejection changed the accepted shot state");
+        Thread.sleep(fireRejection.retryAfterMs());
+        p1.send(rejectedShot);
+        var retriedShot = p1.next(ShotResult.class);
+        check(retriedShot.sequence() == rejectedShot.sequence(), "Server fire retry delay was insufficient");
+        var afterShotB = p1.view();
+        check(player(afterShotB, p2).hp() == shotTarget.hp() - 2 * Rules.SHOT_DAMAGE
+                        && player(afterShotB, p1).lastSequence() == rejectedShot.sequence(),
+                "Retried shot did not update the target state");
+
+        long staleSequence = player(mover.view(), mover).lastSequence();
+        rejectAction(mover, new MoveRequest(0, 0, staleSequence), Rules.STALE_SEQUENCE);
+        rejectAction(mover, new MoveRequest(0, 0, moveSequence), Rules.STALE_SEQUENCE);
+        var stepTooLargeSequence = staleSequence + 1;
+        rejectAction(mover,
                 new MoveRequest(Rules.MAX_STEP + 0.01, 0, stepTooLargeSequence),
                 Rules.STEP_TOO_LARGE);
-        rejectAction(
-                mover,
+        rejectAction(mover,
                 new MoveRequest(0, 0, Rules.MAX_SAFE_INTEGER + 1),
                 Rules.INTEGER_OUT_OF_RANGE);
 
         var outsideStart = walk(p1, p2, mover, 1, Rules.FIRST_SPAWN_Y);
         var outsideSequence = player(outsideStart, mover).lastSequence() + 1;
-        rejectAction(
-                mover,
-                new MoveRequest(-Rules.MAX_STEP, 0, outsideSequence),
-                Rules.OUTSIDE_MAP);
-
+        rejectAction(mover, new MoveRequest(-Rules.MAX_STEP, 0, outsideSequence), Rules.OUTSIDE_MAP);
         var beforeWall = walk(p1, p2, mover, Rules.WALL_X - Rules.MAX_STEP, WALL_CENTER_Y);
         var wallSequence = player(beforeWall, mover).lastSequence() + 1;
-        rejectAction(
-                mover,
-                new MoveRequest(Rules.MAX_STEP, 0, wallSequence),
-                Rules.MOVE_BLOCKED_BY_WALL);
-
+        rejectAction(mover, new MoveRequest(Rules.MAX_STEP, 0, wallSequence), Rules.MOVE_BLOCKED_BY_WALL);
         moveBy(p1, p2, mover, -0.1, 0, Rules.MAX_SAFE_INTEGER, null, false);
-        check(
-                player(mover.view(), mover).lastSequence() == Rules.MAX_SAFE_INTEGER,
+        check(player(mover.view(), mover).lastSequence() == Rules.MAX_SAFE_INTEGER,
                 "Maximum safe sequence was not accepted");
-        rejectAction(
-                mover,
+        rejectAction(mover,
                 new MoveRequest(0, 0, Rules.MAX_SAFE_INTEGER + 1),
                 Rules.INTEGER_OUT_OF_RANGE);
     }

@@ -24,6 +24,8 @@ if $local_mode; then
     fi
   fi
   $build_only && exit 0
+  ctest --test-dir "$ROOT/build" --output-on-failure
+  [[ "${arguments[0]:-}" == "--check-domain" ]] && exit 0
   exec "$ROOT/build/bin/my-game-e2e" --root "$ROOT" "${arguments[@]}"
 fi
 if $no_build; then
@@ -75,6 +77,7 @@ $build_only && exit 0
 "${compose[@]}" run --rm --no-deps -T --name "$project-check" runner "${arguments[@]}" --check-structure
 for argument in "${arguments[@]}"; do
   [[ "$argument" == "--check-structure" ]] && exit 0
+  [[ "$argument" == "--check-domain" ]] && exit 0
 done
 "${compose[@]}" up -d --wait --wait-timeout 30 redis >"$logs/redis-start.log" 2>&1
 "${compose[@]}" run --rm --no-deps -T --name "$project-control" runner "${arguments[@]}"

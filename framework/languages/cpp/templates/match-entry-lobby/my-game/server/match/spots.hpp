@@ -132,8 +132,18 @@ class Room final : public fx::spot_t<Player>
     {
         if (auto rejection = state.move (actor.context ().actor_id ().value (), request))
             co_await actor.context ().bound_session ().send (*rejection).async ();
-        else
+        else {
+            const auto players = state.view ();
+            const auto player = std::find_if (players.begin (), players.end (), [&] (const auto &value) {
+                return value.playerId == actor.context ().actor_id ().value ();
+            });
+            if (player == players.end ())
+                throw std::runtime_error ("Unknown room player");
+            co_await actor.context ().bound_session ()
+              .send (MoveResult{player->x, player->y, request.sequence})
+              .async ();
             co_await broadcast (view ());
+        }
     }
     fx::task_t<void> shoot (Player &actor, fx::message_context_t &, const ShootRequest &request)
     {
@@ -141,6 +151,9 @@ class Room final : public fx::spot_t<Player>
             co_await actor.context ().bound_session ().send (*rejection).async ();
             co_return;
         }
+        co_await actor.context ().bound_session ()
+          .send (ShotResult{"hit", request.targetId, request.sequence})
+          .async ();
         co_await broadcast (view ());
         if (state.winner)
             co_await broadcast (MatchEnded{*state.winner});

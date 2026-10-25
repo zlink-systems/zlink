@@ -67,6 +67,10 @@ public sealed record MoveRequest(double Dx, double Dy, long Sequence);
 
 public sealed record ShootRequest(string TargetId, long Sequence);
 
+public sealed record MoveResult(double X, double Y, long Sequence);
+
+public sealed record ShotResult(string Outcome, string TargetId, long Sequence);
+
 public sealed record RoomViewRequest;
 
 public sealed record PlayerView(string PlayerId, double X, double Y, int Hp, long LastSequence);

@@ -52,7 +52,7 @@ export interface Combatant {
   x: number;
   y: number;
   hp: number;
-  lastSequence: number;
+  lastSequence: bigint;
   lastMoveAtMs: number | null;
   lastShotAtMs: number | null;
 }
@@ -66,7 +66,7 @@ interface CombatantSnapshot {
   X: number;
   Y: number;
   Hp: number;
-  LastSequence: number;
+  LastSequence: string;
   MoveBudgetRemainingMs: number | null;
   FireCooldownRemainingMs: number | null;
 }
@@ -110,7 +110,7 @@ export class RoomState {
       x: spawn[0],
       y: spawn[1],
       hp: Game.initialHp,
-      lastSequence: 0,
+      lastSequence: 0n,
       lastMoveAtMs: null,
       lastShotAtMs: null
     });
@@ -123,14 +123,14 @@ export class RoomState {
     return player;
   }
 
-  private validateAction(player: Combatant, sequence: number): ActionRejected | null {
-    if (!Number.isInteger(sequence) || sequence > Game.maxSafeInteger)
+  private validateAction(player: Combatant, sequence: bigint): ActionRejected | null {
+    if (sequence > BigInt(Game.maxSafeInteger))
       return new ActionRejected(Rejection.integerOutOfRange);
     if (sequence <= player.lastSequence) return new ActionRejected(Rejection.staleSequence);
     return this.winner === null ? null : new ActionRejected(Rejection.matchFinished);
   }
 
-  private static commitAcceptedAction(player: Combatant, sequence: number): void {
+  private static commitAcceptedAction(player: Combatant, sequence: bigint): void {
     player.lastSequence = sequence;
   }
 
@@ -241,7 +241,7 @@ export class RoomState {
         X: player.x,
         Y: player.y,
         Hp: player.hp,
-        LastSequence: player.lastSequence,
+        LastSequence: player.lastSequence.toString(),
         MoveBudgetRemainingMs: this.remainingMilliseconds(
           player.lastMoveAtMs,
           moveBudgetDurationMs,
@@ -272,7 +272,7 @@ export class RoomState {
         x: player.X,
         y: player.Y,
         hp: player.Hp,
-        lastSequence: player.LastSequence,
+        lastSequence: BigInt(player.LastSequence),
         lastMoveAtMs: this.restoreTimestamp(
           player.MoveBudgetRemainingMs,
           moveBudgetDurationMs,

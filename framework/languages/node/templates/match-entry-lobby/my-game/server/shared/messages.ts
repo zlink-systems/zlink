@@ -46,13 +46,27 @@ export class MoveRequest {
   constructor(
     readonly dx: number,
     readonly dy: number,
-    readonly sequence: number
+    readonly sequence: bigint
   ) {}
 }
 export class ShootRequest {
   constructor(
     readonly targetId: string,
-    readonly sequence: number
+    readonly sequence: bigint
+  ) {}
+}
+export class MoveResult {
+  constructor(
+    readonly x: number,
+    readonly y: number,
+    readonly sequence: bigint
+  ) {}
+}
+export class ShotResult {
+  constructor(
+    readonly outcome: string,
+    readonly targetId: string,
+    readonly sequence: bigint
   ) {}
 }
 export class RoomViewRequest {}
@@ -62,7 +76,7 @@ export class PlayerView {
     readonly x: number,
     readonly y: number,
     readonly hp: number,
-    readonly lastSequence: number
+    readonly lastSequence: bigint
   ) {}
 }
 export class RoomView {

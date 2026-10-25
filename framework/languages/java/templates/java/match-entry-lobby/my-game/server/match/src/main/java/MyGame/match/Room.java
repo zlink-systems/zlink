@@ -56,14 +56,21 @@ public final class Room implements ZLinkSpot<Player> {
 
     public CompletionStage<Void> move(Player actor, MoveRequest request) {
         var rejection = state.move(actor.context().actorId(), request);
-        return rejection == null ? broadcast(view()) : reply(actor, rejection);
+        if (rejection != null) return reply(actor, rejection);
+        var player = state.view().stream()
+                .filter(candidate -> candidate.playerId().equals(actor.context().actorId()))
+                .findFirst()
+                .orElseThrow(() -> new IllegalStateException("Unknown room player"));
+        return reply(actor, new MoveResult(player.x(), player.y(), request.sequence()))
+                .thenCompose(ignored -> broadcast(view()));
     }
 
     public CompletionStage<Void> shoot(Player actor, ShootRequest request) {
         var rejection = state.shoot(actor.context().actorId(), request);
         if (rejection != null) return reply(actor, rejection);
         var ended = state.winner() == null ? null : new MatchEnded(state.winner());
-        return broadcast(view())
+        return reply(actor, new ShotResult("hit", request.targetId(), request.sequence()))
+                .thenCompose(ignored -> broadcast(view()))
                 .thenCompose(
                         ignored ->
                                 ended == null

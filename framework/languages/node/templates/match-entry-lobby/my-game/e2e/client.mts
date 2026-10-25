@@ -1,3 +1,4 @@
+import '../.zlink-framework-json-schemas.cjs';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { appendFileSync } from 'node:fs';
@@ -12,14 +13,16 @@ import {
   ActionRejected,
   QueueRequest,
   MoveRequest,
+  MoveResult,
   RoomAssignment,
   ShootRequest,
+  ShotResult,
+  RoomView,
   RoomViewRequest,
   SessionInfoRequest,
-  type SessionInfo,
-  type RoomView,
-  type MatchFound,
-  type MatchEnded
+  SessionInfo,
+  MatchFound,
+  MatchEnded
 } from '../server/shared/messages.js';
 
 interface Received {
@@ -52,13 +55,9 @@ class PlayerClient {
       requestTimeoutMs: Limits.messageMs,
       reconnect: { enabled: false }
     });
-    for (const name of [
-      PacketNames.roomView,
-      PacketNames.matchFound,
-      PacketNames.matchEnded,
-      PacketNames.actionRejected
-    ])
-      this.connector.on(name, (message) => {
+    for (const packetType of [RoomView, MatchFound, MoveResult, ShotResult, MatchEnded, ActionRejected])
+      this.connector.on(packetType, (message) => {
+        const name = packetType.name;
         this.messages.push({ name, payload: message.payload });
         appendFileSync(
           log,
@@ -165,7 +164,7 @@ class PlayerClient {
   }
 
   async sessionInfo(): Promise<SessionInfo> {
-    return this.connector.request(new SessionInfoRequest()).submit<SessionInfo>();
+    return this.connector.request(new SessionInfoRequest()).submit(SessionInfo);
   }
 
   async view(): Promise<RoomView> {
@@ -198,8 +197,8 @@ function playerView(view: RoomView, playerId: string) {
   return player;
 }
 
-async function nextSequence(player: PlayerClient): Promise<number> {
-  return playerView(await player.view(), player.playerId).lastSequence + 1;
+async function nextSequence(player: PlayerClient): Promise<bigint> {
+  return playerView(await player.view(), player.playerId).lastSequence + 1n;
 }
 
 async function moveBy(
@@ -208,7 +207,7 @@ async function moveBy(
   mover: PlayerClient,
   dx: number,
   dy: number,
-  sequence: number,
+  sequence: bigint,
   priorView?: RoomView,
   requireMoveBudget = false
 ): Promise<RoomView> {
@@ -231,7 +230,7 @@ async function moveBy(
     const other = mover.playerId === a.playerId ? b : a;
     const peerMark = other.messages.length;
     const resultTask = mover.waitForActionResult(mark, moved);
-    await mover.connector.send(new MoveRequest(dx, dy, sequence)).submit();
+    await mover.connector.send(new MoveRequest(dx, dy, BigInt(sequence))).submit();
     const result = await resultTask;
     if (result instanceof ActionRejected || 'reason' in result) {
       const rejection = result as ActionRejected;
@@ -272,7 +271,7 @@ async function walk(
       dx !== 0 || remainingY === 0
         ? 0
         : Math.max(-Game.maxStep, Math.min(remainingY, Game.maxStep));
-    view = await moveBy(a, b, mover, dx, dy, position.lastSequence + 1, view);
+    view = await moveBy(a, b, mover, dx, dy, position.lastSequence + 1n, view);
     position = playerView(view, mover.playerId);
   }
   return view;
@@ -281,7 +280,7 @@ async function walk(
 async function hit(
   a: PlayerClient,
   b: PlayerClient,
-  sequence: number,
+  sequence: bigint,
   hp: number,
   allowFireRetry = true
 ): Promise<RoomView> {
@@ -294,7 +293,7 @@ async function hit(
     const markA = a.messages.length;
     const markB = b.messages.length;
     const resultTask = a.waitForActionResult(markA, damaged);
-    await a.connector.send(new ShootRequest(b.playerId, sequence)).submit();
+    await a.connector.send(new ShootRequest(b.playerId, BigInt(sequence))).submit();
     const result = await resultTask;
     if (result instanceof ActionRejected || 'reason' in result) {
       const rejection = result as ActionRejected;
@@ -347,34 +346,92 @@ async function rejectAction<T>(
 async function rejectShot(
   a: PlayerClient,
   b: PlayerClient,
-  sequence: number,
+  sequence: bigint,
   reason: string,
   target = b.playerId
 ): Promise<void> {
-  await rejectAction(a, new ShootRequest(target, sequence), reason);
+  await rejectAction(a, new ShootRequest(target, BigInt(sequence)), reason);
 }
 
 async function input(a: PlayerClient, b: PlayerClient): Promise<void> {
-  await hit(a, b, 1, Game.initialHp - Game.shotDamage);
-  const fireDelay = await rejectAction(a, new ShootRequest(b.playerId, 2), Rejection.fireTooSoon);
-  assert(fireDelay.retryAfterMs > 0, 'Fire rejection omitted RetryAfterMs');
-  await delay(fireDelay.retryAfterMs);
-  await hit(a, b, 2, Game.initialHp - Game.shotDamage * 2, false);
-
-  const initial = await a.view();
-  const firstSpawn = initial.players.find(
+  const beforeMove = await a.view();
+  const firstSpawn = beforeMove.players.find(
     (player) => player.x === Game.firstSpawnX && player.y === Game.firstSpawnY
   );
   assert(firstSpawn, 'Room view omitted the first spawn');
   const mover = firstSpawn.playerId === a.playerId ? a : b;
-  const movementStart = playerView(initial, mover.playerId).lastSequence + 1;
-  const budgetSequence = movementStart + 1;
-  const firstMove = await moveBy(a, b, mover, 1, 0, movementStart);
-  await moveBy(a, b, mover, 2, 0, budgetSequence, firstMove, true);
-  await rejectAction(mover, new MoveRequest(0, 0, budgetSequence), Rejection.staleSequence);
-  await rejectAction(mover, new MoveRequest(0, 0, movementStart), Rejection.staleSequence);
+  const other = mover.playerId === a.playerId ? b : a;
+  const source = playerView(beforeMove, mover.playerId);
+  const target = playerView(beforeMove, other.playerId);
+  const moveDelta = target.x >= source.x ? Game.maxStep : -Game.maxStep;
+  const moveSequence = source.lastSequence + 1n;
+  const acceptedMove = new MoveRequest(moveDelta, 0, moveSequence);
+  const rejectedMove = new MoveRequest(moveDelta, 0, moveSequence + 1n);
+  const moveMark = mover.messages.length;
+  const acceptedMoveTask = mover.wait<MoveResult>(MoveResult.name, moveMark, (result) =>
+    result.sequence === moveSequence
+  );
+  const rejectedMoveTask = mover.wait<ActionRejected>(PacketNames.actionRejected, moveMark);
+  await mover.connector.send(acceptedMove).submit();
+  await mover.connector.send(rejectedMove).submit();
+  const [moveResult, moveRejection] = await Promise.all([acceptedMoveTask, rejectedMoveTask]);
+  assert.equal(moveResult.sequence, moveSequence, 'Accepted move result sequence differs');
+  assert.equal(moveRejection.reason, Rejection.moveBudget, 'Second move was not rejected for movement budget');
+  assert(moveRejection.retryAfterMs > 0, 'Movement rejection omitted RetryAfterMs');
+  const afterMoveA = await mover.view();
+  const afterMovePlayer = playerView(afterMoveA, mover.playerId);
+  assert.equal(afterMovePlayer.x, moveResult.x);
+  assert.equal(afterMovePlayer.y, moveResult.y);
+  assert.equal(afterMovePlayer.lastSequence, moveSequence);
+  assert.equal(playerView(afterMoveA, other.playerId).hp, target.hp);
+  await delay(moveRejection.retryAfterMs);
+  const retryMoveMark = mover.messages.length;
+  const retriedMoveTask = mover.wait<MoveResult>(MoveResult.name, retryMoveMark, (result) =>
+    result.sequence === rejectedMove.sequence
+  );
+  await mover.connector.send(rejectedMove).submit();
+  const retriedMove = await retriedMoveTask;
+  assert.equal(retriedMove.sequence, rejectedMove.sequence, 'Retried move result sequence differs');
+  const afterMoveB = await mover.view();
+  assert.equal(playerView(afterMoveB, mover.playerId).lastSequence, rejectedMove.sequence);
+  assert.equal(playerView(afterMoveB, mover.playerId).x, retriedMove.x);
+  assert.equal(playerView(afterMoveB, mover.playerId).y, retriedMove.y);
 
-  const stepTooLargeSequence = budgetSequence + 1;
+  const beforeShot = await a.view();
+  const shotSequence = playerView(beforeShot, a.playerId).lastSequence + 1n;
+  const shotTarget = playerView(beforeShot, b.playerId);
+  const acceptedShot = new ShootRequest(b.playerId, shotSequence);
+  const rejectedShot = new ShootRequest(b.playerId, shotSequence + 1n);
+  const shotMark = a.messages.length;
+  const acceptedShotTask = a.wait<ShotResult>(ShotResult.name, shotMark, (result) =>
+    result.sequence === shotSequence
+  );
+  const rejectedShotTask = a.wait<ActionRejected>(PacketNames.actionRejected, shotMark);
+  await a.connector.send(acceptedShot).submit();
+  await a.connector.send(rejectedShot).submit();
+  const [shotResult, fireRejection] = await Promise.all([acceptedShotTask, rejectedShotTask]);
+  assert.equal(shotResult.sequence, shotSequence, 'Accepted shot result sequence differs');
+  assert.equal(fireRejection.reason, Rejection.fireTooSoon, 'Second shot was not rejected for fire interval');
+  assert(fireRejection.retryAfterMs > 0, 'Fire rejection omitted RetryAfterMs');
+  const afterShotA = await a.view();
+  assert.equal(playerView(afterShotA, b.playerId).hp, shotTarget.hp - Game.shotDamage);
+  assert.equal(playerView(afterShotA, a.playerId).lastSequence, shotSequence);
+  await delay(fireRejection.retryAfterMs);
+  const retryShotMark = a.messages.length;
+  const retriedShotTask = a.wait<ShotResult>(ShotResult.name, retryShotMark, (result) =>
+    result.sequence === rejectedShot.sequence
+  );
+  await a.connector.send(rejectedShot).submit();
+  const retriedShot = await retriedShotTask;
+  assert.equal(retriedShot.sequence, rejectedShot.sequence, 'Retried shot result sequence differs');
+  const afterShotB = await a.view();
+  assert.equal(playerView(afterShotB, b.playerId).hp, shotTarget.hp - 2 * Game.shotDamage);
+  assert.equal(playerView(afterShotB, a.playerId).lastSequence, rejectedShot.sequence);
+
+  const staleSequence = playerView(await mover.view(), mover.playerId).lastSequence;
+  await rejectAction(mover, new MoveRequest(0, 0, staleSequence), Rejection.staleSequence);
+  await rejectAction(mover, new MoveRequest(0, 0, moveSequence), Rejection.staleSequence);
+  const stepTooLargeSequence = staleSequence + 1n;
   await rejectAction(
     mover,
     new MoveRequest(Game.maxStep + 0.01, 0, stepTooLargeSequence),
@@ -382,12 +439,12 @@ async function input(a: PlayerClient, b: PlayerClient): Promise<void> {
   );
   await rejectAction(
     mover,
-    new MoveRequest(0, 0, Game.maxSafeInteger + 1),
+    new MoveRequest(0, 0, BigInt(Game.maxSafeInteger) + 1n),
     Rejection.integerOutOfRange
   );
 
   const outsideStart = await walk(a, b, mover, 1, Game.firstSpawnY);
-  const outsideSequence = playerView(outsideStart, mover.playerId).lastSequence + 1;
+  const outsideSequence = playerView(outsideStart, mover.playerId).lastSequence + 1n;
   await rejectAction(
     mover,
     new MoveRequest(-Game.maxStep, 0, outsideSequence),
@@ -396,23 +453,23 @@ async function input(a: PlayerClient, b: PlayerClient): Promise<void> {
 
   const wallCenterY = (Game.wallMinY + Game.wallMaxY) / 2;
   const beforeWall = await walk(a, b, mover, Game.wallX - Game.maxStep, wallCenterY);
-  const wallSequence = playerView(beforeWall, mover.playerId).lastSequence + 1;
+  const wallSequence = playerView(beforeWall, mover.playerId).lastSequence + 1n;
   await rejectAction(
     mover,
     new MoveRequest(Game.maxStep, 0, wallSequence),
     Rejection.moveBlockedByWall
   );
 
-  await moveBy(a, b, mover, -0.1, 0, Game.maxSafeInteger);
+  await moveBy(a, b, mover, -0.1, 0, BigInt(Game.maxSafeInteger));
   const atMaximum = await mover.view();
   assert.equal(
     playerView(atMaximum, mover.playerId).lastSequence,
-    Game.maxSafeInteger,
+    BigInt(Game.maxSafeInteger),
     'Maximum safe sequence was not accepted'
   );
   await rejectAction(
     mover,
-    new MoveRequest(0, 0, Game.maxSafeInteger + 1),
+    new MoveRequest(0, 0, BigInt(Game.maxSafeInteger) + 1n),
     Rejection.integerOutOfRange
   );
 }
@@ -446,7 +503,7 @@ export async function scenario(
     assert.deepEqual(views[0], views[1]);
     assert.equal(views[0].roomId, foundA.roomId);
     assert(
-      views[0].players.every((player) => player.hp === Game.initialHp && player.lastSequence === 0)
+      views[0].players.every((player) => player.hp === Game.initialHp && player.lastSequence === 0n)
     );
     assert.equal(views[0].phase, Game.playingPhase);
     assert.equal(views[0].winner, null);
@@ -465,9 +522,9 @@ export async function scenario(
       const sessionB = await b.sessionInfo();
       assert.equal(sessionA.actorId, a.playerId);
       assert.equal(sessionB.actorId, b.playerId);
-      await moveBy(a, b, a, 0, 0, 1, initial);
-      await moveBy(a, b, b, 0, 0, 1, initial);
-      const before = await hit(a, b, 2, Game.initialHp - Game.shotDamage);
+      await moveBy(a, b, a, 0, 0, 1n, initial);
+      await moveBy(a, b, b, 0, 0, 1n, initial);
+      const before = await hit(a, b, 2n, Game.initialHp - Game.shotDamage);
 
       if (name === 'hit') {
         await rejectAction(a, new RoomAssignment(before.roomId), Rejection.packetNotAllowed);
@@ -498,7 +555,7 @@ export async function scenario(
         const targetBefore = playerView(beforeWall, b.playerId);
         await rejectAction(
           a,
-          new MoveRequest(Game.maxStep, 0, await nextSequence(a)),
+          new MoveRequest(Game.maxStep, 0, BigInt(await nextSequence(a))),
           Rejection.moveBlockedByWall
         );
         await rejectShot(a, b, await nextSequence(a), Rejection.blockedByWall);
@@ -531,11 +588,11 @@ export async function scenario(
         sameState(before, restored);
         assert.equal(restored.phase, Game.playingPhase);
         assert.equal(restored.winner, null);
-        assert.equal(playerView(restored, again.playerId).lastSequence, 1);
-        await moveBy(again, a, again, 0, 0, 2);
-        await hit(a, again, 3, Game.initialHp - Game.shotDamage * 2);
-        await hit(a, again, 4, Game.initialHp - Game.shotDamage * 3);
-        const finished = await hit(a, again, 5, 0);
+        assert.equal(playerView(restored, again.playerId).lastSequence, 1n);
+        await moveBy(again, a, again, 0, 0, 2n);
+        await hit(a, again, 3n, Game.initialHp - Game.shotDamage * 2);
+        await hit(a, again, 4n, Game.initialHp - Game.shotDamage * 3);
+        const finished = await hit(a, again, 5n, 0);
         assert.equal(finished.phase, Game.finishedPhase);
         assert.equal(finished.winner, a.playerId);
         const finishedAgain = create('finished-reconnect', again.playerId);
@@ -550,7 +607,7 @@ export async function scenario(
         sameActor(identity, finishedIdentity);
         sameState(finished, restoredFinished);
         assert.equal(restoredFinished.winner, a.playerId);
-        assert.equal(playerView(restoredFinished, again.playerId).lastSequence, 2);
+        assert.equal(playerView(restoredFinished, again.playerId).lastSequence, 2n);
       } else if (name === 'update') {
         await control.drain(before.nodeId);
         assert.deepEqual(await a.sessionInfo(), sessionA);
@@ -564,7 +621,7 @@ export async function scenario(
         await control.replace(before.nodeId);
         const fresh = await pair(create('new-a'), create('new-b'));
         assert.equal(fresh.nodeId, before.nodeId, 'Replacement did not accept a new Room');
-        await hit(a, b, 3, Game.initialHp - Game.shotDamage * 2);
+        await hit(a, b, 3n, Game.initialHp - Game.shotDamage * 2);
         assert.deepEqual(await a.sessionInfo(), sessionA);
         assert.deepEqual(await b.sessionInfo(), sessionB);
       } else {

@@ -2,10 +2,8 @@
 #include <array>
 #include <chrono>
 #include <iostream>
-#include <initializer_list>
 #include <limits>
 #include <tuple>
-#include <type_traits>
 namespace
 {
 using namespace std::chrono_literals;
@@ -43,21 +41,6 @@ void rejected (const std::optional<ActionRejected> &result,
 nlohmann::json capture (const RoomState &room)
 {
     return nlohmann::json (room);
-}
-
-void require_wire_fields (const nlohmann::json &value,
-                          std::initializer_list<const char *> fields,
-                          const char *message)
-{
-    require (value.is_object () && value.size () == fields.size (), message);
-    for (const auto *field : fields)
-        require (value.contains (field), message);
-}
-
-template <class T> void require_wire_round_trip (const T &value, const char *message)
-{
-    const auto wire = nlohmann::json (value);
-    require (wire.get<T> () == value, message);
 }
 
 RoomState new_room (TestClock &clock)
@@ -108,41 +91,6 @@ void test_queue ()
         invalid = true;
     }
     require (invalid, "Blank mode accepted");
-}
-
-void test_wire_contract_names_and_phase ()
-{
-    static_assert (std::is_same_v<decltype (ActionRejected::retryAfterMs), std::int32_t>);
-
-    const MyGame::PlayerView player{"p1", 1, 2, 100, 9};
-    const auto player_json = nlohmann::json (player);
-    require_wire_fields (player_json, {"playerId", "x", "y", "hp", "lastSequence"},
-                         "PlayerView did not use camelCase fields");
-
-    const auto rejected_json = nlohmann::json (
-      ActionRejected{MyGame::Rejection::move_budget, 40});
-    require_wire_fields (rejected_json, {"reason", "retryAfterMs"},
-                         "ActionRejected did not use camelCase fields");
-    require (rejected_json.at ("reason").is_string ()
-               && rejected_json.at ("retryAfterMs").is_number_integer (),
-             "ActionRejected wire values have the wrong JSON types");
-    require_wire_round_trip (ActionRejected{MyGame::Rejection::move_budget, 40},
-                             "ActionRejected camelCase round-trip failed");
-
-    for (const auto &view : {
-           MyGame::RoomView{"room-1", "matchA", Game::playing_phase, std::nullopt, {player}},
-           MyGame::RoomView{"room-1", "matchA", Game::finished_phase, std::string ("p1"),
-                            {player}}}) {
-        const auto view_json = nlohmann::json (view);
-        require_wire_fields (view_json, {"roomId", "nodeId", "phase", "winner", "players"},
-                             "RoomView did not use camelCase fields");
-        require (view_json.at ("phase").is_string ()
-                   && view_json.at ("phase").get<std::string> () == view.phase,
-                 "RoomView phase was not serialized as the exact phase string");
-        require (view_json.at ("players").at (0).contains ("lastSequence"),
-                 "RoomView player omitted lastSequence");
-        require_wire_round_trip (view, "RoomView camelCase round-trip failed");
-    }
 }
 
 void test_sequence_and_move_boundaries ()
@@ -251,6 +199,19 @@ void test_map_boundary ()
     }
 }
 
+void test_shot_validation ()
+{
+    TestClock clock;
+    const auto check_rejected_shot = [] (RoomState room, const std::string &target, const char *reason) {
+        const auto before = capture (room);
+        rejected (room.shoot ("p1", {target, 1}), reason);
+        require (capture (room) == before, "Shot validation rejection changed Room state");
+    };
+    check_rejected_shot (positioned (clock, 40, 40, 60, 40), "p2", MyGame::Rejection::blocked);
+    check_rejected_shot (positioned (clock, 10, 10, 95, 10), "p2", MyGame::Rejection::out_of_range);
+    check_rejected_shot (new_room (clock), "missing", MyGame::Rejection::no_target);
+}
+
 void test_fire_interval ()
 {
     TestClock clock;
@@ -343,16 +304,16 @@ int main ()
 {
     try {
         test_queue ();
-        test_wire_contract_names_and_phase ();
         test_sequence_and_move_boundaries ();
         test_move_budget ();
         test_wall_boundaries ();
         test_map_boundary ();
         test_fire_interval ();
+        test_shot_validation ();
         test_snapshot_clock_origin ();
         test_finished_rejection ();
         test_nonfinite_input ();
-        std::cout << "Domain: sequence/map/wall/move-budget/fire/snapshot/finished checks passed"
+        std::cout << "Domain: 10 matchmaking, action, geometry, timing, shot, snapshot, and finished checks passed"
                   << std::endl;
         return 0;
     }

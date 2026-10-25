@@ -124,6 +124,24 @@ struct ShootRequest
     bool operator== (const ShootRequest &) const = default;
     NLOHMANN_DEFINE_TYPE_INTRUSIVE (ShootRequest, targetId, sequence)
 };
+struct MoveResult
+{
+    static constexpr auto packet_name = "MoveResult";
+    double x{};
+    double y{};
+    std::int64_t sequence{};
+    bool operator== (const MoveResult &) const = default;
+    NLOHMANN_DEFINE_TYPE_INTRUSIVE (MoveResult, x, y, sequence)
+};
+struct ShotResult
+{
+    static constexpr auto packet_name = "ShotResult";
+    std::string outcome{};
+    std::string targetId{};
+    std::int64_t sequence{};
+    bool operator== (const ShotResult &) const = default;
+    NLOHMANN_DEFINE_TYPE_INTRUSIVE (ShotResult, outcome, targetId, sequence)
+};
 struct RoomViewRequest
 {
     static constexpr auto packet_name = "RoomViewRequest";

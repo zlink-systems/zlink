@@ -18,12 +18,15 @@ cd "$ROOT"
 mkdir -p "$ROOT/.logs"
 if $local_mode; then
   if ! $no_build; then
-    if ! ./gradlew --no-daemon installDist :e2e:javaHome >"$ROOT/.logs/build.log" 2>&1; then
+    if ! ./gradlew --no-daemon test installDist :e2e:javaHome >"$ROOT/.logs/build.log" 2>&1; then
       tail -n 35 "$ROOT/.logs/build.log" >&2
       exit 1
     fi
   fi
   $build_only && exit 0
+  for argument in "${arguments[@]}"; do
+    [[ "$argument" == "--check-domain" ]] && exit 0
+  done
   java_home_path=$(cat .logs/java-home.txt)
   exec "$java_home_path/bin/java" --enable-native-access=ALL-UNNAMED -Dstdout.encoding=UTF-8 -Dstderr.encoding=UTF-8 -cp 'e2e/build/install/e2e/lib/*' MyGame.e2e.ProgramKt "${arguments[@]}"
 fi
@@ -76,6 +79,7 @@ $build_only && exit 0
 "${compose[@]}" run --rm --no-deps -T --name "$project-check" runner --check-structure
 for argument in "${arguments[@]}"; do
   [[ "$argument" == "--check-structure" ]] && exit 0
+  [[ "$argument" == "--check-domain" ]] && exit 0
 done
 "${compose[@]}" up -d --wait --wait-timeout 30 redis >"$logs/redis-start.log" 2>&1
 "${compose[@]}" run --rm --no-deps -T --name "$project-control" runner "${arguments[@]}"

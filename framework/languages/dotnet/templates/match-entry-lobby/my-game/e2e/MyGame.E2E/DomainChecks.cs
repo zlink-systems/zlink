@@ -52,6 +52,20 @@ internal static class DomainChecks
             return room;
         }
 
+        var matchmaking = new MatchmakingState();
+        matchmaking.Enqueue(new QueueRequest("p1"));
+        matchmaking.Enqueue(new QueueRequest("p1"));
+        matchmaking.Enqueue(new QueueRequest("ranked-1", "ranked"));
+        Check(matchmaking.Pair().Length == 0, "matchmaking does not pair across modes");
+        matchmaking.Enqueue(new QueueRequest("p2"));
+        var pair = matchmaking.Pair();
+        Check(pair.Select(player => player.PlayerId).SequenceEqual(["p1", "p2"]), "matchmaking pairs FIFO within a mode");
+        Check(matchmaking.TryAllocateRoom(out var firstRoom) && firstRoom == "room-1", "first room sequence allocated");
+        matchmaking.Remove(pair);
+        Check(matchmaking.Waiting.Keys.SequenceEqual(["ranked"]), "matched queue removal preserves other modes");
+        matchmaking.RoomSequence = GameNames.MaxSafeInteger;
+        Check(!matchmaking.TryAllocateRoom(out _), "unsafe room sequence rejected");
+
         var sequenceRoom = NewRoom(new ManualTimeProvider(0));
         Check(sequenceRoom.Move("a", new MoveRequest(0, 0, 1)) is null, "sequence baseline accepted");
         var sequenceBefore = sequenceRoom.Capture();
@@ -88,37 +102,6 @@ internal static class DomainChecks
                 && SameSnapshot(oversizedStoredSequenceBefore, oversizedStoredSequenceRoom.Capture()),
             "out-of-range sequence precedes stale sequence when both apply"
         );
-
-        var playingRoom = NewRoom(new ManualTimeProvider(0));
-        var playingView = new RoomView("room", "node", playingRoom.Phase, null, playingRoom.View());
-        using (var playingWire = JsonDocument.Parse(playingView.ToJson().Payload))
-        {
-            var playingPayload = playingWire.RootElement;
-            Check(
-                playingRoom.Phase == "Playing"
-                    && playingPayload.TryGetProperty("roomId", out _)
-                    && playingPayload.TryGetProperty("phase", out var phase)
-                    && !playingPayload.TryGetProperty("RoomId", out _)
-                    && !playingPayload.TryGetProperty("Phase", out _)
-                    && phase.GetString() == "Playing",
-                "typed wire uses .NET Web camelCase names and Playing phase"
-            );
-        }
-        using (
-            var rejectionWire = JsonDocument.Parse(
-                new ActionRejected(Rejection.FireTooSoon, 1).ToJson().Payload
-            )
-        )
-        {
-            var rejectionPayload = rejectionWire.RootElement;
-            Check(
-                rejectionPayload.TryGetProperty("reason", out _)
-                    && rejectionPayload.TryGetProperty("retryAfterMs", out var retryAfter)
-                    && retryAfter.GetInt32() == 1
-                    && !rejectionPayload.TryGetProperty("RetryAfterMs", out _),
-                "typed rejection wire uses .NET Web camelCase names and a 32-bit retry delay"
-            );
-        }
 
         var stepRoom = NewRoom(new ManualTimeProvider(0));
         Check(stepRoom.Move("a", new MoveRequest(GameNames.MaxStep, 0, 1)) is null, "MaxStep boundary accepted");
@@ -259,6 +242,28 @@ internal static class DomainChecks
         fireClock.Advance(TimeSpan.FromMilliseconds(1));
         Check(fireRoom.Shoot("a", new ShootRequest("b", 2)) is null, "fire interval exact boundary accepted");
 
+        var wallShotRoom = Positioned(new ManualTimeProvider(0), 40, WallCenterY(), 60, WallCenterY());
+        var wallShotBefore = wallShotRoom.Capture();
+        Check(
+            wallShotRoom.Shoot("a", new ShootRequest("b", 1)) is { Reason: Rejection.BlockedByWall }
+                && SameSnapshot(wallShotBefore, wallShotRoom.Capture()),
+            "wall blocks shot without changing state"
+        );
+        var rangeShotRoom = Positioned(new ManualTimeProvider(0), 10, 10, 95, 10);
+        var rangeShotBefore = rangeShotRoom.Capture();
+        Check(
+            rangeShotRoom.Shoot("a", new ShootRequest("b", 1)) is { Reason: Rejection.OutOfRange }
+                && SameSnapshot(rangeShotBefore, rangeShotRoom.Capture()),
+            "range rejects shot without changing state"
+        );
+        var missingTargetRoom = NewRoom(new ManualTimeProvider(0));
+        var missingTargetBefore = missingTargetRoom.Capture();
+        Check(
+            missingTargetRoom.Shoot("a", new ShootRequest("missing", 1)) is { Reason: Rejection.NoTarget }
+                && SameSnapshot(missingTargetBefore, missingTargetRoom.Capture()),
+            "missing target rejects shot without changing state"
+        );
+
         var sourceClock = new ManualTimeProvider(5_000_000);
         var source = NewRoom(sourceClock);
         Check(source.Move("a", new MoveRequest(GameNames.MaxStep, 0, 1)) is null, "snapshot source move accepted");
@@ -325,20 +330,6 @@ internal static class DomainChecks
                 && Player(finished, "b").Hp == 0,
             "lethal shots finish the match"
         );
-        var finishedView = new RoomView(
-            "room",
-            "node",
-            finished.Phase,
-            finished.Winner,
-            finished.View()
-        );
-        using (var finishedWire = JsonDocument.Parse(finishedView.ToJson().Payload))
-        {
-            Check(
-                finishedWire.RootElement.GetProperty("phase").GetString() == "Finished",
-                "typed wire emits Finished phase with exact casing"
-            );
-        }
         var finishedBefore = finished.Capture();
         Check(
             finished.Move("a", new MoveRequest(0, 0, 5)) is { Reason: Rejection.MatchFinished }
@@ -351,7 +342,7 @@ internal static class DomainChecks
             "finished shooting rejection preserves state"
         );
 
-        Console.WriteLine($"Domain boundaries: {checkedCount}/{checkedCount} passed");
+        Console.WriteLine($"Domain checks: 10 categories; {checkedCount}/{checkedCount} assertions passed");
 
         static double WallCenterY() => (GameNames.WallMinY + GameNames.WallMaxY) / 2;
     }

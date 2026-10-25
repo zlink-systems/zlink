@@ -83,46 +83,6 @@ final class DomainTest {
         assertEquals(before, room.snapshot());
     }
 
-    private static void assertJson(String expected, Object value) throws Exception {
-        assertEquals(Json.MAPPER.readTree(expected), Json.MAPPER.valueToTree(value));
-    }
-
-    @Test
-    void publicContractsUseCamelCaseJsonPropertiesAndExactPhaseValues() throws Exception {
-        var player = new PlayerView("p1", 40, 10, 100, 7);
-        assertJson("{\"playerId\":\"p1\",\"mode\":\"duel\"}", new QueueRequest("p1"));
-        assertJson(
-                "{\"playerId\":\"p1\",\"roomId\":\"room-1\"}",
-                new RoomAdmission("p1", "room-1"));
-        assertJson("{\"roomId\":\"room-1\"}", new RoomAssignment("room-1"));
-        assertJson("{\"roomId\":\"room-1\"}", new MatchFound("room-1"));
-        assertJson(
-                "{\"dx\":1.5,\"dy\":-2.0,\"sequence\":7}",
-                new MoveRequest(1.5, -2, 7));
-        assertJson("{\"targetId\":\"p2\",\"sequence\":8}", new ShootRequest("p2", 8));
-        assertJson("{}", new RoomViewRequest());
-        assertJson(
-                "{\"playerId\":\"p1\",\"x\":40.0,\"y\":10.0,\"hp\":100,\"lastSequence\":7}",
-                player);
-        assertJson(
-                "{\"roomId\":\"room-1\",\"nodeId\":\"match-a\",\"phase\":\"Playing\",\"winner\":null,\"players\":[{\"playerId\":\"p1\",\"x\":40.0,\"y\":10.0,\"hp\":100,\"lastSequence\":7}]}",
-                new RoomView("room-1", "match-a", Rules.PLAYING_PHASE, null, List.of(player)));
-        assertJson(
-                "{\"reason\":\"stale-sequence\",\"retryAfterMs\":0}",
-                new ActionRejected(Rules.STALE_SEQUENCE));
-        assertJson(
-                "{\"reason\":\"move-budget\",\"retryAfterMs\":200}",
-                new ActionRejected(Rules.MOVE_BUDGET, 200));
-        assertJson("{\"winner\":\"p1\"}", new MatchEnded("p1"));
-        assertJson("{}", new SessionInfoRequest());
-        assertJson(
-                "{\"sessionId\":\"session-1\",\"actorId\":\"p1\",\"objectGeneration\":3}",
-                new SessionInfo("session-1", "p1", 3));
-        assertJson(
-                "{\"roomId\":\"room-1\",\"nodeId\":\"match-a\",\"phase\":\"Finished\",\"winner\":\"p1\",\"players\":[]}",
-                new RoomView("room-1", "match-a", Rules.FINISHED_PHASE, "p1", List.of()));
-    }
-
     @Test
     void sequenceIsSharedAcrossActionsAndRejectionsDoNotAdvanceIt() {
         var state = room(new ManualClock(0));

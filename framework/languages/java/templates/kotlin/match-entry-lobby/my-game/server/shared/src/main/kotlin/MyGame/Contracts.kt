@@ -78,6 +78,10 @@ data class MoveRequest(val dx: Double = 0.0, val dy: Double = 0.0, val sequence:
 
 data class ShootRequest(val targetId: String = "", val sequence: Long = 0)
 
+data class MoveResult(val x: Double = 0.0, val y: Double = 0.0, val sequence: Long = 0)
+
+data class ShotResult(val outcome: String = "", val targetId: String = "", val sequence: Long = 0)
+
 class RoomViewRequest
 
 data class PlayerView(

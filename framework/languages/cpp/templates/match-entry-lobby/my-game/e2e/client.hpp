@@ -18,7 +18,8 @@ inline void checked (sc::result_t<void> result)
 }
 class Client
 {
-    using Received = std::variant<RoomView, MatchFound, MatchEnded, ActionRejected, SessionInfo>;
+    using Received = std::variant<RoomView, MatchFound, MatchEnded, MoveResult, ShotResult,
+                                  ActionRejected, SessionInfo>;
     std::mutex mutex_;
     std::condition_variable changed_;
     std::vector<Received> received_;
@@ -58,6 +59,8 @@ class Client
         connector_ = sc::connector_factory_t::create (options);
         observe<RoomView> ();
         observe<MatchFound> ();
+        observe<MoveResult> ();
+        observe<ShotResult> ();
         observe<MatchEnded> ();
         observe<ActionRejected> ();
         observe<SessionInfo> ();

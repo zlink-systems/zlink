@@ -51,6 +51,8 @@ internal sealed class GameClient(
         );
         client.Record<RoomView>();
         client.Record<MatchFound>();
+        client.Record<MoveResult>();
+        client.Record<ShotResult>();
         client.Record<MatchEnded>();
         client.Record<ActionRejected>();
         try

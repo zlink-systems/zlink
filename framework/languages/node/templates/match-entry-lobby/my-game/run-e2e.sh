@@ -24,6 +24,13 @@ if $local_mode; then
     fi
   fi
   $build_only && exit 0
+  if [[ "${arguments[0]:-}" == "--check-domain" ]]; then
+    node --test dist/e2e/domain.test.js
+    node dist/e2e/wire-checks.js
+    exit 0
+  fi
+  node --test dist/e2e/domain.test.js
+  node dist/e2e/wire-checks.js
   exec node dist/e2e/runner.js "${arguments[@]}"
 fi
 if $no_build; then
@@ -76,6 +83,13 @@ if [[ "${arguments[0]:-}" == "--check-structure" ]]; then
   "${compose[@]}" run --rm --no-deps -T --name "$project-check" runner "${arguments[@]}"
   exit 0
 fi
+if [[ "${arguments[0]:-}" == "--check-domain" ]]; then
+  "${compose[@]}" run --rm --no-deps -T --name "$project-domain" node-image --test dist/e2e/domain.test.js
+  "${compose[@]}" run --rm --no-deps -T --name "$project-wire" node-image dist/e2e/wire-checks.js
+  exit 0
+fi
 "${compose[@]}" run --rm --no-deps -T --name "$project-check" runner --check-structure
+"${compose[@]}" run --rm --no-deps -T --name "$project-domain" node-image --test dist/e2e/domain.test.js
+"${compose[@]}" run --rm --no-deps -T --name "$project-wire" node-image dist/e2e/wire-checks.js
 "${compose[@]}" up -d --wait --wait-timeout 30 redis >"$logs/redis-start.log" 2>&1
 "${compose[@]}" run --rm --no-deps -T --name "$project-control" runner "${arguments[@]}"

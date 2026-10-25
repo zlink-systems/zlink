@@ -43,6 +43,8 @@ class Client(endpoint: String, val playerId: String) {
         listOf(
                 RoomView::class.java,
                 MatchFound::class.java,
+                MoveResult::class.java,
+                ShotResult::class.java,
                 MatchEnded::class.java,
                 ActionRejected::class.java,
             )

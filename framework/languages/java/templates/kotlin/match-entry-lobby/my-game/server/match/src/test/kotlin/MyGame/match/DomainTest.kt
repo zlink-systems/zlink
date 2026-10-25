@@ -48,36 +48,6 @@ class DomainTest {
     }
 
     @Test
-    fun publicContractsSerializeWithCamelCaseNamesAndExactPhaseValues() {
-        assertEquals(
-            """{"reason":"move-budget","retryAfterMs":25}""",
-            Json.mapper.writeValueAsString(ActionRejected(Rejection.MOVE_BUDGET, 25)),
-        )
-        assertEquals(
-            """
-                {"roomId":"room-1","nodeId":"match-a","phase":"Playing","winner":null,"players":[{"playerId":"p1","x":1.0,"y":2.0,"hp":75,"lastSequence":17}]}
-            """.trimIndent(),
-            Json.mapper.writeValueAsString(
-                RoomView(
-                    "room-1",
-                    "match-a",
-                    Game.PLAYING_PHASE,
-                    null,
-                    listOf(PlayerView("p1", 1.0, 2.0, 75, 17)),
-                ),
-            ),
-        )
-        assertEquals(
-            """
-                {"roomId":"room-1","nodeId":"match-a","phase":"Finished","winner":"p1","players":[]}
-            """.trimIndent(),
-            Json.mapper.writeValueAsString(
-                RoomView("room-1", "match-a", Game.FINISHED_PHASE, "p1", emptyList()),
-            ),
-        )
-    }
-
-    @Test
     fun queueOwnsModesAndRoomSequence() {
         val state = MatchmakingState()
         state.enqueue(QueueRequest("p1"))

@@ -44,6 +44,8 @@ public final class Client implements AutoCloseable {
                                 d.reconnectBackoffFactor()));
         register(RoomView.class);
         register(MatchFound.class);
+        register(MoveResult.class);
+        register(ShotResult.class);
         register(MatchEnded.class);
         register(ActionRejected.class);
         registrations.add(

@@ -17,10 +17,12 @@ import {
   ActionRejected,
   MatchEnded,
   MatchFound,
+  MoveResult,
   QueueRequest,
   RoomAdmission,
   RoomAssignment,
   RoomView,
+  ShotResult,
   type MoveRequest,
   type ShootRequest
 } from '../shared/messages';
@@ -121,8 +123,14 @@ export class Room implements ZLinkSpot<Player> {
   }
   async move(actor: Player, request: MoveRequest): Promise<void> {
     const rejection = this.state.move(actor.context.actorId, request);
-    if (rejection) await actor.context.boundSession.send(rejection).submit();
-    else await this.broadcast(this.view());
+    if (rejection) {
+      await actor.context.boundSession.send(rejection).submit();
+      return;
+    }
+    const player = this.state.players.find((candidate) => candidate.playerId === actor.context.actorId);
+    if (!player) throw new Error('Unknown room player');
+    await actor.context.boundSession.send(new MoveResult(player.x, player.y, request.sequence)).submit();
+    await this.broadcast(this.view());
   }
   async shoot(actor: Player, request: ShootRequest): Promise<void> {
     const rejection = this.state.shoot(actor.context.actorId, request);
@@ -130,6 +138,9 @@ export class Room implements ZLinkSpot<Player> {
       await actor.context.boundSession.send(rejection).submit();
       return;
     }
+    await actor.context.boundSession
+      .send(new ShotResult('hit', request.targetId, request.sequence))
+      .submit();
     await this.broadcast(this.view());
     if (this.state.Winner !== null) await this.broadcast(new MatchEnded(this.state.Winner));
   }

@@ -13,6 +13,9 @@ private fun sameState(before: RoomView, after: RoomView) {
     check(before.copy(nodeId = after.nodeId) == after) { "Room state changed: $before -> $after" }
 }
 
+private fun player(view: RoomView, client: Client) =
+    view.players.single { it.playerId == client.playerId }
+
 private suspend fun match(a: Client, b: Client): RoomView {
     a.queue()
     b.queue()
@@ -187,22 +190,77 @@ private suspend fun newMatch(endpoint: String, replacement: String) {
 }
 
 private suspend fun input(a: Client, b: Client) {
-    hit(a, b, 1, Game.INITIAL_HP - Game.SHOT_DAMAGE)
-    val fireDelay = rejectAction(a, ShootRequest(b.playerId, 2), Rejection.FIRE_TOO_SOON)
-    delay(fireDelay.retryAfterMs.toLong())
-    hit(a, b, 2, Game.INITIAL_HP - Game.SHOT_DAMAGE * 2, allowFireRetry = false)
-
-    val initial = a.view()
-    val firstSpawn = initial.players.single { it.x == Game.FIRST_SPAWN_X && it.y == Game.FIRST_SPAWN_Y }
+    val beforeMove = a.view()
+    val firstSpawn = beforeMove.players.single {
+        it.x == Game.FIRST_SPAWN_X && it.y == Game.FIRST_SPAWN_Y
+    }
     val mover = if (firstSpawn.playerId == a.playerId) a else b
-    val movementStart =
-        initial.players.single { it.playerId == mover.playerId }.lastSequence + 1
-    val budgetSequence = movementStart + 1
-    val firstMove = moveBy(a, b, mover, 1.0, 0.0, movementStart)
-    moveBy(a, b, mover, 1.0, 0.0, budgetSequence, firstMove, requireMoveBudget = true)
-    rejectAction(mover, MoveRequest(0.0, 0.0, budgetSequence), Rejection.STALE_SEQUENCE)
-    rejectAction(mover, MoveRequest(0.0, 0.0, movementStart), Rejection.STALE_SEQUENCE)
-    val stepTooLargeSequence = budgetSequence + 1
+    val other = if (mover === a) b else a
+    val source = player(beforeMove, mover)
+    val target = player(beforeMove, other)
+    val moveDelta = if (target.x >= source.x) Game.MAX_STEP else -Game.MAX_STEP
+    val moveSequence = source.lastSequence + 1
+    val acceptedMove = MoveRequest(moveDelta, 0.0, moveSequence)
+    val rejectedMove = MoveRequest(moveDelta, 0.0, moveSequence + 1)
+    mover.send(acceptedMove)
+    mover.send(rejectedMove)
+    val moveResult = mover.next<MoveResult>()
+    val moveRejection = mover.next<ActionRejected>()
+    check(moveResult.sequence == moveSequence) { "Accepted move result sequence differs." }
+    check(moveRejection.reason == Rejection.MOVE_BUDGET && moveRejection.retryAfterMs > 0) {
+        "Expected movement-budget rejection."
+    }
+    val afterMoveA = mover.view()
+    val afterMover = player(afterMoveA, mover)
+    check(afterMover.x == moveResult.x && afterMover.y == moveResult.y &&
+        afterMover.lastSequence == moveSequence && player(afterMoveA, other).hp == target.hp) {
+        "Movement-budget rejection changed the accepted movement state."
+    }
+    delay(moveRejection.retryAfterMs.toLong())
+    mover.send(rejectedMove)
+    val retriedMove = mover.next<MoveResult>()
+    check(retriedMove.sequence == rejectedMove.sequence) { "Server movement retry delay was insufficient." }
+    val afterMoveB = mover.view()
+    val afterRetryMove = player(afterMoveB, mover)
+    check(afterRetryMove.lastSequence == rejectedMove.sequence &&
+        afterRetryMove.x == retriedMove.x && afterRetryMove.y == retriedMove.y) {
+        "Retried movement result differs from RoomView."
+    }
+
+    val beforeShot = a.view()
+    val shotTarget = player(beforeShot, b)
+    val shotSequence = player(beforeShot, a).lastSequence + 1
+    val acceptedShot = ShootRequest(b.playerId, shotSequence)
+    val rejectedShot = ShootRequest(b.playerId, shotSequence + 1)
+    a.send(acceptedShot)
+    a.send(rejectedShot)
+    val shotResult = a.next<ShotResult>()
+    val fireRejection = a.next<ActionRejected>()
+    check(shotResult.sequence == shotSequence && shotResult.outcome == "hit") {
+        "Expected accepted hit before fire-too-soon rejection."
+    }
+    check(fireRejection.reason == Rejection.FIRE_TOO_SOON && fireRejection.retryAfterMs > 0) {
+        "Expected fire-interval rejection."
+    }
+    val afterShotA = a.view()
+    check(player(afterShotA, b).hp == shotTarget.hp - Game.SHOT_DAMAGE &&
+        player(afterShotA, a).lastSequence == shotSequence) {
+        "Fire-too-soon rejection changed the accepted shot state."
+    }
+    delay(fireRejection.retryAfterMs.toLong())
+    a.send(rejectedShot)
+    val retriedShot = a.next<ShotResult>()
+    check(retriedShot.sequence == rejectedShot.sequence) { "Server fire retry delay was insufficient." }
+    val afterShotB = a.view()
+    check(player(afterShotB, b).hp == shotTarget.hp - 2 * Game.SHOT_DAMAGE &&
+        player(afterShotB, a).lastSequence == rejectedShot.sequence) {
+        "Retried shot did not update the target state."
+    }
+
+    val staleSequence = player(mover.view(), mover).lastSequence
+    rejectAction(mover, MoveRequest(0.0, 0.0, staleSequence), Rejection.STALE_SEQUENCE)
+    rejectAction(mover, MoveRequest(0.0, 0.0, moveSequence), Rejection.STALE_SEQUENCE)
+    val stepTooLargeSequence = staleSequence + 1
     rejectAction(
         mover,
         MoveRequest(Game.MAX_STEP + 0.01, 0.0, stepTooLargeSequence),
@@ -214,29 +272,18 @@ private suspend fun input(a: Client, b: Client) {
         Rejection.INTEGER_OUT_OF_RANGE,
     )
 
-    val outsideStart = walk(a, b, mover, 1.0, LANE_Y)
-    val outsideSequence =
-        outsideStart.players.single { it.playerId == mover.playerId }.lastSequence + 1
+    val outsideStart = walk(a, b, mover, 1.0, Game.FIRST_SPAWN_Y)
+    val outsideSequence = player(outsideStart, mover).lastSequence + 1
     rejectAction(
         mover,
         MoveRequest(-Game.MAX_STEP, 0.0, outsideSequence),
         Rejection.OUTSIDE_MAP,
     )
-
     val beforeWall = walk(a, b, mover, Game.WALL_X - Game.MAX_STEP, WALL_CENTER_Y)
-    val wallSequence = beforeWall.players.single { it.playerId == mover.playerId }.lastSequence + 1
-    rejectAction(
-        mover,
-        MoveRequest(Game.MAX_STEP, 0.0, wallSequence),
-        Rejection.MOVE_BLOCKED_BY_WALL,
-    )
-
+    val wallSequence = player(beforeWall, mover).lastSequence + 1
+    rejectAction(mover, MoveRequest(Game.MAX_STEP, 0.0, wallSequence), Rejection.MOVE_BLOCKED_BY_WALL)
     moveBy(a, b, mover, -0.1, 0.0, Game.MAX_SAFE_INTEGER)
-    val atMaximum = mover.view()
-    check(
-        atMaximum.players.single { it.playerId == mover.playerId }.lastSequence ==
-            Game.MAX_SAFE_INTEGER
-    ) {
+    check(player(mover.view(), mover).lastSequence == Game.MAX_SAFE_INTEGER) {
         "Maximum safe sequence was not accepted."
     }
     rejectAction(
