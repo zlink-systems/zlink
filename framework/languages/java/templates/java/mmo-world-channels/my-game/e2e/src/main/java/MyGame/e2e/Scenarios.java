@@ -84,8 +84,8 @@ public final class Scenarios {
                 var b = new Client(n.endpoints.get(Names.WORLD_B), id)) {
             view(a.connect(), Names.WORLD_A, Names.FIRST_CHANNEL, CHANNEL_A1, 0);
             a.send(new EarnRequest());
-            view(a, Names.WORLD_A, Names.FIRST_CHANNEL, CHANNEL_A1, EARNED_GOLD);
             a.send(new EarnRequest());
+            view(a, Names.WORLD_A, Names.FIRST_CHANNEL, CHANNEL_A1, EARNED_GOLD);
             var rejected = a.rejection();
             Structure.require(
                     Rejection.EARN_TOO_SOON.equals(rejected.reason()) && rejected.retryAfterMs() > 0,

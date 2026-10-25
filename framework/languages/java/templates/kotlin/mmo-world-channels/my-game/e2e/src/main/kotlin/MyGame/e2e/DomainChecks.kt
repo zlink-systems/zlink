@@ -11,59 +11,65 @@ fun runDomainChecks(): Int {
     val balance = GoldBalance(0, 0, now::get)
 
     val first = balance.previewEarn()
-    check(first.accepted) { "Initial earn was rejected" }
+    check(first.accepted && first.gold == GameRules.EARN_AMOUNT) { "Initial earn was rejected" }
+    checks++
+    check(balance.gold == 0L) { "Gold changed before persistence completed" }
     checks++
     balance.commit(first)
     check(balance.gold == GameRules.EARN_AMOUNT) { "Wrong fixed reward" }
     checks++
 
-    now.set(600_000_000L)
     val early = balance.previewEarn()
     val earlyRejection = early.rejection
     check(
         !early.accepted &&
             earlyRejection?.reason == Rejection.EARN_TOO_SOON &&
-            earlyRejection.retryAfterMs == 400 &&
-            balance.gold == GameRules.EARN_AMOUNT,
-    ) { "Early earn changed state or returned a wrong delay" }
+            earlyRejection.retryAfterMs == GameRules.EARN_INTERVAL_MS.toInt(),
+    ) { "Immediate earn did not return the full cooldown" }
+    checks++
+    check(
+        balance.gold == GameRules.EARN_AMOUNT &&
+            balance.capture().cooldownRemainingMs == GameRules.EARN_INTERVAL_MS,
+    ) { "Rejected earn changed gold or cooldown state" }
     checks++
 
-    now.set(999_000_000L)
-    val lastMs = balance.previewEarn()
-    check(!lastMs.accepted && lastMs.rejection?.retryAfterMs == 1) { "Wrong last-ms delay" }
-    checks++
-
-    now.set(1_000_000_000L)
-    val second = balance.previewEarn()
-    check(second.accepted) { "Earn was rejected at the interval boundary" }
-    balance.commit(second)
-    check(balance.gold == 2 * GameRules.EARN_AMOUNT) { "Wrong balance after second earn" }
-    checks++
-
-    now.set(1_500_000_000L)
+    now.set(250_000_000L)
     val snapshot = balance.capture()
-    check(snapshot.cooldownRemainingMs == 500L) { "Snapshot did not preserve remaining time" }
+    check(snapshot.cooldownRemainingMs == 750L) { "Snapshot did not store remaining milliseconds" }
     checks++
 
     now.set(10_000_000_000L)
     val relocated = GoldBalance(snapshot.gold, snapshot.cooldownRemainingMs, now::get)
     val restored = relocated.previewEarn()
-    check(!restored.accepted && restored.rejection?.retryAfterMs == 500) {
+    check(!restored.accepted && restored.rejection?.retryAfterMs == 750) {
         "Relocation did not preserve remaining cooldown"
     }
     checks++
 
-    now.set(10_500_000_000L)
+    now.set(10_750_000_000L)
     val afterCooldown = relocated.previewEarn()
-    check(afterCooldown.accepted) { "Relocated earn was rejected at its boundary" }
-    relocated.commit(afterCooldown)
+    check(
+        afterCooldown.accepted && afterCooldown.gold == 2 * GameRules.EARN_AMOUNT,
+    ) { "Earn was not accepted after the restored cooldown" }
     checks++
 
     val atLimit = GoldBalance(GameRules.MAX_INTEGER - GameRules.EARN_AMOUNT, 0, now::get)
     val boundary = atLimit.previewEarn()
-    check(boundary.accepted) { "Gold limit boundary was rejected" }
+    check(
+        boundary.accepted && boundary.gold == GameRules.MAX_INTEGER,
+    ) { "Gold at maximum minus reward was not accepted exactly at the limit" }
+    checks++
     atLimit.commit(boundary)
-    check(atLimit.gold == GameRules.MAX_INTEGER) { "Gold limit boundary was not reached" }
+    now.addAndGet(1_000_000_000L)
+    val atCap = atLimit.previewEarn()
+    val atCapRejection = atCap.rejection
+    check(
+        !atCap.accepted &&
+            atCapRejection?.reason == Rejection.GOLD_LIMIT &&
+            atCapRejection.retryAfterMs == 0,
+    ) { "Gold limit was not rejected" }
+    checks++
+    check(atLimit.gold == GameRules.MAX_INTEGER) { "Gold limit rejection changed the balance" }
     checks++
 
     val overLimit =
@@ -73,9 +79,12 @@ fun runDomainChecks(): Int {
     check(
         !rejected.accepted &&
             rejection?.reason == Rejection.GOLD_LIMIT &&
-            rejection.retryAfterMs == 0 &&
-            overLimit.gold == GameRules.MAX_INTEGER - GameRules.EARN_AMOUNT + 1,
-    ) { "Gold limit rejection changed state or returned a wrong reason" }
+            rejection.retryAfterMs == 0,
+    ) { "Gold at maximum minus reward plus one was not rejected" }
+    checks++
+    check(overLimit.gold == GameRules.MAX_INTEGER - GameRules.EARN_AMOUNT + 1) {
+        "Rejected boundary earn changed the balance"
+    }
     checks++
     return checks
 }

@@ -1,4 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
+import { deserialize, serialize } from 'node:v8';
 import type {
   ZLinkActor,
   ZLinkActorContext,
@@ -16,7 +17,7 @@ export class Player implements ZLinkActor {
   constructor(
     readonly context: ZLinkActorContext,
     private readonly data: PlayerData,
-    gold: number
+    gold: bigint
   ) {
     this.gold = new GoldBalance(gold);
   }
@@ -48,9 +49,9 @@ export class PlayerFactory implements ZLinkActorFactory<Player> {
 @Injectable()
 export class PlayerRelocation implements ZLinkActorRelocationAdapter<Player> {
   async capture(actor: Player): Promise<Uint8Array> {
-    return Buffer.from(JSON.stringify(actor.gold.capture()));
+    return serialize(actor.gold.capture());
   }
   async restore(actor: Player, payload: Uint8Array): Promise<void> {
-    actor.gold.restore(JSON.parse(Buffer.from(payload).toString('utf8')) as GoldSnapshot);
+    actor.gold.restore(deserialize(payload) as GoldSnapshot);
   }
 }

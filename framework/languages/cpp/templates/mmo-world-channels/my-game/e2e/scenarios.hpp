@@ -69,8 +69,6 @@ inline void domain_checks ()
     const auto boundary_earn = boundary.evaluate_earn ();
     check (boundary_earn.accepted () && boundary_earn.newValue == GameRules::max_integer,
            "Gold at maximum minus reward was not accepted exactly at the limit");
-    check (boundary.value () == GameRules::max_integer - GameRules::earn_amount,
-           "Gold changed before persistence at the limit boundary");
     boundary.commit_earn (boundary_earn);
     boundary_now += std::chrono::milliseconds (GameRules::earn_interval_ms);
     const auto at_limit = boundary.evaluate_earn ();
@@ -116,10 +114,18 @@ inline void scenario (Scenario name, World &world)
         const auto initial_channel_mark = a.mark_channel_views ();
         require (a.enter () == PlayerView{"A", Names::first_channel, "channelA1", 0},
                  "Initial world A state mismatch");
-        const auto before = a.earn (Test::earned_gold);
+        PlayerView before{};
+        ActionRejected repeated_earn_rejection{};
+        if (name == Scenario::worlds) {
+            const auto responses = a.earn_back_to_back ();
+            before = responses.first;
+            repeated_earn_rejection = responses.second;
+        }
+        else
+            before = a.earn (Test::earned_gold);
         require (before.gold == Test::earned_gold, "Gold was not earned");
         if (name == Scenario::worlds) {
-            const auto rejected = a.earn_rejected ();
+            const auto &rejected = repeated_earn_rejection;
             require (rejected.reason == Rejection::earn_too_soon
                        && rejected.retryAfterMs > 0,
                      "Repeated earn did not return its server cooldown");

@@ -1,27 +1,27 @@
 import { GameRules, Rejection, ActionRejected } from '../shared/messages';
 
 export interface GoldSnapshot {
-  gold: number;
+  gold: bigint;
   cooldownRemainingMs: number;
 }
 
 export type GoldDecision =
-  | { accepted: true; gold: number; earnedAt: number }
+  | { accepted: true; gold: bigint; earnedAt: number }
   | { accepted: false; rejection: ActionRejected };
 
 export class GoldBalance {
-  private current = 0;
+  private current = 0n;
   private lastEarnAt?: number;
 
   constructor(
-    value: number,
+    value: bigint,
     cooldownRemainingMs = 0,
     private readonly now: () => number = () => performance.now()
   ) {
     this.restore({ gold: value, cooldownRemainingMs });
   }
 
-  get value(): number {
+  get value(): bigint {
     return this.current;
   }
 
@@ -58,8 +58,8 @@ export class GoldBalance {
 
   restore(snapshot: GoldSnapshot): void {
     if (
-      !Number.isSafeInteger(snapshot.gold) ||
-      snapshot.gold < 0 ||
+      typeof snapshot.gold !== 'bigint' ||
+      snapshot.gold < 0n ||
       snapshot.gold > GameRules.maxInteger ||
       !Number.isSafeInteger(snapshot.cooldownRemainingMs) ||
       snapshot.cooldownRemainingMs < 0 ||

@@ -57,11 +57,14 @@ internal static class Scenarios
         );
         var initial = await a.EnterAsync(ct);
         Require(initial.WorldId == "A" && initial.Gold == 0, "World A initial data differs.");
-        Require(
-            (await a.EarnAsync(EarnedGold, ct)).Gold == EarnedGold,
-            "World A earning was not persisted."
+        var acceptedEarn = a.SendAsync<PlayerView, EarnRequest>(
+            new(),
+            view => view.Gold == EarnedGold,
+            ct
         );
-        var rejected = await a.EarnRejectedAsync(ct);
+        var rejectedEarn = a.SendAsync<ActionRejected, EarnRequest>(new(), _ => true, ct);
+        Require((await acceptedEarn).Gold == EarnedGold, "World A earning was not persisted.");
+        var rejected = await rejectedEarn;
         Require(
             rejected.Reason == Rejection.EarnTooSoon && rejected.RetryAfterMs > 0,
             "A repeated earn did not return its server cooldown."

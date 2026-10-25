@@ -72,10 +72,17 @@ if ! "${compose[@]}" build >"$logs/build.log" 2>&1; then
   exit 1
 fi
 $build_only && exit 0
+if [[ "${arguments[0]:-}" == "--check-domain" ]]; then
+  "${compose[@]}" run --rm --no-deps -T --name "$project-domain" runner --check-domain
+  "${compose[@]}" run --rm --no-deps -T --name "$project-wire" node-image dist/e2e/wire-checks.js
+  exit 0
+fi
 if [[ "${arguments[0]:-}" == "--check-structure" ]]; then
   "${compose[@]}" run --rm --no-deps -T --name "$project-check" runner "${arguments[@]}"
   exit 0
 fi
 "${compose[@]}" run --rm --no-deps -T --name "$project-check" runner --check-structure
+"${compose[@]}" run --rm --no-deps -T --name "$project-domain" runner --check-domain
+"${compose[@]}" run --rm --no-deps -T --name "$project-wire" node-image dist/e2e/wire-checks.js
 "${compose[@]}" up -d --wait --wait-timeout 30 dbA dbB >"$logs/redis-start.log" 2>&1
 "${compose[@]}" run --rm --no-deps -T --name "$project-control" runner "${arguments[@]}"

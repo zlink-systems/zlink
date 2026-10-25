@@ -160,6 +160,6 @@ export class DeliverChannelView {
     _context: ZLinkMessageContext,
     message: ChannelView
   ): Promise<void> {
-    await actor.context.boundSession.send(Object.assign(new ChannelView(0, []), message)).submit();
+    await actor.context.boundSession.send(Object.assign(new ChannelView(0n, []), message)).submit();
   }
 }

@@ -1,3 +1,4 @@
+import '../.zlink-framework-json-schemas.cjs';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { appendFileSync } from 'node:fs';
@@ -20,7 +21,7 @@ import {
   Rejection,
   ViewRequest,
   SessionInfoRequest,
-  type SessionInfo,
+  SessionInfo,
   type WorldInfo
 } from '../server/shared/messages.js';
 interface NodeControl {
@@ -50,22 +51,34 @@ class PlayerClient {
       requestTimeoutMs: Limits.messageMs,
       reconnect: { enabled: false }
     });
-    this.connector.on<PlayerView>(PacketNames.playerView, (message) => {
+    this.connector.on<PlayerView>(PlayerView, (message) => {
       this.views.push(message.payload);
       appendFileSync(
         log,
-        JSON.stringify({ name: PacketNames.playerView, payload: message.payload }) + '\n'
+        JSON.stringify(
+          { name: PacketNames.playerView, payload: message.payload },
+          (_, value) => (typeof value === 'bigint' ? value.toString() : value)
+        ) + '\n'
       );
       this.changed.emit('change');
     });
-    this.connector.on<ChannelView>(PacketNames.channelView, (message) => {
+    this.connector.on<ChannelView>(ChannelView, (message) => {
       this.channelViews.push(message.payload);
-      appendFileSync(log, JSON.stringify({ name: PacketNames.channelView, payload: message.payload }) + '\n');
+      appendFileSync(
+        log,
+        JSON.stringify(
+          { name: PacketNames.channelView, payload: message.payload },
+          (_, value) => (typeof value === 'bigint' ? value.toString() : value)
+        ) + '\n'
+      );
       this.changed.emit('change');
     });
-    this.connector.on<ActionRejected>(PacketNames.actionRejected, (message) => {
+    this.connector.on<ActionRejected>(ActionRejected, (message) => {
       this.rejections.push(message.payload);
-      appendFileSync(log, JSON.stringify({ name: PacketNames.actionRejected, payload: message.payload }) + '\n');
+      appendFileSync(
+        log,
+        JSON.stringify({ name: PacketNames.actionRejected, payload: message.payload }) + '\n'
+      );
       this.changed.emit('change');
     });
     this.connector.onDisconnected(() => {
@@ -147,7 +160,7 @@ class PlayerClient {
     await this.connector.send(new EarnRequest()).submit();
     return this.next(this.rejections, from, 'ActionRejected');
   }
-  async rejectedChannel(channel: number): Promise<ActionRejected> {
+  async rejectedChannel(channel: bigint): Promise<ActionRejected> {
     const from = this.rejections.length;
     await this.connector.send(new ChangeChannelRequest(channel)).submit();
     return this.next(this.rejections, from, 'ActionRejected');
@@ -172,14 +185,14 @@ class PlayerClient {
     assert(Number.isInteger(retryAfterMs) && retryAfterMs > 0 && retryAfterMs <= 2_147_483_647);
     await new Promise<void>((resolve) => setTimeout(resolve, retryAfterMs));
   }
-  async change(channel: number): Promise<PlayerView> {
+  async change(channel: bigint): Promise<PlayerView> {
     return this.response(new ChangeChannelRequest(channel));
   }
   async view(): Promise<PlayerView> {
     return this.response(new ViewRequest());
   }
   async sessionInfo(): Promise<SessionInfo> {
-    return this.connector.request(new SessionInfoRequest()).submit<SessionInfo>();
+    return this.connector.request(new SessionInfoRequest()).submit(SessionInfo);
   }
   async close(): Promise<void> {
     if (this.closed) return;
@@ -187,7 +200,7 @@ class PlayerClient {
     await this.connector.close();
   }
 }
-const Test = { earnedGold: 10, secondChannel: 2 } as const;
+const Test = { earnedGold: 10n, secondChannel: 2n } as const;
 export async function scenario(
   name: string,
   endpoints: Record<string, string>,
@@ -227,15 +240,25 @@ export async function scenario(
       worldId: 'A',
       channel: Game.firstChannel,
       nodeId: 'channelA1',
-      gold: 0
+      gold: 0n
     });
-    const before = await a.earn();
+    let before: PlayerView;
+    let repeatedEarnRejection: ActionRejected | undefined;
+    if (name === 'worlds') {
+      const acceptedEarn = a.earn();
+      const rejectedEarn = a.rejectedEarn();
+      before = await acceptedEarn;
+      repeatedEarnRejection = await rejectedEarn;
+    } else {
+      before = await a.earn();
+    }
     assert.equal(before.gold, Test.earnedGold);
     const binding = await a.sessionInfo();
     assert.equal(binding.actorId, a.playerId);
     if (name === 'worlds') {
-      const rejected = await a.rejectedEarn();
-      assert.deepEqual(rejected, { reason: Rejection.earnTooSoon, retryAfterMs: rejected.retryAfterMs });
+      assert(repeatedEarnRejection);
+      const rejected = repeatedEarnRejection;
+      assert.equal(rejected.reason, Rejection.earnTooSoon);
       assert(rejected.retryAfterMs > 0);
       assert.equal((await a.view()).gold, before.gold);
       await a.waitRetryAfter(rejected.retryAfterMs);
@@ -245,7 +268,7 @@ export async function scenario(
         worldId: 'B',
         channel: Game.firstChannel,
         nodeId: 'channelB',
-        gold: 0
+        gold: 0n
       });
       assert.equal((await a.view()).gold, before.gold + GameRules.earnAmount);
       assert.equal((await b.sessionInfo()).actorId, a.playerId);
@@ -286,7 +309,7 @@ export async function scenario(
         assert.deepEqual(sameAllView.playerIds, expectedAll);
         assert.deepEqual(movingAllView.playerIds, expectedAll);
 
-        const invalidChannel = await a.rejectedChannel(GameRules.maxInteger + 1);
+        const invalidChannel = await a.rejectedChannel(GameRules.maxInteger + 1n);
         assert.deepEqual(invalidChannel, { reason: Rejection.integerOutOfRange, retryAfterMs: 0 });
         assert.deepEqual((await a.channelView()).playerIds, expectedAll);
         assert.deepEqual(await a.rejectedInternalPacket(), {
@@ -308,7 +331,7 @@ export async function scenario(
           worldId: 'A',
           channel: Test.secondChannel,
           nodeId: 'channelA2',
-          gold: 0
+          gold: 0n
         });
         const [oldAView, oldSameView, destinationView] = await Promise.all([
           oldAtA,
@@ -341,7 +364,7 @@ export async function scenario(
       const expectedDestination =
         name === 'channel' ? [a.playerId, movingPlayerId].sort() : [a.playerId];
       assert.deepEqual((await movedAtDestination).playerIds, expectedDestination);
-      const invalidChannel = await a.rejectedChannel(GameRules.maxInteger + 1);
+      const invalidChannel = await a.rejectedChannel(GameRules.maxInteger + 1n);
       assert.deepEqual(invalidChannel, { reason: Rejection.integerOutOfRange, retryAfterMs: 0 });
       assert.deepEqual(await a.view(), moved);
       assert.deepEqual((await a.channelView()).playerIds, expectedDestination);
@@ -385,13 +408,13 @@ export async function scenario(
         worldId: 'A',
         channel: Game.firstChannel,
         nodeId: 'channelA2',
-        gold: 0
+        gold: 0n
       });
       const replacementView = {
         worldId: 'A',
         channel: Game.updateChannel,
         nodeId: before.nodeId,
-        gold: 0
+        gold: 0n
       };
       assert.deepEqual(await newcomer.change(Game.updateChannel), replacementView);
       assert.deepEqual((await newcomer.channelView()).playerIds, [newcomer.playerId]);

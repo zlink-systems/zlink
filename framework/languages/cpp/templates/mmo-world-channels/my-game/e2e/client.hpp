@@ -1,8 +1,10 @@
 #pragma once
 #include "world.hpp"
 #include <zlink/stream_connector.hpp>
+#include <algorithm>
 #include <functional>
 #include <condition_variable>
+#include <utility>
 #include <vector>
 
 namespace MyGame::E2E
@@ -26,9 +28,15 @@ class Client
     sc::connector_t connector_;
     sc::subscription_t error_subscription_;
     sc::subscription_t channel_view_subscription_;
+    sc::subscription_t player_view_subscription_;
+    sc::subscription_t rejection_subscription_;
     std::mutex channel_view_mutex_;
     std::condition_variable channel_view_changed_;
     std::vector<ChannelView> channel_views_;
+    std::mutex reply_mutex_;
+    std::condition_variable reply_changed_;
+    std::vector<PlayerView> player_views_;
+    std::vector<ActionRejected> rejections_;
     bool closed_ = false;
 
   public:
@@ -47,6 +55,20 @@ class Client
                 channel_views_.push_back (message.payload);
             }
             channel_view_changed_.notify_all ();
+        });
+        player_view_subscription_ = connector_.on<PlayerView> ([this] (const auto &message) {
+            {
+                std::lock_guard lock (reply_mutex_);
+                player_views_.push_back (message.payload);
+            }
+            reply_changed_.notify_all ();
+        });
+        rejection_subscription_ = connector_.on<ActionRejected> ([this] (const auto &message) {
+            {
+                std::lock_guard lock (reply_mutex_);
+                rejections_.push_back (message.payload);
+            }
+            reply_changed_.notify_all ();
         });
         error_subscription_ = connector_.on_error ([this] (const auto &error) {
             std::lock_guard lock (error_mutex_);
@@ -83,6 +105,20 @@ class Client
     {
         return exchange<EarnRequest, PlayerView> (
           {}, [expected_gold] (const auto &view) { return view.gold == expected_gold; });
+    }
+    std::pair<PlayerView, ActionRejected> earn_back_to_back ()
+    {
+        const auto player_view_mark = mark_reply (player_views_);
+        const auto rejection_mark = mark_reply (rejections_);
+        healthy ();
+        connector_.send (EarnRequest{}).submit ();
+        connector_.send (EarnRequest{}).submit ();
+        const auto accepted = wait_reply<PlayerView> (
+          player_views_, player_view_mark,
+          [] (const auto &view) { return view.gold == GameRules::earn_amount; }, "PlayerView");
+        const auto rejected = wait_reply<ActionRejected> (
+          rejections_, rejection_mark, [] (const auto &) { return true; }, "ActionRejected");
+        return {accepted, rejected};
     }
     ActionRejected earn_rejected ()
     {
@@ -144,6 +180,30 @@ class Client
         healthy ();
         checked (connector_.close ());
         closed_ = true;
+    }
+
+  private:
+    template <class T> std::size_t mark_reply (const std::vector<T> &replies)
+    {
+        std::lock_guard lock (reply_mutex_);
+        return replies.size ();
+    }
+    template <class T>
+    T wait_reply (const std::vector<T> &replies, std::size_t from,
+                  std::function<bool (const T &)> predicate, const std::string &name)
+    {
+        std::unique_lock lock (reply_mutex_);
+        const auto find = [&] {
+            return std::find_if (replies.begin () + static_cast<std::ptrdiff_t> (from),
+                                 replies.end (), predicate);
+        };
+        const auto received = reply_changed_.wait_for (
+          lock, Limits::packet, [&] { return find () != replies.end () || !connector_.is_connected (); });
+        require (received && find () != replies.end (), "Packet deadline: " + name);
+        const auto reply = *find ();
+        lock.unlock ();
+        healthy ();
+        return reply;
     }
 };
 }

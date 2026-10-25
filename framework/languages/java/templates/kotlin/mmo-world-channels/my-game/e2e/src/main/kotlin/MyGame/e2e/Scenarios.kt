@@ -69,8 +69,8 @@ object Scenarios {
             withClient(n.endpoints.getValue(Names.WORLD_B), id) { b ->
                 view(a.connect(), Names.WORLD_A, Names.FIRST_CHANNEL, CHANNEL_A1, 0)
                 a.send(EarnRequest())
-                view(a, Names.WORLD_A, Names.FIRST_CHANNEL, CHANNEL_A1, EARNED_GOLD)
                 a.send(EarnRequest())
+                view(a, Names.WORLD_A, Names.FIRST_CHANNEL, CHANNEL_A1, EARNED_GOLD)
                 val rejected = a.rejection()
                 check(
                     rejected.reason == Rejection.EARN_TOO_SOON && rejected.retryAfterMs > 0,

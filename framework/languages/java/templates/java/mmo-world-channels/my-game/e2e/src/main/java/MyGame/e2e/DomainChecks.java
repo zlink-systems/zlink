@@ -14,37 +14,30 @@ final class DomainChecks {
         var balance = new GoldBalance(0, 0, now::get);
 
         var first = balance.previewEarn();
-        require(first.accepted(), "Initial earn was rejected");
+        require(first.accepted() && first.gold() == GameRules.EARN_AMOUNT, "Initial earn was rejected");
+        checks++;
+        require(balance.gold() == 0, "Gold changed before persistence completed");
         checks++;
         balance.commit(first);
         require(balance.gold() == GameRules.EARN_AMOUNT, "Wrong fixed reward");
         checks++;
 
-        now.set(600_000_000L);
         var early = balance.previewEarn();
         require(
                 !early.accepted()
                         && Rejection.EARN_TOO_SOON.equals(early.rejection().reason())
-                        && early.rejection().retryAfterMs() == 400
-                        && balance.gold() == GameRules.EARN_AMOUNT,
-                "Early earn changed state or returned a wrong delay");
+                        && early.rejection().retryAfterMs() == GameRules.EARN_INTERVAL_MS,
+                "Immediate earn did not return the full cooldown");
+        checks++;
+        require(
+                balance.gold() == GameRules.EARN_AMOUNT
+                        && balance.capture().cooldownRemainingMs() == GameRules.EARN_INTERVAL_MS,
+                "Rejected earn changed gold or cooldown state");
         checks++;
 
-        now.set(999_000_000L);
-        var lastMs = balance.previewEarn();
-        require(!lastMs.accepted() && lastMs.rejection().retryAfterMs() == 1, "Wrong last-ms delay");
-        checks++;
-
-        now.set(1_000_000_000L);
-        var second = balance.previewEarn();
-        require(second.accepted(), "Earn was rejected at the interval boundary");
-        balance.commit(second);
-        require(balance.gold() == 2 * GameRules.EARN_AMOUNT, "Wrong balance after second earn");
-        checks++;
-
-        now.set(1_500_000_000L);
+        now.set(250_000_000L);
         var snapshot = balance.capture();
-        require(snapshot.cooldownRemainingMs() == 500, "Snapshot did not preserve remaining time");
+        require(snapshot.cooldownRemainingMs() == 750, "Snapshot did not store remaining milliseconds");
         checks++;
 
         now.set(10_000_000_000L);
@@ -52,21 +45,33 @@ final class DomainChecks {
         var restored = relocated.previewEarn();
         require(
                 !restored.accepted()
-                        && restored.rejection().retryAfterMs() == 500,
+                        && restored.rejection().retryAfterMs() == 750,
                 "Relocation did not preserve remaining cooldown");
         checks++;
 
-        now.set(10_500_000_000L);
+        now.set(10_750_000_000L);
         var afterCooldown = relocated.previewEarn();
-        require(afterCooldown.accepted(), "Relocated earn was rejected at its boundary");
-        relocated.commit(afterCooldown);
+        require(
+                afterCooldown.accepted() && afterCooldown.gold() == 2 * GameRules.EARN_AMOUNT,
+                "Earn was not accepted after the restored cooldown");
         checks++;
 
         var atLimit = new GoldBalance(GameRules.MAX_INTEGER - GameRules.EARN_AMOUNT, 0, now::get);
         var boundary = atLimit.previewEarn();
-        require(boundary.accepted(), "Gold limit boundary was rejected");
+        require(
+                boundary.accepted() && boundary.gold() == GameRules.MAX_INTEGER,
+                "Gold at maximum minus reward was not accepted exactly at the limit");
+        checks++;
         atLimit.commit(boundary);
-        require(atLimit.gold() == GameRules.MAX_INTEGER, "Gold limit boundary was not reached");
+        now.addAndGet(1_000_000_000L);
+        var atCap = atLimit.previewEarn();
+        require(
+                !atCap.accepted()
+                        && Rejection.GOLD_LIMIT.equals(atCap.rejection().reason())
+                        && atCap.rejection().retryAfterMs() == 0,
+                "Gold limit was not rejected");
+        checks++;
+        require(atLimit.gold() == GameRules.MAX_INTEGER, "Gold limit rejection changed the balance");
         checks++;
 
         var overLimit =
@@ -75,9 +80,12 @@ final class DomainChecks {
         require(
                 !rejected.accepted()
                         && Rejection.GOLD_LIMIT.equals(rejected.rejection().reason())
-                        && rejected.rejection().retryAfterMs() == 0
-                        && overLimit.gold() == GameRules.MAX_INTEGER - GameRules.EARN_AMOUNT + 1,
-                "Gold limit rejection changed state or returned a wrong reason");
+                        && rejected.rejection().retryAfterMs() == 0,
+                "Gold at maximum minus reward plus one was not rejected");
+        checks++;
+        require(
+                overLimit.gold() == GameRules.MAX_INTEGER - GameRules.EARN_AMOUNT + 1,
+                "Rejected boundary earn changed the balance");
         checks++;
         return checks;
     }
