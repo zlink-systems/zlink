@@ -357,17 +357,19 @@ template <> struct zlink::json::enum_traits<player_status_t>
 };
 ```
 
-- DTO는 기본 생성할 수 있고 선언한 member가 public이어야 한다. `dto_traits<T>::fields`에 선언한 member만
-  wire property이며 선언 순서는 의미가 없다.
-- 선언한 property는 required다. `std::optional<U>` field만 nullable이며, property가 없거나 `null`이면 빈 값으로
+- DTO는 기본 생성할 수 있어야 한다. 선언한 field는 그 DTO에 직접 선언된 public, non-const data member여야 한다.
+  Immutable DTO는 지원하지 않으며 base class의 traits를 자동으로 합치지 않는다. `dto_traits<T>::fields`에 선언한
+  member만 wire property이며 선언 순서는 의미가 없다. Wire property 이름은 유일해야 한다.
+- 선언한 모든 property는 required이며 누락되면 거부한다. `std::optional<U>` field만 nullable이며 `null`은 빈 값으로
   읽고 빈 값은 `null`로 쓴다.
 - Field type은 `bool`, 8~64 bit signed·unsigned 정수, `float`·`double`, `std::string`, `std::vector<std::byte>`(base64),
   `std::vector<U>`, `std::map<std::string, U>`, `std::optional<U>`, `dto_traits`를 선언한 DTO와 `enum_traits`를
-  선언한 enum이다. 정수·실수·byte의 wire 표현은 message model §5를 따른다.
-- Enum은 `enum_traits<E>::values`의 이름으로만 변환한다. 이름과 값은 각각 유일해야 하며, 선언되지 않은 값을
-  encode하면 실패한다.
-- Payload type이나 field type에 위 선언이 없거나 선언한 member pointer가 그 type의 member가 아니면 compile
-  time에 실패한다. 기존 `nlohmann` `to_json`·`from_json` callback은 기본 typed JSON에 쓰지 않으며 자동 대체
+  선언한 enum이다. 이 밖의 type은 지원하지 않는다. 정수·실수·byte의 wire 표현은 message model §5를 따른다.
+- Enum은 `enum_traits<E>::values`의 이름으로만 변환한다. Wire 이름과 underlying 값은 각각 유일해야 하고 wire
+  이름은 message model §5의 enum 이름 규칙을 지켜야 한다. 선언되지 않은 값을 encode하면 실패한다.
+- Descriptor는 정적으로 평가할 수 있어야 한다. Payload type이나 field type에 위 선언이 없거나, 지원하지 않는
+  type·member를 선언했거나, 위 유일성·이름 조건을 어기면 그 type을 기본 typed JSON에 쓸 때 compile time에
+  실패한다. 기존 `nlohmann` `to_json`·`from_json` callback은 기본 typed JSON에 쓰지 않으며 자동 대체
   경로도 없다. 기본 JSON으로 표현할 수 없는 payload는 위 codec extension을 쓴다.
 - `nlohmann::json` 값 자체를 payload type으로 쓰면 그 값을 그대로 직렬화한다. Schema가 없으므로 64-bit와 enum
   규칙은 application이 지킨다.

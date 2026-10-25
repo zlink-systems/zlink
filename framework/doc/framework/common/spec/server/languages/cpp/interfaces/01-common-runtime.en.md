@@ -400,18 +400,22 @@ template <> struct zlink::json::enum_traits<player_status_t>
 };
 ```
 
-- A DTO must be default-constructible and its declared members must be public. Only members declared in
-  `dto_traits<T>::fields` are wire properties, and declaration order has no meaning.
-- A declared property is required. Only a `std::optional<U>` field is nullable: a missing property or `null`
-  reads as empty, and an empty value is written as `null`.
+- A DTO must be default-constructible. Each declared field must be a public, non-const data member declared
+  directly in that DTO. Immutable DTOs aren't supported, and base-class traits aren't combined automatically.
+  Only members declared in `dto_traits<T>::fields` are wire properties, and declaration order has no meaning.
+  Wire property names must be unique.
+- Every declared property is required; a missing property is rejected. Only a `std::optional<U>` field is
+  nullable: `null` reads as empty, and an empty value is written as `null`.
 - Field types are `bool`, 8- to 64-bit signed and unsigned integers, `float` and `double`, `std::string`,
   `std::vector<std::byte>` (base64), `std::vector<U>`, `std::map<std::string, U>`, `std::optional<U>`, a DTO with
-  `dto_traits`, and an enum with `enum_traits`. The wire form of integers, floating-point values, and bytes
-  follows message model §5.
-- An enum converts only through the names in `enum_traits<E>::values`. Names and values must each be unique,
-  and encoding an undeclared value fails.
-- If a payload type or field type lacks the declaration above, or a declared member pointer isn't a member of
-  that type, compilation fails. Existing `nlohmann` `to_json`/`from_json` callbacks aren't used by the default
+  `dto_traits`, and an enum with `enum_traits`. Other types aren't supported. The wire form of integers,
+  floating-point values, and bytes follows message model §5.
+- An enum converts only through the names in `enum_traits<E>::values`. Wire names and underlying values must
+  each be unique, and wire names must follow the enum-name rules of message model §5. Encoding an undeclared
+  value fails.
+- Descriptors must be statically evaluable. If a payload type or field type lacks the declaration above,
+  declares an unsupported type or member, or breaks the uniqueness and name conditions above, using that type
+  with the default typed JSON fails compilation. Existing `nlohmann` `to_json`/`from_json` callbacks aren't used by the default
   typed JSON, and there's no automatic fallback. A payload that the default JSON can't express uses the codec
   extension above.
 - Using a `nlohmann::json` value itself as the payload type serializes that value as is. With no schema, the
