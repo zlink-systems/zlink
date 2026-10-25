@@ -832,8 +832,10 @@ void mesh_node_runtime_t::start (
                   admit_wire_actor_join (spot_state, routing_id, request, payload, serializers));
                 co_return;
             },
-            [completion] {
-                completion (actor_join_typed_terminal (framework_error_kind_t::unavailable));
+            [completion] (result_t<void> rejected) {
+                completion (actor_join_typed_terminal (
+                  rejected.error_kind (),
+                  rejected.error () ? detail::failure_code (*rejected.error ()) : 0));
             });
       });
     node->configure_actor_join_relocation (

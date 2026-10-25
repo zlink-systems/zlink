@@ -213,21 +213,27 @@ export class ZLinkSpotSerialTurnExecutor {
 
   /** Admits membership work and holds the lifecycle FIFO until its result settles. */
   executeLifecycleOperation<T>(operation: () => Promise<T> | T): Promise<T> {
-    let entry: ZLinkExecutionBarrierClaim | Promise<ZLinkExecutionBarrierClaim> | undefined;
-    try {
+    const requireAdmission = (): void => {
       if (this.lifecycleAdmissionClosed) {
         throw createInternalFrameworkException(
-          ZLinkFrameworkInternalErrorKind.RequestRejected,
-          'Spot lifecycle admission is closed by a committed Close.'
+          ZLinkFrameworkInternalErrorKind.RequestTargetNotFound,
+          'Spot incarnation is closing (committed Close).'
         );
       }
+    };
+    let entry: ZLinkExecutionBarrierClaim | Promise<ZLinkExecutionBarrierClaim> | undefined;
+    try {
+      requireAdmission();
       entry = this.executionBarrier?.enter();
     } catch (error) {
       return Promise.reject(error);
     }
     const submit = (claim?: ZLinkExecutionBarrierClaim): Promise<T> => {
       try {
-        return this.scheduler.submitLifecycleOperation(operation);
+        return this.scheduler.submitLifecycleOperation(() => {
+          requireAdmission();
+          return operation();
+        });
       } catch (error) {
         return Promise.reject(error);
       } finally {
