@@ -90,8 +90,8 @@ Framework는 다음 경계에 §2.1의 단계를 적용한다.
   reply와 현재 session에 연결된 송신
 - Request timeout, cancellation, runtime 종료와 handler 분배 오류
 
-Wrapper와 transport는 같은 terminal trace를 중복해서 만들지 않는다. Request에는
-surface별 terminal 기록이 정확히 하나만 존재한다. Actor payload는 Spot의 handler
+Wrapper와 transport는 같은 terminal trace를 중복해서 제출하지 않는다. Request의 terminal
+기록은 surface마다 [§6](#6-완료-실패와-수명)의 전달 경계에 정확히 한 번 제출한다. Actor payload는 Spot의 handler
 분배 단계로 기록하지 않는다.
 
 ## 3. 공통 attribute
@@ -299,15 +299,15 @@ Provider가 없으면 trace만을 위한 allocation을 하지 않는다.
 |---|---|
 | 보관 | 실행 중인 한 건을 빼고 아직 provider에 전달하지 않은 기록을 최대 8192건 보관한다. 실행 자원에 넘겼지만 provider가 아직 받지 않은 기록도 이 한도에 포함한다. 이 한도는 public 설정이 아니다. |
 | 포화 | 한도가 차면 정상·오류·drop 기록을 구분하지 않고 새 기록을 버리고, 버린 건수를 `zlink.observability.events.overflow`(`source=message_flow`)에 반영한다. 기록을 넘기는 처리 지점은 기다리거나 다시 시도하지 않고 provider를 호출하지 않는다. |
-| Provider failure | Message operation failure가 아니다. 경계의 수명 동안 provider 역할(logger, trace, metric)마다 첫 실패 한 번만 fallback으로 기록하고, 그 뒤 실패는 횟수에만 반영한다. Fallback은 실패한 provider가 아닌 application의 fallback logger 또는 process stderr다. Fallback 기록의 실패도 message operation 결과, dispatch와 lifecycle을 바꾸지 않는다. |
+| Provider failure | Message operation failure가 아니다. 경계의 수명 동안 logger, trace와 fallback 역할마다 첫 실패 한 번만 실패한 provider가 아닌 application의 fallback logger 또는 process stderr에 기록하고, 그 뒤 실패는 횟수에만 반영한다. 실패한 fallback은 다시 호출하지 않는다. Fallback 기록의 실패도 message operation 결과, dispatch와 lifecycle을 바꾸지 않는다. |
 | Host 종료 | 그 host의 기록 제출을 닫고 아직 전달하지 않은 기록을 버린다. 종료로 버린 기록은 overflow에 세지 않는다. 실행 중인 provider 호출의 완료를 기다리거나 강제로 끝내지 않는다. 그 호출은 불변 snapshot과 provider만 참조하고 host runtime을 참조하지 않는다. |
 
-이 절과 다른 절에서 "정확히 한 번 기록한다"는 기록 한 건을 이 경계에 정확히 한 번
-넘긴다는 뜻이다. 그 기록도 포화와 host 종료 규칙에 따라 버려질 수 있다.
+이 문서에서 trace 또는 dispatch error를 "정확히 한 번 기록한다"는 기록 한 건을 이 경계에
+정확히 한 번 제출한다는 뜻이다. 그 기록도 포화와 host 종료 규칙에 따라 버려질 수 있다.
 
-Node에서 이 경계의 실행 자원은 worker thread다. Process 시작 때 읽는 표준 telemetry
-bootstrap(`--require`·`--import`로 미리 읽는 module)은 이 worker에서도 실행되며,
-Framework는 그 worker에 설치된 provider에만 기록을 전달한다. C++ application logging의
+Node에서 이 경계의 실행 자원은 worker thread다. Framework는 이 worker를 만들 때 표준
+telemetry bootstrap의 preload 설정(`--require`·`--import`) 상속을 유지하며, 그 worker에
+설치된 provider에만 기록을 전달한다. C++ application logging의
 async 설정(용량과 `block`을 포함한 overflow 정책)은 이 경계에 적용하지 않는다.
 
 Trace attribute에는 진단에 필요한 식별자만 넣으며 message 처리가 끝난 뒤 caller
