@@ -343,10 +343,16 @@ public sealed partial class EntrySpotActorDispatchTests
         finally
         {
             handler.ReleaseDisposal.TrySetResult();
-            await retirement;
-            // Observe a failed preparation as well as joining a suspended one.
-            _ = await Record.ExceptionAsync(() => preparation);
-            await state.DisposeHandlerActivationAsync();
+            try
+            {
+                await retirement;
+                // Observe a failed preparation as well as joining a suspended one.
+                _ = await Record.ExceptionAsync(() => preparation);
+            }
+            finally
+            {
+                await state.InvalidateRuntimeGenerationAfterDispatchesAsync();
+            }
         }
     }
 
