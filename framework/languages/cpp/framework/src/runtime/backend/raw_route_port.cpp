@@ -292,16 +292,15 @@ task_t<bool> raw_route_port_t::send (const raw_bytes_t &target_routing_id, raw_m
       == zlink::submit_result_t::ok;
 }
 
-task_t<raw_request_completion_t>
-raw_route_port_t::request (const raw_bytes_t &target_routing_id,
-                           raw_message_t parts,
-                           std::chrono::milliseconds timeout,
-                           runtime::mesh::service_liveness_registry_t::connection_t admission,
-                           std::shared_ptr<task_completion_source_t<void>> admitted)
+void raw_route_port_t::request (const raw_bytes_t &target_routing_id,
+                                raw_message_t parts,
+                                std::chrono::milliseconds timeout,
+                                raw_request_receiver_t receive,
+                                runtime::mesh::service_liveness_registry_t::connection_t admission,
+                                std::shared_ptr<task_completion_source_t<void>> admitted,
+                                detail::ambient_context_snapshot_t ambient,
+                                std::shared_ptr<detail::serial_turn_t> owner)
 {
-    auto source = std::make_shared<task_completion_source_t<raw_request_completion_t>> ();
-    auto result = source->task ();
-    observe_raw_request_admission_failure (result, admitted);
     // Route selection happens synchronously inside .async(). Keep that initial
     // admission boundary separate from the pending terminal: the same errno
     // has different meaning after Core has issued a WRITABLE wait token.
@@ -313,34 +312,46 @@ raw_route_port_t::request (const raw_bytes_t &target_routing_id,
         std::optional<request_submission_stages_t> stages;
         {
             std::lock_guard lock (*_socket_mutex);
-            if (_socket == nullptr) {
-                source->complete (result_t<raw_request_completion_t>::success (
-                  raw_request_completion_t{zlink::request_result_t::terminated, {}}));
-                return result;
+            if (_socket != nullptr) {
+                if (!admission && _request_receive_source)
+                    admission = _request_receive_source (target_routing_id);
+                auto operation =
+                  std::move (_socket->request (zlink::routing_id_t::from (target_routing_id)))
+                    .message (materialize_binding_part (std::move (parts[0])));
+                for (std::size_t index = 1; index < parts.size (); ++index) {
+                    operation = std::move (operation).message (
+                      materialize_binding_part (std::move (parts[index])));
+                }
+                stages.emplace (submit_request_once (
+                  [&] { return std::move (operation).timeout (timeout).async (); }));
             }
-            if (!admission && _request_receive_source)
-                admission = _request_receive_source (target_routing_id);
-            auto operation =
-              std::move (_socket->request (zlink::routing_id_t::from (target_routing_id)))
-                .message (materialize_binding_part (std::move (parts[0])));
-            for (std::size_t index = 1; index < parts.size (); ++index) {
-                operation = std::move (operation).message (
-                  materialize_binding_part (std::move (parts[index])));
-            }
-            stages.emplace (submit_request_once (
-              [&] { return std::move (operation).timeout (timeout).async (); }));
         }
-        observe_request_completion (std::move (*stages), source, std::move (admission), admitted);
+        if (!stages) {
+            deliver_raw_request_completion (
+              receive, admitted,
+              result_t<raw_request_completion_t>::success (
+                raw_request_completion_t{zlink::request_result_t::terminated, {}}),
+              ambient);
+            return;
+        }
+        // Keep the original receiver until the coroutine owns its copy, so an
+        // allocation failure still has a consumer for this accepted request.
+        observe_request_completion (std::move (*stages), receive, std::move (admission), admitted,
+                                    ambient, owner);
     }
     catch (const std::exception &error) {
-        source->complete (
-          raw_request_failure_result (error, raw_request_failure_phase_t::initial_admission));
+        deliver_raw_request_completion (
+          receive, admitted,
+          raw_request_failure_result (error, raw_request_failure_phase_t::initial_admission),
+          ambient);
     }
     catch (...) {
-        source->complete (result_t<raw_request_completion_t>::failure (
-          framework_error_kind_t::internal_failure, "raw route request submission failed"));
+        deliver_raw_request_completion (
+          receive, admitted,
+          result_t<raw_request_completion_t>::failure (framework_error_kind_t::internal_failure,
+                                                       "raw route request submission failed"),
+          ambient);
     }
-    return result;
 }
 
 zlink::poll_event_flag_t raw_route_port_t::poll (std::chrono::milliseconds timeout,

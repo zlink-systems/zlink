@@ -52,8 +52,9 @@ static_assert (
 static_assert (std::is_same_v<decltype (std::declval<backend::raw_route_port_t &> ().request (
                                 std::declval<const backend::raw_bytes_t &> (),
                                 std::declval<const backend::raw_message_t &> (),
-                                std::chrono::milliseconds (1))),
-                              zlink::framework::task_t<backend::raw_request_completion_t>>);
+                                std::chrono::milliseconds (1),
+                                std::declval<backend::raw_request_receiver_t> ())),
+                              void>);
 static_assert (std::is_same_v<decltype (std::declval<backend::raw_route_port_t &> ().reply (
                                 std::declval<const backend::raw_received_t &> (),
                                 std::declval<const backend::raw_message_t &> ())),
@@ -72,6 +73,26 @@ static_assert (
 namespace
 {
 using namespace std::chrono_literals;
+
+// These transport contract checks await a result. Their consumer owns that
+// result; the production port only delivers to the prepared receiver.
+zlink::framework::task_t<backend::raw_request_completion_t> route_request_result (
+  backend::raw_route_port_t &port,
+  const backend::raw_bytes_t &target,
+  backend::raw_message_t parts,
+  std::chrono::milliseconds timeout,
+  zlink::framework::runtime::mesh::service_liveness_registry_t::connection_t admission = {},
+  std::shared_ptr<zlink::framework::task_completion_source_t<void>> admitted = {})
+{
+    auto source = std::make_shared<
+      zlink::framework::task_completion_source_t<backend::raw_request_completion_t>> ();
+    auto task = source->task ();
+    port.request (
+      target, std::move (parts), timeout,
+      [source] (auto result) { source->complete (std::move (result)); }, std::move (admission),
+      std::move (admitted));
+    return task;
+}
 
 constexpr auto raw_route_fixture_timeout = 2s;
 constexpr auto raw_route_fixture_poll_interval = 10ms;
@@ -158,7 +179,8 @@ void verify_request_submission_stages ()
         assert (stages.admission);
         auto source = std::make_shared<
           zlink::framework::task_completion_source_t<backend::raw_request_completion_t>> ();
-        backend::observe_request_completion (std::move (stages), source);
+        backend::observe_request_completion (
+          std::move (stages), [source] (auto result) { source->complete (std::move (result)); });
         auto completion = source->task ();
         const auto &observed = completion.result ().value ();
         if (expected_error == 0) {
@@ -322,8 +344,8 @@ void verify_writable_request_timeout_remains_deadline_exceeded ()
     auto acceptance = std::make_shared<zlink::framework::task_completion_source_t<void>> ();
     auto pending = zlink::framework::runtime::messaging::with_request_deadline (
       zlink::framework::request_task_t<backend::raw_request_completion_t> (
-        port.request (target_rid.to_bytes (), request_parts (), raw_route_fixture_timeout, {},
-                      acceptance),
+        route_request_result (port, target_rid.to_bytes (), request_parts (),
+                              raw_route_fixture_timeout, {}, acceptance),
         acceptance),
       caller_deadline);
     auto admitted = acceptance->task ();
@@ -487,8 +509,8 @@ void verify_binding_completion_bypasses_handler_executor ()
 
     backend::raw_route_port_t source_port (source), target_port (target);
     auto acceptance = std::make_shared<zlink::framework::task_completion_source_t<void>> ();
-    auto pending =
-      source_port.request (target_rid.to_bytes (), request_parts (), 2s, {}, acceptance);
+    auto pending = route_request_result (source_port, target_rid.to_bytes (), request_parts (), 2s,
+                                         {}, acceptance);
     auto admitted = acceptance->task ();
     assert (admitted.await_ready () && admitted.result ());
     assert (!pending.await_ready ());
@@ -809,8 +831,8 @@ void verify_missing_rid_is_initial_not_connected_without_wait_token ()
     router.options ().mandatory (true);
     backend::raw_route_port_t port (router);
 
-    auto request =
-      port.request (zlink::routing_id_t::from ("missing-route").to_bytes (), request_parts (), 1s);
+    auto request = route_request_result (
+      port, zlink::routing_id_t::from ("missing-route").to_bytes (), request_parts (), 1s);
     assert (request.await_ready ());
     const auto &settled = request.result ();
     assert (settled);
@@ -847,7 +869,7 @@ void verify_handover_request_completion_is_replayable ()
     assert (wait_for_monitor_event (ready, zlink::monitor_event::connection_ready, 2s));
     backend::raw_route_port_t source_port (source), target_port (target);
     const auto deadline = std::chrono::steady_clock::now () + 2s;
-    auto pending = source_port.request (target_rid.to_bytes (), request_parts (), 2s);
+    auto pending = route_request_result (source_port, target_rid.to_bytes (), request_parts (), 2s);
     std::optional<backend::raw_received_t> admitted;
     while (!admitted && std::chrono::steady_clock::now () < deadline)
         admitted = target_port.receive_if_ready (target_port.poll (1ms));
@@ -901,7 +923,7 @@ void verify_disconnect_rid_ends_issued_wait_token_with_enoent ()
     assert (wait_for_monitor_event (client_monitor, zlink::monitor_event::connection_ready, 2s));
 
     backend::raw_route_port_t port (client);
-    auto request = port.request (server_rid.to_bytes (), request_parts (), 2s);
+    auto request = route_request_result (port, server_rid.to_bytes (), request_parts (), 2s);
     assert (!request.await_ready ());
 
     client.disconnect_rid (server_rid);
@@ -1027,7 +1049,8 @@ void verify_request_materializes_only_the_binding_message_list ()
         backend::raw_message_t parts (part_count);
         std::optional<zlink::framework::task_t<backend::raw_request_completion_t>> pending;
         const auto observed = count_allocations (
-          [&] { pending.emplace (port.request (target, std::move (parts), 1s)); }, container_bytes);
+          [&] { pending.emplace (route_request_result (port, target, std::move (parts), 1s)); },
+          container_bytes);
         assert (pending->await_ready ());
         const auto &terminal = pending->result ();
         assert (terminal && terminal.value ().terminal == zlink::request_result_t::not_connected);

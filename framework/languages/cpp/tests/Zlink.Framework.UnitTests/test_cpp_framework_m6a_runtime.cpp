@@ -4405,11 +4405,14 @@ void verify_unadmitted_route (bool repeat_hello)
             update_result = await_task (target.pump_one (std::chrono::steady_clock::now ()));
         assert (update_result == mesh::raw_mesh_pump_result_t::infrastructure);
         assert (!target.topology ().peer (bytes ("unadmitted-source")));
-        auto pending = port.request (
+        auto completion = std::make_shared<zlink::framework::task_completion_source_t<
+          zlink::framework::detail::backend::raw_request_completion_t>> ();
+        auto pending = completion->task ();
+        port.request (
           bytes ("unadmitted-target"),
           {protocol::encode_node_request_header (91),
            protocol::encode_application_payload ({"Silent", "application/json", bytes ("{}")})},
-          100ms);
+          100ms, [completion] (auto result) { completion->complete (std::move (result)); });
         while (!pending.await_ready () && std::chrono::steady_clock::now () < deadline) {
             (void) await_task (target.pump_one (std::chrono::steady_clock::now ()));
             (void) port.poll (0ms);

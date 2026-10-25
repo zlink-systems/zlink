@@ -167,8 +167,8 @@ request_metric_terminal (const protocol::reply_header_t &reply) noexcept
 // Every attempt can deliver the operation's terminal envelope, including an
 // attempt superseded by a selected-route change. Publish its completion only
 // after classifying the result, so a ready task cannot race terminal delivery.
-task_t<void> observe_durable_infrastructure_attempt (
-  std::shared_ptr<task_t<detail::backend::raw_request_completion_t>> native,
+std::pair<task_t<void>, detail::backend::raw_request_receiver_t>
+prepare_durable_infrastructure_attempt (
   std::shared_ptr<foundation::operation_registry_t> operations,
   foundation::call_id_t operation,
   std::optional<std::uint64_t> correlation,
@@ -176,9 +176,10 @@ task_t<void> observe_durable_infrastructure_attempt (
 {
     auto completion = std::make_shared<task_completion_source_t<void>> ();
     auto completed = completion->task ();
-    detail::observe_task_terminal (*native, [native, operations = std::move (operations), operation,
-                                             correlation, decode_reply = std::move (decode_reply),
-                                             completion] (const auto &settled) {
+    detail::backend::raw_request_receiver_t receive = [operations = std::move (operations),
+                                                       operation, correlation,
+                                                       decode_reply = std::move (decode_reply),
+                                                       completion] (const auto &settled) {
         if (operations->contains (operation)) {
             if (!settled) {
                 (void) operations->fail (operation,
@@ -228,8 +229,8 @@ task_t<void> observe_durable_infrastructure_attempt (
             }
         }
         completion->complete (result_t<void>::success ());
-    });
-    return completed;
+    };
+    return {std::move (completed), std::move (receive)};
 }
 
 // The coroutine owns one operation's replay state. Topology publications and
@@ -292,16 +293,17 @@ task_t<void> run_durable_infrastructure_request (
             && remaining > std::chrono::milliseconds::zero ()) {
             submitted_connection = observation.peer->connection_id;
             auto accepted = std::make_shared<task_completion_source_t<void>> ();
-            auto native = std::make_shared<task_t<detail::backend::raw_request_completion_t>> (
-              port->request (target_routing_id, request_parts, remaining, {}, accepted));
+            auto [attempt, receive] = prepare_durable_infrastructure_attempt (
+              operations, operation, correlation, decode_reply);
+            running = std::make_shared<task_t<void>> (std::move (attempt));
             auto accepted_task = accepted->task ();
             detail::observe_task_terminal (accepted_task,
                                            [first_admission] (const result_t<void> &result) {
                                                if (result)
                                                    first_admission->complete (result);
                                            });
-            running = std::make_shared<task_t<void>> (observe_durable_infrastructure_attempt (
-              std::move (native), operations, operation, correlation, decode_reply));
+            port->request (target_routing_id, request_parts, remaining, std::move (receive), {},
+                           accepted);
         }
         auto wake = std::make_shared<task_completion_source_t<void>> ();
         auto notified = wake->task ();
@@ -395,12 +397,11 @@ task_t<bool> submit_registered_infrastructure_request (
     }
     auto accepted =
       admitted ? std::move (admitted) : std::make_shared<task_completion_source_t<void>> ();
-    auto running = std::make_shared<task_t<detail::backend::raw_request_completion_t>> (
-      port->request (target_routing_id, std::move (request_parts), timeout, {}, accepted));
-    detail::observe_task_terminal (
-      *running, [operations = std::move (operations), operation, correlation,
-                 decode_reply = std::move (decode_reply),
-                 running] (const result_t<detail::backend::raw_request_completion_t> &settled) {
+    port->request (
+      target_routing_id, std::move (request_parts), timeout,
+      [operations = std::move (operations), operation, correlation,
+       decode_reply = std::move (decode_reply)] (
+        const result_t<detail::backend::raw_request_completion_t> &settled) {
           if (!settled) {
               (void) operations->fail (operation,
                                        foundation::operation_terminal_t::transport_failed);
@@ -438,7 +439,8 @@ task_t<bool> submit_registered_infrastructure_request (
           catch (const protocol::service_wire_error_t &) {
               (void) operations->fail (operation, foundation::operation_terminal_t::protocol_error);
           }
-      });
+      },
+      {}, accepted);
     co_return co_await await_request_admission (accepted->task ());
 }
 
@@ -1012,16 +1014,15 @@ task_t<zlink::submit_result_t> raw_mesh_node_owner_t::send_logical_multicast (
 }
 
 
-
-task_t<bool> raw_mesh_node_owner_t::request_to_node (
-  const std::vector<std::uint8_t> &target_routing_id,
-  const protocol::application_payload_t &application_payload,
-  std::chrono::milliseconds timeout,
-  foundation::operation_registry_t::callback_t callback,
-  std::optional<std::uint64_t> correlation)
+task_t<bool>
+raw_mesh_node_owner_t::request_to_node (const std::vector<std::uint8_t> &target_routing_id,
+                                        const protocol::application_payload_t &application_payload,
+                                        std::chrono::milliseconds timeout,
+                                        foundation::operation_registry_t::callback_t callback,
+                                        std::optional<std::uint64_t> correlation)
 {
     return request_to_node_submission (target_routing_id, application_payload, timeout,
-                                        std::move (callback), correlation)
+                                       std::move (callback), correlation)
       .admission;
 }
 
@@ -1033,7 +1034,7 @@ task_t<bool> raw_mesh_node_owner_t::request_to_channel (
   std::optional<std::uint64_t> correlation)
 {
     return request_to_channel_submission (channel_name, application_payload, timeout,
-                                           std::move (callback), correlation)
+                                          std::move (callback), correlation)
       .admission;
 }
 
@@ -1055,7 +1056,6 @@ try {
 catch (...) {
     return {task_t<bool> (detail::current_exception_result<bool> ()), false};
 }
-
 
 
 raw_mesh_node_owner_t::request_submission_t raw_mesh_node_owner_t::request_to_channel_submission (
@@ -1083,96 +1083,87 @@ catch (...) {
     return {task_t<bool> (detail::current_exception_result<bool> ()), false};
 }
 
-bool raw_mesh_node_owner_t::observe_request (
-  foundation::call_id_t operation,
-  std::uint64_t correlation,
-  std::shared_ptr<task_t<detail::backend::raw_request_completion_t>> running)
+detail::backend::raw_request_receiver_t
+raw_mesh_node_owner_t::request_completion_receiver (foundation::call_id_t operation,
+                                                    std::uint64_t correlation)
 {
-    if (!running) {
-        (void) _operations->fail (operation, foundation::operation_terminal_t::transport_failed);
-        return false;
-    }
     const auto operations = _operations;
-    detail::observe_task_terminal (
-      *running, [operations, operation, correlation,
-                 running] (const result_t<detail::backend::raw_request_completion_t> &settled) {
-          if (!settled) {
-              (void) operations->fail (operation,
-                                       foundation::operation_terminal_t::transport_failed);
-              return;
-          }
-          const auto &completion = settled.value ();
-          trace_mesh ("request-completion correlation=" + std::to_string (correlation)
-                      + " result=" + std::to_string (static_cast<int> (completion.terminal))
-                      + " parts=" + std::to_string (completion.parts.size ()));
-          if (completion.terminal != zlink::request_result_t::ok) {
-              const auto terminal =
-                messaging::request_failure_mapper_t{}
-                  .transport_terminal (completion.terminal)
-                  .value_or (foundation::operation_terminal_t::transport_failed);
-              auto failure_reply = request_failure_reply_parts (correlation, completion.terminal);
-              (void) operations->fail (operation, terminal,
-                                       zlink::message_t::from (failure_reply.front ()));
-              return;
-          }
-          try {
-              auto &parts = completion.parts;
-              if (parts.empty () || parts.size () > 2) {
-                  throw protocol::service_wire_error_t ("request reply has an invalid part count");
-              }
-              const auto reply =
-                protocol::decode_reply_header (protocol::message_bytes (parts.front ()));
-              //  This is a generic application request reply (requestToNode
-              //  / spotRequest): its originalOperationKind is not one of
-              //  request-specific-tail's tail-bearing cases
-              //  (service-wire-v1.schema.json), so the schema's "otherwise"
-              //  branch applies and the tail MUST be empty. decode_reply_header
-              //  itself now permissively accepts tail-bearing frames (fix for
-              //  the residual-convergence tail rejection bug), so this generic
-              //  caller enforces the empty-tail contract explicitly, matching
-              //  Node's raw-service-mesh-runtime.ts generic reply guard
-              //  ("Generic node/channel reply carries an operation-specific
-              //  tail.").
-              if (parts.front ().size () != protocol::reply_header_t::encoded_size) {
-                  throw protocol::service_wire_error_t (
-                    "generic request reply carries an operation-specific "
-                    "tail");
-              }
-              if (reply.correlation != correlation) {
-                  throw protocol::service_wire_error_t ("request reply correlation does not match");
-              }
-              if (reply.terminal_result != 0) {
-                  if (parts.size () != 1) {
-                      throw protocol::service_wire_error_t (
-                        "failed request reply cannot carry a payload");
-                  }
-                  (void) operations->fail (
-                    operation, foundation::operation_terminal_t::transport_failed,
-                    parts.front ().copy (), {}, request_metric_terminal (reply));
-                  return;
-              }
-              if (parts.size () != 2) {
-                  throw protocol::service_wire_error_t (
-                    "successful request reply must carry a payload");
-              }
-              (void) protocol::application_payload_hwm_bytes (protocol::message_bytes (parts[1]));
-              (void) operations->complete (operation, parts[1].copy ());
-          }
-          catch (const protocol::service_wire_error_t &) {
-              //  Spec 32-framework-error-model:91-92 — a malformed reply is
-              //  ProtocolError, not a transport failure. Carry a synthesized
-              //  protocolError header; complete_operation decodes it into
-              //  terminal 104 instead of collapsing to internal_error.
-              (void) operations->fail (
-                operation, foundation::operation_terminal_t::transport_failed,
-                zlink::message_t::from (protocol::encode_reply_header (
-                  correlation,
-                  static_cast<std::uint32_t> (protocol::request_terminal_result::protocolError),
-                  static_cast<std::uint32_t> (
-                    protocol::framework_error_code::requestProtocolError))));
-          }
-      });
-    return true;
+    return [operations, operation,
+            correlation] (const result_t<detail::backend::raw_request_completion_t> &settled) {
+        if (!settled) {
+            (void) operations->fail (operation, foundation::operation_terminal_t::transport_failed);
+            return;
+        }
+        const auto &completion = settled.value ();
+        trace_mesh ("request-completion correlation=" + std::to_string (correlation)
+                    + " result=" + std::to_string (static_cast<int> (completion.terminal))
+                    + " parts=" + std::to_string (completion.parts.size ()));
+        if (completion.terminal != zlink::request_result_t::ok) {
+            const auto terminal = messaging::request_failure_mapper_t{}
+                                    .transport_terminal (completion.terminal)
+                                    .value_or (foundation::operation_terminal_t::transport_failed);
+            auto failure_reply = request_failure_reply_parts (correlation, completion.terminal);
+            (void) operations->fail (operation, terminal,
+                                     zlink::message_t::from (failure_reply.front ()));
+            return;
+        }
+        try {
+            auto &parts = completion.parts;
+            if (parts.empty () || parts.size () > 2) {
+                throw protocol::service_wire_error_t ("request reply has an invalid part count");
+            }
+            const auto reply =
+              protocol::decode_reply_header (protocol::message_bytes (parts.front ()));
+            //  This is a generic application request reply (requestToNode
+            //  / spotRequest): its originalOperationKind is not one of
+            //  request-specific-tail's tail-bearing cases
+            //  (service-wire-v1.schema.json), so the schema's "otherwise"
+            //  branch applies and the tail MUST be empty. decode_reply_header
+            //  itself now permissively accepts tail-bearing frames (fix for
+            //  the residual-convergence tail rejection bug), so this generic
+            //  caller enforces the empty-tail contract explicitly, matching
+            //  Node's raw-service-mesh-runtime.ts generic reply guard
+            //  ("Generic node/channel reply carries an operation-specific
+            //  tail.").
+            if (parts.front ().size () != protocol::reply_header_t::encoded_size) {
+                throw protocol::service_wire_error_t (
+                  "generic request reply carries an operation-specific "
+                  "tail");
+            }
+            if (reply.correlation != correlation) {
+                throw protocol::service_wire_error_t ("request reply correlation does not match");
+            }
+            if (reply.terminal_result != 0) {
+                if (parts.size () != 1) {
+                    throw protocol::service_wire_error_t (
+                      "failed request reply cannot carry a payload");
+                }
+                (void) operations->fail (
+                  operation, foundation::operation_terminal_t::transport_failed,
+                  parts.front ().copy (), {}, request_metric_terminal (reply));
+                return;
+            }
+            if (parts.size () != 2) {
+                throw protocol::service_wire_error_t (
+                  "successful request reply must carry a payload");
+            }
+            (void) protocol::application_payload_hwm_bytes (protocol::message_bytes (parts[1]));
+            (void) operations->complete (operation, parts[1].copy ());
+        }
+        catch (const protocol::service_wire_error_t &) {
+            //  Spec 32-framework-error-model:91-92 — a malformed reply is
+            //  ProtocolError, not a transport failure. Carry a synthesized
+            //  protocolError header; complete_operation decodes it into
+            //  terminal 104 instead of collapsing to internal_error.
+            (void) operations->fail (
+              operation, foundation::operation_terminal_t::transport_failed,
+              zlink::message_t::from (protocol::encode_reply_header (
+                correlation,
+                static_cast<std::uint32_t> (protocol::request_terminal_result::protocolError),
+                static_cast<std::uint32_t> (
+                  protocol::framework_error_code::requestProtocolError))));
+        }
+    };
 }
 
 void raw_mesh_node_owner_t::trace_admission_phase (const std::vector<std::uint8_t> &node_routing_id,
@@ -1226,8 +1217,6 @@ try {
     struct request_start_t
     {
         foundation::call_id_t operation;
-        std::uint64_t correlation = 0;
-        std::shared_ptr<task_t<detail::backend::raw_request_completion_t>> running;
         std::shared_ptr<task_completion_source_t<void>> admitted =
           std::make_shared<task_completion_source_t<void>> ();
         bool registered = false;
@@ -1236,6 +1225,8 @@ try {
                                   request = std::move (request), requested_correlation, timeout,
                                   callback = std::move (callback),
                                   encoded_payload = std::move (encoded_payload),
+                                  completion_ambient = detail::capture_ambient_context (),
+                                  completion_owner = detail::capture_current_serial_turn (),
                                   admission = std::move (admission)] () mutable {
         std::shared_ptr<detail::backend::raw_route_port_t> port;
         {
@@ -1245,12 +1236,11 @@ try {
         if (!port)
             return std::optional<request_start_t>{};
         request_start_t value;
-        value.correlation = take_reply_route_id_locked (requested_correlation);
-        value.operation =
-          operation_id (_options.descriptor.lifecycle_generation, value.correlation);
+        const auto correlation = take_reply_route_id_locked (requested_correlation);
+        value.operation = operation_id (_options.descriptor.lifecycle_generation, correlation);
         detail::backend::raw_message_t wire;
         wire.reserve (2);
-        wire.push_back (header (value.correlation));
+        wire.push_back (header (correlation));
         wire.push_back (std::move (encoded_payload));
         if (request && request->operation == foundation::call_id_t{})
             request->operation = value.operation;
@@ -1259,12 +1249,12 @@ try {
           std::move (callback), {}, std::move (request_metric), std::move (request));
         if (value.registered) {
             try {
-                trace_mesh ("request-submit correlation=" + std::to_string (value.correlation)
+                trace_mesh ("request-submit correlation=" + std::to_string (correlation)
                             + " targetBytes=" + std::to_string (target_routing_id.size ()));
-                value.running =
-                  std::make_shared<task_t<detail::backend::raw_request_completion_t>> (
-                    port->request (target_routing_id, std::move (wire), timeout,
-                                   std::move (admission), value.admitted));
+                port->request (target_routing_id, std::move (wire), timeout,
+                               request_completion_receiver (value.operation, correlation),
+                               std::move (admission), value.admitted,
+                               std::move (completion_ambient), std::move (completion_owner));
             }
             catch (...) {
                 (void) _operations->unregister (value.operation);
@@ -1281,7 +1271,6 @@ try {
     }
     try {
         auto admitted = start->admitted->task ();
-        (void) observe_request (start->operation, start->correlation, std::move (start->running));
         return {await_request_admission (std::move (admitted)), true};
     }
     catch (...) {
@@ -2539,11 +2528,10 @@ task_t<bool> raw_mesh_node_owner_t::request_instance_spot_activation (
     trace_mesh ("infrastructure-request-submit correlation=" + std::to_string (correlation)
                 + " targetBytes=" + std::to_string (target_routing_id.size ()));
     auto admitted = std::make_shared<task_completion_source_t<void>> ();
-    auto running = std::make_shared<task_t<detail::backend::raw_request_completion_t>> (
-      port->request (target_routing_id, std::move (parts), timeout, {}, admitted));
-    detail::observe_task_terminal (
-      *running, [operations, id, correlation,
-                 running] (const result_t<detail::backend::raw_request_completion_t> &settled) {
+    port->request (
+      target_routing_id, std::move (parts), timeout,
+      [operations, id,
+       correlation] (const result_t<detail::backend::raw_request_completion_t> &settled) {
           if (!settled) {
               (void) operations->fail (id, foundation::operation_terminal_t::transport_failed);
               return;
@@ -2600,7 +2588,8 @@ task_t<bool> raw_mesh_node_owner_t::request_instance_spot_activation (
                       protocol::framework_error_code::requestProtocolError))})),
                 {}, foundation::operation_terminal_t::protocol_error);
           }
-      });
+      },
+      {}, admitted);
     co_return co_await await_request_admission (admitted->task ());
 }
 

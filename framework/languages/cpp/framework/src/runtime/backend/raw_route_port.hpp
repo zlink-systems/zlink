@@ -91,6 +91,8 @@ struct raw_request_completion_t
     std::optional<raw_request_failure_t> failure;
 };
 
+using raw_request_receiver_t = std::function<void (result_t<raw_request_completion_t>)>;
+
 // A send that the binding accepts immediately has its terminal admission
 // result now.  Only a DONTWAIT rejection needs the binding-owned completion
 // task that retries on writable readiness.
@@ -130,12 +132,15 @@ class raw_route_port_t
     {
         _request_receive_source = std::move (source);
     }
-    task_t<raw_request_completion_t>
+    void
     request (const raw_bytes_t &target_routing_id,
              raw_message_t parts,
              std::chrono::milliseconds timeout,
+             raw_request_receiver_t receive,
              runtime::mesh::service_liveness_registry_t::connection_t admission = {},
-             std::shared_ptr<task_completion_source_t<void>> admitted = {});
+             std::shared_ptr<task_completion_source_t<void>> admitted = {},
+             detail::ambient_context_snapshot_t ambient = detail::capture_ambient_context (),
+             std::shared_ptr<detail::serial_turn_t> owner = detail::capture_current_serial_turn ());
     zlink::poll_event_flag_t poll (std::chrono::milliseconds timeout,
                                    bool accept_application_receive = true);
     void signal_activity () noexcept;

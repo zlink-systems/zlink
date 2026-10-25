@@ -99,18 +99,22 @@ raw_request_admission_failure (const result_t<raw_request_completion_t> &result)
                   : detail::result_access_t::failure<void> (result.exception ());
 }
 
+inline void publish_raw_request_admission_failure (
+  const result_t<raw_request_completion_t> &result,
+  const std::shared_ptr<task_completion_source_t<void>> &admitted)
+{
+    if (admitted && (!result || result.value ().terminal != zlink::request_result_t::ok))
+        admitted->complete (raw_request_admission_failure (result));
+}
+
 inline void observe_raw_request_admission_failure (
   task_t<raw_request_completion_t> &reply,
   const std::shared_ptr<task_completion_source_t<void>> &admitted)
 {
-    if (!admitted)
-        return;
-    detail::observe_task_terminal (reply, [admitted] (const auto &result) {
-        if (!result)
-            admitted->complete (raw_request_admission_failure (result));
-        else if (result.value ().terminal != zlink::request_result_t::ok)
-            admitted->complete (raw_request_admission_failure (result));
-    });
+    if (admitted)
+        detail::observe_task_terminal (reply, [admitted] (const auto &result) {
+            publish_raw_request_admission_failure (result, admitted);
+        });
 }
 
 // A successful binding receive owns native parts until close(). This guard
@@ -150,12 +154,30 @@ inline raw_message_t copy_binding_parts (const std::vector<zlink::message_t> &pa
     return result;
 }
 
+inline void deliver_raw_request_completion (
+  const raw_request_receiver_t &receive,
+  const std::shared_ptr<task_completion_source_t<void>> &admitted,
+  result_t<raw_request_completion_t> result,
+  const detail::ambient_context_snapshot_t &ambient = detail::capture_ambient_context ()) noexcept
+{
+    const auto ambient_guard = detail::enter_ambient_context (ambient);
+    publish_raw_request_admission_failure (result, admitted);
+    // Like task terminal observers, transport consumers must not throw. A
+    // consumer defect must never be mistaken for another native terminal.
+    receive (std::move (result));
+}
+
 inline binding_completion_observer_t observe_request_completion (
   request_submission_stages_t stages,
-  std::shared_ptr<task_completion_source_t<raw_request_completion_t>> source,
+  raw_request_receiver_t receive,
   runtime::mesh::service_liveness_registry_t::connection_t admission = {},
-  std::shared_ptr<task_completion_source_t<void>> admitted = {})
+  std::shared_ptr<task_completion_source_t<void>> admitted = {},
+  detail::ambient_context_snapshot_t ambient = detail::capture_ambient_context (),
+  std::shared_ptr<detail::serial_turn_t> owner = detail::capture_current_serial_turn ())
 {
+    // The removed terminal registration retained this caller turn until the
+    // physical terminal. Preserve that lifetime in the existing observer frame.
+    (void) owner;
     try {
         std::exception_ptr admission_error;
         if (stages.admission) {
@@ -185,11 +207,15 @@ inline binding_completion_observer_t observe_request_completion (
               runtime::mesh::service_liveness_registry_t::clock_t::now ());
         if (admission_error)
             std::rethrow_exception (admission_error);
-        source->complete (result_t<raw_request_completion_t>::success (
-          raw_request_completion_t{zlink::request_result_t::ok, std::move (reply)}));
+        deliver_raw_request_completion (
+          receive, admitted,
+          result_t<raw_request_completion_t>::success (
+            raw_request_completion_t{zlink::request_result_t::ok, std::move (reply)}),
+          ambient);
     }
     catch (const std::exception &error) {
-        source->complete (raw_request_failure_result (error));
+        deliver_raw_request_completion (receive, admitted, raw_request_failure_result (error),
+                                        ambient);
     }
 }
 

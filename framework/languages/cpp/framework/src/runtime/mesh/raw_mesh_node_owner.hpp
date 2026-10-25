@@ -184,6 +184,7 @@ class raw_mesh_node_owner_t
                             const std::string &source_spot_id,
                             const protocol::application_payload_t &application_payload,
                             const std::vector<std::uint8_t> &metadata);
+    using request_submission_t = detail::request_start_result_t<bool>;
     task_t<bool> request_to_node (const std::vector<std::uint8_t> &target_routing_id,
                                   const protocol::application_payload_t &application_payload,
                                   std::chrono::milliseconds timeout,
@@ -194,7 +195,6 @@ class raw_mesh_node_owner_t
                                      std::chrono::milliseconds timeout,
                                      foundation::operation_registry_t::callback_t callback,
                                      std::optional<std::uint64_t> correlation = std::nullopt);
-    using request_submission_t = detail::request_start_result_t<bool>;
     request_submission_t
     request_to_node_submission (const std::vector<std::uint8_t> &target_routing_id,
                                 const protocol::application_payload_t &application_payload,
@@ -532,10 +532,8 @@ class raw_mesh_node_owner_t
         &decode_reply,
       std::chrono::milliseconds timeout,
       foundation::operation_registry_t::callback_t callback);
-    bool
-    observe_request (foundation::call_id_t operation,
-                     std::uint64_t correlation,
-                     std::shared_ptr<task_t<detail::backend::raw_request_completion_t>> running);
+    detail::backend::raw_request_receiver_t
+    request_completion_receiver (foundation::call_id_t operation, std::uint64_t correlation);
     void trace_admission_phase (const std::vector<std::uint8_t> &node_routing_id,
                                 std::uint64_t lifecycle_generation,
                                 protocol::command command,
