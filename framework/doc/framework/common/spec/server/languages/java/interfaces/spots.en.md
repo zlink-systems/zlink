@@ -305,8 +305,11 @@ surface for an Instance Spot to end its own lifecycle is
 `ZLinkInstanceSpotContext.close()`, and the close contract inside this
 context is kept.
 
-In the following example, `spotClient` is a `ZLinkSpotOutbound`, and
-`cartId` is the global SpotId to call. Since Instance intent is
+In the following example, `spotClient` is a [`ZLinkRouteClient`](channel-messaging.en.md) received
+through DI (the common [interaction model](../../../00-foundation/04-interaction-model.en.md)'s
+`IZLinkSpotClient`), and `cartId` is the global SpotId to call. Inside a Spot
+callback, the same call goes through the context's `ZLinkSpotOutbound`, which
+can't be used outside an active Spot callback. Since Instance intent is
 specified, the stable type and initial Mesh needed for cold activation
 are only used if the Spot doesn't exist.
 
