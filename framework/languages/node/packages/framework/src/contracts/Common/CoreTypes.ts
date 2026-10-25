@@ -1,4 +1,5 @@
 export type Type<T = unknown> = new (...args: never[]) => T;
+export type ZLinkMessageTypeResolver<T = unknown> = Type<T> | (() => Type<T>);
 export type RoutingId = string;
 /** Global logical Actor identity. It does not encode a Mesh or owner route. */
 export type ActorId = string;

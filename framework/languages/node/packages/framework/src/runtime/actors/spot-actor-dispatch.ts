@@ -3,6 +3,7 @@ import {
   type Type,
   type ZLinkActor,
   type ZLinkActorHandlerRegistry,
+  type ZLinkMessageTypeResolver,
   type ZLinkMessageContext,
   type ZLinkMessageSerializer,
   type ZLinkSpot,
@@ -14,6 +15,10 @@ import {
 } from '../../contracts';
 
 import type { Message } from '../../contracts/Common/Message';
+import {
+  resolveHandlerMessageType,
+  resolveMessageTypeForDecode
+} from '../../contracts/Common/HandlerMessageType';
 import type { ZLinkProviderResolver } from '../../contracts/Common/ZLinkProviderResolver';
 import { readZLinkDecoratorMetadata } from '../../contracts/Handlers/Attributes';
 import { ZLinkConfigurationException } from '../configuration';
@@ -37,6 +42,7 @@ export interface ZLinkActorPacketDescriptor {
   readonly packetName: string;
   readonly actorType: Type<ZLinkActor>;
   readonly handlerType: Type;
+  readonly messageType?: ZLinkMessageTypeResolver;
   readonly methodName?: string;
 }
 
@@ -57,6 +63,7 @@ export class ZLinkSpotActorHandlerRegistryRuntime implements ZLinkActorHandlerRe
         `Actor packet handler '${handlerType.name}' must declare a packet name.`
       );
     }
+    const messageType = resolveHandlerMessageType(handlerType);
     return this.addPacket({
       kind:
         metadata.kind === 'spotActorSend'
@@ -65,6 +72,7 @@ export class ZLinkSpotActorHandlerRegistryRuntime implements ZLinkActorHandlerRe
       packetName: resolvedPacketName,
       actorType: Object as unknown as Type<ZLinkActor>,
       handlerType,
+      ...(messageType === undefined ? {} : { messageType }),
       methodName: metadata.methodName
     });
   }
@@ -159,12 +167,12 @@ export class ZLinkSpotActorDispatcher {
   dispatchSendDecoded<TMessage>(
     actor: ZLinkActor,
     packetName: string,
-    decode: () => TMessage,
+    decode: (messageType?: Type) => TMessage,
     context?: Partial<ZLinkMessageContext>
   ): Promise<void> {
     return this.execute(async () => {
       const descriptor = this.requirePacket(ZLinkActorPacketKind.Send, actor, packetName);
-      const message = decode();
+      const message = decode(resolveMessageTypeForDecode(descriptor.messageType));
       this.options.onHandlerStart?.();
       await this.invokeHandler<ZLinkSpotActorSendHandler<ZLinkSpot, ZLinkActor, TMessage>, void>(
         actor,
@@ -201,7 +209,7 @@ export class ZLinkSpotActorDispatcher {
   dispatchRequestDecoded<TRequest, TReply>(
     actor: ZLinkActor,
     packetName: string,
-    decode: () => TRequest,
+    decode: (messageType?: Type) => TRequest,
     context?: Partial<ZLinkMessageContext>
   ): Promise<TReply> {
     return this.dispatchRequestThenDecoded<TRequest, TReply, TReply>(
@@ -240,7 +248,7 @@ export class ZLinkSpotActorDispatcher {
   dispatchRequestThenDecoded<TRequest, TReply, TResult>(
     actor: ZLinkActor,
     packetName: string,
-    decode: () => TRequest,
+    decode: (messageType?: Type) => TRequest,
     context: Partial<ZLinkMessageContext> | undefined,
     afterReply: (
       reply: TReply,
@@ -253,7 +261,7 @@ export class ZLinkSpotActorDispatcher {
   ): Promise<TResult> {
     return this.execute(async () => {
       const descriptor = this.requirePacket(ZLinkActorPacketKind.Request, actor, packetName);
-      const request = decode();
+      const request = decode(resolveMessageTypeForDecode(descriptor.messageType));
       this.options.onHandlerStart?.();
       return await this.invokeHandler<
         ZLinkSpotActorRequestHandler<ZLinkSpot, ZLinkActor, TRequest, TReply>,

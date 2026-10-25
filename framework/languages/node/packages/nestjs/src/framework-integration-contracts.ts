@@ -19,6 +19,7 @@ import type {
   ZLinkMetricsOptions,
   ZLinkNetworkOptions,
   ZLinkMessageContext,
+  ZLinkMessageTypeResolver,
   ZLinkPublishMessageContext,
   ZLinkRouteMessageContext,
   ZLinkSpot,
@@ -368,20 +369,24 @@ export interface ZLinkRouteChannelHandlerOptions {
   readonly kind: 'send' | 'request';
   readonly packetName: string;
   readonly handler: ZLinkRouteChannelSendHandler | ZLinkRouteChannelRequestHandler;
+  readonly messageType?: ZLinkMessageTypeResolver;
 }
 
 export interface ZLinkRouteChannelSendHandlerRegistration {
   readonly packetName: string;
   readonly handler: ZLinkRouteChannelSendHandler;
+  readonly messageType?: ZLinkMessageTypeResolver;
 }
 
 export interface ZLinkRouteChannelRequestHandlerRegistration {
   readonly packetName: string;
   readonly handler: ZLinkRouteChannelRequestHandler;
+  readonly messageType?: ZLinkMessageTypeResolver;
 }
 
 export interface ZLinkChannelPublishHandlerRegistration {
   readonly packetName: string;
+  readonly messageType?: ZLinkMessageTypeResolver;
   readonly handler: {
     handle(payload: unknown, context: ZLinkPublishMessageContext): Promise<void>;
   };
@@ -389,11 +394,13 @@ export interface ZLinkChannelPublishHandlerRegistration {
 
 export interface ZLinkChannelRequestHandlerRegistration {
   readonly packetName: string;
+  readonly messageType?: ZLinkMessageTypeResolver;
   readonly handler: { handle(payload: unknown, context: ZLinkMessageContext): Promise<unknown> };
 }
 
 export interface ZLinkChannelSendHandlerRegistration {
   readonly packetName: string;
+  readonly messageType?: ZLinkMessageTypeResolver;
   readonly handler: { handle(payload: unknown, context: ZLinkMessageContext): Promise<void> };
 }
 
@@ -408,18 +415,21 @@ export interface ZLinkEntrySpotPacketHandlerRegistration {
   readonly entrySpotType: Type<ZLinkEntrySpot>;
   readonly handlerType: Type;
   readonly packetName?: string;
+  readonly messageType?: ZLinkMessageTypeResolver;
 }
 export interface ZLinkEntrySpotSubscriptionHandlerRegistration {
   readonly entrySpotType: Type<ZLinkEntrySpot>;
   readonly handlerType: Type;
   readonly channelName: string;
   readonly topic: string;
+  readonly messageType?: ZLinkMessageTypeResolver;
 }
 export interface ZLinkEntrySpotActorSendHandlerRegistration {
   readonly entrySpotType: Type<ZLinkEntrySpot>;
   readonly actorType: Type<ZLinkActor>;
   readonly handlerType: Type;
   readonly packetName: string;
+  readonly messageType?: ZLinkMessageTypeResolver;
 }
 export interface ZLinkEntrySpotActorRequestHandlerRegistration extends ZLinkEntrySpotActorSendHandlerRegistration {}
 export interface ZLinkSpotTimerHandlerRegistration {
@@ -433,17 +443,20 @@ export interface ZLinkSpotPacketHandlerRegistration {
   readonly spotType: Type<ZLinkSpot>;
   readonly handlerType: Type;
   readonly packetName?: string;
+  readonly messageType?: ZLinkMessageTypeResolver;
 }
 export interface ZLinkSpotSubscriptionHandlerRegistration {
   readonly spotType: Type<ZLinkSpot>;
   readonly handlerType: Type;
   readonly channelName: string;
   readonly topic: string;
+  readonly messageType?: ZLinkMessageTypeResolver;
 }
 export interface ZLinkSpotActorSendHandlerRegistration {
   readonly spotType: Type<ZLinkSpot>;
   readonly actorType: Type<ZLinkActor>;
   readonly handlerType: Type;
   readonly packetName: string;
+  readonly messageType?: ZLinkMessageTypeResolver;
 }
 export interface ZLinkSpotActorRequestHandlerRegistration extends ZLinkSpotActorSendHandlerRegistration {}

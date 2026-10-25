@@ -2,6 +2,7 @@ import { AutoHwmProfile } from '@zlink-systems/zlink';
 import type {
   RoutingId,
   Type,
+  ZLinkMessageTypeResolver,
   ZLinkActor,
   ZLinkActorFactory,
   ZLinkClientServerChannelClientBuilder,
@@ -53,6 +54,7 @@ import { requireMessageFlowLogMode, requireTraceSampleRate } from './Diagnostics
 import { normalizeEndpoint } from './EndpointNotation';
 import { requirePublicFanoutTopic } from './FanoutTopic';
 import { requireValidSendTimeoutMs } from './SendTimeoutValidation';
+import { resolveHandlerMessageType } from '../Common/HandlerMessageType';
 import { DEFAULT_STREAM_NODE_MAX_MESSAGE_SIZE } from './InternalDefaults';
 import {
   type ZLinkActorFactoryBuilder,
@@ -671,7 +673,7 @@ class DefaultClientServerChannelServerBuilder implements ZLinkClientServerChanne
     handlerType: Type<import('../Handlers').ZLinkSendHandler<TMessage>>
   ): this {
     this.channel.sendHandlers ??= [];
-    this.channel.sendHandlers.push({ packetName: handlerPacketName(handlerType), handlerType });
+    this.channel.sendHandlers.push(handlerRegistration(handlerType));
     return this;
   }
 
@@ -679,7 +681,7 @@ class DefaultClientServerChannelServerBuilder implements ZLinkClientServerChanne
     handlerType: Type<import('../Handlers').ZLinkRequestHandler<TRequest, TReply>>
   ): this {
     this.channel.requestHandlers ??= [];
-    this.channel.requestHandlers.push({ packetName: handlerPacketName(handlerType), handlerType });
+    this.channel.requestHandlers.push(handlerRegistration(handlerType));
     return this;
   }
 
@@ -1011,7 +1013,7 @@ class DefaultMeshNodeBuilder implements ZLinkMeshNodeBuilder {
     handlerType: Type<import('../Handlers').ZLinkRouteSendHandler<TMessage>>
   ): this {
     this.node.routeSendHandlers ??= [];
-    this.node.routeSendHandlers.push({ packetName: handlerPacketName(handlerType), handlerType });
+    this.node.routeSendHandlers.push(handlerRegistration(handlerType));
     return this;
   }
 
@@ -1019,10 +1021,7 @@ class DefaultMeshNodeBuilder implements ZLinkMeshNodeBuilder {
     handlerType: Type<import('../Handlers').ZLinkRouteRequestHandler<TRequest, TReply>>
   ): this {
     this.node.routeRequestHandlers ??= [];
-    this.node.routeRequestHandlers.push({
-      packetName: handlerPacketName(handlerType),
-      handlerType
-    });
+    this.node.routeRequestHandlers.push(handlerRegistration(handlerType));
     return this;
   }
 
@@ -1379,7 +1378,7 @@ class DefaultMeshChannelServerBuilder implements ZLinkMeshChannelServerBuilder {
     handlerType: Type<import('../Handlers').ZLinkSendHandler<TMessage>>
   ): this {
     this.channel.sendHandlers ??= [];
-    this.channel.sendHandlers.push({ packetName: handlerPacketName(handlerType), handlerType });
+    this.channel.sendHandlers.push(handlerRegistration(handlerType));
     return this;
   }
 
@@ -1387,7 +1386,7 @@ class DefaultMeshChannelServerBuilder implements ZLinkMeshChannelServerBuilder {
     handlerType: Type<import('../Handlers').ZLinkRequestHandler<TRequest, TReply>>
   ): this {
     this.channel.requestHandlers ??= [];
-    this.channel.requestHandlers.push({ packetName: handlerPacketName(handlerType), handlerType });
+    this.channel.requestHandlers.push(handlerRegistration(handlerType));
     return this;
   }
 }
@@ -1588,8 +1587,8 @@ interface MutableChannelOptions {
   client?: MutableClientCapabilityOptions;
   server?: MutableServerCapabilityOptions;
   handlerGroups?: string[];
-  requestHandlers?: Array<{ packetName: string; handlerType: Type }>;
-  sendHandlers?: Array<{ packetName: string; handlerType: Type }>;
+  requestHandlers?: MutableHandlerRegistration[];
+  sendHandlers?: MutableHandlerRegistration[];
 }
 
 interface MutableServerCapabilityOptions {
@@ -1670,8 +1669,8 @@ interface MutableSpotNodeOptions {
     MutableObjectFactoryRegistration<ZLinkActor, ZLinkActorFactory, ZLinkActorFactoryConfiguration>
   >;
   meshChannels?: Record<string, MutableMeshChannelOptions>;
-  routeSendHandlers?: Array<{ packetName: string; handlerType: Type }>;
-  routeRequestHandlers?: Array<{ packetName: string; handlerType: Type }>;
+  routeSendHandlers?: MutableHandlerRegistration[];
+  routeRequestHandlers?: MutableHandlerRegistration[];
   requestTimeoutMs?: number;
 }
 
@@ -1686,8 +1685,8 @@ interface MutableMeshChannelOptions {
   server?: boolean;
   weight?: number;
   handlerGroups?: string[];
-  sendHandlers?: Array<{ packetName: string; handlerType: Type }>;
-  requestHandlers?: Array<{ packetName: string; handlerType: Type }>;
+  sendHandlers?: MutableHandlerRegistration[];
+  requestHandlers?: MutableHandlerRegistration[];
 }
 
 interface MutableSpotRouterCapabilityOptions {
@@ -1707,6 +1706,21 @@ interface MutableSpotPubSubCapabilityOptions {
   bind?: string;
   manualConnections?: string[];
   routingId?: string;
+}
+
+interface MutableHandlerRegistration {
+  packetName: string;
+  handlerType: Type;
+  messageType?: ZLinkMessageTypeResolver;
+}
+
+function handlerRegistration(handlerType: Type): MutableHandlerRegistration {
+  const messageType = resolveHandlerMessageType(handlerType);
+  return {
+    packetName: handlerPacketName(handlerType),
+    handlerType,
+    ...(messageType === undefined ? {} : { messageType })
+  };
 }
 
 function handlerPacketName(handlerType: Type): string {

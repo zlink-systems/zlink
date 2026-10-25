@@ -19,6 +19,8 @@ import type {
   ZLinkSpotSubscriptionHandlerRegistration
 } from '../../contracts/Configuration/RegistrationTypes';
 import type { ZLinkProviderResolver } from '../../contracts/Common/ZLinkProviderResolver';
+import type { ZLinkMessageTypeResolver } from '../../contracts/Common/CoreTypes';
+import { resolveHandlerMessageType } from '../../contracts/Common/HandlerMessageType';
 import { prepareHandlerInstance } from '../handlers/handler-instance-scope';
 import {
   ZLinkFrameworkInternalErrorKind,
@@ -30,6 +32,7 @@ import { readZLinkDecoratorMetadata } from '../../contracts/Handlers/Attributes'
 export interface ZLinkSpotHandlerRegistration {
   readonly kind: 'packet' | 'subscribe' | 'actorSend' | 'actorRequest' | 'timer';
   readonly handlerType: Type;
+  readonly messageType?: ZLinkMessageTypeResolver;
   readonly packetName?: string;
   readonly channelName?: string;
   readonly topic?: string;
@@ -61,7 +64,8 @@ export class DefaultZLinkSpotHandlerRegistry<
       metadata.kind === 'spotActorSend' ? ZLinkActorPacketKind.Send : ZLinkActorPacketKind.Request,
       handlerType,
       Object as unknown as Type<TActor>,
-      resolvedPacketName
+      resolvedPacketName,
+      resolveHandlerMessageType(handlerType)
     );
   }
 
@@ -82,11 +86,24 @@ export class DefaultZLinkSpotHandlerRegistry<
       metadata.kind === 'spotActorSend' ? ZLinkActorPacketKind.Send : ZLinkActorPacketKind.Request,
       handlerType,
       actorType as unknown as Type<TActor>,
-      metadata.packetName
+      metadata.packetName,
+      resolveHandlerMessageType(handlerType)
     );
   }
 
   addPacket(handlerType: Type, packetName?: string): this {
+    return this.addPacketRegistration(
+      handlerType,
+      packetName,
+      resolveHandlerMessageType(handlerType)
+    );
+  }
+
+  addPacketRegistration(
+    handlerType: Type,
+    packetName: string | undefined,
+    messageType: ZLinkMessageTypeResolver | undefined
+  ): this {
     const declared = readZLinkDecoratorMetadata(handlerType).find(
       (entry) => entry.kind === 'packet'
     )?.packetName;
@@ -104,6 +121,7 @@ export class DefaultZLinkSpotHandlerRegistry<
     this.entries.push({
       kind: 'packet',
       handlerType,
+      ...(messageType === undefined ? {} : { messageType: messageType }),
       packetName: resolvedPacketName
     });
     return this;
@@ -117,12 +135,14 @@ export class DefaultZLinkSpotHandlerRegistry<
     kind: ZLinkActorPacketKind,
     handlerType: Type,
     actorType: Type<TActor>,
-    packetName: string
+    packetName: string,
+    messageType: ZLinkMessageTypeResolver | undefined
   ): this {
     prepareHandlerInstance(this.providerResolver, handlerType);
     this.entries.push({
       kind: kind === ZLinkActorPacketKind.Send ? 'actorSend' : 'actorRequest',
       handlerType,
+      ...(messageType === undefined ? {} : { messageType: messageType }),
       actorType,
       packetName
     });
@@ -130,7 +150,8 @@ export class DefaultZLinkSpotHandlerRegistry<
       kind,
       packetName,
       actorType,
-      handlerType
+      handlerType,
+      messageType: messageType
     });
     return this;
   }
@@ -144,7 +165,8 @@ export class DefaultZLinkSpotHandlerRegistry<
       ZLinkActorPacketKind.Send,
       handlerType,
       actorType,
-      packetName
+      packetName,
+      resolveHandlerMessageType(handlerType)
     );
   }
 
@@ -157,11 +179,26 @@ export class DefaultZLinkSpotHandlerRegistry<
       ZLinkActorPacketKind.Request,
       handlerType,
       actorType,
-      packetName
+      packetName,
+      resolveHandlerMessageType(handlerType)
     );
   }
 
   addSubscribe(handlerType: Type, channelName: string, topic: string): this {
+    return this.addSubscriptionRegistration(
+      handlerType,
+      channelName,
+      topic,
+      resolveHandlerMessageType(handlerType)
+    );
+  }
+
+  addSubscriptionRegistration(
+    handlerType: Type,
+    channelName: string,
+    topic: string,
+    messageType: ZLinkMessageTypeResolver | undefined
+  ): this {
     if (channelName.trim().length === 0) {
       throw createInternalFrameworkException(
         ZLinkFrameworkInternalErrorKind.InvalidOperation,
@@ -189,7 +226,13 @@ export class DefaultZLinkSpotHandlerRegistry<
       );
     }
     prepareHandlerInstance(this.providerResolver, handlerType);
-    this.entries.push({ kind: 'subscribe', handlerType, channelName, topic });
+    this.entries.push({
+      kind: 'subscribe',
+      handlerType,
+      ...(messageType === undefined ? {} : { messageType: messageType }),
+      channelName,
+      topic
+    });
     return this;
   }
 
@@ -259,7 +302,8 @@ export function applyEntrySpotHandlerRegistrations(
         ZLinkActorPacketKind.Send,
         handler.handlerType,
         handler.actorType,
-        handler.packetName
+        handler.packetName,
+        handler.messageType
       );
     }
   }
@@ -269,18 +313,24 @@ export function applyEntrySpotHandlerRegistrations(
         ZLinkActorPacketKind.Request,
         handler.handlerType,
         handler.actorType,
-        handler.packetName
+        handler.packetName,
+        handler.messageType
       );
     }
   }
   for (const handler of registrations.packetHandlers ?? []) {
     if (handler.entrySpotType === entrySpotType) {
-      registry.addPacket(handler.handlerType, handler.packetName);
+      registry.addPacketRegistration(handler.handlerType, handler.packetName, handler.messageType);
     }
   }
   for (const handler of registrations.subscriptionHandlers ?? []) {
     if (handler.entrySpotType === entrySpotType) {
-      registry.addSubscribe(handler.handlerType, handler.channelName, handler.topic);
+      registry.addSubscriptionRegistration(
+        handler.handlerType,
+        handler.channelName,
+        handler.topic,
+        handler.messageType
+      );
     }
   }
 }
@@ -296,7 +346,8 @@ export function applySpotHandlerRegistrations(
         ZLinkActorPacketKind.Send,
         handler.handlerType,
         handler.actorType,
-        handler.packetName
+        handler.packetName,
+        handler.messageType
       );
     }
   }
@@ -306,18 +357,24 @@ export function applySpotHandlerRegistrations(
         ZLinkActorPacketKind.Request,
         handler.handlerType,
         handler.actorType,
-        handler.packetName
+        handler.packetName,
+        handler.messageType
       );
     }
   }
   for (const handler of registrations.packetHandlers ?? []) {
     if (isSpotImplementation(handler.spotType, spotType)) {
-      registry.addPacket(handler.handlerType, handler.packetName);
+      registry.addPacketRegistration(handler.handlerType, handler.packetName, handler.messageType);
     }
   }
   for (const handler of registrations.subscriptionHandlers ?? []) {
     if (isSpotImplementation(handler.spotType, spotType)) {
-      registry.addSubscribe(handler.handlerType, handler.channelName, handler.topic);
+      registry.addSubscriptionRegistration(
+        handler.handlerType,
+        handler.channelName,
+        handler.topic,
+        handler.messageType
+      );
     }
   }
 }

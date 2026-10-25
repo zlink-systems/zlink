@@ -9,6 +9,7 @@ import type {
 import type { ZLinkProviderResolver } from '../../contracts/Common/ZLinkProviderResolver';
 import type { ZLinkApplicationWorkClaim } from '../admission';
 import { zlinkMessageMetadata } from '../../contracts';
+import { resolveMessageTypeForDecode } from '../../contracts/Common/HandlerMessageType';
 import {
   ZLinkRuntimeDispatchErrorAction as ZLinkDispatchErrorAction,
   ZLinkRuntimeDispatchErrorReason as ZLinkDispatchErrorReason,
@@ -77,7 +78,7 @@ export class ZLinkRoutedSpotPacketDispatch {
   async sendEncoded(
     spotId: RoutingId,
     packetName: string | undefined,
-    decodePayload: () => unknown,
+    decodePayload: (messageType?: Type) => unknown,
     context: ZLinkRoutedSpotPacketContext
   ): Promise<void> {
     await this.dispatch(spotId, packetName, decodePayload, context, false);
@@ -95,7 +96,7 @@ export class ZLinkRoutedSpotPacketDispatch {
   async requestEncoded<TReply>(
     spotId: RoutingId,
     packetName: string | undefined,
-    decodePayload: () => unknown,
+    decodePayload: (messageType?: Type) => unknown,
     context: ZLinkRoutedSpotPacketContext
   ): Promise<TReply> {
     return (await this.dispatch(spotId, packetName, decodePayload, context, true)) as TReply;
@@ -104,7 +105,7 @@ export class ZLinkRoutedSpotPacketDispatch {
   private async dispatch(
     spotId: RoutingId,
     packetName: string | undefined,
-    decodePayload: () => unknown,
+    decodePayload: (messageType?: Type) => unknown,
     context: ZLinkRoutedSpotPacketContext,
     returnResponse: boolean
   ): Promise<unknown> {
@@ -190,7 +191,9 @@ export class ZLinkRoutedSpotPacketDispatch {
                 );
         // Decode only after the Spot has acquired both application admission
         // and its execution authority.
-        const payload = decodePayload();
+        const payload = decodePayload(
+          resolveMessageTypeForDecode(currentRegistrations[0]?.messageType)
+        );
         for (const registration of currentRegistrations) {
           const handler = await resolveLifecycleHandler(
             current.spot,
