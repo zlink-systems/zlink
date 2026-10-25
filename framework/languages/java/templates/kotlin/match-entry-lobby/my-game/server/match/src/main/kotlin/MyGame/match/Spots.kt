@@ -75,7 +75,7 @@ class Room(
 
     override suspend fun onLeaveActorSuspending(actor: Player) {}
 
-    private fun view() = RoomView(context.spotId(), config.id, state.view())
+    private fun view() = RoomView(context.spotId(), config.id, state.phase, state.winner, state.view())
 
     suspend fun sendView(actor: Player) = actor.context.boundSession().kotlin().send(view()).await()
 
@@ -84,15 +84,15 @@ class Room(
     }
 
     suspend fun move(actor: Player, request: MoveRequest) {
-        val reason = state.move(actor.context.actorId(), request)
-        if (reason == null) broadcast(view())
-        else actor.context.boundSession().kotlin().send(ActionRejected(reason)).await()
+        val rejection = state.move(actor.context.actorId(), request)
+        if (rejection == null) broadcast(view())
+        else actor.context.boundSession().kotlin().send(rejection).await()
     }
 
     suspend fun shoot(actor: Player, request: ShootRequest) {
-        val reason = state.shoot(actor.context.actorId(), request)
-        if (reason != null) {
-            actor.context.boundSession().kotlin().send(ShotRejected(reason)).await()
+        val rejection = state.shoot(actor.context.actorId(), request)
+        if (rejection != null) {
+            actor.context.boundSession().kotlin().send(rejection).await()
             return
         }
         broadcast(view())
@@ -126,7 +126,7 @@ class RoomTransfer : ZLinkSpotRelocationAdapter<Room> {
         cancellation: ZLinkRelocationCancellation,
     ): CompletionStage<ByteArray> {
         cancellation.ensureActive()
-        return CompletableFuture.completedFuture(Json.mapper.writeValueAsBytes(spot.state))
+        return CompletableFuture.completedFuture(spot.state.capture())
     }
 
     override fun restore(
@@ -135,7 +135,7 @@ class RoomTransfer : ZLinkSpotRelocationAdapter<Room> {
         cancellation: ZLinkRelocationCancellation,
     ): CompletionStage<Void> {
         cancellation.ensureActive()
-        spot.state = Json.mapper.readValue(state, RoomState::class.java)
+        spot.state = RoomState().also { it.restore(state) }
         return CompletableFuture.completedFuture(null)
     }
 }

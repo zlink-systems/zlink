@@ -15,7 +15,7 @@ Default builds and e2e run nodes and the runner in Docker without a host Node.js
 ```powershell
 pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
 pwsh -NoProfile -File ./run-e2e.ps1
-pwsh -NoProfile -File ./run-e2e.ps1 -Scenario hit,reconnect,update
+pwsh -NoProfile -File ./run-e2e.ps1 -Scenario hit,wall,input,reconnect,update
 pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
 ```
 
@@ -24,7 +24,7 @@ Bash provides the same workflow:
 ```bash
 ./run-e2e.sh --build-only
 ./run-e2e.sh
-./run-e2e.sh --scenario hit,reconnect,update
+./run-e2e.sh --scenario hit,wall,input,reconnect,update
 ./run-e2e.sh --check-structure
 ```
 
@@ -48,7 +48,7 @@ A Spot is a state object that accepts Actors and executes shared game rules. `Ma
 
 ### E2E client
 
-`e2e/client.mts` connects through the public connector and runs the scenarios, which check results observable by the client. `e2e/runner.ts` starts nodes, captures logs, and cleans up what each run created, while `e2e/structure.ts` validates composition. Verify new gameplay through received client results; the project includes no separate unit-test project.
+`e2e/client.mts` connects through the public connector and runs the scenarios, which check results observable by the client. `e2e/domain.test.ts` checks domain boundaries with `node:test` and an injected clock. `e2e/runner.ts` starts nodes, captures logs, and cleans up what each run created, while `e2e/structure.ts` validates composition. Verify domain rules directly and their client-visible results through the scenarios.
 
 ## ZLink concepts in this project
 
@@ -83,17 +83,17 @@ Requests in the example game follow this path. Reading the code along this path 
 1. The client connects to the Session node over STREAM and sends the first packet, `QueueRequest`. `Session` checks the first packet name, calls `getOrCreate` for the Player Actor by `playerId`, binds it to the Session, and relays the original packet.
 2. A new Actor starts in the Entry Spot `Entry`. The `EnterQueue` handler checks the identity and requests `joinSpot(Names.matchmakingId, ...).defer()`. `Matchmaking.onActorJoin` enqueues the player, and `Matchmaking.onJoinedActor` tries to pair players of the same mode.
 3. For a pair, `Matchmaking` allocates a room ID, calls `getOrCreate` for the `Room`, and sends `RoomAssignment` to both Actors by player ID. The `Assignment` handler requests `joinSpot(roomId, ...).defer()`. `Room.onJoinedActor` sends `MatchFound` and broadcasts `RoomView`; `Delivery` forwards these pushes through each bound Session. A player that is already in `Matchmaking` and sends `QueueRequest` again is queued by `QueueAgain`.
-4. `Move` and `Shoot` call `Room.move` and `Room.shoot`. A valid action broadcasts `RoomView`, and a winning shot also broadcasts `MatchEnded`; an invalid action sends `ActionRejected` or `ShotRejected` to the requester through its bound Session.
+4. `Move` and `Shoot` call `Room.move` and `Room.shoot`. A valid action broadcasts `RoomView`, and a winning shot also broadcasts `MatchEnded`; a rejected action sends `ActionRejected` to the requester through its bound Session.
 5. After a reconnect, the new Session sends `QueueRequest` again. The `Reconnect` handler of the Room that holds the Actor checks the identity and resends the view through the bound Session.
 6. To replace a node, the `drain` command in `runHost` requests relocation. Framework takes the game state from `capture` in `MatchmakingRelocation` and `RoomRelocation` and calls `restore` on another node.
 
-## Developing from this sample
+## Extending this action domain
 
-This sample shows how the features work together, so read and run it rather than turning it into your game. Start your own project from the Node.js starter: choose Node.js in the Initializer at [ZLink Start](https://zlink.systems/start), or use `framework/languages/node/templates/starter/my-game` in the ZLink repository. Then transfer the features you need from this sample one at a time. The starter's `AGENTS.md` owns the choice between structures; this section covers only `match-entry-lobby`. Keep this sample unchanged next to your project as a reference.
+Extend this template's action domain to build an action game server. Keep domain state and decisions in `server/match/domain.ts` (`MatchmakingState` and `RoomState`), and update the matching `capture` and `restore` when state changes. Add new packet contracts to `server/shared/messages.ts`. Limit `clientPackets` in `server/session/session.ts` to `QueueRequest`, `RoomViewRequest`, `MoveRequest`, `ShootRequest`, and `SessionInfoRequest`. Add scenario behavior and client checks to `e2e/client.mts`, register scenario IDs in `server/shared/constants.ts`, and update `zlink.structure.json` `run.scenarios` and its scenario selection commands.
 
 ### Run the sample first
 
-Before transferring anything, run the build and e2e once with the [Development commands](#development-commands) to confirm the downloaded sample works and to see its behavior. This result is the baseline for comparison. If it fails, compare the failure with Known issues in the [README](README.md) first.
+Before extending the domain, run the build and e2e once with the [Development commands](#development-commands) to confirm the downloaded template works and to see its behavior. This result is the baseline for comparison. If it fails, compare the failure with Known issues in the [README](README.md) first.
 
 ### Features to transfer
 
@@ -101,7 +101,7 @@ Feature names match the feature table in the starter's `AGENTS.md`. Paths are re
 
 | Feature                   | File in this sample                                                                                                                                                                                                                | What to transfer                                                                                                                                                                                                                                                                                          | What to grow in the starter alongside                                                                                                                                                                                                                                               |
 | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Typed messages            | `server/shared/messages.ts`                                                                                                                                                                                                        | The classes of the features you adopt: `QueueRequest`, `RoomAdmission`, `RoomAssignment`, `MatchFound`, `MoveRequest`, `ShootRequest`, `RoomViewRequest`, `PlayerView`, `RoomView`, `ShotRejected`, `ActionRejected`, `MatchEnded`; `SessionInfoRequest` and `SessionInfo` only if your client needs them | The packet names in `PacketNames`, the registration names in `Names`, and `Rejection` in `server/shared/constants.ts`                                                                                                                                                               |
+| Typed messages            | `server/shared/messages.ts`                                                                                                                                                                                                        | The classes of the features you adopt: `QueueRequest`, `RoomAdmission`, `RoomAssignment`, `MatchFound`, `MoveRequest`, `ShootRequest`, `RoomViewRequest`, `PlayerView`, `RoomView`, `ActionRejected`, `MatchEnded`; `SessionInfoRequest` and `SessionInfo` only if your client needs them | The packet names in `PacketNames`, the registration names in `Names`, and `Rejection` in `server/shared/constants.ts`                                                                                                                                                               |
 | Actor                     | `server/match/player.ts`                                                                                                                                                                                                           | `Player` with its admission-rejection handling, `PlayerFactory`, and `PlayerRelocation`, which uses an empty payload                                                                                                                                                                                      | A new `server/match/` project with `main.ts`, its `server/config/` files, and the Actor factory registration; a `match` entry in `NodeEntrypoints` in `server/shared/constants.ts`; the Actor declaration and the structure check                                                   |
 | Spot                      | `server/match/spots.ts`, `server/match/domain.ts`                                                                                                                                                                                  | `Matchmaking` and `Room` with their admission and broadcast, and `MatchmakingState` and `RoomState` with the queue and combat rules                                                                                                                                                                       | The Spot factory registrations and the `bootstrapMatchmaking` creation in `server/match/main.ts`; the `spots` and `nodes` declarations in `zlink.structure.json`, and the structure check, which asserts zero Spots in the starter, extended to compare them with the registrations |
 | Entry and first admission | `Entry` in `server/match/spots.ts`; `EnterQueue`, `QueueAgain`, `Assignment`, and `Reconnect` in `server/match/handlers.ts`                                                                                                        | `EnterQueue`, the identity check, the deferred join to `Matchmaking`, the hand-over to the Room in `Assignment`, and the state resend of `Reconnect`                                                                                                                                                      | The Entry Spot registration and its `entry` declaration; a first-entry scenario and a `reconnect` scenario that compares state after reconnection                                                                                                                                   |
@@ -117,7 +117,7 @@ Transfer one row at a time and run the build, the structure check, and the relat
 
 Start with the message contracts. Define the classes in `messages.ts` first, then move each handler that fails to compile to the new messages. The build generates packet schemas from `server/shared`, so messages defined elsewhere are not registered. When you change the first-entry packet, update the first-packet check in `Session`, `EnterQueue`, and `Reconnect` to receive the same packet.
 
-Keep each piece of state in the object that decides it. The queue and room sequence belong in `Matchmaking`; positions, HP, action sequences, and the winner belong in `Room`. `Entry` and `Player` keep none. When you change state fields, update that object's snapshot and its `capture` and `restore` together. A missing field disappears after relocation, and the `update` scenario detects the loss.
+Keep each piece of state in the object that decides it. The queue and room sequence belong in `Matchmaking`; positions, HP, action sequences, cooldowns, and the winner belong in `Room`. `Entry` and `Player` keep none. When you change state fields, update that object's snapshot and its `capture` and `restore` together. Store remaining cooldown and movement-budget milliseconds, not process timestamps, so relocation works under a different monotonic clock origin. The `update` scenario detects missing state after relocation.
 
 The fixed `matchmaking` Spot is created on the node whose `bootstrapMatchmaking` is true. Wait for that node to report `READY` before starting another Match node, so the Spot starts on its declared owner while that node is the only placement candidate. A replacement for that node starts with `bootstrapMatchmaking` set to `false`, because the relocated Matchmaking Spot already exists.
 

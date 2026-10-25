@@ -8,14 +8,25 @@ import type {
   ZLinkSessionDispatchContext,
   ZLinkSessionFactory
 } from '@zlink-systems/framework';
-import { Names, PacketNames } from '../shared/constants';
-import { QueueRequest, SessionInfo } from '../shared/messages';
+import { Names, PacketNames, Rejection } from '../shared/constants';
+import { ActionRejected, QueueRequest, SessionInfo } from '../shared/messages';
+const clientPackets = new Set<string>([
+  PacketNames.queueRequest,
+  PacketNames.roomViewRequest,
+  PacketNames.moveRequest,
+  PacketNames.shootRequest,
+  PacketNames.sessionInfoRequest
+]);
 export class Session implements ZLinkSession {
   constructor(
     readonly context: ZLinkSessionContext,
     private readonly actors: ZLinkActorManager
   ) {}
   async onDispatch(dispatch: ZLinkSessionDispatchContext, payload: ZLinkMessage): Promise<void> {
+    if (!clientPackets.has(dispatch.packetName)) {
+      await this.context.client.send(new ActionRejected(Rejection.packetNotAllowed)).submit();
+      return;
+    }
     if (!this.context.actors.bound.length) {
       if (dispatch.packetName !== PacketNames.queueRequest)
         throw new Error('QueueRequest must be first');

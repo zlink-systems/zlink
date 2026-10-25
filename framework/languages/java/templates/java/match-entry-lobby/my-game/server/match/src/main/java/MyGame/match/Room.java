@@ -46,7 +46,8 @@ public final class Room implements ZLinkSpot<Player> {
     }
 
     private RoomView view() {
-        return new RoomView(context.spotId(), config.id(), state.view());
+        return new RoomView(
+                context.spotId(), config.id(), state.phase(), state.winner(), state.view());
     }
 
     public CompletionStage<Void> sendView(Player actor) {
@@ -54,14 +55,14 @@ public final class Room implements ZLinkSpot<Player> {
     }
 
     public CompletionStage<Void> move(Player actor, MoveRequest request) {
-        var reason = state.move(actor.context().actorId(), request);
-        return reason == null ? broadcast(view()) : reply(actor, new ActionRejected(reason));
+        var rejection = state.move(actor.context().actorId(), request);
+        return rejection == null ? broadcast(view()) : reply(actor, rejection);
     }
 
     public CompletionStage<Void> shoot(Player actor, ShootRequest request) {
-        var reason = state.shoot(actor.context().actorId(), request);
-        if (reason != null) return reply(actor, new ShotRejected(reason));
-        var ended = state.winner == null ? null : new MatchEnded(state.winner);
+        var rejection = state.shoot(actor.context().actorId(), request);
+        if (rejection != null) return reply(actor, rejection);
+        var ended = state.winner() == null ? null : new MatchEnded(state.winner());
         return broadcast(view())
                 .thenCompose(
                         ignored ->
@@ -72,10 +73,10 @@ public final class Room implements ZLinkSpot<Player> {
 
     private CompletionStage<Void> broadcast(Object message) {
         CompletionStage<Void> sends = CompletableFuture.completedFuture(null);
-        for (var player : state.players)
+        for (var player : state.playerIds())
             sends =
                     sends.thenCompose(
-                            ignored -> actors.sendToActor(player.playerId, message).submit());
+                            ignored -> actors.sendToActor(player, message).submit());
         return sends;
     }
 

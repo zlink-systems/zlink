@@ -1,13 +1,18 @@
+import { performance } from 'node:perf_hooks';
 import { Game, Names, Rejection } from '../shared/constants';
 import {
+  ActionRejected,
   PlayerView,
+  toRetryAfterMs,
   type MoveRequest,
   type ShootRequest,
   type QueueRequest
 } from '../shared/messages';
+
 export class MatchmakingState {
   waiting: [string, QueueRequest[]][] = [];
   roomSequence = 0;
+
   enqueue(request: QueueRequest): void {
     if (!request.mode.trim()) throw new Error('Mode required');
     if (this.waiting.some(([, queue]) => queue.some((p) => p.playerId === request.playerId)))
@@ -19,6 +24,7 @@ export class MatchmakingState {
     }
     entry[1].push(request);
   }
+
   pair(): QueueRequest[] {
     return (
       this.waiting
@@ -26,10 +32,13 @@ export class MatchmakingState {
         .slice(0, Game.playersPerRoom) ?? []
     );
   }
-  allocateRoom(): string {
-    if (!Number.isSafeInteger(this.roomSequence + 1)) throw new Error('Room sequence exhausted');
-    return Names.roomPrefix + ++this.roomSequence;
+
+  allocateRoom(): string | null {
+    if (this.roomSequence >= Game.maxSafeInteger) return null;
+    this.roomSequence++;
+    return Names.roomPrefix + this.roomSequence;
   }
+
   remove(pair: QueueRequest[]): void {
     const index = this.waiting.findIndex(([mode]) => mode === pair[0].mode);
     const queue = this.waiting[index][1];
@@ -37,73 +46,264 @@ export class MatchmakingState {
     if (!queue.length) this.waiting.splice(index, 1);
   }
 }
+
 export interface Combatant {
   playerId: string;
   x: number;
   y: number;
   hp: number;
-  sequence: number;
+  lastSequence: number;
+  lastMoveAtMs: number | null;
+  lastShotAtMs: number | null;
 }
+
+export interface RoomClock {
+  now(): number;
+}
+
+interface CombatantSnapshot {
+  PlayerId: string;
+  X: number;
+  Y: number;
+  Hp: number;
+  LastSequence: number;
+  MoveBudgetRemainingMs: number | null;
+  FireCooldownRemainingMs: number | null;
+}
+
+interface RoomSnapshot {
+  Phase: string;
+  Winner: string | null;
+  Players: CombatantSnapshot[];
+}
+
+const systemClock: RoomClock = { now: () => performance.now() };
+const moveBudgetDurationMs = (Game.maxStep / Game.maxSpeed) * 1000;
+
 export class RoomState {
-  players: Combatant[] = [];
-  winner: string | null = null;
+  private readonly combatants: Combatant[] = [];
+  private winner: string | null = null;
+
+  constructor(private readonly clock: RoomClock = systemClock) {}
+
+  get players(): readonly Combatant[] {
+    return this.combatants;
+  }
+
+  get Winner(): string | null {
+    return this.winner;
+  }
+
+  get Phase(): string {
+    return this.winner === null ? Game.playingPhase : Game.finishedPhase;
+  }
+
   admit(playerId: string): boolean {
-    if (this.players.some((p) => p.playerId === playerId)) return true;
-    if (this.players.length >= Game.playersPerRoom) return false;
-    this.players.push({ playerId, x: 0, y: 0, hp: Game.initialHp, sequence: 0 });
+    if (this.combatants.some((player) => player.playerId === playerId)) return true;
+    if (this.combatants.length >= Game.playersPerRoom) return false;
+    const spawn =
+      this.combatants.length === 0
+        ? [Game.firstSpawnX, Game.firstSpawnY]
+        : [Game.secondSpawnX, Game.secondSpawnY];
+    this.combatants.push({
+      playerId,
+      x: spawn[0],
+      y: spawn[1],
+      hp: Game.initialHp,
+      lastSequence: 0,
+      lastMoveAtMs: null,
+      lastShotAtMs: null
+    });
     return true;
   }
+
   private player(id: string): Combatant {
-    const player = this.players.find((p) => p.playerId === id);
+    const player = this.combatants.find((candidate) => candidate.playerId === id);
     if (!player) throw new Error('Unknown room player');
     return player;
   }
-  private validate(player: Combatant, sequence: number): string | null {
-    if (!Number.isSafeInteger(sequence) || sequence <= player.sequence)
-      return Rejection.staleSequence;
-    player.sequence = sequence;
-    return this.winner === null ? null : Rejection.matchFinished;
+
+  private validateAction(player: Combatant, sequence: number): ActionRejected | null {
+    if (!Number.isInteger(sequence) || sequence > Game.maxSafeInteger)
+      return new ActionRejected(Rejection.integerOutOfRange);
+    if (sequence <= player.lastSequence) return new ActionRejected(Rejection.staleSequence);
+    return this.winner === null ? null : new ActionRejected(Rejection.matchFinished);
   }
-  move(id: string, move: MoveRequest): string | null {
-    const player = this.player(id),
-      reason = this.validate(player, move.sequence);
-    if (reason) return reason;
-    if (!Number.isFinite(move.x) || !Number.isFinite(move.y)) return Rejection.invalidMove;
-    player.x = move.x;
-    player.y = move.y;
+
+  private static commitAcceptedAction(player: Combatant, sequence: number): void {
+    player.lastSequence = sequence;
+  }
+
+  private elapsedMilliseconds(start: number, end: number): number {
+    return Math.max(0, end - start);
+  }
+
+  private static intersectsWall(ax: number, ay: number, bx: number, by: number): boolean {
+    if (ax === bx)
+      return (
+        ax === Game.wallX && Math.max(ay, by) >= Game.wallMinY && Math.min(ay, by) <= Game.wallMaxY
+      );
+    const t = (Game.wallX - ax) / (bx - ax);
+    const y = ay + t * (by - ay);
+    return t >= 0 && t <= 1 && y >= Game.wallMinY && y <= Game.wallMaxY;
+  }
+
+  move(id: string, move: MoveRequest): ActionRejected | null {
+    const player = this.player(id);
+    const rejection = this.validateAction(player, move.sequence);
+    if (rejection) return rejection;
+    if (!Number.isFinite(move.dx) || !Number.isFinite(move.dy))
+      return new ActionRejected(Rejection.invalidMove);
+
+    const distance = Math.sqrt(move.dx * move.dx + move.dy * move.dy);
+    if (distance > Game.maxStep) return new ActionRejected(Rejection.stepTooLarge);
+
+    const targetX = player.x + move.dx;
+    const targetY = player.y + move.dy;
+    if (
+      targetX < Game.mapMinX ||
+      targetX > Game.mapMaxX ||
+      targetY < Game.mapMinY ||
+      targetY > Game.mapMaxY
+    )
+      return new ActionRejected(Rejection.outsideMap);
+
+    if (RoomState.intersectsWall(player.x, player.y, targetX, targetY))
+      return new ActionRejected(Rejection.moveBlockedByWall);
+
+    const now = this.clock.now();
+    if (player.lastMoveAtMs !== null) {
+      const elapsedMs = this.elapsedMilliseconds(player.lastMoveAtMs, now);
+      const budget = Math.min(Game.maxStep, (Game.maxSpeed * elapsedMs) / 1000);
+      if (distance > budget) {
+        const remainingDistance = distance - budget;
+        const retryAfterMs = toRetryAfterMs(
+          Math.max(1, (remainingDistance * 1000) / Game.maxSpeed)
+        );
+        return new ActionRejected(Rejection.moveBudget, retryAfterMs);
+      }
+    }
+
+    player.x = targetX;
+    player.y = targetY;
+    RoomState.commitAcceptedAction(player, move.sequence);
+    player.lastMoveAtMs = now;
     return null;
   }
-  shoot(id: string, shot: ShootRequest): string | null {
-    const shooter = this.player(id),
-      reason = this.validate(shooter, shot.sequence);
-    if (reason) return reason;
-    const target = this.players.find(
-      (p) => p.playerId === shot.targetId && p.playerId !== id && p.hp > 0
+
+  shoot(id: string, shot: ShootRequest): ActionRejected | null {
+    const shooter = this.player(id);
+    const rejection = this.validateAction(shooter, shot.sequence);
+    if (rejection) return rejection;
+
+    const target = this.combatants.find(
+      (player) => player.playerId === shot.targetId && player.playerId !== id && player.hp > 0
     );
-    if (!target) return Rejection.noTarget;
-    const dx = target.x - shooter.x,
-      dy = target.y - shooter.y;
-    if (dx * dx + dy * dy > Game.shotRange * Game.shotRange) return Rejection.outOfRange;
-    if (
-      Game.walls.some((wall) => {
-        // Touching the closed wall segment blocks the shot.
-        if (shooter.x === target.x)
-          return (
-            shooter.x === wall.x &&
-            Math.max(shooter.y, target.y) >= wall.minY &&
-            Math.min(shooter.y, target.y) <= wall.maxY
-          );
-        const t = (wall.x - shooter.x) / dx,
-          y = shooter.y + t * dy;
-        return t >= 0 && t <= 1 && y >= wall.minY && y <= wall.maxY;
-      })
-    )
-      return Rejection.blockedByWall;
+    if (!target) return new ActionRejected(Rejection.noTarget);
+
+    const dx = target.x - shooter.x;
+    const dy = target.y - shooter.y;
+    if (dx * dx + dy * dy > Game.shotRange * Game.shotRange)
+      return new ActionRejected(Rejection.outOfRange);
+    if (RoomState.intersectsWall(shooter.x, shooter.y, target.x, target.y))
+      return new ActionRejected(Rejection.blockedByWall);
+
+    const now = this.clock.now();
+    if (shooter.lastShotAtMs !== null) {
+      const retryAfterMs = toRetryAfterMs(
+        Game.fireIntervalMs - this.elapsedMilliseconds(shooter.lastShotAtMs, now)
+      );
+      if (retryAfterMs > 0)
+        return new ActionRejected(Rejection.fireTooSoon, retryAfterMs);
+    }
+
     target.hp = Math.max(0, target.hp - Game.shotDamage);
     if (target.hp === 0) this.winner = id;
+    RoomState.commitAcceptedAction(shooter, shot.sequence);
+    shooter.lastShotAtMs = now;
     return null;
   }
+
   view(): PlayerView[] {
-    return this.players.map((p) => new PlayerView(p.playerId, p.x, p.y, p.hp));
+    return this.combatants.map(
+      (player) =>
+        new PlayerView(player.playerId, player.x, player.y, player.hp, player.lastSequence)
+    );
+  }
+
+  capture(): Uint8Array {
+    const now = this.clock.now();
+    const snapshot: RoomSnapshot = {
+      Phase: this.Phase,
+      Winner: this.winner,
+      Players: this.combatants.map((player) => ({
+        PlayerId: player.playerId,
+        X: player.x,
+        Y: player.y,
+        Hp: player.hp,
+        LastSequence: player.lastSequence,
+        MoveBudgetRemainingMs: this.remainingMilliseconds(
+          player.lastMoveAtMs,
+          moveBudgetDurationMs,
+          now
+        ),
+        FireCooldownRemainingMs: this.remainingMilliseconds(
+          player.lastShotAtMs,
+          Game.fireIntervalMs,
+          now
+        )
+      }))
+    };
+    return new TextEncoder().encode(JSON.stringify(snapshot));
+  }
+
+  restore(payload: Uint8Array): void {
+    const snapshot = JSON.parse(new TextDecoder().decode(payload)) as RoomSnapshot;
+    const expectedPhase = snapshot.Winner === null ? Game.playingPhase : Game.finishedPhase;
+    if (snapshot.Phase !== expectedPhase || snapshot.Players.length > Game.playersPerRoom)
+      throw new Error('Invalid room state snapshot');
+
+    const now = this.clock.now();
+    this.combatants.splice(
+      0,
+      this.combatants.length,
+      ...snapshot.Players.map((player) => ({
+        playerId: player.PlayerId,
+        x: player.X,
+        y: player.Y,
+        hp: player.Hp,
+        lastSequence: player.LastSequence,
+        lastMoveAtMs: this.restoreTimestamp(
+          player.MoveBudgetRemainingMs,
+          moveBudgetDurationMs,
+          now
+        ),
+        lastShotAtMs: this.restoreTimestamp(
+          player.FireCooldownRemainingMs,
+          Game.fireIntervalMs,
+          now
+        )
+      }))
+    );
+    this.winner = snapshot.Winner;
+  }
+
+  private remainingMilliseconds(
+    lastAtMs: number | null,
+    durationMs: number,
+    now: number
+  ): number | null {
+    if (lastAtMs === null) return null;
+    return Math.max(0, Math.ceil(durationMs - this.elapsedMilliseconds(lastAtMs, now)));
+  }
+
+  private restoreTimestamp(
+    remainingMs: number | null,
+    durationMs: number,
+    now: number
+  ): number | null {
+    if (remainingMs === null) return null;
+    const boundedRemaining = Math.max(0, Math.min(remainingMs, durationMs));
+    return now - (durationMs - boundedRemaining);
   }
 }

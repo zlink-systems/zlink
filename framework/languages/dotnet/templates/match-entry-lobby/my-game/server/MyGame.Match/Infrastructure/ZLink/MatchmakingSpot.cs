@@ -54,7 +54,12 @@ public sealed class MatchmakingSpot(
         var pair = state.Pair();
         if (pair.Length == 0)
             return;
-        var roomId = state.AllocateRoom();
+        if (!state.TryAllocateRoom(out var roomId))
+        {
+            foreach (var player in pair)
+                await actors.SendToActor(player.PlayerId, new ActionRejected(Rejection.IntegerOutOfRange)).Async();
+            return;
+        }
         var created = await spots
             .GetOrCreate(roomId, GameNames.RoomType)
             .InMesh(GameNames.WorldMesh)

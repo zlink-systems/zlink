@@ -38,17 +38,23 @@ Bash:
 
 ```sh
 ./run-e2e.sh
-./run-e2e.sh --scenario hit,reconnect,update
+./run-e2e.sh --scenario hit,wall,input,reconnect,update
 ```
 
 PowerShell:
 
 ```powershell
 pwsh -NoProfile -File ./run-e2e.ps1
-pwsh -NoProfile -File ./run-e2e.ps1 -Scenario hit,reconnect,update
+pwsh -NoProfile -File ./run-e2e.ps1 -Scenario hit,wall,input,reconnect,update
 ```
 
-`hit` verifies shared room admission, movement, HP damage, wall/range/no-target rejection, and the winner. `reconnect` verifies a new Session with the same Actor generation and room state. `update` drains the room host, verifies unchanged Session binding and game state, replaces the stopped process, and verifies a new room on the replacement.
+| Scenario | Checks |
+| --- | --- |
+| hit | Matchmaking, client `RoomAssignment` rejection, HP 75 after a hit, wall and range rejections without damage, absent target, HP zero, and winner |
+| wall | A wall blocks movement and a shot at its segment; walking below its endpoint reaches the other side, where a shot with the wall behind the target is accepted |
+| input | Duplicate and reversed sequences, `MaxStep`, map and wall bounds, movement and fire cooldown responses, unchanged state after rejection, and retry acceptance after the server-provided delay |
+| reconnect | A new Session retains Actor identity and the Room's position, HP, last sequence, phase, and winner, including after the match finishes |
+| update | Relocation retains Room state and client Sessions, then the replacement node accepts new work |
 
 Each scenario owns its Redis Compose project, ephemeral loopback ports, key prefix, and node processes. Configuration and stdout/stderr logs remain in `.logs/run-<id>/`. Framework message-flow diagnostics run at Normal and write to stderr. Cleanup failures fail the run. Use `pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure` or `./run-e2e.sh --check-structure` for structure validation.
 
@@ -66,10 +72,12 @@ Start Redis, then matchA with `bootstrap: true`, matchB, and session. Each node 
 
 For planned maintenance, send `drain` to the room host's stdin and wait for `RELOCATION_REQUESTED`, `RELOCATED`, and `SAFE_TO_SHUTDOWN`. Send `shutdown`, wait for `STOPPED`, and start the replacement with the same configuration; bootstrap uses GetOrCreate and accepts the existing Matchmaking object on the surviving host. The runner performs this sequence through the public relocation API.
 
-Players start with 100 HP. Shots have range 80 and damage 25. A closed vertical wall at x=50, y=0..100 blocks intersecting shots. RoomState validates monotonically increasing action sequences, finite movement, and terminal matches. Extend combat rules in `server/match/.../Domain.kt`; transport, binding, and lifecycle remain Framework responsibilities.
+Players start at `(40, 10)` and `(60, 10)` with 100 HP. `MoveRequest` carries displacement. The server checks finite values, `MaxStep` 2.0, map bounds `[0, 100]` on each axis, the closed wall segment at `x=50, y=20..60`, and the movement budget `min(MaxStep, MaxSpeed × elapsed)` with `MaxSpeed` 10 units per second. Shots have range 80, damage 25, and a 250 ms fire interval. Contract integers are limited to `9,007,199,254,740,991`; values outside that range are rejected. Only accepted moves and shots advance `LastSequence`; rejected actions preserve room state. `ActionRejected` carries `Reason` and `RetryAfterMs`; only time-limited rejections have a positive delay, and clients wait for that returned value before retrying the same request. `RoomView` includes each player's `LastSequence`, the room `Phase`, and `Winner`. Relocation snapshots store remaining cooldown and movement-budget time in milliseconds, not process timestamps.
+
+`QueueRequest` is the first client packet. The Session relays only `QueueRequest`, `RoomViewRequest`, `MoveRequest`, `ShootRequest`, and `SessionInfoRequest`; internal packets receive `ActionRejected("packet-not-allowed", 0)`. Requests use typed messages and the default Framework serializer. The Framework message model carries only finite JSON numbers, so nonfinite input reaches only the domain checks.
 
 ## 한국어 실행 안내
 
 기본 e2e는 Docker에서 실행합니다. 로컬 process 디버깅은 JDK 25를 준비하고 `--local` 또는 `-Local`로 실행합니다. Docker Compose를 준비한 뒤 위 Build 명령과 Docker e2e 명령을 실행합니다. runner는 시나리오마다 Redis와 node process를 생성하고 자신이 만든 자원만 정리합니다. 실행 설정과 message-flow 기록은 `.logs/run-<id>/`에 남습니다.
 
-대기열은 Matchmaking User Spot이 소유하며 Room Spot이 위치·HP·명중을 판정합니다. 운영 중 갱신할 때는 room host에 `drain`을 보내고 `SAFE_TO_SHUTDOWN`을 확인한 뒤 종료합니다. 대체 process는 같은 설정으로 시작하며 bootstrap의 GetOrCreate가 기존 Matchmaking object를 사용합니다.
+대기열은 Matchmaking User Spot이 소유하며 Room Spot이 위치·HP·행동 sequence·승자를 판정합니다. 플레이어는 `(40, 10)`과 `(60, 10)`에서 시작하고 이동은 한 번에 `MaxStep` 2, 지도의 `[0, 100]`, x=50의 y=20..60 닫힌 벽, 초당 10 단위 예산을 따른다. 사격은 250 ms 간격이며 이동·사격 거부는 `ActionRejected`에 이유와 서버가 계산한 `RetryAfterMs`를 담습니다. 거부된 행동은 Room 상태와 `LastSequence`를 바꾸지 않고 relocation snapshot은 절대 시각 대신 남은 시간(밀리초)을 저장합니다. 시나리오는 `hit`, `wall`, `input`, `reconnect`, `update` 순서로 실행합니다. 운영 중 갱신할 때는 room host에 `drain`을 보내고 `SAFE_TO_SHUTDOWN`을 확인한 뒤 종료합니다. 대체 process는 같은 설정으로 시작하며 bootstrap의 GetOrCreate가 기존 Matchmaking object를 사용합니다.

@@ -45,7 +45,6 @@ public final class Client implements AutoCloseable {
         register(RoomView.class);
         register(MatchFound.class);
         register(MatchEnded.class);
-        register(ShotRejected.class);
         register(ActionRejected.class);
         registrations.add(
                 connector.onDisconnected(
@@ -117,6 +116,13 @@ public final class Client implements AutoCloseable {
             if (event instanceof Exception error) throw error;
             pending.add(event);
         }
+    }
+
+    Object nextActionResult(Predicate<RoomView> updated) throws Exception {
+        return next(
+                Object.class,
+                value -> value instanceof ActionRejected
+                        || (value instanceof RoomView view && updated.test(view)));
     }
 
     void clear() throws Exception {

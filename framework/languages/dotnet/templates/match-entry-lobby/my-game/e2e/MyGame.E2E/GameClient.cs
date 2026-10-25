@@ -16,6 +16,7 @@ internal sealed class GameClient(
     public string PlayerId { get; } = playerId;
     public bool Disconnected { get; private set; }
     private readonly Dictionary<Type, Channel<object>> inboxes = [];
+    private readonly Channel<object> actionResults = Channel.CreateUnbounded<object>();
 
     public static async Task<GameClient> ConnectAsync(
         RunOutcome outcome,
@@ -50,7 +51,6 @@ internal sealed class GameClient(
         );
         client.Record<RoomView>();
         client.Record<MatchFound>();
-        client.Record<ShotRejected>();
         client.Record<MatchEnded>();
         client.Record<ActionRejected>();
         try
@@ -72,7 +72,10 @@ internal sealed class GameClient(
         Connector.On<T>(
             (message, _) =>
             {
-                inbox.Writer.TryWrite(message.Payload!);
+                var payload = message.Payload!;
+                inbox.Writer.TryWrite(payload);
+                if (payload is RoomView or ActionRejected)
+                    actionResults.Writer.TryWrite(payload);
                 return ValueTask.CompletedTask;
             }
         );
@@ -96,6 +99,41 @@ internal sealed class GameClient(
             );
         }
         throw new InvalidOperationException("Client inbox closed.");
+    }
+
+    public void ClearActionResults()
+    {
+        while (actionResults.Reader.TryRead(out _)) { }
+    }
+
+    public async Task<object> WaitForActionResultAsync(
+        Func<RoomView, bool> updated,
+        CancellationToken ct
+    )
+    {
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        deadline.CancelAfter(ResponseTimeout);
+        try
+        {
+            await foreach (var message in actionResults.Reader.ReadAllAsync(deadline.Token))
+            {
+                if (message is ActionRejected rejection)
+                {
+                    inboxes[typeof(ActionRejected)].Reader.TryRead(out _);
+                    return rejection;
+                }
+                if (message is RoomView view && updated(view))
+                    return view;
+            }
+        }
+        catch (OperationCanceledException error) when (!ct.IsCancellationRequested)
+        {
+            throw new TimeoutException(
+                $"Player {PlayerId}: timed out waiting for an action result.",
+                error
+            );
+        }
+        throw new InvalidOperationException("Client action result inbox closed.");
     }
 
     public Task SendAsync<T>(T message, CancellationToken ct) =>

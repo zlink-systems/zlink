@@ -38,17 +38,27 @@ Build and outer cleanup logs are in `.logs/docker-<project>/`; node configuratio
 
 ```sh
 ./run-e2e.sh
-./run-e2e.sh --scenario hit,reconnect,update
+./run-e2e.sh --scenario hit,wall,input,reconnect,update
 ./run-e2e.sh --check-structure
 ```
 
 ```powershell
 pwsh -NoProfile -File ./run-e2e.ps1
-pwsh -NoProfile -File ./run-e2e.ps1 -Scenario hit,reconnect,update
+pwsh -NoProfile -File ./run-e2e.ps1 -Scenario hit,wall,input,reconnect,update
 pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
 ```
 
-`hit` verifies pairing, HP damage, closed wall intersection, range and missing-target rejections, and the winner. `reconnect` verifies the same Actor generation, room, HP, and position after a new Session binds the Actor. `update` drains the Room host, observes relocation and safe shutdown, checks unchanged bindings and game state, replaces the process, and verifies that it accepts a new Room.
+| Scenario | Checks |
+| --- | --- |
+| hit | Matchmaking, client `RoomAssignment` rejection, HP damage, wall and range rejections without damage, absent target, HP zero, and winner |
+| wall | Wall blocks a shot and movement at its segment; walking below its endpoint reaches the other side, where a shot succeeds |
+| input | Duplicate and reversed sequences, `MaxStep`, map and wall bounds, movement and fire cooldown responses, state immutability after rejection, and first retry acceptance after the server-provided delay |
+| reconnect | A new Session retains Actor identity and the Room's position, HP, last sequence, phase, and winner, including after the match finishes |
+| update | Relocation retains Room state and client Sessions, then the replacement node accepts new work |
+
+`QueueRequest` is the first client packet. The Session relays only `QueueRequest`, `RoomViewRequest`, `MoveRequest`, `ShootRequest`, and `SessionInfoRequest`; internal packets receive `ActionRejected("packet-not-allowed", 0)`. The example accepts a claimed player ID; replace this boundary with authenticated identity before deployment. Requests use typed messages and the default Framework serializer. The Framework message model carries only finite JSON numbers, so nonfinite input reaches only the domain checks.
+
+`RoomState` owns movement, shooting, action sequence, cooldown, and winner decisions. It places players at `(40, 10)` and `(60, 10)`. `MoveRequest` carries displacement; the server checks finite values, `MaxStep` 2.0, map bounds `[0, 100]` on each axis, the closed wall segment at `x=50, y=20..60`, and movement budget `min(MaxStep, MaxSpeed × elapsed)` with `MaxSpeed` 10 units per second. Shots use server positions and have a 250 ms fire interval. Contract integers are limited to `9,007,199,254,740,991`; values above that limit are rejected. Only accepted moves and shots advance `lastSequence`; rejected actions preserve room state. `ActionRejected` carries `reason` and `retryAfterMs`; only time-limited rejections have a positive delay, and clients wait for that returned value before retrying the same request. `RoomView` includes each player's `lastSequence`, the room `phase`, and `winner`. Relocation snapshots store remaining cooldown and movement-budget time in milliseconds, not process timestamps. The domain test exercises the same boundaries with an injected monotonic test clock.
 
 The runner checks the structure, uses the invocation's isolated Compose project and a unique key prefix per scenario, starts match processes before Session, and waits for public runtime readiness. Listeners bind port zero and publish their actual endpoints. Redis prefixes are unique per run. Logs, generated configuration, message-flow events, and client observations remain in `.logs/run-<id>/`. The runner removes only its own processes and Compose project; cleanup failures produce a nonzero exit code.
 
@@ -74,4 +84,4 @@ Write `drain` to the selected match process's standard input. Wait for `RELOCATI
 
 기본 빌드와 e2e는 Docker에서 runner와 node를 실행한다. Bash는 `./run-e2e.sh`, PowerShell 7은 `pwsh -NoProfile -File ./run-e2e.ps1`을 사용한다. 로컬 프로세스 디버깅은 Node.js와 npm을 설치한 뒤 `--local` 또는 `-Local`로 실행한다. Docker 빌드·정리 로그는 `.logs/docker-<project>/`에 남는다.
 
-Docker Compose를 준비하고 Build 절의 명령으로 이미지를 빌드합니다. `run-e2e.sh` 또는 PowerShell 7의 `run-e2e.ps1`을 실행하면 구조 검사, Redis·서버 기동, 시나리오 판정과 자원 정리를 수행합니다. 실행 로그와 message flow는 `.logs/run-<id>/`에 보존됩니다. `hit`은 매칭과 사격 판정을, `reconnect`는 Actor identity와 게임 상태 복원을 확인합니다. `update`는 Room host를 drain한 뒤 연결·상태 유지와 교체 process의 새 Room 수락을 확인합니다. 배포 시에는 `SAFE_TO_SHUTDOWN`을 확인한 뒤 기존 process를 종료하고, 교체 process의 `READY`를 확인합니다.
+Docker Compose를 준비하고 Build 절의 명령으로 이미지를 빌드합니다. `run-e2e.sh` 또는 PowerShell 7의 `run-e2e.ps1`을 실행하면 구조 검사, Redis·서버 기동, 시나리오 판정과 자원 정리를 수행합니다. 실행 로그와 message flow는 `.logs/run-<id>/`에 보존됩니다. `hit`은 매칭과 사격 판정을, `wall`은 벽의 이동·사격 차단과 합법 이동을, `input`은 순번·이동·쿨다운 거부와 상태 불변을, `reconnect`는 진행 중·종료 뒤의 상태 복원을, `update`는 relocation과 대체 node 동작을 확인합니다. 배포 시에는 `SAFE_TO_SHUTDOWN`을 확인한 뒤 기존 process를 종료하고, 교체 process의 `READY`를 확인합니다.

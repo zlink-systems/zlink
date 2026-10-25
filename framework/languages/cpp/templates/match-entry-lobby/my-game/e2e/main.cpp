@@ -23,7 +23,7 @@ int main (int argc, char **argv)
                 selection = argv[++i];
             else
                 throw std::invalid_argument ("Usage: my-game-e2e [--root path] [--scenario "
-                                             "hit,reconnect,update] [--check-structure]");
+                                             "hit,wall,input,reconnect,update] [--check-structure]");
         }
         MyGame::E2E::check_structure (root);
         if (check_only) {

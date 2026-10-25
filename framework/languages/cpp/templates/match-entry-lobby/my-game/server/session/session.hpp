@@ -26,6 +26,14 @@ class Session final : public fx::packet_stream_session_t
                                 const fx::session_message_context_t &dispatch,
                                 const zlink::message_t &payload) override
     {
+        if (!is_client_packet (dispatch.packet_name)) {
+            const auto response = zlink::message_t::from_json (
+              ActionRejected{Rejection::packet_not_allowed});
+            co_await stream.write_packet (response)
+              .packet_name (ActionRejected::packet_name)
+              .async ();
+            co_return;
+        }
         auto bound = stream.actors ().bound ();
         if (bound.empty ()) {
             if (dispatch.packet_name != QueueRequest::packet_name)
@@ -58,6 +66,16 @@ class Session final : public fx::packet_stream_session_t
             co_return;
         }
         co_await actor.relay (std::string (dispatch.packet_name), payload);
+    }
+
+  private:
+    static bool is_client_packet (std::string_view packet_name)
+    {
+        return packet_name == QueueRequest::packet_name
+               || packet_name == RoomViewRequest::packet_name
+               || packet_name == MoveRequest::packet_name
+               || packet_name == ShootRequest::packet_name
+               || packet_name == SessionInfoRequest::packet_name;
     }
 };
 }

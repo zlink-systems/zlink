@@ -1,4 +1,3 @@
-using System.Text.Json;
 using MyGame.Match.Domain;
 using MyGame.Shared;
 using Zlink.Framework.Contracts.Actors;
@@ -50,7 +49,8 @@ public sealed class RoomSpot(
     public ValueTask OnLeaveActorAsync(PlayerActor actor, CancellationToken ct) =>
         ValueTask.CompletedTask;
 
-    private RoomView View() => new(Context.SpotId, settings.Id, state.View());
+    private RoomView View() =>
+        new(Context.SpotId, settings.Id, state.Phase, state.Winner, state.View());
 
     public ValueTask ViewAsync(PlayerActor actor) =>
         actor.Context.BoundSession.Send(View()).Async();
@@ -64,19 +64,19 @@ public sealed class RoomSpot(
 
     public async ValueTask MoveAsync(PlayerActor actor, MoveRequest request, CancellationToken ct)
     {
-        var reason = state.Move(actor.Context.ActorId, request);
-        if (reason is not null)
-            await actor.Context.BoundSession.Send(new ActionRejected(reason)).Async();
+        var rejection = state.Move(actor.Context.ActorId, request);
+        if (rejection is not null)
+            await actor.Context.BoundSession.Send(rejection).Async();
         else
             await BroadcastAsync(View(), ct);
     }
 
     public async ValueTask ShootAsync(PlayerActor actor, ShootRequest request, CancellationToken ct)
     {
-        var reason = state.Shoot(actor.Context.ActorId, request);
-        if (reason is not null)
+        var rejection = state.Shoot(actor.Context.ActorId, request);
+        if (rejection is not null)
         {
-            await actor.Context.BoundSession.Send(new ShotRejected(reason)).Async();
+            await actor.Context.BoundSession.Send(rejection).Async();
             return;
         }
         await BroadcastAsync(View(), ct);
@@ -84,12 +84,9 @@ public sealed class RoomSpot(
             await BroadcastAsync(new MatchEnded(winner), ct);
     }
 
-    public byte[] Capture() => JsonSerializer.SerializeToUtf8Bytes(state);
+    public byte[] Capture() => state.Capture();
 
-    public void Restore(ReadOnlyMemory<byte> payload) =>
-        state =
-            JsonSerializer.Deserialize<RoomState>(payload.Span)
-            ?? throw new InvalidDataException("Missing room state.");
+    public void Restore(ReadOnlyMemory<byte> payload) => state.Restore(payload);
 }
 
 public sealed class RoomRelocation : IZLinkSpotRelocationAdapter<RoomSpot>

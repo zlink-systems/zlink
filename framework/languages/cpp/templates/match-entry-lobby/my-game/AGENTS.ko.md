@@ -15,7 +15,7 @@
 ```powershell
 pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
 pwsh -NoProfile -File ./run-e2e.ps1
-pwsh -NoProfile -File ./run-e2e.ps1 -Scenario hit,reconnect,update
+pwsh -NoProfile -File ./run-e2e.ps1 -Scenario hit,wall,input,reconnect,update
 pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
 ```
 
@@ -24,7 +24,7 @@ Bash도 같은 절차를 실행한다.
 ```bash
 ./run-e2e.sh --build-only
 ./run-e2e.sh
-./run-e2e.sh --scenario hit,reconnect,update
+./run-e2e.sh --scenario hit,wall,input,reconnect,update
 ./run-e2e.sh --check-structure
 ```
 
@@ -84,47 +84,25 @@ Actor가 소속 Spot을 바꾸는 동작은 membership 변경이다. 대상 Spot
 2. 새 Actor는 Entry Spot `Entry`에서 시작한다. `Entry::queue`가 identity를 확인하고 `Matchmaking` Spot에 `join_spot(...).defer()`를 요청한다. 이 Spot은 `BootstrapMatchmaking` 설정이 true인 node(`matchA`)에서 `NodeControl`이 시작 때 만든다.
 3. `Matchmaking::on_actor_join`이 요청을 대기열에 넣고, `Matchmaking::match`가 `MatchmakingState::pair`로 같은 mode의 두 플레이어를 짝짓는다. Room 이름을 할당하고 Room을 `get_or_create`한 뒤 Actor client로 두 플레이어에게 `RoomAssignment`를 보낸다.
 4. `Matchmaking::assignment`가 플레이어마다 실행되어 `RoomAdmission`으로 Room에 `join_spot(...).defer()`를 요청한다. `Room::on_actor_join`이 플레이어를 수락하고 `Room::on_actor_joined`가 `MatchFound`를 push하며 Room이 두 플레이어에게 `RoomView`를 broadcast한다. `Room::deliver_view` 등 `Room::deliver_*` handler가 push를 binding된 Session으로 전달한다.
-5. `MoveRequest`와 `ShootRequest`는 `Room::move`와 `Room::shoot`가 처리한다. `RoomState` 규칙을 적용하고 거부는 `ActionRejected`나 `ShotRejected`로 답하며, 새 `RoomView`와 승자가 나오면 `MatchEnded`를 broadcast한다.
+5. `MoveRequest`와 `ShootRequest`는 `Room::move`와 `Room::shoot`가 `RoomState` 규칙에 따라 처리한다. 모든 거부는 `ActionRejected`로 응답하며, 시간 제한 거부에는 서버가 계산한 `RetryAfterMs`를 포함한다. 수락된 행동은 새 `RoomView`를 broadcast하고 승자가 나오면 `MatchEnded`도 broadcast한다.
 6. node를 교체할 때 `NodeControl`의 `drain`이 relocation을 요청한다. Framework는 `MatchmakingRelocation`·`RoomRelocation`(둘 다 `server/match/spots.hpp`의 `StateRelocation` alias)의 `capture`로 게임 상태를 받아 다른 node에서 `restore`한다.
 
-## 이 샘플을 보며 개발하기
+## 프로젝트 개발
 
-이 샘플은 기능들이 함께 동작하는 방식을 보여 주므로, 자기 게임으로 바꾸지 않고 읽고 실행하는 용도로 쓴다. 자기 프로젝트는 C++ 기본 셋업에서 시작한다. [ZLink Start](https://zlink.systems/start)의 Initializer에서 C++를 고르거나 ZLink 저장소의 `framework/languages/cpp/templates/starter/my-game`을 사용한다. 그다음 필요한 기능을 이 샘플에서 하나씩 옮긴다. 구조 선택은 기본 셋업의 `AGENTS.md`가 설명하며, 이 절은 `match-entry-lobby`만 다룬다. 이 샘플은 바꾸지 않고 프로젝트 옆에 참고용으로 둔다.
+이 템플릿의 domain을 확장해 액션 게임 서버를 만듭니다. 실행·배포 절차는 [README](README.md)가 설명하고, [zlink.structure.json](zlink.structure.json)은 초기 topology와 시나리오 순서를 정의합니다.
 
-### 샘플 먼저 실행하기
+### 템플릿 실행
 
-옮기기 전에 [개발 명령](#개발-명령)으로 빌드와 e2e를 한 번 실행해 받은 샘플이 동작하는지 확인하고 동작을 본다. 이 결과가 이후 비교의 기준이 된다. 실패하면 먼저 [README](README.md)의 Known issues와 대조한다.
+domain을 바꾸기 전에 이 안내의 build와 e2e 명령을 실행합니다. 현재 동작을 확인하고, 실패는 [README](README.md)의 Known issues와 대조합니다.
 
-### 옮길 기능
+### 도메인 확장 위치
 
-기능 이름은 기본 셋업 `AGENTS.md`의 기능 표와 같다(매칭 대기열과 동적 Room은 이 구조에만 있는 기능이다). 경로는 이 디렉터리를 기준으로 한다. 기본 셋업에는 Session node 하나와 `connect` 시나리오만 있으므로, 마지막 열은 기능마다 기본 셋업에서 함께 늘릴 것이다.
+1. 게임 상태와 판정을 책임 타입에 둡니다. `server/match/domain.hpp`의 `RoomState`는 이동·사격·승자를, `MatchmakingState`는 대기열을 관리합니다. 상태가 바뀌면 같은 domain type의 JSON snapshot도 갱신합니다. relocation은 이동·사격 제한의 남은 시간을 밀리초 단위로 복원하고, 대상 node의 monotonic clock을 기준으로 판정합니다.
+2. packet contract와 게임 상수는 `server/shared/contracts.hpp`에 추가합니다.
+3. `server/session/session.hpp`의 client packet allow list에는 client가 보낼 수 있는 `QueueRequest`, `RoomViewRequest`, `MoveRequest`, `ShootRequest`, `SessionInfoRequest`만 둡니다. Session은 내부 packet을 `packet-not-allowed`로 거부합니다.
+4. `e2e/scenarios.hpp`에 시나리오를 추가하고 `e2e/client.hpp`에 전송·관찰 코드를 둡니다. 시나리오 순서와 선택 예시는 `e2e/structure.hpp`, `e2e/main.cpp`, `zlink.structure.json`, README에서 함께 갱신합니다. domain 규칙 검사는 `e2e/domain_test.cpp`에 추가하고 `ctest --test-dir build --output-on-failure`로 실행합니다.
 
-| 기능 | 이 샘플의 파일 | 옮길 것 | 기본 셋업에서 함께 늘릴 것 |
-| --- | --- | --- | --- |
-| Typed 메시지 | `server/shared/contracts.hpp` | 사용할 기능의 struct: `QueueRequest`, `RoomAssignment`, `RoomAdmission`, `MatchFound`, `MoveRequest`, `ShootRequest`, `RoomViewRequest`, `RoomView`, `PlayerView`, `ShotRejected`, `ActionRejected`, `MatchEnded`. `SessionInfoRequest`·`SessionInfo`는 client가 필요로 할 때만 옮긴다 | 메시지가 가리키는 `Names`·`Game`·`Rejection` 상수 |
-| Actor | `server/match/player.hpp`의 `Player`, `PlayerFactory` | 최소 플레이어 Actor. 거부된 참가를 알리는 `Player::on_join_completed`와 이를 만드는 `PlayerFactory` | 새 `server/match/` role과 그 `main.cpp`, `server/config/` 파일, `CMakeLists.txt` role 목록의 항목. `main.cpp`의 Actor factory 등록. `zlink.structure.json`의 `nodes` 선언과 `e2e/structure.hpp`의 구조 검사 |
-| Spot | `server/match/spots.hpp`의 `Room`, `server/match/domain.hpp`의 `RoomState` | `RoomState`의 참가 수락 규칙·이동과 사격 규칙·승자 계산을 가진 `Room`과 `deliver_*` forwarder | `main.cpp`의 `RoomCapacity`를 지정한 Spot factory 등록. 구조 검사가 node 설정과 대조하는 `zlink.structure.json`의 `spots` 선언 |
-| 매칭 대기열 | `server/match/spots.hpp`의 `Matchmaking`, `server/match/domain.hpp`의 `MatchmakingState` | 단일 대기열 Spot. `MatchmakingState`(`enqueue`, `pair`, `allocate_room`, `remove`)와 `Matchmaking`의 `queue`·`assignment` handler | `BootstrapMatchmaking` 설정과 `NodeControl`(`server/shared/hosting.hpp`)의 생성 코드. `zlink.structure.json`의 `matchmaking` Spot |
-| Entry·첫 입장 | `server/match/player.hpp`의 `Entry`, `server/match/spots.hpp`의 `Room::queue` | `Entry::queue`(identity 확인, `Matchmaking`으로의 지연 참가)와, 재접속 때 다시 보낸 첫 패킷에 현재 `RoomView`로 답하는 `Room::queue` | `add_entry_spot` 등록과 `entry` 선언. 첫 입장 시나리오(`hit`)와 재접속 뒤 상태를 비교하는 `reconnect` 시나리오 |
-| 동적 Room | `server/match/spots.hpp`의 `Matchmaking::match`, `Matchmaking::assignment` | 동적 User Spot 생성 형태. 이름 할당, `Room` `get_or_create`, `RoomAssignment` 전송, `RoomAdmission`으로의 참가 | `RoomCapacity`를 지정한 `Room` factory 등록. `zlink.structure.json`의 `room` Spot 선언 |
-| Session binding | `server/session/session.hpp` | 첫 패킷 검사, Actor 조회·생성, `bind_or_get` binding과 원래 typed 패킷 relay | `Entry::queue`와 같은 첫 패킷 타입. 기본 셋업의 `server/session/session.hpp`에 옮긴다 |
-| Host relocation | `server/match/player.hpp`의 `PlayerRelocation`, `server/match/spots.hpp`의 `MatchmakingRelocation`·`RoomRelocation`, `server/shared/hosting.hpp`의 `NodeControl` | `capture`·`restore`를 가진 `StateRelocation` adapter, 상태 없는 Actor를 위한 `PlayerRelocation`, `drain`·`shutdown` 제어 | `main.cpp`의 `preserve_state_with` 등록. 서버 교체 뒤에도 연결·상태가 유지되고 대체 node가 새 작업을 받는지 판정하는 `update` 시나리오 |
-
-`drain`과 `shutdown`은 `NodeControl`과 함께 옮긴다. 단일 Matchmaking Spot이 이미 있으므로 대체 node는 `BootstrapMatchmaking`을 false로 설정한다.
-
-### 옮기는 순서와 규칙
-
-기능은 표의 행 하나씩 옮기고, 하나를 옮길 때마다 빌드, 구조 검사, 관련 e2e 시나리오를 실행한다. 시나리오 ID는 `e2e/structure.hpp`의 `Scenario` enum과 `scenario_order`, `e2e/scenarios.hpp`의 `scenario` 함수와 `e2e/main.cpp`의 usage 메시지, `zlink.structure.json`의 `run.scenarios`, `run.commands`의 시나리오 선택 예시에 함께 추가한다. 판정은 실제로 받은 응답과 이벤트로 하고, 고정 대기나 기한 확대로 통과시키지 않는다.
-
-메시지 contract부터 옮긴다. `server/shared/contracts.hpp`에 packet struct를 `packet_name`과 JSON 변환을 갖춰 먼저 정의한 뒤, 컴파일 오류가 나는 handler를 하나씩 새 메시지로 옮긴다. 첫 입장 패킷을 바꾸면 `server/session/session.hpp`의 `Session::on_packet`에 있는 첫 패킷 검사와 `Entry::queue`, `Room::queue`가 같은 타입을 받도록 함께 고친다.
-
-상태는 그 상태를 결정하는 객체에 둔다. 대기열은 `MatchmakingState`를 통해 `Matchmaking`에, HP·위치·sequence는 `RoomState`를 통해 `Room`에 둔다. `Player`는 application 상태를 갖지 않는다. 상태 필드를 바꿀 때는 같은 객체의 상태 struct와 JSON 변환, relocation adapter의 `capture`·`restore`를 함께 고친다. 빠뜨린 필드는 relocation 뒤 사라지고, `update` 시나리오가 그 손실을 잡는다.
-
-재접속은 첫 패킷을 다시 보내는 방식이다. 새 Session이 `QueueRequest`를 다시 보내면 `Session::on_packet`이 기존 Actor를 binding하고, Actor가 지금 속한 Spot이 이를 처리한다(`Room::queue`는 현재 view를 돌려주고 `Matchmaking::queue`는 플레이어를 다시 대기열에 넣는다). Actor가 있을 수 있는 모든 Spot에 첫 패킷 타입의 handler를 둔다.
-
-Match·Matchmaking·Room 같은 역할 이름을 이 샘플과 다르게 정하려면 타입 이름, `Names`, `server/config/`, `zlink.structure.json`, `CMakeLists.txt`의 role 목록을 한 번에 바꾼다. 이름 변경은 기능을 옮기는 변경과 나눠서 진행하면 실패 원인을 찾기 쉽다.
-
-옮긴 뒤 `update`가 실패하면 snapshot에 빠진 상태가 있는지 먼저 확인한다. 그다음 [디버깅](#디버깅)의 message flow로 첫 실패 단계를 찾는다.
+거부된 행동은 모두 `ActionRejected`로 응답합니다. 거부는 위치·HP·승자·마지막으로 수락한 sequence를 바꾸지 않습니다. 시간 제한 거부에는 서버가 계산한 `RetryAfterMs`가 포함되며, 시나리오는 그 값을 기다린 뒤 같은 요청을 다시 보냅니다.
 
 ## 개발 시 주의점
 

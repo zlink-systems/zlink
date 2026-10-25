@@ -2,6 +2,8 @@ package MyGame;
 
 public enum Scenario {
     HIT("hit"),
+    WALL("wall"),
+    INPUT("input"),
     RECONNECT("reconnect"),
     UPDATE("update");
     private final String id;

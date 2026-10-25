@@ -15,7 +15,7 @@
 ```powershell
 pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
 pwsh -NoProfile -File ./run-e2e.ps1
-pwsh -NoProfile -File ./run-e2e.ps1 -Scenario hit,reconnect,update
+pwsh -NoProfile -File ./run-e2e.ps1 -Scenario hit,wall,input,reconnect,update
 pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
 ```
 
@@ -24,7 +24,7 @@ Bash도 같은 절차를 실행한다.
 ```bash
 ./run-e2e.sh --build-only
 ./run-e2e.sh
-./run-e2e.sh --scenario hit,reconnect,update
+./run-e2e.sh --scenario hit,wall,input,reconnect,update
 ./run-e2e.sh --check-structure
 ```
 
@@ -48,7 +48,7 @@ Actor를 받아 공통 게임 규칙을 실행하는 상태 객체가 Spot이다
 
 ### E2E client
 
-`e2e/client.mts`는 공개 connector로 게임에 접속하여 client가 관찰할 결과를 검사하는 시나리오를 실행한다. `e2e/runner.ts`는 node를 시작하고 로그를 수집하며 실행이 만든 자원을 정리하고, `e2e/structure.ts`는 구성을 검사한다. 새 게임 동작은 client가 받은 결과로 검증하며, 별도 unit-test 프로젝트는 포함되어 있지 않다.
+`e2e/client.mts`는 공개 connector로 게임에 접속하여 client가 관찰할 결과를 검사하는 시나리오를 실행한다. `e2e/domain.test.ts`는 `node:test`와 주입한 시계로 domain 경계를 검사한다. `e2e/runner.ts`는 node를 시작하고 로그를 수집하며 실행이 만든 자원을 정리하고, `e2e/structure.ts`는 구성을 검사한다. domain 규칙은 직접 검사하고 client가 관찰하는 결과는 시나리오로 검증한다.
 
 ## 프로젝트의 ZLink 개념
 
@@ -83,17 +83,17 @@ Actor가 소속 Spot을 바꾸는 동작은 membership 변경이다. 대상 Spot
 1. client가 Session node에 STREAM으로 연결하고 첫 패킷 `QueueRequest`를 보낸다. `Session`은 첫 패킷 이름을 확인하고 `playerId`로 Player Actor를 `getOrCreate`한 뒤 Session에 binding하고 원래 패킷을 relay한다.
 2. 새 Actor는 Entry Spot `Entry`에서 시작한다. `EnterQueue` handler가 identity를 확인하고 `joinSpot(Names.matchmakingId, ...).defer()`를 요청한다. `Matchmaking.onActorJoin`이 플레이어를 대기열에 넣고 `Matchmaking.onJoinedActor`가 같은 mode의 플레이어를 짝짓는다.
 3. 짝이 생기면 `Matchmaking`이 room ID를 할당하고 `Room`을 `getOrCreate`한 뒤 player ID로 두 Actor에 `RoomAssignment`를 보낸다. `Assignment` handler가 `joinSpot(roomId, ...).defer()`를 요청한다. `Room.onJoinedActor`가 `MatchFound`를 보내고 `RoomView`를 broadcast하며 `Delivery`가 이 push를 각 binding된 Session으로 전달한다. 이미 `Matchmaking`에 있는 플레이어가 `QueueRequest`를 다시 보내면 `QueueAgain`이 대기열에 넣는다.
-4. `Move`와 `Shoot`은 `Room.move`와 `Room.shoot`을 호출한다. 유효한 동작은 `RoomView`를 broadcast하고, 승리하는 사격은 `MatchEnded`도 broadcast한다. 유효하지 않은 동작은 요청자의 binding된 Session으로 `ActionRejected`나 `ShotRejected`를 보낸다.
+4. `Move`와 `Shoot`은 `Room.move`와 `Room.shoot`을 호출한다. 유효한 동작은 `RoomView`를 broadcast하고, 승리하는 사격은 `MatchEnded`도 broadcast한다. 거부된 동작은 요청자의 binding된 Session으로 `ActionRejected`를 보낸다.
 5. 재접속하면 새 Session이 `QueueRequest`를 다시 보낸다. Actor가 속한 Room의 `Reconnect` handler가 identity를 확인하고 binding된 Session으로 view를 다시 보낸다.
 6. node를 교체할 때 `runHost`의 `drain` 명령이 relocation을 요청한다. Framework는 `MatchmakingRelocation`·`RoomRelocation`의 `capture`로 게임 상태를 받아 다른 node에서 `restore`한다.
 
-## 이 샘플을 보며 개발하기
+## 액션 게임 도메인 확장
 
-이 샘플은 기능들이 함께 동작하는 방식을 보여 주므로, 자기 게임으로 바꾸지 않고 읽고 실행하는 용도로 쓴다. 자기 프로젝트는 Node.js 기본 셋업에서 시작한다. [ZLink Start](https://zlink.systems/start)의 Initializer에서 Node.js를 고르거나 ZLink 저장소의 `framework/languages/node/templates/starter/my-game`을 사용한다. 그다음 필요한 기능을 이 샘플에서 하나씩 옮긴다. 구조 선택은 기본 셋업의 `AGENTS.md`가 설명하며, 이 절은 `match-entry-lobby`만 다룬다. 이 샘플은 바꾸지 않고 프로젝트 옆에 참고용으로 둔다.
+이 템플릿의 액션 도메인을 확장해 액션 게임 서버를 만든다. 도메인 상태와 판정은 `server/match/domain.ts`의 `MatchmakingState`와 `RoomState`에 두고, 상태가 바뀌면 같은 상태의 `capture`·`restore`도 갱신한다. 새 packet contract는 `server/shared/messages.ts`에 추가한다. `server/session/session.ts`의 `clientPackets`에는 `QueueRequest`, `RoomViewRequest`, `MoveRequest`, `ShootRequest`, `SessionInfoRequest`만 둔다. 시나리오 동작과 client 검사는 `e2e/client.mts`에 추가하고, 시나리오 ID를 `server/shared/constants.ts`에 등록한 뒤 `zlink.structure.json`의 `run.scenarios`와 시나리오 선택 명령도 갱신한다.
 
 ### 샘플 먼저 실행하기
 
-옮기기 전에 [개발 명령](#개발-명령)으로 빌드와 e2e를 한 번 실행해 받은 샘플이 동작하는지 확인하고 동작을 본다. 이 결과가 이후 비교의 기준이 된다. 실패하면 먼저 [README](README.md)의 Known issues와 대조한다.
+도메인을 확장하기 전에 [개발 명령](#개발-명령)으로 빌드와 e2e를 한 번 실행해 받은 템플릿이 동작하는지 확인하고 동작을 본다. 이 결과가 이후 비교의 기준이 된다. 실패하면 먼저 [README](README.md)의 Known issues와 대조한다.
 
 ### 옮길 기능
 
@@ -101,7 +101,7 @@ Actor가 소속 Spot을 바꾸는 동작은 membership 변경이다. 대상 Spot
 
 | 기능            | 이 샘플의 파일                                                                                                                                                                                                 | 옮길 것                                                                                                                                                                                                                                                                               | 기본 셋업에서 함께 늘릴 것                                                                                                                                                                        |
 | --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Typed 메시지    | `server/shared/messages.ts`                                                                                                                                                                                    | 사용할 기능의 class: `QueueRequest`, `RoomAdmission`, `RoomAssignment`, `MatchFound`, `MoveRequest`, `ShootRequest`, `RoomViewRequest`, `PlayerView`, `RoomView`, `ShotRejected`, `ActionRejected`, `MatchEnded`. `SessionInfoRequest`·`SessionInfo`는 client가 필요로 할 때만 옮긴다 | `server/shared/constants.ts`의 `PacketNames` 패킷 이름, `Names`의 등록 이름, `Rejection`                                                                                                          |
+| Typed 메시지    | `server/shared/messages.ts`                                                                                                                                                                                    | 사용할 기능의 class: `QueueRequest`, `RoomAdmission`, `RoomAssignment`, `MatchFound`, `MoveRequest`, `ShootRequest`, `RoomViewRequest`, `PlayerView`, `RoomView`, `ActionRejected`, `MatchEnded`. `SessionInfoRequest`·`SessionInfo`는 client가 필요로 할 때만 옮긴다 | `server/shared/constants.ts`의 `PacketNames` 패킷 이름, `Names`의 등록 이름, `Rejection`                                                                                                          |
 | Actor           | `server/match/player.ts`                                                                                                                                                                                       | 참가 거부 처리를 가진 `Player`, `PlayerFactory`, 빈 payload를 쓰는 `PlayerRelocation`                                                                                                                                                                                                 | `main.ts`를 가진 새 `server/match/` 프로젝트와 `server/config/` 파일, Actor factory 등록. `server/shared/constants.ts`의 `NodeEntrypoints`에 `match` 항목. Actor 선언과 구조 검사                 |
 | Spot            | `server/match/spots.ts`, `server/match/domain.ts`                                                                                                                                                              | 참가 수락과 broadcast를 가진 `Matchmaking`·`Room`, 대기열과 전투 규칙을 가진 `MatchmakingState`·`RoomState`                                                                                                                                                                           | `server/match/main.ts`의 Spot factory 등록과 `bootstrapMatchmaking` 생성. `zlink.structure.json`의 `spots`·`nodes` 선언과, 기본 셋업에서는 Spot 0개를 단정하는 구조 검사를 등록과 비교하도록 확장 |
 | Entry·첫 입장   | `server/match/spots.ts`의 `Entry`, `server/match/handlers.ts`의 `EnterQueue`·`QueueAgain`·`Assignment`·`Reconnect`                                                                                             | `EnterQueue`, identity 확인, `Matchmaking`으로의 지연 참가, `Assignment`의 Room 인계, `Reconnect`의 상태 재전송                                                                                                                                                                       | Entry Spot 등록과 `entry` 선언. 첫 입장 시나리오와 재접속 뒤 상태를 비교하는 `reconnect` 시나리오                                                                                                 |
@@ -117,7 +117,7 @@ Actor가 소속 Spot을 바꾸는 동작은 membership 변경이다. 대상 Spot
 
 메시지 contract부터 옮긴다. `messages.ts`에 class를 먼저 정의한 뒤, 컴파일 오류가 나는 handler를 하나씩 새 메시지로 옮긴다. build는 `server/shared`에서 packet schema를 생성하므로 다른 위치에 정의한 메시지는 등록되지 않는다. 첫 입장 패킷을 바꾸면 `Session`의 첫 패킷 검사, `EnterQueue`, `Reconnect`가 같은 패킷을 받도록 함께 고친다.
 
-상태는 그 상태를 결정하는 객체에 둔다. 대기열과 room 순번은 `Matchmaking`, 위치·HP·행동 sequence·승자는 `Room`에 두고 `Entry`와 `Player`에는 두지 않는다. 상태 필드를 바꿀 때는 같은 객체의 snapshot과 `capture`·`restore`를 함께 고친다. 빠뜨린 필드는 relocation 뒤 사라지고, `update` 시나리오가 그 손실을 잡는다.
+상태는 그 상태를 결정하는 객체에 둔다. 대기열과 room 순번은 `Matchmaking`, 위치·HP·행동 sequence·cooldown·승자는 `Room`에 두고 `Entry`와 `Player`에는 두지 않는다. 상태 필드를 바꿀 때는 같은 객체의 snapshot과 `capture`·`restore`를 함께 고친다. relocation 뒤 다른 단조 시계 기준에서도 동작하도록 process timestamp가 아니라 남은 cooldown과 이동 budget을 밀리초로 저장한다. `update` 시나리오는 relocation 뒤 상태 누락을 검사한다.
 
 고정 `matchmaking` Spot은 `bootstrapMatchmaking`이 true인 node에서 생성한다. 그 node가 `READY`를 보고한 뒤에 다른 Match node를 시작하면, 그 node가 유일한 배치 후보인 동안 Spot이 선언된 소유 node에서 시작된다. 그 node의 대체 process는 `bootstrapMatchmaking`을 `false`로 시작한다. 재배치된 Matchmaking Spot이 이미 있기 때문이다.
 

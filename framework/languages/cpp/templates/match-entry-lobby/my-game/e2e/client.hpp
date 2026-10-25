@@ -18,8 +18,7 @@ inline void checked (sc::result_t<void> result)
 }
 class Client
 {
-    using Received =
-      std::variant<RoomView, MatchFound, MatchEnded, ShotRejected, ActionRejected, SessionInfo>;
+    using Received = std::variant<RoomView, MatchFound, MatchEnded, ActionRejected, SessionInfo>;
     std::mutex mutex_;
     std::condition_variable changed_;
     std::vector<Received> received_;
@@ -60,7 +59,6 @@ class Client
         observe<RoomView> ();
         observe<MatchFound> ();
         observe<MatchEnded> ();
-        observe<ShotRejected> ();
         observe<ActionRejected> ();
         observe<SessionInfo> ();
         subscriptions_.push_back (connector_.on_error ([this] (const auto &error) {
@@ -118,6 +116,32 @@ class Client
     {
         return wait<T> (from, [] (const T &) { return true; });
     }
+
+    template <class Predicate>
+    std::variant<RoomView, ActionRejected> wait_action (std::size_t from, Predicate updated)
+    {
+        std::unique_lock lock (mutex_);
+        const auto find = [&] () {
+            return std::find_if (received_.begin () + from, received_.end (), [&] (const auto &item) {
+                if (std::holds_alternative<ActionRejected> (item))
+                    return true;
+                const auto *view = std::get_if<RoomView> (&item);
+                return view && updated (*view);
+            });
+        };
+        require (changed_.wait_for (lock, Limits::packet, [&] {
+                     return find () != received_.end () || !failure_.empty () || disconnects_ != 0;
+                 }),
+                 "Packet deadline: RoomView or ActionRejected");
+        require (failure_.empty (), "Connector error: " + failure_);
+        require (disconnects_ == 0, "Disconnected waiting for action result");
+        const auto result = find ();
+        require (result != received_.end (), "Missing action result");
+        if (const auto *rejection = std::get_if<ActionRejected> (&*result))
+            return *rejection;
+        return *std::get_if<RoomView> (&*result);
+    }
+
     template <class T> void send (const T &message)
     {
         healthy ();
