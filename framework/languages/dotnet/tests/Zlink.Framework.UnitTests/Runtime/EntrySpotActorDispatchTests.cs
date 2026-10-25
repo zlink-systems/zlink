@@ -6602,29 +6602,31 @@ public sealed partial class EntrySpotActorDispatchTests
         var ingressClaimed = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
-        var blocker = activation
-            ._serial.ExecuteAsync(
-                async (_, _) =>
-                {
-                    entered.TrySetResult();
-                    await release.Task.ConfigureAwait(false);
-                },
-                CancellationToken.None
-            )
-            .AsTask();
-        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        var ingress = member
-            .ExecuteDispatchAsync(
-                _ =>
-                {
-                    ingressClaimed.TrySetResult();
-                    return ValueTask.CompletedTask;
-                },
-                CancellationToken.None
-            )
-            .AsTask();
+        var blocker = Task.CompletedTask;
+        var ingress = Task.CompletedTask;
         try
         {
+            blocker = activation
+                ._serial.ExecuteAsync(
+                    async (_, _) =>
+                    {
+                        entered.TrySetResult();
+                        await release.Task.ConfigureAwait(false);
+                    },
+                    CancellationToken.None
+                )
+                .AsTask();
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            ingress = member
+                .ExecuteDispatchAsync(
+                    _ =>
+                    {
+                        ingressClaimed.TrySetResult();
+                        return ValueTask.CompletedTask;
+                    },
+                    CancellationToken.None
+                )
+                .AsTask();
             await Assert.ThrowsAsync<TimeoutException>(() =>
                 ingressClaimed.Task.WaitAsync(TimeSpan.FromMilliseconds(100))
             );
@@ -6632,7 +6634,14 @@ public sealed partial class EntrySpotActorDispatchTests
         finally
         {
             release.TrySetResult();
-            await Task.WhenAll(blocker, ingress).WaitAsync(TimeSpan.FromSeconds(5));
+            try
+            {
+                await Task.WhenAll(blocker, ingress).WaitAsync(TimeSpan.FromSeconds(5));
+            }
+            finally
+            {
+                await member.InvalidateRuntimeGenerationAfterDispatchesAsync();
+            }
         }
     }
 
