@@ -1,38 +1,50 @@
 #pragma once
 #include "server/shared/contracts.hpp"
-#include <algorithm>
-#include <limits>
 #include <set>
-namespace MyGame
-{
-struct DungeonState
-{
+namespace MyGame {
+struct DungeonState {
     std::string partyId;
     std::vector<std::string> members;
-    int stage = 0;
-    void prepare (const PrepareDungeon &request, std::string_view spot)
-    {
-        const std::set<std::string> unique (request.members.begin (), request.members.end ());
-        if (!partyId.empty () || !nonblank (request.partyId) || request.members.empty ()
-            || request.members.size () > Names::maximum_members
-            || unique.size () != request.members.size ()
-            || std::ranges::any_of (request.members, [] (const auto &id) { return !nonblank (id); })
-            || Names::dungeon_prefix + request.partyId != spot)
-            throw std::invalid_argument ("Invalid dungeon party preparation");
-        partyId = request.partyId;
-        members = request.members;
+    std::set<std::string> joined;
+    std::int64_t stage = 0;
+    std::optional<std::string> runId;
+    RunPhase phase = RunPhase::Preparing;
+    std::string prepare(const PrepareDungeon &r) {
+        if (runId) return *runId == r.runId && partyId == r.partyId && members == r.members ? "" : Rejection::run_mismatch;
+        const std::set<std::string> unique(r.members.begin(), r.members.end());
+        if (!nonblank(r.runId) || !nonblank(r.partyId) || r.members.empty() || r.members.size() > Names::maximum_members || unique.size() != r.members.size() || std::ranges::any_of(r.members, [](const auto &id) { return !nonblank(id); })) return Rejection::run_mismatch;
+        runId = r.runId; partyId = r.partyId; members = r.members; phase = RunPhase::Entering; return {};
     }
-    bool admits (std::string_view id, const JoinDungeon &request, std::string_view spot) const
-    {
-        return request.dungeonId == spot && request.partyId == partyId
-               && std::ranges::find (members, id) != members.end ();
+    bool admits(std::string_view id, const JoinDungeon &r, std::string_view spot) const {
+        return r.dungeonId == spot && runId == r.runId && std::ranges::find(members, id) != members.end();
     }
-    void advance ()
-    {
-        if (stage == std::numeric_limits<int>::max ())
-            throw std::overflow_error ("Dungeon stage exhausted");
-        ++stage;
+    bool join(const std::string &id) {
+        if (std::ranges::find(members, id) == members.end()) return false;
+        joined.insert(id);
+        if (phase != RunPhase::Entering || joined.size() != members.size()) return false;
+        phase = RunPhase::Active; return true;
     }
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (DungeonState, partyId, members, stage)
+    std::string advance() {
+        if (stage >= Names::maximum_integer || stage < 0) return Rejection::integer_out_of_range;
+        if (phase != RunPhase::Active) return Rejection::run_not_active;
+        ++stage; if (stage == Names::final_stage) phase = RunPhase::Completed; return {};
+    }
 };
+
+inline void to_json(nlohmann::json &j, const DungeonState& v) {
+    j["partyId"] = v.partyId;
+    j["members"] = v.members;
+    j["joined"] = v.joined;
+    j["stage"] = v.stage;
+    j["runId"] = v.runId ? nlohmann::json(*v.runId) : nlohmann::json(nullptr);
+    j["phase"] = v.phase;
+}
+inline void from_json(const nlohmann::json &j, DungeonState& v) {
+    j.at("partyId").get_to(v.partyId);
+    j.at("members").get_to(v.members);
+    j.at("joined").get_to(v.joined);
+    j.at("stage").get_to(v.stage);
+    if (j.at("runId").is_null()) v.runId.reset(); else v.runId = j.at("runId").get<std::string>();
+    j.at("phase").get_to(v.phase);
+}
 }

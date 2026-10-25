@@ -59,14 +59,22 @@ async Task<int> RunAsync()
         StructureCheck.Run(root, Option("--structure"));
         return 0;
     }
+    DomainChecks.Run();
+    if (args.Contains("--check-domain")) return 0;
     var selected = Scenarios.Select(Option("--scenario"));
-    run = new WorldRun(root);
-    await using var ownedRun = run;
     using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellation.Token);
     deadline.CancelAfter(TimeSpan.FromMinutes(3));
     StructureCheck.Run(root, null);
-    await run.StartAsync(deadline.Token);
-    await Scenarios.RunAsync(run.Endpoint, run, selected, deadline.Token);
+    var passed = 0;
+    foreach (var scenario in selected)
+    {
+        run = new WorldRun(root);
+        await using var ownedRun = run;
+        await run.StartAsync(deadline.Token);
+        await Scenarios.RunAsync(run.Endpoint, run, [scenario], deadline.Token);
+        passed++;
+    }
+    Console.WriteLine($"Scenarios: {passed}/{selected.Length} passed");
     Console.WriteLine("morpg-lobby-instances=completed");
     return 0;
 }

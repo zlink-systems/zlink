@@ -4,7 +4,7 @@ ARG DOCKER_CLI_IMAGE=docker:28.5.1-cli
 FROM ${JDK_IMAGE} AS build
 WORKDIR /src
 COPY . .
-RUN chmod +x gradlew && ./gradlew --no-daemon installDist \
+RUN chmod +x gradlew && ./gradlew --no-daemon installDist :server:lobby:test \
     && mkdir /out && for module in server/*; do \
          if [ -d "$module/build/install" ]; then cp -r "$module/build/install/"* /out/; fi; \
        done && cp -r e2e/build/install/e2e /out/e2e

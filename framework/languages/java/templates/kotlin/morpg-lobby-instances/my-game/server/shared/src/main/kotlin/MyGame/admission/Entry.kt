@@ -11,13 +11,15 @@ class Entry(override val context: ZLinkEntrySpotContext, private val spots: ZLin
     override suspend fun onLeaveActorSuspending(actor: Player) {}
 
     suspend fun join(actor: Player, partyId: String, create: Boolean) {
-        if (partyId.isBlank()) {
+        if (partyId.isBlank() || (!create && spots.find(partyId).await().isEmpty)) {
             actor.context.boundSession().kotlin().send(ActionRejected(Rules.INVALID_PARTY)).await()
             return
         }
-        val id = Names.PARTY_PREFIX + partyId
-        val result = spots.kotlin().getOrCreate(id, Names.PARTY).inMesh(Names.MESH).await()
-        check(result.state() != ZLinkSpotCreateState.REJECTED) { "Party creation rejected" }
+        val id = partyId
+        if (create) {
+            val result = spots.kotlin().getOrCreate(id, Names.PARTY).inMesh(Names.MESH).await()
+            check(result.state() != ZLinkSpotCreateState.REJECTED) { "Party creation rejected" }
+        }
         actor.context.joinSpot(id, PartyJoin(partyId, create)).defer()
     }
 }

@@ -82,54 +82,23 @@ Relocation changes an object's execution host; drain moves a host's workload els
 
 ## Request flow
 
-Requests in the example game follow this path. Reading the code along this path before adding or transferring a feature locates the places to change.
+1. Session binds the Player Actor after JoinLobbyRequest and relays only allowed client packets.
+2. Lobby Entry issues `party-<32hex>` for CreatePartyRequest and creates its Party Spot. JoinPartyRequest resolves an existing party only; unknown IDs return `invalid-party`.
+3. PartyState checks leader and readiness. Entry creates a `run-<32hex>` ID and moves Forming or Completed to Preparing. Repeated requests reuse that RunId.
+4. Party Spot gets or creates `dungeon-<RunId>`, prepares the fixed roster, moves to Entering and sends JoinDungeon to members still in the party. Dungeon preparation is idempotent for the same run and roster.
+5. Dungeon state moves to Active when all members arrive and sends RunStarted to Party Spot. Advance reaches FinalStage (3), completes the run and sends RunCompleted. Party Spot keeps the party record while Actors are away.
+6. Reconnect returns the current view. Relocation preserves domain snapshots; update observes completion and safe shutdown before replacing a host.
 
-1. The client connects to the Session node over STREAM and sends the first packet, `JoinLobbyRequest`. `PlayerSession` checks the first packet type, calls `GetOrCreate` for the Player Actor by `playerId`, binds it to the Session, and relays the original packet.
-2. A new Actor starts in the Entry Spot `LobbyEntry`. `LobbyLogin` checks the identity and replies with `LobbyView` through the bound Session.
-3. `CreatePartyRequest` and `JoinPartyRequest` reach `CreateParty` and `JoinParty` at the Entry, which call `LobbyEntry.JoinAsync`. It rejects an empty party ID through the bound Session, calls `GetOrCreate` for the party's Spot, and requests `JoinSpot(...).Defer()`.
-4. `PartySpot.OnActorJoinAsync` admits the player through `PartyState.Join`: a created party must be empty, a joined party must exist and have room for at most four members. `OnJoinedActorAsync` then sends `PartyView` to every member by player ID, and `PartyDelivery` forwards it through each Actor's bound Session.
-5. `ReadyRequest` reaches `Ready`, which marks the member ready and broadcasts the new view. `EnterDungeonRequest` reaches `EnterDungeon`, which calls `PartySpot.EnterAsync`. `PartyState.EntryRejection` rejects anyone but the leader with `not-leader` and an unready party with `not-ready`, through the requester's bound Session.
-6. An accepted entry calls `GetOrCreate` for the party's Dungeon, sends a typed `PrepareDungeon` request that fixes the roster, and sends `JoinDungeon` to each member by player ID. `DungeonTravel` then requests the join into the Dungeon, where `DungeonSpot.OnActorJoinAsync` admits only roster members. `AdvanceRequest` reaches `Advance`, which raises the stage and broadcasts `DungeonView`.
-7. When the same player reconnects, `PlayerSession` binds the existing Actor to the new Session, and `PartyReconnect` or `DungeonReconnect` in the Spot that holds the Actor checks the identity and resends the current view.
-8. To replace a node, `drain` in `NodeControl` requests relocation. Framework takes the state from `PartyRelocation` and `DungeonRelocation` and restores it on another node.
+## Extending the MORPG domain
 
-## Developing from this sample
+Extend this template's domain to build a MORPG server. Run the build, domain checks and e2e before changing gameplay.
 
-This sample shows how the features work together, so read and run it rather than turning it into your game. Start your own project from the .NET starter: choose .NET in the Initializer at [ZLink Start](https://zlink.systems/start), or use `framework/languages/dotnet/templates/starter/my-game` in the ZLink repository. Then transfer the features you need from this sample one at a time. The starter's `AGENTS.md` owns the choice between structures; this section covers only `morpg-lobby-instances`. Keep this sample unchanged next to your project as a reference.
+- Change party rules in `server/MyGame.Lobby/Domain/PartyState.cs` and dungeon rules in `server/MyGame.Instance/DungeonState.cs`. Party Spot owns the roster, readiness, Phase and RunId, including while its Actors are in a dungeon. Dungeon state owns arrivals and Stage. Keep each decision in its domain.
+- Add shared typed messages and constants in `server/MyGame.Shared/Contracts.cs`. Party and run IDs are server-issued GUIDs. Use the default Framework serializer; enum values are names and absent RunId is JSON null. Integer values must remain within `GameNames.MaximumInteger`.
+- Add client packet names to the allowlist in `server/MyGame.Session/PlayerSession.cs` and register their handlers on the destination Spot. Keep server-only preparation, travel and lifecycle messages outside the allowlist.
+- Add domain boundaries to `e2e/MyGame.E2E/DomainChecks.cs` and observable results to `Scenarios.cs`. Run `./run-e2e.sh --check-domain` or `./run-e2e.ps1 -CheckDomain`. Keep scenario IDs synchronized with `zlink.structure.json` and README.
 
-### Run the sample first
-
-Before transferring anything, run the build and e2e once with the [Development commands](#development-commands) to confirm the downloaded sample works and to see its behavior. This result is the baseline for comparison. If it fails, compare the failure with Known issues in the [README](README.md) first.
-
-### Features to transfer
-
-Feature names match the feature table in the starter's `AGENTS.md`. Paths are relative to this directory. The starter has one Session node and the `connect` scenario only, so the last column lists what grows in the starter with each feature.
-
-| Feature | File in this sample | What to transfer | What to grow in the starter alongside |
-| --- | --- | --- | --- |
-| Typed messages | `server/MyGame.Shared/Contracts.cs` | The records of the features you adopt: `JoinLobbyRequest`, `LobbyView`, `CreatePartyRequest`, `JoinPartyRequest`, `PartyJoin`, `ReadyRequest`, `EnterDungeonRequest`, `AdvanceRequest`, `ViewRequest`, `PartyView`, `DungeonView`, `PrepareDungeon`, `DungeonPrepared`, `JoinDungeon`, `ActionRejected`; `SessionInfoRequest` and `SessionInfo` only if your client needs them | The registration names and the `PartyId` and `DungeonId` helpers in `GameNames`, and the `Rejection` reasons; the starter already has `NodeReady` and `NodeProtocol` |
-| Spot | `server/MyGame.Lobby/PartySpot.cs`, `server/MyGame.Lobby/Domain/PartyState.cs`, `server/MyGame.Instance/DungeonSpot.cs` | `PartySpot` with admission, readiness, and the party rules in `PartyState`, and `DungeonSpot` with the roster and stage | New `server/MyGame.Lobby/` and `server/MyGame.Instance/` projects, their `server/config/` files, and the `AddSpotFactory<PartySpot>` and `AddSpotFactory<DungeonSpot>` registrations in `Program.cs`; the `PartyCapacity` and `DungeonCapacity` settings; the `spots` and `nodes` declarations in `zlink.structure.json` and the structure check that compares them with the registrations |
-| Actor | `server/MyGame.Shared/PlayerActor.cs` | The stateless `PlayerActor` with the join-completion rejection reply, and `PlayerFactory` | The `AddActorFactory<PlayerActor, PlayerFactory>` registration in each `Program.cs` |
-| Entry and first admission | `server/MyGame.Shared/LobbyEntry.cs`, `PartyReconnect` in `server/MyGame.Lobby/Handlers.cs`, `DungeonReconnect` in `server/MyGame.Instance/Handlers.cs` | `LobbyLogin`, the party creation and join through `LobbyEntry.JoinAsync`, and the identity check and state resend of the reconnect handlers | The Entry Spot registration on Lobby and Instance nodes and its `entry` declarations; the `party` scenario for first entry and a `reconnect` scenario that compares state after reconnection |
-| Session binding | `server/MyGame.Session/PlayerSession.cs` | The first-packet check, then find or create the Actor, bind, and relay the original typed packet | The same first-packet type as `LobbyLogin`; transfer it into the starter's `PlayerSession.cs` |
-| Host relocation | `PartyRelocation` in `server/MyGame.Lobby/PartySpot.cs`, `DungeonRelocation` in `server/MyGame.Instance/DungeonSpot.cs`, `PlayerRelocation` in `server/MyGame.Shared/PlayerActor.cs`, `server/MyGame.Shared/NodeControl.cs` | The relocation adapters with `Capture` and `Restore`, and the `drain` and `shutdown` controls | The `PreserveStateWith` relocation registrations; the `update` scenario, which checks that connections and state survive a server replacement and that the replacement node accepts a new Dungeon |
-| Dynamic dungeon | `PartySpot.EnterAsync` in `server/MyGame.Lobby/PartySpot.cs`, `DungeonTravel` in `server/MyGame.Lobby/Handlers.cs`, `server/MyGame.Instance/DungeonSpot.cs`, `server/MyGame.Instance/Program.cs` | The `GetOrCreate` and typed preparation of a party Dungeon, the roster-only admission, and the stage | The dynamic `dungeon` Spots of each Instance and the `GetOrCreate` edge in `zlink.structure.json`; the dungeon steps of the `party` scenario |
-
-### Transfer order and rules
-
-Transfer one row at a time and run the build, the structure check, and the related e2e scenario after each. Add a scenario ID to the list in `e2e/MyGame.E2E/Scenarios.cs`, to `run.scenarios`, and to the selection examples in `run.commands` of `zlink.structure.json` together. Judge results by the replies and events actually received; do not make tests pass with fixed sleeps or longer deadlines.
-
-Start with the message contracts. Define the typed records in `Contracts.cs` first, then move each handler that fails to compile to the new messages. When you change the first-entry packet, update the first-packet check in `PlayerSession`, `LobbyLogin`, and the reconnect handlers to receive the same type.
-
-Keep each piece of state in the object that decides it. The Entry keeps no party state: the roster and readiness belong in `PartySpot`, and the admitted roster and stage belong in `DungeonSpot`. When you change state fields, update `Capture` and `Restore` of that Spot together; a state kept outside them disappears after relocation, and the `update` scenario detects the loss.
-
-Keep the checks of the `party` scenario when changing the party rules: the first admitted member is the leader, a new member starts unready, entry is rejected with `not-ready` until everyone is ready, and the party enters the same stage-zero Dungeon where `Advance` reaches stage one on every client. The party removes a member as the Actor leaves for the Dungeon, and the Dungeon then owns the admitted roster; this template does not implement disbanding a party or returning to the lobby.
-
-Register the shared Entry and the Player factory on every node that can host an Actor, including the Instance nodes, and declare one Entry for each Lobby and Instance node in `zlink.structure.json`; the Framework default Entries are not part of the structure. Keep the one-Dungeon capacity per Instance in the e2e configuration, because it makes replacement admission deterministic.
-
-To name roles such as Lobby or Dungeon differently from this sample, change the type names, `GameNames`, `server/config/`, and `zlink.structure.json` at once. Do the renaming in its own change, separate from transferring a feature, so failures are easier to trace.
-
-If `update` fails after a transfer, first check whether `Capture` is missing a field, then use the message flow in [Debugging](#debugging) to find the first failing step.
+Clients request actions; the domain decides outcomes. Rejections leave state unchanged and return `ActionRejected(Reason, RetryAfterMs)`. This structure has no time restrictions, so RetryAfterMs is always zero. Preserve Phase, RunId, Members, Ready, arrivals and Stage in relocation snapshots. Keep public async calls and Framework execution ownership; do not add separate locks or routing state.
 
 ## Development considerations
 

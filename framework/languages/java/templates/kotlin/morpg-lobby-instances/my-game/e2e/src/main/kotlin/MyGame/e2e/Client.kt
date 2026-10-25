@@ -98,12 +98,12 @@ class Client(endpoint: String, val playerId: String) {
         registrations.forEach { it.close() }
     }
 
-    inline fun <reified T> next(): T = next(T::class.java)
+    inline fun <reified T> next(noinline predicate: (T) -> Boolean = { true }): T = next(T::class.java, predicate)
 
-    fun <T> next(type: Class<T>): T {
+    fun <T> next(type: Class<T>, predicate: (T) -> Boolean = { true }): T {
         val expires = System.nanoTime() + TimeUnit.SECONDS.toNanos(MESSAGE_SECONDS)
         while (true) {
-            val index = pending.indexOfFirst { type.isInstance(it) }
+            val index = pending.indexOfFirst { type.isInstance(it) && predicate(type.cast(it)) }
             if (index >= 0) return type.cast(pending.removeAt(index))
             val event =
                 queue.poll((expires - System.nanoTime()).coerceAtLeast(0), TimeUnit.NANOSECONDS)

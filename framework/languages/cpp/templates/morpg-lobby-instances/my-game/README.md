@@ -59,9 +59,9 @@ The runner checks the structure. The script starts Redis under a unique Compose 
 
 | Scenario | Assertions |
 | --- | --- |
-| party | Membership pushes, not-ready rejection, readiness and matching stage-zero Dungeon views |
-| reconnect | Same Actor and Dungeon stage, new physical Session, continued advancement |
-| update | Drain observation, preserved binding and state, stopped source, replacement readiness and new work |
+| party | Server-issued IDs; not-ready and non-leader rejection without state changes; internal packet rejection; back-to-back entry reaches one active run; distinct parties get distinct Dungeons; FinalStage completes the run |
+| reconnect | Same Actor, Dungeon, RunId, Phase and Stage after reconnect; advancement and completion continue |
+| update | Drain and safe-shutdown observations; preserved Sessions, RunId, Phase and Stage; replacement accepts a distinct party and Dungeon |
 
 ## Local debugging
 
@@ -102,3 +102,8 @@ This template answers `SessionInfoRequest` with a typed `SessionInfo` push; Fram
 Docker Compose v2와 Linux 컨테이너 데몬을 준비한다. 템플릿 디렉터리에서 Linux는 `./run-e2e.sh`, Windows는 `pwsh -NoProfile -File ./run-e2e.ps1`을 실행한다. 기본 실행은 이미지 빌드부터 runner·node 컨테이너 기동과 정리까지 수행한다. Framework 버전은 `bootstrap.cmake` 한 곳에서 정하며, 빌드는 그 버전의 GitHub Release prebuilt를 받아 함께 게시된 SHA-256 체크섬으로 확인한다.
 
 로컬 디버깅은 C++20 컴파일러, CMake, Ninja를 설치한 뒤 `./run-e2e.sh --local` 또는 `pwsh -NoProfile -File ./run-e2e.ps1 -Local`로 실행한다. node 로그와 설정은 `.logs/run-<id>/`, Docker 빌드·정리 로그는 `.logs/docker-<project>/`에 남는다. 공개 패키지에서 확인된 차단 사항은 Known issues를 따른다.
+
+
+Domain extension: change PartyState and DungeonState, add shared typed contracts, update the Session client allowlist and add boundary tests and scenario observations. Integer values are bounded by 9,007,199,254,740,991; rejected inputs leave state unchanged. ActionRejected includes a 32-bit RetryAfterMs, always zero in this structure. No floating-point action input or time restriction is used.
+
+한국어 안내: 이 템플릿의 파티·던전 도메인을 확장하여 MORPG 서버를 만든다. party는 중복 입장·서버 발급 ID·거부 뒤 상태 불변·최종 완료를 관찰한다. reconnect·update는 RunId·Phase·Stage 보존을 검사한다. 도메인 경계 시험은 AGENTS의 확장 절차에 따라 실행한다.

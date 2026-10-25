@@ -12,7 +12,11 @@ export const Rejection = {
   joinRejected: 'join-rejected',
   invalidParty: 'invalid-party',
   notLeader: 'not-leader',
-  notReady: 'not-ready'
+  notReady: 'not-ready',
+  runMismatch: 'run-mismatch',
+  runNotActive: 'run-not-active',
+  packetNotAllowed: 'packet-not-allowed',
+  integerOutOfRange: 'integer-out-of-range'
 } as const;
 const messageFollowMs = 30_000;
 const relocationMs = 25_000;
@@ -56,6 +60,10 @@ export const PacketNames = {
   prepareDungeon: 'PrepareDungeon',
   dungeonPrepared: 'DungeonPrepared',
   joinDungeon: 'JoinDungeon',
+  dungeonMemberEntered: 'DungeonMemberEntered',
+  runStarted: 'RunStarted',
+  runCompleted: 'RunCompleted',
+  enterPartyRun: 'EnterPartyRun',
   actionRejected: 'ActionRejected',
   sessionInfoRequest: 'SessionInfoRequest',
   sessionInfo: 'SessionInfo'

@@ -79,11 +79,13 @@ The runner checks `zlink.structure.json`, starts Redis with a unique Compose pro
 
 | Scenario | Assertions |
 | --- | --- |
-| party | p1 creates a party, p2 joins, entry is rejected with `not-ready`, both become ready and enter the same stage-zero Dungeon; Advance reaches stage one on both clients |
-| reconnect | p2 reconnects to the same Actor, Dungeon and stage |
-| update | Dungeon host drains, reports relocation and safe shutdown; Sessions and game state remain unchanged; replacement process accepts a fresh Dungeon |
+| party | server-issued party and run IDs; not-ready and non-leader rejection without state changes; internal packet rejection; back-to-back entry requests reach the same active Dungeon; FinalStage completes the run |
+| reconnect | p2 reconnects to the same Actor, Dungeon, RunId, Phase and Stage |
+| update | host relocation preserves Sessions, roster, RunId, Phase and Stage; replacement accepts a distinct party and Dungeon |
 
-Party logical IDs use `party-<partyId>` and Dungeon IDs use `dungeon-<partyId>`. Maximum party size is four. The first admitted member is leader. `PartyView.Ready` contains booleans aligned with `Members`. Admission of a new member begins unready. Disconnect retains the roster. Party removes members and readiness as Actors leave for Dungeon; Dungeon then owns its admitted roster. This template does not implement disbanding or returning to Lobby. A Join request for an unknown party may create an empty Party Spot, but admission is rejected until a leader creates it. Lobby capacity is configurable. Each instance's Dungeon capacity is one in the local composition so update can prove that the replacement accepts new work.
+Party IDs are `party-<32hex>`, RunIds are `run-<32hex>`, and Dungeon IDs are `dungeon-<RunId>`. Maximum party size is four. The first member is leader; new members are unready. Unknown party IDs return `invalid-party`. Party Spot retains the roster and readiness during a run. The state machine is Forming → Preparing → Entering → Active → Completed; a new entry after Completed issues a new RunId. Advance is accepted only in Active and FinalStage is 3. Rejections use `ActionRejected(Reason, RetryAfterMs)` with zero RetryAfterMs. Integer values are bounded by 9,007,199,254,740,991. No time restriction or floating-point client value is used.
+
+Run domain checks before scenario nodes with `./run-e2e.sh --check-domain` or `pwsh -NoProfile -File ./run-e2e.ps1 -CheckDomain`. The regular e2e runs them automatically.
 
 ## Known issues
 
@@ -100,3 +102,5 @@ For an instance update, write `drain` to its stdin, wait for `RELOCATION_REQUEST
 기본 실행은 Docker에서 node와 e2e runner를 함께 실행하므로 호스트 .NET SDK가 필요하지 않습니다. Docker Compose v2와 Linux container 환경을 준비하십시오. 로컬 process 디버깅은 .NET 8 SDK를 설치한 뒤 `./run-e2e.sh --local` 또는 `pwsh -NoProfile -File ./run-e2e.ps1 -Local`로 실행합니다. 이미지 빌드·정리 로그는 `.logs/docker-<project>/`, node 로그는 `.logs/run-<id>/`에 남습니다. Docker Compose v2를 준비한 뒤 템플릿 디렉터리에서 위 Build 명령을 실행합니다. Bash는 `./run-e2e.sh`, PowerShell 7은 `pwsh -NoProfile -File ./run-e2e.ps1`로 전체 시나리오를 실행합니다.
 
 runner는 실행별 Redis key prefix와 Compose project를 만들고 Framework가 게시한 임시 endpoint를 사용합니다. 로그는 `.logs/run-<id>/`에 보존됩니다. instance를 교체할 때는 drain 완료와 `SAFE_TO_SHUTDOWN`을 확인한 뒤 종료하고 같은 설정으로 대체 process를 시작합니다.
+
+도메인 확장은 PartyState와 DungeonState에서 수행한다. `--check-domain`으로 상태 전이·멱등성·거부 뒤 상태 불변·스냅샷 경계를 검사한다. party는 중복 입장과 완료, reconnect·update는 RunId·Phase·Stage 보존을 관찰한다.

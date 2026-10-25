@@ -16,24 +16,32 @@ public final class Scenarios {
         equal(a.partyId(), b.partyId());
         equal(a.members(), b.members());
         equal(a.stage(), b.stage());
+        equal(a.phase(), b.phase()); equal(a.runId(), b.runId());
     }
 
-    private static DungeonView enter(Client a, Client b, String party) throws Exception {
+    private static DungeonView enter(Client a, Client b) throws Exception {
         a.connect();
         a.next(LobbyView.class);
         b.connect();
         b.next(LobbyView.class);
         a.clear();
         b.clear();
-        a.send(new CreatePartyRequest(party));
-        equal(new PartyView(party, List.of(a.playerId), List.of(false)), a.next(PartyView.class));
+        a.send(new JoinPartyRequest(Names.newPartyId())); equal(new ActionRejected(Rules.INVALID_PARTY), a.next(ActionRejected.class));
+        a.send(new CreatePartyRequest());
+        var created = a.next(PartyView.class); String party = created.partyId();
+        Structure.require(party.matches("party-[0-9a-f]{32}"), "Party ID");
+        equal(new PartyView(party, List.of(a.playerId), List.of(false), RunPhase.Forming, null), created);
         a.clear();
         b.send(new JoinPartyRequest(party));
         var joined = a.next(PartyView.class);
         equal(joined, b.next(PartyView.class));
-        equal(new PartyView(party, List.of(a.playerId, b.playerId), List.of(false, false)), joined);
+        equal(new PartyView(party, List.of(a.playerId, b.playerId), List.of(false, false), RunPhase.Forming, null), joined);
         a.send(new EnterDungeonRequest());
-        equal(Rules.NOT_READY, a.next(ActionRejected.class).reason());
+        equal(new ActionRejected(Rules.NOT_READY), a.next(ActionRejected.class));
+        a.send(new ViewRequest()); equal(joined, a.next(PartyView.class));
+        b.send(new EnterDungeonRequest()); equal(new ActionRejected(Rules.NOT_LEADER), b.next(ActionRejected.class));
+        b.send(new ViewRequest()); equal(joined, b.next(PartyView.class));
+        b.send(new JoinDungeon("dungeon-forged", "run-forged")); equal(new ActionRejected(Rules.PACKET_NOT_ALLOWED), b.next(ActionRejected.class));
         a.clear();
         b.clear();
         a.send(new ReadyRequest());
@@ -49,18 +57,20 @@ public final class Scenarios {
         a.clear();
         b.clear();
         a.send(new EnterDungeonRequest());
-        var dungeon = a.next(DungeonView.class);
-        equal(dungeon, b.next(DungeonView.class));
-        equal(Names.DUNGEON_PREFIX + party, dungeon.dungeonId());
+        a.send(new EnterDungeonRequest());
+        var dungeon = a.next(DungeonView.class, v -> v.phase() == RunPhase.Active);
+        equal(dungeon, b.next(DungeonView.class, v -> v.phase() == RunPhase.Active));
+        Structure.require(dungeon.runId().matches("run-[0-9a-f]{32}"), "Run ID");
+        equal(Names.dungeonId(dungeon.runId()), dungeon.dungeonId());
         equal(party, dungeon.partyId());
         equal(List.of(a.playerId, b.playerId), dungeon.members());
-        equal(0, dungeon.stage());
+        equal(0L, dungeon.stage());
         sameState(dungeon, a.view());
         sameState(dungeon, b.view());
         return dungeon;
     }
 
-    private static DungeonView advance(Client a, Client b, int stage) throws Exception {
+    private static DungeonView advance(Client a, Client b, long stage) throws Exception {
         a.clear();
         b.clear();
         a.send(new AdvanceRequest());
@@ -70,11 +80,16 @@ public final class Scenarios {
         return view;
     }
 
+    private static void complete(Client a, Client b) throws Exception {
+        var done = advance(a, b, Rules.FINAL_STAGE); equal(RunPhase.Completed, done.phase());
+        a.send(new AdvanceRequest()); equal(new ActionRejected(Rules.RUN_NOT_ACTIVE), a.next(ActionRejected.class));
+        sameState(done, a.view());
+    }
     public static void run(Scenario scenario, Nodes nodes) throws Exception {
         String id = UUID.randomUUID().toString();
         try (var a = new Client(nodes.endpoint, id + "-p1");
                 var b = new Client(nodes.endpoint, id + "-p2")) {
-            var initial = enter(a, b, id);
+            var initial = enter(a, b);
             var sa = a.sessionInfo();
             var sb = b.sessionInfo();
             equal(a.playerId, sa.actorId());
@@ -84,7 +99,13 @@ public final class Scenarios {
             equal(sa, a.sessionInfo());
             equal(sb, b.sessionInfo());
             switch (scenario) {
-                case PARTY -> {}
+                case PARTY -> {
+                    try (var c = new Client(nodes.endpoint, id + "-second1"); var d = new Client(nodes.endpoint, id + "-second2")) {
+                        var separate = enter(c, d);
+                        Structure.require(!separate.dungeonId().equals(initial.dungeonId()) && !separate.runId().equals(initial.runId()), "Two parties shared run");
+                    }
+                    advance(a, b, 2); complete(a, b);
+                }
                 case RECONNECT -> {
                     b.close();
                     try (var again = new Client(nodes.endpoint, b.playerId)) {
@@ -98,7 +119,7 @@ public final class Scenarios {
                         Structure.require(
                                 !sb.sessionId().equals(identity.sessionId()),
                                 "Reconnect reused Session");
-                        advance(a, again, 2);
+                        advance(a, again, 2); complete(a, again);
                         equal(0, again.disconnects.get());
                     }
                 }
@@ -114,10 +135,12 @@ public final class Scenarios {
                     nodes.replace(before.nodeId());
                     try (var c = new Client(nodes.endpoint, id + "-new1");
                             var d = new Client(nodes.endpoint, id + "-new2")) {
-                        var fresh = enter(c, d, id + "-replacement");
+                        var fresh = enter(c, d);
                         equal(before.nodeId(), fresh.nodeId());
+                        advance(c, d, 1);
+                        Structure.require(!fresh.dungeonId().equals(initial.dungeonId()) && !fresh.runId().equals(initial.runId()), "Two parties shared run");
                     }
-                    advance(a, b, 2);
+                    advance(a, b, 2); complete(a, b);
                     equal(sa, a.sessionInfo());
                     equal(sb, b.sessionInfo());
                 }

@@ -8,18 +8,18 @@ class Entry final : public fx::entry_spot_t<Player>
     fx::spot_manager_t &spots_;
     fx::task_t<void> join (Player &actor, const std::string &party, bool create)
     {
-        if (!nonblank (party)) {
+        if (!nonblank (party) || (!create && !(co_await spots_.find(party)))) {
             co_await actor.context ()
               .bound_session ()
               .send (ActionRejected{Rejection::invalid_party})
               .async ();
             co_return;
         }
-        const auto id = Names::party_prefix + party;
-        const auto result =
-          co_await spots_.get_or_create (id, Names::party).in_mesh (Names::mesh).async ();
-        if (result.state == fx::spot_create_state_t::rejected)
-            throw std::runtime_error ("Party creation rejected");
+        const auto id = party;
+        if (create) {
+            const auto result = co_await spots_.get_or_create(id, Names::party).in_mesh(Names::mesh).async();
+            if (result.state == fx::spot_create_state_t::rejected) throw std::runtime_error("Party creation rejected");
+        }
         actor.context ().join_spot (id, PartyJoin{party, create}).defer ();
     }
 
@@ -44,9 +44,9 @@ class Entry final : public fx::entry_spot_t<Player>
         co_await actor.context ().bound_session ().send (LobbyView{}).async ();
     }
     fx::task_t<void>
-    create (Player &actor, fx::message_context_t &, const CreatePartyRequest &request)
+    create (Player &actor, fx::message_context_t &, const CreatePartyRequest &)
     {
-        co_await join (actor, request.partyId, true);
+        co_await join (actor, new_id("party-"), true);
     }
     fx::task_t<void> enter (Player &actor, fx::message_context_t &, const JoinPartyRequest &request)
     {

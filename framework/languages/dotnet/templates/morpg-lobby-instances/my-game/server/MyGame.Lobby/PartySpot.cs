@@ -2,6 +2,7 @@ using System.Text.Json;
 using MyGame.Lobby.Domain;
 using MyGame.Shared;
 using Zlink.Framework.Contracts.Actors;
+using Zlink.Framework.Contracts.Handlers;
 using Zlink.Framework.Contracts.Messaging;
 using Zlink.Framework.Contracts.Spots;
 
@@ -18,6 +19,7 @@ public sealed class PartySpot(
 
     public void Configure()
     {
+        Context.Handlers.AddActorPacket<RejectionDelivery, PlayerActor>(nameof(ActionRejected));
         Context.Handlers.AddActorPacket<PartyReconnect, PlayerActor>(nameof(JoinLobbyRequest));
         Context.Handlers.AddActorPacket<PartyQuery, PlayerActor>(nameof(ViewRequest));
         Context.Handlers.AddActorPacket<Ready, PlayerActor>(nameof(ReadyRequest));
@@ -34,7 +36,7 @@ public sealed class PartySpot(
     {
         var join = request.Decode<PartyJoin>();
         return ValueTask.FromResult(
-            GameNames.PartyId(join.PartyId) == Context.SpotId && state.Join(actorId, join)
+            join.PartyId == Context.SpotId && state.Join(actorId, join)
                 ? ZLinkSpotActorJoinResult.Accept()
                 : ZLinkSpotActorJoinResult.Reject()
         );
@@ -69,28 +71,45 @@ public sealed class PartySpot(
         return BroadcastAsync(ct);
     }
 
-    public async ValueTask EnterAsync(PlayerActor actor, CancellationToken ct)
+    public ValueTask EnterAsync(PlayerActor actor, CancellationToken ct) => EnterAsync(actor.Context.ActorId, ct);
+
+    public async ValueTask EnterAsync(string playerId, CancellationToken ct)
     {
-        if (state.EntryRejection(actor.Context.ActorId) is { } reason)
+        if (state.Enter(playerId) is { } reason)
         {
-            await actor.Context.BoundSession.Send(new ActionRejected(reason)).Async();
+            await actors.SendToActor(playerId, new ActionRejected(reason)).Async();
             return;
         }
-        var dungeonId = GameNames.DungeonId(state.PartyId);
-        var created = await spots
-            .GetOrCreate(dungeonId, GameNames.DungeonType)
-            .InMesh(GameNames.WorldMesh)
-            .Async(ct);
+        if (state.Phase == RunPhase.Active)
+        {
+            await actors.SendToActor(playerId, state.View()).Async();
+            return;
+        }
+        var runId = state.RunId!;
+        var dungeonId = GameNames.DungeonId(runId);
+        var created = await spots.GetOrCreate(dungeonId, GameNames.DungeonType).InMesh(GameNames.WorldMesh).Async(ct);
         if (created.State == ZLinkSpotCreateState.Rejected)
             throw new InvalidOperationException("Dungeon creation rejected.");
-        var members = state.Members.ToArray();
-        var prepared = await Context
-            .Outbound.RequestToSpot(dungeonId, new PrepareDungeon(state.PartyId, members))
-            .Async<DungeonPrepared>(ct);
-        if (prepared.DungeonId != dungeonId)
-            throw new InvalidDataException("Dungeon preparation identity mismatch.");
-        foreach (var id in members)
-            await actors.SendToActor(id, new JoinDungeon(dungeonId, state.PartyId)).Async();
+        var prepared = await Context.Outbound.RequestToSpot(dungeonId,
+            new PrepareDungeon(runId, state.PartyId, state.Members.ToArray())).Async<DungeonPrepared>(ct);
+        if (prepared.DungeonId != dungeonId || state.Prepared(prepared.RunId) is not null)
+            throw new InvalidDataException(Rejection.RunMismatch);
+        foreach (var id in state.Members.Where(id => !state.Entered.Contains(id)))
+            await actors.SendToActor(id, new JoinDungeon(dungeonId, runId)).Async();
+    }
+
+    public void Arrived(DungeonMemberEntered request)
+    {
+        if (state.Arrived(request.RunId, request.PlayerId) is { } reason) throw new InvalidDataException(reason);
+    }
+    public void Started(RunStarted request)
+    {
+        if (state.Started(request.RunId) is { } reason) throw new InvalidDataException(reason);
+    }
+
+    public void Completed(RunCompleted request)
+    {
+        if (state.Completed(request.RunId) is { } reason) throw new InvalidDataException(reason);
     }
 
     public byte[] Capture() => JsonSerializer.SerializeToUtf8Bytes(state);
@@ -119,4 +138,31 @@ public sealed class PartyRelocation : IZLinkSpotRelocationAdapter<PartySpot>
         spot.Restore(payload);
         return ValueTask.CompletedTask;
     }
+}
+
+[ZLinkSpotPacketHandler(nameof(RunStarted))]
+public sealed class Started : IZLinkSpotPacketHandler<PartySpot, RunStarted>
+{
+    public ValueTask HandleAsync(PartySpot spot, RunStarted request, CancellationToken ct)
+    { spot.Started(request); return ValueTask.CompletedTask; }
+}
+
+[ZLinkSpotPacketHandler(nameof(RunCompleted))]
+public sealed class Completed : IZLinkSpotPacketHandler<PartySpot, RunCompleted>
+{
+    public ValueTask HandleAsync(PartySpot spot, RunCompleted request, CancellationToken ct)
+    { spot.Completed(request); return ValueTask.CompletedTask; }
+}
+
+[ZLinkSpotPacketHandler(nameof(EnterPartyRun))]
+public sealed class EnterRun : IZLinkSpotPacketHandler<PartySpot, EnterPartyRun>
+{
+    public ValueTask HandleAsync(PartySpot spot, EnterPartyRun request, CancellationToken ct) => spot.EnterAsync(request.PlayerId, ct);
+}
+
+[ZLinkSpotPacketHandler(nameof(DungeonMemberEntered))]
+public sealed class Arrived : IZLinkSpotPacketHandler<PartySpot, DungeonMemberEntered>
+{
+    public ValueTask HandleAsync(PartySpot spot, DungeonMemberEntered request, CancellationToken ct)
+    { spot.Arrived(request); return ValueTask.CompletedTask; }
 }

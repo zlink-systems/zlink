@@ -8,7 +8,7 @@ COPY tsconfig.json ./
 COPY scripts scripts
 COPY server server
 COPY e2e e2e
-RUN npm run build && npm prune --omit=dev
+RUN npm run build && npm test && npm prune --omit=dev
 
 FROM ${NODE_IMAGE}-slim AS node
 RUN apt-get update && apt-get install -y --no-install-recommends libssl3t64 && rm -rf /var/lib/apt/lists/*

@@ -82,54 +82,23 @@ Actor가 소속 Spot을 바꾸는 동작은 membership 변경이다. 대상 Spot
 
 ## 요청 흐름
 
-예시 게임의 요청은 다음 경로로 처리된다. 기능을 더하거나 옮기기 전에 이 경로를 따라 코드를 읽으면 바꿀 위치를 빠르게 찾을 수 있다.
+1. Session은 JoinLobbyRequest로 Player Actor를 바인딩하고 허용된 클라이언트 패킷만 중계한다.
+2. Lobby Entry는 CreatePartyRequest에 `party-<32hex>`를 발급하고 Party Spot을 만든다. JoinPartyRequest는 기존 파티만 찾으며 없는 ID는 `invalid-party`로 거부한다.
+3. PartyState는 리더와 준비를 검사한다. Forming 또는 Completed에서 `run-<32hex>`를 발급하여 Preparing으로 전이하며 재요청은 같은 RunId를 사용한다.
+4. Party Spot은 `dungeon-<RunId>`를 생성·조회하고 명단을 준비한 뒤 Entering으로 전이한다. 아직 파티에 있는 멤버에게 JoinDungeon을 보낸다. 같은 실행과 명단의 던전 준비는 같은 결과를 반환한다.
+5. 전원이 도착하면 던전은 Active가 되고 Party Spot에 RunStarted를 보낸다. Advance가 FinalStage(3)에 도달하면 Completed가 되고 RunCompleted를 보낸다. Actor가 떠나도 Party Spot은 파티 기록을 유지한다.
+6. 재접속은 현재 view를 반환한다. relocation은 도메인 snapshot을 보존하며 update는 완료와 safe shutdown을 관찰한 뒤 호스트를 교체한다.
 
-1. client가 Session node에 STREAM으로 연결하고 첫 패킷 `JoinLobbyRequest`를 보낸다. `PlayerSession`은 첫 패킷 타입을 확인하고 `playerId`로 Player Actor를 `GetOrCreate`한 뒤 Session에 binding하고 원래 패킷을 relay한다.
-2. 새 Actor는 Entry Spot `LobbyEntry`에서 시작한다. `LobbyLogin`이 identity를 확인하고 binding된 Session으로 `LobbyView`를 응답한다.
-3. `CreatePartyRequest`와 `JoinPartyRequest`는 Entry의 `CreateParty`와 `JoinParty`가 받아 `LobbyEntry.JoinAsync`를 호출한다. 빈 party ID는 binding된 Session으로 거부하고, 파티의 Spot을 `GetOrCreate`한 뒤 `JoinSpot(...).Defer()`를 요청한다.
-4. `PartySpot.OnActorJoinAsync`가 `PartyState.Join`으로 입장을 판정한다. 생성하는 파티는 비어 있어야 하고, 참가하는 파티는 이미 있고 최대 네 명까지 자리가 있어야 한다. 이어서 `OnJoinedActorAsync`가 모든 구성원에게 player ID로 `PartyView`를 보내고 `PartyDelivery`가 각 Actor의 binding된 Session으로 전달한다.
-5. `ReadyRequest`는 `Ready`가 받아 구성원을 준비 상태로 표시하고 새 view를 broadcast한다. `EnterDungeonRequest`는 `EnterDungeon`이 받아 `PartySpot.EnterAsync`를 호출한다. `PartyState.EntryRejection`은 파티장이 아니면 `not-leader`, 준비되지 않은 파티이면 `not-ready`로 요청자의 binding된 Session에 거부한다.
-6. 수락된 입장은 파티의 Dungeon을 `GetOrCreate`하고, 명단을 확정하는 typed `PrepareDungeon` request를 보낸 뒤, 각 구성원에게 player ID로 `JoinDungeon`을 보낸다. 이어서 `DungeonTravel`이 Dungeon 참가를 요청하고 `DungeonSpot.OnActorJoinAsync`는 명단에 있는 구성원만 받아들인다. `AdvanceRequest`는 `Advance`가 받아 stage를 올리고 `DungeonView`를 broadcast한다.
-7. 같은 플레이어가 재접속하면 `PlayerSession`이 기존 Actor를 새 Session에 binding하고, Actor를 가진 Spot의 `PartyReconnect` 또는 `DungeonReconnect`가 identity를 확인한 뒤 현재 view를 다시 보낸다.
-8. node를 교체할 때 `NodeControl`의 `drain`이 relocation을 요청한다. Framework는 `PartyRelocation`과 `DungeonRelocation`으로 상태를 받아 다른 node에서 복원한다.
+## MORPG 도메인 확장
 
-## 이 샘플을 보며 개발하기
+이 템플릿의 도메인을 확장하여 MORPG 서버를 만든다. 기능을 바꾸기 전에 빌드, 도메인 시험과 e2e를 실행한다.
 
-이 샘플은 기능들이 함께 동작하는 방식을 보여 주므로, 자기 게임으로 바꾸지 않고 읽고 실행하는 용도로 쓴다. 자기 프로젝트는 .NET 기본 셋업에서 시작한다. [ZLink Start](https://zlink.systems/start)의 Initializer에서 .NET을 고르거나 ZLink 저장소의 `framework/languages/dotnet/templates/starter/my-game`을 사용한다. 그다음 필요한 기능을 이 샘플에서 하나씩 옮긴다. 구조 선택은 기본 셋업의 `AGENTS.md`가 설명하며, 이 절은 `morpg-lobby-instances`만 다룬다. 이 샘플은 바꾸지 않고 프로젝트 옆에 참고용으로 둔다.
+- 파티 규칙은 `server/MyGame.Lobby/Domain/PartyState.cs`, 던전 규칙은 `server/MyGame.Instance/DungeonState.cs`에서 바꾼다. Party Spot은 Actor가 던전에 있는 동안에도 멤버·준비·Phase·RunId를 유지한다. 던전 도메인은 도착 멤버와 Stage를 소유한다. 각 판정은 해당 도메인에 둔다.
+- 공통 typed 메시지와 상수는 `server/MyGame.Shared/Contracts.cs`에 추가한다. 파티와 실행 ID는 서버가 GUID로 발급한다. Framework 기본 serializer를 사용하며 enum은 이름 문자열, 없는 RunId는 JSON null로 표현한다. 정수는 `GameNames.MaximumInteger` 범위를 지킨다.
+- 클라이언트 패킷은 `server/MyGame.Session/PlayerSession.cs`의 허용 목록에 추가하고 대상 Spot에 handler를 등록한다. 서버 간 준비·이동·실행 통지 패킷은 허용하지 않는다.
+- 경계 시험은 `e2e/MyGame.E2E/DomainChecks.cs`, 클라이언트 관찰은 `Scenarios.cs`에 추가한다. `./run-e2e.sh --check-domain` 또는 `./run-e2e.ps1 -CheckDomain`으로 도메인 시험을 실행한다. 시나리오 ID는 `zlink.structure.json`과 README에 함께 반영한다.
 
-### 샘플 먼저 실행하기
-
-옮기기 전에 [개발 명령](#개발-명령)으로 빌드와 e2e를 한 번 실행해 받은 샘플이 동작하는지 확인하고 동작을 본다. 이 결과가 이후 비교의 기준이 된다. 실패하면 먼저 [README](README.md)의 Known issues와 대조한다.
-
-### 옮길 기능
-
-기능 이름은 기본 셋업 `AGENTS.md`의 기능 표와 같다. 경로는 이 디렉터리를 기준으로 한다. 기본 셋업에는 Session node 하나와 `connect` 시나리오만 있으므로, 마지막 열은 기능마다 기본 셋업에서 함께 늘릴 것이다.
-
-| 기능 | 이 샘플의 파일 | 옮길 것 | 기본 셋업에서 함께 늘릴 것 |
-| --- | --- | --- | --- |
-| Typed 메시지 | `server/MyGame.Shared/Contracts.cs` | 사용할 기능의 record: `JoinLobbyRequest`, `LobbyView`, `CreatePartyRequest`, `JoinPartyRequest`, `PartyJoin`, `ReadyRequest`, `EnterDungeonRequest`, `AdvanceRequest`, `ViewRequest`, `PartyView`, `DungeonView`, `PrepareDungeon`, `DungeonPrepared`, `JoinDungeon`, `ActionRejected`. `SessionInfoRequest`·`SessionInfo`는 client가 필요로 할 때만 옮긴다 | `GameNames`의 등록 이름과 `PartyId`·`DungeonId` helper, `Rejection` 사유. `NodeReady`와 `NodeProtocol`은 기본 셋업에 이미 있다 |
-| Spot | `server/MyGame.Lobby/PartySpot.cs`, `server/MyGame.Lobby/Domain/PartyState.cs`, `server/MyGame.Instance/DungeonSpot.cs` | admission·준비 상태와 `PartyState`의 파티 규칙을 가진 `PartySpot`, 명단과 stage를 가진 `DungeonSpot` | 새 `server/MyGame.Lobby/`·`server/MyGame.Instance/` 프로젝트와 `server/config/` 파일, 각 `Program.cs`의 `AddSpotFactory<PartySpot>`·`AddSpotFactory<DungeonSpot>` 등록. `PartyCapacity`·`DungeonCapacity` 설정. `zlink.structure.json`의 `spots`·`nodes` 선언과 이를 등록과 비교하는 구조 검사 |
-| Actor | `server/MyGame.Shared/PlayerActor.cs` | join 완료 시 거부 응답을 보내는 상태 없는 `PlayerActor`와 `PlayerFactory` | 각 `Program.cs`의 `AddActorFactory<PlayerActor, PlayerFactory>` 등록 |
-| Entry·첫 입장 | `server/MyGame.Shared/LobbyEntry.cs`, `server/MyGame.Lobby/Handlers.cs`의 `PartyReconnect`, `server/MyGame.Instance/Handlers.cs`의 `DungeonReconnect` | `LobbyLogin`, `LobbyEntry.JoinAsync`의 파티 생성·참가, 재접속 handler의 identity 확인과 상태 재전송 | Lobby와 Instance node의 Entry Spot 등록과 `entry` 선언. 첫 입장을 확인하는 `party` 시나리오와 재접속 뒤 상태를 비교하는 `reconnect` 시나리오 |
-| Session binding | `server/MyGame.Session/PlayerSession.cs` | 첫 패킷 검사, Actor 조회·생성, binding과 원래 typed 패킷 relay | `LobbyLogin`과 같은 첫 패킷 타입. 기본 셋업의 `PlayerSession.cs`에 옮긴다 |
-| Host relocation | `server/MyGame.Lobby/PartySpot.cs`의 `PartyRelocation`, `server/MyGame.Instance/DungeonSpot.cs`의 `DungeonRelocation`, `server/MyGame.Shared/PlayerActor.cs`의 `PlayerRelocation`, `server/MyGame.Shared/NodeControl.cs` | `Capture`·`Restore`를 가진 relocation adapter와 `drain`·`shutdown` 제어 | `PreserveStateWith` relocation 등록. 서버 교체 뒤에도 연결·상태가 유지되고 대체 node가 새 Dungeon을 받는지 판정하는 `update` 시나리오 |
-| 동적 던전 | `server/MyGame.Lobby/PartySpot.cs`의 `EnterAsync`, `server/MyGame.Lobby/Handlers.cs`의 `DungeonTravel`, `server/MyGame.Instance/DungeonSpot.cs`, `server/MyGame.Instance/Program.cs` | 파티 Dungeon의 `GetOrCreate`와 typed 준비, 명단에 있는 구성원만 받는 admission, stage | 각 Instance의 동적 `dungeon` Spot과 `zlink.structure.json`의 `GetOrCreate` edge. `party` 시나리오의 던전 단계 |
-
-### 옮기는 순서와 규칙
-
-기능은 표의 행 하나씩 옮기고, 하나를 옮길 때마다 빌드, 구조 검사, 관련 e2e 시나리오를 실행한다. 시나리오 ID는 `e2e/MyGame.E2E/Scenarios.cs`의 목록, `zlink.structure.json`의 `run.scenarios`, `run.commands`의 시나리오 선택 예시에 함께 추가한다. 판정은 실제로 받은 응답과 이벤트로 하고, 고정 대기나 기한 확대로 통과시키지 않는다.
-
-메시지 contract부터 옮긴다. `Contracts.cs`에 typed record를 먼저 정의한 뒤, 컴파일 오류가 나는 handler를 하나씩 새 메시지로 옮긴다. 첫 입장 패킷을 바꾸면 `PlayerSession`의 첫 패킷 검사, `LobbyLogin`, 재접속 handler가 같은 타입을 받도록 함께 고친다.
-
-상태는 그 상태를 결정하는 객체에 둔다. Entry는 파티 상태를 갖지 않는다. 명단과 준비 상태는 `PartySpot`에, 입장한 명단과 stage는 `DungeonSpot`에 둔다. 상태 필드를 바꿀 때는 그 Spot의 `Capture`·`Restore`를 함께 고친다. 빠뜨린 상태는 relocation 뒤 사라지고 `update` 시나리오가 그 손실을 잡는다.
-
-파티 규칙을 바꿀 때 `party` 시나리오의 검사를 유지한다. 처음 입장한 구성원이 파티장이고, 새 구성원은 준비하지 않은 상태로 시작하며, 모두 준비하기 전의 입장은 `not-ready`로 거부되고, 파티는 같은 stage 0 Dungeon에 들어가 `Advance`가 모든 client에서 stage 1에 이른다. Actor가 Dungeon으로 떠나면 파티가 구성원을 제거하고 그 뒤에는 Dungeon이 입장한 명단을 소유한다. 이 템플릿은 파티 해산과 lobby 복귀를 구현하지 않는다.
-
-Actor를 호스팅할 수 있는 모든 node에 공통 Entry와 Player factory를 등록하고, Instance node도 포함하여 Lobby와 Instance node마다 `zlink.structure.json`에 Entry 하나를 선언한다. Framework 기본 Entry는 structure에 넣지 않는다. e2e 설정의 Instance당 Dungeon 하나라는 용량은 대체 입장을 결정적으로 만들므로 유지한다.
-
-Lobby·Dungeon 같은 역할 이름을 이 샘플과 다르게 정하려면 타입 이름, `GameNames`, `server/config/`, `zlink.structure.json`을 한 번에 바꾼다. 이름 변경은 기능을 옮기는 변경과 나눠서 진행하면 실패 원인을 찾기 쉽다.
-
-옮긴 뒤 `update`가 실패하면 `Capture`에 빠진 필드가 있는지 먼저 확인한다. 그다음 [디버깅](#디버깅)의 message flow로 첫 실패 단계를 찾는다.
+클라이언트는 행동을 요청하고 도메인이 결과를 결정한다. 거부는 상태를 바꾸지 않으며 `ActionRejected(Reason, RetryAfterMs)`로 응답한다. 이 구조에는 시간 제한이 없으므로 RetryAfterMs는 항상 0이다. relocation snapshot에는 Phase·RunId·멤버·준비·도착 멤버·Stage를 보존한다. 공개 비동기 API와 Framework 실행 소유권을 유지하며 별도 lock이나 라우팅 상태를 추가하지 않는다.
 
 ## 개발 시 주의점
 

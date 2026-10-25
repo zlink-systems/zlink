@@ -31,3 +31,6 @@ test('Party admission preserves leader, capacity, and readiness', () => {
   assert.equal(party.join('replacement', new PartyJoin('party', false)), true);
   assert.equal(party.entryRejection('member-1'), Rejection.notReady);
 });
+
+import { domainChecks } from './domain-checks';
+test('Run state boundaries', domainChecks);

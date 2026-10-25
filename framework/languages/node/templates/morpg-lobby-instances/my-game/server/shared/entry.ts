@@ -16,13 +16,15 @@ export class Entry implements ZLinkEntrySpot<Player> {
   async onJoinedActor(_actor: Player): Promise<void> {}
   async onLeaveActor(_actor: Player): Promise<void> {}
   async join(actor: Player, partyId: string, create: boolean): Promise<void> {
-    if (!partyId.trim()) {
+    if (!partyId.trim() || (!create && !(await this.spots.find(partyId)))) {
       await actor.context.boundSession.send(new ActionRejected(Rejection.invalidParty)).submit();
       return;
     }
-    const id = Names.partyPrefix + partyId;
-    const result = await this.spots.getOrCreate(id, Names.party).inMesh(Names.mesh).submit();
-    if (result.state === ZLinkSpotCreateState.Rejected) throw new Error('Party creation rejected');
+    const id = partyId;
+    if (create) {
+      const result = await this.spots.getOrCreate(id, Names.party).inMesh(Names.mesh).submit();
+      if (result.state === ZLinkSpotCreateState.Rejected) throw new Error('Party creation rejected');
+    }
     actor.context.joinSpot(id, new PartyJoin(partyId, create)).defer();
   }
 }

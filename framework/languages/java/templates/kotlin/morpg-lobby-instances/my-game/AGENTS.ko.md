@@ -82,53 +82,23 @@ Actor가 소속 Spot을 바꾸는 동작은 membership 변경이다. 대상 Spot
 
 ## 요청 흐름
 
-예시 게임의 요청은 다음 경로로 처리된다. 기능을 더하거나 옮기기 전에 이 경로를 따라 코드를 읽으면 바꿀 위치를 빠르게 찾을 수 있다.
+1. Session은 JoinLobbyRequest로 Player Actor를 바인딩하고 클라이언트 허용 패킷만 중계한다.
+2. Entry는 CreatePartyRequest에 `party-<32hex>`를 발급하여 Party Spot을 생성한다. JoinPartyRequest는 기존 파티만 찾으며 없는 ID는 `invalid-party`로 거부한다.
+3. 파티 도메인은 리더와 전원 준비를 검사한다. Forming 또는 Completed에서 새 `run-<32hex>`를 발급하고 Preparing으로 전이한다. 재요청은 같은 RunId를 사용한다.
+4. Party Spot은 `dungeon-<RunId>`를 생성·조회하고 명단을 준비한다. 같은 실행과 명단은 같은 DungeonPrepared를 반환한다. Entering으로 전이한 뒤 아직 파티에 있는 멤버에게 JoinDungeon을 보낸다.
+5. 전원이 도착하면 던전은 Active가 되고 Party Spot에 RunStarted를 보낸다. Advance가 FinalStage(3)에 도달하면 Completed가 되고 RunCompleted를 보낸다. Party Spot은 실행 중 떠난 멤버를 제거하지 않는다.
+6. 재접속은 현재 view를 반환한다. relocation은 도메인 snapshot을 보존하며 update는 relocation과 safe shutdown을 관찰한 뒤 호스트를 교체한다.
 
-1. client가 Session node에 STREAM으로 연결하고 첫 패킷 `JoinLobbyRequest`를 보낸다. `GameSession`은 `playerId`로 Player Actor를 `getOrCreate`한 뒤 `bindOrGet`으로 Session에 binding하고 원래 패킷을 relay한다.
-2. 새 Actor는 Entry Spot `Entry`에서 시작한다. `EntryActions.login`이 identity를 확인하고 binding된 Session으로 `LobbyView`를 응답한다.
-3. `CreatePartyRequest` 또는 `JoinPartyRequest`가 `EntryActions.create` 또는 `EntryActions.join`에 도달하고, `Entry.join`이 `party-<partyId>` Spot을 `getOrCreate`로 만든 뒤 `joinSpot(...).defer()`를 요청한다. `Party.onActorJoinSuspending`이 `PartyState.join`으로 플레이어를 받아들이고(최대 `Rules.MAX_MEMBERS`) `Party.onJoinedActorSuspending`이 `PartyView`를 broadcast한다.
-4. `ReadyRequest`는 `PartyActions.ready`에 도달하여 플레이어를 준비 상태로 표시하고 `PartyView`를 broadcast한다. `EnterDungeonRequest`는 `Party.enter`에 도달한다. `PartyState.entryRejection`이 `not-leader` 또는 `not-ready`면 `ActionRejected`로 응답하고, 아니면 `Party.enter`가 `dungeon-<partyId>`를 `getOrCreate`로 만들고 `requestToSpot`으로 `PrepareDungeon`을 `Prepare.prepare`에 보낸 뒤 모든 멤버에게 `JoinDungeon`을 push한다.
-5. `PartyActions.travel`이 `JoinDungeon`을 받아 `joinSpot(dungeonId, request).defer()`를 요청한다. `Dungeon.onActorJoinSuspending`이 멤버를 받아들이고 `Dungeon.onJoinedActorSuspending`이 `DungeonView`를 push한다. `AdvanceRequest`는 `DungeonActions.advance`에 도달하여 단계를 올리고 `DungeonActions.deliver` handler로 모든 멤버에게 `DungeonView`를 push한다.
-6. 재접속한 client는 새 Session에서 `JoinLobbyRequest`를 보낸다. 같은 Actor가 binding되고 Actor가 속한 Spot의 `login`(`PartyActions` 또는 `DungeonActions`)이 현재 view를 다시 보낸다.
-7. node를 교체할 때 `runNode`의 `drain`이 relocation을 요청한다. Framework는 `PartyTransfer`·`DungeonTransfer`·`PlayerTransfer`의 `capture`로 application 상태를 받아 다른 node에서 `restore`한다.
+## MORPG 도메인 확장
 
-## 이 샘플을 보며 개발하기
+이 템플릿의 도메인을 확장하여 MORPG 서버를 만든다. 기능을 바꾸기 전에 빌드, 도메인 시험과 e2e를 실행한다.
 
-이 샘플은 기능들이 함께 동작하는 방식을 보여 주므로, 자기 게임으로 바꾸지 않고 읽고 실행하는 용도로 쓴다. 자기 프로젝트는 Kotlin 기본 셋업에서 시작한다. [ZLink Start](https://zlink.systems/start)의 Initializer에서 Kotlin을 고르거나 ZLink 저장소의 `framework/languages/java/templates/kotlin/starter/my-game`을 사용한다. 그다음 필요한 기능을 이 샘플에서 하나씩 옮긴다. 구조 선택은 기본 셋업의 `AGENTS.md`가 설명하며, 이 절은 `morpg-lobby-instances`만 다룬다. 이 샘플은 바꾸지 않고 프로젝트 옆에 참고용으로 둔다.
+- 파티 판정은 `server/lobby/src/main/kotlin/MyGame/lobby/domain/PartyState.kt`, 던전 판정은 `server/instance/src/main/kotlin/MyGame/instance/domain/DungeonState.kt`에서 확장한다. Party Spot은 Actor가 던전에 있는 동안에도 멤버·준비·Phase·RunId를 유지한다. 던전은 도착 멤버와 Stage를 소유한다.
+- 새 공통 계약과 상수는 `server/shared/src/main/kotlin/MyGame/Contracts.kt`에 추가한다. 서버가 UUID로 파티와 실행 ID를 발급한다. 기본 Framework serializer를 사용하며 enum은 이름 문자열, 없는 RunId는 JSON null로 표현한다. 정수 상한은 9,007,199,254,740,991이다.
+- 클라이언트 패킷은 `server/session/src/main/kotlin/MyGame/session/Program.kt`의 Session 허용 목록에 추가하고 대상 Spot에 handler를 등록한다. 준비·이동·실행 통지 등 내부 패킷은 허용하지 않는다.
+- 시나리오 관찰은 `e2e/src/main/kotlin/MyGame/e2e/Scenarios.kt`, 경계 시험은 `server/lobby/src/test/kotlin/MyGame/lobby/PartyStateTest.kt`에 추가한다. `./gradlew --no-daemon :server:lobby:test`로 도메인 시험을 실행한다. 시나리오 ID는 README와 `zlink.structure.json`에 함께 반영한다.
 
-### 샘플 먼저 실행하기
-
-옮기기 전에 [개발 명령](#개발-명령)으로 빌드와 e2e를 한 번 실행해 받은 샘플이 동작하는지 확인하고 동작을 본다. 이 결과가 이후 비교의 기준이 된다. 실패하면 먼저 [README](README.md)의 Known issues와 대조한다.
-
-### 옮길 기능
-
-기능 이름은 기본 셋업 `AGENTS.md`의 기능 표와 같다. 경로는 이 디렉터리를 기준으로 한다. 기본 셋업에는 Session node 하나와 `connect` 시나리오만 있으므로, 마지막 열은 기능마다 기본 셋업에서 함께 늘릴 것이다.
-
-| 기능 | 이 샘플의 파일 | 옮길 것 | 기본 셋업에서 함께 늘릴 것 |
-| --- | --- | --- | --- |
-| Typed 메시지 | `server/shared/src/main/kotlin/MyGame/Contracts.kt` | 사용할 기능의 클래스: `JoinLobbyRequest`, `CreatePartyRequest`, `JoinPartyRequest`, `PartyJoin`, `PartyView`, `ReadyRequest`, `EnterDungeonRequest`, `PrepareDungeon`, `DungeonPrepared`, `JoinDungeon`, `DungeonView`, `AdvanceRequest`, `ViewRequest`, `LobbyView`, `ActionRejected`. `SessionInfoRequest`·`SessionInfo`는 client가 필요로 할 때만 옮긴다 | `Names`의 이름·ID prefix와 `Rules`의 한도. node `Roles`와 제어 문자열은 기본 셋업에 이미 있다 |
-| Actor | `server/shared/src/main/kotlin/MyGame/Player.kt` | `checkIdentity`와 `onJoinCompletedSuspending`(거부를 `ActionRejected`로 전달)을 가진 `Player`, `PlayerFactory`, `PlayerTransfer` | 새 `server/lobby/` Gradle 모듈(`settings.gradle.kts`에 포함)과 그 `Program.kt`, `server/config/lobby.json`, `e2e/.../Nodes.kt`의 시작 처리, `Roles` 항목. `Program.kt`의 `addActorFactory` 등록. `zlink.structure.json`의 node 선언과 이에 맞춘 `Structure.kt` 검사(기본 셋업의 검사는 `session` 역할만 받는다) |
-| Spot | `server/lobby/src/main/kotlin/MyGame/lobby/infrastructure/zlink/Spots.kt`, `server/lobby/src/main/kotlin/MyGame/lobby/domain/PartyState.kt` | `PartyState`(명단, 준비 상태, `entryRejection`)를 가진 `Party`와 `PartyActions` handler | `Program.kt`의 `addSpotFactory` 등록(`SPOT_WIDE`). 파티 규칙의 unit test. `zlink.structure.json`의 `spots` 선언과 이를 등록과 비교하는 `Structure.kt` 검사(기본 셋업의 검사는 Spot이 없다고 단정한다) |
-| Entry·첫 입장 | `server/shared/src/main/kotlin/MyGame/admission/Entry.kt`, `server/shared/src/main/kotlin/MyGame/admission/EntryActions.kt` | `EntryActions.login`·`create`·`join`, `Entry.join`(`getOrCreate`로 파티 생성, deferred join) | `addEntrySpot` 등록, `addHandlersFromPackageOf<EntryActions>()`, `entry` 선언. 파티 구성을 보는 `party` 시나리오와 재접속 뒤 상태를 비교하는 `reconnect` 시나리오 |
-| Session binding | `server/session/src/main/kotlin/MyGame/session/Program.kt` (`GameSession`) | 첫 패킷 분기: Actor 조회·생성, `bindOrGet`, 원래 typed 패킷 relay | `EntryActions.login`과 같은 첫 패킷 타입. 기본 셋업의 `PlayerSession.kt`에 옮긴다 |
-| Host relocation | `server/lobby/src/main/kotlin/MyGame/lobby/infrastructure/zlink/Spots.kt`의 `PartyTransfer`, `server/instance/src/main/kotlin/MyGame/instance/infrastructure/zlink/Dungeon.kt`의 `DungeonTransfer`, `server/shared/src/main/kotlin/MyGame/Player.kt`의 `PlayerTransfer`, `server/shared/src/main/kotlin/MyGame/Transfer.kt` | JSON으로 저장하는 `PartyState`·`DungeonState`와 `capture`·`restore`, 비어 있는 Player adapter, `ensureActive` | `preserveStateWith` 등록. 서버 교체 뒤에도 연결·던전 상태가 유지되고 대체 node가 새 던전을 받는지 판정하는 `update` 시나리오 |
-| 동적 던전 | `server/lobby/src/main/kotlin/MyGame/lobby/infrastructure/zlink/Spots.kt`의 `Party.enter`, `server/instance/src/main/kotlin/MyGame/instance/Program.kt`, `server/instance/src/main/kotlin/MyGame/instance/infrastructure/zlink/Dungeon.kt`, `server/instance/src/main/kotlin/MyGame/instance/infrastructure/zlink/Handlers.kt`의 `Prepare` | `getOrCreate`와 `requestToSpot` 준비로 하는 동적 Dungeon 생성, 준비된 멤버만 받는 admission, 단계 진행 | 새 `server/instance/` Gradle 모듈과 `instanceA.json`·`instanceB.json`, 시작 처리, 역할. `NodeConfig`의 `dungeonCapacity`. `zlink.structure.json`의 동적 `dungeon` Spot과 `GetOrCreate` edge |
-
-### 옮기는 순서와 규칙
-
-기능은 표의 행 하나씩 옮기고, 하나를 옮길 때마다 빌드, 구조 검사, 관련 e2e 시나리오를 실행한다. 시나리오 ID는 `Contracts.kt`의 `Scenario` enum, `e2e/src/main/kotlin/MyGame/e2e/Scenarios.kt`의 `scenario` 함수, `zlink.structure.json`의 `run.scenarios`, `run.commands`의 시나리오 선택 예시에 함께 추가한다. 판정은 실제로 받은 응답과 이벤트로 하고, 고정 대기나 기한 확대로 통과시키지 않는다.
-
-메시지 contract부터 옮긴다. `Contracts.kt`에 typed 클래스를 먼저 정의한 뒤, 컴파일 오류가 나는 handler를 하나씩 새 메시지로 옮긴다. 첫 패킷(`JoinLobbyRequest`)을 바꾸면 `GameSession`의 첫 패킷 분기, `EntryActions.login`, `PartyActions`와 `DungeonActions`의 `login` handler가 같은 타입을 받도록 함께 고친다.
-
-상태는 그 상태를 결정하는 객체에 둔다. 명단과 준비 상태는 `Party`, 멤버와 단계는 `Dungeon`에 두며 `Player`는 상태를 갖지 않는다. `PartyState`나 `DungeonState` 필드를 바꿀 때는 `PartyTransfer`나 `DungeonTransfer`를 함께 고친다. 빠뜨린 필드는 relocation 뒤 사라지고, `update` 시나리오가 그 손실을 잡는다.
-
-멤버가 참가하기 전에 Dungeon을 준비한다. `Dungeon.onActorJoinSuspending`이 준비된 멤버만 받으므로 `Party.enter`는 `Prepare.prepare`의 응답을 기다린 뒤에만 `JoinDungeon`을 push한다. instance 용량은 process당 Dungeon 하나(`dungeonCapacity`)여서 대체 node의 배치를 관찰할 수 있다. Dungeon을 만드는 시나리오를 추가할 때도 이 구성을 유지한다.
-
-Lobby와 Instance node는 공유 `Entry`와 `EntryActions`를 등록한다. 두 role의 node마다 structure에 Entry를 정확히 하나씩 선언하고 다른 role에는 선언하지 않는다. Framework 자체의 Entry는 structure에 포함하지 않는다. 구조 검사는 Entry 소유자가 빠졌거나 동적 `Party`·`Dungeon` 타입이 빠졌으면 거부하고 양수인 `dungeonCapacity`를 요구한다(제공된 설정은 Instance node당 Dungeon 하나를 허용한다).
-
-역할 이름을 이 샘플과 다르게 정하려면 타입 이름, `Names`, `server/config/`, `zlink.structure.json`을 한 번에 바꾼다. 이름 변경은 기능을 옮기는 변경과 나눠서 진행하면 실패 원인을 찾기 쉽다.
-
-옮긴 뒤 `update`가 실패하면 snapshot에 빠진 상태가 있는지 먼저 확인한다. 그다음 [디버깅](#디버깅)의 message flow로 첫 실패 단계를 찾는다.
+클라이언트는 행동을 요청하고 도메인이 결과를 결정한다. 거부는 상태를 바꾸지 않고 `ActionRejected(Reason, RetryAfterMs)`로 응답한다. 이 구조에는 시간 제한이 없으므로 RetryAfterMs는 32-bit 정수 0이다. relocation snapshot은 Phase·RunId·멤버·준비·도착 멤버·Stage를 보존하며 시각은 저장하지 않는다. Framework 실행 gate가 직렬화하는 상태에 별도 lock이나 queue를 추가하지 않는다.
 
 ## 개발 시 주의점
 

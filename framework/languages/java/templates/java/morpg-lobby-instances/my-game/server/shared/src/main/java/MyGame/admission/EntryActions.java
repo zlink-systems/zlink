@@ -19,7 +19,7 @@ public final class EntryActions {
     @ZLinkSpotActorSend
     public CompletionStage<Void> create(
             Entry spot, Player actor, ZLinkMessageContext context, CreatePartyRequest request) {
-        return spot.join(actor, request.partyId(), true);
+        return spot.join(actor, Names.newPartyId(), true);
     }
 
     @ZLinkSpotActorSend

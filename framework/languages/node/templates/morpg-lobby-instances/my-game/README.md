@@ -70,3 +70,8 @@ For maintenance, send `drain` on the selected Instance process's stdin. Wait for
 기본 빌드와 e2e는 Docker에서 runner와 node를 실행한다. Bash는 `./run-e2e.sh`, PowerShell 7은 `pwsh -NoProfile -File ./run-e2e.ps1`을 사용한다. 로컬 프로세스 디버깅은 Node.js와 npm을 설치한 뒤 `--local` 또는 `-Local`로 실행한다. Docker 빌드·정리 로그는 `.logs/docker-<project>/`에 남는다.
 
 Docker Compose v2를 준비하고 위 Build 명령으로 이미지를 빌드합니다. Windows에서는 PowerShell 7을 사용합니다. Docker e2e 명령은 독립 Redis와 node 컨테이너를 생성하며, 실행 로그는 `.logs/run-<id>/`에 보존합니다. 파티 상태는 Lobby의 Party User Spot, 던전 상태는 Instance의 Dungeon User Spot이 소유합니다. Instance를 교체할 때는 `drain` 뒤 세 relocation 신호를 확인하고 `shutdown`으로 종료한 다음 같은 설정으로 대체 process를 시작합니다. 0.30.2 게시 전 검증의 한계와 DTO 전달 관련 사항은 Known issues를 확인합니다.
+
+
+Domain extension: change PartyState and DungeonState, add shared typed contracts, update the Session client allowlist and add boundary tests and scenario observations. Integer values are bounded by 9,007,199,254,740,991; rejected inputs leave state unchanged. ActionRejected includes a 32-bit RetryAfterMs, always zero in this structure. No floating-point action input or time restriction is used.
+
+한국어 안내: 이 템플릿의 파티·던전 도메인을 확장하여 MORPG 서버를 만든다. party는 중복 입장·서버 발급 ID·거부 뒤 상태 불변·최종 완료를 관찰한다. reconnect·update는 RunId·Phase·Stage 보존을 검사한다. 도메인 경계 시험은 AGENTS의 확장 절차에 따라 실행한다.

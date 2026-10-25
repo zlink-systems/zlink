@@ -3,7 +3,7 @@ import { zlinkSpotActorSendHandler, zlinkSpotPacketHandler } from '@zlink-system
 import type { ZLinkMessageContext, ZLinkSpotRequestHandler } from '@zlink-systems/framework';
 import { PacketNames } from '../shared/constants';
 import {
-  DungeonView,
+  DungeonView, PartyView, JoinDungeon, ActionRejected, EnterDungeonRequest,
   type JoinLobbyRequest,
   type ViewRequest,
   type AdvanceRequest,
@@ -54,11 +54,11 @@ export class View {
 export class Advance {
   async handle(
     spot: Dungeon,
-    _actor: Player,
+    actor: Player,
     _context: ZLinkMessageContext,
     _request: AdvanceRequest
   ): Promise<void> {
-    await spot.advance();
+    await spot.advance(actor);
   }
 }
 @Injectable()
@@ -90,3 +90,16 @@ export class Prepare implements ZLinkSpotRequestHandler<Dungeon, PrepareDungeon,
     return spot.prepare(request);
   }
 }
+
+@Injectable()
+@zlinkSpotActorSendHandler({ spot: () => Dungeon, actor: () => Player, packetName: PacketNames.enterDungeonRequest })
+export class Enter { async handle(spot: Dungeon, actor: Player, _context: ZLinkMessageContext, _request: EnterDungeonRequest): Promise<void> { await spot.enter(actor); } }
+@Injectable()
+@zlinkSpotActorSendHandler({ spot: () => Dungeon, actor: () => Player, packetName: PacketNames.joinDungeon })
+export class Travel { async handle(_spot: Dungeon, actor: Player, _context: ZLinkMessageContext, request: JoinDungeon): Promise<void> { actor.context.joinSpot(request.dungeonId, request).defer(); } }
+@Injectable()
+@zlinkSpotActorSendHandler({ spot: () => Dungeon, actor: () => Player, packetName: PacketNames.partyView })
+export class PartyDelivery { async handle(_spot: Dungeon, actor: Player, _context: ZLinkMessageContext, request: PartyView): Promise<void> { await actor.context.boundSession.send(Object.assign(new PartyView(), request)).submit(); } }
+@Injectable()
+@zlinkSpotActorSendHandler({ spot: () => Dungeon, actor: () => Player, packetName: PacketNames.actionRejected })
+export class RejectDelivery { async handle(_spot: Dungeon, actor: Player, _context: ZLinkMessageContext, request: ActionRejected): Promise<void> { await actor.context.boundSession.send(new ActionRejected(request.reason, request.retryAfterMs)).submit(); } }

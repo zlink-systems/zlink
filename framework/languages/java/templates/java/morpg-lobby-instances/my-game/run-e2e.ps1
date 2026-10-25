@@ -16,7 +16,7 @@ if ($CheckStructure) { $RunnerArguments = @('--check-structure') + $RunnerArgume
 elseif ($Scenario) { $RunnerArguments = @('--scenario', $Scenario) + $RunnerArguments }
 if ($Local) {
     if (-not $NoBuild) {
-        & ./gradlew.bat --no-daemon installDist :e2e:javaHome *> (Join-Path $root '.logs/build.log')
+        & ./gradlew.bat --no-daemon installDist :server:lobby:test :e2e:javaHome *> (Join-Path $root '.logs/build.log')
         if ($LASTEXITCODE -ne 0) {
             Get-Content (Join-Path $root '.logs/build.log') -Tail 35 | Write-Host
             exit 1

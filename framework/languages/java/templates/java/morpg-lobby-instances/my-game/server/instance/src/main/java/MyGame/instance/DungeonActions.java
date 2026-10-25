@@ -25,7 +25,7 @@ public final class DungeonActions {
     @ZLinkSpotActorSend
     public CompletionStage<Void> advance(
             Dungeon spot, Player actor, ZLinkMessageContext context, AdvanceRequest request) {
-        return spot.advance();
+        return spot.advance(actor);
     }
 
     @ZLinkSpotActorSend
@@ -33,4 +33,12 @@ public final class DungeonActions {
             Dungeon spot, Player actor, ZLinkMessageContext context, DungeonView request) {
         return actor.context().boundSession().send(request).submit();
     }
+    @ZLinkSpotActorSend
+    public CompletionStage<Void> reject(Dungeon spot, Player actor, ZLinkMessageContext context, ActionRejected r) { return actor.context().boundSession().send(r).submit(); }
+    @ZLinkSpotActorSend
+    public CompletionStage<Void> enter(Dungeon spot, Player actor, ZLinkMessageContext context, EnterDungeonRequest r) { return spot.enter(actor); }
+    @ZLinkSpotActorSend
+    public CompletionStage<Void> travel(Dungeon spot, Player actor, ZLinkMessageContext context, JoinDungeon r) { actor.context().joinSpot(r.dungeonId(), r).defer(); return CompletableFuture.completedFuture(null); }
+    @ZLinkSpotActorSend
+    public CompletionStage<Void> party(Dungeon spot, Player actor, ZLinkMessageContext context, PartyView r) { return actor.context().boundSession().send(r).submit(); }
 }

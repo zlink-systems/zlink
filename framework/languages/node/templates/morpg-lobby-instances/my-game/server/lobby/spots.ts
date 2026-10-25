@@ -15,7 +15,7 @@ import {
   PartyJoin,
   PrepareDungeon,
   DungeonPrepared,
-  JoinDungeon
+  JoinDungeon, RunPhase
 } from '../shared/messages';
 import { Player } from '../shared/player';
 import { PartyState } from './domain';
@@ -31,7 +31,7 @@ export class Party implements ZLinkSpot<Player> {
     const request = payload.decode(PartyJoin);
     return {
       accepted:
-        Names.partyPrefix + request.partyId === String(this.context.spotId) &&
+        request.partyId === String(this.context.spotId) &&
         this.state.join(id, request)
     };
   }
@@ -52,13 +52,16 @@ export class Party implements ZLinkSpot<Player> {
     this.state.markReady(actor.context.actorId);
     await this.broadcast();
   }
-  async enter(actor: Player): Promise<void> {
-    const reason = this.state.entryRejection(actor.context.actorId);
+  async enter(actor: Player): Promise<void> { await this.enterPlayer(actor.context.actorId); }
+  async enterPlayer(playerId: string): Promise<void> {
+    const reason = this.state.enter(playerId);
     if (reason) {
-      await actor.context.boundSession.send(new ActionRejected(reason)).submit();
+      await this.actors.sendToActor(playerId, new ActionRejected(reason)).submit();
       return;
     }
-    const dungeonId = Names.dungeonPrefix + this.state.partyId;
+    if (this.state.phase === RunPhase.Active) { await this.actors.sendToActor(playerId, this.state.view()).submit(); return; }
+    const runId = this.state.runId!;
+    const dungeonId = Names.dungeonPrefix + runId;
     const result = await this.spots
       .getOrCreate(dungeonId, Names.dungeon)
       .inMesh(Names.mesh)
@@ -67,12 +70,15 @@ export class Party implements ZLinkSpot<Player> {
       throw new Error('Dungeon creation rejected');
     const members = [...this.state.members];
     const prepared = await this.context.outbound
-      .requestToSpot(dungeonId, new PrepareDungeon(this.state.partyId, members))
+      .requestToSpot(dungeonId, new PrepareDungeon(runId, this.state.partyId, members))
       .submit<DungeonPrepared>();
-    if (prepared.dungeonId !== dungeonId) throw new Error('Dungeon preparation identity mismatch');
-    for (const id of members)
-      await this.actors.sendToActor(id, new JoinDungeon(dungeonId, this.state.partyId)).submit();
+    if (prepared.dungeonId !== dungeonId || this.state.prepared(prepared.runId)) throw new Error('Dungeon preparation identity mismatch');
+    for (const id of members.filter(id => !this.state.entered.includes(id)))
+      await this.actors.sendToActor(id, new JoinDungeon(dungeonId, runId)).submit();
   }
+  arrived(runId: string, playerId: string): void { const reason = this.state.arrived(runId, playerId); if (reason) throw new Error(reason); }
+  started(runId: string): void { const reason = this.state.started(runId); if (reason) throw new Error(reason); }
+  completed(runId: string): void { const reason = this.state.completed(runId); if (reason) throw new Error(reason); }
   capture(): Uint8Array {
     return Buffer.from(JSON.stringify(this.state));
   }
