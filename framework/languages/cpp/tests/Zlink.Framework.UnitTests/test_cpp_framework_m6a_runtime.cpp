@@ -162,16 +162,18 @@ void verify_node_send_forwarding_allocations ()
                 ::operator delete (allocation);
             })
             == 1);
-    std::vector<std::uint8_t> copied_target, encoded_header;
+    std::vector<std::uint8_t> copied_target;
+    zlink::message_t encoded_header;
     const auto target_copy_allocations = count_allocations ([&] { copied_target = target; });
     std::vector<std::uint8_t> ().swap (copied_target);
     std::shared_ptr<const mesh::admitted_peer_t> peer;
     const auto argument_allocations = count_allocations ([&] {
         copied_target = target;
-        encoded_header = protocol::encode_node_send_header ();
+        encoded_header = protocol::encode_node_send_header_message ();
         peer = source.topology ().peer (target);
     });
-    assert (copied_target == target && !encoded_header.empty () && !peer);
+    assert (copied_target == target && encoded_header.valid () && encoded_header.size () != 0
+            && !peer);
     std::optional<fw::task_t<zlink::submit_result_t>> ready;
     const auto result_allocations = count_allocations ([&] {
         ready.emplace (
@@ -246,10 +248,10 @@ void verify_node_request_submit_cost ()
               target.size ());
             assert (submission->await_ready ());
             assert (submission->result () && !submission->result ().value ());
-            std::vector<std::uint8_t> encoded;
-            const auto encode_allocations =
-              count_allocations ([&] { encoded = protocol::encode_application_payload (payload); });
-            assert (!encoded.empty ());
+            zlink::message_t encoded;
+            const auto encode_allocations = count_allocations (
+              [&] { encoded = protocol::encode_application_payload_message (payload); });
+            assert (encoded.valid () && encoded.size () != 0);
             const auto full_allocations = count_allocations ([&] {
                 submission.emplace (source.request_to_node (
                   target, payload, 1s, [&] (auto, auto) { callback_called = true; }));
@@ -4405,11 +4407,10 @@ void verify_unadmitted_route (bool repeat_hello)
             update_result = await_task (target.pump_one (std::chrono::steady_clock::now ()));
         assert (update_result == mesh::raw_mesh_pump_result_t::infrastructure);
         assert (!target.topology ().peer (bytes ("unadmitted-source")));
-        auto pending = port.request (
-          bytes ("unadmitted-target"),
+        auto request_parts = zlink::framework::detail::backend::materialize_binding_parts (
           {protocol::encode_node_request_header (91),
-           protocol::encode_application_payload ({"Silent", "application/json", bytes ("{}")})},
-          100ms);
+           protocol::encode_application_payload ({"Silent", "application/json", bytes ("{}")})});
+        auto pending = port.request (bytes ("unadmitted-target"), request_parts, 100ms);
         while (!pending.await_ready () && std::chrono::steady_clock::now () < deadline) {
             (void) await_task (target.pump_one (std::chrono::steady_clock::now ()));
             (void) port.poll (0ms);
