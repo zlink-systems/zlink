@@ -7099,6 +7099,74 @@ public sealed partial class EntrySpotActorDispatchTests
     }
 
     [Fact]
+    public async Task Entry_spot_disposal_joins_shared_cancellation_callbacks_outside_its_lane()
+    {
+        var probe = new BlockingDisposeRouteProbe();
+        await using var services = new ServiceCollection()
+            .AddSingleton(probe)
+            .AddTransient<BlockingDisposeRouteHandler>()
+            .BuildServiceProvider();
+        var (activation, _) = CreateActivationWithRuntime(
+            services,
+            new CapturingSpot(),
+            typeof(BlockingDisposeEntrySpot)
+        );
+        activation.Configure();
+        var dispatch = activation
+            .DispatchRouteAsync(CreateRoutedReceived("cancel-dispose"), CancellationToken.None)
+            .AsTask();
+        var callbackFinalization = new TaskCompletionSource<Task>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        using var releaseCallback = new ManualResetEventSlim();
+        Task? cancellation = null;
+        try
+        {
+            await probe.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            using var registration = probe.ExecutionToken.UnsafeRegister(
+                _ =>
+                {
+                    callbackFinalization.TrySetResult(activation.DisposeAsync().AsTask());
+                    Assert.True(releaseCallback.Wait(TimeSpan.FromSeconds(5)));
+                },
+                null
+            );
+            cancellation = Task.Run(activation.CancelActiveOperations);
+            var callbackDisposal = await callbackFinalization.Task.WaitAsync(
+                TimeSpan.FromSeconds(5)
+            );
+            probe.Release.TrySetResult();
+            try
+            {
+                await dispatch.WaitAsync(TimeSpan.FromSeconds(5));
+            }
+            catch (OperationCanceledException) { }
+            var disposal = activation.DisposeAsync().AsTask();
+            Assert.Same(callbackDisposal, disposal);
+            Assert.False(cancellation.IsCompleted);
+            Assert.False(disposal.IsCompleted);
+
+            releaseCallback.Set();
+            await cancellation.WaitAsync(TimeSpan.FromSeconds(5));
+            await disposal.WaitAsync(TimeSpan.FromSeconds(5));
+            activation.CancelActiveOperations();
+        }
+        finally
+        {
+            releaseCallback.Set();
+            probe.Release.TrySetResult();
+            if (cancellation is not null)
+                await cancellation.WaitAsync(TimeSpan.FromSeconds(5));
+            try
+            {
+                await dispatch.WaitAsync(TimeSpan.FromSeconds(5));
+            }
+            catch (OperationCanceledException) { }
+            await activation.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        }
+    }
+
+    [Fact]
     public async Task Spot_Node_And_Catalog_Repeated_Dispose_Callers_Share_Finalization()
     {
         var cleanupStarted = new TaskCompletionSource(
@@ -7134,11 +7202,13 @@ public sealed partial class EntrySpotActorDispatchTests
 
             releaseCleanup.TrySetResult();
             await Task.WhenAll(firstNode, secondNode).WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(0, Volatile.Read(ref node.RuntimeContextDisposeCount));
         }
         finally
         {
             releaseCleanup.TrySetResult();
             await runtime.StopAsync(CancellationToken.None);
+            Assert.Equal(1, Volatile.Read(ref node.RuntimeContextDisposeCount));
         }
     }
 
@@ -13259,6 +13329,7 @@ public sealed partial class EntrySpotActorDispatchTests
             CancellationToken cancellationToken
         )
         {
+            probe.ExecutionToken = cancellationToken;
             probe.Started.TrySetResult();
             await probe.Release.Task.ConfigureAwait(false);
         }
@@ -13266,6 +13337,8 @@ public sealed partial class EntrySpotActorDispatchTests
 
     private sealed class BlockingDisposeRouteProbe
     {
+        public CancellationToken ExecutionToken { get; set; }
+
         public TaskCompletionSource Started { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -14238,6 +14311,8 @@ public sealed partial class EntrySpotActorDispatchTests
             IZLinkBackendLocalActorAuthorityReader,
             IZLinkBackendBoundSessionBind
     {
+        public int RuntimeContextDisposeCount;
+
         public Func<
             Systems.Zlink.Framework.Runtime.Protocol.ServiceWireCodec.BoundSessionBind38,
             TimeSpan,
@@ -15343,7 +15418,11 @@ public sealed partial class EntrySpotActorDispatchTests
             IZLinkBackendSpotNode? actorDispatchNode = null
         ) => throw new NotSupportedException();
 
-        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+        public ValueTask DisposeAsync()
+        {
+            Interlocked.Increment(ref node.RuntimeContextDisposeCount);
+            return ValueTask.CompletedTask;
+        }
     }
 
     private sealed class CapturingMessageFlowObserver : IDisposable
