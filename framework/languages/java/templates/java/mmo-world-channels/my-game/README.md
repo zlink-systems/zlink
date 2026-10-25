@@ -1,6 +1,6 @@
 # MyGame world and channel servers
 
-This Java template separates two MMORPG worlds into independent meshes and Redis stores. Accounts publishes the world list over HTTP. Session nodes relay typed STREAM messages to Player Actors. Each Actor owns its gold; Zone Spots identify channels and retain no application state.
+This Java template separates two MMORPG worlds into independent meshes and Redis stores. Accounts publishes the world list over HTTP. Session nodes relay typed STREAM messages to Player Actors. `GoldBalance` owns each player's gold and earn timing; each Zone owns the IDs of its connected players.
 
 ```mermaid
 flowchart LR
@@ -54,10 +54,10 @@ The runner checks `zlink.structure.json`, starts its own two Redis containers an
 
 | Scenario | Assertions |
 | --- | --- |
-| worlds | HTTP world endpoints; equal player IDs have independent gold in A and B |
-| channel | Channel 1 to 2 preserves connection, SessionInfo, and gold |
+| worlds | HTTP world endpoints; fixed gold reward, cooldown rejection and server retry delay; equal player IDs have independent gold in A and B |
+| channel | Same-Zone visibility, cross-Zone isolation, move and disconnect removal; oversized channel requests return `integer-out-of-range` without changing membership; channel move preserves connection, SessionInfo, and gold; internal packets return `packet-not-allowed` |
 | reconnect | A new connection retains Actor identity, channel, and gold |
-| update | Drain channelA1; preserve both worlds; stop and replace it; verify a new Zone and Player work on the replacement |
+| update | Drain channelA1; preserve both worlds and the relocated Zone player list; stop and replace it; verify a new Zone and Player work on the replacement |
 
 ## Known issues
 
@@ -78,6 +78,7 @@ The command creates verification Zone `field@3` through the public Spot manager.
 ChannelA2 already holds two Zones, so the replacement must host the new Zone.
 A new Player joins it and earns gold; the test checks channelA1 in both responses.
 Existing Players remain in their relocated Zones. The replacement uses the same configuration.
+`ZoneTransfer` saves the connected player ID list in the Zone relocation snapshot and restores it on the target host. A channel move keeps the client Session bound while the Player Actor changes Zones, so the list follows Zone membership callbacks.
 Message Follow is explicitly 30 seconds; the safe shutdown observation budget is
 derived from that duration and the existing operation budget.
 
@@ -87,4 +88,4 @@ derived from that duration and the existing operation budget.
 
 Docker Compose v2를 준비한 뒤 위 Build 명령을 실행합니다. Docker e2e 명령은 실행마다 Redis 두 개와 node process를 생성하며, 결과와 message-flow 로그를 `.logs/run-<id>/`에 보관합니다.
 
-월드별 Redis와 mesh를 분리하며 Player Actor가 gold를 소유합니다. 채널 변경과 host relocation의 연결 유지는 공개 Framework API에 맡깁니다. 공개 패키지 결함으로 실패한 경우 Known issues와 node stderr를 확인하며, 재시도나 대기 시간 변경으로 실패를 숨기지 않습니다.
+월드별 Redis와 mesh를 분리하며 `GoldBalance`가 gold와 earn 시간을 판정합니다. Zone은 접속한 player ID를 소유하고 relocation snapshot에 목록을 저장합니다. 채널 이동 때 client Session은 유지되고 Player Actor의 Zone이 바뀌므로 목록은 Zone membership callback에서 갱신합니다. `EarnRequest`에는 보상량을 넣지 않고 `GoldBalance`가 수락마다 10 gold를 지급합니다. 단조 시계 기준 1000 ms 안의 요청은 `earn-too-soon`과 서버가 계산한 `RetryAfterMs`로 거부하며 gold와 cooldown을 바꾸지 않습니다. 상한 `9,007,199,254,740,991`에서 상한−10 수락과 상한−9 거부를 도메인 검사로 확인합니다. 상한을 넘는 채널 요청은 `integer-out-of-range`로 거부하고 membership을 바꾸지 않습니다. Session은 허용 목록의 client packet만 전달하고 내부 packet은 `packet-not-allowed`로 거부합니다. 시나리오는 같은 Zone의 목록 공유, 다른 Zone 격리, channel 이동·연결 종료 뒤 제거, 보상 제한을 검사합니다. 채널 변경과 host relocation의 연결 유지는 공개 Framework API에 맡깁니다. 공개 패키지 결함으로 실패하면 Known issues와 node stderr를 확인하고 해당 검사를 유지합니다.

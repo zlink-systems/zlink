@@ -34,6 +34,11 @@ public sealed class ChangeChannel
         CancellationToken ct
     )
     {
+        if (request.Channel > GameRules.MaxInteger)
+            return actor.Context.BoundSession
+                .Send(new ActionRejected(Rejection.IntegerOutOfRange, 0))
+                .Async();
+
         actor
             .Context.JoinSpot(
                 GameNames.ZoneId(request.Channel),
@@ -55,8 +60,13 @@ public sealed class EarnGold : IZLinkSpotActorSendHandler<ZoneSpot, PlayerActor,
         CancellationToken ct
     )
     {
-        await actor.EarnAsync(request.Amount, ct);
-        await spot.ShowAsync(actor);
+        var decision = await actor.EarnAsync(ct);
+        if (decision.Accepted)
+            await spot.ShowAsync(actor);
+        else
+            await actor.Context.BoundSession
+                .Send(new ActionRejected(decision.Reason!, checked((int)decision.RetryAfterMs)))
+                .Async();
     }
 }
 
@@ -72,6 +82,18 @@ public sealed class ViewPlayer : IZLinkSpotActorSendHandler<ZoneSpot, PlayerActo
     ) => spot.ShowAsync(actor);
 }
 
+[ZLinkSpotActorSendHandler(nameof(ChannelViewRequest))]
+public sealed class ViewChannel : IZLinkSpotActorSendHandler<ZoneSpot, PlayerActor, ChannelViewRequest>
+{
+    public ValueTask HandleAsync(
+        ZoneSpot spot,
+        PlayerActor actor,
+        IZLinkMessageContext context,
+        ChannelViewRequest request,
+        CancellationToken ct
+    ) => spot.ShowPlayersAsync(actor);
+}
+
 [ZLinkSpotActorSendHandler(nameof(PlayerView))]
 public sealed class DeliverView : IZLinkSpotActorSendHandler<ZoneSpot, PlayerActor, PlayerView>
 {
@@ -80,6 +102,19 @@ public sealed class DeliverView : IZLinkSpotActorSendHandler<ZoneSpot, PlayerAct
         PlayerActor actor,
         IZLinkMessageContext context,
         PlayerView request,
+        CancellationToken ct
+    ) => actor.Context.BoundSession.Send(request).Async();
+}
+
+[ZLinkSpotActorSendHandler(nameof(ChannelView))]
+public sealed class DeliverChannelView
+    : IZLinkSpotActorSendHandler<ZoneSpot, PlayerActor, ChannelView>
+{
+    public ValueTask HandleAsync(
+        ZoneSpot spot,
+        PlayerActor actor,
+        IZLinkMessageContext context,
+        ChannelView request,
         CancellationToken ct
     ) => actor.Context.BoundSession.Send(request).Async();
 }

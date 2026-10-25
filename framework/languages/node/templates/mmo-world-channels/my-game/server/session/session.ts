@@ -10,7 +10,15 @@ import type {
 } from '@zlink-systems/framework';
 import { Names, PacketNames, meshName } from '../shared/constants';
 import { NODE_CONFIG, type NodeConfig } from '../shared/config';
-import { EnterWorldRequest, SessionInfo } from '../shared/messages';
+import { ActionRejected, EnterWorldRequest, Rejection, SessionInfo } from '../shared/messages';
+const allowedClientPackets = new Set<string>([
+  PacketNames.enterWorldRequest,
+  PacketNames.changeChannelRequest,
+  PacketNames.earnRequest,
+  PacketNames.viewRequest,
+  PacketNames.channelViewRequest,
+  PacketNames.sessionInfoRequest
+]);
 export class Session implements ZLinkSession {
   constructor(
     readonly context: ZLinkSessionContext,
@@ -18,6 +26,12 @@ export class Session implements ZLinkSession {
     private readonly config: NodeConfig
   ) {}
   async onDispatch(dispatch: ZLinkSessionDispatchContext, payload: ZLinkMessage): Promise<void> {
+    if (!allowedClientPackets.has(dispatch.packetName)) {
+      await this.context.client
+        .send(new ActionRejected(Rejection.packetNotAllowed, 0))
+        .submit();
+      return;
+    }
     if (!this.context.actors.bound.length) {
       if (dispatch.packetName !== PacketNames.enterWorldRequest)
         throw new Error('EnterWorldRequest must be first');

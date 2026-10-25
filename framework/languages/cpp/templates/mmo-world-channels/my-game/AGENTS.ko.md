@@ -91,45 +91,16 @@ Actor가 소속 Spot을 바꾸는 동작은 membership 변경이다. 대상 Spot
 5. `ChangeChannelRequest`는 `Zone::change`가 처리하며 새 channel의 Zone에 `join_spot(...).defer()`를 요청한다. 그 Zone이 다른 channel node에 있어도 client 연결과 Actor는 바뀌지 않는다.
 6. node를 교체할 때 `NodeControl`의 `drain`이 relocation을 요청한다. Framework는 `PlayerRelocation`의 `capture`로 gold를 받아 같은 월드의 다른 node에서 `restore`한다. `ZoneRelocation`은 상태를 옮기지 않는다.
 
-## 이 샘플을 보며 개발하기
+## MMORPG 도메인 확장
 
-이 샘플은 기능들이 함께 동작하는 방식을 보여 주므로, 자기 게임으로 바꾸지 않고 읽고 실행하는 용도로 쓴다. 자기 프로젝트는 C++ 기본 셋업에서 시작한다. [ZLink Start](https://zlink.systems/start)의 Initializer에서 C++를 고르거나 ZLink 저장소의 `framework/languages/cpp/templates/starter/my-game`을 사용한다. 그다음 필요한 기능을 이 샘플에서 하나씩 옮긴다. 구조 선택은 기본 셋업의 `AGENTS.md`가 설명하며, 이 절은 `mmo-world-channels`만 다룬다. 이 샘플은 바꾸지 않고 프로젝트 옆에 참고용으로 둔다.
+이 템플릿의 도메인을 확장하여 MMORPG 서버를 만든다.
 
-### 샘플 먼저 실행하기
+1. 바꾸는 상태와 규칙을 같은 소유자에 둔다. `server/channel/domain.hpp`는 gold 상한과 획득 시간을 판정하고, `server/channel/zone.hpp`는 채널별 접속 player ID를 관리한다.
+2. process가 함께 쓰는 typed message와 수 상한은 `server/shared/contracts.hpp`에 추가한다.
+3. 클라이언트가 보낼 packet을 추가하면 `server/session/session.hpp`의 허용 목록에도 등록한다.
+4. 관찰할 동작은 `e2e/scenarios.hpp`, domain 경계는 `e2e/scenarios.hpp::domain_checks`에 시험을 추가하고, `README.md`와 `zlink.structure.json`의 시나리오 설명을 맞춘다.
 
-옮기기 전에 [개발 명령](#개발-명령)으로 빌드와 e2e를 한 번 실행해 받은 샘플이 동작하는지 확인하고 동작을 본다. 이 결과가 이후 비교의 기준이 된다. 실패하면 먼저 [README](README.md)의 Known issues와 대조한다.
-
-### 옮길 기능
-
-기능 이름은 기본 셋업 `AGENTS.md`의 기능 표와 같다(월드 데이터베이스은 이 구조에만 있는 기능이다). 경로는 이 디렉터리를 기준으로 한다. 기본 셋업에는 Session node 하나와 `connect` 시나리오만 있으므로, 마지막 열은 기능마다 기본 셋업에서 함께 늘릴 것이다.
-
-| 기능 | 이 샘플의 파일 | 옮길 것 | 기본 셋업에서 함께 늘릴 것 |
-| --- | --- | --- | --- |
-| Typed 메시지 | `server/shared/contracts.hpp` | 사용할 기능의 struct: `EnterWorldRequest`, `ChangeChannelRequest`, `EarnRequest`, `ViewRequest`, `PlayerView`. `WorldInfo`는 Accounts의 JSON body다. `SessionInfoRequest`·`SessionInfo`는 client가 필요로 할 때만 옮긴다 | 메시지가 가리키는 `Names`(월드별 mesh 이름 포함) 상수 |
-| Actor | `server/channel/player.hpp`의 `Player`, `PlayerFactory`, `server/channel/domain.hpp`의 `GoldBalance` | gold(`GoldBalance`), `earn`, 참가 완료 검사를 가진 `Player`와 저장된 gold를 읽는 `PlayerFactory` | 새 `server/channel/` role과 그 `main.cpp`, `server/config/` 파일, `CMakeLists.txt` role 목록의 항목. `main.cpp`의 Actor factory 등록. `zlink.structure.json`의 `nodes` 선언과 `e2e/structure.hpp`의 구조 검사 |
-| Spot | `server/channel/zone.hpp`의 `Zone` | 참가 수락 규칙과 `enter`·`earn`·`read` handler, `deliver` forwarder를 가진 `Zone` | `main.cpp`의 `ZoneCapacity`를 지정한 Spot factory 등록. 구조 검사가 대조하는 `ZoneIds` 설정과 `zlink.structure.json`의 `spots` 선언 |
-| Entry·첫 입장 | `server/channel/player.hpp`의 `WorldEntry`, `server/channel/zone.hpp`의 `Zone::enter` | `WorldEntry::enter`(identity 확인, 첫 channel로의 지연 참가)와 `Zone::enter`의 identity 확인과 view 재전송 | `add_entry_spot` 등록과 `entry` 선언. 첫 입장 시나리오(`worlds`)와 재접속 뒤 상태를 비교하는 `reconnect` 시나리오 |
-| Session binding | `server/session/session.hpp` | 첫 패킷 검사, Actor 조회·생성, `bind_or_get` binding과 원래 typed 패킷 relay | `WorldEntry::enter`와 같은 첫 패킷 타입. 기본 셋업의 `server/session/session.hpp`에 옮긴다 |
-| Host relocation | `server/channel/player.hpp`의 `PlayerRelocation`, `server/channel/zone.hpp`의 `ZoneRelocation`, `server/shared/hosting.hpp`의 `NodeControl` | gold의 `capture`·`restore`를 가진 adapter, 상태 없는 Zone을 위한 `ZoneRelocation`, `drain`·`shutdown`·`create-update-zone` 제어 | `main.cpp`의 `preserve_state_with` 등록. 서버 교체 뒤에도 연결·상태가 유지되고 대체 node가 새 작업을 받는지 판정하는 `update` 시나리오 |
-| 월드·채널 선택 | `server/channel/zone.hpp`의 `Zone::change`, `server/accounts/main.cpp`, `server/config/accounts.json` | 다른 `Zone`으로의 지연 channel 변경과 Accounts의 월드 목록. channel은 한 월드의 Zone이며 messaging channel이 아니다 | 새 `server/accounts/` process와 그 `CMakeLists.txt` target, 설정. `channel` 시나리오와, 월드가 여럿이면 `worlds` 시나리오 |
-| 월드 데이터베이스 | `server/channel/data.hpp`의 `PlayerData`, `docker-compose.yml` | 월드별 `player:<id>` gold 기록(`load`·`save`). Framework의 Location·Relocation store와 분리되어 있다 | `docker-compose.yml`의 월드별 Redis 서비스와 월드별 `KeyPrefix`·`RedisEndpoint` 설정 |
-
-`drain`·`shutdown`·`create-update-zone`은 `NodeControl`과 함께 옮긴다. `create-update-zone`은 e2e가 대체 node 배치를 확인하는 데 쓰는 제어다. 이 샘플에서 월드의 channel은 한 mesh의 Zone이다. 이는 messaging channel과 다르며, 샘플은 pub/sub 구독을 등록하지 않는다.
-
-### 옮기는 순서와 규칙
-
-기능은 표의 행 하나씩 옮기고, 하나를 옮길 때마다 빌드, 구조 검사, 관련 e2e 시나리오를 실행한다. 시나리오 ID는 `e2e/structure.hpp`의 `Scenario` enum과 `scenario_order`, `e2e/scenarios.hpp`의 `scenario` 함수와 `e2e/main.cpp`의 usage 메시지, `zlink.structure.json`의 `run.scenarios`, `run.commands`의 시나리오 선택 예시에 함께 추가한다. 판정은 실제로 받은 응답과 이벤트로 하고, 고정 대기나 기한 확대로 통과시키지 않는다.
-
-메시지 contract부터 옮긴다. `server/shared/contracts.hpp`에 packet struct를 `packet_name`과 JSON 변환을 갖춰 먼저 정의한 뒤, 컴파일 오류가 나는 handler를 하나씩 새 메시지로 옮긴다. 첫 입장 패킷을 바꾸면 `server/session/session.hpp`의 `Session::on_packet`에 있는 첫 패킷 검사와 `WorldEntry::enter`, `Zone::enter`가 같은 타입을 받도록 함께 고친다.
-
-상태는 그 상태를 결정하는 객체에 둔다. gold는 `GoldBalance`를 통해 `Player`에 두고 월드 데이터베이스에 저장하며 `Zone`은 application 상태를 갖지 않는다. 상태 필드를 바꿀 때는 같은 객체의 상태 struct와 JSON 변환, relocation adapter의 `capture`·`restore`를 함께 고친다. 빠뜨린 필드는 relocation 뒤 사라지고, `update` 시나리오가 그 손실을 잡는다.
-
-월드 데이터는 분리해서 둔다. 월드마다 자기 mesh 이름, Redis, key prefix, 플레이어 기록을 가지며, application의 Redis protocol 코드(`PlayerData`)는 Framework frame이나 상태를 다루지 않는다.
-
-channel·world 같은 역할 이름을 이 샘플과 다르게 정하려면 타입 이름, `Names`, `server/config/`, `zlink.structure.json`, `CMakeLists.txt`의 role 목록을 한 번에 바꾼다. 이름 변경은 기능을 옮기는 변경과 나눠서 진행하면 실패 원인을 찾기 쉽다.
-
-옮긴 뒤 `update`가 실패하면 snapshot에 빠진 상태가 있는지 먼저 확인한다. 그다음 [디버깅](#디버깅)의 message flow로 첫 실패 단계를 찾는다.
-
+확장한 뒤 build, structure check, 관련 시나리오를 실행한다. 상태 판정은 기존 domain 소유자에 두고 공개 Framework 호출 경로를 유지한다.
 ## 개발 시 주의점
 
 ### 상태와 메시지 계약

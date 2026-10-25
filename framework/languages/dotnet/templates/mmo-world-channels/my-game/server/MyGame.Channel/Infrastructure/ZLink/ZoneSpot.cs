@@ -1,3 +1,4 @@
+using System.Text.Json;
 using MyGame.Shared;
 using Zlink.Framework.Contracts.Actors;
 using Zlink.Framework.Contracts.Messaging;
@@ -11,6 +12,8 @@ public sealed class ZoneSpot(
     IZLinkActorClient actors
 ) : IZLinkSpot<PlayerActor>
 {
+    private readonly HashSet<string> _playerIds = new(StringComparer.Ordinal);
+
     public IZLinkSpotContext Context { get; } = context;
 
     public void Configure()
@@ -19,7 +22,9 @@ public sealed class ZoneSpot(
         Context.Handlers.AddActorPacket<ChangeChannel, PlayerActor>(nameof(ChangeChannelRequest));
         Context.Handlers.AddActorPacket<EarnGold, PlayerActor>(nameof(EarnRequest));
         Context.Handlers.AddActorPacket<ViewPlayer, PlayerActor>(nameof(ViewRequest));
+        Context.Handlers.AddActorPacket<ViewChannel, PlayerActor>(nameof(ChannelViewRequest));
         Context.Handlers.AddActorPacket<DeliverView, PlayerActor>(nameof(PlayerView));
+        Context.Handlers.AddActorPacket<DeliverChannelView, PlayerActor>(nameof(ChannelView));
     }
 
     public ValueTask<ZLinkSpotActorJoinResult> OnActorJoinAsync(
@@ -42,25 +47,71 @@ public sealed class ZoneSpot(
     public ValueTask ShowAsync(PlayerActor actor) =>
         actor.Context.BoundSession.Send(View(actor)).Async();
 
-    public ValueTask OnJoinedActorAsync(PlayerActor actor, CancellationToken ct) =>
-        actors.SendToActor(actor.Context.ActorId, View(actor)).Async();
+    public async ValueTask OnJoinedActorAsync(PlayerActor actor, CancellationToken ct)
+    {
+        _playerIds.Add(actor.Context.ActorId);
+        await actors.SendToActor(actor.Context.ActorId, View(actor)).Async();
+        await PublishPlayersAsync();
+    }
 
     public ValueTask OnLeaveActorAsync(PlayerActor actor, CancellationToken ct) =>
-        ValueTask.CompletedTask;
+        RemovePlayerAsync(actor);
 
     public ValueTask OnDisconnectActorAsync(PlayerActor actor, CancellationToken ct) =>
-        ValueTask.CompletedTask;
+        RemovePlayerAsync(actor);
+
+    private async ValueTask RemovePlayerAsync(PlayerActor actor)
+    {
+        if (_playerIds.Remove(actor.Context.ActorId))
+            await PublishPlayersAsync();
+    }
+
+    public ValueTask ShowPlayersAsync(PlayerActor actor) =>
+        actor.Context.BoundSession
+            .Send(
+                new ChannelView(
+                    GameNames.Channel(Context.SpotId),
+                    _playerIds.OrderBy(playerId => playerId, StringComparer.Ordinal).ToArray()
+                )
+            )
+            .Async();
+
+    private async ValueTask PublishPlayersAsync()
+    {
+        var view = new ChannelView(GameNames.Channel(Context.SpotId), CapturePlayerIds());
+        foreach (var playerId in _playerIds)
+            await actors.SendToActor(playerId, view).Async();
+    }
+
+    public string[] CapturePlayerIds() =>
+        _playerIds.OrderBy(playerId => playerId, StringComparer.Ordinal).ToArray();
+
+    public void RestorePlayerIds(IEnumerable<string> playerIds)
+    {
+        _playerIds.Clear();
+        foreach (var playerId in playerIds)
+            _playerIds.Add(playerId);
+    }
 }
 
-// The Zone owns no application state. Framework transfers its membership and logical identity.
+public sealed record ZoneSnapshot(string[] PlayerIds);
+
 public sealed class ZoneRelocation : IZLinkSpotRelocationAdapter<ZoneSpot>
 {
     public ValueTask<byte[]> CaptureAsync(ZoneSpot spot, CancellationToken ct) =>
-        ValueTask.FromResult(Array.Empty<byte>());
+        ValueTask.FromResult(
+            JsonSerializer.SerializeToUtf8Bytes(new ZoneSnapshot(spot.CapturePlayerIds()))
+        );
 
     public ValueTask RestoreAsync(
         ZoneSpot spot,
         ReadOnlyMemory<byte> payload,
         CancellationToken ct
-    ) => ValueTask.CompletedTask;
+    )
+    {
+        var snapshot = JsonSerializer.Deserialize<ZoneSnapshot>(payload.Span)
+            ?? throw new InvalidDataException("Zone relocation state is empty.");
+        spot.RestorePlayerIds(snapshot.PlayerIds);
+        return ValueTask.CompletedTask;
+    }
 }

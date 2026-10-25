@@ -11,21 +11,21 @@ class Player(
     private val data: PlayerRepository,
     gold: Long,
 ) : ZLinkSuspendingActor() {
-    var gold: Long = 0
-        private set
+    private val balance = GoldBalance(gold)
+    val gold: Long get() = balance.gold
 
-    init {
-        restore(gold)
+    fun goldSnapshot() = balance.capture()
+
+    fun restore(snapshot: GoldBalance.Snapshot) {
+        balance.restore(snapshot)
     }
 
-    fun restore(value: Long) {
-        gold = GoldBalance.validate(value)
-    }
-
-    suspend fun earn(amount: Long) {
-        val next = GoldBalance.earn(gold, amount)
-        data.save(context.actorId(), next).await()
-        gold = next
+    suspend fun earn(): ActionRejected? {
+        val decision = balance.previewEarn()
+        if (!decision.accepted) return decision.rejection
+        data.save(context.actorId(), decision.gold).await()
+        balance.commit(decision)
+        return null
     }
 
     fun checkIdentity(id: String) {

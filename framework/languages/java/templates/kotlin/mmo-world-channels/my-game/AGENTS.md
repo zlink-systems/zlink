@@ -38,17 +38,17 @@ For host process debugging, install JDK 25 and add `--local` or `-Local`. Add `-
 
 ### Session gateway
 
-`server/session/src/main/kotlin/MyGame/session/Program.kt` registers the STREAM node and the RouteMesh client, and `GameSession` (in the same file) handles incoming packets. A Session is a communication object for a connection; Framework provides binding to associate it with a player state object. `GameSession` answers `SessionInfoRequest` from the binding, finds or creates the Player Actor and binds it when it receives `EnterWorldRequest`, and relays every other packet to the bound Actor. Add authentication before binding and retain the typed packet relay so Framework can identify the connection for replies to that player. Each Session node serves one world: `config.worldId` selects the mesh (`Names.mesh`) in which it creates the Player Actor.
+`GameSession` answers `SessionInfoRequest` from the binding, finds or creates the Player Actor and binds it when it receives `EnterWorldRequest`, relays only packets in its client allowlist, and sends `ActionRejected(packet-not-allowed, 0)` for other packets. Add authentication before binding and retain the typed packet relay so Framework can identify the connection for replies to that player. Each Session node serves one world: `config.worldId` selects the mesh (`Names.mesh`) in which it creates the Player Actor.
 
 ### Channels and players
 
-An Actor is a game state object addressed by ID; `Player` in `server/channel/src/main/kotlin/MyGame/channel/infrastructure/zlink/Player.kt` owns the player's gold. `PlayerFactory` loads the gold when the Actor is created, and `Player.earn` saves the new value before it replaces the current one. A Spot is a state object that accepts Actors; `Zone` in `server/channel/src/main/kotlin/MyGame/channel/infrastructure/zlink/Zone.kt` identifies one field channel (`field@<n>`) and keeps no application state, and `Entry` in the same file receives new Actors.
+An Actor is a game state object addressed by ID; `Player` in `server/channel/src/main/kotlin/MyGame/channel/infrastructure/zlink/Player.kt` owns the `GoldBalance` domain object, which decides gold and earn timing. `PlayerFactory` loads gold when the Actor is created, and accepted gold is saved before the domain state changes. A Spot is a state object that accepts Actors; `Zone` in `server/channel/src/main/kotlin/MyGame/channel/infrastructure/zlink/Zone.kt` identifies one field channel (`field@<n>`) and owns connected player IDs, and `Entry` in the same file receives new Actors.
 
 `server/channel/src/main/kotlin/MyGame/channel/Program.kt` registers the handlers, the Entry Spot, the `Zone` factory (`stableTypeLimit(config.zoneCapacity)`, `SPOT_WIDE`), and the `Player` factory in the mesh of the node's world. `Actions` and `EntryActions` in `server/channel/src/main/kotlin/MyGame/channel/infrastructure/zlink/Handlers.kt` connect player requests to the Zone and Entry. The gold rule (`GoldBalance`) is in `server/channel/src/main/kotlin/MyGame/channel/domain/GoldBalance.kt`, the persistence port (`PlayerRepository`) in `server/channel/src/main/kotlin/MyGame/channel/application/PlayerRepository.kt`, and its Redis adapter (`PlayerData`) in `server/channel/src/main/kotlin/MyGame/channel/infrastructure/redis/PlayerData.kt`. When changing node composition, update registrations, `server/config/`, and the descriptor together so the structure check validates the same composition.
 
 ### Shared contracts and hosting
 
-`server/shared/src/main/kotlin/MyGame/Contracts.kt` defines names, game constants, and the messages shared by processes. `Hosting.kt` defines `NodeConfig` (process settings), the Redis stores, `configure` for hosting and diagnostics, and `runNode`, which starts a node and handles the stdin control commands; `Control.kt` defines the control and readiness strings. `Names` holds the world, mesh, and channel naming (`mesh`, `zone`, `channel`) and `Roles` the node roles; `Stores.kt` defines the Location and relocation stores; `Hosting.kt` also creates the fixed Zones listed in `zoneIds` and handles `create-update-zone`. Keep hosting and the control protocol here instead of duplicating them per role. Add contracts used by several processes in `Contracts.kt`, and keep the player's gold in `Player` so separate processes do not independently modify the same fact.
+`server/shared/src/main/kotlin/MyGame/Contracts.kt` defines names, `GameRules` contract limits and reward values, `Rejection` reason strings, and messages shared by processes. `Hosting.kt` defines `NodeConfig` (process settings), the Redis stores, `configure` for hosting and diagnostics, and `runNode`, which starts a node and handles the stdin control commands; `Control.kt` defines the control and readiness strings. `Names` holds the world, mesh, and channel naming (`mesh`, `zone`, `channel`) and `Roles` the node roles; `Stores.kt` defines the Location and relocation stores; `Hosting.kt` also creates the fixed Zones listed in `zoneIds` and handles `create-update-zone`. Keep hosting and the control protocol here instead of duplicating them per role. Add contracts used by several processes in `Contracts.kt`.
 
 ### E2E client
 
@@ -78,7 +78,7 @@ A membership change moves an Actor from one Spot to another. Admission is the ta
 
 ### Host relocation and drain
 
-Relocation changes an object's execution host; drain moves a host's workload elsewhere so the host can shut down. Application adapters capture and restore game state, while Framework transfers workload and routes. `runNode` in `Hosting.kt` requests host relocation when it reads `drain` and reports `SAFE_TO_SHUTDOWN` after observing it; `PlayerTransfer` stores the gold and `ZoneTransfer` stores nothing. The [Relocation guide](https://docs.zlink.systems/kotlin/guide/server/37-relocation/) explains the procedure.
+`PlayerTransfer` stores gold and remaining cooldown milliseconds; `ZoneTransfer` stores connected player IDs. The [Relocation guide](https://docs.zlink.systems/kotlin/guide/server/37-relocation/) explains the procedure.
 
 ## Request flow
 
@@ -88,47 +88,17 @@ Requests in the example game follow this path. Reading the code along this path 
 2. `GameSession` calls `getOrCreate` for the Player Actor by `playerId` in the mesh of its world, binds it to the Session with `bindOrGet`, and relays the original packet. `PlayerFactory` loads the player's gold from the world's Redis when the Actor is created.
 3. A new Actor starts in the Entry Spot `Entry`. `EntryActions.enter` checks the identity and requests `joinSpot(field@1)` with `defer()`. `Zone.onJoinedActorSuspending` sends `PlayerView` (world, channel, node, gold), and `Actions.forward` passes it through the bound Session.
 4. `ChangeChannelRequest` reaches `Actions.change`, which requests `joinSpot` to the Zone of the new channel. The client connection and `SessionInfo` do not change, even when that Zone is on another node.
-5. `EarnRequest` reaches `Actions.earn`, and `Player.earn` saves the new gold to Redis through `PlayerRepository` before the Actor takes the value. `ViewRequest` and `Zone.show` return the current `PlayerView`.
+5. `EarnRequest` reaches `Actions.earn`. `GoldBalance` rejects an early or over-limit earn without changing state; accepted gold is saved before the Actor changes. `ViewRequest` and `Zone.show` return the current `PlayerView`.
 6. A reconnecting client sends `EnterWorldRequest` on a new Session. The same Actor is bound, and `Actions.enter` resends the view after checking the identity.
-7. To replace a Channel node, `drain` in `runNode` requests relocation. Framework takes the gold from `capture` in `PlayerTransfer` and calls `restore` on another node.
+7. To replace a Channel node, `runNode` in `Hosting.kt` requests relocation. Framework transfers the gold snapshot from `PlayerTransfer` and connected player IDs from `ZoneTransfer` to another node.
 
-## Developing from this sample
+## Extend this template's domain
 
-This sample shows how the features work together, so read and run it rather than turning it into your game. Start your own project from the Kotlin starter: choose Kotlin in the Initializer at [ZLink Start](https://zlink.systems/start), or use `framework/languages/java/templates/kotlin/starter/my-game` in the ZLink repository. Then transfer the features you need from this sample one at a time. The starter's `AGENTS.md` owns the choice between structures; this section covers only `mmo-world-channels`. Keep this sample unchanged next to your project as a reference.
+Extend this template's domain to build an MMO world-and-channel server. Keep one owner for each game decision.
 
-### Run the sample first
-
-Before transferring anything, run the build and e2e once with the [Development commands](#development-commands) to confirm the downloaded sample works and to see its behavior. This result is the baseline for comparison. If it fails, compare the failure with Known issues in the [README](README.md) first.
-
-### Features to transfer
-
-Feature names match the feature table in the starter's `AGENTS.md`. Paths are relative to this directory. The starter has one Session node and the `connect` scenario only, so the last column lists what grows in the starter with each feature.
-
-| Feature | File in this sample | What to transfer | What to grow in the starter alongside |
-| --- | --- | --- | --- |
-| Typed messages | `server/shared/src/main/kotlin/MyGame/Contracts.kt` | The classes of the features you adopt: `EnterWorldRequest`, `ChangeChannelRequest`, `EarnRequest`, `ViewRequest`, `PlayerView`, `WorldInfo`; `SessionInfoRequest` and `SessionInfo` only if your client needs them | The world, mesh, and channel naming in `Names`; the starter already has the node `Roles` and the control strings |
-| Actor | `server/channel/src/main/kotlin/MyGame/channel/infrastructure/zlink/Player.kt`, `server/channel/src/main/kotlin/MyGame/channel/domain/GoldBalance.kt`, `server/channel/src/main/kotlin/MyGame/channel/application/PlayerRepository.kt`, `server/channel/src/main/kotlin/MyGame/channel/infrastructure/redis/PlayerData.kt` | `Player` and `PlayerFactory` with the gold rule, the `PlayerRepository` port, and the `PlayerData` Redis adapter | A new `server/channel/` Gradle module (included in `settings.gradle.kts`) with its `Program.kt` and the `server/config/channelA1.json`, `server/config/channelA2.json`, `server/config/channelB.json` files, its start-up in `e2e/.../Nodes.kt`, and a `Roles` entry; the `addActorFactory` registration in `Program.kt`; the node declarations in `zlink.structure.json` and the matching `Structure.kt` check (the starter's check accepts only the `session` role) |
-| Spot | `server/channel/src/main/kotlin/MyGame/channel/infrastructure/zlink/Zone.kt` | `Zone` as a channel identity with admission by player ID and the `show` view | The `addSpotFactory` registration in `Program.kt` (`stableTypeLimit`, `SPOT_WIDE`) and `zoneIds` and `zoneCapacity` in `NodeConfig`, with the Zone creation in `Hosting.kt`; the `spots` declarations in `zlink.structure.json` and the `Structure.kt` check that compares them with the registrations (the starter's check requires no Spots) |
-| Entry and first admission | `Entry` in `server/channel/src/main/kotlin/MyGame/channel/infrastructure/zlink/Zone.kt`, `EntryActions.enter` and `Actions.enter` in `server/channel/src/main/kotlin/MyGame/channel/infrastructure/zlink/Handlers.kt` | `EntryActions.enter`: the identity check and the deferred join to the first channel, and the identity check and view resend of `Actions.enter` | The `addEntrySpot` registration and its `entry` declaration; the `worlds` scenario for first entry and the `reconnect` scenario that compares state after reconnection |
-| Session binding | `server/session/src/main/kotlin/MyGame/session/Program.kt` (`GameSession`) | The first-packet branch: find or create the Actor in the world's mesh, `bindOrGet`, and relay the original typed packet | The same first-packet type as `EntryActions.enter`; transfer it into the starter's `PlayerSession.kt` |
-| Host relocation | `server/channel/src/main/kotlin/MyGame/channel/infrastructure/zlink/Transfer.kt` (`PlayerTransfer`, `ZoneTransfer`, `ensureActive`) and the `create-update-zone` control in `server/shared/src/main/kotlin/MyGame/Hosting.kt` and `Control.kt` | The gold snapshot with `capture` and `restore`, the empty Zone adapter, and the `create-update-zone` control that creates `field@3` for the update scenario | The `preserveStateWith` registrations; the `update` scenario, which checks that connections and gold survive a server replacement and that the replacement node hosts a new Zone |
-| World/channel selection | `Actions.change` in `server/channel/src/main/kotlin/MyGame/channel/infrastructure/zlink/Handlers.kt`, `server/accounts/src/main/kotlin/MyGame/accounts/Program.kt`, `Names.mesh` in `server/shared/src/main/kotlin/MyGame/Contracts.kt` | The channel change as a deferred Spot join, the world list over HTTP, and the per-world mesh | A new `server/accounts/` Gradle module with `accounts.json`, its start-up, and the `accounts` role; `worldId` and `worlds` in `NodeConfig`; one Redis service per world in `docker-compose.yml`; the `worlds` and `channel` scenarios |
-
-The channels of this sample are player-selected game spaces within a world (Zone Spots). They differ from messaging subscription channels, and this sample registers no pub/sub subscriptions.
-
-### Transfer order and rules
-
-Transfer one row at a time and run the build, the structure check, and the related e2e scenario after each. Add a scenario ID to the `Scenario` enum in `Contracts.kt`, to the `scenario` function in `e2e/src/main/kotlin/MyGame/e2e/Scenarios.kt`, to `run.scenarios`, and to the selection examples in `run.commands` of `zlink.structure.json` together. Judge results by the replies and events actually received; do not make tests pass with fixed sleeps or longer deadlines.
-
-Start with the message contracts. Define the typed classes in `Contracts.kt` first, then move each handler that fails to compile to the new messages. When you change the first packet (`EnterWorldRequest`), update the first-packet branch in `GameSession`, `EntryActions.enter`, and `Actions.enter` to receive the same type.
-
-Keep each piece of state in the object that decides it. The player's gold belongs in `Player`, and the Zone keeps no application state. Gold is written to Redis through `PlayerRepository` before the Actor adopts it, and `PlayerTransfer` carries the current value across relocation; change `Player`, the repository, and `PlayerTransfer` together when you change what is stored. A missing field disappears after relocation, and the `update` scenario detects the loss.
-
-Keep each world's mesh, Redis endpoint, and key prefix consistent across its nodes (`worldId` in the settings selects them). Application data uses the key `<keyPrefix>player:<id>`, and Framework Location and relocation data use separate prefixes. In the e2e fixture, `channelA1` has a one-Zone capacity and starts before `channelA2` so that each fixed Zone is created on its declared owner and `update` can drain `channelA1`; keep that arrangement when you add Zones.
-
-To name roles differently from this sample, change the type names, `Names`, `server/config/`, and `zlink.structure.json` at once. Do the renaming in its own change, separate from transferring a feature, so failures are easier to trace.
-
-If `update` fails after a transfer, first check whether the snapshot is missing any state, then use the message flow in [Debugging](#debugging) to find the first failing step.
+1. Put player gold and earn timing in `server/channel/src/main/kotlin/MyGame/channel/domain/GoldBalance.kt`. Put connected player IDs and channel membership views in `server/channel/src/main/kotlin/MyGame/channel/infrastructure/zlink/Zone.kt`.
+2. Add typed messages in `server/shared/src/main/kotlin/MyGame/Contracts.kt`. Add every client-sendable packet name to the allowlist in `server/session/src/main/kotlin/MyGame/session/Program.kt`.
+3. Add observable assertions to `e2e/src/main/kotlin/MyGame/e2e/Scenarios.kt`. Add each scenario ID to `Contracts.kt` and its execution order to `zlink.structure.json` (`run.scenarios` and `run.commands`). Preserve existing scenario coverage.
 
 ## Development considerations
 
@@ -136,7 +106,7 @@ If `update` fails after a transfer, first check whether the snapshot is missing 
 
 Use the public packages from Maven Central at the versions pinned in `build.gradle.kts`, and keep project dependencies between this project's own Gradle modules. Process typed messages with the default Framework JSON serializer so processes use the same contract. Limit direct serialization in relocation adapters (the `*Transfer` classes) to application state, keeping management of Framework execution state separate from game state. Framework owns routing, leases, membership, completion, queues, and execution gates; do not duplicate those decisions in application state.
 
-Manage each game fact, such as a player's gold, in the object responsible for changing it (`Player`). The Zone identifies the channel and keeps no application state. Replies inside an Actor handler go through that Actor's bound Session; other pushes address the Actor by player ID with the public Actor client, and the receiving Actor handler forwards them through its bound Session. A Spot must not retain Actor references for later delivery because host relocation does not repeat `onJoinedActor` on the target. Session binding owns Actor identity, so game messages do not duplicate it (`SessionInfo` reads the current binding). Sessions forward packets after binding; the Actor or Spot responsible for the state makes gameplay decisions.
+`GoldBalance` owns gold and earn timing; `Zone` owns connected player IDs. `PlayerTransfer` captures gold and cooldown remaining milliseconds, and `ZoneTransfer` captures the player ID list. Replies inside an Actor handler go through that Actor's bound Session; other pushes address the Actor by player ID with the public Actor client, and the receiving Actor handler forwards them through its bound Session. A Spot must not retain Actor references for later delivery because host relocation does not repeat `onJoinedActor` on the target. Session binding owns Actor identity, so game messages do not duplicate it (`SessionInfo` reads the current binding). Sessions forward only allowlisted client packets; the Actor or Spot responsible for the state makes gameplay decisions.
 
 ### Asynchronous execution and lifecycle
 

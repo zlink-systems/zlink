@@ -6,7 +6,7 @@ namespace MyGame.E2E;
 internal static class Scenarios
 {
     public static readonly string[] All = ["worlds", "channel", "reconnect", "update"];
-    private const long EarnedGold = 10;
+    private const long EarnedGold = GameRules.EarnAmount;
     private const int SecondChannel = 2;
 
     public static string[] Select(string? selected)
@@ -58,8 +58,24 @@ internal static class Scenarios
         var initial = await a.EnterAsync(ct);
         Require(initial.WorldId == "A" && initial.Gold == 0, "World A initial data differs.");
         Require(
-            (await a.EarnAsync(EarnedGold, EarnedGold, ct)).Gold == EarnedGold,
+            (await a.EarnAsync(EarnedGold, ct)).Gold == EarnedGold,
             "World A earning was not persisted."
+        );
+        var rejected = await a.EarnRejectedAsync(ct);
+        Require(
+            rejected.Reason == Rejection.EarnTooSoon && rejected.RetryAfterMs > 0,
+            "A repeated earn did not return its server cooldown."
+        );
+        Require(
+            await a.ViewAsync(initial with { Gold = EarnedGold }, ct)
+                == initial with { Gold = EarnedGold },
+            "A rejected earn changed the gold balance."
+        );
+        await Task.Delay(TimeSpan.FromMilliseconds(rejected.RetryAfterMs), ct);
+        var earnedTwice = EarnedGold * 2;
+        Require(
+            (await a.EarnAsync(earnedTwice, ct)).Gold == earnedTwice,
+            "An earn was not accepted after the server cooldown."
         );
         await using var b = await GameClient.ConnectAsync(
             run.Outcome,
@@ -73,27 +89,128 @@ internal static class Scenarios
             "World B shares World A player data."
         );
         Require(
-            (await a.ViewAsync(initial with { Gold = EarnedGold }, ct)).Gold == EarnedGold,
+            (await a.ViewAsync(initial with { Gold = earnedTwice }, ct)).Gold == earnedTwice,
             "Entering World B changed World A data."
         );
     }
 
     private static async Task ChannelAsync(WorldRun run, CancellationToken ct)
     {
-        await using var client = await GameClient.ConnectAsync(
+        await using var alice = await GameClient.ConnectAsync(
             run.Outcome,
             run.Endpoints["A"],
             "channel-player",
             ct
         );
-        var initial = await client.EnterAsync(ct);
+        await using var charlie = await GameClient.ConnectAsync(
+            run.Outcome,
+            run.Endpoints["A"],
+            "channel-mover",
+            ct
+        );
+        var initial = await alice.EnterAsync(ct);
         Require(
             initial.Channel == GameNames.FirstChannel && initial.NodeId == "channelA1",
             "Initial Zone is not channelA1."
         );
-        await client.EarnAsync(EarnedGold, EarnedGold, ct);
-        var binding = await client.SessionAsync(ct);
-        var moved = await client.ChangeAsync(SecondChannel, ct);
+        Task<ChannelView>? afterDisconnect = null;
+        await using (var bob = await GameClient.ConnectAsync(
+            run.Outcome,
+            run.Endpoints["A"],
+            "channel-observer",
+            ct
+        ))
+        {
+            var visibleToAlice = alice.ReceiveAsync<ChannelView>(
+                view =>
+                    view.ChannelId == GameNames.FirstChannel
+                    && HasPlayers(view, alice.PlayerId, bob.PlayerId, charlie.PlayerId),
+                ct
+            );
+            await bob.EnterAsync(ct);
+            var visibleToBob = bob.ReceiveAsync<ChannelView>(
+                view =>
+                    view.ChannelId == GameNames.FirstChannel
+                    && HasPlayers(view, alice.PlayerId, bob.PlayerId, charlie.PlayerId),
+                ct
+            );
+            await charlie.EnterAsync(ct);
+            var allowed = await visibleToAlice;
+            var bobView = await visibleToBob;
+            Require(
+                allowed.ChannelId == GameNames.FirstChannel
+                    && HasPlayers(allowed, alice.PlayerId, bob.PlayerId, charlie.PlayerId)
+                    && bobView.ChannelId == GameNames.FirstChannel
+                    && HasPlayers(bobView, alice.PlayerId, bob.PlayerId, charlie.PlayerId),
+                "Players in the same channel were not visible."
+            );
+            var rejected = await alice.SendRejectedAsync(
+                new PlayerView("A", GameNames.FirstChannel, "channelA1", 0),
+                ct
+            );
+            Require(
+                rejected == new ActionRejected(Rejection.PacketNotAllowed, 0),
+                "Session relayed an internal packet."
+            );
+            var oversizedChannel = await alice.SendRejectedAsync(
+                new ChangeChannelRequest(GameRules.MaxInteger + 1),
+                ct
+            );
+            Require(
+                oversizedChannel == new ActionRejected(Rejection.IntegerOutOfRange, 0),
+                "Oversized channel request was not rejected."
+            );
+            var afterOversizedChannel = await alice.ChannelViewAsync(
+                view =>
+                    view.ChannelId == GameNames.FirstChannel
+                    && HasPlayers(view, alice.PlayerId, bob.PlayerId, charlie.PlayerId),
+                ct
+            );
+            Require(
+                afterOversizedChannel.ChannelId == GameNames.FirstChannel
+                    && HasPlayers(afterOversizedChannel, alice.PlayerId, bob.PlayerId, charlie.PlayerId),
+                "Oversized channel request changed membership."
+            );
+            var movedFromFirstChannel = alice.ReceiveAsync<ChannelView>(
+                view =>
+                    view.ChannelId == GameNames.FirstChannel
+                    && HasPlayers(view, alice.PlayerId, bob.PlayerId),
+                ct
+            );
+            var movedCharlie = await charlie.ChangeAsync(SecondChannel, ct);
+            Require(
+                movedCharlie.Channel == SecondChannel && movedCharlie.NodeId == "channelA2",
+                "Channel move did not complete on channelA2."
+            );
+            var firstChannel = await movedFromFirstChannel;
+            var secondChannel = await charlie.ChannelViewAsync(
+                view => view.ChannelId == SecondChannel && HasPlayers(view, charlie.PlayerId),
+                ct
+            );
+            Require(
+                HasPlayers(firstChannel, alice.PlayerId, bob.PlayerId)
+                    && !firstChannel.PlayerIds.Contains(charlie.PlayerId, StringComparer.Ordinal),
+                "A channel move left the player in the previous channel list."
+            );
+            Require(
+                secondChannel.ChannelId == SecondChannel
+                    && HasPlayers(secondChannel, charlie.PlayerId),
+                "A player in another channel was visible."
+            );
+            afterDisconnect = alice.ReceiveAsync<ChannelView>(
+                view => view.ChannelId == GameNames.FirstChannel && HasPlayers(view, alice.PlayerId),
+                ct
+            );
+        }
+        var afterDisconnectView = await afterDisconnect!;
+        Require(
+            HasPlayers(afterDisconnectView, alice.PlayerId),
+            "A disconnected player remained in the channel list."
+        );
+
+        await alice.EarnAsync(EarnedGold, ct);
+        var binding = await alice.SessionAsync(ct);
+        var moved = await alice.ChangeAsync(SecondChannel, ct);
         Require(
             moved.WorldId == "A"
                 && moved.Channel == SecondChannel
@@ -102,10 +219,15 @@ internal static class Scenarios
             "Channel relocation lost player state or selected the wrong owner."
         );
         Require(
-            !client.Disconnected && await client.SessionAsync(ct) == binding,
+            !alice.Disconnected && await alice.SessionAsync(ct) == binding,
             "Channel change replaced the Session or Actor binding."
         );
     }
+
+    private static bool HasPlayers(ChannelView view, params string[] expected) =>
+        view.PlayerIds
+            .OrderBy(playerId => playerId, StringComparer.Ordinal)
+            .SequenceEqual(expected.OrderBy(playerId => playerId, StringComparer.Ordinal));
 
     private static async Task ReconnectAsync(WorldRun run, CancellationToken ct)
     {
@@ -117,7 +239,7 @@ internal static class Scenarios
         )
         {
             await client.EnterAsync(ct);
-            await client.EarnAsync(EarnedGold, EarnedGold, ct);
+            await client.EarnAsync(EarnedGold, ct);
             saved = await client.ChangeAsync(SecondChannel, ct);
             before = await client.SessionAsync(ct);
         }
@@ -145,9 +267,19 @@ internal static class Scenarios
             "update-player",
             ct
         );
+        var initialChannelView = a.ReceiveAsync<ChannelView>(
+            view =>
+                view.ChannelId == GameNames.FirstChannel && HasPlayers(view, a.PlayerId),
+            ct
+        );
         await a.EnterAsync(ct);
-        var before = await a.EarnAsync(EarnedGold, EarnedGold, ct);
+        await initialChannelView;
+        var before = await a.EarnAsync(EarnedGold, ct);
         Require(before.NodeId == "channelA1", "Update subject was not on channelA1.");
+        Require(
+            HasPlayers(await a.ChannelViewAsync(ct), a.PlayerId),
+            "Channel player list was not available before host relocation."
+        );
         var binding = await a.SessionAsync(ct);
         await using var b = await GameClient.ConnectAsync(
             run.Outcome,
@@ -166,6 +298,10 @@ internal static class Scenarios
         Require(
             moved == before with { NodeId = "channelA2" },
             "Host relocation lost Zone, Actor gold or world isolation."
+        );
+        Require(
+            HasPlayers(await a.ChannelViewAsync(ct), a.PlayerId),
+            "Host relocation lost the Zone player list."
         );
         Require(
             !a.Disconnected && await a.SessionAsync(ct) == binding,
@@ -202,7 +338,7 @@ internal static class Scenarios
             "New Zone was not placed on the replacement."
         );
         Require(
-            await newcomer.EarnAsync(EarnedGold, EarnedGold, ct)
+            await newcomer.EarnAsync(EarnedGold, ct)
                 == new PlayerView("A", GameNames.UpdateChannel, "channelA1", EarnedGold),
             "New work after replacement failed."
         );

@@ -42,13 +42,13 @@ For host process debugging, install JDK 25 and add `--local` or `-Local`. Add `-
 
 ### Channels and players
 
-`Zone` in `server/channel/src/main/java/MyGame/channel/Zone.java` is the User Spot of one channel (ID `field@<channel>`, from `Names.zone`). `Player` in `server/channel/src/main/java/MyGame/channel/Player.java` owns the player's gold; `server/channel/src/main/java/MyGame/channel/PlayerData.java` stores it in the world's Redis database under `<keyPrefix>player:<id>`, and `server/channel/src/main/java/MyGame/channel/PlayerFactory.java` loads it when the Actor is created. `server/channel/src/main/java/MyGame/channel/Entry.java` and `server/channel/src/main/java/MyGame/channel/EntryActions.java` accept a player's first entry and defer the join to the first channel; `server/channel/src/main/java/MyGame/channel/Actions.java` holds the handlers for entry, channel change, earning gold, and views.
+`Zone` in `server/channel/src/main/java/MyGame/channel/Zone.java` is the User Spot of one channel (ID `field@<channel>`, from `Names.zone`) and owns its connected player IDs. `Player` owns a `GoldBalance` from the domain package, which decides gold and earn timing; `PlayerData` stores accepted gold in the world's Redis database under `<keyPrefix>player:<id>`, and `PlayerFactory` loads it when the Actor is created. `Entry` and `EntryActions` accept a player's first entry and defer the join to the first channel; `Actions` handles entry, channel change, earning gold, and views.
 
 `server/channel/src/main/java/MyGame/channel/Program.java` registers the Entry Spot, the Zone factory (`zoneCapacity`), and the Player factory on the mesh of the node's world (`Names.mesh(worldId)`). Each world has its own Session node, so add authentication to the Session of the world the player selected. When changing node composition, update registrations, `server/config/`, and the descriptor together so the structure check validates the same composition.
 
 ### Shared contracts and hosting
 
-`server/shared/src/main/java/MyGame/` holds the messages and game constants shared by processes (`EnterWorldRequest`, `ChangeChannelRequest`, `EarnRequest`, `ViewRequest`, `PlayerView`, `WorldInfo`, `SessionInfoRequest`, `SessionInfo`), `NodeConfig.java` defines process settings, and `Names.java` defines the mesh and type names. `Hosting.java` configures hosting and diagnostics and runs the stdin control loop (`drain`, `shutdown`, `create-update-zone`), `Control.java` defines the control markers and deadlines, and `Stores.java` creates the Redis Location and Relocation stores. `Hosting.java` creates the configured channel Spots at startup, and `create-update-zone` creates the extra channel that the `update` scenario uses on the replacement node. Add contracts used by several processes here, and keep gold in `Player` so separate processes do not independently modify the same fact.
+`server/shared/src/main/java/MyGame/` holds messages shared by processes; `GameRules` owns contract limits and reward values, and `Rejection` owns rejection reason strings. `NodeConfig.java` defines process settings and `Names.java` defines the mesh and type names. `Hosting.java` configures Framework and diagnostics and runs the stdin control loop (`drain`, `shutdown`, `create-update-zone`), `Control.java` defines the control markers and deadlines, and `Stores.java` creates the Redis Location and Relocation stores. `Hosting.java` creates the configured channel Spots at startup, and `create-update-zone` creates the extra channel that the `update` scenario uses on the replacement node. Add contracts used by several processes in the shared package.
 
 ### E2E client
 
@@ -78,7 +78,7 @@ A membership change moves an Actor from one Spot to another. Admission is the ta
 
 ### Host relocation and drain
 
-Relocation changes an object's execution host; drain moves a host's workload elsewhere so the host can shut down. Application adapters (`PlayerTransfer`, `ZoneTransfer`), registered with `preserveStateWith(...)`, capture and restore game state, while Framework transfers workload and routes. `PlayerTransfer` captures only the gold. `Hosting.run` handles the `drain` control by requesting a public planned-maintenance relocation and observing safe shutdown; the [Relocation guide](https://docs.zlink.systems/java/guide/server/37-relocation/) explains the procedure.
+`PlayerTransfer` captures gold and remaining cooldown milliseconds; `ZoneTransfer` captures and restores connected player IDs. `Hosting.run` handles the `drain` control by requesting a public planned-maintenance relocation and observing safe shutdown; the [Relocation guide](https://docs.zlink.systems/java/guide/server/37-relocation/) explains the procedure.
 
 ## Request flow
 
@@ -87,45 +87,17 @@ Requests in the example game follow this path. Reading the code along this path 
 1. The client calls `GET /worlds` on the accounts service, chooses a world, and connects to that world's Session node over STREAM. It sends the first packet, `EnterWorldRequest`. `GameSession` checks the first packet type, calls `getOrCreate` for the Player Actor by `playerId`, binds it with `bindOrGet`, and relays the original packet.
 2. `PlayerFactory.create` loads the player's gold from the world's database through `PlayerData` when the Actor is created.
 3. A new Actor starts in the Entry Spot. `EntryActions.enter` checks the identity and requests `joinSpot(Names.zone(Names.FIRST_CHANNEL), request).defer()`. `Zone.onActorJoin` accepts the matching player, and `Zone.onJoinedActor` sends the first `PlayerView`.
-4. `EarnRequest` is delivered to `Actions.earn`, where `Player.earn` saves the new gold to the world's database before it changes the Actor and `Zone.show` replies with `PlayerView`.
+4. `EarnRequest` is delivered to `Actions.earn`. `GoldBalance` rejects an early or over-limit earn without changing state; accepted gold is saved before the Actor changes, then `Zone.show` sends `PlayerView`.
 5. `ChangeChannelRequest` is delivered to `Actions.change`, which requests `joinSpot(Names.zone(channel), ...).defer()` for the other channel of the same world. The client connection does not change, even when that channel is on another node.
 6. To replace a node, the `drain` control in `Hosting.run` requests relocation. Framework takes the game state from `capture` in `PlayerTransfer` and `ZoneTransfer` and calls `restore` on another node.
 
-## Developing from this sample
+## Extend this template's domain
 
-This sample shows how the features work together, so read and run it rather than turning it into your game. Start your own project from the Java starter: choose Java in the Initializer at [ZLink Start](https://zlink.systems/start), or use `framework/languages/java/templates/java/starter/my-game` in the ZLink repository. Then transfer the features you need from this sample one at a time. The starter's `AGENTS.md` owns the choice between structures; this section covers only `mmo-world-channels`. Keep this sample unchanged next to your project as a reference.
+Extend this template's domain to build an MMO world-and-channel server. Keep one owner for each game decision.
 
-### Run the sample first
-
-Before transferring anything, run the build and e2e once with the [Development commands](#development-commands) to confirm the downloaded sample works and to see its behavior. This result is the baseline for comparison. If it fails, compare the failure with Known issues in the [README](README.md) first.
-
-### Features to transfer
-
-Feature names match the feature table in the starter's `AGENTS.md`. Paths are relative to this directory. The starter has one Session node and the `connect` scenario only, so the last column lists what grows in the starter with each feature.
-
-| Feature | File in this sample | What to transfer | What to grow in the starter alongside |
-| --- | --- | --- | --- |
-| Typed messages | `server/shared/src/main/java/MyGame/EnterWorldRequest.java` | The records of the features you adopt: `EnterWorldRequest`, `ChangeChannelRequest`, `EarnRequest`, `ViewRequest`, `PlayerView`; `WorldInfo` for the world list; `SessionInfoRequest` and `SessionInfo` only if your client needs them | The registration names in `Names.java`; the starter already has `Control.java` and `Json.java` |
-| Actor | `server/channel/src/main/java/MyGame/channel/Player.java`, `server/channel/src/main/java/MyGame/channel/PlayerData.java`, `server/channel/src/main/java/MyGame/channel/PlayerFactory.java` | `Player` with the gold rules, `PlayerData` for the application persistence, and the factory that loads it | A new `server/channel/` module (`build.gradle.kts`, `Program.java`) with `include("server:channel")` in `settings.gradle.kts`, its `server/config/` files, and the Actor factory registration in `Program.java`; the node declaration in `zlink.structure.json` and the check in `Structure.java`. The starter's `Nodes.java` starts only the Session role, so extend `Nodes.java` and `Roles.java` for the new role |
-| Spot | `server/channel/src/main/java/MyGame/channel/Zone.java` | `Zone` as one channel of a world, with its join admission and view | The Spot factory registration in `Program.java`; the `spots` and `nodes` declarations in `zlink.structure.json`, and a `Structure.java` check that compares them with the registrations (the starter declares no Spots) |
-| Entry and first admission | `server/channel/src/main/java/MyGame/channel/Entry.java`, `server/channel/src/main/java/MyGame/channel/EntryActions.java`, `enter` in `server/channel/src/main/java/MyGame/channel/Actions.java` | `EntryActions.enter`, the first-entry path to the first channel, and the identity check of `Actions.enter` | The Entry Spot registration and its `entry` declaration; a first-entry scenario and a `reconnect` scenario that compares state after reconnection |
-| Session binding | `server/session/src/main/java/MyGame/session/GameSession.java` | The first-packet check, then find or create the Actor, bind, and relay the original typed packet | The same first-packet type as `EntryActions.enter`; transfer it into the starter's `PlayerSession.java` |
-| Host relocation | `server/channel/src/main/java/MyGame/channel/PlayerTransfer.java`, `server/channel/src/main/java/MyGame/channel/ZoneTransfer.java`, `server/channel/src/main/java/MyGame/channel/Transfer.java`, `server/shared/src/main/java/MyGame/Hosting.java` | The snapshot adapters with `capture` and `restore` (the gold for `Player`), and the `create-update-zone` control next to `drain` and `shutdown` | The `preserveStateWith(...)` registrations; the `update` scenario, which checks that connections and state survive a server replacement and that the replacement node accepts new work |
-| World/channel selection | `change` in `server/channel/src/main/java/MyGame/channel/Actions.java`, `server/accounts/src/main/java/MyGame/accounts/Program.java` | `change`, which uses a deferred Spot join to another channel of the same world, and the world list endpoint | A second channel Zone on the same or another node, the per-world Redis database and mesh (`Names.mesh`), and a `channel` scenario that checks the connection and gold survive the change |
-
-The channels in this sample are player-selected game spaces within a world. They differ from messaging subscription channels, and this sample registers no pub/sub subscriptions.
-
-### Transfer order and rules
-
-Transfer one row at a time and run the build, the structure check, and the related e2e scenario after each. Add a scenario ID to the `Scenario` enum in `server/shared/src/main/java/MyGame/Scenario.java`, to the dispatch in `e2e/src/main/java/MyGame/e2e/Scenarios.java`, to `run.scenarios`, and to the selection examples in `run.commands` of `zlink.structure.json` together. Judge results by the replies and events actually received; do not make tests pass with fixed sleeps or longer deadlines.
-
-Start with the message contracts. Define the typed records in `server/shared/src/main/java/MyGame/` first, then move each handler that fails to compile to the new messages. When you change the first-entry packet, update the first-packet check in `GameSession` and `EntryActions.enter` to receive the same type.
-
-Keep each piece of state in the object that decides it. Gold belongs in `Player` and its database record; channel membership belongs to Framework. When you change the persisted fields, update `PlayerData`, `PlayerFactory`, and the `capture` and `restore` in `PlayerTransfer` together. A missing field disappears after relocation, and the `update` scenario detects the loss.
-
-To name roles differently from this sample, change the type names, `Names.java`, `server/config/`, the module and package names with `settings.gradle.kts`, and `zlink.structure.json` at once. Do the renaming in its own change, separate from transferring a feature, so failures are easier to trace.
-
-If `update` fails after a transfer, first check whether the snapshot is missing any state, then use the message flow in [Debugging](#debugging) to find the first failing step.
+1. Put player gold and earn timing in `GoldBalance` in `server/channel/src/main/java/MyGame/channel/GoldBalance.java`. Put connected player IDs and channel membership views in `Zone` in the same package.
+2. Add typed messages in `server/shared/src/main/java/MyGame/`. Add every client-sendable packet name to the allowlist in `server/session/src/main/java/MyGame/session/GameSession.java`.
+3. Add observable assertions to `e2e/src/main/java/MyGame/e2e/Scenarios.java`. Add each scenario ID to `Scenario.java` and its execution order to `zlink.structure.json` (`run.scenarios` and `run.commands`). Preserve existing scenario coverage.
 
 ## Development considerations
 
@@ -133,7 +105,7 @@ If `update` fails after a transfer, first check whether the snapshot is missing 
 
 Use public Maven Central packages at the versions pinned centrally in `build.gradle.kts`, and keep project dependencies between this project's own modules; do not commit local package feeds or dependencies on repository sources. Process typed messages with the default Framework JSON serializer so processes use the same contract. Limit direct serialization in relocation adapters to application snapshots, keeping management of Framework execution state separate from game state.
 
-`Player` owns the gold and its relocation adapter captures only the gold; Zone identity and membership belong to Framework. A world's configuration selects one mesh and one Redis store, so keep worlds apart by configuration and do not implement route, lease, reconnect, codec, or handoff policies in the application. Store player IDs in Spot state, never Actor references, because host relocation does not call `onJoinedActor` again on the target. Persist application data such as gold before the Actor state changes, and load it again when the Actor is created; do not copy it into Framework state. Reply to the requester through the handler Actor's bound Session (`actor.context().boundSession().send(...)`). Send other pushes to the Actor by player ID with `ZLinkActorClient.sendToActor`, and let a Spot Actor handler such as `Actions.forward` forward the message to the bound Session. `SessionInfo` reads identity from the Session binding, and game-state messages contain no binding identity.
+`GoldBalance` owns gold and earn timing; `Zone` owns connected player IDs. `PlayerTransfer` captures gold and cooldown remaining milliseconds, and `ZoneTransfer` captures the player ID list. A world's configuration selects one mesh and one Redis store, so keep worlds apart by configuration and do not implement route, lease, reconnect, codec, or handoff policies in the application. Store player IDs in Spot state, never Actor references, because host relocation does not call `onJoinedActor` again on the target. Persist accepted application data before changing Actor state. Send responses and updates through the bound Session or the public Actor client as the corresponding handler requires. `SessionInfo` reads identity from the Session binding, and game-state messages contain no binding identity.
 
 ### Asynchronous execution and lifecycle
 

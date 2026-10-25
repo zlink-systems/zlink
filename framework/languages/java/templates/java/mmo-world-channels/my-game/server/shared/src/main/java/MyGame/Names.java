@@ -14,9 +14,8 @@ public final class Names {
             ZONE = "Zone",
             PLAYER_KEY = "player:",
             FIELD = "field@";
-    public static final int FIRST_CHANNEL = 1;
-    public static final int UPDATE_CHANNEL = 3;
-    public static final long MAX_GOLD = 9_007_199_254_740_991L;
+    public static final long FIRST_CHANNEL = 1;
+    public static final long UPDATE_CHANNEL = 3;
     public static final List<String> SCENARIOS =
             java.util.Arrays.stream(Scenario.values()).map(Scenario::id).toList();
 
@@ -28,14 +27,15 @@ public final class Names {
         };
     }
 
-    public static String zone(int channel) {
-        if (channel < 1) throw new IllegalArgumentException("Channel must be positive");
+    public static String zone(long channel) {
+        if (channel < 1)
+            throw new IllegalArgumentException("Channel is out of range");
         return FIELD + channel;
     }
 
-    public static int channel(String zone) {
+    public static long channel(String zone) {
         if (!zone.startsWith(FIELD)) throw new IllegalArgumentException("Invalid Zone ID");
-        int n = Integer.parseInt(zone.substring(FIELD.length()));
+        long n = Long.parseLong(zone.substring(FIELD.length()));
         if (!zone(n).equals(zone)) throw new IllegalArgumentException("Invalid channel");
         return n;
     }

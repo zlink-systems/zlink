@@ -18,8 +18,8 @@ object Names {
     const val ZONE = "Zone"
     const val PLAYER_KEY = "player:"
     const val FIELD = "field@"
-    const val FIRST_CHANNEL = 1
-    const val UPDATE_CHANNEL = 3
+    const val FIRST_CHANNEL = 1L
+    const val UPDATE_CHANNEL = 3L
     val SCENARIOS = Scenario.entries.map { it.id }
 
     fun mesh(world: String) =
@@ -29,14 +29,14 @@ object Names {
             else -> error("Unknown world: $world")
         }
 
-    fun zone(channel: Int): String {
-        require(channel >= FIRST_CHANNEL) { "Channel must be positive" }
+    fun zone(channel: Long): String {
+        require(channel >= FIRST_CHANNEL) { "Channel is out of range" }
         return "$FIELD$channel"
     }
 
-    fun channel(zone: String): Int {
+    fun channel(zone: String): Long {
         require(zone.startsWith(FIELD)) { "Invalid Zone ID" }
-        val number = zone.removePrefix(FIELD).toInt()
+        val number = zone.removePrefix(FIELD).toLong()
         require(zone(number) == zone) { "Invalid channel" }
         return number
     }
@@ -61,6 +61,19 @@ enum class Scenario {
 
 @JsonSerialize class ViewRequest
 
+object GameRules {
+    const val MAX_INTEGER = 9_007_199_254_740_991L
+    const val EARN_AMOUNT = 10L
+    const val EARN_INTERVAL_MS = 1_000L
+}
+
+object Rejection {
+    const val EARN_TOO_SOON = "earn-too-soon"
+    const val GOLD_LIMIT = "gold-limit"
+    const val INTEGER_OUT_OF_RANGE = "integer-out-of-range"
+    const val PACKET_NOT_ALLOWED = "packet-not-allowed"
+}
+
 data class SessionInfo(
     val sessionId: String = "",
     val actorId: String = "",
@@ -69,13 +82,19 @@ data class SessionInfo(
 
 data class EnterWorldRequest(val playerId: String = "")
 
-data class EarnRequest(val amount: Long = 0)
+@JsonSerialize class EarnRequest
 
-data class ChangeChannelRequest(val channel: Int = 0)
+@JsonSerialize class ChannelViewRequest
+
+data class ChannelView(val channelId: Long = 0, val playerIds: List<String> = emptyList())
+
+data class ActionRejected(val reason: String = "", val retryAfterMs: Int = 0)
+
+data class ChangeChannelRequest(val channel: Long = 0)
 
 data class PlayerView(
     val worldId: String = "",
-    val channel: Int = 0,
+    val channel: Long = 0,
     val nodeId: String = "",
     val gold: Long = 0,
 )

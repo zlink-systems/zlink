@@ -9,6 +9,8 @@ fun main(args: Array<String>) {
     val root = Path.of("").toAbsolutePath().normalize()
     Structure.check(root)
     if (args.contentEquals(arrayOf("--check-structure"))) return
+    val domainChecks = runDomainChecks()
+    println("Domain checks: $domainChecks/$domainChecks passed")
     require(args.isEmpty() || (args.size == 2 && args[0] == "--scenario")) { "Use --scenario a,b" }
     val selected =
         (if (args.isEmpty()) Names.SCENARIOS else args[1].split(',')).map(Scenario::parse)

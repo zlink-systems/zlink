@@ -9,7 +9,8 @@ import type {
 import { NODE_CONFIG, type NodeConfig } from '../shared/config';
 import { Control } from '../shared/constants';
 import { PlayerData } from './data';
-import { GoldBalance } from './domain';
+import { GoldBalance, type GoldSnapshot } from './domain';
+import { ActionRejected } from '../shared/messages';
 export class Player implements ZLinkActor {
   readonly gold: GoldBalance;
   constructor(
@@ -19,10 +20,12 @@ export class Player implements ZLinkActor {
   ) {
     this.gold = new GoldBalance(gold);
   }
-  async earn(amount: number): Promise<void> {
-    const next = this.gold.afterEarning(amount);
-    await this.data.save(this.context.actorId, next);
-    this.gold.restore(next);
+  async earn(): Promise<ActionRejected | undefined> {
+    const decision = this.gold.previewEarn();
+    if (!decision.accepted) return decision.rejection;
+    await this.data.save(this.context.actorId, decision.gold);
+    this.gold.commitEarn(decision);
+    return undefined;
   }
   async onJoinCompleted(completion: ZLinkActorJoinCompletion): Promise<void> {
     if (completion.status !== 'accepted') throw new Error(`Zone join failed: ${completion.status}`);
@@ -45,9 +48,9 @@ export class PlayerFactory implements ZLinkActorFactory<Player> {
 @Injectable()
 export class PlayerRelocation implements ZLinkActorRelocationAdapter<Player> {
   async capture(actor: Player): Promise<Uint8Array> {
-    return Buffer.from(JSON.stringify(actor.gold.value));
+    return Buffer.from(JSON.stringify(actor.gold.capture()));
   }
   async restore(actor: Player, payload: Uint8Array): Promise<void> {
-    actor.gold.restore(JSON.parse(Buffer.from(payload).toString('utf8')));
+    actor.gold.restore(JSON.parse(Buffer.from(payload).toString('utf8')) as GoldSnapshot);
   }
 }

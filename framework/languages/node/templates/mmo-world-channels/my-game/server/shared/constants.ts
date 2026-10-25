@@ -36,6 +36,9 @@ export const PacketNames = {
   changeChannelRequest: 'ChangeChannelRequest',
   earnRequest: 'EarnRequest',
   viewRequest: 'ViewRequest',
+  channelViewRequest: 'ChannelViewRequest',
+  channelView: 'ChannelView',
+  actionRejected: 'ActionRejected',
   playerView: 'PlayerView',
   sessionInfoRequest: 'SessionInfoRequest',
   sessionInfo: 'SessionInfo'

@@ -9,13 +9,18 @@ public sealed class PlayerActor(IZLinkActorContext context, PlayerData data, lon
     : IZLinkActor
 {
     public IZLinkActorContext Context { get; } = context;
-    public GoldBalance Gold { get; } = new(gold);
+    public GoldBalance Gold { get; } = new(gold, TimeProvider.System);
 
-    public async ValueTask EarnAsync(long amount, CancellationToken ct)
+    public async ValueTask<GoldEarnDecision> EarnAsync(CancellationToken ct)
     {
-        var next = Gold.AfterEarning(amount);
+        var decision = Gold.EvaluateEarn();
+        if (!decision.Accepted)
+            return decision;
+
+        var next = decision.NewValue!.Value;
         await data.SaveAsync(Context.ActorId, next, ct);
-        Gold.Restore(next);
+        Gold.CommitEarn(decision);
+        return decision;
     }
 
     public ValueTask OnJoinCompletedAsync(ZLinkActorJoinCompletion completion, CancellationToken ct)
@@ -39,7 +44,7 @@ public sealed class PlayerFactory(PlayerData data) : IZLinkActorFactory<PlayerAc
 public sealed class PlayerRelocation : IZLinkActorRelocationAdapter<PlayerActor>
 {
     public ValueTask<byte[]> CaptureAsync(PlayerActor actor, CancellationToken ct) =>
-        ValueTask.FromResult(JsonSerializer.SerializeToUtf8Bytes(actor.Gold.Value));
+        ValueTask.FromResult(JsonSerializer.SerializeToUtf8Bytes(actor.Gold.Capture()));
 
     public ValueTask RestoreAsync(
         PlayerActor actor,
@@ -47,7 +52,9 @@ public sealed class PlayerRelocation : IZLinkActorRelocationAdapter<PlayerActor>
         CancellationToken ct
     )
     {
-        actor.Gold.Restore(JsonSerializer.Deserialize<long>(payload.Span));
+        var snapshot = JsonSerializer.Deserialize<GoldSnapshot>(payload.Span)
+            ?? throw new InvalidDataException("Gold relocation state is empty.");
+        actor.Gold.Restore(snapshot);
         return ValueTask.CompletedTask;
     }
 }

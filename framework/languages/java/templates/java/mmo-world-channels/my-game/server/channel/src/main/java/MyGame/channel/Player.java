@@ -9,12 +9,12 @@ import java.util.concurrent.*;
 public final class Player implements ZLinkActor {
     private final ZLinkActorContext context;
     private final PlayerData data;
-    private long gold;
+    private final GoldBalance gold;
 
     public Player(ZLinkActorContext context, PlayerData data, long gold) {
         this.context = context;
         this.data = data;
-        restore(gold);
+        this.gold = new GoldBalance(gold);
     }
 
     public ZLinkActorContext context() {
@@ -22,19 +22,27 @@ public final class Player implements ZLinkActor {
     }
 
     public long gold() {
+        return gold.gold();
+    }
+
+    public GoldBalance goldBalance() {
         return gold;
     }
 
-    public void restore(long value) {
-        if (value < 0 || value > Names.MAX_GOLD) throw new IllegalArgumentException("Invalid gold");
-        gold = value;
+    public CompletionStage<ActionRejected> earn() {
+        var decision = gold.previewEarn();
+        if (!decision.accepted())
+            return CompletableFuture.completedFuture(decision.rejection());
+        return data.save(context.actorId(), decision.gold())
+                .thenApply(
+                        ignored -> {
+                            gold.commit(decision);
+                            return null;
+                        });
     }
 
-    public CompletionStage<Void> earn(long amount) {
-        if (amount <= 0 || amount > Names.MAX_GOLD - gold)
-            throw new IllegalArgumentException("Invalid earning amount");
-        long next = gold + amount;
-        return data.save(context.actorId(), next).thenRun(() -> gold = next);
+    public void restore(GoldBalance.Snapshot snapshot) {
+        gold.restore(snapshot);
     }
 
     public void checkIdentity(String id) {

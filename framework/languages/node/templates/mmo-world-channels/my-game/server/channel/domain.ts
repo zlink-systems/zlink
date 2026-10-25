@@ -1,20 +1,75 @@
+import { GameRules, Rejection, ActionRejected } from '../shared/messages';
+
+export interface GoldSnapshot {
+  gold: number;
+  cooldownRemainingMs: number;
+}
+
+export type GoldDecision =
+  | { accepted: true; gold: number; earnedAt: number }
+  | { accepted: false; rejection: ActionRejected };
+
 export class GoldBalance {
   private current = 0;
+  private lastEarnAt?: number;
+
+  constructor(
+    value: number,
+    cooldownRemainingMs = 0,
+    private readonly now: () => number = () => performance.now()
+  ) {
+    this.restore({ gold: value, cooldownRemainingMs });
+  }
+
   get value(): number {
     return this.current;
   }
-  constructor(value: number) {
-    this.restore(value);
+
+  previewEarn(): GoldDecision {
+    const now = this.now();
+    if (this.lastEarnAt !== undefined) {
+      const remainingMs = GameRules.earnIntervalMs - (now - this.lastEarnAt);
+      if (remainingMs > 0)
+        return {
+          accepted: false,
+          rejection: new ActionRejected(Rejection.earnTooSoon, Math.ceil(remainingMs))
+        };
+    }
+    if (this.current > GameRules.maxInteger - GameRules.earnAmount)
+      return {
+        accepted: false,
+        rejection: new ActionRejected(Rejection.goldLimit, 0)
+      };
+    return { accepted: true, gold: this.current + GameRules.earnAmount, earnedAt: now };
   }
-  afterEarning(amount: number): number {
-    if (!Number.isSafeInteger(amount) || amount <= 0)
-      throw new Error('Amount must be a positive safe integer');
-    const next = this.value + amount;
-    if (!Number.isSafeInteger(next)) throw new Error('Gold overflow');
-    return next;
+
+  commitEarn(decision: Extract<GoldDecision, { accepted: true }>): void {
+    this.current = decision.gold;
+    this.lastEarnAt = decision.earnedAt;
   }
-  restore(value: number): void {
-    if (!Number.isSafeInteger(value) || value < 0) throw new Error('Invalid gold');
-    this.current = value;
+
+  capture(): GoldSnapshot {
+    const remainingMs =
+      this.lastEarnAt === undefined
+        ? 0
+        : Math.max(0, Math.ceil(GameRules.earnIntervalMs - (this.now() - this.lastEarnAt)));
+    return { gold: this.current, cooldownRemainingMs: remainingMs };
+  }
+
+  restore(snapshot: GoldSnapshot): void {
+    if (
+      !Number.isSafeInteger(snapshot.gold) ||
+      snapshot.gold < 0 ||
+      snapshot.gold > GameRules.maxInteger ||
+      !Number.isSafeInteger(snapshot.cooldownRemainingMs) ||
+      snapshot.cooldownRemainingMs < 0 ||
+      snapshot.cooldownRemainingMs > GameRules.earnIntervalMs
+    )
+      throw new Error('Invalid gold snapshot');
+    this.current = snapshot.gold;
+    this.lastEarnAt =
+      snapshot.cooldownRemainingMs === 0
+        ? undefined
+        : this.now() - (GameRules.earnIntervalMs - snapshot.cooldownRemainingMs);
   }
 }

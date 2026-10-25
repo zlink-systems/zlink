@@ -80,8 +80,8 @@ The runner validates `zlink.structure.json`, starts an isolated Compose project 
 
 | Scenario | Verification |
 | --- | --- |
-| `worlds` | HTTP returns both published Session endpoints. The same player earns 10 gold in A and starts with 0 in B. |
-| `channel` | Channel 1 to 2 preserves connection, SessionInfo and gold; the new owner is channelA2. |
+| `worlds` | HTTP returns both published Session endpoints. A repeated earn is rejected without changing gold, returns `earn-too-soon` with `RetryAfterMs`, and succeeds after that duration. The same player starts with 0 gold in B. |
+| `channel` | Players in one channel see the same `ChannelView`; another channel is isolated. Oversized channel requests return `integer-out-of-range` without changing membership. A move and disconnect remove the player from the previous channel list. Session rejects internal packets with `packet-not-allowed`; channel relocation preserves connection, SessionInfo and gold. |
 | `reconnect` | A new connection binds the same Actor generation, channel and gold. |
 | `update` | channelA1 drains into channelA2, without affecting B. SessionInfo and gold remain unchanged. The source stops and a replacement starts with the same config, executes Zone lookup during bootstrap, and a new Zone on the replacement processes Player work. |
 
@@ -99,7 +99,9 @@ Validated against the published Framework 0.30.2 packages.
 4. Configure the accounts `Worlds` list with those Session endpoints, then start accounts. Its HTTP listener publishes the actual endpoint in `READY`.
 5. Send `drain` to channelA1. Wait for `RELOCATION_REQUESTED`, `RELOCATED`, and `SAFE_TO_SHUTDOWN`. Send `shutdown`, wait for `STOPPED` and exit, and start the replacement with the same configuration. Existing Zones remain at their relocated authoritative owner.
 
-Player data writes use the Actor execution turn. Gold must be positive when earning and checked arithmetic rejects overflow. Initial admission selects channel 1; reconnect relays to the Actor's existing Zone and does not change channels. No Spot retains Actor references or duplicates Framework membership. Account configuration contains the common node fields for a consistent JSON schema; the HTTP service does not connect to Redis or a mesh and uses a stateless Framework host for the same drain/shutdown control protocol.
+Player data writes use the Actor execution turn. `GoldBalance` grants 10 gold per accepted request, enforces a 1000 ms monotonic interval and rejects a result above `9,007,199,254,740,991` without changing state. Its relocation snapshot stores the remaining cooldown in milliseconds. Each Zone owns its connected player IDs and includes them in its relocation snapshot. Initial admission selects channel 1; reconnect relays to the Actor's existing Zone and does not change channels. Account configuration contains the common node fields for a consistent JSON schema; the HTTP service does not connect to Redis or a mesh and uses a stateless Framework host for the same drain/shutdown control protocol.
+
+`ChannelViewRequest` returns the Zone's connected player IDs. The Zone rebuilds this list from membership and disconnect callbacks; relocation carries the current list in `ZoneSnapshot`. A channel move keeps the client Session bound while the Player Actor changes Zones, so the list follows Zone membership callbacks.
 
 This example trusts the supplied player ID and demonstrates server composition rather than account authentication. Production deployments must authenticate that identity before binding an Actor.
 
@@ -117,4 +119,4 @@ derived from that duration and the existing operation budget.
 
 기본 실행은 Docker에서 node와 e2e runner를 함께 실행하므로 호스트 .NET SDK가 필요하지 않습니다. Docker Compose v2와 Linux container 환경을 준비하십시오. 로컬 process 디버깅은 .NET 8 SDK를 설치한 뒤 `./run-e2e.sh --local` 또는 `pwsh -NoProfile -File ./run-e2e.ps1 -Local`로 실행합니다. 이미지 빌드·정리 로그는 `.logs/docker-<project>/`, node 로그는 `.logs/run-<id>/`에 남습니다. 이 디렉터리에서 `./run-e2e.sh --build-only`으로 빌드합니다. Windows에서는 `pwsh -NoProfile -File ./run-e2e.ps1`, Linux에서는 `./run-e2e.sh`로 전체 시나리오를 실행합니다. 실행에 사용하는 Redis와 node는 매번 별도로 생성되며 로그는 `.logs/run-<id>/`에 보존됩니다.
 
-월드 A와 B는 Redis와 mesh를 분리합니다. Player Actor가 gold를 소유하며 채널 변경과 재접속에서도 동일한 Actor 상태를 유지합니다. 유지보수에서는 drain 완료와 SafeToShutdown을 확인한 뒤 원본 node를 종료하고 같은 설정으로 대체 node를 시작합니다. 공개 Framework 0.30.2 패키지로 검증했습니다.
+월드 A와 B는 Redis와 mesh를 분리합니다. `GoldBalance`가 요청마다 10 gold를 지급하고 단조 시계로 1000 ms 간격과 `9,007,199,254,740,991` 상한을 판정합니다. 거부한 요청은 gold와 cooldown을 바꾸지 않으며 `ActionRejected(Reason, RetryAfterMs)`를 반환합니다. `RetryAfterMs`가 있는 거부는 응답값만큼 지난 뒤 다시 요청합니다. 상한을 넘는 채널 요청은 `integer-out-of-range`로 거부하고 membership을 바꾸지 않습니다. Zone은 현재 접속 중인 player ID를 보유하고 채널 이동·연결 종료 때 목록에서 제거합니다. 채널 이동 때 client Session은 유지되고 Player Actor의 Zone이 바뀌므로 목록은 Zone membership callback에서 갱신합니다. relocation snapshot은 목록과 남은 cooldown ms를 저장합니다. 채널 변경과 재접속은 같은 Actor 상태를 유지합니다. 유지보수에서는 drain 완료와 SafeToShutdown을 확인한 뒤 원본 node를 종료하고 같은 설정으로 대체 node를 시작합니다. 공개 Framework 0.30.2 패키지로 검증했습니다.

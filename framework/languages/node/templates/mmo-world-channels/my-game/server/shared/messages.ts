@@ -5,7 +5,14 @@ export class ChangeChannelRequest {
   constructor(readonly channel: number) {}
 }
 export class EarnRequest {
-  constructor(readonly amount: number) {}
+  constructor() {}
+}
+export class ChannelViewRequest {}
+export class ChannelView {
+  constructor(readonly channelId: number, readonly playerIds: string[]) {}
+}
+export class ActionRejected {
+  constructor(readonly reason: string, readonly retryAfterMs: number) {}
 }
 export class ViewRequest {}
 export class PlayerView {
@@ -24,6 +31,17 @@ export class SessionInfo {
     readonly objectGeneration: bigint
   ) {}
 }
+export const GameRules = {
+  maxInteger: 9_007_199_254_740_991,
+  earnAmount: 10,
+  earnIntervalMs: 1_000
+} as const;
+export const Rejection = {
+  earnTooSoon: 'earn-too-soon',
+  goldLimit: 'gold-limit',
+  integerOutOfRange: 'integer-out-of-range',
+  packetNotAllowed: 'packet-not-allowed'
+} as const;
 export interface WorldInfo {
   worldId: string;
   name: string;

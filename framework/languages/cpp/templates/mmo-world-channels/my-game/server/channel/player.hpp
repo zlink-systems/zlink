@@ -21,15 +21,19 @@ class Player final : public fx::actor_t
     const fx::actor_context_t &context () const noexcept override { return context_; }
     // The world database write runs on an I/O worker of the Spot turn that handles the
     // request; the turn stays held, and gold changes only after the write is stored.
-    fx::task_t<void> earn (fx::spot_context_t &spot, std::int64_t amount)
+    fx::task_t<GoldEarnDecision> earn (fx::spot_context_t &spot)
     {
-        const auto next = gold.after_earning (amount);
+        const auto decision = gold.evaluate_earn ();
+        if (!decision.accepted ())
+            co_return decision;
+        const auto next = *decision.newValue;
         co_await spot
           .run_io_worker ([&data = data_, id = std::string (context_.actor_id ().value ()), next] {
               return data.save (id, next);
           })
           .async ();
-        gold.restore (next);
+        gold.commit_earn (decision);
+        co_return decision;
     }
     fx::task_t<void> on_join_completed (const fx::actor_join_completion_t &completion) override
     {
@@ -66,14 +70,14 @@ class PlayerRelocation final : public fx::actor_relocation_adapter_t<Player>
   public:
     fx::task_t<std::vector<std::byte>> capture (Player &actor, std::stop_token) override
     {
-        const auto payload = zlink::message_t::from_json (actor.gold.value ());
+        const auto payload = zlink::message_t::from_json (actor.gold.capture ());
         co_return std::vector<std::byte> (payload.bytes ().begin (), payload.bytes ().end ());
     }
     fx::task_t<void>
     restore (Player &actor, std::vector<std::byte> payload, std::stop_token) override
     {
         actor.gold.restore (zlink::message_t::from (std::span<const std::byte> (payload))
-                              .parse_json<std::int64_t> ());
+                              .parse_json<GoldSnapshot> ());
         co_return;
     }
 };
