@@ -5,6 +5,7 @@ type ZLinkStateLaneWork<T> = () => Promise<T> | T;
 
 interface ZLinkStateLaneTurn {
   readonly lane: ZLinkStateLane;
+  readonly description: string;
   active: boolean;
 }
 
@@ -21,6 +22,10 @@ export function startOutsideStateLane<T>(work: () => T): T {
 
 const currentLaneStorage = new AsyncLocalStorage<ZLinkStateLane>();
 const diagnosticPending = isStructuralGuardEnabled() ? new Map<number, string>() : undefined;
+const diagnosticLaneIds = isStructuralGuardEnabled()
+  ? new WeakMap<ZLinkStateLane, number>()
+  : undefined;
+let nextDiagnosticLane = 0;
 let nextDiagnosticWork = 0;
 const diagnosticTurnStorage =
   diagnosticPending === undefined ? undefined : new AsyncLocalStorage<ZLinkStateLaneTurn>();
@@ -152,10 +157,22 @@ if (isStructuralGuardEnabled()) {
     this: ZLinkStateLane,
     work: ZLinkStateLaneWork<T>
   ): Promise<T> {
-    const completion = run.call(this, () => runDiagnosticTurn(this, work)) as Promise<T>;
+    const release = registerDiagnosticWork(
+      `${diagnosticLaneName(this)} ${diagnosticWorkName(work)}`
+    );
+    let completion: Promise<T>;
+    try {
+      completion = run.call(this, () =>
+        runDiagnosticTurn(this, work, release.description)
+      ) as Promise<T>;
+    } catch (error) {
+      release();
+      throw error;
+    }
+    void completion.then(release, release);
     return guardStateLaneCompletion(
-      trackDiagnosticCompletion(completion, `state lane ${diagnosticWorkName(work)}`),
-      'another state lane completion',
+      completion,
+      `another state lane completion [${release.description}]`,
       this
     );
   };
@@ -165,10 +182,12 @@ if (isStructuralGuardEnabled()) {
     this: ZLinkStateLane,
     work: ZLinkStateLaneWork<void>
   ): boolean {
-    const release = registerDiagnosticWork(`state lane post ${diagnosticWorkName(work)}`);
+    const release = registerDiagnosticWork(
+      `${diagnosticLaneName(this)} post ${diagnosticWorkName(work)}`
+    );
     const accepted = tryPost.call(this, () => {
       try {
-        const result = runDiagnosticTurn(this, work);
+        const result = runDiagnosticTurn(this, work, release.description);
         if (result instanceof Promise) return result.finally(release);
         release();
         return result;
@@ -182,8 +201,12 @@ if (isStructuralGuardEnabled()) {
   };
 }
 
-function runDiagnosticTurn<T>(lane: ZLinkStateLane, work: ZLinkStateLaneWork<T>): Promise<T> | T {
-  const turn: ZLinkStateLaneTurn = { lane, active: true };
+function runDiagnosticTurn<T>(
+  lane: ZLinkStateLane,
+  work: ZLinkStateLaneWork<T>,
+  description: string
+): Promise<T> | T {
+  const turn: ZLinkStateLaneTurn = { lane, description, active: true };
   return diagnosticTurnStorage!.run(turn, () => {
     try {
       const result = work();
@@ -213,7 +236,10 @@ export function guardStateLaneCompletion<T>(
         return (onFulfilled: (value: T) => unknown, onRejected: (error: unknown) => unknown) => {
           const current = ZLinkStateLane.current;
           if (current !== undefined && current !== owner) {
-            throw new Error(`A state lane turn cannot wait for ${label}.`);
+            throw new Error(
+              `A state lane turn cannot wait for ${label}. ` +
+                `current turn: ${diagnosticTurnStorage?.getStore()?.description ?? UNKNOWN_DIAGNOSTIC_CALLER}`
+            );
           }
           return target.then(onFulfilled, onRejected);
         };
@@ -246,16 +272,29 @@ export function diagnosticWorkName(work: { readonly name: string }): string {
   return work.name.length > 0 ? work.name : '<anonymous>';
 }
 
-function registerDiagnosticWork(name: string): () => void {
-  if (diagnosticPending === undefined) return () => undefined;
+function diagnosticLaneName(lane: ZLinkStateLane): string {
+  let id = diagnosticLaneIds!.get(lane);
+  if (id === undefined) {
+    id = ++nextDiagnosticLane;
+    diagnosticLaneIds!.set(lane, id);
+  }
+  return `state lane #${id}`;
+}
+
+function registerDiagnosticWork(name: string): (() => void) & { readonly description: string } {
+  if (diagnosticPending === undefined) return Object.assign(() => undefined, { description: name });
   const id = ++nextDiagnosticWork;
   const frames = new Error().stack?.split('\n').slice(2) ?? [];
   const caller =
     frames
       .find((frame) => !frame.includes('state-lane.') && !frame.includes('serial-execution-queue.'))
       ?.trim() ?? UNKNOWN_DIAGNOSTIC_CALLER;
-  diagnosticPending.set(id, `${name} ${caller}`);
-  return () => {
-    diagnosticPending.delete(id);
-  };
+  const description = `${name} ${caller}`;
+  diagnosticPending.set(id, description);
+  return Object.assign(
+    () => {
+      diagnosticPending.delete(id);
+    },
+    { description }
+  );
 }
