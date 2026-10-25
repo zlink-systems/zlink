@@ -487,7 +487,14 @@ public final class ZLinkSerialExecutionQueue {
 
     private CompletionStage<Void> admissionFailureLocked(
             Object message, Predicate<Object> retains, ZLinkFrameworkErrorKind sealedKind) {
-        LifecycleTransition transition = lifecycleTransitionLocked();
+        return admissionFailureLocked(message, retains, sealedKind, lifecycleTransitionLocked());
+    }
+
+    private CompletionStage<Void> admissionFailureLocked(
+            Object message,
+            Predicate<Object> retains,
+            ZLinkFrameworkErrorKind sealedKind,
+            LifecycleTransition transition) {
         boolean closing = transition != null && transition.committed.getAsBoolean();
         boolean retainedMessage = (closingAdmissionSealed || closing) && retains.test(message);
         if (closingAdmissionSealed || closing && !retainedMessage) {
@@ -1082,11 +1089,33 @@ public final class ZLinkSerialExecutionQueue {
             Supplier<CompletionStage<Void>> operation) {
         EnqueueResult result;
         synchronized (this) {
+            Objects.requireNonNull(operation, "operation");
             CompletionStage<Void> rejection = admissionFailureLocked();
             if (rejection != null) {
                 return rejection;
             }
-            result = enqueueBarrierNextLocked(operation);
+            materializePublished();
+            LifecycleTransition predecessor = lifecycleTransitionLocked();
+            for (Entry pending : lifecyclePending) {
+                if (pending.operation instanceof LifecycleTransition transition) {
+                    predecessor = transition;
+                }
+            }
+            LifecycleTransition precedingTransition = predecessor;
+            result =
+                    enqueueBarrierNextLocked(
+                            () -> {
+                                CompletionStage<Void> refused;
+                                synchronized (ZLinkSerialExecutionQueue.this) {
+                                    refused =
+                                            admissionFailureLocked(
+                                                    null,
+                                                    ignored -> false,
+                                                    ZLinkFrameworkErrorKind.NOT_FOUND,
+                                                    precedingTransition);
+                                }
+                                return refused == null ? operation.get() : refused;
+                            });
         }
         scheduleDrainIfNeeded(result);
         return result.result();

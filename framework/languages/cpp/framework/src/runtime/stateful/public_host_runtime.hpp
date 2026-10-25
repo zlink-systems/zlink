@@ -285,7 +285,7 @@ using spot_close_done_t = std::function<void (result_t<bool>)>;
 /* The owner runtime runs a Close for one local User Spot on that Spot's
  * lifecycle lane and reports its result through `done`. */
 using user_spot_closer_t =
-  std::function<void (const std::string &, spot_close_begin_t, spot_close_done_t)>;
+  std::function<void (const std::string &, std::uint64_t, spot_close_begin_t, spot_close_done_t)>;
 
 /* Continues a Close step when `task` completes. `resume` returns the
  * continuation to the Spot lifecycle turn that waits for the step, which
