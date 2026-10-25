@@ -10,6 +10,15 @@ class Session final : public fx::packet_stream_session_t
     fx::actor_manager_t &actors_;
     fx::serializer_registry_t &serializers_;
 
+    static bool is_client_packet (const std::string &packet_name)
+    {
+        return packet_name == JoinTableRequest::packet_name
+               || packet_name == TableViewRequest::packet_name
+               || packet_name == StartHandRequest::packet_name
+               || packet_name == BetRequest::packet_name
+               || packet_name == SessionInfoRequest::packet_name;
+    }
+
   public:
     Session (fx::actor_manager_t &actors, fx::serializer_registry_t &serializers) :
         actors_ (actors), serializers_ (serializers)
@@ -26,6 +35,13 @@ class Session final : public fx::packet_stream_session_t
                                 const fx::session_message_context_t &dispatch,
                                 const zlink::message_t &payload) override
     {
+        if (!is_client_packet (dispatch.packet_name)) {
+            const auto message = ActionRejected{Rules::packet_not_allowed, 0};
+            co_await stream.write_packet (zlink::message_t::from_json (message))
+              .packet_name (ActionRejected::packet_name)
+              .async ();
+            co_return;
+        }
         auto bound = stream.actors ().bound ();
         if (bound.empty ()) {
             if (dispatch.packet_name != JoinTableRequest::packet_name)

@@ -1,18 +1,173 @@
 #pragma once
 #include "client.hpp"
+#include "server/table/domain.hpp"
+#include <algorithm>
+#include <limits>
 #include <numeric>
+#include <set>
 
 namespace MyGame::E2E
 {
 struct Bets
 {
-    static constexpr int table_first = 100, table_second = 50, continuity_first = 10,
-                         continuity_second = 20;
+    static constexpr std::int64_t table_first = 100, table_second = 50, continuity_first = 10,
+                                  continuity_second = 20;
 };
+inline constexpr int domain_check_count = 7;
+inline int domain_checks ()
+{
+    int passed = 0;
+    constexpr auto maximum = Rules::max_contract_integer;
+    {
+        TableState state;
+        require (state.admit ("p1") && state.admit ("p2"),
+                 "Could not prepare shuffled deck uniqueness check");
+        require (state.start ("p1").empty (), "Deck shuffle failed");
+        std::set<int> cards (state.deck.begin (), state.deck.end ());
+        std::size_t card_count = state.deck.size ();
+        for (const auto &seat : state.seats) {
+            card_count += seat.cards.size ();
+            cards.insert (seat.cards.begin (), seat.cards.end ());
+        }
+        int expected_card = 0;
+        const bool is_complete_deck =
+          cards.size () == Rules::deck_size
+          && std::all_of (cards.begin (), cards.end (), [&expected_card] (int card) {
+                 return card == expected_card++;
+             });
+        require (card_count == Rules::deck_size && is_complete_deck,
+                 "Shuffled deck did not contain every card exactly once");
+    }
+    ++passed;
+
+    {
+        TableState state ([] { return std::numeric_limits<std::uint32_t>::max (); });
+        require (state.admit ("p1") && state.admit ("p2"),
+                 "Could not prepare deterministic shuffle");
+        require (state.start ("p1").empty (), "Injected random source failed");
+        const std::vector<int> expected_order{
+          2,  1,  4,  9,  14, 40, 12, 7,  34, 18, 22, 13, 8,  33, 16, 19, 50, 24,
+          37, 23, 25, 27, 49, 28, 20, 26, 48, 44, 29, 39, 32, 31, 35, 17, 10, 46,
+          6,  5,  21, 42, 36, 43, 51, 3,  30, 11, 41, 15, 38, 45, 0,  47};
+        constexpr auto dealt_count = Rules::minimum_players * Rules::cards_per_hand;
+        const std::vector<int> expected_remaining (expected_order.begin (),
+                                                  expected_order.end () - dealt_count);
+        const std::vector<int> expected_first_hand{expected_order[51], expected_order[50]};
+        const std::vector<int> expected_second_hand{expected_order[49], expected_order[48]};
+        require (state.deck == expected_remaining && state.seats[0].cards == expected_first_hand
+                   && state.seats[1].cards == expected_second_hand,
+                 "Injected random source produced a different deterministic order");
+    }
+    ++passed;
+
+    {
+        TableState state;
+        for (int i = 0; i < Rules::seats; ++i)
+            require (state.admit ("p" + std::to_string (i)),
+                     "Could not prepare settlement cards");
+        state.handNumber = 1;
+        state.inHand = true;
+        state.turnSeat = 0;
+        for (std::size_t i = 0; i < state.seats.size (); ++i)
+            state.seats[i].cards = {static_cast<int> (i), static_cast<int> (i + Rules::seats)};
+        std::optional<HandResult> result;
+        for (int i = 0; i < Rules::seats; ++i) {
+            const auto outcome = state.bet ("p" + std::to_string (i), BetRequest{1, 0});
+            require (outcome.rejection.empty (), "Valid settlement bet was rejected");
+            if (i + 1 == Rules::seats)
+                result = outcome.result;
+            else
+                require (!outcome.result, "Settlement ended before every player acted");
+        }
+        require (result.has_value () && result->seats.size () == Rules::seats
+                   && std::all_of (result->seats.begin (), result->seats.end (),
+                                   [] (const auto &seat) { return seat.cardCount == 0; })
+                   && std::all_of (state.seats.begin (), state.seats.end (),
+                                   [] (const auto &seat) { return seat.cards.empty (); }),
+                 "Settlement retained private cards");
+    }
+    ++passed;
+
+    {
+        TableState state;
+        require (state.admit ("p1") && state.admit ("p2"),
+                 "Could not prepare bet amount boundary");
+        state.seats[0].chips = maximum;
+        state.seats[0].cards = {11, 24};
+        state.seats[1].cards = {0, 13};
+        state.handNumber = 1;
+        state.inHand = true;
+        state.turnSeat = 0;
+        const auto accepted = state.bet ("p1", BetRequest{1, maximum});
+        require (accepted.rejection.empty () && !accepted.result && state.pot == maximum
+                   && state.seats[0].chips == 0,
+                 "Maximum in-range bet was not accepted");
+        const nlohmann::json before = state;
+        const auto outcome = state.bet ("p2", BetRequest{1, maximum + 1});
+        require (outcome.rejection == Rules::integer_out_of_range,
+                 "Over-limit bet amount did not return integer-out-of-range");
+        require (nlohmann::json (state) == before,
+                 "Over-limit bet rejection changed state");
+    }
+    ++passed;
+
+    {
+        TableState state;
+        require (state.admit ("p1") && state.admit ("p2"), "Could not prepare pot boundary");
+        state.seats[0].chips = maximum;
+        state.seats[0].cards = {11, 24};
+        state.seats[1].cards = {0, 13};
+        state.handNumber = 1;
+        state.inHand = true;
+        state.turnSeat = 0;
+        state.pot = maximum;
+        const nlohmann::json before = state;
+        const auto outcome = state.bet ("p1", BetRequest{1, 1});
+        require (outcome.rejection == Rules::integer_out_of_range,
+                 "Pot overflow did not return integer-out-of-range");
+        require (nlohmann::json (state) == before, "Pot overflow rejection changed state");
+    }
+    ++passed;
+
+    {
+        TableState state;
+        require (state.admit ("p1") && state.admit ("p2"),
+                 "Could not prepare payout boundary");
+        state.seats[0].chips = maximum;
+        state.seats[0].cards = {11, 24};
+        state.seats[1].cards = {0, 13};
+        state.handNumber = 1;
+        state.inHand = true;
+        state.turnSeat = 0;
+        const auto first = state.bet ("p1", BetRequest{1, 0});
+        require (first.rejection.empty () && !first.result,
+                 "First payout-boundary bet ended the hand");
+        const nlohmann::json before = state;
+        const auto outcome = state.bet ("p2", BetRequest{1, 1});
+        require (outcome.rejection == Rules::integer_out_of_range,
+                 "Payout overflow did not return integer-out-of-range");
+        require (nlohmann::json (state) == before, "Payout overflow rejection changed state");
+    }
+    ++passed;
+
+    {
+        TableState state;
+        require (state.admit ("p1") && state.admit ("p2"),
+                 "Could not prepare hand-number boundary");
+        state.handNumber = maximum;
+        const nlohmann::json before = state;
+        require (state.start ("p1") == Rules::integer_out_of_range,
+                 "Maximum hand number did not reject the next hand");
+        require (nlohmann::json (state) == before,
+                 "Hand number overflow rejection changed state");
+    }
+    ++passed;
+    return passed;
+}
 inline void conservation (const std::vector<SeatView> &seats)
 {
-    const int total = std::accumulate (seats.begin (), seats.end (), 0,
-                                       [] (int n, const auto &s) { return n + s.chips; });
+    const auto total = std::accumulate (seats.begin (), seats.end (), std::int64_t{0},
+                                        [] (std::int64_t n, const auto &s) { return n + s.chips; });
     require (total == Rules::initial_chips * Rules::minimum_players, "Chips were not conserved");
 }
 inline std::pair<HandDealt, HandDealt> start (Client &a, Client &b)
@@ -38,7 +193,8 @@ inline std::pair<HandDealt, HandDealt> start (Client &a, Client &b)
     return {ah, bh};
 }
 inline void
-settle (Client &a, Client &b, const HandDealt &ah, const HandDealt &bh, int first, int second)
+settle (Client &a, Client &b, const HandDealt &ah, const HandDealt &bh, std::int64_t first,
+        std::int64_t second)
 {
     a.privacy (ah);
     b.privacy (bh);
@@ -63,14 +219,33 @@ settle (Client &a, Client &b, const HandDealt &ah, const HandDealt &bh, int firs
     if (score (bh) >= score (ah))
         winners.push_back (1);
     require (ar.winners == winners, "Incorrect winners");
-    std::vector<int> chips{Rules::initial_chips - first, Rules::initial_chips - second};
+    std::vector<std::int64_t> chips{Rules::initial_chips - first, Rules::initial_chips - second};
     for (int winner : winners)
         chips[winner] += ar.pot / static_cast<int> (winners.size ());
     chips[winners.front ()] += ar.pot % static_cast<int> (winners.size ());
     require (ar.seats.size () == chips.size (), "Seat count changed");
     for (std::size_t i = 0; i < chips.size (); ++i)
         require (ar.seats[i].chips == chips[i], "Incorrect settlement");
+    require (std::all_of (ar.seats.begin (), ar.seats.end (),
+                          [] (const auto &seat) { return seat.cardCount == 0; }),
+             "Settlement retained a private card count");
     conservation (ar.seats);
+    a.clear ();
+    b.clear ();
+    a.send (TableViewRequest{});
+    const auto settled_a = a.next<TableView> ();
+    const auto empty_a = a.next<HandDealt> ();
+    b.send (TableViewRequest{});
+    const auto settled_b = b.next<TableView> ();
+    const auto empty_b = b.next<HandDealt> ();
+    for (const auto &view : {settled_a, settled_b})
+        require (!view.inHand && view.handNumber == ah.handNumber
+                   && std::all_of (view.seats.begin (), view.seats.end (),
+                                   [] (const auto &seat) { return seat.cardCount == 0; }),
+                 "Settled table view retained private cards");
+    require (empty_a.handNumber == ah.handNumber && empty_a.cards.empty ()
+               && empty_b.handNumber == ah.handNumber && empty_b.cards.empty (),
+             "Private-hand query returned cards after settlement");
     a.healthy ();
     b.healthy ();
 }
@@ -85,15 +260,67 @@ inline void initial (Client &a, Client &b, const std::string &expected_node = {}
     for (const auto &s : bv.seats)
         require (s.chips == Rules::initial_chips, "Invalid initial chips");
 }
+inline void same_state (const TableView &before, const TableView &after)
+{
+    require (before.tableId == after.tableId && before.yourSeat == after.yourSeat
+               && before.handNumber == after.handNumber && before.inHand == after.inHand
+               && before.turnSeat == after.turnSeat && before.pot == after.pot
+               && before.seats == after.seats,
+             "Game state changed during continuity");
+}
 inline void table (const std::string &endpoint, const std::string &expected_node = {})
 {
     const auto id = unique_id ();
     Client a (endpoint, "p1-" + id, "table-" + id), b (endpoint, "p2-" + id, "table-" + id);
     initial (a, b, expected_node);
+
+    b.send (TableViewRequest{});
+    const auto before_packet = b.next<TableView> ();
+    require (b.next<HandDealt> ().cards.empty (), "Idle table returned private cards");
+    b.send (HandResult{});
+    const auto packet_rejection = b.next<ActionRejected> ();
+    require (packet_rejection.reason == Rules::packet_not_allowed
+               && packet_rejection.retryAfterMs == 0,
+             "Internal packet was not rejected");
+    b.send (TableViewRequest{});
+    const auto after_packet = b.next<TableView> ();
+    require (b.next<HandDealt> ().cards.empty (), "Packet rejection changed private cards");
+    same_state (before_packet, after_packet);
+
     const auto [ah, bh] = start (a, b);
+    b.send (TableViewRequest{});
+    const auto before_out_of_turn = b.next<TableView> ();
+    require (b.next<HandDealt> () == bh, "Table view changed private cards");
     b.send (BetRequest{bh.handNumber, Bets::table_second});
-    require (b.next<ActionRejected> ().reason == Rules::not_your_turn,
-             "Out-of-turn bet not rejected");
+    const auto out_of_turn = b.next<ActionRejected> ();
+    require (out_of_turn.reason == Rules::not_your_turn && out_of_turn.retryAfterMs == 0,
+             "Out-of-turn bet rejection differs");
+    b.send (TableViewRequest{});
+    const auto after_out_of_turn = b.next<TableView> ();
+    require (b.next<HandDealt> () == bh, "Rejected bet changed private cards");
+    same_state (before_out_of_turn, after_out_of_turn);
+
+    a.send (TableViewRequest{});
+    const auto before_limit = a.next<TableView> ();
+    require (a.next<HandDealt> () == ah, "Table view changed private cards");
+    a.send (BetRequest{ah.handNumber, Rules::max_contract_integer + 1});
+    const auto over_limit = a.next<ActionRejected> ();
+    require (over_limit.reason == Rules::integer_out_of_range && over_limit.retryAfterMs == 0,
+             "Over-limit bet rejection differs");
+    a.send (TableViewRequest{});
+    const auto after_limit = a.next<TableView> ();
+    require (a.next<HandDealt> () == ah, "Rejected bet changed private cards");
+    same_state (before_limit, after_limit);
+
+    a.send (BetRequest{ah.handNumber, Rules::initial_chips + 1});
+    const auto invalid_amount = a.next<ActionRejected> ();
+    require (invalid_amount.reason == Rules::invalid_amount && invalid_amount.retryAfterMs == 0,
+             "Invalid amount rejection differs");
+    a.send (TableViewRequest{});
+    const auto after_invalid_amount = a.next<TableView> ();
+    require (a.next<HandDealt> () == ah, "Rejected bet changed private cards");
+    same_state (before_limit, after_invalid_amount);
+
     a.send (BetRequest{ah.handNumber, Bets::table_first});
     const auto state =
       b.next<TableView> ([] (const auto &v) { return v.pot == Bets::table_first; });
@@ -118,14 +345,6 @@ inline Continuity in_progress (Client &a, Client &b)
       b.next<TableView> ([] (const auto &v) { return v.pot == Bets::continuity_first; });
     require (before.turnSeat == 1, "Second player must own turn");
     return {ah, bh, before};
-}
-inline void same_state (const TableView &before, const TableView &after)
-{
-    require (before.tableId == after.tableId && before.yourSeat == after.yourSeat
-               && before.handNumber == after.handNumber && before.inHand == after.inHand
-               && before.turnSeat == after.turnSeat && before.pot == after.pot
-               && before.seats == after.seats,
-             "Game state changed during continuity");
 }
 inline void reconnect (const std::string &endpoint)
 {

@@ -1,3 +1,3 @@
 package MyGame;
 
-public record BetRequest(int handNumber, int amount) {}
+public record BetRequest(long handNumber, long amount) {}

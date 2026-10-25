@@ -10,11 +10,13 @@ namespace MyGame.Table;
 public sealed class TableSpot(
     IZLinkSpotContext context,
     NodeSettings settings,
-    IZLinkActorClient actors
+    IZLinkActorClient actors,
+    Func<int, int>? randomIndex = null
 ) : IZLinkSpot<PlayerActor>
 {
     public IZLinkSpotContext Context { get; } = context;
     private TableState state = new();
+    private readonly Func<int, int> randomIndexSource = randomIndex ?? RandomNumberGenerator.GetInt32;
 
     public void Configure()
     {
@@ -78,10 +80,7 @@ public sealed class TableSpot(
         }
         ct.ThrowIfCancellationRequested();
         await actor.Context.BoundSession.Send(CreateView(seat, Seats())).Async();
-        if (state.InHand && seat.Cards.Length != 0)
-            await actor
-                .Context.BoundSession.Send(new HandDealt(state.HandNumber, seat.Cards))
-                .Async();
+        await actor.Context.BoundSession.Send(new HandDealt(state.HandNumber, seat.Cards)).Async();
     }
 
     private TableView CreateView(PlayerSeat player, SeatView[] seats) =>
@@ -105,7 +104,7 @@ public sealed class TableSpot(
     }
 
     private static ValueTask RejectAsync(PlayerActor actor, string reason) =>
-        actor.Context.BoundSession.Send(new ActionRejected(reason)).Async();
+        actor.Context.BoundSession.Send(new ActionRejected(reason, 0)).Async();
 
     public async ValueTask StartAsync(PlayerActor actor, CancellationToken ct)
     {
@@ -113,6 +112,8 @@ public sealed class TableSpot(
             Find(actor.Context.ActorId) is null ? Rejection.NotSeated
             : state.InHand ? Rejection.HandInProgress
             : state.Seats.Count < GameNames.MinimumPlayers ? Rejection.NotEnoughPlayers
+            : !GameNames.TryAddContractIntegers(state.HandNumber, 1, out _)
+                ? Rejection.IntegerOutOfRange
             : null;
         if (reason is not null)
         {
@@ -122,7 +123,7 @@ public sealed class TableSpot(
         state.Deck = Enumerable.Range(0, GameNames.DeckSize).ToList();
         for (var index = state.Deck.Count - 1; index > 0; index--)
         {
-            var other = RandomNumberGenerator.GetInt32(index + 1);
+            var other = randomIndexSource(index + 1);
             (state.Deck[index], state.Deck[other]) = (state.Deck[other], state.Deck[index]);
         }
         state.HandNumber++;
@@ -146,54 +147,125 @@ public sealed class TableSpot(
     public async ValueTask BetAsync(PlayerActor actor, BetRequest bet, CancellationToken ct)
     {
         var player = Find(actor.Context.ActorId);
-        var reason =
-            player is null ? Rejection.NotSeated
-            : !state.InHand || bet.HandNumber != state.HandNumber ? Rejection.NoHand
-            : state.TurnSeat != player.Seat ? Rejection.NotYourTurn
-            : bet.Amount < 0 || bet.Amount > player.Chips ? Rejection.InvalidAmount
-            : null;
+        var reason = player is null ? Rejection.NotSeated : null;
+        if (
+            reason is null
+            && (
+                bet.HandNumber > GameNames.MaxContractInteger
+                || bet.Amount > GameNames.MaxContractInteger
+            )
+        )
+            reason = Rejection.IntegerOutOfRange;
+        if (reason is null && (!state.InHand || bet.HandNumber != state.HandNumber))
+            reason = Rejection.NoHand;
+        if (reason is null && state.TurnSeat != player!.Seat)
+            reason = Rejection.NotYourTurn;
+        if (reason is null && (bet.Amount < 0 || bet.Amount > player!.Chips))
+            reason = Rejection.InvalidAmount;
         if (reason is not null)
         {
             await RejectAsync(actor, reason);
             return;
         }
+
+        if (!GameNames.TryAddContractIntegers(state.Pot, bet.Amount, out var nextPot))
+        {
+            await RejectAsync(actor, Rejection.IntegerOutOfRange);
+            return;
+        }
+
+        var nextPlayer = state.Seats.FirstOrDefault(seat =>
+            seat.Cards.Length != 0 && seat.Seat != player!.Seat && !seat.Acted
+        );
+        SettlementPlan? settlement = null;
+        if (
+            nextPlayer is null
+            && !TryCreateSettlement(player!, bet.Amount, nextPot, out settlement)
+        )
+        {
+            await RejectAsync(actor, Rejection.IntegerOutOfRange);
+            return;
+        }
+
         player!.Chips -= bet.Amount;
-        state.Pot += bet.Amount;
+        state.Pot = nextPot;
         player.Acted = true;
-        state.TurnSeat =
-            state.Seats.FirstOrDefault(seat => seat.Cards.Length != 0 && !seat.Acted)?.Seat
-            ?? GameNames.NoSeat;
+        state.TurnSeat = nextPlayer?.Seat ?? GameNames.NoSeat;
         await BroadcastAsync(ct);
-        if (state.TurnSeat != GameNames.NoSeat)
+        if (settlement is null)
             return;
 
-        var hands = state.Seats.Where(seat => seat.Cards.Length != 0).ToArray();
-        static int Score(PlayerSeat seat) =>
-            seat.Cards.Sum(card => card % GameNames.RankCount + GameNames.LowestRank);
-        var highest = hands.Max(Score);
-        var winners = hands.Where(seat => Score(seat) == highest).ToArray();
-        var pot = state.Pot;
-        foreach (var winner in winners)
-            winner.Chips += pot / winners.Length;
-        winners[0].Chips += pot % winners.Length;
-        var revealed = hands
-            .Select(seat => new RevealedHand(seat.Seat, seat.PlayerId, seat.Cards))
-            .ToArray();
         state.InHand = false;
+        state.TurnSeat = GameNames.NoSeat;
         state.Pot = 0;
         foreach (var seat in state.Seats)
             seat.Cards = [];
+        for (var index = 0; index < settlement.WinnerSeats.Length; index++)
+            settlement.WinnerSeats[index].Chips = settlement.WinnerBalances[index];
         var result = new HandResult(
             state.HandNumber,
-            pot,
-            winners.Select(seat => seat.Seat).ToArray(),
-            revealed,
+            nextPot,
+            settlement.WinnerSeats.Select(seat => seat.Seat).ToArray(),
+            settlement.Hands,
             Seats()
         );
         foreach (var seat in state.Seats)
             await actors.SendToActor(seat.PlayerId, result).Async();
         await BroadcastAsync(ct);
     }
+
+    private bool TryCreateSettlement(
+        PlayerSeat bettor,
+        long betAmount,
+        long pot,
+        out SettlementPlan plan
+    )
+    {
+        var hands = state.Seats.Where(seat => seat.Cards.Length != 0).ToArray();
+        if (hands.Length == 0)
+        {
+            plan = null!;
+            return false;
+        }
+
+        static int Score(PlayerSeat seat) =>
+            seat.Cards.Sum(card => card % GameNames.RankCount + GameNames.LowestRank);
+        var highest = hands.Max(Score);
+        var winners = hands.Where(seat => Score(seat) == highest).ToArray();
+        var share = pot / winners.Length;
+        var remainder = pot % winners.Length;
+        var winnerBalances = new long[winners.Length];
+        for (var index = 0; index < winners.Length; index++)
+        {
+            var winner = winners[index];
+            var balance = winner == bettor ? winner.Chips - betAmount : winner.Chips;
+            if (!GameNames.TryAddContractIntegers(balance, share, out balance))
+            {
+                plan = null!;
+                return false;
+            }
+            if (index == 0 && !GameNames.TryAddContractIntegers(balance, remainder, out balance))
+            {
+                plan = null!;
+                return false;
+            }
+            winnerBalances[index] = balance;
+        }
+
+        plan = new SettlementPlan(
+            winners,
+            hands.Select(seat => new RevealedHand(seat.Seat, seat.PlayerId, seat.Cards.ToArray()))
+                .ToArray(),
+            winnerBalances
+        );
+        return true;
+    }
+
+    private sealed record SettlementPlan(
+        PlayerSeat[] WinnerSeats,
+        RevealedHand[] Hands,
+        long[] WinnerBalances
+    );
 
     public byte[] Capture() => JsonSerializer.SerializeToUtf8Bytes(state);
 
@@ -207,7 +279,7 @@ public sealed class PlayerSeat
 {
     public int Seat { get; set; }
     public string PlayerId { get; set; } = "";
-    public int Chips { get; set; } = GameNames.InitialChips;
+    public long Chips { get; set; } = GameNames.InitialChips;
     public bool Acted { get; set; }
     public int[] Cards { get; set; } = [];
 }
@@ -216,10 +288,10 @@ public sealed class TableState
 {
     public List<PlayerSeat> Seats { get; set; } = [];
     public List<int> Deck { get; set; } = [];
-    public int HandNumber { get; set; }
+    public long HandNumber { get; set; }
     public bool InHand { get; set; }
     public int TurnSeat { get; set; } = GameNames.NoSeat;
-    public int Pot { get; set; }
+    public long Pot { get; set; }
 }
 
 public sealed class TableRelocation : IZLinkSpotRelocationAdapter<TableSpot>

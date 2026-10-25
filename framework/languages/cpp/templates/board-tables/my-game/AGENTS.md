@@ -86,42 +86,24 @@ Requests in the example game follow this path. Reading the code along this path 
 4. Later packets from the same client are handled by the handlers of the Table that holds the Actor: `Table::start` deals a hand and pushes each player's `HandDealt`, and `Table::bet` applies a `BetRequest` and publishes the updated views and, at the end of a hand, the `HandResult`. `Table::inspect` answers `TableViewRequest` on demand.
 5. To replace a node, `drain` in `NodeControl` requests relocation. Framework takes the table state from `capture` in `TableRelocation` and calls `restore` on another node. `PlayerRelocation` carries no state.
 
-## Developing from this sample
+## Extend this template's domain
 
-This sample shows how the features work together, so read and run it rather than turning it into your game. Start your own project from the C++ starter: choose C++ in the Initializer at [ZLink Start](https://zlink.systems/start), or use `framework/languages/cpp/templates/starter/my-game` in the ZLink repository. Then transfer the features you need from this sample one at a time. The starter's `AGENTS.md` owns the choice between structures; this section covers only `board-tables`. Keep this sample unchanged next to your project as a reference.
+Extend this template's domain to build a board-game server. Add each new rule to the domain that owns its state and decision.
 
-### Run the sample first
+### Run the template first
 
-Before transferring anything, run the build and e2e once with the [Development commands](#development-commands) to confirm the downloaded sample works and to see its behavior. This result is the baseline for comparison. If it fails, compare the failure with Known issues in the [README](README.md) first.
+Before adding a rule, run the build and e2e with the [Development commands](#development-commands). This confirms the starting behavior. If it fails, compare the first failure with Known issues in the [README](README.md).
 
-### Features to transfer
+### Add a game rule
 
-Feature names match the feature table in the starter's `AGENTS.md`. Paths are relative to this directory. The starter has one Session node and the `connect` scenario only, so the last column lists what grows in the starter with each feature.
+1. Define typed requests and results in `server/shared/contracts.hpp`. Keep the shared integer limit and rejection reasons in this file. Clients send requested actions; `TableState` validates each request and calculates the result.
+2. Add table state and decisions to `TableState` in `server/table/domain.hpp`. Add request handlers and client delivery in `Table` in `server/table/table.hpp`. `TableRelocation` serializes `TableState`. Use a monotonic clock for time-based rules, pass a test clock only to the domain constructor, and store remaining milliseconds in relocation state.
+3. Add only client-to-server request packets to the allowlist in `Session::on_packet` in `server/session/session.hpp`. The Session rejects all other packets with `packet-not-allowed`.
+4. Add client-observable checks to `e2e/scenarios.hpp`. Keep the `table`, `reconnect`, and `update` scenarios. When adding a scenario ID, update the README table and `run.scenarios` in `zlink.structure.json` in the same order.
 
-| Feature | File in this sample | What to transfer | What to grow in the starter alongside |
-| --- | --- | --- | --- |
-| Typed messages | `server/shared/contracts.hpp` | The structs of the features you adopt: `JoinTableRequest`, `TableViewRequest`, `StartHandRequest`, `BetRequest`, `TableView`, `HandDealt`, `HandResult`, `ActionRejected`; `SessionInfoRequest` and `SessionInfo` only if your client needs them | The `Names` and `Rules` constants that the messages refer to |
-| Actor | `Player`, `PlayerFactory` in `server/table/table.hpp` | The minimal player Actor: `Player::on_join_completed` reports a rejected join, and `PlayerFactory` creates it | A new `server/table/` role with its `main.cpp`, `server/config/` files, and an entry in the `CMakeLists.txt` role list; the Actor factory registration in `main.cpp`; the `nodes` declaration in `zlink.structure.json` and the structure check in `e2e/structure.hpp` |
-| Spot | `Table` in `server/table/table.hpp`, `TableState` in `server/table/domain.hpp` | `Table` with the seats, the admission rule, and the betting rules in `TableState`, and the `deliver` forwarders that carry pushes to the bound Session | The Spot factory registration in `main.cpp` with `TableCapacity`; the `spots` declaration in `zlink.structure.json` that the structure check compares with the node configuration |
-| Entry and first admission | `Entry` in `server/table/table.hpp`, `Table::reconnect` in the same file | `Entry::join` (identity check, `get_or_create` of the Table, deferred join) and the identity check and state resend of `Table::reconnect` | The `add_entry_spot` registration and the `entry` declarations; a first-entry scenario (`table`) and a `reconnect` scenario that compares state after reconnection |
-| Session binding | `server/session/session.hpp` | The first-packet check, then find or create the Actor, `bind_or_get`, and relay the original typed packet | The same first-packet type as `Entry::join`; transfer it into the starter's `server/session/session.hpp` |
-| Host relocation | `TableRelocation` in `server/table/table.hpp`, `NodeControl` in `server/shared/hosting.hpp` | The adapter with `capture` and `restore` of `TableState`, `PlayerRelocation` for the stateless Actor, and the `drain` and `shutdown` controls | The `preserve_state_with` registrations in `main.cpp`; the `update` scenario, which checks that connections and state survive a server replacement and that the replacement node accepts new work |
+Rejected actions leave table values, sequences, and cooldowns unchanged. `ActionRejected` has the JSON fields `reason` and `retryAfterMs`; current rejections use `retryAfterMs: 0`. Wait only for a positive delay supplied by the server. Do not use fixed waits or longer deadlines to make a check pass.
 
-`drain` and `shutdown` are transferred together with `NodeControl`.
-
-### Transfer order and rules
-
-Transfer one row at a time and run the build, the structure check, and the related e2e scenario after each. Add a scenario ID to the `Scenario` enum and `scenario_order` in `e2e/structure.hpp`, to the `switch` and the usage message in `e2e/main.cpp`, to `run.scenarios`, and to the selection examples in `run.commands` of `zlink.structure.json` together. Judge results by the replies and events actually received; do not make tests pass with fixed sleeps or longer deadlines.
-
-Start with the message contracts. Define the packet structs in `server/shared/contracts.hpp` first, each with a `packet_name` and its JSON conversion, then move each handler that fails to compile to the new messages. When you change the first-entry packet, update the first-packet check in `Session::on_packet` in `server/session/session.hpp` and `Entry::join` and `Table::reconnect` to receive the same type.
-
-Keep each piece of state in the object that decides it. Seats, chips, cards, and the turn belong in `Table` through `TableState`; `Player` holds no application state. When you change state fields, update that object's state struct with its JSON conversion and the `capture` and `restore` of its relocation adapter together. A missing field disappears after relocation, and the `update` scenario detects the loss.
-
-Put pushes to other players in `Table` through `actor_client_t`, and give each pushed message type a `deliver` forwarder registered in `Table::configure()`. A receiving handler is how a push reaches the bound Session, so a new pushed message needs its own forwarder.
-
-To name roles such as Table differently from this sample, change the type names, `Names`, `server/config/`, `zlink.structure.json`, and the role list in `CMakeLists.txt` at once. Do the renaming in its own change, separate from transferring a feature, so failures are easier to trace.
-
-If `update` fails after a transfer, first check whether the snapshot is missing any state, then use the message flow in [Debugging](#debugging) to find the first failing step.
+Keep pushes to other players in `Table` through `actor_client_t`, and register one `deliver` forwarder for each pushed message type in `Table::configure()`. Keep application state in `TableState`; `Player` holds no game state. If `update` fails, inspect the message flow in [Debugging](#debugging) at the first failed transition.
 
 ## Development considerations
 

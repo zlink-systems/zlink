@@ -7,7 +7,7 @@ import java.util.*;
 public final class Scenarios {
     private Scenarios() {}
 
-    private static final int TABLE_FIRST_BET = 100, CONTINUITY_FIRST_BET = 10, SECOND_BET = 50;
+    private static final long TABLE_FIRST_BET = 100L, CONTINUITY_FIRST_BET = 10L, SECOND_BET = 50L;
 
     private static void check(boolean condition, String message) {
         Structure.require(condition, message);
@@ -15,7 +15,7 @@ public final class Scenarios {
 
     private static void chips(TableView view) {
         check(
-                view.seats().stream().mapToInt(SeatView::chips).sum() + view.pot()
+                view.seats().stream().mapToLong(SeatView::chips).sum() + view.pot()
                         == Rules.INITIAL_CHIPS * Rules.MIN_PLAYERS,
                 "Chip total changed");
     }
@@ -41,7 +41,7 @@ public final class Scenarios {
         return client.next(TableView.class);
     }
 
-    private static void result(HandResult result, List<List<Integer>> cards, List<Integer> bets) {
+    private static void result(HandResult result, List<List<Integer>> cards, List<Long> bets) {
         check(
                 result.hands().stream().map(RevealedHand::cards).toList().equals(cards),
                 "Revealed cards differ from private hands");
@@ -53,14 +53,15 @@ public final class Scenarios {
                                                 .mapToInt(c -> c % Rules.RANKS + Rules.MIN_RANK)
                                                 .sum())
                         .toList();
-        int best = Collections.max(scores), pot = bets.stream().mapToInt(Integer::intValue).sum();
+        int best = Collections.max(scores);
+        long pot = bets.stream().mapToLong(Long::longValue).sum();
         var winners = new ArrayList<Integer>();
         for (int i = 0; i < scores.size(); i++) if (scores.get(i) == best) winners.add(i);
         check(
                 result.winners().equals(winners) && result.pot() == pot,
                 "Settlement winners or pot differ");
         for (int i = 0; i < bets.size(); i++) {
-            int expected = Rules.INITIAL_CHIPS - bets.get(i);
+            long expected = Rules.INITIAL_CHIPS - bets.get(i);
             if (winners.contains(i))
                 expected +=
                         pot / winners.size() + (i == winners.getFirst() ? pot % winners.size() : 0);
@@ -70,11 +71,14 @@ public final class Scenarios {
                     seat.seat() == i && hand.seat() == i && seat.playerId().equals(hand.playerId()),
                     "Settlement identity mismatch");
             check(
-                    seat.chips() == expected && seat.acted() && seat.cardCount() == 0,
+                    seat.chips() == expected && seat.acted(),
                     "Settlement seat differs");
         }
         check(
-                result.seats().stream().mapToInt(SeatView::chips).sum()
+                result.seats().stream().allMatch(seat -> seat.cardCount() == 0),
+                "Settlement retained a private card count");
+        check(
+                result.seats().stream().mapToLong(SeatView::chips).sum()
                         == Rules.INITIAL_CHIPS * Rules.MIN_PLAYERS,
                 "Settlement chip total changed");
     }
@@ -82,8 +86,10 @@ public final class Scenarios {
     private static void privacy(Client player, HandDealt own) {
         synchronized (player.history) {
             for (var message : player.history) {
-                if (message instanceof HandDealt dealt)
-                    check(dealt.equals(own), "Foreign private hand received");
+                if (message instanceof HandDealt dealt) {
+                    if (!dealt.cards().isEmpty())
+                        check(dealt.equals(own), "Foreign private hand received");
+                }
                 else if (message instanceof TableView table)
                     check(
                             table.seats().stream()
@@ -134,6 +140,17 @@ public final class Scenarios {
                     session1.actorId().equals(p1.playerId)
                             && session2.actorId().equals(p2.playerId),
                     "Actor identity differs from player");
+            p2.clear();
+            p2.send(new HandResult(0L, 0L, List.of(), List.of(), List.of()));
+            var packetRejection = p2.next(ActionRejected.class);
+            check(
+                    packetRejection.reason().equals(Rules.PACKET_NOT_ALLOWED)
+                            && packetRejection.retryAfterMs() == 0,
+                    "Internal packet was not rejected");
+            same(second, view(p2));
+            check(
+                    p2.next(HandDealt.class).cards().isEmpty(),
+                    "Idle table returned private cards");
             p1.clear();
             p2.clear();
             p1.send(new StartHandRequest());
@@ -151,12 +168,36 @@ public final class Scenarios {
             var start = p1.next(TableView.class, v -> v.inHand() && v.turnSeat() == 0);
             p2.next(TableView.class, v -> v.inHand() && v.turnSeat() == 0);
             if (id == Scenario.TABLE) {
+                var beforeOutOfTurn = view(p2);
                 p2.send(new BetRequest(cards2.handNumber(), SECOND_BET));
+                var outOfTurn = p2.next(ActionRejected.class);
                 check(
-                        p2.next(ActionRejected.class).reason().equals(Rules.NOT_YOUR_TURN),
-                        "Out-of-turn bet accepted");
+                        outOfTurn.reason().equals(Rules.NOT_YOUR_TURN)
+                                && outOfTurn.retryAfterMs() == 0,
+                        "Wrong out-of-turn rejection");
+                same(beforeOutOfTurn, view(p2));
+
+                var beforeLimit = view(p1);
+                p1.send(new BetRequest(cards1.handNumber(), Rules.MAX_CONTRACT_INTEGER + 1L));
+                var overLimit = p1.next(ActionRejected.class);
+                check(
+                        overLimit.reason().equals(Rules.INTEGER_OUT_OF_RANGE)
+                                && overLimit.retryAfterMs() == 0,
+                        "Over-limit bet was not rejected");
+                same(beforeLimit, view(p1));
+
+                var beforeAmount = view(p1);
+                p1.send(
+                        new BetRequest(
+                                cards1.handNumber(), Rules.INITIAL_CHIPS + 1L));
+                var invalidAmount = p1.next(ActionRejected.class);
+                check(
+                        invalidAmount.reason().equals(Rules.INVALID_AMOUNT)
+                                && invalidAmount.retryAfterMs() == 0,
+                        "Insufficient chips were not rejected");
+                same(beforeAmount, view(p1));
             }
-            int bet1 = id == Scenario.TABLE ? TABLE_FIRST_BET : CONTINUITY_FIRST_BET;
+            long bet1 = id == Scenario.TABLE ? TABLE_FIRST_BET : CONTINUITY_FIRST_BET;
             p1.send(new BetRequest(cards1.handNumber(), bet1));
             var before1 = p1.next(TableView.class, v -> v.turnSeat() == 1 && v.pot() == bet1);
             var before2 = p2.next(TableView.class, v -> v.turnSeat() == 1 && v.pot() == bet1);
@@ -212,6 +253,18 @@ public final class Scenarios {
                     result1.equals(result2) && result1.handNumber() == start.handNumber(),
                     "Settlement differs between clients");
             result(result1, List.of(cards1.cards(), cards2.cards()), List.of(bet1, SECOND_BET));
+            for (var client : List.of(p1, p2)) {
+                var settled = view(client);
+                var emptyHand = client.next(HandDealt.class);
+                check(
+                        !settled.inHand()
+                                && settled.handNumber() == result1.handNumber()
+                                && settled.turnSeat() == Rules.NO_SEAT
+                                && settled.pot() == 0L
+                                && settled.seats().equals(result1.seats())
+                                && emptyHand.cards().isEmpty(),
+                        "Settlement did not clear every private hand");
+            }
             if (id == Scenario.UPDATE) {
                 nodes.replace(before1.nodeId());
                 run(Scenario.TABLE, nodes, before1.nodeId());

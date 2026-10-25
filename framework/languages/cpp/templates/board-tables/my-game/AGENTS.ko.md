@@ -86,42 +86,24 @@ Actor가 소속 Spot을 바꾸는 동작은 membership 변경이다. 대상 Spot
 4. 이후 같은 client의 패킷은 Actor가 속한 Table의 handler가 처리한다. `Table::start`는 핸드를 나눠 각 플레이어에게 `HandDealt`를 push하고, `Table::bet`은 `BetRequest`를 적용해 갱신된 view와 핸드가 끝나면 `HandResult`를 publish한다. `Table::inspect`는 `TableViewRequest`에 필요할 때 답한다.
 5. node를 교체할 때 `NodeControl`의 `drain`이 relocation을 요청한다. Framework는 `TableRelocation`의 `capture`로 테이블 상태를 받아 다른 node에서 `restore`한다. `PlayerRelocation`은 상태를 옮기지 않는다.
 
-## 이 샘플을 보며 개발하기
+## 도메인 확장
 
-이 샘플은 기능들이 함께 동작하는 방식을 보여 주므로, 자기 게임으로 바꾸지 않고 읽고 실행하는 용도로 쓴다. 자기 프로젝트는 C++ 기본 셋업에서 시작한다. [ZLink Start](https://zlink.systems/start)의 Initializer에서 C++를 고르거나 ZLink 저장소의 `framework/languages/cpp/templates/starter/my-game`을 사용한다. 그다음 필요한 기능을 이 샘플에서 하나씩 옮긴다. 구조 선택은 기본 셋업의 `AGENTS.md`가 설명하며, 이 절은 `board-tables`만 다룬다. 이 샘플은 바꾸지 않고 프로젝트 옆에 참고용으로 둔다.
+이 템플릿의 도메인을 확장하여 보드게임 서버를 만든다. 새 규칙은 해당 규칙의 상태와 판정을 소유한 도메인에 추가한다.
 
-### 샘플 먼저 실행하기
+### 템플릿 먼저 실행하기
 
-옮기기 전에 [개발 명령](#개발-명령)으로 빌드와 e2e를 한 번 실행해 받은 샘플이 동작하는지 확인하고 동작을 본다. 이 결과가 이후 비교의 기준이 된다. 실패하면 먼저 [README](README.md)의 Known issues와 대조한다.
+규칙을 추가하기 전에 [개발 명령](#개발-명령)으로 빌드와 e2e를 실행한다. 이 결과로 시작 동작을 확인한다. 실패하면 첫 실패를 [README](README.md)의 Known issues와 대조한다.
 
-### 옮길 기능
+### 게임 규칙 추가
 
-기능 이름은 기본 셋업 `AGENTS.md`의 기능 표와 같다. 경로는 이 디렉터리를 기준으로 한다. 기본 셋업에는 Session node 하나와 `connect` 시나리오만 있으므로, 마지막 열은 기능마다 기본 셋업에서 함께 늘릴 것이다.
+1. 새 요청과 결과 packet은 `server/shared/contracts.hpp`에 정의한다. 공통 정수 상한과 거부 사유도 이 파일에 둔다. client는 요청을 보내고 `TableState`가 입력을 검증해 결과를 계산한다.
+2. 테이블 상태와 판정은 `server/table/domain.hpp`의 `TableState`에 둔다. 요청 handler와 client 전달은 `server/table/table.hpp`의 `Table`에 둔다. `TableRelocation`은 `TableState`를 저장한다. 시간 규칙은 단조 시계로 판정하고, 시험 시계는 domain 생성자로만 전달하며, relocation에는 남은 ms를 저장한다.
+3. `server/session/session.hpp`의 `Session::on_packet` 허용 목록에는 client에서 server로 보내는 요청만 추가한다. 나머지 packet은 `packet-not-allowed`로 거부한다.
+4. client가 관찰할 검사는 `e2e/scenarios.hpp`에 추가한다. `table`·`reconnect`·`update` 시나리오를 유지한다. 시나리오 ID를 추가하면 README 표와 `zlink.structure.json`의 `run.scenarios`를 같은 순서로 맞춘다.
 
-| 기능 | 이 샘플의 파일 | 옮길 것 | 기본 셋업에서 함께 늘릴 것 |
-| --- | --- | --- | --- |
-| Typed 메시지 | `server/shared/contracts.hpp` | 사용할 기능의 struct: `JoinTableRequest`, `TableViewRequest`, `StartHandRequest`, `BetRequest`, `TableView`, `HandDealt`, `HandResult`, `ActionRejected`. `SessionInfoRequest`·`SessionInfo`는 client가 필요로 할 때만 옮긴다 | 메시지가 가리키는 `Names`·`Rules` 상수 |
-| Actor | `server/table/table.hpp`의 `Player`, `PlayerFactory` | 최소 플레이어 Actor. 거부된 참가를 알리는 `Player::on_join_completed`와 이를 만드는 `PlayerFactory` | 새 `server/table/` role과 그 `main.cpp`, `server/config/` 파일, `CMakeLists.txt` role 목록의 항목. `main.cpp`의 Actor factory 등록. `zlink.structure.json`의 `nodes` 선언과 `e2e/structure.hpp`의 구조 검사 |
-| Spot | `server/table/table.hpp`의 `Table`, `server/table/domain.hpp`의 `TableState` | `TableState`의 좌석·참가 수락 규칙·베팅 규칙을 가진 `Table`과, push를 binding된 Session으로 전달하는 `deliver` forwarder | `main.cpp`의 `TableCapacity`를 지정한 Spot factory 등록. 구조 검사가 node 설정과 대조하는 `zlink.structure.json`의 `spots` 선언 |
-| Entry·첫 입장 | `server/table/table.hpp`의 `Entry`와 `Table::reconnect` | `Entry::join`(identity 확인, Table `get_or_create`, 지연 참가)과 `Table::reconnect`의 identity 확인과 상태 재전송 | `add_entry_spot` 등록과 `entry` 선언. 첫 입장 시나리오(`table`)와 재접속 뒤 상태를 비교하는 `reconnect` 시나리오 |
-| Session binding | `server/session/session.hpp` | 첫 패킷 검사, Actor 조회·생성, `bind_or_get` binding과 원래 typed 패킷 relay | `Entry::join`과 같은 첫 패킷 타입. 기본 셋업의 `server/session/session.hpp`에 옮긴다 |
-| Host relocation | `server/table/table.hpp`의 `TableRelocation`, `server/shared/hosting.hpp`의 `NodeControl` | `TableState`의 `capture`·`restore`를 가진 adapter, 상태 없는 Actor를 위한 `PlayerRelocation`, `drain`·`shutdown` 제어 | `main.cpp`의 `preserve_state_with` 등록. 서버 교체 뒤에도 연결·상태가 유지되고 대체 node가 새 작업을 받는지 판정하는 `update` 시나리오 |
+거부된 요청은 테이블 값·순번·cooldown을 바꾸지 않는다. `ActionRejected` JSON 필드는 `reason`과 `retryAfterMs`이며, 현재 거부의 `retryAfterMs`는 0이다. 양수 대기 시간은 server가 준 값만 사용한다. 고정 대기나 기한 확대로 검사를 통과시키지 않는다.
 
-`drain`과 `shutdown`은 `NodeControl`과 함께 옮긴다.
-
-### 옮기는 순서와 규칙
-
-기능은 표의 행 하나씩 옮기고, 하나를 옮길 때마다 빌드, 구조 검사, 관련 e2e 시나리오를 실행한다. 시나리오 ID는 `e2e/structure.hpp`의 `Scenario` enum과 `scenario_order`, `e2e/main.cpp`의 `switch`와 usage 메시지, `zlink.structure.json`의 `run.scenarios`, `run.commands`의 시나리오 선택 예시에 함께 추가한다. 판정은 실제로 받은 응답과 이벤트로 하고, 고정 대기나 기한 확대로 통과시키지 않는다.
-
-메시지 contract부터 옮긴다. `server/shared/contracts.hpp`에 packet struct를 `packet_name`과 JSON 변환을 갖춰 먼저 정의한 뒤, 컴파일 오류가 나는 handler를 하나씩 새 메시지로 옮긴다. 첫 입장 패킷을 바꾸면 `server/session/session.hpp`의 `Session::on_packet`에 있는 첫 패킷 검사와 `Entry::join`, `Table::reconnect`가 같은 타입을 받도록 함께 고친다.
-
-상태는 그 상태를 결정하는 객체에 둔다. 좌석, chip, 카드와 차례는 `TableState`를 통해 `Table`에 두며 `Player`는 application 상태를 갖지 않는다. 상태 필드를 바꿀 때는 같은 객체의 상태 struct와 JSON 변환, relocation adapter의 `capture`·`restore`를 함께 고친다. 빠뜨린 필드는 relocation 뒤 사라지고, `update` 시나리오가 그 손실을 잡는다.
-
-다른 플레이어에게 보내는 push는 `Table`에서 `actor_client_t`로 보내고, push하는 메시지 타입마다 `Table::configure()`에 등록한 `deliver` forwarder를 둔다. 수신 handler를 거쳐야 push가 binding된 Session에 닿으므로, 새 push 메시지에는 전용 forwarder가 필요하다.
-
-Table 같은 역할 이름을 이 샘플과 다르게 정하려면 타입 이름, `Names`, `server/config/`, `zlink.structure.json`, `CMakeLists.txt`의 role 목록을 한 번에 바꾼다. 이름 변경은 기능을 옮기는 변경과 나눠서 진행하면 실패 원인을 찾기 쉽다.
-
-옮긴 뒤 `update`가 실패하면 snapshot에 빠진 상태가 있는지 먼저 확인한다. 그다음 [디버깅](#디버깅)의 message flow로 첫 실패 단계를 찾는다.
+다른 플레이어에게 보내는 push는 `actor_client_t`를 통해 `Table`에서 보내고, packet 종류마다 `Table::configure()`에 `deliver` forwarder를 등록한다. 게임 상태는 `TableState`에 두고 `Player`에 복제하지 않는다. `update`가 실패하면 [디버깅](#디버깅)의 message flow에서 첫 실패 transition을 확인한다.
 
 ## 개발 시 주의점
 

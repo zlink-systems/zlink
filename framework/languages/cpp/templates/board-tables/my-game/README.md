@@ -58,9 +58,11 @@ The scripts and C++ runner validate actual structure files, start an isolated Re
 
 | Scenario | Assertions |
 | --- | --- |
-| `table` | Seats 0 and 1, initial chips, distinct private cards, rejection of an out-of-turn bet, revealed cards, winner calculation, split remainder and chip conservation. |
-| `reconnect` | Immediate connection replacement preserves Actor identity, generation, seat, chips, cards and turn while the other player stays connected. |
-| `update` | Drain the actual Table host, observe relocation and SafeToShutdown, preserve both Session identities and game state, settle, stop and replace the host, then finish a fresh table. |
+| `table` | Seats and chips, private cards, rejection of a server-originated packet, out-of-turn bets, over-limit values (`integer-out-of-range`) and insufficient chips. Each rejection has `retryAfterMs: 0` and leaves table state unchanged. Settlement reports every `cardCount` as zero; a private-hand query returns no cards. |
+| `reconnect` | Immediate connection replacement preserves Actor identity, generation, seat, chips, cards and turn while the other player stays connected. Settlement clears every hand, and a later private-hand query returns no cards. |
+| `update` | Drain the actual Table host, observe relocation and SafeToShutdown, preserve both Session identities and game state, settle on the replacement with empty hands, stop and replace the host, then finish a fresh table. |
+
+`ActionRejected.retryAfterMs` is a signed 32-bit JSON integer serialized with the `retryAfterMs` property name. Chip balances, the pot and hand numbers use signed 64-bit integers.
 
 The fresh-table check requires both new players to observe the replacement node ID before completing a hand. The runner constrains placement through the public Table stable-type capacity.
 
@@ -111,3 +113,5 @@ The e2e runner sets each node's optional `TableCapacity` to the number of select
 Docker Compose v2와 Linux 컨테이너 데몬을 준비한다. 템플릿 디렉터리에서 Linux는 `./run-e2e.sh`, Windows는 `pwsh -NoProfile -File ./run-e2e.ps1`을 실행한다. 기본 실행은 이미지 빌드부터 runner·node 컨테이너 기동과 정리까지 수행한다. Framework 버전은 `bootstrap.cmake` 한 곳에서 정하며, 빌드는 그 버전의 GitHub Release prebuilt를 받아 함께 게시된 SHA-256 체크섬으로 확인한다.
 
 로컬 디버깅은 C++20 컴파일러, CMake, Ninja를 설치한 뒤 `./run-e2e.sh --local` 또는 `pwsh -NoProfile -File ./run-e2e.ps1 -Local`로 실행한다. node 로그와 설정은 `.logs/run-<id>/`, Docker 빌드·정리 로그는 `.logs/docker-<project>/`에 남는다. 공개 패키지에서 확인된 차단 사항은 Known issues를 따른다.
+
+e2e는 기본적으로 `table`·`reconnect`·`update`를 이 순서로 실행하며, scenario 선택은 `--scenario` 또는 `-Scenario`로 한다. `table`은 내부 packet과 차례 밖 행동, 상한 초과 금액, 보유 칩을 넘는 금액의 거부와 거부 뒤 상태 불변을 확인한다. 각 시나리오는 정산 뒤 모든 좌석의 `cardCount`가 0이고 개인 패 조회가 빈 패인지 확인한다. 실행기는 일곱 도메인 경계 검사를 먼저 수행한다. scenario 목록은 `e2e/structure.hpp`, 이 표, `zlink.structure.json`의 `run.scenarios`에서 같은 순서로 맞춘다.

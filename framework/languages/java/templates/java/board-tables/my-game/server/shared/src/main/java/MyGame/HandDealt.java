@@ -2,4 +2,4 @@ package MyGame;
 
 import java.util.List;
 
-public record HandDealt(int handNumber, List<Integer> cards) {}
+public record HandDealt(long handNumber, List<Integer> cards) {}

@@ -87,43 +87,22 @@ Requests in the example game follow this path. Reading the code along this path 
 5. A reconnecting client sends `JoinTableRequest` again on a new Session. The same Actor is bound, `Table.admit` accepts the seated player without a new seat, and `Actions.join` resends the current view and the player's cards.
 6. To replace a node, `drain` in `runNode` requests relocation. Framework takes the game state from `capture` in `TableTransfer` and `PlayerTransfer` and calls `restore` on another node.
 
-## Developing from this sample
+## Extend this template's domain
 
-This sample shows how the features work together, so read and run it rather than turning it into your game. Start your own project from the Kotlin starter: choose Kotlin in the Initializer at [ZLink Start](https://zlink.systems/start), or use `framework/languages/java/templates/kotlin/starter/my-game` in the ZLink repository. Then transfer the features you need from this sample one at a time. The starter's `AGENTS.md` owns the choice between structures; this section covers only `board-tables`. Keep this sample unchanged next to your project as a reference.
+Extend this template's domain to build a board-game server. These files own the current rules and provide the extension points for new rules.
 
-### Run the sample first
+### Run the template first
 
-Before transferring anything, run the build and e2e once with the [Development commands](#development-commands) to confirm the downloaded sample works and to see its behavior. This result is the baseline for comparison. If it fails, compare the failure with the first failure in the logs (see [Debugging](#debugging)) and the [README](README.md) first.
+Before adding a rule, run the commands in [Development commands](#development-commands) to check the starting behavior. Compare the first failure with the README's Known issues.
 
-### Features to transfer
+### Add a game rule
 
-Feature names match the feature table in the starter's `AGENTS.md`. Paths are relative to this directory. The starter has one Session node and the `connect` scenario only, so the last column lists what grows in the starter with each feature.
+1. Add typed request and result classes in `server/shared/src/main/kotlin/MyGame/Contracts.kt`. Keep the shared integer limit and rejection reasons in that file. Clients submit requested actions; `Table` validates amounts and calculates resulting state.
+2. Add domain state and decisions in `server/table/src/main/kotlin/MyGame/table/Table.kt`. `TableState` and `Seat` hold the state, and `Table` owns the decisions. `TableTransfer` captures that state. If a rule depends on time, use a monotonic clock at this domain decision, pass a test clock only through the `Table` constructor, and store remaining milliseconds in relocation state.
+3. Add only client-to-server request types to the allowlist in `server/session/src/main/kotlin/MyGame/session/Program.kt`. Reject other packets as `packet-not-allowed`.
+4. Add client-observable checks in `e2e/src/main/kotlin/MyGame/e2e/Scenarios.kt`. Preserve `table`, `reconnect`, and `update`. When adding a scenario ID, update `Names.SCENARIOS` in `Contracts.kt`, `zlink.structure.json`, and the README table together.
 
-| Feature | File in this sample | What to transfer | What to grow in the starter alongside |
-| --- | --- | --- | --- |
-| Typed messages | `server/shared/src/main/kotlin/MyGame/Contracts.kt` | The classes of the features you adopt: `JoinTableRequest`, `TableViewRequest`, `StartHandRequest`, `BetRequest`, `TableView`, `SeatView`, `HandDealt`, `RevealedHand`, `HandResult`, `ActionRejected`; `SessionInfoRequest` and `SessionInfo` only if your client needs them | The mesh and type names in `Names` and the rejection reasons in `Rules`; the starter already has the node `Roles` and the control strings |
-| Actor | `server/table/src/main/kotlin/MyGame/table/Player.kt` | `Player` with `onJoinCompletedSuspending` (rejection reported as `ActionRejected`) and `PlayerFactory` | A new `server/table/` Gradle module (included in `settings.gradle.kts`) with its `Program.kt` and the `server/config/table-a.json`, `server/config/table-b.json` files, its start-up in `e2e/.../Nodes.kt`, and a `Roles` entry; the `addActorFactory` registration in `Program.kt`; the node declarations in `zlink.structure.json` and the matching `Structure.kt` check (the starter's check accepts only the `session` role) |
-| Spot | `server/table/src/main/kotlin/MyGame/table/Table.kt` | `Table` with `TableState` and `Seat`, the admission in `onActorJoinSuspending`, the hand rules, and the `Actions` handlers | The `addSpotFactory` registration in `Program.kt` (and `tableCapacity` in `NodeConfig` if you limit Tables); the `spots` declarations in `zlink.structure.json` and the `Structure.kt` check that compares them with the registrations (the starter's check requires no Spots) |
-| Entry and first admission | `server/table/src/main/kotlin/MyGame/table/Player.kt` (`Entry`, `Join`) | `Join.join`: the identity check, table creation with `getOrCreate`, and the deferred join | The `addEntrySpot` registration and its `entry` declaration; the `table` scenario for seating and the `reconnect` scenario that compares state after reconnection |
-| Session binding | `server/session/src/main/kotlin/MyGame/session/Program.kt` (`GameSession`) | The first-packet branch: find or create the Actor, `bindOrGet`, and relay the original typed packet | The same first-packet type as `Join.join`; transfer it into the starter's `PlayerSession.kt` |
-| Host relocation | `TableTransfer` in `server/table/src/main/kotlin/MyGame/table/Table.kt`, `PlayerTransfer` in `server/table/src/main/kotlin/MyGame/table/Player.kt`, and `server/table/src/main/kotlin/MyGame/table/Transfer.kt` | `TableState` stored as JSON with `capture` and `restore`, the empty Player adapter, and `ensureActive` | The `preserveStateWith` registrations; the `update` scenario, which checks that connections, seats, cards, and turns survive a server replacement and that the replacement node hosts a new table |
-
-### Transfer order and rules
-
-Transfer one row at a time and run the build, the structure check, and the related e2e scenario after each. Add a scenario ID to `Names.SCENARIOS` in `Contracts.kt`, to the `scenario` function in `e2e/src/main/kotlin/MyGame/e2e/Scenarios.kt`, to `run.scenarios`, and to the selection examples in `run.commands` of `zlink.structure.json` together. Judge results by the replies and events actually received; do not make tests pass with fixed sleeps or longer deadlines.
-
-Start with the message contracts. Define the typed classes in `Contracts.kt` first, then move each handler that fails to compile to the new messages. When you change the first packet (`JoinTableRequest`), update the first-packet branch in `GameSession`, `Join.join`, and `Actions.join` to receive the same type.
-
-Keep each piece of state in the object that decides it. Table state belongs in `Table`; the Player Actor keeps no copy. When you change `TableState` or `Seat` fields, update `TableTransfer` together. `PlayerTransfer.restore` requires an empty state, so a new Player field needs its own snapshot and a matching change there. A missing field disappears after relocation, and the `update` scenario detects the loss.
-
-Send private information only to its owner and keep the shared view free of it, as `HandDealt` and `TableView` do. Each scenario in this template retains one table, and the e2e runner sets `tableCapacity` to the number of selected scenarios; keep that arrangement when adding a scenario so only the replacement node can host the new table after `update`.
-
-Verify on a temporary copy during development that the structure check rejects bad structure input, and do not leave self-test code in the project. The Initializer replaces `my-game` and `MyGame` in the downloaded project, so do not introduce other spellings of the project name.
-
-To name roles differently from this sample, change the type names, `Names`, `server/config/`, and `zlink.structure.json` at once. Do the renaming in its own change, separate from transferring a feature, so failures are easier to trace.
-
-If `update` fails after a transfer, first check whether the snapshot is missing any state, then use the message flow in [Debugging](#debugging) to find the first failing step.
-
+The server validates actions and decides card distribution, turn order, chip balances, and settlement. Rejected actions leave table values, sequences, and cooldowns unchanged. Rejections use `ActionRejected(reason, retryAfterMs)`; current rejections set the delay to zero. A client waits only for a positive delay supplied by the server. Do not use fixed waits or longer deadlines to make a scenario pass.
 ## Development considerations
 
 ### State and message contracts

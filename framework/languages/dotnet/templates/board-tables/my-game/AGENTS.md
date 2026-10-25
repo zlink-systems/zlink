@@ -87,40 +87,24 @@ Requests in the example game follow this path. Reading the code along this path 
 5. When the same player reconnects, `PlayerSession` binds the existing Actor to the new Session, and `ReconnectHandler` checks the identity and resends the current table state and the player's own cards.
 6. To replace a node, `drain` in `NodeControl` requests relocation. Framework takes the table state from `TableRelocation` and restores it on another node.
 
-## Developing from this sample
+## Extend this template's domain
 
-This sample shows how the features work together, so read and run it rather than turning it into your game. Start your own project from the .NET starter: choose .NET in the Initializer at [ZLink Start](https://zlink.systems/start), or use `framework/languages/dotnet/templates/starter/my-game` in the ZLink repository. Then transfer the features you need from this sample one at a time. The starter's `AGENTS.md` owns the choice between structures; this section covers only `board-tables`. Keep this sample unchanged next to your project as a reference.
+Extend this template's domain to build a board-game server. These files own the current decisions and provide the extension points for new rules.
 
-### Run the sample first
+### Run the template first
 
-Before transferring anything, run the build and e2e once with the [Development commands](#development-commands) to confirm the downloaded sample works and to see its behavior. This result is the baseline for comparison. If it fails, compare the failure with Known issues in the [README](README.md) first.
+Before adding a rule, run the build and e2e with the [Development commands](#development-commands). This confirms the starting behavior. If it fails, compare the first failure with Known issues in the [README](README.md).
 
-### Features to transfer
+### Add a game rule
 
-Feature names match the feature table in the starter's `AGENTS.md`. Paths are relative to this directory. The starter has one Session node and the `connect` scenario only, so the last column lists what grows in the starter with each feature.
+1. Add typed request and result records in `server/MyGame.Shared/Contracts.cs`. Put shared integer limits and rejection reason strings there. Clients send requested actions; `TableSpot` validates them and calculates the resulting state.
+2. Add domain state and its decisions in `server/MyGame.Table/TableSpot.cs`. `TableState` and `PlayerSeat` hold the table state, and `TableSpot` is the only decision location for seats, chips, cards, turns, and settlement. `TableRelocation` captures this state. If a new rule depends on time, use a monotonic clock owned by `TableSpot`, pass a test clock only through its constructor, and store remaining milliseconds in relocation state.
+3. Add a packet to the client allowlist in `server/MyGame.Session/PlayerSession.cs` only when clients are allowed to send it. The allowlist contains client-to-server requests; internal and server-originated packets receive `packet-not-allowed`.
+4. Add client-observable checks in `e2e/MyGame.E2E/Scenarios.cs`. Keep `table`, `reconnect`, and `update` behavior, and update the scenario table in the [README](README.md) and `run.scenarios` in `zlink.structure.json` together when adding a scenario ID.
 
-| Feature | File in this sample | What to transfer | What to grow in the starter alongside |
-| --- | --- | --- | --- |
-| Typed messages | `server/MyGame.Shared/Contracts.cs` | The records of the features you adopt: `JoinTableRequest`, `TableViewRequest`, `StartHandRequest`, `BetRequest`, `SeatView`, `TableView`, `HandDealt`, `RevealedHand`, `HandResult`, `ActionRejected`; `SessionInfoRequest` and `SessionInfo` only if your client needs them | The registration names in `GameNames` and the `Rejection` reasons; the starter already has `NodeReady` and `NodeProtocol` |
-| Spot | `server/MyGame.Table/TableSpot.cs` | `TableSpot` with seats, chips, deck, turns, the pot, admission in `OnActorJoinAsync`, and the handler registrations in `Configure()` | A new `server/MyGame.Table/` project, its `server/config/` files, and the `AddSpotFactory<TableSpot>` registration in `Program.cs`; the `spots` and `nodes` declarations in `zlink.structure.json` and the structure check that compares them with the registrations |
-| Actor | `server/MyGame.Table/PlayerActor.cs` | `PlayerActor` with the join-completion rejection reply, and `PlayerFactory` | The `AddActorFactory<PlayerActor, PlayerFactory>` registration in `Program.cs` |
-| Entry and first admission | `server/MyGame.Table/TableEntry.cs`, `ReconnectHandler` in `server/MyGame.Table/Handlers.cs` | `EnterTableHandler`, the table creation and deferred join, and the identity check and state resend of `ReconnectHandler` | The Entry Spot registration and its `entry` declarations; the `table` scenario for first entry and a `reconnect` scenario that compares state after reconnection |
-| Session binding | `server/MyGame.Session/PlayerSession.cs` | The first-packet check, then find or create the Actor, bind, and relay the original typed packet | The same first-packet type as `EnterTableHandler`; transfer it into the starter's `PlayerSession.cs` |
-| Host relocation | `TableRelocation` in `server/MyGame.Table/TableSpot.cs`, `PlayerRelocation` in `server/MyGame.Table/PlayerActor.cs`, `server/MyGame.Shared/NodeControl.cs` | The relocation adapters with `Capture` and `Restore`, and the `drain` and `shutdown` controls | The `PreserveStateWith` relocation registrations; the `update` scenario, which checks that connections and state survive a server replacement and that the replacement node accepts a new table |
+Judge results by replies and events received from the client. Rejected actions leave values, sequences, and cooldowns unchanged. A rejection uses `ActionRejected(Reason, RetryAfterMs)`; wait only for a positive server-provided delay. Do not use fixed sleeps or longer deadlines to make a check pass.
 
-### Transfer order and rules
-
-Transfer one row at a time and run the build, the structure check, and the related e2e scenario after each. Add a scenario ID to the list in `e2e/MyGame.E2E/Scenarios.cs`, to `run.scenarios`, and to the selection examples in `run.commands` of `zlink.structure.json` together. Judge results by the replies and events actually received; do not make tests pass with fixed sleeps or longer deadlines.
-
-Start with the message contracts. Define the typed records in `Contracts.cs` first, then move each handler that fails to compile to the new messages. When you change the first-entry packet, update the first-packet check in `PlayerSession`, `EnterTableHandler`, and `ReconnectHandler` to receive the same type.
-
-Keep each piece of state in the object that decides it. Seats, chips, the deck, cards, turns, and the pot belong in `TableSpot`, and the Actor stays free of game state. `TableRelocation` serializes the whole `TableState`, so adding a field to `TableState` or `PlayerSeat` is enough for relocation; a state kept outside it disappears after relocation, and the `update` scenario detects the loss.
-
-Keep the checks of the `table` scenario when changing the rules: private cards reach only their owner and the public view shows card counts only, the sum of chips is conserved through settlement, and out-of-turn actions are rejected. The `reconnect` and `update` scenarios compare the Actor generation in `SessionInfo` and the connection continuity, so retain those assertions.
-
-To name roles such as Table differently from this sample, change the type names, `GameNames`, `server/config/`, and `zlink.structure.json` at once. Do the renaming in its own change, separate from transferring a feature, so failures are easier to trace.
-
-If `update` fails after a transfer, first check whether the table state is missing anything, then use the message flow in [Debugging](#debugging) to find the first failing step.
+To rename roles such as Table, update the type names, `GameNames`, `server/config/`, and `zlink.structure.json` together. Keep the `update` scenario and use message flow in [Debugging](#debugging) to find the first failed transition.
 
 ## Development considerations
 

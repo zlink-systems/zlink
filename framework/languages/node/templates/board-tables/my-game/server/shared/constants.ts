@@ -7,7 +7,7 @@ export const Names = {
 export const Game = {
   seats: 4,
   minimumPlayers: 2,
-  initialChips: 1000,
+  initialChips: 1000n,
   deckSize: 52,
   ranks: 13,
   lowestRank: 2,
@@ -32,7 +32,9 @@ export const Reasons = {
   players: 'not-enough-players',
   turn: 'not-your-turn',
   amount: 'invalid-amount',
-  seated: 'not-seated'
+  seated: 'not-seated',
+  integerOutOfRange: 'integer-out-of-range',
+  packetNotAllowed: 'packet-not-allowed'
 } as const;
 export const Scenarios = ['table', 'reconnect', 'update'] as const;
 export const PacketNames = {

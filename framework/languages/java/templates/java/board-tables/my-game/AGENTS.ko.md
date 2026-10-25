@@ -4,7 +4,7 @@
 
 이 Java 25 프로젝트는 플레이어가 Table에 앉아 개인 카드를 받고 차례로 베팅하는 보드게임 server 예제다. 연결을 처리하는 Session gateway, Table을 요청에 따라 생성하는 Table host A·B와 위치·이동 상태를 저장하는 Redis를 실행한다. `build.gradle.kts`는 ZLink Framework를 `0.30.2`, binding을 `1.20.0`으로 고정한다.
 
-게임 기능을 추가할 위치는 아래의 프로젝트 구성에, 이 샘플의 기능을 자기 프로젝트로 옮기는 절차는 "이 샘플을 보며 개발하기"에 있다. 실행 환경·배포·공개 package의 알려진 문제는 [README](README.md)가 설명한다. 초기 node 구성과 scenario 목록은 [zlink.structure.json](zlink.structure.json)에 있으며, 실행 중 객체의 위치는 Framework와 Redis가 관리한다.
+게임 기능을 추가할 위치는 아래의 프로젝트 구성과 "도메인 확장"에 있다. 실행 환경·배포·공개 package의 알려진 문제는 [README](README.md)가 설명한다. 초기 node 구성과 scenario 목록은 [zlink.structure.json](zlink.structure.json)에 있으며, 실행 중 객체의 위치는 Framework와 Redis가 관리한다.
 
 > **문서와 package 버전.** [ZLink 문서](https://docs.zlink.systems/ko/), [Java 가이드](https://docs.zlink.systems/ko/java/guide/server/), [API reference](https://docs.zlink.systems/ko/java/reference/)와 [에이전트 색인](https://docs.zlink.systems/llms.txt)이 공개 문서의 진입점이다. 현재 가이드가 더 새 버전을 설명하면 `build.gradle.kts`에 고정된 버전의 API와 대조한다.
 
@@ -86,39 +86,22 @@ Actor가 소속 Spot을 바꾸는 동작은 membership 변경이다. 대상 Spot
 4. `StartHandRequest`와 `BetRequest`는 `Actions`를 거쳐 `Table.start`와 `Table.bet`에 전달된다. `Table`은 플레이어별 개인 `HandDealt`를 플레이어 ID로 보내고 `TableView`를 broadcast하며, `Actions.forward`가 수신 Actor의 binding된 Session으로 전달한다.
 5. node를 교체할 때 `Hosting.run`의 `drain` 제어가 relocation을 요청한다. Framework는 `TableTransfer`·`PlayerTransfer`의 `capture`로 게임 상태를 받아 다른 node에서 `restore`한다.
 
-## 이 샘플을 보며 개발하기
+## 도메인 확장
 
-이 샘플은 기능들이 함께 동작하는 방식을 보여 주므로, 자기 게임으로 바꾸지 않고 읽고 실행하는 용도로 쓴다. 자기 프로젝트는 Java 기본 셋업에서 시작한다. [ZLink Start](https://zlink.systems/start)의 Initializer에서 Java를 고르거나 ZLink 저장소의 `framework/languages/java/templates/java/starter/my-game`을 사용한다. 그다음 필요한 기능을 이 샘플에서 하나씩 옮긴다. 구조 선택은 기본 셋업의 `AGENTS.md`가 설명하며, 이 절은 `board-tables`만 다룬다. 이 샘플은 바꾸지 않고 프로젝트 옆에 참고용으로 둔다.
+이 템플릿의 도메인을 확장하여 보드게임 서버를 만든다. 아래 파일이 현재 규칙의 판정과 상태를 소유하며, 새 규칙도 해당 위치에 추가한다.
 
-### 샘플 먼저 실행하기
+### 템플릿 먼저 실행하기
 
-옮기기 전에 [개발 명령](#개발-명령)으로 빌드와 e2e를 한 번 실행해 받은 샘플이 동작하는지 확인하고 동작을 본다. 이 결과가 이후 비교의 기준이 된다. 실패하면 먼저 [README](README.md)의 Known issues와 대조한다.
+규칙을 추가하기 전에 [개발 명령](#개발-명령)으로 빌드와 e2e를 실행한다. 실패하면 첫 실패를 [README](README.md)의 Known issues와 대조한다.
 
-### 옮길 기능
+### 게임 규칙 추가
 
-기능 이름은 기본 셋업 `AGENTS.md`의 기능 표와 같다. 경로는 이 디렉터리를 기준으로 한다. 기본 셋업에는 Session node 하나와 `connect` 시나리오만 있으므로, 마지막 열은 기능마다 기본 셋업에서 함께 늘릴 것이다.
+1. typed request와 result record는 `server/shared/src/main/java/MyGame/`에 추가한다. 공통 정수 상한과 거부 사유는 `server/shared/src/main/java/MyGame/Rules.java`에 둔다. client는 행동을 요청하고, `Table`이 입력을 검사해 결과 상태를 계산한다.
+2. 도메인 상태와 판정은 `server/table/src/main/java/MyGame/table/Table.java`에 추가한다. 상태는 `TableState.java`에 두고 `TableTransfer`가 저장한다. 시간 규칙은 이 도메인 판정 한 곳에서 단조 시계로 계산한다. 시험용 시계는 `Table` 생성자로만 전달하고 relocation 상태에는 남은 ms를 저장한다.
+3. client가 보낼 수 있는 request만 `server/session/src/main/java/MyGame/session/GameSession.java`의 허용 목록에 추가한다. 허용 목록 밖의 packet은 `packet-not-allowed`로 거부한다.
+4. client가 관찰할 수 있는 검사는 `e2e/src/main/java/MyGame/e2e/Scenarios.java`에 추가한다. `table`·`reconnect`·`update` 동작을 유지한다. 시나리오 ID를 추가할 때는 `Scenario.java`, `zlink.structure.json`, README 표도 함께 맞춘다.
 
-| 기능 | 이 샘플의 파일 | 옮길 것 | 기본 셋업에서 함께 늘릴 것 |
-| --- | --- | --- | --- |
-| Typed 메시지 | `server/shared/src/main/java/MyGame/JoinTableRequest.java` | 사용할 기능의 record: `JoinTableRequest`, `TableViewRequest`, `StartHandRequest`, `BetRequest`, `TableView`, `SeatView`, `HandDealt`, `HandResult`, `RevealedHand`, `ActionRejected`. `SessionInfoRequest`·`SessionInfo`는 client가 필요로 할 때만 옮긴다 | `Names.java`의 등록 이름. `Control.java`와 `Json.java`는 기본 셋업에 이미 있다 |
-| Actor | `server/table/src/main/java/MyGame/table/Player.java`, `server/table/src/main/java/MyGame/table/PlayerFactory.java` | 참가 완료 처리를 가진 `Player`와 그 factory | 새 `server/table/` module(`build.gradle.kts`, `Program.java`)과 `settings.gradle.kts`의 `include("server:table")`, `server/config/` 파일, `Program.java`의 Actor factory 등록. `zlink.structure.json`의 node 선언과 `Structure.java`의 검사. 기본 셋업의 `Nodes.java`는 Session 역할만 시작하므로 새 역할을 위해 `Nodes.java`와 `Roles.java`를 확장한다 |
-| Spot | `server/table/src/main/java/MyGame/table/Table.java`, `server/table/src/main/java/MyGame/table/TableState.java` | 좌석·칩·pot·차례와 hand 규칙을 가진 `Table` | `Program.java`의 Spot factory 등록. `zlink.structure.json`의 `spots`·`nodes` 선언과 이를 등록과 비교하는 `Structure.java` 검사(기본 셋업은 Spot을 선언하지 않는다) |
-| Entry·첫 입장 | `server/table/src/main/java/MyGame/table/Entry.java`, `server/table/src/main/java/MyGame/table/Join.java`, `join` in `server/table/src/main/java/MyGame/table/Actions.java` | 처음 사용하는 Table을 생성하고 참가를 지연 요청하는 `Join.join`과 `Actions.join`의 identity 확인 | Entry Spot 등록과 `entry` 선언. 첫 입장 시나리오와 재접속 뒤 상태를 비교하는 `reconnect` 시나리오 |
-| Session binding | `server/session/src/main/java/MyGame/session/GameSession.java` | 첫 packet 검사, 그다음 Actor 조회·생성, binding과 원래 typed packet relay | `Join.join`과 같은 첫 packet 타입. 기본 셋업의 `PlayerSession.java`에 옮긴다 |
-| Host relocation | `server/table/src/main/java/MyGame/table/TableTransfer.java`, `server/table/src/main/java/MyGame/table/PlayerTransfer.java`, `server/table/src/main/java/MyGame/table/Transfer.java`, `server/shared/src/main/java/MyGame/Hosting.java` | Table 상태와 Player의 `capture`·`restore`를 가진 snapshot adapter | `preserveStateWith(...)` 등록. 서버 교체 뒤에도 연결·상태가 유지되고 대체 node가 새 hand를 맡는지 판정하는 `update` 시나리오 |
-
-### 옮기는 순서와 규칙
-
-기능은 표의 행 하나씩 옮기고, 하나를 옮길 때마다 빌드, 구조 검사, 관련 e2e 시나리오를 실행한다. 시나리오 ID는 `server/shared/src/main/java/MyGame/Scenario.java`의 `Scenario` enum, `e2e/src/main/java/MyGame/e2e/Scenarios.java`의 분기, `zlink.structure.json`의 `run.scenarios`, `run.commands`의 시나리오 선택 예시에 함께 추가한다. 판정은 실제로 받은 응답과 이벤트로 하고, 고정 대기나 기한 확대로 통과시키지 않는다.
-
-메시지 contract부터 옮긴다. `server/shared/src/main/java/MyGame/`에 typed record를 먼저 정의한 뒤, 컴파일 오류가 나는 handler를 하나씩 새 메시지로 옮긴다. 첫 입장 packet을 바꾸면 `GameSession`의 첫 packet 검사와 `Join`가 같은 타입을 받도록 함께 고친다.
-
-상태는 그 상태를 결정하는 객체에 둔다. Table 상태(좌석·칩·pot·차례·카드)는 `Table`에 두고, `Player`는 identity와 Framework context를 통한 연결 접근만 소유한다. 상태 필드를 바꿀 때는 `TableState`와 `TableTransfer`의 `capture`·`restore`를 함께 고친다. 빠뜨린 필드는 relocation 뒤 사라지고, `update` 시나리오가 그 손실을 잡는다.
-
-역할 이름을 이 샘플과 다르게 정하려면 타입 이름, `Names.java`, `server/config/`, module·package 이름과 `settings.gradle.kts`, `zlink.structure.json`을 한 번에 바꾼다. 이름 변경은 기능을 옮기는 변경과 나눠서 진행하면 실패 원인을 찾기 쉽다.
-
-옮긴 뒤 `update`가 실패하면 snapshot에 빠진 상태가 있는지 먼저 확인한다. 그다음 [디버깅](#디버깅)의 message flow로 첫 실패 단계를 찾는다.
-
+서버가 행동을 검사하고 카드 분배, 차례, 칩 잔액과 정산 결과를 결정한다. 거부된 행동은 테이블 값, 순번과 cooldown 상태를 바꾸지 않는다. 거부 응답은 `ActionRejected(reason, retryAfterMs)` 형태이며 JSON 필드는 `reason`과 `retryAfterMs`다. 현재 거부의 대기값은 0이다. 양수 대기 시간이 있으면 client는 서버가 준 값만 기다린다. 고정 대기나 기한 확대로 시나리오를 통과시키지 않는다.
 ## 개발 시 주의점
 
 ### 상태와 메시지 계약

@@ -8,14 +8,29 @@ import type {
   ZLinkSessionDispatchContext,
   ZLinkSessionFactory
 } from '@zlink-systems/framework';
-import { Names, PacketNames } from '../shared/constants';
-import { JoinTableRequest, SessionInfo } from '../shared/messages';
+import { Names, PacketNames, Reasons } from '../shared/constants';
+import { ActionRejected, JoinTableRequest, SessionInfo } from '../shared/messages';
+
+const clientPackets = new Set<string>([
+  PacketNames.joinTableRequest,
+  PacketNames.tableViewRequest,
+  PacketNames.startHandRequest,
+  PacketNames.betRequest,
+  PacketNames.sessionInfoRequest
+]);
+
 export class Session implements ZLinkSession {
   constructor(
     readonly context: ZLinkSessionContext,
     private readonly actors: ZLinkActorManager
   ) {}
   async onDispatch(dispatch: ZLinkSessionDispatchContext, payload: ZLinkMessage): Promise<void> {
+    if (!clientPackets.has(dispatch.packetName)) {
+      await this.context.client
+        .send(new ActionRejected(Reasons.packetNotAllowed, 0))
+        .submit();
+      return;
+    }
     if (dispatch.packetName === PacketNames.joinTableRequest) {
       if (this.context.actors.bound.length) throw new Error('JoinTableRequest must be first');
       const request = payload.decode(JoinTableRequest);

@@ -10,6 +10,14 @@ public sealed class PlayerSession(IZLinkSessionContext context, IZLinkActorManag
 {
     public IZLinkSessionContext Context { get; } = context;
 
+    private static bool IsClientPacket(string packetName) =>
+        packetName
+            is nameof(JoinTableRequest)
+                or nameof(TableViewRequest)
+                or nameof(StartHandRequest)
+                or nameof(BetRequest)
+                or nameof(SessionInfoRequest);
+
     public ValueTask OnConnectedAsync(CancellationToken cancellationToken) =>
         ValueTask.CompletedTask;
 
@@ -28,6 +36,14 @@ public sealed class PlayerSession(IZLinkSessionContext context, IZLinkActorManag
         CancellationToken cancellationToken
     )
     {
+        if (!IsClientPacket(dispatch.PacketName))
+        {
+            await Context
+                .Client.Send(new ActionRejected(Rejection.PacketNotAllowed, 0))
+                .Async();
+            return;
+        }
+
         if (Context.Actors.Bound.Count == 0)
         {
             if (dispatch.PacketName != nameof(JoinTableRequest))

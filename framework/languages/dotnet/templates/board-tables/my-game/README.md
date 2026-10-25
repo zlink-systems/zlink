@@ -82,11 +82,11 @@ The runner checks the structure, then starts Redis, Table A and B, and Session i
 
 | Scenario | Verified behavior |
 | --- | --- |
-| `table` | Seats and initial chips, unique cards with private visibility, rejection of out-of-turn actions, winner, payout, and chip conservation. |
-| `reconnect` | The sessionId in `SessionInfo` changes while the Actor ID and generation stay the same. Seat, chips, cards, and turn persist, and the hand settles after reconnecting. |
-| `update` | Both clients keep their `SessionInfo` across drain, connection and game state persist, the hand settles on a different node, and after the original node is replaced a new table plays one hand. |
+| `table` | Seats and chips, private cards, rejection of server-originated packets, out-of-turn bets, over-limit values, and insufficient chips. Each rejection has `RetryAfterMs: 0` and leaves table state unchanged. Settlement reports every `cardCount` as zero; a private-hand query before the next hand returns no cards. |
+| `reconnect` | The sessionId in `SessionInfo` changes while the Actor ID and generation stay the same. Seat, chips, cards, and turn persist, and the hand settles after reconnecting with empty hands. |
+| `update` | Both clients keep their `SessionInfo` across drain, connection and game state persist, the hand settles on a different node with empty hands, and after the original node is replaced a new table plays one hand. |
 
-Selected scenarios run in the order shown above. Results are printed with `✓`/`✗` and `Scenarios: N/M passed`. Failures and cleanup errors are reported with exit code 1. A rerun that passes without a known cause does not cancel an intermittent failure.
+After the structure check, the runner executes the domain boundary checks and prints `Domain checks: 7/7`. It then starts the nodes and runs selected scenarios in the order shown above. Scenario results are printed with `✓`/`✗` and `Scenarios: N/M passed`. Failures and cleanup errors are reported with exit code 1. A rerun that passes without a known cause does not cancel an intermittent failure.
 
 After a local build, use the following command to check structure without starting nodes:
 
@@ -96,15 +96,17 @@ dotnet e2e/MyGame.E2E/bin/Debug/net8.0/MyGame.E2E.dll --root . --check-structure
 
 The structure check validates the actual files' version, identifiers, configuration paths and IDs, Spot registrations and references, and the scenario list. It accepts additional nodes, Spots, and edges in a valid composition, and reordered arrays. `channels` is an empty array because the server registers no channels.
 
-## Game and extension
+## Game rules and extension
 
 The first client packet is `JoinTableRequest{playerId,tableId}`. The Entry Spot calls `GetOrCreate` for the Table and joins the Actor. When the same player reconnects, the new Session is bound to the existing Actor, and the player receives the current Table state and their own cards. Seats and game state persist when the connection drops.
 
 Send `SessionInfoRequest` after `JoinTableRequest`. The Session node replies with `SessionInfo` containing the current sessionId and the bound Actor's actorId and objectGeneration. The Table state does not store Actor identity.
 
-There are four seats, and each player starts with 1000 chips. With two or more players, each receives two cards from a fresh 52-card deck, and players bet once in turn starting from the lowest seat. The player with the highest sum of the two cards' values takes the pot. Ties split the pot evenly, and the remainder goes to the lowest winning seat. A player who sits down during a hand joins from the next hand.
+There are four seats, and each player starts with 1000 chips. With two or more players, each receives two cards from a fresh 52-card deck shuffled by the operating system cryptographic random source. Players bet once in turn starting from the lowest seat. The player with the highest sum of the two cards' values takes the pot. Ties split the pot evenly, and the remainder goes to the lowest winning seat. A player who sits down during a hand joins from the next hand. Settlement clears every player's hand before sending `HandResult`; a subsequent private-hand query returns an empty card list.
 
-Extend the protocol and constants in `MyGame.Shared/Contracts.cs`, and game state and decisions in `MyGame.Table/TableSpot.cs`. The Player Actor holds no copy of the game state. Add authentication before the Session binds the Actor.
+`server/MyGame.Shared/Contracts.cs` owns typed messages, `GameNames.MaxContractInteger` (`9007199254740991`), and rejection reason strings. Requests and results use that integer limit. `TableSpot` validates requests before changing state, calculates bets and settlement, and rejects a value or result outside the limit with `integer-out-of-range`. `ActionRejected` carries `Reason` and `RetryAfterMs`; `RetryAfterMs` is a 32-bit integer serialized as `retryAfterMs` by the default typed JSON serializer. Chips, pots, and hand numbers remain 64-bit integers. Current rules have no time-based rejection, so the value is zero. Extend `TableSpot` as the only owner of any time-based decision, use a monotonic clock, pass a test clock through its constructor, and store remaining milliseconds in relocation snapshots. A client waits only for a positive delay supplied by the server.
+
+`server/MyGame.Session/PlayerSession.cs` forwards only `JoinTableRequest`, `TableViewRequest`, `StartHandRequest`, `BetRequest`, and `SessionInfoRequest`. It rejects other packets with `packet-not-allowed`. Add only client-to-server requests to this allowlist. Add new client-observable checks in `e2e/MyGame.E2E/Scenarios.cs`, and keep its scenario IDs aligned with the README table and `run.scenarios` in `zlink.structure.json`.
 
 Message Follow is explicitly configured for 30 seconds. The `SAFE_TO_SHUTDOWN` observation budget is that period plus the existing relocation budget. Update waits for replacement `READY`, then asserts that the replacement hosts the new table and completes a hand.
 
@@ -140,8 +142,10 @@ The e2e runner sets each node's optional `TableCapacity` to the number of select
 
 ## 한국어 실행 안내
 
-기본 실행은 Docker에서 node와 e2e runner를 함께 실행하므로 호스트 .NET SDK가 필요하지 않습니다. Docker Compose v2와 Linux container 환경을 준비하십시오. 로컬 process 디버깅은 .NET 8 SDK를 설치한 뒤 `./run-e2e.sh --local` 또는 `pwsh -NoProfile -File ./run-e2e.ps1 -Local`로 실행합니다. 이미지 빌드·정리 로그는 `.logs/docker-<project>/`, node 로그는 `.logs/run-<id>/`에 남습니다. 이 프로젝트는 Session node 하나, Table node A·B, Redis Location Store를 실행합니다. Session이 STREAM 연결을 받아 Player Actor에 bind하고, 좌석·칩·카드·차례·결산은 Table node의 Table Spot이 맡습니다. 게임 규칙은 `MyGame.Table/TableSpot.cs`에서, 공개 API 사용 규칙은 `AGENTS.md`에서 확인하십시오.
+기본 실행은 Docker에서 node와 e2e runner를 함께 실행하므로 호스트 .NET SDK가 필요하지 않습니다. Docker Compose v2와 Linux container 환경을 준비하십시오. 로컬 process 디버깅은 .NET 8 SDK를 설치한 뒤 `./run-e2e.sh --local` 또는 `pwsh -NoProfile -File ./run-e2e.ps1 -Local`로 실행합니다. 이미지 빌드·정리 로그는 `.logs/docker-<project>/`, node 로그는 `.logs/run-<id>/`에 남습니다. 이 프로젝트는 Session node 하나, Table node A·B, Redis Location Store를 실행합니다.
 
-e2e는 `./run-e2e.sh` 또는 `pwsh -NoProfile -File ./run-e2e.ps1`로 실행합니다. 실행기는 구조를 검사한 뒤 Redis와 각 node를 순서대로 기동하고, `table`·`reconnect`·`update` 시나리오를 확인하고, 자신이 만든 process와 container를 정리합니다. 특정 시나리오만 돌리려면 `--scenario`(PowerShell은 `-Scenario`)를 사용합니다.
+e2e는 `./run-e2e.sh` 또는 `pwsh -NoProfile -File ./run-e2e.ps1`로 실행합니다. 실행기는 구조를 검사한 뒤 도메인 경계 검사를 실행하고 `Domain checks: 7/7`을 출력합니다. 이어 Redis와 각 node를 순서대로 기동하고 `table`·`reconnect`·`update` 시나리오를 확인한 뒤 자신이 만든 process와 container를 정리합니다. `table`은 내부 패킷과 잘못된 행동을 거부하고 상태가 바뀌지 않는지, 정산 뒤 모든 좌석의 `cardCount`가 0인지, 다음 판 전 개인 패 조회 결과가 빈 패인지 확인합니다. `reconnect`와 `update`는 이동·재접속 뒤에도 상태가 유지되고 정산 뒤 패가 비는지 확인합니다. 시나리오 ID는 `Scenarios.cs`, 이 표와 `zlink.structure.json`의 `run.scenarios`에서 같은 순서로 관리합니다.
+
+게임 규칙의 판정 위치는 `server/MyGame.Table/TableSpot.cs`, 계약과 정수 상한은 `server/MyGame.Shared/Contracts.cs`, client 패킷 허용 목록은 `server/MyGame.Session/PlayerSession.cs`, 시나리오 검사는 `e2e/MyGame.E2E/Scenarios.cs`입니다. 정수 상한 또는 계산 결과를 넘긴 거부 사유는 `integer-out-of-range`입니다. `ActionRejected.RetryAfterMs`는 32-bit integer이며 기본 typed JSON serializer에서 `retryAfterMs`로 직렬화합니다. 칩·pot·handNumber는 64-bit 정수입니다. 현재 시간 제한 거부가 없어 `RetryAfterMs`는 0입니다. 확장한 시간 규칙은 단조 시계로 판정하고 relocation에는 남은 ms만 저장합니다.
 
 설정과 로그는 `.logs/run-<id>/`에 남습니다. 실패하면 첫 실행의 `<node>.err.log`에서 message flow의 마지막 transition을 먼저 확인하십시오. 공개 Framework 0.30.2 패키지로 검증했습니다.

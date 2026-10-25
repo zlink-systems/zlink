@@ -49,9 +49,9 @@ The runner checks the structure, then starts Redis in a uniquely named Compose p
 
 | Scenario | Observable behavior |
 | --- | --- |
-| `table` | Seat assignment, private cards, rejection of an out-of-turn action, betting, settlement, and chip conservation. |
-| `reconnect` | The `SessionInfo` sessionId changes while actorId and objectGeneration stay the same. Seat, cards, and turn are preserved, and the other client stays connected. |
-| `update` | Both clients keep their `SessionInfo` before and after drain. The hand in progress keeps its state and connections, the source node is stopped and replaced, and a new hand settles. |
+| `table` | Seat assignment, private cards, rejection of server-originated packets, out-of-turn bets, out-of-range values (`integer-out-of-range`), and insufficient chips. Each rejection has `retryAfterMs: 0` and leaves table state unchanged. Settlement reports `cardCount: 0` for every seat; a private-hand query returns an empty list. |
+| `reconnect` | The `SessionInfo` sessionId changes while actorId and objectGeneration stay the same. Seat, cards, and turn persist; settlement clears every hand and a later private-hand query returns an empty list. |
+| `update` | Both clients keep their `SessionInfo` before and after drain. Table state persists through settlement on another node and source replacement; settlement clears every hand, and a later private-hand query returns an empty list. |
 
 `SessionInfo` carries the Session ID and the ID and generation of the bound Actor. `TableView` carries only the table state. The Session node answers `SessionInfoRequest`. A request handler sends its response to the requesting Actor's bound session; other state pushes use the public Actor send API.
 
@@ -81,10 +81,12 @@ The Windows runner starts the JDK 25 that Gradle selected directly. The `lib/*` 
 
 The e2e runner sets each node's optional `tableCapacity` to the number of selected scenarios through the public Table stable-type limit. Each scenario retains one table. After update drains the source, the surviving node is at capacity, so only the replacement can host the new table. Both new players must observe the replacement node ID. Omitted or zero capacity leaves deployment capacity unlimited. Entry declarations describe the application Entry on Table nodes only; there are no fixed User Spots in this template.
 
+Before the scenarios, the runner executes the server table's `--check-domain` mode. It checks seven domain boundaries and reports `Domain checks: 7/7 passed`, then verifies the `ActionRejected` JSON contract. `retryAfterMs` is a signed 32-bit JSON integer with the lower camel case property name; chips, pot, and hand numbers remain 64-bit integers.
+
 ## 한국어 실행 안내
 
-기본 e2e는 Docker에서 실행합니다. 로컬 process 디버깅은 JDK 25를 준비하고 `--local` 또는 `-Local`로 실행합니다. 이 프로젝트는 Session node 하나와 Table node 두 개, Redis를 실행하는 4인 보드 테이블 서버입니다. `run-e2e.sh` 또는 `run-e2e.ps1`을 실행하면 구조를 검사하고 `table`, `reconnect`, `update` 시나리오로 좌석·카드·베팅·재연결·노드 교체의 실제 동작을 확인합니다. 시나리오 실패나 정리 실패가 있으면 종료 코드는 1입니다.
+기본 e2e는 Docker에서 실행합니다. 로컬 process 디버깅은 JDK 25를 준비하고 `--local` 또는 `-Local`로 실행합니다. 이 프로젝트는 Session node 하나와 Table node 두 개, Redis를 실행하는 4인 보드 테이블 서버입니다. runner는 시나리오 전에 Table server의 `--check-domain`을 실행해 `Domain checks: 7/7 passed`를 출력하고 `ActionRejected` JSON 계약을 검사합니다. `retryAfterMs`는 lower camel case JSON 필드인 signed 32-bit 정수이며, 칩·pot·hand 번호는 64-bit 정수입니다. 이어서 구조를 검사하고 `table`, `reconnect`, `update` 시나리오로 좌석·카드·베팅·재연결·노드 교체의 실제 동작을 확인합니다. `table`은 내부 packet과 잘못된 행동을 거부하고, 상한 초과는 `integer-out-of-range`로 응답하며 `retryAfterMs`가 0이고 상태가 유지되는지 확인합니다. 정산 직후 모든 좌석의 `cardCount`가 0이고, 이후 개인 패 조회가 빈 목록을 반환하는지도 확인합니다. `reconnect`와 `update`는 상태 보존 뒤 정산과 빈 패 조회를 확인합니다. 시나리오나 정리 실패 시 종료 코드는 1입니다.
 
 시나리오를 고르려면 `./run-e2e.sh --scenario table,reconnect,update`(Windows는 `-Scenario`)를 사용합니다. 포트는 실행마다 OS가 배정하며, runner는 자신이 만든 process와 Compose project만 정리합니다.
 
-로그, 설정, message flow 기록은 `.logs/run-<id>/`에 남습니다. 실패하면 이 폴더의 첫 오류부터 확인하십시오. 게임 규칙을 추가할 위치와 공개 API 사용 규칙은 `AGENTS.md`를 따릅니다.
+로그, 설정, message flow 기록은 `.logs/run-<id>/`에 남습니다. 실패하면 이 폴더의 첫 오류부터 확인하십시오. 도메인 규칙은 server가 검사하고 계산하며, 현재 거부 응답 `ActionRejected`의 `retryAfterMs`는 0입니다. 게임 규칙을 추가할 위치와 공개 API 사용 규칙은 `AGENTS.md`를 따릅니다.

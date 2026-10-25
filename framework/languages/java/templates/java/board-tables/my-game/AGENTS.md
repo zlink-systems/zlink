@@ -4,7 +4,7 @@
 
 This Java 25 project is a board-table server example in which players sit at a Table, are dealt private cards, and bet in turn. It runs a Session gateway for connections, Table hosts A and B whose Tables are created on demand, and Redis for location and relocation state. `build.gradle.kts` pins the ZLink Framework to `0.30.2` and the binding to `1.20.0`.
 
-The project layout below describes where to add gameplay, and "Developing from this sample" describes how to carry its features into your own project. The [README](README.md) covers prerequisites, deployment, and known issues in the public packages. [zlink.structure.json](zlink.structure.json) describes the initial node composition and scenarios; Framework and Redis manage object placement at runtime.
+The project layout below describes where to add gameplay, and "Extend this template's domain" describes where to add new rules. The [README](README.md) covers prerequisites, deployment, and known issues in the public packages. [zlink.structure.json](zlink.structure.json) describes the initial node composition and scenarios; Framework and Redis manage object placement at runtime.
 
 > **Documentation and package versions.** The [ZLink documentation](https://docs.zlink.systems/), [Java guide](https://docs.zlink.systems/java/guide/server/), [API reference](https://docs.zlink.systems/java/reference/), and [agent index](https://docs.zlink.systems/llms.txt) are the public documentation entry points. When a current guide describes a newer release, check its API against the version pinned in `build.gradle.kts`.
 
@@ -86,39 +86,22 @@ Requests in the example game follow this path. Reading the code along this path 
 4. `StartHandRequest` and `BetRequest` are delivered to `Table.start` and `Table.bet` through `Actions`. `Table` sends each player's private `HandDealt` by player ID and broadcasts `TableView`; `Actions.forward` delivers these messages through the receiving Actor's bound Session.
 5. To replace a node, the `drain` control in `Hosting.run` requests relocation. Framework takes the game state from `capture` in `TableTransfer` and `PlayerTransfer` and calls `restore` on another node.
 
-## Developing from this sample
+## Extend this template's domain
 
-This sample shows how the features work together, so read and run it rather than turning it into your game. Start your own project from the Java starter: choose Java in the Initializer at [ZLink Start](https://zlink.systems/start), or use `framework/languages/java/templates/java/starter/my-game` in the ZLink repository. Then transfer the features you need from this sample one at a time. The starter's `AGENTS.md` owns the choice between structures; this section covers only `board-tables`. Keep this sample unchanged next to your project as a reference.
+Extend this template's domain to build a board-game server. These files own the current rules and provide the extension points for new rules.
 
-### Run the sample first
+### Run the template first
 
-Before transferring anything, run the build and e2e once with the [Development commands](#development-commands) to confirm the downloaded sample works and to see its behavior. This result is the baseline for comparison. If it fails, compare the failure with Known issues in the [README](README.md) first.
+Before adding a rule, run the commands in [Development commands](#development-commands) to check the starting behavior. Compare the first failure with Known issues in the [README](README.md).
 
-### Features to transfer
+### Add a game rule
 
-Feature names match the feature table in the starter's `AGENTS.md`. Paths are relative to this directory. The starter has one Session node and the `connect` scenario only, so the last column lists what grows in the starter with each feature.
+1. Add typed request and result records under `server/shared/src/main/java/MyGame/`. Put the shared integer limit and rejection reasons in `server/shared/src/main/java/MyGame/Rules.java`. Clients submit requested actions; `Table` validates amounts and calculates resulting state.
+2. Add domain state and decisions in `server/table/src/main/java/MyGame/table/Table.java`. Keep state in `TableState.java`; `TableTransfer` captures it. If a rule depends on time, use a monotonic clock at this domain decision, pass a test clock only through the `Table` constructor, and store remaining milliseconds in relocation state.
+3. Add only client-to-server request types to the allowlist in `server/session/src/main/java/MyGame/session/GameSession.java`. Reject other packets as `packet-not-allowed`.
+4. Add client-observable checks in `e2e/src/main/java/MyGame/e2e/Scenarios.java`. Preserve `table`, `reconnect`, and `update`. When adding a scenario ID, update `Scenario.java`, `zlink.structure.json`, and the README table together.
 
-| Feature | File in this sample | What to transfer | What to grow in the starter alongside |
-| --- | --- | --- | --- |
-| Typed messages | `server/shared/src/main/java/MyGame/JoinTableRequest.java` | The records of the features you adopt: `JoinTableRequest`, `TableViewRequest`, `StartHandRequest`, `BetRequest`, `TableView`, `SeatView`, `HandDealt`, `HandResult`, `RevealedHand`, `ActionRejected`; `SessionInfoRequest` and `SessionInfo` only if your client needs them | The registration names in `Names.java`; the starter already has `Control.java` and `Json.java` |
-| Actor | `server/table/src/main/java/MyGame/table/Player.java`, `server/table/src/main/java/MyGame/table/PlayerFactory.java` | `Player` with its join-completion handling, and its factory | A new `server/table/` module (`build.gradle.kts`, `Program.java`) with `include("server:table")` in `settings.gradle.kts`, its `server/config/` files, and the Actor factory registration in `Program.java`; the node declaration in `zlink.structure.json` and the check in `Structure.java`. The starter's `Nodes.java` starts only the Session role, so extend `Nodes.java` and `Roles.java` for the new role |
-| Spot | `server/table/src/main/java/MyGame/table/Table.java`, `server/table/src/main/java/MyGame/table/TableState.java` | `Table` with seats, chips, the pot, the turn, and the hand rules | The Spot factory registration in `Program.java`; the `spots` and `nodes` declarations in `zlink.structure.json`, and a `Structure.java` check that compares them with the registrations (the starter declares no Spots) |
-| Entry and first admission | `server/table/src/main/java/MyGame/table/Entry.java`, `server/table/src/main/java/MyGame/table/Join.java`, `join` in `server/table/src/main/java/MyGame/table/Actions.java` | `Join.join`, which creates the Table on first use and defers the admission, and the identity check of `Actions.join` | The Entry Spot registration and its `entry` declaration; a first-entry scenario and a `reconnect` scenario that compares state after reconnection |
-| Session binding | `server/session/src/main/java/MyGame/session/GameSession.java` | The first-packet check, then find or create the Actor, bind, and relay the original typed packet | The same first-packet type as `Join.join`; transfer it into the starter's `PlayerSession.java` |
-| Host relocation | `server/table/src/main/java/MyGame/table/TableTransfer.java`, `server/table/src/main/java/MyGame/table/PlayerTransfer.java`, `server/table/src/main/java/MyGame/table/Transfer.java`, `server/shared/src/main/java/MyGame/Hosting.java` | The snapshot adapters with `capture` and `restore` for the Table state and the Player | The `preserveStateWith(...)` registrations; the `update` scenario, which checks that connections and state survive a server replacement and that the replacement node hosts a new hand |
-
-### Transfer order and rules
-
-Transfer one row at a time and run the build, the structure check, and the related e2e scenario after each. Add a scenario ID to the `Scenario` enum in `server/shared/src/main/java/MyGame/Scenario.java`, to the dispatch in `e2e/src/main/java/MyGame/e2e/Scenarios.java`, to `run.scenarios`, and to the selection examples in `run.commands` of `zlink.structure.json` together. Judge results by the replies and events actually received; do not make tests pass with fixed sleeps or longer deadlines.
-
-Start with the message contracts. Define the typed records in `server/shared/src/main/java/MyGame/` first, then move each handler that fails to compile to the new messages. When you change the first-entry packet, update the first-packet check in `GameSession` and `Join` to receive the same type.
-
-Keep each piece of state in the object that decides it. Table state (seats, chips, pot, turn, cards) belongs in `Table`; `Player` owns identity and connection access through the Framework context. When you change state fields, update `TableState` and its `capture` and `restore` in `TableTransfer` together. A missing field disappears after relocation, and the `update` scenario detects the loss.
-
-To name roles differently from this sample, change the type names, `Names.java`, `server/config/`, the module and package names with `settings.gradle.kts`, and `zlink.structure.json` at once. Do the renaming in its own change, separate from transferring a feature, so failures are easier to trace.
-
-If `update` fails after a transfer, first check whether the snapshot is missing any state, then use the message flow in [Debugging](#debugging) to find the first failing step.
-
+The server validates actions and decides card distribution, turn order, chip balances, and settlement. Rejected actions leave table values, sequences, and cooldowns unchanged. Rejections use `ActionRejected(reason, retryAfterMs)`; current rejections set the delay to zero. A client waits only for a positive delay supplied by the server. Do not use fixed waits or longer deadlines to make a scenario pass.
 ## Development considerations
 
 ### State and message contracts

@@ -6,8 +6,8 @@ public record TableView(
         String tableId,
         String nodeId,
         int yourSeat,
-        int handNumber,
+        long handNumber,
         boolean inHand,
         int turnSeat,
-        int pot,
+        long pot,
         List<SeatView> seats) {}
