@@ -634,8 +634,7 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
                                                                                     new ZLinkConfigurationException(
                                                                                             "Instance Spot runtime is not configured"))
                                                                     : activateRequest(
-                                                                            replyType,
-                                                                            resolver,
+                                                                            replyType, resolver,
                                                                             address)
                                                             : requestExisting(address, replyType);
                                             return !instanceIntent && address != null
