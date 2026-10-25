@@ -2,7 +2,6 @@ using MyGame.Shared;
 using Zlink.Framework.Contracts.Handlers;
 using Zlink.Framework.Contracts.Messaging;
 using Zlink.Framework.Contracts.Spots;
-using Zlink.Framework.Contracts.Timers;
 
 namespace MyGame.Zone;
 
@@ -20,8 +19,7 @@ public sealed class ReconnectHandler
     {
         if (request.PlayerId != actor.Context.ActorId)
             throw new InvalidDataException("Player identity does not match the bound Actor.");
-        spot.Remember(actor);
-        await actor.SendStateAsync();
+        await spot.ReconnectAsync(actor, cancellationToken);
     }
 }
 
@@ -36,28 +34,8 @@ public sealed class MoveHandler : IZLinkSpotActorSendHandler<ZoneSpot, PlayerAct
         CancellationToken cancellationToken
     )
     {
-        if (request.Sequence != actor.Sequence + 1)
-            throw new InvalidDataException("Move sequence must increase by one.");
-        var zoneId = GameNames.ZoneId(request.X);
-        var position = new EnterZone(request.X, request.Sequence);
-        if (zoneId != spot.Context.SpotId)
-        {
-            actor.Move(position);
-            return;
-        }
-        actor.Apply(position);
-        spot.Remember(actor);
-        await actor.SendStateAsync();
+        await spot.MoveAsync(actor, request, cancellationToken);
     }
-}
-
-public sealed class BorderTick : IZLinkSpotTimerHandler<ZoneSpot>
-{
-    public ValueTask HandleAsync(
-        ZoneSpot spot,
-        ZLinkTimerTick tick,
-        CancellationToken cancellationToken
-    ) => spot.PublishBorderAsync(cancellationToken);
 }
 
 public sealed class BorderHandler : IZLinkSpotSubscriptionHandler<ZoneSpot, BorderPresence>
@@ -70,15 +48,41 @@ public sealed class BorderHandler : IZLinkSpotSubscriptionHandler<ZoneSpot, Bord
     ) => spot.ShowBorderAsync(presence);
 }
 
-[ZLinkSpotActorSendHandler(nameof(BorderVisible))]
-public sealed class BorderDelivery
-    : IZLinkSpotActorSendHandler<ZoneSpot, PlayerActor, BorderVisible>
+[ZLinkSpotActorSendHandler(nameof(PlayerAppeared))]
+public sealed class PlayerAppearedDelivery
+    : IZLinkSpotActorSendHandler<ZoneSpot, PlayerActor, PlayerAppeared>
 {
     public ValueTask HandleAsync(
         ZoneSpot spot,
         PlayerActor actor,
         IZLinkMessageContext context,
-        BorderVisible presence,
+        PlayerAppeared presence,
+        CancellationToken cancellationToken
+    ) => actor.Context.BoundSession.Send(presence).Async();
+}
+
+[ZLinkSpotActorSendHandler(nameof(PlayerMoved))]
+public sealed class PlayerMovedDelivery
+    : IZLinkSpotActorSendHandler<ZoneSpot, PlayerActor, PlayerMoved>
+{
+    public ValueTask HandleAsync(
+        ZoneSpot spot,
+        PlayerActor actor,
+        IZLinkMessageContext context,
+        PlayerMoved presence,
+        CancellationToken cancellationToken
+    ) => actor.Context.BoundSession.Send(presence).Async();
+}
+
+[ZLinkSpotActorSendHandler(nameof(PlayerLeft))]
+public sealed class PlayerLeftDelivery
+    : IZLinkSpotActorSendHandler<ZoneSpot, PlayerActor, PlayerLeft>
+{
+    public ValueTask HandleAsync(
+        ZoneSpot spot,
+        PlayerActor actor,
+        IZLinkMessageContext context,
+        PlayerLeft presence,
         CancellationToken cancellationToken
     ) => actor.Context.BoundSession.Send(presence).Async();
 }

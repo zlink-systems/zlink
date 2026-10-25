@@ -7,13 +7,13 @@ public final class Rules {
     private Rules() {}
 
     public static final int ZONE_WIDTH = 100, ZONE_COUNT = 6, BORDER_RADIUS = 10;
-    public static final long TICK_MILLIS = 100;
+    public static final long MAX_SAFE_INTEGER = 9_007_199_254_740_991L;
+    public static final double MAX_STEP = 10, MAX_SPEED = MAX_STEP * 5;
+    public static final int FULL_BUDGET_AFTER_MS = 200;
     public static final String ZONE_PREFIX = "zone-";
 
-    public static String zoneId(int x) {
-        if (x < 0 || x >= ZONE_WIDTH * ZONE_COUNT)
-            throw new IllegalArgumentException("Position outside world");
-        return ZONE_PREFIX + (x / ZONE_WIDTH + 1);
+    public static String zoneId(double x) {
+        return ZONE_PREFIX + ((int) Math.floor(x / ZONE_WIDTH) + 1);
     }
 
     public static List<String> adjacentZones(String id) {

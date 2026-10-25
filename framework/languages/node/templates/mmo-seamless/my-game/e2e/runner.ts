@@ -6,6 +6,7 @@ import { createInterface } from 'node:readline';
 import { EventEmitter } from 'node:events';
 import { finished } from 'node:stream/promises';
 import { checkStructure } from './structure';
+import { checkDomain } from './domain-checks';
 import {
   Game,
   zoneId,
@@ -121,6 +122,11 @@ async function main(): Promise<void> {
     checkStructure(args[1]);
     return;
   }
+  if (args[0] === '--check-domain') {
+    assert.equal(args.length, 1);
+    checkDomain();
+    return;
+  }
   let selected: readonly string[] = Scenarios;
   if (args.length) {
     assert.equal(args.length, 2);
@@ -132,6 +138,7 @@ async function main(): Promise<void> {
     selected = Scenarios.filter((s) => requested.includes(s));
   }
   checkStructure();
+  checkDomain();
   const runId = randomUUID();
   const logDir = `.logs/run-${runId}`;
   mkdirSync(logDir, { recursive: true });

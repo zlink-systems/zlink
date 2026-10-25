@@ -9,45 +9,43 @@ import systems.zlink.framework.handlers.*
 import systems.zlink.framework.kotlin.*
 import systems.zlink.framework.spots.*
 
-class Player(override val context: ZLinkActorContext, private val config: NodeConfig) :
-    ZLinkSuspendingActor() {
-    var position = EnterZone()
-        private set
-
-    fun apply(position: EnterZone) {
-        this.position = position
-    }
-
-    fun move(position: EnterZone) {
-        context.joinSpot(Rules.zoneId(position.x), position).defer()
-    }
-
-    suspend fun sendState() {
-        context
-            .boundSession()
-            .kotlin()
-            .send(WorldState(Rules.zoneId(position.x), config.id, position.x, position.sequence))
-            .await()
+class Player(override val context: ZLinkActorContext) : ZLinkSuspendingActor() {
+    fun move(zoneId: String, destination: EnterZone) {
+        context.joinSpot(zoneId, destination).defer()
     }
 
     override suspend fun onJoinCompletedSuspending(completion: ZLinkActorJoinCompletion) {
-        check(completion is ZLinkActorJoinCompletion.Accepted) { "Zone join failed: $completion" }
-        sendState()
+        when (completion) {
+            is ZLinkActorJoinCompletion.Accepted ->
+                context
+                    .boundSession()
+                    .kotlin()
+                    .send(completion.reply().decode<WorldState>())
+                    .await()
+            is ZLinkActorJoinCompletion.Rejected ->
+                context
+                    .boundSession()
+                    .kotlin()
+                    .send(completion.reply().decode<ActionRejected>())
+                    .await()
+            is ZLinkActorJoinCompletion.Failed -> error("Zone join failed: ${completion.kind()}")
+        }
     }
 }
 
-class PlayerFactory(private val config: NodeConfig) : ZLinkSuspendingActorFactory() {
-    override suspend fun createActor(context: ZLinkActorContext): ZLinkActor =
-        Player(context, config)
+class PlayerFactory : ZLinkSuspendingActorFactory() {
+    override suspend fun createActor(context: ZLinkActorContext): ZLinkActor = Player(context)
 }
 
 class PlayerTransfer : ZLinkActorRelocationAdapter<Player> {
+    private val empty = byteArrayOf()
+
     override fun capture(
         actor: Player,
         cancellation: ZLinkRelocationCancellation,
     ): CompletionStage<ByteArray> {
         cancellation.ensureActive()
-        return CompletableFuture.completedFuture(Json.mapper.writeValueAsBytes(actor.position))
+        return CompletableFuture.completedFuture(empty)
     }
 
     override fun restore(
@@ -56,7 +54,7 @@ class PlayerTransfer : ZLinkActorRelocationAdapter<Player> {
         cancellation: ZLinkRelocationCancellation,
     ): CompletionStage<Void> {
         cancellation.ensureActive()
-        actor.apply(Json.mapper.readValue(state, EnterZone::class.java))
+        require(state.isEmpty()) { "Player Actor has no application relocation state" }
         return CompletableFuture.completedFuture(null)
     }
 }
@@ -77,6 +75,15 @@ class EnterWorld {
         request: JoinWorldRequest,
     ) {
         require(actor.context.actorId() == request.playerId)
-        actor.move(EnterZone(request.x, 0))
+        val location = ZonePositionDomain.resolveLocation(request.x)
+        val rejection = location.rejection
+        if (rejection != null) {
+            actor.context.boundSession().kotlin().send(rejection).await()
+            return
+        }
+        actor.move(
+            requireNotNull(location.zoneId),
+            EnterZone(Position(request.x), 0, 0),
+        )
     }
 }

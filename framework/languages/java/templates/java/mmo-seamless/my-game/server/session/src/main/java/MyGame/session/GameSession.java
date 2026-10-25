@@ -7,8 +7,14 @@ import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.streams.*;
 
 import java.util.concurrent.*;
+import java.util.Set;
 
 public final class GameSession implements ZLinkSession {
+    private static final Set<String> CLIENT_PACKETS = Set.of(
+            JoinWorldRequest.class.getSimpleName(),
+            MoveRequest.class.getSimpleName(),
+            OpenDungeonRequest.class.getSimpleName(),
+            SessionInfoRequest.class.getSimpleName());
     private final ZLinkSessionContext context;
     private final ZLinkActorManager actors;
 
@@ -35,8 +41,12 @@ public final class GameSession implements ZLinkSession {
 
     public CompletionStage<Void> onDispatch(
             ZLinkSessionDispatchContext dispatch, ZLinkMessage payload) {
+        if (!CLIENT_PACKETS.contains(dispatch.packetName()))
+            return context.client().send(new ActionRejected("packet-not-allowed", 0)).submit();
         if (dispatch.packetName().equals(SessionInfoRequest.class.getSimpleName())) {
             var actor = bound();
+            if (actor.ref().objectGeneration() > Rules.MAX_SAFE_INTEGER)
+                return context.client().send(new ActionRejected("integer-out-of-range", 0)).submit();
             return context.client()
                     .reply(
                             new SessionInfo(
@@ -46,6 +56,7 @@ public final class GameSession implements ZLinkSession {
                     .submit();
         }
         if (dispatch.packetName().equals(JoinWorldRequest.class.getSimpleName())) {
+            if (!context.actors().bound().isEmpty()) return bound().relay(dispatch, payload);
             var request = payload.decode(JoinWorldRequest.class);
             if (request.playerId() == null || request.playerId().isBlank())
                 throw new IllegalArgumentException("Player ID is required");

@@ -14,14 +14,18 @@ export class JoinWorldRequest {
 }
 export class MoveRequest {
   constructor(
-    readonly x: number,
-    readonly sequence: number
+    readonly delta: number,
+    readonly sequence: bigint
   ) {}
+}
+export class Position {
+  constructor(readonly x: number) {}
 }
 export class EnterZone {
   constructor(
-    readonly x: number,
-    readonly sequence: number
+    readonly position: Position,
+    readonly sequence: bigint,
+    readonly remainingMs: number
   ) {}
 }
 export class WorldState {
@@ -29,24 +33,43 @@ export class WorldState {
     readonly zoneId: string,
     readonly nodeId: string,
     readonly x: number,
-    readonly sequence: number
+    readonly sequence: bigint
+  ) {}
+}
+export class ActionRejected {
+  constructor(
+    readonly reason: string,
+    readonly retryAfterMs: number
+  ) {}
+}
+export type PlayerLeftReason = 'left-zone' | 'disconnected';
+export class PlayerAppeared {
+  constructor(
+    readonly playerId: string,
+    readonly position: Position
+  ) {}
+}
+export class PlayerMoved {
+  constructor(
+    readonly playerId: string,
+    readonly position: Position,
+    readonly sequence: bigint
+  ) {}
+}
+export class PlayerLeft {
+  constructor(
+    readonly playerId: string,
+    readonly reason: PlayerLeftReason
   ) {}
 }
 export class BorderPresence {
   constructor(
     readonly sourceZoneId: string,
-    readonly actorId: string,
-    readonly x: number,
-    readonly sequence: number
-  ) {}
-}
-export class BorderVisible {
-  constructor(
-    readonly observerZoneId: string = '',
-    readonly sourceZoneId: string = '',
-    readonly actorId: string = '',
-    readonly x: number = 0,
-    readonly sequence: number = 0
+    readonly playerId: string,
+    readonly position: Position,
+    readonly sequence: bigint,
+    readonly kind: 'appeared' | 'moved' | 'left',
+    readonly reason: PlayerLeftReason | null
   ) {}
 }
 export class OpenDungeonRequest {

@@ -42,7 +42,10 @@ public final class Client implements AutoCloseable {
                                 d.reconnectMaxDelay(),
                                 d.reconnectBackoffFactor()));
         register(WorldState.class);
-        register(BorderVisible.class);
+        register(ActionRejected.class);
+        register(PlayerAppeared.class);
+        register(PlayerMoved.class);
+        register(PlayerLeft.class);
         register(DungeonOpened.class);
         registrations.add(
                 connector.onDisconnected(
@@ -74,14 +77,78 @@ public final class Client implements AutoCloseable {
         connector.connect().submit().toCompletableFuture().join();
     }
 
-    WorldState join(int x) throws Exception {
+    WorldState join(double x) throws Exception {
         send(new JoinWorldRequest(playerId, x));
         return next(WorldState.class);
     }
 
-    WorldState move(int x, int sequence) throws Exception {
-        send(new MoveRequest(x, sequence));
-        return next(WorldState.class, v -> v.sequence() == sequence);
+    WorldState move(double delta, long sequence) throws Exception {
+        while (true) {
+            var result = moveResult(delta, sequence);
+            if (result instanceof WorldState state) return state;
+            var rejection = (ActionRejected) result;
+            if (!rejection.reason().equals("move-budget") || rejection.retryAfterMs() <= 0)
+                throw new IllegalStateException("Move was rejected: " + rejection.reason());
+            Thread.sleep(rejection.retryAfterMs());
+        }
+    }
+
+    ActionRejected moveRejected(double delta, long sequence) throws Exception {
+        var result = moveResult(delta, sequence);
+        if (result instanceof ActionRejected rejection) return rejection;
+        throw new IllegalStateException("Move unexpectedly succeeded: " + result);
+    }
+
+    record ImmediateMoveResponses(WorldState accepted, ActionRejected rejected) {}
+
+    ImmediateMoveResponses moveWithImmediateBudgetRejection(
+            double acceptedDelta,
+            long acceptedSequence,
+            double rejectedDelta,
+            long rejectedSequence)
+            throws Exception {
+        var accepted = new CompletableFuture<WorldState>();
+        var rejected = new CompletableFuture<ActionRejected>();
+        try (var acceptedRegistration =
+                        connector.on(
+                                WorldState.class,
+                                message -> {
+                                    if (message.payload().sequence() == acceptedSequence)
+                                        accepted.complete(message.payload());
+                                    return CompletableFuture.completedFuture(null);
+                                });
+                var rejectedRegistration =
+                        connector.on(
+                                ActionRejected.class,
+                                message -> {
+                                    if (message.payload().reason().equals("move-budget"))
+                                        rejected.complete(message.payload());
+                                    return CompletableFuture.completedFuture(null);
+                                })) {
+            send(new MoveRequest(acceptedDelta, acceptedSequence));
+            send(new MoveRequest(rejectedDelta, rejectedSequence));
+            accepted.get(MESSAGE_SECONDS, TimeUnit.SECONDS);
+            rejected.get(MESSAGE_SECONDS, TimeUnit.SECONDS);
+            return new ImmediateMoveResponses(
+                    next(WorldState.class, state -> state.sequence() == acceptedSequence),
+                    next(ActionRejected.class, rejection -> rejection.reason().equals("move-budget")));
+        }
+    }
+
+    private Object moveResult(double delta, long sequence) throws Exception {
+        send(new MoveRequest(delta, sequence));
+        return next(Object.class, value -> value instanceof ActionRejected
+                || value instanceof WorldState state && state.sequence() == sequence);
+    }
+
+    WorldState state() throws Exception {
+        send(new JoinWorldRequest(playerId, 0));
+        return next(WorldState.class);
+    }
+
+    ActionRejected packetRejected(Object packet) throws Exception {
+        send(packet);
+        return next(ActionRejected.class, value -> value.reason().equals("packet-not-allowed"));
     }
 
     DungeonOpened dungeon(String id) throws Exception {

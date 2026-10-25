@@ -62,13 +62,15 @@ On Unix sockets, Bash runs the runner with the caller's UID/GID and the socket's
 The default runs all four scenarios. To select scenarios, use:
 
 ```sh
-./run-e2e.sh --scenario cross,border,reconnect
+./run-e2e.sh --scenario cross,border,reconnect,update
 ./run-e2e.sh --check-structure
+./run-e2e.sh --check-domain
 ```
 
 ```powershell
-pwsh -NoProfile -File ./run-e2e.ps1 -Scenario cross,border,reconnect
+pwsh -NoProfile -File ./run-e2e.ps1 -Scenario cross,border,reconnect,update
 pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
+pwsh -NoProfile -File ./run-e2e.ps1 -CheckDomain
 ```
 
 Selection retains the canonical scenario order. Unknown or duplicate names fail before node startup. Exit status includes cleanup failures even when all selected scenarios pass.
@@ -87,14 +89,14 @@ pwsh -NoProfile -File ./run-e2e.ps1 -Local -NoBuild
 
 | Scenario | Observable behavior |
 | --- | --- |
-| cross | A player moves from Zone 3 on A to Zone 4 on B. Actor ID, generation, and STREAM Session remain unchanged. A subsequent movement succeeds. |
-| border | A player near the Zone 3/4 border becomes visible to a player in the neighboring Zone through real pub/sub delivery. |
-| reconnect | The client disconnects and returns to the same Actor generation and authoritative coordinate through a new Session. |
-| update | A drains while a player continues sending movements. Spots and Actors relocate to B, the Session remains connected, and acknowledged movement continues after A is replaced. |
+| cross | Server-checked Delta movement rejects an oversized step, an exhausted movement budget, and an outside-world result without changing state. After the server-provided retry delay, the player crosses from Zone 3 on A to Zone 4 on B; Actor identity and STREAM Session remain unchanged. |
+| border | Same-Zone and adjacent-Zone players observe appearance and movement. Zone departure and connection loss produce `left-zone` and `disconnected` events. |
+| reconnect | The client reconnects to the same Actor identity and authoritative coordinate and sequence through a new Session. |
+| update | A drains while a player continues sending movements. Zone snapshots preserve positions, sequences, and remaining movement-budget milliseconds. The Session remains connected and acknowledged movement continues after A is replaced. |
 
 The client also requests a Dungeon User Spot from the Instance node through `GetOrCreate`. Scenario results use `✓`/`✗` with a total and a nonzero exit code on failure. A failed run retains diagnostics; inspect that run before repeating it.
 
-Pass `--check-structure` to `run-e2e.sh` or `-CheckStructure` to `run-e2e.ps1` to check composition without starting nodes. After a local build, structure validation can also run without Docker:
+Pass `--check-structure` or `--check-domain` to `run-e2e.sh`, or `-CheckStructure` or `-CheckDomain` to `run-e2e.ps1`, to check composition or domain boundaries without starting nodes. The domain check also runs before the default scenario nodes start. After a local build, structure validation can also run without Docker:
 
 ```sh
 dotnet e2e/MyGame.E2E/bin/Debug/net8.0/MyGame.E2E.dll --root . --check-structure
@@ -134,6 +136,6 @@ Fixed Zones are bootstrapped serially: Zone A fills its three-Spot capacity befo
 
 ## 한국어 실행 안내
 
-Docker와 Compose v2를 설치한 뒤 Bash에서 `./run-e2e.sh`, PowerShell 7에서 `pwsh -NoProfile -File ./run-e2e.ps1`을 실행한다. 기본 실행은 빌드부터 node와 e2e client 실행까지 컨테이너에서 처리하므로 호스트 .NET SDK가 필요 없다. 로그는 `.logs/`에 남으며 자신이 만든 컨테이너·network·이미지 태그를 자동으로 제거한다.
+Docker와 Compose v2를 설치한 뒤 Bash에서 `./run-e2e.sh`, PowerShell 7에서 `pwsh -NoProfile -File ./run-e2e.ps1`을 실행한다. 기본 실행은 빌드부터 domain 검사, node와 e2e client 실행까지 컨테이너에서 처리하므로 호스트 .NET SDK가 필요 없다. `./run-e2e.sh --check-domain` 또는 `pwsh -NoProfile -File ./run-e2e.ps1 -CheckDomain`은 node를 시작하지 않고 도메인 경계 검사를 실행한다. 로그는 `.logs/`에 남으며 자신이 만든 컨테이너·network·이미지 태그를 자동으로 제거한다.
 
 로컬 디버깅은 .NET 8 SDK를 설치한 뒤 `--local` 또는 `-Local`로 실행한다. 공개 Framework 0.30.2 패키지로 검증했다. 게임 확장 위치와 공개 API 규칙은 `AGENTS.md`를 따른다.

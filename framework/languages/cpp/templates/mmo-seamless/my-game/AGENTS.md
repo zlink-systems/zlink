@@ -38,7 +38,7 @@ For host process debugging, install a C++20 compiler (GCC 13 or later, or Visual
 
 ### Zones and players
 
-An Actor is a game state object addressed by ID; `Player` in `server/zone/player.hpp` hosts the player's `PlayerState`, whose coordinate `x`, `sequence`, and movement rules are defined in `server/zone/domain.hpp`. A Spot is a state object that accepts Actors and executes shared game rules; `Zone` in `server/zone/zone.hpp` manages Zone visibility and pending arrivals in `ZoneState`. Visibility values are copies of Actor movement state used for observation, so apply player state changes to the Actor.
+An Actor is a game object addressed by ID. `Player` in `server/zone/player.hpp` connects the Actor to Zone membership and does not duplicate player positions. `Zone` in `server/zone/zone.hpp` owns `ZonePositionDomain` from `server/zone/domain.hpp`; that domain stores positions, sequences, movement budgets, and connected-player visibility, and makes movement decisions.
 
 `server/zone/main.cpp` registers `WorldEntry`, the `Player` factory, and the `Zone` factory with `ZoneCapacity` and the SpotWide execution mode. `WorldEntry` in `server/zone/player.hpp` handles player Actor entry into the world. Add handlers that combine player rules with shared Zone rules in `Zone::configure()` with `add_actor_send`. When changing node composition, update registrations, `server/config/`, and the descriptor together so the structure check validates the same composition.
 
@@ -48,11 +48,11 @@ An Actor is a game state object addressed by ID; `Player` in `server/zone/player
 
 ### Shared contracts and hosting
 
-`server/shared/contracts.hpp` defines the `Names`, `Limits`, and `Control` constants and the messages shared by processes, while `server/shared/config.hpp` defines `NodeConfig`, the process settings loaded from `server/config/`. `server/shared/hosting.hpp` configures hosting and diagnostics in `configure_host`, and `NodeControl` in the same file handles runtime control commands. Add contracts used by several processes to `contracts.hpp`, and keep player state in `Player` so separate processes do not independently modify the same fact.
+`server/shared/contracts.hpp` defines the `Names`, `Limits`, and `Control` constants and the messages shared by processes, while `server/shared/config.hpp` defines `NodeConfig`, the process settings loaded from `server/config/`. `server/shared/hosting.hpp` configures hosting and diagnostics in `configure_host`, and `NodeControl` in the same file handles runtime control commands. Add shared typed contracts to `contracts.hpp`. Keep positions and movement decisions in `ZonePositionDomain` so Actors and Zones do not maintain duplicate copies.
 
 ### Build and e2e runner
 
-`CMakeLists.txt` builds one executable per role (`my-game-session`, `my-game-zone`, `my-game-instance`) from `server/<role>/main.cpp` and the `my-game-e2e` runner; add a node role to its `foreach(role ...)` list. `e2e/client.hpp` connects through the public stream connector, and `e2e/scenarios.hpp` checks results observable by the client. `e2e/world.hpp` starts the nodes and infrastructure through `e2e/process.hpp`, `e2e/main.cpp` selects and runs scenarios, and `e2e/structure.hpp` validates `zlink.structure.json` against `server/config/` and the names in `contracts.hpp`. Verify new gameplay through received client results; the project includes no separate unit-test target or formatter configuration.
+`CMakeLists.txt` builds one executable per role (`my-game-session`, `my-game-zone`, `my-game-instance`) from `server/<role>/main.cpp` and the `my-game-e2e` runner; add a node role to its `foreach(role ...)` list. `e2e/client.hpp` connects through the public stream connector, and `e2e/scenarios.hpp` checks results observable by the client. `e2e/domain_checks.hpp` contains domain boundary checks that run before scenario nodes and with `--check-domain`. `e2e/world.hpp` starts the nodes and infrastructure through `e2e/process.hpp`, `e2e/main.cpp` selects and runs scenarios, and `e2e/structure.hpp` validates `zlink.structure.json` against `server/config/` and the names in `contracts.hpp`.
 
 ## ZLink concepts in this project
 
@@ -62,7 +62,7 @@ A RouteMesh connects nodes that exchange messages between processes; this projec
 
 ### Spots and Actors
 
-`WorldEntry` handles Actor entry, `Zone` represents a geographical Zone, and `Dungeon` represents a dynamically created Dungeon. The [Spot guide](https://docs.zlink.systems/cpp/guide/server/21-spot/) describes registration and calls for these objects. `Player` retains movement state when its host Spot changes; the [Actor guide](https://docs.zlink.systems/cpp/guide/server/22-actor/) describes Actor creation and calls.
+`WorldEntry` handles Actor entry, `Zone` represents a geographical Zone, and `Dungeon` represents a dynamically created Dungeon. The [Spot guide](https://docs.zlink.systems/cpp/guide/server/21-spot/) describes registration and calls for these objects. `ZonePositionDomain` owns positions when an Actor changes Zone or its host Spot relocates; the [Actor guide](https://docs.zlink.systems/cpp/guide/server/22-actor/) describes Actor creation and calls.
 
 ### STREAM and Sessions
 
@@ -80,59 +80,43 @@ A membership change moves an Actor from one Spot to another. Admission is the ta
 
 Relocation changes an object's execution host; drain moves a host's workload elsewhere so the host can shut down. Application adapters capture and restore game state, while Framework transfers workload and routes. `NodeControl` requests public host relocation and observes safe shutdown; the [Relocation guide](https://docs.zlink.systems/cpp/guide/server/37-relocation/) explains the procedure.
 
-### Border notifications and timers
+### Zone observations and border publications
 
-A timer runs a handler periodically; `BorderTick` is registered in `Zone::on_initialize()` with `add_timer` and publishes information about players near a border through the Spot publisher client. In this pub/sub exchange, `Zone::border` receives the subscribed information (registered in `Zone::configure()`), and `Zone::deliver` forwards `BorderVisible` through the receiving Actor's bound Session. [Timers and workers](https://docs.zlink.systems/cpp/guide/server/36-timer-worker/) explains registration and execution of periodic work.
+`ZonePositionDomain` owns the current player list and positions. `Zone` sends `PlayerAppeared`, `PlayerMoved`, and `PlayerLeft` to connected players in the same Zone and publishes border changes through the existing `border` channel for adjacent-Zone observers. `Zone::border` forwards the typed event through the receiving Actor's bound Session.
 
 ## Request flow
 
-Requests in the example game follow this path. Reading the code along this path before adding or transferring a feature locates the places to change.
+Requests follow this path. Read the code along it before extending the domain to locate the state owner and packet boundary.
 
-1. The client connects to the Session node over STREAM and sends the first packet, `JoinWorldRequest`. `Session::on_packet` checks the first packet name, calls `get_or_create` for the Player Actor by `playerId`, binds it with `bind_or_get`, and relays the original packet.
-2. A new Actor starts in the Entry Spot `WorldEntry`. `WorldEntry::enter` checks the identity and calls `Player::move`, which requests `join_spot(...).defer()` for the Zone that covers the coordinate.
-3. `Zone::on_actor_join` accepts the arrival and `Zone::on_actor_joined` applies it to the Actor. When the join completes, `Player::on_join_completed` sends `WorldState` through the bound Session. Later packets from the same client are handled by the handlers of the Zone that holds the Actor (such as `Zone::move`), which send results through the same Session.
-4. When movement reaches a coordinate in another Zone, `Zone::move` calls `Player::move` again. The client connection does not change, even when that Zone is on another node.
-5. Every `Names::tick_period`, `BorderTick` publishes the players near a border on the `border` channel. The adjacent Zone's `Zone::border` sends `BorderVisible` to the nearby players through the Actor client, and `Zone::deliver` forwards it to the bound Session.
-6. To replace a node, `drain` in `NodeControl` requests relocation. Framework takes the game state from `capture` in `PlayerRelocation` and `ZoneRelocation` and calls `restore` on another node.
+1. The client connects to the Session node over STREAM. `Session::on_packet` relays only allow-listed client packets, handles `SessionInfoRequest`, and binds the Player Actor when it receives `JoinWorldRequest`.
+2. A new Actor starts in the Entry Spot `WorldEntry`. `WorldEntry::enter` checks identity and resolves the initial location through `ZonePositionDomain` before requesting Zone membership.
+3. The target `Zone::on_actor_join` validates and queues admission in `ZonePositionDomain`, then returns a typed `WorldState` reply. After Join completion, `Player::on_join_completed` sends that reply through the bound Session and the Zone publishes `PlayerAppeared` to observers.
+4. `Zone::move` passes `Delta` and `Sequence` to `ZonePositionDomain`. The domain checks the step, world boundary, sequence, and movement budget. A Zone change carries the calculated position and remaining budget milliseconds through Actor membership.
+5. Same-Zone observers receive typed events through Actor messaging; adjacent Zones receive border changes through `border`. A Zone leave publishes `left-zone`, and a connection loss publishes `disconnected`.
+6. To replace a node, `drain` in `NodeControl` requests relocation. `ZoneRelocation` snapshots positions, sequences, visibility, and remaining budget milliseconds without process timestamps; `SessionInfo` carries Actor ID and generation separately.
 
-## Developing from this sample
+## Extend this template's domain
 
-This sample shows how the features work together, so read and run it rather than turning it into your game. Start your own project from the C++ starter: choose C++ in the Initializer at [ZLink Start](https://zlink.systems/start), or use `framework/languages/cpp/templates/starter/my-game` in the ZLink repository. Then transfer the features you need from this sample one at a time. The starter's `AGENTS.md` owns the choice between structures; this section covers only `mmo-seamless`. Keep this sample unchanged next to your project as a reference.
+Extend this template's domain to build a seamless MMO server. Add game rules in the module that owns their state and decisions.
 
-### Run the sample first
+### Extension points
 
-Before transferring anything, run the build and e2e once with the [Development commands](#development-commands) to confirm the downloaded sample works and to see its behavior. This result is the baseline for comparison. If it fails, compare the failure with Known issues in the [README](README.md) first.
+- Domain state and decisions: server/zone/domain.hpp. Zone owns ZonePositionDomain, which validates movement and stores positions, sequences, movement budgets, and visibility.
+- Typed contracts: server/shared/contracts.hpp. Add client requests, replies, and events here.
+- Session allow-list: server/session/session.hpp. Add only packets that clients may send. Keep internal messages server-to-server.
+- Domain boundary checks: e2e/domain_checks.hpp. Add checks for accepted limits, rejected inputs, unchanged state, snapshots, and JSON representation.
+- Scenarios: e2e/scenarios.hpp. Observe replies and push events; update e2e/structure.hpp and zlink.structure.json scenario lists and selection commands.
 
-### Features to transfer
+### Extension procedure
 
-Feature names match the feature table in the starter's `AGENTS.md`. Paths are relative to this directory. The starter has one Session node and the `connect` scenario only, so the last column lists what grows in the starter with each feature.
+1. Define typed request, reply, event, and rejection contracts in server/shared/contracts.hpp.
+2. Keep each state and decision in ZonePositionDomain. Add matching boundary checks to e2e/domain_checks.hpp.
+3. Add client packets to the Session allow-list only when the client is permitted to send them.
+4. Add an end-to-end scenario that observes accepted results, rejections, and state after rejection. Observe same-Zone visibility through pushes.
+5. Update ZonePositionDomain snapshots with remaining budget milliseconds when state changes. Do not store process timestamps.
+6. Run ./run-e2e.sh --check-domain, ./run-e2e.sh --build-only, and ./run-e2e.sh.
 
-| Feature | File in this sample | What to transfer | What to grow in the starter alongside |
-| --- | --- | --- | --- |
-| Typed messages | `server/shared/contracts.hpp` | The structs of the features you adopt: `WorldState`, `JoinWorldRequest`, `MoveRequest`, `EnterZone`, `BorderPresence`, `BorderVisible`, `OpenDungeonRequest`, `DungeonOpened`; `SessionInfoRequest` and `SessionInfo` only if your client needs them | The `Names` constants (mesh, Actor, Spot, and channel names) that the messages refer to |
-| Actor | `server/zone/player.hpp`, `server/zone/domain.hpp` | `Player` and `PlayerFactory` with `PlayerState` (coordinate `x`, `sequence`) and the movement rules | A new `server/zone/` role with its `main.cpp`, `server/config/` files, and an entry in the `CMakeLists.txt` role list; the Actor factory registration in `main.cpp`; the `nodes` declaration in `zlink.structure.json` and the structure check in `e2e/structure.hpp` |
-| Spot | `server/zone/zone.hpp`, `server/zone/domain.hpp` | `Zone` with `ZoneState` (visibility, pending arrivals) and the border calculation | The Spot factory registration in `main.cpp`; the `spots` declarations in `zlink.structure.json` and the `ZoneIds` and `ZoneCapacity` settings that the structure check compares them with |
-| Entry and first admission | `WorldEntry` in `server/zone/player.hpp`, `Zone::reconnect` in `server/zone/zone.hpp` | `WorldEntry::enter` and the first-entry path, and the identity check and state resend of `Zone::reconnect` | The `add_entry_spot` registration and the `entry` declarations; a first-entry scenario (`cross`) and a `reconnect` scenario that compares state after reconnection |
-| Session binding | `server/session/session.hpp` | The first-packet check, then find or create the Actor, `bind_or_get`, and relay the original typed packet | The same first-packet type as `WorldEntry::enter`; transfer it into the starter's `server/session/session.hpp` |
-| Host relocation | `PlayerRelocation` in `server/zone/player.hpp`, `ZoneRelocation` in `server/zone/zone.hpp`, `NodeControl` in `server/shared/hosting.hpp` | The adapters with `capture` and `restore`, and the `drain`, `shutdown`, and `vacate-zone` controls | The `preserve_state_with` registrations in `main.cpp`; the `update` scenario, which checks that connections and state survive a server replacement and that the replacement node accepts new work |
-| Dynamic dungeon | `server/instance/dungeon.hpp`, `server/instance/main.cpp`, `Zone::dungeon` in `server/zone/zone.hpp` | The dynamic User Spot creation pattern (`get_or_create`, then `request_to_spot`) and the Dungeon information | A new `server/instance/` role with its config and `CMakeLists.txt` entry; the dynamic `dungeon` Spot and the `GetOrCreate` edge in `zlink.structure.json` |
-| Channel pub/sub and seamless movement | `Zone::configure()`, `Zone::publish_border`, `Zone::border`, `Zone::deliver`, and `BorderTick` in `server/zone/zone.hpp` | The border subscription and publication, and the delivery to the receiving Actor's bound Session | The `border` channel registration in the node `main.cpp` files and its `channels` declaration in `zlink.structure.json`; a `border` scenario |
-
-`vacate-zone` is the control that e2e uses to verify replacement placement. Transfer `drain`, `shutdown`, and `vacate-zone` together.
-
-### Transfer order and rules
-
-Transfer one row at a time and run the build, the structure check, and the related e2e scenario after each. Add a scenario ID to the `Scenario` enum and `scenario_order` in `e2e/structure.hpp`, to the `switch` and the usage message in `e2e/main.cpp`, to `run.scenarios`, and to the selection examples in `run.commands` of `zlink.structure.json` together. Judge results by the replies and events actually received; do not make tests pass with fixed sleeps or longer deadlines.
-
-Start with the message contracts. Define the packet structs in `server/shared/contracts.hpp` first, each with a `packet_name` and its JSON conversion, then move each handler that fails to compile to the new messages. When you change the first-entry packet, update the first-packet check in `Session::on_packet` in `server/session/session.hpp` and `WorldEntry::enter` and `Zone::reconnect` to receive the same type.
-
-Keep each piece of state in the object that decides it. Per-player state belongs in `Player`; state shared by several players belongs in a Spot. When you change state fields, update that object's state struct with its JSON conversion and the `capture` and `restore` of its relocation adapter together. A missing field disappears after relocation, and the `update` scenario detects the loss.
-
-Add a channel, its subscription, and its declaration in the same change: the subscription in `Zone::configure()`, the channel registration in the Zone and Session `main.cpp` files, and the `channels` declaration in `zlink.structure.json`. If they disagree, the structure check fails before startup. The subscription calls `add_subscribe(channel, topic)` through `subscribe_border`; when the installed Framework lacks that call, Zone startup fails with an explicit message instead of switching the subscription to `Names::mesh` (see Known issues in the README).
-
-To name roles such as Zone or Dungeon differently from this sample, change the type names, `Names`, `server/config/`, `zlink.structure.json`, and the role list in `CMakeLists.txt` at once. Do the renaming in its own change, separate from transferring a feature, so failures are easier to trace.
-
-If `update` fails after a transfer, first check whether the snapshot is missing any state, then use the message flow in [Debugging](#debugging) to find the first failing step.
+The built-in scenarios are cross, border, reconnect, and update. Keep their observations and assertions when adding game behavior.
 
 ## Development considerations
 
@@ -140,7 +124,7 @@ If `update` fails after a transfer, first check whether the snapshot is missing 
 
 Use the public Framework prebuilt that `bootstrap.cmake` installs at the pinned version, and add no repository sources or local feeds to the project. Process typed messages with the default Framework JSON serializer so processes use the same contract: declare each message in `server/shared/contracts.hpp` with a `packet_name` and JSON conversion, and add no per-message codecs, manual encoding, or raw frame parsing. Limit direct serialization in relocation adapters to application state (`zlink::message_t::from_json` in `capture`, `parse_json` in `restore`), keeping management of Framework execution state separate from game state.
 
-Manage each game fact, such as a player's coordinate, in the object responsible for changing it. Store player IDs and observational copies in Spots, and never retain Actor references: a Spot handler receives the Actor as an argument and reaches other players through `actor_client_t` by player ID. Sessions forward packets after authentication and binding; movement and gameplay decisions are made by the Actor or Spot that owns the state. Keep game rules in `server/zone/domain.hpp`, and keep Framework callbacks in the Spot, Actor, and Session files.
+Keep each game fact in its owner. `ZonePositionDomain` owns player positions, sequences, movement budgets, and connected-player visibility; `Player` does not duplicate those values. A Spot handler receives the Actor as an argument and reaches other players through `actor_client_t` by player ID rather than retaining Actor references. Sessions forward allow-listed client packets after binding. Keep game rules in `server/zone/domain.hpp`, and keep Framework callbacks in the Spot, Actor, and Session files.
 
 ### Asynchronous execution and lifecycle
 

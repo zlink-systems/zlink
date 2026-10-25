@@ -20,29 +20,31 @@ public final class Actions {
     public CompletionStage<Void> reconnect(
             Zone spot, Player actor, ZLinkMessageContext dispatch, JoinWorldRequest request) {
         actor.checkIdentity(request.playerId());
-        spot.remember(actor);
-        return actor.sendState();
+        return spot.reconnect(actor);
     }
 
     @ZLinkSpotActorSend
     public CompletionStage<Void> move(
             Zone spot, Player actor, ZLinkMessageContext dispatch, MoveRequest request) {
-        if (request.sequence() != actor.position().sequence() + 1)
-            throw new IllegalArgumentException("Move sequence must increase by one");
-        var destination = new EnterZone(request.x(), request.sequence());
-        if (!Rules.zoneId(request.x()).equals(spot.context().spotId())) {
-            actor.move(destination);
-            return CompletableFuture.completedFuture(null);
-        }
-        actor.apply(destination);
-        spot.remember(actor);
-        return actor.sendState();
+        return spot.move(actor, request);
     }
 
     @ZLinkSpotActorSend
-    public CompletionStage<Void> deliver(
-            Zone spot, Player actor, ZLinkMessageContext dispatch, BorderVisible message) {
-        return actor.context().boundSession().send(message).submit();
+    public CompletionStage<Void> deliverAppeared(
+            Zone spot, Player actor, ZLinkMessageContext dispatch, PlayerAppeared message) {
+        return spot.deliverAppeared(actor, dispatch, message);
+    }
+
+    @ZLinkSpotActorSend
+    public CompletionStage<Void> deliverMoved(
+            Zone spot, Player actor, ZLinkMessageContext dispatch, PlayerMoved message) {
+        return spot.deliverMoved(actor, dispatch, message);
+    }
+
+    @ZLinkSpotActorSend
+    public CompletionStage<Void> deliverLeft(
+            Zone spot, Player actor, ZLinkMessageContext dispatch, PlayerLeft message) {
+        return spot.deliverLeft(actor, dispatch, message);
     }
 
     @ZLinkSpotActorSend

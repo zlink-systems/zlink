@@ -1,3 +1,6 @@
+using System.Text.Json;
+using System.Text.Json.Serialization;
+
 namespace MyGame.Shared;
 
 public static class GameNames
@@ -11,14 +14,12 @@ public static class GameNames
     public const int ZoneWidth = 100;
     public const int ZoneCount = 6;
     public const int BorderRadius = 10;
-    public const int TickPeriodMilliseconds = 100;
+    public const long MaxSafeInteger = 9_007_199_254_740_991;
+    public static int WorldWidth => ZoneWidth * ZoneCount;
 
-    public static string ZoneId(int x)
-    {
-        ArgumentOutOfRangeException.ThrowIfNegative(x);
-        ArgumentOutOfRangeException.ThrowIfGreaterThan(x, ZoneWidth * ZoneCount - 1);
-        return $"zone-{x / ZoneWidth + 1}";
-    }
+    public static bool IsSafeInteger(ulong value) => value <= (ulong)MaxSafeInteger;
+
+    public static string ZoneId(double x) => $"zone-{(int)Math.Floor(x / ZoneWidth) + 1}";
 
     public static IEnumerable<string> AdjacentZones(string zoneId)
     {
@@ -33,29 +34,61 @@ public static class GameNames
 }
 
 public sealed record WorldState(
-    string ActorId,
-    ulong ObjectGeneration,
     string ZoneId,
     string NodeId,
-    int X,
-    int Sequence
+    double X,
+    long Sequence
 );
 
-public sealed record JoinWorldRequest(string PlayerId, int X);
+public sealed record Position(double X);
 
-public sealed record MoveRequest(int X, int Sequence);
+public sealed record JoinWorldRequest(string PlayerId, double X);
 
-public sealed record EnterZone(int X, int Sequence);
+public sealed record MoveRequest(double Delta, long Sequence);
 
-public sealed record BorderPresence(string SourceZoneId, string ActorId, int X, int Sequence);
+public sealed record EnterZone(Position Position, long Sequence, int RemainingMs);
 
-public sealed record BorderVisible(
-    string ObserverZoneId,
+public sealed class PlayerLeftReasonConverter() : JsonStringEnumConverter<PlayerLeftReason>(
+    JsonNamingPolicy.KebabCaseLower
+)
+{ }
+
+[JsonConverter(typeof(PlayerLeftReasonConverter))]
+public enum PlayerLeftReason
+{
+    LeftZone,
+    Disconnected,
+}
+
+public sealed class BorderPresenceKindConverter() : JsonStringEnumConverter<BorderPresenceKind>(
+    JsonNamingPolicy.KebabCaseLower
+)
+{ }
+
+[JsonConverter(typeof(BorderPresenceKindConverter))]
+public enum BorderPresenceKind
+{
+    Appeared,
+    Moved,
+    Left,
+}
+
+public sealed record PlayerAppeared(string PlayerId, Position Position);
+
+public sealed record PlayerMoved(string PlayerId, Position Position, long Sequence);
+
+public sealed record PlayerLeft(string PlayerId, PlayerLeftReason Reason);
+
+public sealed record BorderPresence(
     string SourceZoneId,
-    string ActorId,
-    int X,
-    int Sequence
+    string PlayerId,
+    Position Position,
+    long Sequence,
+    BorderPresenceKind Kind,
+    PlayerLeftReason? Reason
 );
+
+public sealed record ActionRejected(string Reason, int RetryAfterMs);
 
 public sealed record OpenDungeonRequest(string DungeonId);
 
@@ -63,7 +96,7 @@ public sealed record DungeonOpened(string DungeonId, string NodeId);
 
 public sealed record SessionInfoRequest;
 
-public sealed record SessionInfo(string SessionId);
+public sealed record SessionInfo(string SessionId, string? ActorId, long? ObjectGeneration);
 
 public sealed record NodeReady(string Id, string MeshEndpoint, string? StreamEndpoint);
 

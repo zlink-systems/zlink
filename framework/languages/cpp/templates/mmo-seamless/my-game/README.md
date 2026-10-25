@@ -45,31 +45,33 @@ Linux:
 
 ```sh
 ./run-e2e.sh
-./run-e2e.sh --scenario cross,border,reconnect
+./run-e2e.sh --scenario cross,border,reconnect,update
+./run-e2e.sh --check-domain
 ```
 
 Windows:
 
 ```powershell
 pwsh -NoProfile -File ./run-e2e.ps1
-pwsh -NoProfile -File ./run-e2e.ps1 -Scenario cross,border,reconnect
+pwsh -NoProfile -File ./run-e2e.ps1 -Scenario cross,border,reconnect,update
 pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
+pwsh -NoProfile -File ./run-e2e.ps1 -CheckDomain
 ```
 
 The runner and nodes execute in containers. The script checks structure before Redis startup, then uses a unique Compose network, project, container names and Redis key prefixes. Nodes share the runner's network namespace, preserving loopback listeners and OS-assigned ports. Configuration is copied into each node before attaching stdin and stdout; `drain`, `shutdown` and lifecycle output retain their existing protocol.
 
 The runner removes its node containers. The script removes remaining containers carrying this run's label, its Compose resources and its image tags. Cleanup failures return exit code 1. Build and orchestration logs remain in `.logs/docker-<project>/`; node logs and generated configurations remain in `.logs/run-<id>/`. Unix runners use the caller UID and Docker socket group so those files remain caller-owned.
 
-The scripts and C++ runner check `zlink.structure.json`, start Redis and the four node containers, run scenarios, and shut down their own resources. Logs and generated configurations remain in `.logs/run-<id>/`. A scenario or cleanup failure returns exit code 1. The default scenario order is:
+The scripts and C++ runner check `zlink.structure.json`, run domain boundary checks, start Redis and the four node containers, run scenarios, and shut down their own resources. Logs and generated configurations remain in `.logs/run-<id>/`. A scenario or cleanup failure returns exit code 1. The default scenario order is:
 
 | Scenario | Assertion |
 | --- | --- |
-| `cross` | Move from x=299 on zone-3 / Zone A to x=300 on zone-4 / Zone B, preserving Actor and Session identity; continue movement and open a Dungeon. |
-| `border` | A player at x=300 receives the adjacent Zone's authoritative update for another player moving to x=298. |
-| `reconnect` | A new physical Session binds the same Actor generation and retains position and movement sequence. |
-| `update` | Drain Zone A while moving, observe relocation and SafeToShutdown, preserve Session and world state, replace Zone A, and verify fresh Actor creation and movement. |
+| `cross` | Delta movement rejects an oversized step, exhausted movement budget, and an outside-world result without changing state. After the server-provided retry delay, the player crosses from Zone 3 on A to Zone 4 on B; Actor and Session identity remain unchanged. |
+| `border` | Same-Zone and adjacent-Zone players observe appearance and movement. Zone departure and connection loss produce `left-zone` and `disconnected` events. |
+| `reconnect` | A new physical Session binds the same Actor generation and retains the authoritative position and movement sequence. |
+| `update` | Drain Zone A while moving, observe relocation and SafeToShutdown, preserve position, sequence, and remaining movement-budget milliseconds, replace Zone A, and verify fresh Actor creation and movement. |
 
-`./run-e2e.sh --check-structure` checks the actual project files without starting Redis or game nodes. The structure checker accepts valid added nodes and reordered edges; it rejects inconsistent IDs, owner references, channels, stable types, scenario order, and escaping configuration paths.
+`./run-e2e.sh --check-structure` checks the actual project files without starting Redis or game nodes. `./run-e2e.sh --check-domain` runs movement, sequence, snapshot, presence, and JSON boundary checks without starting nodes. Domain checks also run before the default scenario nodes start. The structure checker accepts valid added nodes and reordered edges; it rejects inconsistent IDs, owner references, channels, stable types, scenario order, and escaping configuration paths.
 
 ## Local debugging
 
@@ -97,7 +99,7 @@ Validated against the published Framework 0.30.2 packages.
 
 This template answers `SessionInfoRequest` with a typed `SessionInfo` push; Framework 0.30.2 adds a typed Session reply API (#1785), and the template has not switched to it.
 
-The update fixture follows the Node reference's fresh-player check. It does not prove that the replacement physical node receives the new Actor: Actor placement is a Framework decision. A deterministic replacement-node work probe remains an acceptance gap.
+The `update` scenario verifies that a fresh Actor joins Zone A on the replacement node and accepts movement after replacement (`e2e/scenarios.hpp`). Existing relocated players remain on Zone B.
 
 Message Follow is explicitly configured to 30 seconds in shared hosting. The wait for `SAFE_TO_SHUTDOWN` is derived from that period plus the existing host relocation budget. Packet deadlines and the relocation operation budget remain unchanged.
 
@@ -107,12 +109,12 @@ Start Redis, Zone A, Zone B, Instance nodes, and then the Session node. Zone A b
 
 For a planned update, write `drain` to the affected process's standard input. Wait for `RELOCATION_REQUESTED`, `RELOCATED`, and `SAFE_TO_SHUTDOWN`. Write `shutdown` and require `STOPPED` plus exit code zero before replacing the process. Use the same node configuration on a Zone replacement. Like every Zone node, it runs `get_or_create` for all configured Zones at startup: Zones already moved to Zone B end as existing and remain under Location Store authority, and only the closed first Zone is created on the replacement. Every listener binds an OS-assigned port. Configure Redis endpoints and a deployment-specific key prefix for your environment.
 
-Game messages carry world state; `SessionInfo` carries Session ID, Actor ID, and object generation from the actual bound Actor. Player movement is owned by `server/zone/domain.hpp`. Zone visibility stores player IDs and position projections, and sends pushes through the public Actor client. Relocation adapters preserve application state only.
+`SessionInfo` carries Session ID, Actor ID, and object generation from the actual bound Actor. `ZonePositionDomain` in `server/zone/domain.hpp` owns player positions, sequences, movement budgets, and connected-player visibility. Zone transitions use its calculated position and remaining budget milliseconds. Relocation adapters preserve application state only.
 
 Fixed Zones are bootstrapped serially: Zone A fills its three-Spot capacity before Zone B starts. This makes the declared initial owners deterministic through public stable-type capacity. During e2e, Zone B has capacity for all but one world Zone. Before update drains Zone A, `vacate-zone` closes the unused first Zone through the public Spot manager. The remaining Zones fill Zone B; the replacement Zone A recreates the first Zone through its startup `get_or_create`; a fresh player then joins it, and the test verifies its host and continued movement. Existing relocated players remain on Zone B.
 
 ## 한국어 실행 안내
 
-Docker Compose v2와 Linux 컨테이너 데몬을 준비한다. 템플릿 디렉터리에서 Linux는 `./run-e2e.sh`, Windows는 `pwsh -NoProfile -File ./run-e2e.ps1`을 실행한다. 기본 실행은 이미지 빌드부터 runner·node 컨테이너 기동과 정리까지 수행한다. Framework 버전은 `bootstrap.cmake` 한 곳에서 정하며, 빌드는 그 버전의 GitHub Release prebuilt를 받아 함께 게시된 SHA-256 체크섬으로 확인한다.
+Docker Compose v2와 Linux 컨테이너 데몬을 준비한다. 템플릿 디렉터리에서 Linux는 `./run-e2e.sh`, Windows는 `pwsh -NoProfile -File ./run-e2e.ps1`을 실행한다. 기본 실행은 이미지 빌드, 도메인 경계 검사, runner·node 컨테이너 기동과 정리를 수행한다. `./run-e2e.sh --check-domain` 또는 `pwsh -NoProfile -File ./run-e2e.ps1 -CheckDomain`은 node를 시작하지 않고 도메인 검사를 실행한다. 기본 시나리오는 `cross`, `border`, `reconnect`, `update`다. Framework 버전은 `bootstrap.cmake` 한 곳에서 정하며, 빌드는 그 버전의 GitHub Release prebuilt를 받아 함께 게시된 SHA-256 체크섬으로 확인한다.
 
 로컬 디버깅은 C++20 컴파일러, CMake, Ninja를 설치한 뒤 `./run-e2e.sh --local` 또는 `pwsh -NoProfile -File ./run-e2e.ps1 -Local`로 실행한다. node 로그와 설정은 `.logs/run-<id>/`, Docker 빌드·정리 로그는 `.logs/docker-<project>/`에 남는다. 공개 패키지에서 확인된 차단 사항은 Known issues를 따른다.

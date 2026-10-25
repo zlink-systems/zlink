@@ -38,7 +38,7 @@ For host process debugging, install the .NET 8 SDK and add `--local` or `-Local`
 
 ### Zones and players
 
-An Actor is a game state object addressed by ID; `PlayerActor` in `server/MyGame.Zone/PlayerActor.cs` manages the player's coordinate and sequence. A Spot is a state object that accepts Actors and executes shared game rules; `ZoneSpot` in `server/MyGame.Zone/ZoneSpot.cs` manages Zone visibility and pending arrivals. Visibility values are copies of Actor movement state used for observation, so apply player state changes to the Actor.
+An Actor is a state object addressed by ID. `PlayerActor` in `server/MyGame.Zone/PlayerActor.cs` connects the Actor to Zone membership; it does not duplicate the player's location. `ZoneSpot` owns a `ZonePositionDomain` in `server/MyGame.Zone/ZonePositionDomain.cs`, which stores current positions, sequences, movement budgets, and connected-player visibility. Movement decisions stay in that domain.
 
 `server/MyGame.Zone/Program.cs` registers types and handlers, and `server/MyGame.Zone/WorldEntry.cs` handles player Actor entry into the world. Add handlers that combine player rules with shared Zone rules in `server/MyGame.Zone/Handlers.cs`. When changing node composition, update registrations, `server/config/`, and the descriptor together so the structure check validates the same composition.
 
@@ -48,7 +48,7 @@ An Actor is a game state object addressed by ID; `PlayerActor` in `server/MyGame
 
 ### Shared contracts and hosting
 
-`server/MyGame.Shared/Contracts.cs` defines messages and game constants shared by processes, while `server/MyGame.Shared/NodeSettings.cs` defines process settings. `server/MyGame.Shared/GameHosting.cs` configures hosting and diagnostics, and `server/MyGame.Shared/NodeControl.cs` handles runtime control commands. Add contracts used by several processes here, and keep player state in `PlayerActor` so separate processes do not independently modify the same fact.
+`server/MyGame.Shared/Contracts.cs` defines messages and game constants shared by processes, while `server/MyGame.Shared/NodeSettings.cs` defines process settings. `server/MyGame.Shared/GameHosting.cs` configures hosting and diagnostics, and `server/MyGame.Shared/NodeControl.cs` handles runtime control commands. Add shared typed contracts here. Keep player positions and movement decisions in `ZonePositionDomain` so the Actor and Zone do not maintain duplicate copies.
 
 ### E2E client
 
@@ -62,7 +62,7 @@ A RouteMesh connects nodes that exchange messages between processes; this projec
 
 ### Spots and Actors
 
-`WorldEntry` handles Actor entry, `ZoneSpot` represents a geographical Zone, and `DungeonSpot` represents a dynamically created Dungeon. The [Spot guide](https://docs.zlink.systems/dotnet/guide/server/21-spot/) describes registration and calls for these objects. `PlayerActor` retains movement state when its host Spot changes; the [Actor guide](https://docs.zlink.systems/dotnet/guide/server/22-actor/) describes Actor creation and calls.
+`WorldEntry` handles Actor entry, `ZoneSpot` represents a geographical Zone, and `DungeonSpot` represents a dynamically created Dungeon. The [Spot guide](https://docs.zlink.systems/dotnet/guide/server/21-spot/) describes registration and calls for these objects. Zone membership changes use the position and sequence decided by `ZonePositionDomain`; the [Actor guide](https://docs.zlink.systems/dotnet/guide/server/22-actor/) describes Actor creation and calls.
 
 ### STREAM and Sessions
 
@@ -80,97 +80,41 @@ A membership change moves an Actor from one Spot to another. Admission is the ta
 
 Relocation changes an object's execution host; drain moves a host's workload elsewhere so the host can shut down. Application adapters capture and restore game state, while Framework transfers workload and routes. `NodeControl` requests public host relocation and observes safe shutdown; the [Relocation guide](https://docs.zlink.systems/dotnet/guide/server/37-relocation/) explains the procedure.
 
-### Border notifications and timers
+### Zone observations and border publications
 
-A timer runs a handler periodically; `BorderTick` uses one to publish information about players near a border. In this pub/sub exchange, `BorderHandler` receives subscribed information, and `BorderDelivery` forwards notifications through the receiving Actor's bound Session. [Timers and workers](https://docs.zlink.systems/dotnet/guide/server/36-timer-worker/) explains registration and execution of periodic work.
+`ZonePositionDomain` owns the current player list and positions. `ZoneSpot` sends `PlayerAppeared`, `PlayerMoved`, and `PlayerLeft` to connected players in the same Zone. It publishes border updates on the existing `border` channel for adjacent-Zone observers, and `BorderHandler` forwards each typed event to the receiving Actor.
 
 ## Request flow
 
 Requests in the example game follow this path. Reading the code along this path before adding or transferring a feature locates the places to change.
 
-1. The client connects to the Session node over STREAM and sends the first packet, `JoinWorldRequest`. `PlayerSession` checks the first packet type, calls `GetOrCreate` for the Player Actor by `playerId`, binds it to the Session, and relays the original packet.
-2. A new Actor starts in the Entry Spot `WorldEntry`. `EnterWorldHandler` checks the identity and calls `PlayerActor.Move`, which requests `JoinSpot(...).Defer()` for the Zone that covers the coordinate.
-3. When the join completes, `PlayerActor.OnJoinCompletedAsync` sends `WorldState` through the bound Session. Later packets from the same client are handled by the handlers of the Zone that holds the Actor (such as `MoveHandler`), which send results through the same Session.
-4. When movement reaches a coordinate in another Zone, `MoveHandler` calls `PlayerActor.Move` again. The client connection does not change, even when that Zone is on another node.
-5. To replace a node, `drain` in `NodeControl` requests relocation. Framework takes the game state from `Capture` in `PlayerRelocation` and `ZoneRelocation` and calls `Restore` on another node.
+1. The client connects to the Session node over STREAM. `PlayerSession` relays only allow-listed client packets, handles `SessionInfoRequest`, and binds the Player Actor when it receives `JoinWorldRequest`.
+2. A new Actor starts in the Entry Spot `WorldEntry`. `EnterWorldHandler` checks the identity and requests Zone admission through `PlayerActor.Move`.
+3. The target `ZoneSpot` validates the arrival and stores the position in `ZonePositionDomain`. After Actor Join completion, `PlayerActor` sends the target's `WorldState` reply through the bound Session, and the Zone publishes `PlayerAppeared` to observers.
+4. `MoveHandler` delegates `Delta` and `Sequence` to `ZonePositionDomain`. The domain checks the step, world boundary, sequence, and movement budget, then computes the result. A move to another Zone carries the computed position and remaining budget milliseconds through Actor membership; the Session connection stays bound.
+5. `drain` in `NodeControl` requests relocation. `ZoneRelocation` snapshots player positions, sequences, visibility, and remaining movement-budget milliseconds. It does not serialize process timestamps; Actor ID and generation are reported separately by `SessionInfo`.
 
-## Developing from this sample
+## Extend this template's domain
 
-This sample shows how the features work together, so read and run it rather than turning it into your game. Start your own project from the .NET starter: choose .NET in the Initializer at [ZLink Start](https://zlink.systems/start), or use `framework/languages/dotnet/templates/starter/my-game` in the ZLink repository. Then transfer the features you need from this sample one at a time. The starter's `AGENTS.md` owns the choice between structures; this section covers only `mmo-seamless`. Keep this sample unchanged next to your project as a reference.
+Extend this template's domain to build a seamless MMO server. Use this project as the starting point and add game rules in the module that owns their state and decisions.
 
-### Run the sample first
+### Extension points
 
-Before transferring anything, run the build and e2e once with the [Development commands](#development-commands) to confirm the downloaded sample works and to see its behavior. This result is the baseline for comparison. If it fails, compare the failure with Known issues in the [README](README.md) first.
+- Domain state and decisions: `server/MyGame.Zone/ZonePositionDomain.cs`. `ZoneSpot` owns player positions and visibility; this domain validates movement.
+- Typed contracts: `server/MyGame.Shared/Contracts.cs`. Add client requests, replies, and events here.
+- Session allow-list: `server/MyGame.Session/PlayerSession.cs`. Add only packet names clients are allowed to send. Internal messages stay server-to-server.
+- Scenarios: `e2e/MyGame.E2E/Scenarios.cs`. Add observable request, reply, and event checks, then update the README scenario table and `zlink.structure.json` `run.scenarios` and selection commands.
 
-### Features to transfer
+### Extension procedure
 
-Feature names match the feature table in the starter's `AGENTS.md`. Paths are relative to this directory. The starter has one Session node and the `connect` scenario only, so the last column lists what grows in the starter with each feature.
+1. Define typed messages in `Contracts.cs`, including the server response for rejected input.
+2. Keep state and its decisions together. `ZonePositionDomain` owns player positions, sequences, movement budgets, and visibility data.
+3. Add a packet to the `PlayerSession` allow-list only when clients are allowed to send it. Do not relay internal messages from a client.
+4. Add boundary checks to the existing E2E `DomainChecks.cs` and a scenario that observes accepted results, rejections, and state after rejection.
+5. When Zone state changes, update `ZonePositionSnapshot`, `Capture`, and `Restore` together. Store remaining milliseconds for movement budgets rather than process timestamps.
+6. Run `./run-e2e.sh --check-domain`, `./run-e2e.sh --build-only`, and `./run-e2e.sh` from this directory. Inspect the first failure and its logs before repeating a check.
 
-| Feature | File in this sample | What to transfer | What to grow in the starter alongside |
-| --- | --- | --- | --- |
-| Typed messages | `server/MyGame.Shared/Contracts.cs` | The records of the features you adopt: `WorldState`, `JoinWorldRequest`, `MoveRequest`, `EnterZone`, `BorderPresence`, `BorderVisible`, `OpenDungeonRequest`, `DungeonOpened`; `SessionInfoRequest` and `SessionInfo` only if your client needs them | The registration names in `GameNames`; the starter already has `NodeReady` and `NodeProtocol` |
-| Actor | `server/MyGame.Zone/PlayerActor.cs` | `PlayerActor` with coordinate `X`, `Sequence`, and the movement rules | A new `server/MyGame.Zone/` project, its `server/config/` files, and the Actor registration in `Program.cs`; the Actor declaration in `zlink.structure.json` and the structure check |
-| Spot | `server/MyGame.Zone/ZoneSpot.cs` | `ZoneSpot` with visibility, pending arrivals, and the border calculation | The Spot registration in `Program.cs`; the `spots` and `nodes` declarations in `zlink.structure.json` and the structure check that compares them with the registrations |
-| Entry and first admission | `server/MyGame.Zone/WorldEntry.cs`, `ReconnectHandler` in `server/MyGame.Zone/Handlers.cs` | `EnterWorldHandler`, the first-entry path, and the identity check and state resend of `ReconnectHandler` | The Entry Spot registration and its `entry` declaration; a first-entry scenario and a `reconnect` scenario that compares state after reconnection |
-| Session binding | `server/MyGame.Session/PlayerSession.cs` | The first-packet check, then find or create the Actor, bind, and relay the original typed packet | The same first-packet type as `EnterWorldHandler`; transfer it into the starter's `PlayerSession.cs` |
-| Host relocation | `PlayerRelocation` in `server/MyGame.Zone/PlayerActor.cs`, `ZoneRelocation` in `server/MyGame.Zone/ZoneSpot.cs`, `server/MyGame.Shared/NodeControl.cs` | The snapshot records with `Capture` and `Restore`, and the `drain`, `shutdown`, and `vacate-zone` controls | The relocation registration; the `update` scenario, which checks that connections and state survive a server replacement and that the replacement node accepts new work |
-| Dynamic dungeon | `server/MyGame.Instance/DungeonSpot.cs`, `server/MyGame.Instance/Program.cs`, `OpenDungeonHandler` in `server/MyGame.Zone/Handlers.cs` | The dynamic User Spot creation pattern and the Dungeon information | A new `server/MyGame.Instance/` project and its config; the dynamic `dungeon` Spot and the `GetOrCreate` edge in `zlink.structure.json` |
-| Channel pub/sub and seamless movement | `Configure()` in `server/MyGame.Zone/ZoneSpot.cs`; `BorderTick`, `BorderHandler`, and `BorderDelivery` in `server/MyGame.Zone/Handlers.cs` | The border subscription and publication, and the delivery to the receiving Actor's bound Session | The `border` channel registration in `Program.cs` and its `channels` declaration in `zlink.structure.json`; a `border` scenario |
-
-`vacate-zone` is the control that e2e uses to verify replacement placement. Transfer `drain`, `shutdown`, and `vacate-zone` together.
-
-### Transfer order and rules
-
-Transfer one row at a time and run the build, the structure check, and the related e2e scenario after each. Add a scenario ID to the list in `e2e/MyGame.E2E/Scenarios.cs`, to `run.scenarios`, and to the selection examples in `run.commands` of `zlink.structure.json` together. Judge results by the replies and events actually received; do not make tests pass with fixed sleeps or longer deadlines.
-
-Start with the message contracts. Define the typed records in `Contracts.cs` first, then move each handler that fails to compile to the new messages. When you change the first-entry packet, update the first-packet check in `PlayerSession`, `EnterWorldHandler`, and `ReconnectHandler` to receive the same type.
-
-Keep each piece of state in the object that decides it. Per-player state belongs in `PlayerActor`; state shared by several players belongs in a Spot. When you change state fields, update that object's snapshot record and its `Capture` and `Restore` together. A missing field disappears after relocation, and the `update` scenario detects the loss.
-
-Add a channel, its subscription, and its declaration in the same change: the subscription in `ZoneSpot.Configure()`, the channel registration in `Program.cs`, and the `channels` declaration in `zlink.structure.json`. If the three disagree, the structure check fails before startup.
-
-To name roles such as Zone or Dungeon differently from this sample, change the type names, `GameNames`, `server/config/`, and `zlink.structure.json` at once. Do the renaming in its own change, separate from transferring a feature, so failures are easier to trace.
-
-If `update` fails after a transfer, first check whether the snapshot is missing any state, then use the message flow in [Debugging](#debugging) to find the first failing step.
-
-## Adding item pickup
-
-This example adds one more feature after the features above are in the starter. File names are those of this sample; the same files exist in your project once you have transferred Typed messages, Actor, and Spot.
-
-### Messages and handlers
-
-For item pickup within a Zone, begin with request and result contracts and a Zone handler. Define new application records `PickupRequest` and `ItemPickedUp` in `Contracts.cs` for the item ID and game result, and obtain the requester's identity from the handler's Actor argument rather than a self-reported packet value.
-
-When adding `PickupHandler` in `Handlers.cs`, follow the `ZLinkSpotActorSendHandler` attribute, `IZLinkSpotActorSendHandler<ZoneSpot, PlayerActor, MoveRequest>` interface, and `HandleAsync` signature of `MoveHandler`. Change the attribute's packet name and the interface's message type to match the new request; `Program.cs` already registers assembly scanning with this call.
-
-```csharp
-options.AddHandlersFromAssemblyOf<ZoneSpot>();
-```
-
-This call registers handlers from the assembly containing `ZoneSpot`, so place the new handler in that assembly. `PickupRequest`, `ItemPickedUp`, and `PickupHandler` are game types to add for this feature.
-
-### State changes and result delivery
-
-A turn is the execution interval in which a handler or callback can modify state; an execution gate limits concurrent turns over that state. The project's `SpotWide` setting gives Spot handlers, member Actor handlers, timers, and lifecycle callbacks in the same Zone a shared gate. The pickup handler changes ground items in `ZoneSpot` and inventory in `PlayerActor` within the same turn to determine whether pickup is duplicated.
-
-If the item exists and its distance from `PlayerActor.X` is allowed, remove it from the ground and add it to inventory. If it is absent or out of range, leave both states unchanged and send a rejection result. For result delivery, follow the typed Session send used in `BorderDelivery`.
-
-```csharp
-await actor.Context.BoundSession.Send(presence).Async();
-```
-
-`presence` is the message in the existing code; the pickup handler sends its new pickup result instead. For notifications to other players, store IDs, send through the public Actor client as in `ZoneSpot.ShowBorderAsync`, and forward to the Session in a receiving handler such as `BorderDelivery`.
-
-### State preservation and verification
-
-Add inventory to `PlayerSnapshot`, `Capture`, and `Restore` in `PlayerActor.cs`, and remaining ground items to `ZoneSnapshot`, `Capture`, and `Restore` in `ZoneSpot.cs`. `PlayerRelocation` and `ZoneRelocation` serialize these snapshots, so include application state only. Framework manages routes, leases, membership, and queues; do not duplicate them in application snapshots.
-
-If extracting pure game rules into unit tests, test successful pickup, absent items, and duplicate pickup. In e2e, register the typed result wait before sending, as `MoveAsync` does in `GameClient.cs`, so fast replies are also observed. Extend the scenario and selection case in `Scenarios.cs` and `run.scenarios` in the descriptor together, retaining the existing scenarios and assertions.
-
-### Verification runs
-
-Verify the received result, duplicate rejection, and inventory preservation after reconnect and relocation. Build and check structure before running affected scenarios, then preserve the first failure to distinguish application usage errors from the package defects documented in the README.
-
+The built-in scenarios are `cross`, `border`, `reconnect`, and `update`. Keep their observations and assertions when adding game behavior.
 ## Development considerations
 
 ### State and message contracts

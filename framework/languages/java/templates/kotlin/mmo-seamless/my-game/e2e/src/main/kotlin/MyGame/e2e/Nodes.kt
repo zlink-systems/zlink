@@ -153,7 +153,7 @@ class Nodes(private val root: Path) : AutoCloseable {
                     keyPrefix = "my-game:$runId:",
                     zoneCapacity =
                         if (
-                            role == "zone" && Rules.zoneId(Control.REPLACEMENT_X) !in source.zoneIds
+                            role == "zone" && Rules.zoneId(Control.REPLACEMENT_X.toDouble()) !in source.zoneIds
                         )
                             Rules.ZONE_COUNT - 1
                         else source.zoneCapacity,

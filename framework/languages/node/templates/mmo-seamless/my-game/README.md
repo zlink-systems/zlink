@@ -1,6 +1,6 @@
 # MyGame seamless world
 
-This Node.js template runs a Session process, two Zone processes and a Dungeon process. A Player Actor owns movement state. Zone User Spots maintain visibility projections and publish nearby positions through the `border` channel. Framework relocation moves Actors across Zones while preserving their Session binding.
+This Node.js template runs a Session process, two Zone processes and a Dungeon process. `ZonePositionDomain` owns authoritative position, sequence, movement budget, and visibility state. Zone User Spots publish typed appearance, movement, and departure through the `border` channel. Framework relocation moves Actors across Zones while preserving their Session binding.
 
 ```mermaid
 flowchart LR
@@ -40,16 +40,18 @@ Docker builds a shared role image and a runner image using the pinned `NODE_IMAG
 ```sh
 ./run-e2e.sh
 ./run-e2e.sh --scenario cross,border,reconnect
+./run-e2e.sh --check-domain
 ./run-e2e.sh --check-structure
 ```
 
 ```powershell
 pwsh -NoProfile -File ./run-e2e.ps1
 pwsh -NoProfile -File ./run-e2e.ps1 -Scenario cross,border,reconnect
+pwsh -NoProfile -File ./run-e2e.ps1 -CheckDomain
 pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
 ```
 
-The default order is `cross`, `border`, `reconnect`, `update`. Cross verifies Zone A to Zone B movement, Actor identity, uninterrupted Session binding and Dungeon placement. Border verifies adjacent visibility across physical processes. Reconnect verifies preserved movement with a new physical Session. Update drains Zone A while movement continues, observes relocation and SafeToShutdown, stops the old process, starts its replacement and verifies continued game traffic.
+The default order is `cross`, `border`, `reconnect`, `update`. Cross verifies rejected movement leaves state unchanged, uses the server-provided retry delay, crosses Zones, preserves Actor identity and reaches Dungeon placement. Border verifies adjacent visibility and `left-zone` and `disconnected` termination events. Reconnect verifies preserved movement with a new physical Session. Update drains Zone A while movement continues, observes relocation and SafeToShutdown, stops the old process, starts its replacement and verifies continued game traffic. `--check-domain` verifies finite input, bounds, sequence, budget, and snapshot boundaries without sending non-finite JSON.
 
 Each run validates `zlink.structure.json`, creates a unique Redis Compose project and key prefix, binds listeners to OS-assigned ports, and saves node stdout, stderr message-flow records and client packets in `.logs/run-<id>/`. Cleanup failure causes exit code 1. The runner uses separate role entrypoints and starts Zone A before Zone B so fixed Zone placement follows the declared configuration.
 
@@ -80,4 +82,4 @@ Fixed Zones are bootstrapped serially: Zone A fills its three-Spot capacity befo
 
 Docker Compose v2를 설치한 뒤 위 Build 명령으로 이미지를 빌드합니다. 기본 e2e는 runner와 node를 컨테이너에서 실행합니다. 로컬 프로세스 디버깅은 Node.js 22 이상을 설치하고 `--local` 또는 `-Local`로 실행합니다. Windows에서는 PowerShell 7로 `run-e2e.ps1`을 실행하고, Linux에서는 `run-e2e.sh`를 실행합니다.
 
-기본 검증은 Zone 경계 이동, 인접 Zone의 위치 관찰, 재접속과 host 교체를 순서대로 실행합니다. 실행별 node 로그와 message-flow 기록은 `.logs/run-<id>/`에 보존됩니다. 공개 Framework 0.30.2 패키지로 검증했습니다.
+기본 검증은 거부 뒤 상태 불변, Zone 경계 이동, 인접 Zone의 appearance·movement·departure 관찰, 재접속과 host 교체를 순서대로 실행합니다. `--check-domain`은 JSON으로 전송하지 않는 비유한 값과 경계 입력을 도메인에서 검사합니다. 실행별 node 로그와 message-flow 기록은 `.logs/run-<id>/`에 보존됩니다. 공개 Framework 0.30.2 패키지로 검증했습니다.

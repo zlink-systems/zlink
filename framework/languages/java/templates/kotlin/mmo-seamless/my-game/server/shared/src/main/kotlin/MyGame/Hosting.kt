@@ -155,7 +155,7 @@ fun runNode(application: Class<*>, args: Array<String>) = runBlocking {
                     Control.VACATE_ZONE -> {
                         val spot =
                             spots
-                                .find(Rules.zoneId(Control.REPLACEMENT_X))
+                                .find(Rules.zoneId(Control.REPLACEMENT_X.toDouble()))
                                 .toCompletableFuture()
                                 .join()
                                 .orElseThrow()

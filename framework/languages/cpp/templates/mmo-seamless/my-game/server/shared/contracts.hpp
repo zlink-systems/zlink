@@ -2,6 +2,7 @@
 #include <nlohmann/json.hpp>
 #include <chrono>
 #include <cstdint>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -16,17 +17,14 @@ struct Names
     static constexpr auto dungeon = "Dungeon";
     static constexpr auto border = "border";
     static constexpr auto stream = "players";
-    static constexpr auto timer = "border-tick";
     static constexpr auto zone_prefix = "zone-";
     static constexpr int zone_width = 100;
     static constexpr int zone_count = 6;
     static constexpr int border_radius = 10;
-    static constexpr auto tick_period = std::chrono::milliseconds (100);
-    static std::string zone_id (int x)
+    static constexpr int world_width = zone_width * zone_count;
+    static std::string zone_id (double x)
     {
-        if (x < 0 || x >= zone_width * zone_count)
-            throw std::out_of_range ("Position outside world");
-        return zone_prefix + std::to_string (x / zone_width + 1);
+        return zone_prefix + std::to_string (static_cast<int> (x / zone_width) + 1);
     }
     static std::vector<std::string> adjacent (const std::string &zone_id)
     {
@@ -45,6 +43,7 @@ struct Names
 };
 struct Limits
 {
+    static constexpr std::int64_t max_safe_integer = 9'007'199'254'740'991;
     static constexpr auto packet = std::chrono::seconds (10);
     static constexpr auto startup = std::chrono::seconds (30);
     static constexpr auto relocation = std::chrono::seconds (30);
@@ -80,8 +79,9 @@ inline void from_json (const nlohmann::json &, SessionInfoRequest &)
 struct SessionInfo
 {
     static constexpr auto packet_name = "SessionInfo";
-    std::string sessionId, actorId;
-    std::uint64_t objectGeneration = 0;
+    std::string sessionId;
+    std::string actorId;
+    std::int64_t objectGeneration = 0;
     bool operator== (const SessionInfo &) const = default;
     NLOHMANN_DEFINE_TYPE_INTRUSIVE (SessionInfo, sessionId, actorId, objectGeneration)
 };
@@ -89,43 +89,115 @@ struct JoinWorldRequest
 {
     static constexpr auto packet_name = "JoinWorldRequest";
     std::string playerId;
-    int x = 0;
+    double x = 0;
     NLOHMANN_DEFINE_TYPE_INTRUSIVE (JoinWorldRequest, playerId, x)
+};
+struct Position
+{
+    double x = 0;
+    bool operator== (const Position &) const = default;
+    NLOHMANN_DEFINE_TYPE_INTRUSIVE (Position, x)
 };
 struct MoveRequest
 {
     static constexpr auto packet_name = "MoveRequest";
-    int x = 0, sequence = 0;
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (MoveRequest, x, sequence)
+    double delta = 0;
+    std::int64_t sequence = 0;
+    NLOHMANN_DEFINE_TYPE_INTRUSIVE (MoveRequest, delta, sequence)
 };
 struct EnterZone
 {
     static constexpr auto packet_name = "EnterZone";
-    int x = 0, sequence = 0;
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (EnterZone, x, sequence)
+    Position position;
+    std::int64_t sequence = 0;
+    std::int32_t remainingMs = 0;
+    NLOHMANN_DEFINE_TYPE_INTRUSIVE (EnterZone, position, sequence, remainingMs)
 };
 struct WorldState
 {
     static constexpr auto packet_name = "WorldState";
     std::string zoneId, nodeId;
-    int x = 0, sequence = 0;
+    double x = 0;
+    std::int64_t sequence = 0;
     NLOHMANN_DEFINE_TYPE_INTRUSIVE (WorldState, zoneId, nodeId, x, sequence)
+};
+struct ActionRejected
+{
+    static constexpr auto packet_name = "ActionRejected";
+    std::string reason;
+    std::int32_t retryAfterMs = 0;
+    NLOHMANN_DEFINE_TYPE_INTRUSIVE (ActionRejected, reason, retryAfterMs)
+};
+enum class PlayerLeftReason
+{
+    left_zone,
+    disconnected,
+};
+NLOHMANN_JSON_SERIALIZE_ENUM (PlayerLeftReason,
+                              {{PlayerLeftReason::left_zone, "left-zone"},
+                               {PlayerLeftReason::disconnected, "disconnected"}})
+enum class BorderPresenceKind
+{
+    appeared,
+    moved,
+    left,
+};
+NLOHMANN_JSON_SERIALIZE_ENUM (BorderPresenceKind,
+                              {{BorderPresenceKind::appeared, "appeared"},
+                               {BorderPresenceKind::moved, "moved"},
+                               {BorderPresenceKind::left, "left"}})
+struct PlayerAppeared
+{
+    static constexpr auto packet_name = "PlayerAppeared";
+    std::string playerId;
+    Position position;
+    NLOHMANN_DEFINE_TYPE_INTRUSIVE (PlayerAppeared, playerId, position)
+};
+struct PlayerMoved
+{
+    static constexpr auto packet_name = "PlayerMoved";
+    std::string playerId;
+    Position position;
+    std::int64_t sequence = 0;
+    NLOHMANN_DEFINE_TYPE_INTRUSIVE (PlayerMoved, playerId, position, sequence)
+};
+struct PlayerLeft
+{
+    static constexpr auto packet_name = "PlayerLeft";
+    std::string playerId;
+    PlayerLeftReason reason = PlayerLeftReason::left_zone;
+    NLOHMANN_DEFINE_TYPE_INTRUSIVE (PlayerLeft, playerId, reason)
 };
 struct BorderPresence
 {
     static constexpr auto packet_name = "BorderPresence";
-    std::string sourceZoneId, actorId;
-    int x = 0, sequence = 0;
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (BorderPresence, sourceZoneId, actorId, x, sequence)
+    std::string sourceZoneId, playerId;
+    Position position;
+    std::int64_t sequence = 0;
+    BorderPresenceKind kind = BorderPresenceKind::appeared;
+    std::optional<PlayerLeftReason> reason;
 };
-struct BorderVisible
+inline void to_json (nlohmann::json &j, const BorderPresence &value)
 {
-    static constexpr auto packet_name = "BorderVisible";
-    std::string observerZoneId, sourceZoneId, actorId;
-    int x = 0, sequence = 0;
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (
-      BorderVisible, observerZoneId, sourceZoneId, actorId, x, sequence)
-};
+    j = { {"sourceZoneId", value.sourceZoneId},
+          {"playerId", value.playerId},
+          {"position", value.position},
+          {"sequence", value.sequence},
+          {"kind", value.kind},
+          {"reason", value.reason ? nlohmann::json (*value.reason) : nlohmann::json (nullptr)} };
+}
+inline void from_json (const nlohmann::json &j, BorderPresence &value)
+{
+    j.at ("sourceZoneId").get_to (value.sourceZoneId);
+    j.at ("playerId").get_to (value.playerId);
+    j.at ("position").get_to (value.position);
+    j.at ("sequence").get_to (value.sequence);
+    j.at ("kind").get_to (value.kind);
+    const auto &reason = j.at ("reason");
+    value.reason = reason.is_null () ? std::nullopt
+                                    : std::optional<PlayerLeftReason> (
+                                        reason.get<PlayerLeftReason> ());
+}
 struct OpenDungeonRequest
 {
     static constexpr auto packet_name = "OpenDungeonRequest";

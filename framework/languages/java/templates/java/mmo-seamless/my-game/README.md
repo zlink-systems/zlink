@@ -44,8 +44,8 @@ Docker builds a shared node image and a runner image. The containerized runner v
 
 | Scenario | Assertion |
 | --- | --- |
-| cross | Movement from zone-3 on Zone A to zone-4 on Zone B preserves Actor identity and Session; movement and Dungeon creation continue. |
-| border | An observer on zone-4 receives zone-3's authoritative border update across physical nodes. |
+| cross | Server-validated delta movement crosses the Zone boundary after rejecting an oversized step, an exhausted movement budget and a world-boundary move without changing state; Dungeon creation continues. |
+| border | Same-Zone observers receive appearance and movement pushes; observers receive `left-zone` when a player crosses a Zone boundary and `disconnected` when a player disconnects. |
 | reconnect | A new physical Session rebinds the same Actor and preserves position, sequence and logical Zone. |
 | update | Movement continues during Zone A drain; relocation signals complete; Session and Actor identity persist after replacement; fresh work remains available. |
 
@@ -53,7 +53,7 @@ For local process debugging, use `./run-e2e.sh --local` or `pwsh -NoProfile -Fil
 
 The Dockerfile owns pinned Eclipse Temurin JDK/JRE 25.0.2+10 bases and Docker CLI 28.5.1. Replace its image ARG defaults when adopting a deployment base image. Logs remain under `.logs/` on the host.
 
-Structure-only validation: `./run-e2e.sh --check-structure` or `pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure`.
+Structure-only validation: `./run-e2e.sh --check-structure` or `pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure`. Domain boundary checks: `./run-e2e.sh --check-domain` or `pwsh -NoProfile -File ./run-e2e.ps1 -CheckDomain`.
 
 ## Known issues
 

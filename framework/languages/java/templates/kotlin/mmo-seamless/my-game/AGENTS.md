@@ -15,7 +15,7 @@ Default builds and e2e run nodes and the client in Docker without a host JDK. Ru
 ```powershell
 pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
 pwsh -NoProfile -File ./run-e2e.ps1
-pwsh -NoProfile -File ./run-e2e.ps1 -Scenario cross,border,reconnect
+pwsh -NoProfile -File ./run-e2e.ps1 -Scenario cross,border,reconnect,update
 pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
 ```
 
@@ -24,7 +24,7 @@ Bash provides the same workflow:
 ```bash
 ./run-e2e.sh --build-only
 ./run-e2e.sh
-./run-e2e.sh --scenario cross,border,reconnect
+./run-e2e.sh --scenario cross,border,reconnect,update
 ./run-e2e.sh --check-structure
 ```
 
@@ -38,7 +38,7 @@ For host process debugging, install JDK 25 and add `--local` or `-Local`. Add `-
 
 ### Zones and players
 
-An Actor is a game state object addressed by ID; `Player` in `server/zone/src/main/kotlin/MyGame/zone/Player.kt` manages the player's `position` (`EnterZone`: coordinate `x` and `sequence`). A Spot is a state object that accepts Actors and executes shared game rules; `Zone` in `server/zone/src/main/kotlin/MyGame/zone/Zone.kt` manages the Zone's visibility and pending arrivals in `ZoneState`. Visibility values are copies of Actor movement state used for observation, so apply player state changes to the Actor.
+An Actor is a game state object addressed by ID; `Player` in `server/zone/src/main/kotlin/MyGame/zone/Player.kt` owns no duplicate position state. A Spot accepts Actors and executes shared game rules; `ZonePositionDomain` in `server/zone/src/main/kotlin/MyGame/zone/ZonePositionDomain.kt` owns position, sequence, movement budget, arrivals, and visibility state for its Zone.
 
 `server/zone/src/main/kotlin/MyGame/zone/Program.kt` registers the handlers, the Entry Spot, the `Zone` factory (`stableTypeLimit(config.zoneCapacity)`, `SPOT_WIDE`), the `Player` factory, and the `border` channel server. `Entry` and `EnterWorld` in `Player.kt` handle player entry into the world. Add handlers that combine player rules with shared Zone rules to the `Actions` class in `Handlers.kt`. When changing node composition, update registrations, `server/config/`, and the descriptor together so the structure check validates the same composition.
 
@@ -52,7 +52,7 @@ An Actor is a game state object addressed by ID; `Player` in `server/zone/src/ma
 
 ### Shared contracts and hosting
 
-`server/shared/src/main/kotlin/MyGame/Contracts.kt` defines names, game constants, and the messages shared by processes. `Hosting.kt` defines `NodeConfig` (process settings), the Redis stores, `configure` for hosting and diagnostics, and `runNode`, which starts a node and handles the stdin control commands; `Control.kt` defines the control and readiness strings. `Transfer.kt` defines `ensureActive` for relocation adapters. Keep hosting and the control protocol here instead of duplicating them per role. Add contracts used by several processes in `Contracts.kt`, and keep player state in `Player` so separate processes do not independently modify the same fact.
+`server/shared/src/main/kotlin/MyGame/Contracts.kt` defines names, game constants, and the messages shared by processes. `Hosting.kt` defines `NodeConfig` (process settings), the Redis stores, `configure` for hosting and diagnostics, and `runNode`, which starts a node and handles the stdin control commands; `Control.kt` defines the control and readiness strings. `Transfer.kt` defines `ensureActive` for relocation adapters. Keep hosting and the control protocol here instead of duplicating them per role. Add shared contracts in `Contracts.kt`; keep position and movement decisions in `ZonePositionDomain` so separate processes do not independently modify the same fact.
 
 ### E2E client
 
@@ -78,7 +78,7 @@ The Location Store records an object's current runtime location by ID; this proj
 
 ### Actor membership
 
-A membership change moves an Actor from one Spot to another. Admission is the target Spot's decision to accept or reject the membership request. `Player.move` requests deferred admission to the next Zone with `joinSpot(...).defer()`, `Zone.onActorJoinSuspending` decides, and `onJoinCompletedSuspending` observes the completion result. [Actor membership](https://docs.zlink.systems/kotlin/guide/server/35-actor-membership/) explains the order of admission and completion.
+A membership change moves an Actor from one Spot to another. Admission is the target Spot's decision to accept or reject the membership request. The Zone handler requests deferred admission after `ZonePositionDomain` accepts movement; `onJoinCompletedSuspending` observes completion. [Actor membership](https://docs.zlink.systems/kotlin/guide/server/35-actor-membership/) explains the order of admission and completion.
 
 ### Host relocation and drain
 
@@ -86,50 +86,57 @@ Relocation changes an object's execution host; drain moves a host's workload els
 
 ### Border notifications and timers
 
-A timer runs a handler periodically; `BorderTick` uses one to publish information about players near a border. In this pub/sub exchange, the `Route*` subscription handlers in `BorderRoutes.kt` receive subscribed information and call `Zone.showBorder`, and `Actions.deliver` forwards the notification through the receiving Actor's bound Session. [Timers and workers](https://docs.zlink.systems/kotlin/guide/server/36-timer-worker/) explains registration and execution of periodic work.
+Zone publishes appearance, movement, and departure when each fact changes. In this pub/sub exchange, the `Route*` subscription handlers in `BorderRoutes.kt` receive nearby events and `Actions` delivers each typed event through the receiving Actor's bound Session without duplicating a local fact.
 
 ## Request flow
 
 Requests in the example game follow this path. Reading the code along this path before adding or transferring a feature locates the places to change.
 
 1. The client connects to the Session node over STREAM and sends the first packet, `JoinWorldRequest`. `GameSession` calls `getOrCreate` for the Player Actor by `playerId`, binds it to the Session with `bindOrGet`, and relays the original packet.
-2. A new Actor starts in the Entry Spot `Entry`. `EnterWorld.join` checks the identity and calls `Player.move`, which requests `joinSpot(...).defer()` for the Zone that covers the coordinate.
+2. A new Actor starts in the Entry Spot `Entry`. `EnterWorld.join` checks identity and asks `ZonePositionDomain` to resolve the requested initial position before requesting `joinSpot(...).defer()`.
 3. When the join completes, `Player.onJoinCompletedSuspending` sends `WorldState` through the bound Session. Later packets from the same client are handled by the `Actions` handlers of the Zone that holds the Actor (such as `move`), which send results through the same Session.
-4. When movement reaches a coordinate in another Zone, `Actions.move` calls `Player.move` again. The client connection does not change, even when that Zone is on another node.
-5. To replace a node, `drain` in `runNode` requests relocation. Framework takes the game state from `capture` in `PlayerTransfer` and `ZoneTransfer` and calls `restore` on another node.
+4. `Actions.move` asks `ZonePositionDomain` to validate a delta and sequence. When the computed position belongs to another Zone, the handler requests the target admission. The client connection does not change when that Zone is on another node.
+5. To replace a node, `drain` in `runNode` requests relocation. The Zone domain snapshot stores remaining budget milliseconds; the stateless Player Actor snapshot is empty.
 
-## Developing from this sample
+## Extend this template's domain
 
-This sample shows how the features work together, so read and run it rather than turning it into your game. Start your own project from the Kotlin starter: choose Kotlin in the Initializer at [ZLink Start](https://zlink.systems/start), or use `framework/languages/java/templates/kotlin/starter/my-game` in the ZLink repository. Then transfer the features you need from this sample one at a time. The starter's `AGENTS.md` owns the choice between structures; this section covers only `mmo-seamless`. Keep this sample unchanged next to your project as a reference.
+Extend this template's domain to build a seamless MMO server.
 
-### Run the sample first
+- Domain state and decisions: `server/zone/src/main/kotlin/MyGame/zone/ZonePositionDomain.kt`.
+- Shared typed contracts and limits: `server/shared/src/main/kotlin/MyGame/Contracts.kt`.
+- Client packet allow-list: `GameSession` in `server/session/src/main/kotlin/MyGame/session/Program.kt`.
+- Domain boundary checks and scenarios: `e2e/src/main/kotlin/MyGame/e2e/DomainChecks.kt`, `Scenarios.kt`, and `Client.kt`; keep `run.scenarios` and `run.commands` in `zlink.structure.json` aligned.
 
-Before transferring anything, run the build and e2e once with the [Development commands](#development-commands) to confirm the downloaded sample works and to see its behavior. This result is the baseline for comparison. If it fails, compare the failure with the first failure in the logs (see [Debugging](#debugging)) and the [README](README.md) first.
+Add a typed contract, put its decision in the domain owner, permit only client packets in Session, add a domain boundary check, and observe acceptance, rejection, and unchanged state through the public client. Relocation snapshots store remaining budget milliseconds. Run `./run-e2e.sh --check-domain`, `./run-e2e.sh --build-only`, and `./run-e2e.sh`.
 
-### Features to transfer
+### Validate the current domain
 
-Feature names match the feature table in the starter's `AGENTS.md`. Paths are relative to this directory. The starter has one Session node and the `connect` scenario only, so the last column lists what grows in the starter with each feature.
+Before changing a rule, run the domain checks and related e2e scenario with the [Development commands](#development-commands). Compare failures with the first failure in the logs (see [Debugging](#debugging)) and the [README](README.md).
 
-| Feature | File in this sample | What to transfer | What to grow in the starter alongside |
+### Existing extension points
+
+Paths are relative to this directory. Each row identifies the owner and the related registration or observable scenario.
+
+| Area | Owner | Rule or code to extend | Related registration or scenario |
 | --- | --- | --- | --- |
-| Typed messages | `server/shared/src/main/kotlin/MyGame/Contracts.kt` | The classes of the features you adopt: `WorldState`, `JoinWorldRequest`, `MoveRequest`, `EnterZone`, `BorderPresence`, `BorderVisible`, `OpenDungeonRequest`, `DungeonOpened`; `SessionInfoRequest` and `SessionInfo` only if your client needs them | The mesh and type names in `Names`; the starter already has the node `Roles` and the control strings |
-| Actor | `server/zone/src/main/kotlin/MyGame/zone/Player.kt` | `Player` with `position` (`EnterZone`), the movement rules, and `PlayerFactory` | A new `server/zone/` Gradle module (included in `settings.gradle.kts`) with its `Program.kt` and the `server/config/zone-a.json` and `zone-b.json` files, its start-up in `e2e/.../Nodes.kt`, and a `Roles` entry; the `addActorFactory` registration in `Program.kt`; the node declarations in `zlink.structure.json` and the matching `Structure.kt` check (the starter's check accepts only the `session` role) |
-| Spot | `server/zone/src/main/kotlin/MyGame/zone/Zone.kt` | `Zone` with `ZoneState` (visibility, pending arrivals) and the border calculation | The `addSpotFactory` registration in `Program.kt` (`stableTypeLimit`, `SPOT_WIDE`); the `spots` and `nodes` declarations in `zlink.structure.json` and the `Structure.kt` check that compares them with the registrations (the starter's check requires no Spots) |
+| Typed messages | `server/shared/src/main/kotlin/MyGame/Contracts.kt` | Shared request, response, event, and rejection contracts; `SessionInfo` carries binding identity separately from `WorldState` | Keep JSON property names and event string values aligned across languages |
+| Movement and visibility domain | `server/zone/src/main/kotlin/MyGame/zone/ZonePositionDomain.kt` | `ZonePositionDomain` owns position, sequence, budget, arrivals, connected players, and boundary decisions | Add the domain check and observe results in `cross` and `border` |
+| Actor and Zone lifecycle | `server/zone/src/main/kotlin/MyGame/zone/Player.kt`; `Zone.kt` | Player carries no duplicate position state; Zone admission and leave callbacks update the domain and publish typed events | Preserve `addActorFactory` and `addSpotFactory` registrations in `Program.kt` |
 | Entry and first admission | `server/zone/src/main/kotlin/MyGame/zone/Player.kt` (`Entry`, `EnterWorld`), `Actions.reconnect` in `server/zone/src/main/kotlin/MyGame/zone/Handlers.kt` | `EnterWorld.join`, the first-entry path, and the identity check and state resend of `Actions.reconnect` | The `addEntrySpot` registration and its `entry` declaration; the `cross` scenario for first entry and the `reconnect` scenario that compares state after reconnection |
 | Session binding | `server/session/src/main/kotlin/MyGame/session/Program.kt` (`GameSession`) | The first-packet branch: find or create the Actor, `bindOrGet`, and relay the original typed packet | The same first-packet type as `EnterWorld.join`; transfer it into the starter's `PlayerSession.kt` |
-| Host relocation | `PlayerTransfer` in `server/zone/src/main/kotlin/MyGame/zone/Player.kt`, `ZoneTransfer` in `server/zone/src/main/kotlin/MyGame/zone/Zone.kt`, `server/shared/src/main/kotlin/MyGame/Transfer.kt`, and the `vacate-zone` control in `server/shared/src/main/kotlin/MyGame/Hosting.kt` and `Control.kt` | The snapshot classes (`EnterZone`, `ZoneState`) with `capture` and `restore`, `ensureActive`, and the `vacate-zone` control | The `preserveStateWith` registrations; the `update` scenario, which checks that connections and state survive a server replacement and that the replacement node accepts new work |
+| Host relocation | `ZoneTransfer` in `server/zone/src/main/kotlin/MyGame/zone/Zone.kt`, `Transfer.kt`, and host controls | Zone snapshots store remaining budget milliseconds; Player transfer state is empty | Keep `preserveStateWith` registrations and the `update` scenario aligned |
 | Dynamic dungeon | `server/instance/src/main/kotlin/MyGame/instance/Program.kt`, `Actions.dungeon` in `server/zone/src/main/kotlin/MyGame/zone/Handlers.kt` | The dynamic User Spot creation pattern (`recreateOnRelocation()`), `DungeonActions.open`, and the Dungeon information | A new `server/instance/` Gradle module with `instance.json`, its start-up, and role; the dynamic `dungeon` Spot and the `GetOrCreate` edge in `zlink.structure.json` |
-| Channel pub/sub and seamless movement | `Zone.configure()`, `publishBorder`, and `showBorder` in `server/zone/src/main/kotlin/MyGame/zone/Zone.kt`; `server/zone/src/main/kotlin/MyGame/border/BorderRoutes.kt`; `BorderTick` and `Actions.deliver` in `server/zone/src/main/kotlin/MyGame/zone/Handlers.kt` | The border subscription and publication, and the delivery to the receiving Actor's bound Session | The `border` channel server registration in `Program.kt` and its `channels` declaration in `zlink.structure.json`; a `border` scenario |
+| Channel pub/sub and seamless movement | `Zone` visibility publication, `BorderRoutes.kt`, and typed delivery handlers in `Handlers.kt` | Publish appearance, movement, and departure on state changes | Keep the `border` channel registration and the `border` scenario aligned |
 
-`vacate-zone` is the control that e2e uses to verify replacement placement (`Control.VACATE_ZONE`, handled in `runNode`). Transfer `drain`, `shutdown`, and `vacate-zone` together.
+`vacate-zone` is the control that e2e uses to verify replacement placement (`Control.VACATE_ZONE`, handled in `runNode`).
 
 ### Transfer order and rules
 
-Transfer one row at a time and run the build, the structure check, and the related e2e scenario after each. Add a scenario ID to `Names.SCENARIOS` in `Contracts.kt`, to the `scenario` function in `e2e/src/main/kotlin/MyGame/e2e/Scenarios.kt`, to `run.scenarios`, and to the selection examples in `run.commands` of `zlink.structure.json` together. Judge results by the replies and events actually received; do not make tests pass with fixed sleeps or longer deadlines.
+Extend one rule at a time and run its domain check, build, structure check, and related e2e scenario. Add scenario IDs to `Names.SCENARIOS`, `Scenarios.kt`, `run.scenarios`, and the command examples in `zlink.structure.json` together. Judge results by replies and push events actually received; do not use fixed waits or longer deadlines.
 
 Start with the message contracts. Define the typed classes in `Contracts.kt` first, then move each handler that fails to compile to the new messages. When you change the first-entry packet, update the first-packet branch in `GameSession`, `EnterWorld.join`, and `Actions.reconnect` to receive the same type.
 
-Keep each piece of state in the object that decides it. Per-player state belongs in `Player`; state shared by several players belongs in a Spot. When you change state fields, update that object's snapshot class (`EnterZone` for `Player`, `ZoneState` for `Zone`) and its `capture` and `restore` together. A missing field disappears after relocation, and the `update` scenario detects the loss.
+Keep position, sequence, movement budget, and visibility in `ZonePositionDomain`. When those fields change, update its snapshot and `capture` and `restore` together. A missing field disappears after relocation, and the `update` scenario detects the loss.
 
 Add a channel, its subscription, and its declaration in the same change: the subscription handlers in `BorderRoutes.kt` (registered from `Zone.configure()`), the channel server registration in `Program.kt`, and the `channels` declaration in `zlink.structure.json`. The structure check requires every Zone node to declare the `border` channel.
 
@@ -143,7 +150,7 @@ If `update` fails after a transfer, first check whether the snapshot is missing 
 
 Use the public packages from Maven Central at the versions pinned in `build.gradle.kts`, and keep project dependencies between this project's own Gradle modules. Process typed messages with the default Framework JSON serializer so processes use the same contract. Limit direct serialization in relocation adapters (the `*Transfer` classes) to application state, keeping management of Framework execution state separate from game state. Framework owns routing, leases, membership, completion, queues, and execution gates; do not duplicate those decisions in application state.
 
-Manage each game fact, such as a player's coordinate, in the object responsible for changing it (`Player`). Store player IDs and observational copies in Spots (`ZoneState.visiblePlayers`), without assuming the same Actor object reference remains usable after movement. Replies inside an Actor handler go through that Actor's bound Session; other pushes address the Actor by player ID with the public Actor client, and the receiving Actor handler forwards them through its bound Session. A Spot must not retain Actor references for later delivery because host relocation does not repeat `onJoinedActor` on the target. Session binding owns Actor identity, so game messages do not duplicate it (`SessionInfo` reads the current binding). Sessions forward packets after binding; the Actor or Spot responsible for the state makes gameplay decisions.
+Keep position, sequence, budget, and visibility in `ZonePositionDomain`; Spots retain player IDs and forward typed observations without storing Actor references. Replies inside an Actor handler go through that Actor's bound Session; pushes address the Actor by player ID with the public Actor client, and the receiving Actor handler forwards them through its bound Session. Host relocation does not repeat `onJoinedActor` on the target. Session binding owns Actor identity, so game messages do not duplicate it (`SessionInfo` reads the current binding). Session forwards only packets in its client allow-list; the domain owner makes movement decisions.
 
 ### Asynchronous execution and lifecycle
 
