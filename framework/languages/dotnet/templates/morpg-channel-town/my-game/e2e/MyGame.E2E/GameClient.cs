@@ -1,3 +1,4 @@
+using System.Threading.Channels;
 using MyGame.Shared;
 using Systems.Zlink.Stream.Connector;
 using Systems.Zlink.Stream.Connector.Contracts;
@@ -14,6 +15,7 @@ internal sealed class GameClient(
     public IZlinkStreamConnector Connector { get; } = connector;
     public string PlayerId { get; } = playerId;
     public bool Disconnected { get; private set; }
+    private readonly Dictionary<Type, Channel<object>> inboxes = [];
 
     public static async Task<GameClient> ConnectAsync(
         RunOutcome outcome,
@@ -46,6 +48,9 @@ internal sealed class GameClient(
                 return ValueTask.CompletedTask;
             }
         );
+        client.Record<TownView>();
+        client.Record<DungeonView>();
+        client.Record<ActionRejected>();
         try
         {
             await connector.Connect.Async(ct);
@@ -58,14 +63,29 @@ internal sealed class GameClient(
         }
     }
 
+    private void Record<T>()
+    {
+        var inbox = Channel.CreateUnbounded<object>();
+        inboxes.Add(typeof(T), inbox);
+        Connector.On<T>((message, _) =>
+        {
+            inbox.Writer.TryWrite(message.Payload!);
+            return ValueTask.CompletedTask;
+        });
+    }
+
     public async Task<T> ReceiveAsync<T>(Func<T, bool> predicate, CancellationToken ct)
     {
-        var result = await Connector
-            .WaitFor<T>()
-            .Where(message => predicate(message.Payload))
-            .Timeout(MessageTimeout)
-            .Async(ct);
-        return result.Payload;
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        deadline.CancelAfter(MessageTimeout);
+        try
+        {
+            await foreach (var message in inboxes[typeof(T)].Reader.ReadAllAsync(deadline.Token))
+                if (predicate((T)message)) return (T)message;
+        }
+        catch (OperationCanceledException error) when (!ct.IsCancellationRequested)
+        { throw new TimeoutException($"Player {PlayerId}: waiting for {typeof(T).Name}.", error); }
+        throw new InvalidOperationException("Client inbox closed.");
     }
 
     public async Task<T> SendAsync<T, TRequest>(
@@ -74,6 +94,8 @@ internal sealed class GameClient(
         CancellationToken ct
     )
     {
+        if (request is ViewRequest)
+            while (inboxes[typeof(T)].Reader.TryRead(out _)) { }
         var response = ReceiveAsync(predicate, ct);
         await Connector.Send(request).Async(ct);
         return await response;
@@ -92,6 +114,8 @@ internal sealed class GameClient(
     internal static bool SameDungeonState(DungeonView before, DungeonView after) =>
         before.DungeonId == after.DungeonId
         && before.PartyId == after.PartyId
+        && before.RunId == after.RunId
+        && before.Phase == after.Phase
         && before.Stage == after.Stage
         && before.Members.SequenceEqual(after.Members);
 

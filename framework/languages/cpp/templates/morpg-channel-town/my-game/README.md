@@ -43,6 +43,8 @@ Linux:
 ```sh
 ./run-e2e.sh
 ./run-e2e.sh --scenario channel,dungeon,reconnect,update
+./run-e2e.sh --check-structure
+./run-e2e.sh --check-domain
 ```
 
 Windows:
@@ -51,6 +53,7 @@ Windows:
 pwsh -NoProfile -File ./run-e2e.ps1
 pwsh -NoProfile -File ./run-e2e.ps1 -Scenario channel,dungeon,reconnect,update
 pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
+pwsh -NoProfile -File ./run-e2e.ps1 -CheckDomain
 ```
 
 The runner and nodes execute in containers. The script checks structure before Redis startup, then uses a unique Compose network, project, container names and Redis key prefixes. Nodes share the runner's network namespace, preserving loopback listeners and OS-assigned ports. Configuration is copied into each node before attaching stdin and stdout; `drain`, `shutdown` and lifecycle output retain their existing protocol.
@@ -61,12 +64,12 @@ The scripts and runner validate the actual structure files, start Redis with an 
 
 | Scenario | Assertions |
 | --- | --- |
-| `channel` | Move from town-1 on townA to town-2 on townB while preserving the physical Session and Actor generation. |
-| `dungeon` | Two players create and join a party, enter the same dungeon at stage 0 and both receive stage 1 after Advance. |
-| `reconnect` | Reconnect the second player with a new physical Session, retaining Actor identity, dungeon roster and stage. |
-| `update` | Drain the active Instance, observe relocation and SafeToShutdown, preserve both Sessions and dungeon state, stop and replace that Instance, then verify fresh dungeon placement there. |
+| `channel` | Reject an out-of-range channel without changing town state; move from town-1 to town-2 while preserving the physical Session and Actor generation; remove the forming party member from the source Town. |
+| `dungeon` | Verify server-issued PartyId and RunId, two entry sends without waiting, identical Active Dungeon views, nonleader and internal-packet rejection with unchanged state, completion at FinalStage, and distinct runs for parties in both town channels. |
+| `reconnect` | Reconnect the second player with a new physical Session, retaining Actor identity, RunId, Phase, stage and Dungeon roster. |
+| `update` | Drain the completed Instance, observe relocation and SafeToShutdown, preserve both Sessions and Dungeon state, stop and replace that Instance, then verify it accepts a distinct new party run. |
 
-The three party scenarios share a fixture so each can run alone or in combination. Both Instance nodes have `DungeonCapacity: 1`; the occupied target leaves the replacement as the available owner for a fresh dungeon. Placement remains a Framework decision. `./run-e2e.sh --check-structure` validates the actual files without starting Redis or game nodes.
+The three party scenarios share a fixture so each can run alone or in combination. Both Instance nodes have `DungeonCapacity: 1`; the occupied target leaves the replacement as the available owner for a fresh dungeon. Placement remains a Framework decision. `./run-e2e.sh --check-structure` validates the actual files without starting Redis or game nodes. `./run-e2e.sh --check-domain` runs the 91 domain checks without starting Redis or game nodes.
 
 ## Local debugging
 
@@ -98,7 +101,7 @@ This template answers `SessionInfoRequest` with a typed `SessionInfo` push; Fram
 
 Bootstrap Town providers sequentially and wait for each READY before starting the next. Each provider's public Town stable-type capacity must equal its configured fixed Town count; the structure checker enforces this. Earlier providers are full and later providers are absent, making each fixed Town's declared initial owner deterministic. Entry declarations describe the application Entry registered by Town and Instance, excluding Framework default Entries.
 
-Start Redis, townA (town-1), townB (town-2), instanceA, instanceB, then Session. Wait for each process's `READY` record. All listeners bind port zero and readiness reports Framework-published endpoints. Configure production Redis and key prefixes through `server/config/*.json`; distribute each actual Session endpoint to clients.
+Start Redis, townA (town-1), townB (town-2), instanceA, instanceB, then Session. Wait for each process's `READY` record. All listeners bind port zero and readiness reports Framework-published endpoints. Configure production Redis and key prefixes through `server/config/*.json`; distribute each actual Session endpoint to clients. Party order defines the leader. Members can leave a party while it is Forming; after preparation starts, the PartyRun retains its roster through Dungeon entry, completion and relocation.
 
 For maintenance, send `drain` on the selected process's stdin. Wait for `RELOCATION_REQUESTED`, `RELOCATED` and `SAFE_TO_SHUTDOWN`, then send `shutdown` and require `STOPPED` plus exit code 0. Start the replacement with the same configuration and wait for `READY` before assigning new work. A failed lifecycle operation must stop the deployment sequence.
 
@@ -110,4 +113,4 @@ The e2e configuration uses one Dungeon slot per Instance. After drain, the survi
 
 Docker Compose v2와 Linux 컨테이너 데몬을 준비한다. 템플릿 디렉터리에서 Linux는 `./run-e2e.sh`, Windows는 `pwsh -NoProfile -File ./run-e2e.ps1`을 실행한다. 기본 실행은 이미지 빌드부터 runner·node 컨테이너 기동과 정리까지 수행한다. Framework 버전은 `bootstrap.cmake` 한 곳에서 정하며, 빌드는 그 버전의 GitHub Release prebuilt를 받아 함께 게시된 SHA-256 체크섬으로 확인한다.
 
-로컬 디버깅은 C++20 컴파일러, CMake, Ninja를 설치한 뒤 `./run-e2e.sh --local` 또는 `pwsh -NoProfile -File ./run-e2e.ps1 -Local`로 실행한다. node 로그와 설정은 `.logs/run-<id>/`, Docker 빌드·정리 로그는 `.logs/docker-<project>/`에 남는다. 공개 패키지에서 확인된 차단 사항은 Known issues를 따른다.
+로컬 디버깅은 C++20 컴파일러, CMake, Ninja를 설치한 뒤 `./run-e2e.sh --local` 또는 `pwsh -NoProfile -File ./run-e2e.ps1 -Local`로 실행한다. 도메인 경계만 확인하려면 `./run-e2e.sh --check-domain` 또는 `pwsh -NoProfile -File ./run-e2e.ps1 -CheckDomain`을 사용한다. node 로그와 설정은 `.logs/run-<id>/`, Docker 빌드·정리 로그는 `.logs/docker-<project>/`에 남는다. 공개 패키지에서 확인된 차단 사항은 Known issues를 따른다.

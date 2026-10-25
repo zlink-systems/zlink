@@ -17,7 +17,11 @@ import {
   JoinParty,
   EnterDungeon,
   DungeonTravel,
-  TownDelivery
+  TownDelivery,
+  RunStartedHandler,
+  RunCompletedHandler,
+  PartyViewRequestHandler,
+  TownActionRejectedDelivery
 } from './handlers';
 runHost((_builder, config, mesh) => {
   if (!config.townId || !Number.isInteger(config.townCapacity) || config.townCapacity! < 1)
@@ -45,7 +49,11 @@ runHost((_builder, config, mesh) => {
       JoinParty,
       EnterDungeon,
       DungeonTravel,
-      TownDelivery
+      TownDelivery,
+      RunStartedHandler,
+      RunCompletedHandler,
+      PartyViewRequestHandler,
+      TownActionRejectedDelivery
     ],
     listener: { kind: 'routeMesh', name: Names.mesh },
     ready: (status) => status.placement.isAvailable,

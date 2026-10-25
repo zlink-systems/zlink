@@ -8,12 +8,6 @@ import systems.zlink.framework.kotlin.*
 import systems.zlink.framework.messaging.ZLinkMessage
 import systems.zlink.framework.spots.*
 
-data class DungeonState(
-    var partyId: String = "",
-    var members: List<String> = emptyList(),
-    var stage: Int = 0,
-)
-
 class Dungeon(
     override val context: ZLinkSpotContext,
     private val config: NodeConfig,
@@ -21,39 +15,29 @@ class Dungeon(
 ) : ZLinkSuspendingSpot<Player>() {
     var state = DungeonState()
 
-    fun prepare(request: PrepareDungeon): DungeonPrepared {
-        require(
-            state.partyId.isEmpty() &&
-                request.partyId.isNotBlank() &&
-                request.members.isNotEmpty() &&
-                request.members.size <= Names.MAXIMUM_PARTY_MEMBERS &&
-                request.members.distinct() == request.members &&
-                request.members.none { it.isBlank() } &&
-                Names.dungeonId(request.partyId) == context.spotId()
-        ) {
-            "Invalid dungeon party preparation"
-        }
-        state.partyId = request.partyId
-        state.members = request.members.toList()
-        return DungeonPrepared(context.spotId())
-    }
+    fun prepare(request: PrepareDungeon): DungeonPrepared =
+        DungeonPrepared(context.spotId(), request.runId, state.prepare(context.spotId(), request))
 
     override suspend fun onActorJoinSuspending(
         actorId: String,
         request: ZLinkMessage,
     ): ZLinkSpotActorJoinResult {
         val join = request.decode<JoinDungeon>()
-        return if (
-            join.dungeonId == context.spotId() &&
-                join.partyId == state.partyId &&
-                actorId in state.members
-        )
+        return if (state.accepts(actorId, context.spotId(), join))
             ZLinkSpotActorJoinResult.accept()
         else ZLinkSpotActorJoinResult.reject()
     }
 
     override suspend fun onJoinedActorSuspending(actor: Player) {
-        actors.kotlin().sendToActor(actor.context.actorId(), view()).await()
+        if (state.join(actor.context.actorId())) {
+            context.outbound().kotlin().sendToSpot(state.ownerSpotId, RunStarted(state.runId)).await()
+        }
+        broadcast()
+    }
+
+    private suspend fun broadcast() {
+        val message = view()
+        for (id in state.joined) actors.kotlin().sendToActor(id, message).await()
     }
 
     override suspend fun onLeaveActorSuspending(actor: Player) {}
@@ -61,14 +45,37 @@ class Dungeon(
     override suspend fun onDisconnectActorSuspending(actor: Player) {}
 
     private fun view() =
-        DungeonView(context.spotId(), config.id, state.partyId, state.members, state.stage)
+        DungeonView(
+            context.spotId(),
+            config.id,
+            state.partyId,
+            state.members,
+            state.stage,
+            state.runId,
+            state.phase,
+        )
 
     suspend fun show(actor: Player) = actor.context.boundSession().kotlin().send(view()).await()
 
-    suspend fun advance() {
-        state.stage = Math.incrementExact(state.stage)
-        val message = view()
-        for (id in state.members) actors.kotlin().sendToActor(id, message).await()
+    suspend fun showWithParty(actor: Player) {
+        context
+            .outbound()
+            .kotlin()
+            .sendToSpot(state.ownerSpotId, PartyViewRequest(actor.context.actorId()))
+            .await()
+        show(actor)
+    }
+
+    suspend fun advance(actor: Player) {
+        val reason = state.advance()
+        if (reason != null) {
+            actor.context.boundSession().kotlin().send(ActionRejected(reason)).await()
+            return
+        }
+        broadcast()
+        if (state.phase == RunPhase.Completed) {
+            context.outbound().kotlin().sendToSpot(state.ownerSpotId, RunCompleted(state.runId)).await()
+        }
     }
 }
 

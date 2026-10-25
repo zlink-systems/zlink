@@ -25,12 +25,7 @@ class Actions {
         dispatch: ZLinkMessageContext,
         request: ChangeChannelRequest,
     ) {
-        actor.context
-            .joinSpot(
-                Names.townId(request.channel),
-                JoinTownRequest(actor.context.actorId(), request.channel),
-            )
-            .defer()
+        spot.changeChannel(actor, request.channel)
     }
 
     @ZLinkSpotActorSend
@@ -39,7 +34,7 @@ class Actions {
         actor: Player,
         dispatch: ZLinkMessageContext,
         request: CreatePartyRequest,
-    ) = spot.party(actor, request.partyId, true)
+    ) = spot.party(actor, null, true)
 
     @ZLinkSpotActorSend
     suspend fun joinParty(
@@ -79,4 +74,20 @@ class Actions {
     suspend fun push(spot: Town, actor: Player, dispatch: ZLinkMessageContext, message: TownView) {
         actor.context.boundSession().kotlin().send(message).await()
     }
+}
+
+@ZLinkHandlerGroup(Names.TOWN)
+class RunStartedHandler : ZLinkSuspendingSpotPacketHandler<Town, RunStarted> {
+    override suspend fun handle(spot: Town, message: RunStarted) = spot.runStarted(message)
+}
+
+@ZLinkHandlerGroup(Names.TOWN)
+class RunCompletedHandler : ZLinkSuspendingSpotPacketHandler<Town, RunCompleted> {
+    override suspend fun handle(spot: Town, message: RunCompleted) = spot.runCompleted(message)
+}
+
+@ZLinkHandlerGroup(Names.TOWN)
+class PartyViewRequestHandler : ZLinkSuspendingSpotPacketHandler<Town, PartyViewRequest> {
+    override suspend fun handle(spot: Town, message: PartyViewRequest) =
+        spot.showParty(message.playerId)
 }

@@ -93,44 +93,16 @@ Actor가 소속 Spot을 바꾸는 동작은 membership 변경이다. 대상 Spot
 7. 같은 플레이어가 재접속하면 `PlayerSession`이 기존 Actor를 새 Session에 binding하고, Actor를 가진 Spot의 `TownReconnect` 또는 `DungeonReconnect`가 identity를 확인한 뒤 현재 view를 다시 보낸다.
 8. node를 교체할 때 `NodeControl`의 `drain`이 relocation을 요청한다. Framework는 `TownRelocation`과 `DungeonRelocation`으로 상태를 받아 다른 node에서 복원한다.
 
-## 이 샘플을 보며 개발하기
+## 템플릿 도메인 확장
 
-이 샘플은 기능들이 함께 동작하는 방식을 보여 주므로, 자기 게임으로 바꾸지 않고 읽고 실행하는 용도로 쓴다. 자기 프로젝트는 .NET 기본 셋업에서 시작한다. [ZLink Start](https://zlink.systems/start)의 Initializer에서 .NET을 고르거나 ZLink 저장소의 `framework/languages/dotnet/templates/starter/my-game`을 사용한다. 그다음 필요한 기능을 이 샘플에서 하나씩 옮긴다. 구조 선택은 기본 셋업의 `AGENTS.md`가 설명하며, 이 절은 `morpg-channel-town`만 다룬다. 이 샘플은 바꾸지 않고 프로젝트 옆에 참고용으로 둔다.
+이 템플릿의 도메인을 확장하여 MORPG 서버를 만든다. 실행과 배포 절차는 [README](README.md)를 따른다.
 
-### 샘플 먼저 실행하기
+1. `server/MyGame.Town/TownSpot.cs`에서 채널 인원과 파티 규칙을 확장하고, `server/MyGame.Instance/DungeonSpot.cs`에서 던전 멤버와 단계 규칙을 확장한다. 각 상태의 판정 위치를 도메인 한 곳에 유지한다. `server/MyGame.Shared/PartyRun.cs`는 실행 전이·던전 준비·단계 진행·채널 수 범위를 판정한다.
+2. 새 공통 계약은 `server/MyGame.Shared/Contracts.cs`에 추가한다. 클라이언트 입력과 서버 내부 메시지를 구분하고 기본 typed serializer를 사용한다.
+3. 새 클라이언트 패킷은 `server/MyGame.Session/PlayerSession.cs`의 Session 허용 목록에 추가한다. 내부 메시지는 클라이언트가 보낼 수 없다.
+4. `e2e/MyGame.E2E/Scenarios.cs`에 응답과 거부 뒤 상태 불변을 관찰하는 시나리오를 추가한다. README의 시나리오 표와 `zlink.structure.json`의 `run.scenarios`를 함께 맞춘다.
 
-옮기기 전에 [개발 명령](#개발-명령)으로 빌드와 e2e를 한 번 실행해 받은 샘플이 동작하는지 확인하고 동작을 본다. 이 결과가 이후 비교의 기준이 된다. 실패하면 먼저 [README](README.md)의 Known issues와 대조한다.
-
-### 옮길 기능
-
-기능 이름은 기본 셋업 `AGENTS.md`의 기능 표와 같다. 경로는 이 디렉터리를 기준으로 한다. 기본 셋업에는 Session node 하나와 `connect` 시나리오만 있으므로, 마지막 열은 기능마다 기본 셋업에서 함께 늘릴 것이다.
-
-| 기능 | 이 샘플의 파일 | 옮길 것 | 기본 셋업에서 함께 늘릴 것 |
-| --- | --- | --- | --- |
-| Typed 메시지 | `server/MyGame.Shared/Contracts.cs` | 사용할 기능의 record: `JoinTownRequest`, `ChangeChannelRequest`, `CreatePartyRequest`, `JoinPartyRequest`, `EnterDungeonRequest`, `AdvanceRequest`, `ViewRequest`, `PartyView`, `TownView`, `DungeonView`, `PrepareDungeon`, `DungeonPrepared`, `JoinDungeon`, `ActionRejected`. `SessionInfoRequest`·`SessionInfo`는 client가 필요로 할 때만 옮긴다 | `GameNames`의 등록 이름과 `TownId`·`DungeonId` helper, `Rejection` 사유. `NodeReady`와 `NodeProtocol`은 기본 셋업에 이미 있다 |
-| Spot | `server/MyGame.Town/TownSpot.cs`, `server/MyGame.Instance/DungeonSpot.cs` | channel 인원과 파티 규칙을 가진 `TownSpot`, 명단과 stage를 가진 `DungeonSpot` | 새 `server/MyGame.Town/`·`server/MyGame.Instance/` 프로젝트와 `server/config/` 파일, 각 `Program.cs`의 `AddSpotFactory<TownSpot>`·`AddSpotFactory<DungeonSpot>` 등록. `zlink.structure.json`의 `spots`·`nodes` 선언과 이를 등록과 비교하는 구조 검사 |
-| Actor | `server/MyGame.Shared/PlayerActor.cs` | join 완료 시 거부 응답을 보내는 상태 없는 `PlayerActor`와 `PlayerFactory` | 각 `Program.cs`의 `AddActorFactory<PlayerActor, PlayerFactory>` 등록 |
-| Entry·첫 입장 | `server/MyGame.Shared/TownEntry.cs`, `server/MyGame.Town/Handlers.cs`의 `TownReconnect`, `server/MyGame.Instance/Handlers.cs`의 `DungeonReconnect` | `EnterTownHandler`와 town으로의 지연 join, 재접속 handler의 identity 확인과 상태 재전송 | Town과 Instance node의 Entry Spot 등록과 `entry` 선언. 첫 입장을 확인하는 `channel` 시나리오와 재접속 뒤 상태를 비교하는 `reconnect` 시나리오 |
-| Session binding | `server/MyGame.Session/PlayerSession.cs` | 첫 패킷 검사, Actor 조회·생성, binding과 원래 typed 패킷 relay | `EnterTownHandler`와 같은 첫 패킷 타입. 기본 셋업의 `PlayerSession.cs`에 옮긴다 |
-| Host relocation | `server/MyGame.Town/TownSpot.cs`의 `TownRelocation`, `server/MyGame.Instance/DungeonSpot.cs`의 `DungeonRelocation`, `server/MyGame.Shared/PlayerActor.cs`의 `PlayerRelocation`, `server/MyGame.Shared/NodeControl.cs` | `Capture`·`Restore`를 가진 relocation adapter와 `drain`·`shutdown` 제어 | `PreserveStateWith` relocation 등록. 서버 교체 뒤에도 연결·상태가 유지되고 대체 node가 새 Dungeon을 받는지 판정하는 `update` 시나리오 |
-| 동적 던전 | `server/MyGame.Town/TownSpot.cs`의 `EnterAsync`, `server/MyGame.Town/Handlers.cs`의 `DungeonTravel`, `server/MyGame.Instance/DungeonSpot.cs`, `server/MyGame.Instance/Program.cs` | 파티 Dungeon의 `GetOrCreate`와 typed 준비, 명단에 있는 구성원만 받는 admission, stage | 각 Instance의 동적 `dungeon` Spot과 `zlink.structure.json`의 `GetOrCreate` edge. `dungeon` 시나리오 |
-| 월드·채널 선택 | `server/MyGame.Town/Handlers.cs`의 `ChangeChannel`, `server/MyGame.Town/Program.cs`의 `TownIds` bootstrap | town 사이의 지연 membership 변경과 시작 시 만드는 고정 town | `TownIds`·`TownCapacity` 설정. `zlink.structure.json`의 `logicalId`를 가진 고정 `town-1`·`town-2` Spot |
-
-### 옮기는 순서와 규칙
-
-기능은 표의 행 하나씩 옮기고, 하나를 옮길 때마다 빌드, 구조 검사, 관련 e2e 시나리오를 실행한다. 시나리오 ID는 `e2e/MyGame.E2E/Scenarios.cs`의 목록, `zlink.structure.json`의 `run.scenarios`, `run.commands`의 시나리오 선택 예시에 함께 추가한다. 판정은 실제로 받은 응답과 이벤트로 하고, 고정 대기나 기한 확대로 통과시키지 않는다.
-
-메시지 contract부터 옮긴다. `Contracts.cs`에 typed record를 먼저 정의한 뒤, 컴파일 오류가 나는 handler를 하나씩 새 메시지로 옮긴다. 첫 입장 패킷을 바꾸면 `PlayerSession`의 첫 패킷 검사, `EnterTownHandler`, 재접속 handler가 같은 타입을 받도록 함께 고친다.
-
-상태는 그 상태를 결정하는 객체에 둔다. Town이 인원과 파티를, Dungeon이 명단과 stage를 소유한다. Session binding이 Actor identity를 소유하므로 게임 상태 view에는 Actor generation이나 Session identity를 넣지 않는다. 상태 필드를 바꿀 때는 그 Spot의 `Capture`·`Restore`를 함께 고친다. 빠뜨린 상태는 relocation 뒤 사라지고 `update` 시나리오가 그 손실을 잡는다.
-
-Actor를 호스팅할 수 있는 모든 node에 공통 Entry와 Player factory를 등록하고, Instance node도 포함하여 그 node마다 `zlink.structure.json`에 Entry 하나를 선언한다. Framework 기본 Entry는 structure에 넣지 않는다. 동적 Dungeon factory는 소유하는 모든 Instance에 선언한다.
-
-Town provider는 하나씩 시작하고 각 `READY` 줄을 확인한 뒤 다음을 시작한다. 각 provider의 `TownCapacity`는 고정 town 수와 정확히 같게 두어, town을 만드는 동안 앞선 provider는 가득 차고 뒤의 provider는 아직 없으므로 선언된 소유자만 그 town을 호스팅하게 한다. 구조 검사가 이 용량을 정확히 검사한다. e2e 설정은 Instance마다 Dungeon slot을 하나로 두어 대체 배치를 결정적으로 만든다.
-
-Town·Dungeon 같은 역할 이름을 이 샘플과 다르게 정하려면 타입 이름, `GameNames`, `server/config/`, `zlink.structure.json`을 한 번에 바꾼다. 이름 변경은 기능을 옮기는 변경과 나눠서 진행하면 실패 원인을 찾기 쉽다.
-
-옮긴 뒤 `update`가 실패하면 `Capture`에 빠진 필드가 있는지 먼저 확인한다. 그다음 [디버깅](#디버깅)의 message flow로 첫 실패 단계를 찾는다.
+상태 필드를 추가할 때 relocation capture와 restore를 함께 수정한다. Framework가 소유한 라우팅·membership·binding 결정을 도메인에 재구현하지 않는다.
 
 ## 개발 시 주의점
 

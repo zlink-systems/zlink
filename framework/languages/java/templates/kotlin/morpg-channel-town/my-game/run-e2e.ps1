@@ -1,6 +1,7 @@
 param(
     [switch]$Local,
     [switch]$CheckStructure,
+    [switch]$CheckDomain,
     [switch]$NoBuild,
     [switch]$BuildOnly,
     [string]$Scenario,
@@ -13,7 +14,8 @@ $root = $PSScriptRoot
 Push-Location $root
 try {
 New-Item -ItemType Directory -Force (Join-Path $root '.logs') | Out-Null
-if ($CheckStructure) { $RunnerArguments = @('--check-structure') + $RunnerArguments }
+if ($CheckDomain) { $RunnerArguments = @('--check-domain') + $RunnerArguments }
+elseif ($CheckStructure) { $RunnerArguments = @('--check-structure') + $RunnerArguments }
 elseif ($Scenario) { $RunnerArguments = @('--scenario', $Scenario) + $RunnerArguments }
 if ($Local) {
     if (-not $NoBuild) {
@@ -49,10 +51,16 @@ try {
     }
     if ($BuildOnly) { $result = 0 }
     else {
-        $checkArguments = @(if ($CheckStructure) { $RunnerArguments } else { '--check-structure' })
+        $checkArguments = @('--check-structure')
         & docker @compose run --rm --no-deps -T --name "$project-check" runner @checkArguments
         if ($LASTEXITCODE -ne 0) { throw 'Structure check failed.' }
-        if ($CheckStructure) { $result = 0 }
+        if ($CheckStructure -and -not $CheckDomain) { $result = 0 }
+        elseif ($CheckDomain) {
+            & docker @compose run --rm --no-deps -T --name "$project-domain" runner --check-domain *> (Join-Path $logs 'domain.log')
+            if ($LASTEXITCODE -ne 0) { throw 'Domain check failed.' }
+            Get-Content (Join-Path $logs 'domain.log') -Tail 5 | Write-Host
+            $result = 0
+        }
         else {
             & docker @compose up -d --wait --wait-timeout 30 redis *> (Join-Path $logs 'redis-start.log')
             if ($LASTEXITCODE -ne 0) { throw 'Redis startup failed.' }

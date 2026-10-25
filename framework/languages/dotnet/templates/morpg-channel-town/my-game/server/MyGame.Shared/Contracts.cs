@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace MyGame.Shared;
 
 public static class GameNames
@@ -9,29 +11,37 @@ public static class GameNames
     public const string SessionStream = "players";
     public const int MaximumPartyMembers = 4;
     public const int ChannelCount = 2;
+    public const long MaximumInteger = 9_007_199_254_740_991;
+    public const long FinalStage = 3;
 
-    public static string TownId(int channel)
+    public static string TownId(long channel)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(channel, 1);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(channel, ChannelCount);
         return $"town-{channel}";
     }
 
-    public static string DungeonId(string partyId) => $"dungeon-{partyId}";
+    public static string DungeonId(string runId) => $"dungeon-{runId}";
 }
 
 public static class Rejection
 {
-    public const string JoinRejected = "JOIN_REJECTED";
-    public const string InvalidParty = "INVALID_PARTY";
-    public const string NotLeader = "NOT_LEADER";
+    public const string JoinRejected = "join-rejected";
+    public const string InvalidParty = "invalid-party";
+    public const string NotLeader = "not-leader";
+    public const string RunMismatch = "run-mismatch";
+    public const string RunInProgress = "run-in-progress";
+    public const string RunNotActive = "run-not-active";
+    public const string IntegerOutOfRange = "integer-out-of-range";
+    public const string InvalidChannel = "invalid-channel";
+    public const string PacketNotAllowed = "packet-not-allowed";
 }
 
-public sealed record JoinTownRequest(string PlayerId, int Channel);
+public sealed record JoinTownRequest(string PlayerId, long Channel);
 
-public sealed record ChangeChannelRequest(int Channel);
+public sealed record ChangeChannelRequest(long Channel);
 
-public sealed record CreatePartyRequest(string PartyId);
+public sealed record CreatePartyRequest;
 
 public sealed record JoinPartyRequest(string PartyId);
 
@@ -41,7 +51,7 @@ public sealed record AdvanceRequest;
 
 public sealed record ViewRequest;
 
-public sealed record PartyView(string PartyId, string[] Members);
+public sealed record PartyView(string PartyId, string[] Members, RunPhase Phase, string? RunId);
 
 public sealed record TownView(string TownId, string NodeId, string[] Players, PartyView[] Parties);
 
@@ -50,16 +60,31 @@ public sealed record DungeonView(
     string NodeId,
     string PartyId,
     string[] Members,
-    int Stage
+    long Stage,
+    string RunId,
+    RunPhase Phase
 );
 
-public sealed record PrepareDungeon(string PartyId, string[] Members);
+public sealed record PrepareDungeon(
+    string RunId,
+    string PartyId,
+    string OwnerSpotId,
+    string[] Members
+);
 
-public sealed record DungeonPrepared(string DungeonId);
+public sealed record DungeonPrepared(string DungeonId, string RunId, string? Reason = null);
 
-public sealed record JoinDungeon(string DungeonId, string PartyId);
+public sealed record JoinDungeon(string DungeonId, string RunId);
 
-public sealed record ActionRejected(string Reason);
+public sealed record ActionRejected(string Reason, int RetryAfterMs = 0);
+
+[JsonConverter(typeof(JsonStringEnumConverter<RunPhase>))]
+public enum RunPhase { Forming, Preparing, Entering, Active, Completed }
+
+public sealed record RunStarted(string RunId);
+public sealed record RunCompleted(string RunId);
+
+public sealed record PartyViewRequest(string PlayerId);
 
 public sealed record SessionInfoRequest;
 

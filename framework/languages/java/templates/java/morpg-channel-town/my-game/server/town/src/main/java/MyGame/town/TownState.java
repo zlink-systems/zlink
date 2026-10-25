@@ -6,37 +6,42 @@ import java.util.*;
 
 public final class TownState {
     public Set<String> players = new LinkedHashSet<>();
-    public Map<String, List<String>> parties = new LinkedHashMap<>();
+    public Map<String, PartyRun> parties = new LinkedHashMap<>();
 
     public void leave(String id) {
         players.remove(id);
-        var it = parties.values().iterator();
+        var it = parties.entrySet().iterator();
         while (it.hasNext()) {
-            var members = it.next();
-            members.remove(id);
-            if (members.isEmpty()) it.remove();
+            var party = it.next().getValue();
+            party.leave(id);
+            if (party.members.isEmpty()) it.remove();
         }
     }
 
     public boolean party(String id, String partyId, boolean create) {
-        if (partyId == null
-                || partyId.isBlank()
-                || !players.contains(id)
-                || parties.values().stream().anyMatch(m -> m.contains(id))) return false;
-        var members = parties.get(partyId);
-        if (create ? members != null : members == null || members.size() >= Rules.MAX_MEMBERS)
-            return false;
+        if (!players.contains(id) || partyFor(id) != null) return false;
         if (create) {
-            members = new ArrayList<>();
-            parties.put(partyId, members);
+            var party = new PartyRun();
+            party.members.add(id);
+            parties.put(party.partyId, party);
+            return true;
         }
-        members.add(id);
+        if (partyId == null || partyId.isBlank()) return false;
+        var party = parties.get(partyId);
+        if (party == null
+                || party.phase != RunPhase.Forming
+                || party.members.size() >= Rules.MAX_MEMBERS) return false;
+        party.members.add(id);
         return true;
     }
 
-    public Map.Entry<String, List<String>> ledParty(String id) {
-        return parties.entrySet().stream()
-                .filter(e -> e.getValue().getFirst().equals(id))
+    public PartyRun partyFor(String id) {
+        return parties.values().stream().filter(party -> party.members.contains(id)).findFirst().orElse(null);
+    }
+
+    public PartyRun partyForRun(String runId) {
+        return parties.values().stream()
+                .filter(party -> Objects.equals(party.runId, runId))
                 .findFirst()
                 .orElse(null);
     }
@@ -48,7 +53,7 @@ public final class TownState {
                 players.stream().sorted().toList(),
                 new TreeMap<>(parties)
                         .entrySet().stream()
-                                .map(e -> new PartyView(e.getKey(), List.copyOf(e.getValue())))
+                                .map(e -> e.getValue().view())
                                 .toList());
     }
 }

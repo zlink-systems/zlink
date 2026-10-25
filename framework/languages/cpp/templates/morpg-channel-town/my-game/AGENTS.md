@@ -17,6 +17,7 @@ pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
 pwsh -NoProfile -File ./run-e2e.ps1
 pwsh -NoProfile -File ./run-e2e.ps1 -Scenario channel,dungeon,reconnect,update
 pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
+pwsh -NoProfile -File ./run-e2e.ps1 -CheckDomain
 ```
 
 Bash provides the same workflow:
@@ -26,6 +27,7 @@ Bash provides the same workflow:
 ./run-e2e.sh
 ./run-e2e.sh --scenario channel,dungeon,reconnect,update
 ./run-e2e.sh --check-structure
+./run-e2e.sh --check-domain
 ```
 
 For host process debugging, install a C++20 compiler (GCC 13 or later, or Visual Studio 2022 17.4 or later in a Visual Studio developer shell on Windows), CMake 3.24 or later, and Ninja, then add `--local` or `-Local`. Local mode runs `cmake -P bootstrap.cmake`, `cmake --preset default` and `cmake --build --preset default`, then starts `build/bin/my-game-e2e`. Add `--no-build` or `-NoBuild` only with an existing local build. Keep canonical scenario order and assertions; compare first failures with Known issues in the README.
@@ -87,52 +89,21 @@ Requests in the example game follow this path. Reading the code along this path 
 1. The client connects to the Session node over STREAM and sends the first packet, `JoinTownRequest`, which carries the player ID and the channel number. `Session::on_packet` checks the first packet name, calls `get_or_create` for the Player Actor by `playerId`, binds it with `bind_or_get`, and relays the original packet.
 2. A new Actor starts in the Entry Spot `TownEntry`. `TownEntry::enter` checks the identity and requests `join_spot(...).defer()` for the town of that channel (`Names::town_id`).
 3. `Town::on_actor_join` accepts the player, and `Town::on_actor_joined` broadcasts a `TownView` (players and parties) to the town through the Actor client; `Town::deliver` forwards it to the bound Session. `Town::query` answers `ViewRequest`, and `Town::reconnect` answers the first packet replayed on reconnect.
-4. `ChangeChannelRequest` is handled by `Town::change`, which requests `join_spot(...).defer()` for the town of the other channel. `CreatePartyRequest` and `JoinPartyRequest` are handled by `Town::create_party` and `Town::join_party`, which apply `TownState::party` or answer `ActionRejected`.
-5. `EnterDungeonRequest` is handled by `Town::enter`. For the party led by the requester, it calls `get_or_create` for the Dungeon, asks it with `request_to_spot` and `PrepareDungeon`, and sends `JoinDungeon` to every member through the Actor client. Each member's `Town::travel` requests `join_spot(...).defer()` for the Dungeon.
-6. `Dungeon::on_actor_join` admits the party members and `Dungeon::on_actor_joined` sends the `DungeonView`; `Dungeon::advance` raises the stage and sends the new view to every member.
+4. `ChangeChannelRequest` is handled by `Town::change`, which checks the 64-bit channel range and the PartyRun phase before requesting `join_spot(...).defer()` for another channel. A member may leave while the party is Forming; later phases reject the move. `CreatePartyRequest` and `JoinPartyRequest` update `TownState::party` or return `ActionRejected`.
+5. `EnterDungeonRequest` is handled by `Town::enter`. A server-issued PartyId identifies the party and a server-issued RunId identifies each run. The leader creates or reuses the Dungeon using `get_or_create`, prepares it with `request_to_spot` and `PrepareDungeon`, then sends `JoinDungeon` to online members. Matching repeated preparation is idempotent.
+6. `Dungeon::on_actor_join` admits only roster members with the matching RunId. When all members arrive, `Dungeon::on_actor_joined` sends `RunStarted` to the owner Town and broadcasts an Active `DungeonView`. `Dungeon::advance` advances through `FinalStage`, broadcasts the Completed view and sends `RunCompleted` to the owner Town.
 7. To replace a node, `drain` in `NodeControl` requests relocation. Framework takes the game state from `capture` in `TownRelocation` and `DungeonRelocation` and calls `restore` on another node. `PlayerRelocation` carries no state.
 
-## Developing from this sample
+## Extending the template domain
 
-This sample shows how the features work together, so read and run it rather than turning it into your game. Start your own project from the C++ starter: choose C++ in the Initializer at [ZLink Start](https://zlink.systems/start), or use `framework/languages/cpp/templates/starter/my-game` in the ZLink repository. Then transfer the features you need from this sample one at a time. The starter's `AGENTS.md` owns the choice between structures; this section covers only `morpg-channel-town`. Keep this sample unchanged next to your project as a reference.
+Extend this template's domain to build a MORPG server. Follow the [README](README.md) for execution and deployment.
 
-### Run the sample first
+1. Extend channel population and PartyRun transitions in `server/town/domain.hpp`; it owns PartyId, RunId and party phase. `server/instance/domain.hpp` owns Dungeon preparation, admission, arrival phase and stage progression. `server/shared/domain.hpp` owns channel bounds.
+2. Add shared contracts in `server/shared/contracts.hpp`. Keep client input separate from internal messages, preserve camelCase JSON fields and string RunPhase values, and use the default typed serializer.
+3. Add new client packets to the Session allowlist in `server/session/session.hpp`. Internal messages must not be accepted from clients.
+4. Add scenarios in `e2e/scenarios.hpp` that observe replies and unchanged state after rejection. Keep the 91 domain checks available through `./run-e2e.sh --check-domain`; update the README scenario table and `run.scenarios` and `run.commands` in `zlink.structure.json` together.
 
-Before transferring anything, run the build and e2e once with the [Development commands](#development-commands) to confirm the downloaded sample works and to see its behavior. This result is the baseline for comparison. If it fails, compare the failure with Known issues in the [README](README.md) first.
-
-### Features to transfer
-
-Feature names match the feature table in the starter's `AGENTS.md`, except Party, which only this structure has. Paths are relative to this directory. The starter has one Session node and the `connect` scenario only, so the last column lists what grows in the starter with each feature.
-
-| Feature | File in this sample | What to transfer | What to grow in the starter alongside |
-| --- | --- | --- | --- |
-| Typed messages | `server/shared/contracts.hpp` | The structs of the features you adopt: `JoinTownRequest`, `ChangeChannelRequest`, `CreatePartyRequest`, `JoinPartyRequest`, `TownView`, `PartyView`, `EnterDungeonRequest`, `PrepareDungeon`, `DungeonPrepared`, `JoinDungeon`, `AdvanceRequest`, `ViewRequest`, `DungeonView`, `ActionRejected`; `SessionInfoRequest` and `SessionInfo` only if your client needs them | The `Names` and `Rejection` constants that the messages refer to |
-| Actor | `Player`, `PlayerFactory` in `server/shared/player.hpp` | The minimal player Actor: `Player::on_join_completed` reports a rejected join, and `PlayerFactory` creates it | A new `server/town/` role with its `main.cpp`, `server/config/` files, and an entry in the `CMakeLists.txt` role list; the Actor factory registration in `main.cpp`; the `nodes` declaration in `zlink.structure.json` and the structure check in `e2e/structure.hpp` |
-| Spot | `Town` in `server/town/town.hpp`, `TownState` in `server/town/domain.hpp` | `Town` with its admission rule, the players and parties in `TownState`, and the `deliver` forwarder | The Spot factory registration in `main.cpp` with `TownCapacity`; the `TownIds` setting and the `spots` declarations in `zlink.structure.json` that the structure check compares |
-| Party | `Town::create_party`, `Town::join_party` in `server/town/town.hpp`, `TownState::party` in `server/town/domain.hpp` | The party rules (one party per player, a size limit, leader entry) and the handlers that apply them and answer `ActionRejected` | The `Names::maximum_party_members` constant and the `Rejection` strings; the `dungeon` scenario, which creates and joins a party |
-| Entry and first admission | `TownEntry` in `server/shared/player.hpp`, `Town::reconnect` in `server/town/town.hpp` | `TownEntry::enter` (identity check, deferred join to the town of the channel) and the identity check and view resend of `Town::reconnect` and `Dungeon::reconnect` | The `add_entry_spot` registration and the `entry` declarations; a first-entry scenario (`channel`) and a `reconnect` scenario that compares state after reconnection |
-| Session binding | `server/session/session.hpp` | The first-packet check, then find or create the Actor, `bind_or_get`, and relay the original typed packet | The same first-packet type as `TownEntry::enter`; transfer it into the starter's `server/session/session.hpp` |
-| Host relocation | `TownRelocation` in `server/town/town.hpp`, `DungeonRelocation` in `server/instance/dungeon.hpp`, `PlayerRelocation` in `server/shared/player.hpp`, `NodeControl` in `server/shared/hosting.hpp` | The adapters with `capture` and `restore` of `TownState` and `DungeonState`, `PlayerRelocation` for the stateless Actor, and the `drain` and `shutdown` controls | The `preserve_state_with` registrations in `main.cpp`; the `update` scenario, which checks that connections and state survive a server replacement and that the replacement node accepts new work |
-| Dynamic dungeon | `Town::enter`, `Town::travel` in `server/town/town.hpp`, `server/instance/dungeon.hpp`, `server/instance/main.cpp` | The dynamic User Spot creation pattern (`get_or_create`, then `request_to_spot` with `PrepareDungeon`), the member-only admission of `Dungeon`, and `DungeonState` | A new `server/instance/` role with its config (`DungeonCapacity`) and `CMakeLists.txt` entry; the dynamic `dungeon` Spots and the `GetOrCreate` edge in `zlink.structure.json` |
-| World/channel selection | `Town::change` in `server/town/town.hpp` | The deferred channel change to the town of another channel | The `channel` scenario, which moves a player between `town-1` and `town-2` while keeping the Session and the Actor |
-
-`drain` and `shutdown` are transferred together with `NodeControl`.
-
-### Transfer order and rules
-
-Transfer one row at a time and run the build, the structure check, and the related e2e scenario after each. Add a scenario ID to the `Scenario` enum and `scenario_order` in `e2e/structure.hpp`, to the `switch` and the usage message in `e2e/main.cpp`, to `run.scenarios`, and to the selection examples in `run.commands` of `zlink.structure.json` together. Judge results by the replies and events actually received; do not make tests pass with fixed sleeps or longer deadlines.
-
-Start with the message contracts. Define the packet structs in `server/shared/contracts.hpp` first, each with a `packet_name` and its JSON conversion, then move each handler that fails to compile to the new messages. When you change the first-entry packet, update the first-packet check in `Session::on_packet` in `server/session/session.hpp` and `TownEntry::enter`, `Town::reconnect`, and `Dungeon::reconnect` to receive the same type.
-
-Keep each piece of state in the object that decides it. Players and parties belong in `Town` through `TownState`; the party roster and stage of a Dungeon belong in `Dungeon` through `DungeonState`. `Player` holds no application state. When you change state fields, update that object's state struct with its JSON conversion and the `capture` and `restore` of its relocation adapter together. A missing field disappears after relocation, and the `update` scenario detects the loss.
-
-Declare one Entry in `zlink.structure.json` for each node that registers `TownEntry` (the Town and Instance nodes) and none for roles without application Entry registration; Framework default Entries are not part of the structure. Keep the dynamic Dungeon declarations complete for every Instance that owns Dungeons.
-
-Both Instance nodes set `DungeonCapacity` to 1 in the e2e configuration. This makes replacement placement deterministic, because the occupied node leaves the replacement as the available owner for a fresh Dungeon; placement itself remains a Framework decision.
-
-To name roles such as Town or Dungeon differently from this sample, change the type names, `Names`, `server/config/`, `zlink.structure.json`, and the role list in `CMakeLists.txt` at once. Do the renaming in its own change, separate from transferring a feature, so failures are easier to trace.
-
-If `update` fails after a transfer, first check whether the snapshot is missing any state, then use the message flow in [Debugging](#debugging) to find the first failing step.
+When adding state fields, update relocation capture and restore together. Framework owns routing, membership and binding; keep those decisions out of the game domain.
 
 ## Development considerations
 

@@ -1,3 +1,3 @@
 package MyGame;
 
-public record ChangeChannelRequest(int channel) {}
+public record ChangeChannelRequest(long channel) {}

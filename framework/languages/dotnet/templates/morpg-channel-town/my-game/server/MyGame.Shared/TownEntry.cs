@@ -32,6 +32,8 @@ public sealed class EnterTownHandler
     {
         if (request.PlayerId != actor.Context.ActorId)
             throw new InvalidDataException("Player identity does not match the bound Actor.");
+        var reason = ChannelRules.Validate(request.Channel);
+        if (reason is not null) return actor.Context.BoundSession.Send(new ActionRejected(reason)).Async();
         actor.Context.JoinSpot(GameNames.TownId(request.Channel), request).Defer();
         return ValueTask.CompletedTask;
     }

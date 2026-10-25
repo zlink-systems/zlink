@@ -17,6 +17,7 @@ pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
 pwsh -NoProfile -File ./run-e2e.ps1
 pwsh -NoProfile -File ./run-e2e.ps1 -Scenario channel,dungeon,reconnect,update
 pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
+pwsh -NoProfile -File ./run-e2e.ps1 -CheckDomain
 ```
 
 Bash도 같은 절차를 실행한다.
@@ -26,6 +27,7 @@ Bash도 같은 절차를 실행한다.
 ./run-e2e.sh
 ./run-e2e.sh --scenario channel,dungeon,reconnect,update
 ./run-e2e.sh --check-structure
+./run-e2e.sh --check-domain
 ```
 
 로컬 process 디버깅은 C++20 컴파일러(GCC 13 이상 또는 Visual Studio 2022 17.4 이상이며 Windows에서는 Visual Studio 개발자 셸), CMake 3.24 이상과 Ninja를 설치한 뒤 `--local` 또는 `-Local`로 실행한다. 로컬 모드는 `cmake -P bootstrap.cmake`, `cmake --preset default`, `cmake --build --preset default`를 실행한 뒤 `build/bin/my-game-e2e`를 시작한다. 로컬 빌드가 있으면 `--no-build` 또는 `-NoBuild`를 추가한다. 시나리오 순서와 assertion은 유지하며 최초 실패를 README의 Known issues와 대조한다.
@@ -87,52 +89,21 @@ Actor가 소속 Spot을 바꾸는 동작은 membership 변경이다. 대상 Spot
 1. client가 Session node에 STREAM으로 연결하고 플레이어 ID와 channel 번호를 담은 첫 패킷 `JoinTownRequest`를 보낸다. `Session::on_packet`은 첫 패킷 이름을 확인하고 `playerId`로 Player Actor를 `get_or_create`한 뒤 `bind_or_get`으로 binding하고 원래 패킷을 relay한다.
 2. 새 Actor는 Entry Spot `TownEntry`에서 시작한다. `TownEntry::enter`가 identity를 확인하고 그 channel의 town(`Names::town_id`)에 `join_spot(...).defer()`를 요청한다.
 3. `Town::on_actor_join`이 플레이어를 수락하고 `Town::on_actor_joined`가 Actor client로 town에 `TownView`(플레이어와 파티)를 broadcast하며 `Town::deliver`가 이를 binding된 Session으로 전달한다. `Town::query`는 `ViewRequest`에 답하고 `Town::reconnect`는 재접속 때 다시 보낸 첫 패킷에 답한다.
-4. `ChangeChannelRequest`는 `Town::change`가 처리하며 다른 channel의 town에 `join_spot(...).defer()`를 요청한다. `CreatePartyRequest`와 `JoinPartyRequest`는 `Town::create_party`와 `Town::join_party`가 처리하며 `TownState::party`를 적용하거나 `ActionRejected`로 답한다.
-5. `EnterDungeonRequest`는 `Town::enter`가 처리한다. 요청자가 이끄는 파티에 대해 Dungeon을 `get_or_create`하고 `request_to_spot`과 `PrepareDungeon`으로 준비시킨 뒤 Actor client로 모든 구성원에게 `JoinDungeon`을 보낸다. 각 구성원의 `Town::travel`이 Dungeon에 `join_spot(...).defer()`를 요청한다.
-6. `Dungeon::on_actor_join`이 파티 구성원을 수락하고 `Dungeon::on_actor_joined`가 `DungeonView`를 보내며, `Dungeon::advance`는 stage를 올리고 새 view를 모든 구성원에게 보낸다.
+4. `ChangeChannelRequest`는 `Town::change`가 처리한다. 64-bit channel 범위와 PartyRun 단계를 검사한 뒤 다른 channel에 `join_spot(...).defer()`를 요청한다. Forming 단계에서는 파티를 떠날 수 있고, 그 뒤에는 channel 이동을 거부한다. `CreatePartyRequest`와 `JoinPartyRequest`는 `TownState::party`를 적용하거나 `ActionRejected`로 답한다.
+5. `EnterDungeonRequest`는 `Town::enter`가 처리한다. 서버가 발급한 PartyId로 파티를, RunId로 각 실행을 식별한다. Dungeon을 `get_or_create`한 뒤 `request_to_spot`과 `PrepareDungeon`으로 준비하고 온라인 구성원에게 `JoinDungeon`을 보낸다. 같은 준비 요청은 멱등 처리한다.
+6. `Dungeon::on_actor_join`은 RunId가 일치하는 파티 구성원만 수락한다. 모든 구성원이 도착하면 `Dungeon::on_actor_joined`가 소유 Town에 `RunStarted`를 보내고 Active `DungeonView`를 broadcast한다. `Dungeon::advance`는 `FinalStage`까지 진행하고 Completed view를 보낸 뒤 소유 Town에 `RunCompleted`를 보낸다.
 7. node를 교체할 때 `NodeControl`의 `drain`이 relocation을 요청한다. Framework는 `TownRelocation`·`DungeonRelocation`의 `capture`로 게임 상태를 받아 다른 node에서 `restore`한다. `PlayerRelocation`은 상태를 옮기지 않는다.
 
-## 이 샘플을 보며 개발하기
+## 템플릿 도메인 확장
 
-이 샘플은 기능들이 함께 동작하는 방식을 보여 주므로, 자기 게임으로 바꾸지 않고 읽고 실행하는 용도로 쓴다. 자기 프로젝트는 C++ 기본 셋업에서 시작한다. [ZLink Start](https://zlink.systems/start)의 Initializer에서 C++를 고르거나 ZLink 저장소의 `framework/languages/cpp/templates/starter/my-game`을 사용한다. 그다음 필요한 기능을 이 샘플에서 하나씩 옮긴다. 구조 선택은 기본 셋업의 `AGENTS.md`가 설명하며, 이 절은 `morpg-channel-town`만 다룬다. 이 샘플은 바꾸지 않고 프로젝트 옆에 참고용으로 둔다.
+이 템플릿의 도메인을 확장하여 MORPG 서버를 만든다. 실행과 배포 절차는 [README](README.md)를 따른다.
 
-### 샘플 먼저 실행하기
+1. `server/town/domain.hpp`에서 채널 인원과 PartyRun 전이를 확장한다. 여기서 PartyId·RunId·party phase를 소유한다. `server/instance/domain.hpp`는 Dungeon 준비·입장·도착 단계·stage 진행을 소유하고, `server/shared/domain.hpp`는 channel 범위를 판정한다.
+2. 새 공통 계약은 `server/shared/contracts.hpp`에 추가한다. 클라이언트 입력과 내부 메시지를 구분하고 camelCase JSON 필드와 문자열 RunPhase를 유지하며 기본 typed serializer를 사용한다.
+3. 새 클라이언트 패킷은 `server/session/session.hpp`의 Session 허용 목록에 추가한다. 내부 메시지는 클라이언트가 보낼 수 없다.
+4. `e2e/scenarios.hpp`에 응답과 거부 뒤 상태 불변을 관찰하는 시나리오를 추가한다. `./run-e2e.sh --check-domain`으로 91개 도메인 검사를 따로 실행한다. README의 시나리오 표와 `zlink.structure.json`의 `run.scenarios`·`run.commands`를 함께 맞춘다.
 
-옮기기 전에 [개발 명령](#개발-명령)으로 빌드와 e2e를 한 번 실행해 받은 샘플이 동작하는지 확인하고 동작을 본다. 이 결과가 이후 비교의 기준이 된다. 실패하면 먼저 [README](README.md)의 Known issues와 대조한다.
-
-### 옮길 기능
-
-기능 이름은 기본 셋업 `AGENTS.md`의 기능 표와 같다(파티은 이 구조에만 있는 기능이다). 경로는 이 디렉터리를 기준으로 한다. 기본 셋업에는 Session node 하나와 `connect` 시나리오만 있으므로, 마지막 열은 기능마다 기본 셋업에서 함께 늘릴 것이다.
-
-| 기능 | 이 샘플의 파일 | 옮길 것 | 기본 셋업에서 함께 늘릴 것 |
-| --- | --- | --- | --- |
-| Typed 메시지 | `server/shared/contracts.hpp` | 사용할 기능의 struct: `JoinTownRequest`, `ChangeChannelRequest`, `CreatePartyRequest`, `JoinPartyRequest`, `TownView`, `PartyView`, `EnterDungeonRequest`, `PrepareDungeon`, `DungeonPrepared`, `JoinDungeon`, `AdvanceRequest`, `ViewRequest`, `DungeonView`, `ActionRejected`. `SessionInfoRequest`·`SessionInfo`는 client가 필요로 할 때만 옮긴다 | 메시지가 가리키는 `Names`·`Rejection` 상수 |
-| Actor | `server/shared/player.hpp`의 `Player`, `PlayerFactory` | 최소 플레이어 Actor. 거부된 참가를 알리는 `Player::on_join_completed`와 이를 만드는 `PlayerFactory` | 새 `server/town/` role과 그 `main.cpp`, `server/config/` 파일, `CMakeLists.txt` role 목록의 항목. `main.cpp`의 Actor factory 등록. `zlink.structure.json`의 `nodes` 선언과 `e2e/structure.hpp`의 구조 검사 |
-| Spot | `server/town/town.hpp`의 `Town`, `server/town/domain.hpp`의 `TownState` | 참가 수락 규칙과 `TownState`의 플레이어·파티를 가진 `Town`과 `deliver` forwarder | `main.cpp`의 `TownCapacity`를 지정한 Spot factory 등록. 구조 검사가 대조하는 `TownIds` 설정과 `zlink.structure.json`의 `spots` 선언 |
-| 파티 | `server/town/town.hpp`의 `Town::create_party`·`Town::join_party`, `server/town/domain.hpp`의 `TownState::party` | 파티 규칙(플레이어당 파티 하나, 인원 제한, 파티장 입장)과 이를 적용하고 `ActionRejected`로 답하는 handler | `Names::maximum_party_members` 상수와 `Rejection` 문자열. 파티를 만들고 참가하는 `dungeon` 시나리오 |
-| Entry·첫 입장 | `server/shared/player.hpp`의 `TownEntry`, `server/town/town.hpp`의 `Town::reconnect` | `TownEntry::enter`(identity 확인, channel의 town으로의 지연 참가)와 `Town::reconnect`·`Dungeon::reconnect`의 identity 확인과 view 재전송 | `add_entry_spot` 등록과 `entry` 선언. 첫 입장 시나리오(`channel`)와 재접속 뒤 상태를 비교하는 `reconnect` 시나리오 |
-| Session binding | `server/session/session.hpp` | 첫 패킷 검사, Actor 조회·생성, `bind_or_get` binding과 원래 typed 패킷 relay | `TownEntry::enter`와 같은 첫 패킷 타입. 기본 셋업의 `server/session/session.hpp`에 옮긴다 |
-| Host relocation | `server/town/town.hpp`의 `TownRelocation`, `server/instance/dungeon.hpp`의 `DungeonRelocation`, `server/shared/player.hpp`의 `PlayerRelocation`, `server/shared/hosting.hpp`의 `NodeControl` | `TownState`·`DungeonState`의 `capture`·`restore`를 가진 adapter, 상태 없는 Actor를 위한 `PlayerRelocation`, `drain`·`shutdown` 제어 | `main.cpp`의 `preserve_state_with` 등록. 서버 교체 뒤에도 연결·상태가 유지되고 대체 node가 새 작업을 받는지 판정하는 `update` 시나리오 |
-| 동적 던전 | `server/town/town.hpp`의 `Town::enter`·`Town::travel`, `server/instance/dungeon.hpp`, `server/instance/main.cpp` | 동적 User Spot 생성 형태(`get_or_create` 뒤 `PrepareDungeon`으로 `request_to_spot`), 구성원만 수락하는 `Dungeon`, `DungeonState` | 새 `server/instance/` role과 그 설정(`DungeonCapacity`), `CMakeLists.txt` 항목. `zlink.structure.json`의 동적 `dungeon` Spot과 `GetOrCreate` edge |
-| 월드·채널 선택 | `server/town/town.hpp`의 `Town::change` | 다른 channel의 town으로의 지연 channel 변경 | Session과 Actor를 유지한 채 `town-1`과 `town-2` 사이로 플레이어를 옮기는 `channel` 시나리오 |
-
-`drain`과 `shutdown`은 `NodeControl`과 함께 옮긴다.
-
-### 옮기는 순서와 규칙
-
-기능은 표의 행 하나씩 옮기고, 하나를 옮길 때마다 빌드, 구조 검사, 관련 e2e 시나리오를 실행한다. 시나리오 ID는 `e2e/structure.hpp`의 `Scenario` enum과 `scenario_order`, `e2e/main.cpp`의 `switch`와 usage 메시지, `zlink.structure.json`의 `run.scenarios`, `run.commands`의 시나리오 선택 예시에 함께 추가한다. 판정은 실제로 받은 응답과 이벤트로 하고, 고정 대기나 기한 확대로 통과시키지 않는다.
-
-메시지 contract부터 옮긴다. `server/shared/contracts.hpp`에 packet struct를 `packet_name`과 JSON 변환을 갖춰 먼저 정의한 뒤, 컴파일 오류가 나는 handler를 하나씩 새 메시지로 옮긴다. 첫 입장 패킷을 바꾸면 `server/session/session.hpp`의 `Session::on_packet`에 있는 첫 패킷 검사와 `TownEntry::enter`, `Town::reconnect`, `Dungeon::reconnect`가 같은 타입을 받도록 함께 고친다.
-
-상태는 그 상태를 결정하는 객체에 둔다. 플레이어와 파티는 `TownState`를 통해 `Town`에, Dungeon의 파티 구성원과 stage는 `DungeonState`를 통해 `Dungeon`에 둔다. `Player`는 application 상태를 갖지 않는다. 상태 필드를 바꿀 때는 같은 객체의 상태 struct와 JSON 변환, relocation adapter의 `capture`·`restore`를 함께 고친다. 빠뜨린 필드는 relocation 뒤 사라지고, `update` 시나리오가 그 손실을 잡는다.
-
-`zlink.structure.json`에는 `TownEntry`를 등록하는 node(Town과 Instance node)마다 Entry 하나를 선언하고, application Entry를 등록하지 않는 role에는 선언하지 않는다. Framework 기본 Entry는 구조에 포함하지 않는다. Dungeon을 가진 모든 Instance의 동적 Dungeon 선언을 빠뜨리지 않는다.
-
-e2e 설정은 두 Instance node의 `DungeonCapacity`를 1로 둔다. 이미 찬 node 때문에 새 Dungeon을 받을 수 있는 소유자가 대체 node뿐이므로 대체 배치를 결정적으로 확인할 수 있다. 배치 자체는 Framework가 결정한다.
-
-Town·Dungeon 같은 역할 이름을 이 샘플과 다르게 정하려면 타입 이름, `Names`, `server/config/`, `zlink.structure.json`, `CMakeLists.txt`의 role 목록을 한 번에 바꾼다. 이름 변경은 기능을 옮기는 변경과 나눠서 진행하면 실패 원인을 찾기 쉽다.
-
-옮긴 뒤 `update`가 실패하면 snapshot에 빠진 상태가 있는지 먼저 확인한다. 그다음 [디버깅](#디버깅)의 message flow로 첫 실패 단계를 찾는다.
+상태 필드를 추가할 때 relocation capture와 restore를 함께 수정한다. Framework가 소유한 라우팅·membership·binding 결정을 도메인에 재구현하지 않는다.
 
 ## 개발 시 주의점
 

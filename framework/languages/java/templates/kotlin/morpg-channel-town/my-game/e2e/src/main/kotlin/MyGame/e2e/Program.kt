@@ -9,6 +9,8 @@ fun main(args: Array<String>) = runBlocking {
     val root = Path.of("").toAbsolutePath().normalize()
     checkStructure(root)
     if (args.contentEquals(arrayOf("--check-structure"))) return@runBlocking
+    DomainChecks.run()
+    if (args.contentEquals(arrayOf("--check-domain"))) return@runBlocking
     require(args.isEmpty() || (args.size == 2 && args[0] == "--scenario"))
     val selected = if (args.isEmpty()) Names.SCENARIOS else args[1].split(',')
     require(

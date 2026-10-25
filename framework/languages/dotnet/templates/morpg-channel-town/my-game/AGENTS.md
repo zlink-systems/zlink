@@ -17,6 +17,7 @@ pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
 pwsh -NoProfile -File ./run-e2e.ps1
 pwsh -NoProfile -File ./run-e2e.ps1 -Scenario channel,dungeon,reconnect,update
 pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
+pwsh -NoProfile -File ./run-e2e.ps1 -CheckDomain
 ```
 
 Bash provides the same workflow:
@@ -26,6 +27,7 @@ Bash provides the same workflow:
 ./run-e2e.sh
 ./run-e2e.sh --scenario channel,dungeon,reconnect,update
 ./run-e2e.sh --check-structure
+./run-e2e.sh --check-domain
 ```
 
 For host process debugging, install the .NET 8 SDK and add `--local` or `-Local`. Add `--no-build` or `-NoBuild` only with an existing local Debug build. Keep canonical scenario order and assertions; compare first failures with Known issues in the README.
@@ -93,44 +95,16 @@ Requests in the example game follow this path. Reading the code along this path 
 7. When the same player reconnects, `PlayerSession` binds the existing Actor to the new Session, and `TownReconnect` or `DungeonReconnect` in the Spot that holds the Actor checks the identity and resends the current view.
 8. To replace a node, `drain` in `NodeControl` requests relocation. Framework takes the state from `TownRelocation` and `DungeonRelocation` and restores it on another node.
 
-## Developing from this sample
+## Extending the template domain
 
-This sample shows how the features work together, so read and run it rather than turning it into your game. Start your own project from the .NET starter: choose .NET in the Initializer at [ZLink Start](https://zlink.systems/start), or use `framework/languages/dotnet/templates/starter/my-game` in the ZLink repository. Then transfer the features you need from this sample one at a time. The starter's `AGENTS.md` owns the choice between structures; this section covers only `morpg-channel-town`. Keep this sample unchanged next to your project as a reference.
+Extend this template's domain to build a MORPG server. Follow the [README](README.md) for execution and deployment.
 
-### Run the sample first
+1. Extend channel population and party rules in `server/MyGame.Town/TownSpot.cs`, and Dungeon roster and stage rules in `server/MyGame.Instance/DungeonSpot.cs`. Keep each decision in its owning domain. `server/MyGame.Shared/PartyRun.cs` owns run transitions, Dungeon preparation and progression, and channel bounds.
+2. Add shared contracts in `server/MyGame.Shared/Contracts.cs`. Distinguish client input from internal messages and use the default typed serializer.
+3. Add new client packets to the Session allowlist in `server/MyGame.Session/PlayerSession.cs`. Internal messages must not be accepted from clients.
+4. Add scenarios in `e2e/MyGame.E2E/Scenarios.cs` that observe replies and unchanged state after rejection. Update the README scenario table and `run.scenarios` in `zlink.structure.json` together.
 
-Before transferring anything, run the build and e2e once with the [Development commands](#development-commands) to confirm the downloaded sample works and to see its behavior. This result is the baseline for comparison. If it fails, compare the failure with Known issues in the [README](README.md) first.
-
-### Features to transfer
-
-Feature names match the feature table in the starter's `AGENTS.md`. Paths are relative to this directory. The starter has one Session node and the `connect` scenario only, so the last column lists what grows in the starter with each feature.
-
-| Feature | File in this sample | What to transfer | What to grow in the starter alongside |
-| --- | --- | --- | --- |
-| Typed messages | `server/MyGame.Shared/Contracts.cs` | The records of the features you adopt: `JoinTownRequest`, `ChangeChannelRequest`, `CreatePartyRequest`, `JoinPartyRequest`, `EnterDungeonRequest`, `AdvanceRequest`, `ViewRequest`, `PartyView`, `TownView`, `DungeonView`, `PrepareDungeon`, `DungeonPrepared`, `JoinDungeon`, `ActionRejected`; `SessionInfoRequest` and `SessionInfo` only if your client needs them | The registration names and the `TownId` and `DungeonId` helpers in `GameNames`, and the `Rejection` reasons; the starter already has `NodeReady` and `NodeProtocol` |
-| Spot | `server/MyGame.Town/TownSpot.cs`, `server/MyGame.Instance/DungeonSpot.cs` | `TownSpot` with the channel population and party rules, and `DungeonSpot` with the roster and stage | New `server/MyGame.Town/` and `server/MyGame.Instance/` projects, their `server/config/` files, and the `AddSpotFactory<TownSpot>` and `AddSpotFactory<DungeonSpot>` registrations in `Program.cs`; the `spots` and `nodes` declarations in `zlink.structure.json` and the structure check that compares them with the registrations |
-| Actor | `server/MyGame.Shared/PlayerActor.cs` | The stateless `PlayerActor` with the join-completion rejection reply, and `PlayerFactory` | The `AddActorFactory<PlayerActor, PlayerFactory>` registration in each `Program.cs` |
-| Entry and first admission | `server/MyGame.Shared/TownEntry.cs`, `TownReconnect` in `server/MyGame.Town/Handlers.cs`, `DungeonReconnect` in `server/MyGame.Instance/Handlers.cs` | `EnterTownHandler` and the deferred join into the town, and the identity check and state resend of the reconnect handlers | The Entry Spot registration on Town and Instance nodes and its `entry` declarations; the `channel` scenario for first entry and a `reconnect` scenario that compares state after reconnection |
-| Session binding | `server/MyGame.Session/PlayerSession.cs` | The first-packet check, then find or create the Actor, bind, and relay the original typed packet | The same first-packet type as `EnterTownHandler`; transfer it into the starter's `PlayerSession.cs` |
-| Host relocation | `TownRelocation` in `server/MyGame.Town/TownSpot.cs`, `DungeonRelocation` in `server/MyGame.Instance/DungeonSpot.cs`, `PlayerRelocation` in `server/MyGame.Shared/PlayerActor.cs`, `server/MyGame.Shared/NodeControl.cs` | The relocation adapters with `Capture` and `Restore`, and the `drain` and `shutdown` controls | The `PreserveStateWith` relocation registrations; the `update` scenario, which checks that connections and state survive a server replacement and that the replacement node accepts a new Dungeon |
-| Dynamic dungeon | `TownSpot.EnterAsync` in `server/MyGame.Town/TownSpot.cs`, `DungeonTravel` in `server/MyGame.Town/Handlers.cs`, `server/MyGame.Instance/DungeonSpot.cs`, `server/MyGame.Instance/Program.cs` | The `GetOrCreate` and typed preparation of a party Dungeon, the roster-only admission, and the stage | The dynamic `dungeon` Spots of each Instance and the `GetOrCreate` edge in `zlink.structure.json`; a `dungeon` scenario |
-| World/channel selection | `ChangeChannel` in `server/MyGame.Town/Handlers.cs`, the `TownIds` bootstrap in `server/MyGame.Town/Program.cs` | The deferred membership change between towns, and the fixed towns created at startup | The `TownIds` and `TownCapacity` settings; the fixed `town-1` and `town-2` Spots with their `logicalId` in `zlink.structure.json` |
-
-### Transfer order and rules
-
-Transfer one row at a time and run the build, the structure check, and the related e2e scenario after each. Add a scenario ID to the list in `e2e/MyGame.E2E/Scenarios.cs`, to `run.scenarios`, and to the selection examples in `run.commands` of `zlink.structure.json` together. Judge results by the replies and events actually received; do not make tests pass with fixed sleeps or longer deadlines.
-
-Start with the message contracts. Define the typed records in `Contracts.cs` first, then move each handler that fails to compile to the new messages. When you change the first-entry packet, update the first-packet check in `PlayerSession`, `EnterTownHandler`, and the reconnect handlers to receive the same type.
-
-Keep each piece of state in the object that decides it. A Town owns its population and parties, and a Dungeon owns its roster and stage. Game state views must not include the Actor generation or the Session identity, because Session binding owns Actor identity. When you change state fields, update `Capture` and `Restore` of that Spot together; a state kept outside them disappears after relocation, and the `update` scenario detects the loss.
-
-Register the shared Entry and the Player factory on every node that can host an Actor, including the Instance nodes, and declare one Entry for each of those nodes in `zlink.structure.json`; the Framework default Entries are not part of the structure. Declare the dynamic Dungeon factory for every owning Instance.
-
-Start the Town providers one at a time and wait for each `READY` line before starting the next. Set each provider's `TownCapacity` to exactly its fixed town count, so earlier providers are full and later ones are absent while a town is created and only its declared owner can host it; the structure check enforces the exact capacity. The e2e configuration gives each Instance one Dungeon slot so that replacement placement is deterministic.
-
-To name roles such as Town or Dungeon differently from this sample, change the type names, `GameNames`, `server/config/`, and `zlink.structure.json` at once. Do the renaming in its own change, separate from transferring a feature, so failures are easier to trace.
-
-If `update` fails after a transfer, first check whether `Capture` is missing a field, then use the message flow in [Debugging](#debugging) to find the first failing step.
+When adding state fields, update relocation capture and restore together. Framework owns routing, membership and binding; keep those decisions out of the game domain.
 
 ## Development considerations
 
