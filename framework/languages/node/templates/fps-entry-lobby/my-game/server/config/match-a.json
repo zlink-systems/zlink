@@ -1,0 +1,9 @@
+{
+  "id": "matchA",
+  "redisEndpoint": "127.0.0.1:6379",
+  "keyPrefix": "my-game-arena:",
+  "meshEndpoint": "tcp://127.0.0.1:0",
+  "streamEndpoint": null,
+  "bootstrapMatchmaking": true,
+  "roomCapacity": 2147483647
+}
