@@ -4,7 +4,7 @@
 
 #include "runtime/diagnostics/flow_context.hpp"
 
-#include <nlohmann/detail/exceptions.hpp>
+#include <nlohmann/json.hpp>
 #include <service_wire_constants.hpp>
 
 #include <algorithm>
@@ -170,10 +170,8 @@ const char *plain_string_end (const char *first, const char *end) noexcept
     return first;
 }
 
-// A sequence length of zero means malformed UTF-8. The optional failure
-// position is the offending byte, or end for an incomplete sequence.
-std::size_t
-utf8_sequence_length (const char *first, const char *end, const char **invalid = nullptr) noexcept
+// A sequence length of zero means malformed UTF-8.
+std::size_t utf8_sequence_length (const char *first, const char *end) noexcept
 {
     const auto lead = static_cast<unsigned char> (*first);
     const std::size_t length = lead >= 0xc2 && lead <= 0xdf   ? 2
@@ -181,46 +179,20 @@ utf8_sequence_length (const char *first, const char *end, const char **invalid =
                                : lead >= 0xf0 && lead <= 0xf4 ? 4
                                                               : 0;
     if (length == 0) {
-        if (invalid)
-            *invalid = first;
         return 0;
     }
     for (std::size_t index = 1; index < length; ++index) {
-        if (first + index == end) {
-            if (invalid)
-                *invalid = end;
+        if (first + index == end)
             return 0;
-        }
         const auto byte = static_cast<unsigned char> (first[index]);
         if (byte < 0x80 || byte > 0xbf
             || (index == 1
                 && ((lead == 0xe0 && byte < 0xa0) || (lead == 0xed && byte >= 0xa0)
                     || (lead == 0xf0 && byte < 0x90) || (lead == 0xf4 && byte >= 0x90)))) {
-            if (invalid)
-                *invalid = first + index;
             return 0;
         }
     }
     return length;
-}
-
-[[noreturn]] void invalid_utf8 (std::string_view value, const char *invalid)
-{
-    // Keep the writer's established nlohmann exception type, id and message.
-    constexpr char digits[] = "0123456789ABCDEF";
-    if (invalid == value.data () + value.size ()) {
-        const auto last = static_cast<unsigned char> (value.back ());
-        const char hex[] = {digits[last >> 4], digits[last & 15]};
-        throw nlohmann::detail::type_error::create (
-          316, "incomplete UTF-8 string; last byte: 0x" + std::string (hex, 2), nullptr);
-    }
-    const auto byte = static_cast<unsigned char> (*invalid);
-    const char hex[] = {digits[byte >> 4], digits[byte & 15]};
-    throw nlohmann::detail::type_error::create (316,
-                                                "invalid UTF-8 byte at index "
-                                                  + std::to_string (invalid - value.data ())
-                                                  + ": 0x" + std::string (hex, 2),
-                                                nullptr);
 }
 
 // The envelope has a fixed field order. Count the escaped bytes first, then
@@ -271,11 +243,10 @@ template <header_output_t Output> class header_writer_t
             const auto byte = static_cast<unsigned char> (value[index]);
             if (byte >= 0x80) {
                 if constexpr (Output != header_output_t::native_message) {
-                    const char *invalid;
                     const auto length = utf8_sequence_length (
-                      value.data () + index, value.data () + value.size (), &invalid);
+                      value.data () + index, value.data () + value.size ());
                     if (length == 0)
-                        invalid_utf8 (value, invalid);
+                        (void) nlohmann::json (value).dump ();
                     index += length;
                 } else {
                     ++index;
@@ -359,7 +330,7 @@ void write_metadata (header_writer_t<Output> &writer,
             writer.append (":");
             writer.string (value);
         }
-        catch (const nlohmann::detail::exception &error) {
+        catch (const nlohmann::json::exception &error) {
             throw framework_exception_t (framework_error_kind_t::protocol_error, error.what ());
         }
     }

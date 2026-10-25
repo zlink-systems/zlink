@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #include "runtime/messaging/envelope_codec.hpp"
-#include <nlohmann/detail/exceptions.hpp>
+#include <nlohmann/json.hpp>
 
 #include <array>
 #include <cfenv>
@@ -339,7 +339,7 @@ std::uint64_t observe_writer (const msg::envelope_header_t &header,
         output.number (0);
         output.text (wire.to_string ());
     }
-    catch (const nlohmann::detail::type_error &error) {
+    catch (const nlohmann::json::type_error &error) {
         if (diagnostic)
             *diagnostic = error.what ();
         output.number (1);
