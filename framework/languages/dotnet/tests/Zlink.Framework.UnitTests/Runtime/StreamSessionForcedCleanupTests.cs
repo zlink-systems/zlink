@@ -77,12 +77,42 @@ public sealed class StreamSessionForcedCleanupTests
         }
         finally
         {
-            await stop.CancelAsync();
-            poller.ReleaseWait();
-            await ended.WaitAsync(TimeSpan.FromSeconds(5));
-            Assert.Same(failure, await Record.ExceptionAsync(() => node.DisposeAsync().AsTask()));
-            await runner.StopAsync();
-            Assert.Same(failure, await Record.ExceptionAsync(() => source.DisposeAsync().AsTask()));
+            try
+            {
+                try
+                {
+                    try
+                    {
+                        await stop.CancelAsync();
+                    }
+                    finally
+                    {
+                        poller.ReleaseWait();
+                    }
+                    await ended.WaitAsync(TimeSpan.FromSeconds(5));
+                }
+                finally
+                {
+                    Assert.Same(
+                        failure,
+                        await Record.ExceptionAsync(() => node.DisposeAsync().AsTask())
+                    );
+                }
+            }
+            finally
+            {
+                try
+                {
+                    await runner.StopAsync();
+                }
+                finally
+                {
+                    Assert.Same(
+                        failure,
+                        await Record.ExceptionAsync(() => source.DisposeAsync().AsTask())
+                    );
+                }
+            }
         }
     }
 
