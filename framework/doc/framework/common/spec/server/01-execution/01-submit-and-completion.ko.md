@@ -229,7 +229,12 @@ admission 한 곳에서 한다.
 - 처음 대기에 들어갈 때 대상 intent의 `intent_id`와 `last_failure_id`를 기준값으로 보존한다. 기준값을 읽은 snapshot과
   변화 구독은 socket의 단일 관찰자가 같은 차례에 처리해 그 사이의 변경을 놓치지 않는다. 대기 중 대상 intent가
   없어지거나 `intent_id`가 바뀌거나 `last_failure_id`가 바뀌면 `Unavailable`로 끝낸다. 현재 snapshot에서 연결과
-  service admission이 이미 회복됐어도 같다. 이 판정은 대기 중인 request를 제출할지 정하기 전에 한다.
+  service admission이 이미 회복됐어도 같다. 이 판정은 대기 중인 request를 제출할지 정하기 전에 한다. Core 행이
+  아직 없어 대기를 시작한 request는 기준값을 만들지 않고, 최초 행의 출현을 intent 교체로 보지 않는다. 최초 행에
+  이미 실패 이력(`last_failure_id`가 0이 아님)이 있으면 현재 상태가 회복됐어도 `Unavailable`로 끝내고, 없으면 그
+  행의 식별자를 기준값으로 삼아 대기를 계속한다. 최초 행을 보기 전에는 target·descriptor·logical intent 제거와
+  deadline·shutdown을 기존 소유자의 통지로 처리하며, Framework가 가짜 Core 식별자나 별도 physical intent 목록을
+  만들지 않는다.
 - 대상 RID의 Core 선택 route가 있고 그 route의 service admission이 끝났으면 남은 timeout으로 binding request를
   한 번 시작한다. 그 route와 무관한 다른 physical 연결의 실패는 이 route를 무효로 만들지 않으며, 이미 준비된
   route를 쓰는 새 request를 과거 실패만으로 거부하지 않는다.

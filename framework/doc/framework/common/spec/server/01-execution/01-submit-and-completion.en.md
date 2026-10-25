@@ -251,7 +251,12 @@ relocation PREPARE) do the same. Each language decides this in one logical reque
   turn, so no change between them is missed. If, while waiting, the target intent disappears, its `intent_id`
   changes, or its `last_failure_id` changes, the request ends with `Unavailable`, even if the current snapshot shows
   the connection and service admission already recovered. This check is made before deciding whether to submit a
-  waiting request.
+  waiting request. A request that started waiting because there was no Core row yet makes no baseline, and the
+  first row's appearance isn't an intent replacement. If the first row already has a failure history
+  (`last_failure_id` isn't 0), the request ends with `Unavailable` even if the current state recovered; otherwise it
+  keeps waiting with that row's identifiers as baselines. Before the first row is seen, removal of the target,
+  descriptor, or logical intent, and the deadline and shutdown, are handled by notifications from their existing
+  owners, and the Framework doesn't make up Core identifiers or keep a separate physical intent list.
 - If the target RID has a Core selected route and that route's service admission has finished, the binding request
   starts once with the remaining timeout. A failure of another physical connection unrelated to that route doesn't
   invalidate it, and a new request using an already ready route isn't rejected for a past failure alone.
