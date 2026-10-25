@@ -10795,11 +10795,12 @@ public sealed partial class EntrySpotActorDispatchTests
     {
         var node = new CapturingSpotNode();
         var (runtime, actorRef) = await CreateStartedRuntimeAsync(node);
+        var registry = new ZLinkActorSessionRegistry(runtime.Services);
+        ZLinkActorRuntimeState? sourceState = null;
         try
         {
-            var registry = new ZLinkActorSessionRegistry(runtime.Services);
             var actorId = ZLinkActorId.FromBoundary(actorRef.ActorId, "actorId");
-            var sourceState = registry.GetOrCreate(actorId);
+            sourceState = registry.GetOrCreate(actorId);
             sourceState.BindNativeActorRef(actorRef);
             var context = sourceState.GetOrCreateContext(() =>
                 new ZLinkActorContext(
@@ -10835,7 +10836,18 @@ public sealed partial class EntrySpotActorDispatchTests
         }
         finally
         {
-            await runtime.StopAsync(CancellationToken.None);
+            try
+            {
+                await Task.WhenAll(
+                    sourceState?.InvalidateRuntimeGenerationAfterDispatchesAsync().AsTask()
+                        ?? Task.CompletedTask,
+                    registry.ResetGenerationAsync().AsTask()
+                );
+            }
+            finally
+            {
+                await runtime.StopAsync(CancellationToken.None);
+            }
         }
     }
 
