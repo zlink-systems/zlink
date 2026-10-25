@@ -234,6 +234,47 @@ fields aren't used as metric attributes. Reason and action use the closed
 values from the message-flow tracing contract, but aren't exposed as a public
 DTO or callback type.
 
+### 2.1 The Message Class a Handler Receives
+
+```ts
+export type ZLinkMessageTypeResolver<T = unknown> = Type<T> | (() => Type<T>);
+```
+
+A TypeScript parameter annotation doesn't survive at runtime, so the
+Framework doesn't use it to register the received type. A handler class
+that takes a received message as an argument declares the received message
+class with a static `messageType` (`ZLinkMessageTypeResolver`). This covers
+Channel and RouteMesh send and request handlers; Spot, Entry Spot, and
+Instance Spot packet, request, and subscription handlers; a Spot's Actor send
+and request handlers; and Actor handlers, including the same handlers
+registered with a Nest decorator. The function form is for when a circular
+import requires reading the class later.
+
+```ts
+@ZLinkPacket('TableView')
+export class TableView { tableId = ''; seats: string[] = []; }
+
+export class TableViewHandler implements ZLinkSpotActorSendHandler<Room, Player, TableView> {
+ static readonly messageType = TableView;
+ async handle(spot: Room, actor: Player, context: ZLinkMessageContext, message: TableView): Promise<void> {
+  await actor.context.boundSession.send(message).submit(); // Goes out as a TableView packet.
+ }
+}
+```
+
+- When registering the handler, the Framework keeps `messageType` in that
+  handler's registration and passes the class to the common decode when it
+  decodes a received payload. The default JSON codec builds the value once
+  with that class's prototype without calling the constructor. A custom
+  serializer receives the same class as its type argument.
+- A handler without `messageType` receives a structural object. That value
+  has no packet name, so passing it unchanged to a typed send ends with
+  `ZLinkConfigurationException`.
+- The class is chosen per handler registration. A class isn't chosen
+  process-wide from the packet name alone.
+- A STREAM session handler receives a `ZLinkMessage` and picks the type with
+  `decode(type)`, so it isn't covered by this rule.
+
 ## 3. Location Peer And Logical Multicast
 
 ```ts
