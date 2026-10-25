@@ -320,6 +320,60 @@ target_link_libraries(app PRIVATE zlink::cpp)
 target_link_libraries(app PRIVATE zlink::framework_codec_protobuf)
 ```
 
+### 5.1 기본 typed JSON의 DTO와 enum 선언
+
+기본 typed JSON은 [message model §5](../../../00-foundation/05-message-model.ko.md#5-framework-json-v1-typed-payload-profile)의
+`framework-json-v1`을 따른다. C++은 DTO와 enum의 정적 선언에서 property 이름과 member type을 얻으며,
+Framework·connector·HTTP client가 같은 선언과 같은 변환을 쓴다. 이 선언은 serializer 등록이 아니며
+handler와 messaging API가 받은 payload type으로 자동 선택된다.
+
+```cpp
+#include <zlink/json.hpp>
+
+enum class player_status_t { idle, playing };
+
+struct player_state_t
+{
+    std::string player_id;
+    std::int64_t score = 0;                 // wire: decimal string
+    std::optional<std::string> nickname;    // nullable
+    player_status_t status = player_status_t::idle;
+};
+
+template <> struct zlink::json::dto_traits<player_state_t>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("playerId", &player_state_t::player_id),
+      zlink::json::field ("score", &player_state_t::score),
+      zlink::json::field ("nickname", &player_state_t::nickname),
+      zlink::json::field ("status", &player_state_t::status)};
+};
+
+template <> struct zlink::json::enum_traits<player_status_t>
+{
+    static constexpr auto values = std::array{
+      zlink::json::enum_value (player_status_t::idle, "Idle"),
+      zlink::json::enum_value (player_status_t::playing, "Playing")};
+};
+```
+
+- DTO는 기본 생성할 수 있고 선언한 member가 public이어야 한다. `dto_traits<T>::fields`에 선언한 member만
+  wire property이며 선언 순서는 의미가 없다.
+- 선언한 property는 required다. `std::optional<U>` field만 nullable이며, property가 없거나 `null`이면 빈 값으로
+  읽고 빈 값은 `null`로 쓴다.
+- Field type은 `bool`, 8~64 bit signed·unsigned 정수, `float`·`double`, `std::string`, `std::vector<std::byte>`(base64),
+  `std::vector<U>`, `std::map<std::string, U>`, `std::optional<U>`, `dto_traits`를 선언한 DTO와 `enum_traits`를
+  선언한 enum이다. 정수·실수·byte의 wire 표현은 message model §5를 따른다.
+- Enum은 `enum_traits<E>::values`의 이름으로만 변환한다. 이름과 값은 각각 유일해야 하며, 선언되지 않은 값을
+  encode하면 실패한다.
+- Payload type이나 field type에 위 선언이 없거나 선언한 member pointer가 그 type의 member가 아니면 compile
+  time에 실패한다. 기존 `nlohmann` `to_json`·`from_json` callback은 기본 typed JSON에 쓰지 않으며 자동 대체
+  경로도 없다. 기본 JSON으로 표현할 수 없는 payload는 위 codec extension을 쓴다.
+- `nlohmann::json` 값 자체를 payload type으로 쓰면 그 값을 그대로 직렬화한다. Schema가 없으므로 64-bit와 enum
+  규칙은 application이 지킨다.
+- 변환 실패는 서버에서 기존 `framework_error_kind_t::protocol_error`, connector core에서 기존 result 오류로
+  전달한다. 예외를 쓰지 않는 connector core 경계는 그대로다.
+
 ## 6. C++ 고유 계약
 
 ### 6.1 Backpressure

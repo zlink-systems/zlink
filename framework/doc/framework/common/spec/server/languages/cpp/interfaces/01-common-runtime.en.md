@@ -361,6 +361,64 @@ target_link_libraries(app PRIVATE zlink::cpp)
 target_link_libraries(app PRIVATE zlink::framework_codec_protobuf)
 ```
 
+### 5.1 DTO and Enum Declarations for the Default Typed JSON
+
+The default typed JSON follows `framework-json-v1` in
+[message model §5](../../../00-foundation/05-message-model.en.md#5-the-framework-json-v1-typed-payload-profile).
+C++ gets property names and member types from static declarations on the DTO and the enum, and the
+Framework, the connector, and the HTTP client use the same declarations and the same conversion. These
+declarations aren't serializer registrations; they're selected automatically from the payload type that the
+handler or messaging API receives.
+
+```cpp
+#include <zlink/json.hpp>
+
+enum class player_status_t { idle, playing };
+
+struct player_state_t
+{
+    std::string player_id;
+    std::int64_t score = 0;                 // wire: decimal string
+    std::optional<std::string> nickname;    // nullable
+    player_status_t status = player_status_t::idle;
+};
+
+template <> struct zlink::json::dto_traits<player_state_t>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("playerId", &player_state_t::player_id),
+      zlink::json::field ("score", &player_state_t::score),
+      zlink::json::field ("nickname", &player_state_t::nickname),
+      zlink::json::field ("status", &player_state_t::status)};
+};
+
+template <> struct zlink::json::enum_traits<player_status_t>
+{
+    static constexpr auto values = std::array{
+      zlink::json::enum_value (player_status_t::idle, "Idle"),
+      zlink::json::enum_value (player_status_t::playing, "Playing")};
+};
+```
+
+- A DTO must be default-constructible and its declared members must be public. Only members declared in
+  `dto_traits<T>::fields` are wire properties, and declaration order has no meaning.
+- A declared property is required. Only a `std::optional<U>` field is nullable: a missing property or `null`
+  reads as empty, and an empty value is written as `null`.
+- Field types are `bool`, 8- to 64-bit signed and unsigned integers, `float` and `double`, `std::string`,
+  `std::vector<std::byte>` (base64), `std::vector<U>`, `std::map<std::string, U>`, `std::optional<U>`, a DTO with
+  `dto_traits`, and an enum with `enum_traits`. The wire form of integers, floating-point values, and bytes
+  follows message model §5.
+- An enum converts only through the names in `enum_traits<E>::values`. Names and values must each be unique,
+  and encoding an undeclared value fails.
+- If a payload type or field type lacks the declaration above, or a declared member pointer isn't a member of
+  that type, compilation fails. Existing `nlohmann` `to_json`/`from_json` callbacks aren't used by the default
+  typed JSON, and there's no automatic fallback. A payload that the default JSON can't express uses the codec
+  extension above.
+- Using a `nlohmann::json` value itself as the payload type serializes that value as is. With no schema, the
+  application keeps the 64-bit and enum rules.
+- A conversion failure is delivered as the existing `framework_error_kind_t::protocol_error` on the server and
+  as the existing result error in the connector core. The connector core's no-exception boundary stays.
+
 ## 6. C++-Specific Contract
 
 ### 6.1 Backpressure
