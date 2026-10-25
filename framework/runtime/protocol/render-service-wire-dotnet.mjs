@@ -57,6 +57,15 @@ const intType = (e) =>
 const lit = (v, e = "u64") =>
   `${v}${e === "u64" ? "UL" : e === "u32" ? "U" : e === "i64" ? "L" : ""}`;
 const typeOf = (r, n = false) => `${rn(r)}${n ? "?" : ""}`;
+const unwrapped = (reference, expression) =>
+  main(types.get(reference.$ref)).op === "conditional-union"
+    ? `${expression}!`
+    : `${expression}.Value`;
+// The schema's `rid` bytes are a binding RoutingId on .NET (schema rid,
+// public binding RoutingId), so generated values keep the RoutingId that owns
+// the bytes instead of a second copy.
+const ROUTING_ID_TYPE = "rid";
+const isRoutingId = (t) => t.name === ROUTING_ID_TYPE;
 const optional = (f) => Boolean(f.when) || f.required === false;
 const fieldsDecl = (fs) =>
   fs.map((f) => `${typeOf(f.type, optional(f))} ${id(f.name)}`).join(", ");
@@ -75,19 +84,21 @@ function declaration(t) {
     n = id(t.name);
   switch (o.op) {
     case "integer":
-      return `internal sealed record ${n}(${intType(o.encoding)} Value);`;
+      return `internal readonly record struct ${n}(${intType(o.encoding)} Value);`;
     case "enum":
       return `internal enum ${n} : ${intType(o.encoding)}\n{\n${o.values.map((v) => `    ${id(v.name)} = ${v.value}`).join(",\n")}\n}`;
     case "length-prefixed":
-      return `internal sealed record ${n}(${o.content === "text" ? "string" : "byte[]"}${o.zeroLengthMeaning ? "?" : ""} Value);`;
+      if (isRoutingId(t))
+        return `internal readonly record struct ${n}(RoutingId RoutingId) { internal ${n}(byte[] value) : this(global::Systems.Zlink.RoutingId.From(value)) {} internal ReadOnlySpan<byte> Value => RoutingId.ToBytes(); }`;
+      return `internal readonly record struct ${n}(${o.content === "text" ? "string" : "byte[]"}${o.zeroLengthMeaning ? "?" : ""} Value);`;
     case "struct":
     case "versioned-length-delimited":
-      return `internal sealed record ${n}(${fieldsDecl(o.fields)});`;
+      return `internal readonly record struct ${n}(${fieldsDecl(o.fields)});`;
     case "vector":
-      return `internal sealed record ${n}(IReadOnlyList<${typeOf(o.item)}> Items);`;
+      return `internal readonly record struct ${n}(IReadOnlyList<${typeOf(o.item)}> Items);`;
     case "versioned-vector": {
       const r = o.layout.find((x) => x.kind === "repeat");
-      return `internal sealed record ${n}(IReadOnlyList<${typeOf(r.item)}> ${id(r.name)});`;
+      return `internal readonly record struct ${n}(IReadOnlyList<${typeOf(r.item)}> ${id(r.name)});`;
     }
     case "conditional-union": {
       const d = cases(o).map(
@@ -101,7 +112,7 @@ function declaration(t) {
       return `internal abstract record ${n};\n${d.join("\n")}`;
     }
     case "tlv32":
-      return `internal sealed record ${n}(${o.fields.map((f) => `${typeOf(f.type, true)} ${id(f.name)}`).join(", ")});`;
+      return `internal readonly record struct ${n}(${o.fields.map((f) => `${typeOf(f.type, true)} ${id(f.name)}`).join(", ")});`;
     default:
       throw Error(`${t.name}: declaration ${o.op}`);
   }
@@ -124,7 +135,7 @@ function external(r) {
 }
 function readCall(r, reader, env) {
   return `Read${rn(r)}(${[
-    reader,
+    `ref ${reader}`,
     "context",
     ...external(r).map(
       (d) =>
@@ -137,7 +148,7 @@ function readCall(r, reader, env) {
 }
 function writeCall(r, writer, value, env) {
   return `Write${rn(r)}(${[
-    writer,
+    `ref ${writer}`,
     value,
     "context",
     ...external(r).map(
@@ -227,7 +238,7 @@ function readFields(fs, reader, base = new Map(), flags = "0") {
         `if (${cond(f.when, env, flags)})`,
         `{`,
         `    ${n} = ${readCall(f.type, reader, env)};`,
-        ...fieldChecks(f, n).map((x) => `    ${x}`),
+        ...fieldChecks(f, unwrapped(f.type, n)).map((x) => `    ${x}`),
         `}`,
         `else ${n} = null;`,
       );
@@ -252,8 +263,8 @@ function writeFields(fs, writer, owner, base = new Map(), flags = "0") {
         `if (${cond(f.when, env, flags)})`,
         `{`,
         `    if (${x} is null) throw Error("${f.name}: required");`,
-        ...fieldChecks(f, `${x}!`).map((y) => `    ${y}`),
-        `    ${writeCall(f.type, writer, `${x}!`, env)};`,
+        ...fieldChecks(f, unwrapped(f.type, x)).map((y) => `    ${y}`),
+        `    ${writeCall(f.type, writer, unwrapped(f.type, x), env)};`,
         `}`,
         `else if (${x} is not null) throw Error("${f.name}: forbidden");`,
       );
@@ -345,7 +356,6 @@ function constraints(
         return { reference, expression };
       };
       if (constraint.key.kind === "tuple") {
-        body.push("var writer = new Writer();");
         for (const part of constraint.key.parts) {
           const source = part.source,
             found = resolve(
@@ -357,7 +367,7 @@ function constraints(
             if (part.lengthPrefix !== "excluded")
               throw Error(`${owner.name}: utf8 key prefix`);
             body.push(
-              `writer.Bytes(Utf8.GetBytes(${found.expression}.Value!));`,
+              `writer.Text(${found.expression}.Value!, Utf8.GetByteCount(${found.expression}.Value!));`,
             );
           } else {
             const encoding = main(types.get(found.reference.$ref)).encoding;
@@ -372,7 +382,6 @@ function constraints(
             );
           }
         }
-        body.push("return writer.ToArray();");
       } else if (constraint.key.kind === "canonical-authority-key-bytes") {
         const source = resolve(item, "item", constraint.key.source.path),
           union = types.get(source.reference.$ref),
@@ -425,9 +434,29 @@ function constraints(
           `return ${source.expression} switch { ${arms.join(", ")}, _ => throw Error("authority key variant") };`,
         );
       } else throw Error(`${owner.name}: key ${constraint.key.kind}`);
+      if (
+        constraint.kind === "unique" &&
+        constraint.key.kind === "tuple" &&
+        constraint.key.parts.length === 1 &&
+        constraint.key.parts[0].kind === "utf-8-bytes"
+      ) {
+        const source = constraint.key.parts[0].source;
+        const found = resolve(
+          item,
+          "item",
+          source.kind === "item" ? "" : source.path,
+        );
+        lines.push(
+          `try { var keys${index} = new HashSet<string>(${value}.${property}.Count, StringComparer.Ordinal); for (var index = 0; index < ${value}.${property}.Count; index++) { var item = ${value}.${property}[index]; if (!keys${index}.Add(${found.expression}.Value!)) throw Error("duplicate vector item"); } } catch (OutOfMemoryException) { throw Capacity("${owner.name} constraint capacity"); }`,
+        );
+        return;
+      }
       helpers.push(
-        `    private static byte[] ${key}(${typeOf(item)} item, DecodeContext context)\n    {\n        ${body.join("\n        ")}\n    }`,
+        constraint.key.kind === "tuple"
+          ? `    private static byte[] ${key}(${typeOf(item)} item, DecodeContext context) { ${encodeBody(`Write${key}(ref writer, item, context)`)} }\n    private static void Write${key}(ref Writer writer, ${typeOf(item)} item, DecodeContext context) { ${body.join("\n        ")} }`
+          : `    private static byte[] ${key}(${typeOf(item)} item, DecodeContext context)\n    {\n        ${body.join("\n        ")}\n    }`,
       );
+
       if (constraint.kind === "sorted") {
         lines.push(
           `try { for (var index = 1; index < ${value}.${property}.Count; index++) { var previous = ${key}(${value}.${property}[index - 1], context); var current = ${key}(${value}.${property}[index], context); var compared = CompareBytes(previous, current); ${strict ? `if (compared == 0) throw Error("duplicate vector item"); ` : ""}if (compared > 0) throw Error("unsorted vector"); } } catch (OutOfMemoryException) { throw Capacity("${owner.name} constraint capacity"); }`,
@@ -975,7 +1004,7 @@ function commandDecl(c) {
   if (m) a.push(`${typeOf(m.frame, true)} Metadata`);
   if (p.policy !== "forbidden")
     a.push(`${typeOf(p.type, p.policy === "optional")} Payload`);
-  return `internal sealed record ${id(c.name)}${c.id}(${a.join(",")});`;
+  return `internal readonly record struct ${id(c.name)}${c.id}(${a.join(",")});`;
 }
 function flagChecks(c, x) {
   const f = op(c, "flags"),
@@ -993,6 +1022,28 @@ function flagChecks(c, x) {
   }
   return r;
 }
+function writeConstraints(lines) {
+  return lines.length
+    ? ["if (writer.IsSizing)", "{", ...lines.map((line) => `    ${line}`), "}"]
+    : [];
+}
+function encodeBody(write) {
+  return `var writer = new Writer(); ${write}; var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); ${write}; return bytes;`;
+}
+function beginLength(reference, name) {
+  return [
+    `var ${name}Offset = writer.Length;`,
+    `writer.Reserve(${main(types.get(reference.$ref)).width});`,
+    `var ${name}Start = writer.Length;`,
+  ];
+}
+function endLength(reference, name) {
+  return [
+    `var ${name}Writer = writer.At(${name}Offset);`,
+    `Write${rn(reference)}(ref ${name}Writer, new ${rn(reference)}(checked((${intType(main(types.get(reference.$ref)).encoding)})(writer.Length - ${name}Start))), context);`,
+  ];
+}
+
 function commandMethods(c) {
   const n = `${id(c.name)}${c.id}`,
     h = op(c, "command-header"),
@@ -1002,61 +1053,73 @@ function commandMethods(c) {
     rf = readFields(fs, "body", new Map(), "flags"),
     wf = writeFields(fs, "body", "value", new Map(), "value.Flags"),
     ctor = ["flags", ...fs.map((f) => id(f.name))],
-    r = [
-      'if(frames.Count==0)throw Error("frames");',
-      "var body=new Reader(frames[0]);",
+    headerRead = [
+      "var body = new Reader(frame);",
       ...h.magic.map((v) => `if(body.U8()!=${v})throw Error("magic");`),
       `if(body.U8()!=${h.wireMajor}||body.U8()!=${h.commandId})throw Error("header");`,
-      `var flags=body.U8();`,
+      "var flags=body.U8();",
       ...flagChecks(c, "flags"),
       ...rf.lines,
       'body.End("body");',
-      "var index=1;",
     ],
-    w = [
+    headerWrite = [
       ...flagChecks(c, "value.Flags"),
-      "var body=new Writer();",
       ...h.magic.map((v) => `body.U8(${v});`),
       `body.U8(${h.wireMajor});body.U8(${h.commandId});body.U8(value.Flags);`,
       ...wf.lines,
-      "var frames=new List<byte[]>{body.ToArray()};",
-    ];
+      ...predicates(c, "value"),
+    ],
+    read = [
+      'if(frames.Count==0)throw Error("frames");',
+      `var value=Decode${n}Header(frames[0],context);`,
+      "var index=1;",
+    ],
+    write = [],
+    count = ["1"];
   if (m) {
     seen.add(m.op);
-    const b = flagBits.get(m.flag.name);
-    r.push(
-      `${typeOf(m.frame, true)} metadata=null;`,
-      `if((flags&${b})!=0){if(index>=frames.Count)throw Error("metadata required");var x=new Reader(frames[index++]);metadata=${readCall(m.frame, "x", new Map())};x.End("metadata");}`,
+    const bit = flagBits.get(m.flag.name);
+    ctor.push("default");
+    count.push(`((value.Flags&${bit})!=0?1:0)`);
+    read.push(
+      `if((value.Flags&${bit})!=0){if(index>=frames.Count)throw Error("metadata required");value=value with { Metadata=Decode${rn(m.frame)}(frames[index++],context) };}`,
     );
-    ctor.push("metadata");
-    w.push(
-      `if((value.Flags&${b})!=0){if(value.Metadata is null)throw Error("metadata required");var x=new Writer();${writeCall(m.frame, "x", "value.Metadata", new Map())};frames.Add(x.ToArray());}else if(value.Metadata is not null)throw Error("metadata forbidden");`,
+    write.push(
+      `if((value.Flags&${bit})!=0){if(value.Metadata is null)throw Error("metadata required");frames[index++]=Encode${rn(m.frame)}(${unwrapped(m.frame, "value.Metadata")},context);}else if(value.Metadata is not null)throw Error("metadata forbidden");`,
     );
   }
   if (p.policy !== "forbidden") {
-    r.push(
-      `${typeOf(p.type, true)} payload=null;`,
-      p.policy === "required"
-        ? `if(index>=frames.Count)throw Error("payload required");`
-        : "",
-      `if(index<frames.Count){var x=new Reader(frames[index++]);payload=${readCall(p.type, "x", new Map())};x.End("payload");}`,
-    );
-    ctor.push(`payload${p.policy === "required" ? "!" : ""}`);
-    w.push(
-      p.policy === "required"
-        ? `if(value.Payload is null)throw Error("payload required");`
-        : "",
-      `if(value.Payload is not null){var x=new Writer();${writeCall(p.type, "x", "value.Payload", new Map())};frames.Add(x.ToArray());}`,
+    ctor.push("default");
+    if (p.policy === "required") {
+      count.push("1");
+      read.push('if(index>=frames.Count)throw Error("payload required");');
+      write.push(`frames[index++]=Encode${rn(p.type)}(value.Payload,context);`);
+    } else {
+      count.push("(value.Payload is not null?1:0)");
+      write.push(
+        `if(value.Payload is not null)frames[index++]=Encode${rn(p.type)}(${unwrapped(p.type, "value.Payload")},context);`,
+      );
+    }
+    read.push(
+      `if(index<frames.Count)value=value with { Payload=Decode${rn(p.type)}(frames[index++],context) };`,
     );
   }
-  r.push(
-    'if(index!=frames.Count)throw Error("extra frame");',
+  headerRead.push(
     `var value=new ${n}(${ctor.join(",")});`,
     ...predicates(c, "value"),
     "return value;",
   );
-  w.push(...predicates(c, "value"), "return frames.ToArray();");
-  return `    internal static ${n} Decode${n}(IReadOnlyList<byte[]> frames,DecodeContext context)\n    {\n        ${r.filter(Boolean).join("\n        ")}\n    }\n    internal static ${n} Decode${n}(byte[] frame,DecodeContext context)=>Decode${n}(new[]{frame},context);\n    internal static byte[][] Encode${n}(${n} value,DecodeContext context)\n    {\n        ${w.filter(Boolean).join("\n        ")}\n    }`;
+  read.push(
+    'if(index!=frames.Count)throw Error("extra frame");',
+    "return value;",
+  );
+  write.unshift(
+    `var frames=new byte[${count.join("+")}][];`,
+    `frames[0]=Encode${n}Header(value,context);`,
+    ...(m || p.policy !== "forbidden" ? ["var index=1;"] : []),
+  );
+  write.push("return frames;");
+  return `    internal static ${n} Decode${n}Header(ReadOnlySpan<byte> frame,DecodeContext context)\n    {\n        ${headerRead.join("\n        ")}\n    }\n    internal static byte[] Encode${n}Header(${n} value,DecodeContext context) { ${encodeBody(`Write${n}Header(ref writer, value, context)`)} }\n    private static void Write${n}Header(ref Writer body, ${n} value, DecodeContext context)\n    {\n        ${headerWrite.join("\n        ")}\n    }\n    internal static ${n} Decode${n}(IReadOnlyList<byte[]> frames,DecodeContext context)\n    {\n        ${read.join("\n        ")}\n    }\n    internal static ${n} Decode${n}(byte[] frame,DecodeContext context)=>Decode${n}(new[]{frame},context);\n    internal static byte[][] Encode${n}(${n} value,DecodeContext context)\n    {\n        ${write.join("\n        ")}\n    }`;
 }
 
 function durable(f) {
@@ -1076,9 +1139,53 @@ function durable(f) {
     throw Error(`${f.name}: durable operation policy`);
   const n = id(f.name),
     b = rn(bf.type);
-  return `    internal static ${b} DecodeDurable${n}(byte[] bytes,DecodeContext context){if(bytes.LongLength>${l.maximumEncodedBytes}L)throw Error("limit");var r=new Reader(bytes);${h.magic.map((v) => `if(r.U8()!=${v})throw Error("magic");`).join("")}if(r.U8()!=${h.formatVersion})throw Error("version");if(Read${rn(h.flagsType)}(r,context).Value!=${h.flags})throw Error("flags");var x=r.Slice(checked((int)Read${rn(h.bodyLengthType)}(r,context).Value));var sum=r.U32();r.End("durable");if(Crc32C(bytes.AsSpan(0,bytes.Length-4))!=sum)throw Error("checksum");var v=Read${b}(x,context);x.End("body");return v;}\n    internal static byte[] EncodeDurable${n}(${b} value,DecodeContext context){var body=new Writer();Write${b}(body,value,context);var w=new Writer();${h.magic.map((v) => `w.U8(${v});`).join("")}w.U8(${h.formatVersion});Write${rn(h.flagsType)}(w,new ${rn(h.flagsType)}(${h.flags}),context);Write${rn(h.bodyLengthType)}(w,new ${rn(h.bodyLengthType)}(checked((${intType(main(types.get(h.bodyLengthType.$ref)).encoding)})body.Length)),context);w.Bytes(body.ToArray());var p=w.ToArray();w.U32(Crc32C(p));var r=w.ToArray();if(r.LongLength>${l.maximumEncodedBytes}L)throw Error("limit");return r;}`;
+  return `    internal static ${b} DecodeDurable${n}(byte[] bytes,DecodeContext context){if(bytes.LongLength>${l.maximumEncodedBytes}L)throw Error("limit");var r=new Reader(bytes);${h.magic.map((v) => `if(r.U8()!=${v})throw Error("magic");`).join("")}if(r.U8()!=${h.formatVersion})throw Error("version");if(Read${rn(h.flagsType)}(ref r,context).Value!=${h.flags})throw Error("flags");var x=r.Slice(checked((int)Read${rn(h.bodyLengthType)}(ref r,context).Value));var sum=r.U32();r.End("durable");if(Crc32C(bytes.AsSpan(0,bytes.Length-4))!=sum)throw Error("checksum");var v=Read${b}(ref x,context);x.End("body");return v;}\n    internal static byte[] EncodeDurable${n}(${b} value,DecodeContext context){${encodeBody(`WriteDurable${n}(ref writer, value, context)`)}}\n    private static void WriteDurable${n}(ref Writer writer, ${b} value, DecodeContext context) { ${h.magic.map((v) => `writer.U8(${v});`).join("")} writer.U8(${h.formatVersion}); Write${rn(h.flagsType)}(ref writer,new ${rn(h.flagsType)}(${h.flags}),context); ${beginLength(h.bodyLengthType, "body").join(" ")} Write${b}(ref writer,value,context); ${endLength(h.bodyLengthType, "body").join(" ")} writer.U32(Crc32C(writer.Written)); if(writer.Length>${l.maximumEncodedBytes}L)throw Error("limit"); }`;
 }
-const runtime = String.raw`    private sealed class Reader{private readonly byte[]b;private readonly int limit;private int p;internal Reader(byte[] bytes){b=bytes;limit=bytes.Length;}internal int Remaining=>limit-p;private void N(int n){if(n<0||Remaining<n)throw new EndOfStreamException("truncated");}internal byte U8()=>Bytes(1)[0];internal ushort U16()=>BinaryPrimitives.ReadUInt16BigEndian(Bytes(2));internal uint U32()=>BinaryPrimitives.ReadUInt32BigEndian(Bytes(4));internal ulong U64()=>BinaryPrimitives.ReadUInt64BigEndian(Bytes(8));internal long I64()=>BinaryPrimitives.ReadInt64BigEndian(Bytes(8));internal byte[] Bytes(int n){N(n);var value=b.AsSpan(p,n).ToArray();p+=n;return value;}internal Reader Slice(int n)=>new(Bytes(n));internal void End(string n){if(Remaining!=0)throw Error(n+": trailing");}} private sealed class Writer{private readonly List<byte[]>chunks=[];private long length;internal long Length=>length;private void Add(byte[]v){chunks.Add(v);length=checked(length+v.LongLength);}internal void U8(byte v)=>Add([v]);internal void U16(ushort v){var x=new byte[2];BinaryPrimitives.WriteUInt16BigEndian(x,v);Add(x);}internal void U32(uint v){var x=new byte[4];BinaryPrimitives.WriteUInt32BigEndian(x,v);Add(x);}internal void U64(ulong v){var x=new byte[8];BinaryPrimitives.WriteUInt64BigEndian(x,v);Add(x);}internal void I64(long v){var x=new byte[8];BinaryPrimitives.WriteInt64BigEndian(x,v);Add(x);}internal void Bytes(byte[]v)=>Add(v);internal byte[]ToArray(){if(length>int.MaxValue)throw Capacity("writer capacity");var result=GC.AllocateUninitializedArray<byte>((int)length);var offset=0;foreach(var chunk in chunks){chunk.CopyTo(result,offset);offset+=chunk.Length;}return result;}} private sealed class CapacityException(string message):Exception(message);private static CapacityException Capacity(string m)=>new(m);private static readonly UTF8Encoding Utf8=new(false,true);private static string StrictText(byte[] bytes,string name){try{return Utf8.GetString(bytes);}catch(DecoderFallbackException failure){throw new InvalidDataException(name+": UTF-8",failure);}}private static InvalidDataException Error(string m)=>new(m);private static int CompareBytes(byte[]a,byte[]b){var n=Math.Min(a.Length,b.Length);for(var i=0;i<n;i++){var c=a[i].CompareTo(b[i]);if(c!=0)return c;}return a.Length.CompareTo(b.Length);}private static string AuthorityComponent(string value){var bytes=Utf8.GetBytes(value);var result=new StringBuilder().Append(bytes.Length).Append(':');foreach(var b in bytes){if((b>=(byte)'A'&&b<=(byte)'Z')||(b>=(byte)'a'&&b<=(byte)'z')||(b>=(byte)'0'&&b<=(byte)'9')||b is (byte)'-' or (byte)'.' or (byte)'_' or (byte)'~')result.Append((char)b);else result.Append('%').Append(b.ToString("X2"));}return result.ToString();}private static uint Crc32C(ReadOnlySpan<byte>b){var c=uint.MaxValue;foreach(var v in b){c^=v;for(var i=0;i<8;i++)c=(c>>1)^(0x82f63b78u&(uint)-(int)(c&1));}return~c;}
+const runtime = String.raw`
+    private ref struct Reader
+    {
+        private readonly ReadOnlySpan<byte> bytes;
+        private int position;
+        internal Reader(ReadOnlySpan<byte> value) { bytes = value; position = 0; }
+        internal int Remaining => bytes.Length - position;
+        internal ReadOnlySpan<byte> Bytes(int count)
+        {
+            if (count < 0 || count > Remaining) throw new EndOfStreamException("truncated");
+            var value = bytes.Slice(position, count); position += count; return value;
+        }
+        internal byte U8() => Bytes(1)[0];
+        internal ushort U16() => BinaryPrimitives.ReadUInt16BigEndian(Bytes(2));
+        internal uint U32() => BinaryPrimitives.ReadUInt32BigEndian(Bytes(4));
+        internal ulong U64() => BinaryPrimitives.ReadUInt64BigEndian(Bytes(8));
+        internal long I64() => BinaryPrimitives.ReadInt64BigEndian(Bytes(8));
+        internal Reader Slice(int count) => new(Bytes(count));
+        internal void End(string name) { if (Remaining != 0) throw Error(name + ": trailing"); }
+    }
+    private ref struct Writer
+    {
+        private readonly Span<byte> buffer;
+        private int length;
+        internal Writer(Span<byte> destination) { buffer = destination; length = 0; }
+        internal int Length => length;
+        internal bool IsSizing => buffer.IsEmpty;
+        internal ReadOnlySpan<byte> Written => buffer.IsEmpty ? default : buffer[..length];
+        internal Writer At(int offset) => new(buffer.IsEmpty ? default : buffer[offset..]);
+        private Span<byte> Append(int count)
+        {
+            if (count > int.MaxValue - length) throw Capacity("writer capacity");
+            var offset = length; length += count;
+            return buffer.IsEmpty ? default : buffer.Slice(offset, count);
+        }
+        internal void Reserve(int count) => Append(count);
+        internal void U8(byte value) { var target = Append(1); if (!target.IsEmpty) target[0] = value; }
+        internal void U16(ushort value) { var target = Append(2); if (!target.IsEmpty) BinaryPrimitives.WriteUInt16BigEndian(target, value); }
+        internal void U32(uint value) { var target = Append(4); if (!target.IsEmpty) BinaryPrimitives.WriteUInt32BigEndian(target, value); }
+        internal void U64(ulong value) { var target = Append(8); if (!target.IsEmpty) BinaryPrimitives.WriteUInt64BigEndian(target, value); }
+        internal void I64(long value) { var target = Append(8); if (!target.IsEmpty) BinaryPrimitives.WriteInt64BigEndian(target, value); }
+        internal void Bytes(scoped ReadOnlySpan<byte> value) { var target = Append(value.Length); if (!target.IsEmpty) value.CopyTo(target); }
+        internal void Text(string? value, int byteCount) { var target = Append(byteCount); if (!target.IsEmpty) Utf8.GetBytes(value, target); }
+    }
+ private sealed class CapacityException(string message):Exception(message);private static CapacityException Capacity(string m)=>new(m);private static readonly UTF8Encoding Utf8=new(false,true);private static string StrictText(ReadOnlySpan<byte> bytes,string name){try{return Utf8.GetString(bytes);}catch(DecoderFallbackException failure){throw new InvalidDataException(name+": UTF-8",failure);}}private static InvalidDataException Error(string m)=>new(m);private static int CompareBytes(byte[]a,byte[]b){var n=Math.Min(a.Length,b.Length);for(var i=0;i<n;i++){var c=a[i].CompareTo(b[i]);if(c!=0)return c;}return a.Length.CompareTo(b.Length);}private static string AuthorityComponent(string value){var bytes=Utf8.GetBytes(value);var result=new StringBuilder().Append(bytes.Length).Append(':');foreach(var b in bytes){if((b>=(byte)'A'&&b<=(byte)'Z')||(b>=(byte)'a'&&b<=(byte)'z')||(b>=(byte)'0'&&b<=(byte)'9')||b is (byte)'-' or (byte)'.' or (byte)'_' or (byte)'~')result.Append((char)b);else result.Append('%').Append(b.ToString("X2"));}return result.ToString();}private static uint Crc32C(ReadOnlySpan<byte>b){var c=uint.MaxValue;foreach(var v in b){c^=v;for(var i=0;i<8;i++)c=(c>>1)^(0x82f63b78u&(uint)-(int)(c&1));}return~c;}
     internal static void ValidateTerminalFailure(RequestTerminalResult result, FrameworkErrorCode failure){if(!ServiceWireConstants.ValidTerminalFailure((uint)result,(uint)failure))throw Error("terminal failure integrity");}`;
 function render() {
   assertSyntaxCoverage();
@@ -1115,7 +1222,7 @@ function render() {
     internal enum LogicalFailureKind { Truncated, Trailing, Capacity, Limit, Protocol }
     internal sealed class LogicalDecodeException(LogicalFailureKind kind,long offset,Exception inner):IOException($"{kind.ToString().ToLowerInvariant()} at byte {offset}",inner){internal LogicalFailureKind Kind{get;}=kind;internal long Offset{get;}=offset;}
     private sealed class LogicalInternalException(LogicalFailureKind kind,string message):IOException(message){internal LogicalFailureKind Kind{get;}=kind;}
-    internal sealed record LogicalDecodeStep<T>(LogicalDecodeProgress Progress,T? Value,int BufferedInputByteCount,long ConsumedByteCount,int ContinuationDepth);
+    internal sealed record LogicalDecodeStep<T>(LogicalDecodeProgress Progress,T? Value,int BufferedInputByteCount,long ConsumedByteCount,int ContinuationDepth) where T : struct;
     private abstract class LogicalFrame{internal readonly long End;internal long Start;internal int State,Filled;internal object? Child;internal byte[]? Scratch;protected LogicalFrame(long end){End=end;}protected object TakeChild(){var value=Child!;Child=null;return value;}internal abstract void Resume(LogicalMachine machine);}
     private sealed class LogicalMachine
     {
@@ -1140,7 +1247,7 @@ ${frames}
         internal void SetSyntheticPriorInputByteCountForTest(long value){if(totalInputByteCount!=0)throw new InvalidOperationException();totalInputByteCount=value;}
         internal LogicalDecodeStep<${lb}> Push(byte[] chunk,bool finalChunk){if(terminal)throw new InvalidOperationException("terminal logical decoder push");if(chunk.LongLength>${ll.maximumEncodedBytes}L-totalInputByteCount){terminal=true;throw new LogicalDecodeException(LogicalFailureKind.Limit,machine.Consumed,Error("${lo.name}: encoded limit"));}totalInputByteCount+=chunk.LongLength;try{var value=machine.Run(chunk,finalChunk);if(value is null)return new(LogicalDecodeProgress.NeedMore,null,machine.Buffered,machine.Consumed,machine.Depth);terminal=true;return new(LogicalDecodeProgress.Complete,(${lb})value,0,machine.Consumed,0);}catch(Exception failure)when(failure is not LogicalDecodeException){terminal=true;var kind=failure is LogicalInternalException internalFailure?internalFailure.Kind:failure is CapacityException?LogicalFailureKind.Capacity:failure is EndOfStreamException?LogicalFailureKind.Truncated:LogicalFailureKind.Protocol;throw new LogicalDecodeException(kind,machine.Consumed,failure);}}
     }
-    internal static ${lb} DecodeLogical${ln}(byte[] b,DecodeContext c){var step=new Logical${ln}Decoder(c).Push(b,true);if(step.Progress!=LogicalDecodeProgress.Complete)throw new EndOfStreamException("truncated logical stream");return step.Value!;}
+    internal static ${lb} DecodeLogical${ln}(byte[] b,DecodeContext c){var step=new Logical${ln}Decoder(c).Push(b,true);if(step.Progress!=LogicalDecodeProgress.Complete)throw new EndOfStreamException("truncated logical stream");return step.Value!.Value;}
     internal static byte[] EncodeLogical${ln}(${lb} v,DecodeContext c){var b=Encode${lb}(v,c);if(b.LongLength>${ll.maximumEncodedBytes}L)throw Error("limit");return b;}`;
   const source = `// <auto-generated> DO NOT EDIT.\n#nullable enable\nusing System;\nusing System.Buffers.Binary;\nusing System.Collections.Generic;\nusing System.IO;\nusing System.Linq;\nusing System.Text;\nnamespace Systems.Zlink.Framework.Runtime.Protocol;\ninternal static class ServiceWireCodec\n{\n${[
     ctx,
@@ -1236,7 +1343,7 @@ function typeMethods(t) {
     const lr = o.lengthType,
       capacity = o.encodeCapacity;
     read = [
-      `var encodedLength = (ulong)Read${rn(lr)}(reader, context).Value;`,
+      `var encodedLength = (ulong)Read${rn(lr)}(ref reader, context).Value;`,
       `if (encodedLength > ${lit(capacity.representationCeiling)}) throw Capacity("${t.name}: capacity");`,
       `if (encodedLength < ${lit(o.minimumBytes)} || encodedLength > ${lit(capacity.declaredMaximumBytes)}) throw Error("${t.name}: length");`,
       `var length = checked((int)encodedLength);`,
@@ -1244,17 +1351,25 @@ function typeMethods(t) {
       o.zeroLengthMeaning ? `if (length == 0) return new(null);` : "",
       o.content === "text"
         ? `if (bytes.Contains((byte)0)) throw Error("${t.name}: NUL");\n        return new(Utf8.GetString(bytes));`
-        : `return new(bytes);`,
+        : isRoutingId(t)
+          ? `return new(RoutingId.From(bytes));`
+          : `return new(bytes.ToArray());`,
     ].filter(Boolean);
     write = [
-      `var bytes = ${o.content === "text" ? "value.Value is null ? Array.Empty<byte>() : Utf8.GetBytes(value.Value)" : "value.Value ?? Array.Empty<byte>()"};`,
       o.content === "text"
-        ? `if (bytes.Contains((byte)0)) throw Error("${t.name}: NUL");`
+        ? `var length = value.Value is null ? 0 : Utf8.GetByteCount(value.Value);`
+        : isRoutingId(t)
+          ? `var bytes = value.Value; var length = bytes.Length;`
+          : `var bytes = value.Value ?? Array.Empty<byte>(); var length = bytes.Length;`,
+      o.content === "text"
+        ? `if (value.Value?.IndexOf('\\0') >= 0) throw Error("${t.name}: NUL");`
         : "",
-      `if ((ulong)bytes.LongLength > ${lit(capacity.representationCeiling)}) throw Capacity("${t.name}: capacity");`,
-      `if ((ulong)bytes.LongLength < ${lit(o.minimumBytes)} || (ulong)bytes.LongLength > ${lit(capacity.declaredMaximumBytes)}) throw Error("${t.name}: length");`,
-      `Write${rn(lr)}(writer, new ${rn(lr)}(checked((${intType(main(types.get(lr.$ref)).encoding)})bytes.Length)), context);`,
-      `writer.Bytes(bytes);`,
+      `if ((ulong)length > ${lit(capacity.representationCeiling)}) throw Capacity("${t.name}: capacity");`,
+      `if ((ulong)length < ${lit(o.minimumBytes)} || (ulong)length > ${lit(capacity.declaredMaximumBytes)}) throw Error("${t.name}: length");`,
+      `Write${rn(lr)}(ref writer, new ${rn(lr)}(checked((${intType(main(types.get(lr.$ref)).encoding)})length)), context);`,
+      o.content === "text"
+        ? `writer.Text(value.Value, length);`
+        : `writer.Bytes(bytes);`,
     ].filter(Boolean);
   } else if (o.op === "struct" || o.op === "versioned-length-delimited") {
     const target = o.op === "versioned-length-delimited" ? "body" : "reader";
@@ -1275,15 +1390,14 @@ function typeMethods(t) {
       ...(o.reader ? [`body.End("${t.name}");`] : []),
       "return value;",
     );
-    const wf = writeFields(o.fields, "body", "value");
-    write.push(...c.lines, ...pred);
+    const wf = writeFields(o.fields, "writer", "value");
+    write.push(...writeConstraints(c.lines), ...pred);
     if (o.op === "versioned-length-delimited") {
       write.push(
-        "var body = new Writer();",
-        ...wf.lines,
         `${writeCall(o.version, "writer", expected(o.version, o.version.constant), new Map())};`,
-        `Write${rn(o.length)}(writer, new ${rn(o.length)}(checked((${intType(main(types.get(o.length.$ref)).encoding)})body.Length)), context);`,
-        `writer.Bytes(body.ToArray());`,
+        ...beginLength(o.length, "body"),
+        ...wf.lines,
+        ...endLength(o.length, "body"),
       );
     } else write.push(...writeFields(o.fields, "writer", "value").lines);
   } else if (o.op === "vector" || o.op === "versioned-vector") {
@@ -1316,7 +1430,7 @@ function typeMethods(t) {
       "return value;",
     );
     write.push(
-      ...c.lines,
+      ...writeConstraints(c.lines),
       ...(o.maximumItems !== undefined
         ? [
             `if (value.${prop}.Count > ${o.maximumItems}) throw Error("${t.name}: count");`,
@@ -1330,8 +1444,8 @@ function typeMethods(t) {
       );
     }
     write.push(
-      `Write${rn(count)}(writer, new ${rn(count)}(checked((${intType(main(types.get(count.$ref)).encoding)})value.${prop}.Count)), context);`,
-      `foreach (var item in value.${prop}) ${writeCall(item, "writer", "item", new Map())};`,
+      `Write${rn(count)}(ref writer, new ${rn(count)}(checked((${intType(main(types.get(count.$ref)).encoding)})value.${prop}.Count)), context);`,
+      `for (var index = 0; index < value.${prop}.Count; index++) { var item = value.${prop}[index]; ${writeCall(item, "writer", "item", new Map())}; }`,
     );
   } else if (o.op === "conditional-union") {
     const disc = o.discriminators,
@@ -1353,7 +1467,7 @@ function typeMethods(t) {
       read.push(
         `var selected = reader.Slice(checked((int)${readCall(o.bodyLengthType, "reader", new Map())}.Value));`,
       );
-    } else read.push("var selected = reader;");
+    } else read.push("ref var selected = ref reader;");
     cases(o).forEach(([sig, v], i) => {
       const s = JSON.parse(sig),
         test = disc
@@ -1401,7 +1515,7 @@ function typeMethods(t) {
       write.push(
         `case ${n}Case${i} item:`,
         "{",
-        ...cc.lines.map((x) => `    ${x}`),
+        ...writeConstraints(cc.lines).map((x) => `    ${x}`),
         ...cp.map((x) => `    ${x}`),
       );
       for (const d of disc) {
@@ -1420,17 +1534,12 @@ function typeMethods(t) {
           );
         }
       }
-      const wf = writeFields(
-        caseFields(v),
-        o.reader ? "body" : "writer",
-        "item",
-      );
+      const wf = writeFields(caseFields(v), "writer", "item");
       if (o.reader)
         write.push(
-          "    var body = new Writer();",
+          ...beginLength(o.bodyLengthType, "body").map((x) => `    ${x}`),
           ...wf.lines.map((x) => `    ${x}`),
-          `    Write${rn(o.bodyLengthType)}(writer, new ${rn(o.bodyLengthType)}(checked((${intType(main(types.get(o.bodyLengthType.$ref)).encoding)})body.Length)), context);`,
-          "    writer.Bytes(body.ToArray());",
+          ...endLength(o.bodyLengthType, "body").map((x) => `    ${x}`),
         );
       else write.push(...wf.lines.map((x) => `    ${x}`));
       write.push("    break;", "}");
@@ -1450,17 +1559,12 @@ function typeMethods(t) {
           `    if (${disc.map((d, i) => `${actuals[i]} == ${expected(d.type, s[d.name])}`).join(" && ")}) throw Error("${t.name}: otherwise matches case");`,
         );
       }
-      const wf = writeFields(
-        o.otherwise.fields,
-        o.reader ? "body" : "writer",
-        "item",
-      );
+      const wf = writeFields(o.otherwise.fields, "writer", "item");
       if (o.reader)
         write.push(
-          "    var body = new Writer();",
+          ...beginLength(o.bodyLengthType, "body").map((x) => `    ${x}`),
           ...wf.lines.map((x) => `    ${x}`),
-          `    Write${rn(o.bodyLengthType)}(writer, new ${rn(o.bodyLengthType)}(checked((${intType(main(types.get(o.bodyLengthType.$ref)).encoding)})body.Length)), context);`,
-          "    writer.Bytes(body.ToArray());",
+          ...endLength(o.bodyLengthType, "body").map((x) => `    ${x}`),
         );
       else write.push(...wf.lines.map((x) => `    ${x}`));
       write.push("    break;", "}");
@@ -1500,7 +1604,9 @@ function typeMethods(t) {
       read.push(
         `    case ${f.id}:`,
         `        ${id(f.name)} = ${readCall(f.type, "item", new Map())};`,
-        ...fieldChecks(f, `${id(f.name)}!`).map((line) => `        ${line}`),
+        ...fieldChecks(f, unwrapped(f.type, id(f.name))).map(
+          (line) => `        ${line}`,
+        ),
         `        item.End("${f.name}");`,
         "        break;",
       );
@@ -1524,28 +1630,27 @@ function typeMethods(t) {
         [`${f.name}:field`, f],
       ]),
     );
-    write.push(...tlvPresence(o, writeEnvironment), "var body = new Writer();");
+    write.push(
+      ...tlvPresence(o, writeEnvironment),
+      ...beginLength(o.totalLengthType, "body"),
+    );
     for (const f of ordered) {
       const x = `value.${id(f.name)}`,
-        v = main(types.get(f.type.$ref)).op === "enum" ? `${x}.Value` : `${x}!`;
+        v = unwrapped(f.type, x);
       if (required.has(f.name))
         write.push(`if (${x} is null) throw Error("${f.name}: required");`);
       write.push(
         `if (${x} is not null)`,
         "{",
         ...fieldChecks(f, v).map((line) => `    ${line}`),
-        "    var item = new Writer();",
-        `    ${writeCall(f.type, "item", v, new Map())};`,
-        `    Write${rn(o.fieldIdType)}(body, new ${rn(o.fieldIdType)}(${lit(f.id, main(types.get(o.fieldIdType.$ref)).encoding)}), context);`,
-        `    Write${rn(o.fieldLengthType)}(body, new ${rn(o.fieldLengthType)}(checked((${intType(main(types.get(o.fieldLengthType.$ref)).encoding)})item.Length)), context);`,
-        "    body.Bytes(item.ToArray());",
+        `    Write${rn(o.fieldIdType)}(ref writer, new ${rn(o.fieldIdType)}(${lit(f.id, main(types.get(o.fieldIdType.$ref)).encoding)}), context);`,
+        ...beginLength(o.fieldLengthType, "item").map((x) => `    ${x}`),
+        `    ${writeCall(f.type, "writer", v, new Map())};`,
+        ...endLength(o.fieldLengthType, "item").map((x) => `    ${x}`),
         "}",
       );
     }
-    write.push(
-      `Write${rn(o.totalLengthType)}(writer, new ${rn(o.totalLengthType)}(checked((${intType(main(types.get(o.totalLengthType.$ref)).encoding)})body.Length)), context);`,
-      "writer.Bytes(body.ToArray());",
-    );
+    write.push(...endLength(o.totalLengthType, "body"));
   } else throw Error(`${t.name}: methods ${o.op}`);
   const encodedLimit = t.operations.find(
     (operation) => operation.op === "encoded-limit",
@@ -1566,7 +1671,7 @@ function typeMethods(t) {
       maximum = `context.${id(name)} ?? throw Error("missing context ${name}")`,
       measured =
         negotiated.measured === "content-bytes"
-          ? "bytes.LongLength"
+          ? "length"
           : "negotiatedStart - reader.Remaining",
       check = `if (negotiatedMaximum < 0 || negotiatedMaximum > ${lit(negotiated.context.absoluteMaximum, "i64")} || (ulong)(${measured}) > (ulong)negotiatedMaximum) throw Error("${t.name}: negotiated bound");`;
     readBody = [
@@ -1590,7 +1695,7 @@ function typeMethods(t) {
       maximum = `context.${id(name)} ?? throw Error("missing context ${name}")`,
       measured =
         negotiated.measured === "content-bytes"
-          ? "bytes.LongLength"
+          ? "length"
           : "writer.Length - negotiatedStart",
       check = `if (negotiatedMaximum < 0 || negotiatedMaximum > ${lit(negotiated.context.absoluteMaximum, "i64")} || (ulong)(${measured}) > (ulong)negotiatedMaximum) throw Error("${t.name}: negotiated bound");`;
     writeBody = [
@@ -1608,5 +1713,5 @@ function typeMethods(t) {
       ...writeBody,
       `if ((ulong)(writer.Length - encodedStart) > ${lit(max)}) throw Error("${t.name}: encoded limit");`,
     ];
-  return `    internal static ${n} Decode${n}(byte[] bytes, DecodeContext context${params}) { var reader = new Reader(bytes); var value = Read${n}(reader, context${args}); reader.End("${t.name}"); return value; }\n    internal static byte[] Encode${n}(${n} value, DecodeContext context${params}) { var writer = new Writer(); Write${n}(writer, value, context${args}); return writer.ToArray(); }\n    private static ${n} Read${n}(Reader reader, DecodeContext context${params})\n    {\n        ${readBody.join("\n        ")}\n    }\n    private static void Write${n}(Writer writer, ${n} value, DecodeContext context${params})\n    {\n        ${writeBody.join("\n        ")}\n    }\n${c.helpers.join("\n")}`;
+  return `    internal static ${n} Decode${n}(byte[] bytes, DecodeContext context${params}) { var reader = new Reader(bytes); var value = Read${n}(ref reader, context${args}); reader.End("${t.name}"); return value; }\n    internal static byte[] Encode${n}(${n} value, DecodeContext context${params}) { ${encodeBody(`Write${n}(ref writer, value, context${args})`)} }\n    private static ${n} Read${n}(ref Reader reader, DecodeContext context${params})\n    {\n        ${readBody.join("\n        ")}\n    }\n    private static void Write${n}(ref Writer writer, ${n} value, DecodeContext context${params})\n    {\n        ${writeBody.join("\n        ")}\n    }\n${c.helpers.join("\n")}`;
 }
