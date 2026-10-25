@@ -125,6 +125,32 @@ def main():
             name, line = events.get_nowait()
             if line is not None:
                 print(f"{name}: {line}", flush=True)
+    if not failed:
+        for mode in ("stop", "destroy"):
+            try:
+                with subprocess.Popen(
+                    [binary, f"--classification-{mode}"],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                ) as process:
+                    try:
+                        output, _ = process.communicate(
+                            timeout=max(0, deadline - time.monotonic())
+                        )
+                    except subprocess.TimeoutExpired:
+                        failed = True
+                        print(f"classification-{mode}: exceeded the runtime deadline", file=sys.stderr)
+                        # The fixture releases its Store latch before joining its host.
+                        # Reap that cooperative cleanup without terminating the child.
+                        output, _ = process.communicate()
+                    for line in output.splitlines():
+                        print(f"classification-{mode}: {line}", flush=True)
+                    print(f"classification-{mode}: exit={process.returncode}", flush=True)
+                    failed |= process.returncode != 0
+            except OSError as error:
+                failed = True
+                print(f"classification-{mode}: {error}", file=sys.stderr)
     return int(failed)
 
 

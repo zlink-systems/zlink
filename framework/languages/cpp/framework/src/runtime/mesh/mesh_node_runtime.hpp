@@ -280,7 +280,7 @@ class mesh_node_runtime_t
                               std::vector<zlink::message_t> parts,
                               std::chrono::milliseconds timeout,
                               request_receiver_t<runtime::messaging::message_parts_t> receiver);
-    task_t<void> submit_unknown_node_request_reply (
+    void submit_unknown_node_request_reply (
       zlink::routing_id_t target,
       std::vector<zlink::message_t> parts,
       std::chrono::milliseconds timeout,
@@ -639,8 +639,10 @@ class mesh_node_runtime_t
     classify_node_target_from_topology (const zlink::routing_id_t &target, bool &unknown) const;
     task_t<std::optional<zlink::submit_result_t>>
     classify_unknown_node_target (const zlink::routing_id_t &target) const;
-    task_t<std::optional<zlink::submit_result_t>>
-    lookup_unknown_node_target (zlink::routing_id_t target) const;
+    static task_t<std::optional<zlink::submit_result_t>>
+    lookup_unknown_node_target (std::shared_ptr<location_repository_t> store,
+                                std::string mesh_name,
+                                zlink::routing_id_t target);
     template <typename Classified, typename Known, typename Unknown>
     auto dispatch_node_request (const zlink::routing_id_t &target,
                                 Classified &&classified,

@@ -4131,17 +4131,16 @@ mesh_node_runtime_t::classify_unknown_node_target (const zlink::routing_id_t &ta
     if (!_user_spot_store)
         return task_t<std::optional<zlink::submit_result_t>> (
           result_t<std::optional<zlink::submit_result_t>>::success (std::nullopt));
-    return lookup_unknown_node_target (target);
+    return lookup_unknown_node_target (_user_spot_store, _state->mesh_name, target);
 }
 
-task_t<std::optional<zlink::submit_result_t>>
-mesh_node_runtime_t::lookup_unknown_node_target (zlink::routing_id_t target) const
+task_t<std::optional<zlink::submit_result_t>> mesh_node_runtime_t::lookup_unknown_node_target (
+  std::shared_ptr<location_repository_t> store, std::string mesh_name, zlink::routing_id_t target)
 {
     try {
         location_page_request_t page;
         for (;;) {
-            const auto listed =
-              co_await _user_spot_store->list_mesh_nodes (_state->mesh_name, page);
+            const auto listed = co_await store->list_mesh_nodes (mesh_name, page);
             const auto found = std::find_if (listed.items.begin (), listed.items.end (),
                                              [&target] (const mesh_node_descriptor_t &descriptor) {
                                                  return descriptor.rid == target;
@@ -4295,9 +4294,8 @@ void mesh_node_runtime_t::submit_node_request_reply (
               start_node_request_reply (target, std::move (parts), timeout, std::move (receiver));
           },
           [&] (auto classification) {
-              (void) submit_unknown_node_request_reply (target, std::move (parts), timeout,
-                                                        std::move (receiver),
-                                                        std::move (classification));
+              submit_unknown_node_request_reply (target, std::move (parts), timeout,
+                                                 std::move (receiver), std::move (classification));
           });
     }
     catch (...) {
@@ -4314,6 +4312,8 @@ void mesh_node_runtime_t::start_request_reply (
 {
     auto rejected = receiver.rejection_receiver ();
     try {
+        if (!_node)
+            throw configuration_error ("MeshNode has not started");
         auto start = submit ([receiver = std::move (receiver), operation_name] (
                                result_t<host::operation_completion_t> completed) mutable {
             if (auto failure = request_completion_failure (completed, operation_name))
@@ -4373,8 +4373,6 @@ void mesh_node_runtime_t::submit_channel_request_reply (
 {
     start_request_reply (
       [&] (auto receive) {
-          if (!_node)
-              throw configuration_error ("MeshNode has not started");
           host::call_id_t operation;
           return _node->submit_channel_request (channel_name, parts, operation, timeout,
                                                 std::move (receive));
@@ -4390,24 +4388,33 @@ void mesh_node_runtime_t::submit_channel_request_reply (
       });
 }
 
-task_t<void> mesh_node_runtime_t::submit_unknown_node_request_reply (
+void mesh_node_runtime_t::submit_unknown_node_request_reply (
   zlink::routing_id_t target,
   std::vector<zlink::message_t> parts,
   std::chrono::milliseconds timeout,
   request_receiver_t<runtime::messaging::message_parts_t> receiver,
   task_t<std::optional<zlink::submit_result_t>> classification)
 {
-    const auto result = co_await runtime::await_result (std::move (classification));
-    if (!result || result.value ()) {
-        auto failure =
-          result
-            ? node_submission_failure (*result.value ())
-            : result_access_t::failure<runtime::messaging::message_parts_t> (result.exception ());
-        receiver.reject (failure.exception ());
-        co_return;
-    }
-    // Classification is complete; the same source submission owns registration.
-    start_node_request_reply (target, std::move (parts), timeout, std::move (receiver));
+    // The receiver retains the selected transport, whose callable owns this mesh.
+    // Classification owns only the Store lookup; no forwarding task owns the reply.
+    observe_task_terminal (
+      classification, [this, target = std::move (target), parts = std::move (parts), timeout,
+                       receiver = std::move (receiver), owner = capture_current_serial_turn ()] (
+                        const result_t<std::optional<zlink::submit_result_t>> &result) mutable {
+          auto rejected = receiver.rejection_receiver ();
+          try {
+              const serial_turn_scope_t turn (owner);
+              if (!result || result.value ()) {
+                  receiver.reject (result ? node_submission_failure (*result.value ()).exception ()
+                                          : result.exception ());
+                  return;
+              }
+              start_node_request_reply (target, std::move (parts), timeout, std::move (receiver));
+          }
+          catch (...) {
+              rejected.reject (std::current_exception ());
+          }
+      });
 }
 
 task_t<zlink::submit_result_t>

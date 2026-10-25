@@ -9,8 +9,9 @@
 #include <cstdint>
 #include <cstdio>
 #include <exception>
-#include <memory>
 #include <iostream>
+#include <map>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <stdexcept>
@@ -211,7 +212,9 @@ struct host_t
     std::atomic<bool> exited{false};
     std::exception_ptr run_failure;
 
-    explicit host_t (const char *id, const std::string &peer_endpoint = {}) :
+    explicit host_t (const char *id,
+                     const std::string &peer_endpoint = {},
+                     std::shared_ptr<fw::location_store_t> store = {}) :
         rid (zlink::routing_id_t::from (id))
     {
         app.logging ().disable_record_capture ();
@@ -220,6 +223,13 @@ struct host_t
         app.add_hosted_service (std::move (service));
         auto &options = app.add_zlink_framework ();
         options.codecs ().use (codec_t{probe});
+        if (store) {
+            app.logging ()
+              .use_file (std::string (id) + ".flow")
+              .set_min_level (fw::log_level_t::debug);
+            options.configure_dispatch ().message_flow (fw::message_flow_log_mode_t::normal);
+            options.add_location_store (std::move (store));
+        }
         options.services ().add_singleton<handler_t> (std::make_unique<handler_t> (probe));
         options.services ().add_singleton<prepared_handler_t> (
           std::make_unique<prepared_handler_t> ());
@@ -405,9 +415,171 @@ void verify_results_prepared_before_encode (host_t &source, const zlink::routing
 
 }
 
+namespace
+{
+class held_classification_store_t final : public fw::location_store_t
+{
+  public:
+    fw::task_t<fw::store_read_result_t> read (fw::store_key_t key) override
+    {
+        std::lock_guard lock (mutex);
+        const auto now = expire ();
+        const auto found = values.find (key.value);
+        if (found != values.end ())
+            found->second.store_now = now;
+        return fw::task_t<fw::store_read_result_t> (fw::result_t<fw::store_read_result_t>::success (
+          found == values.end () ? fw::store_read_result_t (fw::store_missing_t{now})
+                                 : fw::store_read_result_t (fw::store_found_t{found->second})));
+    }
+    fw::task_t<fw::store_write_result_t> write (fw::store_write_request_t request) override
+    {
+        std::lock_guard lock (mutex);
+        const auto now = expire ();
+        for (const auto &condition : request.conditions) {
+            const auto key =
+              std::visit ([] (const auto &value) { return value.key.value; }, condition);
+            const auto found = values.find (key);
+            const bool matches = std::visit (
+              [&] (const auto &value) {
+                  using condition_t = std::decay_t<decltype (value)>;
+                  if constexpr (std::is_same_v<condition_t, fw::store_missing_condition_t>)
+                      return found == values.end ();
+                  else if constexpr (std::is_same_v<condition_t, fw::store_version_condition_t>)
+                      return found != values.end ()
+                             && found->second.version.value == value.expected.value;
+                  else
+                      return found != values.end () && found->second.bytes == value.expected;
+              },
+              condition);
+            if (!matches)
+                return fw::task_t<fw::store_write_result_t> (
+                  fw::result_t<fw::store_write_result_t>::success (
+                    fw::store_write_conflict_t{now}));
+        }
+        fw::store_write_applied_t applied{{}, now};
+        for (auto &mutation : request.mutations) {
+            if (auto *put = std::get_if<fw::store_put_t> (&mutation)) {
+                fw::store_version_t next{std::to_string (++version)};
+                values[put->key.value] = {
+                  std::move (put->bytes), next,
+                  put->retention ? std::optional{now + *put->retention} : std::nullopt, now};
+                applied.put_versions.push_back ({put->key, std::move (next)});
+            } else {
+                values.erase (std::get<fw::store_delete_t> (mutation).key.value);
+            }
+        }
+        return fw::task_t<fw::store_write_result_t> (
+          fw::result_t<fw::store_write_result_t>::success (std::move (applied)));
+    }
+    fw::task_t<fw::store_scan_result_t> scan (fw::store_scan_request_t request) override
+    {
+        if (std::this_thread::get_id () == caller) {
+            entered = true;
+            return gate.task ();
+        }
+        std::lock_guard lock (mutex);
+        fw::store_scan_page_t page;
+        page.store_now = expire ();
+        for (auto &[key, value] : values)
+            if (key.starts_with (request.prefix)) {
+                value.store_now = page.store_now;
+                page.items.push_back ({{key}, value});
+            }
+        require (!request.cursor && page.items.size () <= request.limit,
+                 "classification Store fixture unexpectedly needs pagination");
+        return fw::task_t<fw::store_scan_result_t> (
+          fw::result_t<fw::store_scan_result_t>::success (std::move (page)));
+    }
+    const std::thread::id caller = std::this_thread::get_id ();
+    bool entered = false;
+    fw::task_completion_source_t<fw::store_scan_result_t> gate;
+
+    bool release ()
+    {
+        fw::store_scan_page_t page;
+        page.store_now = std::chrono::system_clock::now ();
+        return gate.complete (fw::result_t<fw::store_scan_result_t>::success (std::move (page)));
+    }
+
+  private:
+    std::chrono::system_clock::time_point expire ()
+    {
+        const auto now = std::chrono::system_clock::now ();
+        std::erase_if (values, [&] (const auto &entry) {
+            return entry.second.expires_at && *entry.second.expires_at <= now;
+        });
+        return now;
+    }
+    std::mutex mutex;
+    std::map<std::string, fw::store_value_t> values;
+    std::uint64_t version = 0;
+};
+
+void verify_classification_after_stop (bool destroy_host)
+{
+    fw::completion_owner_t completion_owner;
+    auto store = std::make_shared<held_classification_store_t> ();
+    auto source = std::make_unique<host_t> ("classification-source", "", store);
+    struct release_on_exit_t
+    {
+        std::shared_ptr<held_classification_store_t> store;
+        ~release_on_exit_t () { (void) store->release (); }
+    } release_on_exit{store};
+    const auto probe = source->probe;
+    source->start ();
+    // Hold only this caller's classification, leaving background Store reads free.
+    auto pending = source->capture->client
+                     ->request_to_node (mesh_name, zlink::routing_id_t::from ("unknown-target"),
+                                        request_t{reply_mode_t::immediate})
+                     .async<int> ();
+    const bool entered = store->entered;
+    const bool pending_before_stop = !pending.await_ready ();
+    source->app.request_stop ();
+    const auto deadline = std::chrono::steady_clock::now () + test_timeout;
+    while (!source->exited.load (std::memory_order_acquire)
+           && std::chrono::steady_clock::now () < deadline)
+        std::this_thread::yield ();
+    const bool stopped = source->exited.load (std::memory_order_acquire);
+    if (!stopped)
+        (void) store->release ();
+    source->stop ();
+    require (stopped, "runtime shutdown waited for an unregistered classification");
+    if (destroy_host)
+        source.reset ();
+    std::printf (
+      "classification: entered=%d pending_before_stop=%d runtime_stopped=1 host_destroyed=%d\n",
+      entered, pending_before_stop, destroy_host);
+    std::fflush (stdout);
+    // Always release the latch, including a failed precondition, before asserting.
+    require (store->release (), "classification gate was completed twice");
+    require (entered && pending_before_stop, "classification did not suspend before shutdown");
+    auto admission = pending.admitted ();
+    const auto admitted = admission.result_for (test_timeout);
+    const auto reply = pending.result_for (test_timeout);
+    std::printf ("classification: admission_settled=%d reply_settled=%d decoded=%u\n",
+                 admitted.has_value (), reply.has_value (), probe->reply_decoded.load ());
+    std::fflush (stdout);
+    require (admitted && !*admitted, "classification after shutdown did not reject admission");
+    require (reply && !*reply, "classification after shutdown did not fail the public reply");
+    require (reply->exception () == admitted->exception (),
+             "classification after shutdown published different rejection results");
+    require (probe->reply_decoded == 0,
+             "classification after shutdown unexpectedly decoded a reply");
+    std::printf ("classification: shutdown admission and reply settled; decoded=0\n");
+}
+}
+
 int main (int argc, char **argv)
 {
     try {
+        if (argc == 2 && std::string (argv[1]) == "--classification-stop") {
+            verify_classification_after_stop (false);
+            return 0;
+        }
+        if (argc == 2 && std::string (argv[1]) == "--classification-destroy") {
+            verify_classification_after_stop (true);
+            return 0;
+        }
         if (argc == 2 && std::string (argv[1]) == "--server") {
             host_t target ("consumer-target");
             target.start ();
