@@ -105,6 +105,8 @@ the same logical release point at which the queue and handler stop retaining the
 **The handler is handed a deserialized owned object. It is not handed native storage or
 release responsibility.**
 
+When a handler registration declares the received message type as a class, the Framework hands over an instance of that class. If the application passes that value unchanged to another typed messaging API, the packet type information is kept. The Framework owns class materialization and codec selection and doesn't require the application to convert the value or register a per-message codec. Each language interface defines how the type is declared.
+
 Because of this rule, one deserialization copy is unavoidable. As long as a typed handler is
 offered, the wire representation must be turned into that language's object.
 
