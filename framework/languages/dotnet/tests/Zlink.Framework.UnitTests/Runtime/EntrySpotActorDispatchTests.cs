@@ -1680,25 +1680,33 @@ public sealed partial class EntrySpotActorDispatchTests
         state.BindActorInstance(actor);
         state.BindNativeActorRef(new ZLinkBackendActorRef(node.RoutingId, state.ActorId, 1));
 
-        var first = state
-            .ExecuteDispatchAsync(
-                async _ =>
-                {
-                    await sessions.DestroyActorAsync(node.RoutingId, actor);
-                    Assert.False(destroyStarted.Task.IsCompleted);
-                },
-                CancellationToken.None
-            )
-            .AsTask();
-        await first.WaitAsync(TimeSpan.FromSeconds(5));
-        await destroyStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.True(state.IsTeardownPending);
-        var second = sessions.DestroyActorAsync(node.RoutingId, actor).AsTask();
-        releaseDestroy.TrySetResult();
+        try
+        {
+            var first = state
+                .ExecuteDispatchAsync(
+                    async _ =>
+                    {
+                        await sessions.DestroyActorAsync(node.RoutingId, actor);
+                        Assert.False(destroyStarted.Task.IsCompleted);
+                    },
+                    CancellationToken.None
+                )
+                .AsTask();
+            await first.WaitAsync(TimeSpan.FromSeconds(5));
+            await destroyStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.True(state.IsTeardownPending);
+            var second = sessions.DestroyActorAsync(node.RoutingId, actor).AsTask();
+            releaseDestroy.TrySetResult();
 
-        await Task.WhenAll(first, second).WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.Single(node.DestroyedActors);
-        Assert.False(state.IsTeardownPending);
+            await Task.WhenAll(first, second).WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Single(node.DestroyedActors);
+            Assert.False(state.IsTeardownPending);
+        }
+        finally
+        {
+            releaseDestroy.TrySetResult();
+            await state.InvalidateRuntimeGenerationAfterDispatchesAsync();
+        }
     }
 
     [Fact]
