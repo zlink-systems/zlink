@@ -44,7 +44,7 @@ pwsh -NoProfile -File ./run-e2e.ps1 -Scenario matchmaking,hit,wall,input,reconne
 pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
 ```
 
-The runner validates `zlink.structure.json`, creates Redis with a unique Compose project and OS-assigned port, then starts matchA, matchB and Session as separate processes. Each scenario owns independent nodes, Redis keys and logs in `.logs/run-<id>/`. It cleans up its own resources and fails on cleanup errors. `-CheckStructure` / `--check-structure` validates files without starting nodes. `./gradlew --no-daemon :server:match:test` checks 45 RoomState domain boundaries and application-state serialization.
+The runner validates `zlink.structure.json`, creates Redis with a unique Compose project and OS-assigned port, then starts matchA, matchB and Session as separate processes. Each scenario owns independent nodes, Redis keys and logs in `.logs/run-<id>/`. It cleans up its own resources and fails on cleanup errors. `-CheckStructure` / `--check-structure` validates files without starting nodes. `./gradlew --no-daemon :server:match:test` checks 46 RoomState domain boundaries and application-state serialization.
 
 | Scenario | Checks |
 | --- | --- |
@@ -84,10 +84,14 @@ Framework owns Actor identity, Session binding, route and lease state, membershi
 
 ## 한국어 실행 안내
 
-기본 e2e는 runner와 node를 Docker에서 실행합니다. 로컬 process 디버깅에는 JDK 25를 준비하고 `--local` 또는 `-Local`을 지정합니다. 시나리오를 지정하지 않으면 matchmaking, hit, wall, input, reconnect, update 순서로 실행합니다. 도메인 경계 45개는 `./gradlew --no-daemon :server:match:test`로 확인합니다.
+기본 e2e는 runner와 node를 Docker에서 실행합니다. 로컬 process 디버깅에는 JDK 25를 준비하고 `--local` 또는 `-Local`을 지정합니다. 시나리오를 지정하지 않으면 matchmaking, hit, wall, input, reconnect, update 순서로 실행합니다. 도메인 경계 46개는 `./gradlew --no-daemon :server:match:test`로 확인합니다.
 
 `QueueRequest`가 첫 client packet이며 이 예제는 요청의 player ID를 사용합니다. 배포 전에는 인증된 identity를 연결해야 합니다. `GameSession`은 QueueRequest, RoomViewRequest, MoveRequest, ShootRequest, SessionInfoRequest만 중계합니다. 좌표는 Y축이 위이고, 발 위치는 Y=0입니다. 수직 이동은 `vertical-move`로 거부되며 점프와 중력은 구현하지 않습니다.
 
 이동은 최대 2 단위이고, 마지막 수락 이동 뒤 경과 시간에 따라 초당 10 단위 예산을 받되 최대 2 단위로 제한합니다. 발사 사거리는 80, 피해는 25, 발사 간격은 250ms입니다. 벽과 플레이어 AABB의 가장 가까운 교차를 판정하며 동률이면 벽이 이깁니다. 거부 입력은 위치·HP·순번·이동 예산·발사 간격을 바꾸지 않습니다. `RetryAfterMs`를 받은 경우 서버가 전달한 시간 뒤 같은 입력을 다시 보낼 수 있습니다.
 
 이동 예산, 발사 간격, 명중 판정은 `RoomState`가 소유합니다. 스냅샷은 프로세스의 절대 시각 대신 남은 시간을 저장합니다. Match host를 교체할 때는 해당 process에 `drain`을 보내고 `SAFE_TO_SHUTDOWN`까지 확인한 뒤 종료합니다. 같은 설정으로 대체 process를 시작하고 `READY`를 확인합니다. 로그는 `.logs/run-<id>/`에 남습니다.
+
+Action sequences are signed 64-bit values encoded as decimal JSON strings. The accepted input range is 1..9007199254740991. Values above the upper bound are rejected as `integer-out-of-range` before stale-sequence checks; values at or below the last accepted sequence are `stale-sequence`. Rejections preserve all game state. `RetryAfterMs` remains a 32-bit JSON number.
+
+입력 순번은 decimal JSON 문자열로 전달하는 signed 64-bit 값이며 수락 범위는 1..9007199254740991입니다. 상한 초과는 stale-sequence 판정 전에 `integer-out-of-range`로 거부하며, 마지막 수락 순번 이하는 `stale-sequence`로 거부합니다. 거부 시 게임 상태는 바뀌지 않습니다. `RetryAfterMs`는 32-bit JSON 숫자를 유지합니다.

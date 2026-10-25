@@ -60,6 +60,7 @@ async Task<int> RunAsync()
         return 0;
     }
     DomainChecks.Run();
+    await WireChecks.RunAsync();
     if (args.Contains("--check-domain"))
         return 0;
     var selected = Scenarios.Select(Option("--scenario"));

@@ -26,6 +26,8 @@ pwsh -NoProfile -File ./run-e2e.ps1 -CheckDomain
 
 For host process debugging with the .NET 8 SDK, add `--local` or `-Local`. After a local build, `--no-build` or `-NoBuild` skips compilation. Keep scenario assertions and inspect the first failure before rerunning.
 
+`--check-domain` (`-CheckDomain` in PowerShell) runs 46 game domain checks and one separate wire golden check for four samples. The wire check briefly starts one local typed Session host and observes its public connector payloads; Redis and game scenario nodes are not started.
+
 ## Modules and extension points
 
 - `server/MyGame.Shared/Contracts.cs`: typed game contracts, action limits and protocol names. `HttpLobbyContracts.cs`: HTTP lobby and server-only preparation contracts. `Geometry.cs`: Vec3, closed slab ray/AABB intersection, static map, spawn points and player boxes.

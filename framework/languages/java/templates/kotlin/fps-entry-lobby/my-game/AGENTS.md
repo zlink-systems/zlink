@@ -31,7 +31,7 @@ For host-process debugging, install JDK 25 and add `--local` or `-Local`. After 
 - `server/match/src/main/kotlin/MyGame/match/Program.kt`: Match node registrations and factories. `Handlers.kt`, `Player.kt`, and `Spots.kt` connect Entry, Matchmaking, Room, and Actor operations to the public Framework API. Keep Framework callbacks out of the game domain.
 - `server/session/src/main/kotlin/MyGame/session/Program.kt`: connection callbacks, Actor binding, and client packet allowlist. Authenticate the claimed player identity before binding. Relay only `QueueRequest`, `RoomViewRequest`, `MoveRequest`, `ShootRequest`, and `SessionInfoRequest`; reject internal assignment and result packets from clients.
 - `server/shared/src/main/kotlin/MyGame/Hosting.kt`, `NodeConfig` and `Control.kt`: shared setup, diagnostics, configuration, drain, and shutdown observation. Retain public Framework ownership of routing, membership, binding, and relocation.
-- `e2e/src/main/kotlin/MyGame/e2e/Scenarios.kt`: received client results for matchmaking, hit, wall, input, reconnect, and update. `server/match/src/test/kotlin/MyGame/match/domain/RoomStateTest.kt` contains the 45 game-domain boundaries. `Structure.kt` checks descriptor, configuration, and contracts before infrastructure starts. `Nodes.kt` manages the runner-owned process lifecycle.
+- `e2e/src/main/kotlin/MyGame/e2e/Scenarios.kt`: received client results for matchmaking, hit, wall, input, reconnect, and update. `server/match/src/test/kotlin/MyGame/match/domain/RoomStateTest.kt` contains the 46 game-domain boundaries. `Structure.kt` checks descriptor, configuration, and contracts before infrastructure starts. `Nodes.kt` manages the runner-owned process lifecycle.
 
 ## Domain ownership and asynchronous execution
 

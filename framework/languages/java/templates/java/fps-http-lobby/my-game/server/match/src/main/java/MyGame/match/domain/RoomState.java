@@ -53,6 +53,7 @@ public final class RoomState {
     }
 
     private String validateAction(Combatant player, long sequence) {
+        if (sequence > Rules.MAX_SEQUENCE) return Rejection.INTEGER_OUT_OF_RANGE;
         if (sequence <= player.sequence) return Rejection.STALE_SEQUENCE;
         if (phase == MatchPhase.Finished) return Rejection.MATCH_FINISHED;
         return null;

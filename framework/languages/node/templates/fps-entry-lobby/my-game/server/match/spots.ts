@@ -1,3 +1,4 @@
+import { serialize, deserialize } from 'node:v8';
 import { Inject, Injectable, Scope } from '@nestjs/common';
 import { ZLINK_ACTOR_CLIENT, ZLINK_SPOT_MANAGER } from '@zlink-systems/nestjs';
 import {
@@ -138,11 +139,11 @@ export class Room implements ZLinkSpot<Player> {
     if (this.state.winner !== null) await this.broadcast(new MatchEnded(this.state.winner));
   }
   capture(): Uint8Array {
-    return Buffer.from(JSON.stringify(this.state.capture()));
+    return serialize(this.state.capture());
   }
   restore(payload: Uint8Array): void {
     this.state = new RoomState();
-    this.state.restore(JSON.parse(Buffer.from(payload).toString('utf8')) as RoomSnapshot);
+    this.state.restore(deserialize(Buffer.from(payload)) as RoomSnapshot);
   }
 }
 @Injectable()

@@ -175,8 +175,24 @@ class RoomStateTest {
             equal(finished.view(), lethal.view()), "finished snapshot preserves winner and sequence")
         checkBoundary(room.view().plus(destination.view()).plus(finished.view()).all { it.position.y == 0.0 },
             "feet remain on ground through movement and relocation")
-        assertEquals(45, checkedCount)
-        println("Domain boundaries: $checkedCount/45 passed")
+        val bounded = RoomState { 0.0 }
+        bounded.admit("a")
+        bounded.admit("b")
+        assertEquals(null, bounded.move("a", MoveRequest(Vec3(0.0, 0.0, -1.0), Game.MAX_SEQUENCE)))
+        val boundedBefore = bounded.capture()
+        for (invalid in listOf(Game.MAX_SEQUENCE + 1)) {
+            assertEquals(Rejection.INTEGER_OUT_OF_RANGE, bounded.move("a", MoveRequest(Vec3(1.0, 0.0, 0.0), invalid))?.reason)
+            assertEquals(Rejection.INTEGER_OUT_OF_RANGE, bounded.shoot("a", ShootRequest(Vec3(1.0, 0.0, 0.0), invalid)).rejected?.reason)
+            assertTrue(equal(boundedBefore, bounded.capture()))
+        }
+        val boundedShot = RoomState { 0.0 }
+        boundedShot.admit("a")
+        boundedShot.admit("b")
+        checkBoundary(bounded.view().first().lastSequence == Game.MAX_SEQUENCE &&
+            boundedShot.shoot("a", ShootRequest(Vec3(0.0, 1.0, 0.0), Game.MAX_SEQUENCE)).result?.sequence == Game.MAX_SEQUENCE,
+            "safe sequence upper bound and invalid inputs preserve state")
+        assertEquals(46, checkedCount)
+        println("Domain boundaries: $checkedCount/46 passed")
     }
 
 }

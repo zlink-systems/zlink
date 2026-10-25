@@ -315,6 +315,8 @@ class RoomState
     }
     const char *validate_action (const Combatant &player, std::int64_t sequence) const
     {
+        if (sequence > Game::max_sequence)
+            return Rejection::integer_out_of_range;
         if (sequence <= player.sequence)
             return Rejection::stale;
         if (phase_ == MatchPhase::finished)

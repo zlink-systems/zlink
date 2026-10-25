@@ -11,6 +11,7 @@ Run from this project root with Docker Compose v2 and Linux containers:
 ./run-e2e.sh
 ./run-e2e.sh --scenario lobby,hit,wall,input,reconnect,update
 ./run-e2e.sh --check-structure
+./run-e2e.sh --check-domain
 ```
 
 PowerShell 7 provides the same commands:
@@ -20,9 +21,12 @@ pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
 pwsh -NoProfile -File ./run-e2e.ps1
 pwsh -NoProfile -File ./run-e2e.ps1 -Scenario lobby,hit,wall,input,reconnect,update
 pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
+pwsh -NoProfile -File ./run-e2e.ps1 -CheckDomain
 ```
 
 For host process debugging, install Node.js 22 or later and npm, then add `--local` or `-Local`. After a local build, `--no-build` or `-NoBuild` skips compilation. Keep scenario assertions and inspect the first failure before rerunning.
+
+`--check-domain` (`-CheckDomain` in PowerShell) runs 46 game domain checks and one separate wire golden check for four samples. The wire check runs in the Framework execution image; the runner does not load Framework. It briefly starts one local typed Session host and observes its public connector payloads; Redis and game scenario nodes are not started.
 
 ## Modules and extension points
 
@@ -32,7 +36,7 @@ For host process debugging, install Node.js 22 or later and npm, then add `--loc
 - `server/match/roster.ts`: owns the prepared member list, admission decision, and roster snapshot. `server/match/spots.ts` and `handlers.ts` connect Room preparation, actor admission, game decisions, and relocation.
 - `server/session/session.ts`: connection callbacks, Actor binding, and client packet allowlist. `JoinRoomRequest` is the first allowed packet; `PrepareRoom`, `RoomPrepared`, `HttpNodeReady`, and other server contracts are rejected as `packet-not-allowed`.
 - `server/shared/hosting.ts`, `config.ts`, and `constants.ts`: shared setup, diagnostics, configuration, drain, and shutdown observation. Retain public Framework ownership of routing, membership, binding, and relocation.
-- `e2e/client.mts`: received client results for lobby, hit, wall, input, reconnect, and update. `domain-checks.ts` and `lobby-domain-checks.ts`: 45 game and 19 HTTP lobby boundaries in the same executable. `structure.ts`: descriptor/config/contract consistency before infrastructure starts. `runner.ts`: owned process lifecycle.
+- `e2e/client.mts`: received client results for lobby, hit, wall, input, reconnect, and update. `domain-checks.ts` and `lobby-domain-checks.ts`: 46 game and 19 HTTP lobby boundaries in the same executable. `structure.ts`: descriptor/config/contract consistency before infrastructure starts. `runner.ts`: owned process lifecycle.
 
 ## Domain ownership and asynchronous execution
 

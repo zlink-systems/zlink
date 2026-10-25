@@ -10,6 +10,7 @@ public static class GameNames
     public const string MatchmakingId = "matchmaking";
     public const string DefaultMode = "duel";
     public const string RoomPrefix = "room-";
+    public const long MaxSequence = 9007199254740991;
     public const int PlayersPerRoom = 2;
     public const int InitialHp = 100;
     public const int ShotDamage = 25;
@@ -34,6 +35,7 @@ public static class Rejection
     public const string MoveBudget = "move-budget";
     public const string InvalidAim = "invalid-aim";
     public const string FireTooSoon = "fire-too-soon";
+    public const string IntegerOutOfRange = "integer-out-of-range";
     public const string StaleSequence = "stale-sequence";
     public const string MatchFinished = "match-finished";
     public const string PacketNotAllowed = "packet-not-allowed";

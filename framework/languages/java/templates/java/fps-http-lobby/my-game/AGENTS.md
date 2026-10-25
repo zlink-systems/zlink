@@ -32,7 +32,7 @@ For host-process debugging, install JDK 25 and add `--local` or `-Local`. The sc
 - `server/lobby/src/main/java/MyGame/lobby/application/Matchmaker.java` owns mode queues and pairing. It is the single Room ID issuer and creates a RoomPrefix plus a hyphen-free UUID. `RoomProvisioner.java` sends `PrepareRoom` and waits for `RoomPrepared` before returning the HTTP assignment.
 - `server/match/src/main/java/MyGame/match/domain/RoomRoster.java` is the sole owner of the prepared member list and admission decision. Room relocation captures `{Game, Roster}` together. Keep Framework callbacks out of this domain.
 - `server/session/src/main/java/MyGame/session/GameSession.java` owns the client packet allowlist and Actor binding. The first normal client packet is JoinRoomRequest. Authenticate its claimed player ID before deployment. Do not relay preparation, readiness, assignment or result packets from clients.
-- `e2e/src/main/java/MyGame/e2e/Scenarios.java` checks lobby, hit, wall, input, reconnect and update observations. `server/match/src/test/java/MyGame/match/domain/RoomStateTest.java` covers 45 game-domain boundaries; `server/lobby/src/test/java/MyGame/lobby/application/LobbyDomainTest.java` covers 19 lobby-domain boundaries.
+- `e2e/src/main/java/MyGame/e2e/Scenarios.java` checks lobby, hit, wall, input, reconnect and update observations. `server/match/src/test/java/MyGame/match/domain/RoomStateTest.java` covers 46 game-domain boundaries; `server/lobby/src/test/java/MyGame/lobby/application/LobbyDomainTest.java` covers 19 lobby-domain boundaries.
 
 The HTTP handler injects the public Java `ZLinkRouteClient` and uses `requestToSpot` for Room preparation. `ZLinkSpotOutbound` is limited to Spot callbacks.
 

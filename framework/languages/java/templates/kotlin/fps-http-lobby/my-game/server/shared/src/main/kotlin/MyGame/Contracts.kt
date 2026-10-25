@@ -15,6 +15,7 @@ object Names {
 
 object Game {
     const val MATCHMAKING_CAPACITY = 1
+    const val MAX_SEQUENCE = 9_007_199_254_740_991L
     const val PLAYERS_PER_ROOM = 2
     const val INITIAL_HP = 100
     const val SHOT_DAMAGE = 25
@@ -38,6 +39,7 @@ object Rejection {
     const val MOVE_BUDGET = "move-budget"
     const val INVALID_AIM = "invalid-aim"
     const val FIRE_TOO_SOON = "fire-too-soon"
+    const val INTEGER_OUT_OF_RANGE = "integer-out-of-range"
     const val STALE_SEQUENCE = "stale-sequence"
     const val MATCH_FINISHED = "match-finished"
     const val PACKET_NOT_ALLOWED = "packet-not-allowed"

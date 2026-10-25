@@ -15,6 +15,16 @@ internal static class DomainChecks
             checkedCount++;
         }
         static bool Equal<T>(T a, T b) => JsonSerializer.Serialize(a) == JsonSerializer.Serialize(b);
+        var sequenceRoom = new RoomState(() => 1000);
+        sequenceRoom.Admit("a"); sequenceRoom.Admit("b");
+        var upperAccepted = sequenceRoom.Move("a", new(new(0, 0, -1), GameNames.MaxSequence)) is null;
+        var sequenceBefore = sequenceRoom.Capture();
+        Check(upperAccepted
+            && sequenceRoom.Move("a", new(new(0, 0, -1), GameNames.MaxSequence + 1))
+                is { Reason: Rejection.IntegerOutOfRange }
+            && sequenceRoom.Shoot("a", new(new(1, 0, 0), GameNames.MaxSequence + 1)).Rejected
+                is { Reason: Rejection.IntegerOutOfRange }
+            && Equal(sequenceBefore, sequenceRoom.Capture()), "sequence upper bound invariant");
         var box = new Aabb(new(1, 1, 1), new(2, 2, 2));
         Check(box.Intersect(new(0, 1, 1), new(1, 0, 0), 1) == 1, "closed face and exact limit");
         Check(box.Intersect(new(0, 2, 2), new(1, 0, 0), 3) == 1, "parallel corner tangent");
@@ -147,6 +157,7 @@ internal static class DomainChecks
             && Equal(finished.View(), lethal.View()), "finished snapshot preserves winner and sequence");
         Check(room.View().Concat(destination.View()).Concat(finished.View()).All(p => p.Position.Y == 0),
             "feet remain on ground through movement and relocation");
+        if (checkedCount != 46) throw new InvalidOperationException("Domain boundary count differs.");
         Console.WriteLine($"Domain boundaries: {checkedCount}/{checkedCount} passed");
     }
 }

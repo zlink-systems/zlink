@@ -116,6 +116,12 @@ async function main(): Promise<void> {
     checkStructure(args[1]);
     return;
   }
+  if (args[0] === '--check-domain') {
+    assert.equal(args.length, 1);
+    runDomainChecks();
+    await runLobbyDomainChecks();
+    return;
+  }
   let selected: readonly string[] = Scenarios;
   if (args.length) {
     assert.equal(args.length, 2);

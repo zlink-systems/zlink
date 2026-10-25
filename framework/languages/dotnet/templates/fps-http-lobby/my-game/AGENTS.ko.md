@@ -26,6 +26,8 @@ pwsh -NoProfile -File ./run-e2e.ps1 -CheckDomain
 
 .NET 8 SDK로 host process를 디버깅할 때는 `--local` 또는 `-Local`을 추가합니다. 로컬 빌드 뒤 `--no-build` 또는 `-NoBuild`로 컴파일을 생략할 수 있습니다. 시나리오 assertion을 유지하고 재실행 전에 첫 실패를 확인합니다.
 
+`--check-domain`(PowerShell `-CheckDomain`)은 게임 도메인 46개와 네 표본을 비교하는 별도 wire golden 1개를 검사합니다. Wire 검사는 local typed Session host 하나를 잠시 시작하고 public connector payload를 관찰합니다. Redis와 게임 시나리오 노드는 시작하지 않습니다.
+
 ## 모듈과 확장 지점
 
 - `server/MyGame.Shared/Contracts.cs`: typed 게임 계약, 동작 제한과 protocol 이름. `HttpLobbyContracts.cs`: HTTP lobby와 서버 전용 준비 계약. `Geometry.cs`: Vec3, 닫힌 slab ray/AABB 교차, 정적 맵, 스폰과 플레이어 상자.

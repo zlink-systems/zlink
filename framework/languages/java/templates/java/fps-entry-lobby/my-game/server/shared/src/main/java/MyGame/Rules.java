@@ -3,6 +3,7 @@ package MyGame;
 public final class Rules {
     private Rules() {}
 
+    public static final long MAX_SEQUENCE = 9_007_199_254_740_991L;
     public static final int PLAYERS_PER_ROOM = 2;
     public static final int INITIAL_HP = 100;
     public static final int SHOT_DAMAGE = 25;

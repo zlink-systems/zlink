@@ -29,7 +29,8 @@ public sealed class RoomState
     private Combatant Player(string id) => Players.Single(p => p.PlayerId == id);
 
     private string? ValidateAction(Combatant player, long sequence) =>
-        sequence <= player.Sequence ? Rejection.StaleSequence
+        sequence > GameNames.MaxSequence ? Rejection.IntegerOutOfRange
+        : sequence <= player.Sequence ? Rejection.StaleSequence
         : Phase == MatchPhase.Finished ? Rejection.MatchFinished : null;
 
     public ActionRejected? Move(string id, MoveRequest move)

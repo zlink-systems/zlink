@@ -2,6 +2,7 @@ import { performance } from 'node:perf_hooks';
 import { Game, MatchPhase, Rejection, ShotOutcome } from '../shared/constants';
 import {
   ActionRejected,
+  MaxSequence,
   PlayerView,
   ShotRejected,
   ShotResult,
@@ -22,7 +23,7 @@ export interface Combatant {
   playerId: string;
   position: Vec3Like;
   hp: number;
-  sequence: number;
+  sequence: bigint;
   lastMoveMs: number | null;
   nextFireMs: number | null;
 }
@@ -31,7 +32,7 @@ export interface CombatantSnapshot {
   playerId: string;
   position: Vec3;
   hp: number;
-  sequence: number;
+  sequence: bigint;
   fireRemainingMs: number;
   moveRemainingMs: number;
 }
@@ -71,7 +72,7 @@ export class RoomState {
       playerId,
       position: ArenaMap.spawns[this.players.length],
       hp: Game.initialHp,
-      sequence: 0,
+      sequence: 0n,
       lastMoveMs: null,
       nextFireMs: null
     });
@@ -85,8 +86,9 @@ export class RoomState {
     return player;
   }
 
-  private validateAction(player: Combatant, sequence: number): string | null {
-    if (!Number.isSafeInteger(sequence) || sequence <= player.sequence) return Rejection.staleSequence;
+  private validateAction(player: Combatant, sequence: bigint): string | null {
+    if (sequence > MaxSequence) return Rejection.integerOutOfRange;
+    if (sequence <= player.sequence) return Rejection.staleSequence;
     if (this.currentPhase === MatchPhase.Finished) return Rejection.matchFinished;
     return null;
   }

@@ -31,6 +31,7 @@ export const Rejection = {
   moveBudget: 'move-budget',
   invalidAim: 'invalid-aim',
   fireTooSoon: 'fire-too-soon',
+  integerOutOfRange: 'integer-out-of-range',
   staleSequence: 'stale-sequence',
   matchFinished: 'match-finished',
   packetNotAllowed: 'packet-not-allowed'
@@ -41,9 +42,9 @@ export const ShotOutcome = {
   blockedByWall: Rejection.blockedByWall
 } as const;
 export enum MatchPhase {
-  Waiting,
-  Playing,
-  Finished
+  Waiting = 'Waiting',
+  Playing = 'Playing',
+  Finished = 'Finished'
 }
 const MessageFollowMs = 30_000;
 const RelocationMs = 25_000;

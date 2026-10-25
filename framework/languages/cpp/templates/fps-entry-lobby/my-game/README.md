@@ -67,7 +67,7 @@ The scripts and runner check `zlink.structure.json`, start a uniquely named Redi
 | `reconnect` | A new connection retains the Actor generation, Room, position, HP and last sequence; a finished reconnect retains the winner. |
 | `update` | Drain through `RELOCATION_REQUESTED`, `RELOCATED`, `SAFE_TO_SHUTDOWN`; preserve both Sessions and Room state; replace the host; verify that the replacement accepts a new Room. |
 
-The runner executes 45 domain checks before starting scenarios. The separate `my-game-domain-test` target runs the same checks through `ctest --test-dir build --output-on-failure` after a local build.
+The runner executes 46 domain checks before starting scenarios. The separate `my-game-domain-test` target runs the same checks through `ctest --test-dir build --output-on-failure` after a local build.
 
 The wire contracts are in `server/shared/contracts.hpp`; `server/match/domain.hpp` defines `Vec3`, closed slab ray/AABB intersection, the static map, spawn points and player boxes. `RoomViewRequest` asks the authoritative Room for its current view. `SessionInfoRequest` receives a typed request reply. Requests and pushes use the Framework default typed JSON serializer. The runner never retries a failed scenario.
 

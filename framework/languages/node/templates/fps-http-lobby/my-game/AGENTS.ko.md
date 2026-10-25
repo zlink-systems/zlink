@@ -11,6 +11,7 @@
 ./run-e2e.sh
 ./run-e2e.sh --scenario lobby,hit,wall,input,reconnect,update
 ./run-e2e.sh --check-structure
+./run-e2e.sh --check-domain
 ```
 
 PowerShell 7에서는 같은 작업을 다음과 같이 실행합니다.
@@ -20,9 +21,12 @@ pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
 pwsh -NoProfile -File ./run-e2e.ps1
 pwsh -NoProfile -File ./run-e2e.ps1 -Scenario lobby,hit,wall,input,reconnect,update
 pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
+pwsh -NoProfile -File ./run-e2e.ps1 -CheckDomain
 ```
 
 Node.js 22 이상과 npm으로 host process를 디버깅할 때는 `--local` 또는 `-Local`을 추가합니다. 로컬 빌드 뒤 `--no-build` 또는 `-NoBuild`로 컴파일을 생략할 수 있습니다. 시나리오 assertion을 유지하고 재실행 전에 첫 실패를 확인합니다.
+
+`--check-domain`(PowerShell `-CheckDomain`)은 게임 도메인 46개와 네 표본을 비교하는 별도 wire golden 1개를 검사합니다. Wire 검사는 Framework 실행 image에서 실행하며 runner는 Framework를 load하지 않습니다. 검사는 local typed Session host 하나를 잠시 시작하고 public connector payload를 관찰합니다. Redis와 게임 시나리오 노드는 시작하지 않습니다.
 
 ## 모듈과 확장 지점
 
@@ -32,7 +36,7 @@ Node.js 22 이상과 npm으로 host process를 디버깅할 때는 `--local` 또
 - `server/match/roster.ts`: 준비된 명단·입장 판정·명단 snapshot을 소유합니다. `server/match/spots.ts`와 `handlers.ts`: Room 준비, Actor 입장, 게임 판정, relocation을 연결합니다.
 - `server/session/session.ts`: 연결 callback, Actor binding, client packet 허용 목록. 허용되는 첫 packet은 `JoinRoomRequest`입니다. `PrepareRoom`, `RoomPrepared`, `HttpNodeReady`와 다른 서버 계약은 `packet-not-allowed`로 거부합니다.
 - `server/shared/hosting.ts`, `config.ts`, `constants.ts`: 공통 설정·진단·구성·drain·shutdown 관찰. Routing·membership·binding·relocation은 Framework 공개 API의 소유를 유지합니다.
-- `e2e/client.mts`: lobby·hit·wall·input·reconnect·update의 실제 client 결과. `domain-checks.ts`와 `lobby-domain-checks.ts`: 45개 게임과 19개 HTTP Lobby 경계 검사. `structure.ts`: 인프라 시작 전 descriptor·설정·계약 검사. `runner.ts`: 실행한 process의 lifecycle.
+- `e2e/client.mts`: lobby·hit·wall·input·reconnect·update의 실제 client 결과. `domain-checks.ts`와 `lobby-domain-checks.ts`: 46개 게임과 19개 HTTP Lobby 경계 검사. `structure.ts`: 인프라 시작 전 descriptor·설정·계약 검사. `runner.ts`: 실행한 process의 lifecycle.
 
 ## 도메인 소유와 비동기 실행
 

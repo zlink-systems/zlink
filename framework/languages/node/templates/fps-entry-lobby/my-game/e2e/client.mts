@@ -1,4 +1,6 @@
+import '../.zlink-framework-json-schemas.cjs';
 import assert from 'node:assert/strict';
+import { inspect, isDeepStrictEqual } from 'node:util';
 import { EventEmitter } from 'node:events';
 import { appendFileSync } from 'node:fs';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -23,8 +25,8 @@ import {
   ShootRequest,
   ShotRejected,
   ShotResult,
-  type RoomView,
-  type SessionInfo
+  RoomView,
+  SessionInfo
 } from '../server/shared/messages.js';
 
 interface Received {
@@ -57,16 +59,17 @@ class PlayerClient {
       requestTimeoutMs: Limits.messageMs,
       reconnect: { enabled: false }
     });
-    for (const name of [
-      PacketNames.roomView,
-      PacketNames.matchFound,
-      PacketNames.moveResult,
-      PacketNames.shotResult,
-      PacketNames.shotRejected,
-      PacketNames.matchEnded,
-      PacketNames.actionRejected
+    for (const packetType of [
+      RoomView,
+      MatchFound,
+      MoveResult,
+      ShotResult,
+      ShotRejected,
+      MatchEnded,
+      ActionRejected
     ])
-      this.connector.on(name, (message) => {
+      this.connector.on(packetType, (message) => {
+        const name = packetType.name;
         this.messages.push({ name, payload: message.payload });
         appendFileSync(
           log,
@@ -163,7 +166,7 @@ class PlayerClient {
   }
 
   async sessionInfo(): Promise<SessionInfo> {
-    return this.connector.request(new SessionInfoRequest()).submit<SessionInfo>();
+    return this.connector.request(new SessionInfoRequest()).submit(SessionInfo);
   }
 
   async view(): Promise<RoomView> {
@@ -194,7 +197,7 @@ class PlayerClient {
 }
 
 function equal(a: unknown, b: unknown): boolean {
-  return JSON.stringify(a) === JSON.stringify(b);
+  return isDeepStrictEqual(structuredClone(a), structuredClone(b));
 }
 
 function sameState(before: RoomView, after: RoomView): void {
@@ -207,8 +210,8 @@ function player(view: RoomView, client: PlayerClient): RoomView['players'][numbe
   return found;
 }
 
-function next(view: RoomView, client: PlayerClient): number {
-  return player(view, client).lastSequence + 1;
+function next(view: RoomView, client: PlayerClient): bigint {
+  return player(view, client).lastSequence + 1n;
 }
 
 async function viewAsync(client: PlayerClient): Promise<RoomView> {
@@ -228,7 +231,7 @@ async function moveAsync(client: PlayerClient, delta: Vec3): Promise<void> {
         continue;
       }
     }
-    assert.equal(result.name, PacketNames.moveResult, `Movement was not accepted: ${JSON.stringify(result.payload)}.`);
+    assert.equal(result.name, PacketNames.moveResult, `Movement was not accepted: ${inspect(result.payload)}.`);
     const moved = result.payload as MoveResult,
       expected = addVec(player(before, client).position, delta);
     assert.equal(moved.sequence, request.sequence);
@@ -273,7 +276,7 @@ async function shootAsync(shooter: PlayerClient, aimDirection: Vec3, outcome: st
         continue;
       }
     }
-    assert.equal(result.name, PacketNames.shotResult, `Expected ${outcome}, received ${JSON.stringify(result.payload)}.`);
+    assert.equal(result.name, PacketNames.shotResult, `Expected ${outcome}, received ${inspect(result.payload)}.`);
     const shot = result.payload as ShotResult;
     assert.equal(shot.outcome, outcome);
     assert.equal(shot.sequence, request.sequence);
@@ -309,21 +312,46 @@ async function rejectedAsync(
       (result.name === PacketNames.shotRejected &&
         (result.payload as ShotRejected).retryAfterMs === 0 &&
         (result.payload as ShotRejected).reason === reason),
-    `Expected rejection ${reason}, received ${JSON.stringify(result.payload)}.`
+    `Expected rejection ${reason}, received ${inspect(result.payload)}.`
   );
   sameState(before, await viewAsync(client));
   console.log(`input rejected: ${reason}; state unchanged`);
 }
 
 async function inputAsync(a: PlayerClient, b: PlayerClient): Promise<void> {
-  await moveAsync(a, new Vec3(0, 0, -1));
+  const beforeBudget = await viewAsync(a),
+    moveSequence = next(beforeBudget, a),
+    acceptedMoveRequest = new MoveRequest(new Vec3(0, 0, -2), moveSequence),
+    move = new MoveRequest(new Vec3(0, 0, -2), moveSequence + 1n),
+    moveStart = a.messages.length;
+  await a.connector.send(acceptedMoveRequest).submit();
+  await a.connector.send(move).submit();
+  const acceptedMove = await a.wait<MoveResult>(PacketNames.moveResult, moveStart);
+  assert.equal(acceptedMove.sequence, moveSequence, 'Expected accepted movement before movement-budget rejection.');
+  const budget = await a.wait<ActionRejected>(PacketNames.actionRejected, moveStart);
+  assert(budget.reason === Rejection.moveBudget && budget.retryAfterMs > 0, 'Expected movement-budget rejection.');
+  const afterBudget = await viewAsync(a),
+    beforeBudgetPlayer = player(beforeBudget, a),
+    afterBudgetPlayer = player(afterBudget, a);
+  assert(equal(afterBudgetPlayer.position, acceptedMove.position), 'Movement-budget rejection changed the accepted position.');
+  assert.equal(afterBudgetPlayer.lastSequence, moveSequence, 'Movement-budget rejection changed the accepted sequence.');
+  assert.equal(afterBudgetPlayer.hp, beforeBudgetPlayer.hp, 'Movement-budget rejection changed player HP.');
+  assert.equal(player(afterBudget, b).hp, player(beforeBudget, b).hp, 'Movement-budget rejection changed target HP.');
+  await delay(budget.retryAfterMs);
+  const retriedMove = await a.action(move);
+  assert(
+    retriedMove.name === PacketNames.moveResult &&
+      (retriedMove.payload as MoveResult).sequence === move.sequence,
+    'Server movement retry delay was insufficient.'
+  );
+
   let view = await viewAsync(a),
     sequence = player(view, a).lastSequence;
   await rejectedAsync(a, new MoveRequest(new Vec3(0, 0, 1), sequence), Rejection.staleSequence);
-  await rejectedAsync(a, new ShootRequest(new Vec3(1, 0, 0), sequence - 1), Rejection.staleSequence);
-  await rejectedAsync(a, new MoveRequest(new Vec3(Game.maxStep + 1, 0, 0), sequence + 1), Rejection.stepTooLarge);
-  await rejectedAsync(a, new MoveRequest(new Vec3(0, 1, 0), sequence + 1), Rejection.verticalMove);
-  await rejectedAsync(a, new MoveRequest(new Vec3(0, -1, 0), sequence + 1), Rejection.verticalMove);
+  await rejectedAsync(a, new ShootRequest(new Vec3(1, 0, 0), sequence - 1n), Rejection.staleSequence);
+  await rejectedAsync(a, new MoveRequest(new Vec3(Game.maxStep + 1, 0, 0), sequence + 1n), Rejection.stepTooLarge);
+  await rejectedAsync(a, new MoveRequest(new Vec3(0, 1, 0), sequence + 1n), Rejection.verticalMove);
+  await rejectedAsync(a, new MoveRequest(new Vec3(0, -1, 0), sequence + 1n), Rejection.verticalMove);
   await walkAsync(a, new Vec3(player(view, a).position.x, 0, 0));
   sequence = next(await viewAsync(a), a);
   await rejectedAsync(a, new MoveRequest(new Vec3(0, 0, -1), sequence), Rejection.outsideMap);
@@ -331,34 +359,33 @@ async function inputAsync(a: PlayerClient, b: PlayerClient): Promise<void> {
   await walkAsync(a, new Vec3(48, 0, 22));
   sequence = next(await viewAsync(a), a);
   await rejectedAsync(a, new MoveRequest(new Vec3(2, 0, 0), sequence), Rejection.moveBlockedByWall);
-  await moveAsync(a, new Vec3(0, 0, -2));
-  await moveAsync(a, new Vec3(0, 0, -2));
-  await moveAsync(a, new Vec3(0, 0, -2));
-  const beforeBudget = await viewAsync(a),
-    move = new MoveRequest(new Vec3(0, 0, -2), next(beforeBudget, a)),
-    budget = await a.action(move);
-  assert(
-    budget.name === PacketNames.actionRejected &&
-      (budget.payload as ActionRejected).reason === Rejection.moveBudget &&
-      (budget.payload as ActionRejected).retryAfterMs > 0,
-    'Expected movement-budget rejection.'
-  );
-  sameState(beforeBudget, await viewAsync(a));
-  await delay((budget.payload as ActionRejected).retryAfterMs);
-  assert.equal((await a.action(move)).name, PacketNames.moveResult, 'Server movement retry delay was insufficient.');
-  await shootAsync(a, new Vec3(0, 1, 0), ShotOutcome.miss);
   const beforeFire = await viewAsync(a),
-    shot = new ShootRequest(new Vec3(0, 1, 0), next(beforeFire, a)),
-    fire = await a.action(shot);
+    shotSequence = next(beforeFire, a),
+    acceptedShotRequest = new ShootRequest(new Vec3(0, 1, 0), shotSequence),
+    shot = new ShootRequest(new Vec3(0, 1, 0), shotSequence + 1n),
+    shotStart = a.messages.length;
+  await a.connector.send(acceptedShotRequest).submit();
+  await a.connector.send(shot).submit();
+  const acceptedShot = await a.wait<ShotResult>(PacketNames.shotResult, shotStart);
+  assert.equal(acceptedShot.sequence, shotSequence, 'Expected accepted shot before fire-too-soon rejection.');
+  assert.equal(acceptedShot.outcome, ShotOutcome.miss, 'Expected accepted miss before fire-too-soon rejection.');
+  const fire = await a.wait<ShotRejected>(PacketNames.shotRejected, shotStart);
+  assert(fire.reason === Rejection.fireTooSoon && fire.retryAfterMs > 0, 'Expected fire-interval rejection.');
+  const afterFire = await viewAsync(a),
+    beforeFirePlayer = player(beforeFire, a),
+    afterFirePlayer = player(afterFire, a);
+  assert(equal(afterFirePlayer.position, beforeFirePlayer.position), 'Fire-too-soon rejection changed player position.');
+  assert.equal(afterFirePlayer.lastSequence, shotSequence, 'Fire-too-soon rejection changed the accepted sequence.');
+  assert.equal(afterFirePlayer.hp, beforeFirePlayer.hp, 'Fire-too-soon rejection changed player HP.');
+  assert.equal(player(afterFire, b).hp, player(beforeFire, b).hp, 'Fire-too-soon rejection changed target HP.');
+  await delay(fire.retryAfterMs);
+  const retriedShot = await a.action(shot);
   assert(
-    fire.name === PacketNames.shotRejected &&
-      (fire.payload as ShotRejected).reason === Rejection.fireTooSoon &&
-      (fire.payload as ShotRejected).retryAfterMs > 0,
-    'Expected fire-interval rejection.'
+    retriedShot.name === PacketNames.shotResult &&
+      (retriedShot.payload as ShotResult).sequence === shot.sequence &&
+      (retriedShot.payload as ShotResult).outcome === ShotOutcome.miss,
+    'Server fire retry delay was insufficient.'
   );
-  sameState(beforeFire, await viewAsync(a));
-  await delay((fire.payload as ShotRejected).retryAfterMs);
-  assert.equal((await a.action(shot)).name, PacketNames.shotResult, 'Server fire retry delay was insufficient.');
   assert.equal(player(await viewAsync(b), b).hp, Game.initialHp, 'Input checks damaged target.');
   console.log('input: movement-budget and fire-too-soon server retry delays accepted unchanged requests');
 }
@@ -412,7 +439,7 @@ async function matchmakingAsync(endpoint: string, runId: string, logDir: string)
         ranked.phase === MatchPhase.Playing &&
         casual.phase === MatchPhase.Playing &&
         ranked.players.concat(casual.players).every(
-          (candidate) => candidate.hp === Game.initialHp && candidate.lastSequence === 0
+          (candidate) => candidate.hp === Game.initialHp && candidate.lastSequence === 0n
         ),
       'Matched Room members or initial state differ.'
     );
@@ -460,7 +487,7 @@ async function pairAsync(a: PlayerClient, b: PlayerClient): Promise<RoomView> {
     ]);
   assert(equal(viewA, viewB) && viewA.phase === MatchPhase.Playing, 'Initial Room views differ.');
   assert(
-    viewA.players.every((candidate) => candidate.hp === Game.initialHp && candidate.lastSequence === 0),
+    viewA.players.every((candidate) => candidate.hp === Game.initialHp && candidate.lastSequence === 0n),
     'Initial Room state differs.'
   );
   return viewA;

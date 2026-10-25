@@ -31,7 +31,7 @@ pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
 - `server/match/src/main/kotlin/MyGame/match/Program.kt`: Match node 등록과 factory. `Handlers.kt`, `Player.kt`, `Spots.kt`는 Entry·Matchmaking·Room·Actor 작업을 Framework 공개 API에 연결합니다. 게임 도메인에 Framework callback을 넣지 않습니다.
 - `server/session/src/main/kotlin/MyGame/session/Program.kt`: 연결 callback, Actor binding과 client 패킷 허용 목록. Binding 전에 주장된 플레이어 신원을 인증합니다. `QueueRequest`, `RoomViewRequest`, `MoveRequest`, `ShootRequest`, `SessionInfoRequest`만 중계하고 내부 배정·결과 패킷은 거부합니다.
 - `server/shared/src/main/kotlin/MyGame/Hosting.kt`, `NodeConfig`, `Control.kt`: 공통 설정·진단·구성·drain·shutdown 관찰. Routing·membership·binding·relocation은 Framework 공개 API의 소유를 유지합니다.
-- `e2e/src/main/kotlin/MyGame/e2e/Scenarios.kt`: matchmaking·hit·wall·input·reconnect·update의 실제 client 결과. `server/match/src/test/kotlin/MyGame/match/domain/RoomStateTest.kt`는 45개 게임 도메인 경계를 검사합니다. `Structure.kt`는 인프라 시작 전 descriptor·설정·계약을 검사합니다. `Nodes.kt`는 runner 소유 process의 lifecycle을 관리합니다.
+- `e2e/src/main/kotlin/MyGame/e2e/Scenarios.kt`: matchmaking·hit·wall·input·reconnect·update의 실제 client 결과. `server/match/src/test/kotlin/MyGame/match/domain/RoomStateTest.kt`는 46개 게임 도메인 경계를 검사합니다. `Structure.kt`는 인프라 시작 전 descriptor·설정·계약을 검사합니다. `Nodes.kt`는 runner 소유 process의 lifecycle을 관리합니다.
 
 ## 도메인 소유와 비동기 실행
 

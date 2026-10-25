@@ -32,7 +32,7 @@ pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
 - `server/lobby/src/main/java/MyGame/lobby/application/Matchmaker.java`는 mode 대기열과 매칭을 소유합니다. Room ID 발급 위치는 여기 한 곳이며 RoomPrefix 뒤에 하이픈 없는 UUID를 붙입니다. `RoomProvisioner.java`는 `PrepareRoom`을 보내고 `RoomPrepared`를 받은 뒤 HTTP 할당을 반환합니다.
 - `server/match/src/main/java/MyGame/match/domain/RoomRoster.java` 한 곳이 준비된 멤버 명단과 입장 판정을 소유합니다. Room relocation은 `{Game, Roster}`를 함께 저장합니다. Framework callback은 도메인에 넣지 않습니다.
 - `server/session/src/main/java/MyGame/session/GameSession.java`는 client packet 허용 목록과 Actor binding을 소유합니다. 정상 client의 첫 packet은 JoinRoomRequest입니다. 배포 전에는 주장된 player ID를 인증합니다. preparation, readiness, assignment, result packet을 중계하지 않습니다.
-- `e2e/src/main/java/MyGame/e2e/Scenarios.java`는 lobby, hit, wall, input, reconnect, update 관찰을 검증합니다. `server/match/src/test/java/MyGame/match/domain/RoomStateTest.java`는 게임 도메인 경계 45개를 확인하고, `server/lobby/src/test/java/MyGame/lobby/application/LobbyDomainTest.java`는 로비 경계 19개를 확인합니다.
+- `e2e/src/main/java/MyGame/e2e/Scenarios.java`는 lobby, hit, wall, input, reconnect, update 관찰을 검증합니다. `server/match/src/test/java/MyGame/match/domain/RoomStateTest.java`는 게임 도메인 경계 46개를 확인하고, `server/lobby/src/test/java/MyGame/lobby/application/LobbyDomainTest.java`는 로비 경계 19개를 확인합니다.
 
 HTTP handler는 공개 Java `ZLinkRouteClient`를 주입받아 `requestToSpot`으로 Room을 준비합니다. `ZLinkSpotOutbound`는 Spot callback 안에서만 사용합니다.
 

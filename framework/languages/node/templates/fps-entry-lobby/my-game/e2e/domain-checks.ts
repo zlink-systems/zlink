@@ -1,8 +1,10 @@
+import { serialize, deserialize } from 'node:v8';
 import assert from 'node:assert/strict';
+import { isDeepStrictEqual } from 'node:util';
 import { Game, MatchPhase, Rejection, ShotOutcome } from '../server/shared/constants';
 import { Aabb, ArenaMap, normalizeVec, Vec3, vecLength } from '../server/shared/geometry';
 import { RoomState, type RoomSnapshot } from '../server/match/domain';
-import { MoveRequest, ShootRequest } from '../server/shared/messages';
+import { MaxSequence, MoveRequest, ShootRequest } from '../server/shared/messages';
 
 export function runDomainChecks(): void {
   let checkedCount = 0;
@@ -10,7 +12,15 @@ export function runDomainChecks(): void {
     assert(condition, `Domain boundary failed: ${name}`);
     checkedCount++;
   };
-  const equal = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
+  const equal = (a: unknown, b: unknown): boolean => isDeepStrictEqual(a, b);
+  const sequenceRoom = new RoomState(() => 1000);
+  sequenceRoom.admit('a'); sequenceRoom.admit('b');
+  const upperAccepted = sequenceRoom.move('a', new MoveRequest(new Vec3(0, 0, -1), MaxSequence)) === null;
+  const sequenceBefore = sequenceRoom.capture();
+  check(upperAccepted &&
+    sequenceRoom.move('a', new MoveRequest(new Vec3(0, 0, -1), MaxSequence + 1n))?.reason === Rejection.integerOutOfRange &&
+    sequenceRoom.shoot('a', new ShootRequest(new Vec3(1, 0, 0), MaxSequence + 1n)).rejected?.reason === Rejection.integerOutOfRange &&
+    equal(sequenceBefore, sequenceRoom.capture()), 'sequence upper bound invariant');
   const box = new Aabb(new Vec3(1, 1, 1), new Vec3(2, 2, 2));
   check(box.intersect(new Vec3(0, 1, 1), new Vec3(1, 0, 0), 1) === 1, 'closed face and exact limit');
   check(box.intersect(new Vec3(0, 2, 2), new Vec3(1, 0, 0), 3) === 1, 'parallel corner tangent');
@@ -40,105 +50,105 @@ export function runDomainChecks(): void {
   const room = new RoomState(() => now);
   room.admit('a');
   room.admit('b');
-  check(room.move('a', new MoveRequest(new Vec3(0, 0, -2), 1)) === null, 'first movement full budget');
+  check(room.move('a', new MoveRequest(new Vec3(0, 0, -2), 1n)) === null, 'first movement full budget');
   let before = room.capture();
-  const budget = room.move('a', new MoveRequest(new Vec3(0, 0, -2), 2));
+  const budget = room.move('a', new MoveRequest(new Vec3(0, 0, -2), 2n));
   check(
     budget?.reason === Rejection.moveBudget && budget.retryAfterMs === 200 && equal(before, room.capture()),
     'movement rejection leaves timing and sequence unchanged'
   );
-  const tinyMove = room.move('a', new MoveRequest(new Vec3(Number.MIN_VALUE, 0, 0), 2));
+  const tinyMove = room.move('a', new MoveRequest(new Vec3(Number.MIN_VALUE, 0, 0), 2n));
   check(
     tinyMove?.reason === Rejection.moveBudget && tinyMove.retryAfterMs > 0 && equal(before, room.capture()),
     'nonzero subnormal movement with zero elapsed budget leaves state unchanged'
   );
   now += 100;
-  check(room.move('a', new MoveRequest(new Vec3(0, 0, -1), 2)) === null, 'partial elapsed movement budget');
+  check(room.move('a', new MoveRequest(new Vec3(0, 0, -1), 2n)) === null, 'partial elapsed movement budget');
   before = room.capture();
   check(
-    room.move('a', new MoveRequest(new Vec3(0, 0, -3), 3))?.reason === Rejection.stepTooLarge &&
+    room.move('a', new MoveRequest(new Vec3(0, 0, -3), 3n))?.reason === Rejection.stepTooLarge &&
       equal(before, room.capture()),
     'oversize rejection invariant'
   );
   check(
-    room.move('a', new MoveRequest(new Vec3(0, 1, 0), 3))?.reason === Rejection.verticalMove &&
+    room.move('a', new MoveRequest(new Vec3(0, 1, 0), 3n))?.reason === Rejection.verticalMove &&
       equal(before, room.capture()),
     'upward movement rejection invariant'
   );
   check(
-    room.move('a', new MoveRequest(new Vec3(0, -1, 0), 3))?.reason === Rejection.verticalMove &&
+    room.move('a', new MoveRequest(new Vec3(0, -1, 0), 3n))?.reason === Rejection.verticalMove &&
       equal(before, room.capture()),
     'downward movement rejection invariant'
   );
   const edge = positioned(new Vec3(0, 0, 65), new Vec3(80, 0, 65));
   const edgeBefore = edge.capture();
   check(
-    edge.move('a', new MoveRequest(new Vec3(-1, 0, 0), 1))?.reason === Rejection.outsideMap &&
+    edge.move('a', new MoveRequest(new Vec3(-1, 0, 0), 1n))?.reason === Rejection.outsideMap &&
       equal(edgeBefore, edge.capture()),
     'horizontal map boundary invariant'
   );
   check(
-    room.move('a', new MoveRequest(new Vec3(Number.NaN, 0, 0), 3))?.reason === Rejection.nonFinite &&
+    room.move('a', new MoveRequest(new Vec3(Number.NaN, 0, 0), 3n))?.reason === Rejection.nonFinite &&
       equal(before, room.capture()),
     'nonfinite movement invariant'
   );
   check(
-    room.shoot('a', new ShootRequest(new Vec3(0, 1, 0), 3)).result?.outcome === ShotOutcome.miss,
+    room.shoot('a', new ShootRequest(new Vec3(0, 1, 0), 3n)).result?.outcome === ShotOutcome.miss,
     'miss is accepted'
   );
   before = room.capture();
   check(
-    room.shoot('a', new ShootRequest(new Vec3(1, 0, 0), 3)).rejected?.reason === Rejection.staleSequence &&
+    room.shoot('a', new ShootRequest(new Vec3(1, 0, 0), 3n)).rejected?.reason === Rejection.staleSequence &&
       equal(before, room.capture()),
     'shared stale sequence invariant'
   );
   check(
-    room.shoot('a', new ShootRequest(new Vec3(0, 0, 0), 4)).rejected?.reason === Rejection.invalidAim &&
+    room.shoot('a', new ShootRequest(new Vec3(0, 0, 0), 4n)).rejected?.reason === Rejection.invalidAim &&
       equal(before, room.capture()),
     'invalid aim leaves cooldown unchanged'
   );
-  const fire = room.shoot('a', new ShootRequest(new Vec3(0, 1, 0), 4)).rejected;
+  const fire = room.shoot('a', new ShootRequest(new Vec3(0, 1, 0), 4n)).rejected;
   check(
     fire?.reason === Rejection.fireTooSoon && fire.retryAfterMs === Game.fireIntervalMs &&
       equal(before, room.capture()),
     'fire interval invariant'
   );
   now += Game.fireIntervalMs;
-  check(room.shoot('a', new ShootRequest(new Vec3(0, 1, 0), 4)).result !== null, 'exact fire interval');
-  check(room.move('a', new MoveRequest(new Vec3(0, 0, -2), 5)) === null, 'movement budget capped at max step');
+  check(room.shoot('a', new ShootRequest(new Vec3(0, 1, 0), 4n)).result !== null, 'exact fire interval');
+  check(room.move('a', new MoveRequest(new Vec3(0, 0, -2), 5n)) === null, 'movement budget capped at max step');
 
   const tie = positioned(new Vec3(48, 0, 22), new Vec3(49.5, 0, 22));
   check(
-    tie.shoot('a', new ShootRequest(new Vec3(1, 0, 0), 1)).result?.outcome === ShotOutcome.blockedByWall &&
+    tie.shoot('a', new ShootRequest(new Vec3(1, 0, 0), 1n)).result?.outcome === ShotOutcome.blockedByWall &&
       tie.view()[1].hp === Game.initialHp,
     'equal wall and player distance selects wall'
   );
   const behind = positioned(ArenaMap.spawns[0], ArenaMap.spawns[1]);
   check(
-    behind.shoot('a', new ShootRequest(new Vec3(1, 0, 0), 1)).result?.outcome === ShotOutcome.hit &&
+    behind.shoot('a', new ShootRequest(new Vec3(1, 0, 0), 1n)).result?.outcome === ShotOutcome.hit &&
       behind.view()[1].hp === Game.initialHp - Game.shotDamage,
     'wall behind target does not block'
   );
   const exactRange = positioned(new Vec3(0, 0, 65), new Vec3(80.5, 0, 65));
   check(
-    exactRange.shoot('a', new ShootRequest(new Vec3(1, 0, 0), 1)).result?.outcome === ShotOutcome.hit,
+    exactRange.shoot('a', new ShootRequest(new Vec3(1, 0, 0), 1n)).result?.outcome === ShotOutcome.hit,
     'player face at exact range'
   );
   const beyondRange = positioned(new Vec3(0, 0, 65), new Vec3(80.501, 0, 65));
   check(
-    beyondRange.shoot('a', new ShootRequest(new Vec3(1, 0, 0), 1)).result?.outcome === ShotOutcome.miss,
+    beyondRange.shoot('a', new ShootRequest(new Vec3(1, 0, 0), 1n)).result?.outcome === ShotOutcome.miss,
     'player face beyond range'
   );
   const crossing = positioned(new Vec3(48, 0, 22), ArenaMap.spawns[1]);
   before = crossing.capture();
   check(
-    crossing.move('a', new MoveRequest(new Vec3(2, 0, 0), 1))?.reason === Rejection.moveBlockedByWall &&
+    crossing.move('a', new MoveRequest(new Vec3(2, 0, 0), 1n))?.reason === Rejection.moveBlockedByWall &&
       equal(before, crossing.capture()),
     'movement endpoint inside wall'
   );
   const touching = positioned(new Vec3(48, 0, 20), ArenaMap.spawns[1]);
   check(
-    touching.move('a', new MoveRequest(new Vec3(1, 0, 0), 1))?.reason === Rejection.moveBlockedByWall,
+    touching.move('a', new MoveRequest(new Vec3(1, 0, 0), 1n))?.reason === Rejection.moveBlockedByWall,
     'movement touches wall face'
   );
 
@@ -146,8 +156,8 @@ export function runDomainChecks(): void {
   const source = new RoomState(() => now);
   source.admit('a');
   source.admit('b');
-  source.move('a', new MoveRequest(new Vec3(0, 0, -2), 1));
-  source.shoot('a', new ShootRequest(new Vec3(0, 1, 0), 2));
+  source.move('a', new MoveRequest(new Vec3(0, 0, -2), 1n));
+  source.shoot('a', new ShootRequest(new Vec3(0, 1, 0), 2n));
   now += 60;
   const snapshot = source.capture();
   check(
@@ -157,33 +167,33 @@ export function runDomainChecks(): void {
   check(equal(snapshot, source.capture()), 'capture does not mutate live state');
   let destinationNow = 900000;
   const destination = new RoomState(() => destinationNow);
-  destination.restore(JSON.parse(JSON.stringify(snapshot)) as RoomSnapshot);
+  destination.restore(deserialize(serialize(snapshot)) as RoomSnapshot);
   check(
     equal(source.view(), destination.view()) && source.phase === destination.phase,
     'relocation keeps view under new clock origin'
   );
-  const relocatedMove = destination.move('a', new MoveRequest(new Vec3(0, 0, -2), 3));
+  const relocatedMove = destination.move('a', new MoveRequest(new Vec3(0, 0, -2), 3n));
   check(
     relocatedMove?.reason === Rejection.moveBudget && relocatedMove.retryAfterMs === 140,
     'relocated movement budget'
   );
-  const relocatedFire = destination.shoot('a', new ShootRequest(new Vec3(0, 1, 0), 3)).rejected;
+  const relocatedFire = destination.shoot('a', new ShootRequest(new Vec3(0, 1, 0), 3n)).rejected;
   check(
     relocatedFire?.reason === Rejection.fireTooSoon && relocatedFire.retryAfterMs === 190,
     'relocated fire cooldown'
   );
   destinationNow += 140;
   check(
-    destination.move('a', new MoveRequest(new Vec3(0, 0, -2), 3)) === null,
+    destination.move('a', new MoveRequest(new Vec3(0, 0, -2), 3n)) === null,
     'relocated budget exact boundary'
   );
   destinationNow += 50;
   check(
-    destination.shoot('a', new ShootRequest(new Vec3(0, 1, 0), 4)).result !== null,
+    destination.shoot('a', new ShootRequest(new Vec3(0, 1, 0), 4n)).result !== null,
     'relocated cooldown exact boundary'
   );
   const lethal = positioned(ArenaMap.spawns[0], ArenaMap.spawns[1]);
-  for (let sequence = 1; sequence <= 4; sequence++) {
+  for (let sequence = 1n; sequence <= 4n; sequence++) {
     lethal.shoot('a', new ShootRequest(new Vec3(1, 0, 0), sequence));
     now += Game.fireIntervalMs;
   }
@@ -193,8 +203,8 @@ export function runDomainChecks(): void {
   );
   before = lethal.capture();
   check(
-    lethal.move('a', new MoveRequest(new Vec3(0, 0, 1), 5))?.reason === Rejection.matchFinished &&
-      lethal.shoot('a', new ShootRequest(new Vec3(1, 0, 0), 5)).rejected?.reason ===
+    lethal.move('a', new MoveRequest(new Vec3(0, 0, 1), 5n))?.reason === Rejection.matchFinished &&
+      lethal.shoot('a', new ShootRequest(new Vec3(1, 0, 0), 5n)).rejected?.reason ===
         Rejection.matchFinished &&
       equal(before, lethal.capture()),
     'finished actions leave state unchanged'
@@ -210,15 +220,15 @@ export function runDomainChecks(): void {
     room.view().concat(destination.view(), finished.view()).every((player) => player.position.y === 0),
     'feet remain on ground through movement and relocation'
   );
-  assert.equal(checkedCount, 45, 'Domain boundary count differs from .NET');
+  assert.equal(checkedCount, 46, 'Domain boundary count differs from .NET');
   console.log(`Domain boundaries: ${checkedCount}/${checkedCount} passed`);
 
   function positioned(a: Vec3, b: Vec3): RoomState {
     const result = new RoomState(() => now);
     result.restore({
       players: [
-        { playerId: 'a', position: a, hp: 100, sequence: 0, fireRemainingMs: 0, moveRemainingMs: 0 },
-        { playerId: 'b', position: b, hp: 100, sequence: 0, fireRemainingMs: 0, moveRemainingMs: 0 }
+        { playerId: 'a', position: a, hp: 100, sequence: 0n, fireRemainingMs: 0, moveRemainingMs: 0 },
+        { playerId: 'b', position: b, hp: 100, sequence: 0n, fireRemainingMs: 0, moveRemainingMs: 0 }
       ],
       phase: MatchPhase.Playing,
       winner: null

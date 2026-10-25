@@ -31,7 +31,7 @@ pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
 - `server/match/src/main/java/MyGame/match/domain/RoomState.java` 한 곳이 위치, HP, phase, winner, 공유 순번, 이동 예산, 발사 간격과 명중 선택을 소유합니다. 운영 시 단조 시계를 사용하고, 도메인 생성자에서만 시험용 시계를 받습니다. `RoomSnapshot`은 process 절대 시각 대신 남은 시간을 저장합니다.
 - `server/match/src/main/java/MyGame/match/MatchmakingState.java`는 mode 대기열과 매칭을 소유합니다. `match/Actions.java`, `match/Room.java`, `match/RoomTransfer.java`는 도메인을 public Framework callback과 relocation에 연결합니다.
 - `server/session/src/main/java/MyGame/session/GameSession.java`는 client packet 허용 목록과 Actor binding을 소유합니다. 배포 전에는 QueueRequest의 주장된 identity를 인증합니다. 내부 할당·결과 packet을 중계하지 않습니다.
-- `e2e/src/main/java/MyGame/e2e/Scenarios.java`는 matchmaking, hit, wall, input, reconnect, update 관찰을 검증합니다. `server/match/src/test/java/MyGame/match/domain/RoomStateTest.java`는 도메인 경계 45개를 확인하고, `DomainTest.java`는 matchmaking 상태 직렬화를 확인합니다.
+- `e2e/src/main/java/MyGame/e2e/Scenarios.java`는 matchmaking, hit, wall, input, reconnect, update 관찰을 검증합니다. `server/match/src/test/java/MyGame/match/domain/RoomStateTest.java`는 도메인 경계 46개를 확인하고, `DomainTest.java`는 matchmaking 상태 직렬화를 확인합니다.
 
 ## 게임 규칙
 

@@ -61,7 +61,7 @@ The default run executes `matchmaking`, `hit`, `wall`, `input`, `reconnect`, and
 | `reconnect` | A new Session retains the Actor identity, Room, position, HP, and sequence; a finished match retains its winner. |
 | `update` | Relocation preserves Session bindings and Room state, safe shutdown is observed, and the replacement accepts a new Room. |
 
-`e2e/domain-checks.ts` runs 45 domain boundary checks before any scenario starts. It covers closed ray/AABB faces, tangents, range limits, wall/player ties, movement and fire timing, rejected state, and snapshots restored under a different monotonic clock origin. `./run-e2e.sh --check-domain` or `pwsh -NoProfile -File ./run-e2e.ps1 -CheckDomain` runs these checks without starting Redis or application nodes.
+`e2e/domain-checks.ts` runs 46 domain boundary checks before any scenario starts. It covers closed ray/AABB faces, tangents, range limits, wall/player ties, movement and fire timing, rejected state, and snapshots restored under a different monotonic clock origin. `./run-e2e.sh --check-domain` or `pwsh -NoProfile -File ./run-e2e.ps1 -CheckDomain` runs these checks together with a separate local typed Session wire golden check; Redis and game scenario nodes are not started.
 
 ## FPS rules and extension points
 
@@ -71,11 +71,15 @@ Coordinates use `Vec3(x, y, z)` with Y up. `ArenaMap` defines bounds X/Z=0..100 
 
 `MoveRequest(delta, sequence)` has a maximum step of 2 and a speed budget of 10 units per second, capped at 2 since the last accepted movement. The first movement has the full budget. Nonfinite deltas, nonzero `delta.y`, oversized steps, map exits, wall intersections, and budget overruns are rejected. `ShootRequest(aimDirection, sequence)` normalizes finite nonzero aim, casts from the authoritative eye position up to 80 units, and chooses the closest wall or living player AABB. Wall ties and box contact block the ray. A hit causes 25 damage; accepted misses and wall-blocked shots still consume their sequence and 250 ms fire interval. There is no ammunition model. The Framework message model carries only finite JSON numbers, so nonfinite input reaches only the domain checks.
 
-Move and Shoot share one increasing sequence. Rejections change neither position, HP, sequence, nor movement/fire timing. `retryAfterMs` is positive only for movement-budget or fire-interval rejection; clients wait for the reported duration and resend the same input. `MoveResult` and `ShotResult` acknowledge accepted actions; `ActionRejected` and `ShotRejected` report rejected inputs. `RoomView` includes positions, HP, last sequences, phase, and winner so a fresh client can continue with its last sequence plus one. At zero HP, the match finishes and later Move/Shoot inputs are rejected.
+Move and Shoot share one increasing sequence in `1..9007199254740991`. Values above the upper bound are rejected as `integer-out-of-range`; values at or below the last accepted sequence, including zero and negative values, are rejected as `stale-sequence`. The shared domain check evaluates the upper bound before stale sequence and match phase. Rejections change neither position, HP, sequence, nor movement/fire timing. `retryAfterMs` is positive only for movement-budget or fire-interval rejection; clients wait for the reported duration and resend the same input. `MoveResult` and `ShotResult` acknowledge accepted actions; `ActionRejected` and `ShotRejected` report rejected inputs. `RoomView` includes positions, HP, last sequences, phase, and winner so a fresh client can continue with its last sequence plus one. At zero HP, the match finishes and later Move/Shoot inputs are rejected.
 
 Hit detection uses the current server state. The template has no lag compensation, projectile simulation, or client prediction. Extend `RoomState` in `server/match/domain.ts` for weapons and match rules, `ArenaMap` for level geometry and spawn selection, and the shared contracts for client actions. `MatchmakingState` in `server/match/matchmaking-state.ts` owns mode queues and pairing. Keep cooldown, movement budget, and hit decisions in `RoomState`. `RoomSnapshot` stores remaining milliseconds for timing and never transfers a process's absolute clock reading.
 
 Message Follow is configured explicitly to 30 seconds. After `RELOCATED`, the safe shutdown observation budget is the follow duration plus the existing relocation observation budget; the relocation operation deadline is unchanged.
+
+`--check-domain` (`-CheckDomain` in PowerShell) runs 46 game domain checks and one separate wire golden check for four samples. The wire check runs in the Framework execution image; the runner does not load Framework. It briefly starts one local typed Session host and observes its public connector payloads; Redis and game scenario nodes are not started.
+
+`--check-domain`(PowerShell `-CheckDomain`)은 게임 도메인 46개와 네 표본을 비교하는 별도 wire golden 1개를 검사합니다. Wire 검사는 local typed Session host 하나를 잠시 시작하고 public connector payload를 관찰합니다. Redis와 게임 시나리오 노드는 시작하지 않습니다.
 
 ## Known issues
 
@@ -93,6 +97,6 @@ Write `drain` to the selected Match process's standard input. Wait for `RELOCATI
 
 기본 빌드와 e2e는 Docker에서 runner와 node를 실행합니다. Bash는 `./run-e2e.sh`, PowerShell 7은 `pwsh -NoProfile -File ./run-e2e.ps1`을 사용합니다. 로컬 process 디버깅은 Node.js 22 이상과 npm을 설치한 뒤 `--local` 또는 `-Local`로 실행합니다. Docker 빌드·정리 로그는 `.logs/docker-<project>/`에 남습니다.
 
-Docker Compose를 준비하고 Build 절의 명령으로 이미지를 빌드합니다. `run-e2e.sh` 또는 PowerShell 7의 `run-e2e.ps1`을 실행하면 구조 검사, Redis·서버 기동, 시나리오 판정과 자원 정리를 수행합니다. 기본 시나리오는 `matchmaking`, `hit`, `wall`, `input`, `reconnect`, `update` 순서입니다. `--check-domain` 또는 `-CheckDomain`은 서버를 시작하지 않고 45개 도메인 경계 검사를 실행합니다. 실행 로그와 message-flow는 `.logs/run-<id>/`에 보존됩니다.
+Docker Compose를 준비하고 Build 절의 명령으로 이미지를 빌드합니다. `run-e2e.sh` 또는 PowerShell 7의 `run-e2e.ps1`을 실행하면 구조 검사, Redis·서버 기동, 시나리오 판정과 자원 정리를 수행합니다. 기본 시나리오는 `matchmaking`, `hit`, `wall`, `input`, `reconnect`, `update` 순서입니다. `--check-domain` 또는 `-CheckDomain`은 게임 도메인 46개와 별도 wire golden 1개를 검사합니다. Wire 검사는 Framework 실행 image에서 실행하며 runner는 Framework를 load하지 않습니다. 검사에 필요한 local typed Session host 하나만 잠시 시작하며 Redis와 게임 시나리오 노드는 시작하지 않습니다. 실행 로그와 message-flow는 `.logs/run-<id>/`에 보존됩니다.
 
 매칭 대기열과 모드별 조합은 `server/match/matchmaking-state.ts`의 `MatchmakingState`가 소유하고, 위치·HP·순번·쿨다운·이동 예산·명중 판정은 `server/match/domain.ts`의 `RoomState`가 소유합니다. 발 위치 Y는 항상 0이며 수직 이동은 `vertical-move`로 거부합니다. 점프와 중력은 없습니다. 현재 서버 상태를 기준으로 명중을 판정하며 지연 보정·투사체·클라이언트 예측은 없습니다. 게임 규칙은 `RoomState`와 `ArenaMap`, typed 계약을 확장합니다. 프로덕션 배포에서는 플레이어 인증과 Redis 연결 설정을 적용해야 합니다.

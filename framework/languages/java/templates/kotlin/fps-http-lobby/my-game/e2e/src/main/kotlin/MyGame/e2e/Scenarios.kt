@@ -331,7 +331,35 @@ private suspend fun wallScenario(a: Client, b: Client) {
 }
 
 private suspend fun inputScenario(a: Client, b: Client) {
-    move(a, Vec3(0.0, 0.0, -1.0))
+    val beforeBudget = view(a)
+    val moveSequence = nextSequence(beforeBudget, a)
+    val acceptedMoveRequest = MoveRequest(Vec3(0.0, 0.0, -2.0), moveSequence)
+    val request = MoveRequest(Vec3(0.0, 0.0, -2.0), moveSequence + 1)
+    a.send(acceptedMoveRequest)
+    a.send(request)
+    val acceptedMove = a.next<MoveResult>()
+    check(acceptedMove.sequence == moveSequence) {
+        "Expected accepted movement before movement-budget rejection."
+    }
+    val budget = a.next<ActionRejected>()
+    check(budget.reason == Rejection.MOVE_BUDGET && budget.retryAfterMs > 0) {
+        "Expected movement-budget rejection."
+    }
+    val afterBudget = view(a)
+    val beforeBudgetPlayer = player(beforeBudget, a)
+    val afterBudgetPlayer = player(afterBudget, a)
+    check(afterBudgetPlayer.position == acceptedMove.position && afterBudgetPlayer.lastSequence == moveSequence) {
+        "Movement-budget rejection changed the accepted movement position or sequence."
+    }
+    check(beforeBudgetPlayer.hp == afterBudgetPlayer.hp && player(beforeBudget, b).hp == player(afterBudget, b).hp) {
+        "Movement-budget rejection changed player HP."
+    }
+    delay(budget.retryAfterMs.toLong())
+    val retriedMove = a.action(request)
+    check(retriedMove is MoveResult && retriedMove.sequence == request.sequence) {
+        "Server movement retry delay was insufficient."
+    }
+
     val room = view(a)
     var sequence = player(room, a).lastSequence
     rejected(a, MoveRequest(Vec3(0.0, 0.0, 1.0), sequence), Rejection.STALE_SEQUENCE)
@@ -346,28 +374,34 @@ private suspend fun inputScenario(a: Client, b: Client) {
     walk(a, Vec3(48.0, 0.0, 22.0))
     sequence = nextSequence(view(a), a)
     rejected(a, MoveRequest(Vec3(2.0, 0.0, 0.0), sequence), Rejection.MOVE_BLOCKED_BY_WALL)
-    move(a, Vec3(0.0, 0.0, -2.0))
-    move(a, Vec3(0.0, 0.0, -2.0))
-    move(a, Vec3(0.0, 0.0, -2.0))
-    val beforeBudget = view(a)
-    val request = MoveRequest(Vec3(0.0, 0.0, -2.0), nextSequence(beforeBudget, a))
-    val budget = a.action(request)
-    check(budget is ActionRejected && budget.reason == Rejection.MOVE_BUDGET && budget.retryAfterMs > 0) {
-        "Expected movement-budget rejection."
-    }
-    sameState(beforeBudget, view(a))
-    delay((budget as ActionRejected).retryAfterMs.toLong())
-    check(a.action(request) is MoveResult) { "Server movement retry delay was insufficient." }
-    shoot(a, Vec3(0.0, 1.0, 0.0), ShotOutcome.MISS)
     val beforeFire = view(a)
-    val shot = ShootRequest(Vec3(0.0, 1.0, 0.0), nextSequence(beforeFire, a))
-    val fire = a.action(shot)
-    check(fire is ShotRejected && fire.reason == Rejection.FIRE_TOO_SOON && fire.retryAfterMs > 0) {
+    val shotSequence = nextSequence(beforeFire, a)
+    val acceptedShotRequest = ShootRequest(Vec3(0.0, 1.0, 0.0), shotSequence)
+    val shot = ShootRequest(Vec3(0.0, 1.0, 0.0), shotSequence + 1)
+    a.send(acceptedShotRequest)
+    a.send(shot)
+    val acceptedShot = a.next<ShotResult>()
+    check(acceptedShot.sequence == shotSequence && acceptedShot.outcome == ShotOutcome.MISS) {
+        "Expected accepted miss before fire-too-soon rejection."
+    }
+    val fire = a.next<ShotRejected>()
+    check(fire.reason == Rejection.FIRE_TOO_SOON && fire.retryAfterMs > 0) {
         "Expected fire-interval rejection."
     }
-    sameState(beforeFire, view(a))
-    delay((fire as ShotRejected).retryAfterMs.toLong())
-    check(a.action(shot) is ShotResult) { "Server fire retry delay was insufficient." }
+    val afterFire = view(a)
+    val beforeFirePlayer = player(beforeFire, a)
+    val afterFirePlayer = player(afterFire, a)
+    check(afterFirePlayer.position == beforeFirePlayer.position && afterFirePlayer.lastSequence == shotSequence) {
+        "Fire-too-soon rejection changed the accepted shot position or sequence."
+    }
+    check(beforeFirePlayer.hp == afterFirePlayer.hp && player(beforeFire, b).hp == player(afterFire, b).hp) {
+        "Fire-too-soon rejection changed player HP."
+    }
+    delay(fire.retryAfterMs.toLong())
+    val retriedShot = a.action(shot)
+    check(retriedShot is ShotResult
+            && retriedShot.sequence == shot.sequence
+            && retriedShot.outcome == ShotOutcome.MISS) { "Server fire retry delay was insufficient." }
     check(player(view(b), b).hp == Game.INITIAL_HP) { "Input checks damaged target." }
     println("input: move-budget and fire-too-soon retry delays accepted unchanged requests")
 }

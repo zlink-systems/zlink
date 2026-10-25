@@ -1,3 +1,4 @@
+import { serialize, deserialize } from 'node:v8';
 import { Inject, Injectable, Scope } from '@nestjs/common';
 import { ZLINK_ACTOR_CLIENT } from '@zlink-systems/nestjs';
 import {
@@ -95,10 +96,10 @@ export class Room implements ZLinkSpot<Player> {
   }
   capture(): Uint8Array {
     const snapshot: HttpRoomSnapshot = { Game: this.state.capture(), Roster: this.roster.capture() };
-    return Buffer.from(JSON.stringify(snapshot));
+    return serialize(snapshot);
   }
   restore(payload: Uint8Array): void {
-    const snapshot = JSON.parse(Buffer.from(payload).toString('utf8')) as HttpRoomSnapshot;
+    const snapshot = deserialize(Buffer.from(payload)) as HttpRoomSnapshot;
     if (!snapshot?.Game || !snapshot.Roster) throw new Error('Missing Room state.');
     this.roster.restore(snapshot.Roster);
     this.state.restore(snapshot.Game);

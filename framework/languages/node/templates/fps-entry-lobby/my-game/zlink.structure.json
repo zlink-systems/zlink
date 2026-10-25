@@ -8,19 +8,22 @@
       "sh": [
         "./run-e2e.sh --build-only",
         "./run-e2e.sh",
-        "./run-e2e.sh --scenario matchmaking,hit,wall,input,reconnect,update",
-        "./run-e2e.sh --check-structure",
-        "./run-e2e.sh --check-domain"
+        "./run-e2e.sh --scenario matchmaking,hit,wall,input,reconnect,update"
       ],
       "powershell": [
         "pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly",
         "pwsh -NoProfile -File ./run-e2e.ps1",
-        "pwsh -NoProfile -File ./run-e2e.ps1 -Scenario matchmaking,hit,wall,input,reconnect,update",
-        "pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure",
-        "pwsh -NoProfile -File ./run-e2e.ps1 -CheckDomain"
+        "pwsh -NoProfile -File ./run-e2e.ps1 -Scenario matchmaking,hit,wall,input,reconnect,update"
       ]
     },
-    "scenarios": ["matchmaking", "hit", "wall", "input", "reconnect", "update"]
+    "scenarios": [
+      "matchmaking",
+      "hit",
+      "wall",
+      "input",
+      "reconnect",
+      "update"
+    ]
   },
   "nodes": [
     {

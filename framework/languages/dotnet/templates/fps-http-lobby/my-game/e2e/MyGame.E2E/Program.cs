@@ -60,6 +60,7 @@ async Task<int> RunAsync()
         return 0;
     }
     DomainChecks.Run();
+    await WireChecks.RunAsync();
     await LobbyDomainChecks.RunAsync();
     if (args.Contains("--check-domain"))
         return 0;

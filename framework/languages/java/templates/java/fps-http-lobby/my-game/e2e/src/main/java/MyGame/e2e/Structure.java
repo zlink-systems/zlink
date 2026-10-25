@@ -75,14 +75,13 @@ public final class Structure {
         var keys = new HashSet<String>();
         commands.fieldNames().forEachRemaining(keys::add);
         require(keys.equals(Set.of("sh", "powershell")), "Invalid command shells");
-        for (var shell : keys) {
-            var values = array(commands, shell);
-            require(
-                    !values.isEmpty()
-                            && values.stream()
-                                    .allMatch(v -> v.isTextual() && !v.asText().isBlank()),
-                    "Invalid commands");
-        }
+        var scenarioArgument = String.join(",", Names.SCENARIOS);
+        require(array(commands, "sh").stream().map(JsonNode::asText).toList().equals(List.of(
+                "./run-e2e.sh --build-only", "./run-e2e.sh", "./run-e2e.sh --scenario " + scenarioArgument)),
+                "Invalid shell commands");
+        require(array(commands, "powershell").stream().map(JsonNode::asText).toList().equals(List.of(
+                "pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly", "pwsh -NoProfile -File ./run-e2e.ps1",
+                "pwsh -NoProfile -File ./run-e2e.ps1 -Scenario " + scenarioArgument)), "Invalid PowerShell commands");
         var nodes = array(s, "nodes");
         var ids = nodes.stream().map(n -> text(n, "id")).toList();
         unique(ids);

@@ -53,7 +53,7 @@ The runner removes its node containers. The script removes containers carrying t
 | `reconnect` | A new connection retains Actor identity, Room, position, HP and sequence; reconnecting after completion retains the winner. |
 | `update` | The Room relocates while Sessions remain bound; the outsider remains rejected after relocation; the replacement host accepts a new Room and the original match continues. |
 
-The runner executes 45 game-domain checks and 19 HTTP-lobby checks before scenarios. After a local CMake build, run the same checks with `ctest --test-dir build --output-on-failure`. `my-game-domain-test` runs the game checks; `my-game-http-domain-test` runs both sets.
+The runner executes 46 game-domain checks and 19 HTTP-lobby checks before scenarios. After a local CMake build, run the same checks with `ctest --test-dir build --output-on-failure`. `my-game-domain-test` runs the game checks; `my-game-http-domain-test` runs both sets.
 
 ## FPS rules and extension points
 
@@ -91,7 +91,7 @@ Start Redis, Match A, Match B, Session, then the Lobby. Each role has its own ex
 
 기본 실행에는 Docker Compose v2와 Linux 컨테이너 데몬이 필요하다. 템플릿 디렉터리에서 Linux는 `./run-e2e.sh`, Windows는 `pwsh -NoProfile -File ./run-e2e.ps1`을 실행한다. `--build-only`는 이미지 빌드만 하고, 기본 실행은 structure 검사·Redis·node·runner를 실행한 뒤 자신이 만든 리소스를 정리한다. Framework 0.30.2는 `bootstrap.cmake` 한 곳에서 고정하며 공개 prebuilt의 SHA-256 체크섬을 확인한다.
 
-시나리오는 lobby, hit, wall, input, reconnect, update 순서다. Lobby 검사는 기본 duel, mode 분리, 같은 Room·Session endpoint, 빈 방 outsider 거부, client `PrepareRoom`의 입장 전·대전 중 거부, Lobby 재시작 뒤 기존 경기 유지와 새 Room ID 발급을 확인한다. 게임 도메인 45개와 HTTP lobby 도메인 19개 검사는 시나리오 전에 실행한다. 로컬 빌드 후에는 `ctest --test-dir build --output-on-failure`로 두 domain target을 실행한다.
+시나리오는 lobby, hit, wall, input, reconnect, update 순서다. Lobby 검사는 기본 duel, mode 분리, 같은 Room·Session endpoint, 빈 방 outsider 거부, client `PrepareRoom`의 입장 전·대전 중 거부, Lobby 재시작 뒤 기존 경기 유지와 새 Room ID 발급을 확인한다. 게임 도메인 46개와 HTTP lobby 도메인 19개 검사는 시나리오 전에 실행한다. 로컬 빌드 후에는 `ctest --test-dir build --output-on-failure`로 두 domain target을 실행한다.
 
 `Matchmaker`가 mode별 매칭과 `RoomPrefix + UUID` Room ID 발급을 소유한다. Room 준비를 확인한 뒤에만 HTTP 응답을 반환한다. `RoomRoster`는 준비된 명단과 admission을 소유하고 `{Game, Roster}` snapshot으로 relocation된다. `RoomState`는 이동 예산·발사 간격·명중 판정·HP·공유 순번·승자와 남은 시간 기반 snapshot을 소유한다. 발은 Y=0이며 수직 이동은 `vertical-move`로 거부한다. RetryAfterMs는 서버가 보낸 시간만 기다린다.
 

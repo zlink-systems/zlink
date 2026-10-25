@@ -53,12 +53,25 @@ try {
     }
     if ($BuildOnly) { $result = 0 }
     else {
-        $checkOnly = $CheckStructure -or $CheckDomain
-        $checkArguments = @(if ($checkOnly) { $RunnerArguments } else { '--check-structure' })
-        & docker @compose run --rm --no-deps -T --name "$project-check" runner @checkArguments
-        if ($LASTEXITCODE -ne 0) { throw 'Project checks failed.' }
-        if ($checkOnly) { $result = 0 }
+        if ($CheckStructure) {
+            & docker @compose run --rm --no-deps -T --name "$project-check" runner @RunnerArguments
+            if ($LASTEXITCODE -ne 0) { throw 'Structure check failed.' }
+            $result = 0
+        }
+        elseif ($CheckDomain) {
+            & docker @compose run --rm --no-deps -T --name "$project-domain" runner @RunnerArguments
+            if ($LASTEXITCODE -ne 0) { throw 'Domain check failed.' }
+            & docker @compose run --rm --no-deps -T --name "$project-wire" node-image dist/e2e/wire-checks.js
+            if ($LASTEXITCODE -ne 0) { throw 'Wire check failed.' }
+            $result = 0
+        }
         else {
+            & docker @compose run --rm --no-deps -T --name "$project-check" runner --check-structure
+            if ($LASTEXITCODE -ne 0) { throw 'Structure check failed.' }
+            & docker @compose run --rm --no-deps -T --name "$project-domain" runner --check-domain
+            if ($LASTEXITCODE -ne 0) { throw 'Domain check failed.' }
+            & docker @compose run --rm --no-deps -T --name "$project-wire" node-image dist/e2e/wire-checks.js
+            if ($LASTEXITCODE -ne 0) { throw 'Wire check failed.' }
             & docker @compose up -d --wait --wait-timeout 30 redis *> (Join-Path $logs 'redis-start.log')
             if ($LASTEXITCODE -ne 0) { throw 'Redis startup failed.' }
             & docker @compose run --rm --no-deps -T --name "$project-control" runner @RunnerArguments

@@ -22,7 +22,7 @@ pwsh -NoProfile -File ./run-e2e.ps1 -Scenario lobby,hit,wall,input,reconnect,upd
 pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
 ```
 
-For host-process debugging, install a C++20 compiler (GCC 13 or later, or Visual Studio 2022 17.4 or later in a developer shell on Windows), CMake 3.24 or later and Ninja. Add `--local` or `-Local`; after a local build, `--no-build` or `-NoBuild` skips compilation. The runner executes 45 game-domain checks and 19 lobby-domain checks before scenarios. After a local build, `ctest --test-dir build --output-on-failure` runs both domain targets.
+For host-process debugging, install a C++20 compiler (GCC 13 or later, or Visual Studio 2022 17.4 or later in a developer shell on Windows), CMake 3.24 or later and Ninja. Add `--local` or `-Local`; after a local build, `--no-build` or `-NoBuild` skips compilation. The runner executes 46 game-domain checks and 19 lobby-domain checks before scenarios. After a local build, `ctest --test-dir build --output-on-failure` runs both domain targets.
 
 ## Modules and extension points
 

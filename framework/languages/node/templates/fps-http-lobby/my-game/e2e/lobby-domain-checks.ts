@@ -1,3 +1,4 @@
+import { serialize, deserialize } from 'node:v8';
 import assert from 'node:assert/strict';
 import { isDeepStrictEqual } from 'node:util';
 import { Names } from '../server/shared/constants';
@@ -89,10 +90,10 @@ export async function runLobbyDomainChecks(): Promise<void> {
   const game = new RoomState(() => 1000);
   game.admit('a');
   game.admit('b');
-  game.move('a', new MoveRequest(new Vec3(0, 0, -1), 1));
-  game.shoot('a', new ShootRequest(new Vec3(4, 0, 1), 2));
+  game.move('a', new MoveRequest(new Vec3(0, 0, -1), 1n));
+  game.shoot('a', new ShootRequest(new Vec3(4, 0, 1), 2n));
   const envelope: HttpRoomSnapshot = { Game: game.capture(), Roster: roster.capture() };
-  const restored = JSON.parse(JSON.stringify(envelope)) as HttpRoomSnapshot;
+  const restored = deserialize(serialize(envelope)) as HttpRoomSnapshot;
   const restoredRoster = new RoomRoster();
   restoredRoster.restore(restored.Roster);
   const restoredGame = new RoomState(() => 900000);

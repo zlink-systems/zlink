@@ -22,7 +22,7 @@ pwsh -NoProfile -File ./run-e2e.ps1 -Scenario lobby,hit,wall,input,reconnect,upd
 pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
 ```
 
-호스트 process 디버깅은 C++20 compiler(GCC 13 이상 또는 Visual Studio 2022 17.4 이상), CMake 3.24 이상과 Ninja를 설치합니다. Windows에서는 Visual Studio 개발자 셸을 사용합니다. `--local` 또는 `-Local`을 지정하고, 로컬 빌드가 있으면 `--no-build` 또는 `-NoBuild`를 추가합니다. Runner는 scenario 전에 게임 도메인 45개와 HTTP lobby 도메인 19개를 실행합니다. 로컬 빌드 뒤 `ctest --test-dir build --output-on-failure`로 두 domain target을 실행합니다.
+호스트 process 디버깅은 C++20 compiler(GCC 13 이상 또는 Visual Studio 2022 17.4 이상), CMake 3.24 이상과 Ninja를 설치합니다. Windows에서는 Visual Studio 개발자 셸을 사용합니다. `--local` 또는 `-Local`을 지정하고, 로컬 빌드가 있으면 `--no-build` 또는 `-NoBuild`를 추가합니다. Runner는 scenario 전에 게임 도메인 46개와 HTTP lobby 도메인 19개를 실행합니다. 로컬 빌드 뒤 `ctest --test-dir build --output-on-failure`로 두 domain target을 실행합니다.
 
 ## 모듈과 확장 위치
 

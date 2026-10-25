@@ -1,6 +1,8 @@
 import { MatchPhase, Names } from './constants';
 import { Vec3 } from './geometry';
 
+export const MaxSequence = 9007199254740991n;
+
 export class SessionInfoRequest {}
 export class SessionInfo {
   constructor(
@@ -30,19 +32,19 @@ export class MatchFound {
 export class MoveRequest {
   constructor(
     readonly delta: Vec3,
-    readonly sequence: number
+    readonly sequence: bigint
   ) {}
 }
 export class MoveResult {
   constructor(
     readonly position: Vec3,
-    readonly sequence: number
+    readonly sequence: bigint
   ) {}
 }
 export class ShootRequest {
   constructor(
     readonly aimDirection: Vec3,
-    readonly sequence: number
+    readonly sequence: bigint
   ) {}
 }
 export class RoomViewRequest {}
@@ -51,7 +53,7 @@ export class PlayerView {
     readonly playerId: string,
     readonly position: Vec3,
     readonly hp: number,
-    readonly lastSequence: number
+    readonly lastSequence: bigint
   ) {}
 }
 export class RoomView {
@@ -67,7 +69,7 @@ export class ShotResult {
   constructor(
     readonly outcome: string,
     readonly targetId: string | null,
-    readonly sequence: number
+    readonly sequence: bigint
   ) {}
 }
 export class ShotRejected {

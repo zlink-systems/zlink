@@ -33,6 +33,7 @@ struct Names
 struct Game
 {
     static constexpr std::size_t players_per_room = 2;
+    static constexpr std::int64_t max_sequence = 9007199254740991LL;
     static constexpr int initial_hp = 100, shot_damage = 25, fire_interval_ms = 250;
     static constexpr double shot_range = 80, max_step = 2, max_speed = 10, eye_height = 1.6,
                             player_half_width = 0.5, player_height = 2;
@@ -47,6 +48,7 @@ struct Rejection
     static constexpr auto move_blocked_by_wall = "move-blocked-by-wall";
     static constexpr auto move_budget = "move-budget", invalid_aim = "invalid-aim";
     static constexpr auto fire_too_soon = "fire-too-soon", stale = "stale-sequence";
+    static constexpr auto integer_out_of_range = "integer-out-of-range";
     static constexpr auto finished = "match-finished", packet_not_allowed = "packet-not-allowed";
 };
 
@@ -61,6 +63,11 @@ enum class MatchPhase
     playing,
     finished
 };
+NLOHMANN_JSON_SERIALIZE_ENUM (MatchPhase, {
+  {MatchPhase::waiting, "Waiting"},
+  {MatchPhase::playing, "Playing"},
+  {MatchPhase::finished, "Finished"}
+})
 
 struct Vec3
 {

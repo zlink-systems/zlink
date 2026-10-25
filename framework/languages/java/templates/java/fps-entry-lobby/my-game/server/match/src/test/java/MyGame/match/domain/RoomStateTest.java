@@ -16,7 +16,7 @@ import java.util.Objects;
 
 final class RoomStateTest {
     @Test
-    void matchesFortyFiveDomainBoundaries() throws Exception {
+    void matchesFortySixDomainBoundaries() throws Exception {
         int[] count = {0};
         var box = new Aabb(new Vec3(1, 1, 1), new Vec3(2, 2, 2));
         check(Objects.equals(box.intersect(new Vec3(0, 1, 1), new Vec3(1, 0, 0), 1), 1.0), "closed face and exact limit", count);
@@ -144,7 +144,20 @@ final class RoomStateTest {
         check(List.of(room, destination, finished).stream().flatMap(state -> state.view().stream())
                 .allMatch(player -> player.position().y() == 0), "feet remain on ground through movement and relocation", count);
 
-        assertEquals(45, count[0], "Domain boundary item count");
+        var bounded = positioned(new Vec3(10, 0, 10), new Vec3(20, 0, 10), () -> 0);
+        assertNull(bounded.move("a", new MoveRequest(new Vec3(1, 0, 0), Rules.MAX_SEQUENCE)));
+        var boundedBefore = bounded.capture();
+        for (long outOfRange : new long[] {Rules.MAX_SEQUENCE + 1}) {
+            assertEquals(Rejection.INTEGER_OUT_OF_RANGE, bounded.move("a", new MoveRequest(new Vec3(1, 0, 0), outOfRange)).reason());
+            assertEquals(Rejection.INTEGER_OUT_OF_RANGE, bounded.shoot("a", new ShootRequest(new Vec3(1, 0, 0), outOfRange)).rejected().reason());
+            assertEquals(boundedBefore, bounded.capture());
+        }
+        var boundedShot = positioned(new Vec3(10, 0, 10), new Vec3(20, 0, 10), () -> 0);
+        check(bounded.view().getFirst().lastSequence() == Rules.MAX_SEQUENCE
+                && boundedShot.shoot("a", new ShootRequest(new Vec3(0, 1, 0), Rules.MAX_SEQUENCE)).result().sequence() == Rules.MAX_SEQUENCE,
+                "safe sequence upper bound and invalid inputs preserve state", count);
+
+        assertEquals(46, count[0], "Domain boundary item count");
         System.out.println("Domain boundaries: " + count[0] + "/" + count[0] + " passed");
     }
 

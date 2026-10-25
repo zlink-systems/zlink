@@ -204,7 +204,19 @@ void run_domain_checks ()
         check (feetRemainGrounded (room.view ()) && feetRemainGrounded (destination.view ())
                  && feetRemainGrounded (finished.view ()),
                "feet remain on ground through movement and relocation");
-        require (checkedCount == 45, "Domain check count differs from .NET baseline");
+        RoomState sequenceBoundary ([&] { return now; });
+        sequenceBoundary.admit ("a");
+        sequenceBoundary.admit ("b");
+        const auto acceptedMaximum = sequenceBoundary.move ("a", {{}, Game::max_sequence});
+        const auto sequenceBefore = sequenceBoundary.capture ();
+        const auto invalidMove = sequenceBoundary.move ("a", {{}, Game::max_sequence + 1});
+        const auto invalidShot = sequenceBoundary.shoot ("a", {{0, 1, 0}, 0});
+        check (!acceptedMaximum && sequenceBoundary.view ()[0].lastSequence == Game::max_sequence
+                 && invalidMove && invalidMove->reason == Rejection::integer_out_of_range
+                 && invalidShot.rejected && invalidShot.rejected->reason == Rejection::stale
+                 && equal (sequenceBefore, sequenceBoundary.capture ()),
+               "safe sequence maximum is accepted and invalid inputs preserve state");
+        require (checkedCount == 46, "Domain check count differs from .NET baseline");
         std::cout << "Domain boundaries: " << checkedCount << "/" << checkedCount << " passed"
                   << std::endl;
 }

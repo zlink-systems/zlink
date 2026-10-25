@@ -21,6 +21,7 @@ class RoomState(private val nowMs: () -> Double = { System.nanoTime() / 1_000_00
 
     private fun validateAction(player: Combatant, sequence: Long): String? =
         when {
+            sequence > Game.MAX_SEQUENCE -> Rejection.INTEGER_OUT_OF_RANGE
             sequence <= player.sequence -> Rejection.STALE_SEQUENCE
             phase == MatchPhase.Finished -> Rejection.MATCH_FINISHED
             else -> null

@@ -31,7 +31,7 @@ For host-process debugging, install JDK 25 and add `--local` or `-Local`. The sc
 - `server/match/src/main/java/MyGame/match/domain/RoomState.java` is the sole owner of position, HP, phase, winner, shared sequences, movement budget, fire interval and hit selection. Production uses a monotonic clock; tests inject a clock through the domain constructor. `RoomSnapshot` stores remaining milliseconds, not process clock readings.
 - `server/match/src/main/java/MyGame/match/MatchmakingState.java` owns mode queues and pairing. `match/Actions.java`, `match/Room.java` and `match/RoomTransfer.java` adapt the domain to public Framework callbacks and relocation.
 - `server/session/src/main/java/MyGame/session/GameSession.java` owns the client packet allowlist and Actor binding. Authenticate a claimed QueueRequest identity before deployment. Do not relay internal assignment or result packets.
-- `e2e/src/main/java/MyGame/e2e/Scenarios.java` checks matchmaking, hit, wall, input, reconnect and update observations. `server/match/src/test/java/MyGame/match/domain/RoomStateTest.java` covers the 45 domain boundaries; `DomainTest.java` checks matchmaking-state serialization.
+- `e2e/src/main/java/MyGame/e2e/Scenarios.java` checks matchmaking, hit, wall, input, reconnect and update observations. `server/match/src/test/java/MyGame/match/domain/RoomStateTest.java` covers the 46 domain boundaries; `DomainTest.java` checks matchmaking-state serialization.
 
 ## Domain rules
 

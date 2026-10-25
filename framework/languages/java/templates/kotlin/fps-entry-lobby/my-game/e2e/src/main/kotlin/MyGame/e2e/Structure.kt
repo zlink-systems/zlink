@@ -49,11 +49,14 @@ fun checkStructure(root: Path) {
     )
     val commands = requireNotNull(run["commands"])
     check(commands.fieldNames().asSequence().toSet() == setOf("sh", "powershell"))
-    for (shell in listOf("sh", "powershell")) check(
-        commands[shell].isArray &&
-            !commands[shell].isEmpty &&
-            commands[shell].all { it.isTextual && it.asText().isNotBlank() }
-    )
+    val scenarioArgument = ScenarioList.order.joinToString(",")
+    check(commands["sh"].isArray && commands["sh"].map { it.asText() } == listOf(
+        "./run-e2e.sh --build-only", "./run-e2e.sh", "./run-e2e.sh --scenario $scenarioArgument",
+    )) { "Invalid shell commands" }
+    check(commands["powershell"].isArray && commands["powershell"].map { it.asText() } == listOf(
+        "pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly", "pwsh -NoProfile -File ./run-e2e.ps1",
+        "pwsh -NoProfile -File ./run-e2e.ps1 -Scenario $scenarioArgument",
+    )) { "Invalid PowerShell commands" }
     val nodes = array("nodes")
     val ids = nodes.map { text(it, "id") }
     unique(ids)
