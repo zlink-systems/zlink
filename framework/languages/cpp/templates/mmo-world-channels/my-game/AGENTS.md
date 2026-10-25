@@ -91,45 +91,16 @@ Requests in the example game follow this path. Reading the code along this path 
 5. `ChangeChannelRequest` is handled by `Zone::change`, which requests `join_spot(...).defer()` for the Zone of the new channel. The client connection and the Actor stay the same, even when that Zone is on another channel node.
 6. To replace a node, `drain` in `NodeControl` requests relocation. Framework takes the gold from `capture` in `PlayerRelocation` and calls `restore` on another node of the same world; `ZoneRelocation` carries no state.
 
-## Developing from this sample
+## Extending the MMORPG domain
 
-This sample shows how the features work together, so read and run it rather than turning it into your game. Start your own project from the C++ starter: choose C++ in the Initializer at [ZLink Start](https://zlink.systems/start), or use `framework/languages/cpp/templates/starter/my-game` in the ZLink repository. Then transfer the features you need from this sample one at a time. The starter's `AGENTS.md` owns the choice between structures; this section covers only `mmo-world-channels`. Keep this sample unchanged next to your project as a reference.
+Extend this template's domain to build an MMORPG server.
 
-### Run the sample first
+1. Keep each rule beside the state it changes. `server/channel/domain.hpp` owns gold limits and earn timing; `server/channel/zone.hpp` owns the connected player IDs for one channel.
+2. Add shared typed messages and numeric limits in `server/shared/contracts.hpp`.
+3. Add each client packet to the allowlist in `server/session/session.hpp`.
+4. Add observable behavior to `e2e/scenarios.hpp`, domain boundaries to `e2e/scenarios.hpp::domain_checks`, and the matching scenario description to `README.md` and `zlink.structure.json`.
 
-Before transferring anything, run the build and e2e once with the [Development commands](#development-commands) to confirm the downloaded sample works and to see its behavior. This result is the baseline for comparison. If it fails, compare the failure with Known issues in the [README](README.md) first.
-
-### Features to transfer
-
-Feature names match the feature table in the starter's `AGENTS.md`, except World database, which only this structure has. Paths are relative to this directory. The starter has one Session node and the `connect` scenario only, so the last column lists what grows in the starter with each feature.
-
-| Feature | File in this sample | What to transfer | What to grow in the starter alongside |
-| --- | --- | --- | --- |
-| Typed messages | `server/shared/contracts.hpp` | The structs of the features you adopt: `EnterWorldRequest`, `ChangeChannelRequest`, `EarnRequest`, `ViewRequest`, `PlayerView`, and `WorldInfo`, the Accounts JSON body; `SessionInfoRequest` and `SessionInfo` only if your client needs them | The `Names` (including the per-world mesh name) constants that the messages refer to |
-| Actor | `Player`, `PlayerFactory` in `server/channel/player.hpp`, `GoldBalance` in `server/channel/domain.hpp` | `Player` with its gold (`GoldBalance`), `earn`, and the join-completion check; `PlayerFactory` loads the saved gold | A new `server/channel/` role with its `main.cpp`, `server/config/` files, and an entry in the `CMakeLists.txt` role list; the Actor factory registration in `main.cpp`; the `nodes` declaration in `zlink.structure.json` and the structure check in `e2e/structure.hpp` |
-| Spot | `Zone` in `server/channel/zone.hpp` | `Zone` with its admission rule and the handlers `enter`, `earn`, `read`, and the `deliver` forwarder | The Spot factory registration in `main.cpp` with `ZoneCapacity`; the `ZoneIds` setting and the `spots` declarations in `zlink.structure.json` that the structure check compares |
-| Entry and first admission | `WorldEntry` in `server/channel/player.hpp`, `Zone::enter` in `server/channel/zone.hpp` | `WorldEntry::enter` (identity check, deferred join to the first channel) and the identity check and view resend of `Zone::enter` | The `add_entry_spot` registration and the `entry` declarations; a first-entry scenario (`worlds`) and a `reconnect` scenario that compares state after reconnection |
-| Session binding | `server/session/session.hpp` | The first-packet check, then find or create the Actor, `bind_or_get`, and relay the original typed packet | The same first-packet type as `WorldEntry::enter`; transfer it into the starter's `server/session/session.hpp` |
-| Host relocation | `PlayerRelocation` in `server/channel/player.hpp`, `ZoneRelocation` in `server/channel/zone.hpp`, `NodeControl` in `server/shared/hosting.hpp` | The adapter with `capture` and `restore` of the gold, `ZoneRelocation` for the stateless Zone, and the `drain`, `shutdown`, and `create-update-zone` controls | The `preserve_state_with` registrations in `main.cpp`; the `update` scenario, which checks that connections and state survive a server replacement and that the replacement node accepts new work |
-| World/channel selection | `Zone::change` in `server/channel/zone.hpp`, `server/accounts/main.cpp`, `server/config/accounts.json` | The deferred channel change to another `Zone` and the Accounts world listing; a channel is a Zone of one world, not a messaging channel | A new `server/accounts/` process with its `CMakeLists.txt` target and config; the `channel` scenario and, for several worlds, the `worlds` scenario |
-| World database | `PlayerData` in `server/channel/data.hpp`, `docker-compose.yml` | The per-world `player:<id>` gold record (`load` and `save`); it is separate from the Framework Location and Relocation stores | A Redis service per world in `docker-compose.yml` and the per-world `KeyPrefix` and `RedisEndpoint` settings |
-
-`drain`, `shutdown`, and `create-update-zone` are transferred together with `NodeControl`; `create-update-zone` is the control that e2e uses to verify replacement placement. In this sample the channels of a world are Zones of one mesh. They differ from messaging channels, and the sample registers no pub/sub subscriptions.
-
-### Transfer order and rules
-
-Transfer one row at a time and run the build, the structure check, and the related e2e scenario after each. Add a scenario ID to the `Scenario` enum and `scenario_order` in `e2e/structure.hpp`, to the `scenario` function in `e2e/scenarios.hpp` and the usage message in `e2e/main.cpp`, to `run.scenarios`, and to the selection examples in `run.commands` of `zlink.structure.json` together. Judge results by the replies and events actually received; do not make tests pass with fixed sleeps or longer deadlines.
-
-Start with the message contracts. Define the packet structs in `server/shared/contracts.hpp` first, each with a `packet_name` and its JSON conversion, then move each handler that fails to compile to the new messages. When you change the first-entry packet, update the first-packet check in `Session::on_packet` in `server/session/session.hpp` and `WorldEntry::enter` and `Zone::enter` to receive the same type.
-
-Keep each piece of state in the object that decides it. Gold belongs in `Player` through `GoldBalance` and is saved to the world database; `Zone` holds no application state. When you change state fields, update that object's state struct with its JSON conversion and the `capture` and `restore` of its relocation adapter together. A missing field disappears after relocation, and the `update` scenario detects the loss.
-
-Keep world data separate: each world has its own mesh name, Redis, key prefix, and player records, and the application's Redis protocol code (`PlayerData`) never handles Framework frames or state.
-
-To name roles such as channel or world differently from this sample, change the type names, `Names`, `server/config/`, `zlink.structure.json`, and the role list in `CMakeLists.txt` at once. Do the renaming in its own change, separate from transferring a feature, so failures are easier to trace.
-
-If `update` fails after a transfer, first check whether the snapshot is missing any state, then use the message flow in [Debugging](#debugging) to find the first failing step.
-
+Run the build, structure check and affected scenario after each extension. Keep state decisions in their domain owner and preserve the existing public Framework call paths.
 ## Development considerations
 
 ### State and message contracts

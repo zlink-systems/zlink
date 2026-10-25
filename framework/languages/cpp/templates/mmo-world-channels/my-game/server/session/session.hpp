@@ -1,5 +1,8 @@
 #pragma once
 #include "server/shared/config.hpp"
+#include <algorithm>
+#include <array>
+#include <string_view>
 #include <zlink/framework.hpp>
 
 namespace MyGame
@@ -55,6 +58,20 @@ class Session final : public fx::packet_stream_session_t
         if (bound.size () != 1)
             throw std::runtime_error ("Exactly one Actor must be bound");
         auto &actor = bound.front ();
+        constexpr std::array<std::string_view, 6> allowed_client_packets{
+          EnterWorldRequest::packet_name,
+          ChangeChannelRequest::packet_name,
+          EarnRequest::packet_name,
+          ViewRequest::packet_name,
+          ChannelViewRequest::packet_name,
+          SessionInfoRequest::packet_name};
+        if (std::find (allowed_client_packets.begin (), allowed_client_packets.end (),
+                       dispatch.packet_name) == allowed_client_packets.end ()) {
+            co_await actor.bound_session ()
+              .send (ActionRejected{Rejection::packet_not_allowed, 0})
+              .async ();
+            co_return;
+        }
         if (dispatch.packet_name == SessionInfoRequest::packet_name) {
             co_await actor.bound_session ()
               .send (SessionInfo{stream.session_id (), std::string (actor.actor_id ()),

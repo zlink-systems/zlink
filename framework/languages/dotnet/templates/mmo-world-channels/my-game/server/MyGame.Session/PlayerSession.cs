@@ -31,6 +31,22 @@ public sealed class PlayerSession(
         CancellationToken cancellationToken
     )
     {
+        if (
+            dispatch.PacketName
+            is not (
+                nameof(EnterWorldRequest)
+                    or nameof(ChangeChannelRequest)
+                    or nameof(EarnRequest)
+                    or nameof(ViewRequest)
+                    or nameof(ChannelViewRequest)
+                    or nameof(SessionInfoRequest)
+            )
+        )
+        {
+            await Context.Client.Send(new ActionRejected(Rejection.PacketNotAllowed, 0)).Async();
+            return;
+        }
+
         if (Context.Actors.Bound.Count == 0)
         {
             if (dispatch.PacketName != nameof(EnterWorldRequest))

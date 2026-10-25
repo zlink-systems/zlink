@@ -6,6 +6,7 @@ import { createInterface } from 'node:readline';
 import { EventEmitter } from 'node:events';
 import { finished } from 'node:stream/promises';
 import { checkStructure } from './structure';
+import { runDomainChecks } from './domain-checks';
 import {
   Limits,
   Scenarios,
@@ -121,6 +122,12 @@ async function main(): Promise<void> {
     checkStructure(args[1]);
     return;
   }
+  if (args[0] === '--check-domain') {
+    assert.equal(args.length, 1);
+    const checks = runDomainChecks();
+    console.log(`Domain checks: ${checks}/${checks} passed`);
+    return;
+  }
   let selected: readonly string[] = Scenarios;
   if (args.length) {
     assert.equal(args.length, 2);
@@ -132,6 +139,8 @@ async function main(): Promise<void> {
     selected = Scenarios.filter((s) => requested.includes(s));
   }
   checkStructure();
+  const domainChecks = runDomainChecks();
+  console.log(`Domain checks: ${domainChecks}/${domainChecks} passed`);
   let passed = 0;
   for (const name of selected) {
     if (await runScenario(name)) passed++;

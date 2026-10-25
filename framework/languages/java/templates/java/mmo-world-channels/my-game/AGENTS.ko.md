@@ -42,13 +42,13 @@ Bash도 같은 절차를 실행한다.
 
 ### 채널과 플레이어
 
-`server/channel/src/main/java/MyGame/channel/Zone.java`의 `Zone`은 채널 하나의 User Spot이다(ID는 `Names.zone`이 만드는 `field@<channel>`). `server/channel/src/main/java/MyGame/channel/Player.java`의 `Player`는 플레이어의 gold를 소유하고, `server/channel/src/main/java/MyGame/channel/PlayerData.java`가 이를 월드의 Redis 데이터베이스에 `<keyPrefix>player:<id>` 키로 저장하며, `server/channel/src/main/java/MyGame/channel/PlayerFactory.java`가 Actor를 만들 때 이를 읽는다. `server/channel/src/main/java/MyGame/channel/Entry.java`와 `server/channel/src/main/java/MyGame/channel/EntryActions.java`는 플레이어의 첫 진입을 받아 첫 채널로 참가를 지연 요청하고, `server/channel/src/main/java/MyGame/channel/Actions.java`에는 입장·채널 변경·gold 획득·조회 handler가 있다.
+`server/channel/src/main/java/MyGame/channel/Zone.java`의 `Zone`은 채널 하나의 User Spot이며 접속한 player ID를 소유한다(ID는 `Names.zone`이 만드는 `field@<channel>`). `Player`는 도메인 package의 `GoldBalance`를 소유하고 gold와 earn 시간을 판정한다. `PlayerData`는 수락된 gold를 월드의 Redis 데이터베이스에 `<keyPrefix>player:<id>` 키로 저장하며, `PlayerFactory`가 Actor를 만들 때 이를 읽는다. `Entry`와 `EntryActions`는 플레이어의 첫 진입을 받아 첫 채널로 참가를 지연 요청하고, `Actions`에는 입장·채널 변경·gold 획득·조회 handler가 있다.
 
 `server/channel/src/main/java/MyGame/channel/Program.java`가 node가 속한 월드의 mesh(`Names.mesh(worldId)`)에 Entry Spot, Zone factory(`zoneCapacity`)와 Player factory를 등록한다. 월드마다 Session node가 따로 있으므로 인증은 플레이어가 고른 월드의 Session에 추가한다. node 구성을 바꾸면 실제 등록과 `server/config/`, descriptor를 함께 맞추어 구조 검사가 같은 구성을 검사하게 한다.
 
 ### 공통 계약과 hosting
 
-`server/shared/src/main/java/MyGame/`는 process 간 메시지와 게임 상수(`EnterWorldRequest`, `ChangeChannelRequest`, `EarnRequest`, `ViewRequest`, `PlayerView`, `WorldInfo`, `SessionInfoRequest`, `SessionInfo`)를, `NodeConfig.java`는 process 설정을, `Names.java`는 mesh와 타입 이름을 정의한다. `Hosting.java`는 hosting과 진단을 설정하고 stdin 제어 loop(`drain`, `shutdown`, `create-update-zone`)를 실행하며, `Control.java`는 제어 marker와 기한을, `Stores.java`는 Redis Location·Relocation store를 만든다. `Hosting.java`는 시작할 때 설정된 채널 Spot을 만들고, `create-update-zone`은 `update` 시나리오가 대체 node에서 쓰는 추가 채널을 만든다. 여러 process가 사용하는 계약은 여기에 추가하며, gold는 `Player`에 유지하여 서로 다른 process가 같은 값을 따로 변경하지 않게 한다.
+`server/shared/src/main/java/MyGame/`는 process 간 메시지를 둔다. `GameRules`는 계약 상한과 보상 값을, `Rejection`은 거부 이유 문자열을 소유한다. `NodeConfig.java`는 process 설정을, `Names.java`는 mesh와 타입 이름을 정의한다. `Hosting.java`는 hosting과 진단을 설정하고 stdin 제어 loop(`drain`, `shutdown`, `create-update-zone`)를 실행하며, `Control.java`는 제어 marker와 기한을, `Stores.java`는 Redis Location·Relocation store를 만든다. `Hosting.java`는 시작할 때 설정된 채널 Spot을 만들고, `create-update-zone`은 `update` 시나리오가 대체 node에서 쓰는 추가 채널을 만든다. 여러 process가 사용하는 계약은 shared package에 추가한다.
 
 ### E2E client
 
@@ -78,7 +78,7 @@ Actor가 소속 Spot을 바꾸는 동작은 membership 변경이다. 대상 Spot
 
 ### Host relocation과 drain
 
-객체의 실행 host를 변경하는 동작은 relocation이며, host를 종료할 수 있도록 workload를 다른 host로 이동시키는 절차는 drain이다. application adapter(`PlayerTransfer`, `ZoneTransfer`)는 `preserveStateWith(...)`로 등록되어 게임 상태를 저장하고 복원하며 Framework는 workload와 route를 이전한다. `PlayerTransfer`는 gold만 저장한다. `Hosting.run`은 `drain` 제어를 받으면 공개 planned-maintenance relocation을 요청한 뒤 종료 가능한 상태를 관찰하며, 절차는 [Relocation 가이드](https://docs.zlink.systems/ko/java/guide/server/37-relocation/)가 설명한다.
+`PlayerTransfer`는 gold와 남은 cooldown ms를 저장하고, `ZoneTransfer`는 접속한 player ID 목록을 저장한다. `Hosting.run`은 `drain` 제어를 받으면 공개 planned-maintenance relocation을 요청한 뒤 종료 가능한 상태를 관찰하며, 절차는 [Relocation 가이드](https://docs.zlink.systems/ko/java/guide/server/37-relocation/)가 설명한다.
 
 ## 요청 흐름
 
@@ -87,45 +87,17 @@ Actor가 소속 Spot을 바꾸는 동작은 membership 변경이다. 대상 Spot
 1. client가 accounts 서비스의 `GET /worlds`로 월드 목록을 받아 월드를 고르고 그 월드의 Session node에 STREAM으로 연결해 첫 packet `EnterWorldRequest`를 보낸다. `GameSession`은 첫 packet 타입을 확인하고 `playerId`로 Player Actor를 `getOrCreate`한 뒤 `bindOrGet`으로 binding하고 원래 packet을 relay한다.
 2. Actor가 만들어질 때 `PlayerFactory.create`가 `PlayerData`로 그 월드 데이터베이스에서 플레이어의 gold를 읽는다.
 3. 새 Actor는 Entry Spot에서 시작한다. `EntryActions.enter`가 identity를 확인하고 `joinSpot(Names.zone(Names.FIRST_CHANNEL), request).defer()`를 요청한다. `Zone.onActorJoin`이 일치하는 플레이어를 수락하고 `Zone.onJoinedActor`가 첫 `PlayerView`를 보낸다.
-4. `EarnRequest`는 `Actions.earn`에 전달되고, `Player.earn`이 world 데이터베이스에 새 gold를 저장한 뒤 Actor를 갱신하며 `Zone.show`가 `PlayerView`로 응답한다.
+4. `EarnRequest`는 `Actions.earn`에 전달된다. `GoldBalance`가 너무 이르거나 상한을 넘는 요청을 상태 변경 없이 거부한다. 수락한 gold는 Actor 상태를 바꾸기 전에 저장한 뒤 `Zone.show`가 `PlayerView`를 보낸다.
 5. `ChangeChannelRequest`는 `Actions.change`에 전달되어 같은 월드의 다른 채널에 `joinSpot(Names.zone(channel), ...).defer()`를 요청한다. 다른 node에 있는 채널이어도 client 연결은 바뀌지 않는다.
 6. node를 교체할 때 `Hosting.run`의 `drain` 제어가 relocation을 요청한다. Framework는 `PlayerTransfer`·`ZoneTransfer`의 `capture`로 게임 상태를 받아 다른 node에서 `restore`한다.
 
-## 이 샘플을 보며 개발하기
+## 이 템플릿 확장하기
 
-이 샘플은 기능들이 함께 동작하는 방식을 보여 주므로, 자기 게임으로 바꾸지 않고 읽고 실행하는 용도로 쓴다. 자기 프로젝트는 Java 기본 셋업에서 시작한다. [ZLink Start](https://zlink.systems/start)의 Initializer에서 Java를 고르거나 ZLink 저장소의 `framework/languages/java/templates/java/starter/my-game`을 사용한다. 그다음 필요한 기능을 이 샘플에서 하나씩 옮긴다. 구조 선택은 기본 셋업의 `AGENTS.md`가 설명하며, 이 절은 `mmo-world-channels`만 다룬다. 이 샘플은 바꾸지 않고 프로젝트 옆에 참고용으로 둔다.
+이 템플릿의 도메인을 확장하여 MMO 월드·채널 서버를 만든다. 게임 판정마다 소유자를 하나 둔다.
 
-### 샘플 먼저 실행하기
-
-옮기기 전에 [개발 명령](#개발-명령)으로 빌드와 e2e를 한 번 실행해 받은 샘플이 동작하는지 확인하고 동작을 본다. 이 결과가 이후 비교의 기준이 된다. 실패하면 먼저 [README](README.md)의 Known issues와 대조한다.
-
-### 옮길 기능
-
-기능 이름은 기본 셋업 `AGENTS.md`의 기능 표와 같다. 경로는 이 디렉터리를 기준으로 한다. 기본 셋업에는 Session node 하나와 `connect` 시나리오만 있으므로, 마지막 열은 기능마다 기본 셋업에서 함께 늘릴 것이다.
-
-| 기능 | 이 샘플의 파일 | 옮길 것 | 기본 셋업에서 함께 늘릴 것 |
-| --- | --- | --- | --- |
-| Typed 메시지 | `server/shared/src/main/java/MyGame/EnterWorldRequest.java` | 사용할 기능의 record: `EnterWorldRequest`, `ChangeChannelRequest`, `EarnRequest`, `ViewRequest`, `PlayerView`. 월드 목록에는 `WorldInfo`. `SessionInfoRequest`·`SessionInfo`는 client가 필요로 할 때만 옮긴다 | `Names.java`의 등록 이름. `Control.java`와 `Json.java`는 기본 셋업에 이미 있다 |
-| Actor | `server/channel/src/main/java/MyGame/channel/Player.java`, `server/channel/src/main/java/MyGame/channel/PlayerData.java`, `server/channel/src/main/java/MyGame/channel/PlayerFactory.java` | gold 규칙을 가진 `Player`, application 저장을 담당하는 `PlayerData`, 이를 읽는 factory | 새 `server/channel/` module(`build.gradle.kts`, `Program.java`)과 `settings.gradle.kts`의 `include("server:channel")`, `server/config/` 파일, `Program.java`의 Actor factory 등록. `zlink.structure.json`의 node 선언과 `Structure.java`의 검사. 기본 셋업의 `Nodes.java`는 Session 역할만 시작하므로 새 역할을 위해 `Nodes.java`와 `Roles.java`를 확장한다 |
-| Spot | `server/channel/src/main/java/MyGame/channel/Zone.java` | 월드의 채널 하나인 `Zone`과 그 join admission, view | `Program.java`의 Spot factory 등록. `zlink.structure.json`의 `spots`·`nodes` 선언과 이를 등록과 비교하는 `Structure.java` 검사(기본 셋업은 Spot을 선언하지 않는다) |
-| Entry·첫 입장 | `server/channel/src/main/java/MyGame/channel/Entry.java`, `server/channel/src/main/java/MyGame/channel/EntryActions.java`, `enter` in `server/channel/src/main/java/MyGame/channel/Actions.java` | `EntryActions.enter`, 첫 채널로의 첫 입장 경로, `Actions.enter`의 identity 확인 | Entry Spot 등록과 `entry` 선언. 첫 입장 시나리오와 재접속 뒤 상태를 비교하는 `reconnect` 시나리오 |
-| Session binding | `server/session/src/main/java/MyGame/session/GameSession.java` | 첫 packet 검사, 그다음 Actor 조회·생성, binding과 원래 typed packet relay | `EntryActions.enter`와 같은 첫 packet 타입. 기본 셋업의 `PlayerSession.java`에 옮긴다 |
-| Host relocation | `server/channel/src/main/java/MyGame/channel/PlayerTransfer.java`, `server/channel/src/main/java/MyGame/channel/ZoneTransfer.java`, `server/channel/src/main/java/MyGame/channel/Transfer.java`, `server/shared/src/main/java/MyGame/Hosting.java` | `capture`·`restore`를 가진 snapshot adapter(`Player`는 gold)와 `drain`·`shutdown` 옆의 `create-update-zone` 제어 | `preserveStateWith(...)` 등록. 서버 교체 뒤에도 연결·상태가 유지되고 대체 node가 새 작업을 받는지 판정하는 `update` 시나리오 |
-| 월드·채널 선택 | `change` in `server/channel/src/main/java/MyGame/channel/Actions.java`, `server/accounts/src/main/java/MyGame/accounts/Program.java` | 같은 월드의 다른 채널로 가는 지연 Spot join을 쓰는 `change`와 월드 목록 endpoint | 같은 node 또는 다른 node의 두 번째 채널 Zone, 월드별 Redis 데이터베이스와 mesh(`Names.mesh`). 채널 변경 뒤 연결과 gold가 유지되는지 판정하는 `channel` 시나리오 |
-
-이 샘플의 채널은 플레이어가 선택하는 월드 안의 게임 공간이다. 메시지 구독 channel과는 구분하며, 이 샘플에는 pub/sub 구독이 없다.
-
-### 옮기는 순서와 규칙
-
-기능은 표의 행 하나씩 옮기고, 하나를 옮길 때마다 빌드, 구조 검사, 관련 e2e 시나리오를 실행한다. 시나리오 ID는 `server/shared/src/main/java/MyGame/Scenario.java`의 `Scenario` enum, `e2e/src/main/java/MyGame/e2e/Scenarios.java`의 분기, `zlink.structure.json`의 `run.scenarios`, `run.commands`의 시나리오 선택 예시에 함께 추가한다. 판정은 실제로 받은 응답과 이벤트로 하고, 고정 대기나 기한 확대로 통과시키지 않는다.
-
-메시지 contract부터 옮긴다. `server/shared/src/main/java/MyGame/`에 typed record를 먼저 정의한 뒤, 컴파일 오류가 나는 handler를 하나씩 새 메시지로 옮긴다. 첫 입장 packet을 바꾸면 `GameSession`의 첫 packet 검사와 `EntryActions.enter`가 같은 타입을 받도록 함께 고친다.
-
-상태는 그 상태를 결정하는 객체에 둔다. gold는 `Player`와 그 데이터베이스 기록에 두고 채널 membership은 Framework가 소유한다. 저장하는 필드를 바꿀 때는 `PlayerData`, `PlayerFactory`, `PlayerTransfer`의 `capture`·`restore`를 함께 고친다. 빠뜨린 필드는 relocation 뒤 사라지고, `update` 시나리오가 그 손실을 잡는다.
-
-역할 이름을 이 샘플과 다르게 정하려면 타입 이름, `Names.java`, `server/config/`, module·package 이름과 `settings.gradle.kts`, `zlink.structure.json`을 한 번에 바꾼다. 이름 변경은 기능을 옮기는 변경과 나눠서 진행하면 실패 원인을 찾기 쉽다.
-
-옮긴 뒤 `update`가 실패하면 snapshot에 빠진 상태가 있는지 먼저 확인한다. 그다음 [디버깅](#디버깅)의 message flow로 첫 실패 단계를 찾는다.
+1. 플레이어 gold와 earn 시간은 `server/channel/src/main/java/MyGame/channel/GoldBalance.java`의 `GoldBalance`에 둔다. 접속한 플레이어 ID와 채널 목록은 같은 package의 `Zone`에 둔다.
+2. 새 typed message는 `server/shared/src/main/java/MyGame/`에 추가한다. client가 보낼 수 있는 packet은 `server/session/src/main/java/MyGame/session/GameSession.java`의 허용 목록에도 추가한다.
+3. client가 관찰하는 assertion은 `e2e/src/main/java/MyGame/e2e/Scenarios.java`에 추가한다. 새 scenario ID와 순서는 `Scenario.java`와 `zlink.structure.json`의 `run.scenarios`, `run.commands`에 함께 반영한다. 기존 scenario 검증은 유지한다.
 
 ## 개발 시 주의점
 
@@ -133,7 +105,7 @@ Actor가 소속 Spot을 바꾸는 동작은 membership 변경이다. 대상 Spot
 
 의존성은 `build.gradle.kts`에서 중앙으로 고정한 Maven Central 공개 package를 사용하며, project 의존은 이 프로젝트의 모듈 사이에 두며, 로컬 package feed와 저장소 소스에 대한 의존은 commit하지 않는다. typed 메시지는 기본 Framework JSON serializer로 처리하여 process마다 같은 계약을 사용한다. relocation adapter가 직접 직렬화하는 대상은 application snapshot으로 한정하여 Framework의 실행 상태와 게임 상태의 관리 책임을 분리한다.
 
-`Player`가 gold를 소유하고 relocation adapter는 gold만 저장하며, Zone identity와 membership은 Framework가 소유한다. 월드의 설정이 mesh 하나와 Redis store 하나를 고르므로 월드는 설정으로 분리하고, route·lease·reconnect·codec·handoff 정책은 application에서 구현하지 않는다. Spot 상태에는 플레이어 ID를 보관하고 Actor 참조는 보관하지 않는다. host relocation은 대상에서 `onJoinedActor`를 다시 호출하지 않기 때문이다. gold 같은 application 데이터는 Actor 상태를 바꾸기 전에 저장하고 Actor를 만들 때 다시 읽으며, Framework 상태에 복제하지 않는다. 요청자에게는 handler가 받은 Actor의 binding된 Session(`actor.context().boundSession().send(...)`)으로 응답한다. 그 밖의 push는 `ZLinkActorClient.sendToActor`로 플레이어 ID의 Actor에게 보내고, `Actions.forward` 같은 Spot Actor handler가 binding된 Session으로 전달한다. `SessionInfo`는 Session binding에서 identity를 읽으며, 게임 상태 메시지에는 binding identity를 넣지 않는다.
+`GoldBalance`가 gold와 earn 시간을 판정하고 `Zone`이 접속한 player ID를 소유한다. `PlayerTransfer`는 gold와 남은 cooldown ms를, `ZoneTransfer`는 player ID 목록을 저장한다. 월드의 설정이 mesh 하나와 Redis store 하나를 고르므로 월드는 설정으로 분리하고, route·lease·reconnect·codec·handoff 정책은 application에서 구현하지 않는다. Spot 상태에는 플레이어 ID를 보관하고 Actor 참조는 보관하지 않는다. host relocation은 대상에서 `onJoinedActor`를 다시 호출하지 않기 때문이다. 수락한 application 데이터는 Actor 상태를 바꾸기 전에 저장한다. 응답과 update는 해당 handler가 요구하는 bound Session 또는 공개 Actor client를 사용한다. `SessionInfo`는 Session binding에서 identity를 읽으며, 게임 상태 메시지에는 binding identity를 넣지 않는다.
 
 ### 비동기 실행과 lifecycle
 

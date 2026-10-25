@@ -18,11 +18,11 @@ export class PlayerData {
   private key(id: string): string {
     return this.config.keyPrefix + Names.playerKey + id;
   }
-  async load(id: string): Promise<number> {
+  async load(id: string): Promise<bigint> {
     const value = await this.client.get(this.key(id));
-    return value === null ? 0 : (JSON.parse(value) as number);
+    return value === null ? 0n : BigInt(value);
   }
-  async save(id: string, gold: number): Promise<void> {
-    await this.client.set(this.key(id), String(gold));
+  async save(id: string, gold: bigint): Promise<void> {
+    await this.client.set(this.key(id), gold.toString());
   }
 }

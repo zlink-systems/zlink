@@ -34,21 +34,21 @@ Bash도 같은 절차를 실행한다.
 
 ### Accounts와 Session
 
-`server/accounts/main.ts`는 설정의 월드 목록을 `GET /worlds`로 제공하는 일반 HTTP 서비스다. 재배치 가능한 객체를 호스팅하지 않으며 stdin으로는 `shutdown`만 받는다. `server/session/main.ts`는 한 월드의 STREAM과 mesh listener를 등록하고 `server/session/session.ts`는 연결 callback과 수신 packet 전달을 담당한다. 연결별 통신 객체가 Session이며, Framework는 Session을 플레이어 상태 객체와 연결하는 binding을 제공한다. `Session`은 첫 패킷으로 `EnterWorldRequest`만 받으며, 인증은 binding 전에 추가하고 게임 packet은 기존 typed relay로 전달하여 플레이어에게 응답할 연결을 Framework가 확인하게 한다.
+`server/session/main.ts`는 한 월드의 STREAM과 mesh listener를 등록하고 `server/session/session.ts`는 연결 callback을 처리한다. `Session`은 `allowedClientPackets`에 든 client packet만 Actor에 relay하고, 내부 packet은 `ActionRejected(packet-not-allowed, 0)`로 거부한다. 첫 packet은 `EnterWorldRequest`다. 인증은 binding 전에 추가하고 기존 typed relay는 유지하여 플레이어에게 응답할 연결을 Framework가 확인하게 한다.
 
 ### Channel과 플레이어
 
-ID로 찾는 게임 상태 객체가 Actor이며, `server/channel/player.ts`의 `Player`가 플레이어의 gold를 소유한다. Actor를 만들 때 `server/channel/data.ts`의 `PlayerData`로 gold를 불러오고, 값이 바뀔 때마다 월드의 Redis에 저장한다. gold 규칙은 `server/channel/domain.ts`의 `GoldBalance`에 있으며 게임 규칙은 여기서 확장한다. Actor를 받아 공통 게임 규칙을 실행하는 상태 객체가 Spot이며, `server/channel/spots.ts`의 `Zone`이 channel 하나를 표현하고 플레이어를 받아들인다.
+ID로 찾는 게임 상태 객체가 Actor이며, `server/channel/player.ts`의 `Player`는 gold와 earn 시간을 판정하는 도메인 객체 `GoldBalance`를 소유한다. `PlayerData`가 Actor 생성 때 gold를 불러오고 수락한 변경은 도메인 상태를 바꾸기 전에 저장한다. Actor를 받아 공통 게임 규칙을 실행하는 상태 객체가 Spot이며, `server/channel/spots.ts`의 `Zone`은 channel 하나를 표현하고 플레이어를 받아들이며 접속한 player ID를 소유한다.
 
 `server/channel/main.ts`가 Entry Spot, factory, handler를 등록하고 node 설정의 `zoneIds`에 적은 Zone을 생성한다. 플레이어별 규칙과 Zone 공통 규칙을 연결하는 handler는 `server/channel/handlers.ts`에 추가하고, 새 handler는 `server/channel/main.ts`의 `providers` 배열에 모두 나열한다. node 구성을 바꾸면 실제 등록과 `server/config/`, descriptor를 함께 맞추어 구조 검사가 같은 구성을 검사하게 한다.
 
 ### 공통 계약과 hosting
 
-`server/shared/messages.ts`는 process 간 메시지를, `server/shared/constants.ts`는 이름·시나리오 ID·한도·제어 문자열을, `server/shared/config.ts`는 process 설정을 정의한다. `server/shared/hosting.ts`는 hosting과 진단을 설정하고 실행 중 제어 명령을 처리하며, `server/shared/diagnostics.ts`는 진단 기록을 stderr로 쓴다. 메시지는 `server/shared/messages.ts`에 정의한다. build가 이 디렉터리에서 packet schema를 생성하기 때문이다. `server/shared/constants.ts`의 `meshName`이 월드별 mesh 이름을 만들고 node 설정의 `worldId`가 월드를 고른다. 플레이어 상태는 `Player`에 유지하여 서로 다른 process가 같은 값을 따로 변경하지 않게 한다.
+`server/shared/messages.ts`는 typed message와 계약 상수 `GameRules`, `Rejection`을 정의한다. `server/shared/constants.ts`는 이름·scenario ID·제어 문자열을, `server/shared/config.ts`는 process 설정을 정의한다. `server/shared/hosting.ts`는 hosting과 진단을 설정하고 실행 중 제어 명령을 처리하며, `server/shared/diagnostics.ts`는 진단 기록을 stderr로 쓴다. build는 `server/shared/messages.ts`에서 packet schema를 생성한다. `meshName`은 월드별 mesh 이름을 만들고 node 설정의 `worldId`가 월드를 고른다.
 
 ### E2E client
 
-`e2e/client.mts`는 공개 connector로 게임에 접속하여 client가 관찰할 결과를 검사하는 시나리오를 실행한다. `e2e/runner.ts`는 node를 시작하고 로그를 수집하며 실행이 만든 자원을 정리하고, `e2e/structure.ts`는 구성을 검사한다. 새 게임 동작은 client가 받은 결과로 검증하며, 별도 unit-test 프로젝트는 포함되어 있지 않다.
+`e2e/client.mts`는 공개 connector로 접속해 client가 관찰하는 결과를 검사한다. `e2e/runner.ts`는 node를 시작하고 도메인 경계 검사를 실행하며 로그와 정리를 관리하고, `e2e/structure.ts`는 구성을 검사한다. 새 게임 동작은 client 관찰과 도메인 경계 검사로 검증한다.
 
 ## 프로젝트의 ZLink 개념
 
@@ -58,11 +58,11 @@ process 간 메시지를 전달할 node들을 연결하는 구성이 RouteMesh�
 
 ### Spot과 Actor
 
-`Entry`는 Actor의 첫 입장을 처리하고 `Zone`은 channel 하나를 표현한다. 여기서 channel은 플레이어가 월드 안에서 선택하는 게임 공간이며 메시지 구독 channel과는 구분한다. 이 프로젝트에는 pub/sub 구독이 없다. `Player`는 소속 Spot이 바뀌어도 gold를 유지한다. [Spot 가이드](https://docs.zlink.systems/ko/node/guide/server/21-spot/)는 이 객체들의 등록과 호출을, [Actor 가이드](https://docs.zlink.systems/ko/node/guide/server/22-actor/)는 Actor의 생성과 호출을 설명한다.
+`Entry`는 Actor의 첫 입장을 처리한다. `Zone`은 channel 하나와 접속한 player ID 목록을 소유한다. 여기서 channel은 월드 안에서 플레이어가 선택하는 게임 공간이며 메시지 구독 channel과 구분한다. 이 프로젝트에는 pub/sub 구독이 없다. `Player`는 소속 Spot이 바뀌어도 gold를 유지한다. 등록과 호출은 [Spot 가이드](https://docs.zlink.systems/ko/node/guide/server/21-spot/)와 [Actor 가이드](https://docs.zlink.systems/ko/node/guide/server/22-actor/)가 설명한다.
 
 ### STREAM과 Session
 
-client 연결의 packet을 처리하는 [STREAM](https://docs.zlink.systems/ko/node/guide/server/23-stream/)에서 `Session`은 `EnterWorldRequest`로 Player Actor를 구해 binding한 뒤 원래 typed packet을 전달한다. Actor handler는 binding된 Session을 통해 client에 메시지를 보낸다. 연결과 Actor 사이의 관계는 [Session and Actor](https://docs.zlink.systems/ko/node/guide/server/24-actor-session/)가 설명한다.
+client 연결의 packet을 처리하는 [STREAM](https://docs.zlink.systems/ko/node/guide/server/23-stream/)에서 `Session`은 `EnterWorldRequest`로 Player Actor를 구해 binding한다. 허용 목록에 든 client packet만 relay하고 내부 packet은 `ActionRejected(packet-not-allowed, 0)`로 거부한다. Actor handler는 binding된 Session을 통해 client에 메시지를 보낸다. 연결과 Actor의 관계는 [Session and Actor](https://docs.zlink.systems/ko/node/guide/server/24-actor-session/)가 설명한다.
 
 ### Location Store
 
@@ -74,7 +74,7 @@ Actor가 소속 Spot을 바꾸는 동작은 membership 변경이다. 대상 Spot
 
 ### Host relocation과 drain
 
-객체의 실행 host를 변경하는 동작은 relocation이며, host를 종료할 수 있도록 workload를 다른 host로 이동시키는 절차는 drain이다. application adapter는 게임 상태(`PlayerRelocation`이 저장하는 gold. `ZoneRelocation`에는 application 상태가 없다)를 저장하고 복원하며 Framework는 workload와 route를 이전한다. `server/shared/hosting.ts`의 `runHost`는 `drain` 명령에서 공개 host relocation을 요청한 뒤 종료 가능한 상태를 관찰하며, 절차는 [Relocation 가이드](https://docs.zlink.systems/ko/node/guide/server/37-relocation/)가 설명한다.
+객체의 실행 host를 바꾸는 동작은 relocation이며, drain은 host의 workload를 옮겨 host를 종료할 수 있게 한다. application adapter는 게임 상태를 저장하고 복원한다. `PlayerRelocation`은 gold와 남은 cooldown ms를, `ZoneRelocation`은 접속한 player ID 목록을 저장한다. Framework는 workload와 route를 이전한다. `server/shared/hosting.ts`의 `runHost`는 `drain`에서 공개 host relocation을 요청하고 종료 가능한 상태를 관찰한다. 절차는 [Relocation 가이드](https://docs.zlink.systems/ko/node/guide/server/37-relocation/)가 설명한다.
 
 ## 요청 흐름
 
@@ -82,45 +82,17 @@ Actor가 소속 Spot을 바꾸는 동작은 membership 변경이다. 대상 Spot
 
 1. client가 Accounts에서 `GET /worlds`로 월드 목록을 읽고, 선택한 월드의 Session endpoint에 STREAM으로 연결하여 첫 패킷 `EnterWorldRequest`를 보낸다. `Session`은 첫 패킷 이름을 확인하고 `playerId`로 Player Actor를 `getOrCreate`한 뒤 Session에 binding하고 원래 패킷을 relay한다.
 2. 새 Actor는 Entry Spot `Entry`에서 시작한다. `PlayerFactory`가 월드의 Redis에서 gold를 불러온다. `EnterPlayer` handler가 identity를 확인하고 `joinSpot(zoneId(Game.firstChannel), ...).defer()`를 요청한다. `Zone.onJoinedActor`가 월드·channel·node·gold를 담은 `PlayerView`를 push한다.
-3. `EarnGold`는 `Player.earn`을 호출하고, `Player.earn`은 새 잔액을 Redis에 저장한 뒤 Actor를 갱신한다. `ViewPlayer`는 binding된 Session으로 view를 다시 보낸다.
+3. `EarnGold`는 `GoldBalance`에 고정 보상과 cooldown을 판정하게 한다. 너무 이르거나 상한을 넘는 요청은 상태 변경 없이 거부하고, 수락한 gold는 Actor를 갱신하기 전에 저장한다. `ViewPlayer`는 binding된 Session으로 view를 다시 보낸다.
 4. `ChangeChannel`은 `joinSpot(zoneId(channel), ...).defer()`로 다른 Zone으로의 참가를 요청한다. 그 Zone이 다른 node에 있어도 client 연결과 binding된 Session은 바뀌지 않는다. 재접속하면 `EnterZone`이 identity를 확인하고 view를 다시 보낸다.
-5. node를 교체할 때 `runHost`의 `drain` 명령이 relocation을 요청한다. Framework는 `PlayerRelocation`의 `capture`로 gold를 받아 다른 node에서 `restore`한다.
+5. node를 교체할 때 `runHost`의 `drain` 명령이 relocation을 요청한다. Framework는 `PlayerRelocation`의 gold와 남은 cooldown ms, `ZoneRelocation`의 접속 player ID 목록을 다른 node로 이전한다.
 
-## 이 샘플을 보며 개발하기
+## 이 템플릿 확장하기
 
-이 샘플은 기능들이 함께 동작하는 방식을 보여 주므로, 자기 게임으로 바꾸지 않고 읽고 실행하는 용도로 쓴다. 자기 프로젝트는 Node.js 기본 셋업에서 시작한다. [ZLink Start](https://zlink.systems/start)의 Initializer에서 Node.js를 고르거나 ZLink 저장소의 `framework/languages/node/templates/starter/my-game`을 사용한다. 그다음 필요한 기능을 이 샘플에서 하나씩 옮긴다. 구조 선택은 기본 셋업의 `AGENTS.md`가 설명하며, 이 절은 `mmo-world-channels`만 다룬다. 이 샘플은 바꾸지 않고 프로젝트 옆에 참고용으로 둔다.
+이 템플릿의 도메인을 확장하여 MMO 월드·채널 서버를 만든다. 게임 판정마다 소유자를 하나 둔다.
 
-### 샘플 먼저 실행하기
-
-옮기기 전에 [개발 명령](#개발-명령)으로 빌드와 e2e를 한 번 실행해 받은 샘플이 동작하는지 확인하고 동작을 본다. 이 결과가 이후 비교의 기준이 된다. 실패하면 먼저 [README](README.md)의 Known issues와 대조한다.
-
-### 옮길 기능
-
-기능 이름은 기본 셋업 `AGENTS.md`의 기능 표와 같다. 경로는 이 디렉터리를 기준으로 한다. 기본 셋업에는 Session node 하나와 `connect` 시나리오만 있으므로, 마지막 열은 기능마다 기본 셋업에서 함께 늘릴 것이다.
-
-| 기능            | 이 샘플의 파일                                                                                                                                                                             | 옮길 것                                                                                                                                                                           | 기본 셋업에서 함께 늘릴 것                                                                                                                                                                                                                    |
-| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Typed 메시지    | `server/shared/messages.ts`                                                                                                                                                                | 사용할 기능의 class: `EnterWorldRequest`, `ChangeChannelRequest`, `EarnRequest`, `ViewRequest`, `PlayerView`. `SessionInfoRequest`·`SessionInfo`는 client가 필요로 할 때만 옮긴다 | `server/shared/constants.ts`의 `PacketNames` 패킷 이름과 `Names`                                                                                                                                                                              |
-| Actor           | `server/channel/player.ts`, `server/channel/domain.ts`, `server/channel/data.ts`                                                                                                           | 영속되는 gold를 가진 `Player`, `GoldBalance`, `PlayerData`, `PlayerFactory`, gold를 저장하는 `PlayerRelocation`                                                                   | `main.ts`를 가진 새 `server/channel/` 프로젝트와 `server/config/` 파일, Actor factory 등록. `server/shared/constants.ts`의 `NodeEntrypoints`에 `channel` 항목. Actor 선언과 구조 검사. 저장 데이터를 위한 `docker-compose.yml`의 Redis 서비스 |
-| Spot            | `server/channel/spots.ts`                                                                                                                                                                  | 참가 수락과 플레이어 view를 가진 `Zone`. `ZoneRelocation`에는 application 상태가 없다                                                                                             | `server/channel/main.ts`의 Spot factory 등록과 `zoneIds` 생성. `zlink.structure.json`의 `spots`·`nodes` 선언과, 기본 셋업에서는 Spot 0개를 단정하는 구조 검사를 등록과 비교하도록 확장                                                        |
-| Entry·첫 입장   | `server/channel/spots.ts`의 `Entry`, `server/channel/handlers.ts`의 `EnterPlayer`·`EnterZone`                                                                                              | `Entry`, `EnterPlayer`, `EnterZone`의 identity 확인과 view 재전송                                                                                                                 | Entry Spot 등록과 `entry` 선언. 첫 입장 시나리오와 재접속 뒤 상태를 비교하는 `reconnect` 시나리오                                                                                                                                             |
-| Session binding | `server/session/session.ts`                                                                                                                                                                | 첫 패킷 검사, Actor 조회·생성, binding과 원래 typed 패킷 relay, `SessionInfo` 응답                                                                                                | `EnterPlayer`와 같은 첫 패킷 이름. 기본 셋업의 `session.ts`에 옮긴다                                                                                                                                                                          |
-| Host relocation | `server/channel/player.ts`의 `PlayerRelocation`, `server/channel/spots.ts`의 `ZoneRelocation`, `server/shared/constants.ts`의 `Control`과 `server/shared/hosting.ts`의 `runHost` 제어 loop | `capture`·`restore` adapter와 `create-update-zone` 제어. `drain`·`shutdown`은 기본 셋업에 이미 있다                                                                               | `preserveStateWith` 등록. 서버 교체 뒤에도 연결·gold가 유지되고 대체 node가 새 Zone을 호스팅하는지 판정하는 `update` 시나리오                                                                                                                 |
-| 월드·채널 선택  | `server/channel/handlers.ts`의 `ChangeChannel`, `server/accounts/main.ts`, `server/shared/constants.ts`의 `meshName`                                                                       | 연결을 유지하는 다른 Zone으로의 지연 참가, HTTP 월드 목록과 월드별 mesh                                                                                                           | `zlink.structure.json`의 `accounts` node와 월드별 Session·Channel node, `docker-compose.yml`의 월드별 Redis 서비스. `worlds`·`channel` 시나리오                                                                                               |
-
-### 옮기는 순서와 규칙
-
-기능은 표의 행 하나씩 옮기고, 하나를 옮길 때마다 빌드, 구조 검사, 관련 e2e 시나리오를 실행한다. 시나리오 ID는 `server/shared/constants.ts`의 `Scenarios` 목록, `zlink.structure.json`의 `run.scenarios`, `run.commands`의 시나리오 선택 예시에 함께 추가한다. 판정은 실제로 받은 응답과 이벤트로 하고, 고정 대기나 기한 확대로 통과시키지 않는다.
-
-메시지 contract부터 옮긴다. `messages.ts`에 class를 먼저 정의한 뒤, 컴파일 오류가 나는 handler를 하나씩 새 메시지로 옮긴다. build는 `server/shared`에서 packet schema를 생성하므로 다른 위치에 정의한 메시지는 등록되지 않는다. 첫 입장 패킷을 바꾸면 `Session`의 첫 패킷 검사, `EnterPlayer`, `EnterZone`이 같은 패킷을 받도록 함께 고친다.
-
-상태는 그 상태를 결정하는 객체에 둔다. gold는 `Player`가 가지며 `PlayerData`가 저장하고, `Zone`은 application 상태를 갖지 않는다. 상태 필드를 바꿀 때는 `PlayerRelocation`과 저장 형식을 함께 고친다. 빠뜨린 필드는 relocation 뒤 사라지고, `update` 시나리오가 그 손실을 잡는다.
-
-고정 Zone은 시작할 때 `zoneIds`로 생성한다. Channel A1은 Zone 하나의 정원으로 Channel A2보다 먼저 시작하고 A2의 정원은 둘이므로, 각 고정 Zone은 선언된 초기 소유 node에 놓이고 drain을 위한 여유가 남는다. 대체 process가 시작된 뒤 `create-update-zone` 제어가 공개 Spot manager로 검증용 Zone `field@3`을 생성하며, 남은 node는 이미 Zone 둘을 가지고 있으므로 대체 node가 새 Zone을 호스팅해야 한다. 월드는 mesh와 Redis endpoint로 격리한다.
-
-Channel이나 Accounts 같은 역할 이름을 이 샘플과 다르게 정하려면 class 이름, `Names`, `server/config/`, `zlink.structure.json`을 한 번에 바꾼다. 이름 변경은 기능을 옮기는 변경과 나눠서 진행하면 실패 원인을 찾기 쉽다.
-
-옮긴 뒤 `update`가 실패하면 snapshot에 빠진 상태가 있는지 먼저 확인한다. 그다음 [디버깅](#디버깅)의 message flow로 첫 실패 단계를 찾는다.
+1. 플레이어 gold와 earn 시간은 `server/channel/domain.ts`의 `GoldBalance`에 둔다. 접속한 플레이어 ID와 채널 목록은 `server/channel/spots.ts`의 `Zone`에 둔다.
+2. 새 typed message는 `server/shared/messages.ts`에 추가한다. client가 보낼 수 있는 packet은 `server/session/session.ts`의 `allowedClientPackets`에도 추가한다.
+3. client가 관찰하는 assertion은 `e2e/client.mts`에 추가한다. 새 scenario ID와 순서는 `server/shared/constants.ts`와 `zlink.structure.json`의 `run.scenarios`, `run.commands`에 함께 반영한다. 기존 scenario 검증은 유지한다.
 
 ## 개발 시 주의점
 
@@ -128,7 +100,7 @@ Channel이나 Accounts 같은 역할 이름을 이 샘플과 다르게 정하려
 
 의존성은 `package.json`에 고정한 공개 npm package를 사용하며, 이 프로젝트의 모듈 사이에는 상대 경로 import를 쓴다. typed 메시지는 기본 Framework JSON serializer로 처리하여 process마다 같은 계약을 사용한다. build가 packet schema를 생성하고 `server/shared/hosting.ts`가 이를 불러온다. relocation adapter가 직접 직렬화하는 대상은 application snapshot으로 한정하여 Framework의 실행 상태와 게임 상태의 관리 책임을 분리한다.
 
-플레이어 gold 같은 게임 사실은 그것을 변경하는 객체 한 곳에서 관리한다. Spot에는 플레이어 ID를 보관하며, 이동 뒤에도 같은 Actor 객체 참조를 사용할 수 있다고 가정하지 않는다. host relocation의 target은 `onJoinedActor`를 다시 호출하지 않으므로 Spot은 나중에 전달할 Actor 참조에 의존하지 않는다. 요청한 Actor에게는 handler의 binding된 Session으로 응답하고, 다른 플레이어에게는 player ID로 Actor를 지정해 push한다. Actor identity의 출처는 `SessionInfo`다. Node.js의 typed handler는 현재 선언한 class가 아닌 필드만 받으므로(#1731), `DeliverView`는 전달하기 전에 패킷 이름 표로 class를 복원한다. push를 추가하면 그 표도 함께 맞춘다. Message Follow 시간과 이로부터 정한 `Limits.safeMs` 관찰 기한은 `server/shared/constants.ts`에 둔다.
+`GoldBalance`가 gold와 earn 시간을 판정하고 `Zone`이 접속한 player ID를 소유한다. `PlayerRelocation`은 gold와 남은 cooldown ms를, `ZoneRelocation`은 player ID 목록을 저장한다. Spot에는 플레이어 ID를 보관하며, 이동 뒤에도 같은 Actor 객체 참조를 사용할 수 있다고 가정하지 않는다. host relocation의 target은 `onJoinedActor`를 다시 호출하지 않으므로 Spot은 나중에 전달할 Actor 참조에 의존하지 않는다. 요청한 Actor에게는 handler의 binding된 Session으로 응답하고, 다른 플레이어에게는 player ID로 Actor를 지정해 push한다. Actor identity의 출처는 `SessionInfo`다. Node.js의 typed handler는 현재 선언한 class가 아닌 필드만 받으므로(#1731), `DeliverView`는 전달하기 전에 패킷 이름 표로 class를 복원한다. push를 추가하면 그 표도 함께 맞춘다. Message Follow 시간과 이로부터 정한 `Limits.safeMs` 관찰 기한은 `server/shared/constants.ts`에 둔다.
 
 ### 비동기 실행과 lifecycle
 

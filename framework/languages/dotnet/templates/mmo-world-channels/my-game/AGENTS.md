@@ -83,49 +83,21 @@ Requests in the example game follow this path. Reading the code along this path 
 1. The client calls `GET /worlds` on the accounts service and receives the Session endpoint of each world. It connects to the chosen Session over STREAM and sends the first packet, `EnterWorldRequest`. `PlayerSession` checks the first packet type, calls `GetOrCreate` for the Player Actor by `playerId` in the world's mesh, binds it to the Session, and relays the original packet. `PlayerFactory` loads the player's gold from Redis when the Actor is created.
 2. A new Actor starts in the Entry Spot `ZoneEntry`. `EnterPlayer` checks the identity and requests `JoinSpot(...).Defer()` into the first channel (`field@1`).
 3. `ZoneSpot.OnActorJoinAsync` accepts the join, and `OnJoinedActorAsync` sends `PlayerView` to the Actor; `DeliverView` forwards it through the bound Session.
-4. `EarnRequest` reaches `EarnGold`, which calls `PlayerActor.EarnAsync`. `GoldBalance` accepts a positive amount with checked arithmetic, `PlayerData` writes the new value, and the handler replies with `PlayerView`.
+4. `EarnRequest` reaches `EarnGold`, which calls `PlayerActor.EarnAsync`. `GoldBalance` grants a fixed reward of 10, enforces the monotonic 1000 ms interval and common integer limit, and returns a rejection without changing gold or cooldown when needed. `PlayerData` saves accepted gold before the domain state changes, and the handler replies with `PlayerView`.
 5. `ChangeChannelRequest` reaches `ChangeChannel`, which requests `JoinSpot(...).Defer()` into the other Zone. The connection, the Actor, and the gold stay the same; only the hosting Zone changes.
 6. When the same player reconnects, `PlayerSession` binds the existing Actor to the new Session, and `EnterZone` checks the identity and resends the current `PlayerView`. The channel does not change.
 7. To replace a node, `drain` in `NodeControl` requests relocation. Framework takes the gold from `PlayerRelocation` and restores it on another node; the Zones keep their logical IDs.
 
-## Developing from this sample
+## Extending the MMORPG domain
 
-This sample shows how the features work together, so read and run it rather than turning it into your game. Start your own project from the .NET starter: choose .NET in the Initializer at [ZLink Start](https://zlink.systems/start), or use `framework/languages/dotnet/templates/starter/my-game` in the ZLink repository. Then transfer the features you need from this sample one at a time. The starter's `AGENTS.md` owns the choice between structures; this section covers only `mmo-world-channels`. Keep this sample unchanged next to your project as a reference.
+Extend this template's domain to build an MMORPG server.
 
-### Run the sample first
+1. Add a rule beside the state it changes. `server/MyGame.Channel/Domain/GoldBalance.cs` owns gold limits and earn timing; `server/MyGame.Channel/Infrastructure/ZLink/ZoneSpot.cs` owns the connected player IDs for one channel.
+2. Add shared typed messages and numeric limits in `server/MyGame.Shared/Contracts.cs`.
+3. Add every client packet to the allowlist in `server/MyGame.Session/PlayerSession.cs`.
+4. Add observable behavior to `e2e/MyGame.E2E/Scenarios.cs`, domain boundaries to `e2e/MyGame.E2E/DomainChecks.cs`, and the matching scenario description to `README.md` and `zlink.structure.json`.
 
-Before transferring anything, run the build and e2e once with the [Development commands](#development-commands) to confirm the downloaded sample works and to see its behavior. This result is the baseline for comparison. If it fails, compare the failure with Known issues in the [README](README.md) first.
-
-### Features to transfer
-
-Feature names match the feature table in the starter's `AGENTS.md`. Paths are relative to this directory. The starter has one Session node and the `connect` scenario only, so the last column lists what grows in the starter with each feature.
-
-| Feature | File in this sample | What to transfer | What to grow in the starter alongside |
-| --- | --- | --- | --- |
-| Typed messages | `server/MyGame.Shared/Contracts.cs` | The records of the features you adopt: `EnterWorldRequest`, `ChangeChannelRequest`, `EarnRequest`, `ViewRequest`, `PlayerView`, `WorldInfo`; `SessionInfoRequest` and `SessionInfo` only if your client needs them | The registration names and the `Mesh`, `ZoneId`, and `Channel` helpers in `GameNames`; the starter already has `NodeReady` and `NodeProtocol` |
-| Spot | `server/MyGame.Channel/Infrastructure/ZLink/ZoneSpot.cs` | `ZoneSpot` with admission, the player view, and the handler registrations in `Configure()` | A new `server/MyGame.Channel/` project, its `server/config/` files with `WorldId`, `ZoneIds`, and `ZoneCapacity`, and the `AddSpotFactory<ZoneSpot>` registration in `Program.cs`; the startup callback that creates the fixed Zones; the `spots` and `nodes` declarations in `zlink.structure.json` and the structure check that compares them with the registrations |
-| Actor | `server/MyGame.Channel/Infrastructure/ZLink/PlayerActor.cs`, `server/MyGame.Channel/Domain/GoldBalance.cs`, `server/MyGame.Channel/Infrastructure/Redis/PlayerData.cs` | `PlayerActor` with the gold rule and its persistence, and `PlayerFactory` | The `AddActorFactory<PlayerActor, PlayerFactory>` registration in `Program.cs` and the `PlayerData` service; a Redis store per world in `docker-compose.yml` |
-| Entry and first admission | `ZoneEntry` and `EnterZone` in `server/MyGame.Channel/Infrastructure/ZLink/Handlers.cs` | `EnterPlayer` and the deferred join into the first channel, and the identity check and state resend of `EnterZone` | The Entry Spot registration and its `entry` declarations; the `worlds` scenario for first entry and a `reconnect` scenario that compares state after reconnection |
-| Session binding | `server/MyGame.Session/PlayerSession.cs` | The first-packet check, then find or create the Actor in the world's mesh, bind, and relay the original typed packet | The same first-packet type as `EnterPlayer`; transfer it into the starter's `PlayerSession.cs` |
-| Host relocation | `PlayerRelocation` in `server/MyGame.Channel/Infrastructure/ZLink/PlayerActor.cs`, `ZoneRelocation` in `server/MyGame.Channel/Infrastructure/ZLink/ZoneSpot.cs`, `server/MyGame.Shared/NodeControl.cs` | The relocation adapters with `Capture` and `Restore`, and the `drain` and `shutdown` controls | The `PreserveStateWith` relocation registrations; the `update` scenario, which checks that connections and state survive a server replacement and that the replacement node accepts new work |
-| World/channel selection | `ChangeChannel` in `server/MyGame.Channel/Infrastructure/ZLink/Handlers.cs`, `server/MyGame.Accounts/Program.cs` | The deferred membership change between Zones, and the `GET /worlds` listing | A new `server/MyGame.Accounts/` project and `server/config/accounts.json` with the `Worlds` list; the `accounts` node and its `HTTP` edge in `zlink.structure.json`; a `channel` scenario that checks the connection, `SessionInfo`, and gold survive the move |
-
-### Transfer order and rules
-
-Transfer one row at a time and run the build, the structure check, and the related e2e scenario after each. Add a scenario ID to the list in `e2e/MyGame.E2E/Scenarios.cs`, to `run.scenarios`, and to the selection examples in `run.commands` of `zlink.structure.json` together. Judge results by the replies and events actually received; do not make tests pass with fixed sleeps or longer deadlines.
-
-Start with the message contracts. Define the typed records in `Contracts.cs` first, then move each handler that fails to compile to the new messages. When you change the first-entry packet, update the first-packet check in `PlayerSession`, `EnterPlayer`, and `EnterZone` to receive the same type.
-
-Keep each piece of state in the object that decides it. `PlayerActor` is the only owner of gold, and a Zone takes its identity from the Framework Spot context, so do not cache the channel or the membership elsewhere. When you change player state fields, update `PlayerRelocation` and the persisted value in `PlayerData` together; a state kept outside them disappears after relocation, and the `update` scenario detects the loss. Write player data inside the Actor's execution turn.
-
-Keep worlds separate. Redis application keys use `player:<id>` under the world's key prefix, and logical Spot IDs are unique within a world mesh while composition IDs are globally unique, so `zlink.structure.json` declares a `mesh` on the fixed Zones. When you extend the topology, update the structure and the configuration together; the structure check rejects a mismatch before startup.
-
-Keep the checks of the `worlds` scenario: the same player earns gold in world A and starts with none in world B.
-
-To name roles such as Channel or Zone differently from this sample, change the type names, `GameNames`, `server/config/`, and `zlink.structure.json` at once. Do the renaming in its own change, separate from transferring a feature, so failures are easier to trace.
-
-If `update` fails after a transfer, first check whether the player state is missing a field, then use the message flow in [Debugging](#debugging) to find the first failing step.
-
+Run the build, structure check and affected scenario after each extension. Keep each state decision in its domain owner and preserve the existing public Framework call paths.
 ## Development considerations
 
 ### State and message contracts

@@ -59,10 +59,10 @@ pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
 
 | Scenario  | Assertions                                                                                                    |
 | --------- | ------------------------------------------------------------------------------------------------------------- |
-| worlds    | HTTP world list and Session endpoints; the same player ID has independent gold in A and B.                    |
-| channel   | Channel 1 to 2 preserves Session identity, Actor generation, connection and gold.                             |
+| worlds    | HTTP world list and Session endpoints; fixed reward, cooldown rejection and server retry delay; the same player ID has independent gold in A and B. |
+| channel   | Same-channel visibility, cross-channel isolation, channel-move and disconnect removal; oversized channel requests return `integer-out-of-range` without changing membership; connection and gold persist; internal packets return `packet-not-allowed`. |
 | reconnect | A new Session binds the original Actor with its saved channel and gold.                                       |
-| update    | Drain channelA1 into channelA2, preserve client state and world B, stop the source and start its replacement. |
+| update    | Drain channelA1 into channelA2, preserve client state, Zone player list and world B, stop the source and start its replacement. |
 
 ChannelA1 has a one-Zone capacity and starts before channelA2, whose capacity is two.
 This places each fixed Zone on its declared initial owner and leaves room for drain.
@@ -71,6 +71,7 @@ The command creates verification Zone `field@3` through the public Spot manager.
 ChannelA2 already holds two Zones, so the replacement must host the new Zone.
 A new Player joins it and earns gold; the test checks channelA1 in both responses.
 Existing Players remain in their relocated Zones. The replacement uses the same configuration.
+`ZoneRelocation` saves and restores connected player IDs in the Zone relocation snapshot. A channel move keeps the client Session bound while the Player Actor changes Zones, so the list follows Zone membership callbacks.
 Message Follow is explicitly 30 seconds; the safe shutdown observation budget is
 derived from that duration and the existing operation budget.
 
@@ -106,6 +107,6 @@ its control protocol accepts `shutdown` and it does not host relocatable objects
 기본 빌드와 e2e는 Docker에서 runner와 node를 실행한다. Bash는 `./run-e2e.sh`, PowerShell 7은 `pwsh -NoProfile -File ./run-e2e.ps1`을 사용한다. 로컬 프로세스 디버깅은 Node.js와 npm을 설치한 뒤 `--local` 또는 `-Local`로 실행한다. Docker 빌드·정리 로그는 `.logs/docker-<project>/`에 남는다.
 
 이 템플릿은 월드별 Session endpoint, mesh, Redis와 Player Actor를 분리합니다.
-Player Actor가 gold를 소유하며 변경 값을 해당 월드 Redis에 저장합니다. 채널 변경은
-공개 Actor join API를 사용하므로 client 연결을 유지합니다. Docker Compose를 준비한 뒤 위 Build 명령으로 이미지를 빌드하고 Docker e2e 명령으로 검증한다. 실행별 로그는 `.logs/run-<id>/`에 남습니다. channel node를 교체할 때는
+`GoldBalance`가 고정 gold 보상과 earn 시간을 판정하고 Zone은 접속한 player ID를 소유합니다.
+시나리오는 같은 channel의 목록 공유, 다른 channel 격리, 이동·연결 종료 뒤 제거와 보상 제한을 검사합니다. `EarnRequest`에는 보상량을 넣지 않고 `GoldBalance`가 수락마다 10 gold를 지급합니다. 단조 시계 기준 1000 ms 안의 요청은 `earn-too-soon`과 서버가 계산한 `RetryAfterMs`로 거부하며 gold와 cooldown을 바꾸지 않습니다. 상한 `9,007,199,254,740,991`에서 상한−10 수락과 상한−9 거부를 도메인 검사로 확인합니다. 상한을 넘는 채널 요청은 `integer-out-of-range`로 거부하고 membership을 바꾸지 않습니다. Session은 허용 목록의 client packet만 전달하고 내부 packet은 `packet-not-allowed`로 거부합니다. Zone player ID는 relocation snapshot에 저장합니다. 채널 이동 때 client Session은 유지되고 Player Actor의 Zone이 바뀌므로 목록은 Zone membership callback에서 갱신합니다. 채널 변경은 공개 Actor join API를 사용하므로 client 연결을 유지합니다. Docker Compose를 준비한 뒤 위 Build 명령을 실행하고 Docker e2e로 검증합니다. 실행별 로그는 `.logs/run-<id>/`에 남습니다. channel node를 교체할 때는
 `drain` 완료와 `SAFE_TO_SHUTDOWN`을 확인한 뒤 종료하고 같은 설정으로 다시 기동합니다.

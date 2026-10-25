@@ -1,6 +1,7 @@
 package MyGame.channel.infrastructure.zlink
 
 import MyGame.*
+import MyGame.channel.domain.GoldBalance
 import java.util.concurrent.CancellationException
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionStage
@@ -17,7 +18,7 @@ class PlayerTransfer : ZLinkActorRelocationAdapter<Player> {
         cancellation: ZLinkRelocationCancellation,
     ): CompletionStage<ByteArray> {
         cancellation.ensureActive()
-        return CompletableFuture.completedFuture(Json.mapper.writeValueAsBytes(actor.gold))
+        return CompletableFuture.completedFuture(Json.mapper.writeValueAsBytes(actor.goldSnapshot()))
     }
 
     override fun restore(
@@ -26,19 +27,18 @@ class PlayerTransfer : ZLinkActorRelocationAdapter<Player> {
         cancellation: ZLinkRelocationCancellation,
     ): CompletionStage<Void> {
         cancellation.ensureActive()
-        actor.restore(Json.mapper.readValue(state, Long::class.javaObjectType))
+        actor.restore(Json.mapper.readValue(state, GoldBalance.Snapshot::class.java))
         return CompletableFuture.completedFuture(null)
     }
 }
 
-// Framework owns Spot identity and membership; the Zone has no application state.
 class ZoneTransfer : ZLinkSpotRelocationAdapter<Zone> {
     override fun capture(
         spot: Zone,
         cancellation: ZLinkRelocationCancellation,
     ): CompletionStage<ByteArray> {
         cancellation.ensureActive()
-        return CompletableFuture.completedFuture(byteArrayOf())
+        return CompletableFuture.completedFuture(Json.mapper.writeValueAsBytes(spot.snapshot()))
     }
 
     override fun restore(
@@ -47,7 +47,7 @@ class ZoneTransfer : ZLinkSpotRelocationAdapter<Zone> {
         cancellation: ZLinkRelocationCancellation,
     ): CompletionStage<Void> {
         cancellation.ensureActive()
-        require(state.isEmpty()) { "Zone has no application state" }
+        spot.restore(Json.mapper.readValue(state, Array<String>::class.java).toList())
         return CompletableFuture.completedFuture(null)
     }
 }

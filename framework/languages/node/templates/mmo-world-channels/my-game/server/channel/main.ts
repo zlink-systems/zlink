@@ -15,7 +15,9 @@ import {
   ChangeChannel,
   EarnGold,
   ViewPlayer,
-  DeliverView
+  ViewChannel,
+  DeliverView,
+  DeliverChannelView
 } from './handlers';
 runHost((_builder, config, mesh) => {
   const objects = mesh.objects().server();
@@ -39,7 +41,9 @@ runHost((_builder, config, mesh) => {
       ChangeChannel,
       EarnGold,
       ViewPlayer,
-      DeliverView
+      ViewChannel,
+      DeliverView,
+      DeliverChannelView
     ],
     listener: { kind: 'routeMesh', name: meshName(config.worldId) },
     ready: (status) => status.placement.isAvailable,

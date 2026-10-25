@@ -31,6 +31,7 @@ int main (int argc, char **argv)
             std::cout << "Structure: passed" << std::endl;
             return 0;
         }
+        MyGame::E2E::domain_checks ();
         if (selection.empty ())
             selected.assign (MyGame::E2E::scenario_order.begin (),
                              MyGame::E2E::scenario_order.end ());

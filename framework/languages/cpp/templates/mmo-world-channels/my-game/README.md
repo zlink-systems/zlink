@@ -58,8 +58,8 @@ The runner checks the project structure before starting its Redis containers and
 
 | Scenario | Assertions |
 | --- | --- |
-| `worlds` | Accounts lists both actual Session endpoints; one player earns 10 gold in A and has zero in B. |
-| `channel` | Channel 1 to 2 preserves gold, Actor identity, and physical Session; the target is channelA2. |
+| `worlds` | Accounts lists both actual Session endpoints. A repeated earn is rejected without changing gold, returns `earn-too-soon` with `retryAfterMs`, and succeeds after that duration. The same player starts with zero gold in B. |
+| `channel` | Players in one channel see each other in `ChannelView`; another channel is isolated. Oversized channel requests return `integer-out-of-range` without changing membership. A move and disconnect remove players from the previous list. Session rejects internal packets with `packet-not-allowed`; channel relocation preserves gold, Actor identity, and physical Session. |
 | `reconnect` | A new physical connection binds the same Actor generation, channel, and gold. |
 | `update` | Draining channelA1 moves its Zone and Actors to channelA2, leaves B unchanged, and verifies a new Zone and Player work on the replacement. |
 
@@ -102,6 +102,8 @@ This template answers `SessionInfoRequest` with a typed `SessionInfo` push; Fram
 
 Player gold persistence uses an asynchronous Boost.Asio Redis client in `server/channel/data.hpp` with one short connection per load/save. Commands run on that client's own I/O thread and return Framework tasks; `Zone::earn` awaits the save through the Spot's I/O worker, so no handler thread waits on a socket. Production storage can replace `server/channel/data.hpp` without changing Actor, Session, or relocation contracts.
 
+`GoldBalance` grants 10 gold per accepted request, enforces a 1000 ms monotonic interval, and rejects a result above `9,007,199,254,740,991` without changing state. Its Actor relocation snapshot stores the remaining cooldown in milliseconds. Each Zone owns its connected player IDs and includes them in its relocation snapshot. `ChannelViewRequest` returns the Zone's current list. A channel move keeps the client Session bound while the Player Actor changes Zones, so the list follows Zone membership callbacks.
+
 ChannelA1 has a one-Zone capacity and starts before channelA2, whose capacity is two.
 This places each fixed Zone on its declared initial owner and leaves room for drain.
 After replacement, update sends `create-update-zone` and waits for `UPDATE_ZONE_CREATED`.
@@ -114,6 +116,6 @@ derived from that duration and the existing operation budget.
 
 ## 한국어 실행 안내
 
-Docker Compose v2와 Linux 컨테이너 데몬을 준비한다. 템플릿 디렉터리에서 Linux는 `./run-e2e.sh`, Windows는 `pwsh -NoProfile -File ./run-e2e.ps1`을 실행한다. 기본 실행은 이미지 빌드부터 runner·node 컨테이너 기동과 정리까지 수행한다. Framework 버전은 `bootstrap.cmake` 한 곳에서 정하며, 빌드는 그 버전의 GitHub Release prebuilt를 받아 함께 게시된 SHA-256 체크섬으로 확인한다.
+Docker Compose v2와 Linux 컨테이너 데몬을 준비한다. 템플릿 디렉터리에서 Linux는 `./run-e2e.sh`, Windows는 `pwsh -NoProfile -File ./run-e2e.ps1`을 실행한다. 기본 실행은 이미지 빌드부터 runner·node 컨테이너 기동과 정리까지 수행한다. Framework 버전은 `bootstrap.cmake` 한 곳에서 정하며, 빌드는 그 버전의 GitHub Release prebuilt를 받아 함께 게시된 SHA-256 체크섬으로 확인한다. `GoldBalance`가 10 gold 보상, 단조 시계 기준 1000 ms 간격과 `9,007,199,254,740,991` 상한을 판정한다. 거부 응답은 `ActionRejected(Reason, RetryAfterMs)`이며, 시간 제한은 서버가 준 ms만큼 기다린 뒤 다시 요청한다. 상한을 넘는 채널 요청은 `integer-out-of-range`로 거부하고 membership을 바꾸지 않는다. Zone은 접속 player ID를 보유하고 채널 이동·연결 종료 때 목록에서 제거한다. 채널 이동 때 client Session은 유지되고 Player Actor의 Zone이 바뀌므로 목록은 Zone membership callback에서 갱신한다. Actor와 Zone relocation snapshot은 남은 cooldown ms와 player ID 목록을 각각 저장한다.
 
 로컬 디버깅은 C++20 컴파일러, CMake, Ninja를 설치한 뒤 `./run-e2e.sh --local` 또는 `pwsh -NoProfile -File ./run-e2e.ps1 -Local`로 실행한다. node 로그와 설정은 `.logs/run-<id>/`, Docker 빌드·정리 로그는 `.logs/docker-<project>/`에 남는다. 공개 패키지에서 확인된 차단 사항은 Known issues를 따른다.

@@ -13,25 +13,46 @@ public static class GameNames
 
     public static string Mesh(string worldId) => "my-game-world-" + worldId.ToLowerInvariant();
 
-    public static string ZoneId(int channel)
+    public static string ZoneId(long channel)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(channel, FirstChannel);
         return ZonePrefix + channel.ToString(System.Globalization.CultureInfo.InvariantCulture);
     }
 
-    public static int Channel(string spotId) =>
-        int.Parse(spotId[ZonePrefix.Length..], System.Globalization.CultureInfo.InvariantCulture);
+    public static long Channel(string spotId) =>
+        long.Parse(spotId[ZonePrefix.Length..], System.Globalization.CultureInfo.InvariantCulture);
 }
 
 public sealed record EnterWorldRequest(string PlayerId);
 
-public sealed record ChangeChannelRequest(int Channel);
+public sealed record ChangeChannelRequest(long Channel);
 
-public sealed record EarnRequest(long Amount);
+public sealed record EarnRequest;
 
 public sealed record ViewRequest;
 
-public sealed record PlayerView(string WorldId, int Channel, string NodeId, long Gold);
+public sealed record ChannelViewRequest;
+
+public sealed record ChannelView(long ChannelId, string[] PlayerIds);
+
+public sealed record ActionRejected(string Reason, int RetryAfterMs);
+
+public static class GameRules
+{
+    public const long MaxInteger = 9_007_199_254_740_991;
+    public const long EarnAmount = 10;
+    public const long EarnIntervalMs = 1_000;
+}
+
+public static class Rejection
+{
+    public const string EarnTooSoon = "earn-too-soon";
+    public const string GoldLimit = "gold-limit";
+    public const string IntegerOutOfRange = "integer-out-of-range";
+    public const string PacketNotAllowed = "packet-not-allowed";
+}
+
+public sealed record PlayerView(string WorldId, long Channel, string NodeId, long Gold);
 
 public sealed record SessionInfoRequest;
 

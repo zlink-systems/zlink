@@ -3,8 +3,13 @@ import { zlinkEntrySpotActorSendHandler, zlinkSpotActorSendHandler } from '@zlin
 import type { ZLinkMessageContext } from '@zlink-systems/framework';
 import { Game, PacketNames, zoneId } from '../shared/constants';
 import {
+  ActionRejected,
+  ChannelView,
+  ChannelViewRequest,
   EnterWorldRequest,
+  GameRules,
   PlayerView,
+  Rejection,
   type ChangeChannelRequest,
   type EarnRequest,
   type ViewRequest
@@ -60,6 +65,12 @@ export class ChangeChannel {
     _context: ZLinkMessageContext,
     request: ChangeChannelRequest
   ): Promise<void> {
+    if (request.channel > GameRules.maxInteger) {
+      await actor.context.boundSession
+        .send(new ActionRejected(Rejection.integerOutOfRange, 0))
+        .submit();
+      return;
+    }
     actor.context
       .joinSpot(zoneId(request.channel), new EnterWorldRequest(actor.context.actorId))
       .defer();
@@ -76,9 +87,13 @@ export class EarnGold {
     spot: Zone,
     actor: Player,
     _context: ZLinkMessageContext,
-    request: EarnRequest
+    _request: EarnRequest
   ): Promise<void> {
-    await actor.earn(request.amount);
+    const rejection = await actor.earn();
+    if (rejection) {
+      await actor.context.boundSession.send(rejection).submit();
+      return;
+    }
     await spot.show(actor);
   }
 }
@@ -96,6 +111,17 @@ export class ViewPlayer {
     _request: ViewRequest
   ): Promise<void> {
     await spot.show(actor);
+  }
+}
+@Injectable()
+@zlinkSpotActorSendHandler({
+  spot: () => Zone,
+  actor: () => Player,
+  packetName: PacketNames.channelViewRequest
+})
+export class ViewChannel {
+  async handle(spot: Zone, actor: Player, _context: ZLinkMessageContext, _request: ChannelViewRequest) {
+    await spot.showChannelView(actor);
   }
 }
 const deliveryPackets: ReadonlyMap<string, new () => PlayerView> = new Map([
@@ -118,5 +144,22 @@ export class DeliverView {
     if (!type) throw new Error(`Unregistered player push: ${context.packetName}`);
     // Restore the declared public DTO class before forwarding (#1731).
     await actor.context.boundSession.send(Object.assign(new type(), message)).submit();
+  }
+}
+
+@Injectable()
+@zlinkSpotActorSendHandler({
+  spot: () => Zone,
+  actor: () => Player,
+  packetName: PacketNames.channelView
+})
+export class DeliverChannelView {
+  async handle(
+    _spot: Zone,
+    actor: Player,
+    _context: ZLinkMessageContext,
+    message: ChannelView
+  ): Promise<void> {
+    await actor.context.boundSession.send(Object.assign(new ChannelView(0n, []), message)).submit();
   }
 }

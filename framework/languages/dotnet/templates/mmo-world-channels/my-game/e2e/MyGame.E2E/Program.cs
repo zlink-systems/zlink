@@ -60,11 +60,12 @@ async Task<int> RunAsync()
         return 0;
     }
     var selected = Scenarios.Select(Option("--scenario"));
-    run = new WorldRun(root);
-    await using var ownedRun = run;
     using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellation.Token);
     deadline.CancelAfter(TimeSpan.FromMinutes(3));
     StructureCheck.Run(root, null);
+    DomainChecks.Run();
+    run = new WorldRun(root);
+    await using var ownedRun = run;
     await run.StartAsync(deadline.Token);
     await Scenarios.RunAsync(run, selected, deadline.Token);
     Console.WriteLine("mmo-world-channels=completed");

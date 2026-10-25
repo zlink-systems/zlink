@@ -9,13 +9,13 @@ export const Names = {
 export function meshName(worldId: string): string {
   return `my-game-world-${worldId.toLowerCase()}`;
 }
-export function zoneId(channel: number): string {
-  if (!Number.isSafeInteger(channel) || channel < 1) throw new Error('Invalid channel');
-  return Names.zonePrefix + channel;
+export function zoneId(channel: bigint): string {
+  if (channel < 1n) throw new Error('Invalid channel');
+  return Names.zonePrefix + channel.toString();
 }
-export function channelOf(spotId: string): number {
+export function channelOf(spotId: string): bigint {
   if (!spotId.startsWith(Names.zonePrefix)) throw new Error('Invalid Zone ID');
-  const channel = Number(spotId.slice(Names.zonePrefix.length));
+  const channel = BigInt(spotId.slice(Names.zonePrefix.length));
   if (zoneId(channel) !== spotId) throw new Error('Invalid Zone ID');
   return channel;
 }
@@ -36,6 +36,9 @@ export const PacketNames = {
   changeChannelRequest: 'ChangeChannelRequest',
   earnRequest: 'EarnRequest',
   viewRequest: 'ViewRequest',
+  channelViewRequest: 'ChannelViewRequest',
+  channelView: 'ChannelView',
+  actionRejected: 'ActionRejected',
   playerView: 'PlayerView',
   sessionInfoRequest: 'SessionInfoRequest',
   sessionInfo: 'SessionInfo'
@@ -59,4 +62,4 @@ export const NodeEntrypoints = {
 } as const;
 export type NodeRole = keyof typeof NodeEntrypoints;
 
-export const Game = { firstChannel: 1, updateChannel: 3 } as const;
+export const Game = { firstChannel: 1n, updateChannel: 3n } as const;

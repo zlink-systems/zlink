@@ -7,8 +7,18 @@ import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.streams.*;
 
 import java.util.concurrent.*;
+import java.util.Set;
 
 public final class GameSession implements ZLinkSession {
+    private static final Set<String> ALLOWED_CLIENT_PACKETS =
+            Set.of(
+                    EnterWorldRequest.class.getSimpleName(),
+                    ChangeChannelRequest.class.getSimpleName(),
+                    EarnRequest.class.getSimpleName(),
+                    ViewRequest.class.getSimpleName(),
+                    ChannelViewRequest.class.getSimpleName(),
+                    SessionInfoRequest.class.getSimpleName());
+
     private final ZLinkSessionContext context;
     private final ZLinkActorManager actors;
     private final NodeConfig config;
@@ -37,6 +47,10 @@ public final class GameSession implements ZLinkSession {
 
     public CompletionStage<Void> onDispatch(
             ZLinkSessionDispatchContext dispatch, ZLinkMessage payload) {
+        if (!ALLOWED_CLIENT_PACKETS.contains(dispatch.packetName()))
+            return context.client()
+                    .send(new ActionRejected(Rejection.PACKET_NOT_ALLOWED, 0))
+                    .submit();
         if (dispatch.packetName().equals(SessionInfoRequest.class.getSimpleName())) {
             var actor = bound();
             return context.client()

@@ -2,6 +2,7 @@
 #include <nlohmann/json.hpp>
 #include <chrono>
 #include <cstdint>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -22,20 +23,20 @@ struct Names
             return "my-game-world-b";
         throw std::invalid_argument ("Unknown world");
     }
-    static std::string zone_id (int channel)
+    static std::string zone_id (std::int64_t channel)
     {
         if (channel < first_channel)
             throw std::invalid_argument ("Invalid channel");
         return zone_prefix + std::to_string (channel);
     }
-    static int channel_of (const std::string &id)
+    static std::int64_t channel_of (const std::string &id)
     {
         if (!id.starts_with (zone_prefix))
             throw std::invalid_argument ("Invalid Zone ID");
-        const auto channel = std::stoi (id.substr (std::string (zone_prefix).size ()));
+        const auto channel = std::stoll (id.substr (std::string (zone_prefix).size ()));
         if (zone_id (channel) != id)
             throw std::invalid_argument ("Invalid Zone ID");
-        return channel;
+        return static_cast<std::int64_t> (channel);
     }
 };
 struct Limits
@@ -66,15 +67,28 @@ struct EnterWorldRequest
 struct ChangeChannelRequest
 {
     static constexpr auto packet_name = "ChangeChannelRequest";
-    int channel = 0;
+    std::int64_t channel = 0;
     NLOHMANN_DEFINE_TYPE_INTRUSIVE (ChangeChannelRequest, channel)
+};
+struct GameRules
+{
+    static constexpr std::int64_t max_integer = 9007199254740991;
+    static constexpr std::int64_t earn_amount = 10;
+    static constexpr std::int64_t earn_interval_ms = 1000;
+};
+struct Rejection
+{
+    static constexpr auto earn_too_soon = "earn-too-soon";
+    static constexpr auto gold_limit = "gold-limit";
+    static constexpr auto integer_out_of_range = "integer-out-of-range";
+    static constexpr auto packet_not_allowed = "packet-not-allowed";
 };
 struct EarnRequest
 {
     static constexpr auto packet_name = "EarnRequest";
-    std::int64_t amount = 0;
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (EarnRequest, amount)
 };
+inline void to_json (nlohmann::json &j, const EarnRequest &) { j = nlohmann::json::object (); }
+inline void from_json (const nlohmann::json &, EarnRequest &) {}
 struct ViewRequest
 {
     static constexpr auto packet_name = "ViewRequest";
@@ -86,11 +100,36 @@ inline void to_json (nlohmann::json &j, const ViewRequest &)
 inline void from_json (const nlohmann::json &, ViewRequest &)
 {
 }
+struct ChannelViewRequest
+{
+    static constexpr auto packet_name = "ChannelViewRequest";
+};
+inline void to_json (nlohmann::json &j, const ChannelViewRequest &)
+{
+    j = nlohmann::json::object ();
+}
+inline void from_json (const nlohmann::json &, ChannelViewRequest &)
+{
+}
+struct ChannelView
+{
+    static constexpr auto packet_name = "ChannelView";
+    std::int64_t channelId = 0;
+    std::vector<std::string> playerIds;
+    NLOHMANN_DEFINE_TYPE_INTRUSIVE (ChannelView, channelId, playerIds)
+};
+struct ActionRejected
+{
+    static constexpr auto packet_name = "ActionRejected";
+    std::string reason;
+    std::int32_t retryAfterMs = 0;
+    NLOHMANN_DEFINE_TYPE_INTRUSIVE (ActionRejected, reason, retryAfterMs)
+};
 struct PlayerView
 {
     static constexpr auto packet_name = "PlayerView";
     std::string worldId;
-    int channel = 0;
+    std::int64_t channel = 0;
     std::string nodeId;
     std::int64_t gold = 0;
     bool operator== (const PlayerView &) const = default;

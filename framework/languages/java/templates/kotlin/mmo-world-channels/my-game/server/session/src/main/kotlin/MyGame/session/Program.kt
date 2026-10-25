@@ -41,6 +41,16 @@ class GameSession(
     private val actors: ZLinkActorManager,
     private val config: NodeConfig,
 ) : ZLinkSuspendingSession() {
+    private val allowedClientPackets =
+        setOf(
+            EnterWorldRequest::class.java.simpleName,
+            ChangeChannelRequest::class.java.simpleName,
+            EarnRequest::class.java.simpleName,
+            ViewRequest::class.java.simpleName,
+            ChannelViewRequest::class.java.simpleName,
+            SessionInfoRequest::class.java.simpleName,
+        )
+
     override fun context() = session
 
     override suspend fun onErrorSuspending(error: ZLinkStreamError) {
@@ -51,6 +61,14 @@ class GameSession(
         dispatch: ZLinkSessionDispatchContext,
         payload: ZLinkMessage,
     ) {
+        if (dispatch.packetName() !in allowedClientPackets) {
+            session
+                .client()
+                .kotlin()
+                .send(ActionRejected(Rejection.PACKET_NOT_ALLOWED, 0))
+                .await()
+            return
+        }
         when (dispatch.packetName()) {
             SessionInfoRequest::class.java.simpleName -> {
                 val actor = bound()

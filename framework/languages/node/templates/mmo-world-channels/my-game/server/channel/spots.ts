@@ -11,7 +11,7 @@ import type {
 } from '@zlink-systems/framework';
 import { NODE_CONFIG, type NodeConfig } from '../shared/config';
 import { channelOf } from '../shared/constants';
-import { EnterWorldRequest, PlayerView } from '../shared/messages';
+import { ChannelView, EnterWorldRequest, PlayerView } from '../shared/messages';
 import { Player } from './player';
 @Injectable({ scope: Scope.TRANSIENT })
 export class Entry implements ZLinkEntrySpot<Player> {
@@ -22,6 +22,7 @@ export class Entry implements ZLinkEntrySpot<Player> {
 @Injectable({ scope: Scope.TRANSIENT })
 export class Zone implements ZLinkSpot<Player> {
   readonly context!: ZLinkSpotContext<Player, Zone>;
+  private readonly playerIds = new Set<string>();
   constructor(
     @Inject(NODE_CONFIG) private readonly config: NodeConfig,
     @Inject(ZLINK_ACTOR_CLIENT) private readonly actors: ZLinkActorClient
@@ -41,15 +42,42 @@ export class Zone implements ZLinkSpot<Player> {
     await actor.context.boundSession.send(this.view(actor)).submit();
   }
   async onJoinedActor(actor: Player): Promise<void> {
+    this.playerIds.add(actor.context.actorId);
     await this.actors.sendToActor(actor.context.actorId, this.view(actor)).submit();
+    await this.publishPlayers();
   }
-  async onLeaveActor(_actor: Player): Promise<void> {}
+  async onLeaveActor(actor: Player): Promise<void> {
+    if (!this.playerIds.delete(actor.context.actorId)) return;
+    await this.publishPlayers();
+  }
+  async onDisconnectActor(actor: Player): Promise<void> {
+    await this.onLeaveActor(actor);
+  }
+  private async publishPlayers(): Promise<void> {
+    const view = new ChannelView(channelOf(String(this.context.spotId)), [...this.playerIds].sort());
+    for (const playerId of this.playerIds) {
+      await this.actors.sendToActor(playerId, view).submit();
+    }
+  }
+  async showChannelView(actor: Player): Promise<void> {
+    await actor.context.boundSession
+      .send(new ChannelView(channelOf(String(this.context.spotId)), [...this.playerIds].sort()))
+      .submit();
+  }
+  snapshot(): string[] {
+    return [...this.playerIds].sort();
+  }
+  restore(playerIds: readonly string[]): void {
+    this.playerIds.clear();
+    for (const playerId of playerIds) this.playerIds.add(playerId);
+  }
 }
-// Framework owns Zone identity and membership; there is no application state.
 @Injectable()
 export class ZoneRelocation implements ZLinkSpotRelocationAdapter<Zone> {
-  async capture(_spot: Zone): Promise<Uint8Array> {
-    return new Uint8Array();
+  async capture(spot: Zone): Promise<Uint8Array> {
+    return Buffer.from(JSON.stringify(spot.snapshot()));
   }
-  async restore(_spot: Zone, _payload: Uint8Array): Promise<void> {}
+  async restore(spot: Zone, payload: Uint8Array): Promise<void> {
+    spot.restore(JSON.parse(Buffer.from(payload).toString('utf8')) as string[]);
+  }
 }
