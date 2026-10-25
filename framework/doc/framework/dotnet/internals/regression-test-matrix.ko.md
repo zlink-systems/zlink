@@ -201,7 +201,7 @@ socket·context·message handle, process-wide diagnostics, static runtime state,
 | session actor bind resolver fallback 없음 | `integration-single-process` | `BindAsync(...)` 는 application resolver fallback 없이 logical actor handle 을 등록한다 |
 | remote actor dispatch 생성 금지 | `integration-single-process` | routed actor dispatch 수신 경로는 local actor 가 없을 때 factory 를 호출하지 않고 dispatch 를 실패시킨다 |
 | session actor relay bridge | `integration-single-process` | `BindAsync(...)` 와 `IZLinkSessionActor.RelayAsync(...)` 가 public session 표면에서 동작한다 |
-| session actor explicit disconnect notification | `contract`, `integration-single-process` | session disconnect 는 bound actor 전체에 자동 전파되지 않고, `NotifyDisconnectedAsync(...)` 또는 runtime 명시 호출 시 현재 Spot 의 `OnDisconnectActorAsync(...)` callback 이 호출된다 |
+| session actor disconnect notification | `contract`, `integration-single-process` | 물리 연결이 끊기면 binding cleanup이 bound actor마다 현재 Spot 의 `OnDisconnectActorAsync(...)`를 자동으로 제출하고([Session과 Actor binding §7](../../common/spec/server/04-session/02-session-actor-binding.ko.md#7-disconnect-통지)), `NotifyDisconnectedAsync(...)`는 연결을 유지한 채 보내는 logical 통지다 |
 | session actor dispatch ordering | `integration-single-process` | stream session에서 actor로 relay된 packet이 actor별 순서를 보장하고, 현재 actor 위치에 맞는 handler 실행 경로로 넘어간다 |
 | actor dispatch location after mailbox wait | `integration-single-process` | 같은 actor의 앞선 packet이 join을 끝낸 뒤, 대기 중이던 다음 packet이 이전 위치가 아니라 새 user Spot 위치로 dispatch된다 |
 | session actor dispatch wire multipart | `integration-single-process` | Session 서버와 Play 서버 사이의 actor dispatch가 route header, actor metadata, stream header, payload를 별도 part로 유지하고, payload를 JSON envelope 안의 `byte[]`로 재직렬화하지 않는다 |
