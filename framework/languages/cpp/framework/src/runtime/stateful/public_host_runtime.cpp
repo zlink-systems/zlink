@@ -2990,10 +2990,11 @@ public_host_runtime_t::create_reserved_actor_async (std::string actor_type,
     //  State lanes §blocking boundary (06:211-226): an internal caller has no public sync
     //  signature to keep, so the object lane results are awaited. Blocking here would hold a
     //  completion worker until that same dispatcher delivered them.
-    if (created.factory_owner
-        && co_await _objects.commit_create_async (created.attempt)
-             != stateful::stateful_error_t::none)
-        throw std::runtime_error ("reserved framework Actor Ready commit failed");
+    if (created.factory_owner) {
+        const auto committed = co_await _objects.commit_create_async (created.attempt);
+        if (committed != stateful::stateful_error_t::none)
+            throw std::runtime_error ("reserved framework Actor Ready commit failed");
+    }
     auto object = co_await _objects.find_async (stateful::object_kind_t::actor, reserved.key);
     if (!object)
         throw std::runtime_error ("reserved framework Actor authority is unavailable");

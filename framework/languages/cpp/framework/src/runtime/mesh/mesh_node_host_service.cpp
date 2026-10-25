@@ -1100,7 +1100,7 @@ mesh_node_host_service_t::create_actor (bool exclusive,
             // MeshNode §5.1: the target MeshNode holds one activation admission for this Actor
             // creation until Ready, rejection or failure.
             std::shared_ptr<void> activation_admission;
-            std::optional<result_t<actor_ref_t>> admission_failure;
+            std::optional<result_t<actor_ref_t>> factory_result;
             try {
                 activation_admission = (*target_runtime)
                                          ->activation_admission ()
@@ -1108,16 +1108,15 @@ mesh_node_host_service_t::create_actor (bool exclusive,
                                            std::string (actor_id.value ())));
             }
             catch (const framework_exception_t &error) {
-                admission_failure.emplace (detail::result_access_t::failure<actor_ref_t> (error));
+                factory_result.emplace (detail::result_access_t::failure<actor_ref_t> (error));
             }
-            const auto created =
-              admission_failure
-                ? std::move (*admission_failure)
-                : co_await await_result ((*target_runtime)
-                                           ->create_application_actor_async (
-                                             stable_type, std::string (actor_id.value ()),
-                                             winner->fence.object_generation,
-                                             winner->fence.authority_owner_generation));
+            if (!factory_result)
+                factory_result.emplace (co_await await_result (
+                  (*target_runtime)
+                    ->create_application_actor_async (stable_type, std::string (actor_id.value ()),
+                                                      winner->fence.object_generation,
+                                                      winner->fence.authority_owner_generation)));
+            const auto created = std::move (*factory_result);
             if (!created) {
                 const auto failed_envelope = actor_terminal_envelope (
                   terminal_codec::request_terminal_result_t::internalError,
