@@ -19,6 +19,7 @@ queue_rules:
       - check-success=Compare Linux and Windows Java results
       - check-success=Framework C++ unit and contract tests
       - check-success=win-x64 / Framework C++ unit and contract tests
+      - check-success=Framework source format
   - name: release
     batch_size: 4
     merge_method: merge

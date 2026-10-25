@@ -378,7 +378,8 @@ public final class ZLinkBackendReceived implements AutoCloseable {
 
     /** Releases the retained transport parts without releasing the dispatch lease. */
     public void closeParts() {
-        parts.forEach(Message::close);
+        systems.zlink.framework.runtime.internal.service.ZLinkFrameworkMultipartView.closeAll(
+                parts);
     }
 
     @Override

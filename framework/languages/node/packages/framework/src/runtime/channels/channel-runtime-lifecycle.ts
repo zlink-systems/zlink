@@ -1,3 +1,4 @@
+import type { ZLinkMeshDispatchAdmission } from '../admission';
 import { RuntimeDisposal } from '../disposal';
 import type { ZLinkLocationOptionOverrides } from '../../contracts/Locations/Options';
 import type { ZLinkRequestHandler, ZLinkSendHandler } from '../../contracts/Handlers';
@@ -346,7 +347,8 @@ export class ZLinkChannelRuntimeLifecycle {
   dispatchMeshChannel(
     meshName: string,
     record: ReceiveRecord,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    admit?: ZLinkMeshDispatchAdmission
   ): void | Promise<void> {
     const channelName = record.channelName;
     if (channelName === null) {
@@ -358,13 +360,14 @@ export class ZLinkChannelRuntimeLifecycle {
         `RouteMesh '${meshName}' channel '${channelName}' has no registered handlers.`
       );
     }
-    return dispatcher.dispatchMesh(record, signal);
+    return dispatcher.dispatchMesh(record, signal, admit);
   }
 
   dispatchMeshRoute(
     meshName: string,
     record: ReceiveRecord,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    admit?: ZLinkMeshDispatchAdmission
   ): void | Promise<void> {
     const dispatcher = this.meshRouteDispatchers.get(meshName);
     if (dispatcher === undefined) {
@@ -372,7 +375,7 @@ export class ZLinkChannelRuntimeLifecycle {
         `RouteMesh '${meshName}' has no registered node-direct handlers.`
       );
     }
-    return dispatcher.dispatchMesh(record, signal);
+    return dispatcher.dispatchMesh(record, signal, admit);
   }
 
   dispatchLocalMeshRoute(

@@ -166,7 +166,7 @@ test('native completion callbacks retain async context and run Promise continuat
         try {
           assert.equal(scope.getStore(), 'request-owner');
           assert.equal(status, 0);
-          const completion = native.socketCompletionRecv(dealer._native, zlink.RecvFlags.DontWait);
+          const completion = native.socketCompletionRecv(dealer._native, zlink.RecvFlags.DontWait, Buffer.allocUnsafe);
           if (!completion) return;
           assert.equal(completion.requestResult, zlink.RequestResult.Ok);
           native.socketReadableWatchStop(watch);

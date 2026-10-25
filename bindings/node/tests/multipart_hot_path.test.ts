@@ -133,3 +133,34 @@ test('mixed multipart normalization preserves prefixes and input buffers', async
     received.close(); right.close(); left.close(); context.close();
   }
 });
+
+test('successful submit consumes Message parts but never Buffer parts', async () => {
+  const context = zlink.createContext();
+  const left = zlink.createPairSocket(context);
+  const right = zlink.createPairSocket(context);
+  const received = new zlink.Received();
+  const owner = zlink.Message.allocate(5);
+  try {
+    left.bind('inproc://multipart-buffer-part');
+    right.connect('inproc://multipart-buffer-part');
+    owner.data().write('owner');
+    // Native submit copies a Buffer part as bytes. A property with the
+    // snapshot field name must not make submit consume another Message.
+    const bytes: Buffer & { nativeMessage?: unknown } = Buffer.from('bytes');
+    bytes.nativeMessage = owner._nativeMessage;
+    const moved = zlink.Message.allocate(4);
+    const view = moved.data();
+    view.write('move');
+    await right.send().message(bytes).message(moved).submit().admitted;
+    assert.equal(view.byteLength, 0);
+    assert.equal(moved.size(), 0);
+    assert.equal(left.recv(received), true);
+    assert.deepEqual(received.parts.map((part: any) => part.data().toString()), ['bytes', 'move']);
+    // The untouched owner still sends its own native frame.
+    await right.send().message(owner).submit().admitted;
+    assert.equal(left.recv(received), true);
+    assert.deepEqual(received.parts.map((part: any) => part.data().toString()), ['owner']);
+  } finally {
+    owner.close(); received.close(); right.close(); left.close(); context.close();
+  }
+});

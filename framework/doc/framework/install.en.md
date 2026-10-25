@@ -108,7 +108,7 @@ need them.
 === "Java"
 
     ```kotlin
-    implementation("systems.zlink:zlink-framework-spring-boot-starter:0.30.1")
+    implementation("systems.zlink:zlink-framework-spring-boot-starter:0.30.2")
     ```
 
     | Included package | Role |
@@ -134,8 +134,8 @@ need them.
 === "Kotlin"
 
     ```kotlin
-    implementation("systems.zlink:zlink-framework-spring-boot-starter:0.30.1")
-    implementation("systems.zlink:zlink-framework-kotlin:0.30.1")
+    implementation("systems.zlink:zlink-framework-spring-boot-starter:0.30.2")
+    implementation("systems.zlink:zlink-framework-kotlin:0.30.2")
     ```
 
     | Included package | Role |
@@ -208,7 +208,7 @@ sandbox.
     pinned tag the browser bundle drifts from the server version.
 
     ```
-    https://github.com/zlink-systems/zlink.git?path=framework/languages/unity/com.zlink.stream-connector.webgl#framework-node/v0.30.1
+    https://github.com/zlink-systems/zlink.git?path=framework/languages/unity/com.zlink.stream-connector.webgl#framework-node/v0.30.2
     ```
 
     The UPM adapter carries the npm package's browser bundle and provides only the jslib and C#
@@ -281,7 +281,7 @@ sandbox.
     |---|---|---|
     | `.NET` | `Zlink.Stream.Connector` | nuget.org |
     | C++ | `zlink::stream_e2e_client` — the connector plus scenario helpers | vcpkg · Conan · source |
-    | Java · Kotlin | `systems.zlink:zlink-stream-connector:0.30.1` | Maven Central |
+    | Java · Kotlin | `systems.zlink:zlink-stream-connector:0.30.2` | Maven Central |
     | Node.js | `@zlink-systems/stream-connector` | npm |
 
     Only C++ has a dedicated target. `zlink::stream_e2e_client` adds scenario-writing helpers on

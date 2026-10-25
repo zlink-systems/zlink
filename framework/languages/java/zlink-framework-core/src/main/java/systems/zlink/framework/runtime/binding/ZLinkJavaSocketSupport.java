@@ -94,7 +94,8 @@ final class ZLinkJavaSocketSupport {
         if (result == SubmitResult.BACKPRESSURED) {
             return operations.submitSend(submission::admitted);
         }
-        return admission(result, submission::admitted);
+        // The admission supplier is consumed only for BACKPRESSURED, handled above.
+        return admission(result, null);
     }
 
     static CompletionStage<List<Message>> reply(

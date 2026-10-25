@@ -354,7 +354,7 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
                                                                         contentType,
                                                                         metadata.values(),
                                                                         activationDeadline,
-                                                                        null)
+                                                                        address)
                                                         : sendExisting(address);
                                         return address != null
                                                 ? resolver.observeTerminal(target, submitted)
@@ -634,7 +634,9 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
                                                                                     new ZLinkConfigurationException(
                                                                                             "Instance Spot runtime is not configured"))
                                                                     : activateRequest(
-                                                                            replyType, resolver)
+                                                                            replyType,
+                                                                            resolver,
+                                                                            address)
                                                             : requestExisting(address, replyType);
                                             return !instanceIntent && address != null
                                                     ? resolver.observeTerminal(target, submitted)
@@ -666,7 +668,9 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
         }
 
         private <TReply> CompletionStage<TReply> activateRequest(
-                Class<TReply> replyType, SpotTransportAddressResolver resolver) {
+                Class<TReply> replyType,
+                SpotTransportAddressResolver resolver,
+                SpotTransportAddress readyRoute) {
             return instanceSpots
                     .request(
                             target,
@@ -677,7 +681,7 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
                             contentType,
                             metadata.values(),
                             timeout,
-                            null,
+                            readyRoute,
                             resolver,
                             requestAdmission)
                     .thenApply(
