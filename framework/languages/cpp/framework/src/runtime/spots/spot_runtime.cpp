@@ -1025,6 +1025,38 @@ class callback_context_scope_t final
     const spot_context_state_t *_previous;
 };
 
+std::vector<std::shared_ptr<spot_context_state_t>>
+owned_spot_contexts_core (const spot_node_builder_state_t &node)
+{
+    std::vector<std::shared_ptr<spot_context_state_t>> result;
+    result.reserve (node.spot_contexts_by_id.size () + node.pending_spot_creations_by_id.size ());
+    const auto append = [&] (const std::shared_ptr<spot_context_state_t> &state) {
+        if (state && std::find (result.begin (), result.end (), state) == result.end ())
+            result.push_back (state);
+    };
+    for (const auto &[_, context] : node.spot_contexts_by_id)
+        append (spot_context_access_t::state (context));
+    for (const auto &[_, pending] : node.pending_spot_creations_by_id)
+        append (pending.context.lock ());
+    return result;
+}
+
+void retain_execution_queues (
+  std::vector<std::shared_ptr<runtime::serial_execution_queue_t>> &retained,
+  const std::vector<std::shared_ptr<runtime::serial_execution_queue_t>> &queues)
+{
+    // Owner snapshots end with the Spot gate. Refresh existing entries so
+    // children added during cleanup still drain before that gate.
+    for (const auto &queue : queues) {
+        if (!queue)
+            continue;
+        const auto previous = std::find (retained.begin (), retained.end (), queue);
+        if (previous != retained.end ())
+            retained.erase (previous);
+        retained.push_back (queue);
+    }
+}
+
 } // namespace
 
 std::shared_ptr<runtime::runtime_failure_collector_t>
@@ -1036,6 +1068,28 @@ spot_node_builder_state_t::runtime_failures () const
 
 spot_node_builder_state_t::~spot_node_builder_state_t () = default;
 
+void visit_spot_node_dispatch_queues (
+  spot_node_builder_state_t &node,
+  const std::function<void (runtime::serial_execution_queue_t &)> &visitor)
+{
+    const auto queues =
+      node.lane
+        .run ([&] {
+            std::vector<std::shared_ptr<runtime::serial_execution_queue_t>> result;
+            for (const auto &state : owned_spot_contexts_core (node)) {
+                if (state->spot_serial_executor)
+                    retain_execution_queues (result, state->spot_serial_executor->queues ());
+                else if (state->serial_queue)
+                    retain_execution_queues (result, {state->serial_queue});
+            }
+            return result;
+        })
+        .get ();
+    for (const auto &queue : queues)
+        if (queue)
+            visitor (*queue);
+}
+
 void drain_spot_node_executors (spot_node_builder_state_t &node)
 {
     struct drain_plan_t
@@ -1044,31 +1098,29 @@ void drain_spot_node_executors (spot_node_builder_state_t &node)
         {
             std::shared_ptr<spot_context_state_t> state;
             std::vector<std::shared_ptr<runtime::serial_execution_queue_t>> retained_queues;
-            std::shared_ptr<runtime::serial_execution_queue_t> serial_queue;
         };
         std::vector<context_t> contexts;
+        std::vector<std::shared_future<void>> pending_creations;
         std::shared_ptr<runtime::offload_executor_t> deadline_executor;
         std::shared_ptr<runtime::offload_executor_t> worker_executor;
     };
-    const auto plan =
+    auto plan =
       node.lane
         .run ([&] {
             drain_plan_t result;
-            result.contexts.reserve (node.spot_contexts_by_id.size ());
-            for (const auto &[_, context] : node.spot_contexts_by_id) {
-                const auto state = context._state;
-                if (!state)
-                    continue;
-                result.contexts.push_back (drain_plan_t::context_t{state, {}, state->serial_queue});
-                auto &context_plan = result.contexts.back ();
-                if (state->spot_serial_executor) {
-                    context_plan.retained_queues = state->spot_serial_executor->timer_queues ();
-                    const auto actors = state->spot_serial_executor->actor_executor_snapshot ();
-                    for (const auto &[_, actor] : *actors)
-                        if (actor && actor->queue ())
-                            context_plan.retained_queues.push_back (actor->queue ());
-                }
+            const auto contexts = owned_spot_contexts_core (node);
+            result.contexts.reserve (contexts.size ());
+            for (const auto &state : contexts) {
+                result.contexts.push_back (drain_plan_t::context_t{state, {}});
+                auto &queues = result.contexts.back ().retained_queues;
+                if (state->spot_serial_executor)
+                    retain_execution_queues (queues, state->spot_serial_executor->queues ());
+                else if (state->serial_queue)
+                    retain_execution_queues (queues, {state->serial_queue});
             }
+            result.pending_creations.reserve (node.pending_spot_creations_by_id.size ());
+            for (const auto &[_, pending] : node.pending_spot_creations_by_id)
+                result.pending_creations.push_back (pending.future);
             result.deadline_executor = node.deadline_executor;
             result.worker_executor = node.worker_executor;
             return result;
@@ -1079,17 +1131,26 @@ void drain_spot_node_executors (spot_node_builder_state_t &node)
         for (const auto &queue : context.retained_queues)
             if (queue)
                 queue->cancel_pending ();
-        if (context.serial_queue)
-            context.serial_queue->cancel_pending ();
     }
+    for (const auto &creation : plan.pending_creations)
+        creation.wait ();
+
+    // Creation cleanup may add child queues before publishing its terminal.
+    // Retain them and close their existing owner before stopping the worker.
+    node.lane
+      .run ([&] {
+          for (auto &context : plan.contexts) {
+              if (context.state->spot_serial_executor)
+                  retain_execution_queues (context.retained_queues,
+                                           context.state->spot_serial_executor->close ());
+          }
+      })
+      .get ();
+
     for (const auto &context : plan.contexts) {
         for (const auto &queue : context.retained_queues)
             if (queue)
                 queue->drain ();
-        if (context.serial_queue) {
-            context.serial_queue->cancel_pending ();
-            context.serial_queue->drain ();
-        }
     }
     if (plan.deadline_executor)
         plan.deadline_executor->drain ();
@@ -1100,8 +1161,6 @@ void drain_spot_node_executors (spot_node_builder_state_t &node)
       .run ([&] {
           for (const auto &context : plan.contexts) {
               context.state->serial_executor.reset ();
-              if (context.state->spot_serial_executor)
-                  context.state->spot_serial_executor->close ();
               context.state->spot_serial_executor.reset ();
               context.state->worker_scheduler.reset ();
           }
@@ -1109,27 +1168,6 @@ void drain_spot_node_executors (spot_node_builder_state_t &node)
           node.worker_executor.reset ();
       })
       .get ();
-}
-
-void visit_spot_node_dispatch_queues (
-  spot_node_builder_state_t &node,
-  const std::function<void (runtime::serial_execution_queue_t &)> &visitor)
-{
-    const auto queues =
-      node.lane
-        .run ([&] {
-            std::vector<std::shared_ptr<runtime::serial_execution_queue_t>> result;
-            result.reserve (node.spot_contexts_by_id.size ());
-            for (const auto &[_, context] : node.spot_contexts_by_id) {
-                if (const auto queue = context._state ? context._state->serial_queue : nullptr)
-                    result.push_back (queue);
-            }
-            return result;
-        })
-        .get ();
-    for (const auto &queue : queues)
-        if (queue)
-            visitor (*queue);
 }
 
 } // namespace detail
@@ -13036,12 +13074,12 @@ local_spot_create_result_t spot_node_runtime_t::create_spot_context (
   std::function<task_t<void> (bool)> *preparation_terminal,
   std::shared_ptr<spot_serial_executor_t::preparation_t> inherited_operation)
 {
+    const auto id_value = std::string (spot_id);
     auto context_state = std::make_shared<spot_context_state_t> ();
     struct creation_plan_t
     {
         spot_lifecycle_callbacks_t lifecycle;
         std::optional<service_provider_t> root_services;
-        std::shared_ptr<runtime::offload_executor_t> worker_executor;
         runtime::location_lifecycle_t *location_lifecycle = nullptr;
         std::shared_ptr<monitoring_runtime_state_t> monitoring;
         std::optional<spot_location_t> location;
@@ -13052,7 +13090,7 @@ local_spot_create_result_t spot_node_runtime_t::create_spot_context (
         .run ([&] {
             /* graceful-drain-handoff §4-2: a draining node blocks new spot creation.
          * Existing spots (and in-progress transfer commits) keep running. */
-            if (_state->host_draining ()) {
+            if (_state->host_draining () || _state->stopping.load (std::memory_order_acquire)) {
                 throw framework_exception_t (framework_error_kind_t::shutting_down,
                                              "spot node is draining and rejects new spot creation");
             }
@@ -13074,7 +13112,7 @@ local_spot_create_result_t spot_node_runtime_t::create_spot_context (
             result.entry_spot =
               _state->snapshot.entry_spot_name && *_state->snapshot.entry_spot_name == spot_name;
             result.root_services = _state->root_services;
-            result.worker_executor = framework_worker_executor_core (_state);
+            const auto worker_executor = framework_worker_executor_core (_state);
             result.location_lifecycle = _state->location_lifecycle;
             result.monitoring = _state->monitoring;
             if (result.location_lifecycle)
@@ -13103,6 +13141,10 @@ local_spot_create_result_t spot_node_runtime_t::create_spot_context (
                 context_state->relocation_coordination_mode = mode->second;
             }
             context_state->lifecycle = result.lifecycle;
+            configure_spot_execution (context_state, worker_executor, retained_queue);
+            if (const auto pending = _state->pending_spot_creations_by_id.find (id_value);
+                pending != _state->pending_spot_creations_by_id.end ())
+                pending->second.context = context_state;
             return result;
         })
         .get ();
@@ -13127,11 +13169,9 @@ local_spot_create_result_t spot_node_runtime_t::create_spot_context (
                                                           ? service_scope_kind_t::entry_spot
                                                           : service_scope_kind_t::spot_activation));
     }
-    configure_spot_execution (context_state, plan.worker_executor, retained_queue);
     spot_context_t context (context_state);
     std::optional<message_t> create_reply;
     std::shared_ptr<service::spot_t> staged_native;
-    const auto id_value = std::string (spot_id);
     // Barrier cancellation can settle this caller while the creation turn still runs, so
     // the turn's coroutine frame owns its inputs and outputs; parameters live in the frame,
     // unlike lambda captures. It is declared before the preparation scope so a failed
@@ -13161,7 +13201,36 @@ local_spot_create_result_t spot_node_runtime_t::create_spot_context (
                            .value ();
                      }}
                    : std::function<void ()>{[context_state] {
-                         context_state->complete_preparation (false).result ().value ();
+                         const auto coordinator = context_state->spot_serial_executor;
+                         std::vector<std::shared_ptr<runtime::serial_execution_queue_t>> queues;
+                         const auto seal_preparation_queues = [&] {
+                             const auto owned = coordinator->queues ();
+                             retain_execution_queues (queues, owned);
+                             for (const auto &queue : owned) {
+                                 if (!queue)
+                                     continue;
+                                 if (queue == context_state->serial_queue)
+                                     queue->close ();
+                                 else
+                                     queue->cancel_pending ();
+                             }
+                         };
+                         seal_preparation_queues ();
+                         std::exception_ptr terminal_failure;
+                         try {
+                             context_state->complete_preparation (false).result ().value ();
+                         }
+                         catch (...) {
+                             terminal_failure = std::current_exception ();
+                         }
+                         seal_preparation_queues ();
+                         context_state->serial_queue->drain ();
+                         retain_execution_queues (queues, coordinator->close ());
+                         for (const auto &queue : queues)
+                             if (queue)
+                                 queue->drain ();
+                         if (terminal_failure)
+                             std::rethrow_exception (terminal_failure);
                      }};
     auto preparation_scope = std::unique_ptr<void, std::function<void (void *)>> (
       context_state.get (),
@@ -13175,13 +13244,6 @@ local_spot_create_result_t spot_node_runtime_t::create_spot_context (
                                             std::current_exception ());
           }
       });
-    _state->lane
-      .run ([&] {
-          const auto pending = _state->pending_spot_creations_by_id.find (id_value);
-          if (pending != _state->pending_spot_creations_by_id.end ())
-              pending->second.context = context_state;
-      })
-      .get ();
     // The barrier may keep this callable after the turn, so it holds only weak references
     // and the running frame alone owns the turn; a failed creation then releases the
     // staged native Spot when this caller returns.
@@ -14129,13 +14191,7 @@ void spot_node_runtime_t::cancel_timers () noexcept
     try {
         const auto contexts = _state->lane
                                 .run ([&] {
-                                    std::vector<std::shared_ptr<spot_context_state_t>> result;
-                                    result.reserve (_state->spot_contexts_by_id.size ());
-                                    for (const auto &[_, context] : _state->spot_contexts_by_id) {
-                                        if (context._state)
-                                            result.push_back (context._state);
-                                    }
-                                    return result;
+                                    return owned_spot_contexts_core (*_state);
                                 })
                                 .get ();
         for (const auto &context : contexts)

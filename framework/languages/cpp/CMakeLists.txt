@@ -2033,6 +2033,15 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
       ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
     zlink_framework_cpp_add_boost_headers(test_cpp_framework_serial_drain_wake)
   endif()
+  add_zlink_framework_test(
+    test_cpp_framework_pending_spot_shutdown
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_pending_spot_shutdown.cpp
+    "framework-unit;framework-regression;execution;spot"
+    unit)
+  target_use_zlink_gtest_main(test_cpp_framework_pending_spot_shutdown)
+  target_include_directories(test_cpp_framework_pending_spot_shutdown PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  zlink_framework_cpp_add_boost_headers(test_cpp_framework_pending_spot_shutdown)
   add_executable(test_cpp_framework_state_lane
     tests/Zlink.Framework.UnitTests/test_cpp_framework_state_lane.cpp)
   target_use_zlink_gtest_main(test_cpp_framework_state_lane)

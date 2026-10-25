@@ -908,7 +908,14 @@ class spot_serial_executor_t : public std::enable_shared_from_this<spot_serial_e
                && queue->try_post_async (std::move (name), std::move (work), std::move (options));
     }
 
-    void close ()
+    std::vector<queue_ptr_t> queues () const
+    {
+        if (!_state_lane || _state_lane->is_on_lane ())
+            return queues_on_lane ();
+        return _state_lane->run ([this] { return queues_on_lane (); }).get ();
+    }
+
+    std::vector<queue_ptr_t> close ()
     {
         std::vector<queue_ptr_t> queues;
         if (!_state_lane || _state_lane->is_on_lane ())
@@ -918,6 +925,7 @@ class spot_serial_executor_t : public std::enable_shared_from_this<spot_serial_e
         for (const auto &queue : queues)
             if (queue)
                 queue->cancel_pending ();
+        return queues;
     }
 
   private:
@@ -1040,18 +1048,24 @@ class spot_serial_executor_t : public std::enable_shared_from_this<spot_serial_e
         _timer_queues.erase (found);
     }
 
-    std::vector<queue_ptr_t> close_on_lane ()
+    std::vector<queue_ptr_t> queues_on_lane () const
     {
         assert_on_lane ();
         std::vector<queue_ptr_t> queues;
         queues.reserve (1 + _actor_executors.size () + _timer_queues.size ());
-        if (_spot_queue)
-            queues.push_back (_spot_queue);
         for (const auto &[_, executor] : _actor_executors)
             if (executor)
                 queues.push_back (executor->queue ());
         for (const auto &[_, queue] : _timer_queues)
             queues.push_back (queue);
+        if (_spot_queue)
+            queues.push_back (_spot_queue);
+        return queues;
+    }
+
+    std::vector<queue_ptr_t> close_on_lane ()
+    {
+        auto queues = queues_on_lane ();
         _actor_executors.clear ();
         _timer_queues.clear ();
         publish_actor_executor_snapshot ();
