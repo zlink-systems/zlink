@@ -10,12 +10,20 @@ object Names {
     const val REGION = "Region"
     const val DUNGEON = "Dungeon"
     const val REGION_FULL = "region-full"
+    const val MAX_SAFE_INTEGER = 9_007_199_254_740_991L
+    const val MAX_REPLICAS_PER_REGION = 2
+    const val MAX_STEP = 10
+    const val REGION_MIN_X = 0
+    const val REGION_MAX_X = 100
+    const val MAX_SPEED = MAX_STEP * 5.0
+    val ALLOWED_REGIONS = listOf("forest", "desert")
+    const val MOVEMENT = "movement"
     const val FIRST_REGION_INDEX = 1
     const val REGION_SCENARIO = "region"
     const val DUNGEON_SCENARIO = "dungeon"
     const val RECONNECT = "reconnect"
     const val UPDATE = "update"
-    val SCENARIOS = listOf(REGION_SCENARIO, DUNGEON_SCENARIO, RECONNECT, UPDATE)
+    val SCENARIOS = listOf(REGION_SCENARIO, MOVEMENT, DUNGEON_SCENARIO, RECONNECT, UPDATE)
 
     fun regionId(region: String, index: Int): String {
         require(region.isNotBlank() && index >= FIRST_REGION_INDEX) { "Invalid region identity" }
@@ -41,7 +49,7 @@ data class JoinRegion(val region: String = "", val index: Int = 0)
 
 data class RegionFull(val reason: String = "", val region: String = "", val index: Int = 0)
 
-data class PlayerPosition(val playerId: String = "", val x: Int = 0)
+data class PlayerPosition(val playerId: String = "", val x: Double = 0.0, val sequence: Long = 0)
 
 data class RegionView(
     val regionId: String = "",
@@ -49,7 +57,11 @@ data class RegionView(
     val players: List<PlayerPosition> = emptyList(),
 )
 
-data class MoveRequest(val x: Int = 0, val sequence: Long = 0)
+data class MoveRequest(val delta: Double = 0.0, val sequence: Long = 0)
+
+data class ActionRejected(val reason: String = "", val retryAfterMs: Int = 0)
+
+data class RegionUnavailable(val region: String = "", val reason: String = "")
 
 data class OpenDungeonRequest(val dungeonId: String = "")
 

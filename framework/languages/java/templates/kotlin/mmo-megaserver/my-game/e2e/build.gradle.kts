@@ -1,7 +1,7 @@
 plugins { application }
 
 dependencies {
-    implementation(project(":server:shared"))
+    implementation(project(":server:region")); implementation(project(":server:shared"))
     implementation("systems.zlink:zlink-stream-connector:${rootProject.extra["frameworkVersion"]}")
 }
 

@@ -52,7 +52,11 @@ class Region(
 
     suspend fun move(actor: Player, request: MoveRequest) {
         val id = actor.context.actorId()
-        positions.move(id, request.x, request.sequence)
+        val rejection = positions.move(id, request.delta, request.sequence)
+        if (rejection != null) {
+            actor.context.boundSession().kotlin().send(rejection).await()
+            return
+        }
         val view = view()
         actor.context.boundSession().kotlin().send(view).await()
         broadcast(view, id)

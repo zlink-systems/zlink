@@ -15,7 +15,7 @@ public sealed class RegionSpot(
 ) : IZLinkSpot<PlayerActor>
 {
     public IZLinkSpotContext Context { get; } = context;
-    private Dictionary<string, PositionState> players = new(StringComparer.Ordinal);
+    private readonly Positions positions = new();
 
     public void Configure()
     {
@@ -36,13 +36,13 @@ public sealed class RegionSpot(
         var join = request.Decode<JoinRegion>();
         if (GameNames.RegionId(join.Region, join.Index) != Context.SpotId)
             throw new InvalidDataException("Region join identity mismatch.");
-        if (!players.ContainsKey(actorId) && players.Count >= settings.Capacity)
+        if (!positions.Contains(actorId) && positions.Count >= settings.Capacity)
             return ValueTask.FromResult(
                 ZLinkSpotActorJoinResult.Reject(
                     ZLinkMessage.From(new RegionFull(Rejection.RegionFull, join.Region, join.Index))
                 )
             );
-        players.TryAdd(actorId, new PositionState());
+        positions.Add(actorId);
         return ValueTask.FromResult(ZLinkSpotActorJoinResult.Accept());
     }
 
@@ -51,7 +51,7 @@ public sealed class RegionSpot(
 
     public async ValueTask OnLeaveActorAsync(PlayerActor actor, CancellationToken ct)
     {
-        players.Remove(actor.Context.ActorId);
+        positions.Remove(actor.Context.ActorId);
         await BroadcastAsync(ct);
     }
 
@@ -63,31 +63,37 @@ public sealed class RegionSpot(
         new(
             Context.SpotId,
             settings.Id,
-            players
-                .OrderBy(pair => pair.Key)
-                .Select(pair => new PlayerPosition(pair.Key, pair.Value.X))
-                .ToArray()
+            positions.View()
         );
 
     public ValueTask ShowAsync(PlayerActor actor) =>
         actor.Context.BoundSession.Send(View()).Async();
 
-    private async ValueTask BroadcastAsync(CancellationToken ct)
+    private async ValueTask BroadcastAsync(
+        CancellationToken ct,
+        string? excludedActorId = null,
+        RegionView? current = null
+    )
     {
         ct.ThrowIfCancellationRequested();
-        var view = View();
-        foreach (var id in players.Keys)
-            await actors.SendToActor(id, view).Async();
+        var view = current ?? View();
+        foreach (var player in view.Players)
+            if (player.PlayerId != excludedActorId)
+                await actors.SendToActor(player.PlayerId, view).Async();
     }
 
     public async ValueTask MoveAsync(PlayerActor actor, MoveRequest request, CancellationToken ct)
     {
-        var position = players[actor.Context.ActorId];
-        if (request.Sequence <= position.Sequence)
-            throw new InvalidDataException("Move sequence must increase.");
-        position.X = request.X;
-        position.Sequence = request.Sequence;
-        await BroadcastAsync(ct);
+        var rejection = positions.Move(actor.Context.ActorId, request);
+        if (rejection is not null)
+        {
+            await actor.Context.BoundSession.Send(rejection).Async();
+            return;
+        }
+
+        var view = View();
+        await actor.Context.BoundSession.Send(view).Async();
+        await BroadcastAsync(ct, actor.Context.ActorId, view);
     }
 
     public async ValueTask OpenAsync(PlayerActor actor, string dungeonId, CancellationToken ct)
@@ -105,12 +111,13 @@ public sealed class RegionSpot(
         await actor.Context.BoundSession.Send(reply).Async();
     }
 
-    public byte[] Capture() => JsonSerializer.SerializeToUtf8Bytes(players);
+    public byte[] Capture() => JsonSerializer.SerializeToUtf8Bytes(positions.Capture());
 
     public void Restore(ReadOnlyMemory<byte> payload) =>
-        players =
-            JsonSerializer.Deserialize<Dictionary<string, PositionState>>(payload.Span)
-            ?? throw new InvalidDataException("Missing Region relocation state.");
+        positions.Restore(
+            JsonSerializer.Deserialize<PositionsSnapshot>(payload.Span)
+                ?? throw new InvalidDataException("Missing Region relocation state.")
+        );
 }
 
 public sealed class RegionRelocation : IZLinkSpotRelocationAdapter<RegionSpot>

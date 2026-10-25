@@ -8,14 +8,25 @@ import type {
   ZLinkSessionDispatchContext,
   ZLinkSessionFactory
 } from '@zlink-systems/framework';
-import { Names, PacketNames } from '../shared/constants';
-import { EnterRegionRequest, SessionInfo } from '../shared/messages';
+import { Names, PacketNames, Rejection } from '../shared/constants';
+import { ActionRejected, EnterRegionRequest, SessionInfo } from '../shared/messages';
+const allowedPackets = new Set<string>([
+  PacketNames.enterRegionRequest,
+  PacketNames.moveRequest,
+  PacketNames.viewRequest,
+  PacketNames.openDungeonRequest,
+  PacketNames.sessionInfoRequest
+]);
 export class Session implements ZLinkSession {
   constructor(
     readonly context: ZLinkSessionContext,
     private readonly actors: ZLinkActorManager
   ) {}
   async onDispatch(dispatch: ZLinkSessionDispatchContext, payload: ZLinkMessage): Promise<void> {
+    if (!allowedPackets.has(dispatch.packetName)) {
+      await this.context.client.send(new ActionRejected(Rejection.packetNotAllowed)).submit();
+      return;
+    }
     if (!this.context.actors.bound.length) {
       if (dispatch.packetName !== PacketNames.enterRegionRequest)
         throw new Error('EnterRegionRequest must be first');
@@ -33,9 +44,7 @@ export class Session implements ZLinkSession {
       await this.context.client
         .reply(
           new SessionInfo(
-            String(this.context.sessionId),
-            actor.ref.actorId,
-            actor.ref.objectGeneration
+            String(this.context.sessionId), actor.ref.actorId, actor.ref.objectGeneration
           )
         )
         .submit();

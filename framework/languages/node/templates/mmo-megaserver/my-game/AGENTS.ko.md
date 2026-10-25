@@ -91,13 +91,9 @@ Actor가 소속 Spot을 바꾸는 동작은 membership 변경이다. 대상 Spot
 5. 재접속하면 새 Session이 `EnterRegionRequest`를 다시 보낸다. `ReconnectRegion`이 identity를 확인하고 binding된 Session으로 region view를 다시 보낸다.
 6. node를 교체할 때 `runHost`의 `drain` 명령이 relocation을 요청한다. Framework는 `RegionRelocation`의 `capture`로 게임 상태를 받아 다른 node에서 `restore`한다.
 
-## 이 샘플을 보며 개발하기
+## MMO 도메인 확장
 
-이 샘플은 기능들이 함께 동작하는 방식을 보여 주므로, 자기 게임으로 바꾸지 않고 읽고 실행하는 용도로 쓴다. 자기 프로젝트는 Node.js 기본 셋업에서 시작한다. [ZLink Start](https://zlink.systems/start)의 Initializer에서 Node.js를 고르거나 ZLink 저장소의 `framework/languages/node/templates/starter/my-game`을 사용한다. 그다음 필요한 기능을 이 샘플에서 하나씩 옮긴다. 구조 선택은 기본 셋업의 `AGENTS.md`가 설명하며, 이 절은 `mmo-megaserver`만 다룬다. 이 샘플은 바꾸지 않고 프로젝트 옆에 참고용으로 둔다.
-
-### 샘플 먼저 실행하기
-
-옮기기 전에 [개발 명령](#개발-명령)으로 빌드와 e2e를 한 번 실행해 받은 샘플이 동작하는지 확인하고 동작을 본다. 이 결과가 이후 비교의 기준이 된다. 실패하면 먼저 [README](README.md)의 Known issues와 대조한다.
+이 템플릿의 도메인을 확장하여 MMO 서버를 만든다. 공통 계약과 수치 상한은 `server/shared/messages.ts`, `server/shared/constants.ts`에 추가한다. 위치·순번·시계·이동 예산·relocation 남은 시간의 판정은 `server/region/domain/positions.ts` 한 곳에 둔다. 새 클라이언트 패킷은 `server/session/session.ts` 허용 목록에 추가한다. 도메인 경계는 `e2e/domain-checks.ts`, 클라이언트 관찰 시나리오는 `e2e/client.mts`에 추가하고 `Scenarios`, `zlink.structure.json`, README에 함께 등록한다. `--check-domain`, 관련 시나리오, 전체 e2e runner를 순서대로 실행한다.
 
 ### 옮길 기능
 
@@ -119,7 +115,7 @@ Actor가 소속 Spot을 바꾸는 동작은 membership 변경이다. 대상 Spot
 
 메시지 contract부터 옮긴다. `messages.ts`에 class를 먼저 정의한 뒤, 컴파일 오류가 나는 handler를 하나씩 새 메시지로 옮긴다. build는 `server/shared`에서 packet schema를 생성하므로 다른 위치에 정의한 메시지는 등록되지 않는다. 첫 입장 패킷을 바꾸면 `Session`의 첫 패킷 검사, `EnterRegion`, `ReconnectRegion`이 같은 패킷을 받도록 함께 고친다. application Entry와 첫 입장 handler는 Region node만 등록하므로 `zlink.structure.json`에도 그 node만 Entry를 선언한다.
 
-상태는 그 상태를 결정하는 객체에 둔다. 구성원·위치·sequence 검증은 `Region`에 두고, `Entry`는 `region-full` 거부 뒤 index 선택만 맡는다. 상태 필드를 바꿀 때는 `Positions`와 `RegionRelocation` snapshot을 함께 고친다. 빠뜨린 필드는 relocation 뒤 사라지고, `update` 시나리오가 그 손실을 잡는다.
+상태는 그 상태를 결정하는 객체에 둔다. 구성원은 `Region`에 두고, 위치·sequence·이동 예산·시간 판정은 `Positions`에 둔다. `Entry`는 허용 지역, 복제본 한계와 최종 거부 응답을 맡는다. 상태 필드를 바꿀 때는 `Positions`와 `RegionRelocation` snapshot을 함께 고친다. 빠뜨린 필드는 relocation 뒤 사라지고, `update` 시나리오가 그 손실을 잡는다.
 
 제공된 설정에서 Region 정원은 Region당 플레이어 2명, Region stable-type 한도는 node당 Region Spot 2개다. e2e fixture는 drain 전에 두 node의 Region을 모두 채워 두므로, relocation 뒤 남은 node는 가득 차 있고 대체 node만 새 Region을 서비스할 수 있다. 이 한도를 바꿀 때는 남는 node에 충분한 정원을 둔다.
 

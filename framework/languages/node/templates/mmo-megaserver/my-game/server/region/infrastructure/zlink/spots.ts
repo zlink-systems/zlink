@@ -1,3 +1,4 @@
+import { serialize, deserialize } from 'node:v8';
 import { Inject, Injectable, Scope } from '@nestjs/common';
 import { ZLINK_ACTOR_CLIENT, ZLINK_SPOT_MANAGER } from '@zlink-systems/nestjs';
 import {
@@ -12,17 +13,17 @@ import {
   type ZLinkSpotRelocationAdapter
 } from '@zlink-systems/framework';
 import { NODE_CONFIG, type NodeConfig } from '../../../shared/config';
-import { Names, regionId } from '../../../shared/constants';
+import { Game, Names, Rejection, regionId } from '../../../shared/constants';
 import {
   JoinRegion,
   RegionFull,
+  RegionUnavailable,
   RegionView,
   DungeonOpened,
   DungeonInfoRequest,
   type MoveRequest
 } from '../../../shared/messages';
-import { Rejection } from '../../../shared/constants';
-import { Positions } from '../../domain/positions';
+import { Positions, type PositionSnapshot } from '../../domain/positions';
 import { Player } from './player';
 @Injectable()
 export class Entry implements ZLinkEntrySpot<Player> {
@@ -31,12 +32,20 @@ export class Entry implements ZLinkEntrySpot<Player> {
   async onJoinedActor(_actor: Player): Promise<void> {}
   async onLeaveActor(_actor: Player): Promise<void> {}
   async select(actor: Player, region: string, index: number): Promise<void> {
-    if (!region.trim() || !Number.isSafeInteger(index) || index < 1)
-      throw new Error('Invalid region selection');
+    if (!(Game.allowedRegions as readonly string[]).includes(region)) {
+      await actor.context.boundSession.send(new RegionUnavailable(region, Rejection.regionUnknown)).submit();
+      return;
+    }
+    if (index > Game.maxReplicasPerRegion) {
+      await actor.context.boundSession.send(new RegionUnavailable(region, Rejection.capacityExhausted)).submit();
+      return;
+    }
     const id = regionId(region, index);
     const result = await this.spots.getOrCreate(id, Names.region).inMesh(Names.mesh).submit();
-    if (result.state === ZLinkSpotCreateState.Rejected)
-      throw new Error(`Region creation rejected: ${id}`);
+    if (result.state === ZLinkSpotCreateState.Rejected) {
+      await actor.context.boundSession.send(new RegionUnavailable(region, Rejection.capacityExhausted)).submit();
+      return;
+    }
     actor.context.joinSpot(id, new JoinRegion(region, index)).defer();
   }
 }
@@ -53,9 +62,10 @@ export class Region implements ZLinkSpot<Player> {
     const join = payload.decode(JoinRegion);
     if (regionId(join.region, join.index) !== String(this.context.spotId))
       throw new Error('Region join identity mismatch');
-    return this.positions.admit(id, this.config.capacity)
-      ? { accepted: true }
-      : { accepted: false, reply: new RegionFull(Rejection.regionFull, join.region, join.index) };
+    if (!this.positions.has(id) && this.positions.size >= this.config.capacity)
+      return { accepted: false, reply: new RegionFull(Rejection.regionFull, join.region, join.index) };
+    this.positions.add(id);
+    return { accepted: true };
   }
   async onJoinedActor(_actor: Player): Promise<void> {
     await this.broadcast();
@@ -72,13 +82,17 @@ export class Region implements ZLinkSpot<Player> {
   async show(actor: Player): Promise<void> {
     await actor.context.boundSession.send(this.view()).submit();
   }
-  private async broadcast(): Promise<void> {
+  private async broadcast(requester?: Player): Promise<void> {
     const view = this.view();
-    for (const id of this.positions.ids()) await this.actors.sendToActor(id, view).submit();
+    for (const id of this.positions.ids()) {
+      if (requester?.context.actorId === id) await requester.context.boundSession.send(view).submit();
+      else await this.actors.sendToActor(id, view).submit();
+    }
   }
   async move(actor: Player, request: MoveRequest): Promise<void> {
-    this.positions.move(actor.context.actorId, request.x, request.sequence);
-    await this.broadcast();
+    const rejected = this.positions.move(actor.context.actorId, request);
+    if (rejected) { await actor.context.boundSession.send(rejected).submit(); return; }
+    await this.broadcast(actor);
   }
   async open(actor: Player, dungeonId: string): Promise<void> {
     if (!dungeonId.trim()) throw new Error('Dungeon ID is required');
@@ -94,10 +108,10 @@ export class Region implements ZLinkSpot<Player> {
     await actor.context.boundSession.send(Object.assign(new DungeonOpened(), reply)).submit();
   }
   capture(): Uint8Array {
-    return Buffer.from(JSON.stringify(this.positions.snapshot()));
+    return serialize(this.positions.capture());
   }
   restore(payload: Uint8Array): void {
-    this.positions.restore(JSON.parse(Buffer.from(payload).toString('utf8')));
+    this.positions.restore(deserialize(Buffer.from(payload)) as PositionSnapshot[]);
   }
 }
 @Injectable()

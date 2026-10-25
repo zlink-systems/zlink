@@ -60,12 +60,39 @@ class Entry final : public fx::entry_spot_t<Player>
     fx::spot_manager_t &spots_;
     fx::task_t<void> select (Player &actor, const std::string &region, int index)
     {
+        if (!Names::is_allowed_region (region)) {
+            co_await actor.context ()
+              .bound_session ()
+              .send (RegionUnavailable{region, Rejection::region_unknown})
+              .async ();
+            co_return;
+        }
+        if (index > Names::max_replicas_per_region) {
+            co_await actor.context ()
+              .bound_session ()
+              .send (RegionUnavailable{region, Rejection::capacity_exhausted})
+              .async ();
+            co_return;
+        }
         const auto id = Names::region_id (region, index);
         const auto created =
           co_await spots_.get_or_create (id, Names::region).in_mesh (Names::mesh).async ();
-        if (created.state == fx::spot_create_state_t::rejected)
-            throw std::runtime_error ("Region creation rejected");
+        if (created.state == fx::spot_create_state_t::rejected) {
+            co_await actor.context ()
+              .bound_session ()
+              .send (RegionUnavailable{region, Rejection::capacity_exhausted})
+              .async ();
+            co_return;
+        }
         actor.context ().join_spot (id, JoinRegion{region, index}).defer ();
+    }
+
+    fx::task_t<void> select_next (Player &actor, const RegionFull &reply)
+    {
+        const auto next_index = reply.Index >= Names::max_replicas_per_region
+                                  ? Names::max_replicas_per_region + 1
+                                  : reply.Index + 1;
+        co_await select (actor, reply.Region, next_index);
     }
 
   public:
@@ -82,15 +109,15 @@ class Entry final : public fx::entry_spot_t<Player>
     fx::task_t<void>
     enter (Player &actor, fx::message_context_t &, const EnterRegionRequest &request)
     {
-        if (request.playerId != actor.context ().actor_id ().value ())
+        if (request.PlayerId != actor.context ().actor_id ().value ())
             throw std::invalid_argument ("Player identity mismatch");
-        co_await select (actor, request.region, Names::first_index);
+        co_await select (actor, request.Region, Names::first_index);
     }
     fx::task_t<void> next (Player &actor, fx::message_context_t &, const RegionFull &reply)
     {
-        if (reply.reason != Names::region_full || reply.index == std::numeric_limits<int>::max ())
+        if (reply.Reason != Names::region_full)
             throw std::runtime_error ("Invalid region rejection");
-        co_await select (actor, reply.region, reply.index + 1);
+        co_await select_next (actor, reply);
     }
     fx::task_t<void> on_actor_joined (Player &) override { co_return; }
     fx::task_t<void> on_leave_actor (Player &) override { co_return; }

@@ -8,6 +8,15 @@ namespace MyGame.Session;
 public sealed class PlayerSession(IZLinkSessionContext context, IZLinkActorManager actors)
     : IZLinkSession
 {
+    private static readonly HashSet<string> AllowedPackets = new(StringComparer.Ordinal)
+    {
+        nameof(EnterRegionRequest),
+        nameof(MoveRequest),
+        nameof(ViewRequest),
+        nameof(OpenDungeonRequest),
+        nameof(SessionInfoRequest),
+    };
+
     public IZLinkSessionContext Context { get; } = context;
 
     public ValueTask OnConnectedAsync(CancellationToken cancellationToken) =>
@@ -28,6 +37,12 @@ public sealed class PlayerSession(IZLinkSessionContext context, IZLinkActorManag
         CancellationToken cancellationToken
     )
     {
+        if (!AllowedPackets.Contains(dispatch.PacketName))
+        {
+            await Context.Client.Send(new ActionRejected(Rejection.PacketNotAllowed, 0)).Async();
+            return;
+        }
+
         if (Context.Actors.Bound.Count == 0)
         {
             if (dispatch.PacketName != nameof(EnterRegionRequest))

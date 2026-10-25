@@ -91,44 +91,22 @@ Requests in the example game follow this path. Reading the code along this path 
 5. `OpenDungeonRequest` is handled by `Region::dungeon`, which calls `get_or_create` for the Dungeon on the Instance node, asks it with `request_to_spot` and `DungeonInfoRequest`, and sends the `DungeonOpened` reply to the bound Session.
 6. To replace a node, `drain` in `NodeControl` requests relocation. Framework takes the game state from `capture` in `RegionRelocation` and calls `restore` on another node. `PlayerRelocation` carries no state.
 
-## Developing from this sample
+## Extending this MMO domain
 
-This sample shows how the features work together, so read and run it rather than turning it into your game. Start your own project from the C++ starter: choose C++ in the Initializer at [ZLink Start](https://zlink.systems/start), or use `framework/languages/cpp/templates/starter/my-game` in the ZLink repository. Then transfer the features you need from this sample one at a time. The starter's `AGENTS.md` owns the choice between structures; this section covers only `mmo-megaserver`. Keep this sample unchanged next to your project as a reference.
+Extend this template's domain to build an MMO server. Keep each decision in the component that owns its state.
 
-### Run the sample first
+| Concern | Owner | Extension point |
+| --- | --- | --- |
+| Shared packet fields and limits | Contracts | `server/shared/contracts.hpp` |
+| Position, sequence, movement budget, monotonic time, and relocation snapshot | Region domain | `server/region/domain/positions.hpp` |
+| Region admission, replica selection, and movement delivery | Region adapters | `server/region/infrastructure/zlink/region.hpp`, `server/region/infrastructure/zlink/player.hpp` (`Entry`) |
+| Client packet relay allowlist | Session | `server/session/session.hpp` |
+| Domain boundary checks and client-observed scenarios | E2E runner | `e2e/domain_checks.hpp`, `e2e/scenarios.hpp` |
+| Scenario declarations and user instructions | Template descriptor and README | `e2e/structure.hpp`, `e2e/main.cpp`, `zlink.structure.json`, `README.md` |
 
-Before transferring anything, run the build and e2e once with the [Development commands](#development-commands) to confirm the downloaded sample works and to see its behavior. This result is the baseline for comparison. If it fails, compare the failure with Known issues in the [README](README.md) first.
+Add a packet contract and its shared constants in `contracts.hpp`. Put position, sequence, movement-budget, and clock decisions in `Positions`; inject test clocks through its constructor and snapshot only the remaining time. Add each new client packet to the Session allowlist. Add boundary checks to `domain_checks.hpp` and an e2e scenario to `scenarios.hpp`; register its ID in `e2e/structure.hpp`, `e2e/main.cpp`, `zlink.structure.json`, and the README scenario table. Run `--check-domain`, the related scenario, and the full e2e runner.
 
-### Features to transfer
-
-Feature names match the feature table in the starter's `AGENTS.md`, except Region overflow, which only this structure has. Paths are relative to this directory. The starter has one Session node and the `connect` scenario only, so the last column lists what grows in the starter with each feature.
-
-| Feature | File in this sample | What to transfer | What to grow in the starter alongside |
-| --- | --- | --- | --- |
-| Typed messages | `server/shared/contracts.hpp` | The structs of the features you adopt: `EnterRegionRequest`, `JoinRegion`, `RegionFull`, `MoveRequest`, `PlayerPosition`, `RegionView`, `ViewRequest`, `DungeonInfoRequest`, `OpenDungeonRequest`, `DungeonOpened`; `SessionInfoRequest` and `SessionInfo` only if your client needs them | The `Names` constants that the messages refer to |
-| Actor | `Player`, `PlayerFactory` in `server/region/infrastructure/zlink/player.hpp` | The stateless player Actor: `Player::on_join_completed` forwards a `RegionFull` rejection to the Actor itself, and `PlayerFactory` creates it with the Actor client | A new `server/region/` role with its `main.cpp`, `server/config/` files, and an entry in the `CMakeLists.txt` role list; the Actor factory registration in `main.cpp`; the `nodes` declaration in `zlink.structure.json` and the structure check in `e2e/structure.hpp` |
-| Spot | `Region` in `server/region/infrastructure/zlink/region.hpp`, `Positions` in `server/region/domain/positions.hpp` | `Region` with the member positions, the capacity-based admission rule in `Positions`, and the `deliver` forwarder | The Spot factory registration in `main.cpp` with `RegionLimit`; the `spots` declarations in `zlink.structure.json` that the structure check compares with the node configuration |
-| Entry and first admission | `Entry` in `server/region/infrastructure/zlink/player.hpp`, `Region::enter` in `server/region/infrastructure/zlink/region.hpp` | `Entry::enter` (identity check and the first instance) and the identity check and view resend of `Region::enter` | The `add_entry_spot` registration and the `entry` declarations; a first-entry scenario (`region`) and a `reconnect` scenario that compares state after reconnection |
-| Region overflow | `Region::on_actor_join` in `server/region/infrastructure/zlink/region.hpp`, `Entry::select` and `Entry::next` in `server/region/infrastructure/zlink/player.hpp` | The capacity rejection with `RegionFull`, the forwarding in `Player::on_join_completed`, and the next-instance selection in `Entry::next` | The `Capacity` and `RegionLimit` settings in `NodeConfig` and the `server/config/` files; the `region` scenario, which checks that a third player enters the next instance |
-| Session binding | `server/session/session.hpp` | The first-packet check, then find or create the Actor, `bind_or_get`, and relay the original typed packet | The same first-packet type as `Entry::enter`; transfer it into the starter's `server/session/session.hpp` |
-| Host relocation | `PlayerRelocation` in `server/region/infrastructure/zlink/player.hpp`, `RegionRelocation` in `server/region/infrastructure/zlink/region.hpp`, `NodeControl` in `server/shared/hosting.hpp` | The adapter with `capture` and `restore` of `Positions`, `PlayerRelocation` for the stateless Actor, and the `drain` and `shutdown` controls | The `preserve_state_with` registrations in `main.cpp`; the `update` scenario, which checks that connections and state survive a server replacement and that the replacement node accepts new work |
-| Dynamic dungeon | `server/instance/dungeon.hpp`, `server/instance/main.cpp`, `Region::dungeon` in `server/region/infrastructure/zlink/region.hpp` | The dynamic User Spot creation pattern (`get_or_create`, then `request_to_spot`) and the Dungeon information | A new `server/instance/` role with its config and `CMakeLists.txt` entry; the dynamic `dungeon` Spot in `zlink.structure.json`; the `dungeon` scenario |
-
-`drain` and `shutdown` are transferred together with `NodeControl`.
-
-### Transfer order and rules
-
-Transfer one row at a time and run the build, the structure check, and the related e2e scenario after each. Add a scenario ID to the `Scenario` enum and `scenario_order` in `e2e/structure.hpp`, to the `switch` and the usage message in `e2e/main.cpp`, to `run.scenarios`, and to the selection examples in `run.commands` of `zlink.structure.json` together. Judge results by the replies and events actually received; do not make tests pass with fixed sleeps or longer deadlines.
-
-Start with the message contracts. Define the packet structs in `server/shared/contracts.hpp` first, each with a `packet_name` and its JSON conversion, then move each handler that fails to compile to the new messages. When you change the first-entry packet, update the first-packet check in `Session::on_packet` in `server/session/session.hpp` and `Entry::enter` and `Region::enter` to receive the same type.
-
-Keep each piece of state in the object that decides it. Positions and sequences belong in `Region` through `Positions`; `Player` holds no application state. When you change state fields, update that object's state struct with its JSON conversion and the `capture` and `restore` of its relocation adapter together. A missing field disappears after relocation, and the `update` scenario detects the loss.
-
-Keep the capacity decision in the Region: `Region::on_actor_join` alone rejects with `RegionFull`, and `Entry` alone selects the next instance after that rejection. Do not copy the capacity count into `Entry` or into the Actor.
-
-To name roles such as Region or Dungeon differently from this sample, change the type names, `Names`, `server/config/`, `zlink.structure.json`, and the role list in `CMakeLists.txt` at once. Do the renaming in its own change, separate from transferring a feature, so failures are easier to trace.
-
-If `update` fails after a transfer, first check whether the snapshot is missing any state, then use the message flow in [Debugging](#debugging) to find the first failing step.
+Judge behavior by typed replies and client-observed events. A rejected request must leave domain state unchanged. Do not use fixed sleeps or extend deadlines to make a scenario pass.
 
 ## Development considerations
 

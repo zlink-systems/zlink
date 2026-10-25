@@ -91,13 +91,9 @@ Requests in the example game follow this path. Reading the code along this path 
 5. After a reconnect, the new Session sends `EnterRegionRequest` again. `ReconnectRegion` checks the identity and resends the region view through the bound Session.
 6. To replace a node, the `drain` command in `runHost` requests relocation. Framework takes the game state from `capture` in `RegionRelocation` and calls `restore` on another node.
 
-## Developing from this sample
+## Extending this MMO domain
 
-This sample shows how the features work together, so read and run it rather than turning it into your game. Start your own project from the Node.js starter: choose Node.js in the Initializer at [ZLink Start](https://zlink.systems/start), or use `framework/languages/node/templates/starter/my-game` in the ZLink repository. Then transfer the features you need from this sample one at a time. The starter's `AGENTS.md` owns the choice between structures; this section covers only `mmo-megaserver`. Keep this sample unchanged next to your project as a reference.
-
-### Run the sample first
-
-Before transferring anything, run the build and e2e once with the [Development commands](#development-commands) to confirm the downloaded sample works and to see its behavior. This result is the baseline for comparison. If it fails, compare the failure with Known issues in the [README](README.md) first.
+Extend this template's domain to build an MMO server. Add shared contracts and numeric limits in `server/shared/messages.ts` and `server/shared/constants.ts`; put position, sequence, clock, budget, and relocation-time decisions only in `server/region/domain/positions.ts`; add each client packet to the Session allowlist in `server/session/session.ts`; add domain boundaries in `e2e/domain-checks.ts` and observable scenarios in `e2e/client.mts`; then register the scenario in `Scenarios`, `zlink.structure.json`, and the README. Run `--check-domain`, the affected scenario, and the complete e2e runner.
 
 ### Features to transfer
 
@@ -119,7 +115,7 @@ Transfer one row at a time and run the build, the structure check, and the relat
 
 Start with the message contracts. Define the classes in `messages.ts` first, then move each handler that fails to compile to the new messages. The build generates packet schemas from `server/shared`, so messages defined elsewhere are not registered. When you change the first-entry packet, update the first-packet check in `Session`, `EnterRegion`, and `ReconnectRegion` to receive the same packet. Only Region nodes register the application Entry and its first-admission handler, so only those nodes declare an Entry in `zlink.structure.json`.
 
-Keep each piece of state in the object that decides it. Membership, positions, and sequence validation belong in `Region`; `Entry` owns only the index selection after an explicit `region-full` rejection. When you change state fields, update `Positions` and the `RegionRelocation` snapshot together. A missing field disappears after relocation, and the `update` scenario detects the loss.
+Keep each piece of state in the object that decides it. Membership belongs in `Region`; `Positions` owns position, sequence, budget, and time validation. `Entry` owns allowed regions, bounded replica selection, and the final unavailable response. When you change state fields, update `Positions` and the `RegionRelocation` snapshot together. A missing field disappears after relocation, and the `update` scenario detects the loss.
 
 Region capacity defaults to two players per Region and the Region stable-type limit to two Region Spots per node, as in the shipped configuration. The e2e fixture keeps the Regions of both nodes occupied before drain, so after relocation the survivor is full and only the replacement can serve a new Region. Keep enough capacity on the surviving node when you change these limits.
 

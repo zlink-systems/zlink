@@ -8,9 +8,27 @@ export const Names = {
 export const Game = {
   firstIndex: 1,
   initialX: 0,
-  initialSequence: 0
+  initialSequence: 0n,
+  maxSafeInteger: 9_007_199_254_740_991n,
+  maxStep: 10,
+  maxSpeed: 50,
+  regionMinX: 0,
+  regionMaxX: 100,
+  maxReplicasPerRegion: 2,
+  allowedRegions: ['forest', 'desert'] as const
 } as const;
-export const Rejection = { regionFull: 'region-full' } as const;
+export const Rejection = {
+  regionFull: 'region-full',
+  packetNotAllowed: 'packet-not-allowed',
+  nonFinite: 'non-finite',
+  stepTooLarge: 'step-too-large',
+  outsideRegion: 'outside-region',
+  moveBudget: 'move-budget',
+  staleSequence: 'stale-sequence',
+  integerOutOfRange: 'integer-out-of-range',
+  regionUnknown: 'region-unknown',
+  capacityExhausted: 'capacity-exhausted'
+} as const;
 const messageFollowMs = 30_000;
 const relocationMs = 25_000;
 export const Limits = {
@@ -22,12 +40,14 @@ export const Limits = {
   relocationMs,
   shutdownMs: 10_000
 } as const;
-export const Scenarios = ['region', 'dungeon', 'reconnect', 'update'] as const;
+export const Scenarios = ['region', 'movement', 'dungeon', 'reconnect', 'update'] as const;
 export const PacketNames = {
   enterRegionRequest: 'EnterRegionRequest',
   joinRegion: 'JoinRegion',
   regionFull: 'RegionFull',
+  regionUnavailable: 'RegionUnavailable',
   moveRequest: 'MoveRequest',
+  actionRejected: 'ActionRejected',
   regionView: 'RegionView',
   viewRequest: 'ViewRequest',
   openDungeonRequest: 'OpenDungeonRequest',

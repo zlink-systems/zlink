@@ -91,39 +91,16 @@ Requests in the example game follow this path. Reading the code along this path 
 5. `OpenDungeonRequest` is delivered to `Actions.dungeon`, and `Actions.dungeon` creates the Dungeon with `getOrCreate(dungeonId, Names.DUNGEON)`, asks the Dungeon for its information with `requestToSpot`, and sends `DungeonOpened` through the bound Session.
 6. To replace a node, the `drain` control in `Hosting.run` requests relocation. Framework takes the game state from `capture` in `RegionTransfer` and `PlayerTransfer` and calls `restore` on another node.
 
-## Developing from this sample
+## Extending the MMO domain
 
-This sample shows how the features work together, so read and run it rather than turning it into your game. Start your own project from the Java starter: choose Java in the Initializer at [ZLink Start](https://zlink.systems/start), or use `framework/languages/java/templates/java/starter/my-game` in the ZLink repository. Then transfer the features you need from this sample one at a time. The starter's `AGENTS.md` owns the choice between structures; this section covers only `mmo-megaserver`. Keep this sample unchanged next to your project as a reference.
+Extend this template's domain to build an MMO server. Keep each state and decision in its owning domain.
 
-### Run the sample first
-
-Before transferring anything, run the build and e2e once with the [Development commands](#development-commands) to confirm the downloaded sample works and to see its behavior. This result is the baseline for comparison. If it fails, compare the failure with Known issues in the [README](README.md) first.
-
-### Features to transfer
-
-Feature names match the feature table in the starter's `AGENTS.md`. Paths are relative to this directory. The starter has one Session node and the `connect` scenario only, so the last column lists what grows in the starter with each feature.
-
-| Feature | File in this sample | What to transfer | What to grow in the starter alongside |
-| --- | --- | --- | --- |
-| Typed messages | `server/shared/src/main/java/MyGame/EnterRegionRequest.java` | The records of the features you adopt: `EnterRegionRequest`, `JoinRegion`, `RegionFull`, `RegionView`, `ViewRequest`, `MoveRequest`, `PlayerPosition`, `OpenDungeonRequest`, `DungeonInfoRequest`, `DungeonOpened`; `SessionInfoRequest` and `SessionInfo` only if your client needs them | The registration names in `Names.java`; the starter already has `Control.java` and `Json.java` |
-| Actor | `server/region/src/main/java/MyGame/region/infrastructure/zlink/Player.java`, `server/region/src/main/java/MyGame/region/infrastructure/zlink/PlayerFactory.java` | `Player` with its join-completion handling (the `RegionFull` reply), and its factory | A new `server/region/` module (`build.gradle.kts`, `Program.java`) with `include("server:region")` in `settings.gradle.kts`, its `server/config/` files, and the Actor factory registration in `Program.java`; the node declaration in `zlink.structure.json` and the check in `Structure.java`. The starter's `Nodes.java` starts only the Session role, so extend `Nodes.java` and `Roles.java` for the new role |
-| Spot | `server/region/src/main/java/MyGame/region/infrastructure/zlink/Region.java`, `server/region/src/main/java/MyGame/region/domain/Positions.java` | `Region` with admission by capacity, positions, and the view broadcast; keep the position rules in `Positions` | The Spot factory registration in `Program.java`; the `spots` and `nodes` declarations in `zlink.structure.json`, and a `Structure.java` check that compares them with the registrations (the starter declares no Spots) |
-| Entry and first admission | `server/region/src/main/java/MyGame/region/infrastructure/zlink/Entry.java`, `server/region/src/main/java/MyGame/region/infrastructure/zlink/Enter.java`, `reconnect` in `server/region/src/main/java/MyGame/region/infrastructure/zlink/Actions.java` | `Entry.select` with the `region-full` retry order owned by the Entry Spot, and the identity check and view resend of `reconnect` | The Entry Spot registration and its `entry` declaration; a first-entry scenario and a `reconnect` scenario that compares state after reconnection |
-| Session binding | `server/session/src/main/java/MyGame/session/infrastructure/zlink/GameSession.java` | The first-packet check, then find or create the Actor, bind, and relay the original typed packet | The same first-packet type as `Enter.enter`; transfer it into the starter's `PlayerSession.java` |
-| Host relocation | `server/region/src/main/java/MyGame/region/infrastructure/zlink/RegionTransfer.java`, `server/region/src/main/java/MyGame/region/infrastructure/zlink/PlayerTransfer.java`, `server/shared/src/main/java/MyGame/Transfer.java`, `server/shared/src/main/java/MyGame/Hosting.java` | The snapshot adapters with `capture` and `restore` for the Region positions and the Player | The `preserveStateWith(...)` registrations; the `update` scenario, which checks that connections and state survive a server replacement and that the replacement node accepts new work |
-| Dynamic dungeon | `server/instance/src/main/java/MyGame/instance/infrastructure/zlink/Dungeon.java`, `server/instance/src/main/java/MyGame/instance/infrastructure/zlink/DungeonActions.java`, `server/instance/src/main/java/MyGame/instance/Program.java`, `dungeon` in `server/region/src/main/java/MyGame/region/infrastructure/zlink/Actions.java` | The dynamic User Spot creation pattern and the Dungeon information request | A new `server/instance/` module and its config; the dynamic `dungeon` Spot and the `GetOrCreate` edge in `zlink.structure.json` |
-
-### Transfer order and rules
-
-Transfer one row at a time and run the build, the structure check, and the related e2e scenario after each. Add a scenario ID to the `Scenario` enum in `server/shared/src/main/java/MyGame/Scenario.java`, to the dispatch in `e2e/src/main/java/MyGame/e2e/Scenarios.java`, to `run.scenarios`, and to the selection examples in `run.commands` of `zlink.structure.json` together. Judge results by the replies and events actually received; do not make tests pass with fixed sleeps or longer deadlines.
-
-Start with the message contracts. Define the typed records in `server/shared/src/main/java/MyGame/` first, then move each handler that fails to compile to the new messages. When you change the first-entry packet, update the first-packet check in `GameSession` and `Enter` to receive the same type.
-
-Keep each piece of state in the object that decides it. Membership and positions belong in `Region` (`Positions`); the next instance index after `region-full` belongs to the Entry Spot. When you change state fields, update `Positions` and its `capture` and `restore` in `RegionTransfer` together. A missing field disappears after relocation, and the `update` scenario detects the loss.
-
-To name roles differently from this sample, change the type names, `Names.java`, `server/config/`, the module and package names with `settings.gradle.kts`, and `zlink.structure.json` at once. Do the renaming in its own change, separate from transferring a feature, so failures are easier to trace.
-
-If `update` fails after a transfer, first check whether the snapshot is missing any state, then use the message flow in [Debugging](#debugging) to find the first failing step.
+1. Add requests and results to the shared contracts beside `server/shared/src/main/java/MyGame/Names.java`. Keep shared limits there: integers are bounded to `2^53-1`, and `RetryAfterMs` is a 32-bit integer.
+2. Add state and decisions in `server/region/src/main/java/MyGame/region/domain/Positions.java`. Movement accepts a delta and sequence; rejected inputs preserve position, sequence, and budget. `MaxStep=10`, region bounds are `0..100`, and speed is `MaxStep*5` per second. Inject a test monotonic clock only through the constructor. Persist remaining milliseconds in relocation snapshots.
+3. Keep allowed regions and the two-replica limit in `server/region/src/main/java/MyGame/region/infrastructure/zlink/Entry.java`. Return `RegionUnavailable(region, "capacity-exhausted")` on exhausted capacity or rejected creation, and `region-unknown` for unknown regions.
+4. Add only client packet names to the allowlist in `server/session/src/main/java/MyGame/session/infrastructure/zlink/GameSession.java`. Reject internal packets with `ActionRejected("packet-not-allowed", 0)`.
+5. Add rule boundaries in `e2e/src/main/java/MyGame/e2e/DomainChecks.java` and public observations in `e2e/src/main/java/MyGame/e2e/Scenarios.java`. Use `./run-e2e.sh --check-domain` or `-CheckDomain` for domain checks. After time-limited rejection, wait only for the server's `RetryAfterMs`.
+6. Reply directly to the requester and use the existing Region broadcast once for other members. Update README and `zlink.structure.json` scenarios together.
 
 ## Development considerations
 

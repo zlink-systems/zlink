@@ -8,12 +8,17 @@ import systems.zlink.framework.streams.*
 
 class GameSession(private val session: ZLinkSessionContext, private val actors: ZLinkActorManager) :
     ZLinkSuspendingSession() {
+    private val allowedPackets = setOf("EnterRegionRequest", "MoveRequest", "ViewRequest", "OpenDungeonRequest", "SessionInfoRequest")
     override fun context() = session
 
     override suspend fun onDispatchSuspending(
         dispatch: ZLinkSessionDispatchContext,
         payload: ZLinkMessage,
     ) {
+        if (dispatch.packetName() !in allowedPackets) {
+            session.client().kotlin().send(ActionRejected("packet-not-allowed", 0)).await()
+            return
+        }
         when (dispatch.packetName()) {
             SessionInfoRequest::class.java.simpleName -> {
                 val actor = session.actors().bound().single()

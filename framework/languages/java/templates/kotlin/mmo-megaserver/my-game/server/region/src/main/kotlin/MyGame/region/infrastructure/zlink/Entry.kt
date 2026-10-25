@@ -13,9 +13,20 @@ class Entry(override val context: ZLinkEntrySpotContext, private val spots: ZLin
     override suspend fun onLeaveActorSuspending(actor: Player) {}
 
     suspend fun select(actor: Player, region: String, index: Int) {
+        if (region !in Names.ALLOWED_REGIONS) {
+            actor.context.boundSession().kotlin().send(RegionUnavailable(region, "region-unknown")).await()
+            return
+        }
+        if (index > Names.MAX_REPLICAS_PER_REGION) {
+            actor.context.boundSession().kotlin().send(RegionUnavailable(region, "capacity-exhausted")).await()
+            return
+        }
         val id = Names.regionId(region, index)
         val created = spots.kotlin().getOrCreate(id, Names.REGION).inMesh(Names.MESH).await()
-        check(created.state() != ZLinkSpotCreateState.REJECTED) { "Region creation rejected: $id" }
+        if (created.state() == ZLinkSpotCreateState.REJECTED) {
+            actor.context.boundSession().kotlin().send(RegionUnavailable(region, "capacity-exhausted")).await()
+            return
+        }
         actor.context.joinSpot(id, JoinRegion(region, index)).defer()
     }
 }

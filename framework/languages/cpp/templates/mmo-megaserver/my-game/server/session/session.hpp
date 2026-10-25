@@ -1,6 +1,9 @@
 #pragma once
 #include "server/shared/config.hpp"
 #include <zlink/framework.hpp>
+#include <algorithm>
+#include <array>
+#include <string_view>
 
 namespace MyGame
 {
@@ -9,6 +12,13 @@ class Session final : public fx::packet_stream_session_t
 {
     fx::actor_manager_t &actors_;
     fx::serializer_registry_t &serializers_;
+    static constexpr std::array<std::string_view, 5> allowed_packets{
+        EnterRegionRequest::packet_name,
+        MoveRequest::packet_name,
+        ViewRequest::packet_name,
+        OpenDungeonRequest::packet_name,
+        SessionInfoRequest::packet_name,
+    };
 
   public:
     Session (fx::actor_manager_t &actors, fx::serializer_registry_t &serializers) :
@@ -26,6 +36,15 @@ class Session final : public fx::packet_stream_session_t
                                 const fx::session_message_context_t &dispatch,
                                 const zlink::message_t &payload) override
     {
+        if (std::find (allowed_packets.begin (), allowed_packets.end (), dispatch.packet_name)
+            == allowed_packets.end ()) {
+            co_await stream
+              .write_packet (zlink::message_t::from_json (
+                ActionRejected{Rejection::packet_not_allowed, 0}))
+              .packet_name (ActionRejected::packet_name)
+              .async ();
+            co_return;
+        }
         auto bound = stream.actors ().bound ();
         if (bound.empty ()) {
             if (dispatch.packet_name != EnterRegionRequest::packet_name)
@@ -33,7 +52,7 @@ class Session final : public fx::packet_stream_session_t
             const auto request = serializers_.get<EnterRegionRequest> ().deserialize (
               fx::encoded_payload_t::from_bytes (payload.bytes ()));
             const auto ensured =
-              co_await actors_.get_or_create (fx::actor_id_t (request.playerId), Names::player)
+              co_await actors_.get_or_create (fx::actor_id_t (request.PlayerId), Names::player)
                 .in_mesh (Names::mesh)
                 .async ();
             const auto ref = std::visit (

@@ -91,39 +91,16 @@ Actor가 소속 Spot을 바꾸는 동작은 membership 변경이다. 대상 Spot
 5. `OpenDungeonRequest`는 `Actions.dungeon`에 전달되며, `Actions.dungeon`은 `getOrCreate(dungeonId, Names.DUNGEON)`으로 Dungeon을 만들고 `requestToSpot`으로 정보를 요청한 뒤 binding된 Session으로 `DungeonOpened`를 보낸다.
 6. node를 교체할 때 `Hosting.run`의 `drain` 제어가 relocation을 요청한다. Framework는 `RegionTransfer`·`PlayerTransfer`의 `capture`로 게임 상태를 받아 다른 node에서 `restore`한다.
 
-## 이 샘플을 보며 개발하기
+## MMO 도메인 확장
 
-이 샘플은 기능들이 함께 동작하는 방식을 보여 주므로, 자기 게임으로 바꾸지 않고 읽고 실행하는 용도로 쓴다. 자기 프로젝트는 Java 기본 셋업에서 시작한다. [ZLink Start](https://zlink.systems/start)의 Initializer에서 Java를 고르거나 ZLink 저장소의 `framework/languages/java/templates/java/starter/my-game`을 사용한다. 그다음 필요한 기능을 이 샘플에서 하나씩 옮긴다. 구조 선택은 기본 셋업의 `AGENTS.md`가 설명하며, 이 절은 `mmo-megaserver`만 다룬다. 이 샘플은 바꾸지 않고 프로젝트 옆에 참고용으로 둔다.
+이 템플릿의 도메인을 확장하여 MMO 서버를 만든다. 상태와 판정은 같은 도메인에 둔다.
 
-### 샘플 먼저 실행하기
-
-옮기기 전에 [개발 명령](#개발-명령)으로 빌드와 e2e를 한 번 실행해 받은 샘플이 동작하는지 확인하고 동작을 본다. 이 결과가 이후 비교의 기준이 된다. 실패하면 먼저 [README](README.md)의 Known issues와 대조한다.
-
-### 옮길 기능
-
-기능 이름은 기본 셋업 `AGENTS.md`의 기능 표와 같다. 경로는 이 디렉터리를 기준으로 한다. 기본 셋업에는 Session node 하나와 `connect` 시나리오만 있으므로, 마지막 열은 기능마다 기본 셋업에서 함께 늘릴 것이다.
-
-| 기능 | 이 샘플의 파일 | 옮길 것 | 기본 셋업에서 함께 늘릴 것 |
-| --- | --- | --- | --- |
-| Typed 메시지 | `server/shared/src/main/java/MyGame/EnterRegionRequest.java` | 사용할 기능의 record: `EnterRegionRequest`, `JoinRegion`, `RegionFull`, `RegionView`, `ViewRequest`, `MoveRequest`, `PlayerPosition`, `OpenDungeonRequest`, `DungeonInfoRequest`, `DungeonOpened`. `SessionInfoRequest`·`SessionInfo`는 client가 필요로 할 때만 옮긴다 | `Names.java`의 등록 이름. `Control.java`와 `Json.java`는 기본 셋업에 이미 있다 |
-| Actor | `server/region/src/main/java/MyGame/region/infrastructure/zlink/Player.java`, `server/region/src/main/java/MyGame/region/infrastructure/zlink/PlayerFactory.java` | 참가 완료 처리(`RegionFull` reply)를 가진 `Player`와 그 factory | 새 `server/region/` module(`build.gradle.kts`, `Program.java`)과 `settings.gradle.kts`의 `include("server:region")`, `server/config/` 파일, `Program.java`의 Actor factory 등록. `zlink.structure.json`의 node 선언과 `Structure.java`의 검사. 기본 셋업의 `Nodes.java`는 Session 역할만 시작하므로 새 역할을 위해 `Nodes.java`와 `Roles.java`를 확장한다 |
-| Spot | `server/region/src/main/java/MyGame/region/infrastructure/zlink/Region.java`, `server/region/src/main/java/MyGame/region/domain/Positions.java` | 정원에 따른 admission, 위치, view broadcast를 가진 `Region`. 위치 규칙은 `Positions`에 둔다 | `Program.java`의 Spot factory 등록. `zlink.structure.json`의 `spots`·`nodes` 선언과 이를 등록과 비교하는 `Structure.java` 검사(기본 셋업은 Spot을 선언하지 않는다) |
-| Entry·첫 입장 | `server/region/src/main/java/MyGame/region/infrastructure/zlink/Entry.java`, `server/region/src/main/java/MyGame/region/infrastructure/zlink/Enter.java`, `reconnect` in `server/region/src/main/java/MyGame/region/infrastructure/zlink/Actions.java` | Entry Spot이 소유하는 `region-full` 재시도 순서를 가진 `Entry.select`와 `reconnect`의 identity 확인과 view 재전송 | Entry Spot 등록과 `entry` 선언. 첫 입장 시나리오와 재접속 뒤 상태를 비교하는 `reconnect` 시나리오 |
-| Session binding | `server/session/src/main/java/MyGame/session/infrastructure/zlink/GameSession.java` | 첫 packet 검사, 그다음 Actor 조회·생성, binding과 원래 typed packet relay | `Enter.enter`와 같은 첫 packet 타입. 기본 셋업의 `PlayerSession.java`에 옮긴다 |
-| Host relocation | `server/region/src/main/java/MyGame/region/infrastructure/zlink/RegionTransfer.java`, `server/region/src/main/java/MyGame/region/infrastructure/zlink/PlayerTransfer.java`, `server/shared/src/main/java/MyGame/Transfer.java`, `server/shared/src/main/java/MyGame/Hosting.java` | Region 위치와 Player의 `capture`·`restore`를 가진 snapshot adapter | `preserveStateWith(...)` 등록. 서버 교체 뒤에도 연결·상태가 유지되고 대체 node가 새 작업을 받는지 판정하는 `update` 시나리오 |
-| 동적 던전 | `server/instance/src/main/java/MyGame/instance/infrastructure/zlink/Dungeon.java`, `server/instance/src/main/java/MyGame/instance/infrastructure/zlink/DungeonActions.java`, `server/instance/src/main/java/MyGame/instance/Program.java`, `dungeon` in `server/region/src/main/java/MyGame/region/infrastructure/zlink/Actions.java` | 동적 User Spot 생성 형태와 Dungeon 정보 요청 | 새 `server/instance/` module과 설정. `zlink.structure.json`의 동적 `dungeon` Spot과 `GetOrCreate` edge |
-
-### 옮기는 순서와 규칙
-
-기능은 표의 행 하나씩 옮기고, 하나를 옮길 때마다 빌드, 구조 검사, 관련 e2e 시나리오를 실행한다. 시나리오 ID는 `server/shared/src/main/java/MyGame/Scenario.java`의 `Scenario` enum, `e2e/src/main/java/MyGame/e2e/Scenarios.java`의 분기, `zlink.structure.json`의 `run.scenarios`, `run.commands`의 시나리오 선택 예시에 함께 추가한다. 판정은 실제로 받은 응답과 이벤트로 하고, 고정 대기나 기한 확대로 통과시키지 않는다.
-
-메시지 contract부터 옮긴다. `server/shared/src/main/java/MyGame/`에 typed record를 먼저 정의한 뒤, 컴파일 오류가 나는 handler를 하나씩 새 메시지로 옮긴다. 첫 입장 packet을 바꾸면 `GameSession`의 첫 packet 검사와 `Enter`가 같은 타입을 받도록 함께 고친다.
-
-상태는 그 상태를 결정하는 객체에 둔다. membership과 위치는 `Region`(`Positions`)에 두고, `region-full` 뒤의 다음 instance index는 Entry Spot이 소유한다. 상태 필드를 바꿀 때는 `Positions`와 `RegionTransfer`의 `capture`·`restore`를 함께 고친다. 빠뜨린 필드는 relocation 뒤 사라지고, `update` 시나리오가 그 손실을 잡는다.
-
-역할 이름을 이 샘플과 다르게 정하려면 타입 이름, `Names.java`, `server/config/`, module·package 이름과 `settings.gradle.kts`, `zlink.structure.json`을 한 번에 바꾼다. 이름 변경은 기능을 옮기는 변경과 나눠서 진행하면 실패 원인을 찾기 쉽다.
-
-옮긴 뒤 `update`가 실패하면 snapshot에 빠진 상태가 있는지 먼저 확인한다. 그다음 [디버깅](#디버깅)의 message flow로 첫 실패 단계를 찾는다.
+1. `server/shared/src/main/java/MyGame/Names.java`의 공통 상수와 shared 계약에 새 요청·결과를 추가한다. 정수 상한은 `2^53-1`, `RetryAfterMs`는 32-bit 정수다.
+2. `server/region/src/main/java/MyGame/region/domain/Positions.java`에 상태와 판정을 추가한다. 이동은 변위와 순번을 받아 검사하며, 거부는 좌표·순번·예산을 변경하지 않는다. `MaxStep=10`, 지역 경계는 `0..100`, 속도는 초당 `MaxStep*5`다. 시험용 단조 시계는 생성자로만 전달한다. snapshot에는 남은 ms를 저장한다.
+3. `server/region/src/main/java/MyGame/region/infrastructure/zlink/Entry.java`에서 허용 지역과 최대 복제본 2개를 판정한다. 정원 초과·생성 거절은 `RegionUnavailable(region, "capacity-exhausted")`, 미등록 지역은 `region-unknown`으로 응답한다.
+4. `server/session/src/main/java/MyGame/session/infrastructure/zlink/GameSession.java`의 허용 목록에 클라이언트 패킷만 추가한다. 내부 패킷은 `ActionRejected("packet-not-allowed", 0)`으로 거부한다.
+5. `e2e/src/main/java/MyGame/e2e/DomainChecks.java`에 도메인 경계 검사를, `e2e/src/main/java/MyGame/e2e/Scenarios.java`에 공개 동작 검사를 추가한다. `./run-e2e.sh --check-domain` 또는 `-CheckDomain`으로 도메인만 검사한다. 시간 제한 거부 뒤에는 서버의 `RetryAfterMs`만 기다린다.
+6. 요청자에게 직접 이동 결과를 보내고 다른 참가자에게는 기존 Region broadcast 하나로 전달한다. README와 `zlink.structure.json`의 시나리오 목록을 함께 갱신한다.
 
 ## 개발 시 주의점
 

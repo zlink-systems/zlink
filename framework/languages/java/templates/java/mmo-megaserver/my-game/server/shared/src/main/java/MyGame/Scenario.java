@@ -2,6 +2,7 @@ package MyGame;
 
 public enum Scenario {
     REGION,
+    MOVEMENT,
     DUNGEON,
     RECONNECT,
     UPDATE;

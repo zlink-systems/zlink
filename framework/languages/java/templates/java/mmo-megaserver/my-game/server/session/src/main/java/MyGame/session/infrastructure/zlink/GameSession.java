@@ -9,6 +9,8 @@ import systems.zlink.framework.streams.*;
 import java.util.concurrent.*;
 
 public final class GameSession implements ZLinkSession {
+    private static final java.util.Set<String> ALLOWED_PACKETS = java.util.Set.of(
+        "EnterRegionRequest", "MoveRequest", "ViewRequest", "OpenDungeonRequest", "SessionInfoRequest");
     private final ZLinkSessionContext context;
     private final ZLinkActorManager actors;
 
@@ -35,6 +37,8 @@ public final class GameSession implements ZLinkSession {
 
     public CompletionStage<Void> onDispatch(
             ZLinkSessionDispatchContext dispatch, ZLinkMessage payload) {
+        if (!ALLOWED_PACKETS.contains(dispatch.packetName()))
+            return context.client().send(new ActionRejected("packet-not-allowed", 0)).submit();
         if (dispatch.packetName().equals(SessionInfoRequest.class.getSimpleName())) {
             var actor = bound();
             return context.client()

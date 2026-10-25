@@ -11,13 +11,35 @@ public static class GameNames
     public const string SessionStream = "players";
     public const int DefaultCapacity = 2;
     public const int DefaultRegionLimit = 2;
+    public const int MaxReplicasPerRegion = 2;
+    public const int MaxStep = 10;
+    public const int RegionMinX = 0;
+    public const int RegionMaxX = 100;
+    public const double MaxSpeed = MaxStep * 5.0;
+    public const long MaxSafeInteger = 9_007_199_254_740_991;
+
+    public static IReadOnlyList<string> AllowedRegions { get; } = Array.AsReadOnly(
+        new[] { "forest", "desert" }
+    );
 
     public static string RegionId(string region, int index) => $"{region}-{index}";
+
+    public static bool IsAllowedRegion(string? region) =>
+        region is not null && AllowedRegions.Contains(region, StringComparer.Ordinal);
 }
 
 public static class Rejection
 {
     public const string RegionFull = "region-full";
+    public const string PacketNotAllowed = "packet-not-allowed";
+    public const string NonFinite = "non-finite";
+    public const string StepTooLarge = "step-too-large";
+    public const string OutsideRegion = "outside-region";
+    public const string MoveBudget = "move-budget";
+    public const string StaleSequence = "stale-sequence";
+    public const string RegionUnknown = "region-unknown";
+    public const string CapacityExhausted = "capacity-exhausted";
+    public const string IntegerOutOfRange = "integer-out-of-range";
 }
 
 public sealed record EnterRegionRequest(string PlayerId, string Region);
@@ -26,9 +48,13 @@ public sealed record JoinRegion(string Region, int Index);
 
 public sealed record RegionFull(string Reason, string Region, int Index);
 
-public sealed record MoveRequest(int X, long Sequence);
+public sealed record RegionUnavailable(string Region, string Reason);
 
-public sealed record PlayerPosition(string PlayerId, int X);
+public sealed record MoveRequest(double Delta, long Sequence);
+
+public sealed record ActionRejected(string Reason, int RetryAfterMs);
+
+public sealed record PlayerPosition(string PlayerId, double X, long Sequence);
 
 public sealed record RegionView(string RegionId, string NodeId, PlayerPosition[] Players);
 

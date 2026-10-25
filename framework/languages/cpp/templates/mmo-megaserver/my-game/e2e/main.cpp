@@ -1,4 +1,5 @@
 #include "scenarios.hpp"
+#include "domain_checks.hpp"
 int main (int argc, char **argv)
 {
 #ifndef _WIN32
@@ -7,7 +8,7 @@ int main (int argc, char **argv)
     std::filesystem::path root = std::filesystem::current_path ();
     std::filesystem::path bin = std::filesystem::absolute (argv[0]).parent_path ();
     std::string selection;
-    bool check_only = false;
+    bool check_only = false, check_domain_only = false;
     std::unique_ptr<MyGame::E2E::World> world;
     int exit = 0, passed = 0;
     std::vector<MyGame::E2E::ScenarioDefinition> selected;
@@ -17,6 +18,8 @@ int main (int argc, char **argv)
             const std::string option (argv[i]);
             if (option == "--check-structure")
                 check_only = true;
+            else if (option == "--check-domain")
+                check_domain_only = true;
             else if (i + 1 < argc && option == "--root")
                 root = argv[++i];
             else if (i + 1 < argc && option == "--scenario")
@@ -24,13 +27,16 @@ int main (int argc, char **argv)
             else
                 throw std::invalid_argument (
                   "Usage: my-game-e2e [--root path] [--scenario "
-                  "region,dungeon,reconnect,update] [--check-structure]");
+                  "region,movement,dungeon,reconnect,update] [--check-structure] [--check-domain]");
         }
         MyGame::E2E::check_structure (root);
         if (check_only) {
             std::cout << "Structure: passed" << std::endl;
             return 0;
         }
+        MyGame::E2E::check_domain ();
+        if (check_domain_only)
+            return 0;
         if (selection.empty ())
             selected.assign (MyGame::E2E::scenario_order.begin (),
                              MyGame::E2E::scenario_order.end ());
@@ -60,6 +66,9 @@ int main (int argc, char **argv)
             switch (scenario.id) {
                 case MyGame::E2E::Scenario::region:
                     MyGame::E2E::region (endpoint);
+                    break;
+                case MyGame::E2E::Scenario::movement:
+                    MyGame::E2E::movement (endpoint);
                     break;
                 case MyGame::E2E::Scenario::dungeon:
                     MyGame::E2E::dungeon (endpoint);

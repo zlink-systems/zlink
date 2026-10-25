@@ -63,7 +63,8 @@ public final class Region implements ZLinkSpot<Player> {
 
     public CompletionStage<Void> move(Player actor, MoveRequest request) {
         var id = actor.context().actorId();
-        positions.move(id, request.x(), request.sequence());
+        var rejection = positions.move(id, request.delta(), request.sequence());
+        if (rejection != null) return actor.context().boundSession().send(rejection).submit();
         // The request handler replies directly; other recipients use the public Actor route.
         var view = view();
         return actor.context()
