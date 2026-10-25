@@ -2432,6 +2432,8 @@ internal sealed class SpotCloseHost : IAsyncDisposable
         return instance.State.ToString();
     }
 
+    internal Task StopAsync() => _hosted.StopAsync(CancellationToken.None);
+
     public async ValueTask DisposeAsync()
     {
         State.ReleaseOnClosing.TrySetResult();
@@ -2755,6 +2757,8 @@ internal sealed class SpotCloseFaultStore(IZLinkLocationStore inner) : IZLinkLoc
     internal TaskCompletionSource ReleasePut { get; } =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
     internal string? ConflictPutsFor { get; set; }
+    internal string? ThrowAuthorityMutationFor { get; set; }
+    internal bool ThrowAuthorityDelete { get; set; }
     internal string? ObserveMissingPlacementFor { get; set; }
     internal string? ObserveAuthorityReleaseFor { get; set; }
     internal Action? OnAuthorityReleased { get; set; }
@@ -2787,6 +2791,27 @@ internal sealed class SpotCloseFaultStore(IZLinkLocationStore inner) : IZLinkLoc
         CancellationToken cancellationToken = default
     )
     {
+        if (
+            ThrowAuthorityMutationFor is { } failedSpot
+            && request.Mutations.Any(mutation =>
+                (
+                    mutation is ZLinkStoreMutation.Put put
+                    && !ThrowAuthorityDelete
+                    && put.Key.Value.StartsWith("authority\0", StringComparison.Ordinal)
+                    && put.Key.Value.EndsWith("\0" + failedSpot, StringComparison.Ordinal)
+                )
+                || (
+                    mutation is ZLinkStoreMutation.Delete delete
+                    && ThrowAuthorityDelete
+                    && delete.Key.Value.StartsWith("authority\0", StringComparison.Ordinal)
+                    && delete.Key.Value.EndsWith("\0" + failedSpot, StringComparison.Ordinal)
+                )
+            )
+        )
+        {
+            ThrowAuthorityMutationFor = null;
+            throw new InvalidOperationException("Injected authority mutation failure.");
+        }
         if (
             HoldNextPutFor is { } target
             && request.Mutations.Any(mutation =>

@@ -122,12 +122,24 @@ public sealed partial class SpotCloseConformanceTests
             {
                 await host.Store.AuthorityDeleteHeld.Task.WaitAsync(Wait);
                 Assert.Null(await host.Runtime.FindAsync(original.SpotId));
+                Assert.Equal(
+                    1,
+                    await host
+                        .Runtime.GetSpotNodeRuntime(SpotCloseHost.MeshName)
+                        .Catalog.CloseTransactionCountAsync()
+                );
                 var second = host.Manager.CloseAsync(original).AsTask();
                 Assert.False(second.IsCompleted);
                 Assert.False(close.IsCompleted);
                 host.Store.ReleaseAuthorityDelete.TrySetResult();
                 Assert.True(await second.WaitAsync(Wait));
                 Assert.True(await close.WaitAsync(Wait));
+                Assert.Equal(
+                    0,
+                    await host
+                        .Runtime.GetSpotNodeRuntime(SpotCloseHost.MeshName)
+                        .Catalog.CloseTransactionCountAsync()
+                );
             }
             finally
             {
@@ -427,6 +439,65 @@ public sealed partial class SpotCloseConformanceTests
             host.Store.ReleasePut.TrySetResult();
             await close.WaitAsync(Wait);
         }
+    }
+
+    [Theory]
+    [InlineData("external-success")]
+    [InlineData("context-success")]
+    [InlineData("membership")]
+    [InlineData("cas-conflict")]
+    [InlineData("put-exception")]
+    [InlineData("delete-exception")]
+    [InlineData("closing-exception")]
+    [InlineData("host-shutdown")]
+    public async Task Close_transaction_registry_is_empty_after_terminal_path(string path)
+    {
+        await using var host = await SpotCloseHost.StartAsync();
+        var spot = await host.CreateSpotAsync();
+        var catalog = host.Runtime.GetSpotNodeRuntime(SpotCloseHost.MeshName).Catalog;
+        switch (path)
+        {
+            case "external-success":
+            case "context-success":
+                Assert.True(
+                    await BeginClose(host, spot, path == "context-success").WaitAsync(Wait)
+                );
+                break;
+            case "membership":
+                await host.JoinActorAsync(spot.SpotId);
+                await host.State.Joined.Task.WaitAsync(Wait);
+                Assert.False(await host.Manager.CloseAsync(spot));
+                break;
+            case "cas-conflict":
+                host.Store.ConflictPutsFor = spot.SpotId;
+                var conflict = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
+                    host.Manager.CloseAsync(spot).AsTask()
+                );
+                Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, conflict.Kind);
+                Assert.Equal("Ready", await host.AuthorityAsync(spot.SpotId));
+                break;
+            case "put-exception":
+            case "delete-exception":
+                host.Store.ThrowAuthorityMutationFor = spot.SpotId;
+                host.Store.ThrowAuthorityDelete = path == "delete-exception";
+                var failure = await Record.ExceptionAsync(() =>
+                    host.Manager.CloseAsync(spot).AsTask()
+                );
+                Assert.NotNull(failure);
+                Assert.Contains("Injected authority mutation failure", failure.ToString());
+                break;
+            case "closing-exception":
+                host.State.ThrowOnClosing = true;
+                Assert.True(await host.Manager.CloseAsync(spot));
+                Assert.Equal(1, host.State.OnClosingCalls);
+                break;
+            case "host-shutdown":
+                await host.StopAsync();
+                break;
+            default:
+                throw new InvalidOperationException($"Unknown terminal path: {path}");
+        }
+        Assert.Equal(0, await catalog.CloseTransactionCountAsync());
     }
 
     private static TestHostMessageFlowListener ClosingFlow(
