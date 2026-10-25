@@ -2584,9 +2584,9 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                       || created->state == spot_create_state_t::existing,
                     std::move (application_reply), std::move (preparation_terminal)};
               },
-              [weak_registration = std::weak_ptr (registration)] (const std::string &spot_id,
-                                                                  host::spot_close_begin_t begin,
-                                                                  host::spot_close_done_t done) {
+              [weak_registration = std::weak_ptr (registration)] (
+                const std::string &spot_id, std::uint64_t object_generation,
+                host::spot_close_begin_t begin, host::spot_close_done_t done) {
                   const auto registration = detail::lock_runtime_owner (weak_registration);
                   // The materializer registers the activation under this local id.
                   std::vector<std::uint8_t> rid_bytes;
@@ -2596,7 +2596,7 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                         static_cast<std::uint8_t> (static_cast<unsigned char> (value)));
                   detail::spot_node_runtime_t (registration->spot_state)
                     .close_user_spot_owner (zlink::routing_id_t::from (rid_bytes).to_string (),
-                                            std::move (begin), std::move (done));
+                                            object_generation, std::move (begin), std::move (done));
               });
             if (!registration->spot_state->snapshot.instance_spot_names.empty ()) {
                 if (!instance_relocations)
