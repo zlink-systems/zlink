@@ -1427,21 +1427,24 @@ void zlink::socket_base_t::process_term (int linger_)
     own_t::process_term (linger_);
 }
 
-void zlink::socket_base_t::process_term_endpoint (std::string *endpoint_)
+void zlink::socket_base_t::process_term_endpoint (std::string *endpoint_, uint64_t intent_id_)
 {
-    // Both sessions can end the same connect intent. Once its exact key is
-    // gone, a later command must not resolve its address to another intent.
-    if (endpoint_runtime ().endpoints.count (*endpoint_) != 0) {
-        std::vector<pipe_t *> terminating_pipes;
-        std::vector<pipe_t *> peer_progress_pipes;
-        std::vector<own_t *> bound_children;
-        // A failed connect names its own intent; a bind can share the URI.
-        term_endpoint_internal (endpoint_->c_str (), &terminating_pipes,
-                                &peer_progress_pipes, &bound_children,
-                                endpoint_type_connect);
-        zlink_assert (bound_children.empty ());
-        zlink_assert (terminating_pipes.empty ());
-        zlink_assert (peer_progress_pipes.empty ());
+    // A physical failure retires its children while retaining the logical
+    // registration. Its identity also fences a delayed command after reconnect.
+    const auto range = endpoint_runtime ().endpoints.equal_range (*endpoint_);
+    for (auto it = range.first; it != range.second; ++it) {
+        endpoint_pipe_t &entry = it->second;
+        if (entry.local_type != endpoint_type_connect || !entry.connection_attempt
+            || entry.connection_attempt->row.intent_id != intent_id_)
+            continue;
+        if (entry.transport_pair_state)
+            entry.transport_pair_state->disable_reconnect ();
+        if (entry.pipe)
+            entry.pipe->terminate (false);
+        if (entry.endpoint)
+            term_child (entry.endpoint);
+        entry.pipe = NULL;
+        entry.endpoint = NULL;
     }
     delete endpoint_;
 }
@@ -1454,7 +1457,8 @@ void zlink::socket_base_t::inproc_reconnect_task_main (void *arg_)
 
 bool zlink::socket_base_t::schedule_inproc_reconnect (
   const std::string &endpoint_,
-  const endpoint_uri_pair_t &endpoint_pair_)
+  const endpoint_uri_pair_t &endpoint_pair_,
+  const std::shared_ptr<connection_attempt_result_t> &attempt_)
 {
     if (options.reconnect_ivl <= 0 || is_terminating () || _ctx_terminated)
         return false;
@@ -1478,8 +1482,8 @@ bool zlink::socket_base_t::schedule_inproc_reconnect (
 
         socket_inproc_reconnect_runtime_t::pending_t::iterator inserted;
         try {
-            inserted = runtime.pending.insert (
-              std::make_pair (deadline, endpoint_));
+            inserted = runtime.pending.insert (std::make_pair (
+              deadline, socket_inproc_reconnect_runtime_t::pending_value_t (endpoint_, attempt_)));
         }
         catch (const std::bad_alloc &) {
             // The asynchronous disconnect path has no caller to which it can
@@ -1554,9 +1558,14 @@ void zlink::socket_base_t::process_scheduled_inproc_reconnects ()
 
         zlink_assert (!due.empty ());
         try {
-            (void) connect_internal (due.mapped ().c_str (), false);
+            options.connection_attempt = due.mapped ().second;
+            if (!options.connection_attempt
+                || options.connection_attempt->registration != connection_attempt_result_t::removed)
+                (void) connect_internal (due.mapped ().first.c_str (), false);
+            options.connection_attempt.reset ();
         }
         catch (const std::bad_alloc &) {
+            options.connection_attempt.reset ();
             scoped_lock_t lock (runtime.sync);
             if (!runtime.stopping)
                 runtime.pending.insert (std::move (due));
@@ -1578,7 +1587,7 @@ bool zlink::socket_base_t::cancel_scheduled_inproc_reconnects (
     for (socket_inproc_reconnect_runtime_t::pending_t::iterator it =
            runtime.pending.begin ();
          it != runtime.pending.end ();) {
-        if (it->second == endpoint_) {
+        if (it->second.first == endpoint_) {
             cancelled = true;
             runtime.pending.erase (it++);
         } else

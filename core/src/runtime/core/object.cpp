@@ -196,7 +196,8 @@ void zlink::object_t::process_command (const command_t &cmd_)
             break;
 
         case command_t::term_endpoint:
-            process_term_endpoint (cmd_.args.term_endpoint.endpoint);
+            process_term_endpoint (cmd_.args.term_endpoint.endpoint,
+                                   cmd_.args.term_endpoint.intent_id);
             break;
 
         case command_t::reap:
@@ -523,12 +524,15 @@ void zlink::object_t::release_endpoint (own_t *destination_)
     completion.wait ();
 }
 
-void zlink::object_t::send_term_endpoint (own_t *destination_, std::string *endpoint_)
+void zlink::object_t::send_term_endpoint (own_t *destination_,
+                                          std::string *endpoint_,
+                                          uint64_t intent_id_)
 {
     command_t cmd;
     cmd.destination = destination_;
     cmd.type = command_t::term_endpoint;
     cmd.args.term_endpoint.endpoint = endpoint_;
+    cmd.args.term_endpoint.intent_id = intent_id_;
     send_command (cmd);
 }
 
@@ -650,7 +654,7 @@ void zlink::object_t::process_release_endpoint ()
     zlink_assert (false);
 }
 
-void zlink::object_t::process_term_endpoint (std::string *)
+void zlink::object_t::process_term_endpoint (std::string *, uint64_t)
 {
     zlink_assert (false);
 }

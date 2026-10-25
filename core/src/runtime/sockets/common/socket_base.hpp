@@ -299,6 +299,17 @@ class socket_base_t : public own_t,
     int getsockopt (int option_, void *optval_, size_t *optvallen_);
     int get_events (int events_, uint32_t *out_);
     virtual bool has_route_change () const { return false; }
+    void update_inproc_connection_attempt (pipe_t *, bool);
+    bool has_connection_attempt_change () const;
+    int connection_attempts_snapshot (
+      zlink_connection_attempt_t *, size_t, size_t *, char *, size_t, size_t *);
+    void report_connection_attempt (const options_t &options_,
+                                    bool ready_,
+                                    int error_,
+                                    uint32_t stage_,
+                                    uint32_t kind_ = 0,
+                                    uint32_t disconnect_reason_ = 0,
+                                    uint64_t connection_id_ = 0);
     int get_events_internal (int events_, uint32_t *out_,
                              bool consume_primary_signaler_ = true);
     void set_all_pipes_nodelay ();
@@ -737,9 +748,13 @@ class socket_base_t : public own_t,
     void validate_inproc_connection (pipe_t *pipe_);
     void emit_inproc_connection_ready (pipe_t *pipe_);
     int materialize_inproc_completion_lane (
-      socket_base_t *bind_socket_, const options_t &bind_options_,
-      const std::string &endpoint_uri_, uint64_t pair_id_,
-      uint64_t pair_generation_, bool bind_side_direct_);
+      socket_base_t *bind_socket_,
+      const options_t &bind_options_,
+      const std::string &endpoint_uri_,
+      uint64_t pair_id_,
+      uint64_t pair_generation_,
+      bool bind_side_direct_,
+      const std::shared_ptr<connection_attempt_result_t> &attempt_);
 
     //  Query the state of a specific peer. The default implementation
     //  always returns an ENOTSUP error.
@@ -1219,9 +1234,9 @@ class socket_base_t : public own_t,
     void stop_monitor (bool send_monitor_stopped_event_ = true);
 
     static void inproc_reconnect_task_main (void *arg_);
-    bool schedule_inproc_reconnect (
-      const std::string &endpoint_,
-      const endpoint_uri_pair_t &endpoint_pair_);
+    bool schedule_inproc_reconnect (const std::string &endpoint_,
+                                    const endpoint_uri_pair_t &endpoint_pair_,
+                                    const std::shared_ptr<connection_attempt_result_t> &attempt_);
     void process_scheduled_inproc_reconnects ();
     bool cancel_scheduled_inproc_reconnects (const std::string &endpoint_);
     void stop_inproc_reconnect_scheduler ();
@@ -1412,7 +1427,7 @@ class socket_base_t : public own_t,
     void process_stop () ZLINK_FINAL;
     void process_bind (zlink::pipe_t *pipe_) ZLINK_FINAL;
     void process_term (int linger_) ZLINK_FINAL;
-    void process_term_endpoint (std::string *endpoint_) ZLINK_FINAL;
+    void process_term_endpoint (std::string *endpoint_, uint64_t intent_id_) ZLINK_FINAL;
     void process_transport_pair_owner_request (
       zlink::session_base_t *session_, int peer_socket_type_,
       uint64_t connection_id_, uint64_t pair_id_, uint64_t generation_,

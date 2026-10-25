@@ -153,6 +153,8 @@ void zlink::asio_ws_connecter_t::timer_event (int id_)
           &_connect_timer_started, [this] () { start_connecting (); },
           [this] () {
               if (_connecting) {
+                  _socket_ptr->report_connection_attempt (options, false, ETIMEDOUT,
+                                                          ZLINK_CONNECTION_STAGE_TRANSPORT);
                   boost::system::error_code ec;
                   _socket.cancel (ec);
                   _connecting = false;
@@ -194,6 +196,8 @@ void zlink::asio_ws_connecter_t::start_connecting ()
     }
     if (rc != 0) {
         WS_CONNECTER_DBG ("start_connecting: resolve failed");
+        _socket_ptr->report_connection_attempt (options, false, errno,
+                                                ZLINK_CONNECTION_STAGE_RESOLVE);
         if (_secure) {
             LIBZLINK_DELETE (_addr->resolved.wss_addr);
         } else {
@@ -217,6 +221,8 @@ void zlink::asio_ws_connecter_t::start_connecting ()
     int rc = _addr->resolved.ws_addr->resolve (_addr->address.c_str (), false, options.ipv6);
     if (rc != 0) {
         WS_CONNECTER_DBG ("start_connecting: resolve failed");
+        _socket_ptr->report_connection_attempt (options, false, errno,
+                                                ZLINK_CONNECTION_STAGE_RESOLVE);
         LIBZLINK_DELETE (_addr->resolved.ws_addr);
         add_reconnect_timer ();
         return;
@@ -246,11 +252,15 @@ void zlink::asio_ws_connecter_t::start_connecting ()
     _socket.open (protocol, ec);
     if (ec) {
         WS_CONNECTER_DBG ("start_connecting: socket open failed: %s", ec.message ().c_str ());
+        _socket_ptr->report_connection_attempt (options, false, ec.value (),
+                                                ZLINK_CONNECTION_STAGE_TRANSPORT);
         add_reconnect_timer ();
         return;
     }
 
     if (!tune_socket (_socket.native_handle ())) {
+        _socket_ptr->report_connection_attempt (options, false, errno,
+                                                ZLINK_CONNECTION_STAGE_TRANSPORT);
         close ();
         add_reconnect_timer ();
         return;
@@ -292,6 +302,8 @@ void zlink::asio_ws_connecter_t::on_connect (const boost::system::error_code &ec
         }
 
         WS_CONNECTER_DBG ("on_connect: connection failed: %s", ec.message ().c_str ());
+        _socket_ptr->report_connection_attempt (options, false, ec.value (),
+                                                ZLINK_CONNECTION_STAGE_TRANSPORT);
         close ();
         add_reconnect_timer ();
         return;
@@ -364,6 +376,9 @@ void zlink::asio_ws_connecter_t::create_engine (fd_t fd_, const std::string &loc
         ssl_context =
           ssl_context_helper_t::create_client_context_from_options (options, _tls_hostname);
         if (!ssl_context) {
+            _socket_ptr->report_connection_attempt (options, false, EINVAL,
+                                                    ZLINK_CONNECTION_STAGE_TLS,
+                                                    ZLINK_CONNECTION_FAILURE_PROTOCOL_FAILED);
             WS_CONNECTER_DBG ("create_engine: failed to create SSL context");
 #ifdef ZLINK_HAVE_WINDOWS
             closesocket (fd_);

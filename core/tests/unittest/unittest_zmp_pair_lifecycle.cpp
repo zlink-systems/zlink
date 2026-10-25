@@ -338,11 +338,143 @@ void test_completion_poller_registration_keeps_transport_owner_progress ()
     test_context_socket_close_zero_linger (server);
 }
 
+zlink_connection_attempt_t attempt_snapshot (void *socket_)
+{
+    zlink_connection_attempt_t row = {};
+    size_t count = 0, bytes = 0;
+    char endpoint[128];
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
+                           zlink_socket_connection_attempts_snapshot (
+                             socket_, &row, 1, &count, endpoint, sizeof endpoint, &bytes));
+    TEST_ASSERT_EQUAL_UINT (1, count);
+    return row;
+}
+
+void test_attempt_owner_aggregates_lanes_and_rejects_retired_results ()
+{
+    void *socket = test_context_socket (ZLINK_SOCKET_PAIR);
+    const char *endpoint = "inproc://attempt-owner-results";
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONNECT_OK, zlink_connect (socket, endpoint));
+    zlink::socket_base_t *core = as_socket_handle (socket).socket;
+    zlink::options_t application =
+      zlink::session_termination_test_access_t::attempt_options (core, endpoint);
+    application.transport_pair_state.reset (new zlink::transport_pair_state_t);
+    application.transport_pair_id = 1;
+    application.transport_pair_generation = 1;
+    TEST_ASSERT_TRUE (application.transport_pair_state->set_expected_lane_count (2));
+    zlink::options_t completion = application;
+    completion.transport_lane = zlink::transport_lane_completion;
+    core->report_connection_attempt (application, false, ECONNREFUSED,
+                                     ZLINK_CONNECTION_STAGE_TRANSPORT);
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONNECTION_CONNECTING, attempt_snapshot (socket).state);
+    completion.transport_pair_state->mark_ready (completion.transport_lane,
+                                                 completion.transport_pair_generation);
+    core->report_connection_attempt (completion, true, 0, ZLINK_CONNECTION_STAGE_NONE);
+    const auto failure = attempt_snapshot (socket);
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONNECTION_ATTEMPT_FAILED, failure.state);
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONNECTION_FAILURE_REFUSED, failure.last_failure.kind);
+    core->report_connection_attempt (completion, true, 0, ZLINK_CONNECTION_STAGE_NONE);
+    TEST_ASSERT_EQUAL_UINT64 (failure.last_failure_id, attempt_snapshot (socket).last_failure_id);
+    application.transport_pair_state->mark_ready (application.transport_lane,
+                                                  application.transport_pair_generation);
+    core->report_connection_attempt (application, true, 0, ZLINK_CONNECTION_STAGE_NONE);
+    const auto success = attempt_snapshot (socket);
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONNECTION_CONNECTED, success.state);
+    TEST_ASSERT_EQUAL_UINT64 (failure.last_failure_id, success.last_failure_id);
+    TEST_ASSERT_NOT_EQUAL (failure.revision, success.revision);
+    // A replacement's failure cannot revoke an existing usable connection.
+    core->report_connection_attempt (completion, false, ECONNREFUSED,
+                                     ZLINK_CONNECTION_STAGE_TRANSPORT);
+    TEST_ASSERT_EQUAL_UINT64 (success.revision, attempt_snapshot (socket).revision);
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONNECT_OK, zlink_disconnect (socket, endpoint));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONNECT_OK, zlink_connect (socket, endpoint));
+    const auto replacement = attempt_snapshot (socket);
+    core->report_connection_attempt (application, true, 0, ZLINK_CONNECTION_STAGE_NONE);
+    core->report_connection_attempt (completion, false, ECONNREFUSED,
+                                     ZLINK_CONNECTION_STAGE_TRANSPORT);
+    // A delayed physical retirement command is fenced by the old intent too.
+    zlink::command_t retired = {};
+    retired.destination = core;
+    retired.type = zlink::command_t::term_endpoint;
+    retired.args.term_endpoint.endpoint = new std::string (endpoint);
+    retired.args.term_endpoint.intent_id = success.intent_id;
+    core->process_command (retired);
+    const auto after_late_result = attempt_snapshot (socket);
+    TEST_ASSERT_NOT_EQUAL (success.intent_id, replacement.intent_id);
+    TEST_ASSERT_EQUAL_UINT64 (replacement.revision, after_late_result.revision);
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONNECTION_CONNECTING, after_late_result.state);
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONNECT_OK, zlink_disconnect (socket, endpoint));
+    test_context_socket_close_zero_linger (socket);
+}
+
+void test_failed_connect_retained_null_entries_lifecycle ()
+{
+    for (int mode = 0; mode != 3; ++mode) {
+        void *context = zlink_ctx_new ();
+        TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_ctx_set (context, ZLINK_IO_THREADS, 2));
+        void *socket = zlink_socket (context, ZLINK_SOCKET_ROUTER);
+        const int no_reconnect = -1, zero = 0;
+        TEST_ASSERT_EQUAL_INT (
+          ZLINK_CONFIG_OK,
+          zlink_set_option (socket, ZLINK_OPT_RECONNECT_IVL, &no_reconnect, sizeof no_reconnect));
+        TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
+                               zlink_set_option (socket, ZLINK_OPT_LINGER, &zero, sizeof zero));
+        {
+            active_driver_t driver (socket);
+            TEST_ASSERT_EQUAL_INT (ZLINK_CONNECT_OK, zlink_connect (socket, "tcp://127.0.0.1:1"));
+            driver.pump ();
+            TEST_ASSERT_EQUAL_UINT (1, driver.peers.size ());
+            timer_access_t::expire (driver.peers[0].engine);
+            driver.pump ();
+            TEST_ASSERT_EQUAL_INT (ZLINK_CONNECTION_ATTEMPT_FAILED,
+                                   attempt_snapshot (socket).state);
+            TEST_ASSERT_EQUAL_UINT64 (
+              1, zlink::session_termination_test_access_t::retained_connect_count (driver.core));
+            if (mode == 0) {
+                TEST_ASSERT_EQUAL_INT (ZLINK_CONNECT_OK,
+                                       zlink_disconnect (socket, "tcp://127.0.0.1:1"));
+                driver.pump ();
+                size_t count, bytes;
+                TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
+                                       zlink_socket_connection_attempts_snapshot (
+                                         socket, NULL, 0, &count, NULL, 0, &bytes));
+                TEST_ASSERT_EQUAL_UINT64 (0, count);
+            }
+        }
+        if (mode == 2) {
+            int term_result = -1;
+            std::thread terminate_context ([&] { term_result = zlink_ctx_term (context); });
+            bool shutdown_observed = false;
+            const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (3);
+            while (std::chrono::steady_clock::now () < deadline) {
+                size_t count, bytes;
+                const auto result = zlink_socket_connection_attempts_snapshot (
+                  socket, NULL, 0, &count, NULL, 0, &bytes);
+                if (result == ZLINK_CONFIG_INTERNAL_ERROR && errno == ETERM) {
+                    shutdown_observed = true;
+                    break;
+                }
+                std::this_thread::yield ();
+            }
+            const auto close_result = zlink_close (socket);
+            terminate_context.join ();
+            TEST_ASSERT_TRUE (shutdown_observed);
+            TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, close_result);
+            TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, term_result);
+        } else {
+            TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, zlink_close (socket));
+            TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, zlink_ctx_term (context));
+        }
+    }
+}
+
 int main ()
 {
     setup_test_environment ();
     UNITY_BEGIN ();
     RUN_TEST (test_owner_timeout_before_commit_leaves_no_stale_completion_child);
     RUN_TEST (test_completion_poller_registration_keeps_transport_owner_progress);
+    RUN_TEST (test_attempt_owner_aggregates_lanes_and_rejects_retired_results);
+    RUN_TEST (test_failed_connect_retained_null_entries_lifecycle);
     return UNITY_END ();
 }

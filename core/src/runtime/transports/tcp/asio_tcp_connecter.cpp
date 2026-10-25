@@ -141,6 +141,8 @@ void zlink::asio_tcp_connecter_t::timer_event (int id_)
           &_connect_timer_started, [this] () { start_connecting (); },
           [this] () {
               if (_connecting) {
+                  _socket_ptr->report_connection_attempt (options, false, ETIMEDOUT,
+                                                          ZLINK_CONNECTION_STAGE_TRANSPORT);
                   boost::system::error_code ec;
                   _socket.cancel (ec);
                   _connecting = false;
@@ -169,6 +171,8 @@ void zlink::asio_tcp_connecter_t::start_connecting ()
     int rc = _addr->resolved.tcp_addr->resolve (_addr->address.c_str (), false, options.ipv6);
     if (rc != 0) {
         CONNECTER_DBG ("start_connecting: resolve failed");
+        _socket_ptr->report_connection_attempt (options, false, errno,
+                                                ZLINK_CONNECTION_STAGE_RESOLVE);
         LIBZLINK_DELETE (_addr->resolved.tcp_addr);
         add_reconnect_timer ();
         return;
@@ -186,11 +190,15 @@ void zlink::asio_tcp_connecter_t::start_connecting ()
     _socket.open (protocol, ec);
     if (ec) {
         CONNECTER_DBG ("start_connecting: socket open failed: %s", ec.message ().c_str ());
+        _socket_ptr->report_connection_attempt (options, false, ec.value (),
+                                                ZLINK_CONNECTION_STAGE_TRANSPORT);
         add_reconnect_timer ();
         return;
     }
 
     if (!tune_socket (_socket.native_handle ())) {
+        _socket_ptr->report_connection_attempt (options, false, errno,
+                                                ZLINK_CONNECTION_STAGE_TRANSPORT);
         close ();
         add_reconnect_timer ();
         return;
@@ -212,6 +220,8 @@ void zlink::asio_tcp_connecter_t::start_connecting ()
         _socket.bind (src_endpoint, ec);
         if (ec) {
             CONNECTER_DBG ("start_connecting: bind failed: %s", ec.message ().c_str ());
+            _socket_ptr->report_connection_attempt (options, false, ec.value (),
+                                                    ZLINK_CONNECTION_STAGE_TRANSPORT);
             close ();
             add_reconnect_timer ();
             return;
@@ -256,6 +266,8 @@ void zlink::asio_tcp_connecter_t::on_connect (const boost::system::error_code &e
 
         //  Connection failed
         CONNECTER_DBG ("on_connect: connection failed: %s", ec.message ().c_str ());
+        _socket_ptr->report_connection_attempt (options, false, ec.value (),
+                                                ZLINK_CONNECTION_STAGE_TRANSPORT);
         close ();
         add_reconnect_timer ();
         return;

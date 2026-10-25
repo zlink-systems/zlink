@@ -68,6 +68,26 @@ struct socket_monitor_event_record_t
     transport_lane_t transport_lane;
 };
 
+struct connection_attempt_result_t
+{
+    connection_attempt_result_t () : row (), registration (pending) {}
+    zlink_connection_attempt_t row;
+    enum registration_t
+    {
+        pending,
+        registered,
+        removed
+    };
+    registration_t registration;
+    std::string endpoint;
+    uint64_t outcome_generation = 0;
+    unsigned int failed_lanes = 0;
+    zlink_connection_failure_t pending_failure = {};
+    uint64_t ready_connection_id = 0;
+    uint64_t ready_pair_id = 0;
+    uint64_t ready_generation = 0;
+};
+
 struct socket_endpoint_pipe_t
 {
     socket_endpoint_pipe_t () : endpoint (NULL), pipe (NULL), local_type (endpoint_type_none),
@@ -92,6 +112,7 @@ struct socket_endpoint_pipe_t
     {
     }
 
+    std::shared_ptr<connection_attempt_result_t> connection_attempt;
     own_t *endpoint;
     pipe_t *pipe;
     endpoint_type_t local_type;
@@ -134,7 +155,12 @@ struct transport_pair_connect_intent_t
 class socket_inprocs_t
 {
   public:
-    void emplace (const char *endpoint_uri_, pipe_t *pipe_);
+    void emplace (const char *endpoint_uri_,
+                  pipe_t *pipe_,
+                  const std::shared_ptr<connection_attempt_result_t> &attempt_);
+    bool has_endpoint (const std::string &) const;
+    std::shared_ptr<connection_attempt_result_t> attempt_for_pipe (const pipe_t *) const;
+    void collect_attempts (std::set<connection_attempt_result_t *> *) const;
     int erase_pipes (const std::string &endpoint_uri_str_,
                      socket_base_t *owner_,
                      std::vector<pipe_t *> *terminating_pipes_,
@@ -155,13 +181,24 @@ class socket_inprocs_t
     }
 
   private:
-    typedef std::multimap<std::string, pipe_t *> map_t;
+    typedef std::multimap<std::string, socket_endpoint_pipe_t> map_t;
     map_t _inprocs;
 };
 
 struct socket_endpoint_runtime_t
 {
     typedef array_t<pipe_t, 3> attached_pipes_t;
+
+    // The endpoint owner serializes result publication and snapshot acknowledgement.
+    mutable std::recursive_mutex attempts_sync;
+    uint64_t next_attempt_token = 1;
+    uint64_t allocate_attempt_token ()
+    {
+        zlink_assert (next_attempt_token != 0 && next_attempt_token != UINT64_MAX);
+        return next_attempt_token++;
+    }
+    std::atomic<uint64_t> attempt_revision{0};
+    std::atomic<uint64_t> observed_attempt_revision{0};
 
     socket_endpoints_t endpoints;
     socket_inprocs_t inprocs;
@@ -189,7 +226,8 @@ struct socket_endpoint_runtime_t
 
 struct socket_inproc_reconnect_runtime_t
 {
-    typedef std::multimap<uint64_t, std::string> pending_t;
+    typedef std::pair<std::string, std::shared_ptr<connection_attempt_result_t>> pending_value_t;
+    typedef std::multimap<uint64_t, pending_value_t> pending_t;
 
     socket_inproc_reconnect_runtime_t () : task_id (0), stopping (false) {}
 

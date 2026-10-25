@@ -350,10 +350,9 @@ void zlink::ctx_inproc_registry_t::connect_inproc_sockets (
     if (!completion && lane_count == 2u && side_ == bind_side) {
         const std::string endpoint_uri =
           pending_connection_.connect_pipe->get_endpoint_pair ().identifier ();
-        if (pending_connection_.endpoint.socket
-              ->materialize_inproc_completion_lane (
-                bind_socket_, bind_options_, endpoint_uri, pair_id,
-                pair_generation, true)
+        if (pending_connection_.endpoint.socket->materialize_inproc_completion_lane (
+              bind_socket_, bind_options_, endpoint_uri, pair_id, pair_generation, true,
+              pending_connection_.endpoint.options.connection_attempt)
             != 0) {
             // pend_connection() reserved one connector sequence number. No
             // application bind command will consume it on this failure path.
@@ -428,10 +427,9 @@ void zlink::ctx_inproc_registry_t::connect_inproc_sockets (
         && !completion_materialized_before_application) {
         const std::string endpoint_uri =
           pending_connection_.connect_pipe->get_endpoint_pair ().identifier ();
-        if (pending_connection_.endpoint.socket
-              ->materialize_inproc_completion_lane (
-                bind_socket_, bind_options_, endpoint_uri, pair_id,
-                pair_generation, side_ == bind_side)
+        if (pending_connection_.endpoint.socket->materialize_inproc_completion_lane (
+              bind_socket_, bind_options_, endpoint_uri, pair_id, pair_generation,
+              side_ == bind_side, pending_connection_.endpoint.options.connection_attempt)
             != 0) {
             pending_connection_.connect_pipe->terminate (false);
             pending_connection_.bind_pipe->terminate (false);

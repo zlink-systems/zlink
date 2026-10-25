@@ -221,7 +221,28 @@ int zlink::socket_base_t::connect (const char *endpoint_uri_)
     if (!admission.acquired ())
         return -1;
     socket_public_api_lock_scope_t guard (lifecycle_coordinator ());
-    return connect_internal (endpoint_uri_);
+    if (unlikely (_ctx_terminated)) {
+        errno = ETERM;
+        return -1;
+    }
+    if (process_commands (0, false) != 0)
+        return -1;
+    std::lock_guard<std::recursive_mutex> lock (endpoint_runtime ().attempts_sync);
+    std::shared_ptr<connection_attempt_result_t> result (new connection_attempt_result_t);
+    result->endpoint = endpoint_uri_ ? endpoint_uri_ : "";
+    result->row.intent_id = endpoint_runtime ().allocate_attempt_token ();
+    result->row.revision = endpoint_runtime ().allocate_attempt_token ();
+    options.connection_attempt = result;
+    const int rc = connect_internal (endpoint_uri_, false);
+    options.connection_attempt.reset ();
+    if (rc == 0) {
+        result->registration = connection_attempt_result_t::registered;
+        endpoint_runtime ().attempt_revision.fetch_add (1, std::memory_order_release);
+        static_cast<mailbox_t *> (get_mailbox ())->signal ();
+    }
+    if (rc != 0)
+        result->registration = connection_attempt_result_t::removed;
+    return rc;
 }
 
 int zlink::socket_base_t::connect_internal (const char *endpoint_uri_,
@@ -468,10 +489,11 @@ int zlink::socket_base_t::connect_internal (const char *endpoint_uri_,
             // and before admission.
             if (paired_transport && lane == transport_lane_application)
                 apply_pending_connect_routing_id (pair_id, new_pipes[0]);
+            endpoint_runtime ().inprocs.emplace (endpoint_uri_, new_pipes[0],
+                                                 options.connection_attempt);
             attach_pipe (new_pipes[0], false, true, connected_inproc_now);
             if (connected_inproc_now)
                 emit_inproc_connection_ready (new_pipes[0]);
-            endpoint_runtime ().inprocs.emplace (endpoint_uri_, new_pipes[0]);
             if (paired_transport && lane == transport_lane_application)
                 paired_application_pipe = new_pipes[0];
         }
@@ -480,8 +502,6 @@ int zlink::socket_base_t::connect_internal (const char *endpoint_uri_,
         options.connected = true;
         return 0;
     }
-    if (unlikely (0 != endpoint_runtime ().endpoints.count (endpoint_uri_)))
-        return 0;
 
     const bool paired_transport =
       options.type == ZLINK_CORE_SOCKET_DEALER || options.type == ZLINK_CORE_SOCKET_ROUTER;
@@ -522,9 +542,13 @@ int zlink::socket_base_t::connect_internal (const char *endpoint_uri_,
 }
 
 int zlink::socket_base_t::materialize_inproc_completion_lane (
-  socket_base_t *bind_socket_, const options_t &bind_options_,
-  const std::string &endpoint_uri_, uint64_t pair_id_,
-  uint64_t pair_generation_, bool bind_side_direct_)
+  socket_base_t *bind_socket_,
+  const options_t &bind_options_,
+  const std::string &endpoint_uri_,
+  uint64_t pair_id_,
+  uint64_t pair_generation_,
+  bool bind_side_direct_,
+  const std::shared_ptr<connection_attempt_result_t> &attempt_)
 {
     if (!bind_socket_ || pair_id_ == 0 || pair_generation_ == 0
         || zmp_control::expected_transport_lane_count (
@@ -603,7 +627,7 @@ int zlink::socket_base_t::materialize_inproc_completion_lane (
     attach_pipe (new_pipes[0], false, true, true);
     emit_inproc_connection_ready (new_pipes[0]);
     bind_socket_->emit_inproc_connection_ready (new_pipes[1]);
-    endpoint_runtime ().inprocs.emplace (endpoint_uri_.c_str (), new_pipes[0]);
+    endpoint_runtime ().inprocs.emplace (endpoint_uri_.c_str (), new_pipes[0], attempt_);
     return 0;
 }
 
@@ -765,11 +789,12 @@ void zlink::socket_base_t::add_transport_pair_endpoint (
   const std::shared_ptr<transport_pair_connect_intent_t> &intent_,
   transport_lane_t lane_)
 {
+    endpoint_pipe_t entry (endpoint_, pipe_, endpoint_pair_.local_type, pair_state_, intent_,
+                           lane_);
+    entry.connection_attempt =
+      intent_ ? intent_->connect_options.connection_attempt : options.connection_attempt;
+    endpoint_runtime ().endpoints.ZLINK_MAP_INSERT_OR_EMPLACE (endpoint_pair_.identifier (), entry);
     launch_child (endpoint_);
-    endpoint_runtime ().endpoints.ZLINK_MAP_INSERT_OR_EMPLACE (
-      endpoint_pair_.identifier (),
-      endpoint_pipe_t (endpoint_, pipe_, endpoint_pair_.local_type, pair_state_,
-                       intent_, lane_));
 }
 
 void zlink::socket_base_t::process_transport_pair_owner_request (
@@ -952,9 +977,11 @@ void zlink::socket_base_t::add_endpoint (const endpoint_uri_pair_t &endpoint_pai
                                          own_t *endpoint_,
                                          pipe_t *pipe_)
 {
+    endpoint_pipe_t entry (endpoint_, pipe_, endpoint_pair_.local_type);
+    if (endpoint_pair_.local_type == endpoint_type_connect)
+        entry.connection_attempt = options.connection_attempt;
+    endpoint_runtime ().endpoints.ZLINK_MAP_INSERT_OR_EMPLACE (endpoint_pair_.identifier (), entry);
     launch_child (endpoint_);
-    endpoint_runtime ().endpoints.ZLINK_MAP_INSERT_OR_EMPLACE (
-      endpoint_pair_.identifier (), endpoint_pipe_t (endpoint_, pipe_, endpoint_pair_.local_type));
 }
 
 void zlink::socket_base_t::begin_inproc_pipe_termination (
@@ -1094,8 +1121,14 @@ int zlink::socket_base_t::term_endpoint_internal (
             // acknowledgement only after releasing this socket's turn.
             return 0;
         }
+        std::lock_guard<std::recursive_mutex> attempt_lock (endpoint_runtime ().attempts_sync);
+        const auto removed_attempt = endpoint_runtime ().inprocs.has_endpoint (endpoint_uri_str);
         const int rc = endpoint_runtime ().inprocs.erase_pipes (
           endpoint_uri_str, this, terminating_pipes_, peer_progress_pipes_);
+        if (rc == 0 && removed_attempt) {
+            endpoint_runtime ().attempt_revision.fetch_add (1, std::memory_order_release);
+            static_cast<mailbox_t *> (get_mailbox ())->signal ();
+        }
         if (rc != 0 && cancelled_retry)
             return 0;
         return rc;
@@ -1151,9 +1184,20 @@ int zlink::socket_base_t::term_endpoint_internal (
             current->second.pipe->terminate (false);
         if (current->second.local_type == endpoint_type_bind)
             bound_children_->push_back (current->second.endpoint);
-        else
+        else if (current->second.endpoint)
             term_child (current->second.endpoint);
-        endpoint_runtime ().endpoints.erase (current);
+        {
+            std::lock_guard<std::recursive_mutex> lock (endpoint_runtime ().attempts_sync);
+            if (current->second.connection_attempt
+                && current->second.connection_attempt->registration
+                     == connection_attempt_result_t::registered) {
+                current->second.connection_attempt->registration =
+                  connection_attempt_result_t::removed;
+                endpoint_runtime ().attempt_revision.fetch_add (1, std::memory_order_release);
+                static_cast<mailbox_t *> (get_mailbox ())->signal ();
+            }
+            endpoint_runtime ().endpoints.erase (current);
+        }
     }
 
     for (size_t i = 0, size = endpoint_runtime ().attached_pipe_count (); i != size; ++i) {
@@ -1293,4 +1337,208 @@ int zlink::socket_base_t::term_peer_rid (const zlink_routing_id_t *peer_rid_)
     }
 
     return 0;
+}
+
+
+bool zlink::socket_base_t::has_connection_attempt_change () const
+{
+    return endpoint_runtime ().attempt_revision.load (std::memory_order_acquire)
+           != endpoint_runtime ().observed_attempt_revision.load (std::memory_order_acquire);
+}
+
+int zlink::socket_base_t::connection_attempts_snapshot (zlink_connection_attempt_t *rows_,
+                                                        size_t capacity_,
+                                                        size_t *count_,
+                                                        char *bytes_,
+                                                        size_t bytes_capacity_,
+                                                        size_t *required_)
+{
+    socket_public_api_scope_t admission (lifecycle_coordinator ());
+    if (!admission.acquired ())
+        return -1;
+    socket_public_api_lock_scope_t guard (lifecycle_coordinator ());
+    if (options.type == ZLINK_CORE_SOCKET_STREAM) {
+        errno = ENOTSUP;
+        return -1;
+    }
+    if (_ctx_terminated) {
+        errno = ETERM;
+        return -1;
+    }
+    std::lock_guard<std::recursive_mutex> lock (endpoint_runtime ().attempts_sync);
+    std::set<connection_attempt_result_t *> unique;
+    endpoint_runtime ().inprocs.collect_attempts (&unique);
+    for (const auto &entry : endpoint_runtime ().endpoints)
+        if (entry.second.connection_attempt
+            && entry.second.connection_attempt->registration
+                 == connection_attempt_result_t::registered)
+            unique.insert (entry.second.connection_attempt.get ());
+    *count_ = unique.size ();
+    *required_ = 0;
+    for (const auto *result : unique)
+        *required_ += result->endpoint.size () + 1;
+    if (capacity_ < *count_ || bytes_capacity_ < *required_) {
+        errno = ENOBUFS;
+        return -1;
+    }
+    size_t index = 0, offset = 0;
+    for (const auto *result : unique) {
+        rows_[index] = result->row;
+        rows_[index].endpoint_offset = offset;
+        rows_[index++].endpoint_length = result->endpoint.size ();
+        memcpy (bytes_ + offset, result->endpoint.c_str (), result->endpoint.size () + 1);
+        offset += result->endpoint.size () + 1;
+    }
+    endpoint_runtime ().observed_attempt_revision.store (
+      endpoint_runtime ().attempt_revision.load (std::memory_order_acquire),
+      std::memory_order_release);
+    errno = 0;
+    return 0;
+}
+
+void zlink::socket_base_t::report_connection_attempt (const options_t &options_,
+                                                      bool ready_,
+                                                      int error_,
+                                                      uint32_t stage_,
+                                                      uint32_t kind_,
+                                                      uint32_t disconnect_reason_,
+                                                      uint64_t connection_id_)
+{
+    const auto &result = options_.connection_attempt;
+    if (!result)
+        return;
+    std::lock_guard<std::recursive_mutex> lock (endpoint_runtime ().attempts_sync);
+    if (result->registration == connection_attempt_result_t::removed)
+        return;
+    const auto &pair = options_.transport_pair_state;
+    const bool matches_ready =
+      result->ready_pair_id == options_.transport_pair_id
+      && result->ready_generation == options_.transport_pair_generation
+      && (options_.transport_pair_id != 0 || !connection_id_ || !result->ready_connection_id
+          || result->ready_connection_id == connection_id_);
+    if (pair && options_.transport_pair_generation != pair->current_generation ()
+        && !(!ready_ && stage_ == ZLINK_CONNECTION_STAGE_ESTABLISHED && matches_ready
+             && result->row.state == ZLINK_CONNECTION_CONNECTED))
+        return;
+    if (pair && result->row.state != ZLINK_CONNECTION_CONNECTED) {
+        if (result->outcome_generation != options_.transport_pair_generation) {
+            result->outcome_generation = options_.transport_pair_generation;
+            result->failed_lanes = 0;
+            result->pending_failure = {};
+        }
+        const unsigned lane_bit = options_.transport_lane == transport_lane_completion ? 2u : 1u;
+        if (ready_)
+            result->failed_lanes &= ~lane_bit;
+        else {
+            result->failed_lanes |= lane_bit;
+            result->pending_failure = {kind_, stage_, error_, disconnect_reason_};
+        }
+        const unsigned expected = pair->expected_ready_mask ();
+        const unsigned ready = pair->ready_lanes.load (std::memory_order_acquire);
+        if (expected && ((ready | result->failed_lanes) & expected) != expected)
+            return;
+        if (result->failed_lanes) {
+            // A ready report cannot confirm an already published failure again.
+            if (ready_ && result->pending_failure.stage == ZLINK_CONNECTION_STAGE_NONE)
+                return;
+            ready_ = false;
+            kind_ = result->pending_failure.kind;
+            stage_ = result->pending_failure.stage;
+            error_ = result->pending_failure.normalized_errno;
+            disconnect_reason_ = result->pending_failure.disconnect_reason;
+        }
+    }
+    if (ready_) {
+        if (options_.transport_pair_state) {
+            const auto &pair = options_.transport_pair_state;
+            const unsigned mask = pair->expected_ready_mask ();
+            if (!mask || (pair->ready_lanes.load (std::memory_order_acquire) & mask) != mask)
+                return;
+        }
+        result->ready_connection_id = connection_id_;
+        result->ready_pair_id = options_.transport_pair_id;
+        result->ready_generation = options_.transport_pair_generation;
+        if (result->row.state == ZLINK_CONNECTION_CONNECTED)
+            return;
+        result->row.state = ZLINK_CONNECTION_CONNECTED;
+    } else {
+        if (stage_ == ZLINK_CONNECTION_STAGE_ESTABLISHED
+            && result->row.state == ZLINK_CONNECTION_CONNECTED && !matches_ready)
+            return;
+        if (stage_ == ZLINK_CONNECTION_STAGE_ESTABLISHED
+            && result->row.state != ZLINK_CONNECTION_CONNECTED
+            && !(matches_ready
+                 && result->row.last_failure.kind == ZLINK_CONNECTION_FAILURE_CONNECTION_LOST)) {
+            stage_ = ZLINK_CONNECTION_STAGE_CORE_HANDSHAKE;
+            kind_ = ZLINK_CONNECTION_FAILURE_PROTOCOL_FAILED;
+        }
+        if (result->row.state == ZLINK_CONNECTION_CONNECTED
+            && stage_ != ZLINK_CONNECTION_STAGE_ESTABLISHED)
+            return;
+#ifdef ZLINK_HAVE_WINDOWS
+        switch (error_) {
+            case WSAECONNREFUSED:
+                error_ = ECONNREFUSED;
+                break;
+            case WSAETIMEDOUT:
+                error_ = ETIMEDOUT;
+                break;
+            case WSAENETUNREACH:
+                error_ = ENETUNREACH;
+                break;
+            case WSAEHOSTUNREACH:
+                error_ = EHOSTUNREACH;
+                break;
+            case WSAHOST_NOT_FOUND:
+                error_ = EHOSTUNREACH;
+                kind_ = ZLINK_CONNECTION_FAILURE_NAME_RESOLUTION;
+                break;
+        }
+#endif
+        if (!kind_) {
+            if (stage_ == ZLINK_CONNECTION_STAGE_ESTABLISHED)
+                kind_ = ZLINK_CONNECTION_FAILURE_CONNECTION_LOST;
+            else if (stage_ == ZLINK_CONNECTION_STAGE_RESOLVE)
+                kind_ = ZLINK_CONNECTION_FAILURE_NAME_RESOLUTION;
+            else if (error_ == ECONNREFUSED)
+                kind_ = ZLINK_CONNECTION_FAILURE_REFUSED;
+            else if (error_ == ENOENT)
+                kind_ = ZLINK_CONNECTION_FAILURE_ENDPOINT_MISSING;
+            else if (error_ == ETIMEDOUT)
+                kind_ = ZLINK_CONNECTION_FAILURE_TIMED_OUT;
+            else if (error_ == ENETUNREACH || error_ == EHOSTUNREACH)
+                kind_ = ZLINK_CONNECTION_FAILURE_UNREACHABLE;
+            else
+                kind_ = ZLINK_CONNECTION_FAILURE_OTHER;
+        }
+        result->row.state = ZLINK_CONNECTION_ATTEMPT_FAILED;
+        result->row.last_failure = {kind_, stage_, error_, disconnect_reason_};
+        result->row.last_failure_id = endpoint_runtime ().allocate_attempt_token ();
+        result->pending_failure = {};
+    }
+    result->row.revision = endpoint_runtime ().allocate_attempt_token ();
+    if (result->registration == connection_attempt_result_t::registered) {
+        endpoint_runtime ().attempt_revision.fetch_add (1, std::memory_order_release);
+        static_cast<mailbox_t *> (get_mailbox ())->signal ();
+    }
+}
+
+void zlink::socket_base_t::update_inproc_connection_attempt (pipe_t *pipe_, bool ready_)
+{
+    if (!pipe_ || pipe_->is_session_pipe ())
+        return;
+    options_t report_options = options;
+    report_options.connection_attempt = endpoint_runtime ().inprocs.attempt_for_pipe (pipe_);
+    report_options.transport_pair_id = pipe_->get_transport_pair_id ();
+    report_options.transport_pair_generation = pipe_->get_transport_pair_generation ();
+    if (!report_options.connection_attempt)
+        return;
+    if (ready_ && pipe_->get_transport_pair_id () != 0
+        && !pipe_->transport_pair_application_ready_cached ())
+        return;
+    report_connection_attempt (
+      report_options, ready_, 0,
+      ready_ ? ZLINK_CONNECTION_STAGE_NONE : ZLINK_CONNECTION_STAGE_ESTABLISHED,
+      ready_ ? 0 : ZLINK_CONNECTION_FAILURE_CONNECTION_LOST,
+      ready_ ? 0 : ZLINK_DISCONNECT_REASON_UNKNOWN, pipe_->get_endpoint_pair ().connection_id);
 }

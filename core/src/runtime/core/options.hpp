@@ -151,8 +151,11 @@ struct transport_pair_state_t
     std::mutex registration_sync;
 };
 
+struct connection_attempt_result_t;
+
 struct options_t
 {
+    std::shared_ptr<connection_attempt_result_t> connection_attempt;
     options_t ();
 
     int setsockopt (int option_, const void *optval_, size_t optvallen_);

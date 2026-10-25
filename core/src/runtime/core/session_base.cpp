@@ -614,6 +614,9 @@ void zlink::session_base_t::engine_ready ()
           _transport_lane, _transport_pair_generation);
         _transport_pair_reconnect_in_progress = false;
     }
+    if (_active && !is_terminating ())
+        _socket->report_connection_attempt (options, true, 0, ZLINK_CONNECTION_STAGE_NONE, 0, 0,
+                                            _engine->get_endpoint ().connection_id);
     // The bind command was queued before this release. The socket mailbox
     // therefore admits the READY pipe and synchronizes its current control
     // state before the temporary executor is allowed to stop.
@@ -750,7 +753,8 @@ void zlink::session_base_t::process_conn_failed ()
     // alongside 127.0.0.1), so it cannot identify the intent being terminated.
     std::string *ep = new std::string (
       _addr->protocol + "://" + _addr->address);
-    send_term_endpoint (_socket, ep);
+    send_term_endpoint (_socket, ep,
+                        options.connection_attempt ? options.connection_attempt->row.intent_id : 0);
 }
 
 void zlink::session_base_t::reconnect ()

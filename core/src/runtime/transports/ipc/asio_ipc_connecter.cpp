@@ -140,6 +140,8 @@ void zlink::asio_ipc_connecter_t::timer_event (int id_)
           &_connect_timer_started, [this] () { start_connecting (); },
           [this] () {
               if (_connecting) {
+                  _socket_ptr->report_connection_attempt (options, false, ETIMEDOUT,
+                                                          ZLINK_CONNECTION_STAGE_TRANSPORT);
                   boost::system::error_code ec;
                   _socket.cancel (ec);
                   _connecting = false;
@@ -167,6 +169,8 @@ void zlink::asio_ipc_connecter_t::start_connecting ()
     int rc = _addr->resolved.ipc_addr->resolve (_addr->address.c_str ());
     if (rc != 0) {
         IPC_CONNECTER_DBG ("start_connecting: resolve failed");
+        _socket_ptr->report_connection_attempt (options, false, errno,
+                                                ZLINK_CONNECTION_STAGE_RESOLVE);
         LIBZLINK_DELETE (_addr->resolved.ipc_addr);
         add_reconnect_timer ();
         return;
@@ -178,6 +182,8 @@ void zlink::asio_ipc_connecter_t::start_connecting ()
     _socket.open (_endpoint.protocol (), ec);
     if (ec) {
         IPC_CONNECTER_DBG ("start_connecting: socket open failed: %s", ec.message ().c_str ());
+        _socket_ptr->report_connection_attempt (options, false, ec.value (),
+                                                ZLINK_CONNECTION_STAGE_TRANSPORT);
         add_reconnect_timer ();
         return;
     }
@@ -210,6 +216,8 @@ void zlink::asio_ipc_connecter_t::on_connect (const boost::system::error_code &e
         }
 
         IPC_CONNECTER_DBG ("on_connect: connection failed: %s", ec.message ().c_str ());
+        _socket_ptr->report_connection_attempt (options, false, ec.value (),
+                                                ZLINK_CONNECTION_STAGE_TRANSPORT);
         close ();
         add_reconnect_timer ();
         return;

@@ -151,6 +151,7 @@ set(tests
   ${INTEGRATION_TEST_ROOT}/test_dealer_router_single_lane_contract
   ${INTEGRATION_TEST_ROOT}/test_zmp_request_reply
   ${INTEGRATION_TEST_ROOT}/test_router_handover
+  ${INTEGRATION_TEST_ROOT}/test_connection_attempts
   ${INTEGRATION_TEST_ROOT}/test_router_selected_route_contract
   ${INTEGRATION_TEST_ROOT}/test_router_reject_duplicate
   ${INTEGRATION_TEST_ROOT}/test_router_reject_disconnected_without_app_recv

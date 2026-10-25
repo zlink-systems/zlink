@@ -19,6 +19,28 @@ class session_termination_test_access_t
 {
   public:
     static options_t options_for (own_t *owner_) { return owner_->options; }
+    static options_t attempt_options (socket_base_t *socket_, const char *endpoint_)
+    {
+        options_t result = socket_->options;
+        for (size_t i = 0; i < socket_->endpoint_runtime ().attached_pipe_count (); ++i) {
+            const auto attempt = socket_->endpoint_runtime ().inprocs.attempt_for_pipe (
+              socket_->endpoint_runtime ().attached_pipe (i));
+            if (attempt && attempt->endpoint == endpoint_) {
+                result.connection_attempt = attempt;
+                break;
+            }
+        }
+        return result;
+    }
+    static size_t retained_connect_count (socket_base_t *socket_)
+    {
+        size_t count = 0;
+        for (const auto &entry : socket_->endpoint_runtime ().endpoints)
+            if (entry.second.local_type == endpoint_type_connect && !entry.second.pipe
+                && !entry.second.endpoint && entry.second.connection_attempt)
+                ++count;
+        return count;
+    }
     static own_t *owner_of (own_t *child_) { return child_->_owner; }
     static void finish_plug (own_t *object_) { object_->process_seqnum (); }
     static void terminate (own_t *object_) { object_->terminate (); }
