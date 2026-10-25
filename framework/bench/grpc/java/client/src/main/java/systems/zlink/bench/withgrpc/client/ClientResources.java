@@ -2,7 +2,6 @@
 
 package systems.zlink.bench.withgrpc.client;
 
-import systems.zlink.bench.withgrpc.shared.BenchMetricHeader;
 import systems.zlink.bench.withgrpc.shared.BenchServerMetrics;
 
 import java.lang.management.ManagementFactory;
@@ -44,13 +43,11 @@ public final class ClientResources {
 
     private final long cpuStartNs;
     private final long threadCpuStartNs;
-    private final long startNs;
     private final ConcurrentHashMap<Long, SubmitCpu> submitThreads = new ConcurrentHashMap<>();
 
     public ClientResources() {
         this.cpuStartNs = BenchServerMetrics.processCpuNs();
         this.threadCpuStartNs = jvmThreadCpuNs();
-        this.startNs = BenchMetricHeader.nowNs();
     }
 
     /** CPU of the calling thread, for measuring a submit loop's own cost. */
@@ -78,8 +75,7 @@ public final class ClientResources {
         return start;
     }
 
-    public Usage finish() {
-        long elapsedNs = BenchMetricHeader.nowNs() - startNs;
+    public Usage finish(long elapsedNs) {
         double elapsedSeconds = elapsedNs / 1e9;
         double cpuSeconds = (BenchServerMetrics.processCpuNs() - cpuStartNs) / 1e9;
         double threadCpuSeconds = (jvmThreadCpuNs() - threadCpuStartNs) / 1e9;
