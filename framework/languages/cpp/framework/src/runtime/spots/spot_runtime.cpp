@@ -2232,10 +2232,18 @@ bool spot_context_state_t::admit (bool claim,
 framework_exception_t spot_context_state_t::admission_error () const
 {
     return state_sync ([this] {
-        return closed && !admission_sealed
-                 ? detail::make_framework_origin_exception (framework_error_kind_t::not_found,
-                                                            "Spot incarnation was closed")
-                 : sealed_admission_error ();
+        // Spot 주소 메시징 §9의 Closing·Draining 분류를 이곳에서 결정합니다.
+        // Relocation ingress는 이 분류 전에 native seal의 hold에 보관됩니다.
+        // 미확정 idle reservation과 relocation 정리의 기존 오류는 유지합니다.
+        if (closed == spot_close_reason_t::host_shutdown)
+            return detail::make_framework_origin_exception (framework_error_kind_t::shutting_down,
+                                                            "Spot host is shutting down");
+        if (closed == spot_close_reason_t::explicit_close
+            || closed == spot_close_reason_t::idle_evicted)
+            return detail::make_framework_origin_exception (framework_error_kind_t::not_found,
+                                                            "Spot incarnation was closed");
+        return detail::make_framework_origin_exception (framework_error_kind_t::rejected,
+                                                        "Spot admission is sealed");
     });
 }
 
@@ -2249,7 +2257,7 @@ spot_context_state_t::discard_preparation (std::shared_ptr<service::spot_t> nati
         const auto owner = self->state_lane_owner ();
         const auto callbacks = owner->lane
                                  .run ([self] {
-                                     self->closed = true;
+                                     self->closed = spot_close_reason_t::explicit_close;
                                      self->preparation_callback_terminal =
                                        std::make_shared<task_completion_source_t<void>> ();
                                      auto terminal = self->preparation_callback_terminal;
@@ -2334,13 +2342,6 @@ bool spot_context_state_t::admit_timer_fire ()
       [this] { return channel_runtime && channel_runtime->serializers && admit_core (true); });
 }
 
-framework_exception_t spot_context_state_t::sealed_admission_error ()
-{
-    // Spot address messaging §9: a Closing owner refuses new admission.
-    return detail::make_framework_origin_exception (framework_error_kind_t::rejected,
-                                                    "Spot admission is sealed");
-}
-
 void spot_context_state_t::enter_callback ()
 {
     state_sync ([this] { ++callback_depth; });
@@ -2404,6 +2405,12 @@ void spot_context_state_t::request_close (service::spot_close_begin_t begin,
         std::atomic_bool reported{false};
     };
     auto report = std::make_shared<close_report_t> (std::move (done));
+    // 진행 중인 Close 합류는 닫힐 수 있는 lifecycle queue에 접근하기 전에 결정합니다.
+    if (state_sync ([this, report] {
+            return merge_into_running_close_core (
+              [report] (result_t<bool> result) { (*report) (std::move (result)); });
+        }))
+        return;
     auto shared_begin = std::make_shared<service::spot_close_begin_t> (std::move (begin));
     auto run = [state = shared_from_this (), shared_begin, reason,
                 report] (std::function<void ()> finished, detail::task_scheduler_t resume,
@@ -2496,12 +2503,8 @@ void spot_context_state_t::close_now (
     }
     const auto start =
       owner->lane
-        .run ([this, &owner, &done, reason] {
+        .run ([this, &owner, reason] {
             close_start_t result;
-            if (merge_into_running_close_core (done)) {
-                result.path = close_path_t::merged;
-                return result;
-            }
             // Idle cleanup sealed the activation first.
             if (close_reservation != 0)
                 return result;
@@ -2546,8 +2549,6 @@ void spot_context_state_t::close_now (
                                        "Spot Close failed after admission was sealed"));
         return;
     }
-    if (start.path == close_path_t::merged)
-        return;
 
     // The Close ends its reservation in the same lane turn that takes the
     // merged requests, so every merged request receives this result.
@@ -2844,7 +2845,7 @@ void spot_context_state_t::run_local_close_steps (
               finish ();
           });
     };
-    owner->lane.run ([&] { closed = true; }).get ();
+    owner->lane.run ([&] { closed = reason; }).get ();
     cancel_timers ();
     try {
         const auto instance = spot_instance;
@@ -2990,7 +2991,7 @@ void spot_context_state_t::run_serial_task_async (
     }
 
     if (!accepted_turn && !admit ()) {
-        completion (detail::result_access_t::failure<void> (sealed_admission_error ()));
+        completion (detail::result_access_t::failure<void> (admission_error ()));
         return;
     }
     const auto queue = serial_queue;
@@ -4794,10 +4795,12 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
                       || !current->spot_instance) {
                       complete ([state, completion, admission_terminal, retained_message] {
                           settle_handler_admission_once (admission_terminal);
-                          completion->complete (result_t<zlink::message_t>::failure (
-                            retained_message ? framework_error_kind_t::internal_failure
-                                             : framework_error_kind_t::not_found,
-                            "Spot incarnation was closed"));
+                          completion->complete (
+                            retained_message ? result_t<zlink::message_t>::failure (
+                                                 framework_error_kind_t::internal_failure,
+                                                 "Spot incarnation was closed")
+                                             : detail::result_access_t::failure<zlink::message_t> (
+                                                 state->admission_error ()));
                       });
                       return;
                   }
@@ -5788,8 +5791,7 @@ class actor_dispatch_admission_token_t final
                                             "actor spot lifecycle admission is closed");
         }
         if (!context->admit (true))
-            return detail::result_access_t::failure<void> (
-              spot_context_state_t::sealed_admission_error ());
+            return detail::result_access_t::failure<void> (context->admission_error ());
         _context = context;
         _lifecycle_claimed = true;
         return result_t<void>::success ();
@@ -8951,18 +8953,19 @@ void spot_node_runtime_t::dispatch_wire_actor_join_admission (
   const spot_id_t &target_spot_id,
   std::string_view actor_id,
   std::function<task_t<void> ()> admission,
-  std::function<void ()> rejected,
+  std::function<void (result_t<void>)> rejected,
   std::function<void ()> completed)
 {
-    const auto target = find_active_remote_actor_join_target (target_spot_id);
-    if (!target) {
-        rejected ();
+    const auto selected = find_active_remote_actor_join_target (target_spot_id);
+    if (!selected) {
+        rejected (detail::propagate_failure<void> (selected, "Actor Join target admission failed"));
         return;
     }
+    const auto target = selected.value ();
     auto finished = [rejected = std::move (rejected),
                      completed = std::move (completed)] (result_t<void> outcome) {
         if (!outcome)
-            rejected ();
+            rejected (outcome);
         if (completed)
             completed ();
     };
@@ -8988,17 +8991,25 @@ void spot_node_runtime_t::dispatch_wire_actor_join_admission (
       });
 }
 
-std::shared_ptr<spot_context_state_t>
+result_t<std::shared_ptr<spot_context_state_t>>
 spot_node_runtime_t::find_active_remote_actor_join_target (const spot_id_t &target_spot_id) const
 {
     return _state->lane
-      .run ([&] {
+      .run ([&] () -> result_t<std::shared_ptr<spot_context_state_t>> {
           const auto found = _state->spot_contexts_by_id.find (std::string (target_spot_id));
-          if (found == _state->spot_contexts_by_id.end () || !found->second._state
-              || !found->second._state->accepts_membership_core (*_state)) {
-              return std::shared_ptr<spot_context_state_t>{};
+          if (found == _state->spot_contexts_by_id.end ())
+              return result_t<std::shared_ptr<spot_context_state_t>>::failure (
+                framework_error_kind_t::not_found, "target spot is not registered");
+          if (found->second._state) {
+              const auto context = found->second._state;
+              if (context->accepts_membership_core (*_state))
+                  return result_t<std::shared_ptr<spot_context_state_t>>::success (context);
+              if (context->closed)
+                  return detail::result_access_t::failure<std::shared_ptr<spot_context_state_t>> (
+                    context->admission_error ());
           }
-          return found->second._state;
+          return result_t<std::shared_ptr<spot_context_state_t>>::failure (
+            framework_error_kind_t::unavailable, "target spot is not active locally");
       })
       .get ();
 }
@@ -9060,10 +9071,12 @@ task_t<spot_actor_join_result_t> spot_node_runtime_t::admit_remote_actor_to_spot
       std::string (actor_ref.actor_id ().value ()), actor_ref.object_generation ());
 
     cleanup_expired_actor_admissions ();
-    auto target_state = find_active_remote_actor_join_target (target_spot_id);
-    if (!target_state)
-        return task_t<spot_actor_join_result_t> (result_t<spot_actor_join_result_t>::failure (
-          framework_error_kind_t::unavailable, "target spot is not active locally"));
+    auto selected = find_active_remote_actor_join_target (target_spot_id);
+    if (!selected)
+        return task_t<spot_actor_join_result_t> (
+          detail::propagate_failure<spot_actor_join_result_t> (
+            selected, "Actor Join target admission failed"));
+    auto target_state = selected.value ();
 
     std::optional<spot_node_builder_state_t::actor_factory_registration_t> actor_factory;
     std::optional<spot_actor_admission_callbacks_t> admission;
@@ -13751,13 +13764,15 @@ task_t<bool> spot_node_runtime_t::close_spot (spot_id_t spot_id, spot_close_reas
 }
 
 void spot_node_runtime_t::close_user_spot_owner (const std::string &spot_id,
+                                                 std::uint64_t object_generation,
                                                  service::spot_close_begin_t begin,
                                                  service::spot_close_done_t done)
 {
     auto state = _state->lane
                    .run ([&] {
                        const auto found = _state->spot_contexts_by_id.find (spot_id);
-                       return found == _state->spot_contexts_by_id.end ()
+                       return found == _state->spot_contexts_by_id.end () || !found->second._state
+                                  || found->second._state->object_generation != object_generation
                                 ? std::shared_ptr<spot_context_state_t>{}
                                 : found->second._state;
                    })
@@ -13766,7 +13781,8 @@ void spot_node_runtime_t::close_user_spot_owner (const std::string &spot_id,
         state->request_close (std::move (begin), std::move (done));
         return;
     }
-    // No local activation remains: only the authority steps are left.
+    // 해당 generation의 local activation이 없으면 기존 authority owner가
+    // Missing·다른 generation·owner fence를 분류합니다.
     service::run_authority_close (std::move (begin), std::move (done), {});
 }
 
@@ -14115,7 +14131,7 @@ void spot_node_runtime_t::release_native_handles () noexcept
               contexts.reserve (_state->spot_contexts_by_id.size ());
               for (auto &[_, context] : _state->spot_contexts_by_id) {
                   if (context._state) {
-                      context._state->closed = true;
+                      context._state->closed = spot_close_reason_t::host_shutdown;
                       contexts.push_back (context._state);
                   }
               }
@@ -15932,10 +15948,10 @@ bool spot_node_runtime_t::dispatch_mesh_record (
                                             remote_transfer, targets_entry_spot, local_node_rid,
                                             *services, *serializers, &join_result->source_leave)));
       },
-      [join_result, settle_once] {
+      [join_result, settle_once] (result_t<void> rejected) {
           if (!join_result->joined)
-              settle_once (result_t<actor_join_reply_t>::failure (
-                framework_error_kind_t::unavailable, "target spot is not active locally"));
+              settle_once (detail::propagate_failure<actor_join_reply_t> (
+                rejected, "Actor Join target admission failed"));
       },
       [join_result, settle_once] {
           if (!join_result->joined)

@@ -5855,7 +5855,7 @@ TEST (ActorMaintenanceJoin, ReturnAdmissionWaitsOutsideTargetLifecycleForSourceT
           admitted->complete (fw::result_t<void>::success ());
           co_return;
       },
-      [admitted] {
+      [admitted] (fw::result_t<void>) {
           admitted->complete (fw::result_t<void>::failure (fw::framework_error_kind_t::unavailable,
                                                            "return admission was rejected"));
       });
@@ -5885,7 +5885,7 @@ TEST (ActorMaintenanceJoin, ReturnAdmissionWaitsOutsideTargetLifecycleForSourceT
           after_close->complete (fw::result_t<void>::success ());
           co_return;
       },
-      [after_close] {
+      [after_close] (fw::result_t<void>) {
           after_close->complete (fw::result_t<void>::failure (
             fw::framework_error_kind_t::unavailable, "return target closed"));
       });

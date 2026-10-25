@@ -304,8 +304,9 @@ is not sent again once ADMIT has been received.
 **Until admission is confirmed by a handshake on the selected route, records other than the
 handshake received on that route are discarded without processing, and no response is sent.** The
 same applies to records the peer sent before the handshake of a new route after the selected route
-changed. A durable operation lost this way is sent again by the sender as defined in
-[Actor model §8.1](04-actor-model.en.md#81-failure).
+changed. A request lost this way isn't sent again. The sender starts a request only on a selected route
+where it received the peer's ADMIT ([Submit and completion §5](../01-execution/01-submit-and-completion.en.md#5-backpressure-and-error-classification)), so this
+loss happens only at a selected-route change, and that request ends with the binding's typed result or its deadline.
 
 Lifecycle generation is a non-zero opaque equality token. Which lifecycle is
 newer isn't judged by numeric magnitude.
@@ -349,8 +350,8 @@ and [Session and Actor Binding §8.1](../04-session/02-session-actor-binding.en.
   state is kept for this.
 - **The state in which intent removal and the absence of an admitted peer hold together is
   that peer's lifecycle termination.** Transport loss or the mere absence of a peer is a
-  transient state that reconnection can recover. How a durable operation consumes this
-  fact is defined by [Actor Model §8.1](04-actor-model.en.md#81-failure).
+  transient state that reconnection can recover. How a request uses this fact and Core's
+  connection attempt result is defined by [Submit and completion §5](../01-execution/01-submit-and-completion.en.md#5-backpressure-and-error-classification).
 - **When the binding rejects a connect, only that attempt fails and the intent remains.**
   The intent owner reports the binding's typed error as is through the runtime error
   reporting path and calls connect again at the same intent's next reconcile. A rejection

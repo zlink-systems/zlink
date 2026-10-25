@@ -424,15 +424,6 @@ final class ZLinkSpotLifecycle {
         return spots.get(spotId);
     }
 
-    DefaultSpotContext contextFor(ZLinkSpot<?> spot) {
-        for (SpotActivation activation : spots.values()) {
-            if (activation.spot() == spot) {
-                return activation.context;
-            }
-        }
-        return null;
-    }
-
     ZLinkUserSpotRelocationBarrier relocationBarrier(
             String spotId, ZLinkActorSessionCoordinator actors) {
         SpotActivation activation = spots.get(spotId);
