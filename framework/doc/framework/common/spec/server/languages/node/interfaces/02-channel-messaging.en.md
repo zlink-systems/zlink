@@ -244,10 +244,11 @@ A TypeScript parameter annotation doesn't survive at runtime, so the
 Framework doesn't use it to register the received type. A handler class
 that takes a received message as an argument declares the received message
 class with a static `messageType` (`ZLinkMessageTypeResolver`). This covers
-Channel and RouteMesh send and request handlers; Spot, Entry Spot, and
-Instance Spot packet, request, and subscription handlers; a Spot's Actor send
-and request handlers; and Actor handlers, including the same handlers
-registered with a Nest decorator. The function form is for when a circular
+Channel and RouteMesh send and request handlers; classic fanout publish
+handlers; Spot, Entry Spot, and Instance Spot packet, request, and
+subscription handlers; a Spot's Actor send and request handlers; and Actor
+handlers, including the same handlers registered with Nest decorators and
+builders. The function form is for when a circular
 import requires reading the class later.
 
 ```ts
@@ -267,9 +268,12 @@ export class TableViewHandler implements ZLinkSpotActorSendHandler<Room, Player,
   decodes a received payload. The default JSON codec builds the value once
   with that class's prototype without calling the constructor. A custom
   serializer receives the same class as its type argument.
-- A handler without `messageType` receives a structural object. That value
-  has no packet name, so passing it unchanged to a typed send ends with
-  `ZLinkConfigurationException`.
+- For a handler without `messageType`, the Framework applies no additional
+  class materialization. The default JSON codec delivers an object payload as
+  a structural object. Passing a value that can't provide a packet name
+  unchanged to a typed send ends with `ZLinkConfigurationException`. A custom
+  serializer still receives `Object` as its type argument, and its return
+  value is passed through unchanged.
 - The class is chosen per handler registration. A class isn't chosen
   process-wide from the packet name alone.
 - A STREAM session handler receives a `ZLinkMessage` and picks the type with
