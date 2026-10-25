@@ -44,7 +44,7 @@ public final class Client implements AutoCloseable {
         register(WorldState.class);
         register(BorderVisible.class);
         register(DungeonView.class);
-        register(FieldView.class);
+        register(PartyView.class);
         register(ActionRejected.class);
         registrations.add(
                 connector.onDisconnected(
@@ -76,13 +76,13 @@ public final class Client implements AutoCloseable {
         connector.connect().submit().toCompletableFuture().join();
     }
 
-    WorldState join(int x) throws Exception {
+    WorldState join(double x) throws Exception {
         send(new JoinWorldRequest(playerId, x));
         return next(WorldState.class);
     }
 
-    WorldState move(int x, int sequence) throws Exception {
-        send(new MoveRequest(x, sequence));
+    WorldState move(double delta, long sequence) throws Exception {
+        send(new MoveRequest(delta, sequence));
         return next(WorldState.class, v -> v.sequence() == sequence);
     }
 
@@ -123,6 +123,8 @@ public final class Client implements AutoCloseable {
                 throw new IllegalStateException(
                         "Timed out waiting for " + type.getSimpleName() + ", received=" + history);
             if (event instanceof Exception error) throw error;
+            if (type.isInstance(event) && predicate.test(type.cast(event)))
+                return type.cast(event);
             if (event instanceof ActionRejected rejected)
                 throw new IllegalStateException("Action rejected: " + rejected.reason());
             pending.add(event);

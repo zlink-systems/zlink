@@ -127,7 +127,8 @@ inline void check_structure (const std::filesystem::path &root)
         require (kind == "user", "Unknown application Spot kind");
         const auto type = nonempty (spot, "type");
         user_types.insert (type);
-        require (type == Names::field || type == Names::dungeon, "Unknown stable type");
+        require (type == Names::field || type == Names::party || type == Names::dungeon,
+                 "Unknown User Spot type");
         if (spot.contains ("dynamic"))
             require (spot.at ("dynamic").is_boolean (), "Dynamic must be boolean");
         if (spot.value ("dynamic", false))
@@ -138,21 +139,22 @@ inline void check_structure (const std::filesystem::path &root)
             if (type == Names::field)
                 fields[owner].insert (id);
         }
-        require (roles.at (owner) == (type == Names::field ? "field" : "instance"),
+        require (roles.at (owner) == (type == Names::dungeon ? "instance" : "field"),
                  "Stable type owner mismatch");
-        require (spot.value ("dynamic", false) == (type == Names::dungeon),
+        require (spot.value ("dynamic", false)
+                   == (type == Names::dungeon || type == Names::party),
                  "Spot family dynamic mismatch");
         if (type == Names::field)
             require (configurations.at (owner).contains ("FieldIds")
                        && channels.contains ({Names::border, owner}),
                      "Field owner must register Field and border");
-        else
+        else if (type == Names::dungeon)
             require (!configurations.at (owner).contains ("FieldIds")
                        && !configurations.at (owner).contains ("StreamEndpoint")
                        && configurations.at (owner).value ("DungeonCapacity", 0) > 0,
                      "Dungeon owner must register Dungeon");
     }
-    require (user_types == std::set<std::string>{Names::field, Names::dungeon},
+    require (user_types == std::set<std::string>{Names::field, Names::party, Names::dungeon},
              "Missing registered User Spot type");
     for (const auto &[id, role] : roles) {
         if (role != "field" && role != "instance")

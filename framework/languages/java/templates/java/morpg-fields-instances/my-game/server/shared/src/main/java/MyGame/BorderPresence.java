@@ -1,3 +1,3 @@
 package MyGame;
 
-public record BorderPresence(String sourceFieldId, String playerId, int x, int sequence) {}
+public record BorderPresence(String sourceFieldId, String playerId, double x, long sequence) {}

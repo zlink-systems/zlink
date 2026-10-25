@@ -59,6 +59,8 @@ async Task<int> RunAsync()
         StructureCheck.Run(root, Option("--structure"));
         return 0;
     }
+    DomainChecks.Run();
+    if (args.Contains("--check-domain")) return 0;
     var selected = Scenarios.Select(Option("--scenario"));
     run = new WorldRun(root);
     await using var ownedRun = run;

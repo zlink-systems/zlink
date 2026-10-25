@@ -3,6 +3,7 @@ package MyGame.field
 import MyGame.*
 import MyGame.border.BorderRoutes
 import java.time.Duration
+import java.util.UUID
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionStage
 import systems.zlink.framework.actors.*
@@ -10,12 +11,7 @@ import systems.zlink.framework.kotlin.*
 import systems.zlink.framework.messaging.ZLinkMessage
 import systems.zlink.framework.spots.*
 
-// This projection supports visibility; Player owns authoritative movement state.
-data class FieldState(
-    val visiblePlayers: MutableMap<String, EnterField> = mutableMapOf(),
-    val parties: MutableMap<String, MutableList<String>> = mutableMapOf(),
-    val arrivals: MutableMap<String, EnterField> = mutableMapOf(),
-)
+data class FieldState(val visiblePlayers: MutableMap<String, EnterField> = linkedMapOf())
 
 class Field(
     override val context: ZLinkSpotContext,
@@ -24,6 +20,7 @@ class Field(
     private val config: NodeConfig,
 ) : ZLinkSuspendingSpot<Player>() {
     var state = FieldState()
+    private val positions = FieldPositionDomain(context.spotId())
     private val adjacent = Rules.adjacentFields(context.spotId())
     private val borderTopics = adjacent.map { Rules.borderTopic(context.spotId(), it) }
 
@@ -45,53 +42,59 @@ class Field(
         actorId: String,
         request: ZLinkMessage,
     ): ZLinkSpotActorJoinResult {
-        val arrival = request.decode<EnterField>()
-        if (Rules.fieldId(arrival.x) != context.spotId()) return ZLinkSpotActorJoinResult.reject()
-        check(state.arrivals.putIfAbsent(actorId, arrival) == null) { "Duplicate Field arrival" }
-        return ZLinkSpotActorJoinResult.accept()
+        val rejection = positions.queueArrival(actorId, request.decode<EnterField>())
+        return if (rejection == null) ZLinkSpotActorJoinResult.accept() else ZLinkSpotActorJoinResult.reject()
     }
 
     override suspend fun onJoinedActorSuspending(actor: Player) {
-        actor.apply(
-            requireNotNull(state.arrivals.remove(actor.context.actorId())) {
-                "Field admission has no movement intent"
-            }
-        )
+        val arrival = requireNotNull(positions.takeArrival(actor.context.actorId())) {
+            "Field admission has no movement intent"
+        }
+        positions.addPlayer(actor.context.actorId(), arrival)
+        actor.apply(arrival)
         remember(actor)
     }
 
     override suspend fun onLeaveActorSuspending(actor: Player) {
         val id = actor.context.actorId()
         state.visiblePlayers.remove(id)
-        val parties = state.parties.entries.iterator()
-        while (parties.hasNext()) {
-            val party = parties.next()
-            if (party.value.remove(id)) {
-                if (party.value.isEmpty()) parties.remove()
-                break
-            }
-        }
+        positions.removePlayer(id)
     }
 
     override suspend fun onDisconnectActorSuspending(actor: Player) {
-        state.visiblePlayers.remove(actor.context.actorId())
+        val id = actor.context.actorId()
+        state.visiblePlayers.remove(id)
+        positions.setConnected(id, false)
     }
 
     fun remember(actor: Player) {
+        positions.setConnected(actor.context.actorId(), true)
         state.visiblePlayers[actor.context.actorId()] = actor.position
+    }
+
+    suspend fun move(actor: Player, request: MoveRequest) {
+        val result = positions.move(actor.context.actorId(), request)
+        if (result.rejection != null) {
+            actor.context.boundSession().kotlin().send(result.rejection).await()
+            return
+        }
+        val arrival = EnterField(result.position.x, result.sequence, result.remainingMs)
+        if (result.relocates) {
+            actor.move(arrival)
+            return
+        }
+        actor.apply(arrival)
+        remember(actor)
+        actor.sendState()
     }
 
     suspend fun publishBorder() {
         for ((actorId, position) in state.visiblePlayers) {
             val offset = position.x % Rules.FIELD_WIDTH
-            if (offset >= Rules.BORDER_RADIUS && offset < Rules.FIELD_WIDTH - Rules.BORDER_RADIUS)
-                continue
+            if (offset >= Rules.BORDER_RADIUS && offset < Rules.FIELD_WIDTH - Rules.BORDER_RADIUS) continue
             val presence = BorderPresence(context.spotId(), actorId, position.x, position.sequence)
-            for (topic in borderTopics) context
-                .outbound()
-                .kotlin()
-                .publish(Names.BORDER, topic, presence)
-                .await()
+            for (topic in borderTopics)
+                context.outbound().kotlin().publish(Names.BORDER, topic, presence).await()
         }
     }
 
@@ -114,66 +117,80 @@ class Field(
         }
     }
 
-    private fun view() =
-        FieldView(
-            context.spotId(),
-            config.id,
-            state.visiblePlayers.keys.sorted(),
-            state.parties.toSortedMap().map { (id, members) -> PartyView(id, members.toList()) },
-        )
-
-    private suspend fun broadcast(requester: Player) {
-        val message = view()
-        requester.context.boundSession().kotlin().send(message).await()
-        for (id in state.visiblePlayers.keys) {
-            if (id != requester.context.actorId()) actors.kotlin().sendToActor(id, message).await()
-        }
-    }
-
-    suspend fun party(actor: Player, partyId: String, create: Boolean) {
-        val id = actor.context.actorId()
-        val members = state.parties[partyId]
-        if (
-            partyId.isBlank() ||
-                id !in state.visiblePlayers ||
-                state.parties.values.any { id in it } ||
-                (if (create) members != null
-                else members == null || members.size >= Rules.MAXIMUM_PARTY_MEMBERS)
-        ) {
-            actor.context
-                .boundSession()
-                .kotlin()
-                .send(ActionRejected(Rejection.INVALID_PARTY))
-                .await()
+    suspend fun party(actor: Player, requestedPartyId: String?, create: Boolean) {
+        if (actor.partyId != null) {
+            reject(actor, Rejection.INVALID_PARTY)
             return
         }
-        if (create) state.parties[partyId] = mutableListOf(id) else requireNotNull(members).add(id)
-        broadcast(actor)
+        val partySpotId =
+            if (create) "party-${UUID.randomUUID().toString().replace("-", "")}"
+            else requestedPartyId ?: ""
+        if (!PartyRun.validId(partySpotId, "party-")) {
+            reject(actor, Rejection.INVALID_PARTY)
+            return
+        }
+        if (create) {
+            val created = spots.kotlin().getOrCreate(partySpotId, Names.PARTY).inMesh(Names.MESH).await()
+            check(created.state() != ZLinkSpotCreateState.REJECTED) { "Party creation rejected" }
+        } else if (!spots.find(partySpotId).await().isPresent) {
+            reject(actor, Rejection.INVALID_PARTY)
+            return
+        }
+        val result =
+            context.outbound().kotlin().requestToSpot<PartyCommandResult>(
+                partySpotId,
+                PartyCommand(actor.context.actorId(), true, false),
+            ).await()
+        val rejection = result.rejection
+        if (rejection != null) {
+            reject(actor, rejection.reason)
+            return
+        }
+        actor.partyId = partySpotId
     }
 
     suspend fun enter(actor: Player) {
-        val party =
-            state.parties.entries.firstOrNull { it.value.first() == actor.context.actorId() }
-        if (party == null) {
-            actor.context.boundSession().kotlin().send(ActionRejected(Rejection.NOT_LEADER)).await()
+        val partyId = actor.partyId
+        if (partyId == null) {
+            reject(actor, Rejection.NOT_LEADER)
             return
         }
-        val partyId = party.key
-        val members = party.value.toList()
-        val dungeonId = Rules.dungeonId(partyId)
-        val created =
-            spots.kotlin().getOrCreate(dungeonId, Names.DUNGEON).inMesh(Names.MESH).await()
-        check(created.state() != ZLinkSpotCreateState.REJECTED) { "Dungeon creation rejected" }
-        val prepared =
-            context
-                .outbound()
-                .kotlin()
-                .requestToSpot<DungeonPrepared>(dungeonId, PrepareDungeon(partyId, members))
-                .await()
-        check(prepared.dungeonId == dungeonId) { "Dungeon preparation identity mismatch" }
-        for (id in members) actors.kotlin().sendToActor(id, JoinDungeon(dungeonId, partyId)).await()
+        val result =
+            context.outbound().kotlin().requestToSpot<PartyCommandResult>(
+                partyId,
+                PartyCommand(actor.context.actorId(), false, true),
+            ).await()
+        result.rejection?.let { reject(actor, it.reason) }
+    }
+
+    suspend fun show(actor: Player) {
+        actor.sendState()
+        val partyId = actor.partyId ?: return
+        val result =
+            context.outbound().kotlin().requestToSpot<PartyCommandResult>(
+                partyId,
+                PartyCommand(actor.context.actorId()),
+            ).await()
+        result.view?.let { actor.context.boundSession().kotlin().send(it).await() }
+    }
+
+    private suspend fun reject(actor: Player, reason: String) {
+        actor.context.boundSession().kotlin().send(ActionRejected(reason)).await()
+    }
+
+    fun capture() = FieldSnapshot(LinkedHashMap(state.visiblePlayers), positions.capture())
+
+    fun restore(snapshot: FieldSnapshot) {
+        positions.restore(snapshot.positions)
+        state.visiblePlayers.clear()
+        state.visiblePlayers.putAll(snapshot.visiblePlayers)
     }
 }
+
+data class FieldSnapshot(
+    val visiblePlayers: Map<String, EnterField>,
+    val positions: FieldPositionSnapshot,
+)
 
 class FieldTransfer : ZLinkSpotRelocationAdapter<Field> {
     override fun capture(
@@ -181,7 +198,7 @@ class FieldTransfer : ZLinkSpotRelocationAdapter<Field> {
         cancellation: ZLinkRelocationCancellation,
     ): CompletionStage<ByteArray> {
         cancellation.ensureActive()
-        return CompletableFuture.completedFuture(Json.mapper.writeValueAsBytes(spot.state))
+        return CompletableFuture.completedFuture(Json.mapper.writeValueAsBytes(spot.capture()))
     }
 
     override fun restore(
@@ -190,7 +207,7 @@ class FieldTransfer : ZLinkSpotRelocationAdapter<Field> {
         cancellation: ZLinkRelocationCancellation,
     ): CompletionStage<Void> {
         cancellation.ensureActive()
-        spot.state = Json.mapper.readValue(state, FieldState::class.java)
+        spot.restore(Json.mapper.readValue(state, FieldSnapshot::class.java))
         return CompletableFuture.completedFuture(null)
     }
 }

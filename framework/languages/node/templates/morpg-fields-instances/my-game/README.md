@@ -1,6 +1,6 @@
 # MyGame MORPG fields and instances
 
-Players move between fixed public fields and enter party dungeons. Field Spots own visibility and parties; Dungeon Spots own their member list and stage. Player Actors retain movement state across field transitions, and Session binding retains Actor identity across reconnects.
+Players move between fixed public fields and enter party dungeons. Field position domains own movement and visibility; independent Party Spots own membership, leadership, and run state across Fields. Dungeon Spots own prepared members and stages. Player Actors retain movement state across field transitions, and Session binding retains Actor identity across reconnects.
 
 ```mermaid
 flowchart LR
@@ -52,12 +52,16 @@ pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
 
 | Scenario    | Verification                                                                                                      |
 | ----------- | ----------------------------------------------------------------------------------------------------------------- |
-| `field`     | Field-2 to field-3 crossing between hosts, border visibility, unchanged Session identity and connection           |
-| `dungeon`   | Same-field party admission, identical dungeon views, stage advancement                                            |
-| `reconnect` | Reconnected member retains Actor identity, dungeon and stage                                                      |
-| `update`    | Instance drain, relocation and SafeToShutdown; unchanged connections and state; replacement accepts a new dungeon |
+| `field`     | Field crossing, border visibility, Session continuity, cross-field party membership and leader, immutable movement rejection and server retry delay           |
+| `dungeon`   | Server IDs, duplicate entry sharing one run, immutable nonleader rejection, shared Dungeon and completion at stage 3                                            |
+| `reconnect` | Reconnected member retains Actor identity, Dungeon, RunId, Phase and stage                                                      |
+| `update`    | Instance drain, relocation and SafeToShutdown; unchanged connections, RunId, Phase and stage; replacement accepts a distinct party run |
 
 The runner checks the structure before startup, creates a unique Redis Compose project and key prefix, and binds listeners to port zero. Run-specific configurations, node stdout/stderr, message-flow records and client events are preserved under `.logs/run-<id>/`. Cleanup failures produce a nonzero exit code.
+
+Movement uses Delta and a bigint Sequence bounded by 9,007,199,254,740,991. MaxStep is 10 and MaxSpeed is 50 units/s. The first move has the full budget. Rejected inputs preserve values, sequence, and cooldown; only move-budget returns a positive RetryAfterMs. Relocation stores remaining milliseconds.
+
+`./run-e2e.sh --check-domain` (PowerShell `-CheckDomain`) runs 95 domain boundary checks without starting game nodes.
 
 ## Known issues
 
@@ -79,4 +83,4 @@ Initial Field placement uses public stable-type capacity and sequential startup.
 
 기본 빌드와 e2e는 Docker에서 runner와 node를 실행한다. Bash는 `./run-e2e.sh`, PowerShell 7은 `pwsh -NoProfile -File ./run-e2e.ps1`을 사용한다. 로컬 프로세스 디버깅은 Node.js와 npm을 설치한 뒤 `--local` 또는 `-Local`로 실행한다. Docker 빌드·정리 로그는 `.logs/docker-<project>/`에 남는다.
 
-이 디렉터리에서 Build와 Docker e2e의 명령을 실행합니다. `field`, `dungeon`, `reconnect`, `update`는 각각 필드 이동과 경계 표시, 파티 던전 입장, 던전 안 재접속, instance 교체를 검증합니다. 실행 로그와 message-flow 기록은 `.logs/run-<id>/`에 남습니다. 배포 시 Redis, fieldA, fieldB, 두 instance, Session 순서로 시작하고 READY를 확인합니다. instance 교체 시 drain의 relocation 및 SafeToShutdown 결과를 확인한 뒤 shutdown하고 같은 설정으로 대체 프로세스를 시작합니다.
+이 디렉터리에서 Build와 Docker e2e의 명령을 실행합니다. `field`, `dungeon`, `reconnect`, `update`는 서버 권위 이동 거부 뒤 상태 불변과 Field 간 파티 유지, 중복 던전 입장 및 실행 완료, 재접속과 instance 교체 뒤 RunId·Phase·Stage 복원을 검증합니다. `--check-domain`으로 도메인 경계 시험을 따로 실행합니다. 실행 로그와 message-flow 기록은 `.logs/run-<id>/`에 남습니다. 배포 시 Redis, fieldA, fieldB, 두 instance, Session 순서로 시작하고 READY를 확인합니다. instance 교체 시 drain의 relocation 및 SafeToShutdown 결과를 확인한 뒤 shutdown하고 같은 설정으로 대체 프로세스를 시작합니다.

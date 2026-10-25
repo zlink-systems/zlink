@@ -28,6 +28,13 @@ public sealed class PlayerSession(IZLinkSessionContext context, IZLinkActorManag
         CancellationToken cancellationToken
     )
     {
+        if (dispatch.PacketName is not (nameof(JoinWorldRequest) or nameof(MoveRequest)
+            or nameof(CreatePartyRequest) or nameof(JoinPartyRequest) or nameof(EnterDungeonRequest)
+            or nameof(AdvanceRequest) or nameof(ViewRequest) or nameof(SessionInfoRequest)))
+        {
+            await Context.Client.Send(new ActionRejected("packet-not-allowed")).Async();
+            return;
+        }
         if (Context.Actors.Bound.Count == 0)
         {
             if (dispatch.PacketName != nameof(JoinWorldRequest))

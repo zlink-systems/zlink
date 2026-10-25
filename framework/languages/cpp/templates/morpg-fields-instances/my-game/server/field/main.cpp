@@ -1,4 +1,5 @@
 #include "field.hpp"
+#include "party.hpp"
 #include "server/shared/entry.hpp"
 #include "server/shared/hosting.hpp"
 int main (int argc, char **argv)
@@ -20,6 +21,11 @@ int main (int argc, char **argv)
           [] (auto &factory) {
               factory.template preserve_state_with<MyGame::PlayerRelocation> ();
           });
+        objects
+          .add_spot_factory<MyGame::PartySpot, MyGame::fx::actor_client_t,
+                            MyGame::fx::spot_manager_t> (MyGame::Names::party)
+          .set_execution_mode (MyGame::fx::user_spot_execution_mode_t::spot_wide)
+          .preserve_state_with<MyGame::PartyRelocation> ();
         objects
           .add_spot_factory<MyGame::Field, MyGame::fx::actor_client_t, MyGame::fx::spot_manager_t,
                             MyGame::fx::spot_publisher_client_t, MyGame::NodeConfig> (

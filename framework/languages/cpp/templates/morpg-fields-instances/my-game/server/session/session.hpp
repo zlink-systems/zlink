@@ -57,6 +57,14 @@ class Session final : public fx::packet_stream_session_t
               .async ();
             co_return;
         }
+        const auto packet = dispatch.packet_name;
+        if (packet != JoinWorldRequest::packet_name && packet != MoveRequest::packet_name
+            && packet != CreatePartyRequest::packet_name && packet != JoinPartyRequest::packet_name
+            && packet != EnterDungeonRequest::packet_name && packet != AdvanceRequest::packet_name
+            && packet != ViewRequest::packet_name && packet != SessionInfoRequest::packet_name) {
+            co_await actor.bound_session ().send (ActionRejected{Rejection::packet_not_allowed}).async ();
+            co_return;
+        }
         co_await actor.relay (std::string (dispatch.packet_name), payload);
     }
 };

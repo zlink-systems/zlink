@@ -1,3 +1,4 @@
+using System.Threading.Channels;
 using MyGame.Shared;
 using Systems.Zlink.Stream.Connector;
 using Systems.Zlink.Stream.Connector.Contracts;
@@ -13,6 +14,7 @@ internal sealed class GameClient(
     private static readonly TimeSpan MessageTimeout = TimeSpan.FromSeconds(10);
     public IZlinkStreamConnector Connector { get; } = connector;
     public string PlayerId { get; } = playerId;
+    private readonly Dictionary<Type, Channel<object>> inboxes = [];
     public bool Disconnected { get; private set; }
 
     public static async Task<GameClient> ConnectAsync(
@@ -46,6 +48,11 @@ internal sealed class GameClient(
                 return ValueTask.CompletedTask;
             }
         );
+        client.Record<WorldState>();
+        client.Record<BorderVisible>();
+        client.Record<PartyView>();
+        client.Record<DungeonView>();
+        client.Record<ActionRejected>();
         try
         {
             await connector.Connect.Async(ct);
@@ -58,14 +65,31 @@ internal sealed class GameClient(
         }
     }
 
+    private void Record<T>()
+    {
+        var inbox = Channel.CreateUnbounded<object>();
+        inboxes.Add(typeof(T), inbox);
+        Connector.On<T>((message, _) =>
+        {
+            inbox.Writer.TryWrite(message.Payload!);
+            return ValueTask.CompletedTask;
+        });
+    }
+
     public async Task<T> ReceiveAsync<T>(Func<T, bool> predicate, CancellationToken ct)
     {
-        var result = await Connector
-            .WaitFor<T>()
-            .Where(message => predicate(message.Payload))
-            .Timeout(MessageTimeout)
-            .Async(ct);
-        return result.Payload;
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        deadline.CancelAfter(MessageTimeout);
+        try
+        {
+            await foreach (var message in inboxes[typeof(T)].Reader.ReadAllAsync(deadline.Token))
+                if (predicate((T)message)) return (T)message;
+        }
+        catch (OperationCanceledException error) when (!ct.IsCancellationRequested)
+        {
+            throw new TimeoutException($"Player {PlayerId}: timed out waiting for {typeof(T).Name}.", error);
+        }
+        throw new InvalidOperationException("Client inbox closed.");
     }
 
     public async Task<T> SendAsync<T, TRequest>(
@@ -74,6 +98,7 @@ internal sealed class GameClient(
         CancellationToken ct
     )
     {
+        while (inboxes[typeof(T)].Reader.TryRead(out _)) { }
         var response = ReceiveAsync(predicate, ct);
         await Connector.Send(request).Async(ct);
         return await response;

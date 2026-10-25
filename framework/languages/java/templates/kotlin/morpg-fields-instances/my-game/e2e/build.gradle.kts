@@ -2,6 +2,8 @@ plugins { application }
 
 dependencies {
     implementation(project(":server:shared"))
+    implementation(project(":server:field"))
+    implementation(project(":server:instance"))
     implementation("systems.zlink:zlink-stream-connector:${rootProject.extra["frameworkVersion"]}")
 }
 

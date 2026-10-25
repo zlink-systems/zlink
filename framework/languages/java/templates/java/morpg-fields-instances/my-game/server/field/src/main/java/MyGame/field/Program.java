@@ -40,6 +40,14 @@ public class Program {
                                                     systems.zlink.framework.configuration
                                                             .ZLinkUserSpotExecutionMode.SPOT_WIDE)
                                             .preserveStateWith(FieldTransfer.class))
+                    .addSpotFactory(
+                            Names.PARTY,
+                            PartySpot.class,
+                            b ->
+                                    b.executionMode(
+                                                    systems.zlink.framework.configuration
+                                                            .ZLinkUserSpotExecutionMode.SPOT_WIDE)
+                                            .preserveStateWith(PartyTransfer.class))
                     .addActorFactory(
                             Names.PLAYER,
                             Player.class,

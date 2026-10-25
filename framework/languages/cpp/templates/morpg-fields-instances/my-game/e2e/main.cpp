@@ -1,4 +1,5 @@
 #include "scenarios.hpp"
+#include "tests/domain_checks.hpp"
 int main (int argc, char **argv)
 {
 #ifndef _WIN32
@@ -7,7 +8,7 @@ int main (int argc, char **argv)
     std::filesystem::path root = std::filesystem::current_path ();
     std::filesystem::path bin = std::filesystem::absolute (argv[0]).parent_path ();
     std::string selection;
-    bool check_only = false;
+    bool check_only = false, check_domain = false;
     std::unique_ptr<MyGame::E2E::World> world;
     int exit = 0, passed = 0;
     std::vector<MyGame::E2E::ScenarioDefinition> selected;
@@ -17,19 +18,30 @@ int main (int argc, char **argv)
             const std::string option (argv[i]);
             if (option == "--check-structure")
                 check_only = true;
+            else if (option == "--check-domain")
+                check_domain = true;
             else if (i + 1 < argc && option == "--root")
                 root = argv[++i];
             else if (i + 1 < argc && option == "--scenario")
                 selection = argv[++i];
             else
                 throw std::invalid_argument ("Usage: my-game-e2e [--root path] [--scenario "
-                                             "field,dungeon,reconnect,update] [--check-structure]");
+                                             "field,dungeon,reconnect,update] [--check-structure] "
+                                             "[--check-domain]");
         }
         MyGame::E2E::check_structure (root);
+        if (check_domain) {
+            const auto count = MyGame::DomainChecks::run ();
+            std::cout << "Domain checks: " << count << "/" << count << " passed" << std::endl;
+            return 0;
+        }
         if (check_only) {
             std::cout << "Structure: passed" << std::endl;
             return 0;
         }
+        const auto domain_count = MyGame::DomainChecks::run ();
+        std::cout << "Domain checks: " << domain_count << "/" << domain_count << " passed"
+                  << std::endl;
         if (selection.empty ())
             selected.assign (MyGame::E2E::scenario_order.begin (),
                              MyGame::E2E::scenario_order.end ());

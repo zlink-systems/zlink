@@ -9,6 +9,7 @@ import systems.zlink.framework.spots.*;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.*;
 
 public final class Field implements ZLinkSpot<Player> {
@@ -16,18 +17,17 @@ public final class Field implements ZLinkSpot<Player> {
     private final ZLinkActorClient actors;
     private final List<String> borderTopics;
     private final ZLinkSpotManager spots;
-    private final NodeConfig config;
     FieldState state = new FieldState();
+    private final FieldPositionDomain positions;
 
     public Field(
             ZLinkSpotContext context,
             ZLinkActorClient actors,
-            ZLinkSpotManager spots,
-            NodeConfig config) {
+            ZLinkSpotManager spots) {
         this.spots = spots;
-        this.config = config;
         this.context = context;
         this.actors = actors;
+        this.positions = new FieldPositionDomain(context.spotId());
         borderTopics =
                 Rules.adjacentFields(context.spotId()).stream()
                         .map(target -> Rules.borderTopic(context.spotId(), target))
@@ -54,18 +54,18 @@ public final class Field implements ZLinkSpot<Player> {
 
     public CompletionStage<ZLinkSpotActorJoinResult> onActorJoin(
             String actorId, ZLinkMessage request) {
-        var arrival = request.decode(EnterField.class);
-        if (!Rules.fieldId(arrival.x()).equals(context.spotId()))
-            return CompletableFuture.completedFuture(ZLinkSpotActorJoinResult.reject());
-        if (state.arrivals.putIfAbsent(actorId, arrival) != null)
-            throw new IllegalStateException("Duplicate Field arrival");
-        return CompletableFuture.completedFuture(ZLinkSpotActorJoinResult.accept());
+        var rejection = positions.queueArrival(actorId, request.decode(EnterField.class));
+        return CompletableFuture.completedFuture(
+                rejection == null
+                        ? ZLinkSpotActorJoinResult.accept()
+                        : ZLinkSpotActorJoinResult.reject());
     }
 
     public CompletionStage<Void> onJoinedActor(Player actor) {
-        var arrival = state.arrivals.remove(actor.context().actorId());
+        var arrival = positions.takeArrival(actor.context().actorId());
         if (arrival == null)
             throw new IllegalStateException("Field admission has no movement intent");
+        positions.addPlayer(actor.context().actorId(), arrival);
         actor.apply(arrival);
         remember(actor);
         return CompletableFuture.completedFuture(null);
@@ -73,31 +73,40 @@ public final class Field implements ZLinkSpot<Player> {
 
     public CompletionStage<Void> onLeaveActor(Player actor) {
         state.visiblePlayers.remove(actor.context().actorId());
-        var parties = state.parties.entrySet().iterator();
-        while (parties.hasNext()) {
-            var party = parties.next();
-            if (party.getValue().remove(actor.context().actorId())) {
-                if (party.getValue().isEmpty()) parties.remove();
-                break;
-            }
-        }
+        positions.removePlayer(actor.context().actorId());
         return CompletableFuture.completedFuture(null);
     }
 
     public CompletionStage<Void> onDisconnectActor(Player actor) {
         state.visiblePlayers.remove(actor.context().actorId());
+        positions.setConnected(actor.context().actorId(), false);
         return CompletableFuture.completedFuture(null);
     }
 
     public void remember(Player actor) {
+        positions.setConnected(actor.context().actorId(), true);
         state.visiblePlayers.put(actor.context().actorId(), actor.position());
+    }
+
+    public CompletionStage<Void> move(Player actor, MoveRequest request) {
+        var result = positions.move(actor.context().actorId(), request);
+        if (result.rejection() != null)
+            return actor.context().boundSession().send(result.rejection()).submit();
+        var arrival = new EnterField(result.position().x(), result.sequence(), result.remainingMs());
+        if (result.relocates()) {
+            actor.move(arrival);
+            return CompletableFuture.completedFuture(null);
+        }
+        actor.apply(arrival);
+        remember(actor);
+        return actor.sendState();
     }
 
     public CompletionStage<Void> publishBorder() {
         CompletionStage<Void> sends = CompletableFuture.completedFuture(null);
         for (var entry : state.visiblePlayers.entrySet()) {
             var position = entry.getValue();
-            int offset = position.x() % Rules.FIELD_WIDTH;
+            double offset = position.x() % Rules.FIELD_WIDTH;
             if (offset >= Rules.BORDER_RADIUS && offset < Rules.FIELD_WIDTH - Rules.BORDER_RADIUS)
                 continue;
             var presence =
@@ -131,85 +140,85 @@ public final class Field implements ZLinkSpot<Player> {
         return sends;
     }
 
-    private FieldView view() {
-        return new FieldView(
-                context.spotId(),
-                config.id(),
-                state.visiblePlayers.keySet().stream().sorted().toList(),
-                state.parties.entrySet().stream()
-                        .sorted(java.util.Map.Entry.comparingByKey())
-                        .map(e -> new PartyView(e.getKey(), List.copyOf(e.getValue())))
-                        .toList());
-    }
-
-    private CompletionStage<Void> broadcast(Player requester) {
-        var view = view();
-        CompletionStage<Void> sent = requester.context().boundSession().send(view).submit();
-        for (var id : state.visiblePlayers.keySet())
-            if (!id.equals(requester.context().actorId()))
-                sent = sent.thenCompose(ignored -> actors.sendToActor(id, view).submit());
-        return sent;
-    }
-
     public CompletionStage<Void> party(Player actor, String partyId, boolean create) {
-        var id = actor.context().actorId();
-        var members = state.parties.get(partyId);
-        if (partyId == null
-                || partyId.isBlank()
-                || !state.visiblePlayers.containsKey(id)
-                || state.parties.values().stream().anyMatch(p -> p.contains(id))
-                || (create
-                        ? members != null
-                        : members == null || members.size() >= Rules.MAXIMUM_PARTY_MEMBERS))
-            return actor.context()
-                    .boundSession()
-                    .send(new ActionRejected(Rejection.INVALID_PARTY))
-                    .submit();
-        if (create) state.parties.put(partyId, new java.util.ArrayList<>(List.of(id)));
-        else members.add(id);
-        return broadcast(actor);
+        if (actor.partyId() != null) return reject(actor, Rejection.INVALID_PARTY);
+        String partySpotId = create ? "party-" + UUID.randomUUID().toString().replace("-", "") : partyId;
+        if (!PartyRun.validId(partySpotId, "party-")) return reject(actor, Rejection.INVALID_PARTY);
+        if (create)
+            return spots.getOrCreate(partySpotId, Names.PARTY)
+                    .inMesh(Names.MESH)
+                    .submit()
+                    .thenCompose(
+                            created -> {
+                                if (created.state() == ZLinkSpotCreateState.REJECTED)
+                                    return CompletableFuture.failedFuture(
+                                            new IllegalStateException("Party creation rejected"));
+                                return joinParty(actor, partySpotId);
+                            });
+        return spots.find(partySpotId)
+                .thenCompose(
+                        found ->
+                                found.isPresent()
+                                        ? joinParty(actor, partySpotId)
+                                        : reject(actor, Rejection.INVALID_PARTY));
     }
 
     public CompletionStage<Void> enter(Player actor) {
-        var party =
-                state.parties.entrySet().stream()
-                        .filter(e -> e.getValue().getFirst().equals(actor.context().actorId()))
-                        .findFirst();
-        if (party.isEmpty())
-            return actor.context()
-                    .boundSession()
-                    .send(new ActionRejected(Rejection.NOT_LEADER))
-                    .submit();
-        var partyId = party.get().getKey();
-        var members = List.copyOf(party.get().getValue());
-        var dungeonId = Rules.dungeonId(partyId);
-        return spots.getOrCreate(dungeonId, Names.DUNGEON)
-                .inMesh(Names.MESH)
-                .submit()
+        if (actor.partyId() == null) return reject(actor, Rejection.NOT_LEADER);
+        return context.outbound()
+                .requestToSpot(
+                        actor.partyId(), new PartyCommand(actor.context().actorId(), false, true))
+                .submit(PartyCommandResult.class)
                 .thenCompose(
-                        created -> {
-                            if (created.state() == ZLinkSpotCreateState.REJECTED)
-                                throw new IllegalStateException("Dungeon creation rejected");
+                        result ->
+                                result.rejection() == null
+                                        ? CompletableFuture.completedFuture(null)
+                                        : actor.context().boundSession().send(result.rejection()).submit());
+    }
+
+    public CompletionStage<Void> show(Player actor) {
+        return actor.sendState()
+                .thenCompose(
+                        ignored -> {
+                            if (actor.partyId() == null) return CompletableFuture.completedFuture(null);
                             return context.outbound()
-                                    .requestToSpot(dungeonId, new PrepareDungeon(partyId, members))
-                                    .submit(DungeonPrepared.class);
-                        })
-                .thenCompose(
-                        prepared -> {
-                            if (!prepared.dungeonId().equals(dungeonId))
-                                throw new IllegalStateException(
-                                        "Dungeon preparation identity mismatch");
-                            CompletionStage<Void> sent = CompletableFuture.completedFuture(null);
-                            for (var id : members)
-                                sent =
-                                        sent.thenCompose(
-                                                ignored ->
-                                                        actors.sendToActor(
-                                                                        id,
-                                                                        new JoinDungeon(
-                                                                                dungeonId, partyId))
-                                                                .submit());
-                            return sent;
+                                    .requestToSpot(actor.partyId(), new PartyCommand(actor.context().actorId()))
+                                    .submit(PartyCommandResult.class)
+                                    .thenCompose(
+                                            result -> result.view() == null
+                                                    ? CompletableFuture.completedFuture(null)
+                                                    : actor.context().boundSession().send(result.view()).submit());
                         });
     }
+
+    private CompletionStage<Void> joinParty(Player actor, String partyId) {
+        return context.outbound()
+                .requestToSpot(partyId, new PartyCommand(actor.context().actorId(), true, false))
+                .submit(PartyCommandResult.class)
+                .thenCompose(
+                        result -> {
+                            if (result.rejection() != null)
+                                return actor.context().boundSession().send(result.rejection()).submit();
+                            actor.setPartyId(partyId);
+                            return CompletableFuture.completedFuture(null);
+                        });
+    }
+
+    private CompletionStage<Void> reject(Player actor, String reason) {
+        return actor.context().boundSession().send(new ActionRejected(reason)).submit();
+    }
+
+    public FieldSnapshot capture() {
+        return new FieldSnapshot(new java.util.LinkedHashMap<>(state.visiblePlayers), positions.capture());
+    }
+
+    public void restore(FieldSnapshot snapshot) {
+        positions.restore(snapshot.positions());
+        state.visiblePlayers.clear();
+        state.visiblePlayers.putAll(snapshot.visiblePlayers());
+    }
+
+    public record FieldSnapshot(
+            java.util.Map<String, EnterField> visiblePlayers,
+            FieldPositionDomain.FieldPositionSnapshot positions) {}
 }

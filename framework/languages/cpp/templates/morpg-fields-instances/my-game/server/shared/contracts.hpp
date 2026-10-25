@@ -1,10 +1,35 @@
 #pragma once
+#include <optional>
 #include <nlohmann/json.hpp>
+#include <array>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
+#include <iomanip>
+#include <random>
+#include <sstream>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <vector>
+
+namespace nlohmann
+{
+template <class T> struct adl_serializer<std::optional<T>>
+{
+    static void to_json (json &value, const std::optional<T> &item)
+    {
+        value = item ? json (*item) : json (nullptr);
+    }
+    static void from_json (const json &value, std::optional<T> &item)
+    {
+        if (value.is_null ())
+            item.reset ();
+        else
+            item = value.template get<T> ();
+    }
+};
+}
 
 namespace MyGame
 {
@@ -12,6 +37,7 @@ struct Names
 {
     static constexpr auto mesh = "my-game-world";
     static constexpr auto field = "Field";
+    static constexpr auto party = "Party";
     static constexpr auto player = "Player";
     static constexpr auto dungeon = "Dungeon";
     static constexpr auto border = "border";
@@ -20,19 +46,34 @@ struct Names
     static constexpr auto field_prefix = "field-";
     static constexpr int field_width = 100;
     static constexpr int field_count = 4;
+    static constexpr int final_stage = 3;
+    static constexpr std::int64_t max_safe_integer = 9'007'199'254'740'991LL;
     static constexpr std::size_t maximum_party_members = 4;
+    static constexpr int border_radius = 10;
+    static constexpr auto tick_period = std::chrono::milliseconds (100);
+
     static bool valid_id (const std::string &id)
     {
         return id.find_first_not_of (" \t\r\n") != std::string::npos;
     }
-    static std::string dungeon_id (const std::string &party) { return "dungeon-" + party; }
-    static constexpr int border_radius = 10;
-    static constexpr auto tick_period = std::chrono::milliseconds (100);
-    static std::string field_id (int x)
+    static std::string new_id (std::string_view prefix)
     {
-        if (x < 0 || x >= field_width * field_count)
+        std::random_device random;
+        std::array<unsigned char, 16> bytes{};
+        for (auto &byte : bytes)
+            byte = static_cast<unsigned char> (random () & 0xffU);
+        std::ostringstream value;
+        value << std::hex << std::setfill ('0');
+        for (const auto byte : bytes)
+            value << std::setw (2) << static_cast<unsigned int> (byte);
+        return std::string (prefix) + value.str ();
+    }
+    static std::string dungeon_id (const std::string &run) { return "dungeon-" + run; }
+    static std::string field_id (double x)
+    {
+        if (!std::isfinite (x) || x < 0 || x >= field_width * field_count)
             throw std::out_of_range ("Position outside world");
-        return field_prefix + std::to_string (x / field_width + 1);
+        return field_prefix + std::to_string (static_cast<int> (x / field_width) + 1);
     }
     static std::vector<std::string> adjacent (const std::string &field_id)
     {
@@ -69,17 +110,47 @@ struct Control
     static constexpr auto safe = "SAFE_TO_SHUTDOWN";
     static constexpr auto stopped = "STOPPED";
 };
+struct Rejection
+{
+    static constexpr auto invalid_party = "invalid-party";
+    static constexpr auto not_leader = "not-leader";
+    static constexpr auto run_mismatch = "run-mismatch";
+    static constexpr auto stale_sequence = "stale-sequence";
+    static constexpr auto non_finite = "non-finite";
+    static constexpr auto outside_world = "outside-world";
+    static constexpr auto integer_out_of_range = "integer-out-of-range";
+    static constexpr auto step_too_large = "step-too-large";
+    static constexpr auto move_budget = "move-budget";
+    static constexpr auto run_not_active = "run-not-active";
+    static constexpr auto packet_not_allowed = "packet-not-allowed";
+    static constexpr auto run_in_progress = "run-in-progress";
+};
+struct ActionRejected
+{
+    static constexpr auto packet_name = "ActionRejected";
+    std::string reason;
+    std::int32_t retryAfterMs = 0;
+    NLOHMANN_DEFINE_TYPE_INTRUSIVE (ActionRejected, reason, retryAfterMs)
+};
+enum class RunPhase
+{
+    Forming,
+    Preparing,
+    Entering,
+    Active,
+    Completed
+};
+NLOHMANN_JSON_SERIALIZE_ENUM (RunPhase,
+                              {{RunPhase::Forming, "Forming"},
+                               {RunPhase::Preparing, "Preparing"},
+                               {RunPhase::Entering, "Entering"},
+                               {RunPhase::Active, "Active"},
+                               {RunPhase::Completed, "Completed"}})
+
 struct SessionInfoRequest
 {
     static constexpr auto packet_name = "SessionInfoRequest";
 };
-inline void to_json (nlohmann::json &j, const SessionInfoRequest &)
-{
-    j = nlohmann::json::object ();
-}
-inline void from_json (const nlohmann::json &, SessionInfoRequest &)
-{
-}
 struct SessionInfo
 {
     static constexpr auto packet_name = "SessionInfo";
@@ -92,53 +163,51 @@ struct JoinWorldRequest
 {
     static constexpr auto packet_name = "JoinWorldRequest";
     std::string playerId;
-    int x = 0;
+    double x = 0;
     NLOHMANN_DEFINE_TYPE_INTRUSIVE (JoinWorldRequest, playerId, x)
 };
 struct MoveRequest
 {
     static constexpr auto packet_name = "MoveRequest";
-    int x = 0, sequence = 0;
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (MoveRequest, x, sequence)
+    double delta = 0;
+    std::int64_t sequence = 0;
+    NLOHMANN_DEFINE_TYPE_INTRUSIVE (MoveRequest, delta, sequence)
 };
 struct EnterField
 {
-    static constexpr auto packet_name = "EnterField";
-    int x = 0, sequence = 0;
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (EnterField, x, sequence)
+    double x = 0;
+    std::int64_t sequence = 0;
+    std::int32_t remainingMs = 0;
+    NLOHMANN_DEFINE_TYPE_INTRUSIVE (EnterField, x, sequence, remainingMs)
 };
 struct WorldState
 {
     static constexpr auto packet_name = "WorldState";
     std::string fieldId, nodeId;
-    int x = 0, sequence = 0;
+    double x = 0;
+    std::int64_t sequence = 0;
     NLOHMANN_DEFINE_TYPE_INTRUSIVE (WorldState, fieldId, nodeId, x, sequence)
 };
 struct BorderPresence
 {
     static constexpr auto packet_name = "BorderPresence";
     std::string sourceFieldId, playerId;
-    int x = 0, sequence = 0;
+    double x = 0;
+    std::int64_t sequence = 0;
     NLOHMANN_DEFINE_TYPE_INTRUSIVE (BorderPresence, sourceFieldId, playerId, x, sequence)
 };
 struct BorderVisible
 {
     static constexpr auto packet_name = "BorderVisible";
     std::string observerFieldId, sourceFieldId, playerId;
-    int x = 0, sequence = 0;
+    double x = 0;
+    std::int64_t sequence = 0;
     NLOHMANN_DEFINE_TYPE_INTRUSIVE (
       BorderVisible, observerFieldId, sourceFieldId, playerId, x, sequence)
-};
-struct Rejection
-{
-    static constexpr auto invalid_party = "INVALID_PARTY";
-    static constexpr auto not_leader = "NOT_LEADER";
 };
 struct CreatePartyRequest
 {
     static constexpr auto packet_name = "CreatePartyRequest";
-    std::string partyId;
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (CreatePartyRequest, partyId)
 };
 struct JoinPartyRequest
 {
@@ -166,15 +235,49 @@ struct ViewRequest
     inline void from_json (const nlohmann::json &, Type &)                                         \
     {                                                                                              \
     }
+EMPTY_PACKET_JSON (CreatePartyRequest)
 EMPTY_PACKET_JSON (EnterDungeonRequest)
 EMPTY_PACKET_JSON (AdvanceRequest)
 EMPTY_PACKET_JSON (ViewRequest)
+EMPTY_PACKET_JSON (SessionInfoRequest)
 #undef EMPTY_PACKET_JSON
 struct PartyView
 {
+    static constexpr auto packet_name = "PartyView";
     std::string partyId;
     std::vector<std::string> members;
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (PartyView, partyId, members)
+    std::string leaderId;
+    RunPhase phase = RunPhase::Forming;
+    std::optional<std::string> runId;
+    NLOHMANN_DEFINE_TYPE_INTRUSIVE (PartyView, partyId, members, leaderId, phase, runId)
+};
+struct PartyCommand
+{
+    std::string actorId;
+    bool join = false;
+    bool enter = false;
+    NLOHMANN_DEFINE_TYPE_INTRUSIVE (PartyCommand, actorId, join, enter)
+};
+struct PartyCommandResult
+{
+    std::optional<PartyView> view;
+    std::optional<ActionRejected> rejection;
+    NLOHMANN_DEFINE_TYPE_INTRUSIVE (PartyCommandResult, view, rejection)
+};
+struct DungeonMemberEntered
+{
+    std::string runId, actorId;
+    NLOHMANN_DEFINE_TYPE_INTRUSIVE (DungeonMemberEntered, runId, actorId)
+};
+struct RunStarted
+{
+    std::string runId;
+    NLOHMANN_DEFINE_TYPE_INTRUSIVE (RunStarted, runId)
+};
+struct RunCompleted
+{
+    std::string runId;
+    NLOHMANN_DEFINE_TYPE_INTRUSIVE (RunCompleted, runId)
 };
 struct FieldView
 {
@@ -190,31 +293,25 @@ struct DungeonView
     std::string dungeonId, nodeId, partyId;
     std::vector<std::string> members;
     int stage = 0;
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (DungeonView, dungeonId, nodeId, partyId, members, stage)
+    std::string runId;
+    RunPhase phase = RunPhase::Preparing;
+    NLOHMANN_DEFINE_TYPE_INTRUSIVE (DungeonView, dungeonId, nodeId, partyId, members, stage, runId, phase)
 };
 struct PrepareDungeon
 {
-    static constexpr auto packet_name = "PrepareDungeon";
-    std::string partyId;
+    std::string runId, partyId;
     std::vector<std::string> members;
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (PrepareDungeon, partyId, members)
+    NLOHMANN_DEFINE_TYPE_INTRUSIVE (PrepareDungeon, runId, partyId, members)
 };
 struct DungeonPrepared
 {
-    static constexpr auto packet_name = "DungeonPrepared";
-    std::string dungeonId;
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (DungeonPrepared, dungeonId)
+    std::string dungeonId, runId;
+    std::optional<ActionRejected> rejection;
+    NLOHMANN_DEFINE_TYPE_INTRUSIVE (DungeonPrepared, dungeonId, runId, rejection)
 };
 struct JoinDungeon
 {
-    static constexpr auto packet_name = "JoinDungeon";
-    std::string dungeonId, partyId;
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (JoinDungeon, dungeonId, partyId)
-};
-struct ActionRejected
-{
-    static constexpr auto packet_name = "ActionRejected";
-    std::string reason;
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (ActionRejected, reason)
+    std::string dungeonId, runId;
+    NLOHMANN_DEFINE_TYPE_INTRUSIVE (JoinDungeon, dungeonId, runId)
 };
 }

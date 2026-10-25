@@ -5,4 +5,6 @@ public record DungeonView(
         String nodeId,
         String partyId,
         java.util.List<String> members,
-        int stage) {}
+        int stage,
+        String runId,
+        RunPhase phase) {}

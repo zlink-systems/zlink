@@ -17,6 +17,7 @@ pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
 pwsh -NoProfile -File ./run-e2e.ps1
 pwsh -NoProfile -File ./run-e2e.ps1 -Scenario field,dungeon,reconnect,update
 pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
+pwsh -NoProfile -File ./run-e2e.ps1 -CheckDomain
 ```
 
 Bash도 같은 절차를 실행한다.
@@ -26,6 +27,7 @@ Bash도 같은 절차를 실행한다.
 ./run-e2e.sh
 ./run-e2e.sh --scenario field,dungeon,reconnect,update
 ./run-e2e.sh --check-structure
+./run-e2e.sh --check-domain
 ```
 
 로컬 process 디버깅은 JDK 25를 설치한 뒤 `--local` 또는 `-Local`로 실행한다. 로컬 빌드가 있으면 `--no-build` 또는 `-NoBuild`를 추가하며, 이 옵션은 `--local`/`-Local`과 함께만 쓴다. 시나리오 순서와 assertion은 유지하며 최초 실패를 README의 Known issues와 대조한다. 빌드와 e2e는 Windows와 Linux 모두에서 실행한다. runner는 node를 시작하기 전에 구조를 검사하며, 실행마다 고유한 Redis key prefix, Compose project, OS가 배정한 포트를 쓰므로 runner를 고칠 때도 이 격리를 유지한다.
@@ -38,25 +40,25 @@ Bash도 같은 절차를 실행한다.
 
 ### Field와 플레이어
 
-ID로 찾는 게임 상태 객체가 Actor이며, `server/shared/src/main/kotlin/MyGame/Player.kt`의 `Player`가 플레이어의 `position`(`EnterField`: 좌표 `x`와 `sequence`)을 관리하고 Field와 Instance node가 함께 쓴다. Actor를 받아 공통 게임 규칙을 실행하는 상태 객체가 Spot이며, `server/field/src/main/kotlin/MyGame/field/Field.kt`의 `Field`는 `FieldState`에 필드의 가시성 정보, 도착 대기 정보, 파티를 관리하는 고정 User Spot이다. 가시성 정보는 Actor의 이동 상태에서 복사한 관찰용 값이므로, 플레이어 상태 변경은 Actor에 적용한다. `server/shared/src/main/kotlin/MyGame/admission/Entry.kt`의 `Entry`와 `EnterWorld`가 새 Actor를 받아 좌표에 해당하는 필드로 보낸다.
+ID로 찾는 게임 상태 객체가 Actor다. `server/shared/src/main/kotlin/MyGame/Player.kt`의 `Player`는 현재 `position`과 `partyId`를 보유한다. `server/field/src/main/kotlin/MyGame/field/FieldPositionDomain.kt`는 authoritative position·sequence·movement budget·pending arrival을 소유하고, 고정 `Field` User Spot은 `FieldState`에 가시성 projection만 둔다. 동적 `Party` User Spot은 파티 구성원과 run phase를, `DungeonRun`은 Party Spot ID·Run ID·멤버·phase·stage를 소유한다. `server/shared/src/main/kotlin/MyGame/admission/Entry.kt`의 `Entry`와 `EnterWorld`가 새 Actor를 받아 좌표에 해당하는 필드로 보낸다.
 
-`server/field/src/main/kotlin/MyGame/field/Program.kt`가 handler, Entry Spot, `Field` factory(`stableTypeLimit(config.fieldCapacity)`, `SPOT_WIDE`), `Player` factory, `border` channel server를 등록한다. `server/field/src/main/kotlin/MyGame/field/Handlers.kt`의 `Actions`가 플레이어 요청(이동, 파티, 던전 입장)과 push를 Field에 연결하고, `BorderTick`이 경계 정보를 publish한다. `Hosting.kt`는 node가 시작할 때 `fieldIds`에 적힌 고정 Field를 만든다. node 구성을 바꾸면 실제 등록과 `server/config/`, descriptor를 함께 맞추어 구조 검사가 같은 구성을 검사하게 한다.
+`server/field/src/main/kotlin/MyGame/field/Program.kt`가 handler, Entry Spot, 고정 `Field` factory, 동적 `PartySpot` factory, `Player` factory, `border` channel server를 등록한다. `Actions`는 플레이어 요청을 Field에 연결하고 파티 command는 `requestToSpot`으로 Party Spot에 보낸다. `BorderTick`은 경계 정보를 publish한다. `Hosting.kt`는 node가 시작할 때 `fieldIds`에 적힌 고정 Field를 만든다. node 구성을 바꾸면 실제 등록과 `server/config/`, descriptor를 함께 맞추어 구조 검사가 같은 구성을 검사하게 한다.
 
 ### 경계 구독
 
-`server/field/src/main/kotlin/MyGame/border/BorderRoutes.kt`는 annotation의 topic이 컴파일 시점 상수(`BorderTopics`)이고 Kotlin Spot handler registry가 아직 runtime `(channelName, topic)` 구독을 등록하지 못하므로(README의 Known issues 참조) 인접한 Field 쌍마다 구독 handler 클래스를 하나씩 선언한다. `Field.configure()`가 이웃마다 `BorderRoutes.register`를 호출한다. 새 인접 쌍은 이곳에 handler 클래스와 `when` 분기를 새로 둔다.
+`server/field/src/main/kotlin/MyGame/border/BorderRoutes.kt`는 공개 0.30.2 `addSubscribe` API로 인접 Field topic마다 `BorderHandler`를 등록한다. Field 쌍을 추가할 때 handler 클래스를 추가하지 않는다.
 
 ### Dungeon
 
-`server/instance/src/main/kotlin/MyGame/instance/Program.kt`는 Entry Spot, `Dungeon` factory(`stableTypeLimit(config.dungeonCapacity)`, `SPOT_WIDE`), `Player` factory를 등록한다. `server/instance/src/main/kotlin/MyGame/instance/Dungeon.kt`의 `Dungeon`은 파티 멤버와 단계를 `DungeonState`로 관리하고 `prepare`가 지정한 멤버만 받아들이며 `DungeonView`를 push하는 User Spot이다. `server/instance/src/main/kotlin/MyGame/instance/Handlers.kt`의 `Prepare`와 `DungeonActions`가 Field의 `PrepareDungeon` 요청과 플레이어 요청을 처리한다. 전투·보상·Dungeon lifecycle은 이 모듈에 추가한다.
+`server/instance/src/main/kotlin/MyGame/instance/Program.kt`는 Entry Spot, `Dungeon` factory, `Player` factory를 등록한다. 동적 Dungeon User Spot의 `DungeonRun`은 owner Party Spot ID, Run ID, 멤버, phase, stage를 저장한다. 준비된 Run ID의 멤버만 받아들이고 도착·완료를 Party Spot에 전달하며 `DungeonView`를 push한다. `Prepare`와 `DungeonActions`가 준비와 플레이어 요청을 처리한다. 전투·보상·Dungeon lifecycle은 이 모듈에 추가한다.
 
 ### 공통 계약과 hosting
 
-`server/shared/src/main/kotlin/MyGame/Contracts.kt`는 process 간 이름·게임 상수·메시지를 정의한다. `Hosting.kt`는 `NodeConfig`(process 설정), Redis store, hosting과 진단을 설정하는 `configure`, node를 시작하고 stdin 제어 명령을 처리하는 `runNode`를 정의하고, `Control.kt`는 제어·준비 문자열을 정의한다. `Names`는 이름과 시나리오 ID를, `Rules`는 필드 폭·개수, 경계 반경과 tick, 파티 한도, 보조 함수 `fieldId`·`adjacentFields`·`borderTopic`·`dungeonId`를 가지고, `Player.kt`는 `Player`와 그 factory·adapter를, `Transfer.kt`는 `ensureActive`를 정의한다. hosting과 제어 protocol은 role마다 복제하지 않고 이곳에 둔다. 여러 process가 사용하는 계약은 `Contracts.kt`에 추가하며, 플레이어 상태는 `Player`에 유지하여 서로 다른 process가 같은 값을 따로 변경하지 않게 한다.
+`server/shared/src/main/kotlin/MyGame/Contracts.kt`는 process 간 이름, movement·party 상수, run phase, 거부 이유와 메시지를 정의한다. `Hosting.kt`는 `NodeConfig`, Redis store, hosting과 진단 설정, `runNode`를 정의하고 `Control.kt`는 제어·준비 문자열을 정의한다. `Rules`는 field·speed·cooldown·stage 한도와 field helper를 소유하고, `Player.kt`는 `Player`, factory와 relocation adapter를 정의한다. hosting과 제어 protocol은 role마다 복제하지 않고 이곳에 둔다.
 
 ### E2E client
 
-`e2e/src/main/kotlin/MyGame/e2e/Client.kt`는 공개 stream connector로 게임에 접속하고 `Scenarios.kt`는 client가 관찰할 결과를 검사한다. `Nodes.kt`는 실행별 process와 Compose project를 관리하고, `Structure.kt`는 구성을 검사하며, `Program.kt`는 시나리오를 고르고 종료 코드를 정한다(시나리오나 정리가 실패하면 종료 코드는 1이다). `DockerRuntime.kt`는 Docker 모드에서 node를 container로 실행하고 `Cleanup.kt`는 정리 실패를 모은다. 새 게임 동작은 client가 받은 결과로 검증한다. 별도 unit-test 모듈은 포함되어 있지 않다.
+`e2e/src/main/kotlin/MyGame/e2e/Client.kt`는 공개 stream connector로 게임에 접속하고 `Scenarios.kt`는 client가 관찰할 결과를 검사한다. `DomainChecks.kt`는 node를 시작하지 않고 movement·PartyRun·DungeonRun·JSON 경계를 확인한다. `Nodes.kt`는 실행별 process와 Compose project를 관리하고, `Structure.kt`는 구성을 검사하며, `Program.kt`는 검증과 시나리오를 고른다. `DockerRuntime.kt`는 Docker 모드에서 node를 container로 실행하고 `Cleanup.kt`는 정리 실패를 모은다. 게임 동작은 client가 받은 결과로 검증한다.
 
 ## 프로젝트의 ZLink 개념
 
@@ -66,7 +68,7 @@ process 간 메시지를 전달할 node들을 연결하는 구성이 RouteMesh�
 
 ### Spot과 Actor
 
-`Entry`는 Actor 진입을 처리하고, `Field`는 필드마다 두는 고정 User Spot이며, `Dungeon`은 Field가 파티를 위해 만드는 User Spot이다. [Spot 가이드](https://docs.zlink.systems/ko/kotlin/guide/server/21-spot/)는 이 객체들의 등록과 호출을 설명한다. `Player`는 소속 Spot이 바뀌어도 플레이어 이동 상태를 유지하며, 생성과 호출은 [Actor 가이드](https://docs.zlink.systems/ko/kotlin/guide/server/22-actor/)에서 설명한다.
+`Entry`는 Actor 진입을 처리하고 `Field`는 고정 User Spot이다. `Party`는 Party ID로 주소를 정하는 동적 User Spot이고 `Dungeon`은 Run ID로 주소를 정하는 동적 User Spot이다. [Spot 가이드](https://docs.zlink.systems/ko/kotlin/guide/server/21-spot/)는 등록과 호출을 설명한다. `Player`는 현재 position과 party association을 보유하며, Actor 생성과 호출은 [Actor 가이드](https://docs.zlink.systems/ko/kotlin/guide/server/22-actor/)에서 설명한다.
 
 ### STREAM과 Session
 
@@ -78,15 +80,15 @@ client 연결의 packet을 처리하는 [STREAM](https://docs.zlink.systems/ko/k
 
 ### Actor membership
 
-Actor가 소속 Spot을 바꾸는 동작은 membership 변경이다. 대상 Spot이 참가 요청의 수락 여부를 정하는 단계가 admission이다. `Player.move`는 다음 Field 참가를 `joinSpot(...).defer()`로 지연 요청하고 `Field.onActorJoinSuspending`이 정하며 `onJoinCompletedSuspending`이 완료 결과를 확인한다. `Field.enter`가 Dungeon을 준비하면 `Actions.travel`이 Dungeon 참가를 지연 요청하고, `Dungeon.onActorJoinSuspending`은 준비된 멤버만 받아들인다. 참가 수락과 완료의 순서는 [Actor membership](https://docs.zlink.systems/ko/kotlin/guide/server/35-actor-membership/)이 설명한다.
+Actor가 소속 Spot을 바꾸는 동작은 membership 변경이다. 대상 Spot이 참가 요청 수락을 정하는 단계가 admission이다. `Player.move`는 다음 Field 참가를 `joinSpot(...).defer()`로 요청하고 `Field.onActorJoinSuspending`이 판정하며 `onJoinCompletedSuspending`이 완료 결과를 확인한다. Field가 Party Spot에 입장 command를 보내면 Party Spot이 Dungeon을 준비하고 `JoinDungeon`을 push한다. `Dungeon.onActorJoinSuspending`은 일치하는 Run ID의 멤버만 받아들인다. 참가 순서는 [Actor membership](https://docs.zlink.systems/ko/kotlin/guide/server/35-actor-membership/)이 설명한다.
 
 ### Host relocation과 drain
 
-객체의 실행 host를 변경하는 동작은 relocation이며, host를 종료할 수 있도록 workload를 다른 host로 이동시키는 절차는 drain이다. application adapter는 게임 상태를 저장하고 복원하며 Framework는 workload와 route를 이전한다. `Hosting.kt`의 `runNode`는 `drain`을 읽으면 host relocation을 요청하고 관찰한 뒤 `SAFE_TO_SHUTDOWN`을 알린다. `PlayerTransfer`는 위치를 저장하고 `FieldTransfer`와 `DungeonTransfer`는 Spot 상태를 JSON으로 저장한다. 절차는 [Relocation 가이드](https://docs.zlink.systems/ko/kotlin/guide/server/37-relocation/)가 설명한다.
+객체의 실행 host를 변경하는 동작은 relocation이고 host를 종료하기 위해 workload를 옮기는 절차는 drain이다. application adapter는 게임 상태를 저장하고 Framework는 workload와 route를 이전한다. `runNode`는 `drain` 뒤 relocation을 관찰하고 `SAFE_TO_SHUTDOWN`을 알린다. `FieldTransfer`는 가시성과 남은 ms를 포함한 movement snapshot을 저장하고 `PartyTransfer`·`DungeonTransfer`·`PlayerTransfer`는 각 소유 상태를 보존한다. 절차는 [Relocation 가이드](https://docs.zlink.systems/ko/kotlin/guide/server/37-relocation/)가 설명한다.
 
 ### 경계 알림과 timer
 
-A timer runs a handler periodically; `BorderTick` uses one to publish information about players near a border. In this pub/sub exchange, the `Route*` subscription handlers in `BorderRoutes.kt` receive subscribed information and call `Field.showBorder`, and `Actions.deliver` forwards the notification through the receiving Actor's bound Session. [Timers and workers](https://docs.zlink.systems/ko/kotlin/guide/server/36-timer-worker/) explains registration and execution of periodic work.
+A timer runs a handler periodically; `BorderTick` uses one to publish information about players near a border. In this pub/sub exchange, the `BorderHandler` subscription handler in `BorderRoutes.kt` receive subscribed information and call `Field.showBorder`, and `Actions.deliver` forwards the notification through the receiving Actor's bound Session. [Timers and workers](https://docs.zlink.systems/ko/kotlin/guide/server/36-timer-worker/) explains registration and execution of periodic work.
 
 ## 요청 흐름
 
@@ -96,51 +98,20 @@ A timer runs a handler periodically; `BorderTick` uses one to publish informatio
 2. 새 Actor는 Entry Spot `Entry`에서 시작한다. `EnterWorld.join`이 identity를 확인하고 `Player.move`로 좌표에 해당하는 Field에 `joinSpot(...).defer()`를 요청한다.
 3. 참가가 끝나면 `Player.onJoinCompletedSuspending`이 binding된 Session으로 `WorldState`를 보낸다. 이후 같은 client의 패킷은 Actor가 속한 Field의 `Actions` handler(`move` 등)가 처리하고 결과를 같은 Session으로 보낸다.
 4. 이동이 다른 Field의 좌표에 닿으면 `Actions.move`가 다시 `Player.move`를 호출한다. 다른 node에 있는 Field여도 client 연결은 바뀌지 않는다.
-5. `Rules.TICK_MILLIS`마다 `BorderTick`이 `border` channel에 경계 정보를 publish한다. `Route*` handler가 `Field.showBorder`를 호출하여 가까운 관찰자에게 `sendToActor`로 `BorderVisible`을 보내고, `Actions.deliver`가 관찰자의 binding된 Session으로 전달한다.
-6. `CreatePartyRequest`와 `JoinPartyRequest`는 `Actions.createParty`와 `Actions.joinParty`에 도달하여 `Field.party`를 호출하며, 잘못된 요청은 `ActionRejected`로 응답한다. `EnterDungeonRequest`는 `Actions.enterDungeon`과 `Field.enter`에 도달한다. 파티장이 아니면 `NOT_LEADER`를 받고, 아니면 `Field.enter`가 `dungeon-<partyId>`를 `getOrCreate`로 만들고 `requestToSpot`으로 `PrepareDungeon`을 `Prepare.prepare`에 보낸 뒤 모든 멤버에게 `JoinDungeon`을 push한다. 이어서 `Actions.travel`이 참가를 요청하고 `AdvanceRequest`는 `DungeonActions.advance`에 도달한다.
-7. 재접속한 client는 새 Session에서 `JoinWorldRequest`를 보낸다. 같은 Actor가 binding되고 Actor가 속한 Spot의 `Actions.reconnect`(`Field`) 또는 `DungeonActions.reconnect`(`Dungeon`)가 현재 상태를 다시 보낸다. Session 연결이 끊기면 플레이어는 필드의 가시성 목록에서 빠지지만 파티에서는 빠지지 않는다.
-8. node를 교체할 때 `runNode`의 `drain`이 relocation을 요청한다. Framework는 `PlayerTransfer`·`FieldTransfer`·`DungeonTransfer`의 `capture`로 상태를 받아 다른 node에서 `restore`한다.
+5. `Rules.TICK_MILLIS`마다 `BorderTick`이 `border` channel에 경계 정보를 publish한다. `BorderHandler`가 `Field.showBorder`를 호출해 근처 관찰자에게 `BorderVisible`을 보내고 `Actions.deliver`가 binding된 Session으로 전달한다.
+6. `CreatePartyRequest`는 server-issued Party ID로 동적 Party Spot을 만들고, `JoinPartyRequest`와 `EnterDungeonRequest`는 `requestToSpot`으로 해당 Spot에 전달된다. Party Spot이 멤버와 phase를 소유하고 Run ID를 발급해 `dungeon-<runId>`를 준비한 뒤 `JoinDungeon`을 push한다. Dungeon은 Run ID로 참가를 확인하고 도착·완료를 Party Spot에 전송한다. Dungeon 안의 마을 전용 요청은 `run-in-progress`로 거부된다.
+7. 재접속한 client는 새 Session에서 `JoinWorldRequest`를 보낸다. 같은 Actor가 binding되고 현재 Spot이 상태를 다시 보낸다. Field 이탈은 가시성만 제거하며 파티 membership은 바꾸지 않는다. Session 연결이 끊겨도 movement와 party state를 보존한다.
+8. node를 교체할 때 `runNode`의 `drain`이 relocation을 요청한다. Framework는 `PlayerTransfer`·`FieldTransfer`·`PartyTransfer`·`DungeonTransfer`로 각 소유 상태를 저장하고 복원한다.
 
-## 이 샘플을 보며 개발하기
+## 템플릿 도메인 확장
 
-이 샘플은 기능들이 함께 동작하는 방식을 보여 주므로, 자기 게임으로 바꾸지 않고 읽고 실행하는 용도로 쓴다. 자기 프로젝트는 Kotlin 기본 셋업에서 시작한다. [ZLink Start](https://zlink.systems/start)의 Initializer에서 Kotlin을 고르거나 ZLink 저장소의 `framework/languages/java/templates/kotlin/starter/my-game`을 사용한다. 그다음 필요한 기능을 이 샘플에서 하나씩 옮긴다. 구조 선택은 기본 셋업의 `AGENTS.md`가 설명하며, 이 절은 `morpg-fields-instances`만 다룬다. 이 샘플은 바꾸지 않고 프로젝트 옆에 참고용으로 둔다.
+이 템플릿의 도메인을 확장하여 MORPG 서버를 만든다. 기능을 추가하기 전에 README의 빌드와 e2e를 실행한다.
 
-### 샘플 먼저 실행하기
-
-옮기기 전에 [개발 명령](#개발-명령)으로 빌드와 e2e를 한 번 실행해 받은 샘플이 동작하는지 확인하고 동작을 본다. 이 결과가 이후 비교의 기준이 된다. 실패하면 먼저 [README](README.md)의 Known issues와 대조한다.
-
-### 옮길 기능
-
-기능 이름은 기본 셋업 `AGENTS.md`의 기능 표와 같다. 경로는 이 디렉터리를 기준으로 한다. 기본 셋업에는 Session node 하나와 `connect` 시나리오만 있으므로, 마지막 열은 기능마다 기본 셋업에서 함께 늘릴 것이다.
-
-| 기능 | 이 샘플의 파일 | 옮길 것 | 기본 셋업에서 함께 늘릴 것 |
-| --- | --- | --- | --- |
-| Typed 메시지 | `server/shared/src/main/kotlin/MyGame/Contracts.kt` | 사용할 기능의 클래스: `JoinWorldRequest`, `MoveRequest`, `EnterField`, `WorldState`, `BorderPresence`, `BorderVisible`, `CreatePartyRequest`, `JoinPartyRequest`, `EnterDungeonRequest`, `ViewRequest`, `AdvanceRequest`, `PartyView`, `FieldView`, `PrepareDungeon`, `DungeonPrepared`, `JoinDungeon`, `DungeonView`, `ActionRejected`. `SessionInfoRequest`·`SessionInfo`는 client가 필요로 할 때만 옮긴다 | `Names`의 이름과 `Rules`의 필드 보조 함수. node `Roles`와 제어 문자열은 기본 셋업에 이미 있다 |
-| Actor | `server/shared/src/main/kotlin/MyGame/Player.kt` | `position`(`EnterField`), `move`, `apply`, `sendState`를 가진 `Player`, `PlayerFactory`, `PlayerTransfer` | 새 `server/field/` Gradle 모듈(`settings.gradle.kts`에 포함)과 그 `Program.kt`, `server/config/fieldA.json`, `server/config/fieldB.json`, `e2e/.../Nodes.kt`의 시작 처리, `Roles` 항목. `Program.kt`의 `addActorFactory` 등록. `zlink.structure.json`의 node 선언과 이에 맞춘 `Structure.kt` 검사(기본 셋업의 검사는 `session` 역할만 받는다) |
-| Spot | `server/field/src/main/kotlin/MyGame/field/Field.kt` | `FieldState`(가시성 정보, 도착 대기 정보, 파티)를 가진 `Field`, admission 규칙, 경계 계산 | `Program.kt`의 `addSpotFactory` 등록(`stableTypeLimit`, `SPOT_WIDE`)과 `NodeConfig`의 `fieldIds`·`fieldCapacity`, `Hosting.kt`의 Field 생성. `zlink.structure.json`의 `spots` 선언과 이를 등록과 비교하는 `Structure.kt` 검사(기본 셋업의 검사는 Spot이 없다고 단정한다) |
-| Entry·첫 입장 | `server/shared/src/main/kotlin/MyGame/admission/Entry.kt`의 `Entry`·`EnterWorld`, `server/field/src/main/kotlin/MyGame/field/Handlers.kt`의 `Actions.reconnect` | `EnterWorld.join`, 첫 입장 경로, `Actions.reconnect`의 identity 확인과 상태 재전송 | `addEntrySpot` 등록, `addHandlersFromPackageOf<EnterWorld>()`, `entry` 선언. 첫 입장을 보는 `field` 시나리오와 재접속 뒤 상태를 비교하는 `reconnect` 시나리오 |
-| Session binding | `server/session/src/main/kotlin/MyGame/session/Program.kt` (`GameSession`) | 첫 패킷 분기: Actor 조회·생성, `bindOrGet`, 원래 typed 패킷 relay | `EnterWorld.join`과 같은 첫 패킷 타입. 기본 셋업의 `PlayerSession.kt`에 옮긴다 |
-| Host relocation | `server/field/src/main/kotlin/MyGame/field/Field.kt`의 `FieldTransfer`, `server/instance/src/main/kotlin/MyGame/instance/Dungeon.kt`의 `DungeonTransfer`, `server/shared/src/main/kotlin/MyGame/Player.kt`의 `PlayerTransfer`, `server/shared/src/main/kotlin/MyGame/Transfer.kt` | snapshot(`EnterField`, `FieldState`, `DungeonState`)와 `capture`·`restore`, `ensureActive` | `preserveStateWith` 등록. 서버 교체 뒤에도 연결·던전 상태가 유지되고 대체 node가 새 던전을 받는지 판정하는 `update` 시나리오 |
-| 동적 던전 | `server/field/src/main/kotlin/MyGame/field/Field.kt`의 `Field.enter`, `server/instance/src/main/kotlin/MyGame/instance/Program.kt`, `server/instance/src/main/kotlin/MyGame/instance/Dungeon.kt`, `server/instance/src/main/kotlin/MyGame/instance/Handlers.kt`의 `Prepare` | `getOrCreate`와 `requestToSpot` 준비로 하는 동적 Dungeon 생성, 준비된 멤버만 받는 admission, 단계 진행 | 새 `server/instance/` Gradle 모듈과 `instanceA.json`·`instanceB.json`, 시작 처리, 역할. `NodeConfig`의 `dungeonCapacity`. `zlink.structure.json`의 동적 `dungeon` Spot과 `GetOrCreate` edge. `dungeon` 시나리오 |
-| Channel pub/sub·심리스 이동 | `server/field/src/main/kotlin/MyGame/field/Field.kt`의 `Field.configure()`·`publishBorder`·`showBorder`, `server/field/src/main/kotlin/MyGame/border/BorderRoutes.kt`, `server/field/src/main/kotlin/MyGame/field/Handlers.kt`의 `BorderTick`·`Actions.deliver` | 경계 구독·발행과 수신 Actor의 binding된 Session으로의 전달 | `Program.kt`의 `border` channel server 등록과 `zlink.structure.json`의 `channels` 선언. 경계 publication이 관찰자에게 닿는지 보는 `field` 시나리오 |
-
-### 옮기는 순서와 규칙
-
-기능은 표의 행 하나씩 옮기고, 하나를 옮길 때마다 빌드, 구조 검사, 관련 e2e 시나리오를 실행한다. 시나리오 ID는 `Contracts.kt`의 `Names.SCENARIOS`, `e2e/src/main/kotlin/MyGame/e2e/Scenarios.kt`의 `scenario` 함수, `zlink.structure.json`의 `run.scenarios`, `run.commands`의 시나리오 선택 예시에 함께 추가한다. 판정은 실제로 받은 응답과 이벤트로 하고, 고정 대기나 기한 확대로 통과시키지 않는다.
-
-메시지 contract부터 옮긴다. `Contracts.kt`에 typed 클래스를 먼저 정의한 뒤, 컴파일 오류가 나는 handler를 하나씩 새 메시지로 옮긴다. 첫 입장 패킷(`JoinWorldRequest`)을 바꾸면 `GameSession`의 첫 패킷 분기, `EnterWorld.join`, `Field`와 `Dungeon`의 `reconnect` handler가 같은 타입을 받도록 함께 고친다.
-
-상태는 그 상태를 결정하는 객체에 둔다. 플레이어별 상태는 `Player`, 여러 플레이어가 공유하는 상태(가시성, 파티, 던전 멤버와 단계)는 `Field`나 `Dungeon`에 둔다. 상태 필드를 바꿀 때는 같은 객체의 snapshot 클래스(`EnterField`, `FieldState`, `DungeonState`)와 `capture`·`restore`를 함께 고친다. 빠뜨린 필드는 relocation 뒤 사라지고, `update` 시나리오가 그 손실을 잡는다.
-
-channel은 구독·등록·structure 선언을 같은 변경에서 함께 추가한다. 구독 handler는 `BorderRoutes.kt`(`Field.configure()`가 등록), channel server 등록은 `Program.kt`, 선언은 `zlink.structure.json`의 `channels`다. 구조 검사는 모든 Field node가 `border` channel을 선언하도록 요구한다.
-
-멤버가 참가하기 전에 Dungeon을 준비한다. `Dungeon.onActorJoinSuspending`이 준비된 멤버만 받으므로 `Field.enter`는 `Prepare.prepare`의 응답을 기다린 뒤에만 `JoinDungeon`을 push한다. field가 아닌 시나리오는 파티 fixture 하나를 공유하므로 `reconnect`나 `update`만 선택하면 그 fixture를 먼저 만든다.
-
-`Player` factory를 등록하는 모든 node에 공유 `Entry`와 `EnterWorld` handler를 등록하고, structure에는 Field·Instance node에만 Entry를 선언한다. Framework 기본 Entry는 structure에 포함하지 않는다. 구조 검사는 그 Entry와 등록된 모든 User Spot 타입을 요구한다. Field node는 하나씩 시작하며 bootstrap 뒤 각 `READY`를 기다리고, `fieldCapacity`를 node의 고정 Field 수(`fieldIds`)와 같게 두어 앞선 node가 가득 차게 한다.
-
-역할 이름을 이 샘플과 다르게 정하려면 타입 이름, `Names`, `server/config/`, `zlink.structure.json`을 한 번에 바꾼다. 이름 변경은 기능을 옮기는 변경과 나눠서 진행하면 실패 원인을 찾기 쉽다.
-
-옮긴 뒤 `update`가 실패하면 snapshot에 빠진 상태가 있는지 먼저 확인한다. 그다음 [디버깅](#디버깅)의 message flow로 첫 실패 단계를 찾는다.
+1. movement 판정은 `FieldPositionDomain.kt`, party transition은 `PartyRun.kt`, Dungeon 규칙은 `DungeonRun.kt`에서 확장한다. 상태를 변경하는 소유자를 하나로 유지한다.
+2. 새 공통 계약은 `server/shared/src/main/kotlin/MyGame/Contracts.kt`에 추가한다. 서버가 입력을 검사하고 결과를 계산한다. 거부된 입력은 값·순번·쿨다운을 변경하지 않는다.
+3. 클라이언트 패킷만 `server/session/src/main/kotlin/MyGame/session/Program.kt`의 Session 허용 목록에 추가한다. 서버 간 메시지와 결과 메시지는 중계하지 않는다.
+4. 경계 검증은 `e2e/src/main/kotlin/MyGame/e2e/DomainChecks.kt`, 관찰 시나리오는 `Scenarios.kt`에 추가한다. README의 시나리오 표와 `zlink.structure.json`의 `run.scenarios`를 함께 갱신한다. 시간 제한 거부는 서버가 반환한 `RetryAfterMs`만 기다린다.
+5. 상태 필드를 추가하면 해당 relocation 스냅샷과 경계 시험도 갱신한다. 시각은 프로세스 절대 시각 대신 남은 ms로 저장한다.
 
 ## 개발 시 주의점
 
@@ -148,13 +119,13 @@ channel은 구독·등록·structure 선언을 같은 변경에서 함께 추가
 
 의존성은 `build.gradle.kts`에 고정한 Maven Central의 공개 package를 사용하며, 프로젝트 의존은 이 프로젝트의 Gradle 모듈 사이에 둔다. typed 메시지는 기본 Framework JSON serializer로 처리하여 process마다 같은 계약을 사용한다. relocation adapter(`*Transfer` 클래스)가 직접 직렬화하는 대상은 application 상태로 한정하여 Framework의 실행 상태와 게임 상태의 관리 책임을 분리한다. route·lease·membership·completion·queue·execution gate는 Framework가 관리하므로 application 상태에 같은 결정을 복제하지 않는다.
 
-플레이어 좌표 같은 게임 사실은 그것을 변경하는 객체 한 곳(`Player`)에서 관리한다. Spot에는 플레이어 ID와 관찰용 복사 값(`FieldState.visiblePlayers`)을 보관하며, 이동 뒤에도 같은 Actor 객체 참조를 사용할 수 있다고 가정하지 않는다. Actor handler 안의 응답은 그 Actor의 binding된 Session으로 보내고, 그 밖의 push는 공개 Actor client로 Actor를 플레이어 ID로 지정하여 보내며 받는 Actor handler가 binding된 Session으로 전달한다. Spot은 나중의 전달을 위해 Actor 참조를 보관하지 않는다. host relocation이 이전 대상에서 `onJoinedActor`를 다시 호출하지 않기 때문이다. Actor identity는 Session binding이 소유하므로 게임 메시지에 중복해서 담지 않는다(`SessionInfo`는 현재 binding을 읽는다). Session은 binding 뒤 packet을 전달하고, 게임 판정은 해당 상태를 관리하는 Actor나 Spot에서 수행한다.
+게임 사실은 각각 소유자 하나가 관리한다. `FieldPositionDomain`은 position·sequence·speed budget·arrival을 판정하고 `FieldState.visiblePlayers`는 관찰용 복사다. `Player`는 현재 position과 Party Spot ID를 보유한다. `PartyRun`은 membership과 phase를, `DungeonRun`은 준비된 run과 stage를 소유한다. Spot에는 Actor 참조 대신 player ID를 둔다. Actor handler 안의 응답은 binding된 Session으로 보내고, 다른 push는 공개 Actor client로 player ID를 지정해 보내며 받는 handler가 Session으로 전달한다. Actor identity는 Session binding이 소유하므로 게임 메시지에 중복해서 담지 않는다.
 
 ### 비동기 실행과 lifecycle
 
-공개 호출은 템플릿처럼 `await()`로 기다리며, handler와 callback에서 `.join()`, `.get()`, `runBlocking`, `Thread.sleep` 같은 blocking 호출을 쓰지 않는다. `Field`와 `Dungeon`은 `SPOT_WIDE`로 등록되어 같은 Spot의 Spot·멤버 Actor handler, timer와 lifecycle callback이 공통 execution gate를 사용한다. 같은 상태를 별도 lock이나 queue로 다시 보호하지 않는다. await 중에도 turn을 유지할 수 있으므로 같은 Spot에 대한 request처럼 그 turn이 끝나야 실행되는 작업을 기다리지 않으며, 긴 작업은 handler 밖에서 처리한다. 실행 경계는 [Execution model](https://docs.zlink.systems/ko/kotlin/guide/server/32-execution-model/)이 설명한다.
+공개 호출은 템플릿처럼 `await()`로 기다리며 handler와 callback에서 `.join()`, `.get()`, `runBlocking`, `Thread.sleep` 같은 blocking 호출을 쓰지 않는다. `Field`·`PartySpot`·`Dungeon`은 `SPOT_WIDE`로 등록되어 각 Spot의 handler·멤버 Actor handler·timer·lifecycle callback이 공통 execution gate를 사용한다. 같은 상태를 별도 lock이나 queue로 보호하지 않는다. await 중 turn을 유지할 수 있으므로 같은 Spot에 대한 request처럼 그 turn이 끝나야 실행되는 작업을 기다리지 않는다. 실행 경계는 [Execution model](https://docs.zlink.systems/ko/kotlin/guide/server/32-execution-model/)이 설명한다.
 
-타입 등록과 객체별 callback은 각각 정해진 lifecycle 단계에 둔다. 고정 `Field` Spot은 node 시작 때, `Dungeon` Spot은 `Field.enter`가 요청에 따라 만들며 둘 다 `getOrCreate`를 쓴다. 생성과 초기화의 차이는 [Activation and lifetime](https://docs.zlink.systems/ko/kotlin/guide/server/34-activation-lifetime/)이 설명한다. membership 변경은 `joinSpot(...).defer()`와 공개 완료 callback(`onJoinCompletedSuspending`)을 사용하고 host 종료는 relocation과 runtime 관찰(`drain` 다음 `SAFE_TO_SHUTDOWN`)로 확인하여 요청 수락을 완료로 오인하지 않는다. `Control.kt`는 safe-shutdown 대기(`SAFE_DEADLINE`)를 Message Follow 시간(`MESSAGE_FOLLOW`)과 host deadline(`HOST_DEADLINE`)에서 유도하므로 이 값들은 그곳에서만 바꾼다.
+타입 등록과 객체별 callback은 정해진 lifecycle 단계에 둔다. 고정 `Field`는 node 시작 때 만들고 동적 `Party`와 `Dungeon`은 `getOrCreate`를 쓴다. 생성과 초기화의 차이는 [Activation and lifetime](https://docs.zlink.systems/ko/kotlin/guide/server/34-activation-lifetime/)이 설명한다. membership 변경은 `joinSpot(...).defer()`와 공개 완료 callback으로 확인하고 host 종료는 relocation 관찰 뒤 `SAFE_TO_SHUTDOWN`으로 확인한다. `Control.kt`의 safe-shutdown 대기 값은 Message Follow 시간과 host deadline에서 유도한다.
 
 ### 재접속과 실패 처리
 

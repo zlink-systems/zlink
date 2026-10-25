@@ -48,4 +48,49 @@ class DungeonActions {
     ) {
         actor.context.boundSession().kotlin().send(message).await()
     }
+
+    @ZLinkSpotActorSend
+    suspend fun deliverParty(
+        spot: Dungeon,
+        actor: Player,
+        dispatch: ZLinkMessageContext,
+        message: PartyView,
+    ) {
+        actor.context.boundSession().kotlin().send(message).await()
+    }
+
+    @ZLinkSpotActorSend
+    suspend fun enter(
+        spot: Dungeon,
+        actor: Player,
+        dispatch: ZLinkMessageContext,
+        request: EnterDungeonRequest,
+    ) = spot.enter(actor)
+
+    @ZLinkSpotActorSend
+    suspend fun createParty(
+        spot: Dungeon,
+        actor: Player,
+        dispatch: ZLinkMessageContext,
+        request: CreatePartyRequest,
+    ) = spot.rejectTownRequest(actor)
+
+    @ZLinkSpotActorSend
+    suspend fun joinParty(
+        spot: Dungeon,
+        actor: Player,
+        dispatch: ZLinkMessageContext,
+        request: JoinPartyRequest,
+    ) = spot.rejectTownRequest(actor)
+
+    @ZLinkSpotActorSend
+    suspend fun travel(
+        spot: Dungeon,
+        actor: Player,
+        dispatch: ZLinkMessageContext,
+        request: JoinDungeon,
+    ) {
+        if (request.dungeonId != spot.context.spotId())
+            actor.context.joinSpot(request.dungeonId, request).defer()
+    }
 }

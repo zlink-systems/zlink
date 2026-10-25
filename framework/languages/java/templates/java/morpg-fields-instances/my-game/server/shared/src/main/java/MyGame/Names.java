@@ -10,6 +10,7 @@ public final class Names {
             STREAM = "players",
             PLAYER = "Player",
             FIELD = "Field",
+            PARTY = "Party",
             DUNGEON = "Dungeon",
             BORDER = "border",
             BORDER_TIMER = "border-tick";

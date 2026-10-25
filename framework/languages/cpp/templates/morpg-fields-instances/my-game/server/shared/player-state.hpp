@@ -1,22 +1,17 @@
 #pragma once
 #include "contracts.hpp"
-#include <limits>
 namespace MyGame
 {
 struct PlayerState
 {
-    int x = 0, sequence = 0;
+    double x = 0;
+    std::int64_t sequence = 0;
+    std::optional<std::string> partyId;
     void apply (const EnterField &arrival)
     {
         x = arrival.x;
         sequence = arrival.sequence;
     }
-    void validate (const MoveRequest &request) const
-    {
-        if (sequence == std::numeric_limits<int>::max () || request.sequence != sequence + 1)
-            throw std::invalid_argument ("Move sequence must increase by one");
-        (void) Names::field_id (request.x);
-    }
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (PlayerState, x, sequence)
+    NLOHMANN_DEFINE_TYPE_INTRUSIVE (PlayerState, x, sequence, partyId)
 };
 }

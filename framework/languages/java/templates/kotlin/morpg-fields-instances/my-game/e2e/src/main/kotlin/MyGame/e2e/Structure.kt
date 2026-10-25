@@ -96,13 +96,18 @@ fun checkStructure(root: Path) {
                     spot["type"]?.isNull == true && !spot.has("logicalId") && !spot.has("dynamic")
                 )
             "user" -> {
-                userTypes += text(spot, "type")
+                val spotType = text(spot, "type")
+                userTypes += spotType
+                val ownerRole = roles[owner(spot)]
                 check(
-                    text(spot, "type") ==
-                        if (roles[owner(spot)] == "field") Names.FIELD else Names.DUNGEON
+                    spotType ==
+                        if (ownerRole == "field") {
+                            if (spot["dynamic"]?.asBoolean() == true) Names.PARTY else Names.FIELD
+                        } else Names.DUNGEON
                 )
                 check(
-                    (spot["dynamic"]?.asBoolean() == true) == (text(spot, "type") == Names.DUNGEON)
+                    (spot["dynamic"]?.asBoolean() == true) ==
+                        (spotType == Names.DUNGEON || spotType == Names.PARTY)
                 ) {
                     "Spot family dynamic mismatch"
                 }
@@ -114,7 +119,9 @@ fun checkStructure(root: Path) {
             else -> error("Unregistered Spot kind")
         }
     }
-    check(userTypes == setOf(Names.FIELD, Names.DUNGEON)) { "Missing registered User Spot type" }
+    check(userTypes == setOf(Names.FIELD, Names.PARTY, Names.DUNGEON)) {
+        "Missing registered User Spot type"
+    }
     unique(logicalIds)
     for (node in nodes.filter { roles[it["id"].asText()] == "field" }) {
         val id = text(node, "id")

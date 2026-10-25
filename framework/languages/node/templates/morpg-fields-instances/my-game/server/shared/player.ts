@@ -11,7 +11,8 @@ import { fieldId } from './constants';
 import { EnterField, WorldState } from './messages';
 export class Player implements ZLinkActor {
   x = 0;
-  sequence = 0;
+  sequence = 0n;
+  partyId: string | null = null;
   constructor(
     readonly context: ZLinkActorContext,
     private readonly config: NodeConfig
@@ -44,9 +45,11 @@ export class PlayerFactory implements ZLinkActorFactory<Player> {
 @Injectable()
 export class PlayerRelocation implements ZLinkActorRelocationAdapter<Player> {
   async capture(actor: Player): Promise<Uint8Array> {
-    return Buffer.from(JSON.stringify({ x: actor.x, sequence: actor.sequence }));
+    return Buffer.from(JSON.stringify({ x: actor.x, sequence: actor.sequence.toString(), partyId: actor.partyId }));
   }
   async restore(actor: Player, payload: Uint8Array): Promise<void> {
-    actor.apply(JSON.parse(Buffer.from(payload).toString('utf8')) as EnterField);
+    const state = JSON.parse(Buffer.from(payload).toString('utf8'));
+    actor.apply(new EnterField(state.x, BigInt(state.sequence)));
+    actor.partyId = state.partyId;
   }
 }

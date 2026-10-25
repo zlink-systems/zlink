@@ -20,16 +20,7 @@ public final class Actions {
     @ZLinkSpotActorSend
     public CompletionStage<Void> move(
             Field spot, Player actor, ZLinkMessageContext dispatch, MoveRequest request) {
-        if (request.sequence() != actor.position().sequence() + 1)
-            throw new IllegalArgumentException("Move sequence must increase by one");
-        var destination = new EnterField(request.x(), request.sequence());
-        if (!Rules.fieldId(request.x()).equals(spot.context().spotId())) {
-            actor.move(destination);
-            return CompletableFuture.completedFuture(null);
-        }
-        actor.apply(destination);
-        spot.remember(actor);
-        return actor.sendState();
+        return spot.move(actor, request);
     }
 
     @ZLinkSpotActorSend
@@ -41,7 +32,7 @@ public final class Actions {
     @ZLinkSpotActorSend
     public CompletionStage<Void> createParty(
             Field spot, Player actor, ZLinkMessageContext dispatch, CreatePartyRequest request) {
-        return spot.party(actor, request.partyId(), true);
+        return spot.party(actor, null, true);
     }
 
     @ZLinkSpotActorSend
@@ -64,8 +55,14 @@ public final class Actions {
     }
 
     @ZLinkSpotActorSend
-    public CompletionStage<Void> deliverField(
-            Field spot, Player actor, ZLinkMessageContext dispatch, FieldView message) {
+    public CompletionStage<Void> deliverParty(
+            Field spot, Player actor, ZLinkMessageContext dispatch, PartyView message) {
         return actor.context().boundSession().send(message).submit();
+    }
+
+    @ZLinkSpotActorSend
+    public CompletionStage<Void> query(
+            Field spot, Player actor, ZLinkMessageContext dispatch, ViewRequest request) {
+        return spot.show(actor);
     }
 }

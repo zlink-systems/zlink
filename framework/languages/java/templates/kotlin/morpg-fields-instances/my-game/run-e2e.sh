@@ -15,11 +15,12 @@ for argument in "$@"; do
   esac
 done
 cd "$ROOT"
-mkdir -p "$ROOT/.logs"
+logs_root="${MY_GAME_E2E_LOGS:-$ROOT/.logs}"
+mkdir -p "$logs_root"
 if $local_mode; then
   if ! $no_build; then
-    if ! ./gradlew --no-daemon installDist :e2e:javaHome >"$ROOT/.logs/build.log" 2>&1; then
-      tail -n 35 "$ROOT/.logs/build.log" >&2
+    if ! ./gradlew --no-daemon installDist :e2e:javaHome >"$logs_root/build.log" 2>&1; then
+      tail -n 35 "$logs_root/build.log" >&2
       exit 1
     fi
   fi
@@ -36,7 +37,7 @@ if [[ -S /var/run/docker.sock ]]; then
   export MY_GAME_DOCKER_GID="$(stat -c '%g' /var/run/docker.sock 2>/dev/null || stat -f '%g' /var/run/docker.sock)"
 fi
 project="my-game-e2e-$(date +%s)-$$-$RANDOM"
-logs="$ROOT/.logs/docker-$project"
+logs="$logs_root/docker-$project"
 mkdir -p "$logs"
 # BuildKit reuses the previous transfer of a build context with the same directory name and
 # compares only file size and modification time, so two projects named my-game with equal
@@ -76,6 +77,12 @@ $build_only && exit 0
 "${compose[@]}" run --rm --no-deps -T --name "$project-check" runner --check-structure
 for argument in "${arguments[@]}"; do
   [[ "$argument" == "--check-structure" ]] && exit 0
+done
+for argument in "${arguments[@]}"; do
+  if [[ "$argument" == "--check-domain" ]]; then
+    "${compose[@]}" run --rm --no-deps -T --name "$project-domain" runner "${arguments[@]}"
+    exit 0
+  fi
 done
 "${compose[@]}" up -d --wait --wait-timeout 30 redis >"$logs/redis-start.log" 2>&1
 "${compose[@]}" run --rm --no-deps -T --name "$project-control" runner "${arguments[@]}"

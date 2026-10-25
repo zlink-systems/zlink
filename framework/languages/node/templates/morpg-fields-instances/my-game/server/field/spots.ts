@@ -9,34 +9,29 @@ import {
   type ZLinkSpotManager,
   type ZLinkSpotRelocationAdapter
 } from '@zlink-systems/framework';
-import { NODE_CONFIG, type NodeConfig } from '../shared/config';
 import {
   Names,
   Game,
-  Rejection,
   adjacentFields,
   borderTopic,
-  dungeonId
+  fieldId
 } from '../shared/constants';
 import {
   ActionRejected,
   BorderPresence,
   BorderVisible,
-  DungeonPrepared,
   EnterField,
-  FieldView,
-  JoinDungeon,
-  PrepareDungeon
+  MoveRequest, PartyCommand, PartyCommandResult, PartyView
 } from '../shared/messages';
 import { Player } from '../shared/player';
 import { FieldState } from './domain';
+import { newId, validId } from './party-domain';
 import { BorderHandler, BorderTick } from './handlers';
 @Injectable({ scope: Scope.TRANSIENT })
 export class Field implements ZLinkSpot<Player> {
   readonly context!: ZLinkSpotContext<Player, Field>;
   private state = new FieldState();
   constructor(
-    @Inject(NODE_CONFIG) private readonly config: NodeConfig,
     @Inject(ZLINK_ACTOR_CLIENT) private readonly actors: ZLinkActorClient,
     @Inject(ZLINK_SPOT_MANAGER) private readonly spots: ZLinkSpotManager
   ) {}
@@ -64,10 +59,10 @@ export class Field implements ZLinkSpot<Player> {
     this.state.leave(actor.context.actorId);
   }
   async onDisconnectActor(actor: Player): Promise<void> {
-    delete this.state.visible[actor.context.actorId];
+    this.state.connected(actor.context.actorId, false);
   }
   remember(actor: Player): void {
-    this.state.visible[actor.context.actorId] = new EnterField(actor.x, actor.sequence);
+    this.state.connected(actor.context.actorId, true);
   }
   async publishBorder(): Promise<void> {
     const source = String(this.context.spotId);
@@ -100,46 +95,49 @@ export class Field implements ZLinkSpot<Player> {
           )
           .submit();
   }
-  async party(actor: Player, partyId: string, create: boolean): Promise<void> {
-    const reason = this.state.party(actor.context.actorId, partyId, create);
-    if (reason) {
-      await actor.context.boundSession.send(new ActionRejected(reason)).submit();
-      return;
+  async move(actor: Player, request: MoveRequest): Promise<void> {
+    const result = this.state.move(actor.context.actorId, request);
+    if (result instanceof ActionRejected) {
+      await actor.context.boundSession.send(result).submit(); return;
     }
-    const view = new FieldView(
-      String(this.context.spotId),
-      this.config.id,
-      Object.keys(this.state.visible).sort(),
-      this.state.partyViews()
-    );
-    await actor.context.boundSession.send(view).submit();
-    for (const id of Object.keys(this.state.visible))
-      if (id !== actor.context.actorId) await this.actors.sendToActor(id, view).submit();
+    if (fieldId(result.x) !== String(this.context.spotId)) actor.move(result);
+    else { actor.apply(result); await actor.sendState(); }
+  }
+  async party(actor: Player, partyId: string, create: boolean): Promise<void> {
+    if (actor.partyId !== null || (!create && (!validId(partyId, 'party-')
+      || !(await this.spots.find(partyId))))) {
+      await actor.context.boundSession.send(new ActionRejected('invalid-party')).submit(); return;
+    }
+    if (create) {
+      partyId = newId('party-');
+      const result = await this.spots.getOrCreate(partyId, Names.party).inMesh(Names.mesh).submit();
+      if (result.state === ZLinkSpotCreateState.Rejected) throw new Error('Party creation rejected');
+    }
+    const response = await this.context.outbound.requestToSpot(partyId,
+      new PartyCommand(actor.context.actorId, true)).submit<PartyCommandResult>();
+    if (response.rejection) await actor.context.boundSession.send(Object.assign(new ActionRejected(), response.rejection)).submit();
+    else actor.partyId = partyId;
   }
   async enter(actor: Player): Promise<void> {
-    const party = this.state.ledBy(actor.context.actorId);
-    if (!party) {
-      await actor.context.boundSession.send(new ActionRejected(Rejection.notLeader)).submit();
-      return;
+    if (!actor.partyId) {
+      await actor.context.boundSession.send(new ActionRejected('not-leader')).submit(); return;
     }
-    const [id, currentMembers] = party,
-      target = dungeonId(id),
-      members = [...currentMembers];
-    const created = await this.spots.getOrCreate(target, Names.dungeon).inMesh(Names.mesh).submit();
-    if (created.state === ZLinkSpotCreateState.Rejected)
-      throw new Error('Dungeon creation rejected');
-    const prepared = await this.context.outbound
-      .requestToSpot(target, new PrepareDungeon(id, members))
-      .submit<DungeonPrepared>();
-    if (prepared.dungeonId !== target) throw new Error('Dungeon preparation identity mismatch');
-    for (const member of members)
-      await this.actors.sendToActor(member, new JoinDungeon(target, id)).submit();
+    const result = await this.context.outbound.requestToSpot(actor.partyId,
+      new PartyCommand(actor.context.actorId, false, true)).submit<PartyCommandResult>();
+    if (result.rejection) await actor.context.boundSession.send(Object.assign(new ActionRejected(), result.rejection)).submit();
+  }
+  async show(actor: Player): Promise<void> {
+    await actor.sendState();
+    if (!actor.partyId) return;
+    const result = await this.context.outbound.requestToSpot(actor.partyId,
+      new PartyCommand(actor.context.actorId)).submit<PartyCommandResult>();
+    if (result.view) await actor.context.boundSession.send(Object.assign(new PartyView(), result.view)).submit();
   }
   capture(): Uint8Array {
-    return Buffer.from(JSON.stringify(this.state));
+    return Buffer.from(JSON.stringify(this.state.capture(), (_, value) => typeof value === 'bigint' ? value.toString() : value));
   }
   restore(payload: Uint8Array): void {
-    this.state.restore(JSON.parse(Buffer.from(payload).toString('utf8')) as FieldState);
+    this.state.restore(JSON.parse(Buffer.from(payload).toString('utf8')));
   }
 }
 @Injectable()

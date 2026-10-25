@@ -9,16 +9,14 @@ namespace MyGame.Field;
 public sealed class FieldSpot(
     IZLinkSpotContext context,
     IZLinkActorClient actors,
-    IZLinkSpotManager spots,
-    NodeSettings settings
+    IZLinkSpotManager spots
 ) : IZLinkSpot<PlayerActor>
 {
     public IZLinkSpotContext Context { get; } = context;
 
     // This projection supports visibility. The Actor remains the owner of player state.
     private readonly Dictionary<string, EnterField> _visiblePlayers = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, EnterField> _arrivals = new(StringComparer.Ordinal);
-    private Dictionary<string, List<string>> _parties = new(StringComparer.Ordinal);
+    private readonly FieldPositionDomain positions = new(context.SpotId);
 
     public void Configure()
     {
@@ -29,7 +27,8 @@ public sealed class FieldSpot(
         Context.Handlers.AddActorPacket<JoinParty, PlayerActor>(nameof(JoinPartyRequest));
         Context.Handlers.AddActorPacket<EnterDungeon, PlayerActor>(nameof(EnterDungeonRequest));
         Context.Handlers.AddActorPacket<DungeonTravel, PlayerActor>(nameof(JoinDungeon));
-        Context.Handlers.AddActorPacket<FieldDelivery, PlayerActor>(nameof(FieldView));
+        Context.Handlers.AddActorPacket<PartyDelivery, PlayerActor>(nameof(PartyView));
+        Context.Handlers.AddActorPacket<FieldQuery, PlayerActor>(nameof(ViewRequest));
         foreach (var adjacent in GameNames.AdjacentFields(Context.SpotId))
             Context.Handlers.AddSubscribe<BorderHandler>(
                 GameNames.BorderChannel,
@@ -50,17 +49,16 @@ public sealed class FieldSpot(
         CancellationToken cancellationToken
     )
     {
-        var arrival = request.Decode<EnterField>();
-        if (GameNames.FieldId(arrival.X) != Context.SpotId)
-            return ValueTask.FromResult(ZLinkSpotActorJoinResult.Reject());
-        _arrivals.Add(actorId, arrival);
-        return ValueTask.FromResult(ZLinkSpotActorJoinResult.Accept());
+        var rejection = positions.QueueArrival(actorId, request.Decode<EnterField>());
+        return ValueTask.FromResult(rejection is null
+            ? ZLinkSpotActorJoinResult.Accept() : ZLinkSpotActorJoinResult.Reject());
     }
 
     public ValueTask OnJoinedActorAsync(PlayerActor actor, CancellationToken cancellationToken)
     {
-        if (!_arrivals.Remove(actor.Context.ActorId, out var arrival))
+        if (!positions.TryTakeArrival(actor.Context.ActorId, out var arrival))
             throw new InvalidDataException("Field admission has no movement intent.");
+        positions.AddPlayer(actor.Context.ActorId, arrival);
         actor.Apply(arrival);
         Remember(actor);
         return ValueTask.CompletedTask;
@@ -69,25 +67,41 @@ public sealed class FieldSpot(
     public ValueTask OnLeaveActorAsync(PlayerActor actor, CancellationToken cancellationToken)
     {
         _visiblePlayers.Remove(actor.Context.ActorId);
-        foreach (var party in _parties)
-        {
-            if (!party.Value.Remove(actor.Context.ActorId))
-                continue;
-            if (party.Value.Count == 0)
-                _parties.Remove(party.Key);
-            break;
-        }
+        positions.RemovePlayer(actor.Context.ActorId);
         return ValueTask.CompletedTask;
     }
 
     public ValueTask OnDisconnectActorAsync(PlayerActor actor, CancellationToken cancellationToken)
     {
         _visiblePlayers.Remove(actor.Context.ActorId);
+        positions.SetConnected(actor.Context.ActorId, false);
         return ValueTask.CompletedTask;
     }
 
-    public void Remember(PlayerActor actor) =>
+    public void Remember(PlayerActor actor)
+    {
+        positions.SetConnected(actor.Context.ActorId, true);
         _visiblePlayers[actor.Context.ActorId] = new EnterField(actor.X, actor.Sequence);
+    }
+
+    public async ValueTask MoveAsync(PlayerActor actor, MoveRequest request)
+    {
+        var result = positions.Move(actor.Context.ActorId, request);
+        if (result.Rejection is { } rejection)
+        {
+            await actor.Context.BoundSession.Send(rejection).Async();
+            return;
+        }
+        var arrival = new EnterField(result.Position.X, result.Sequence, result.RemainingMs);
+        if (result.Relocates)
+            actor.Move(arrival);
+        else
+        {
+            actor.Apply(arrival);
+            Remember(actor);
+            await actor.SendStateAsync();
+        }
+    }
 
     public async ValueTask PublishBorderAsync(CancellationToken cancellationToken)
     {
@@ -131,103 +145,69 @@ public sealed class FieldSpot(
         }
     }
 
-    private FieldView View() =>
-        new(
-            Context.SpotId,
-            settings.Id,
-            _visiblePlayers.Keys.Order().ToArray(),
-            _parties
-                .OrderBy(pair => pair.Key)
-                .Select(pair => new PartyView(pair.Key, pair.Value.ToArray()))
-                .ToArray()
-        );
-
-    private async ValueTask BroadcastAsync(PlayerActor requester, CancellationToken ct)
+    public async ValueTask PartyAsync(PlayerActor actor, string? partyId, bool create, CancellationToken ct)
     {
-        ct.ThrowIfCancellationRequested();
-        var view = View();
-        await requester.Context.BoundSession.Send(view).Async();
-        foreach (var id in _visiblePlayers.Keys)
-            if (id != requester.Context.ActorId)
-                await actors.SendToActor(id, view).Async();
-    }
-
-    public async ValueTask PartyAsync(
-        PlayerActor actor,
-        string partyId,
-        bool create,
-        CancellationToken ct
-    )
-    {
-        var id = actor.Context.ActorId;
-        if (
-            string.IsNullOrWhiteSpace(partyId)
-            || !_visiblePlayers.ContainsKey(id)
-            || _parties.Values.Any(members => members.Contains(id))
-            || (
-                create
-                    ? _parties.ContainsKey(partyId)
-                    : !_parties.TryGetValue(partyId, out var members)
-                        || members.Count >= GameNames.MaximumPartyMembers
-            )
-        )
+        if (create)
         {
-            await actor
-                .Context.BoundSession.Send(new ActionRejected(Rejection.InvalidParty))
-                .Async();
+            if (actor.PartyId is not null)
+            {
+                await actor.Context.BoundSession.Send(new ActionRejected("invalid-party")).Async();
+                return;
+            }
+            partyId = "party-" + Guid.NewGuid().ToString("N");
+            var created = await spots.GetOrCreate(partyId, GameNames.PartyType)
+                .InMesh(GameNames.WorldMesh).Async(ct);
+            if (created.State == ZLinkSpotCreateState.Rejected)
+                throw new InvalidOperationException("Party creation rejected.");
+        }
+        if (actor.PartyId is not null || !PartyRun.ValidId(partyId, "party-")
+            || (!create && await spots.FindAsync(partyId!, ct) is null))
+        {
+            await actor.Context.BoundSession.Send(new ActionRejected("invalid-party")).Async();
             return;
         }
-        if (create)
-            _parties.Add(partyId, [id]);
+        var response = await Context.Outbound.RequestToSpot(partyId!,
+            new PartyCommand(actor.Context.ActorId, Join: true)).Async<PartyCommandResult>(ct);
+        if (response.Rejection is { } rejection)
+            await actor.Context.BoundSession.Send(rejection).Async();
         else
-            _parties[partyId].Add(id);
-        await BroadcastAsync(actor, ct);
+            actor.PartyId = partyId;
     }
 
     public async ValueTask EnterAsync(PlayerActor actor, CancellationToken ct)
     {
-        var party = _parties.FirstOrDefault(pair => pair.Value[0] == actor.Context.ActorId);
-        if (party.Value is null)
+        if (actor.PartyId is null)
         {
-            await actor.Context.BoundSession.Send(new ActionRejected(Rejection.NotLeader)).Async();
+            await actor.Context.BoundSession.Send(new ActionRejected("not-leader")).Async();
             return;
         }
-        var dungeonId = GameNames.DungeonId(party.Key);
-        var created = await spots
-            .GetOrCreate(dungeonId, GameNames.DungeonType)
-            .InMesh(GameNames.WorldMesh)
-            .Async(ct);
-        if (created.State == ZLinkSpotCreateState.Rejected)
-            throw new InvalidOperationException("Dungeon creation rejected.");
-        var members = party.Value.ToArray();
-        var prepared = await Context
-            .Outbound.RequestToSpot(dungeonId, new PrepareDungeon(party.Key, members))
-            .Async<DungeonPrepared>(ct);
-        if (prepared.DungeonId != dungeonId)
-            throw new InvalidDataException("Dungeon preparation identity mismatch.");
-        foreach (var id in members)
-            await actors.SendToActor(id, new JoinDungeon(dungeonId, party.Key)).Async();
+        var result = await Context.Outbound.RequestToSpot(actor.PartyId,
+            new PartyCommand(actor.Context.ActorId, Enter: true)).Async<PartyCommandResult>(ct);
+        if (result.Rejection is { } rejection)
+            await actor.Context.BoundSession.Send(rejection).Async();
     }
 
-    public FieldSnapshot Capture() => new(new(_visiblePlayers), new(_arrivals), _parties);
+    public async ValueTask ShowAsync(PlayerActor actor, CancellationToken ct)
+    {
+        await actor.SendStateAsync();
+        if (actor.PartyId is null) return;
+        var result = await Context.Outbound.RequestToSpot(actor.PartyId,
+            new PartyCommand(actor.Context.ActorId)).Async<PartyCommandResult>(ct);
+        if (result.View is { } view) await actor.Context.BoundSession.Send(view).Async();
+    }
 
+    public FieldSnapshot Capture() => new(new(_visiblePlayers), positions.Capture());
     public void Restore(FieldSnapshot state)
     {
-        _parties = state.Parties;
+        positions.Restore(state.Positions);
         _visiblePlayers.Clear();
-        foreach (var (id, position) in state.VisiblePlayers)
-            _visiblePlayers.Add(id, position);
-        _arrivals.Clear();
-        foreach (var (id, position) in state.Arrivals)
-            _arrivals.Add(id, position);
+        foreach (var (id, position) in state.VisiblePlayers) _visiblePlayers.Add(id, position);
     }
+
 }
 
-public sealed record FieldSnapshot(
-    Dictionary<string, EnterField> VisiblePlayers,
-    Dictionary<string, EnterField> Arrivals,
-    Dictionary<string, List<string>> Parties
-);
+public sealed record FieldSnapshot(Dictionary<string, EnterField> VisiblePlayers,
+    FieldPositionSnapshot Positions);
 
 public sealed class FieldRelocation : IZLinkSpotRelocationAdapter<FieldSpot>
 {

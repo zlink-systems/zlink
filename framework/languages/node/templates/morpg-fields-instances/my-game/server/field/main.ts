@@ -8,9 +8,10 @@ import { runHost, failHost } from '../shared/hosting';
 import { Names } from '../shared/constants';
 import { Entry, EnterWorld } from '../shared/entry';
 import { PlayerFactory, PlayerRelocation } from '../shared/player';
+import { Party, PartyRelocation, Command, MemberEntered, Started, Completed } from './party';
 import { Field, FieldRelocation } from './spots';
 import {
-  Reconnect,
+  FieldQuery, Reconnect,
   Move,
   CreateParty,
   JoinParty,
@@ -29,9 +30,13 @@ runHost((_builder, config, mesh) => {
     f.executionMode(ZLinkUserSpotExecutionMode.SpotWide);
     f.preserveStateWith(FieldRelocation);
   });
+  objects.addSpotFactory(Names.party, Party, f => {
+    f.executionMode(ZLinkUserSpotExecutionMode.SpotWide);
+    f.preserveStateWith(PartyRelocation);
+  });
   mesh.channel(Names.border).server();
   return {
-    providers: [
+    providers: [Party, PartyRelocation, Command, MemberEntered, Started, Completed, FieldQuery,
       Entry,
       EnterWorld,
       Field,

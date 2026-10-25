@@ -1,6 +1,7 @@
 #pragma once
 #include "world.hpp"
 #include <zlink/stream_connector.hpp>
+#include <future>
 
 namespace MyGame::E2E
 {
@@ -49,36 +50,49 @@ class Client
     Reply exchange (const Request &request, Predicate predicate)
     {
         healthy ();
+        auto reply_promise =
+          std::make_shared<std::promise<sc::result_t<sc::message_t<Reply>>>> ();
+        auto pending_reply = reply_promise->get_future ();
+        connector_.wait_for<Reply> ()
+          .where ([predicate] (const auto &message) { return predicate (message.payload); })
+          .submit ([reply_promise] (auto result) {
+              reply_promise->set_value (std::move (result));
+          });
         connector_.send (request).submit ();
-        const auto reply = checked (connector_.wait_for<Reply> ()
-                                      .where ([predicate] (const auto &message) {
-                                          return predicate (message.payload);
-                                      })
-                                      .submit ())
-                             .payload;
+        const auto reply = checked (pending_reply.get ()).payload;
         healthy ();
         return reply;
     }
-    WorldState join (int x)
+    WorldState join (double x)
     {
         return exchange<JoinWorldRequest, WorldState> ({player_id, x}, [x] (const auto &view) {
             return view.fieldId == Names::field_id (x) && view.x == x && view.sequence == 0;
         });
     }
-    WorldState move (int x, int sequence)
+    WorldState move (double delta, std::int64_t sequence, double expected_x)
     {
-        return exchange<MoveRequest, WorldState> ({x, sequence}, [x, sequence] (const auto &view) {
-            return view.x == x && view.sequence == sequence;
+        return exchange<MoveRequest, WorldState> (
+          {delta, sequence}, [expected_x, sequence] (const auto &view) {
+            return view.x == expected_x && view.sequence == sequence;
         });
     }
     SessionInfo info ()
     {
         return exchange<SessionInfoRequest, SessionInfo> ({}, [] (const auto &) { return true; });
     }
-    DungeonView dungeon (const std::string &previous_host = "")
+    DungeonView dungeon (const DungeonView &expected, const std::string &previous_host = "")
     {
         return exchange<ViewRequest, DungeonView> (
-          {}, [previous_host] (const auto &view) { return view.nodeId != previous_host; });
+          {}, [expected, previous_host] (const auto &view) {
+              return view.nodeId != previous_host && view.dungeonId == expected.dungeonId
+                  && view.partyId == expected.partyId && view.members == expected.members
+                  && view.stage == expected.stage && view.runId == expected.runId
+                  && view.phase == expected.phase;
+          });
+    }
+    PartyView party ()
+    {
+        return exchange<ViewRequest, PartyView> ({}, [] (const auto &) { return true; });
     }
     DungeonView reconnect_dungeon ()
     {
@@ -88,14 +102,35 @@ class Client
     template <class T, class Predicate> T receive (Predicate predicate)
     {
         healthy ();
-        auto result = checked (connector_.wait_for<T> ()
-                                 .where ([predicate] (const auto &message) {
-                                     return predicate (message.payload);
-                                 })
-                                 .submit ())
-                        .payload;
+        auto result = connector_.wait_for<T> ()
+                        .where ([predicate] (const auto &message) {
+                            return predicate (message.payload);
+                        })
+                        .submit ();
+        require (static_cast<bool> (result),
+                 std::string ("Waiting for ") + T::packet_name + " failed: "
+                   + (result.error () ? result.error ()->message : "Connector wait failed"));
+        auto payload = result.value ().payload;
         healthy ();
-        return result;
+        return payload;
+    }
+    template <class T, class Predicate> std::future<T> receive_async (Predicate predicate)
+    {
+        healthy ();
+        auto reply_promise =
+          std::make_shared<std::promise<sc::result_t<sc::message_t<T>>>> ();
+        auto pending_reply = reply_promise->get_future ();
+        connector_.wait_for<T> ()
+          .where ([predicate] (const auto &message) { return predicate (message.payload); })
+          .submit ([reply_promise] (auto result) {
+              reply_promise->set_value (std::move (result));
+          });
+        return std::async (std::launch::deferred,
+                           [this, pending_reply = std::move (pending_reply)] () mutable {
+                               const auto payload = checked (pending_reply.get ()).payload;
+                               healthy ();
+                               return payload;
+                           });
     }
     template <class T> void send (const T &request)
     {

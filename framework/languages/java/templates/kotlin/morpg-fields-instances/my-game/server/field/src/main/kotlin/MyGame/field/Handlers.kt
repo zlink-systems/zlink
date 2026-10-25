@@ -27,17 +27,7 @@ class Actions {
         dispatch: ZLinkMessageContext,
         request: MoveRequest,
     ) {
-        require(request.sequence == actor.position.sequence + 1) {
-            "Move sequence must increase by one"
-        }
-        val destination = EnterField(request.x, request.sequence)
-        if (Rules.fieldId(request.x) != spot.context.spotId()) {
-            actor.move(destination)
-            return
-        }
-        actor.apply(destination)
-        spot.remember(actor)
-        actor.sendState()
+        spot.move(actor, request)
     }
 
     @ZLinkSpotActorSend
@@ -56,7 +46,7 @@ class Actions {
         actor: Player,
         dispatch: ZLinkMessageContext,
         request: CreatePartyRequest,
-    ) = spot.party(actor, request.partyId, true)
+    ) = spot.party(actor, null, true)
 
     @ZLinkSpotActorSend
     suspend fun joinParty(
@@ -85,14 +75,22 @@ class Actions {
     }
 
     @ZLinkSpotActorSend
-    suspend fun deliverField(
+    suspend fun deliverParty(
         spot: Field,
         actor: Player,
         dispatch: ZLinkMessageContext,
-        message: FieldView,
+        message: PartyView,
     ) {
         actor.context.boundSession().kotlin().send(message).await()
     }
+
+    @ZLinkSpotActorSend
+    suspend fun query(
+        spot: Field,
+        actor: Player,
+        dispatch: ZLinkMessageContext,
+        request: ViewRequest,
+    ) = spot.show(actor)
 }
 
 class BorderTick : ZLinkSuspendingSpotTimerHandler<Field> {

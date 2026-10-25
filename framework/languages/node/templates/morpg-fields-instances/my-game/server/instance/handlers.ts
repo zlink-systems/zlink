@@ -8,7 +8,7 @@ import {
   AdvanceRequest,
   DungeonView,
   PrepareDungeon,
-  DungeonPrepared
+  DungeonPrepared, PartyView, EnterDungeonRequest, JoinDungeon
 } from '../shared/messages';
 import { Player } from '../shared/player';
 import { Dungeon } from './spots';
@@ -72,10 +72,12 @@ export class Prepare {
     return spot.prepare(request);
   }
 }
-const deliveryPackets: ReadonlyMap<string, new () => object> = new Map([
+const deliveryPackets: ReadonlyMap<string, new () => object> = new Map<string, new () => object>([
+  [PacketNames.partyView, PartyView],
   [PacketNames.dungeonView, DungeonView]
 ]);
 @Injectable()
+@zlinkSpotActorSendHandler({ spot: () => Dungeon, actor: () => Player, packetName: PacketNames.partyView })
 @zlinkSpotActorSendHandler({
   spot: () => Dungeon,
   actor: () => Player,
@@ -86,11 +88,26 @@ export class Delivery {
     _spot: Dungeon,
     actor: Player,
     context: ZLinkMessageContext,
-    message: DungeonView
+    message: DungeonView | PartyView
   ): Promise<void> {
     const type = deliveryPackets.get(context.packetName);
     if (!type) throw new Error(`Unregistered dungeon push: ${context.packetName}`);
     // Restore the declared public DTO class before forwarding (#1731).
     await actor.context.boundSession.send(Object.assign(new type(), message)).submit();
+  }
+}
+
+@Injectable()
+@zlinkSpotActorSendHandler({ spot: () => Dungeon, actor: () => Player, packetName: PacketNames.enterDungeonRequest })
+export class EnterAgain {
+  async handle(spot: Dungeon, actor: Player, _context: ZLinkMessageContext, _request: EnterDungeonRequest): Promise<void> {
+    await spot.enter(actor);
+  }
+}
+@Injectable()
+@zlinkSpotActorSendHandler({ spot: () => Dungeon, actor: () => Player, packetName: PacketNames.joinDungeon })
+export class TravelAgain {
+  async handle(spot: Dungeon, actor: Player, _context: ZLinkMessageContext, request: JoinDungeon): Promise<void> {
+    if (request.dungeonId !== String(spot.context.spotId)) actor.context.joinSpot(request.dungeonId, request).defer();
   }
 }

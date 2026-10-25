@@ -1,4 +1,5 @@
 using MyGame.Shared;
+using Systems.Zlink.Stream.Connector.Contracts;
 
 namespace MyGame.E2E;
 
@@ -39,7 +40,7 @@ internal static class Scenarios
         Require(
             before.DungeonId == after.DungeonId
                 && before.PartyId == after.PartyId
-                && before.Stage == after.Stage
+                && before.Stage == after.Stage && before.RunId == after.RunId && before.Phase == after.Phase
                 && before.Members.SequenceEqual(after.Members),
             "Dungeon state changed."
         );
@@ -51,40 +52,32 @@ internal static class Scenarios
         CancellationToken ct
     )
     {
-        await leader.SendAsync<FieldView, CreatePartyRequest>(
-            new(party),
-            view =>
-                view.Parties.Any(item =>
-                    item.PartyId == party && item.Members.SequenceEqual(new[] { leader.PlayerId })
-                ),
-            ct
-        );
-        var leaderParty = leader.ReceiveAsync<FieldView>(
-            view => view.Parties.Any(item => item.PartyId == party && item.Members.Length == 2),
-            ct
-        );
-        await member.SendAsync<FieldView, JoinPartyRequest>(
-            new(party),
-            view =>
-                view.Parties.Any(item =>
-                    item.PartyId == party
-                    && item.Members.SequenceEqual(new[] { leader.PlayerId, member.PlayerId })
-                ),
-            ct
-        );
+        var created = await leader.SendAsync<PartyView, CreatePartyRequest>(new(),
+            view => view.Members.SequenceEqual(new[] { leader.PlayerId }), ct);
+        party = created.PartyId;
+        Require(MyGame.Field.PartyRun.ValidId(party, "party-"), "Party ID is not server-issued.");
+        var leaderParty = leader.ReceiveAsync<PartyView>(view => view.Members.Length == 2, ct);
+        var joined = await member.SendAsync<PartyView, JoinPartyRequest>(new(party),
+            view => view.PartyId == party && view.Members.SequenceEqual(new[] { leader.PlayerId, member.PlayerId }), ct);
         await leaderParty;
+        var rejected = await member.SendAsync<ActionRejected, EnterDungeonRequest>(new(),
+            view => view.Reason == "not-leader", ct);
+        Require(rejected.RetryAfterMs == 0, "Leadership rejection has a cooldown.");
+        var unchanged = await member.SendAsync<PartyView, ViewRequest>(new(), _ => true, ct);
+        Require(joined.Members.SequenceEqual(unchanged.Members) && joined.Phase == unchanged.Phase
+            && unchanged.RunId is null, "Rejected entry changed party state.");
         var memberArrival = member.ReceiveAsync<DungeonView>(view => view.PartyId == party, ct);
-        var leaderView = await leader.SendAsync<DungeonView, EnterDungeonRequest>(
-            new(),
-            view => view.PartyId == party,
-            ct
-        );
+        var arrival = leader.ReceiveAsync<DungeonView>(view => view.PartyId == party, ct);
+        await leader.Connector.Send(new EnterDungeonRequest()).Async(ct);
+        await leader.Connector.Send(new EnterDungeonRequest()).Async(ct);
+        var leaderView = await arrival;
         var memberView = await memberArrival;
         SameDungeon(leaderView, memberView);
         Require(
-            leaderView.DungeonId == GameNames.DungeonId(party)
+            leaderView.DungeonId == GameNames.DungeonId(leaderView.RunId)
                 && leaderView.NodeId == memberView.NodeId
-                && leaderView.Stage == 0
+                && leaderView.Stage == 0 && leaderView.Phase == RunPhase.Active
+                && MyGame.Field.PartyRun.ValidId(leaderView.RunId, "run-")
                 && leaderView.Members.SequenceEqual(new[] { leader.PlayerId, member.PlayerId }),
             "Party did not enter the same fresh dungeon."
         );
@@ -128,13 +121,20 @@ internal static class Scenarios
                         && observed.NodeId == "fieldA",
                     "Field crossing must start on fieldA."
                 );
+                await player.SendAsync<ActionRejected, JoinPartyRequest>(new("party-" + new string('0', 32)),
+                    view => view.Reason == "invalid-party" && view.RetryAfterMs == 0, ct);
+                var party = await player.SendAsync<PartyView, CreatePartyRequest>(new(), _ => true, ct);
+                await observer.SendAsync<PartyView, JoinPartyRequest>(new(party.PartyId),
+                    view => view.Members.Length == 2, ct);
+                await player.SendAsync<ActionRejected, JoinDungeon>(new("internal", "internal"),
+                    view => view.Reason == "packet-not-allowed" && view.RetryAfterMs == 0, ct);
                 var before = await player.SessionAsync(ct);
                 var visible = observer.ReceiveAsync<BorderVisible>(
                     view => view.PlayerId == player.PlayerId && view.Sequence == 1,
                     ct
                 );
                 var moved = await player.SendAsync<WorldState, MoveRequest>(
-                    new(200, 1),
+                    new(2, 1),
                     view => view.FieldId == "field-3" && view.Sequence == 1,
                     ct
                 );
@@ -150,6 +150,33 @@ internal static class Scenarios
                     before == await player.SessionAsync(ct) && !player.Disconnected,
                     "Session changed during field relocation."
                 );
+                var crossParty = await player.SendAsync<PartyView, ViewRequest>(new(), _ => true, ct);
+                var otherParty = await observer.SendAsync<PartyView, ViewRequest>(new(), _ => true, ct);
+                Require(crossParty.PartyId == party.PartyId && crossParty.Members.SequenceEqual(otherParty.Members)
+                    && crossParty.Members.SequenceEqual(new[] { player.PlayerId, observer.PlayerId })
+                    && crossParty.LeaderId == player.PlayerId && otherParty.LeaderId == player.PlayerId,
+                    "Cross-field movement changed party membership or leadership.");
+                foreach (var (request, reason) in new[] {
+                    (new MoveRequest(11, 2), "step-too-large"),
+                    (new MoveRequest(0, GameNames.MaxSafeInteger + 1), "integer-out-of-range"),
+                    (new MoveRequest(0, 1), "stale-sequence") })
+                {
+                    await player.SendAsync<ActionRejected, MoveRequest>(request,
+                        view => view.Reason == reason && view.RetryAfterMs == 0, ct);
+                    var state = await player.SendAsync<WorldState, ViewRequest>(new(), _ => true, ct);
+                    Require(state.X == moved.X && state.Sequence == moved.Sequence, "Rejected movement changed state.");
+                }
+                var accepted = player.ReceiveAsync<WorldState>(view => view.Sequence == 2, ct);
+                var budgetRejection = player.ReceiveAsync<ActionRejected>(view => view.Reason == "move-budget", ct);
+                await player.Connector.Send(new MoveRequest(0, 2)).Async(ct);
+                await player.Connector.Send(new MoveRequest(10, 3)).Async(ct);
+                await accepted;
+                var budget = await budgetRejection;
+                var budgetState = await player.SendAsync<WorldState, ViewRequest>(new(), _ => true, ct);
+                Require(budgetState.X == moved.X && budgetState.Sequence == 2 && budget.RetryAfterMs > 0,
+                    "Movement budget rejection changed state.");
+                await Task.Delay(budget.RetryAfterMs, ct);
+                await player.SendAsync<WorldState, MoveRequest>(new(10, 3), view => view.Sequence == 3, ct);
                 Console.WriteLine("✓ field");
                 passed++;
             }
@@ -178,11 +205,26 @@ internal static class Scenarios
                     );
                     SameDungeon(advanced, await secondStage);
                     Require(advanced.NodeId == dungeon.NodeId, "Advance changed the dungeon host.");
+                    for (var stage = 2; stage <= GameNames.FinalStage; stage++)
+                        advanced = await p1.SendAsync<DungeonView, AdvanceRequest>(new(), view => view.Stage == stage, ct);
+                    Require(advanced.Phase == RunPhase.Completed, "Final stage did not complete run.");
+                    await p1.SendAsync<ActionRejected, AdvanceRequest>(new(),
+                        view => view.Reason == "run-not-active", ct);
+                    SameDungeon(advanced, await p1.DungeonAsync(ct));
                     Require(
                         before1 == await p1.SessionAsync(ct)
                             && before2 == await p2.SessionAsync(ct),
                         "Session identity changed while entering dungeon."
                     );
+                    if (selected.Contains("dungeon") && !selected.Contains("update"))
+                    {
+                        await using var otherLeader = await GameClient.ConnectAsync(run.Outcome, endpoint, "other-leader", ct);
+                        await using var otherMember = await GameClient.ConnectAsync(run.Outcome, endpoint, "other-member", ct);
+                        await otherLeader.JoinAsync(250, ct); await otherMember.JoinAsync(250, ct);
+                        var other = await EnterAsync(otherLeader, otherMember, "", ct);
+                        Require(other.DungeonId != dungeon.DungeonId && other.RunId != dungeon.RunId,
+                            "Different parties shared a dungeon run.");
+                    }
                     if (selected.Contains("dungeon"))
                     {
                         Console.WriteLine("✓ dungeon");
@@ -251,7 +293,8 @@ internal static class Scenarios
                         await p4.JoinAsync(250, ct);
                         var fresh = await EnterAsync(p3, p4, "party-2", ct);
                         Require(
-                            fresh.NodeId == advanced.NodeId,
+                            fresh.NodeId == advanced.NodeId && fresh.DungeonId != advanced.DungeonId
+                                && fresh.RunId != advanced.RunId,
                             "Replacement instance did not accept new work."
                         );
                         Console.WriteLine("✓ update");

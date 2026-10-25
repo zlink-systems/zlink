@@ -28,6 +28,6 @@ export class EnterWorld {
     request: JoinWorldRequest
   ): Promise<void> {
     if (request.playerId !== actor.context.actorId) throw new Error('Player identity mismatch');
-    actor.move(new EnterField(request.x, 0));
+    actor.move(new EnterField(request.x, 0n));
   }
 }

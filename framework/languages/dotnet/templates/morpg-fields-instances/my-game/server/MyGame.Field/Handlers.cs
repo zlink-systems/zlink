@@ -36,18 +36,7 @@ public sealed class MoveHandler : IZLinkSpotActorSendHandler<FieldSpot, PlayerAc
         CancellationToken cancellationToken
     )
     {
-        if (request.Sequence != actor.Sequence + 1)
-            throw new InvalidDataException("Move sequence must increase by one.");
-        var fieldId = GameNames.FieldId(request.X);
-        var position = new EnterField(request.X, request.Sequence);
-        if (fieldId != spot.Context.SpotId)
-        {
-            actor.Move(position);
-            return;
-        }
-        actor.Apply(position);
-        spot.Remember(actor);
-        await actor.SendStateAsync();
+        await spot.MoveAsync(actor, request);
     }
 }
 
@@ -95,7 +84,7 @@ public sealed class CreateParty
         CancellationToken ct
     )
     {
-        return spot.PartyAsync(actor, request.PartyId, true, ct);
+        return spot.PartyAsync(actor, null, true, ct);
     }
 }
 
@@ -146,17 +135,24 @@ public sealed class DungeonTravel : IZLinkSpotActorSendHandler<FieldSpot, Player
     }
 }
 
-[ZLinkSpotActorSendHandler(nameof(FieldView))]
-public sealed class FieldDelivery : IZLinkSpotActorSendHandler<FieldSpot, PlayerActor, FieldView>
+[ZLinkSpotActorSendHandler(nameof(PartyView))]
+public sealed class PartyDelivery : IZLinkSpotActorSendHandler<FieldSpot, PlayerActor, PartyView>
 {
     public ValueTask HandleAsync(
         FieldSpot spot,
         PlayerActor actor,
         IZLinkMessageContext context,
-        FieldView request,
+        PartyView request,
         CancellationToken ct
     )
     {
         return actor.Context.BoundSession.Send(request).Async();
     }
+}
+
+[ZLinkSpotActorSendHandler(nameof(ViewRequest))]
+public sealed class FieldQuery : IZLinkSpotActorSendHandler<FieldSpot, PlayerActor, ViewRequest>
+{
+    public ValueTask HandleAsync(FieldSpot spot, PlayerActor actor, IZLinkMessageContext context,
+        ViewRequest request, CancellationToken ct) => spot.ShowAsync(actor, ct);
 }

@@ -10,8 +10,13 @@ public final class Program {
 
     public static void main(String[] args) throws Exception {
         var root = Path.of("").toAbsolutePath().normalize();
+        if (Arrays.equals(args, new String[] {"--check-structure"})) {
+            Structure.check(root);
+            return;
+        }
+        DomainChecks.run();
+        if (Arrays.equals(args, new String[] {"--check-domain"})) return;
         Structure.check(root);
-        if (Arrays.equals(args, new String[] {"--check-structure"})) return;
         Structure.require(
                 args.length == 0 || (args.length == 2 && args[0].equals("--scenario")),
                 "Use --scenario a,b");
@@ -28,7 +33,7 @@ public final class Program {
         try {
             System.out.println("Logs: " + nodes.logs);
             nodes.start();
-            try (var scenarios = new Scenarios(nodes)) {
+            try (var scenarios = new Scenarios(nodes, selected)) {
                 Exception dependencyFailure = null;
                 for (var id : selected) {
                     if (id != Scenario.FIELD && dependencyFailure != null) {

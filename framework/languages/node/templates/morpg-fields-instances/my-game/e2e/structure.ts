@@ -96,9 +96,9 @@ export function checkStructure(path = 'zlink.structure.json'): void {
       assert(!('dynamic' in spot) && !('logicalId' in spot));
     } else {
       assert.equal(spot.kind, 'user');
-      assert([Names.field, Names.dungeon].includes(text(spot.type) as typeof Names.field));
-      if (spot.type === Names.dungeon) {
-        assert.equal(host.role, 'instance');
+      assert([Names.field, Names.party, Names.dungeon].includes(text(spot.type) as typeof Names.field));
+      if (spot.type === Names.dungeon || spot.type === Names.party) {
+        assert.equal(host.role, spot.type === Names.dungeon ? 'instance' : 'field');
         assert.equal(spot.dynamic, true);
       } else {
         assert.equal(host.role, 'field');
@@ -112,7 +112,7 @@ export function checkStructure(path = 'zlink.structure.json'): void {
     }
   }
   unique(logical, 'logical Spot ID');
-  for (const type of [Names.field, Names.dungeon])
+  for (const type of [Names.field, Names.party, Names.dungeon])
     assert(
       spots.some((s) => s.kind === 'user' && s.type === type),
       `Missing registered User Spot type: ${type}`

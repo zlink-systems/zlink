@@ -1,8 +1,13 @@
+using System.Text.Json.Serialization;
+
 namespace MyGame.Shared;
 
 public static class GameNames
 {
     public const string WorldMesh = "my-game-world";
+    public const long MaxSafeInteger = 9_007_199_254_740_991;
+    public const int FinalStage = 3;
+    public const string PartyType = "Party";
     public const string FieldType = "Field";
     public const string PlayerType = "Player";
     public const string DungeonType = "Dungeon";
@@ -16,11 +21,11 @@ public static class GameNames
     public const int BorderRadius = 10;
     public const int TickPeriodMilliseconds = 100;
 
-    public static string FieldId(int x)
+    public static string FieldId(double x)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(x);
-        ArgumentOutOfRangeException.ThrowIfGreaterThan(x, FieldWidth * FieldCount - 1);
-        return $"{FieldPrefix}{x / FieldWidth + 1}";
+        ArgumentOutOfRangeException.ThrowIfGreaterThanOrEqual(x, FieldWidth * FieldCount);
+        return $"{FieldPrefix}{(int)(x / FieldWidth) + 1}";
     }
 
     public static IEnumerable<string> AdjacentFields(string fieldId)
@@ -34,7 +39,7 @@ public static class GameNames
 
     public static string BorderTopic(string source, string target) => $"{source}:{target}";
 
-    public static string DungeonId(string partyId) => $"dungeon-{partyId}";
+    public static string DungeonId(string runId) => $"dungeon-{runId}";
 }
 
 public static class GameTiming
@@ -46,29 +51,29 @@ public static class GameTiming
 
 public static class Rejection
 {
-    public const string InvalidParty = "INVALID_PARTY";
-    public const string NotLeader = "NOT_LEADER";
+    public const string InvalidParty = "invalid-party";
+    public const string NotLeader = "not-leader";
 }
 
-public sealed record JoinWorldRequest(string PlayerId, int X);
+public sealed record JoinWorldRequest(string PlayerId, double X);
 
-public sealed record MoveRequest(int X, int Sequence);
+public sealed record MoveRequest(double Delta, long Sequence);
 
-public sealed record EnterField(int X, int Sequence);
+public sealed record EnterField(double X, long Sequence, int RemainingMs = 0);
 
-public sealed record WorldState(string FieldId, string NodeId, int X, int Sequence);
+public sealed record WorldState(string FieldId, string NodeId, double X, long Sequence);
 
-public sealed record BorderPresence(string SourceFieldId, string PlayerId, int X, int Sequence);
+public sealed record BorderPresence(string SourceFieldId, string PlayerId, double X, long Sequence);
 
 public sealed record BorderVisible(
     string ObserverFieldId,
     string SourceFieldId,
     string PlayerId,
-    int X,
-    int Sequence
+    double X,
+    long Sequence
 );
 
-public sealed record CreatePartyRequest(string PartyId);
+public sealed record CreatePartyRequest;
 
 public sealed record JoinPartyRequest(string PartyId);
 
@@ -78,7 +83,15 @@ public sealed record AdvanceRequest;
 
 public sealed record ViewRequest;
 
-public sealed record PartyView(string PartyId, string[] Members);
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum RunPhase { Forming, Preparing, Entering, Active, Completed }
+
+public sealed record PartyView(string PartyId, string[] Members, string LeaderId, RunPhase Phase, string? RunId);
+public sealed record PartyCommand(string ActorId, bool Join = false, bool Enter = false);
+public sealed record PartyCommandResult(PartyView? View, ActionRejected? Rejection);
+public sealed record DungeonMemberEntered(string RunId, string ActorId);
+public sealed record RunStarted(string RunId);
+public sealed record RunCompleted(string RunId);
 
 public sealed record FieldView(
     string FieldId,
@@ -92,16 +105,18 @@ public sealed record DungeonView(
     string NodeId,
     string PartyId,
     string[] Members,
-    int Stage
+    int Stage,
+    string RunId,
+    RunPhase Phase
 );
 
-public sealed record PrepareDungeon(string PartyId, string[] Members);
+public sealed record PrepareDungeon(string RunId, string PartyId, string[] Members);
 
-public sealed record DungeonPrepared(string DungeonId);
+public sealed record DungeonPrepared(string DungeonId, string RunId, ActionRejected? Rejection = null);
 
-public sealed record JoinDungeon(string DungeonId, string PartyId);
+public sealed record JoinDungeon(string DungeonId, string RunId);
 
-public sealed record ActionRejected(string Reason);
+public sealed record ActionRejected(string Reason, int RetryAfterMs = 0);
 
 public sealed record SessionInfoRequest;
 
