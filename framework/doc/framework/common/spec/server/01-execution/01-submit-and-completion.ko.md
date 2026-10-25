@@ -224,14 +224,22 @@ operation을 시작하기 전에 그 owner로 가는 연결과
 lifecycle request(Actor create·Join, session bind, relocation PREPARE)도 같다. 판정은 언어마다 logical request
 admission 한 곳에서 한다.
 
+- HELLO·ADMIT·REJECT는 handshake를 진행하는 제어 record이며 이 대기의 대상이 아니다. ClientServer는 기존
+  ClientServer ready(방향별 handshake 완료)를 연결 준비로 쓰고, 아래 선택 route 조건은 RouteMesh에 적용한다.
+- 처음 대기에 들어갈 때 대상 intent의 `intent_id`와 `last_failure_id`를 기준값으로 보존한다. 기준값을 읽은 snapshot과
+  변화 구독은 socket의 단일 관찰자가 같은 차례에 처리해 그 사이의 변경을 놓치지 않는다. 대기 중 대상 intent가
+  없어지거나 `intent_id`가 바뀌거나 `last_failure_id`가 바뀌면 `Unavailable`로 끝낸다. 현재 snapshot에서 연결과
+  service admission이 이미 회복됐어도 같다. 이 판정은 대기 중인 request를 제출할지 정하기 전에 한다.
 - 대상 RID의 Core 선택 route가 있고 그 route의 service admission이 끝났으면 남은 timeout으로 binding request를
-  한 번 시작한다. 그 route와 무관한 다른 physical 연결의 실패는 이 route를 무효로 만들지 않는다.
+  한 번 시작한다. 그 route와 무관한 다른 physical 연결의 실패는 이 route를 무효로 만들지 않으며, 이미 준비된
+  route를 쓰는 새 request를 과거 실패만으로 거부하지 않는다.
 - 선택 route가 없고 대상 endpoint의 [연결 상태](../../../../../../../core/doc/spec/core/socket/README.ko.md#zlink_socket_connection_attempts_snapshot)가 `ATTEMPT_FAILED`이면
   즉시 `Unavailable`로 끝낸다. Core가 재연결하는 중이어도 기다리지 않는다.
-- 연결 상태가 `CONNECTING`이거나, Core 연결은 있으나 선택 route·service admission이 아직 준비 중이면
-  [§9](#9-request-completion--완료-경쟁과-timeout-budget)의 남은 request timeout 안에서 기다린다. 기다리는 동안 그
-  endpoint의 실패가 새로 확정되거나 intent가 사라지거나, target·descriptor·authority fence가 무효가 되거나,
-  service가 명시적으로 거부하면 `Unavailable`로 끝낸다. Runtime이 새 admission을 받지 않으면 `ShuttingDown`이다.
+- 연결 상태가 `CONNECTING`이거나, 유효 descriptor는 있으나 Core 연결 행이 아직 없거나, Core 연결은 있으나 선택
+  route·service admission이 아직 준비 중이면 [§9](#9-request-completion--완료-경쟁과-timeout-budget)의 남은
+  request timeout 안에서 기다린다. 기다리는 동안 target·descriptor·authority fence가 무효가 되거나 service가
+  명시적으로 거부하면 `Unavailable`로 끝낸다. Runtime이 새 admission을 받지 않으면 `ShuttingDown`이다. Connect
+  호출 자체의 동기 실패를 연결 상태 행의 실패로 바꿔 쓰지 않는다.
 - Binding operation을 시작한 뒤에는 application request와 lifecycle request 모두 같은 operation을 다시
   제출하지 않는다. 연결 손실, handover, 선택 route 변경과 reply 유실은 binding의 typed 결과로 끝난다.
   Relocation relay·cutover batch와 Store authority settlement는 각 transaction 계약을 따르며 request 재시작으로

@@ -243,16 +243,26 @@ descriptor under the existing rules, it checks the connection to that owner and
 starting a binding operation. Lifecycle requests that the Framework starts (Actor create and Join, session bind,
 relocation PREPARE) do the same. Each language decides this in one logical request admission point.
 
+- HELLO, ADMIT, and REJECT are control records that drive the handshake and aren't subject to this wait. ClientServer
+  uses the existing ClientServer ready (completion of the directional handshake) as connection readiness, and the
+  selected-route conditions below apply to RouteMesh.
+- When a request first starts waiting, it keeps the target intent's `intent_id` and `last_failure_id` as baselines.
+  The socket's single observer handles the snapshot that read the baselines and the change subscription in the same
+  turn, so no change between them is missed. If, while waiting, the target intent disappears, its `intent_id`
+  changes, or its `last_failure_id` changes, the request ends with `Unavailable`, even if the current snapshot shows
+  the connection and service admission already recovered. This check is made before deciding whether to submit a
+  waiting request.
 - If the target RID has a Core selected route and that route's service admission has finished, the binding request
   starts once with the remaining timeout. A failure of another physical connection unrelated to that route doesn't
-  invalidate it.
+  invalidate it, and a new request using an already ready route isn't rejected for a past failure alone.
 - If there's no selected route and the target endpoint's [connection state](../../../../../../../core/doc/spec/core/socket/README.en.md#zlink_socket_connection_attempts_snapshot) is
   `ATTEMPT_FAILED`, the request ends at once with `Unavailable`. It doesn't wait even while Core is reconnecting.
-- If the connection state is `CONNECTING`, or a Core connection exists but the selected route or service admission
-  isn't ready yet, the request waits within the remaining request timeout of
-  [§9](#9-request-completion--the-completion-race-and-timeout-budget). While it waits, a newly confirmed failure of
-  that endpoint, removal of the intent, invalidation of the target, descriptor, or authority fence, or an explicit
-  service rejection ends it with `Unavailable`. If the runtime no longer takes new admission, it's `ShuttingDown`.
+- If the connection state is `CONNECTING`, or a valid descriptor exists but there's no Core connection row yet, or a
+  Core connection exists but the selected route or service admission isn't ready yet, the request waits within the
+  remaining request timeout of [§9](#9-request-completion--the-completion-race-and-timeout-budget). While it waits,
+  invalidation of the target, descriptor, or authority fence, or an explicit service rejection ends it with
+  `Unavailable`. If the runtime no longer takes new admission, it's `ShuttingDown`. A synchronous failure of the
+  connect call itself isn't rewritten as a failure in the connection state row.
 - Once a binding operation starts, neither an application request nor a lifecycle request resubmits the same
   operation. Connection loss, handover, a selected-route change, and a lost reply end with the binding's typed
   result. Relocation relay and cutover batches and Store authority settlement follow their own transaction

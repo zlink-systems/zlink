@@ -708,11 +708,11 @@ Gate, Yield, Actor-claim, and self-request observations reference
 - A durable lifecycle operation (Actor create/join, session bind) follows the
   initial admission of
   [Submit and completion §5](../01-execution/01-submit-and-completion.en.md#5-backpressure-and-error-classification)
-  and starts the binding request zero times or once. While the target connection
-  is being attempted, it waits within the deadline and starts once; if the target
-  connection's latest result is a failure, it doesn't start and ends with
-  `Unavailable`. A handover, loss, or lost reply after the start ends with the
-  binding's typed result, and the same operation isn't sent again.
+  and its decision order, and starts the binding request zero times or once.
+  Verification includes the case where only an unrelated outgoing connection
+  failed while a selected route was ready, the case where a failure was confirmed
+  during the initial wait, and a handover after the start; each result matches
+  Submit §5 and §9, and the same operation isn't started again.
 - A call that went through deferred join or a remote transaction wrapper ends
   with the same kind at the same moment as the wrapped operation's terminal,
   and the wrapper doesn't produce a timeout first while admission is pending.

@@ -615,9 +615,9 @@ Gate·Yield·Actor claim과 self-request의 관찰은
   그 뒤 Ready authority가 없으면 새 reservation으로 다시 생성된다.
 - `Rejected`·`Failed` 뒤에는 `Find`가 Actor를 찾지 못하고 reserved capacity가 반환된다.
 - Durable lifecycle operation(Actor create·join, session bind)은 [Submit과 완료 §5](../01-execution/01-submit-and-completion.ko.md#5-backpressure와-오류-분류)의
-  최초 수락을 따라 binding request를 0번 또는 1번 시작한다. 대상 연결을 시도하는 중이면 deadline 안에서
-  기다렸다 한 번 시작하고, 대상 연결의 마지막 결과가 실패이면 시작하지 않고 `Unavailable`로 끝난다.
-  시작한 뒤의 handover·단절·reply 유실은 binding의 typed 결과로 끝나며 같은 operation을 다시 보내지 않는다.
+  판정 순서를 따르며 binding request를 0번 또는 1번 시작한다. 검증에는 선택 route가 준비된 상태에서 무관한
+  outgoing 연결만 실패한 경우, 최초 대기 중 실패가 확정된 경우, 시작 뒤 handover가 일어난 경우를 포함하며, 각
+  결과는 Submit §5·§9와 같고 같은 operation을 다시 시작하지 않는다.
 - Deferred join과 remote transaction wrapper를 거친 호출은 감싼 operation의 terminal과 같은
   종류·같은 시점에 끝나며, admission 대기 중 wrapper가 먼저 timeout을 만들지 않는다.
 - Destroy가 같은 generation만 인정하고 새 incarnation으로 다시 지정하지 않는다.

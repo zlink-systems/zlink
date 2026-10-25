@@ -983,9 +983,11 @@ ZLINK_EXPORT zlink_config_result_t zlink_socket_connection_attempts_snapshot (
 - `capacity_`나 `endpoint_bytes_capacity_`가 모자라면 필요한 행 수와 byte 수(NUL 포함)를
   `*attempt_count_out_`·`*endpoint_bytes_required_out_`에 쓰고 `ZLINK_CONFIG_BUFFER_TOO_SMALL`을 반환하며
   readiness를 해제하지 않는다. 일부만 쓰는 성공은 없다. 성공하면 행 수와 쓴 byte 수를 쓴다. 행이 없으면
-  0으로 성공한다. 출력 pointer가 NULL이거나 양수 용량의 배열이 NULL이면 `ZLINK_CONFIG_INVALID_HANDLE`,
-  connect를 지원하지 않는 socket(bind 전용 STREAM 포함)은 `ZLINK_CONFIG_NOT_SUPPORTED`, close된 socket은
-  `ZLINK_CONFIG_INVALID_STATE`다.
+  0으로 성공한다. 두 count output pointer는 필수다. 각 출력 buffer는 대응 용량이 0이면 NULL일 수 있으며,
+  NULL·0 크기 조회도 위 용량 부족 규칙을 따른다. 필수 pointer가 NULL이거나 양수 용량의 buffer가 NULL이면
+  `ZLINK_CONFIG_INVALID_HANDLE`, connect를 지원하지 않는 socket(bind 전용 STREAM 포함)은
+  `ZLINK_CONFIG_NOT_SUPPORTED`다. Close가 먼저 socket을 점유했으면 `ZLINK_CONFIG_INVALID_STATE`(`ESHUTDOWN`),
+  이미 유효하지 않은 handle이면 `ZLINK_CONFIG_INVALID_HANDLE`이며, context 종료는 기존 config lifecycle 분류를 따른다.
 
 **참고:** `zlink_connect`, `zlink_disconnect`, [ROUTER §10.1](07-router.ko.md#101-선택-route-관찰)
 

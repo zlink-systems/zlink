@@ -1044,9 +1044,12 @@ belongs to the same row's lifetime.
 - If `capacity_` or `endpoint_bytes_capacity_` is too small, the required row count and byte count (including
   NULs) are written to `*attempt_count_out_` and `*endpoint_bytes_required_out_`, `ZLINK_CONFIG_BUFFER_TOO_SMALL`
   is returned, and the readiness isn't cleared. There's no partial success. On success, the row count and the
-  bytes written are stored; with no rows it succeeds with 0. A NULL output pointer or a NULL array with a
-  positive capacity is `ZLINK_CONFIG_INVALID_HANDLE`, a socket that doesn't support connect (including the
-  bind-only STREAM) is `ZLINK_CONFIG_NOT_SUPPORTED`, and a closed socket is `ZLINK_CONFIG_INVALID_STATE`.
+  bytes written are stored; with no rows it succeeds with 0. The two count output pointers are required. Each
+  output buffer may be NULL when its capacity is 0, and a NULL/0 size query follows the insufficient-capacity rule
+  above. A NULL required pointer or a NULL buffer with a positive capacity is `ZLINK_CONFIG_INVALID_HANDLE`, and a
+  socket that doesn't support connect (including the bind-only STREAM) is `ZLINK_CONFIG_NOT_SUPPORTED`. If close
+  took the socket first, it's `ZLINK_CONFIG_INVALID_STATE` (`ESHUTDOWN`); an already invalid handle is
+  `ZLINK_CONFIG_INVALID_HANDLE`; context termination follows the existing config lifecycle classification.
 
 **See also:** `zlink_connect`, `zlink_disconnect`, [ROUTER §10.1](07-router.en.md#101-observing-the-selected-route)
 

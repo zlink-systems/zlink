@@ -1233,8 +1233,9 @@ is the baseline.
 - The connection state snapshot of a raw socket that supports connect
   (`zlink_socket_connection_attempts_snapshot()`) and `ZLINK_POLLCONNECT` are projected without loss, with
   the meaning defined by [Core socket](../../../core/doc/spec/core/socket/README.en.md#zlink_socket_connection_attempts_snapshot).
-  State, failure cause, and stage are published as closed language enums, and `intent_id`, `revision`, and
-  `last_failure_id` as nonzero opaque equality tokens whose sign or size isn't used for ordering. Readiness
+  State, failure cause, and stage are published as closed language enums, and `intent_id` and `revision` as nonzero
+  opaque equality tokens. `last_failure_id` is 0 with no failure history and a nonzero opaque equality token after a
+  failure. No value's sign or size is used for ordering. Readiness
   is delivered through the existing Poller and asynchronous progress path. A binding doesn't infer a
   connection result from monitor event history or timer polling, and doesn't turn a successful snapshot that
   carries a failure state into a request failure. Only errors of the query itself are delivered as the

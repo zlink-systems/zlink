@@ -279,7 +279,7 @@ acceptance of a connect request is enough to make a connection ready.
 
 | Connection method | Condition to become ready |
 |---|---|
-| RouteMesh/ClientServer | Completes the transport connection, service handshake, identity/generation verification, and handler preparation. The service handshake finishes when the peer's ADMIT is received on the current Core selected route and that route and the expected identity and generation match; receiving HELLO, local registration, or sending ADMIT alone doesn't finish it. A RouteMesh Object Client pair with no Server membership is excluded from ready targets. |
+| RouteMesh/ClientServer | Completes the transport connection, service handshake, identity/generation verification, and handler preparation. A RouteMesh service handshake finishes when the peer's ADMIT is received on the current Core selected route and that route and the expected identity and generation match; receiving HELLO, local registration, or sending ADMIT alone doesn't finish it. The direction and completion of a ClientServer handshake follow [the wire protocol's ClientServer direction](06-wire-protocol.en.md#clientserver-direction). A RouteMesh Object Client pair with no Server membership is excluded from ready targets. |
 | Classic fanout | The per-publisher SUB socket is connected, the descriptor or manual endpoint relationship is valid, and the first normal application record or beacon is received. |
 
 A connection is immediately removed from the ready target list when any of the following is
