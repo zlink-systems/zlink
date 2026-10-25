@@ -32,6 +32,7 @@ set(unittests
     unittest_monitor_ready_drain
     unittest_proxy_metadata
     unittest_monitor_queue_accounting
+    unittest_monitor_idle
     unittest_zmp_pair_lifecycle
     unittest_ws_metadata
     unittest_phase3_request_reply_owners
@@ -160,6 +161,10 @@ foreach(test ${unittests})
   if(test STREQUAL "unittest_request_writable_registration")
     set_property(TARGET ${test} APPEND_STRING PROPERTY LINK_FLAGS
       " -Wl,--wrap=_ZNK5zlink6pipe_t33request_correlation_release_epochEv")
+  endif()
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND test STREQUAL "unittest_monitor_idle")
+    set_property(TARGET ${test} APPEND_STRING PROPERTY LINK_FLAGS
+      " -Wl,--wrap=zlink_msg_init_size")
   endif()
   set_property(TARGET ${test} PROPERTY INTERPROCEDURAL_OPTIMIZATION OFF)
 

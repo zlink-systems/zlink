@@ -215,6 +215,12 @@ uint32_t zlink::socket_base_t::test_monitor_ready_count () const
     scoped_lock_t lock (monitor_runtime ().sync);
     return monitor_runtime ().ready_count ();
 }
+
+uint64_t zlink::socket_base_t::test_monitor_worker_pending_bytes ()
+{
+    scoped_lock_t lock (monitor_runtime ().queue_sync);
+    return monitor_runtime ().queue_accounted_bytes;
+}
 #endif
 
 bool zlink::socket_base_t::has_attached_pipes () const
@@ -359,15 +365,14 @@ int zlink::socket_base_t::monitor (const char *endpoint_,
             monitor.events = events_;
             monitor.lossy.store (event_version_ <= 3, std::memory_order_release);
             monitor.socket = static_cast<void *> (monitor_socket);
-            // Publish the worker-visible socket before adding the task. The
-            // control-runtime mutex then carries that initialization to the
-            // first callback without requiring the callback to take
-            // monitor.sync. Detach keeps this socket published until
-            // remove_task() has waited for an active callback to return.
-            const uint64_t task_id = runtime->add_periodic_task (
-              &socket_base_t::monitor_task_main, this, 10, true);
+            // Publish the socket before registering its dormant task. Queue
+            // admission wakes it only after start_task publishes the ID.
+            // Detach retains the socket until remove_task waits for an
+            // active callback to return.
+            const uint64_t task_id = runtime->add_task (
+              &socket_base_t::monitor_task_main, this, 0, false);
             if (task_id != 0) {
-                monitor.start_task (task_id);
+                monitor.start_task (task_id, runtime);
                 monitor.events_atomic.store (monitor.events,
                                              std::memory_order_release);
                 published = true;
@@ -742,19 +747,19 @@ void zlink::socket_base_t::pump_monitor_events ()
 {
     monitor_runtime_t &monitor = monitor_runtime ();
     void *monitor_socket = monitor.socket;
-    monitor_event_record_t record;
+    const monitor_event_record_t *record;
     if (debug_env_enabled ("ZLINK_MONITOR_TASK_DIAG"))
         fprintf (stderr, "raw-monitor-task source-socket=%p\n", static_cast<void *> (this));
-    while (monitor.dequeue_worker_event_nowait (&record)) {
+    while ((record = monitor.front_worker_event_nowait ()) != NULL) {
         bool delivered = true;
         if (monitor_socket)
-            delivered = dispatch_monitor_event (monitor_socket, record);
+            delivered = dispatch_monitor_event (monitor_socket, *record);
         // Admission to the worker queue transfers ownership of this record to
         // the monitor runtime.  A transiently unready internal PAIR must not
         // become a second loss point; lossy policy applies only when admitting
         // later records to the bounded worker queue.
         if (!delivered) {
-            monitor.requeue_worker_event_front (record);
+            monitor.retry_worker_event (get_ctx ()->control_runtime_if_started ());
             break;
         }
         monitor.complete_worker_event ();
@@ -763,7 +768,8 @@ void zlink::socket_base_t::pump_monitor_events ()
 
 void zlink::socket_base_t::enqueue_monitor_event (const monitor_event_record_t &record_)
 {
-    monitor_runtime ().enqueue_worker_event (record_);
+    monitor_runtime ().enqueue_worker_event (
+      record_, get_ctx ()->control_runtime_if_started ());
 }
 
 bool zlink::socket_base_t::build_monitor_event_record (
@@ -823,15 +829,20 @@ bool zlink::socket_base_t::dispatch_monitor_event (void *monitor_socket_,
                                            record_.endpoint_uri_pair.remote.size ());
 
     zlink_msg_t msg;
-    zlink_msg_init_size (&msg, sizeof (wire_event));
+    if (zlink_msg_init_size (&msg, sizeof (wire_event)) != ZLINK_CONFIG_OK)
+        return false;
     memcpy (zlink_msg_data (&msg), &wire_event, sizeof (wire_event));
     const int send_flags = monitor_runtime ().lossy.load (std::memory_order_acquire)
                              ? ZLINK_DONTWAIT : 0;
-    if (zlink::send_msg_internal (monitor_socket_, &msg, send_flags) == -1) {
-        zlink_msg_close (&msg);
-        return false;
+    bool delivered = false;
+    try {
+        delivered = zlink::send_msg_internal (monitor_socket_, &msg, send_flags) != -1;
     }
-    return true;
+    catch (const std::bad_alloc &) {
+        errno = ENOMEM;
+    }
+    zlink_msg_close (&msg);
+    return delivered;
 }
 
 void zlink::socket_base_t::stop_monitor (bool send_monitor_stopped_event_)

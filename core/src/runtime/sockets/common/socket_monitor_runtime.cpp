@@ -3,9 +3,12 @@
 #include "utils/precompiled.hpp"
 
 #include "sockets/common/socket_runtime.hpp"
+#include "core/control_runtime.hpp"
 
 namespace
 {
+const uint32_t monitor_retry_interval_ms = 10;
+
 std::string make_monitor_ready_key (const zlink::endpoint_uri_pair_t &endpoint_uri_pair_,
                                      const unsigned char *routing_id_,
                                      size_t routing_id_size_,
@@ -139,66 +142,56 @@ bool zlink::socket_monitor_runtime_t::erase_transport_pair_readiness (
 void zlink::socket_monitor_runtime_t::reset_worker_state (
   uint64_t hwm_bytes_, uint64_t event_accounted_bytes_)
 {
-    queue_sync.lock ();
+    scoped_lock_t lock (queue_sync);
     queue.clear ();
     queue_hwm_bytes = hwm_bytes_;
     queue_accounted_bytes = 0;
     event_accounted_bytes = event_accounted_bytes_;
     queue_stop = false;
-    task_running = false;
-    queue_sync.unlock ();
+    task_id = 0;
 }
 
-void zlink::socket_monitor_runtime_t::start_task (uint64_t task_id_)
+void zlink::socket_monitor_runtime_t::start_task (uint64_t task_id_,
+                                                control_runtime_t *control_)
 {
-    queue_sync.lock ();
+    scoped_lock_t lock (queue_sync);
     task_id = task_id_;
-    task_running = task_id_ != 0;
-    queue_sync.unlock ();
+    // Publish the task identity and any earlier queue admission under the
+    // same mutex. A dormant task cannot run before this publication.
+    if (control_ && !queue.empty ())
+        (void) control_->schedule_task_after (task_id, 0);
 }
 
-bool zlink::socket_monitor_runtime_t::dequeue_worker_event_nowait (
-  socket_monitor_event_record_t *out_)
+const zlink::socket_monitor_event_record_t *
+zlink::socket_monitor_runtime_t::front_worker_event_nowait ()
 {
-    if (!out_)
-        return false;
-
-    queue_sync.lock ();
-    if (queue_stop || queue.empty ()) {
-        queue_sync.unlock ();
-        return false;
-    }
-
-    *out_ = queue.front ();
-    queue.pop_front ();
-    queue_sync.unlock ();
-    return true;
+    scoped_lock_t lock (queue_sync);
+    return queue_stop || queue.empty () ? NULL : &queue.front ();
 }
 
-void zlink::socket_monitor_runtime_t::requeue_worker_event_front (
-  const socket_monitor_event_record_t &record_)
+void zlink::socket_monitor_runtime_t::retry_worker_event (
+  control_runtime_t *control_)
 {
-    queue_sync.lock ();
-    if (!queue_stop) {
-        queue.push_front (record_);
-        queue_cv.broadcast ();
-    }
-    queue_sync.unlock ();
+    scoped_lock_t lock (queue_sync);
+    // The failed record remains at the front; only its existing task slot
+    // needs another deadline. No copy or queue insertion occurs on failure.
+    if (!queue_stop && control_)
+        (void) control_->schedule_task_after (task_id, monitor_retry_interval_ms);
 }
 
 void zlink::socket_monitor_runtime_t::complete_worker_event ()
 {
-    queue_sync.lock ();
+    scoped_lock_t lock (queue_sync);
     zlink_assert (queue_accounted_bytes >= event_accounted_bytes);
+    queue.pop_front ();
     queue_accounted_bytes -= event_accounted_bytes;
     queue_cv.broadcast ();
-    queue_sync.unlock ();
 }
 
 void zlink::socket_monitor_runtime_t::enqueue_worker_event (
-  const socket_monitor_event_record_t &record_)
+  const socket_monitor_event_record_t &record_, control_runtime_t *control_)
 {
-    queue_sync.lock ();
+    scoped_lock_t lock (queue_sync);
     bool has_capacity = queue_accounted_bytes == 0
                         || (event_accounted_bytes <= queue_hwm_bytes
                             && queue_accounted_bytes
@@ -214,19 +207,17 @@ void zlink::socket_monitor_runtime_t::enqueue_worker_event (
     if (!queue_stop && has_capacity) {
         queue.push_back (record_);
         queue_accounted_bytes += event_accounted_bytes;
-        queue_cv.broadcast ();
+        if (control_)
+            (void) control_->schedule_task_after (task_id, 0);
     }
-    queue_sync.unlock ();
 }
 
 void zlink::socket_monitor_runtime_t::stop_task ()
 {
-    queue_sync.lock ();
+    scoped_lock_t lock (queue_sync);
     queue_stop = true;
     queue.clear ();
     queue_accounted_bytes = 0;
     queue_cv.broadcast ();
-    task_running = false;
     task_id = 0;
-    queue_sync.unlock ();
 }

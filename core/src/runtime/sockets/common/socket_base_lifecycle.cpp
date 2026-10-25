@@ -1488,7 +1488,7 @@ bool zlink::socket_base_t::schedule_inproc_reconnect (
             return false;
         }
         if (runtime.task_id == 0) {
-            runtime.task_id = control->add_periodic_task (
+            runtime.task_id = control->add_task (
               &socket_base_t::inproc_reconnect_task_main, this,
               static_cast<uint32_t> (interval), false);
             if (runtime.task_id == 0) {

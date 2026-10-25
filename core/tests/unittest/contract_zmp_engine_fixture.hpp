@@ -66,8 +66,11 @@ struct contract_zmp_monitor_t
     }
     bool next (zlink::socket_monitor_event_record_t *record_)
     {
-        if (!runtime.dequeue_worker_event_nowait (record_))
+        const zlink::socket_monitor_event_record_t *front =
+          runtime.front_worker_event_nowait ();
+        if (!record_ || !front)
             return false;
+        *record_ = *front;
         runtime.complete_worker_event ();
         return true;
     }

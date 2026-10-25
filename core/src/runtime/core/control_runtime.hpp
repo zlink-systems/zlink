@@ -26,10 +26,12 @@ class control_runtime_t
     bool start ();
     void stop ();
 
-    uint64_t add_periodic_task (control_task_fn *fn_,
-                                void *arg_,
-                                uint32_t interval_ms_,
-                                bool run_immediately_);
+    // A zero interval runs only on explicit scheduling. With no immediate
+    // run requested, the task starts dormant and retains its schedule node.
+    uint64_t add_task (control_task_fn *fn_,
+                       void *arg_,
+                       uint32_t interval_ms_,
+                       bool run_immediately_);
     int remove_task (uint64_t task_id_);
     int schedule_task_after (uint64_t task_id_, uint32_t delay_ms_);
 

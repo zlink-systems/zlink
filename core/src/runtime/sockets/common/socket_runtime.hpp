@@ -30,6 +30,7 @@ namespace zlink
 class io_thread_t;
 class mailbox_t;
 class socket_base_t;
+class control_runtime_t;
 class socket_lifecycle_coordinator_t;
 
 enum
@@ -230,7 +231,6 @@ struct socket_monitor_runtime_t
         event_accounted_bytes (0),
         queue_stop (false),
         task_id (0),
-        task_running (false),
         owns_async_command_processing (false)
     {
     }
@@ -258,11 +258,14 @@ struct socket_monitor_runtime_t
       uint64_t pair_id_,
       uint64_t generation_);
     void reset_worker_state (uint64_t hwm_bytes_, uint64_t event_accounted_bytes_);
-    void start_task (uint64_t task_id_);
-    bool dequeue_worker_event_nowait (socket_monitor_event_record_t *out_);
-    void requeue_worker_event_front (const socket_monitor_event_record_t &record_);
+    void start_task (uint64_t task_id_, control_runtime_t *control_);
+    // The single worker borrows the front until complete_worker_event().
+    // Enqueue preserves deque references; stop/reset follow worker removal.
+    const socket_monitor_event_record_t *front_worker_event_nowait ();
+    void retry_worker_event (control_runtime_t *control_);
     void complete_worker_event ();
-    void enqueue_worker_event (const socket_monitor_event_record_t &record_);
+    void enqueue_worker_event (const socket_monitor_event_record_t &record_,
+                                control_runtime_t *control_);
     void stop_task ();
 
     void *socket;
@@ -283,7 +286,6 @@ struct socket_monitor_runtime_t
     uint64_t event_accounted_bytes;
     bool queue_stop;
     uint64_t task_id;
-    bool task_running;
     // A raw monitor can bootstrap the socket command executor while the
     // application waits only on monitor events. The lease ends with that
     // monitor unless a longer-lived async consumer explicitly takes it over.

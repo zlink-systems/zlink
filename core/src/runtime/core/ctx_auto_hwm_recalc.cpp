@@ -58,7 +58,7 @@ void zlink::ctx_t::ensure_auto_hwm_recalc_task_started ()
     scoped_lock_t state_lock (_auto_hwm_state_sync);
     if (_auto_hwm_recalc_stopped || _auto_hwm.recalc_task_id () != 0)
         return;
-    _auto_hwm.set_recalc_task_id (runtime->add_periodic_task (
+    _auto_hwm.set_recalc_task_id (runtime->add_task (
       &ctx_t::auto_hwm_recalc_task_main, this, UINT_MAX, false));
 }
 

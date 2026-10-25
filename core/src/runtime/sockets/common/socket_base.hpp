@@ -381,6 +381,7 @@ class socket_base_t : public own_t,
 #ifdef ZLINK_BUILD_TESTS
     //  Test-only synchronized snapshot of the socket monitor readiness set.
     uint32_t test_monitor_ready_count () const;
+    uint64_t test_monitor_worker_pending_bytes ();
     static uint64_t test_local_peer_weight_send_attempt_count ();
     //  Test-only observation and injection for the completion-lane flow state.
     //  These compile out of the shipped runtime, so nothing here is reachable

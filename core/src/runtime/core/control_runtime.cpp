@@ -8,7 +8,6 @@
 #include "utils/clock.hpp"
 
 #include <limits.h>
-#include <vector>
 
 namespace zlink
 {
@@ -61,12 +60,12 @@ void control_runtime_t::stop ()
     _stopping = false;
 }
 
-uint64_t control_runtime_t::add_periodic_task (control_task_fn *fn_,
-                                                       void *arg_,
-                                                       uint32_t interval_ms_,
-                                                       bool run_immediately_)
+uint64_t control_runtime_t::add_task (control_task_fn *fn_,
+                                      void *arg_,
+                                      uint32_t interval_ms_,
+                                      bool run_immediately_)
 {
-    if (!fn_ || interval_ms_ == 0) {
+    if (!fn_) {
         errno = EINVAL;
         return 0;
     }
@@ -100,6 +99,8 @@ uint64_t control_runtime_t::add_periodic_task (control_task_fn *fn_,
         task.schedule_it =
           _schedule.insert (std::make_pair (task.next_run_ms, task.id));
         task.scheduled = true;
+        if (interval_ms_ == 0 && !run_immediately_)
+            deschedule_task_locked (&task);
     }
     catch (const std::bad_alloc &) {
         if (task_it != _tasks.end ())
@@ -238,8 +239,10 @@ void control_runtime_t::loop ()
                     task.cached_node = _schedule.extract (next);
                     task.scheduled = false;
 
-                    task.next_run_ms = now + task.interval_ms;
-                    schedule_task_locked (&task);
+                    if (task.interval_ms != 0) {
+                        task.next_run_ms = now + task.interval_ms;
+                        schedule_task_locked (&task);
+                    }
 
                     call.task_id = task.id;
                     call.fn = task.fn;
@@ -274,10 +277,10 @@ void control_runtime_t::loop ()
         }
         catch (const std::bad_alloc &) {
             //  Policy: the failed tick is dropped, never the worker or the
-            //  task. The task was rescheduled before the call, so it simply
-            //  retries at its next interval. The epilogue below must still
-            //  run or a concurrent remove_task()/ctx teardown waits forever
-            //  on the stale active ID.
+            //  task. Periodic tasks keep their next interval; explicitly
+            //  scheduled tasks retain any wake published during the call.
+            //  The epilogue must still run so remove_task()/ctx teardown
+            //  cannot wait forever on a stale active ID.
         }
 
         {
