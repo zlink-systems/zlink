@@ -1,3 +1,4 @@
+import type { ZLinkHandlerMessageType } from '../../contracts/Common/HandlerMessageType';
 import type { ZLinkMeshDispatchAdmission } from '../admission';
 import {
   ZLinkFrameworkInternalErrorKind,
@@ -10,8 +11,7 @@ import type {
   ZLinkHandlerFilter,
   ZLinkHandlerFilterContext,
   ZLinkUnhandledDispatchOptions,
-  ZLinkFlowOrigin,
-  ZLinkMessageTypeResolver
+  ZLinkFlowOrigin
 } from '../../contracts';
 import {
   ZLinkFrameworkErrorKind,
@@ -65,7 +65,7 @@ export interface ZLinkOneWayDispatch<TContext extends ZLinkMessageContext> {
   readonly envelope: ZLinkChannelEnvelope;
   readonly codecs?: ZLinkChannelEnvelopeCodecRegistry;
   readonly handler?: ZLinkChannelDispatchHandler<TContext, void>;
-  readonly messageType?: ZLinkMessageTypeResolver;
+  readonly messageType?: ZLinkHandlerMessageType;
   readonly context: TContext;
   readonly signal?: AbortSignal;
 }
@@ -75,7 +75,7 @@ export interface ZLinkRequestDispatch<TContext extends ZLinkMessageContext> {
   readonly envelope: ZLinkChannelEnvelope;
   readonly codecs?: ZLinkChannelEnvelopeCodecRegistry;
   readonly handler?: ZLinkChannelDispatchHandler<TContext, unknown>;
-  readonly messageType?: ZLinkMessageTypeResolver;
+  readonly messageType?: ZLinkHandlerMessageType;
   readonly context: TContext;
   readonly signal?: AbortSignal;
   readonly missingHandlerMessage: string;
@@ -381,7 +381,7 @@ export class ZLinkChannelDispatchPipeline {
     handler: ZLinkChannelDispatchHandler<TContext, TResult>,
     context: TContext,
     fields: ZLinkChannelDispatchFields,
-    messageType?: ZLinkMessageTypeResolver,
+    messageType?: ZLinkHandlerMessageType,
     signal?: AbortSignal
   ): Promise<TResult | undefined | typeof HANDLER_FILTER_REJECTED> {
     let value: TResult | undefined;

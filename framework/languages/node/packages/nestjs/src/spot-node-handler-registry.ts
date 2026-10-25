@@ -1,3 +1,4 @@
+import type { ZLinkHandlerMessageType } from './framework-integration-contracts';
 import type {
   ZLinkEntrySpotActorRequestHandlerRegistration,
   ZLinkEntrySpotActorSendHandlerRegistration,
@@ -13,12 +14,7 @@ import type {
   ZLinkSpotTimerHandlerRegistration
 } from './framework-integration-contracts';
 import type { Mutable } from './contracts';
-import type {
-  Type,
-  ZLinkInstanceSpot,
-  ZLinkMessageTypeResolver,
-  ZLinkSpot
-} from '@zlink-systems/framework';
+import type { Type, ZLinkInstanceSpot, ZLinkSpot } from '@zlink-systems/framework';
 import { framework } from './framework-loader';
 
 type MutableSpotNode = Mutable<ZLinkSpotNodeOptions>;
@@ -232,7 +228,7 @@ export class SpotNodeHandlerRegistry {
 }
 
 function ensureSpotRegistrationMessageType<
-  T extends { readonly handlerType: Type; readonly messageType?: ZLinkMessageTypeResolver }
+  T extends { readonly handlerType: Type; readonly messageType?: ZLinkHandlerMessageType }
 >(registration: T): T {
   const messageType = framework.resolveHandlerMessageType(registration.handlerType);
   return {

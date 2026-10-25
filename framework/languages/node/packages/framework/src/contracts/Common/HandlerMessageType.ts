@@ -4,35 +4,41 @@ type HandlerTypeWithMessageType = Type & {
   readonly messageType?: ZLinkMessageTypeResolver;
 };
 
+export interface ZLinkHandlerMessageType {
+  readonly type: Type;
+}
+
 /** Reads a handler's declared type once and defers/caches a lazy resolver until decode. */
-export function resolveHandlerMessageType(handlerType: Type): ZLinkMessageTypeResolver | undefined {
+export function resolveHandlerMessageType(handlerType: Type): ZLinkHandlerMessageType | undefined {
   const declared = (handlerType as HandlerTypeWithMessageType).messageType;
-  if (declared === undefined || isTypeConstructor(declared)) return declared;
+  if (declared === undefined) return undefined;
+  if (isTypeConstructor(declared)) return { type: declared };
 
   let state: 'unresolved' | 'resolved' | 'failed' = 'unresolved';
   let resolved: Type | undefined;
   let failure: unknown;
-  return () => {
-    if (state === 'unresolved') {
-      try {
-        resolved = declared();
-        state = 'resolved';
-      } catch (error) {
-        failure = error;
-        state = 'failed';
+  return {
+    get type() {
+      if (state === 'unresolved') {
+        try {
+          resolved = declared();
+          state = 'resolved';
+        } catch (error) {
+          failure = error;
+          state = 'failed';
+        }
       }
+      if (state === 'failed') throw failure;
+      return resolved!;
     }
-    if (state === 'failed') throw failure;
-    return resolved!;
   };
 }
 
 /** Converts a stored registration resolver to the constructor expected by a codec. */
 export function resolveMessageTypeForDecode(
-  messageType?: ZLinkMessageTypeResolver
+  messageType?: ZLinkHandlerMessageType
 ): Type | undefined {
-  if (messageType === undefined) return undefined;
-  return isTypeConstructor(messageType) ? messageType : messageType();
+  return messageType?.type;
 }
 
 function isTypeConstructor(value: unknown): value is Type {

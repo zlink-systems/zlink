@@ -1,8 +1,8 @@
+import type { ZLinkHandlerMessageType } from './framework-integration-contracts';
 import type { InjectionToken } from '@nestjs/common';
 import { ContextIdFactory, ModuleRef } from '@nestjs/core';
 import type {
   Type,
-  ZLinkMessageTypeResolver,
   ZLinkMessageContext,
   ZLinkPublishMessageContext,
   ZLinkRouteMessageContext
@@ -158,7 +158,7 @@ function createManualHandlerRegistrations<TContext extends ManualHandlerContext,
   result: (value: unknown) => TResult
 ): Array<{
   readonly packetName: string;
-  readonly messageType?: ZLinkMessageTypeResolver;
+  readonly messageType?: ZLinkHandlerMessageType;
   readonly handler: {
     handle(payload: Buffer, context: TContext): Promise<TResult>;
   };
@@ -199,7 +199,7 @@ function createDiscoveredHandlerRegistrations<THandler>(
   ) => THandler
 ): Array<{
   readonly packetName: string;
-  readonly messageType?: ZLinkMessageTypeResolver;
+  readonly messageType?: ZLinkHandlerMessageType;
   readonly handler: THandler;
 }> {
   const descriptors = createDiscoveredHandlerDescriptors(providerRefs, handlerGroups, kind);

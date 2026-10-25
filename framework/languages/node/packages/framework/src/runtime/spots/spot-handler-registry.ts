@@ -1,3 +1,4 @@
+import type { ZLinkHandlerMessageType } from '../../contracts/Common/HandlerMessageType';
 import type {
   Type,
   ZLinkActor,
@@ -19,7 +20,6 @@ import type {
   ZLinkSpotSubscriptionHandlerRegistration
 } from '../../contracts/Configuration/RegistrationTypes';
 import type { ZLinkProviderResolver } from '../../contracts/Common/ZLinkProviderResolver';
-import type { ZLinkMessageTypeResolver } from '../../contracts/Common/CoreTypes';
 import { resolveHandlerMessageType } from '../../contracts/Common/HandlerMessageType';
 import { prepareHandlerInstance } from '../handlers/handler-instance-scope';
 import {
@@ -32,7 +32,7 @@ import { readZLinkDecoratorMetadata } from '../../contracts/Handlers/Attributes'
 export interface ZLinkSpotHandlerRegistration {
   readonly kind: 'packet' | 'subscribe' | 'actorSend' | 'actorRequest' | 'timer';
   readonly handlerType: Type;
-  readonly messageType?: ZLinkMessageTypeResolver;
+  readonly messageType?: ZLinkHandlerMessageType;
   readonly packetName?: string;
   readonly channelName?: string;
   readonly topic?: string;
@@ -102,7 +102,7 @@ export class DefaultZLinkSpotHandlerRegistry<
   addPacketRegistration(
     handlerType: Type,
     packetName: string | undefined,
-    messageType: ZLinkMessageTypeResolver | undefined
+    messageType: ZLinkHandlerMessageType | undefined
   ): this {
     const declared = readZLinkDecoratorMetadata(handlerType).find(
       (entry) => entry.kind === 'packet'
@@ -136,7 +136,7 @@ export class DefaultZLinkSpotHandlerRegistry<
     handlerType: Type,
     actorType: Type<TActor>,
     packetName: string,
-    messageType: ZLinkMessageTypeResolver | undefined
+    messageType: ZLinkHandlerMessageType | undefined
   ): this {
     prepareHandlerInstance(this.providerResolver, handlerType);
     this.entries.push({
@@ -197,7 +197,7 @@ export class DefaultZLinkSpotHandlerRegistry<
     handlerType: Type,
     channelName: string,
     topic: string,
-    messageType: ZLinkMessageTypeResolver | undefined
+    messageType: ZLinkHandlerMessageType | undefined
   ): this {
     if (channelName.trim().length === 0) {
       throw createInternalFrameworkException(

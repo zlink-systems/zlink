@@ -1,8 +1,8 @@
+import type { ZLinkHandlerMessageType } from '../Common/HandlerMessageType';
 import { AutoHwmProfile } from '@zlink-systems/zlink';
 import type {
   RoutingId,
   Type,
-  ZLinkMessageTypeResolver,
   ZLinkActor,
   ZLinkActorFactory,
   ZLinkClientServerChannelClientBuilder,
@@ -1711,7 +1711,7 @@ interface MutableSpotPubSubCapabilityOptions {
 interface MutableHandlerRegistration {
   packetName: string;
   handlerType: Type;
-  messageType?: ZLinkMessageTypeResolver;
+  messageType?: ZLinkHandlerMessageType;
 }
 
 function handlerRegistration(handlerType: Type): MutableHandlerRegistration {

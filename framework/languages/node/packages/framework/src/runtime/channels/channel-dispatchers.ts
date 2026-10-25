@@ -1,8 +1,8 @@
+import type { ZLinkHandlerMessageType } from '../../contracts/Common/HandlerMessageType';
 import type { ZLinkMeshDispatchAdmission } from '../admission';
 import type {
   RoutingId,
   ZLinkMessageContext,
-  ZLinkMessageTypeResolver,
   ZLinkHandlerFilter,
   ZLinkPublishMessageContext,
   ZLinkRouteMessageContext,
@@ -80,7 +80,7 @@ export interface ZLinkChannelSendHandler {
 }
 
 export interface ZLinkRouteHandlerRegistration {
-  readonly messageType?: ZLinkMessageTypeResolver;
+  readonly messageType?: ZLinkHandlerMessageType;
   readonly kind: 'send' | 'request';
   readonly packetName: string;
   readonly handler: ZLinkRouteRuntimeSendHandler | ZLinkRouteRuntimeRequestHandler;
@@ -107,7 +107,7 @@ export class ZLinkChannelRequestDispatcher {
     });
   }
 
-  /** Spec 27 짠4: with tracing Off, inbound flow fields are neither validated nor carried forward. */
+  /** Spec 27 §4: with tracing Off, inbound flow fields are neither validated nor carried forward. */
   flowEnabled(): boolean {
     return this.options.dispatchErrors.flow.flowCreationEnabled();
   }
@@ -392,7 +392,7 @@ class ZLinkMeshRequestDispatch<
     return this.registration?.handler;
   }
 
-  get messageType(): ZLinkMessageTypeResolver | undefined {
+  get messageType(): ZLinkHandlerMessageType | undefined {
     return this.registration?.messageType;
   }
 
@@ -586,7 +586,7 @@ export class ZLinkRoutePacketDispatcher {
   private readonly spotRouteBridge?: ZLinkBackendSpotRouteBridge;
   private readonly dispatchErrors: ZLinkDispatchErrorReporter;
 
-  /** Spec 27 짠4: with tracing Off, inbound flow fields are neither validated nor carried forward. */
+  /** Spec 27 §4: with tracing Off, inbound flow fields are neither validated nor carried forward. */
   flowEnabled(): boolean {
     return this.dispatchErrors.flow.flowCreationEnabled();
   }

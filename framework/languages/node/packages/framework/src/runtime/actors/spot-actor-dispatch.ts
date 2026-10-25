@@ -1,9 +1,9 @@
+import type { ZLinkHandlerMessageType } from '../../contracts/Common/HandlerMessageType';
 import { ZlinkStreamContentType } from '@zlink-systems/stream-wire';
 import {
   type Type,
   type ZLinkActor,
   type ZLinkActorHandlerRegistry,
-  type ZLinkMessageTypeResolver,
   type ZLinkMessageContext,
   type ZLinkMessageSerializer,
   type ZLinkSpot,
@@ -42,7 +42,7 @@ export interface ZLinkActorPacketDescriptor {
   readonly packetName: string;
   readonly actorType: Type<ZLinkActor>;
   readonly handlerType: Type;
-  readonly messageType?: ZLinkMessageTypeResolver;
+  readonly messageType?: ZLinkHandlerMessageType;
   readonly methodName?: string;
 }
 

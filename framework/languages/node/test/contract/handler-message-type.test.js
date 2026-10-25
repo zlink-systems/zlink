@@ -27,7 +27,8 @@ const {
   decodeChannelPayload
 } = require('../../packages/framework/dist/runtime/channels/channel-envelope');
 const {
-  resolveMessageTypeForDecode
+  resolveMessageTypeForDecode,
+  resolveHandlerMessageType
 } = require('../../packages/framework/dist/contracts/Common/HandlerMessageType');
 const {
   ZLinkDispatchErrorSurface,
@@ -79,12 +80,13 @@ test('Framework and Nest registration descriptors retain their handler message t
     mesh.channel('typed-route-channel').server().addSendHandler(MeshChannelHandler);
     mesh.addRouteSendHandler(RouteHandler);
   });
-  assert.equal(options.channels.typed.sendHandlers[0].messageType, ChannelMessage);
+  assert.equal(options.channels.typed.sendHandlers[0].messageType.type, ChannelMessage);
   assert.equal(
-    options.spotNodes['typed-mesh'].meshChannels['typed-route-channel'].sendHandlers[0].messageType,
+    options.spotNodes['typed-mesh'].meshChannels['typed-route-channel'].sendHandlers[0].messageType
+      .type,
     MeshChannelMessage
   );
-  assert.equal(options.spotNodes['typed-mesh'].routeSendHandlers[0].messageType, RouteMessage);
+  assert.equal(options.spotNodes['typed-mesh'].routeSendHandlers[0].messageType.type, RouteMessage);
 
   class NestPublishMessage {}
   class ManualNestPublishHandler {
@@ -95,7 +97,7 @@ test('Framework and Nest registration descriptors retain their handler message t
     {},
     new Map()
   );
-  assert.equal(manual[0].messageType, NestPublishMessage);
+  assert.equal(manual[0].messageType.type, NestPublishMessage);
 
   class DiscoveredNestPublishHandler {
     static messageType = NestPublishMessage;
@@ -117,7 +119,7 @@ test('Framework and Nest registration descriptors retain their handler message t
     {},
     new Map()
   );
-  assert.equal(discovered[0].messageType, NestPublishMessage);
+  assert.equal(discovered[0].messageType.type, NestPublishMessage);
 });
 
 test('Nest descriptors omit messageType when a handler does not declare it', () => {
@@ -151,10 +153,12 @@ test('RouteChannel keeps the declared type and original handler receiver', () =>
   const routeHandler = new Handler();
   const registrations = collectRouteChannelHandlers({
     routerChannelId: 'typed-route',
-    sendHandlers: [{ packetName: 'typed.packet', handler: routeHandler, messageType: Message }]
+    sendHandlers: [
+      { packetName: 'typed.packet', handler: routeHandler, messageType: { type: Message } }
+    ]
   });
 
-  assert.equal(registrations[0].messageType, Message);
+  assert.equal(registrations[0].messageType.type, Message);
   assert.equal(registrations[0].handler, routeHandler);
   assert.equal(Object.hasOwn(routeHandler, 'messageType'), false);
   assert.equal(registrations[0].handler.handle(), 'original receiver');
@@ -193,23 +197,29 @@ test('Spot packet, subscription, and Actor descriptors retain registration-scope
   const actorRegistry = new DefaultZLinkSpotHandlerRegistry(actorHandlers);
   actorRegistry.addHandler(ActorHandler, 'shared.packet');
 
-  assert.equal(ownerA.snapshot()[0].messageType, PacketA);
-  assert.equal(ownerB.snapshot()[0].messageType, PacketB);
+  assert.equal(ownerA.snapshot()[0].messageType.type, PacketA);
+  assert.equal(ownerB.snapshot()[0].messageType.type, PacketB);
   const packetEnvelope = {
     header: { contentType: 'application/json', channelName: 'mesh', messageName: 'shared.packet' },
     payload: Buffer.from('{"value":"owner-scoped"}')
   };
   assert.ok(
-    decodeChannelPayload(packetEnvelope, undefined, ownerA.snapshot()[0].messageType) instanceof
-      PacketA
+    decodeChannelPayload(
+      packetEnvelope,
+      undefined,
+      resolveMessageTypeForDecode(ownerA.snapshot()[0].messageType)
+    ) instanceof PacketA
   );
   assert.ok(
-    decodeChannelPayload(packetEnvelope, undefined, ownerB.snapshot()[0].messageType) instanceof
-      PacketB
+    decodeChannelPayload(
+      packetEnvelope,
+      undefined,
+      resolveMessageTypeForDecode(ownerB.snapshot()[0].messageType)
+    ) instanceof PacketB
   );
-  assert.equal(ownerA.snapshot()[1].messageType, PacketA);
+  assert.equal(ownerA.snapshot()[1].messageType.type, PacketA);
   assert.equal(
-    actorHandlers.resolvePacket(ZLinkActorPacketKind.Send, {}, 'shared.packet').messageType,
+    actorHandlers.resolvePacket(ZLinkActorPacketKind.Send, {}, 'shared.packet').messageType.type,
     PacketB
   );
 
@@ -233,8 +243,8 @@ test('lazy handler message type resolves on decode demand and is cached', () => 
   const resolver = registry.snapshot()[0].messageType;
 
   assert.equal(resolverCalls, 0);
-  assert.equal(resolver(), Message);
-  assert.equal(resolver(), Message);
+  assert.equal(resolveMessageTypeForDecode(resolver), Message);
+  assert.equal(resolveMessageTypeForDecode(resolver), Message);
   assert.equal(resolverCalls, 1);
 });
 
@@ -265,6 +275,58 @@ test('ordinary function message type resolvers are deferred and cached', () => {
     assert.equal(value.value, 1);
   }
   assert.equal(calls, 1);
+});
+
+test('decode reads normalized message types without classifying them again', () => {
+  class Message {}
+  for (const declared of [
+    Message,
+    () => Message,
+    function () {
+      return Message;
+    }
+  ]) {
+    class Handler {
+      static messageType = declared;
+    }
+    const normalized = resolveHandlerMessageType(Handler);
+    const original = Object.getOwnPropertyDescriptor;
+    let reads = 0;
+    Object.getOwnPropertyDescriptor = (...args) => {
+      reads += 1;
+      return original(...args);
+    };
+    try {
+      assert.equal(resolveMessageTypeForDecode(normalized), Message);
+      assert.equal(resolveMessageTypeForDecode(normalized), Message);
+      assert.equal(reads, 0);
+    } finally {
+      Object.getOwnPropertyDescriptor = original;
+    }
+  }
+});
+
+test('materialize copies own enumerable properties without invoking prototype setters', () => {
+  const {
+    materializeZLinkMessageValue
+  } = require('../../packages/framework/dist/contracts/Common/ZLinkMessage');
+  class Message {
+    set value(_) {
+      throw new Error('Prototype setter must not run.');
+    }
+  }
+  const source = Object.assign(Object.create({ inherited: 'omit' }), { value: 1, second: 2 });
+  const decoded = materializeZLinkMessageValue(source, Message);
+  assert.ok(decoded instanceof Message);
+  assert.equal(Object.hasOwn(decoded, 'inherited'), false);
+  assert.equal(decoded.value, 1);
+  assert.equal(decoded.second, 2);
+  assert.deepEqual(Object.getOwnPropertyDescriptor(decoded, 'value'), {
+    value: 1,
+    writable: true,
+    enumerable: true,
+    configurable: true
+  });
 });
 
 test('common channel decode restores JSON prototypes without constructors and passes custom types once', () => {
@@ -434,7 +496,7 @@ test('Channel dispatch pipeline decodes with the registered message type', async
       },
       payload: Buffer.from('{"value":"registered"}')
     },
-    messageType: RequiredMessage,
+    messageType: { type: RequiredMessage },
     handler: {
       handle(payload) {
         received = payload;
