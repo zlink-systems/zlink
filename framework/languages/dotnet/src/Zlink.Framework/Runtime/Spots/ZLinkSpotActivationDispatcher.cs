@@ -89,7 +89,10 @@ internal sealed class ZLinkSpotActivationDispatcher
 
     public ZLinkSpotActorPacketDispatcher ActorPackets => _actorPacketDispatcher;
 
-    public async ValueTask<bool> DispatchActorJoinDrainAsync(CancellationToken cancellationToken)
+    public async ValueTask<bool> DispatchActorJoinDrainAsync(
+        CancellationToken cancellationToken,
+        ZLinkSpotSerialExecutor? lifecycleOwner = null
+    )
     {
         var startedAt = Stopwatch.GetTimestamp();
         var count = 0;
@@ -115,9 +118,17 @@ internal sealed class ZLinkSpotActivationDispatcher
 
             try
             {
-                await _actorJoinDispatcher
-                    .DispatchAsync(request, cancellationToken)
-                    .ConfigureAwait(false);
+                if (request.Canonical is not null || lifecycleOwner is null)
+                    await _actorJoinDispatcher
+                        .DispatchAsync(request, cancellationToken)
+                        .ConfigureAwait(false);
+                else
+                    await lifecycleOwner
+                        .ExecuteLifecycleAsync(
+                            (_, ct) => _actorJoinDispatcher.DispatchAsync(request, ct),
+                            cancellationToken
+                        )
+                        .ConfigureAwait(false);
             }
             finally
             {
@@ -443,10 +454,7 @@ internal sealed class ZLinkSpotActivationDispatcher
                 );
                 if (header is null)
                     return;
-                var errorKind =
-                    admission == ZLinkAcceptedWorkAdmission.Closing
-                        ? ZLinkFrameworkErrorKind.NotFound
-                        : admission.ErrorKind();
+                var errorKind = admission.ErrorKind();
                 //  Sealed/rejected admission is framework-generated
                 //  (zlink.origin marker on the error reply).
                 var reply = ZLinkSpotReplyEnvelope.EncodeErrorParts(

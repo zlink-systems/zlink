@@ -217,8 +217,8 @@ export class ZLinkSpotSerialTurnExecutor {
     try {
       if (this.lifecycleAdmissionClosed) {
         throw createInternalFrameworkException(
-          ZLinkFrameworkInternalErrorKind.RequestRejected,
-          'Spot lifecycle admission is closed by a committed Close.'
+          ZLinkFrameworkInternalErrorKind.RequestTargetNotFound,
+          'Spot incarnation is closing (committed Close).'
         );
       }
       entry = this.executionBarrier?.enter();
