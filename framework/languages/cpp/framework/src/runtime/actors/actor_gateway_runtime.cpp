@@ -438,7 +438,8 @@ task_t<void> enqueue_session_relay (const std::shared_ptr<detail::actor_gateway_
     return task;
 }
 
-request_task_t<zlink::message_t> complete_session_actor_relay_request (
+template <typename TProjectReply>
+request_task_t<message_t> complete_session_actor_relay_request (
   std::shared_ptr<detail::actor_gateway_state_t> state,
   detail::actor_gateway_state_t::relay_dispatcher_t submit,
   actor_ref_t actor,
@@ -447,6 +448,7 @@ request_task_t<zlink::message_t> complete_session_actor_relay_request (
   zlink::message_t payload,
   std::optional<detail::bound_session_relay_source_t> relay_source,
   std::chrono::milliseconds timeout,
+  TProjectReply project_reply,
   std::shared_ptr<task_completion_source_t<void>> admitted = {})
 {
     if (admitted) {
@@ -481,7 +483,7 @@ request_task_t<zlink::message_t> complete_session_actor_relay_request (
         });
         throw missing_reply;
     }
-    co_return std::move (*dispatched);
+    co_return project_reply (std::move (*dispatched));
 }
 
 std::shared_ptr<task_completion_source_t<void>>
@@ -1478,23 +1480,21 @@ relay_request_call_t session_actor_t::relay_request (const message_t &payload)
         const request_call_t<message_t>::metadata_map_t &) mutable -> request_task_t<message_t> {
           const auto relay_sequence = actor.reserve_relay_sequence ();
           if (!relay_sequence) {
-              co_return detail::propagate_failure<message_t> (
-                relay_sequence, "actor relay request sequence failed");
+              return request_task_t<message_t> (detail::propagate_failure<message_t> (
+                relay_sequence, "actor relay request sequence failed"));
           }
           if (!actor._state->serializers) {
-              co_return result_t<message_t>::failure (
+              return request_task_t<message_t> (result_t<message_t>::failure (
                 framework_error_kind_t::protocol_error,
-                "actor relay request requires a serializer registry");
+                "actor relay request requires a serializer registry"));
           }
-          auto pending = actor.relay_request_internal (
+          return actor.relay_request_internal (
             header, relay_sequence.value (),
             detail::message_to_raw (payload, *actor._state->serializers), timeout);
-          auto reply = co_await detail::request_submission (std::move (pending));
-          co_return message_t::from_raw (std::move (reply), actor._state->serializers);
       });
 }
 
-request_task_t<zlink::message_t>
+request_task_t<message_t>
 session_actor_t::relay_request_internal (detail::stream_header_t header,
                                          std::uint64_t relay_sequence,
                                          zlink::message_t payload,
@@ -1504,44 +1504,44 @@ session_actor_t::relay_request_internal (detail::stream_header_t header,
     detail::stream_header_t relay_header;
     std::optional<detail::bound_session_relay_source_t> relay_source;
     bool offload_session_relay = false;
-    std::optional<result_t<zlink::message_t>> rejected;
+    std::optional<result_t<message_t>> rejected;
     _state->sync ([&] {
         if (::zlink::framework::detail::actor_ref_access_t::empty (_ref)) {
-            rejected = result_t<zlink::message_t>::failure (framework_error_kind_t::not_found,
-                                                            "session actor is not bound");
+            rejected = result_t<message_t>::failure (framework_error_kind_t::not_found,
+                                                     "session actor is not bound");
             return;
         }
         const auto found = _state->actors_by_id.find (std::string (_ref.actor_id ().value ()));
         if (found != _state->actors_by_id.end () && found->second.disconnected) {
-            rejected = detail::boundary_failure<zlink::message_t> (
-              detail::boundary_error_t::disconnected, "actor session is disconnected");
+            rejected = detail::boundary_failure<message_t> (detail::boundary_error_t::disconnected,
+                                                            "actor session is disconnected");
             return;
         }
         if (found == _state->actors_by_id.end ()) {
-            rejected = result_t<zlink::message_t>::failure (framework_error_kind_t::not_found,
-                                                            "actor route is not found");
+            rejected = result_t<message_t>::failure (framework_error_kind_t::not_found,
+                                                     "actor route is not found");
             return;
         }
         if (!found->second.bound) {
-            rejected = result_t<zlink::message_t>::failure (framework_error_kind_t::not_configured,
-                                                            "actor session is not bound");
+            rejected = result_t<message_t>::failure (framework_error_kind_t::not_configured,
+                                                     "actor session is not bound");
             return;
         }
         if (_binding_token != 0 && found->second.binding_token != _binding_token) {
-            rejected = result_t<zlink::message_t>::failure (framework_error_kind_t::not_configured,
-                                                            "actor session binding is stale");
+            rejected = result_t<message_t>::failure (framework_error_kind_t::not_configured,
+                                                     "actor session binding is stale");
             return;
         }
         if (found->second.ref.object_generation () != _ref.object_generation ()) {
-            rejected = result_t<zlink::message_t>::failure (
-              framework_error_kind_t::invalid_operation, "actor generation is stale");
+            rejected = result_t<message_t>::failure (framework_error_kind_t::invalid_operation,
+                                                     "actor generation is stale");
             return;
         }
         _ref = found->second.ref;
         if (!_state->relay_dispatcher) {
             _state->relayed_frames.push_back (detail::relayed_frame_t{_ref, header, payload});
-            rejected = result_t<zlink::message_t>::failure (
-              framework_error_kind_t::not_found, "actor relay dispatcher is not configured");
+            rejected = result_t<message_t>::failure (framework_error_kind_t::not_found,
+                                                     "actor relay dispatcher is not configured");
             return;
         }
         dispatcher = _state->relay_dispatcher;
@@ -1569,26 +1569,29 @@ session_actor_t::relay_request_internal (detail::stream_header_t header,
         }
     });
     if (rejected)
-        return request_task_t<zlink::message_t> (std::move (*rejected));
+        return request_task_t<message_t> (std::move (*rejected));
+    const auto project_reply = [serializers = _state->serializers] (zlink::message_t reply) {
+        return message_t::from_raw (std::move (reply), serializers);
+    };
     auto admitted = std::make_shared<task_completion_source_t<void>> ();
     if (!offload_session_relay) {
-        return request_task_t<zlink::message_t> (
-          complete_session_actor_relay_request (_state, std::move (dispatcher), _ref, context (),
-                                                std::move (relay_header), payload,
-                                                std::move (relay_source), timeout, admitted),
+        return request_task_t<message_t> (
+          complete_session_actor_relay_request (
+            _state, std::move (dispatcher), _ref, context (), std::move (relay_header), payload,
+            std::move (relay_source), timeout, project_reply, admitted),
           admitted);
     }
     auto actor_context = std::make_shared<actor_context_t> (context ());
-    return request_task_t<zlink::message_t> (
-      runtime::handler_coroutine_executor ().submit<zlink::message_t> (
+    return request_task_t<message_t> (
+      runtime::handler_coroutine_executor ().submit<message_t> (
         [state = _state, dispatcher = std::move (dispatcher), actor = _ref,
          actor_context = std::move (actor_context), relay_header = std::move (relay_header),
-         payload, relay_source = std::move (relay_source), timeout,
-         admitted] () mutable -> boost::asio::awaitable<result_t<zlink::message_t>> {
+         payload, relay_source = std::move (relay_source), timeout, admitted,
+         project_reply] () mutable -> boost::asio::awaitable<result_t<message_t>> {
             co_return co_await runtime::await_task_result (complete_session_actor_relay_request (
               std::move (state), std::move (dispatcher), std::move (actor),
               std::move (*actor_context), std::move (relay_header), payload,
-              std::move (relay_source), timeout, admitted));
+              std::move (relay_source), timeout, project_reply, admitted));
         }),
       admitted);
 }

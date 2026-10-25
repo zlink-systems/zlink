@@ -2449,7 +2449,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   add_zlink_framework_test(
     test_cpp_framework_actor_header_allocations
     tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_header_allocations.cpp
-    "framework-unit;framework-regression;messaging")
+    "framework-unit;framework-regression;messaging;stream")
   target_use_zlink_gtest_main(test_cpp_framework_actor_header_allocations)
   target_sources(test_cpp_framework_actor_header_allocations PRIVATE
     tests/support/allocation_counter.cpp)

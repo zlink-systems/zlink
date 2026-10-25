@@ -316,3 +316,172 @@ TEST (ActorHeaderAllocations, AlternatingBenchmark)
     EXPECT_NE (checksum, 0u);
 }
 } // namespace
+
+#include "../support/runtime_failure_fixture.hpp"
+#include <future>
+#include <thread>
+
+namespace
+{
+#ifdef ZLINK_STREAM_RAW_BASELINE
+using allocation_packet_t = zlink::message_t;
+#else
+using allocation_packet_t = fw::message_t;
+#endif
+
+enum class allocation_path_t
+{
+    reply,
+    relay,
+    relay_reply
+};
+
+class allocation_session_t final : public fw::packet_stream_session_t
+{
+  public:
+    allocation_session_t (allocation_path_t path, fw::session_actor_t actor) :
+        _path (path), _actor (std::move (actor))
+    {
+    }
+    fw::task_t<void> on_connected (fw::stream_t &) override { co_return; }
+    fw::task_t<void> on_disconnected (fw::stream_t &) override { co_return; }
+    fw::task_t<void> on_error (fw::stream_t &, const fw::stream_error_t &) override { co_return; }
+    fw::task_t<void> on_packet (fw::stream_t &stream,
+                                const fw::session_message_context_t &,
+                                const allocation_packet_t &payload) override
+    {
+#ifndef ZLINK_STREAM_RAW_BASELINE
+        if (!payload.encoded ())
+            throw std::runtime_error ("received packet must remain encoded");
+        std::optional<zlink::message_t> first, second;
+        const auto copies = count_allocations ([&] {
+            first.emplace (detail::message_to_raw (payload, _serializers));
+            second.emplace (detail::message_to_raw (payload, _serializers));
+        });
+        if (copies != 0 || first->data () != second->data ())
+            throw std::runtime_error ("encoded forwarding must share native payload storage");
+#endif
+        if (_path == allocation_path_t::reply) {
+            co_await stream.reply_packet (payload).async ();
+        } else if (_path == allocation_path_t::relay) {
+            co_await _actor.relay (payload);
+        } else {
+            co_await stream.reply_packet (co_await _actor.relay_request (payload).async ())
+              .async ();
+        }
+    }
+
+  private:
+    fw::serializer_registry_t _serializers;
+    allocation_path_t _path;
+    fw::session_actor_t _actor;
+};
+
+TEST (ActorHeaderAllocations, StreamEncodedForwardingDoesNotExceedRawMain)
+{
+    detail::configure_stream_dispatch_executor ();
+    struct executor_guard_t
+    {
+        ~executor_guard_t () { detail::shutdown_stream_dispatch_executor (); }
+    } guard;
+    auto builder = fw::test::runtime_failure_builder ();
+    builder.stream ("alloc").bind ("tcp://127.0.0.1:0").register_session ("session");
+    fw::serializer_registry_t serializers;
+    detail::bind_stream_serializers (builder, serializers);
+    auto runtime = detail::stream_runtime_t::from (builder);
+    auto stream = runtime.open_session ("alloc");
+    detail::actor_gateway_runtime_t gateway;
+    gateway.bind_serializers (serializers);
+    auto actors = gateway.manager ();
+    detail::session_actor_manager_access_t::attach (actors, stream);
+    auto actor = actors
+                   .bind (detail::actor_ref_access_t::make (fw::node_rid_t::from_string ("owner"),
+                                                            "type", "actor", 1))
+                   .async ()
+                   .result ()
+                   .value ();
+    const auto body = zlink::message_t::from (std::string (4096, 'a'));
+    std::size_t writes = 0, relays = 0;
+    runtime.attach_transport_writer (
+      stream,
+      [&] (const detail::stream_header_t &header,
+           const zlink::message_t &payload) -> fw::task_t<void> {
+          ++writes;
+          if (header.codec () != fw::stream_codec_t::raw || payload.size () != body.size ()
+              || !std::equal (payload.bytes ().begin (), payload.bytes ().end (),
+                              body.bytes ().begin ()))
+              throw std::runtime_error ("encoded forwarding changed the packet");
+          co_return;
+      });
+    gateway.on_relay (
+      [&] (const fw::actor_ref_t &, fw::actor_context_t, const detail::stream_header_t &,
+           const zlink::message_t &payload, std::optional<detail::bound_session_relay_source_t>,
+           std::chrono::milliseconds) -> fw::request_task_t<std::optional<zlink::message_t>> {
+          ++relays;
+          co_await detail::request_admitted_t{};
+          co_return std::optional<zlink::message_t> (payload.copy ());
+      });
+    const detail::stream_header_t header (
+      detail::stream_message_kind_t::request, fw::stream_codec_t::raw,
+      detail::stream_header_flags_t::has_request_seq, 1, "p", {});
+    // Include every continuation thread of the same packet in the existing allocation counter.
+    const auto measure = [&] (allocation_session_t &session) {
+        std::promise<void> done;
+        auto ready = done.get_future ();
+        fw::result_t<void> result = fw::result_t<void>::success ();
+        fw::tests::process_allocation_count.store (0);
+        fw::tests::tracking_process_allocations.store (true);
+        const auto submitted = runtime.dispatch_packet_async (
+          session, stream, header, body, [&] (const fw::result_t<void> &completed) {
+              result = completed;
+              done.set_value ();
+          });
+        if (submitted)
+            ready.get ();
+        fw::tests::tracking_process_allocations.store (false);
+        const auto allocations = fw::tests::process_allocation_count.load ();
+        if (!submitted)
+            throw fw::framework_exception_t (submitted.error_kind (), submitted.error ()->what ());
+        if (!result)
+            throw fw::framework_exception_t (result.error_kind (), result.error ()->what ());
+        return allocations;
+    };
+    // Positive and negative probes prove that the counter detects allocation and the empty path.
+    void *probe = nullptr;
+    EXPECT_EQ (count_allocations ([&] { probe = ::operator new (64); }), 1u);
+    ::operator delete (probe);
+    EXPECT_EQ (count_allocations ([] {}), 0u);
+    fw::tests::process_allocation_count.store (0);
+    fw::tests::tracking_process_allocations.store (true);
+    probe = ::operator new (64);
+    fw::tests::tracking_process_allocations.store (false);
+    ::operator delete (probe);
+    EXPECT_EQ (fw::tests::process_allocation_count.load (), 1u);
+    fw::tests::process_allocation_count.store (0);
+    fw::tests::tracking_process_allocations.store (true);
+    fw::tests::tracking_process_allocations.store (false);
+    EXPECT_EQ (fw::tests::process_allocation_count.load (), 0u);
+    const char *names[] = {"receive_reply", "receive_relay", "relay_reply"};
+    for (int path = 0; path != 3; ++path) {
+        allocation_session_t session (static_cast<allocation_path_t> (path), actor);
+        for (int warm = 0; warm != 8; ++warm)
+            (void) measure (session);
+        auto measured = measure (session);
+        auto minimum = measured;
+        for (int packet = 0; packet != 31; ++packet) {
+            const auto observed = measure (session);
+            measured = std::max (measured, observed);
+            minimum = std::min (minimum, observed);
+        }
+        std::printf ("STREAM allocations %s=%zu min=%zu packets=32\n", names[path], measured,
+                     minimum);
+#ifndef ZLINK_STREAM_RAW_BASELINE
+        // GCC 13/libstdc++ Release, origin/main 3841c24541, the same 32-packet probe.
+        constexpr std::size_t raw_main_maximum[] = {30, 78, 81};
+        EXPECT_LE (measured, raw_main_maximum[path]) << names[path];
+#endif
+    }
+    EXPECT_EQ (writes, 80u);
+    EXPECT_EQ (relays, 80u);
+}
+} // namespace

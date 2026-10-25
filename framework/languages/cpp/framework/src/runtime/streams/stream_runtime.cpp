@@ -480,34 +480,33 @@ message_flow_event_t stream_packet_flow_event (message_flow_outcome_t outcome,
 
 task_t<void> dispatch_packet_session_callback (packet_stream_session_t *session,
                                                stream_t stream,
-                                               std::shared_ptr<stream_header_t> header,
-                                               std::shared_ptr<session_message_context_t> context,
-                                               std::shared_ptr<message_t> payload)
+                                               stream_header_t header,
+                                               session_message_context_t context,
+                                               message_t payload)
 {
     auto task = [&] {
-        const stream_relay_dispatch_scope_t relay_scope (*header);
-        return session->on_packet (stream, *context, *payload);
+        const stream_relay_dispatch_scope_t relay_scope (header);
+        return session->on_packet (stream, context, payload);
     }();
     co_return co_await task;
 }
 
 task_t<void> dispatch_packet_session (packet_stream_session_t *session,
                                       stream_t stream,
-                                      std::shared_ptr<stream_header_t> header,
-                                      std::shared_ptr<session_message_context_t> context,
-                                      std::shared_ptr<message_t> payload,
+                                      stream_header_t header,
+                                      session_message_context_t context,
+                                      message_t payload,
                                       session_actor_manager_t *actors,
                                       detail::message_flow_tracer_t flow_tracer)
 {
-    if (auto actor_slot = header->actor_slot ()) {
+    if (auto actor_slot = header.actor_slot ()) {
         auto actor = actors
                        ? detail::session_actor_manager_access_t::find_slot (*actors, *actor_slot)
                        : std::nullopt;
         if (!actor) {
-            if (header->kind () == stream_message_kind_t::send) {
+            if (header.kind () == stream_message_kind_t::send) {
                 flow_tracer.trace (message_flow_outcome_t::dropped, [&] {
-                    auto event =
-                      stream_packet_flow_event (message_flow_outcome_t::dropped, *header);
+                    auto event = stream_packet_flow_event (message_flow_outcome_t::dropped, header);
                     event.reason = message_flow_reason_t::stale_target;
                     return event;
                 });
@@ -518,10 +517,10 @@ task_t<void> dispatch_packet_session (packet_stream_session_t *session,
                                              detail::failure_origin_t::stale_actor_slot,
                                              "STREAM Actor slot is not a current binding")));
         }
-        context->actor = std::make_shared<session_actor_t> (std::move (*actor));
+        context.actor = std::make_shared<session_actor_t> (std::move (*actor));
     }
     flow_tracer.trace (message_flow_outcome_t::dispatched, [&] {
-        return stream_packet_flow_event (message_flow_outcome_t::dispatched, *header);
+        return stream_packet_flow_event (message_flow_outcome_t::dispatched, header);
     });
     return dispatch_packet_session_callback (session, std::move (stream), std::move (header),
                                              std::move (context), std::move (payload));
@@ -2012,13 +2011,12 @@ result_t<void> stream_runtime_t::dispatch_packet (packet_stream_session_t &sessi
     auto dispatch_stream = stream;
     dispatch_stream._reply_header = header;
     dispatch_stream._reply_submission = std::make_shared<submit_once_t> ();
-    auto dispatch_header = std::make_shared<stream_header_t> (header);
-    auto dispatch_context = std::make_shared<session_message_context_t> ();
-    dispatch_context->packet_name = std::string (header.packet_name ());
-    dispatch_context->metadata = message_metadata_t (header.metadata ().values ());
-    dispatch_context->can_reply = header.request_seq ().has_value ();
-    auto dispatch_payload = std::make_shared<message_t> (
-      message_t::from_raw (std::move (handler_payload), _state->serializers));
+    auto dispatch_header = header;
+    auto dispatch_context = session_message_context_t{};
+    dispatch_context.packet_name = std::string (header.packet_name ());
+    dispatch_context.metadata = message_metadata_t (header.metadata ().values ());
+    dispatch_context.can_reply = header.request_seq ().has_value ();
+    auto dispatch_payload = message_t::from_raw (std::move (handler_payload), _state->serializers);
     return dispatch_application (
       stream, "packet:" + std::string (header.packet_name ()),
       [session = &session, dispatch_stream = std::move (dispatch_stream),
@@ -2084,13 +2082,12 @@ result_t<void> stream_runtime_t::dispatch_packet_async (packet_stream_session_t 
     auto dispatch_stream = stream;
     dispatch_stream._reply_header = header;
     dispatch_stream._reply_submission = std::make_shared<submit_once_t> ();
-    auto dispatch_header = std::make_shared<stream_header_t> (header);
-    auto dispatch_context = std::make_shared<session_message_context_t> ();
-    dispatch_context->packet_name = std::string (header.packet_name ());
-    dispatch_context->metadata = message_metadata_t (header.metadata ().values ());
-    dispatch_context->can_reply = header.request_seq ().has_value ();
-    auto dispatch_payload = std::make_shared<message_t> (
-      message_t::from_raw (std::move (handler_payload), _state->serializers));
+    auto dispatch_header = header;
+    auto dispatch_context = session_message_context_t{};
+    dispatch_context.packet_name = std::string (header.packet_name ());
+    dispatch_context.metadata = message_metadata_t (header.metadata ().values ());
+    dispatch_context.can_reply = header.request_seq ().has_value ();
+    auto dispatch_payload = message_t::from_raw (std::move (handler_payload), _state->serializers);
     return dispatch_application_async (
       stream, "packet:" + std::string (header.packet_name ()),
       [session = &session, dispatch_stream = std::move (dispatch_stream),

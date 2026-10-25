@@ -819,10 +819,10 @@ class session_actor_t
     task_t<void> relay_internal (detail::stream_header_t header,
                                  std::uint64_t relay_sequence,
                                  const message_t &message);
-    request_task_t<zlink::message_t> relay_request_internal (detail::stream_header_t header,
-                                                             std::uint64_t relay_sequence,
-                                                             zlink::message_t payload,
-                                                             std::chrono::milliseconds timeout);
+    request_task_t<message_t> relay_request_internal (detail::stream_header_t header,
+                                                      std::uint64_t relay_sequence,
+                                                      zlink::message_t payload,
+                                                      std::chrono::milliseconds timeout);
 
     std::shared_ptr<detail::actor_gateway_state_t> _state;
     actor_ref_t _ref;
