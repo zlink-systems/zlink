@@ -1,6 +1,6 @@
 {
   "name": "@zlink-systems/framework-codec-protobuf",
-  "version": "0.30.2",
+  "version": "0.30.3",
   "license": "SEE LICENSE IN LICENSE",
   "repository": {
     "type": "git",
@@ -27,11 +27,11 @@
     }
   },
   "dependencies": {
-    "@zlink-systems/stream-wire": "0.30.2"
+    "@zlink-systems/stream-wire": "0.30.3"
   },
   "peerDependencies": {
-    "@zlink-systems/framework": "0.30.2",
-    "@zlink-systems/stream-connector": "0.30.2"
+    "@zlink-systems/framework": "0.30.3",
+    "@zlink-systems/stream-connector": "0.30.3"
   },
   "peerDependenciesMeta": {
     "@zlink-systems/framework": {
