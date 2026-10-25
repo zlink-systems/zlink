@@ -11,8 +11,7 @@ public final class Names {
             PLAYER = "Player",
             ZONE = "Zone",
             DUNGEON = "Dungeon",
-            BORDER = "border",
-            BORDER_TIMER = "border-tick";
+            BORDER = "border";
     public static final List<String> SCENARIOS =
             java.util.Arrays.stream(Scenario.values()).map(Scenario::id).toList();
 }

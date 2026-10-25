@@ -7,6 +7,10 @@ import kotlinx.coroutines.runBlocking
 
 fun main(args: Array<String>) = runBlocking {
     val root = Path.of("").toAbsolutePath().normalize()
+    if (args.contentEquals(arrayOf("--check-domain"))) {
+        runDomainChecks()
+        return@runBlocking
+    }
     checkStructure(root)
     if (args.contentEquals(arrayOf("--check-structure"))) return@runBlocking
     require(args.isEmpty() || (args.size == 2 && args[0] == "--scenario"))
@@ -16,6 +20,7 @@ fun main(args: Array<String>) = runBlocking {
             selected.distinct() == selected &&
             selected.all { it in Names.SCENARIOS }
     )
+    runDomainChecks()
     var passed = 0
     var cleanupFailure: Exception? = null
     val nodes = Nodes(root)

@@ -38,7 +38,7 @@ Bash도 같은 절차를 실행한다.
 
 ### Zone과 플레이어
 
-ID로 찾는 게임 상태 객체가 Actor이며, `server/zone/player.ts`의 `Player`가 플레이어의 좌표와 sequence를 관리한다. Actor를 받아 공통 게임 규칙을 실행하는 상태 객체가 Spot이며, `server/zone/zone.ts`의 `Zone`이 Zone의 가시성 정보와 도착 대기 정보를 관리한다. 가시성 정보는 Actor의 이동 상태에서 복사한 관찰용 값이므로, 플레이어 상태 변경은 Actor에 적용한다.
+ID로 찾는 게임 상태 객체가 Actor이며, Actor를 받아 공통 게임 규칙을 실행하는 상태 객체가 Spot이다. `server/zone/domain.ts`의 `ZonePositionDomain`이 좌표·sequence·이동 예산·가시성 상태를 관리하고, `server/zone/zone.ts`의 `Zone`은 그 도메인 상태를 전달한다.
 
 `server/zone/main.ts`가 Entry Spot, factory, handler와 `border` channel을 등록하고 `server/zone/zone.ts`의 `Entry`가 플레이어 Actor의 첫 입장을 받는다. 플레이어별 규칙과 Zone 공통 규칙을 연결하는 handler는 `server/zone/handlers.ts`에 추가하고, 새 handler는 `server/zone/main.ts`의 `providers` 배열에 모두 나열한다. node 구성을 바꾸면 실제 등록과 `server/config/`, descriptor를 함께 맞추어 구조 검사가 같은 구성을 검사하게 한다.
 
@@ -48,7 +48,7 @@ ID로 찾는 게임 상태 객체가 Actor이며, `server/zone/player.ts`의 `Pl
 
 ### 공통 계약과 hosting
 
-`server/shared/messages.ts`는 process 간 메시지를, `server/shared/constants.ts`는 이름·시나리오 ID·한도·제어 문자열을, `server/shared/config.ts`는 process 설정을 정의한다. `server/shared/hosting.ts`는 hosting과 진단을 설정하고 실행 중 제어 명령을 처리하며, `server/shared/diagnostics.ts`는 진단 기록을 stderr로 쓴다. 메시지는 `server/shared/messages.ts`에 정의한다. build가 이 디렉터리에서 packet schema를 생성하기 때문이다. 플레이어 상태는 `Player`에 유지하여 서로 다른 process가 같은 값을 따로 변경하지 않게 한다.
+`server/shared/messages.ts`는 process 간 메시지를, `server/shared/constants.ts`는 이름·시나리오 ID·한도·제어 문자열을, `server/shared/config.ts`는 process 설정을 정의한다. `server/shared/hosting.ts`는 hosting과 진단을 설정하고 실행 중 제어 명령을 처리하며, `server/shared/diagnostics.ts`는 진단 기록을 stderr로 쓴다. 메시지는 `server/shared/messages.ts`에 정의한다. build가 이 디렉터리에서 packet schema를 생성하기 때문이다. 위치와 이동 판정은 `ZonePositionDomain`에 유지하여 서로 다른 process가 같은 값을 따로 변경하지 않게 한다.
 
 ### E2E client
 
@@ -74,7 +74,7 @@ client 연결의 packet을 처리하는 [STREAM](https://docs.zlink.systems/ko/n
 
 ### Actor membership
 
-Actor가 소속 Spot을 바꾸는 동작은 membership 변경이다. 대상 Spot이 참가 요청의 수락 여부를 정하는 단계가 admission이다. `Player.move`는 다음 Zone 참가를 지연 처리로 요청하고 `onJoinCompleted`는 완료 결과를 확인한다. 참가 수락과 완료의 순서는 [Actor membership](https://docs.zlink.systems/ko/node/guide/server/35-actor-membership/)이 설명한다.
+Actor가 소속 Spot을 바꾸는 동작은 membership 변경이다. 대상 Spot이 참가 요청의 수락 여부를 정하는 단계가 admission이다. Zone handler는 `ZonePositionDomain`이 이동을 수락한 뒤 다음 Zone 참가를 지연 처리로 요청하고 `onJoinCompleted`는 완료 결과를 확인한다. 참가 수락과 완료의 순서는 [Actor membership](https://docs.zlink.systems/ko/node/guide/server/35-actor-membership/)이 설명한다.
 
 ### Host relocation과 drain
 
@@ -82,21 +82,29 @@ Actor가 소속 Spot을 바꾸는 동작은 membership 변경이다. 대상 Spot
 
 ### 경계 알림과 timer
 
-주기적으로 handler를 실행하는 timer를 사용하여 `BorderTick`이 경계 근처 플레이어 정보를 publish한다. 이 pub/sub 방식에서는 `BorderHandler`가 구독한 정보를 받고, `BorderDelivery`가 수신 Actor의 binding된 Session으로 알림을 전달한다. 주기 작업의 등록과 실행은 [Timers and workers](https://docs.zlink.systems/ko/node/guide/server/36-timer-worker/)가 설명한다.
+Zone 상태는 사실이 바뀔 때 appearance·movement·departure를 publish한다. 이 pub/sub 방식에서는 경계 전달자가 수신 Actor의 binding된 Session으로 typed event를 전달하며, 같은 사실을 local 경로로 중복 전달하지 않는다.
 
 ## 요청 흐름
 
 예시 게임의 요청은 다음 경로로 처리된다. 기능을 더하거나 옮기기 전에 이 경로를 따라 코드를 읽으면 바꿀 위치를 빠르게 찾을 수 있다.
 
 1. client가 Session node에 STREAM으로 연결하고 첫 패킷 `JoinWorldRequest`를 보낸다. `Session`은 첫 패킷 이름을 확인하고 `playerId`로 Player Actor를 `getOrCreate`한 뒤 Session에 binding하고 원래 패킷을 relay한다.
-2. 새 Actor는 Entry Spot `Entry`에서 시작한다. `EnterWorld` handler가 identity를 확인하고 `Player.move`로 좌표에 해당하는 Zone에 `joinSpot(...).defer()`를 요청한다.
+2. 새 Actor는 Entry Spot `Entry`에서 시작한다. `EnterWorld` handler가 identity를 확인하고 admission 값을 만든 뒤 좌표에 해당하는 Zone에 `joinSpot(...).defer()`를 요청한다.
 3. 참가가 끝나면 `Player.onJoinCompleted`가 binding된 Session으로 `WorldState`를 보낸다. 이후 같은 client의 패킷은 Actor가 속한 Zone의 handler(`Move` 등)가 처리하고 결과를 같은 Session으로 보낸다.
-4. 이동이 다른 Zone의 좌표에 닿으면 `Move`가 다시 `Player.move`를 호출한다. 다른 node에 있는 Zone이어도 client 연결은 바뀌지 않는다.
+4. `Move`는 `ZonePositionDomain`에 변위와 sequence 판정을 요청한다. 서버가 계산한 좌표가 다른 Zone이면 handler가 다음 admission을 요청한다. 다른 node에 있는 Zone이어도 client 연결은 바뀌지 않는다.
 5. node를 교체할 때 `runHost`의 `drain` 명령이 relocation을 요청한다. Framework는 `PlayerRelocation`·`ZoneRelocation`의 `capture`로 게임 상태를 받아 다른 node에서 `restore`한다.
 
-## 이 샘플을 보며 개발하기
+## 이 템플릿 도메인 확장
 
-이 샘플은 기능들이 함께 동작하는 방식을 보여 주므로, 자기 게임으로 바꾸지 않고 읽고 실행하는 용도로 쓴다. 자기 프로젝트는 Node.js 기본 셋업에서 시작한다. [ZLink Start](https://zlink.systems/start)의 Initializer에서 Node.js를 고르거나 ZLink 저장소의 `framework/languages/node/templates/starter/my-game`을 사용한다. 그다음 필요한 기능을 이 샘플에서 하나씩 옮긴다. 구조 선택은 기본 셋업의 `AGENTS.md`가 설명하며, 이 절은 `mmo-seamless`만 다룬다. 이 샘플은 바꾸지 않고 프로젝트 옆에 참고용으로 둔다.
+이 템플릿의 도메인을 확장하여 심리스 MMO 서버를 만든다. 게임 규칙은 상태와 판정을 소유한 곳에 둔다.
+
+- 도메인 상태와 판정: `server/zone/domain.ts`.
+- typed 계약: `server/shared/messages.ts`.
+- Session 허용 목록: `server/session/session.ts`.
+- 도메인 경계 검사: `e2e/domain-checks.ts`.
+- 시나리오와 관찰: `e2e/client.mts`; 실제 명령은 `zlink.structure.json`에도 반영한다.
+
+typed 계약을 추가하고, 상태 판정은 `ZonePositionDomain`에 두며, Session에는 client packet만 허용한다. 도메인 경계 검사와 수락·거부·거부 뒤 불변 상태를 관찰하는 e2e를 추가한다. relocation snapshot에는 남은 예산 ms를 저장한다. `./run-e2e.sh --check-domain`, `./run-e2e.sh --build-only`, `./run-e2e.sh`를 실행한다.
 
 ### 샘플 먼저 실행하기
 

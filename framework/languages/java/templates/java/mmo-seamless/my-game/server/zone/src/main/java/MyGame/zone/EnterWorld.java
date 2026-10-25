@@ -13,7 +13,10 @@ public final class EnterWorld {
     public CompletionStage<Void> join(
             Entry entry, Player actor, ZLinkMessageContext dispatch, JoinWorldRequest request) {
         actor.checkIdentity(request.playerId());
-        actor.move(new EnterZone(request.x(), 0));
+        var location = ZonePositionDomain.resolveLocation(request.x());
+        if (location.rejection() != null)
+            return actor.context().boundSession().send(location.rejection()).submit();
+        actor.move(location.zoneId(), new EnterZone(new Position(request.x()), 0, 0));
         return CompletableFuture.completedFuture(null);
     }
 }

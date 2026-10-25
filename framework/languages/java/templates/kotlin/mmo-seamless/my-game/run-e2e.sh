@@ -75,7 +75,11 @@ fi
 $build_only && exit 0
 "${compose[@]}" run --rm --no-deps -T --name "$project-check" runner --check-structure
 for argument in "${arguments[@]}"; do
-  [[ "$argument" == "--check-structure" ]] && exit 0
+  if [[ "$argument" == "--check-structure" ]]; then exit 0; fi
+  if [[ "$argument" == "--check-domain" ]]; then
+    "${compose[@]}" run --rm --no-deps -T --name "$project-domain" runner --check-domain
+    exit 0
+  fi
 done
 "${compose[@]}" up -d --wait --wait-timeout 30 redis >"$logs/redis-start.log" 2>&1
 "${compose[@]}" run --rm --no-deps -T --name "$project-control" runner "${arguments[@]}"

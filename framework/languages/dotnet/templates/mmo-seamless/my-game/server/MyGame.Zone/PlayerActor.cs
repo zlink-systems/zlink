@@ -1,31 +1,15 @@
-using System.Text.Json;
 using MyGame.Shared;
 using Zlink.Framework.Contracts.Actors;
+using Zlink.Framework.Contracts.Messaging;
 
 namespace MyGame.Zone;
 
-public sealed class PlayerActor(IZLinkActorContext context, NodeSettings settings) : IZLinkActor
+public sealed class PlayerActor(IZLinkActorContext context) : IZLinkActor
 {
     public IZLinkActorContext Context { get; } = context;
-    public int X { get; private set; }
-    public int Sequence { get; private set; }
-    public string ZoneId => GameNames.ZoneId(X);
 
-    public void Apply(EnterZone position)
-    {
-        X = position.X;
-        Sequence = position.Sequence;
-    }
-
-    public void Move(EnterZone destination)
-    {
-        Context.JoinSpot(GameNames.ZoneId(destination.X), destination).Defer();
-    }
-
-    public WorldState State() =>
-        new(Context.ActorId, Context.ObjectGeneration, ZoneId, settings.Id, X, Sequence);
-
-    public ValueTask SendStateAsync() => Context.BoundSession.Send(State()).Async();
+    public void Move(string zoneId, EnterZone destination) =>
+        Context.JoinSpot(zoneId, destination).Defer();
 
     public async ValueTask OnJoinCompletedAsync(
         ZLinkActorJoinCompletion completion,
@@ -33,22 +17,15 @@ public sealed class PlayerActor(IZLinkActorContext context, NodeSettings setting
     )
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (completion is not ZLinkActorJoinCompletion.Accepted)
+        if (completion is not ZLinkActorJoinCompletion.Accepted accepted)
             throw new InvalidOperationException($"Zone join failed: {completion}.");
-        await SendStateAsync();
-    }
-
-    public PlayerSnapshot Capture() => new(X, Sequence);
-
-    public void Restore(PlayerSnapshot state)
-    {
-        Apply(new EnterZone(state.X, state.Sequence));
+        var reply = accepted.Reply
+            ?? throw new InvalidDataException("Accepted Zone join has no WorldState reply.");
+        await Context.BoundSession.Send(reply.Decode<WorldState>()).Async();
     }
 }
 
-public sealed record PlayerSnapshot(int X, int Sequence);
-
-public sealed class PlayerFactory(NodeSettings settings) : IZLinkActorFactory<PlayerActor>
+public sealed class PlayerFactory : IZLinkActorFactory<PlayerActor>
 {
     public ValueTask<PlayerActor> CreateAsync(
         IZLinkActorContext context,
@@ -56,17 +33,16 @@ public sealed class PlayerFactory(NodeSettings settings) : IZLinkActorFactory<Pl
     )
     {
         cancellationToken.ThrowIfCancellationRequested();
-        return ValueTask.FromResult(new PlayerActor(context, settings));
+        return ValueTask.FromResult(new PlayerActor(context));
     }
 }
 
-// Only application state is serialized. Framework owns routes, membership, queues and timers.
 public sealed class PlayerRelocation : IZLinkActorRelocationAdapter<PlayerActor>
 {
     public ValueTask<byte[]> CaptureAsync(PlayerActor actor, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        return ValueTask.FromResult(JsonSerializer.SerializeToUtf8Bytes(actor.Capture()));
+        return ValueTask.FromResult(Array.Empty<byte>());
     }
 
     public ValueTask RestoreAsync(
@@ -76,10 +52,8 @@ public sealed class PlayerRelocation : IZLinkActorRelocationAdapter<PlayerActor>
     )
     {
         cancellationToken.ThrowIfCancellationRequested();
-        actor.Restore(
-            JsonSerializer.Deserialize<PlayerSnapshot>(payload.Span)
-                ?? throw new InvalidDataException("Missing player relocation state.")
-        );
+        if (!payload.IsEmpty)
+            throw new InvalidDataException("Player Actor has no application relocation state.");
         return ValueTask.CompletedTask;
     }
 }

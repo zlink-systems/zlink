@@ -1,31 +1,19 @@
 package MyGame.zone;
 
-import MyGame.*;
-
+import MyGame.EnterZone;
 import systems.zlink.framework.actors.*;
 
 import java.util.concurrent.*;
 
 public final class Player implements ZLinkActor {
     private final ZLinkActorContext context;
-    private final NodeConfig config;
-    private EnterZone position = new EnterZone(0, 0);
 
-    public Player(ZLinkActorContext context, NodeConfig config) {
+    public Player(ZLinkActorContext context) {
         this.context = context;
-        this.config = config;
     }
 
     public ZLinkActorContext context() {
         return context;
-    }
-
-    public EnterZone position() {
-        return position;
-    }
-
-    public void apply(EnterZone position) {
-        this.position = position;
     }
 
     public void checkIdentity(String playerId) {
@@ -33,25 +21,24 @@ public final class Player implements ZLinkActor {
             throw new IllegalArgumentException("Player identity mismatch");
     }
 
-    public void move(EnterZone position) {
-        context.joinSpot(Rules.zoneId(position.x()), position).defer();
-    }
-
-    public CompletionStage<Void> sendState() {
-        return context.boundSession()
-                .send(
-                        new WorldState(
-                                Rules.zoneId(position.x()),
-                                config.id(),
-                                position.x(),
-                                position.sequence()))
-                .submit();
+    public void move(String zoneId, EnterZone arrival) {
+        context.joinSpot(zoneId, arrival).defer();
     }
 
     public CompletionStage<Void> onJoinCompleted(ZLinkActorJoinCompletion completion) {
-        if (!(completion instanceof ZLinkActorJoinCompletion.Accepted))
-            return CompletableFuture.failedFuture(
-                    new IllegalStateException("Zone join failed: " + completion));
-        return sendState();
+        if (completion instanceof ZLinkActorJoinCompletion.Accepted accepted) {
+            if (accepted.reply().isEmpty()) return CompletableFuture.completedFuture(null);
+            return context.boundSession().send(accepted.reply().decode(MyGame.WorldState.class)).submit();
+        }
+        if (completion instanceof ZLinkActorJoinCompletion.Rejected rejected) {
+            if (rejected.reply().isEmpty())
+                return CompletableFuture.failedFuture(
+                        new IllegalStateException("Zone join failed: " + completion));
+            return context.boundSession()
+                    .send(rejected.reply().decode(MyGame.ActionRejected.class))
+                    .submit();
+        }
+        return CompletableFuture.failedFuture(
+                new IllegalStateException("Zone join failed: " + completion));
     }
 }

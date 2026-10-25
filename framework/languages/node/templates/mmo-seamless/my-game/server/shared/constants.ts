@@ -4,14 +4,16 @@ export const Names = {
   actor: 'Player',
   zone: 'Zone',
   dungeon: 'Dungeon',
-  border: 'border',
-  borderTimer: 'border-tick'
+  border: 'border'
 } as const;
 export const Game = {
   zoneWidth: 100,
   zoneCount: 6,
   borderRadius: 10,
-  tickMs: 100
+  maxStep: 10,
+  maxSpeed: 50,
+  fullBudgetAfterMs: 200,
+  maxSafeInteger: 9_007_199_254_740_991
 } as const;
 const messageFollowMs = 30_000;
 const relocationMs = 25_000;
@@ -33,7 +35,10 @@ export const PacketNames = {
   enterZone: 'EnterZone',
   worldState: 'WorldState',
   borderPresence: 'BorderPresence',
-  borderVisible: 'BorderVisible',
+  playerAppeared: 'PlayerAppeared',
+  playerMoved: 'PlayerMoved',
+  playerLeft: 'PlayerLeft',
+  actionRejected: 'ActionRejected',
   openDungeonRequest: 'OpenDungeonRequest',
   dungeonOpened: 'DungeonOpened'
 } as const;
@@ -56,8 +61,6 @@ export const NodeEntrypoints = {
 } as const;
 export type NodeRole = keyof typeof NodeEntrypoints;
 export function zoneId(x: number): string {
-  if (!Number.isInteger(x) || x < 0 || x >= Game.zoneWidth * Game.zoneCount)
-    throw new Error('Position outside world');
   return `zone-${Math.floor(x / Game.zoneWidth) + 1}`;
 }
 export function adjacentZones(id: string): string[] {

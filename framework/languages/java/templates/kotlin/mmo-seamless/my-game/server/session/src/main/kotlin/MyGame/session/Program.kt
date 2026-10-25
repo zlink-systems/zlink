@@ -44,9 +44,26 @@ class GameSession(private val session: ZLinkSessionContext, private val actors: 
         dispatch: ZLinkSessionDispatchContext,
         payload: ZLinkMessage,
     ) {
-        when (dispatch.packetName()) {
+        val packetName = dispatch.packetName()
+        val allowed =
+            setOf(
+                JoinWorldRequest::class.java.simpleName,
+                MoveRequest::class.java.simpleName,
+                OpenDungeonRequest::class.java.simpleName,
+                SessionInfoRequest::class.java.simpleName,
+            )
+        if (packetName !in allowed) {
+            session.client().kotlin().send(ActionRejected("packet-not-allowed")).await()
+            return
+        }
+        when (packetName) {
             SessionInfoRequest::class.java.simpleName -> {
                 val actor = session.actors().bound().single()
+                val generation = actor.ref().objectGeneration()
+                if (generation > Rules.MAX_SAFE_INTEGER) {
+                    session.client().kotlin().send(ActionRejected("integer-out-of-range")).await()
+                    return
+                }
                 session
                     .client()
                     .kotlin()
@@ -54,12 +71,16 @@ class GameSession(private val session: ZLinkSessionContext, private val actors: 
                         SessionInfo(
                             session.sessionId(),
                             actor.actorId(),
-                            actor.ref().objectGeneration(),
+                            generation,
                         )
                     )
                     .await()
             }
             JoinWorldRequest::class.java.simpleName -> {
+                if (session.actors().bound().isNotEmpty()) {
+                    session.actors().bound().single().kotlin().relay(dispatch, payload).await()
+                    return
+                }
                 val request = payload.decode<JoinWorldRequest>()
                 require(request.playerId.isNotBlank())
                 val result =

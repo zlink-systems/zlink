@@ -4,7 +4,7 @@
 
 이 Java 25 프로젝트는 플레이어가 Zone 경계를 넘어 이동하는 MMO server 예제다. 연결을 처리하는 Session gateway, Zone host A·B(Zone 6개, host마다 3개), Dungeon을 만드는 Instance host와 위치·이동 상태를 저장하는 Redis를 실행한다. `build.gradle.kts`는 ZLink Framework를 `0.30.2`, binding을 `1.20.0`으로 고정한다.
 
-게임 기능을 추가할 위치는 아래의 프로젝트 구성에, 이 샘플의 기능을 자기 프로젝트로 옮기는 절차는 "이 샘플을 보며 개발하기"에 있다. 실행 환경·배포·공개 package의 알려진 문제는 [README](README.md)가 설명한다. 초기 node 구성과 scenario 목록은 [zlink.structure.json](zlink.structure.json)에 있으며, 실행 중 객체의 위치는 Framework와 Redis가 관리한다.
+이 템플릿의 도메인을 확장하여 MMO server를 만든다. 실행 환경·배포·공개 package의 알려진 문제는 [README](README.md)가 설명한다. 초기 node 구성과 scenario 목록은 [zlink.structure.json](zlink.structure.json)에 있으며, 실행 중 객체의 위치는 Framework와 Redis가 관리한다.
 
 > **문서와 package 버전.** [ZLink 문서](https://docs.zlink.systems/ko/), [Java 가이드](https://docs.zlink.systems/ko/java/guide/server/), [API reference](https://docs.zlink.systems/ko/java/reference/)와 [에이전트 색인](https://docs.zlink.systems/llms.txt)이 공개 문서의 진입점이다. 현재 가이드가 더 새 버전을 설명하면 `build.gradle.kts`에 고정된 버전의 API와 대조한다.
 
@@ -17,6 +17,7 @@ pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
 pwsh -NoProfile -File ./run-e2e.ps1
 pwsh -NoProfile -File ./run-e2e.ps1 -Scenario cross,border,reconnect
 pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
+pwsh -NoProfile -File ./run-e2e.ps1 -CheckDomain
 ```
 
 Bash도 같은 절차를 실행한다.
@@ -26,6 +27,7 @@ Bash도 같은 절차를 실행한다.
 ./run-e2e.sh
 ./run-e2e.sh --scenario cross,border,reconnect
 ./run-e2e.sh --check-structure
+./run-e2e.sh --check-domain
 ```
 
 로컬 process 디버깅은 JDK 25를 설치한 뒤 `--local` 또는 `-Local`로 실행한다. 로컬 빌드가 있으면 `--no-build` 또는 `-NoBuild`를 추가한다. 시나리오 순서와 assertion은 유지하며 최초 실패를 README의 Known issues와 대조한다.
@@ -38,7 +40,7 @@ Bash도 같은 절차를 실행한다.
 
 ### Zone과 플레이어
 
-ID로 찾는 게임 상태 객체가 Actor이며, `server/zone/src/main/java/MyGame/zone/Player.java`의 `Player`가 플레이어의 좌표와 sequence(`EnterZone`)를 관리한다. Actor를 받아 공통 게임 규칙을 실행하는 상태 객체가 Spot이며, `server/zone/src/main/java/MyGame/zone/Zone.java`의 `Zone`이 Zone의 가시성 정보(`ZoneState`)와 도착 대기 정보를 관리한다. 가시성 정보는 Actor의 이동 상태에서 복사한 관찰용 값이므로, 플레이어 상태 변경은 Actor에 적용한다.
+ID로 찾는 게임 상태 객체가 Actor이며, 공통 게임 규칙을 실행하는 상태 객체가 Spot이다. `server/zone/src/main/java/MyGame/zone/ZonePositionDomain.java`의 `ZonePositionDomain`이 좌표·sequence·이동 예산·admission·가시성 상태를 소유하고 `Zone`이 도메인 상태와 event 전달을 관리한다.
 
 `server/zone/src/main/java/MyGame/zone/Program.java`가 Entry Spot, Zone·Player factory와 `border` channel을 등록하고 `server/zone/src/main/java/MyGame/zone/Entry.java`와 `server/zone/src/main/java/MyGame/zone/EnterWorld.java`가 플레이어의 월드 첫 진입을 처리한다. 플레이어별 규칙과 Zone 공통 규칙을 연결하는 handler는 `server/zone/src/main/java/MyGame/zone/Actions.java`에 추가한다. node 구성을 바꾸면 실제 등록과 `server/config/`, descriptor를 함께 맞추어 구조 검사가 같은 구성을 검사하게 한다.
 
@@ -48,11 +50,11 @@ ID로 찾는 게임 상태 객체가 Actor이며, `server/zone/src/main/java/MyG
 
 ### 공통 계약과 hosting
 
-`server/shared/src/main/java/MyGame/`는 process 간 메시지와 게임 상수(`WorldState`, `JoinWorldRequest`, `MoveRequest`, `EnterZone`, `BorderPresence`, `BorderVisible`, `OpenDungeonRequest`, `DungeonOpened`, `SessionInfoRequest`, `SessionInfo`)를, `NodeConfig.java`는 process 설정을, `Names.java`는 mesh와 타입 이름을 정의한다. `Hosting.java`는 hosting과 진단을 설정하고 stdin 제어 loop(`drain`, `shutdown`, `vacate-zone`)를 실행하며, `Control.java`는 제어 marker와 기한을, `Stores.java`는 Redis Location·Relocation store를 만든다. `Rules.java`는 월드 구조와 tick 주기를, `Roles.java`는 node 역할과 시작 순서를, `Transfer.java`는 relocation adapter의 취소 검사를 담는다. 여러 process가 사용하는 계약은 여기에 추가하며, 플레이어 상태는 `Player`에 유지하여 서로 다른 process가 같은 값을 따로 변경하지 않게 한다.
+`server/shared/src/main/java/MyGame/`는 process 간 메시지와 게임 상수(`WorldState`, `JoinWorldRequest`, `MoveRequest`, `EnterZone`, `Position`, `ActionRejected`, 가시성 event, `BorderPresence`, `OpenDungeonRequest`, `DungeonOpened`, `SessionInfoRequest`, `SessionInfo`)를, `NodeConfig.java`는 process 설정을, `Names.java`는 mesh와 타입 이름을 정의한다. `GameSession.java`는 client packet 허용 목록을 소유한다. `Rules.java`는 월드 차원과 공통 정수·이동 한도를 둔다. 새 typed contract는 여기에 추가하고 위치 판정은 `ZonePositionDomain` 한 곳에 둔다.
 
 ### E2E client
 
-`e2e/src/main/java/MyGame/e2e/Client.java`는 공개 connector로 게임에 접속하고 `e2e/src/main/java/MyGame/e2e/Scenarios.java`는 client가 관찰할 결과를 검사한다. `e2e/src/main/java/MyGame/e2e/Nodes.java`는 node를 시작하고 로그를 보존하며 실행별 자원을 정리한다. `e2e/src/main/java/MyGame/e2e/Program.java`는 시나리오 실패 다음에 정리 실패를 보고하며 둘 중 하나라도 있으면 종료 코드는 1이다. `e2e/src/main/java/MyGame/e2e/Structure.java`는 시작 전에 실제 파일을 검사한다. 시나리오 순서 `cross,border,reconnect,update`를 유지한다. 새 게임 동작은 client가 받은 결과로 검증하며, 별도 unit-test module과 formatter 설정은 포함되어 있지 않다.
+`e2e/src/main/java/MyGame/e2e/Client.java`는 공개 connector로 게임에 접속하고 `Scenarios.java`는 응답과 push event를 검사하며 `DomainChecks.java`는 node 시작 전 같은 실행 파일에서 도메인 경계를 검사한다. `Nodes.java`는 node와 실행별 자원을 관리하고 `Structure.java`는 시작 전에 실제 파일을 검사한다. 새 scenario는 `Scenario.java`, `Scenarios.java`, `zlink.structure.json`, README 표에서 함께 갱신한다.
 
 ## 프로젝트의 ZLink 개념
 
@@ -62,7 +64,7 @@ process 간 메시지를 전달할 node들을 연결하는 구성이 RouteMesh�
 
 ### Spot과 Actor
 
-`Entry`는 플레이어의 첫 진입을 받고 `Zone`은 지리적 Zone을, `Dungeon`은 동적으로 생성한 Dungeon을 표현한다. [Spot 가이드](https://docs.zlink.systems/ko/java/guide/server/21-spot/)는 이 객체들의 등록과 호출을 설명한다. `Player`는 소속 Spot이 바뀌어도 플레이어 이동 상태를 유지하며, 생성과 호출은 [Actor 가이드](https://docs.zlink.systems/ko/java/guide/server/22-actor/)에서 설명한다.
+`Entry`는 플레이어의 첫 진입을 받고 `Zone`은 지리적 Zone을, `Dungeon`은 동적으로 생성한 Dungeon을 표현한다. [Spot 가이드](https://docs.zlink.systems/ko/java/guide/server/21-spot/)는 이 객체들의 등록과 호출을 설명한다. `ZonePositionDomain`은 Zone relocation 뒤에도 게임 상태를 유지하며, Actor 생성과 호출은 [Actor 가이드](https://docs.zlink.systems/ko/java/guide/server/22-actor/)에서 설명한다.
 
 ### STREAM과 Session
 
@@ -74,64 +76,37 @@ client 연결의 packet을 처리하는 [STREAM](https://docs.zlink.systems/ko/j
 
 ### Actor membership
 
-Actor가 소속 Spot을 바꾸는 동작은 membership 변경이다. 대상 Spot이 참가 요청의 수락 여부를 정하는 단계가 admission이다. `Player.move`는 다음 Zone 참가를 지연 처리로 요청하고 `Zone.onActorJoin`이 수락 여부를 정하며 `Player.onJoinCompleted`는 완료 결과를 확인한다. 참가 수락과 완료의 순서는 [Actor membership](https://docs.zlink.systems/ko/java/guide/server/35-actor-membership/)이 설명한다.
+Actor가 소속 Spot을 바꾸는 동작은 membership 변경이다. 대상 Spot이 참가 요청의 수락 여부를 정하는 단계가 admission이다. `Player.move`는 `ZonePositionDomain`이 이동을 수락한 뒤 다음 Zone 참가를 지연 처리로 요청한다. `Zone.onActorJoin`은 서버가 계산한 도착을 확인하고 `Player.onJoinCompleted`는 typed 완료 응답을 보낸다. 참가 수락과 완료의 순서는 [Actor membership](https://docs.zlink.systems/ko/java/guide/server/35-actor-membership/)이 설명한다.
 
 ### Host relocation과 drain
 
-객체의 실행 host를 변경하는 동작은 relocation이며, host를 종료할 수 있도록 workload를 다른 host로 이동시키는 절차는 drain이다. application adapter(`PlayerTransfer`, `ZoneTransfer`)는 `preserveStateWith(...)`로 등록되어 게임 상태를 저장하고 복원하며 Framework는 workload와 route를 이전한다. `Hosting.run`은 `drain` 제어를 받으면 공개 planned-maintenance relocation을 요청한 뒤 종료 가능한 상태를 관찰하며, 절차는 [Relocation 가이드](https://docs.zlink.systems/ko/java/guide/server/37-relocation/)가 설명한다.
+객체의 실행 host를 변경하는 동작은 relocation이며, host를 종료할 수 있도록 workload를 다른 host로 이동시키는 절차는 drain이다. application adapter(`ZoneTransfer`)는 `preserveStateWith(...)`로 등록되어 Zone 도메인 상태를 저장하고 복원하며 Framework는 workload와 route를 이전한다. 이동 예산은 절대 시각 대신 남은 ms로 저장한다. `Hosting.run`은 `drain` 제어를 받으면 공개 planned-maintenance relocation을 요청한 뒤 종료 가능한 상태를 관찰하며, 절차는 [Relocation 가이드](https://docs.zlink.systems/ko/java/guide/server/37-relocation/)가 설명한다.
 
 ### 경계 알림과 timer
 
-주기적으로 handler를 실행하는 timer를 사용하여 `Zone.onInitialize`가 등록한 `BorderTick`이 경계 근처 플레이어 정보를 publish한다. 이 pub/sub 방식에서는 `BorderRoutes`의 handler가 구독한 정보를 받고, `Zone.showBorder`가 관찰하는 Actor에게 보내며, 수신 Actor의 `Actions.deliver`가 binding된 Session으로 알림을 전달한다. 주기 작업의 등록과 실행은 [Timers and workers](https://docs.zlink.systems/ko/java/guide/server/36-timer-worker/)가 설명한다.
+Zone 상태는 사실이 바뀔 때 appearance·movement·departure를 publish한다. `BorderRoutes`가 인접 Zone event를 수신해 local event와 같은 Actor 전달 handler로 보내며, 한 관찰자에게 같은 사실을 두 경로로 전달하지 않는다.
 
 ## 요청 흐름
 
 예시 게임의 요청은 다음 경로로 처리된다. 기능을 더하거나 옮기기 전에 이 경로를 따라 코드를 읽으면 바꿀 위치를 빠르게 찾을 수 있다.
 
-1. client가 Session node에 STREAM으로 연결하고 첫 packet `JoinWorldRequest`를 보낸다. `GameSession`은 첫 packet 타입을 확인하고 `playerId`로 Player Actor를 `getOrCreate`한 뒤 `bindOrGet`으로 binding하고 원래 packet을 relay한다.
-2. 새 Actor는 Entry Spot에서 시작한다. `EnterWorld.join`이 identity를 확인하고 `Player.move`를 호출하며, `Player.move`는 좌표에 해당하는 Zone에 `joinSpot(...).defer()`를 요청한다.
-3. `Zone.onActorJoin`이 도착을 수락한다. 참가가 끝나면 `Player.onJoinCompleted`가 binding된 Session으로 `WorldState`를 보낸다. 이후 같은 client의 packet은 Actor가 속한 Zone의 handler(`Actions.move` 등)가 처리하고 결과를 같은 Session으로 보낸다.
-4. 이동이 다른 Zone의 좌표에 닿으면 `Actions.move`가 다시 `Player.move`를 호출한다. 다른 node에 있는 Zone이어도 client 연결은 바뀌지 않는다.
-5. node를 교체할 때 `Hosting.run`의 `drain` 제어가 relocation을 요청한다. Framework는 `PlayerTransfer`·`ZoneTransfer`의 `capture`로 게임 상태를 받아 다른 node에서 `restore`한다.
+1. client가 Session node에 STREAM으로 연결하고 첫 packet `JoinWorldRequest`를 보낸다. `GameSession`은 client 허용 목록을 확인하고 Player Actor를 `getOrCreate`한 뒤 binding하여 원래 typed packet을 relay한다.
+2. 새 Actor는 Entry Spot에서 시작한다. `EnterWorld.join`이 identity와 초기 좌표를 `ZonePositionDomain`으로 판정한 뒤 deferred Zone admission을 요청한다.
+3. `Zone.onActorJoin`은 입장을 검사하고 typed `WorldState` 완료 응답을 반환한다. 입장 뒤에는 Zone 도메인이 좌표·sequence·이동 예산·가시성 상태를 소유한다.
+4. `Actions.move`는 변위와 sequence를 도메인에 전달한다. 서버가 검사와 목적지 계산을 수행하며, Zone 이동에는 남은 예산을 ms로 전달한다.
+5. node를 교체할 때 `Hosting.run`의 `drain` 제어가 relocation을 요청한다. `ZoneTransfer`는 남은 이동 예산(ms)을 포함한 Zone 도메인 snapshot을 저장하며 Framework는 workload와 route를 이전한다.
 
-## 이 샘플을 보며 개발하기
+## 이 템플릿의 도메인 확장
 
-이 샘플은 기능들이 함께 동작하는 방식을 보여 주므로, 자기 게임으로 바꾸지 않고 읽고 실행하는 용도로 쓴다. 자기 프로젝트는 Java 기본 셋업에서 시작한다. [ZLink Start](https://zlink.systems/start)의 Initializer에서 Java를 고르거나 ZLink 저장소의 `framework/languages/java/templates/java/starter/my-game`을 사용한다. 그다음 필요한 기능을 이 샘플에서 하나씩 옮긴다. 구조 선택은 기본 셋업의 `AGENTS.md`가 설명하며, 이 절은 `mmo-seamless`만 다룬다. 이 샘플은 바꾸지 않고 프로젝트 옆에 참고용으로 둔다.
+이 템플릿의 도메인을 확장하여 seamless MMO server를 만든다. 상태와 판정을 소유하는 객체에 새 규칙을 추가한다.
 
-### 샘플 먼저 실행하기
+- 도메인 상태와 판정: `server/zone/src/main/java/MyGame/zone/ZonePositionDomain.java`.
+- typed contract: `server/shared/src/main/java/MyGame/`.
+- Session client packet 허용 목록: `server/session/src/main/java/MyGame/session/GameSession.java`.
+- 도메인 경계 검사: `e2e/src/main/java/MyGame/e2e/DomainChecks.java`.
+- 시나리오와 push 관찰: `e2e/src/main/java/MyGame/e2e/Scenarios.java`, `Client.java`.
 
-옮기기 전에 [개발 명령](#개발-명령)으로 빌드와 e2e를 한 번 실행해 받은 샘플이 동작하는지 확인하고 동작을 본다. 이 결과가 이후 비교의 기준이 된다. 실패하면 먼저 [README](README.md)의 Known issues와 대조한다.
-
-### 옮길 기능
-
-기능 이름은 기본 셋업 `AGENTS.md`의 기능 표와 같다. 경로는 이 디렉터리를 기준으로 한다. 기본 셋업에는 Session node 하나와 `connect` 시나리오만 있으므로, 마지막 열은 기능마다 기본 셋업에서 함께 늘릴 것이다.
-
-| 기능 | 이 샘플의 파일 | 옮길 것 | 기본 셋업에서 함께 늘릴 것 |
-| --- | --- | --- | --- |
-| Typed 메시지 | `server/shared/src/main/java/MyGame/JoinWorldRequest.java` | 사용할 기능의 record: `WorldState`, `JoinWorldRequest`, `MoveRequest`, `EnterZone`, `BorderPresence`, `BorderVisible`, `OpenDungeonRequest`, `DungeonOpened`. `SessionInfoRequest`·`SessionInfo`는 client가 필요로 할 때만 옮긴다 | `Names.java`의 등록 이름. `Control.java`와 `Json.java`는 기본 셋업에 이미 있다 |
-| Actor | `server/zone/src/main/java/MyGame/zone/Player.java`, `server/zone/src/main/java/MyGame/zone/PlayerFactory.java` | 좌표와 sequence(`EnterZone`), 이동 규칙을 가진 `Player`와 그 factory | 새 `server/zone/` module(`build.gradle.kts`, `Program.java`)과 `settings.gradle.kts`의 `include("server:zone")`, `server/config/` 파일, `Program.java`의 Actor factory 등록. `zlink.structure.json`의 node 선언과 `Structure.java`의 검사. 기본 셋업의 `Nodes.java`는 Session 역할만 시작하므로 새 역할을 위해 `Nodes.java`와 `Roles.java`를 확장한다 |
-| Spot | `server/zone/src/main/java/MyGame/zone/Zone.java`, `server/zone/src/main/java/MyGame/zone/ZoneState.java` | 가시성 정보, 도착 대기 정보, 경계 계산을 가진 `Zone` | `Program.java`의 Spot factory 등록. `zlink.structure.json`의 `spots`·`nodes` 선언과 이를 등록과 비교하는 `Structure.java` 검사(기본 셋업은 Spot을 선언하지 않는다) |
-| Entry·첫 입장 | `server/zone/src/main/java/MyGame/zone/Entry.java`, `server/zone/src/main/java/MyGame/zone/EnterWorld.java`, `reconnect` in `server/zone/src/main/java/MyGame/zone/Actions.java` | `EnterWorld.join`, 첫 입장 경로, `reconnect`의 identity 확인과 상태 재전송 | Entry Spot 등록과 `entry` 선언. 첫 입장 시나리오와 재접속 뒤 상태를 비교하는 `reconnect` 시나리오 |
-| Session binding | `server/session/src/main/java/MyGame/session/GameSession.java` | 첫 packet 검사, 그다음 Actor 조회·생성, binding과 원래 typed packet relay | `EnterWorld.join`과 같은 첫 packet 타입. 기본 셋업의 `PlayerSession.java`에 옮긴다 |
-| Host relocation | `server/zone/src/main/java/MyGame/zone/PlayerTransfer.java`, `server/zone/src/main/java/MyGame/zone/ZoneTransfer.java`, `server/shared/src/main/java/MyGame/Hosting.java`, `server/shared/src/main/java/MyGame/Transfer.java` | `capture`·`restore`를 가진 snapshot adapter, `drain`·`shutdown` 옆의 `vacate-zone` 제어 | `preserveStateWith(...)` 등록. 서버 교체 뒤에도 연결·상태가 유지되고 대체 node가 새 작업을 받는지 판정하는 `update` 시나리오 |
-| 동적 던전 | `server/instance/src/main/java/MyGame/instance/Dungeon.java`, `server/instance/src/main/java/MyGame/instance/Program.java`, `dungeon` in `server/zone/src/main/java/MyGame/zone/Actions.java` | 동적 User Spot 생성 형태와 Dungeon 정보 | 새 `server/instance/` module과 설정. `zlink.structure.json`의 동적 `dungeon` Spot과 `GetOrCreate` edge |
-| Channel pub/sub·심리스 이동 | `configure()`, `publishBorder()`, `showBorder()` in `server/zone/src/main/java/MyGame/zone/Zone.java`; `server/zone/src/main/java/MyGame/zone/BorderTick.java`; `server/zone/src/main/java/MyGame/border/BorderRoutes.java` | 경계 구독·발행과 수신 Actor의 binding된 Session으로의 전달 | `Program.java`의 `border` channel 등록과 `zlink.structure.json`의 `channels` 선언. `border` 시나리오 |
-
-`vacate-zone`은 e2e가 대체 node 배치를 확인하는 데 쓰는 제어다. 기본 셋업에는 `drain`과 `shutdown`이 이미 있으므로 `vacate-zone`은 `update` 시나리오와 함께 옮긴다.
-
-### 옮기는 순서와 규칙
-
-기능은 표의 행 하나씩 옮기고, 하나를 옮길 때마다 빌드, 구조 검사, 관련 e2e 시나리오를 실행한다. 시나리오 ID는 `server/shared/src/main/java/MyGame/Scenario.java`의 `Scenario` enum, `e2e/src/main/java/MyGame/e2e/Scenarios.java`의 분기, `zlink.structure.json`의 `run.scenarios`, `run.commands`의 시나리오 선택 예시에 함께 추가한다. 판정은 실제로 받은 응답과 이벤트로 하고, 고정 대기나 기한 확대로 통과시키지 않는다.
-
-메시지 contract부터 옮긴다. `server/shared/src/main/java/MyGame/`에 typed record를 먼저 정의한 뒤, 컴파일 오류가 나는 handler를 하나씩 새 메시지로 옮긴다. 첫 입장 packet을 바꾸면 `GameSession`의 첫 packet 검사, `EnterWorld`, `Actions.reconnect`가 같은 타입을 받도록 함께 고친다.
-
-상태는 그 상태를 결정하는 객체에 둔다. 플레이어별 상태는 `Player`, 여러 플레이어가 공유하는 상태는 Spot에 둔다. 상태 필드를 바꿀 때는 같은 객체의 snapshot(`Player`는 `EnterZone`, `Zone`은 `ZoneState`)과 `PlayerTransfer`·`ZoneTransfer`의 `capture`·`restore`를 함께 고친다. 빠뜨린 필드는 relocation 뒤 사라지고, `update` 시나리오가 그 손실을 잡는다.
-
-channel은 구독 handler·등록·structure 선언을 같은 변경에서 함께 추가한다. 구독 handler는 `BorderRoutes.java`에 두고 `Zone.configure()`에서 등록하며, channel 등록은 `Program.java`, 선언은 `zlink.structure.json`의 `channels`다. 구조 검사는 선언을 node 역할과 `Names.BORDER`에 대조하여 다르면 실행 전에 실패하고, 구독 자체는 `border` 시나리오가 확인한다.
-
-역할 이름을 이 샘플과 다르게 정하려면 타입 이름, `Names.java`, `server/config/`, module·package 이름과 `settings.gradle.kts`, `zlink.structure.json`을 한 번에 바꾼다. 이름 변경은 기능을 옮기는 변경과 나눠서 진행하면 실패 원인을 찾기 쉽다.
-
-옮긴 뒤 `update`가 실패하면 snapshot에 빠진 상태가 있는지 먼저 확인한다. 그다음 [디버깅](#디버깅)의 message flow로 첫 실패 단계를 찾는다.
+contract를 먼저 추가하고 `ZonePositionDomain`에 상태 전이를 구현한다. Session 허용 목록에는 client packet만 넣고, 도메인 경계 검사와 수락·거부·상태 불변을 관찰하는 scenario를 추가한다. `Scenario.java`, `zlink.structure.json`의 `run.scenarios`·`run.commands`, README 시나리오 표를 함께 갱신한다. `./run-e2e.sh --check-domain`, `./run-e2e.sh --build-only`, `./run-e2e.sh`를 실행한다.
 
 ## 개발 시 주의점
 

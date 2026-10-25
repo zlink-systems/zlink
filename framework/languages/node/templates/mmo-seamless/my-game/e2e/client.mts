@@ -7,19 +7,36 @@ import {
   ZlinkStreamDispatchMode,
   type ZlinkStreamConnector
 } from '@zlink-systems/stream-connector';
-import { Control, Limits, PacketNames } from '../server/shared/constants.js';
+import { Control, Game, Limits, PacketNames } from '../server/shared/constants.js';
 import {
+  ActionRejected,
+  EnterZone,
   JoinWorldRequest,
   MoveRequest,
   OpenDungeonRequest,
+  Position,
   SessionInfoRequest,
   type SessionInfo,
   type WorldState,
-  type BorderVisible
+  type PlayerAppeared,
+  type PlayerLeft,
+  type PlayerMoved
 } from '../server/shared/messages.js';
 interface Received {
   name: string;
   payload: unknown;
+}
+function contractPayload(name: string, payload: unknown): unknown {
+  if (!payload || typeof payload !== 'object') return payload;
+  const value = payload as Record<string, unknown>;
+  if (
+    (name === PacketNames.worldState || name === PacketNames.playerMoved || name === 'SessionInfo') &&
+    typeof value.sequence === 'string'
+  )
+    return { ...value, sequence: BigInt(value.sequence) };
+  if (name === 'SessionInfo' && typeof value.objectGeneration === 'string')
+    return { ...value, objectGeneration: BigInt(value.objectGeneration) };
+  return payload;
 }
 export interface NodeControl {
   drain(id: string): Promise<void>;
@@ -28,6 +45,7 @@ export interface NodeControl {
 class PlayerClient {
   readonly connector: ZlinkStreamConnector;
   readonly messages: Received[] = [];
+  private playerId = '';
   private readonly changed = new EventEmitter();
   private failure?: Error;
   disconnects = 0;
@@ -45,14 +63,19 @@ class PlayerClient {
     });
     for (const name of [
       PacketNames.worldState,
-      PacketNames.borderVisible,
+      PacketNames.playerAppeared,
+      PacketNames.playerMoved,
+      PacketNames.playerLeft,
+      PacketNames.sessionInfo,
+      PacketNames.actionRejected,
       PacketNames.dungeonOpened
     ])
       this.connector.on(name, (message) => {
-        this.messages.push({ name, payload: message.payload });
+        const payload = contractPayload(name, message.payload);
+        this.messages.push({ name, payload });
         appendFileSync(
           log,
-          JSON.stringify({ name, payload: message.payload }, (_, v) =>
+          JSON.stringify({ name, payload }, (_, v) =>
             typeof v === 'bigint' ? v.toString() : v
           ) + '\n'
         );
@@ -105,6 +128,7 @@ class PlayerClient {
     });
   }
   async join(playerId: string, x: number): Promise<WorldState> {
+    this.playerId = playerId;
     await this.connector.connect();
     const index = this.messages.length;
     await this.connector.send(new JoinWorldRequest(playerId, x)).submit();
@@ -115,17 +139,69 @@ class PlayerClient {
   async sessionInfo(): Promise<SessionInfo> {
     return this.connector.request(new SessionInfoRequest()).submit<SessionInfo>();
   }
-  async move(x: number, sequence: number): Promise<WorldState> {
+  async moveResult(delta: number, sequence: bigint): Promise<WorldState | ActionRejected> {
     const index = this.messages.length;
-    await this.connector.send(new MoveRequest(x, sequence)).submit();
-    const state = await this.wait<WorldState>(
-      PacketNames.worldState,
-      index,
-      (state) => state.sequence === sequence
-    );
-    assert.equal(state.x, x);
-    assert.equal(state.sequence, sequence);
-    return state;
+    await this.connector.send(new MoveRequest(delta, sequence)).submit();
+    const find = (): WorldState | ActionRejected | undefined => {
+      const message = this.messages.find(
+        (value, messageIndex) =>
+          messageIndex >= index &&
+          (value.name === PacketNames.actionRejected ||
+            (value.name === PacketNames.worldState &&
+              (value.payload as WorldState).sequence === sequence))
+      );
+      return message?.payload as WorldState | ActionRejected | undefined;
+    };
+    const result = find();
+    if (result !== undefined) return result;
+    return new Promise<WorldState | ActionRejected>((resolve, reject) => {
+      const cleanup = (): void => {
+        clearTimeout(timer);
+        this.changed.off('change', check);
+      };
+      const check = (): void => {
+        const value = find();
+        if (value !== undefined) {
+          cleanup();
+          resolve(value);
+        } else if (this.failure) {
+          cleanup();
+          reject(this.failure);
+        } else if (!this.connector.isConnected) {
+          cleanup();
+          reject(new Error('Disconnected waiting for move result'));
+        }
+      };
+      const timer = setTimeout(() => {
+        cleanup();
+        reject(new Error(`Timeout waiting for move result; log=${this.log}`));
+      }, Limits.messageMs);
+      this.changed.on('change', check);
+      check();
+    });
+  }
+  async sendMove(delta: number, sequence: bigint): Promise<void> {
+    await this.connector.send(new MoveRequest(delta, sequence)).submit();
+  }
+  async move(delta: number, sequence: bigint): Promise<WorldState> {
+    while (true) {
+      const result = await this.moveResult(delta, sequence);
+      if (!('reason' in result)) return result;
+      const rejection = result as ActionRejected;
+      if (rejection.reason !== 'move-budget' || rejection.retryAfterMs <= 0)
+        throw new Error(`Move was rejected: ${rejection.reason}`);
+      await new Promise((resolve) => setTimeout(resolve, rejection.retryAfterMs));
+    }
+  }
+  async moveRejected(delta: number, sequence: bigint): Promise<ActionRejected> {
+    const result = await this.moveResult(delta, sequence);
+    assert('reason' in result, 'Move unexpectedly succeeded');
+    return result as ActionRejected;
+  }
+  async state(): Promise<WorldState> {
+    const index = this.messages.length;
+    await this.connector.send(new JoinWorldRequest(this.playerId, 0)).submit();
+    return this.wait<WorldState>(PacketNames.worldState, index);
   }
   async dungeon(id: string): Promise<{ dungeonId: string; nodeId: string }> {
     const index = this.messages.length;
@@ -137,6 +213,11 @@ class PlayerClient {
     );
     assert.equal(opened.dungeonId, id);
     return opened;
+  }
+  async packetRejected(packet: EnterZone): Promise<ActionRejected> {
+    const index = this.messages.length;
+    await this.connector.send(packet).submit();
+    return this.wait<ActionRejected>(PacketNames.actionRejected, index, (value) => value.reason === 'packet-not-allowed');
   }
   async close(): Promise<void> {
     await this.connector.close();
@@ -166,37 +247,104 @@ export async function scenario(
     if (name === 'border') {
       const observer = create('observer');
       const observed = await observer.join(`observer-${runId}`, 300);
+      const appearedMark = observer.messages.length;
       const origin = await client.join(id, 299);
       assert.equal(observed.nodeId, 'zoneB');
       assert.equal(origin.nodeId, 'zoneA');
-      const mark = observer.messages.length;
-      await client.move(298, 1);
-      const visible = await observer.wait<BorderVisible>(
-        PacketNames.borderVisible,
-        mark,
-        (v) => v.actorId === id && v.sequence === 1
+      const appeared = await observer.wait<PlayerAppeared>(
+        PacketNames.playerAppeared,
+        appearedMark,
+        (v) => v.playerId === id
       );
-      assert.equal(visible.observerZoneId, 'zone-4');
-      assert.equal(visible.sourceZoneId, 'zone-3');
-      assert.equal(visible.x, 298);
+      assert.equal(appeared.position.x, 299);
+      const mark = observer.messages.length;
+      await client.move(-1, 1n);
+      const visible = await observer.wait<PlayerMoved>(
+        PacketNames.playerMoved,
+        mark,
+        (v) => v.playerId === id && v.sequence === 1n
+      );
+      assert.equal(visible.position.x, 298);
+      const leftMark = observer.messages.length;
+      await client.move(2, 2n);
+      const left = await observer.wait<PlayerLeft>(
+        PacketNames.playerLeft,
+        leftMark,
+        (v) => v.playerId === id && v.reason === 'left-zone'
+      );
+      assert.equal(left.reason, 'left-zone');
+      const enteredMark = observer.messages.length;
+      const entered = await observer.wait<PlayerAppeared>(
+        PacketNames.playerAppeared,
+        enteredMark,
+        (v) => v.playerId === id && v.position.x === 300
+      );
+      assert.equal(entered.position.x, 300);
+      const movedMark = observer.messages.length;
+      await client.move(1, 3n);
+      await observer.wait<PlayerMoved>(
+        PacketNames.playerMoved,
+        movedMark,
+        (v) => v.playerId === id && v.position.x === 301 && v.sequence === 3n
+      );
+      const disconnectedMark = observer.messages.length;
+      await client.close();
+      const disconnected = await observer.wait<PlayerLeft>(
+        PacketNames.playerLeft,
+        disconnectedMark,
+        (v) => v.playerId === id && v.reason === 'disconnected'
+      );
+      assert.equal(disconnected.reason, 'disconnected');
       assert.equal(observer.disconnects, 0);
     } else {
-      const before = await client.join(id, 299);
+      const before = await client.join(id, name === 'cross' ? 294 : 299);
       const session = await client.sessionInfo();
       assert.equal(before.zoneId, 'zone-3');
       assert.equal(before.nodeId, 'zoneA');
       if (name === 'cross' || name === 'reconnect') {
-        const after = await client.move(300, 1);
-        sameActor(session, await client.sessionInfo());
-        assert.equal(after.zoneId, 'zone-4');
-        assert.equal(after.nodeId, 'zoneB');
         if (name === 'cross') {
+          const tooLarge = await client.moveRejected(11, 1n);
+          assert.equal(tooLarge.reason, 'step-too-large');
+          assert.deepEqual(await client.state(), before, 'Step rejection changed state');
+          const responseIndex = client.messages.length;
+          const firstResponse = client.wait<WorldState>(
+            PacketNames.worldState,
+            responseIndex,
+            (state) => state.sequence === 1n
+          );
+          const budgetResponse = client.wait<ActionRejected>(
+            PacketNames.actionRejected,
+            responseIndex,
+            (rejection) => rejection.reason === 'move-budget'
+          );
+          await client.sendMove(2, 1n);
+          await client.sendMove(10, 2n);
+          const first = await firstResponse;
+          const budget = await budgetResponse;
+          assert.equal(budget.reason, 'move-budget');
+          assert(budget.retryAfterMs > 0, 'Move budget rejection omitted retry delay');
+          assert.deepEqual(await client.state(), first, 'Budget rejection changed state');
+          const after = await client.move(10, 2n);
+          assert.equal(after.x, 306);
+          sameActor(session, await client.sessionInfo());
+          const packet = await client.packetRejected(new EnterZone(new Position(307), 3n, 0));
+          assert.equal(packet.retryAfterMs, 0);
+          assert.deepEqual(await client.state(), after, 'Session rejection changed state');
+          const edge = create('edge');
+          const edgeBefore = await edge.join(`edge-${runId}`, Game.zoneWidth * Game.zoneCount - 1);
+          const outside = await edge.moveRejected(1, 1n);
+          assert.equal(outside.reason, 'outside-world');
+          assert.deepEqual(await edge.state(), edgeBefore, 'World-boundary rejection changed state');
           assert.deepEqual(await client.sessionInfo(), session);
-          const continued = await client.move(301, 2);
+          const continued = await client.move(1, 3n);
           assert.equal(continued.nodeId, 'zoneB');
           sameActor(session, await client.sessionInfo());
           assert.equal((await client.dungeon(`dungeon-${runId}`)).nodeId, 'instance');
         } else {
+        const after = await client.move(1, 1n);
+        sameActor(session, await client.sessionInfo());
+        assert.equal(after.zoneId, 'zone-4');
+        assert.equal(after.nodeId, 'zoneB');
           await client.close();
           const reconnect = create('reconnected');
           assert.deepEqual(
@@ -207,12 +355,12 @@ export async function scenario(
           const rebound = await reconnect.sessionInfo();
           sameActor(session, rebound);
           assert.notEqual(rebound.sessionId, session.sessionId);
-          await reconnect.move(301, 2);
+          await reconnect.move(1, 2n);
           sameActor(session, await reconnect.sessionInfo());
           assert.equal(reconnect.disconnects, 0);
         }
       } else if (name === 'update') {
-        await client.move(298, 1);
+        let state = await client.move(-1, 1n);
         let safe = false;
         let drainFailure: unknown;
         const drain = control.drain(before.nodeId).then(
@@ -223,13 +371,13 @@ export async function scenario(
             drainFailure = error;
           }
         );
-        let sequence = 1;
-        let state: WorldState;
+        let sequence = 1n;
         try {
           do {
             if (drainFailure) throw drainFailure;
             sequence++;
-            state = await client.move(sequence % 2 === 0 ? 299 : 298, sequence);
+            const target = sequence % 2n === 0n ? 299 : 298;
+            state = await client.move(target - state.x, sequence);
             sameActor(session, await client.sessionInfo());
             assert.equal(client.disconnects, 0);
           } while (!safe);
@@ -242,7 +390,7 @@ export async function scenario(
         assert.equal(state.zoneId, 'zone-3');
         assert.equal(state.nodeId, 'zoneB', 'SafeToShutdown did not move the player to Zone B');
         await control.replace(before.nodeId);
-        const after = await client.move(299, sequence + 1);
+        const after = await client.move(299 - state.x, sequence + 1n);
         assert.equal(after.nodeId, 'zoneB');
         assert.deepEqual(await client.sessionInfo(), session);
         assert.equal((await client.dungeon(`after-update-${runId}`)).nodeId, 'instance');
@@ -251,7 +399,7 @@ export async function scenario(
         const fresh = await replacement.join(`replacement-${runId}`, Control.replacementX);
         assert.equal(fresh.nodeId, before.nodeId, 'Replacement did not accept the new Zone');
         const freshSession = await replacement.sessionInfo();
-        const moved = await replacement.move(Control.replacementX + 1, 1);
+        const moved = await replacement.move(1, 1n);
         assert.equal(moved.nodeId, before.nodeId);
         sameActor(freshSession, await replacement.sessionInfo());
         assert.equal(replacement.disconnects, 0);

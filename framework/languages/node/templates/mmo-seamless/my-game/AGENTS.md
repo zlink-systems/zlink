@@ -40,7 +40,7 @@ For host process debugging, install Node.js 22 or later and npm, then add `--loc
 
 An Actor is a game state object addressed by ID; `Player` in `server/zone/player.ts` manages the player's coordinate and sequence. A Spot is a state object that accepts Actors and executes shared game rules; `Zone` in `server/zone/zone.ts` manages Zone visibility and pending arrivals. Visibility values are copies of Actor movement state used for observation, so apply player state changes to the Actor.
 
-`server/zone/main.ts` registers the Entry Spot, factories, handlers, and the `border` channel, and `Entry` in `server/zone/zone.ts` receives the first admission of a player Actor. Add handlers that combine player rules with shared Zone rules in `server/zone/handlers.ts`, and list every new handler in the `providers` array of `server/zone/main.ts`. When changing node composition, update registrations, `server/config/`, and the descriptor together so the structure check validates the same composition.
+`server/zone/main.ts` registers the Entry Spot, factories, handlers, and the `border` channel, and `Entry` in `server/zone/zone.ts` receives the first admission of a player Actor. `ZonePositionDomain` owns coordinates, sequence, movement budget, and visibility state. Add handlers that combine contracts with those domain rules in `server/zone/handlers.ts`, and list every new handler in the `providers` array of `server/zone/main.ts`. When changing node composition, update registrations, `server/config/`, and the descriptor together so the structure check validates the same composition.
 
 ### Dungeons
 
@@ -48,7 +48,7 @@ An Actor is a game state object addressed by ID; `Player` in `server/zone/player
 
 ### Shared contracts and hosting
 
-`server/shared/messages.ts` defines messages shared by processes, `server/shared/constants.ts` defines names, scenario IDs, limits, and control strings, and `server/shared/config.ts` defines process settings. `server/shared/hosting.ts` configures hosting and diagnostics and handles runtime control commands, while `server/shared/diagnostics.ts` writes diagnostic records to stderr. Define messages in `server/shared/messages.ts`: the build generates packet schemas from that directory. Keep player state in `Player` so separate processes do not independently modify the same fact.
+`server/shared/messages.ts` defines messages shared by processes, `server/shared/constants.ts` defines names, scenario IDs, limits, and control strings, and `server/shared/config.ts` defines process settings. `server/shared/hosting.ts` configures hosting and diagnostics and handles runtime control commands, while `server/shared/diagnostics.ts` writes diagnostic records to stderr. Define messages in `server/shared/messages.ts`: the build generates packet schemas from that directory. Keep position and movement decisions in `ZonePositionDomain` so separate processes do not independently modify the same fact.
 
 ### E2E client
 
@@ -74,29 +74,37 @@ The Location Store records an object's current runtime location by ID; this proj
 
 ### Actor membership
 
-A membership change moves an Actor from one Spot to another. Admission is the target Spot's decision to accept or reject the membership request. `Player.move` requests deferred admission to the next Zone, and `onJoinCompleted` observes the completion result. [Actor membership](https://docs.zlink.systems/node/guide/server/35-actor-membership/) explains the order of admission and completion.
+A membership change moves an Actor from one Spot to another. Admission is the target Spot's decision to accept or reject the membership request. A Zone handler requests deferred admission after `ZonePositionDomain` accepts the move, and `onJoinCompleted` observes the completion result. [Actor membership](https://docs.zlink.systems/node/guide/server/35-actor-membership/) explains the order of admission and completion.
 
 ### Host relocation and drain
 
 Relocation changes an object's execution host; drain moves a host's workload elsewhere so the host can shut down. Application adapters capture and restore game state, while Framework transfers workload and routes. `runHost` in `server/shared/hosting.ts` requests public host relocation on the `drain` command and observes safe shutdown; the [Relocation guide](https://docs.zlink.systems/node/guide/server/37-relocation/) explains the procedure.
 
-### Border notifications and timers
+### Border notifications
 
-A timer runs a handler periodically; `BorderTick` uses one to publish information about players near a border. In this pub/sub exchange, `BorderHandler` receives subscribed information, and `BorderDelivery` forwards notifications through the receiving Actor's bound Session. [Timers and workers](https://docs.zlink.systems/node/guide/server/36-timer-worker/) explains registration and execution of periodic work.
+Zone state publishes appearance, movement, and departure when each fact changes. In this pub/sub exchange, border delivery forwards the typed event through the receiving Actor's bound Session without a duplicate local route.
 
 ## Request flow
 
 Requests in the example game follow this path. Reading the code along this path before adding or transferring a feature locates the places to change.
 
 1. The client connects to the Session node over STREAM and sends the first packet, `JoinWorldRequest`. `Session` checks the first packet name, calls `getOrCreate` for the Player Actor by `playerId`, binds it to the Session, and relays the original packet.
-2. A new Actor starts in the Entry Spot `Entry`. The `EnterWorld` handler checks the identity and calls `Player.move`, which requests `joinSpot(...).defer()` for the Zone that covers the coordinate.
+2. A new Actor starts in the Entry Spot `Entry`. The `EnterWorld` handler checks identity, creates an admission value, and requests `joinSpot(...).defer()` for the Zone that covers the coordinate.
 3. When the join completes, `Player.onJoinCompleted` sends `WorldState` through the bound Session. Later packets from the same client are handled by the handlers of the Zone that holds the Actor (such as `Move`), which send results through the same Session.
-4. When movement reaches a coordinate in another Zone, `Move` calls `Player.move` again. The client connection does not change, even when that Zone is on another node.
-5. To replace a node, the `drain` command in `runHost` requests relocation. Framework takes the game state from `capture` in `PlayerRelocation` and `ZoneRelocation` and calls `restore` on another node.
+4. `Move` asks `ZonePositionDomain` to validate a delta and sequence. When its computed coordinate belongs to another Zone, the handler requests the next admission. The client connection does not change, even when that Zone is on another node.
+5. To replace a node, the `drain` command in `runHost` requests relocation. Framework takes the Zone domain snapshot, including remaining movement-budget milliseconds, and calls `restore` on another node.
 
-## Developing from this sample
+## Extend this template's domain
 
-This sample shows how the features work together, so read and run it rather than turning it into your game. Start your own project from the Node.js starter: choose Node.js in the Initializer at [ZLink Start](https://zlink.systems/start), or use `framework/languages/node/templates/starter/my-game` in the ZLink repository. Then transfer the features you need from this sample one at a time. The starter's `AGENTS.md` owns the choice between structures; this section covers only `mmo-seamless`. Keep this sample unchanged next to your project as a reference.
+Extend this template's domain to build a seamless MMO server. Add game rules where their state and decisions are owned.
+
+- Domain state and decisions: `server/zone/domain.ts`.
+- Typed contracts: `server/shared/messages.ts`.
+- Session allow-list: `server/session/session.ts`.
+- Domain boundary checks: `e2e/domain-checks.ts`.
+- Scenarios and observations: `e2e/client.mts`; update `zlink.structure.json` with the actual scenario commands.
+
+Add a typed contract, put its state decision in `ZonePositionDomain`, permit only client packets in Session, add a domain boundary check and an e2e observation of acceptance, rejection, and unchanged state. Store remaining budget milliseconds in relocation snapshots. Run `./run-e2e.sh --check-domain`, `./run-e2e.sh --build-only`, and `./run-e2e.sh`.
 
 ### Run the sample first
 
@@ -125,7 +133,7 @@ Transfer one row at a time and run the build, the structure check, and the relat
 
 Start with the message contracts. Define the classes in `messages.ts` first, then move each handler that fails to compile to the new messages. The build generates packet schemas from `server/shared`, so messages defined elsewhere are not registered. When you change the first-entry packet, update the first-packet check in `Session`, `EnterWorld`, and `Reconnect` to receive the same packet.
 
-Keep each piece of state in the object that decides it. Per-player state belongs in `Player`; state shared by several players belongs in a Spot. When you change state fields, update that object's snapshot and its `capture` and `restore` together. A missing field disappears after relocation, and the `update` scenario detects the loss.
+Keep each piece of state in the object that decides it. Position, sequence, movement budget, and visibility belong in `ZonePositionDomain`. When you change those fields, update its snapshot and `capture` and `restore` together. A missing field disappears after relocation, and the `update` scenario detects the loss.
 
 Add a channel, its subscription, and its declaration in the same change: the subscription in `Zone.configure()`, the channel registration in `server/zone/main.ts`, and the `channels` declaration in `zlink.structure.json`. If the three disagree, the structure check or the scenario fails.
 

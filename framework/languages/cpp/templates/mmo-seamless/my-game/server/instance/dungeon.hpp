@@ -1,4 +1,5 @@
 #pragma once
+#include "server/shared/config.hpp"
 #include "server/zone/player.hpp"
 namespace MyGame
 {

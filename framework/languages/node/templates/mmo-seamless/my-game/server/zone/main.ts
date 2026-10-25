@@ -7,14 +7,15 @@ import { ZLINK_SPOT_MANAGER } from '@zlink-systems/nestjs';
 import { runHost, failHost } from '../shared/hosting';
 import { Names } from '../shared/constants';
 import { Entry, Zone, ZoneRelocation } from './zone';
-import { PlayerFactory, PlayerRelocation } from './player';
+import { PlayerFactory } from './player';
 import {
   EnterWorld,
   Reconnect,
   Move,
-  BorderTick,
   BorderHandler,
-  BorderDelivery,
+  PlayerAppearedDelivery,
+  PlayerMovedDelivery,
+  PlayerLeftDelivery,
   OpenDungeon
 } from './handlers';
 runHost((_builder, config, mesh) => {
@@ -22,7 +23,7 @@ runHost((_builder, config, mesh) => {
     throw new Error('Zone configuration required');
   const objects = mesh.objects().server();
   objects.addEntrySpot(Entry, Names.actor);
-  objects.addActorFactory(Names.actor, PlayerFactory, (f) => f.preserveStateWith(PlayerRelocation));
+  objects.addActorFactory(Names.actor, PlayerFactory, (f) => f.recreateOnRelocation());
   objects.addSpotFactory(Names.zone, Zone, (f) => {
     f.stableTypeLimit(config.zoneCapacity!);
     f.executionMode(ZLinkUserSpotExecutionMode.SpotWide);
@@ -35,13 +36,13 @@ runHost((_builder, config, mesh) => {
       Zone,
       ZoneRelocation,
       PlayerFactory,
-      PlayerRelocation,
       EnterWorld,
       Reconnect,
       Move,
-      BorderTick,
       BorderHandler,
-      BorderDelivery,
+      PlayerAppearedDelivery,
+      PlayerMovedDelivery,
+      PlayerLeftDelivery,
       OpenDungeon
     ],
     listener: { kind: 'routeMesh', name: Names.mesh },

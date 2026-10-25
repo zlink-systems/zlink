@@ -1,6 +1,6 @@
 # my-game
 
-A Kotlin seamless MMORPG template using public ZLink Framework 0.30.2 packages. Session processes bind players to Actors; Zone processes host a six-zone world; Instance processes create Dungeon User Spots on demand. Player Actors retain movement state across cross-node joins and planned host relocation.
+A Kotlin seamless MMORPG template using public ZLink Framework 0.30.2 packages. Session processes bind players to Actors; Zone processes host a six-zone world; Instance processes create Dungeon User Spots on demand. Each Zone's `ZonePositionDomain` owns authoritative movement and visibility state, including the remaining movement budget captured for relocation.
 
 ```mermaid
 flowchart LR
@@ -36,24 +36,26 @@ For local process debugging, run `./run-e2e.sh --local` or `pwsh -NoProfile -Fil
 
 ```sh
 ./run-e2e.sh
-./run-e2e.sh --scenario cross,border,reconnect
+./run-e2e.sh --scenario cross,border,reconnect,update
+./run-e2e.sh --check-domain
 ```
 
 ```powershell
 pwsh -NoProfile -File ./run-e2e.ps1
-pwsh -NoProfile -File ./run-e2e.ps1 -Scenario cross,border,reconnect
+pwsh -NoProfile -File ./run-e2e.ps1 -Scenario cross,border,reconnect,update
+pwsh -NoProfile -File ./run-e2e.ps1 -CheckDomain
 ```
 
 The runner validates the structure, starts an isolated Redis Compose project, starts each role's entrypoint and runs the selected scenarios. Redis and Framework listeners bind ephemeral loopback ports. Each run has a unique Redis prefix and `.logs/run-<id>/` directory. Normal message-flow diagnostics go to node stderr. Cleanup failures cause a nonzero exit code.
 
 | Scenario | Assertion |
 | --- | --- |
-| cross | Movement from zone-3 on Zone A to zone-4 on Zone B preserves Actor identity and Session; movement and Dungeon creation continue. |
-| border | An observer on zone-4 receives zone-3's authoritative border update across physical nodes. |
+| cross | Step-size, move-budget, world-boundary, and internal-packet rejections preserve state; movement retries only after the server delay and crosses Zone while preserving Actor and Session identity. |
+| border | An observer across physical nodes receives appearance, movement, `left-zone`, and `disconnected` events as the player crosses and disconnects. |
 | reconnect | A new physical Session rebinds the same Actor and preserves position, sequence and logical Zone. |
 | update | Movement continues during Zone A drain; relocation signals complete; Session and Actor identity persist after replacement; fresh work remains available. |
 
-Structure-only validation: `./run-e2e.sh --check-structure` or `pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure`.
+Domain checks run before the scenarios and separately with `./run-e2e.sh --check-domain` or `pwsh -NoProfile -File ./run-e2e.ps1 -CheckDomain`. They check NaN and infinity inside the domain tests, not through the JSON message model. Structure-only validation: `./run-e2e.sh --check-structure` or `pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure`.
 
 Message Follow is explicitly configured to 30 seconds in shared hosting. The wait for `SAFE_TO_SHUTDOWN` is derived from that period plus the existing host relocation budget. Packet deadlines and the relocation operation budget remain unchanged.
 
@@ -67,6 +69,6 @@ Fixed Zones are bootstrapped serially: Zone A fills its three-Spot capacity befo
 
 ## 한국어 실행 안내
 
-기본 e2e는 Docker에서 실행합니다. 로컬 process 디버깅은 JDK 25를 준비하고 `--local` 또는 `-Local`로 실행합니다. Docker Compose v2를 준비한 뒤 위 Build 명령과 Docker e2e 명령을 실행합니다. Windows에서는 PowerShell 7을 사용합니다. 기본 실행은 `cross`, `border`, `reconnect`, `update`를 검증하며, 시나리오 선택 명령으로 필요한 범위만 실행할 수 있습니다.
+기본 e2e는 Docker에서 실행합니다. 로컬 process 디버깅은 JDK 25를 준비하고 `--local` 또는 `-Local`로 실행합니다. Docker Compose v2를 준비한 뒤 위 Build 명령과 Docker e2e 명령을 실행합니다. Windows에서는 PowerShell 7을 사용합니다. 기본 실행은 거부 뒤 상태 불변, Zone 경계 이동, 가시성 종료, 재접속과 host 교체를 순서대로 검증합니다. `--check-domain`은 JSON으로 전송하지 않는 NaN·Infinity 입력과 경계 검사를 별도로 실행합니다.
 
 실행별 설정과 node 로그는 `.logs/run-<id>/`에 기록됩니다. Zone A의 drain이 끝나면 Session 연결과 Actor identity를 확인하고 기존 process를 종료합니다. 대체 process는 같은 node identity, capacity와 설정으로 시작하며 시작할 때 설정된 모든 Zone에 `getOrCreate`를 실행합니다. 이미 이전한 Zone은 기존 Zone으로 끝나 Framework Location Store의 소유가 유지되고, 닫힌 첫 Zone만 대체 process에 새로 만들어집니다.

@@ -15,13 +15,13 @@ int main (int argc, char **argv)
         auto objects = mesh.objects ().server ();
         objects.add_entry_spot<MyGame::WorldEntry> ();
         mesh.add_actor_factory<MyGame::Player, MyGame::PlayerFactory> (
-          MyGame::Names::player, std::make_shared<MyGame::PlayerFactory> (config),
-          [] (auto &factory) {
-              factory.template preserve_state_with<MyGame::PlayerRelocation> ();
+          MyGame::Names::player, std::make_shared<MyGame::PlayerFactory> (), [] (auto &factory) {
+              factory.recreate_on_relocation ();
           });
         objects
           .add_spot_factory<MyGame::Zone, MyGame::fx::actor_client_t, MyGame::fx::spot_manager_t,
-                            MyGame::fx::spot_publisher_client_t> (MyGame::Names::zone)
+                            MyGame::fx::spot_publisher_client_t, MyGame::NodeConfig> (
+            MyGame::Names::zone)
           .set_stable_type_limit (config.ZoneCapacity)
           .set_execution_mode (MyGame::fx::user_spot_execution_mode_t::spot_wide)
           .preserve_state_with<MyGame::ZoneRelocation> ();

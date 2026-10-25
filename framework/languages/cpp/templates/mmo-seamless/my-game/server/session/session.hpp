@@ -27,6 +27,19 @@ class Session final : public fx::packet_stream_session_t
                                 const zlink::message_t &payload) override
     {
         auto bound = stream.actors ().bound ();
+        if (dispatch.packet_name != JoinWorldRequest::packet_name
+            && dispatch.packet_name != MoveRequest::packet_name
+            && dispatch.packet_name != OpenDungeonRequest::packet_name
+            && dispatch.packet_name != SessionInfoRequest::packet_name) {
+            const ActionRejected rejection{"packet-not-allowed", 0};
+            if (bound.empty ())
+                co_await stream
+                  .write_packet (zlink::message_t::from_json (rejection))
+                  .async ();
+            else
+                co_await bound.front ().bound_session ().send (rejection).async ();
+            co_return;
+        }
         if (bound.empty ()) {
             if (dispatch.packet_name != JoinWorldRequest::packet_name)
                 throw std::invalid_argument ("JoinWorldRequest must be first");
@@ -51,9 +64,15 @@ class Session final : public fx::packet_stream_session_t
             throw std::runtime_error ("Exactly one Actor must be bound");
         auto &actor = bound.front ();
         if (dispatch.packet_name == SessionInfoRequest::packet_name) {
+            const auto generation = actor.ref ().object_generation ();
+            if (generation > static_cast<std::uint64_t> (Limits::max_safe_integer)) {
+                co_await actor.bound_session ().send (ActionRejected{"integer-out-of-range", 0})
+                  .async ();
+                co_return;
+            }
             co_await actor.bound_session ()
               .send (SessionInfo{stream.session_id (), std::string (actor.actor_id ()),
-                                 actor.ref ().object_generation ()})
+                                 static_cast<std::int64_t> (generation)})
               .async ();
             co_return;
         }

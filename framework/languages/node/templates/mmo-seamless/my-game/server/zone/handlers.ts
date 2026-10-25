@@ -2,25 +2,28 @@ import { Inject, Injectable } from '@nestjs/common';
 import {
   ZLINK_SPOT_MANAGER,
   zlinkEntrySpotActorSendHandler,
-  zlinkSpotActorSendHandler,
-  zlinkSpotTimerHandler
+  zlinkSpotActorSendHandler
 } from '@zlink-systems/nestjs';
 import {
   ZLinkSpotCreateState,
   type ZLinkMessageContext,
   type ZLinkSpotManager,
-  type ZLinkPublishMessageContext,
-  type ZLinkTimerTick
+  type ZLinkPublishMessageContext
 } from '@zlink-systems/framework';
-import { Names, PacketNames, zoneId } from '../shared/constants';
+import { Names, PacketNames } from '../shared/constants';
 import {
+  ActionRejected,
   JoinWorldRequest,
   MoveRequest,
   EnterZone,
   BorderPresence,
-  BorderVisible,
   OpenDungeonRequest,
-  DungeonOpened
+  DungeonOpened,
+  PlayerAppeared,
+  PlayerLeft,
+  PlayerMoved,
+  Position,
+  WorldState
 } from '../shared/messages';
 import { Entry, Zone } from './zone';
 import { Player } from './player';
@@ -38,7 +41,7 @@ export class EnterWorld {
     request: JoinWorldRequest
   ): Promise<void> {
     if (request.playerId !== actor.context.actorId) throw new Error('Player identity mismatch');
-    actor.move(new EnterZone(request.x, 0));
+    actor.move(new EnterZone(new Position(request.x), 0n, 0));
   }
 }
 @Injectable()
@@ -55,8 +58,17 @@ export class Reconnect {
     request: JoinWorldRequest
   ): Promise<void> {
     if (request.playerId !== actor.context.actorId) throw new Error('Player identity mismatch');
-    spot.remember(actor);
-    await actor.sendState();
+    const previous = spot.state(actor.context.actorId);
+    if (!previous) {
+      await actor.context.boundSession.send(new ActionRejected('outside-world', 0)).submit();
+      return;
+    }
+    spot.setConnected(actor.context.actorId, true);
+    if (!previous.connected)
+      await spot.publishLocal(actor.context.actorId, new PlayerAppeared(actor.context.actorId, previous.position));
+    await actor.context.boundSession
+      .send(new WorldState(String(spot.context.spotId), spot.nodeId, previous.position.x, previous.sequence))
+      .submit();
   }
 }
 @Injectable()
@@ -72,23 +84,22 @@ export class Move {
     _context: ZLinkMessageContext,
     request: MoveRequest
   ): Promise<void> {
-    if (request.sequence !== actor.sequence + 1)
-      throw new Error('Move sequence must increase by one');
-    const position = new EnterZone(request.x, request.sequence);
-    if (zoneId(request.x) !== String(spot.context.spotId)) {
-      actor.move(position);
+    const movement = spot.move(actor.context.actorId, request);
+    if (movement.rejection) {
+      await actor.context.boundSession.send(movement.rejection).submit();
       return;
     }
-    actor.apply(position);
-    spot.remember(actor);
-    await actor.sendState();
-  }
-}
-@Injectable()
-@zlinkSpotTimerHandler({ spot: () => Zone })
-export class BorderTick {
-  async handle(spot: Zone, _tick: ZLinkTimerTick): Promise<void> {
-    await spot.publishBorder();
+    const destination = new EnterZone(movement.position, movement.sequence, movement.remainingMs);
+    if (movement.relocates) {
+      await spot.leaveForZone(actor.context.actorId);
+      actor.move(destination);
+      return;
+    }
+    await spot.publishLocal(actor.context.actorId, new PlayerMoved(actor.context.actorId, movement.position, movement.sequence));
+    await spot.publishBorder(actor.context.actorId, movement.position, movement.sequence, 'moved', null);
+    await actor.context.boundSession
+      .send(new WorldState(String(spot.context.spotId), spot.nodeId, movement.position.x, movement.sequence))
+      .submit();
   }
 }
 @Injectable()
@@ -102,27 +113,26 @@ export class BorderHandler {
   }
 }
 @Injectable()
-@zlinkSpotActorSendHandler({
-  spot: () => Zone,
-  actor: () => Player,
-  packetName: PacketNames.borderVisible
-})
-export class BorderDelivery {
-  async handle(
-    _spot: Zone,
-    actor: Player,
-    context: ZLinkMessageContext,
-    presence: BorderVisible
-  ): Promise<void> {
-    const type = deliveryPackets.get(context.packetName);
-    if (!type) throw new Error(`Unregistered zone push: ${context.packetName}`);
-    // Restore the declared public DTO class before forwarding (#1731).
-    await actor.context.boundSession.send(Object.assign(new type(), presence)).submit();
+@zlinkSpotActorSendHandler({ spot: () => Zone, actor: () => Player, packetName: PacketNames.playerAppeared })
+export class PlayerAppearedDelivery {
+  async handle(_spot: Zone, actor: Player, _context: ZLinkMessageContext, event: PlayerAppeared): Promise<void> {
+    await actor.context.boundSession.send(new PlayerAppeared(event.playerId, event.position)).submit();
   }
 }
-const deliveryPackets: ReadonlyMap<string, typeof BorderVisible> = new Map([
-  [PacketNames.borderVisible, BorderVisible]
-]);
+@Injectable()
+@zlinkSpotActorSendHandler({ spot: () => Zone, actor: () => Player, packetName: PacketNames.playerMoved })
+export class PlayerMovedDelivery {
+  async handle(_spot: Zone, actor: Player, _context: ZLinkMessageContext, event: PlayerMoved): Promise<void> {
+    await actor.context.boundSession.send(new PlayerMoved(event.playerId, event.position, event.sequence)).submit();
+  }
+}
+@Injectable()
+@zlinkSpotActorSendHandler({ spot: () => Zone, actor: () => Player, packetName: PacketNames.playerLeft })
+export class PlayerLeftDelivery {
+  async handle(_spot: Zone, actor: Player, _context: ZLinkMessageContext, event: PlayerLeft): Promise<void> {
+    await actor.context.boundSession.send(new PlayerLeft(event.playerId, event.reason)).submit();
+  }
+}
 @Injectable()
 @zlinkSpotActorSendHandler({
   spot: () => Zone,

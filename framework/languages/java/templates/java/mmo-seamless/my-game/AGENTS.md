@@ -4,7 +4,7 @@
 
 This Java 25 project is an MMO server example in which players move across Zone boundaries. It runs a Session gateway for connections, Zone hosts A and B (six Zones, three per host), an Instance host for Dungeons, and Redis for location and relocation state. `build.gradle.kts` pins the ZLink Framework to `0.30.2` and the binding to `1.20.0`.
 
-The project layout below describes where to add gameplay, and "Developing from this sample" describes how to carry its features into your own project. The [README](README.md) covers prerequisites, deployment, and known issues in the public packages. [zlink.structure.json](zlink.structure.json) describes the initial node composition and scenarios; Framework and Redis manage object placement at runtime.
+The project layout below describes where to extend this template's domain. The [README](README.md) covers prerequisites, deployment, and known issues in the public packages. [zlink.structure.json](zlink.structure.json) describes the initial node composition and scenarios; Framework and Redis manage object placement at runtime.
 
 > **Documentation and package versions.** The [ZLink documentation](https://docs.zlink.systems/), [Java guide](https://docs.zlink.systems/java/guide/server/), [API reference](https://docs.zlink.systems/java/reference/), and [agent index](https://docs.zlink.systems/llms.txt) are the public documentation entry points. When a current guide describes a newer release, check its API against the version pinned in `build.gradle.kts`.
 
@@ -17,6 +17,7 @@ pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
 pwsh -NoProfile -File ./run-e2e.ps1
 pwsh -NoProfile -File ./run-e2e.ps1 -Scenario cross,border,reconnect
 pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
+pwsh -NoProfile -File ./run-e2e.ps1 -CheckDomain
 ```
 
 Bash provides the same workflow:
@@ -26,6 +27,7 @@ Bash provides the same workflow:
 ./run-e2e.sh
 ./run-e2e.sh --scenario cross,border,reconnect
 ./run-e2e.sh --check-structure
+./run-e2e.sh --check-domain
 ```
 
 For host process debugging, install JDK 25 and add `--local` or `-Local`. Add `--no-build` or `-NoBuild` only with an existing local build. Keep canonical scenario order and assertions; compare first failures with Known issues in the README.
@@ -38,7 +40,7 @@ For host process debugging, install JDK 25 and add `--local` or `-Local`. Add `-
 
 ### Zones and players
 
-An Actor is a game state object addressed by ID; `Player` in `server/zone/src/main/java/MyGame/zone/Player.java` manages the player's coordinate and sequence (`EnterZone`). A Spot is a state object that accepts Actors and executes shared game rules; `Zone` in `server/zone/src/main/java/MyGame/zone/Zone.java` manages Zone visibility (`ZoneState`) and pending arrivals. Visibility values are copies of Actor movement state used for observation, so apply player state changes to the Actor.
+An Actor is a game state object addressed by ID. `ZonePositionDomain` in `server/zone/src/main/java/MyGame/zone/ZonePositionDomain.java` owns coordinates, sequence, movement budget, admission and visibility state. `Zone` owns the domain instance and delivers its typed events through local Actor messages and adjacent Zone subscriptions.
 
 `server/zone/src/main/java/MyGame/zone/Program.java` registers the Entry Spot, the Zone and Player factories, and the `border` channel. `server/zone/src/main/java/MyGame/zone/Entry.java` and `server/zone/src/main/java/MyGame/zone/EnterWorld.java` handle a player's first entry into the world. Add handlers that combine player rules with shared Zone rules in `server/zone/src/main/java/MyGame/zone/Actions.java`. When changing node composition, update registrations, `server/config/`, and the descriptor together so the structure check validates the same composition.
 
@@ -48,11 +50,11 @@ An Actor is a game state object addressed by ID; `Player` in `server/zone/src/ma
 
 ### Shared contracts and hosting
 
-`server/shared/src/main/java/MyGame/` holds the messages and game constants shared by processes (`WorldState`, `JoinWorldRequest`, `MoveRequest`, `EnterZone`, `BorderPresence`, `BorderVisible`, `OpenDungeonRequest`, `DungeonOpened`, `SessionInfoRequest`, `SessionInfo`), `NodeConfig.java` defines process settings, and `Names.java` defines the mesh and type names. `Hosting.java` configures hosting and diagnostics and runs the stdin control loop (`drain`, `shutdown`, `vacate-zone`), `Control.java` defines the control markers and deadlines, and `Stores.java` creates the Redis Location and Relocation stores. `Rules.java` holds the world geometry and tick period, `Roles.java` the node roles and start order, and `Transfer.java` the cancellation check of the relocation adapters. Add contracts used by several processes here, and keep player state in `Player` so separate processes do not independently modify the same fact.
+`server/shared/src/main/java/MyGame/` holds the messages and game constants shared by processes (`WorldState`, `JoinWorldRequest`, `MoveRequest`, `EnterZone`, `Position`, `ActionRejected`, visibility events, `BorderPresence`, `OpenDungeonRequest`, `DungeonOpened`, `SessionInfoRequest`, `SessionInfo`), `NodeConfig.java` defines process settings, and `Names.java` defines the mesh and type names. `GameSession` in `server/session/src/main/java/MyGame/session/GameSession.java` contains the client packet allow-list. `Rules.java` holds world dimensions and the shared integer and movement limits. Add new typed contracts here, and put position decisions in `ZonePositionDomain` so one domain owns each fact.
 
 ### E2E client
 
-`e2e/src/main/java/MyGame/e2e/Client.java` connects through the public connector, and `e2e/src/main/java/MyGame/e2e/Scenarios.java` checks results observable by the client. `e2e/src/main/java/MyGame/e2e/Nodes.java` starts the nodes, keeps their logs, and cleans up the resources of each run; `e2e/src/main/java/MyGame/e2e/Program.java` reports cleanup failures after scenario failures, and either one makes the exit code 1. `e2e/src/main/java/MyGame/e2e/Structure.java` validates the actual files before startup. Keep the scenario order `cross,border,reconnect,update`. Verify new gameplay through received client results; the project includes no separate unit-test module or formatter configuration.
+`e2e/src/main/java/MyGame/e2e/Client.java` connects through the public connector, `Scenarios.java` checks client replies and push events, and `DomainChecks.java` tests domain boundaries in the same executable before node startup. `Nodes.java` starts the nodes, keeps their logs, and cleans up each run; `Structure.java` validates the actual files before startup. Add scenarios in `Scenarios.java`, and keep `Scenario.java`, `zlink.structure.json`, and the README scenario table aligned.
 
 ## ZLink concepts in this project
 
@@ -62,7 +64,7 @@ A RouteMesh connects nodes that exchange messages between processes; this projec
 
 ### Spots and Actors
 
-`Entry` accepts a player's first entry, `Zone` represents a geographical Zone, and `Dungeon` represents a dynamically created Dungeon. The [Spot guide](https://docs.zlink.systems/java/guide/server/21-spot/) describes registration and calls for these objects. `Player` retains movement state when its host Spot changes; the [Actor guide](https://docs.zlink.systems/java/guide/server/22-actor/) describes Actor creation and calls.
+`Entry` accepts a player's first entry, `Zone` represents a geographical Zone, and `Dungeon` represents a dynamically created Dungeon. The [Spot guide](https://docs.zlink.systems/java/guide/server/21-spot/) describes registration and calls for these objects. `ZonePositionDomain` retains Zone game state across relocation; the [Actor guide](https://docs.zlink.systems/java/guide/server/22-actor/) describes Actor creation and calls.
 
 ### STREAM and Sessions
 
@@ -74,64 +76,37 @@ The Location Store records an object's current runtime location by ID; this proj
 
 ### Actor membership
 
-A membership change moves an Actor from one Spot to another. Admission is the target Spot's decision to accept or reject the membership request. `Player.move` requests deferred admission to the next Zone, `Zone.onActorJoin` accepts or rejects it, and `Player.onJoinCompleted` observes the completion result. [Actor membership](https://docs.zlink.systems/java/guide/server/35-actor-membership/) explains the order of admission and completion.
+A membership change moves an Actor from one Spot to another. Admission is the target Spot's decision to accept or reject the membership request. `Player.move` requests deferred admission after `ZonePositionDomain` accepts a move; `Zone.onActorJoin` validates the server-computed arrival and `Player.onJoinCompleted` sends the typed completion reply. [Actor membership](https://docs.zlink.systems/java/guide/server/35-actor-membership/) explains the order of admission and completion.
 
 ### Host relocation and drain
 
-Relocation changes an object's execution host; drain moves a host's workload elsewhere so the host can shut down. Application adapters (`PlayerTransfer`, `ZoneTransfer`), registered with `preserveStateWith(...)`, capture and restore game state, while Framework transfers workload and routes. `Hosting.run` handles the `drain` control by requesting a public planned-maintenance relocation and observing safe shutdown; the [Relocation guide](https://docs.zlink.systems/java/guide/server/37-relocation/) explains the procedure.
+Relocation changes an object's execution host; drain moves a host's workload elsewhere so the host can shut down. `ZoneTransfer`, registered with `preserveStateWith(...)`, captures the Zone domain snapshot with remaining movement-budget milliseconds; Framework transfers workload and routes. `Hosting.run` handles the `drain` control by requesting public planned-maintenance relocation and observing safe shutdown; the [Relocation guide](https://docs.zlink.systems/java/guide/server/37-relocation/) explains the procedure.
 
-### Border notifications and timers
+### Border notifications
 
-A timer runs a handler periodically; `Zone.onInitialize` adds one that runs `BorderTick` to publish information about players near a border. In this pub/sub exchange, the handlers in `BorderRoutes` receive subscribed information, and `Zone.showBorder` sends it to the observing Actors, whose `Actions.deliver` forwards it through the Actor's bound Session. [Timers and workers](https://docs.zlink.systems/java/guide/server/36-timer-worker/) explains registration and execution of periodic work.
+Zone state publishes appearance, movement and departure when each fact changes. `BorderRoutes` delivers adjacent Zone events through the same Actor delivery handlers used for local events; the same fact is sent through only one route to each observer.
 
 ## Request flow
 
 Requests in the example game follow this path. Reading the code along this path before adding or transferring a feature locates the places to change.
 
-1. The client connects to the Session node over STREAM and sends the first packet, `JoinWorldRequest`. `GameSession` checks the first packet type, calls `getOrCreate` for the Player Actor by `playerId`, binds it with `bindOrGet`, and relays the original packet.
-2. A new Actor starts in the Entry Spot. `EnterWorld.join` checks the identity and calls `Player.move`, and `Player.move` requests `joinSpot(...).defer()` for the Zone that covers the coordinate.
-3. `Zone.onActorJoin` accepts the arrival. When the join completes, `Player.onJoinCompleted` sends `WorldState` through the bound Session. Later packets from the same client are handled by the handlers of the Zone that holds the Actor (such as `Actions.move`), which send results through the same Session.
-4. When movement reaches a coordinate in another Zone, `Actions.move` calls `Player.move` again. The client connection does not change, even when that Zone is on another node.
-5. To replace a node, the `drain` control in `Hosting.run` requests relocation. Framework takes the game state from `capture` in `PlayerTransfer` and `ZoneTransfer` and calls `restore` on another node.
+1. The client connects to the Session node over STREAM and sends the first packet, `JoinWorldRequest`. `GameSession` enforces the client packet allow-list, gets or creates the Player Actor, binds it and relays the original typed packet.
+2. A new Actor starts in the Entry Spot. `EnterWorld.join` checks identity and asks `ZonePositionDomain` to resolve the initial location before requesting deferred Zone admission.
+3. `Zone.onActorJoin` validates the admission and returns a typed `WorldState` completion reply. Once joined, the Zone domain owns position, sequence, movement budget and visibility.
+4. `Actions.move` submits a delta and sequence to the domain. The server checks and calculates the destination; a cross-Zone move carries the remaining budget as milliseconds into the next Zone admission.
+5. To replace a node, the `drain` control in `Hosting.run` requests relocation. `ZoneTransfer` captures the domain snapshot with remaining budget milliseconds; Framework moves workload and routes.
 
-## Developing from this sample
+## Extend this template's domain
 
-This sample shows how the features work together, so read and run it rather than turning it into your game. Start your own project from the Java starter: choose Java in the Initializer at [ZLink Start](https://zlink.systems/start), or use `framework/languages/java/templates/java/starter/my-game` in the ZLink repository. Then transfer the features you need from this sample one at a time. The starter's `AGENTS.md` owns the choice between structures; this section covers only `mmo-seamless`. Keep this sample unchanged next to your project as a reference.
+Extend this template's domain to build a seamless MMO server. Add rules to the object that owns their state and decision.
 
-### Run the sample first
+- Domain state and decisions: `server/zone/src/main/java/MyGame/zone/ZonePositionDomain.java`.
+- Typed contracts: `server/shared/src/main/java/MyGame/`.
+- Session client packet allow-list: `server/session/src/main/java/MyGame/session/GameSession.java`.
+- Domain boundary checks: `e2e/src/main/java/MyGame/e2e/DomainChecks.java`.
+- Scenario behavior and push observations: `e2e/src/main/java/MyGame/e2e/Scenarios.java` and `Client.java`.
 
-Before transferring anything, run the build and e2e once with the [Development commands](#development-commands) to confirm the downloaded sample works and to see its behavior. This result is the baseline for comparison. If it fails, compare the failure with Known issues in the [README](README.md) first.
-
-### Features to transfer
-
-Feature names match the feature table in the starter's `AGENTS.md`. Paths are relative to this directory. The starter has one Session node and the `connect` scenario only, so the last column lists what grows in the starter with each feature.
-
-| Feature | File in this sample | What to transfer | What to grow in the starter alongside |
-| --- | --- | --- | --- |
-| Typed messages | `server/shared/src/main/java/MyGame/JoinWorldRequest.java` | The records of the features you adopt: `WorldState`, `JoinWorldRequest`, `MoveRequest`, `EnterZone`, `BorderPresence`, `BorderVisible`, `OpenDungeonRequest`, `DungeonOpened`; `SessionInfoRequest` and `SessionInfo` only if your client needs them | The registration names in `Names.java`; the starter already has `Control.java` and `Json.java` |
-| Actor | `server/zone/src/main/java/MyGame/zone/Player.java`, `server/zone/src/main/java/MyGame/zone/PlayerFactory.java` | `Player` with its coordinate and sequence (`EnterZone`) and the movement rules, and its factory | A new `server/zone/` module (`build.gradle.kts`, `Program.java`) with `include("server:zone")` in `settings.gradle.kts`, its `server/config/` files, and the Actor factory registration in `Program.java`; the node declaration in `zlink.structure.json` and the check in `Structure.java`. The starter's `Nodes.java` starts only the Session role, so extend `Nodes.java` and `Roles.java` for the new role |
-| Spot | `server/zone/src/main/java/MyGame/zone/Zone.java`, `server/zone/src/main/java/MyGame/zone/ZoneState.java` | `Zone` with visibility, pending arrivals, and the border calculation | The Spot factory registration in `Program.java`; the `spots` and `nodes` declarations in `zlink.structure.json`, and a `Structure.java` check that compares them with the registrations (the starter declares no Spots) |
-| Entry and first admission | `server/zone/src/main/java/MyGame/zone/Entry.java`, `server/zone/src/main/java/MyGame/zone/EnterWorld.java`, `reconnect` in `server/zone/src/main/java/MyGame/zone/Actions.java` | `EnterWorld.join`, the first-entry path, and the identity check and state resend of `reconnect` | The Entry Spot registration and its `entry` declaration; a first-entry scenario and a `reconnect` scenario that compares state after reconnection |
-| Session binding | `server/session/src/main/java/MyGame/session/GameSession.java` | The first-packet check, then find or create the Actor, bind, and relay the original typed packet | The same first-packet type as `EnterWorld.join`; transfer it into the starter's `PlayerSession.java` |
-| Host relocation | `server/zone/src/main/java/MyGame/zone/PlayerTransfer.java`, `server/zone/src/main/java/MyGame/zone/ZoneTransfer.java`, `server/shared/src/main/java/MyGame/Hosting.java`, `server/shared/src/main/java/MyGame/Transfer.java` | The snapshot adapters with `capture` and `restore`, and the `vacate-zone` control next to `drain` and `shutdown` | The `preserveStateWith(...)` registrations; the `update` scenario, which checks that connections and state survive a server replacement and that the replacement node accepts new work |
-| Dynamic dungeon | `server/instance/src/main/java/MyGame/instance/Dungeon.java`, `server/instance/src/main/java/MyGame/instance/Program.java`, `dungeon` in `server/zone/src/main/java/MyGame/zone/Actions.java` | The dynamic User Spot creation pattern and the Dungeon information | A new `server/instance/` module and its config; the dynamic `dungeon` Spot and the `GetOrCreate` edge in `zlink.structure.json` |
-| Channel pub/sub and seamless movement | `configure()`, `publishBorder()`, `showBorder()` in `server/zone/src/main/java/MyGame/zone/Zone.java`; `server/zone/src/main/java/MyGame/zone/BorderTick.java`; `server/zone/src/main/java/MyGame/border/BorderRoutes.java` | The border subscription and publication, and the delivery to the receiving Actor's bound Session | The `border` channel registration in `Program.java` and its `channels` declaration in `zlink.structure.json`; a `border` scenario |
-
-`vacate-zone` is the control that e2e uses to verify replacement placement. The starter already has `drain` and `shutdown`, so transfer `vacate-zone` together with the `update` scenario.
-
-### Transfer order and rules
-
-Transfer one row at a time and run the build, the structure check, and the related e2e scenario after each. Add a scenario ID to the `Scenario` enum in `server/shared/src/main/java/MyGame/Scenario.java`, to the dispatch in `e2e/src/main/java/MyGame/e2e/Scenarios.java`, to `run.scenarios`, and to the selection examples in `run.commands` of `zlink.structure.json` together. Judge results by the replies and events actually received; do not make tests pass with fixed sleeps or longer deadlines.
-
-Start with the message contracts. Define the typed records in `server/shared/src/main/java/MyGame/` first, then move each handler that fails to compile to the new messages. When you change the first-entry packet, update the first-packet check in `GameSession`, `EnterWorld`, and `Actions.reconnect` to receive the same type.
-
-Keep each piece of state in the object that decides it. Per-player state belongs in `Player`; state shared by several players belongs in a Spot. When you change state fields, update that object's snapshot (`EnterZone` for `Player`, `ZoneState` for `Zone`) and its `capture` and `restore` in `PlayerTransfer` or `ZoneTransfer` together. A missing field disappears after relocation, and the `update` scenario detects the loss.
-
-Add a channel, its subscription, and its declaration in the same change: the subscription handler in `BorderRoutes.java` registered from `Zone.configure()`, the channel registration in `Program.java`, and the `channels` declaration in `zlink.structure.json`. The structure check compares the declaration with the node roles and `Names.BORDER` and fails before startup when they disagree; the `border` scenario verifies the subscription itself.
-
-To name roles differently from this sample, change the type names, `Names.java`, `server/config/`, the module and package names with `settings.gradle.kts`, and `zlink.structure.json` at once. Do the renaming in its own change, separate from transferring a feature, so failures are easier to trace.
-
-If `update` fails after a transfer, first check whether the snapshot is missing any state, then use the message flow in [Debugging](#debugging) to find the first failing step.
+Add the typed contract first, implement its state transition in `ZonePositionDomain`, permit only client-originated packets in the Session allow-list, add a domain boundary check, and observe acceptance, rejection and unchanged state in a scenario. Add the scenario to `Scenario.java`, `zlink.structure.json` (`run.scenarios` and `run.commands`) and the README table. Run `./run-e2e.sh --check-domain`, `./run-e2e.sh --build-only`, and `./run-e2e.sh`.
 
 ## Development considerations
 

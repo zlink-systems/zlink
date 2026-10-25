@@ -16,8 +16,7 @@ class Actions(private val spots: ZLinkSpotManager) {
         request: JoinWorldRequest,
     ) {
         require(request.playerId == actor.context.actorId())
-        spot.remember(actor)
-        actor.sendState()
+        spot.reconnect(actor)
     }
 
     @ZLinkSpotActorSend
@@ -27,27 +26,37 @@ class Actions(private val spots: ZLinkSpotManager) {
         dispatch: ZLinkMessageContext,
         request: MoveRequest,
     ) {
-        require(request.sequence == actor.position.sequence + 1) {
-            "Move sequence must increase by one"
-        }
-        val destination = EnterZone(request.x, request.sequence)
-        if (Rules.zoneId(request.x) != spot.context.spotId()) {
-            actor.move(destination)
-            return
-        }
-        actor.apply(destination)
-        spot.remember(actor)
-        actor.sendState()
+        spot.move(actor, request)
     }
 
     @ZLinkSpotActorSend
-    suspend fun deliver(
+    suspend fun deliverAppeared(
         spot: Zone,
         actor: Player,
         dispatch: ZLinkMessageContext,
-        message: BorderVisible,
+        event: PlayerAppeared,
     ) {
-        actor.context.boundSession().kotlin().send(message).await()
+        actor.context.boundSession().kotlin().send(event).await()
+    }
+
+    @ZLinkSpotActorSend
+    suspend fun deliverMoved(
+        spot: Zone,
+        actor: Player,
+        dispatch: ZLinkMessageContext,
+        event: PlayerMoved,
+    ) {
+        actor.context.boundSession().kotlin().send(event).await()
+    }
+
+    @ZLinkSpotActorSend
+    suspend fun deliverLeft(
+        spot: Zone,
+        actor: Player,
+        dispatch: ZLinkMessageContext,
+        event: PlayerLeft,
+    ) {
+        actor.context.boundSession().kotlin().send(event).await()
     }
 
     @ZLinkSpotActorSend
@@ -68,8 +77,4 @@ class Actions(private val spots: ZLinkSpotManager) {
                 .await()
         actor.context.boundSession().kotlin().send(opened).await()
     }
-}
-
-class BorderTick : ZLinkSuspendingSpotTimerHandler<Zone> {
-    override suspend fun handle(spot: Zone, tick: ZLinkTimerTick) = spot.publishBorder()
 }

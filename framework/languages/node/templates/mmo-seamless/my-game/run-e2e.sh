@@ -72,7 +72,7 @@ if ! "${compose[@]}" build >"$logs/build.log" 2>&1; then
   exit 1
 fi
 $build_only && exit 0
-if [[ "${arguments[0]:-}" == "--check-structure" ]]; then
+  if [[ "${arguments[0]:-}" == "--check-structure" || "${arguments[0]:-}" == "--check-domain" ]]; then
   "${compose[@]}" run --rm --no-deps -T --name "$project-check" runner "${arguments[@]}"
   exit 0
 fi

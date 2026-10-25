@@ -20,7 +20,7 @@ public sealed class WorldEntry(IZLinkEntrySpotContext context) : IZLinkEntrySpot
 public sealed class EnterWorldHandler
     : IZLinkEntrySpotActorSendHandler<WorldEntry, PlayerActor, JoinWorldRequest>
 {
-    public ValueTask HandleAsync(
+    public async ValueTask HandleAsync(
         WorldEntry entry,
         PlayerActor actor,
         IZLinkMessageContext context,
@@ -30,7 +30,12 @@ public sealed class EnterWorldHandler
     {
         if (request.PlayerId != actor.Context.ActorId)
             throw new InvalidDataException("Player identity does not match the bound Actor.");
-        actor.Move(new EnterZone(request.X, 0));
-        return ValueTask.CompletedTask;
+        var location = ZonePositionDomain.ResolveLocation(request.X);
+        if (location.Rejection is not null)
+        {
+            await actor.Context.BoundSession.Send(location.Rejection).Async();
+            return;
+        }
+        actor.Move(location.ZoneId!, new EnterZone(new Position(request.X), 0, 0));
     }
 }

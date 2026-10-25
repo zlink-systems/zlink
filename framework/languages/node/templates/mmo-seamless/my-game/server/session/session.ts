@@ -8,14 +8,24 @@ import type {
   ZLinkSessionDispatchContext,
   ZLinkSessionFactory
 } from '@zlink-systems/framework';
-import { Names, PacketNames } from '../shared/constants';
-import { JoinWorldRequest, SessionInfo } from '../shared/messages';
+import { Game, Names, PacketNames } from '../shared/constants';
+import { ActionRejected, JoinWorldRequest, SessionInfo } from '../shared/messages';
 export class Session implements ZLinkSession {
   constructor(
     readonly context: ZLinkSessionContext,
     private readonly actors: ZLinkActorManager
   ) {}
   async onDispatch(dispatch: ZLinkSessionDispatchContext, payload: ZLinkMessage): Promise<void> {
+    const allowed = new Set<string>([
+      PacketNames.joinWorldRequest,
+      PacketNames.moveRequest,
+      PacketNames.openDungeonRequest,
+      PacketNames.sessionInfoRequest
+    ]);
+    if (!allowed.has(dispatch.packetName)) {
+      await this.context.client.send(new ActionRejected('packet-not-allowed', 0)).submit();
+      return;
+    }
     if (!this.context.actors.bound.length) {
       if (dispatch.packetName !== PacketNames.joinWorldRequest)
         throw new Error('JoinWorldRequest must be first');
@@ -30,6 +40,10 @@ export class Session implements ZLinkSession {
     const actor = this.context.actors.bound[0];
     if (!actor) throw new Error('JoinWorldRequest must be first');
     if (dispatch.packetName === PacketNames.sessionInfoRequest) {
+      if (actor.ref.objectGeneration > BigInt(Game.maxSafeInteger)) {
+        await this.context.client.reply(new ActionRejected('integer-out-of-range', 0)).submit();
+        return;
+      }
       await this.context.client
         .reply(
           new SessionInfo(
