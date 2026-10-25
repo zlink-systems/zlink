@@ -36,13 +36,14 @@ settle_and_capture source target /dev/null allPhaseMessages
                                      str(Path(directory) / "calls")], capture_output=True, text=True)
         self.assertEqual(0, result.returncode, result.stderr)
 
-    def test_kotlin_runner_accepts_send_and_preserves_auxiliary_defaults(self):
+    def test_kotlin_runner_accepts_supported_patterns_and_preserves_auxiliary_defaults(self):
         runner = COMMON.parent / "java" / "run_local_kotlin.sh"
         invocation = runner.read_text().split("bench_init kotlin", 1)[1].split('cd "${HERE}"', 1)[0]
         script = 'source "$1"; bench_init kotlin' + invocation + '\nIFS=,; printf "%s|%s" "${patterns[*]}" "${payloads[*]}"'
         base = {key: value for key, value in os.environ.items()
                 if key not in ("PATTERNS", "PAYLOAD_SIZES", "IMPLEMENTATIONS")}
         for values, expected in [({}, "request-backpressure|1024"),
+                                 ({"PATTERNS": "request-serial"}, "request-serial|1024"),
                                  ({"PATTERNS": "send-saturation", "PAYLOAD_SIZES": "1024,4096"},
                                   "send-saturation|1024,4096")]:
             result = subprocess.run(["bash", "-c", script, "_", str(COMMON)],
@@ -50,7 +51,7 @@ settle_and_capture source target /dev/null allPhaseMessages
             self.assertEqual(0, result.returncode, result.stderr)
             self.assertEqual(expected, result.stdout)
         result = subprocess.run(["bash", "-c", script, "_", str(COMMON)],
-                                env=base | {"PATTERNS": "request-serial"}, capture_output=True)
+                                env=base | {"PATTERNS": "bogus-pattern"}, capture_output=True)
         self.assertNotEqual(0, result.returncode)
 
     def test_common_warmup_is_two_seconds(self):
