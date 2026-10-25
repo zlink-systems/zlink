@@ -6,3 +6,8 @@
 
 - Owner 없이 standalone callback을 등록하면 `invalid_operation`으로 실패합니다. `completion_owner_t`를 생성해 사용하십시오. ([§4.1 Completion owner](../../../framework/doc/framework/common/spec/server/languages/cpp/interfaces/01-common-runtime.ko.md#41-completion-owner))
 - `task_t`의 결과 저장 표현이 바뀌어 C++ 바이너리 ABI가 달라졌습니다. Framework·consumer·plugin·fake/test adapter·engine bridge를 같은 header로 모두 다시 빌드하고, 이전 header로 만든 객체와 섞지 마십시오. 공개 signature는 그대로입니다. ([§4 Common result, coroutine과 message](../../../framework/doc/framework/common/spec/server/languages/cpp/interfaces/01-common-runtime.ko.md#4-common-result-coroutine과-message))
+
+- 기본 typed JSON을 사용하는 DTO에는 `<zlink/json.hpp>`의 `zlink::json::dto_traits<T>::fields`를, enum에는 `enum_traits<E>::values`를 선언해야 합니다.
+- 64-bit 정수는 범위를 확인한 10진 문자열로, enum은 선언한 이름의 문자열로 전송합니다. 이전의 정수 number와 enum ordinal 입력은 거부합니다.
+- 기본 typed JSON에서 nlohmann `to_json`·`from_json` callback의 자동 대체 경로를 제거하였습니다.
+- 기존 callback의 wire 이름과 public member를 `field(name, &T::member)`로 옮기고, enum 이름과 값을 `enum_value(value, name)`으로 선언하십시오. 모든 field는 required이며 nullable field에는 `std::optional`을 사용하십시오.

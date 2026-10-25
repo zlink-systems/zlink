@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+#include <zlink/json.hpp>
 #include "../support/runtime_failure_fixture.hpp"
 #include "runtime/dispatch/offload_executor.hpp"
 #include "runtime/diagnostics/dispatch_options_access.hpp"
@@ -31,7 +32,15 @@ struct event_t
     static constexpr const char *packet_name = "NamedChannelEvent";
     int value = 0;
 };
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE (event_t, value)
+}
+
+template <> struct zlink::json::dto_traits<event_t>
+{
+    static constexpr auto fields = std::tuple{zlink::json::field ("value", &event_t::value)};
+};
+
+namespace
+{
 
 template <typename TContext>
 concept accepts_implicit_publish =

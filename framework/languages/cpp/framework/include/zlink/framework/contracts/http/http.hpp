@@ -85,6 +85,67 @@ struct http_request_t
     std::string remote_endpoint;
 };
 
+namespace detail
+{
+template <typename T> bool normalize_http_uri_value (const std::string &text, nlohmann::json &out)
+{
+    if constexpr (zlink::detail::json_profile::optional_type<T>::value) {
+        return normalize_http_uri_value<
+          typename zlink::detail::json_profile::optional_type<T>::value_type> (text, out);
+    } else if constexpr ((std::is_integral_v<T> && !std::is_same_v<T, bool> && sizeof (T) < 8)
+                         || std::is_floating_point_v<T>) {
+        T value{};
+        const auto parsed = std::from_chars (text.data (), text.data () + text.size (), value);
+        if (parsed.ec != std::errc{} || parsed.ptr != text.data () + text.size ())
+            return false;
+        return zlink::detail::json_profile::to_value (value, out);
+    } else if constexpr (std::is_same_v<T, bool>) {
+        if (text != "true" && text != "false")
+            return false;
+        out = text == "true";
+        return true;
+    } else {
+        out = text;
+        return true;
+    }
+}
+
+template <typename T>
+std::string bind_typed_http_uri (const http_request_t &http, const std::string &body)
+{
+    if constexpr (zlink::detail::json_profile::has_dto<T>) {
+        auto binding = zlink::detail::json_profile::parse (body.begin (), body.end ());
+        std::apply (
+          [&] (auto... field) {
+              (
+                [&] {
+                    const std::string name (field.name);
+                    const auto route = http.route_values.find (name);
+                    const auto query = http.query_values.find (name);
+                    const auto *text = route != http.route_values.end ()   ? &route->second
+                                       : query != http.query_values.end () ? &query->second
+                                                                           : nullptr;
+                    if (!text)
+                        return;
+                    using member =
+                      zlink::detail::json_profile::member_type<decltype (field.member)>;
+                    if (!normalize_http_uri_value<typename member::value> (*text, binding[name]))
+                        throw framework_exception_t (framework_error_kind_t::protocol_error,
+                                                     std::string (route != http.route_values.end ()
+                                                                    ? "invalid route "
+                                                                    : "invalid query ")
+                                                       + name);
+                }(),
+                ...);
+          },
+          zlink::json::dto_traits<T>::fields);
+        return zlink::detail::json_profile::dump (binding);
+    } else {
+        return body;
+    }
+}
+} // namespace detail
+
 struct http_response_t
 {
     int status = detail::default_http_success_status;
@@ -607,7 +668,8 @@ class http_options_builder_t
                     using request_type = typename THandler::request_type;
                     using reply_type = typename THandler::reply_type;
                     const auto request = serializers->template get<request_type> ().deserialize (
-                      encoded_payload_t::from_string (body));
+                      encoded_payload_t::from_string (
+                        detail::bind_typed_http_uri<request_type> (http, body)));
                     validate_request (request, context);
                     auto handler_result = invoke_typed_handler (handler, request, http, context);
                     co_return co_await resolve_handler_response<reply_type> (

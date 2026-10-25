@@ -405,7 +405,7 @@ std::string bind_http_request_body (const std::string &body,
     nlohmann::json json = nlohmann::json::object ();
     if (!body.empty ()) {
         try {
-            json = nlohmann::json::parse (body);
+            json = zlink::detail::json_profile::parse (body.begin (), body.end ());
             if (!json.is_object ()) {
                 throw framework_exception_t (framework_error_kind_t::protocol_error,
                                              "HTTP JSON body must be an object");

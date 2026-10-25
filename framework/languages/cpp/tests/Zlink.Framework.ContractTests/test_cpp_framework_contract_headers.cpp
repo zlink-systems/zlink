@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+#include <zlink/json.hpp>
 
 #include <zlink/framework.hpp>
 #include <zlink/framework/version.hpp>
@@ -779,70 +780,60 @@ struct contract_context_instance_spot_t : public zlink::framework::instance_spot
     zlink::framework::instance_spot_context_t value;
 };
 
-void to_json (nlohmann::json &json, const named_request_t &value)
-{
-    json = nlohmann::json{{"value", value.value}};
 }
 
-void from_json (const nlohmann::json &json, named_request_t &value)
+template <> struct zlink::json::dto_traits<named_request_t>
 {
-    value.value = json.value ("value", 0);
-}
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("value", &named_request_t::value)};
+};
 
-void to_json (nlohmann::json &json, const named_context_request_t &value)
+template <> struct zlink::json::dto_traits<named_context_request_t>
 {
-    json = nlohmann::json{{"value", value.value}};
-}
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("value", &named_context_request_t::value)};
+};
 
-void from_json (const nlohmann::json &json, named_context_request_t &value)
+template <> struct zlink::json::dto_traits<named_reply_t>
 {
-    value.value = json.value ("value", 0);
-}
+    static constexpr auto fields = std::tuple{zlink::json::field ("value", &named_reply_t::value)};
+};
 
-void to_json (nlohmann::json &json, const named_reply_t &value)
+namespace
 {
-    json = nlohmann::json{{"value", value.value}};
-}
-
-void from_json (const nlohmann::json &json, named_reply_t &value)
-{
-    value.value = json.value ("value", 0);
-}
 
 std::vector<std::uint8_t> to_stream_payload (const named_request_t &value)
 {
-    const auto text = zlink::detail::json_profile::dump (nlohmann::json (value));
+    const auto text = zlink::detail::json_profile::encode (value);
     return {text.begin (), text.end ()};
 }
 
 void from_stream_payload (const std::vector<std::uint8_t> &message, named_request_t &value)
 {
-    value =
-      zlink::detail::json_profile::parse (message.begin (), message.end ()).get<named_request_t> ();
+    value = zlink::detail::json_profile::decode<named_request_t> (message.begin (), message.end ());
 }
 
 std::vector<std::uint8_t> to_stream_payload (const named_context_request_t &value)
 {
-    const auto text = zlink::detail::json_profile::dump (nlohmann::json (value));
+    const auto text = zlink::detail::json_profile::encode (value);
     return {text.begin (), text.end ()};
 }
 
 void from_stream_payload (const std::vector<std::uint8_t> &message, named_context_request_t &value)
 {
-    value = zlink::detail::json_profile::parse (message.begin (), message.end ())
-              .get<named_context_request_t> ();
+    value = zlink::detail::json_profile::decode<named_context_request_t> (message.begin (),
+                                                                          message.end ());
 }
 
 std::vector<std::uint8_t> to_stream_payload (const named_reply_t &value)
 {
-    const auto text = zlink::detail::json_profile::dump (nlohmann::json (value));
+    const auto text = zlink::detail::json_profile::encode (value);
     return {text.begin (), text.end ()};
 }
 
 void from_stream_payload (const std::vector<std::uint8_t> &message, named_reply_t &value)
 {
-    value =
-      zlink::detail::json_profile::parse (message.begin (), message.end ()).get<named_reply_t> ();
+    value = zlink::detail::json_profile::decode<named_reply_t> (message.begin (), message.end ());
 }
 
 struct named_send_handler_t
@@ -1006,7 +997,6 @@ static_assert (!has_set_send_timeout_option<zlink::framework::capability_builder
 static_assert (
   !has_set_send_timeout_option<zlink::framework::client_server_channel_client_builder_t>);
 static_assert (has_set_send_timeout_option<zlink::framework::fanout_channel_builder_t>);
-
 
 static_assert (
   std::is_same_v<decltype (std::declval<zlink::framework::stream_write_call_t &> ().compress ()),

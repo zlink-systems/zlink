@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+#include <zlink/json.hpp>
 
 #include <zlink/framework.hpp>
 
@@ -62,11 +63,29 @@ struct payload_t
 {
     int value{};
 };
+}
+
+template <> struct zlink::json::dto_traits<payload_t>
+{
+    static constexpr auto fields = std::tuple{zlink::json::field ("value", &payload_t::value)};
+};
+
+namespace
+{
 
 struct missing_t
 {
     int value{};
 };
+}
+
+template <> struct zlink::json::dto_traits<missing_t>
+{
+    static constexpr auto fields = std::tuple{zlink::json::field ("value", &missing_t::value)};
+};
+
+namespace
+{
 
 struct json_payload_t
 {
@@ -77,31 +96,91 @@ struct decode_source_t
 {
     int value{};
 };
+}
+
+template <> struct zlink::json::dto_traits<decode_source_t>
+{
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("value", &decode_source_t::value)};
+};
+
+namespace
+{
+
 
 struct decode_once_t
 {
     int value{};
 };
+}
+
+template <> struct zlink::json::dto_traits<decode_once_t>
+{
+    static constexpr auto fields = std::tuple{zlink::json::field ("value", &decode_once_t::value)};
+};
+
+namespace
+{
+
 
 struct decode_other_t
 {
     int value{};
 };
+}
+
+template <> struct zlink::json::dto_traits<decode_other_t>
+{
+    static constexpr auto fields = std::tuple{zlink::json::field ("value", &decode_other_t::value)};
+};
+
+namespace
+{
+
 
 struct decode_failure_t
 {
     int value{};
 };
+}
+
+template <> struct zlink::json::dto_traits<decode_failure_t>
+{
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("value", &decode_failure_t::value)};
+};
+
+namespace
+{
+
 
 struct nested_inner_t
 {
     int value{};
 };
+}
+
+template <> struct zlink::json::dto_traits<nested_inner_t>
+{
+    static constexpr auto fields = std::tuple{zlink::json::field ("value", &nested_inner_t::value)};
+};
+
+namespace
+{
 
 struct nested_outer_t
 {
     int value{};
 };
+}
+
+template <> struct zlink::json::dto_traits<nested_outer_t>
+{
+    static constexpr auto fields = std::tuple{zlink::json::field ("value", &nested_outer_t::value)};
+};
+
+namespace
+{
 
 struct custom_payload_codec_extension_t
 {
@@ -130,15 +209,15 @@ struct custom_payload_codec_extension_t
     }
 };
 
-void to_json (nlohmann::json &json, const json_payload_t &payload)
-{
-    json = nlohmann::json{{"value", payload.value}};
 }
 
-void from_json (const nlohmann::json &json, json_payload_t &payload)
+template <> struct zlink::json::dto_traits<json_payload_t>
 {
-    payload.value = json.at ("value").get<int> ();
-}
+    static constexpr auto fields = std::tuple{zlink::json::field ("value", &json_payload_t::value)};
+};
+
+namespace
+{
 
 const nlohmann::json &codec_selection_fixture ()
 {

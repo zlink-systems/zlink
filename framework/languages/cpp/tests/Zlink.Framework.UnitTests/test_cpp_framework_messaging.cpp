@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+#include <zlink/json.hpp>
 
 #include "runtime/dispatch/coroutine_executor.hpp"
 #include "runtime/channels/channel_reply_writer.hpp"
@@ -82,6 +83,16 @@ struct envelope_payload_t
 {
     int value{};
 };
+}
+
+template <> struct zlink::json::dto_traits<envelope_payload_t>
+{
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("value", &envelope_payload_t::value)};
+};
+
+namespace
+{
 
 } // namespace
 

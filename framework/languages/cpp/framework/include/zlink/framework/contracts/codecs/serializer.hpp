@@ -36,35 +36,20 @@ encoded_payload_t encoded_payload_from_raw (const zlink::message_t &message);
 encoded_payload_t encoded_payload_from_raw (zlink::message_t &&message);
 zlink::message_t encoded_payload_to_raw (const encoded_payload_t &payload);
 
+template <typename T> struct service_packet_codec_t;
+
 template <typename T, typename = void> struct extension_serializer_traits_t
 {
     static constexpr bool available = false;
 };
 
-template <typename T, typename = void> struct is_json_serializable_t : std::false_type
-{
-};
-
-template <typename T>
-struct is_json_serializable_t<T, std::void_t<decltype (nlohmann::json (std::declval<T> ()))>>
-    : std::true_type
-{
-};
-
-template <typename T, typename = void> struct is_json_deserializable_t : std::false_type
-{
-};
-
-template <typename T>
-struct is_json_deserializable_t<
-  T,
-  std::void_t<decltype (std::declval<nlohmann::json> ().template get<T> ())>> : std::true_type
-{
-};
-
 template <typename T>
 inline constexpr bool is_json_serializer_compatible_v =
-  is_json_serializable_t<T>::value && is_json_deserializable_t<T>::value;
+  zlink::detail::json_profile::has_dto<T> || zlink::detail::json_profile::has_enum<T>
+  || std::is_arithmetic_v<T> || std::is_same_v<T, std::string> || std::is_same_v<T, nlohmann::json>
+  || std::is_enum_v<T> || zlink::detail::json_profile::optional_type<T>::value
+  || zlink::detail::json_profile::vector_type<T>::value
+  || zlink::detail::json_profile::map_type<T>::value;
 } // namespace detail
 
 class encoded_payload_t
@@ -299,8 +284,7 @@ class serializer_registry_t
                                         std::move (content_type), std::nullopt);
     }
 
-    /// Gets the serializer for T. If no custom serializer is registered and T can be converted
-    /// with nlohmann to_json/from_json, the framework uses the default JSON serializer.
+    /// Gets the serializer for T. The default JSON serializer reads dto_traits and enum_traits.
     template <typename T> serializer_t<T> get () const
     {
         const auto type = std::type_index (typeid (T));
@@ -311,40 +295,46 @@ class serializer_registry_t
         serializer_t<T> selected = [&] {
             auto registered = erased_serializer (type);
             if (!registered) {
-                if constexpr (detail::extension_serializer_traits_t<T>::available) {
-                    using traits_t = detail::extension_serializer_traits_t<T>;
-                    const auto extension = erased_serializer (
-                      std::type_index (typeid (typename traits_t::registration_key_type)));
-                    if (extension) {
-                        return traits_t::make_serializer ();
-                    }
-                }
-                if constexpr (detail::is_json_serializer_compatible_v<T>) {
-                    return serializer_t<T> (
-                      [] (const T &value) {
-                          return encoded_payload_t::from_text (
-                            zlink::detail::json_profile::dump (nlohmann::json (value)));
-                      },
-                      [] (const encoded_payload_t &payload) {
-                          const auto bytes = payload.bytes ();
-                          const auto *begin = reinterpret_cast<const char *> (bytes.data ());
-                          const auto *end = begin == nullptr ? begin : begin + bytes.size ();
-                          return zlink::detail::json_profile::parse (begin, end).template get<T> ();
-                      },
-                      zlink::detail::json_profile::content_type);
+                if constexpr (requires { detail::service_packet_codec_t<T>::make_serializer (); }) {
+                    return detail::service_packet_codec_t<T>::make_serializer ();
                 } else {
-                    return serializer_t<T> (
-                      [] (const T &) -> encoded_payload_t {
-                          throw framework_exception_t (
-                            framework_error_kind_t::protocol_error,
-                            "No serializer is registered for this payload type");
-                      },
-                      [] (const encoded_payload_t &) -> T {
-                          throw framework_exception_t (
-                            framework_error_kind_t::protocol_error,
-                            "No serializer is registered for this payload type");
-                      },
-                      zlink::detail::json_profile::content_type);
+                    if constexpr (detail::extension_serializer_traits_t<T>::available) {
+                        using traits_t = detail::extension_serializer_traits_t<T>;
+                        const auto extension = erased_serializer (
+                          std::type_index (typeid (typename traits_t::registration_key_type)));
+                        if (extension) {
+                            return traits_t::make_serializer ();
+                        }
+                    }
+                    if constexpr (detail::is_json_serializer_compatible_v<T>
+                                  || !detail::extension_serializer_traits_t<T>::available) {
+                        static_assert (zlink::detail::json_profile::validate_type<T> ());
+                        return serializer_t<T> (
+                          [] (const T &value) {
+                              return encoded_payload_t::from_text (
+                                zlink::detail::json_profile::encode (value));
+                          },
+                          [] (const encoded_payload_t &payload) {
+                              const auto bytes = payload.bytes ();
+                              const auto *begin = reinterpret_cast<const char *> (bytes.data ());
+                              const auto *end = begin == nullptr ? begin : begin + bytes.size ();
+                              return zlink::detail::json_profile::decode<T> (begin, end);
+                          },
+                          zlink::detail::json_profile::content_type);
+                    } else {
+                        return serializer_t<T> (
+                          [] (const T &) -> encoded_payload_t {
+                              throw framework_exception_t (
+                                framework_error_kind_t::protocol_error,
+                                "No serializer is registered for this payload type");
+                          },
+                          [] (const encoded_payload_t &) -> T {
+                              throw framework_exception_t (
+                                framework_error_kind_t::protocol_error,
+                                "No serializer is registered for this payload type");
+                          },
+                          zlink::detail::json_profile::content_type);
+                    }
                 }
             }
             auto serialize = std::move (registered->serialize);

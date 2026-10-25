@@ -1147,6 +1147,17 @@ struct local_route_probe_message_t
 {
     std::string value;
 };
+}
+
+template <> struct zlink::json::dto_traits<local_route_probe_message_t>
+{
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("value", &local_route_probe_message_t::value)};
+};
+
+namespace
+{
+
 
 struct local_route_probe_state_t
 {

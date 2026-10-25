@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+#include <zlink/json.hpp>
 #include "runtime/mesh/mesh_node_host_service.hpp"
 #include "../support/runtime_failure_fixture.hpp"
 #include "../support/manual_internal_scheduler.hpp"
@@ -10763,6 +10764,12 @@ enum class origin_terminal_case_t
 struct origin_reply_t
 {
 };
+
+template <> struct zlink::json::dto_traits<origin_reply_t>
+{
+    static constexpr auto fields = std::tuple{};
+};
+
 
 zlink::framework::task_t<void> origin_handler_task (
   std::vector<zlink::framework::task_completion_source_t<void>> &sources, int &stage, bool fail)

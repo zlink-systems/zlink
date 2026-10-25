@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+#include <zlink/json.hpp>
 #include "../support/runtime_failure_fixture.hpp"
 #include "runtime/streams/stream_runtime.hpp"
 
@@ -16,8 +17,18 @@ struct session_info_t
 {
     std::string session_id;
     int revision;
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (session_info_t, session_id, revision)
 };
+}
+
+template <> struct zlink::json::dto_traits<session_info_t>
+{
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("session_id", &session_info_t::session_id),
+                 zlink::json::field ("revision", &session_info_t::revision)};
+};
+
+namespace
+{
 
 template <typename TStream> task_t<void> reply_with_session_info (TStream &stream)
 {

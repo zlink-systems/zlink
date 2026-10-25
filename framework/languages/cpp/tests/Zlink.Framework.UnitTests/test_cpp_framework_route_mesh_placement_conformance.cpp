@@ -8,6 +8,7 @@
 #include "runtime/mesh/mesh_node_runtime.hpp"
 
 #include <nlohmann/json.hpp>
+#include <zlink/json.hpp>
 
 #include <algorithm>
 #include <atomic>
@@ -116,7 +117,16 @@ struct placement_probe_message_t
     static constexpr const char *packet_name = "placement.actor.probe";
     int value = 0;
 };
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE (placement_probe_message_t, value)
+}
+
+template <> struct zlink::json::dto_traits<placement_probe_message_t>
+{
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("value", &placement_probe_message_t::value)};
+};
+
+namespace
+{
 
 class placement_entry_spot_t final : public fw::entry_spot_t<placement_actor_t>
 {
@@ -183,7 +193,16 @@ struct placement_instance_probe_t
     static constexpr const char *packet_name = "placement.instance.probe";
     int value = 0;
 };
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE (placement_instance_probe_t, value)
+}
+
+template <> struct zlink::json::dto_traits<placement_instance_probe_t>
+{
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("value", &placement_instance_probe_t::value)};
+};
+
+namespace
+{
 
 class placement_instance_spot_t final : public fw::instance_spot_t
 {

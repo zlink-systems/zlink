@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: Apache-2.0 */
+#include <zlink/json.hpp>
 
 #include "../Configuration/configuration.hpp"
 #include "../../Shared/world_rules.hpp"
@@ -162,14 +163,22 @@ struct world_bootstrap_res_t
     int zones = 0;
     int bots = 0;
 };
-inline void to_json (nlohmann::json &j, const world_bootstrap_req_t &)
-{
-    j = nlohmann::json::object ();
 }
-inline void from_json (const nlohmann::json &, world_bootstrap_req_t &)
+
+template <> struct zlink::json::dto_traits<zlink::samples::zoneworld::world_bootstrap_req_t>
 {
-}
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE (world_bootstrap_res_t, zones, bots)
+    static constexpr auto fields = std::tuple{};
+};
+
+template <> struct zlink::json::dto_traits<zlink::samples::zoneworld::world_bootstrap_res_t>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("zones", &zlink::samples::zoneworld::world_bootstrap_res_t::zones),
+      zlink::json::field ("bots", &zlink::samples::zoneworld::world_bootstrap_res_t::bots)};
+};
+
+namespace zlink::samples::zoneworld
+{
 
 class world_bootstrap_handler_t
 {
