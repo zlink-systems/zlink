@@ -673,8 +673,117 @@ void verify_session_owner_identity_contract ()
             == zlink::framework::framework_error_kind_t::unavailable);
 }
 
+void assert_native_header (const std::vector<std::uint8_t> &expected,
+                           const zlink::message_t &native)
+{
+    assert (native.valid () && native.size () == expected.size ());
+    assert (std::equal (expected.begin (), expected.end (), native.bytes ().begin (),
+                        [] (std::uint8_t left, std::byte right) {
+                            return left == std::to_integer<std::uint8_t> (right);
+                        }));
+}
+
+template <typename ByteEncode, typename NativeEncode>
+void assert_same_header_rejection (ByteEncode bytes, NativeEncode native)
+{
+    std::optional<std::string> byte_error, native_error;
+    try {
+        (void) bytes ();
+    }
+    catch (const protocol::service_wire_error_t &error) {
+        byte_error = error.what ();
+    }
+    try {
+        (void) native ();
+    }
+    catch (const protocol::service_wire_error_t &error) {
+        native_error = error.what ();
+    }
+    assert (byte_error && native_error && byte_error == native_error);
+}
+
+void verify_native_application_headers ()
+{
+    const std::string channel (255, 'c');
+    assert_native_header (protocol::encode_channel_send_header (channel),
+                          protocol::encode_channel_send_header_message (channel));
+    assert_native_header (protocol::encode_channel_request_header (7, channel),
+                          protocol::encode_channel_request_header_message (7, channel));
+    assert_same_header_rejection (
+      [&] { return protocol::encode_channel_request_header (0, channel); },
+      [&] { return protocol::encode_channel_request_header_message (0, channel); });
+    assert_same_header_rejection (
+      [&] { return protocol::encode_channel_send_header (""); },
+      [&] { return protocol::encode_channel_send_header_message (""); });
+    protocol::spot_route_fence_t spot{"spot", 3, {'n'}, 5, 7, 9};
+    protocol::actor_route_fence_t actor{"actor", 3, {'n'}, 5, 7, 9};
+    const std::optional<std::pair<std::string, std::uint64_t>> source{std::pair{"source", 11}};
+    const protocol::actor_message_header_t::bound_session_source_t bound{{'s'}, 13, 17};
+    for (const bool request : {false, true}) {
+        const auto correlation = request ? std::optional<std::uint64_t> (19) : std::nullopt;
+        const auto spot_kind =
+          request ? protocol::command::spotRequest : protocol::command::spotSend;
+        assert_native_header (
+          protocol::encode_spot_message_header (spot_kind, "source", spot, {23, 29}, correlation),
+          protocol::encode_spot_message_header_message (spot_kind, "source", spot, {23, 29},
+                                                        correlation));
+        const auto actor_kind =
+          request ? protocol::command::actorRequest : protocol::command::actorSend;
+        for (const bool has_bound_source : {false, true}) {
+            const auto bound_source = has_bound_source ? std::optional (bound) : std::nullopt;
+            assert_native_header (
+              protocol::encode_actor_message_header (actor_kind, source, actor, {23, 29},
+                                                     correlation, 0, bound_source),
+              protocol::encode_actor_message_header_message (actor_kind, source, actor, {23, 29},
+                                                             correlation, 0, bound_source));
+        }
+    }
+    for (const auto correlation :
+         {std::optional<std::uint64_t>{}, std::optional<std::uint64_t>{0}}) {
+        assert_same_header_rejection (
+          [&] {
+              return protocol::encode_spot_message_header (protocol::command::spotRequest, "source",
+                                                           spot, {23, 29}, correlation);
+          },
+          [&] {
+              return protocol::encode_spot_message_header_message (
+                protocol::command::spotRequest, "source", spot, {23, 29}, correlation);
+          });
+        assert_same_header_rejection (
+          [&] {
+              return protocol::encode_actor_message_header (protocol::command::actorRequest, source,
+                                                            actor, {23, 29}, correlation);
+          },
+          [&] {
+              return protocol::encode_actor_message_header_message (
+                protocol::command::actorRequest, source, actor, {23, 29}, correlation);
+          });
+    }
+    spot.object_generation = 0;
+    actor.owner_lease_generation = 0;
+    assert_same_header_rejection (
+      [&] {
+          return protocol::encode_spot_message_header (protocol::command::spotSend, "source", spot,
+                                                       {23, 29});
+      },
+      [&] {
+          return protocol::encode_spot_message_header_message (protocol::command::spotSend,
+                                                               "source", spot, {23, 29});
+      });
+    assert_same_header_rejection (
+      [&] {
+          return protocol::encode_actor_message_header (protocol::command::actorSend, source, actor,
+                                                        {23, 29});
+      },
+      [&] {
+          return protocol::encode_actor_message_header_message (protocol::command::actorSend,
+                                                                source, actor, {23, 29});
+      });
+}
+
 int main (int argc, char **argv)
 {
+    verify_native_application_headers ();
     const auto command_golden = [] (const char *path, std::uint8_t command) {
         const auto fixture = load_fixture (path);
         const auto &canonical = fixture.at ("canonical");
@@ -858,6 +967,8 @@ int main (int argc, char **argv)
     const protocol::bound_session_send_t bound_send{.actor = bound_actor,
                                                     .expected_binding_generation = 7};
     const auto encoded_bound_send = protocol::encode_bound_session_send (bound_send);
+    assert_native_header (encoded_bound_send,
+                          protocol::encode_bound_session_send_message (bound_send));
     assert (protocol::decode_bound_session_send (encoded_bound_send) == bound_send);
 
     for (const auto state : {protocol::bound_session_binding_state_t::active,
@@ -1286,6 +1397,16 @@ int main (int argc, char **argv)
       true};
     const auto encoded_instance_activation =
       protocol::encode_instance_spot_activation_header (instance_activation);
+    assert_native_header (
+      encoded_instance_activation,
+      protocol::encode_instance_spot_activation_header_message (instance_activation));
+    auto invalid_activation = instance_activation;
+    invalid_activation.source_node_generation = 0;
+    assert_same_header_rejection (
+      [&] { return protocol::encode_instance_spot_activation_header (invalid_activation); },
+      [&] {
+          return protocol::encode_instance_spot_activation_header_message (invalid_activation);
+      });
     assert (encoded_instance_activation[3]
             == static_cast<std::uint8_t> (protocol::command::instanceSpot));
     assert (protocol::decode_instance_spot_activation_header (encoded_instance_activation)
@@ -1314,6 +1435,8 @@ int main (int argc, char **argv)
         ready_instance.target.instance_intent = intent;
         const auto encoded_ready =
           protocol::encode_instance_spot_activation_header (ready_instance);
+        assert_native_header (
+          encoded_ready, protocol::encode_instance_spot_activation_header_message (ready_instance));
         assert (encoded_ready[5] == 1);
         assert (protocol::decode_instance_spot_activation_header (encoded_ready) == ready_instance);
         auto invalid_intent = encoded_ready;

@@ -915,6 +915,8 @@ zlink::message_t encode_node_request_header_message (std::uint64_t correlation);
 std::uint64_t decode_node_request_header (std::span<const std::uint8_t> bytes);
 std::vector<std::uint8_t> encode_channel_request_header (std::uint64_t correlation,
                                                          const std::string &channel_name);
+zlink::message_t encode_channel_request_header_message (std::uint64_t correlation,
+                                                        const std::string &channel_name);
 struct channel_request_header_t
 {
     std::uint64_t correlation;
@@ -922,6 +924,7 @@ struct channel_request_header_t
 };
 channel_request_header_t decode_channel_request_header (std::span<const std::uint8_t> bytes);
 std::vector<std::uint8_t> encode_channel_send_header (const std::string &channel_name);
+zlink::message_t encode_channel_send_header_message (const std::string &channel_name);
 std::vector<std::uint8_t>
 encode_spot_message_header (command kind,
                             const std::string &source_spot_id,
@@ -929,6 +932,13 @@ encode_spot_message_header (command kind,
                             wire_operation_id_t operation,
                             std::optional<std::uint64_t> correlation = std::nullopt,
                             std::uint8_t message_follow_hop_count = 0);
+zlink::message_t
+encode_spot_message_header_message (command kind,
+                                    const std::string &source_spot_id,
+                                    const spot_route_fence_t &target,
+                                    wire_operation_id_t operation,
+                                    std::optional<std::uint64_t> correlation = std::nullopt,
+                                    std::uint8_t message_follow_hop_count = 0);
 spot_message_header_t decode_spot_message_header (std::span<const std::uint8_t> bytes,
                                                   command expected_kind);
 std::vector<std::uint8_t> encode_actor_message_header (
@@ -940,9 +950,19 @@ std::vector<std::uint8_t> encode_actor_message_header (
   std::uint8_t message_follow_hop_count = 0,
   std::optional<actor_message_header_t::bound_session_source_t> bound_session_source =
     std::nullopt);
+zlink::message_t encode_actor_message_header_message (
+  command kind,
+  const std::optional<std::pair<std::string, std::uint64_t>> &source_actor,
+  const actor_route_fence_t &target,
+  wire_operation_id_t operation,
+  std::optional<std::uint64_t> correlation = std::nullopt,
+  std::uint8_t message_follow_hop_count = 0,
+  std::optional<actor_message_header_t::bound_session_source_t> bound_session_source =
+    std::nullopt);
 actor_message_header_t decode_actor_message_header (std::span<const std::uint8_t> bytes,
                                                     command expected_kind);
 std::vector<std::uint8_t> encode_bound_session_send (const bound_session_send_t &record);
+zlink::message_t encode_bound_session_send_message (const bound_session_send_t &record);
 bound_session_send_t decode_bound_session_send (std::span<const std::uint8_t> bytes);
 std::vector<std::uint8_t> encode_bound_session_bind (const bound_session_bind_t &record);
 bound_session_bind_t decode_bound_session_bind (std::span<const std::uint8_t> bytes);
@@ -990,6 +1010,8 @@ std::vector<std::uint8_t> encode_actor_create_header (const actor_create_header_
 actor_create_header_t decode_actor_create_header (std::span<const std::uint8_t> bytes);
 std::vector<std::uint8_t>
 encode_instance_spot_activation_header (const instance_spot_activation_header_t &record);
+zlink::message_t
+encode_instance_spot_activation_header_message (const instance_spot_activation_header_t &record);
 instance_spot_activation_header_t
 decode_instance_spot_activation_header (std::span<const std::uint8_t> bytes);
 std::vector<std::uint8_t>

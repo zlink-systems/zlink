@@ -69,6 +69,21 @@ class wire_buffer_t
     std::size_t _written = 0;
 };
 
+class wire_size_counter_t
+{
+  public:
+    std::uint8_t *end () const { return nullptr; }
+    void push_back (std::uint8_t) { ++_size; }
+    template <typename Iterator> void insert (std::uint8_t *, Iterator first, Iterator last)
+    {
+        _size += static_cast<std::size_t> (last - first);
+    }
+    std::size_t size () const { return _size; }
+
+  private:
+    std::size_t _size = 0;
+};
+
 template <typename Writer> zlink::message_t encode_wire_message (std::size_t size, Writer writer)
 {
     auto result = zlink::message_t::allocate (size);
@@ -80,7 +95,23 @@ template <typename Writer> zlink::message_t encode_wire_message (std::size_t siz
     return result;
 }
 
-void append_nonzero_u64 (std::vector<std::uint8_t> &bytes, std::uint64_t value, const char *field);
+template <typename Writer> zlink::message_t encode_wire_message (Writer writer)
+{
+    wire_size_counter_t size;
+    writer (size);
+    return encode_wire_message (size.size (), writer);
+}
+
+template <typename Writer> std::vector<std::uint8_t> encode_wire_bytes (Writer writer)
+{
+    std::vector<std::uint8_t> result;
+    result.reserve (prefix_size);
+    writer (result);
+    return result;
+}
+
+template <typename Output>
+void append_nonzero_u64 (Output &bytes, std::uint64_t value, const char *field);
 std::uint64_t
 read_nonzero_u64 (std::span<const std::uint8_t> bytes, std::size_t &offset, const char *field);
 
@@ -98,7 +129,7 @@ template <typename Output> void append_u32 (Output &bytes, std::uint32_t value)
     bytes.push_back (static_cast<std::uint8_t> (value & 0xffu));
 }
 
-void append_u16 (std::vector<std::uint8_t> &bytes, std::uint16_t value)
+template <typename Output> void append_u16 (Output &bytes, std::uint16_t value)
 {
     bytes.push_back (static_cast<std::uint8_t> ((value >> 8u) & 0xffu));
     bytes.push_back (static_cast<std::uint8_t> (value & 0xffu));
@@ -111,13 +142,14 @@ template <typename Output> void append_u64 (Output &bytes, std::uint64_t value)
     }
 }
 
-template <typename Output> void write_node_header (Output &bytes, command kind)
+template <typename Output>
+void write_node_header (Output &bytes, command kind, std::uint8_t flags = 0)
 {
     bytes.push_back (magic[0]);
     bytes.push_back (magic[1]);
     bytes.push_back (wire_major);
     bytes.push_back (static_cast<std::uint8_t> (kind));
-    bytes.push_back (0);
+    bytes.push_back (flags);
 }
 
 std::size_t node_request_header_size (std::uint64_t correlation)
@@ -205,9 +237,8 @@ std::string read_text8 (std::span<const std::uint8_t> bytes, std::size_t &offset
     return std::string (read_text8_view (bytes, offset, field));
 }
 
-void append_bytes8 (std::vector<std::uint8_t> &bytes,
-                    const std::vector<std::uint8_t> &value,
-                    const char *field)
+template <typename Output>
+void append_bytes8 (Output &bytes, const std::vector<std::uint8_t> &value, const char *field)
 {
     if (value.empty () || value.size () > std::numeric_limits<std::uint8_t>::max ()) {
         throw service_wire_error_t (std::string (field) + " must contain 1..255 bytes");
@@ -233,7 +264,8 @@ read_bytes8 (std::span<const std::uint8_t> bytes, std::size_t &offset, const cha
     return value;
 }
 
-void append_text16 (std::vector<std::uint8_t> &bytes,
+template <typename Output>
+void append_text16 (Output &bytes,
                     const std::string &value,
                     const char *field,
                     std::uint64_t maximum_bytes = blobBytes)
@@ -323,9 +355,8 @@ void validate_kind (command kind)
     }
 }
 
-void append_actor_route_fence (std::vector<std::uint8_t> &bytes,
-                               const actor_route_fence_t &actor,
-                               const char *context)
+template <typename Output>
+void append_actor_route_fence (Output &bytes, const actor_route_fence_t &actor, const char *context)
 {
     append_text8 (bytes, actor.actor_id, context);
     append_nonzero_u64 (bytes, actor.object_generation, "Actor generation");
@@ -469,17 +500,130 @@ std::uint64_t decode_node_request_header (std::span<const std::uint8_t> bytes)
     return correlation;
 }
 
-std::vector<std::uint8_t> encode_channel_request_header (std::uint64_t correlation,
-                                                         const std::string &channel_name)
+namespace
+{
+template <typename Output>
+void write_channel_request_header (Output &result,
+                                   std::uint64_t correlation,
+                                   const std::string &channel_name)
 {
     if (correlation == 0) {
         throw service_wire_error_t ("request correlation must be nonzero");
     }
-    std::vector<std::uint8_t> result{magic[0], magic[1], wire_major,
-                                     static_cast<std::uint8_t> (command::channelRequest), 0};
+    write_node_header (result, command::channelRequest);
     append_u64 (result, correlation);
     append_text8 (result, channel_name, "channel name");
-    return result;
+}
+template <typename Output>
+void write_channel_send_header (Output &result, const std::string &channel_name)
+{
+    write_node_header (result, command::channelSend);
+    append_text8 (result, channel_name, "channel name");
+}
+template <typename Output>
+void write_spot_message_header (Output &result,
+                                command kind,
+                                const std::string &source_spot_id,
+                                const spot_route_fence_t &target,
+                                wire_operation_id_t operation,
+                                std::optional<std::uint64_t> correlation,
+                                std::uint8_t message_follow_hop_count)
+{
+    if (kind != command::spotSend && kind != command::spotRequest) {
+        throw service_wire_error_t ("command is not a Spot message");
+    }
+    if ((operation.high == 0 && operation.low == 0)
+        || (kind == command::spotRequest) != correlation.has_value ()
+        || (correlation && *correlation == 0) || message_follow_hop_count > messageFollowHopCount
+        || target.object_generation == 0 || target.target_node_generation == 0
+        || target.authority_owner_generation == 0 || target.owner_lease_generation == 0) {
+        throw service_wire_error_t ("invalid Spot route fence");
+    }
+    write_node_header (result, kind);
+    if (correlation)
+        append_u64 (result, *correlation);
+    append_u64 (result, operation.high);
+    append_u64 (result, operation.low);
+    result.push_back (message_follow_hop_count);
+    append_text8 (result, source_spot_id, "source SpotId");
+    append_text8 (result, target.spot_id, "target SpotId");
+    append_u64 (result, target.object_generation);
+    append_bytes8 (result, target.target_node_routing_id, "target node RID");
+    append_u64 (result, target.target_node_generation);
+    append_u64 (result, target.authority_owner_generation);
+    append_u64 (result, target.owner_lease_generation);
+}
+template <typename Output>
+void write_actor_message_header (
+  Output &result,
+  command kind,
+  const std::optional<std::pair<std::string, std::uint64_t>> &source_actor,
+  const actor_route_fence_t &target,
+  wire_operation_id_t operation,
+  std::optional<std::uint64_t> correlation,
+  std::uint8_t message_follow_hop_count,
+  const std::optional<actor_message_header_t::bound_session_source_t> &bound_session_source)
+{
+    if (kind != command::actorSend && kind != command::actorRequest) {
+        throw service_wire_error_t ("command is not an Actor message");
+    }
+    if ((operation.high == 0 && operation.low == 0)
+        || (kind == command::actorRequest) != correlation.has_value ()
+        || (correlation && *correlation == 0) || message_follow_hop_count > messageFollowHopCount
+        || target.object_generation == 0 || target.target_node_generation == 0
+        || target.authority_owner_generation == 0 || target.owner_lease_generation == 0
+        || (bound_session_source
+            && (bound_session_source->session_routing_id.empty ()
+                || bound_session_source->session_routing_id.size () > ridBytes
+                || bound_session_source->binding_generation == 0
+                || bound_session_source->session_sequence == 0))) {
+        throw service_wire_error_t ("invalid Actor route fence");
+    }
+    const auto flags = static_cast<std::uint8_t> (
+      bound_session_source ? static_cast<std::uint8_t> (flag::boundSession)
+                               | static_cast<std::uint8_t> (flag::sourceSpotId)
+                           : 0);
+    write_node_header (result, kind, flags);
+    if (correlation)
+        append_u64 (result, *correlation);
+    append_u64 (result, operation.high);
+    append_u64 (result, operation.low);
+    result.push_back (message_follow_hop_count);
+    if (source_actor) {
+        append_text8 (result, source_actor->first, "source Actor ID");
+        if (source_actor->second == 0) {
+            throw service_wire_error_t ("source Actor generation must be nonzero");
+        }
+        append_u64 (result, source_actor->second);
+    } else {
+        result.push_back (0);
+    }
+    append_text8 (result, target.actor_id, "target Actor ID");
+    append_u64 (result, target.object_generation);
+    append_bytes8 (result, target.target_node_routing_id, "target node RID");
+    append_u64 (result, target.target_node_generation);
+    append_u64 (result, target.authority_owner_generation);
+    append_u64 (result, target.owner_lease_generation);
+    if (bound_session_source) {
+        append_bytes8 (result, bound_session_source->session_routing_id, "source Session RID");
+        append_u64 (result, bound_session_source->binding_generation);
+        append_u64 (result, bound_session_source->session_sequence);
+    }
+}
+} // namespace
+
+std::vector<std::uint8_t> encode_channel_request_header (std::uint64_t correlation,
+                                                         const std::string &channel_name)
+{
+    return encode_wire_bytes (
+      [&] (auto &output) { write_channel_request_header (output, correlation, channel_name); });
+}
+
+zlink::message_t encode_channel_request_header_message (std::uint64_t correlation,
+                                                        const std::string &channel_name)
+{
+    return encode_wire_message (
+      [&] (auto &output) { write_channel_request_header (output, correlation, channel_name); });
 }
 
 channel_request_header_t decode_channel_request_header (std::span<const std::uint8_t> bytes)
@@ -502,10 +646,14 @@ channel_request_header_t decode_channel_request_header (std::span<const std::uin
 
 std::vector<std::uint8_t> encode_channel_send_header (const std::string &channel_name)
 {
-    std::vector<std::uint8_t> result{magic[0], magic[1], wire_major,
-                                     static_cast<std::uint8_t> (command::channelSend), 0};
-    append_text8 (result, channel_name, "channel name");
-    return result;
+    return encode_wire_bytes (
+      [&] (auto &output) { write_channel_send_header (output, channel_name); });
+}
+
+zlink::message_t encode_channel_send_header_message (const std::string &channel_name)
+{
+    return encode_wire_message (
+      [&] (auto &output) { write_channel_send_header (output, channel_name); });
 }
 
 std::vector<std::uint8_t> encode_spot_message_header (command kind,
@@ -515,31 +663,23 @@ std::vector<std::uint8_t> encode_spot_message_header (command kind,
                                                       std::optional<std::uint64_t> correlation,
                                                       std::uint8_t message_follow_hop_count)
 {
-    if (kind != command::spotSend && kind != command::spotRequest) {
-        throw service_wire_error_t ("command is not a Spot message");
-    }
-    if ((operation.high == 0 && operation.low == 0)
-        || (kind == command::spotRequest) != correlation.has_value ()
-        || (correlation && *correlation == 0) || message_follow_hop_count > messageFollowHopCount
-        || target.object_generation == 0 || target.target_node_generation == 0
-        || target.authority_owner_generation == 0 || target.owner_lease_generation == 0) {
-        throw service_wire_error_t ("invalid Spot route fence");
-    }
-    std::vector<std::uint8_t> result{magic[0], magic[1], wire_major,
-                                     static_cast<std::uint8_t> (kind), 0};
-    if (correlation)
-        append_u64 (result, *correlation);
-    append_u64 (result, operation.high);
-    append_u64 (result, operation.low);
-    result.push_back (message_follow_hop_count);
-    append_text8 (result, source_spot_id, "source SpotId");
-    append_text8 (result, target.spot_id, "target SpotId");
-    append_u64 (result, target.object_generation);
-    append_bytes8 (result, target.target_node_routing_id, "target node RID");
-    append_u64 (result, target.target_node_generation);
-    append_u64 (result, target.authority_owner_generation);
-    append_u64 (result, target.owner_lease_generation);
-    return result;
+    return encode_wire_bytes ([&] (auto &output) {
+        write_spot_message_header (output, kind, source_spot_id, target, operation, correlation,
+                                   message_follow_hop_count);
+    });
+}
+
+zlink::message_t encode_spot_message_header_message (command kind,
+                                                     const std::string &source_spot_id,
+                                                     const spot_route_fence_t &target,
+                                                     wire_operation_id_t operation,
+                                                     std::optional<std::uint64_t> correlation,
+                                                     std::uint8_t message_follow_hop_count)
+{
+    return encode_wire_message ([&] (auto &output) {
+        write_spot_message_header (output, kind, source_spot_id, target, operation, correlation,
+                                   message_follow_hop_count);
+    });
 }
 
 spot_message_header_t decode_spot_message_header (std::span<const std::uint8_t> bytes,
@@ -592,53 +732,25 @@ std::vector<std::uint8_t> encode_actor_message_header (
   std::uint8_t message_follow_hop_count,
   std::optional<actor_message_header_t::bound_session_source_t> bound_session_source)
 {
-    if (kind != command::actorSend && kind != command::actorRequest) {
-        throw service_wire_error_t ("command is not an Actor message");
-    }
-    if ((operation.high == 0 && operation.low == 0)
-        || (kind == command::actorRequest) != correlation.has_value ()
-        || (correlation && *correlation == 0) || message_follow_hop_count > messageFollowHopCount
-        || target.object_generation == 0 || target.target_node_generation == 0
-        || target.authority_owner_generation == 0 || target.owner_lease_generation == 0
-        || (bound_session_source
-            && (bound_session_source->session_routing_id.empty ()
-                || bound_session_source->session_routing_id.size () > ridBytes
-                || bound_session_source->binding_generation == 0
-                || bound_session_source->session_sequence == 0))) {
-        throw service_wire_error_t ("invalid Actor route fence");
-    }
-    const auto flags = static_cast<std::uint8_t> (
-      bound_session_source ? static_cast<std::uint8_t> (flag::boundSession)
-                               | static_cast<std::uint8_t> (flag::sourceSpotId)
-                           : 0);
-    std::vector<std::uint8_t> result{magic[0], magic[1], wire_major,
-                                     static_cast<std::uint8_t> (kind), flags};
-    if (correlation)
-        append_u64 (result, *correlation);
-    append_u64 (result, operation.high);
-    append_u64 (result, operation.low);
-    result.push_back (message_follow_hop_count);
-    if (source_actor) {
-        append_text8 (result, source_actor->first, "source Actor ID");
-        if (source_actor->second == 0) {
-            throw service_wire_error_t ("source Actor generation must be nonzero");
-        }
-        append_u64 (result, source_actor->second);
-    } else {
-        result.push_back (0);
-    }
-    append_text8 (result, target.actor_id, "target Actor ID");
-    append_u64 (result, target.object_generation);
-    append_bytes8 (result, target.target_node_routing_id, "target node RID");
-    append_u64 (result, target.target_node_generation);
-    append_u64 (result, target.authority_owner_generation);
-    append_u64 (result, target.owner_lease_generation);
-    if (bound_session_source) {
-        append_bytes8 (result, bound_session_source->session_routing_id, "source Session RID");
-        append_u64 (result, bound_session_source->binding_generation);
-        append_u64 (result, bound_session_source->session_sequence);
-    }
-    return result;
+    return encode_wire_bytes ([&] (auto &output) {
+        write_actor_message_header (output, kind, source_actor, target, operation, correlation,
+                                    message_follow_hop_count, bound_session_source);
+    });
+}
+
+zlink::message_t encode_actor_message_header_message (
+  command kind,
+  const std::optional<std::pair<std::string, std::uint64_t>> &source_actor,
+  const actor_route_fence_t &target,
+  wire_operation_id_t operation,
+  std::optional<std::uint64_t> correlation,
+  std::uint8_t message_follow_hop_count,
+  std::optional<actor_message_header_t::bound_session_source_t> bound_session_source)
+{
+    return encode_wire_message ([&] (auto &output) {
+        write_actor_message_header (output, kind, source_actor, target, operation, correlation,
+                                    message_follow_hop_count, bound_session_source);
+    });
 }
 
 actor_message_header_t decode_actor_message_header (std::span<const std::uint8_t> bytes,
@@ -708,13 +820,25 @@ actor_message_header_t decode_actor_message_header (std::span<const std::uint8_t
     return result;
 }
 
-std::vector<std::uint8_t> encode_bound_session_send (const bound_session_send_t &record)
+namespace
 {
-    std::vector<std::uint8_t> result{magic[0], magic[1], wire_major,
-                                     static_cast<std::uint8_t> (command::boundSessionSend), 0};
+template <typename Output>
+void write_bound_session_send (Output &result, const bound_session_send_t &record)
+{
+    write_node_header (result, command::boundSessionSend);
     append_actor_route_fence (result, record.actor, "bound session Actor ID");
     append_nonzero_u64 (result, record.expected_binding_generation, "expected binding generation");
-    return result;
+}
+} // namespace
+
+std::vector<std::uint8_t> encode_bound_session_send (const bound_session_send_t &record)
+{
+    return encode_wire_bytes ([&] (auto &output) { write_bound_session_send (output, record); });
+}
+
+zlink::message_t encode_bound_session_send_message (const bound_session_send_t &record)
+{
+    return encode_wire_message ([&] (auto &output) { write_bound_session_send (output, record); });
 }
 
 bound_session_send_t decode_bound_session_send (std::span<const std::uint8_t> bytes)
@@ -1156,7 +1280,8 @@ session_relocation_route_t decode_session_relocation_route (std::span<const std:
 
 namespace
 {
-void append_nonzero_u64 (std::vector<std::uint8_t> &bytes, std::uint64_t value, const char *field)
+template <typename Output>
+void append_nonzero_u64 (Output &bytes, std::uint64_t value, const char *field)
 {
     if (value == 0)
         throw service_wire_error_t (std::string (field) + " must be nonzero");
@@ -2373,26 +2498,13 @@ frozen_record_t summarize_frozen_application_record (const frozen_application_re
     return build_frozen_application_record (record, false);
 }
 
-std::vector<std::uint8_t>
-encode_instance_spot_activation_header (const instance_spot_activation_header_t &record)
+namespace
 {
-    const bool ready = record.target.authority_owner_generation != 0;
-    if (record.target.target_node_generation == 0
-        || (!ready
-            && (record.target.deadline_unix_ms == 0
-                || record.target.deadline_unix_ms
-                     > static_cast<std::uint64_t> (std::numeric_limits<std::int64_t>::max ())))
-        || (ready
-            && (record.target.object_generation == 0 || record.target.owner_id.empty ()
-                || record.target.owner_lease_generation == 0
-                || record.target.store_version.empty ()))
-        || record.source_node_generation == 0
-        || (record.operation.high == 0 && record.operation.low == 0)
-        || record.request != (record.reply_route_id != 0)) {
-        throw service_wire_error_t (
-          "Instance Spot activation contains a zero or inconsistent required field");
-    }
-    std::vector<std::uint8_t> route;
+template <typename Output>
+void write_instance_spot_activation_route (Output &route,
+                                           const instance_spot_activation_header_t &record,
+                                           bool ready)
+{
     append_bytes8 (route, record.target.target_node_routing_id, "target node RID");
     append_u64 (route, record.target.target_node_generation);
     append_text8 (route, record.target.spot_id, "target SpotId");
@@ -2410,17 +2522,40 @@ encode_instance_spot_activation_header (const instance_spot_activation_header_t 
         append_text8 (route, record.target.descriptor_version, "target descriptor version");
         append_u64 (route, record.target.deadline_unix_ms);
     }
+}
+
+template <typename Output>
+void write_instance_spot_activation_header (Output &bytes,
+                                            const instance_spot_activation_header_t &record)
+{
+    const bool ready = record.target.authority_owner_generation != 0;
+    if (record.target.target_node_generation == 0
+        || (!ready
+            && (record.target.deadline_unix_ms == 0
+                || record.target.deadline_unix_ms
+                     > static_cast<std::uint64_t> (std::numeric_limits<std::int64_t>::max ())))
+        || (ready
+            && (record.target.object_generation == 0 || record.target.owner_id.empty ()
+                || record.target.owner_lease_generation == 0
+                || record.target.store_version.empty ()))
+        || record.source_node_generation == 0
+        || (record.operation.high == 0 && record.operation.low == 0)
+        || record.request != (record.reply_route_id != 0)) {
+        throw service_wire_error_t (
+          "Instance Spot activation contains a zero or inconsistent required field");
+    }
+    wire_size_counter_t route;
+    write_instance_spot_activation_route (route, record, ready);
     if (route.size () > std::numeric_limits<std::uint16_t>::max ()) {
         throw service_wire_error_t ("Instance Spot activation route exceeds u16 bound");
     }
 
-    std::vector<std::uint8_t> bytes{
-      magic[0], magic[1], wire_major, static_cast<std::uint8_t> (command::instanceSpot),
-      static_cast<std::uint8_t> (record.has_metadata ? static_cast<std::uint8_t> (flag::metadata)
-                                                     : 0)};
+    write_node_header (bytes, command::instanceSpot,
+                       static_cast<std::uint8_t> (
+                         record.has_metadata ? static_cast<std::uint8_t> (flag::metadata) : 0));
     bytes.push_back (ready ? 1 : 2);
     append_u16 (bytes, static_cast<std::uint16_t> (route.size ()));
-    bytes.insert (bytes.end (), route.begin (), route.end ());
+    write_instance_spot_activation_route (bytes, record, ready);
     append_u64 (bytes, record.source_node_generation);
     append_bytes8 (bytes, record.source_node_routing_id, "source node RID");
     if (record.source_spot_id) {
@@ -2434,7 +2569,21 @@ encode_instance_spot_activation_header (const instance_spot_activation_header_t 
     if (record.request) {
         append_u64 (bytes, record.reply_route_id);
     }
-    return bytes;
+}
+} // namespace
+
+std::vector<std::uint8_t>
+encode_instance_spot_activation_header (const instance_spot_activation_header_t &record)
+{
+    return encode_wire_bytes (
+      [&] (auto &output) { write_instance_spot_activation_header (output, record); });
+}
+
+zlink::message_t
+encode_instance_spot_activation_header_message (const instance_spot_activation_header_t &record)
+{
+    return encode_wire_message (
+      [&] (auto &output) { write_instance_spot_activation_header (output, record); });
 }
 
 instance_spot_activation_header_t
