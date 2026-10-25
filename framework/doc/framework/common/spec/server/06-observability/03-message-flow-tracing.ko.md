@@ -297,7 +297,7 @@ Provider가 없으면 trace만을 위한 allocation을 하지 않는다.
 
 | 상황 | 규칙 |
 |---|---|
-| 보관 | 실행 중인 한 건을 빼고 아직 provider에 전달하지 않은 기록을 최대 8192건 보관한다. 실행 자원에 넘겼지만 provider가 아직 받지 않은 기록도 이 한도에 포함한다. 이 한도는 public 설정이 아니다. |
+| 보관 | 실행 중인 한 건을 빼고 아직 provider에 전달하지 않은 기록을 최대 8192건 보관한다. 실행 자원에 넘겼지만 provider가 아직 받지 않은 기록도 이 한도에 포함한다. 이 한도는 public 설정이 아니다. 전달 대기 중인 기록이 이미 있으면 기록을 넘기는 처리 지점은 실행 자원을 다시 깨우지 않는다. |
 | 포화 | 한도가 차면 정상·오류·drop 기록을 구분하지 않고 새 기록을 버리고, 버린 건수를 `zlink.observability.events.overflow`(`source=message_flow`)에 반영한다. 기록을 넘기는 처리 지점은 기다리거나 다시 시도하지 않고 provider를 호출하지 않는다. |
 | Provider failure | Message operation failure가 아니다. 경계의 수명 동안 logger, trace와 fallback 역할마다 첫 실패 한 번만 실패한 provider가 아닌 application의 fallback logger 또는 process stderr에 기록하고, 그 뒤 실패는 횟수에만 반영한다. 실패한 fallback은 다시 호출하지 않는다. Fallback 기록의 실패도 message operation 결과, dispatch와 lifecycle을 바꾸지 않는다. |
 | Host 종료 | 그 host의 기록 제출을 닫고 아직 전달하지 않은 기록을 버린다. 종료로 버린 기록은 overflow에 세지 않는다. 실행 중인 provider 호출의 완료를 기다리거나 강제로 끝내지 않는다. 그 호출은 불변 snapshot과 provider만 참조하고 host runtime을 참조하지 않는다. |
@@ -305,7 +305,7 @@ Provider가 없으면 trace만을 위한 allocation을 하지 않는다.
 이 문서에서 trace 또는 dispatch error를 "정확히 한 번 기록한다"는 기록 한 건을 이 경계에
 정확히 한 번 제출한다는 뜻이다. 그 기록도 포화와 host 종료 규칙에 따라 버려질 수 있다.
 
-Node에서 이 경계의 실행 자원은 worker thread다. Framework는 이 worker를 만들 때 표준
+Node에서 이 경계의 실행 자원은 worker thread이며, 경계는 여러 기록을 한 번에 worker로 넘길 수 있다. Framework는 이 worker를 만들 때 표준
 telemetry bootstrap의 preload 설정(`--require`·`--import`) 상속을 유지하며, 그 worker에
 설치된 provider에만 기록을 전달한다. C++ application logging의
 async 설정(용량과 `block`을 포함한 overflow 정책)은 이 경계에 적용하지 않는다.

@@ -336,7 +336,7 @@ the trace.
 
 | Situation | Rule |
 |---|---|
-| Retention | Apart from the one record in progress, at most 8192 records not yet delivered to a provider are kept. A record handed to the execution resource but not yet received by a provider counts toward this limit. The limit isn't a public setting. |
+| Retention | Apart from the one record in progress, at most 8192 records not yet delivered to a provider are kept. A record handed to the execution resource but not yet received by a provider counts toward this limit. The limit isn't a public setting. While records are already waiting for delivery, the processing point that hands over a record doesn't wake the execution resource again. |
 | Saturation | When the limit is reached, the new record is dropped without distinguishing normal, error, and drop records, and the dropped count is added to `zlink.observability.events.overflow` (`source=message_flow`). The processing point that hands over the record doesn't wait, retry, or call a provider. |
 | Provider failure | It isn't a message operation failure. During the boundary's lifetime, only the first failure of each role (logger, trace, fallback) is recorded, using the application's fallback logger or process stderr rather than the failed provider; later failures only add to the count. A failed fallback isn't called again. Failure of the fallback record also doesn't change the message operation result, dispatch, or lifecycle. |
 | Host shutdown | Record submission for that host closes and records not yet delivered are dropped. Records dropped at shutdown aren't counted as overflow. A provider call in progress isn't awaited or forcibly ended. That call references only the immutable snapshot and the provider, not the host runtime. |
@@ -345,7 +345,7 @@ In this document, recording a trace or dispatch error exactly once means
 submitting one record to this boundary exactly once. That record can still be dropped
 under the saturation and host-shutdown rules.
 
-In Node, this boundary's execution resource is a worker thread. When
+In Node, this boundary's execution resource is a worker thread, and the boundary may hand several records to the worker at once. When
 creating this worker, the Framework preserves the inherited preload
 settings (`--require` and `--import`) for the standard telemetry bootstrap
 and delivers records only to the provider installed in that worker. The C++
