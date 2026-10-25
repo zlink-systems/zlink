@@ -328,9 +328,9 @@ bool spot_route_internal_dispatcher_t::dispatch_request_async (
                   completion (result_t<zlink::message_t>::success (detail::encoded_payload_to_raw (
                     serializers->get<spot_actor_admission_route_reply_t> ().serialize (reply))));
               },
-              [completion] {
-                  completion (result_t<zlink::message_t>::failure (
-                    framework_error_kind_t::unavailable, "target spot is not active locally"));
+              [completion] (result_t<void> rejected) {
+                  completion (detail::propagate_failure<zlink::message_t> (
+                    rejected, "Actor Join target admission failed"));
               });
             return true;
         }

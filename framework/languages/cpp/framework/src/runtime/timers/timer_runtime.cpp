@@ -395,8 +395,7 @@ timer_runtime_t::dispatch_fire_count (timer_t &timer,
             timer._state->running = false;
         }
         complete_cancel_if_ready (timer._state);
-        return detail::result_access_t::failure<timer_tick_t> (
-          spot_context_state_t::sealed_admission_error ());
+        return detail::result_access_t::failure<timer_tick_t> (_context->admission_error ());
     }
     auto reset_running = [&timer, this] {
         _context->leave_callback ();
@@ -447,8 +446,8 @@ task_t<timer_tick_t> timer_runtime_t::dispatch_fire_count_async (timer_t &timer,
           framework_error_kind_t::protocol_error, "SPOT timer context is not configured"));
     }
     if (!context->admit_timer_fire ()) {
-        return task_t<timer_tick_t> (detail::result_access_t::failure<timer_tick_t> (
-          spot_context_state_t::sealed_admission_error ()));
+        return task_t<timer_tick_t> (
+          detail::result_access_t::failure<timer_tick_t> (context->admission_error ()));
     }
     auto task = dispatch_fire_count_async (timer, fire_count, std::nullopt);
     detail::observe_task_completion (
