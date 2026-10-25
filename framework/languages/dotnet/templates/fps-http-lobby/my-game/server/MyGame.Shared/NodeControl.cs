@@ -1,0 +1,77 @@
+using System.Text.Json;
+using Microsoft.AspNetCore.Hosting.Server;
+using Microsoft.AspNetCore.Hosting.Server.Features;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Zlink.Framework.Contracts.Configuration;
+
+namespace MyGame.Shared;
+
+public static class NodeControl
+{
+    public static async Task RunAsync(IHost host, NodeSettings settings)
+    {
+        using var lifetime = new CancellationTokenSource();
+        await host.StartAsync(lifetime.Token);
+        var runtime = host.Services.GetRequiredService<IZLinkFrameworkRuntime>();
+        var mesh = runtime.GetListenerStatus(ZLinkListenerKind.RouteMesh, GameNames.WorldMesh);
+        var stream = settings.StreamEndpoint is null
+            ? null
+            : runtime.GetListenerStatus(ZLinkListenerKind.Stream, GameNames.SessionStream).Endpoint;
+        var http = settings.HttpEndpoint is null
+            ? null
+            : host
+                .Services.GetRequiredService<IServer>()
+                .Features.Get<IServerAddressesFeature>()!
+                .Addresses.Single();
+        Console.WriteLine(
+            NodeProtocol.ReadyPrefix
+                + JsonSerializer.Serialize(
+                    new HttpNodeReady(settings.Id, mesh.Endpoint, stream, http),
+                    new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase }
+                )
+        );
+        while (await Console.In.ReadLineAsync(lifetime.Token) is { } command)
+        {
+            switch (command.Trim())
+            {
+                case NodeProtocol.Drain:
+                    Console.WriteLine(NodeProtocol.RelocationRequested);
+                    var relocation = runtime
+                        .RelocateAsync(
+                            new ZLinkFrameworkRelocationOptions
+                            {
+                                Mode = ZLinkFrameworkRelocationMode.PlannedMaintenance,
+                            },
+                            lifetime.Token
+                        )
+                        .AsTask();
+                    var result = await relocation;
+                    if (result.Outcome != ZLinkFrameworkRelocationOutcome.Relocated)
+                        throw new InvalidOperationException(
+                            $"Host relocation blocked: {result.Reason}."
+                        );
+                    Console.WriteLine(NodeProtocol.Relocated);
+                    await foreach (var observed in runtime.ObserveAsync(lifetime.Token))
+                    {
+                        if (!observed.Status.SafeToShutdown)
+                            continue;
+                        Console.WriteLine(NodeProtocol.SafeToShutdown);
+                        break;
+                    }
+                    break;
+                case NodeProtocol.Shutdown:
+                    var stopped = await runtime.ShutdownAsync(cancellationToken: lifetime.Token);
+                    if (stopped.Outcome != ZLinkFrameworkTerminationOutcome.Stopped)
+                        throw new InvalidOperationException(
+                            $"Host shutdown failed: {stopped.Reason}."
+                        );
+                    await host.StopAsync(lifetime.Token);
+                    return;
+                default:
+                    throw new InvalidDataException($"Unknown node command '{command}'.");
+            }
+        }
+        await host.WaitForShutdownAsync(lifetime.Token);
+    }
+}

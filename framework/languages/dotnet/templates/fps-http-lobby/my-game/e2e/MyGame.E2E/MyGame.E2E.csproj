@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><OutputType>Exe</OutputType></PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../server/MyGame.Shared/MyGame.Shared.csproj" />
+    <ProjectReference Include="../../server/MyGame.Match/MyGame.Match.csproj" />
+    <ProjectReference Include="../../server/MyGame.Lobby/MyGame.Lobby.csproj" />
+    <PackageReference Include="Zlink.Stream.Connector" />
+  </ItemGroup>
+</Project>
