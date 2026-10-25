@@ -8,7 +8,7 @@ Framework 0.30.3은 Node.js binding 1.20.0과 Core 1.20.0을 사용합니다.
 
 - User Spot이 `Close`를 진행 중일 때 `GetOrCreate`가 해당 Spot에 `Join`을 요청하면 실패하던 문제를 수정했습니다. (#2672)
 - Close가 완료된 Spot의 이전 `SpotRef`로 `Close`를 호출하면 예외가 발생하던 문제를 수정했습니다. `Close`가 진행 중일 때 두 번째 요청은 첫 번째 요청에 합류해 같은 결과를 받습니다. (#2675)
-<!-- #2673 -->
+- `NODE_ENV=test`처럼 구조 검사를 켠 환경에서 자동 연결을 쓰는 application의 초기화가 'A state lane turn cannot wait for another state lane completion' 오류로 실패하던 0.30.2 회귀를 수정했습니다. 주기 reconcile과 즉시 reconcile 요청은 겹치지 않고 차례로 실행됩니다. (#2673)
 
 ## 설치
 

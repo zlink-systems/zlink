@@ -8,7 +8,7 @@ Framework 0.30.3 uses Node.js binding 1.20.0 and Core 1.20.0.
 
 - Fixed `GetOrCreate` failing to Join a User Spot while that Spot was closing. (#2672)
 - Fixed an exception when calling `Close` with a stale `SpotRef` after the Spot had closed. A second `Close` call joins an in-progress `Close` and receives the same result. (#2675)
-<!-- #2673 -->
+- Fixed a 0.30.2 regression where application startup with auto-connect failed with 'A state lane turn cannot wait for another state lane completion' when structural checks were enabled, as with `NODE_ENV=test`. Periodic and on-demand reconciles now run one at a time in order. (#2673)
 
 ## Install
 
