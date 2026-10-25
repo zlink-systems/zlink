@@ -32,6 +32,8 @@ export class ZLinkAutoConnectLoop {
   private lastStamp?: bigint;
   private lastLiveOwnerSetVersion?: number;
   private lastTickFailed = false;
+  // This settled tail orders whole operations; mutable state remains on the lane.
+  private inFlightTick: Promise<void> = Promise.resolve();
 
   constructor(options: ZLinkAutoConnectLoopOptions) {
     this.reconciler = options.reconciler;
@@ -59,7 +61,7 @@ export class ZLinkAutoConnectLoop {
     const controller = this.controller;
     if (meshName !== this.meshName || controller === undefined) return;
     // A fresh descriptor scan uses the same RID ordering and connection owner as a periodic tick.
-    await this.lane.run(async () => {
+    await this.enqueueTick(async () => {
       if (!controller.signal.aborted) await this.runReconcile(controller.signal);
     });
   }
@@ -79,6 +81,7 @@ export class ZLinkAutoConnectLoop {
       this.clearTimer(this.timer);
       this.timer = undefined;
     }
+    await this.inFlightTick;
     this.reconciler.disconnectPeers();
   }
 
@@ -87,11 +90,24 @@ export class ZLinkAutoConnectLoop {
   }
 
   async tick(signal?: AbortSignal): Promise<void> {
-    await this.lane.run(() => this.tickCore(signal));
+    const controller = this.controller;
+    await this.enqueueTick(async () => {
+      if (controller?.signal.aborted !== true) await this.tickCore(signal ?? controller?.signal);
+    });
+  }
+
+  private enqueueTick(operation: () => Promise<void>): Promise<void> {
+    const completion = this.inFlightTick.then(operation);
+    // The caller receives the failure; the successor still owns its place in the order.
+    this.inFlightTick = completion.then(
+      () => undefined,
+      () => undefined
+    );
+    return completion;
   }
 
   private async tickCore(signal?: AbortSignal): Promise<void> {
-    const lastTickFailed = this.lastTickFailed;
+    const lastTickFailed = await this.lane.run(() => this.lastTickFailed);
     if (this.changeStampStore?.getMeshNodeChangeStamp !== undefined && !lastTickFailed) {
       try {
         const stamp = await this.changeStampStore.getMeshNodeChangeStamp(this.meshName, signal);
@@ -99,17 +115,23 @@ export class ZLinkAutoConnectLoop {
           this.leaseTracker === undefined
             ? 0
             : await this.leaseTracker.getLiveOwnerSetVersion(signal);
+        const publicationReady = this.reconciler.localPublicationReady;
         if (
-          this.lastStamp === stamp &&
-          this.lastLiveOwnerSetVersion === liveOwners &&
-          this.reconciler.localPublicationReady
+          await this.lane.run(
+            () =>
+              this.lastStamp === stamp &&
+              this.lastLiveOwnerSetVersion === liveOwners &&
+              publicationReady
+          )
         ) {
           return;
         }
         const tickFailed = await this.runReconcile(signal);
         if (!tickFailed) {
-          this.lastStamp = stamp;
-          this.lastLiveOwnerSetVersion = liveOwners;
+          await this.lane.run(() => {
+            this.lastStamp = stamp;
+            this.lastLiveOwnerSetVersion = liveOwners;
+          });
         }
         return;
       } catch {
@@ -118,14 +140,19 @@ export class ZLinkAutoConnectLoop {
     }
 
     await this.runReconcile(signal);
-    this.lastStamp = undefined;
-    this.lastLiveOwnerSetVersion = undefined;
+    await this.lane.run(() => {
+      this.lastStamp = undefined;
+      this.lastLiveOwnerSetVersion = undefined;
+    });
   }
 
   private async runReconcile(signal?: AbortSignal): Promise<boolean> {
     await this.reconciler.tick(signal);
-    this.lastTickFailed = this.reconciler.storeFailed;
-    return this.lastTickFailed;
+    const failed = this.reconciler.storeFailed;
+    return await this.lane.run(() => {
+      this.lastTickFailed = failed;
+      return failed;
+    });
   }
 
   private scheduleNext(): void {
