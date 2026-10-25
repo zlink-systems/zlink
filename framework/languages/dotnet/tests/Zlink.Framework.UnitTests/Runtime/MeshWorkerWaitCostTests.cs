@@ -347,35 +347,61 @@ public sealed class MeshWorkerWaitCostTests(ITestOutputHelper output)
                 _ => { },
                 factory
             );
-            Assert.Same(
-                failure,
-                await Assert.ThrowsAsync<InvalidOperationException>(() =>
-                    source.Completion.WaitAsync(TestGuard)
-                )
-            );
-            Assert.Same(
-                failure,
-                await Assert.ThrowsAsync<InvalidOperationException>(() =>
-                    source.DisposeAsync().AsTask().WaitAsync(TestGuard)
-                )
-            );
-            Assert.Equal(0, calls);
+            Task? disposal = null;
+            try
+            {
+                Assert.Same(
+                    failure,
+                    await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                        source.Completion.WaitAsync(TestGuard)
+                    )
+                );
+                var disposalTask = source.DisposeAsync().AsTask();
+                disposal = disposalTask;
+                Assert.Same(
+                    failure,
+                    await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                        disposalTask.WaitAsync(TestGuard)
+                    )
+                );
+                Assert.Equal(0, calls);
+            }
+            finally
+            {
+                if (disposal is null)
+                    await source.DisposeAsync();
+                else if (!disposal.IsCompleted)
+                    await disposal;
+            }
         }
         else
         {
             var source = ZLinkProcessExecutionPool.CreateReceiveSource(factory);
-            Assert.Same(
-                failure,
-                await Assert.ThrowsAsync<InvalidOperationException>(async () =>
-                    await source.ResumeAsync()
-                )
-            );
-            Assert.Same(
-                failure,
-                await Assert.ThrowsAsync<InvalidOperationException>(() =>
-                    source.DisposeAsync().AsTask().WaitAsync(TestGuard)
-                )
-            );
+            Task? disposal = null;
+            try
+            {
+                Assert.Same(
+                    failure,
+                    await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+                        await source.ResumeAsync()
+                    )
+                );
+                var disposalTask = source.DisposeAsync().AsTask();
+                disposal = disposalTask;
+                Assert.Same(
+                    failure,
+                    await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                        disposalTask.WaitAsync(TestGuard)
+                    )
+                );
+            }
+            finally
+            {
+                if (disposal is null)
+                    await source.DisposeAsync();
+                else if (!disposal.IsCompleted)
+                    await disposal;
+            }
         }
         await using var restarted = ZLinkProcessExecutionPool.CreateReceiveSource();
         await restarted.ResumeAsync();
