@@ -15,7 +15,7 @@
 ```powershell
 pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
 pwsh -NoProfile -File ./run-e2e.ps1
-pwsh -NoProfile -File ./run-e2e.ps1 -Scenario lobby,hit,reconnect,update
+pwsh -NoProfile -File ./run-e2e.ps1 -Scenario lobby,hit,wall,input,reconnect,update
 pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
 ```
 
@@ -24,7 +24,7 @@ Bash도 같은 절차를 실행한다.
 ```bash
 ./run-e2e.sh --build-only
 ./run-e2e.sh
-./run-e2e.sh --scenario lobby,hit,reconnect,update
+./run-e2e.sh --scenario lobby,hit,wall,input,reconnect,update
 ./run-e2e.sh --check-structure
 ```
 
@@ -44,15 +44,15 @@ Bash도 같은 절차를 실행한다.
 
 ID로 찾는 게임 상태 객체가 Actor이며, `server/MyGame.Match/Infrastructure/ZLink/PlayerActor.cs`의 `PlayerActor`는 플레이어 identity와 binding된 Session만 가진다. Actor를 받아 공통 게임 규칙을 실행하는 상태 객체가 Spot이며, `server/MyGame.Match/Infrastructure/ZLink/RoomSpot.cs`의 `RoomSpot`이 대결 하나를 담당한다. `MatchEntry.cs`는 첫 패킷을 받고 `Handlers.cs`는 Room handler와 push를 client로 전달하는 delivery handler를 담고 있다.
 
-전투 규칙은 `server/MyGame.Match/Domain/RoomState.cs`에 있으며 admission, sequence 검증, 사거리, 벽 교차, 피해, 승자를 판정한다. 규칙은 Framework 타입 없이 작성하고 Framework callback과 adapter는 `Infrastructure/ZLink/`에 둔다. `server/MyGame.Match/Program.cs`가 타입과 handler를 등록한다. node 구성을 바꾸면 실제 등록과 `server/config/`, descriptor를 함께 맞추어 구조 검사가 같은 구성을 검사하게 한다.
+`server/MyGame.Match/Domain/RoomRoster.cs`가 매칭된 명단과 Room 입장을 소유한다. `RoomState.cs`는 위치, 행동 검증, 이동·사격 규칙, phase와 승자를 소유한다. 도메인 규칙에는 Framework 타입을 넣지 않고 Framework callback과 adapter는 `Infrastructure/ZLink/`에 둔다. `server/MyGame.Match/Program.cs`가 타입과 handler를 등록한다. node 구성을 바꾸면 실제 등록과 `server/config/`, descriptor를 함께 맞추어 구조 검사가 같은 구성을 검사하게 한다.
 
 ### 공통 계약과 hosting
 
-`server/MyGame.Shared/Contracts.cs`는 process 간 메시지와 게임 상수를, `server/MyGame.Shared/NodeSettings.cs`는 `HttpEndpoint`, `SessionEndpoint`, `RoomCapacity`를 포함한 process 설정을 정의한다. `server/MyGame.Shared/GameHosting.cs`는 hosting과 진단을 설정하고 `server/MyGame.Shared/NodeControl.cs`는 실행 중 제어 명령을 처리한다. 여러 process가 사용하는 계약은 여기에 추가하며, 게임 상태는 `RoomSpot`에 유지하여 서로 다른 process가 같은 값을 따로 변경하지 않게 한다.
+`server/MyGame.Shared/Contracts.cs`는 process 간 메시지와 게임 상수를, `server/MyGame.Shared/NodeSettings.cs`는 `HttpEndpoint`, `SessionEndpoint`, `RoomCapacity`를 포함한 process 설정을 정의한다. `server/MyGame.Shared/GameHosting.cs`는 hosting과 진단을 설정하고 `server/MyGame.Shared/NodeControl.cs`는 실행 중 제어 명령을 처리한다. 여러 process가 사용하는 계약과 수 범위는 여기에 둔다. 게임 상태는 `RoomState`, 명단은 `RoomRoster`에 유지하여 서로 다른 process가 같은 값을 따로 변경하지 않게 한다.
 
 ### E2E client
 
-`e2e/MyGame.E2E/GameClient.cs`는 공개 connector로 게임에 접속하고 `e2e/MyGame.E2E/Scenarios.cs`는 lobby로의 HTTP 호출을 포함해 client가 관찰할 결과를 검사한다. `e2e/MyGame.E2E/MatchRun.cs`는 실행별 process와 기반 시설을 관리하고 `e2e/MyGame.E2E/StructureCheck.cs`는 구성을 검사한다. 새 게임 동작은 client가 받은 결과로 검증하며, 별도 unit-test 프로젝트와 formatter 설정은 포함되어 있지 않다.
+`e2e/MyGame.E2E/GameClient.cs`는 공개 connector로 게임에 접속하고 `e2e/MyGame.E2E/Scenarios.cs`는 HTTP lobby 호출을 포함해 client가 관찰할 결과를 검사한다. `DomainChecks.cs`와 `LobbyDomainChecks.cs`는 E2E scenario 전에 도메인 경계를 검사한다. `MatchRun.cs`는 실행별 process와 기반 시설을 관리하고 `StructureCheck.cs`는 구성을 검사한다. 별도 unit-test 프로젝트와 formatter 설정은 포함되어 있지 않다.
 
 ## 프로젝트의 ZLink 개념
 
@@ -87,46 +87,27 @@ Actor가 소속 Spot을 바꾸는 동작은 membership 변경이다. 대상 Spot
 1. client가 `playerId`와 `mode`를 담아 `POST /match`를 보낸다. `Matchmaker`가 요청을 대기열에 넣고, 같은 mode의 두 번째 플레이어가 오면 `RoomProvisioner.PrepareAsync`가 새 Room을 `GetOrCreate`하며 보류된 두 응답이 같은 room ID와 Session endpoint를 반환한다.
 2. client가 그 endpoint의 Session node에 STREAM으로 연결하고 첫 패킷 `JoinRoomRequest`를 보낸다. `PlayerSession`은 첫 패킷 타입을 확인하고 `playerId`로 Player Actor를 `GetOrCreate`한 뒤 Session에 binding하고 원래 패킷을 relay한다.
 3. 새 Actor는 Entry Spot `MatchEntry`에서 시작한다. `JoinRoomHandler`가 identity를 확인하고 Room에 `JoinSpot(...).Defer()`를 요청한다.
-4. `RoomSpot.OnActorJoinAsync`가 `RoomState.Admit`으로 입장을 허용하고, `OnJoinedActorAsync`가 모든 플레이어에게 player ID로 `RoomView`를 broadcast하며 `RoomViewDelivery`가 각 Actor의 binding된 Session으로 전달한다.
-5. `MoveRequest`와 `ShootRequest`는 `MoveHandler`와 `ShootHandler`가 받아 `RoomState`의 규칙을 호출한다. 거부는 요청자의 binding된 Session으로 `ActionRejected` 또는 `ShotRejected`를 보내고, 수락된 행동은 `RoomView`를 broadcast하며, 치명타는 `MatchEnded`로 끝난다.
+4. `RoomSpot.OnActorJoinAsync`가 `RoomRoster.CanAdmit`을 확인한 뒤 허용된 플레이어를 `RoomState.Admit`에 추가한다. `OnJoinedActorAsync`는 player ID로 `RoomView`를 broadcast하고 `RoomViewDelivery`는 각 Actor의 binding된 Session으로 전달한다.
+5. `MoveRequest`와 `ShootRequest`는 `MoveHandler`와 `ShootHandler`가 받아 `RoomState`를 호출한다. 거부 응답은 모두 `ActionRejected(Reason, RetryAfterMs)`다. 수락된 행동만 상태와 순번을 바꾸고 `RoomView`를 broadcast하며, 치명타는 `MatchEnded`도 broadcast한다.
 6. 같은 플레이어가 재접속하면 `PlayerSession`이 기존 Actor를 새 Session에 binding하고, `RoomReconnectHandler`가 identity를 확인한 뒤 현재 `RoomView`를 다시 보낸다.
 7. node를 교체할 때 `NodeControl`의 `drain`이 relocation을 요청한다. Framework는 `RoomRelocation`으로 Room 상태를 받아 다른 node에서 복원한다.
 
-## 이 샘플을 보며 개발하기
+## 이 템플릿의 도메인 확장
 
-이 샘플은 기능들이 함께 동작하는 방식을 보여 주므로, 자기 게임으로 바꾸지 않고 읽고 실행하는 용도로 쓴다. 자기 프로젝트는 .NET 기본 셋업에서 시작한다. [ZLink Start](https://zlink.systems/start)의 Initializer에서 .NET을 고르거나 ZLink 저장소의 `framework/languages/dotnet/templates/starter/my-game`을 사용한다. 그다음 필요한 기능을 이 샘플에서 하나씩 옮긴다. 구조 선택은 기본 셋업의 `AGENTS.md`가 설명하며, 이 절은 `match-http-lobby`만 다룬다. 이 샘플은 바꾸지 않고 프로젝트 옆에 참고용으로 둔다.
+이 템플릿의 도메인을 확장하여 `2차원 액션` 서버를 만든다. 각 판정은 그 판정을 소유하는 모듈에 둔다.
 
-### 샘플 먼저 실행하기
+| 확장 항목 | 소유 위치 | 절차 |
+| --- | --- | --- |
+| 도메인 상태와 규칙 | `server/MyGame.Match/Domain/RoomState.cs` | 위치, HP, phase, 승자, 행동 순번, 이동 예산과 사격 쿨다운을 이 파일에 둔다. 행동 검증과 단조 시간 판정도 이 도메인이 소유한다. |
+| Room 입장 | `server/MyGame.Match/Domain/RoomRoster.cs` | 매칭된 명단과 입장 판정을 이 파일에 둔다. relocation snapshot에 `RoomRoster`와 게임 상태를 함께 저장한다. |
+| Typed contract와 수 범위 | `server/MyGame.Shared/Contracts.cs` | client packet과 공통 규칙 상수를 이 파일에 추가한다. 각 필드와 수 범위는 한 번만 정의한다. |
+| client packet 허용 목록 | `server/MyGame.Session/PlayerSession.cs` | client가 보낼 수 있는 packet만 허용 목록에 추가한다. 내부 packet은 목록에 넣지 않는다. |
+| 도메인 경계 시험 | `e2e/MyGame.E2E/DomainChecks.cs`, `LobbyDomainChecks.cs` | 규칙의 경계 검사를 해당 시험 파일에 추가한다. 시험용 시계는 `RoomState` 생성자로만 전달한다. |
+| E2E 관찰 | `e2e/MyGame.E2E/Scenarios.cs` | client가 실제로 받은 응답과 Room view를 검사하는 시나리오를 추가한다. README 시나리오 표와 `zlink.structure.json`의 run 명령·시나리오 목록도 함께 갱신한다. |
 
-옮기기 전에 [개발 명령](#개발-명령)으로 빌드와 e2e를 한 번 실행해 받은 샘플이 동작하는지 확인하고 동작을 본다. 이 결과가 이후 비교의 기준이 된다. 실패하면 먼저 [README](README.md)의 Known issues와 대조한다.
+새 client contract는 `Contracts.cs`에 정의하고, 상태 변경과 검증은 `RoomState.cs`에 구현한다. client가 보낼 수 있는 packet이면 Session 허용 목록도 갱신한다. 같은 변경에서 도메인 경계 시험과 E2E 관찰을 추가한다. relocation snapshot에는 남은 시간을 ms로 저장하며 프로세스 시각을 직렬화하지 않는다.
 
-### 옮길 기능
-
-기능 이름은 기본 셋업 `AGENTS.md`의 기능 표와 같다. 경로는 이 디렉터리를 기준으로 한다. 기본 셋업에는 Session node 하나와 `connect` 시나리오만 있으므로, 마지막 열은 기능마다 기본 셋업에서 함께 늘릴 것이다.
-
-| 기능 | 이 샘플의 파일 | 옮길 것 | 기본 셋업에서 함께 늘릴 것 |
-| --- | --- | --- | --- |
-| Typed 메시지 | `server/MyGame.Shared/Contracts.cs` | 사용할 기능의 record: `MatchRequest`, `MatchResponse`, `JoinRoomRequest`, `MoveRequest`, `ShootRequest`, `RoomViewRequest`, `PlayerView`, `RoomView`, `ShotRejected`, `ActionRejected`, `MatchEnded`. `SessionInfoRequest`·`SessionInfo`는 client가 필요로 할 때만 옮긴다 | `GameNames`의 등록 이름과 `Rejection` 사유. `NodeReady`와 `NodeProtocol`은 기본 셋업에 이미 있다 |
-| Spot | `server/MyGame.Match/Infrastructure/ZLink/RoomSpot.cs`, `server/MyGame.Match/Domain/RoomState.cs` | admission·이동·사격·승자를 가진 `RoomSpot`과 그 뒤의 Domain 규칙 | 새 `server/MyGame.Match/` 프로젝트와 `server/config/` 파일, `Program.cs`의 `AddSpotFactory<RoomSpot>` 등록. `zlink.structure.json`의 `spots`·`nodes` 선언과 이를 등록과 비교하는 구조 검사 |
-| Actor | `server/MyGame.Match/Infrastructure/ZLink/PlayerActor.cs` | join 완료 시 거부 응답을 보내는 `PlayerActor`와 `PlayerFactory` | `Program.cs`의 `AddActorFactory<PlayerActor, PlayerFactory>` 등록 |
-| Entry·첫 입장 | `server/MyGame.Match/Infrastructure/ZLink/MatchEntry.cs`, `server/MyGame.Match/Infrastructure/ZLink/Handlers.cs`의 `RoomReconnectHandler` | `JoinRoomHandler`와 배정된 Room으로의 지연 join, `RoomReconnectHandler`의 identity 확인과 상태 재전송 | Entry Spot 등록과 `entry` 선언. 첫 매치를 확인하는 `hit` 시나리오와 재접속 뒤 상태를 비교하는 `reconnect` 시나리오 |
-| Session binding | `server/MyGame.Session/PlayerSession.cs` | 첫 패킷 검사, Actor 조회·생성, binding과 원래 typed 패킷 relay | `JoinRoomHandler`와 같은 첫 패킷 타입. 기본 셋업의 `PlayerSession.cs`에 옮긴다 |
-| Host relocation | `server/MyGame.Match/Infrastructure/ZLink/RoomSpot.cs`의 `RoomRelocation`, `server/MyGame.Match/Infrastructure/ZLink/PlayerActor.cs`의 `PlayerRelocation`, `server/MyGame.Shared/NodeControl.cs` | `Capture`·`Restore`를 가진 relocation adapter와 `drain`·`shutdown` 제어 | `PreserveStateWith` relocation 등록. 서버 교체 뒤에도 연결·상태가 유지되고 대체 node가 새 Room을 받는지 판정하는 `update` 시나리오 |
-| HTTP 로비 | `server/MyGame.Lobby/Program.cs`, `server/MyGame.Lobby/Application/Matchmaker.cs`, `server/MyGame.Lobby/Infrastructure/ZLink/RoomProvisioner.cs` | `POST /match` endpoint, 메모리 짝짓기 대기열, `GetOrCreate`로의 Room 준비 | 새 `server/MyGame.Lobby/` 프로젝트와 `HttpEndpoint`·`SessionEndpoint`를 가진 `server/config/lobby.json`. `zlink.structure.json`의 `lobby` node와 `HTTP`·`Find room` edge. 두 플레이어가 같은 배정을 받고 Room에 입장하는지 확인하는 `lobby` 시나리오 |
-
-### 옮기는 순서와 규칙
-
-기능은 표의 행 하나씩 옮기고, 하나를 옮길 때마다 빌드, 구조 검사, 관련 e2e 시나리오를 실행한다. 시나리오 ID는 `e2e/MyGame.E2E/Scenarios.cs`의 목록, `zlink.structure.json`의 `run.scenarios`, `run.commands`의 시나리오 선택 예시에 함께 추가한다. 판정은 실제로 받은 응답과 이벤트로 하고, 고정 대기나 기한 확대로 통과시키지 않는다.
-
-메시지 contract부터 옮긴다. `Contracts.cs`에 typed record를 먼저 정의한 뒤, 컴파일 오류가 나는 handler를 하나씩 새 메시지로 옮긴다. 첫 입장 패킷을 바꾸면 `PlayerSession`의 첫 패킷 검사, `JoinRoomHandler`, `RoomReconnectHandler`가 같은 타입을 받도록 함께 고친다.
-
-상태는 그 상태를 결정하는 객체에 둔다. 위치·HP·행동 sequence·승자는 `RoomSpot` 뒤의 `RoomState`에 둔다. 상태 필드를 바꿀 때는 relocation adapter를 함께 확인한다. adapter는 `RoomState` 전체를 직렬화하므로, 그 밖에 보관한 상태는 relocation 뒤 사라지고 `update` 시나리오가 그 손실을 잡는다. lobby의 대기열은 Spot 밖의 application 상태이며 relocation으로 보존되지 않으므로, lobby를 재시작하기 전에 대기 중인 매칭을 끝내거나 취소한다.
-
-전투 규칙을 바꿀 때 `hit` 시나리오의 검사를 유지한다. 명중은 사격 피해만큼 HP를 줄이고, 벽·초과 사거리·없는 대상은 피해 없이 사격을 거부하며, 치명 피해는 승자를 선언한다. 행동 sequence는 Move와 Shoot 요청에 걸쳐 증가해야 한다.
-
-Match·Room 같은 역할 이름을 이 샘플과 다르게 정하려면 타입 이름, `GameNames`, `server/config/`, `zlink.structure.json`을 한 번에 바꾼다. 이름 변경은 기능을 옮기는 변경과 나눠서 진행하면 실패 원인을 찾기 쉽다.
-
-옮긴 뒤 `update`가 실패하면 `RoomState`에 빠진 필드가 있는지 먼저 확인한다. 그다음 [디버깅](#디버깅)의 message flow로 첫 실패 단계를 찾는다.
+HTTP lobby 흐름은 `Matchmaker.cs`와 `RoomProvisioner.cs`가 담당한다. Room 명단과 입장 판정은 `RoomRoster`가 소유한다. lobby는 같은 match ID의 `RoomPrepared`를 받은 뒤 배정 응답을 반환한다.
 
 ## 개발 시 주의점
 
@@ -134,7 +115,7 @@ Match·Room 같은 역할 이름을 이 샘플과 다르게 정하려면 타입 
 
 의존성은 중앙에서 고정한 공개 NuGet package를 사용하며, project reference는 이 프로젝트의 모듈 사이에 둔다. typed 메시지는 기본 Framework JSON serializer로 처리하여 process마다 같은 계약을 사용한다. relocation adapter가 직접 직렬화하는 대상은 application 상태로 한정하여 Framework의 실행 상태와 게임 상태의 관리 책임을 분리한다.
 
-게임 사실은 그것을 변경하는 객체 한 곳에서 관리한다. 위치와 HP는 `RoomSpot`, 짝짓기 대기열은 `Matchmaker`의 것이고 `PlayerActor`는 identity와 binding만 가진다. Spot 상태에는 Actor 참조 대신 player ID를 보관한다. request handler 안의 응답은 handler가 받은 Actor의 `BoundSession`으로 보내고, 그 밖의 push는 공개 Actor client로 player ID에 보내 delivery handler가 binding된 Session으로 전달하게 한다. Session은 인증과 binding 뒤 packet을 전달하고, 게임 판정은 Room이 수행한다.
+게임 사실은 그것을 변경하는 객체 한 곳에서 관리한다. 위치·HP·순번·이동 예산·쿨다운·phase·승자는 `RoomState`, 명단은 `RoomRoster`, 짝짓기 대기열은 `Matchmaker`가 소유한다. 거부된 입력은 값·순번·쿨다운을 바꾸지 않는다. `PlayerActor`는 identity와 binding만 가진다. Spot 상태에는 Actor 참조 대신 player ID를 보관한다. request handler 안의 응답은 handler가 받은 Actor의 `BoundSession`으로 보내고, 그 밖의 push는 공개 Actor client로 player ID에 보내 delivery handler가 binding된 Session으로 전달하게 한다. `PlayerSession`은 허용 목록에 든 client packet만 relay하며 게임 결과는 Room이 결정한다.
 
 ### 비동기 실행과 lifecycle
 
@@ -144,7 +125,7 @@ Room은 `GetOrCreate`로 만들고 Actor 이동은 `JoinSpot(...).Defer()`와 �
 
 ### 재접속과 실패 처리
 
-reconnect에서는 같은 Actor ID를 사용하고 새 Session을 binding하여 기존 위치와 HP를 이어서 사용한다. 현재 위치는 Framework가 관리하므로 application route cache를 추가하거나 reconnect 때 게임 상태를 초기화하지 않는다. 처리 용량 때문에 호출을 수락하지 못하거나 대기시키는 동작이 backpressure이며, [Backpressure 가이드](https://docs.zlink.systems/ko/dotnet/guide/server/33-backpressure/)의 공개 결과를 관찰한다.
+reconnect에서는 같은 Actor ID를 사용하고 새 Session을 binding하여 기존 위치, HP, 순번, phase와 승자를 이어서 사용한다. 현재 위치는 Framework가 관리하므로 application route cache를 추가하거나 reconnect 때 게임 상태를 초기화하지 않는다. 처리 용량 때문에 호출을 수락하지 못하거나 대기시키는 동작이 backpressure이며, [Backpressure 가이드](https://docs.zlink.systems/ko/dotnet/guide/server/33-backpressure/)의 공개 결과를 관찰한다.
 
 Framework 실패는 실제 reply·event·lifecycle 결과를 근거로 조사한다. Internal API·reflection·raw frame·사설 codec·추가 poller·고정 sleep·transport 재시도·deadline 확대·assertion 완화는 실패한 공개 동작을 검증하지 못하므로 해결 방법으로 추가하지 않는다. 코드 주석은 영어로 작성하고 실행·빌드 산출물인 `.logs/`, `bin/`, `obj/`는 commit에서 제외한다.
 

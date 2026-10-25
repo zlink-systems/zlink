@@ -1,6 +1,7 @@
 package MyGame.match.infrastructure.zlink
 
 import MyGame.*
+import MyGame.match.domain.RoomRoster
 import MyGame.match.domain.RoomState
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionStage
@@ -14,14 +15,15 @@ class Room(
     private val config: NodeConfig,
     private val clients: ZLinkActorClient,
 ) : ZLinkSuspendingSpot<Player>() {
-    var state = RoomState()
+    val state = RoomState()
+    val roster = RoomRoster()
 
     override suspend fun onActorJoinSuspending(
         actorId: String,
         request: ZLinkMessage,
     ): ZLinkSpotActorJoinResult {
         checkJoin(actorId, request.decode<JoinRoomRequest>())
-        return if (state.admit(actorId)) ZLinkSpotActorJoinResult.accept()
+        return if (roster.canAdmit(actorId) && state.admit(actorId)) ZLinkSpotActorJoinResult.accept()
         else ZLinkSpotActorJoinResult.reject()
     }
 
@@ -37,29 +39,39 @@ class Room(
 
     override suspend fun onLeaveActorSuspending(actor: Player) {}
 
-    private fun view() = RoomView(context.spotId(), config.id, state.view())
+    private fun view() =
+        RoomView(context.spotId(), config.id, state.view(), state.phase, state.winner)
+
+    fun prepare(request: PrepareRoom): RoomPrepared = roster.prepare(context.spotId(), request)
 
     suspend fun current(actor: Player) {
         reply(actor, view())
     }
 
     suspend fun move(actor: Player, request: MoveRequest) {
-        val reason = state.move(actor.context.actorId(), request)
-        if (reason == null) broadcast(view()) else reply(actor, ActionRejected(reason))
+        val rejection = state.move(actor.context.actorId(), request)
+        if (rejection != null) {
+            reply(actor, rejection)
+            return
+        }
+        val player = state.view().single { it.playerId == actor.context.actorId() }
+        reply(actor, MoveResult(player.x, player.y, request.sequence))
+        broadcast(view())
     }
 
     suspend fun shoot(actor: Player, request: ShootRequest) {
-        val reason = state.shoot(actor.context.actorId(), request)
-        if (reason != null) {
-            reply(actor, ShotRejected(reason))
+        val rejection = state.shoot(actor.context.actorId(), request)
+        if (rejection != null) {
+            reply(actor, rejection)
             return
         }
+        reply(actor, ShotResult("hit", request.targetId, request.sequence))
         broadcast(view())
         state.winner?.let { broadcast(MatchEnded(it)) }
     }
 
     private suspend fun broadcast(message: Any) {
-        for (player in state.players) clients.kotlin().sendToActor(player.playerId, message).await()
+        for (playerId in state.view().map { it.playerId }) clients.kotlin().sendToActor(playerId, message).await()
     }
 
     companion object {
@@ -75,7 +87,11 @@ class RoomTransfer : ZLinkSpotRelocationAdapter<Room> {
         cancellation: ZLinkRelocationCancellation,
     ): CompletionStage<ByteArray> {
         cancellation.ensureActive()
-        return CompletableFuture.completedFuture(Json.mapper.writeValueAsBytes(entity.state))
+        return CompletableFuture.completedFuture(
+            Json.mapper.writeValueAsBytes(
+                RoomTransferSnapshot(Json.mapper.readTree(entity.state.capture()), entity.roster.capture())
+            )
+        )
     }
 
     override fun restore(
@@ -84,7 +100,14 @@ class RoomTransfer : ZLinkSpotRelocationAdapter<Room> {
         cancellation: ZLinkRelocationCancellation,
     ): CompletionStage<Void> {
         cancellation.ensureActive()
-        entity.state = Json.mapper.readValue(state, RoomState::class.java)
+        val snapshot = Json.mapper.readValue(state, RoomTransferSnapshot::class.java)
+        entity.state.restore(Json.mapper.writeValueAsBytes(snapshot.game))
+        entity.roster.restore(snapshot.roster)
         return CompletableFuture.completedFuture(null)
     }
 }
+
+data class RoomTransferSnapshot(
+    val game: com.fasterxml.jackson.databind.JsonNode,
+    val roster: RoomRoster.RosterSnapshot,
+)

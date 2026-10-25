@@ -3,6 +3,7 @@ param(
     [switch]$NoBuild,
     [switch]$BuildOnly,
     [switch]$CheckStructure,
+    [switch]$CheckDomain,
     [string]$Scenario,
     [Parameter(ValueFromRemainingArguments = $true)][string[]]$RunnerArguments = @()
 )
@@ -12,6 +13,7 @@ if ($PSVersionTable.PSVersion.Major -lt 7) { throw 'PowerShell 7 or later is req
 $root = $PSScriptRoot
 New-Item -ItemType Directory -Force (Join-Path $root '.logs') | Out-Null
 if ($CheckStructure) { $RunnerArguments = @('--check-structure') + $RunnerArguments }
+elseif ($CheckDomain) { $RunnerArguments = @('--check-domain') + $RunnerArguments }
 elseif ($Scenario) { $RunnerArguments = @('--scenario', $Scenario) + $RunnerArguments }
 if ($Local) {
     if (-not $NoBuild) {

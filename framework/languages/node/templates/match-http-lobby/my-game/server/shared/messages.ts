@@ -1,4 +1,21 @@
-import { Names } from './constants';
+import { Names, Game } from './constants';
+const int32Brand: unique symbol = Symbol('Int32');
+const signedInt32Min = -2_147_483_648;
+const signedInt32Max = 2_147_483_647;
+
+export type Int32 = number & { readonly [int32Brand]: true };
+
+export function signedInt32(value: number): Int32 {
+  if (!Number.isInteger(value) || value < signedInt32Min || value > signedInt32Max)
+    throw new RangeError('Value is outside the signed 32-bit integer range');
+  return value as Int32;
+}
+
+export function toRetryAfterMs(value: number): Int32 {
+  if (Number.isNaN(value)) throw new RangeError('RetryAfterMs cannot be NaN');
+  return signedInt32(Math.ceil(Math.max(0, Math.min(signedInt32Max, value))));
+}
+
 export class SessionInfoRequest {}
 export class SessionInfo {
   constructor(
@@ -25,17 +42,40 @@ export class JoinRoomRequest {
     readonly roomId: string
   ) {}
 }
+export class PrepareRoom {
+  constructor(
+    readonly matchId: string,
+    readonly members: string[]
+  ) {}
+}
+export class RoomPrepared {
+  constructor(readonly matchId: string) {}
+}
 export class MoveRequest {
   constructor(
-    readonly x: number,
-    readonly y: number,
-    readonly sequence: number
+    readonly dx: number,
+    readonly dy: number,
+    readonly sequence: bigint
   ) {}
 }
 export class ShootRequest {
   constructor(
     readonly targetId: string,
-    readonly sequence: number
+    readonly sequence: bigint
+  ) {}
+}
+export class MoveResult {
+  constructor(
+    readonly x: number,
+    readonly y: number,
+    readonly sequence: bigint
+  ) {}
+}
+export class ShotResult {
+  constructor(
+    readonly outcome: string,
+    readonly targetId: string,
+    readonly sequence: bigint
   ) {}
 }
 export class RoomViewRequest {}
@@ -44,21 +84,28 @@ export class PlayerView {
     readonly playerId: string,
     readonly x: number,
     readonly y: number,
-    readonly hp: number
+    readonly hp: number,
+    readonly lastSequence: bigint
   ) {}
 }
 export class RoomView {
   constructor(
     readonly roomId: string = '',
     readonly nodeId: string = '',
+    readonly phase: string = Game.playingPhase,
+    readonly winner: string | null = null,
     readonly players: PlayerView[] = []
   ) {}
 }
-export class ShotRejected {
-  constructor(readonly reason: string) {}
-}
 export class ActionRejected {
-  constructor(readonly reason: string) {}
+  readonly retryAfterMs: Int32;
+
+  constructor(
+    readonly reason: string,
+    retryAfterMs: Int32 = signedInt32(0)
+  ) {
+    this.retryAfterMs = signedInt32(retryAfterMs);
+  }
 }
 export class MatchEnded {
   constructor(readonly winner: string = '') {}

@@ -119,6 +119,14 @@ async function main(): Promise<void> {
     checkStructure(args[1]);
     return;
   }
+  if (args[0] === '--check-domain') {
+    assert.equal(args.length, 1);
+    checkStructure();
+    const { runDomainChecks, runHttpDomainChecks } = await import('./domain-checks.mjs');
+    runDomainChecks();
+    await runHttpDomainChecks();
+    return;
+  }
   let selected: readonly string[] = Scenarios;
   if (args.length) {
     assert.equal(args.length, 2);
@@ -130,6 +138,9 @@ async function main(): Promise<void> {
     selected = Scenarios.filter((s) => requested.includes(s));
   }
   checkStructure();
+  const { runDomainChecks, runHttpDomainChecks } = await import('./domain-checks.mjs');
+  runDomainChecks();
+  await runHttpDomainChecks();
   let passed = 0;
   for (const name of selected) if (await runScenario(name)) passed++;
   console.log(`Scenarios: ${passed}/${selected.length} passed`);
@@ -259,6 +270,13 @@ async function runScenario(name: string): Promise<boolean> {
         await node.stop();
         const replacement = await start({ ...node.config }, node.role);
         await replacement.ready();
+      },
+      async restartLobby(): Promise<string> {
+        const node = [...nodes.values()].find((candidate) => candidate.role === 'http-lobby');
+        assert(node, 'HTTP lobby is missing');
+        await node.stop();
+        const replacement = await start({ ...node.config }, node.role);
+        return (await replacement.ready()).endpoint;
       }
     };
     const lobby = [...nodes.values()].find((n) => n.role === 'http-lobby');

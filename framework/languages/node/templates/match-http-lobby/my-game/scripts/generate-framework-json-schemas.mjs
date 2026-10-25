@@ -51,6 +51,7 @@ const packetNames = collectUsedPacketNames(
 const handlerTypes = collectHandlerTypes(sourceFiles, checker);
 const contracts = new Map();
 const unmatched = [];
+const packetModules = new Set();
 
 for (const packetName of [...packetNames].sort()) {
   const handler = handlerTypes.get(packetName);
@@ -70,6 +71,18 @@ for (const packetName of [...packetNames].sort()) {
       contract.reply = schemaForType(replyType, checker, `${packetName}.reply`);
     }
     contracts.set(packetName, contract);
+    const declaration = payloadSymbol?.declarations?.find(ts.isClassDeclaration);
+    if (declaration !== undefined) {
+      const sourceRoot = config.options.rootDir ?? path.dirname(projectPath);
+      const outputRoot = config.options.outDir ?? path.dirname(projectPath);
+      const emitted = path
+        .join(outputRoot, path.relative(sourceRoot, declaration.getSourceFile().fileName))
+        .replace(/\.ts$/u, '.js');
+      const relative = path
+        .relative(path.dirname(path.resolve(options.out)), emitted)
+        .replaceAll('\\', '/');
+      packetModules.add(relative.startsWith('.') ? relative : `./${relative}`);
+    }
   } catch (error) {
     throw new Error(`${formatError(error)} (packet '${packetName}')`);
   }
@@ -83,7 +96,7 @@ if (unmatched.length > 0) {
 }
 
 const serialized = serializeContracts(contracts);
-writeOutput(options.out, renderCommonJs(serialized));
+writeOutput(options.out, renderCommonJs(serialized, packetModules));
 process.stdout.write(
   `${SCRIPT_NAME}: generated ${contracts.size} packet schema(s)` +
     ` from ${sourceFiles.length} source file(s)\n`
@@ -621,8 +634,12 @@ function serializeContracts(contracts) {
   return JSON.stringify(Object.fromEntries(contracts), (_key, value) => value, 2);
 }
 
-function renderCommonJs(serialized) {
-  return `'use strict';\n\nconst packetContracts = Object.freeze(${serialized});\n\nfunction register(registerPacket) {\n  for (const [packetName, contract] of Object.entries(packetContracts)) {\n    registerPacket(packetName, contract)(class GeneratedZLinkPacket {});\n  }\n}\n\nconst framework = require('@zlink-systems/framework');\nregister(framework.ZLinkPacket);\nmodule.exports = Object.freeze({ packetContracts, register });\n`;
+function renderCommonJs(serialized, packetModules) {
+  const modules = [...packetModules]
+    .sort()
+    .map((module) => `require(${JSON.stringify(module)})`)
+    .join(', ');
+  return `'use strict';\n\nconst packetContracts = Object.freeze(${serialized});\nconst packetTypes = Object.assign({}, ${modules});\n\nfunction register(registerPacket) {\n  for (const [packetName, contract] of Object.entries(packetContracts)) {\n    registerPacket(packetName, contract)(packetTypes[packetName] ?? class GeneratedZLinkPacket {});\n  }\n}\n\nconst framework = require('@zlink-systems/framework');\nregister(framework.ZLinkPacket);\nmodule.exports = Object.freeze({ packetContracts, register });\n`;
 }
 
 function writeOutput(filePath, content) {

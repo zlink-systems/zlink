@@ -1,6 +1,7 @@
 param(
     [switch]$Local,
     [switch]$CheckStructure,
+    [switch]$CheckDomain,
     [switch]$NoBuild,
     [switch]$BuildOnly,
     [string]$Scenario,
@@ -14,10 +15,11 @@ Push-Location $root
 try {
 New-Item -ItemType Directory -Force (Join-Path $root '.logs') | Out-Null
 if ($CheckStructure) { $RunnerArguments = @('--check-structure') + $RunnerArguments }
+elseif ($CheckDomain) { $RunnerArguments = @('--check-domain') + $RunnerArguments }
 elseif ($Scenario) { $RunnerArguments = @('--scenario', $Scenario) + $RunnerArguments }
 if ($Local) {
     if (-not $NoBuild) {
-        & ./gradlew.bat --no-daemon installDist :e2e:javaHome *> (Join-Path $root '.logs/build.log')
+        & ./gradlew.bat --no-daemon test installDist :e2e:javaHome *> (Join-Path $root '.logs/build.log')
         if ($LASTEXITCODE -ne 0) {
             Get-Content (Join-Path $root '.logs/build.log') -Tail 20 | Write-Host
             exit 1

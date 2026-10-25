@@ -3,6 +3,8 @@ package MyGame;
 public enum Scenario {
     LOBBY("lobby"),
     HIT("hit"),
+    WALL("wall"),
+    INPUT("input"),
     RECONNECT("reconnect"),
     UPDATE("update");
     private final String id;

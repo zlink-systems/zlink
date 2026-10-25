@@ -32,6 +32,7 @@ class World
     }
     std::vector<std::unique_ptr<Node>> nodes_;
     std::map<std::string, Node *> matches_;
+    Node *lobby_ = nullptr;
     std::string session_endpoint_, lobby_endpoint_;
     bool compose_started_ = false;
     int command_index_ = 0;
@@ -146,11 +147,20 @@ class World
         require (!stream.empty () && !stream.ends_with (":0"),
                  "Framework did not publish stream endpoint");
         session_endpoint_ = stream;
-        lobby_endpoint_ =
-          start_node ("lobby", "lobby").second.at ("httpEndpoint").get<std::string> ();
+        const auto lobby = start_node ("lobby", "lobby");
+        lobby_ = lobby.first;
+        lobby_endpoint_ = lobby.second.at ("httpEndpoint").get<std::string> ();
         return stream;
     }
     const std::string &lobby_endpoint () const { return lobby_endpoint_; }
+    void restart_lobby ()
+    {
+        require (lobby_ != nullptr, "Lobby has not started");
+        stop_node (*lobby_);
+        const auto replacement = start_node ("lobby", "lobby", false);
+        lobby_ = replacement.first;
+        lobby_endpoint_ = replacement.second.at ("httpEndpoint").get<std::string> ();
+    }
     Process &match_node (const std::string &id) { return *matches_.at (id)->process; }
     void replace_match (const std::string &id)
     {

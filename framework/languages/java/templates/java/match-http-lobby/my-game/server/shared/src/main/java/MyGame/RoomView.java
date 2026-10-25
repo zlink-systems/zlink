@@ -1,3 +1,8 @@
 package MyGame;
 
-public record RoomView(String roomId, String nodeId, java.util.List<PlayerView> players) {}
+public record RoomView(
+        String roomId,
+        String nodeId,
+        java.util.List<PlayerView> players,
+        String phase,
+        String winner) {}

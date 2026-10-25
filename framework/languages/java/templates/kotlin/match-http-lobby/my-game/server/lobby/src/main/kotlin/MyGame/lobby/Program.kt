@@ -5,6 +5,7 @@ import MyGame.lobby.application.*
 import MyGame.lobby.infrastructure.*
 import org.springframework.boot.autoconfigure.SpringBootApplication
 import org.springframework.context.annotation.Bean
+import systems.zlink.framework.channels.ZLinkRouteClient
 import systems.zlink.framework.locations.redis.*
 import systems.zlink.framework.spots.ZLinkSpotManager
 import systems.zlink.framework.spring.*
@@ -28,9 +29,9 @@ class Program {
     }
 
     @Bean(destroyMethod = "close")
-    fun http(config: NodeConfig, spots: ZLinkSpotManager): HttpLobby {
+    fun http(config: NodeConfig, spots: ZLinkSpotManager, routes: ZLinkRouteClient): HttpLobby {
         require(!config.sessionEndpoint.isNullOrBlank()) { "Session endpoint is required" }
-        return HttpLobby(config, Matchmaker(ZLinkRooms(spots, config)))
+        return HttpLobby(config, Matchmaker(ZLinkRooms(spots, routes, config)))
     }
 }
 

@@ -1,56 +1,72 @@
 package MyGame.lobby.application
 
 import MyGame.*
+import java.util.UUID
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionStage
 
 fun interface RoomProvisioner {
-    fun prepare(roomId: String): CompletionStage<MatchResponse>
+    fun prepare(roomId: String, members: List<String>): CompletionStage<MatchResponse>
 }
 
 class Matchmaker(private val rooms: RoomProvisioner) : AutoCloseable {
-    private val waiting = mutableMapOf<String, CompletableFuture<MatchResponse>>()
-    private val participants = mutableMapOf<String, CompletableFuture<MatchResponse>>()
-    private var sequence = 0L
+    private data class Pending(
+        val playerId: String,
+        val mode: String,
+        val result: CompletableFuture<MatchResponse>,
+    )
+
+    private val waiting = mutableMapOf<String, Pending>()
+    private val participants = mutableMapOf<String, Pending>()
     private var closed = false
 
     fun match(request: MatchRequest): CompletionStage<MatchResponse> {
-        require(request.playerId.isNotBlank() && request.mode.isNotBlank()) {
-            "Player and mode are required"
-        }
+        require(request.playerId.isNotBlank()) { "Player is required" }
+        val mode = request.mode ?: Names.DEFAULT_MODE
+        require(mode.isNotBlank()) { "Mode is required" }
+
         val result = CompletableFuture<MatchResponse>()
-        val partner: CompletableFuture<MatchResponse>?
-        var roomId: String? = null
+        val current = Pending(request.playerId, mode, result)
+        val partner: Pending?
+        val roomId: String?
         synchronized(this) {
             check(!closed) { "Lobby is closed" }
-            require(request.playerId !in participants) { "Player already waiting" }
-            if (request.mode in waiting) {
-                sequence = Math.incrementExact(sequence)
-                roomId = Names.ROOM_PREFIX + sequence
+            require(current.playerId !in participants) { "Player already waiting" }
+            participants[current.playerId] = current
+            partner = waiting.remove(mode)
+            if (partner == null) {
+                waiting[mode] = current
+                roomId = null
+            } else {
+                roomId = Names.ROOM_PREFIX + UUID.randomUUID().toString().replace("-", "")
             }
-            participants[request.playerId] = result
-            partner = waiting.remove(request.mode)
-            if (partner == null) waiting[request.mode] = result
         }
         result.whenComplete { _, _ ->
             synchronized(this) {
-                participants.remove(request.playerId, result)
-                waiting.remove(request.mode, result)
+                participants.remove(current.playerId, current)
+                waiting.remove(current.mode, current)
             }
         }
+
         if (partner != null) {
+            val matchId = requireNotNull(roomId)
+            val members = listOf(partner.playerId, current.playerId)
             try {
-                rooms.prepare(requireNotNull(roomId)).whenComplete { value, error ->
-                    if (error == null) {
-                        partner.complete(value)
-                        result.complete(value)
-                    } else {
-                        partner.completeExceptionally(error)
+                rooms.prepare(matchId, members).whenComplete { assignment, error ->
+                    if (error != null) {
+                        partner.result.completeExceptionally(error)
                         result.completeExceptionally(error)
+                    } else if (assignment == null || assignment.roomId != matchId) {
+                        val failure = IllegalStateException("Prepared Room identity mismatch")
+                        partner.result.completeExceptionally(failure)
+                        result.completeExceptionally(failure)
+                    } else {
+                        partner.result.complete(assignment)
+                        result.complete(assignment)
                     }
                 }
             } catch (error: Exception) {
-                partner.completeExceptionally(error)
+                partner.result.completeExceptionally(error)
                 result.completeExceptionally(error)
             }
         }
@@ -59,17 +75,17 @@ class Matchmaker(private val rooms: RoomProvisioner) : AutoCloseable {
 
     @Synchronized
     fun cancelWaiting(request: MatchRequest, result: CompletableFuture<MatchResponse>): Boolean {
-        if (waiting[request.mode] !== result) return false
+        val pending = participants[request.playerId] ?: return false
+        if (pending.result !== result || !waiting.remove(pending.mode, pending)) return false
         result.cancel(false)
         return true
     }
 
     override fun close() {
-        val pending =
-            synchronized(this) {
-                closed = true
-                participants.values.toList()
-            }
+        val pending = synchronized(this) {
+            closed = true
+            participants.values.map { it.result }
+        }
         pending.forEach { it.completeExceptionally(IllegalStateException("Lobby shutdown")) }
     }
 }

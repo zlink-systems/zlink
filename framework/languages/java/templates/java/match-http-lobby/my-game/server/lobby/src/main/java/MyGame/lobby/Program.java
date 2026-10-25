@@ -8,6 +8,7 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Bean;
 
 import systems.zlink.framework.locations.redis.*;
+import systems.zlink.framework.channels.ZLinkRouteClient;
 import systems.zlink.framework.spots.ZLinkSpotManager;
 import systems.zlink.framework.spring.*;
 
@@ -30,11 +31,11 @@ public class Program {
     }
 
     @Bean(destroyMethod = "close")
-    public HttpLobby http(NodeConfig config, ZLinkSpotManager spots) {
+    public HttpLobby http(NodeConfig config, ZLinkSpotManager spots, ZLinkRouteClient routes) {
         if (config.sessionEndpoint() == null || config.sessionEndpoint().isBlank())
             throw new IllegalArgumentException("Session endpoint is required");
         try {
-            return new HttpLobby(config, new Matchmaker(new ZLinkRooms(spots, config)));
+            return new HttpLobby(config, new Matchmaker(new ZLinkRooms(spots, routes, config)));
         } catch (java.io.IOException error) {
             throw new java.io.UncheckedIOException(error);
         }

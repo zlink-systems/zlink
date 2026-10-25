@@ -3,6 +3,7 @@ param(
     [switch]$NoBuild,
     [switch]$BuildOnly,
     [switch]$CheckStructure,
+    [switch]$CheckDomain,
     [string]$Scenario,
     [Parameter(ValueFromRemainingArguments = $true)][string[]]$RunnerArguments = @()
 )
@@ -22,10 +23,16 @@ if ($Local) {
             & cmake --preset default *>> (Join-Path $root '.logs/build.log')
             if ($LASTEXITCODE -ne 0) { throw 'CMake configure failed; see .logs/build.log.' }
             & cmake --build --preset default *>> (Join-Path $root '.logs/build.log')
+            if ($LASTEXITCODE -ne 0) { throw 'C++ build failed.' }
+            & ctest --test-dir build --verbose *>> (Join-Path $root '.logs/build.log')
             if ($LASTEXITCODE -ne 0) { throw 'CMake build failed; see .logs/build.log.' }
         } finally { Pop-Location }
     }
-    if ($BuildOnly) { exit 0 }
+    if ($NoBuild -and $CheckDomain) {
+        & ctest --test-dir (Join-Path $root 'build') --verbose --no-tests=error
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    }
+    if ($BuildOnly -or $CheckDomain) { exit 0 }
     & (Join-Path $root 'build/bin/my-game-e2e.exe') --root $root @RunnerArguments
     exit $LASTEXITCODE
 }
@@ -48,7 +55,7 @@ try {
         Get-Content (Join-Path $logs 'build.log') -Tail 30 | Write-Host
         throw 'Docker image build failed.'
     }
-    if ($BuildOnly) { $result = 0 }
+    if ($BuildOnly -or $CheckDomain) { $result = 0 }
     else {
         $checkArguments = @(if ($CheckStructure) { $RunnerArguments } else { '--check-structure' })
         & docker @compose run --rm --no-deps -T --name "$project-check" runner @checkArguments

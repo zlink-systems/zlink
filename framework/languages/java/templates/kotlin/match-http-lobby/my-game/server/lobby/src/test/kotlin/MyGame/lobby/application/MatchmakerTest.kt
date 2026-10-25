@@ -12,14 +12,18 @@ class MatchmakerTest {
     @Test
     fun cancellationDoesNotChangePairedRequests() {
         val prepared = CompletableFuture<MatchResponse>()
-        Matchmaker { prepared }
+        var generatedRoomId = ""
+        Matchmaker { id, _ ->
+                generatedRoomId = id
+                prepared
+            }
             .use { matches ->
                 val request = MatchRequest("a", Names.DEFAULT_MODE)
                 val first = matches.match(request).toCompletableFuture()
                 val second =
                     matches.match(MatchRequest("b", Names.DEFAULT_MODE)).toCompletableFuture()
                 assertFalse(matches.cancelWaiting(request, first))
-                val assignment = MatchResponse(Names.ROOM_PREFIX + "1", endpoint)
+                val assignment = MatchResponse(generatedRoomId, endpoint)
                 prepared.complete(assignment)
                 assertEquals(assignment, first.join())
                 assertEquals(assignment, second.join())
@@ -28,7 +32,7 @@ class MatchmakerTest {
 
     @Test
     fun staleCancellationDoesNotRemoveReplacement() {
-        Matchmaker { id -> CompletableFuture.completedFuture(MatchResponse(id, endpoint)) }
+        Matchmaker { id, _ -> CompletableFuture.completedFuture(MatchResponse(id, endpoint)) }
             .use { matches ->
                 val request = MatchRequest("a", Names.DEFAULT_MODE)
                 val first = matches.match(request).toCompletableFuture()
@@ -46,7 +50,7 @@ class MatchmakerTest {
     @Test
     fun disconnectedWaiterCanRequestAgainAndMatch() {
         val config = NodeConfig(httpEndpoint = "http://127.0.0.1:0", sessionEndpoint = endpoint)
-        Matchmaker { id -> CompletableFuture.completedFuture(MatchResponse(id, endpoint)) }
+        Matchmaker { id, _ -> CompletableFuture.completedFuture(MatchResponse(id, endpoint)) }
             .use { matches ->
                 MyGame.lobby.infrastructure.HttpLobby(config, matches).use { lobby ->
                     val uri = java.net.URI.create(lobby.endpoint())
@@ -68,7 +72,10 @@ class MatchmakerTest {
                                 Json.mapper.readTree(a.substringAfter("\r\n\r\n")),
                                 Json.mapper.readTree(b.substringAfter("\r\n\r\n")),
                             )
-                            assertTrue(a.contains(Names.ROOM_PREFIX + "1"), a)
+                            assertTrue(
+                                Regex("room-[0-9a-f]{32}").containsMatchIn(a),
+                                a,
+                            )
                         }
                     }
                 }
@@ -90,8 +97,12 @@ class MatchmakerTest {
     @Test
     fun bothResponsesWaitForPreparedRoom() {
         val prepared = CompletableFuture<MatchResponse>()
-        Matchmaker { id ->
-                assertEquals(Names.ROOM_PREFIX + "1", id)
+        var matchedMembers = emptyList<String>()
+        var generatedRoomId: String? = null
+        Matchmaker { id, members ->
+                assertTrue(Regex("room-[0-9a-f]{32}").matches(id))
+                generatedRoomId = id
+                matchedMembers = members
                 prepared
             }
             .use { matches ->
@@ -105,7 +116,8 @@ class MatchmakerTest {
                     matches.match(MatchRequest("b", Names.DEFAULT_MODE)).toCompletableFuture()
                 assertFalse(first.isDone)
                 assertFalse(second.isDone)
-                val assignment = MatchResponse(Names.ROOM_PREFIX + "1", endpoint)
+                assertEquals(listOf("a", "b"), matchedMembers)
+                val assignment = MatchResponse(requireNotNull(generatedRoomId), endpoint)
                 prepared.complete(assignment)
                 assertEquals(assignment, first.join())
                 assertEquals(assignment, second.join())
@@ -114,7 +126,7 @@ class MatchmakerTest {
 
     @Test
     fun modesStaySeparateAndShutdownFailsWaiters() {
-        val matches = Matchmaker { id ->
+        val matches = Matchmaker { id, _ ->
             CompletableFuture.completedFuture(MatchResponse(id, endpoint))
         }
         val a = matches.match(MatchRequest("a", "first")).toCompletableFuture()
@@ -131,7 +143,7 @@ class MatchmakerTest {
 
     @Test
     fun preparationFailureReachesBothPlayers() {
-        Matchmaker { CompletableFuture.failedFuture(IllegalStateException("Room rejected")) }
+        Matchmaker { _, _ -> CompletableFuture.failedFuture(IllegalStateException("Room rejected")) }
             .use { matches ->
                 val first =
                     matches.match(MatchRequest("a", Names.DEFAULT_MODE)).toCompletableFuture()
@@ -148,7 +160,7 @@ class MatchmakerTest {
 
     @Test
     fun invalidRequestNeverEntersQueue() {
-        Matchmaker { throw AssertionError("No pair expected") }
+        Matchmaker { _, _ -> throw AssertionError("No pair expected") }
             .use { matches ->
                 assertThrows(IllegalArgumentException::class.java) {
                     matches.match(MatchRequest("", Names.DEFAULT_MODE))
@@ -156,6 +168,18 @@ class MatchmakerTest {
                 assertThrows(IllegalArgumentException::class.java) {
                     matches.match(MatchRequest("a", ""))
                 }
+                assertFalse(matches.match(MatchRequest("a")).toCompletableFuture().isDone)
+            }
+    }
+
+    @Test
+    fun omittedModeMatchesExplicitDuel() {
+        Matchmaker { id, _ -> CompletableFuture.completedFuture(MatchResponse(id, endpoint)) }
+            .use { matches ->
+                val omitted = matches.match(MatchRequest("a")).toCompletableFuture()
+                val explicit =
+                    matches.match(MatchRequest("b", Names.DEFAULT_MODE)).toCompletableFuture()
+                assertEquals(omitted.join(), explicit.join())
             }
     }
 }

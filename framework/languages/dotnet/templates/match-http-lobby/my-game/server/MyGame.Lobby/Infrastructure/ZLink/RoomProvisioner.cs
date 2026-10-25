@@ -4,10 +4,18 @@ using Zlink.Framework.Contracts.Spots;
 
 namespace MyGame.Lobby.Infrastructure.ZLink;
 
-public sealed class RoomProvisioner(IZLinkSpotManager spots, NodeSettings settings)
+public sealed class RoomProvisioner(
+    IZLinkSpotManager spots,
+    IZLinkSpotClient client,
+    NodeSettings settings
+)
     : IRoomProvisioner
 {
-    public async Task<MatchResponse> PrepareAsync(string roomId, CancellationToken ct)
+    public async Task<MatchResponse> PrepareAsync(
+        string roomId,
+        string[] members,
+        CancellationToken ct
+    )
     {
         var created = await spots
             .GetOrCreate(roomId, GameNames.RoomType)
@@ -15,8 +23,13 @@ public sealed class RoomProvisioner(IZLinkSpotManager spots, NodeSettings settin
             .Async(ct);
         if (created.State == ZLinkSpotCreateState.Rejected)
             throw new InvalidOperationException("Room creation was rejected.");
+        var prepared = await client
+            .RequestToSpot(created.Spot.SpotId, new PrepareRoom(roomId, members))
+            .Async<RoomPrepared>(ct);
+        if (prepared.MatchId != roomId || created.Spot.SpotId != roomId)
+            throw new InvalidDataException("Prepared Room identity differs from the match.");
         return new MatchResponse(
-            created.Spot.SpotId,
+            roomId,
             settings.SessionEndpoint
                 ?? throw new InvalidOperationException("SessionEndpoint is required.")
         );

@@ -15,7 +15,7 @@ Default builds and e2e run nodes and the client in Docker without a host SDK. Ru
 ```powershell
 pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
 pwsh -NoProfile -File ./run-e2e.ps1
-pwsh -NoProfile -File ./run-e2e.ps1 -Scenario lobby,hit,reconnect,update
+pwsh -NoProfile -File ./run-e2e.ps1 -Scenario lobby,hit,wall,input,reconnect,update
 pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
 ```
 
@@ -24,7 +24,7 @@ Bash provides the same workflow:
 ```bash
 ./run-e2e.sh --build-only
 ./run-e2e.sh
-./run-e2e.sh --scenario lobby,hit,reconnect,update
+./run-e2e.sh --scenario lobby,hit,wall,input,reconnect,update
 ./run-e2e.sh --check-structure
 ```
 
@@ -44,15 +44,15 @@ For host process debugging, install the .NET 8 SDK and add `--local` or `-Local`
 
 An Actor is a game state object addressed by ID; `PlayerActor` in `server/MyGame.Match/Infrastructure/ZLink/PlayerActor.cs` holds only the player's identity and the bound Session. A Spot is a state object that accepts Actors and executes shared game rules; `RoomSpot` in `server/MyGame.Match/Infrastructure/ZLink/RoomSpot.cs` hosts one fight. `MatchEntry.cs` receives the first packet, and `Handlers.cs` holds the Room handlers and the delivery handlers that forward pushes to the client.
 
-The combat rules live in `server/MyGame.Match/Domain/RoomState.cs`, which decides admission, sequence validation, range, wall intersection, damage, and the winner. Keep the rules free of Framework types and put Framework callbacks and adapters in `Infrastructure/ZLink/`. `server/MyGame.Match/Program.cs` registers the types and handlers. When changing node composition, update registrations, `server/config/`, and the descriptor together so the structure check validates the same composition.
+`server/MyGame.Match/Domain/RoomRoster.cs` owns the matched member list and Room admission. `RoomState.cs` owns positions, action validation, movement and shooting rules, phase, and winner. Keep domain rules free of Framework types and put Framework callbacks and adapters in `Infrastructure/ZLink/`. `server/MyGame.Match/Program.cs` registers the types and handlers. When changing node composition, update registrations, `server/config/`, and the descriptor together so the structure check validates the same composition.
 
 ### Shared contracts and hosting
 
-`server/MyGame.Shared/Contracts.cs` defines messages and game constants shared by processes, while `server/MyGame.Shared/NodeSettings.cs` defines process settings, including `HttpEndpoint`, `SessionEndpoint`, and `RoomCapacity`. `server/MyGame.Shared/GameHosting.cs` configures hosting and diagnostics, and `server/MyGame.Shared/NodeControl.cs` handles runtime control commands. Add contracts used by several processes here, and keep game state in `RoomSpot` so separate processes do not independently modify the same fact.
+`server/MyGame.Shared/Contracts.cs` defines messages and game constants shared by processes, while `server/MyGame.Shared/NodeSettings.cs` defines process settings, including `HttpEndpoint`, `SessionEndpoint`, and `RoomCapacity`. `server/MyGame.Shared/GameHosting.cs` configures hosting and diagnostics, and `server/MyGame.Shared/NodeControl.cs` handles runtime control commands. Add shared contracts and limits here. Keep game state in `RoomState` and roster membership in `RoomRoster` so separate processes do not independently modify the same fact.
 
 ### E2E client
 
-`e2e/MyGame.E2E/GameClient.cs` connects through the public connector, and `e2e/MyGame.E2E/Scenarios.cs` checks results observable by the client, including the HTTP call to the lobby. `e2e/MyGame.E2E/MatchRun.cs` manages processes and infrastructure for each run, while `e2e/MyGame.E2E/StructureCheck.cs` validates composition. Verify new gameplay through received client results; the project includes no separate unit-test project or formatter configuration.
+`e2e/MyGame.E2E/GameClient.cs` connects through the public connector, and `e2e/MyGame.E2E/Scenarios.cs` checks results observable by the client, including HTTP lobby calls. `DomainChecks.cs` and `LobbyDomainChecks.cs` check domain boundaries before E2E scenarios. `MatchRun.cs` manages processes and infrastructure for each run, while `StructureCheck.cs` validates composition. The project includes no separate unit-test project or formatter configuration.
 
 ## ZLink concepts in this project
 
@@ -87,46 +87,27 @@ Requests in the example game follow this path. Reading the code along this path 
 1. The client sends `POST /match` with `playerId` and `mode`. `Matchmaker` queues the request; when a second player of the same mode arrives, `RoomProvisioner.PrepareAsync` calls `GetOrCreate` for a new Room and both pending responses return the same room ID and Session endpoint.
 2. The client connects to the Session node over STREAM at that endpoint and sends the first packet, `JoinRoomRequest`. `PlayerSession` checks the first packet type, calls `GetOrCreate` for the Player Actor by `playerId`, binds it to the Session, and relays the original packet.
 3. A new Actor starts in the Entry Spot `MatchEntry`. `JoinRoomHandler` checks the identity and requests `JoinSpot(...).Defer()` into the Room.
-4. `RoomSpot.OnActorJoinAsync` admits the player through `RoomState.Admit`, and `OnJoinedActorAsync` broadcasts `RoomView` to every player by player ID; `RoomViewDelivery` forwards it through each Actor's bound Session.
-5. `MoveRequest` and `ShootRequest` reach `MoveHandler` and `ShootHandler`, which call the rules in `RoomState`. A rejection goes through the requester's bound Session as `ActionRejected` or `ShotRejected`; an accepted action broadcasts `RoomView`, and a lethal shot ends with `MatchEnded`.
+4. `RoomSpot.OnActorJoinAsync` checks `RoomRoster.CanAdmit` and then adds an approved player through `RoomState.Admit`. `OnJoinedActorAsync` broadcasts `RoomView` by player ID; `RoomViewDelivery` forwards it through each Actor's bound Session.
+5. `MoveRequest` and `ShootRequest` reach `MoveHandler` and `ShootHandler`, which call `RoomState`. Every rejection uses `ActionRejected(Reason, RetryAfterMs)`. Only an accepted action changes state or sequence and broadcasts `RoomView`; a lethal shot also broadcasts `MatchEnded`.
 6. When the same player reconnects, `PlayerSession` binds the existing Actor to the new Session, and `RoomReconnectHandler` checks the identity and resends the current `RoomView`.
 7. To replace a node, `drain` in `NodeControl` requests relocation. Framework takes the Room state from `RoomRelocation` and restores it on another node.
 
-## Developing from this sample
+## Extend this template's domain
 
-This sample shows how the features work together, so read and run it rather than turning it into your game. Start your own project from the .NET starter: choose .NET in the Initializer at [ZLink Start](https://zlink.systems/start), or use `framework/languages/dotnet/templates/starter/my-game` in the ZLink repository. Then transfer the features you need from this sample one at a time. The starter's `AGENTS.md` owns the choice between structures; this section covers only `match-http-lobby`. Keep this sample unchanged next to your project as a reference.
+Extend this template's domain to build a `two-dimensional action` server. Keep each decision in its owning module.
 
-### Run the sample first
+| Extension | Owner | Procedure |
+| --- | --- | --- |
+| Domain state and rules | `server/MyGame.Match/Domain/RoomState.cs` | Add positions, HP, phase, winner, action sequence, movement budget and fire cooldown here. Keep action validation and monotonic time decisions in this domain. |
+| Room admission | `server/MyGame.Match/Domain/RoomRoster.cs` | Add the matched member list and admission rule here. Keep `RoomRoster` in the relocation snapshot with the game state. |
+| Typed contracts and limits | `server/MyGame.Shared/Contracts.cs` | Add client packets and shared rule constants here. Define each field and numeric limit once. |
+| Client packet allowlist | `server/MyGame.Session/PlayerSession.cs` | Add only client-sendable packet types to the allowlist. Keep internal packets outside it. |
+| Domain boundaries | `e2e/MyGame.E2E/DomainChecks.cs`, `LobbyDomainChecks.cs` | Add boundary checks beside the rule they verify. Inject a test clock only through the `RoomState` constructor. |
+| E2E observation | `e2e/MyGame.E2E/Scenarios.cs` | Add scenarios that assert received replies and Room views. Update the README scenario table and `zlink.structure.json` run commands and scenario list together. |
 
-Before transferring anything, run the build and e2e once with the [Development commands](#development-commands) to confirm the downloaded sample works and to see its behavior. This result is the baseline for comparison. If it fails, compare the failure with Known issues in the [README](README.md) first.
+Add a client contract in `Contracts.cs`, implement its state change and validation in `RoomState.cs`, and update the Session allowlist when clients may send it. Add the domain boundary check and an E2E observation in the same change. Store only remaining milliseconds in relocation snapshots; never serialize a process clock reading.
 
-### Features to transfer
-
-Feature names match the feature table in the starter's `AGENTS.md`. Paths are relative to this directory. The starter has one Session node and the `connect` scenario only, so the last column lists what grows in the starter with each feature.
-
-| Feature | File in this sample | What to transfer | What to grow in the starter alongside |
-| --- | --- | --- | --- |
-| Typed messages | `server/MyGame.Shared/Contracts.cs` | The records of the features you adopt: `MatchRequest`, `MatchResponse`, `JoinRoomRequest`, `MoveRequest`, `ShootRequest`, `RoomViewRequest`, `PlayerView`, `RoomView`, `ShotRejected`, `ActionRejected`, `MatchEnded`; `SessionInfoRequest` and `SessionInfo` only if your client needs them | The registration names in `GameNames` and the `Rejection` reasons; the starter already has `NodeReady` and `NodeProtocol` |
-| Spot | `server/MyGame.Match/Infrastructure/ZLink/RoomSpot.cs`, `server/MyGame.Match/Domain/RoomState.cs` | `RoomSpot` with admission, movement, shooting, and the winner, and the Domain rules behind it | A new `server/MyGame.Match/` project, its `server/config/` files, and the `AddSpotFactory<RoomSpot>` registration in `Program.cs`; the `spots` and `nodes` declarations in `zlink.structure.json` and the structure check that compares them with the registrations |
-| Actor | `server/MyGame.Match/Infrastructure/ZLink/PlayerActor.cs` | `PlayerActor` with the join-completion rejection reply, and `PlayerFactory` | The `AddActorFactory<PlayerActor, PlayerFactory>` registration in `Program.cs` |
-| Entry and first admission | `server/MyGame.Match/Infrastructure/ZLink/MatchEntry.cs`, `RoomReconnectHandler` in `server/MyGame.Match/Infrastructure/ZLink/Handlers.cs` | `JoinRoomHandler` and the deferred join into the assigned Room, and the identity check and state resend of `RoomReconnectHandler` | The Entry Spot registration and its `entry` declarations; the `hit` scenario for the first match and a `reconnect` scenario that compares state after reconnection |
-| Session binding | `server/MyGame.Session/PlayerSession.cs` | The first-packet check, then find or create the Actor, bind, and relay the original typed packet | The same first-packet type as `JoinRoomHandler`; transfer it into the starter's `PlayerSession.cs` |
-| Host relocation | `RoomRelocation` in `server/MyGame.Match/Infrastructure/ZLink/RoomSpot.cs`, `PlayerRelocation` in `server/MyGame.Match/Infrastructure/ZLink/PlayerActor.cs`, `server/MyGame.Shared/NodeControl.cs` | The relocation adapters with `Capture` and `Restore`, and the `drain` and `shutdown` controls | The `PreserveStateWith` relocation registrations; the `update` scenario, which checks that connections and state survive a server replacement and that the replacement node accepts a new Room |
-| HTTP lobby | `server/MyGame.Lobby/Program.cs`, `server/MyGame.Lobby/Application/Matchmaker.cs`, `server/MyGame.Lobby/Infrastructure/ZLink/RoomProvisioner.cs` | The `POST /match` endpoint, the in-memory pairing queue, and the Room preparation through `GetOrCreate` | A new `server/MyGame.Lobby/` project and `server/config/lobby.json` with `HttpEndpoint` and `SessionEndpoint`; the `lobby` node and its `HTTP` and `Find room` edges in `zlink.structure.json`; a `lobby` scenario that checks both players receive the same assignment and enter the Room |
-
-### Transfer order and rules
-
-Transfer one row at a time and run the build, the structure check, and the related e2e scenario after each. Add a scenario ID to the list in `e2e/MyGame.E2E/Scenarios.cs`, to `run.scenarios`, and to the selection examples in `run.commands` of `zlink.structure.json` together. Judge results by the replies and events actually received; do not make tests pass with fixed sleeps or longer deadlines.
-
-Start with the message contracts. Define the typed records in `Contracts.cs` first, then move each handler that fails to compile to the new messages. When you change the first-entry packet, update the first-packet check in `PlayerSession`, `JoinRoomHandler`, and `RoomReconnectHandler` to receive the same type.
-
-Keep each piece of state in the object that decides it. Positions, HP, the action sequence, and the winner belong in `RoomState` behind `RoomSpot`. When you change state fields, update the relocation adapter, which serializes the whole `RoomState`; a state kept outside it disappears after relocation, and the `update` scenario detects the loss. The lobby queue is application state outside any Spot and is not preserved by relocation, so finish or cancel pending matches before restarting the lobby.
-
-Keep the checks of the `hit` scenario when changing the combat rules: a hit lowers HP by the shot damage, a wall, an excessive range, and a missing target reject the shot without damage, and lethal damage declares the winner. The action sequence must increase across Move and Shoot requests.
-
-To name roles such as Match or Room differently from this sample, change the type names, `GameNames`, `server/config/`, and `zlink.structure.json` at once. Do the renaming in its own change, separate from transferring a feature, so failures are easier to trace.
-
-If `update` fails after a transfer, first check whether `RoomState` is missing a field, then use the message flow in [Debugging](#debugging) to find the first failing step.
+The HTTP lobby flow belongs in `Matchmaker.cs` and `RoomProvisioner.cs`. `RoomRoster` owns Room membership and admission. The lobby returns an assignment only after it receives `RoomPrepared` for the same match ID.
 
 ## Development considerations
 
@@ -134,7 +115,7 @@ If `update` fails after a transfer, first check whether `RoomState` is missing a
 
 Use public NuGet packages at the centrally pinned versions, and keep project references between this project's own modules. Process typed messages with the default Framework JSON serializer so processes use the same contract. Limit direct serialization in relocation adapters to application state, keeping management of Framework execution state separate from game state.
 
-Manage each game fact in the object responsible for changing it: positions and HP in `RoomSpot`, and the pairing queue in `Matchmaker`. `PlayerActor` holds only identity and the binding. Store player IDs in Spot state, not Actor references. Deliver replies inside a request handler through the `BoundSession` of the Actor the handler receives, and deliver other pushes by player ID through the public Actor client to a delivery handler that forwards them to the bound Session. Sessions forward packets after authentication and binding; the Room decides game outcomes.
+Manage each game fact in the object responsible for changing it: positions, HP, sequences, movement budgets, cooldowns, phase and winner in `RoomState`; the roster in `RoomRoster`; and the pairing queue in `Matchmaker`. Rejected inputs leave values, sequences, and cooldowns unchanged. `PlayerActor` holds only identity and the binding. Store player IDs in Spot state, not Actor references. Deliver replies inside a request handler through the `BoundSession` of the Actor the handler receives, and deliver other pushes by player ID through the public Actor client to a delivery handler that forwards them to the bound Session. `PlayerSession` relays only client packet types in its allowlist; the Room decides game outcomes.
 
 ### Asynchronous execution and lifecycle
 
@@ -144,7 +125,7 @@ Create Rooms with `GetOrCreate` and move Actors with `JoinSpot(...).Defer()` and
 
 ### Reconnection and failure handling
 
-Reconnect with the same Actor ID and bind the new Session to continue using the existing position and HP. Framework manages current placement, so do not add an application route cache or reset game state during reconnect. Backpressure is the behavior that delays or rejects calls when processing capacity is unavailable; observe the public results described in the [Backpressure guide](https://docs.zlink.systems/dotnet/guide/server/33-backpressure/).
+Reconnect with the same Actor ID and bind the new Session to continue using the existing position, HP, sequence, phase, and winner. Framework manages current placement, so do not add an application route cache or reset game state during reconnect. Backpressure is the behavior that delays or rejects calls when processing capacity is unavailable; observe the public results described in the [Backpressure guide](https://docs.zlink.systems/dotnet/guide/server/33-backpressure/).
 
 Investigate Framework failures using actual replies, events, and lifecycle results. Internal APIs, reflection, raw frames, private codecs, extra pollers, fixed sleeps, transport retries, increased deadlines, and weakened assertions do not verify the failing public operation and must not be added as fixes. Write code comments in English and exclude execution and build artifacts in `.logs/`, `bin/`, and `obj/` from commits.
 

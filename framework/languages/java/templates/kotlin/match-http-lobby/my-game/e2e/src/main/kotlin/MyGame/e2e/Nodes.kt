@@ -194,6 +194,11 @@ class Nodes(private val root: Path) : AutoCloseable {
         startNode(id)
     }
 
+    fun restartLobby() {
+        requireNotNull(nodes["lobby"]).stop()
+        lobbyEndpoint = startNode("lobby")["httpEndpoint"].asText()
+    }
+
     override fun close() {
         var failure: Throwable? = null
         for (node in nodes.values.toList().asReversed()) {

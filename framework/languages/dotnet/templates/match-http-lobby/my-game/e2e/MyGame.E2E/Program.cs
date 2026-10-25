@@ -59,6 +59,16 @@ async Task<int> RunAsync()
         StructureCheck.Run(root, Option("--structure"));
         return 0;
     }
+    if (args.Contains("--check-domain"))
+    {
+        DomainChecks.Run();
+        await WireChecks.RunAsync();
+        await LobbyDomainChecks.RunAsync();
+        return 0;
+    }
+    DomainChecks.Run();
+    await WireChecks.RunAsync();
+    await LobbyDomainChecks.RunAsync();
     var selected = Scenarios.Select(Option("--scenario"));
     using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellation.Token);
     deadline.CancelAfter(TimeSpan.FromMinutes(3));

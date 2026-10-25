@@ -8,15 +8,19 @@ class Room final : public fx::spot_t<Player>
     fx::spot_context_t context_;
     const NodeConfig &config_;
     fx::actor_client_t &actors_;
-    RoomView view () const { return {context_.spot_id (), config_.Id, state.view ()}; }
+    RoomView view () const
+    {
+        return {context_.spot_id (), config_.Id, state.phase (), state.winner, state.view ()};
+    }
     template <class T> fx::task_t<void> broadcast (const T &message)
     {
         for (const auto &p : state.players)
-            co_await actors_.send (fx::actor_id_t (p.view.playerId), message).async ();
+            co_await actors_.send (fx::actor_id_t (p.playerId), message).async ();
     }
 
   public:
     RoomState state;
+    RoomRoster roster;
     Room (fx::spot_context_t context, const NodeConfig &config, fx::actor_client_t &actors) :
         context_ (std::move (context)), config_ (config), actors_ (actors)
     {
@@ -26,6 +30,7 @@ class Room final : public fx::spot_t<Player>
     void configure () override
     {
         context_.handlers ()
+          .add_handler<&Room::prepare> ()
           .add_actor_send<&Room::reconnect> ()
           .add_actor_send<&Room::get_view> ()
           .add_actor_send<&Room::move> ()
@@ -39,8 +44,13 @@ class Room final : public fx::spot_t<Player>
         const auto request = payload.decode<JoinRoomRequest> ();
         if (request.playerId != id || request.roomId != context_.spot_id ())
             throw std::invalid_argument ("Room admission identity mismatch");
-        co_return state.admit (std::string (id)) ? fx::spot_actor_join_result_t::accept ()
-                                                 : fx::spot_actor_join_result_t::reject ();
+        co_return roster.can_admit (std::string (id)) && state.admit (std::string (id))
+                    ? fx::spot_actor_join_result_t::accept ()
+                    : fx::spot_actor_join_result_t::reject ();
+    }
+    fx::task_t<RoomPrepared> prepare (fx::message_context_t &, const PrepareRoom &request)
+    {
+        co_return roster.prepare (context_.spot_id (), request);
     }
     fx::task_t<void> on_actor_joined (Player &) override { co_await broadcast (view ()); }
     fx::task_t<void> on_leave_actor (Player &) override { co_return; }
@@ -59,21 +69,30 @@ class Room final : public fx::spot_t<Player>
     }
     fx::task_t<void> move (Player &actor, fx::message_context_t &, const MoveRequest &request)
     {
-        const auto reason =
-          state.move (std::string (actor.context ().actor_id ().value ()), request);
-        if (!reason.empty ())
-            co_await actor.context ().bound_session ().send (ActionRejected{reason}).async ();
-        else
+        if (auto rejection = state.move (actor.context ().actor_id ().value (), request))
+            co_await actor.context ().bound_session ().send (*rejection).async ();
+        else {
+            const auto players = state.view ();
+            const auto player = std::find_if (players.begin (), players.end (), [&] (const auto &value) {
+                return value.playerId == actor.context ().actor_id ().value ();
+            });
+            if (player == players.end ())
+                throw std::runtime_error ("Unknown room player");
+            co_await actor.context ().bound_session ()
+              .send (MoveResult{player->x, player->y, request.sequence})
+              .async ();
             co_await broadcast (view ());
+        }
     }
     fx::task_t<void> shoot (Player &actor, fx::message_context_t &, const ShootRequest &request)
     {
-        const auto reason =
-          state.shoot (std::string (actor.context ().actor_id ().value ()), request);
-        if (!reason.empty ()) {
-            co_await actor.context ().bound_session ().send (ShotRejected{reason}).async ();
+        if (auto rejection = state.shoot (actor.context ().actor_id ().value (), request)) {
+            co_await actor.context ().bound_session ().send (*rejection).async ();
             co_return;
         }
+        co_await actor.context ().bound_session ()
+          .send (ShotResult{"hit", request.targetId, request.sequence})
+          .async ();
         co_await broadcast (view ());
         if (state.winner)
             co_await broadcast (MatchEnded{*state.winner});
@@ -92,13 +111,16 @@ class RoomRelocation final : public fx::spot_relocation_adapter_t<Room>
   public:
     fx::task_t<std::vector<std::byte>> capture (Room &room, std::stop_token) override
     {
-        const auto payload = zlink::message_t::from_json (room.state);
+        const HttpRoomSnapshot snapshot{room.state, room.roster.capture ()};
+        const auto payload = zlink::message_t::from_json (snapshot);
         co_return std::vector<std::byte> (payload.bytes ().begin (), payload.bytes ().end ());
     }
     fx::task_t<void> restore (Room &room, std::vector<std::byte> payload, std::stop_token) override
     {
-        room.state =
-          zlink::message_t::from (std::span<const std::byte> (payload)).parse_json<RoomState> ();
+        const auto snapshot = zlink::message_t::from (std::span<const std::byte> (payload))
+                                .parse_json<HttpRoomSnapshot> ();
+        room.state = snapshot.Game;
+        room.roster.restore (snapshot.Roster);
         co_return;
     }
 };

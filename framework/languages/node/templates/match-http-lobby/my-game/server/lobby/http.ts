@@ -1,11 +1,15 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { createServer, type Server, type ServerResponse } from 'node:http';
 import { once } from 'node:events';
-import { ZLINK_SPOT_MANAGER } from '@zlink-systems/nestjs';
-import { ZLinkSpotCreateState, type ZLinkSpotManager } from '@zlink-systems/framework';
+import { ZLINK_SPOT_MANAGER, ZLINK_SPOT_OUTBOUND } from '@zlink-systems/nestjs';
+import {
+  ZLinkSpotCreateState,
+  type ZLinkSpotManager,
+  type ZLinkSpotOutbound
+} from '@zlink-systems/framework';
 import { NODE_CONFIG, type NodeConfig } from '../shared/config';
 import { Names, Http } from '../shared/constants';
-import { MatchRequest, MatchResponse } from '../shared/messages';
+import { MatchRequest, MatchResponse, PrepareRoom, RoomPrepared } from '../shared/messages';
 import { Matchmaker, InvalidMatchRequest } from './matchmaker';
 @Injectable()
 export class LobbyHttp {
@@ -15,12 +19,17 @@ export class LobbyHttp {
   endpoint = '';
   constructor(
     @Inject(ZLINK_SPOT_MANAGER) spots: ZLinkSpotManager,
+    @Inject(ZLINK_SPOT_OUTBOUND) private readonly outbound: ZLinkSpotOutbound,
     @Inject(NODE_CONFIG) private readonly config: NodeConfig
   ) {
-    this.matches = new Matchmaker(async (roomId) => {
+    this.matches = new Matchmaker(async (roomId, members) => {
       const created = await spots.getOrCreate(roomId, Names.room).inMesh(Names.mesh).submit();
       if (created.state === ZLinkSpotCreateState.Rejected)
         throw new Error('Room creation rejected');
+      const prepared = await this.outbound
+        .requestToSpot(roomId, new PrepareRoom(roomId, members))
+        .submit<RoomPrepared>();
+      if (prepared.matchId !== roomId) throw new Error('Room preparation identity mismatch');
       if (!config.sessionEndpoint) throw new Error('Session endpoint required');
       return new MatchResponse(String(created.spot.spotId), config.sessionEndpoint);
     });

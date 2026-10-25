@@ -40,6 +40,15 @@ class GameSession(private val session: ZLinkSessionContext, private val actors: 
     ZLinkSuspendingSession() {
     override fun context() = session
 
+    private val clientPackets =
+        setOf(
+            JoinRoomRequest::class.java.simpleName,
+            RoomViewRequest::class.java.simpleName,
+            MoveRequest::class.java.simpleName,
+            ShootRequest::class.java.simpleName,
+            SessionInfoRequest::class.java.simpleName,
+        )
+
     override suspend fun onErrorSuspending(error: ZLinkStreamError) {
         error("Stream error: $error")
     }
@@ -48,7 +57,12 @@ class GameSession(private val session: ZLinkSessionContext, private val actors: 
         dispatch: ZLinkSessionDispatchContext,
         payload: ZLinkMessage,
     ) {
-        when (dispatch.packetName()) {
+        val packetName = dispatch.packetName()
+        if (packetName !in clientPackets) {
+            session.client().kotlin().send(ActionRejected(Rules.PACKET_NOT_ALLOWED, 0)).await()
+            return
+        }
+        when (packetName) {
             SessionInfoRequest::class.java.simpleName -> {
                 val actor = session.actors().bound().single()
                 session

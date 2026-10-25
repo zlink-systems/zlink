@@ -4,25 +4,28 @@ namespace MyGame.Lobby.Application;
 
 public interface IRoomProvisioner
 {
-    Task<MatchResponse> PrepareAsync(string roomId, CancellationToken ct);
+    Task<MatchResponse> PrepareAsync(string roomId, string[] members, CancellationToken ct);
 }
 
 // HTTP callbacks run concurrently. This lock owns only the application lobby queue.
 public sealed class Matchmaker(IRoomProvisioner rooms)
 {
+    private sealed record Pending(
+        string PlayerId,
+        TaskCompletionSource<MatchResponse> Completion
+    );
+
     private readonly object gate = new();
-    private readonly Dictionary<string, LinkedList<TaskCompletionSource<MatchResponse>>> queues =
-        new(StringComparer.Ordinal);
+    private readonly Dictionary<string, LinkedList<Pending>> queues = new(StringComparer.Ordinal);
     private readonly HashSet<string> participants = new(StringComparer.Ordinal);
-    private long sequence;
 
     public async Task<MatchResponse> MatchAsync(MatchRequest request, CancellationToken ct)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(request.PlayerId);
         ArgumentException.ThrowIfNullOrWhiteSpace(request.Mode);
-        TaskCompletionSource<MatchResponse>? partner = null;
+        Pending? partner = null;
         string? roomId = null;
-        LinkedListNode<TaskCompletionSource<MatchResponse>>? pending = null;
+        LinkedListNode<Pending>? pending = null;
         lock (gate)
         {
             if (!participants.Add(request.PlayerId))
@@ -33,13 +36,17 @@ public sealed class Matchmaker(IRoomProvisioner rooms)
             {
                 partner = first.Value;
                 queue.RemoveFirst();
-                roomId = GameNames.RoomPrefix + checked(++sequence);
-                queues.Remove(request.Mode);
+                if (queue.Count == 0)
+                    queues.Remove(request.Mode);
+                roomId = GameNames.RoomPrefix + Guid.NewGuid().ToString("N");
             }
             else
                 pending = queue.AddLast(
-                    new TaskCompletionSource<MatchResponse>(
-                        TaskCreationOptions.RunContinuationsAsynchronously
+                    new Pending(
+                        request.PlayerId,
+                        new TaskCompletionSource<MatchResponse>(
+                            TaskCreationOptions.RunContinuationsAsynchronously
+                        )
                     )
                 );
         }
@@ -49,17 +56,21 @@ public sealed class Matchmaker(IRoomProvisioner rooms)
             {
                 try
                 {
-                    var assignment = await rooms.PrepareAsync(roomId!, ct);
-                    partner.TrySetResult(assignment);
+                    var assignment = await rooms.PrepareAsync(
+                        roomId!,
+                        [partner.PlayerId, request.PlayerId],
+                        ct
+                    );
+                    partner.Completion.TrySetResult(assignment);
                     return assignment;
                 }
                 catch (Exception error)
                 {
-                    partner.TrySetException(error);
+                    partner.Completion.TrySetException(error);
                     throw;
                 }
             }
-            return await pending!.Value.Task.WaitAsync(ct);
+            return await pending!.Value.Completion.Task.WaitAsync(ct);
         }
         finally
         {

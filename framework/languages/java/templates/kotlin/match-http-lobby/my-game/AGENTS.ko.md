@@ -15,7 +15,7 @@
 ```powershell
 pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
 pwsh -NoProfile -File ./run-e2e.ps1
-pwsh -NoProfile -File ./run-e2e.ps1 -Scenario lobby,hit,reconnect,update
+pwsh -NoProfile -File ./run-e2e.ps1 -Scenario lobby,hit,wall,input,reconnect,update
 pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
 ```
 
@@ -24,7 +24,7 @@ Bash도 같은 절차를 실행한다.
 ```bash
 ./run-e2e.sh --build-only
 ./run-e2e.sh
-./run-e2e.sh --scenario lobby,hit,reconnect,update
+./run-e2e.sh --scenario lobby,hit,wall,input,reconnect,update
 ./run-e2e.sh --check-structure
 ```
 
@@ -34,25 +34,25 @@ Bash도 같은 절차를 실행한다.
 
 ### HTTP 로비
 
-`server/lobby/src/main/kotlin/MyGame/lobby/Program.kt`는 로비를 RouteMesh client로 시작하고 `HttpLobby` bean을 만든다. `server/lobby/src/main/kotlin/MyGame/lobby/infrastructure/HttpLobby.kt`는 `RequestHandler`로 HTTP endpoint(`Names.MATCH_PATH`의 `POST`)를 구현하며, 같은 파일의 `ZLinkRooms`가 공개 Spot manager로 Room을 만들고 `MatchResponse`를 반환한다. `server/lobby/src/main/kotlin/MyGame/lobby/application/Matchmaker.kt`는 `RoomProvisioner` port 뒤에 매칭 규칙(`Matchmaker`)을 두어 규칙을 HTTP·Framework 호출과 분리한다. 로비는 같은 mode의 다른 플레이어가 요청할 때까지 첫 요청의 응답을 보류하고, 대기 중 연결이 끊긴 client는 대기열에서 뺀다. 로비를 시작하기 전에 `sessionEndpoint` 설정에 Session node의 `READY` endpoint를 넣으며, `httpEndpoint`는 로비 자신의 listener다.
+`server/lobby/src/main/kotlin/MyGame/lobby/Program.kt`는 로비를 RouteMesh client로 시작하고 `HttpLobby` bean을 만든다. `server/lobby/src/main/kotlin/MyGame/lobby/infrastructure/HttpLobby.kt`는 `RequestHandler`로 HTTP endpoint(`Names.MATCH_PATH`의 `POST`)를 구현한다. 같은 파일의 `ZLinkRooms`는 공개 Spot manager로 Room을 만들고 매칭 명단을 `PrepareRoom`에 담아 전송한 뒤, 일치하는 `RoomPrepared` reply를 받아야 `MatchResponse`를 반환한다. `server/lobby/src/main/kotlin/MyGame/lobby/application/Matchmaker.kt`는 `RoomProvisioner` port 뒤에 mode 짝짓기 규칙을 두며, 생략한 mode의 기본값 `duel`과 prefix·UUID로 만든 Room ID도 관리한다. 연결이 끊긴 대기 요청은 대기열에서 제거한다. 로비를 시작하기 전에 `sessionEndpoint` 설정에 Session node의 `READY` endpoint를 넣으며, `httpEndpoint`는 로비 자신의 listener다.
 
 ### Session gateway
 
-`server/session/src/main/kotlin/MyGame/session/Program.kt`는 STREAM node와 RouteMesh client를 등록하고, `GameSession`(같은 파일)이 수신 packet을 처리한다. 연결별 통신 객체가 Session이며, Framework는 Session을 플레이어 상태 객체와 연결하는 binding을 제공한다. `GameSession`은 binding에서 `SessionInfoRequest`에 응답하고, `JoinRoomRequest`를 받으면 Player Actor를 구하거나 만들어 binding하며, 그 밖의 packet은 binding된 Actor로 relay한다. 인증은 binding 전에 추가하고 typed packet relay는 유지하여 플레이어에게 응답할 연결을 Framework가 확인하게 한다.
+`server/session/src/main/kotlin/MyGame/session/Program.kt`는 STREAM node와 RouteMesh client를 등록하고, `GameSession`(같은 파일)이 수신 packet을 처리한다. 연결별 통신 객체가 Session이며, Framework는 Session을 플레이어 상태 객체와 연결하는 binding을 제공한다. `GameSession`은 binding에서 `SessionInfoRequest`에 응답하고, `JoinRoomRequest`를 받으면 Player Actor를 구하거나 만들어 binding한다. Session은 `JoinRoomRequest`, `RoomViewRequest`, `MoveRequest`, `ShootRequest`, `SessionInfoRequest`만 relay하고 내부 packet은 `ActionRejected("packet-not-allowed", 0)`으로 거부한다. 인증은 binding 전에 추가하고 typed packet relay는 유지하여 플레이어에게 응답할 연결을 Framework가 확인하게 한다.
 
 ### Match node
 
-ID로 찾는 게임 상태 객체가 Actor이며, `server/match/src/main/kotlin/MyGame/match/infrastructure/zlink/Player.kt`의 `Player`는 application 상태를 갖지 않는다. Actor를 받아 공통 게임 규칙을 실행하는 상태 객체가 Spot이며, `server/match/src/main/kotlin/MyGame/match/infrastructure/zlink/Room.kt`의 `Room`은 `RoomState`로 위치·HP·행동 sequence·승자를 관리하는 동적 User Spot이고 그 순수 규칙은 `server/match/src/main/kotlin/MyGame/match/domain/RoomState.kt`에 있다.
+ID로 찾는 게임 상태 객체가 Actor이며, `server/match/src/main/kotlin/MyGame/match/infrastructure/zlink/Player.kt`의 `Player`는 application 상태를 갖지 않는다. Actor를 받아 공통 게임 규칙을 실행하는 상태 객체가 Spot이며, `server/match/src/main/kotlin/MyGame/match/infrastructure/zlink/Room.kt`의 `Room`은 동적 User Spot이다. `RoomState`는 위치·HP·수락된 action sequence·이동 예산·사격 cooldown·phase·winner와 action 판정을 소유하고 `RoomRoster`는 매칭 명단과 입장 판정을 소유한다.
 
 `server/match/src/main/kotlin/MyGame/match/Program.kt`가 handler, Entry Spot, `Room` factory(`stableTypeLimit(config.roomCapacity)`, 기본 `SPOT_WIDE`), `Player` factory를 등록한다. `Player.kt`의 `Entry`와 `Join`이 플레이어 진입을 처리하고, `server/match/src/main/kotlin/MyGame/match/infrastructure/zlink/Actions.kt`의 `Actions` 클래스가 플레이어 요청과 push를 Room에 연결한다. node 구성을 바꾸면 실제 등록과 `server/config/`, descriptor를 함께 맞추어 구조 검사가 같은 구성을 검사하게 한다.
 
 ### 공통 계약과 hosting
 
-`server/shared/src/main/kotlin/MyGame/Contracts.kt`는 process 간 이름·게임 상수·메시지를 정의한다. `Hosting.kt`는 `NodeConfig`(process 설정), Redis store, hosting과 진단을 설정하는 `configure`, node를 시작하고 stdin 제어 명령을 처리하는 `runNode`를 정의하고, `Control.kt`는 제어·준비 문자열을 정의한다. `Names`, `Roles`, `Rules`, `HttpProtocol`은 이름과 상수를 가지고, `Hosting.kt`는 로비가 `READY` 줄에 알리는 `HttpEndpoint` interface도 정의한다. `Transfer.kt`는 relocation adapter용 `ensureActive`를 정의한다. hosting과 제어 protocol은 role마다 복제하지 않고 이곳에 둔다. 여러 process가 사용하는 계약은 `Contracts.kt`에 추가하며, 방 상태는 `Room`에 유지하여 서로 다른 process가 같은 값을 따로 변경하지 않게 한다.
+`server/shared/src/main/kotlin/MyGame/Contracts.kt`는 process 간 이름, `2^53−1` 정수 상한, action 규칙과 typed message를 정의한다. 여기에는 `PrepareRoom`, `RoomPrepared`, `ActionRejected(Reason, RetryAfterMs)`가 포함된다. `Hosting.kt`는 `NodeConfig`, Redis store, hosting·진단 설정, node 실행을 정의하고 `Control.kt`는 제어·준비 문자열을 정의한다. `Transfer.kt`는 relocation adapter용 `ensureActive`를 정의한다. 게임 상태는 `RoomState`, 입장 명단은 `RoomRoster`, 제어 protocol은 기존 소유 위치에 둔다.
 
 ### E2E client
 
-`e2e/src/main/kotlin/MyGame/e2e/Client.kt`는 공개 stream connector로 게임에 접속하고 `Scenarios.kt`는 client가 관찰할 결과를 검사한다. `Nodes.kt`는 실행별 process와 Compose project를 관리하고, `Structure.kt`는 구성을 검사하며, `Program.kt`는 시나리오를 고르고 종료 코드를 정한다(시나리오나 정리가 실패하면 종료 코드는 1이다). `DockerRuntime.kt`는 Docker 모드에서 node를 container로 실행하고 `Cleanup.kt`는 정리 실패를 모은다. 새 게임 동작은 client가 받은 결과로 검증한다. 매칭 규칙과 방 규칙에는 `server/lobby/src/test/kotlin/MyGame/lobby/application/MatchmakerTest.kt`와 `server/match/src/test/kotlin/MyGame/match/domain/RoomStateTest.kt`의 unit test가 있으며, `server:lobby`와 `server:match` 모듈의 `test` task로 실행한다.
+`e2e/src/main/kotlin/MyGame/e2e/Client.kt`는 공개 stream connector로 게임에 접속하고 `Scenarios.kt`는 client가 관찰할 결과를 검사한다. `RoomStateTest.kt`는 게임 경계를, `ContractSerializationTest.kt`는 wire 표본 8개를 빌드 중 검사한다. `LobbyDomainChecks.kt`는 시나리오 전에 HTTP 경계 19개를 검사한다. `Nodes.kt`는 실행별 process와 Compose project를 관리하고 `Structure.kt`는 구성을 검사한다. 시나리오는 `lobby`, `hit`, `wall`, `input`, `reconnect`, `update` 여섯 개다. 기존 JUnit test는 `server/lobby/src/test/kotlin/MyGame/lobby/application/MatchmakerTest.kt`와 `server/match/src/test/kotlin/MyGame/match/domain/RoomStateTest.kt`에 있다.
 
 ## 프로젝트의 ZLink 개념
 
@@ -74,64 +74,37 @@ client 연결의 packet을 처리하는 [STREAM](https://docs.zlink.systems/ko/k
 
 ### Actor membership
 
-Actor가 소속 Spot을 바꾸는 동작은 membership 변경이다. 대상 Spot이 참가 요청의 수락 여부를 정하는 단계가 admission이다. `Join.join`은 첫 패킷이 가리키는 방으로의 참가를 `joinSpot(...).defer()`로 지연 요청하고, `Room.onActorJoinSuspending`이 identity를 확인해 수락 여부를 정하며, `Player.onJoinCompletedSuspending`은 거부를 client에 전달한다. 참가 수락과 완료의 순서는 [Actor membership](https://docs.zlink.systems/ko/kotlin/guide/server/35-actor-membership/)이 설명한다.
+Actor가 소속 Spot을 바꾸는 동작은 membership 변경이다. 대상 Spot이 참가 요청의 수락 여부를 정하는 단계가 admission이다. `Join.join`은 첫 패킷이 가리키는 방으로의 참가를 `joinSpot(...).defer()`로 지연 요청한다. `Room.onActorJoinSuspending`은 identity를 확인하고 `RoomRoster.canAdmit`으로 명단을 검사한 뒤 `RoomState.admit`을 호출한다. `Player.onJoinCompletedSuspending`은 거부를 client에 전달한다. 참가 수락과 완료의 순서는 [Actor membership](https://docs.zlink.systems/ko/kotlin/guide/server/35-actor-membership/)이 설명한다.
 
 ### Host relocation과 drain
 
-객체의 실행 host를 변경하는 동작은 relocation이며, host를 종료할 수 있도록 workload를 다른 host로 이동시키는 절차는 drain이다. application adapter는 게임 상태를 저장하고 복원하며 Framework는 workload와 route를 이전한다. `Hosting.kt`의 `runNode`는 `drain`을 읽으면 host relocation을 요청하고 관찰한 뒤 `SAFE_TO_SHUTDOWN`을 알린다. `RoomTransfer`는 `RoomState`를 JSON으로 저장하고 `PlayerTransfer`는 아무것도 저장하지 않는다. 로비는 host relocation 대상이 아니다. 절차는 [Relocation 가이드](https://docs.zlink.systems/ko/kotlin/guide/server/37-relocation/)가 설명한다.
+객체의 실행 host를 변경하는 동작은 relocation이며, host를 종료할 수 있도록 workload를 다른 host로 이동시키는 절차는 drain이다. application adapter는 게임 상태를 저장하고 복원하며 Framework는 workload와 route를 이전한다. `Hosting.kt`의 `runNode`는 `drain`을 읽으면 host relocation을 요청하고 관찰한 뒤 `SAFE_TO_SHUTDOWN`을 알린다. `RoomTransfer`는 `{game, roster}`와 timer의 남은 ms를 JSON으로 저장하며 process 절대 시각은 저장하지 않는다. `PlayerTransfer`는 application 상태를 저장하지 않는다. 로비는 host relocation 대상이 아니다. 절차는 [Relocation 가이드](https://docs.zlink.systems/ko/kotlin/guide/server/37-relocation/)가 설명한다.
 
 ### 로비에서 Spot 만들기
 
-The lobby is a RouteMesh client that creates the Room through the public Spot manager (`getOrCreate(roomId, Names.ROOM).inMesh(Names.MESH).submit()` in `ZLinkRooms`) before it answers the HTTP request, so a Room exists when the player's STREAM `JoinRoomRequest` arrives. The [Spot 가이드](https://docs.zlink.systems/ko/kotlin/guide/server/21-spot/) describes Spot creation.
+로비는 공개 Spot manager로 Room을 만들고 public route client로 `PrepareRoom(matchId, members)`를 보낸다. 같은 match ID의 `RoomPrepared` reply를 받은 뒤에만 HTTP assignment를 반환한다. 동적 Spot 생성은 [Spot 가이드](https://docs.zlink.systems/ko/kotlin/guide/server/21-spot/)를 참고한다.
 
 ## 요청 흐름
 
 예시 게임의 요청은 다음 경로로 처리된다. 기능을 더하거나 옮기기 전에 이 경로를 따라 코드를 읽으면 바꿀 위치를 빠르게 찾을 수 있다.
 
-1. client가 `MatchRequest`(플레이어 ID와 mode)를 담아 로비의 `Names.MATCH_PATH`에 `POST`한다. `Matchmaker.match`는 같은 mode의 다른 플레이어가 요청할 때까지 첫 요청의 응답을 보류한다.
-2. 두 플레이어가 짝지어지면 `ZLinkRooms.prepare`가 `getOrCreate`로 Room을 만들고, 두 HTTP 요청이 같은 `MatchResponse`(`roomId`와 Session의 `sessionEndpoint`)로 완료된다.
+1. client가 `MatchRequest`를 담아 로비의 `Names.MATCH_PATH`에 `POST`한다. mode를 생략하면 `duel`을 사용하며 `Matchmaker.match`는 같은 mode의 다른 플레이어가 요청할 때까지 응답을 보류한다.
+2. 두 플레이어가 짝지어지면 `Matchmaker`가 UUID Room ID를 만들고 두 member ID를 `ZLinkRooms.prepare`에 전달한다. `ZLinkRooms`는 Room을 만든 뒤 `PrepareRoom`을 보내고 `RoomPrepared`를 확인한 다음 두 HTTP 요청을 같은 `MatchResponse`로 완료한다.
 3. 각 client가 Session node에 STREAM으로 연결하고 첫 패킷 `JoinRoomRequest`를 보낸다. `GameSession`은 `playerId`로 Player Actor를 `getOrCreate`한 뒤 `bindOrGet`으로 Session에 binding하고 원래 패킷을 relay한다.
-4. 새 Actor는 Entry Spot `Entry`에서 시작한다. `Join.join`이 identity를 확인하고 `joinSpot(request.roomId, request).defer()`를 요청한다. `Room.onActorJoinSuspending`이 플레이어를 받아들이고 `Room.onJoinedActorSuspending`이 `RoomView`를 broadcast한다.
-5. `move`와 `shoot` 요청은 `Room`에 도달하며 `RoomState` 규칙이 적용된다. 거부(`ActionRejected`, `ShotRejected`)는 요청자의 binding된 Session으로 보내고, 수락된 행동은 `RoomView`를 broadcast하며 승자는 `MatchEnded`로 알린다. 받는 쪽 `Actions.forward` handler가 push를 각 Actor의 binding된 Session으로 전달한다.
+4. 새 Actor는 Entry Spot `Entry`에서 시작한다. `Join.join`이 identity를 확인하고 `joinSpot(request.roomId, request).defer()`를 요청한다. `Room.onActorJoinSuspending`은 `RoomRoster.canAdmit` 뒤 `RoomState.admit`을 호출하며 spawn은 서버가 정한다. `Room.onJoinedActorSuspending`은 `RoomView`를 broadcast한다.
+5. `move`와 `shoot` 요청은 `Room`에 도달하며 서버의 `RoomState`가 검사와 결과 계산을 수행한다. 거부 응답은 `ActionRejected(reason, retryAfterMs)`이고 값·순번·timer는 바뀌지 않는다. 수락한 행동만 sequence를 올리고 `RoomView`를 broadcast하며 승자는 `MatchEnded`로 알린다.
 6. 재접속한 client는 새 Session에서 `JoinRoomRequest`를 보낸다. 같은 Actor가 binding되고 `Actions.join`이 identity를 확인한 뒤 방 view를 다시 보낸다.
-7. match node를 교체할 때 `runNode`의 `drain`이 relocation을 요청한다. Framework는 `RoomTransfer`·`PlayerTransfer`의 `capture`로 application 상태를 받아 다른 node에서 `restore`한다.
+7. match node를 교체할 때 `runNode`의 `drain`이 relocation을 요청한다. Framework는 `RoomTransfer`의 `{game, roster}` snapshot을 다른 node에서 복원하고 남은 timer ms를 유지한다.
 
-## 이 샘플을 보며 개발하기
+## 이 템플릿의 도메인 확장
 
-이 샘플은 기능들이 함께 동작하는 방식을 보여 주므로, 자기 게임으로 바꾸지 않고 읽고 실행하는 용도로 쓴다. 자기 프로젝트는 Kotlin 기본 셋업에서 시작한다. [ZLink Start](https://zlink.systems/start)의 Initializer에서 Kotlin을 고르거나 ZLink 저장소의 `framework/languages/java/templates/kotlin/starter/my-game`을 사용한다. 그다음 필요한 기능을 이 샘플에서 하나씩 옮긴다. 구조 선택은 기본 셋업의 `AGENTS.md`가 설명하며, 이 절은 `match-http-lobby`만 다룬다. 이 샘플은 바꾸지 않고 프로젝트 옆에 참고용으로 둔다.
+이 템플릿의 도메인을 확장하여 2차원 액션 서버를 만든다. 상태를 변경하는 규칙은 그 상태를 소유한 객체 한 곳에 둔다.
 
-### 샘플 먼저 실행하기
-
-옮기기 전에 [개발 명령](#개발-명령)으로 빌드와 e2e를 한 번 실행해 받은 샘플이 동작하는지 확인하고 동작을 본다. 이 결과가 이후 비교의 기준이 된다. 실패하면 먼저 [README](README.md)의 Known issues와 대조한다.
-
-### 옮길 기능
-
-기능 이름은 기본 셋업 `AGENTS.md`의 기능 표와 같다. 경로는 이 디렉터리를 기준으로 한다. 기본 셋업에는 Session node 하나와 `connect` 시나리오만 있으므로, 마지막 열은 기능마다 기본 셋업에서 함께 늘릴 것이다.
-
-| 기능 | 이 샘플의 파일 | 옮길 것 | 기본 셋업에서 함께 늘릴 것 |
-| --- | --- | --- | --- |
-| Typed 메시지 | `server/shared/src/main/kotlin/MyGame/Contracts.kt` | 사용할 기능의 클래스: `JoinRoomRequest`, `MoveRequest`, `ShootRequest`, `PlayerView`, `RoomView`, `MatchEnded`, `ShotRejected`, `ActionRejected`. HTTP 로비에는 `MatchRequest`·`MatchResponse`. `SessionInfoRequest`·`SessionInfo`는 client가 필요로 할 때만 옮긴다 | `Names`·`Rules`의 mesh·타입 이름과 상수. node `Roles`와 제어 문자열은 기본 셋업에 이미 있다 |
-| Actor | `server/match/src/main/kotlin/MyGame/match/infrastructure/zlink/Player.kt` | `onJoinCompletedSuspending`(거부를 `ActionRejected`로 전달)을 가진 `Player`, `PlayerFactory` | 새 `server/match/` Gradle 모듈(`settings.gradle.kts`에 포함)과 그 `Program.kt`, `server/config/match-a.json`, `server/config/match-b.json`, `e2e/.../Nodes.kt`의 시작 처리, `Roles` 항목. `Program.kt`의 `addActorFactory` 등록. `zlink.structure.json`의 node 선언과 이에 맞춘 `Structure.kt` 검사(기본 셋업의 검사는 `session` 역할만 받는다) |
-| Spot | `server/match/src/main/kotlin/MyGame/match/infrastructure/zlink/Room.kt`, `server/match/src/main/kotlin/MyGame/match/domain/RoomState.kt` | `RoomState`(admission, 이동, 명중, 승자)를 가진 `Room`과 `RoomState.kt`의 순수 규칙 | `Program.kt`의 `addSpotFactory` 등록(`stableTypeLimit`)과 `NodeConfig`의 `roomCapacity`. 규칙의 unit test. `zlink.structure.json`의 `spots` 선언과 이를 등록과 비교하는 `Structure.kt` 검사(기본 셋업의 검사는 Spot이 없다고 단정한다) |
-| Entry·첫 입장 | `server/match/src/main/kotlin/MyGame/match/infrastructure/zlink/Player.kt`의 `Entry`·`Join`, `server/match/src/main/kotlin/MyGame/match/infrastructure/zlink/Actions.kt`의 `Actions.join` | `Join.join`: identity 확인과 패킷이 가리키는 방으로의 deferred join, `Actions.join`의 identity 확인과 view 재전송 | `addEntrySpot` 등록과 `entry` 선언. 첫 매치를 보는 `hit` 시나리오와 재접속 뒤 상태를 비교하는 `reconnect` 시나리오 |
-| Session binding | `server/session/src/main/kotlin/MyGame/session/Program.kt` (`GameSession`) | 첫 패킷 분기: Actor 조회·생성, `bindOrGet`, 원래 typed 패킷 relay | `Join.join`과 같은 첫 패킷 타입. 기본 셋업의 `PlayerSession.kt`에 옮긴다 |
-| Host relocation | `server/match/src/main/kotlin/MyGame/match/infrastructure/zlink/Room.kt`의 `RoomTransfer`, `server/match/src/main/kotlin/MyGame/match/infrastructure/zlink/Player.kt`의 `PlayerTransfer`, `server/shared/src/main/kotlin/MyGame/Transfer.kt` | JSON으로 저장하는 `RoomState`와 `capture`·`restore`, 비어 있는 Player adapter, `ensureActive` | `preserveStateWith` 등록. 서버 교체 뒤에도 연결·방 상태가 유지되고 대체 node가 새 방을 받는지 판정하는 `update` 시나리오 |
-| 동적 던전 | `server/lobby/src/main/kotlin/MyGame/lobby/infrastructure/HttpLobby.kt` (`ZLinkRooms.prepare`) | 동적 방 생성: mesh에서의 `getOrCreate(roomId, Names.ROOM)`과 `REJECTED` 검사 | `zlink.structure.json`의 동적 `room` Spot. 이를 호출하는 로비(HTTP 로비 행 참조) |
-| HTTP 로비 | `server/lobby/src/main/kotlin/MyGame/lobby/infrastructure/HttpLobby.kt`, `server/lobby/src/main/kotlin/MyGame/lobby/application/Matchmaker.kt`, `server/lobby/src/main/kotlin/MyGame/lobby/Program.kt` | HTTP endpoint(`HttpLobby`), `RoomProvisioner` port 뒤의 매칭 규칙(`Matchmaker`), `MatchRequest`·`MatchResponse` 계약 | 새 `server/lobby/` Gradle 모듈(`settings.gradle.kts`에 포함)과 그 `Program.kt`, `server/config/lobby.json`, `e2e/.../Nodes.kt`의 시작 처리, `Roles` 항목. `http-lobby` 역할, `NodeConfig`의 `httpEndpoint`·`sessionEndpoint`, 모듈 build 파일의 Netty 의존성, 두 플레이어가 같은 할당을 받는지 보는 `lobby` 시나리오 |
-
-### 옮기는 순서와 규칙
-
-기능은 표의 행 하나씩 옮기고, 하나를 옮길 때마다 빌드, 구조 검사, 관련 e2e 시나리오를 실행한다. 시나리오 ID는 `Contracts.kt`의 `Scenario` enum, `e2e/src/main/kotlin/MyGame/e2e/Scenarios.kt`의 `scenario` 함수, `zlink.structure.json`의 `run.scenarios`, `run.commands`의 시나리오 선택 예시에 함께 추가한다. 판정은 실제로 받은 응답과 이벤트로 하고, 고정 대기나 기한 확대로 통과시키지 않는다.
-
-메시지 contract부터 옮긴다. `Contracts.kt`에 typed 클래스를 먼저 정의한 뒤, 컴파일 오류가 나는 handler를 하나씩 새 메시지로 옮긴다. 첫 패킷(`JoinRoomRequest`)을 바꾸면 `GameSession`의 첫 패킷 분기, `Join.join`, `Actions.join`이 같은 타입을 받도록 함께 고친다. HTTP 계약(`MatchRequest`, `MatchResponse`)은 STREAM 계약과 분리해 둔다.
-
-상태는 그 상태를 결정하는 객체에 둔다. 방 상태는 `Room`에 두며 `Player`는 상태를 갖지 않는다. `RoomState` 필드를 바꿀 때는 `RoomTransfer`를 함께 고친다. 빠뜨린 필드는 relocation 뒤 사라지고, `update` 시나리오가 그 손실을 잡는다.
-
-매칭 규칙(`Matchmaker`)과 방 규칙(`RoomState`)은 Framework 호출 없이 두고 unit test로 검증한다. e2e runner는 `roomCapacity`를 상수로 정해 `update`가 room host를 drain한 뒤 대체 node만 다음 방을 받게 한다. 방을 만드는 시나리오를 추가할 때도 이 구성을 유지한다.
-
-역할 이름을 이 샘플과 다르게 정하려면 타입 이름, `Names`, `server/config/`, `zlink.structure.json`을 한 번에 바꾼다. 이름 변경은 기능을 옮기는 변경과 나눠서 진행하면 실패 원인을 찾기 쉽다.
-
-옮긴 뒤 `update`가 실패하면 snapshot에 빠진 상태가 있는지 먼저 확인한다. 그다음 [디버깅](#디버깅)의 message flow로 첫 실패 단계를 찾는다.
+- 게임 상태와 판정 규칙은 `server/match/src/main/kotlin/MyGame/match/domain/RoomState.kt`에 추가한다. 매칭 명단과 입장 판정은 같은 domain package의 `RoomRoster.kt`에 둔다.
+- process 간 typed message는 `server/shared/src/main/kotlin/MyGame/Contracts.kt`에 추가한다.
+- client가 새 packet을 보내야 하면 `server/session/src/main/kotlin/MyGame/session/Program.kt`의 허용 목록을 갱신한다. `PrepareRoom`·`RoomPrepared` 같은 내부 message는 허용 목록에 넣지 않는다.
+- 도메인 경계 test는 기존 `RoomStateTest.kt` 또는 `MatchmakerTest.kt` 위치에 추가한다. client가 관찰하는 동작은 `Contracts.kt`의 `Scenario`와 `e2e/src/main/kotlin/MyGame/e2e/Scenarios.kt`에 추가한다.
+- 새 scenario마다 README의 관찰 내용, `zlink.structure.json`의 `run.scenarios`와 scenario 선택 명령을 함께 갱신한다. 상태를 바꾸면 `RoomTransferSnapshot`도 갱신하고 relocation 뒤 남은 timer ms를 확인한다.
 
 ## 개발 시 주의점
 

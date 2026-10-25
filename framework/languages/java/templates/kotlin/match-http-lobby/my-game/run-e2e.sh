@@ -18,7 +18,7 @@ cd "$ROOT"
 mkdir -p "$ROOT/.logs"
 if $local_mode; then
   if ! $no_build; then
-    if ! ./gradlew --no-daemon installDist :e2e:javaHome >"$ROOT/.logs/build.log" 2>&1; then
+    if ! ./gradlew --no-daemon test installDist :e2e:javaHome >"$ROOT/.logs/build.log" 2>&1; then
       tail -n 35 "$ROOT/.logs/build.log" >&2
       exit 1
     fi

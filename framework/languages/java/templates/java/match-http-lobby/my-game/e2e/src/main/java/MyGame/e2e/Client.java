@@ -44,7 +44,8 @@ public final class Client implements AutoCloseable {
                                 d.reconnectMaxDelay(),
                                 d.reconnectBackoffFactor()));
         register(RoomView.class);
-        register(ShotRejected.class);
+        register(MoveResult.class);
+        register(ShotResult.class);
         register(MatchEnded.class);
         register(ActionRejected.class);
         registrations.add(
@@ -74,11 +75,15 @@ public final class Client implements AutoCloseable {
     }
 
     RoomView connect() throws Exception {
-        connector.connect().submit().toCompletableFuture().join();
-        send(new JoinRoomRequest(playerId, roomId));
+        beginJoin();
         return next(
                 RoomView.class,
                 v -> v.players().stream().anyMatch(player -> player.playerId().equals(playerId)));
+    }
+
+    void beginJoin() {
+        connector.connect().submit().toCompletableFuture().join();
+        send(new JoinRoomRequest(playerId, roomId));
     }
 
     SessionInfo sessionInfo() {
@@ -108,6 +113,23 @@ public final class Client implements AutoCloseable {
             if (event == null)
                 throw new IllegalStateException(
                         "Timed out waiting for " + type.getSimpleName() + ", received=" + history);
+            if (event instanceof Exception error) throw error;
+            pending.add(event);
+        }
+    }
+
+    Object nextAny(Class<?>... types) throws Exception {
+        long expires = System.nanoTime() + TimeUnit.SECONDS.toNanos(MESSAGE_SECONDS);
+        while (true) {
+            for (int i = 0; i < pending.size(); i++) {
+                Object event = pending.get(i);
+                if (Arrays.stream(types).anyMatch(type -> type.isInstance(event)))
+                    return pending.remove(i);
+            }
+            Object event =
+                    queue.poll(Math.max(0, expires - System.nanoTime()), TimeUnit.NANOSECONDS);
+            if (event == null)
+                throw new IllegalStateException("Timed out waiting for action result, received=" + history);
             if (event instanceof Exception error) throw error;
             pending.add(event);
         }

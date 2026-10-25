@@ -15,7 +15,7 @@ Default builds and e2e run the nodes and the runner in Docker without a host too
 ```powershell
 pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
 pwsh -NoProfile -File ./run-e2e.ps1
-pwsh -NoProfile -File ./run-e2e.ps1 -Scenario lobby,hit,reconnect,update
+pwsh -NoProfile -File ./run-e2e.ps1 -Scenario lobby,hit,wall,input,reconnect,update
 pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
 ```
 
@@ -24,7 +24,7 @@ Bash provides the same workflow:
 ```bash
 ./run-e2e.sh --build-only
 ./run-e2e.sh
-./run-e2e.sh --scenario lobby,hit,reconnect,update
+./run-e2e.sh --scenario lobby,hit,wall,input,reconnect,update
 ./run-e2e.sh --check-structure
 ```
 
@@ -85,50 +85,30 @@ Relocation changes an object's execution host; drain moves a host's workload els
 Requests in the example game follow this path. Reading the code along this path before adding or transferring a feature locates the places to change.
 
 1. The client posts `{"playerId":"p1","mode":"duel"}` to `POST /match` on the Lobby node (`HttpLobby::match`). The first response is held until another player requests the same mode.
-2. When two players of one mode are waiting, `HttpLobby` numbers a Room and calls `get_or_create` for it through the Spot manager, then answers both requests with `MatchResponse`, which carries the `roomId` and the `SessionEndpoint` configured in `lobby.json`.
+2. When two players of one mode are waiting, `HttpLobby` generates a UUID Room ID and calls `get_or_create` for it through the Spot manager, then answers both requests with `MatchResponse`, which carries the `roomId` and the `SessionEndpoint` configured in `lobby.json`.
 3. Each client connects to that Session endpoint over STREAM and sends the first packet, `JoinRoomRequest`. `Session::on_packet` checks the first packet name, calls `get_or_create` for the Player Actor by `playerId`, binds it with `bind_or_get`, and relays the original packet.
 4. A new Actor starts in the Entry Spot `Entry`. `Entry::join` checks the identity and requests `join_spot(...).defer()` for the Room. `Room::on_actor_join` admits the player, and `Room::on_actor_joined` broadcasts `RoomView` to the players through the Actor client; `Room::deliver_view` forwards it to the bound Session.
-5. `MoveRequest` and `ShootRequest` are handled by `Room::move` and `Room::shoot`, which apply the `RoomState` rules, answer a rejection with `ActionRejected` or `ShotRejected`, and broadcast the new `RoomView` and, when a player wins, `MatchEnded` (forwarded by `Room::deliver_end`).
+5. `MoveRequest` and `ShootRequest` are handled by `Room::move` and `Room::shoot`, which apply the `RoomState` rules, answer a rejection with `ActionRejected`, and broadcast the new `RoomView` and, when a player wins, `MatchEnded` (forwarded by `Room::deliver_end`).
 6. To replace a node, `drain` in `NodeControl` requests relocation. Framework takes the game state from `capture` in `RoomRelocation` and calls `restore` on another node. `PlayerRelocation` carries no state.
 
-## Developing from this sample
+## Extending the game domain
 
-This sample shows how the features work together, so read and run it rather than turning it into your game. Start your own project from the C++ starter: choose C++ in the Initializer at [ZLink Start](https://zlink.systems/start), or use `framework/languages/cpp/templates/starter/my-game` in the ZLink repository. Then transfer the features you need from this sample one at a time. The starter's `AGENTS.md` owns the choice between structures; this section covers only `match-http-lobby`. Keep this sample unchanged next to your project as a reference.
+Extend this template's domain to build a two-dimensional action server. Run the [build and e2e commands](#development-commands) before changing it; if the baseline fails, compare the first failure with Known issues in the [README](README.md).
 
-### Run the sample first
+| Extension point | Decision owner | How to extend it |
+| --- | --- | --- |
+| Game state and action rules | `server/match/domain.hpp`: `RoomState` | Add state and movement or combat decisions here. Rejected actions return `ActionRejected` and leave position, HP, sequence, and cooldown unchanged. |
+| Room membership and admission | `server/match/domain.hpp`: `RoomRoster`; `server/match/room.hpp`: `Room::prepare` and `on_actor_join` | Add the approved member list through the internal preparation request. `RoomRoster` decides admission. |
+| Typed contracts | `server/shared/contracts.hpp` | Add shared packet structs, `packet_name`, JSON fields, and their constants in this file. Keep numeric limits in the same contract owner. |
+| Client packet allowlist | `server/session/session.hpp`: `Session::client_packet_allowed` | Add only packets the client is allowed to send. Internal messages such as `PrepareRoom` stay outside this list. |
+| Domain boundary tests | `e2e/domain_tests.cpp` | Add one check for each new rule and its rejected-state invariants. |
+| Client scenarios | `e2e/scenarios.hpp`, `e2e/structure.hpp`, `e2e/main.cpp` | Add the observable scenario and register it in the enum/order, runner switch, `run.scenarios`, and selection examples in `run.commands`. The lobby scenario rejects an outsider Join against the empty prepared Room before either matched player enters, then checks member admission and client `PrepareRoom` rejection. Keep the README scenario table in sync. |
 
-Before transferring anything, run the build and e2e once with the [Development commands](#development-commands) to confirm the downloaded sample works and to see its behavior. This result is the baseline for comparison. If it fails, compare the failure with Known issues in the [README](README.md) first.
+Keep each fact in its owner. `RoomState` owns positions, HP, accepted action sequence, phase, winner, and monotonic cooldown state. `RoomRoster` owns the prepared member list and admission decision. `HttpLobby` owns the temporary match queue and returns an assignment only after the Room confirms preparation. A relocation snapshot contains `Game` and `Roster`, with cooldowns represented as remaining milliseconds.
 
-### Features to transfer
+When a contract or scenario changes, update all of its C++ declarations and observations together. Judge results by replies and events actually received; use only the server-provided `RetryAfterMs` when a retry is needed. Do not add fixed waits or extend deadlines. If `update` loses state, inspect the Room snapshot and then use the message flow in [Debugging](#debugging) to find the first missing transition.
 
-Feature names match the feature table in the starter's `AGENTS.md`, except Dynamic room, which only this structure has. Paths are relative to this directory. The starter has one Session node and the `connect` scenario only, so the last column lists what grows in the starter with each feature.
-
-| Feature | File in this sample | What to transfer | What to grow in the starter alongside |
-| --- | --- | --- | --- |
-| Typed messages | `server/shared/contracts.hpp` | The structs of the features you adopt: `JoinRoomRequest`, `MoveRequest`, `ShootRequest`, `RoomViewRequest`, `RoomView`, `PlayerView`, `ShotRejected`, `ActionRejected`, `MatchEnded`; `MatchRequest` and `MatchResponse` are the HTTP bodies; `SessionInfoRequest` and `SessionInfo` only if your client needs them | The `Names`, `Game`, and `Rejection` constants that the messages refer to |
-| Actor | `Player`, `PlayerFactory` in `server/match/player.hpp` | The minimal player Actor: `Player::on_join_completed` reports a rejected join, and `PlayerFactory` creates it | A new `server/match/` role with its `main.cpp`, `server/config/` files, and an entry in the `CMakeLists.txt` role list; the Actor factory registration in `main.cpp`; the `nodes` declaration in `zlink.structure.json` and the structure check in `e2e/structure.hpp` |
-| Spot | `Room` in `server/match/room.hpp`, `RoomState` in `server/match/domain.hpp` | `Room` with the admission rule, movement and shooting rules, and winner calculation in `RoomState`, and the `deliver_*` forwarders | The Spot factory registration in `main.cpp` with `RoomCapacity`; the `spots` declaration in `zlink.structure.json` that the structure check compares with the node configuration |
-| Entry and first admission | `Entry` in `server/match/player.hpp`, `Room::reconnect` in `server/match/room.hpp` | `Entry::join` (identity check, deferred join to the Room) and the identity check and view resend of `Room::reconnect` | The `add_entry_spot` registration and the `entry` declarations; a first-entry scenario (`hit`) and a `reconnect` scenario that compares state after reconnection |
-| Session binding | `server/session/session.hpp` | The first-packet check, then find or create the Actor, `bind_or_get`, and relay the original typed packet | The same first-packet type as `Entry::join`; transfer it into the starter's `server/session/session.hpp` |
-| Host relocation | `PlayerRelocation` in `server/match/player.hpp`, `RoomRelocation` in `server/match/room.hpp`, `NodeControl` in `server/shared/hosting.hpp` | The adapter with `capture` and `restore` of `RoomState`, `PlayerRelocation` for the stateless Actor, and the `drain` and `shutdown` controls | The `preserve_state_with` registrations in `main.cpp`; the `update` scenario, which checks that connections and state survive a server replacement and that the replacement node accepts new work |
-| HTTP lobby | `HttpLobby` in `server/lobby/http.hpp`, `server/lobby/main.cpp`, `server/shared/http.hpp` | The `POST /match` endpoint with its same-mode queue, the removal of a waiting request when its client disconnects, and the Room preparation | A new `server/lobby/` role with its config (`HttpEndpoint`, `SessionEndpoint`) and `CMakeLists.txt` entry; the `lobby` node in `zlink.structure.json`; the `lobby` scenario |
-| Dynamic room | `HttpLobby` in `server/lobby/http.hpp`, `Room` factory in `server/match/main.cpp` | The dynamic User Spot creation pattern: allocate a name, `get_or_create` the `Room` through the Spot manager, and return the name to the clients | The `Room` factory registration with `RoomCapacity`; the `room` Spot declaration in `zlink.structure.json` |
-
-`drain` and `shutdown` are transferred together with `NodeControl`.
-
-### Transfer order and rules
-
-Transfer one row at a time and run the build, the structure check, and the related e2e scenario after each. Add a scenario ID to the `Scenario` enum and `scenario_order` in `e2e/structure.hpp`, to the `switch` and the usage message in `e2e/main.cpp`, to `run.scenarios`, and to the selection examples in `run.commands` of `zlink.structure.json` together. Judge results by the replies and events actually received; do not make tests pass with fixed sleeps or longer deadlines.
-
-Start with the message contracts. Define the packet structs in `server/shared/contracts.hpp` first, each with a `packet_name` and its JSON conversion, then move each handler that fails to compile to the new messages. When you change the first-entry packet, update the first-packet check in `Session::on_packet` in `server/session/session.hpp` and `Entry::join` and `Room::reconnect` to receive the same type.
-
-Keep each piece of state in the object that decides it. HP, position, and sequence belong in `Room` through `RoomState`; `Player` holds no application state, and `HttpLobby` keeps only the transient queue. When you change state fields, update that object's state struct with its JSON conversion and the `capture` and `restore` of its relocation adapter together. A missing field disappears after relocation, and the `update` scenario detects the loss.
-
-Configure `HttpEndpoint` with port 0 and read the bound port from the lobby's `READY` line, and set the lobby's `SessionEndpoint` to the endpoint that the Session node publishes; `e2e/world.hpp` does both for each run.
-
-To name roles such as Lobby, Match, or Room differently from this sample, change the type names, `Names`, `server/config/`, `zlink.structure.json`, and the role list in `CMakeLists.txt` at once. Do the renaming in its own change, separate from transferring a feature, so failures are easier to trace.
-
-If `update` fails after a transfer, first check whether the snapshot is missing any state, then use the message flow in [Debugging](#debugging) to find the first failing step.
+Configure `HttpEndpoint` with port 0 and read the bound port from the lobby's `READY` line. Set `SessionEndpoint` to the endpoint published by the Session node; `e2e/world.hpp` does both for each run. If node roles or composition change, update the type registrations, `server/config/`, `zlink.structure.json`, `CMakeLists.txt`, and the structure check together.
 
 ## Development considerations
 
