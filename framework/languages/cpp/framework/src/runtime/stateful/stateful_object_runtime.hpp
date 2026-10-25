@@ -344,6 +344,8 @@ class stateful_object_runtime_t
     create_result_t begin_reserved_object (const object_ref_t &reserved,
                                            const std::string &stable_type,
                                            std::vector<std::uint8_t> creation_request);
+    task_t<create_result_t> begin_reserved_object_async (
+      object_ref_t reserved, std::string stable_type, std::vector<std::uint8_t> creation_request);
     // Accepts the next authority fence for an actor that is retained as a
     // remote copy while ownership returns to this node.
     stateful_error_t adopt_reserved_actor_owner (const object_ref_t &reserved,

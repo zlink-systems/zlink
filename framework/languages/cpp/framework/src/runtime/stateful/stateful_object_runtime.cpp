@@ -223,55 +223,62 @@ stateful_object_runtime_t::begin_reserved_object (const object_ref_t &reserved,
                                                   const std::string &stable_type,
                                                   std::vector<std::uint8_t> creation_request)
 {
-    return _lane
-      .run ([&, this] () -> create_result_t {
-          if ((reserved.kind != object_kind_t::actor && reserved.kind != object_kind_t::user_spot)
-              || !valid_text (reserved.key) || !valid_text (stable_type)
-              || reserved.object_generation == 0 || reserved.authority_owner_generation == 0
-              || !valid_text (reserved.mesh_name) || !valid_text (reserved.node_id)
-              || creation_request.size () > protocol::creationIntentBytes) {
-              return {create_status_t::failed, stateful_error_t::invalid, 0, {}, false};
-          }
-          if (_maintenance_inventory_active) {
-              return {create_status_t::failed, stateful_error_t::moving, 0, {}, false};
-          }
-          const object_key_t key{reserved.kind, reserved.key};
-          const auto existing = _objects.find (key);
-          if (existing != _objects.end ()) {
-              if (existing->second.stable_type != stable_type) {
-                  return {create_status_t::failed, stateful_error_t::type_mismatch, 0, {}, false};
-              }
-              if (existing->second.reference.object_generation != reserved.object_generation
-                  || existing->second.reference.authority_owner_generation
-                       != reserved.authority_owner_generation) {
-                  return {
-                    create_status_t::failed, stateful_error_t::generation_stale, 0, {}, false};
-              }
-              if (existing->second.state == object_state_t::creating) {
-                  return {create_status_t::joined, stateful_error_t::none, existing->second.attempt,
-                          existing->second.reference, false};
-              }
-              if (state_on_lane (existing->second) == object_state_t::moving
-                  || existing->second.state == object_state_t::recovering) {
-                  return {create_status_t::failed, stateful_error_t::moving, 0, {}, false};
-              }
-              return {create_status_t::existing, stateful_error_t::none, 0,
-                      existing->second.reference, false};
-          }
-          const auto attempt = _next_attempt++;
-          if (attempt == 0) {
-              return {create_status_t::failed, stateful_error_t::invalid, 0, {}, false};
-          }
-          object_record_t record;
-          record.reference = reserved;
-          record.stable_type = stable_type;
-          record.attempt = attempt;
-          _last_generation[key] = std::max (_last_generation[key], reserved.object_generation);
-          _objects.emplace (key, record);
-          _attempts.emplace (attempt, key);
-          return {create_status_t::reserved, stateful_error_t::none, attempt, reserved, true};
-      })
-      .get ();
+    return begin_reserved_object_async (reserved, stable_type, std::move (creation_request))
+      .result ()
+      .value ();
+}
+
+task_t<create_result_t> stateful_object_runtime_t::begin_reserved_object_async (
+  object_ref_t reserved, std::string stable_type, std::vector<std::uint8_t> creation_request)
+{
+    return _lane.run_task ([this, reserved = std::move (reserved),
+                            stable_type = std::move (stable_type),
+                            creation_request = std::move (creation_request)] () -> create_result_t {
+        if ((reserved.kind != object_kind_t::actor && reserved.kind != object_kind_t::user_spot)
+            || !valid_text (reserved.key) || !valid_text (stable_type)
+            || reserved.object_generation == 0 || reserved.authority_owner_generation == 0
+            || !valid_text (reserved.mesh_name) || !valid_text (reserved.node_id)
+            || creation_request.size () > protocol::creationIntentBytes) {
+            return {create_status_t::failed, stateful_error_t::invalid, 0, {}, false};
+        }
+        if (_maintenance_inventory_active) {
+            return {create_status_t::failed, stateful_error_t::moving, 0, {}, false};
+        }
+        const object_key_t key{reserved.kind, reserved.key};
+        const auto existing = _objects.find (key);
+        if (existing != _objects.end ()) {
+            if (existing->second.stable_type != stable_type) {
+                return {create_status_t::failed, stateful_error_t::type_mismatch, 0, {}, false};
+            }
+            if (existing->second.reference.object_generation != reserved.object_generation
+                || existing->second.reference.authority_owner_generation
+                     != reserved.authority_owner_generation) {
+                return {create_status_t::failed, stateful_error_t::generation_stale, 0, {}, false};
+            }
+            if (existing->second.state == object_state_t::creating) {
+                return {create_status_t::joined, stateful_error_t::none, existing->second.attempt,
+                        existing->second.reference, false};
+            }
+            if (state_on_lane (existing->second) == object_state_t::moving
+                || existing->second.state == object_state_t::recovering) {
+                return {create_status_t::failed, stateful_error_t::moving, 0, {}, false};
+            }
+            return {create_status_t::existing, stateful_error_t::none, 0,
+                    existing->second.reference, false};
+        }
+        const auto attempt = _next_attempt++;
+        if (attempt == 0) {
+            return {create_status_t::failed, stateful_error_t::invalid, 0, {}, false};
+        }
+        object_record_t record;
+        record.reference = reserved;
+        record.stable_type = stable_type;
+        record.attempt = attempt;
+        _last_generation[key] = std::max (_last_generation[key], reserved.object_generation);
+        _objects.emplace (key, record);
+        _attempts.emplace (attempt, key);
+        return {create_status_t::reserved, stateful_error_t::none, attempt, reserved, true};
+    });
 }
 
 stateful_error_t

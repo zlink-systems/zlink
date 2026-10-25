@@ -2956,40 +2956,39 @@ public_host_runtime_t::create_reserved_actor_async (std::string actor_type,
 {
     if (reserved.kind != stateful::object_kind_t::actor)
         throw std::invalid_argument ("reserved Actor reference has an invalid object kind");
+    //  State lanes §blocking boundary (06:211-226): an internal caller has no public sync
+    //  signature to keep, so every lane result here is awaited.
     const auto existing =
-      _spot_actor_index_lane
-        .run ([&] () -> std::optional<actor_handle_t> {
-            const auto found = _actors.find (reserved.key);
-            if (found != _actors.end ()) {
-                if (found->second.second.object_generation != reserved.object_generation
-                    || found->second.second.authority_owner_generation
-                         != reserved.authority_owner_generation) {
-                    const auto adopted = _objects.adopt_reserved_actor_owner (reserved, actor_type);
-                    if (adopted == stateful::stateful_error_t::none) {
-                        found->second.second = reserved;
-                        return actor_handle_t (shared_from_this (),
-                                               framework_actor_ref (reserved, found->second.first),
-                                               reserved);
-                    }
-                    throw std::runtime_error (
-                      "reserved Actor generation does not match the local Actor");
-                }
-                return actor_handle_t (
-                  shared_from_this (),
-                  framework_actor_ref (found->second.second, found->second.first),
-                  found->second.second);
-            }
-            return std::nullopt;
-        })
-        .get ();
+      co_await _spot_actor_index_lane.run_task ([&] () -> std::optional<actor_handle_t> {
+          const auto found = _actors.find (reserved.key);
+          if (found != _actors.end ()) {
+              if (found->second.second.object_generation != reserved.object_generation
+                  || found->second.second.authority_owner_generation
+                       != reserved.authority_owner_generation) {
+                  const auto adopted = _objects.adopt_reserved_actor_owner (reserved, actor_type);
+                  if (adopted == stateful::stateful_error_t::none) {
+                      found->second.second = reserved;
+                      return actor_handle_t (shared_from_this (),
+                                             framework_actor_ref (reserved, found->second.first),
+                                             reserved);
+                  }
+                  throw std::runtime_error (
+                    "reserved Actor generation does not match the local Actor");
+              }
+              return actor_handle_t (
+                shared_from_this (),
+                framework_actor_ref (found->second.second, found->second.first),
+                found->second.second);
+          }
+          return std::nullopt;
+      });
     if (existing)
         co_return std::move (*existing);
-    auto created = _objects.begin_reserved_object (reserved, actor_type, {});
+    auto created = co_await _objects.begin_reserved_object_async (reserved, actor_type, {});
     if (created.error != stateful::stateful_error_t::none)
         throw std::runtime_error ("reserved framework Actor authority creation failed");
-    //  State lanes §blocking boundary (06:211-226): an internal caller has no public sync
-    //  signature to keep, so the object lane results are awaited. Blocking here would hold a
-    //  completion worker until that same dispatcher delivered them.
+    //  Blocking on the object lane would hold a completion worker until that same dispatcher
+    //  delivered its result.
     if (created.factory_owner) {
         const auto committed = co_await _objects.commit_create_async (created.attempt);
         if (committed != stateful::stateful_error_t::none)
@@ -2998,9 +2997,8 @@ public_host_runtime_t::create_reserved_actor_async (std::string actor_type,
     auto object = co_await _objects.find_async (stateful::object_kind_t::actor, reserved.key);
     if (!object)
         throw std::runtime_error ("reserved framework Actor authority is unavailable");
-    _spot_actor_index_lane
-      .run ([&] { _actors.insert_or_assign (reserved.key, std::make_pair (actor_type, *object)); })
-      .get ();
+    co_await _spot_actor_index_lane.run_task (
+      [&] { _actors.insert_or_assign (reserved.key, std::make_pair (actor_type, *object)); });
     co_return actor_handle_t (shared_from_this (), framework_actor_ref (*object, actor_type),
                               *object);
 }
@@ -6899,8 +6897,8 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                           exact_ref.object_generation);
                         continue;
                     }
-                    auto local =
-                      _objects.begin_reserved_object (exact_ref, request.stable_type, [&] {
+                    auto local = co_await _objects.begin_reserved_object_async (
+                      exact_ref, request.stable_type, [&] {
                           std::vector<std::uint8_t> bytes;
                           bytes.reserve (creation_payload->size ());
                           for (const auto value : *creation_payload)
@@ -6986,7 +6984,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                         creation_bytes.reserve (creation_payload->size ());
                         for (const auto value : *creation_payload)
                             creation_bytes.push_back (std::to_integer<std::uint8_t> (value));
-                        const auto reconciled = _objects.begin_reserved_object (
+                        const auto reconciled = co_await _objects.begin_reserved_object_async (
                           exact_ref, request.stable_type, std::move (creation_bytes));
                         if (reconciled.status == stateful::create_status_t::existing
                             && reconciled.object == exact_ref)
