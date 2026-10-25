@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+#include "../support/stateful_object_sync.hpp"
 #include "../support/session_disconnect_probe_spot.hpp"
 #include "runtime/mesh/mesh_node_host_service.hpp"
 #include "../support/runtime_failure_fixture.hpp"
@@ -51,6 +52,8 @@
 #include <thread>
 #include <tuple>
 #include <vector>
+
+using zlink::framework::test::begin_reserved_object;
 
 namespace
 {
@@ -5361,7 +5364,7 @@ int early_zero_generation_leave_waits_for_source_transfer_completion (bool no_fo
               std::stop_token) { return true; });
         const stateful::object_ref_t source_object{
           stateful::object_kind_t::actor, "early-leave-actor", 7, 1, "no-follow", "actor-a"};
-        const auto reserved = objects.begin_reserved_object (source_object, "player", {});
+        const auto reserved = begin_reserved_object (objects, source_object, "player", {});
         if (objects.commit_create (reserved.attempt) != stateful::stateful_error_t::none)
             return finish (20);
         const auto seal =
