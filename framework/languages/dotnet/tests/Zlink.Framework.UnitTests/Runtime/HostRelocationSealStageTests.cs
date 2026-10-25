@@ -9,6 +9,7 @@ using Zlink.Framework.Contracts.Messaging;
 using Zlink.Framework.LocationProvider;
 using Zlink.Framework.Runtime.Actors;
 using Zlink.Framework.Runtime.Locations;
+using Zlink.Framework.Runtime.Spots;
 
 namespace Zlink.Framework.UnitTests.Runtime;
 
@@ -33,6 +34,7 @@ public sealed class HostRelocationSealStageTests
         trace.ReleaseTargetLifecycle.TrySetResult();
         trace.ReleaseSourceLeave.TrySetResult();
         var initialization = 0;
+        ZLinkSpotActivation? failedTargetActivation = null;
         var targetFailure = new TaskCompletionSource<Exception?>(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
@@ -49,6 +51,9 @@ public sealed class HostRelocationSealStageTests
                 );
             else
             {
+                if (!configure)
+                    failedTargetActivation = (ZLinkSpotActivation)
+                        ZLinkSpotAmbientContext.RequireCurrent();
                 IZLinkTimer? restored = catchMismatch
                     ? await context.AddTimer<SourceTimerHandler>(
                         "pulse",
@@ -153,6 +158,12 @@ public sealed class HostRelocationSealStageTests
         {
             Assert.Equal(ZLinkFrameworkRelocationOutcome.Relocated, result.Outcome);
             Assert.Equal(ZLinkFrameworkRelocationReason.None, result.Reason);
+        }
+        if (!configure && !catchMismatch)
+        {
+            await target.DisposeAsync();
+            Assert.NotNull(failedTargetActivation);
+            Assert.True(failedTargetActivation.IsDisposed);
         }
     }
 

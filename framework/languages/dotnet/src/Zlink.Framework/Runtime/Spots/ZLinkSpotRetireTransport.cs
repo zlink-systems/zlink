@@ -1152,6 +1152,49 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
         }
     }
 
+    internal async ValueTask InitializeRelocatedTargetAsync(
+        TargetStage stage,
+        CancellationToken cancellationToken
+    )
+    {
+        if (
+            stage.Spot.Existing
+            || Volatile.Read(ref stage.RelocatedInitializationCompleted) != 0
+            || stage.Spot.Activation is not ZLinkUserSpotActivation userSpot
+        )
+            return;
+        if (stage.AbortState != TargetStageAbortState.Staged)
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.Unavailable,
+                "Relocation target initialization has already ended."
+            );
+        try
+        {
+            await userSpot
+                .InitializeRelocatedUserSpotAsync(stage.TargetAdmissionSeal, cancellationToken)
+                .ConfigureAwait(false);
+            Volatile.Write(ref stage.RelocatedInitializationCompleted, 1);
+        }
+        catch (Exception initializationFailure)
+        {
+            var failures = new ZLinkFailureCollector(initializationFailure);
+            await failures
+                .CaptureAsync(async () =>
+                    _ = await AbortLocalTargetStageAsync(
+                            new ZLinkAggregateFence(
+                                stage.Envelope.AggregateId,
+                                stage.Envelope.AggregateGeneration
+                            ),
+                            stage,
+                            CancellationToken.None
+                        )
+                        .ConfigureAwait(false)
+                )
+                .ConfigureAwait(false);
+            failures.ThrowIfAny();
+        }
+    }
+
     internal async ValueTask DrainTargetAttemptsAsync(CancellationToken cancellationToken)
     {
         foreach (var pair in _staged.ToArray())
@@ -1195,16 +1238,7 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
             return false;
         if (runtime.DrainAdmission.IsSealedForShutdown)
         {
-            return await stage
-                .RunAbortCleanupAsync(
-                    async () =>
-                    {
-                        // Local disposal neither changes Store authority nor resumes the source.
-                        await AbortTargetStageAsync(stage).ConfigureAwait(false);
-                        return TryCompleteStage(fence, stage, TargetStageTerminalOutcome.Aborted);
-                    },
-                    cancellationToken
-                )
+            return await AbortLocalTargetStageAsync(fence, stage, cancellationToken)
                 .ConfigureAwait(false);
         }
         return fenceSettled
@@ -2019,6 +2053,21 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
         stage.RememberAuthorityPublication(authorities);
         stage.RememberFinalRoot(publication.Reference, publication.ChecksumCrc32c);
     }
+
+    private ValueTask<bool> AbortLocalTargetStageAsync(
+        ZLinkAggregateFence fence,
+        TargetStage stage,
+        CancellationToken cancellationToken
+    ) =>
+        stage.RunAbortCleanupAsync(
+            async () =>
+            {
+                // Local disposal neither changes Store authority nor resumes the source.
+                await AbortTargetStageAsync(stage).ConfigureAwait(false);
+                return TryCompleteStage(fence, stage, TargetStageTerminalOutcome.Aborted);
+            },
+            cancellationToken
+        );
 
     private async ValueTask AbortTargetStageAsync(TargetStage stage)
     {

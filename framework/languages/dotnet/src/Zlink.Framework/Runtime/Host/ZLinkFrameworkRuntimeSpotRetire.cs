@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using Microsoft.Extensions.DependencyInjection;
 using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Runtime.Identifiers;
 
@@ -503,17 +504,10 @@ internal sealed partial class ZLinkFrameworkRuntime
                 Volatile.Write(ref stage.RelocationReadyDelivered, 1);
             }
 
-            if (
-                !stage.Spot.Existing
-                && Volatile.Read(ref stage.RelocatedInitializationCompleted) == 0
-                && stage.Spot.Activation is ZLinkUserSpotActivation userSpot
-            )
-            {
-                await userSpot
-                    .InitializeRelocatedUserSpotAsync(stage.TargetAdmissionSeal, cancellationToken)
-                    .ConfigureAwait(false);
-                Volatile.Write(ref stage.RelocatedInitializationCompleted, 1);
-            }
+            await Services
+                .GetRequiredService<ZLinkSpotRetireTargetRuntime>()
+                .InitializeRelocatedTargetAsync(stage, cancellationToken)
+                .ConfigureAwait(false);
 
             await PublishCatalogBeforeNormalizationAsync(
                     stage,
