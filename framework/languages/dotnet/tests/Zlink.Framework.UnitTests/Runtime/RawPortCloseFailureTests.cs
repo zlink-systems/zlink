@@ -216,6 +216,9 @@ public sealed class RawPortCloseFailureTests
             ],
             new ZLinkLocationRuntimeSnapshot("healthy", null, null)
         );
+        Assert.True(
+            SpinWait.SpinUntil(() => runtime.SocketCreationCount > 0, TimeSpan.FromSeconds(5))
+        );
         var firstDispose = runtime.DisposeAsync().AsTask();
         await proxy.CloseAttempted.Task.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Same(
