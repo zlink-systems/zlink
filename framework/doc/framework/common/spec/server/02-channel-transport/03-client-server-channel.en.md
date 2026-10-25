@@ -448,16 +448,23 @@ value re-measured in this form. The business payload frame carries no metadata.
 
 <a id="envelope-header-grammar"></a>
 **Header grammar.** The JSON header frame is one [RFC 8259](https://www.rfc-editor.org/rfc/rfc8259) JSON object
-written in UTF-8 without a BOM. A receiver classifies the record as a protocol error if any of the following is
-violated.
+written in UTF-8 without a BOM. A violation is a protocol error, and
+[channel messaging §8](02-channel-messaging.en.md#reply-route-remains) defines whether that request gets a reply.
+
+<a id="envelope-header-structure"></a>
+The structure rules define whether the header can be read as one object.
 
 - Only JSON whitespace may follow the object. Any other byte, NUL included, is a violation.
 - Strings must be valid Unicode. A `\u` escape that denotes an unpaired surrogate is a violation.
 - Field names must match the names in the table below exactly, case included. A table field that appears twice
   in one object, or a key that appears twice in the `metadata` object, is a violation. A key not in the table is
   ignored with its value however many times it appears.
-- An integer field's value is an integer literal without a decimal point or exponent, and it must belong to the
-  table's value set.
+
+The field rules define each table field's value. An integer field's value is an integer literal without a decimal
+point or exponent, and it must belong to the table's value set. Whether `flowId` and `flowOrigin` values are
+checked is defined by
+[Request Correlation and Business Flow Identification §4](../06-observability/04-flow-correlation.en.md#4-when-a-flow-is-created),
+and this table applies when that section requires the check.
 
 | Field | JSON value |
 |---|---|

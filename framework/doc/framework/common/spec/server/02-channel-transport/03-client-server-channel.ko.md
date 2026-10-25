@@ -396,13 +396,21 @@ escape하고(제어 문자는 `\b` `\f` `\n` `\r` `\t`가 있으면 그것을, �
 
 <a id="envelope-header-grammar"></a>
 **Header 문법.** JSON header frame은 BOM 없는 UTF-8로 쓴 [RFC 8259](https://www.rfc-editor.org/rfc/rfc8259) JSON
-object 하나다. 받는 쪽은 다음 중 하나라도 어기면 그 record를 protocol error로 판정한다.
+object 하나다. 위반은 protocol error이며, 그 request에 reply를 보낼지는
+[channel messaging §8](02-channel-messaging.ko.md#reply-route-remains)이 정한다.
+
+<a id="envelope-header-structure"></a>
+구조 규칙은 header를 object 하나로 읽을 수 있는지를 정한다.
 
 - Object 뒤에는 JSON 공백만 올 수 있다. NUL을 포함한 다른 byte가 오면 위반이다.
 - 문자열은 유효한 Unicode여야 한다. 짝이 없는 surrogate를 나타내는 `\u` escape는 위반이다.
 - Field 이름은 아래 표의 이름과 대소문자까지 일치해야 한다. 표의 field가 한 object에 두 번 나오거나
   `metadata` object에 같은 key가 두 번 나오면 위반이다. 표에 없는 key는 몇 번 나오든 값과 함께 무시한다.
-- 정수 field의 값은 소수점과 지수가 없는 정수 literal이며 표의 값 집합에 속해야 한다.
+
+Field 규칙은 표의 각 field 값을 정한다. 정수 field의 값은 소수점과 지수가 없는 정수 literal이며 표의 값
+집합에 속해야 한다. `flowId`와 `flowOrigin`의 값을 검사하는지는
+[Request 연결과 업무 흐름 식별 §4](../06-observability/04-flow-correlation.ko.md#4-flow를-만드는-시점)가
+정하며, 이 표는 그 절이 검사를 요구할 때 적용한다.
 
 | Field | JSON 값 |
 |---|---|

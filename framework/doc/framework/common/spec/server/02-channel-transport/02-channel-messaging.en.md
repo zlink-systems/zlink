@@ -662,8 +662,8 @@ The precise full signature is defined by
 | The host isn't accepting new submits. | Fails with that language's shutdown error. |
 
 <a id="reply-route-remains"></a>A reply route remains when the received message is a request with a reply token,
-the whole envelope header is an object that satisfies the
-[header grammar](03-client-server-channel.en.md#envelope-header-grammar), and `correlationId` is a string conforming to
+the envelope header is an object that satisfies the
+[header structure rules](03-client-server-channel.en.md#envelope-header-structure), and `correlationId` is a string conforming to
 [Request Correlation and Business Flow Identification §3](../06-observability/04-flow-correlation.en.md#3-format-and-ownership).
 If another header field is invalid in that case, the request completes with an error reply. If this condition
 is not met, no reply is built and the failure is recorded once in runtime observability information.
