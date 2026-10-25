@@ -519,7 +519,6 @@ bool is_stateful_application (record_kind_t kind)
            || kind == record_kind_t::spot_request;
 }
 
-
 std::string user_spot_operation_key (const std::vector<std::uint8_t> &source,
                                      std::uint64_t source_generation,
                                      const protocol::wire_operation_id_t &operation)
@@ -3141,23 +3140,55 @@ public_host_runtime_t::send_to_node (const zlink::routing_id_t &target,
     }
 }
 
+// Legacy callers already own their final result source. Both representations
+// enter the same registration and physical completion function below.
 task_t<zlink::submit_result_t>
 public_host_runtime_t::request_to_node (const zlink::routing_id_t &target,
                                         std::vector<zlink::message_t> parts,
                                         pending_operation_t &operation,
                                         std::chrono::milliseconds timeout)
-try {
+{
     operation.prepare_for_registration ();
-    operation.id = next_operation ();
+    return submit_node_request (
+             target, std::move (parts), operation.id, timeout,
+             [completion = operation.completion] (result_t<operation_completion_t> result) {
+                 completion->complete (std::move (result));
+             })
+      .admission;
+}
+
+task_t<zlink::submit_result_t>
+public_host_runtime_t::request_to_channel (const std::string &channel_name,
+                                           const std::vector<zlink::message_t> &parts,
+                                           pending_operation_t &operation,
+                                           std::chrono::milliseconds timeout)
+{
+    operation.prepare_for_registration ();
+    return submit_channel_request (
+             channel_name, parts, operation.id, timeout,
+             [completion = operation.completion] (result_t<operation_completion_t> result) {
+                 completion->complete (std::move (result));
+             })
+      .admission;
+}
+
+detail::request_start_result_t<zlink::submit_result_t> public_host_runtime_t::submit_node_request (
+  const zlink::routing_id_t &target,
+  std::vector<zlink::message_t> parts,
+  call_id_t &operation,
+  std::chrono::milliseconds timeout,
+  std::function<void (result_t<operation_completion_t>)> receive)
+try {
+    operation = next_operation ();
     const auto host = shared_from_this ();
     auto target_bytes = target.to_bytes ();
-    auto accepted =
-      _transport->request_to_node (target_bytes, encode_application (std::move (parts)), timeout,
-                                   [host, operation] (foundation::operation_terminal_t terminal,
-                                                      zlink::message_t payload) mutable {
-                                       host->complete_operation (operation, operation_kind_t::none,
-                                                                 terminal, std::move (payload));
-                                   });
+    auto accepted = _transport->request_to_node_submission (
+      target_bytes, encode_application (std::move (parts)), timeout,
+      [host, operation, receive = std::move (receive)] (foundation::operation_terminal_t terminal,
+                                                        zlink::message_t payload) mutable {
+          receive (host->decode_operation_completion (operation, operation_kind_t::none, terminal,
+                                                      std::move (payload)));
+      });
     auto classify = [host, target_bytes = std::move (target_bytes)] (const result_t<bool> &result) {
         if (!result)
             return detail::result_access_t::failure<zlink::submit_result_t> (result.exception ());
@@ -3185,13 +3216,25 @@ try {
         }
         return result_t<zlink::submit_result_t>::success (submitted (accepted));
     };
-    if (accepted.await_ready ())
-        return task_t<zlink::submit_result_t> (classify (accepted.result ()));
-    return detail::project_task_terminal<zlink::submit_result_t> (accepted, std::move (classify));
+    try {
+        auto admission = std::move (accepted.admission);
+        if (admission.await_ready ())
+            return {task_t<zlink::submit_result_t> (classify (admission.result ())),
+                    accepted.registered};
+        return {
+          detail::project_task_terminal<zlink::submit_result_t> (admission, std::move (classify)),
+          accepted.registered};
+    }
+    catch (...) {
+        return {task_t<zlink::submit_result_t> (
+                  detail::current_exception_result<zlink::submit_result_t> ()),
+                accepted.registered};
+    }
 }
 catch (...) {
-    return task_t<zlink::submit_result_t> (
-      detail::current_exception_result<zlink::submit_result_t> ());
+    return {
+      task_t<zlink::submit_result_t> (detail::current_exception_result<zlink::submit_result_t> ()),
+      false};
 }
 
 task_t<zlink::submit_result_t>
@@ -3202,23 +3245,46 @@ public_host_runtime_t::send_to_channel (const std::string &channel_name,
                                                            encode_application (parts));
 }
 
-task_t<zlink::submit_result_t>
-public_host_runtime_t::request_to_channel (const std::string &channel_name,
-                                           const std::vector<zlink::message_t> &parts,
-                                           pending_operation_t &operation,
-                                           std::chrono::milliseconds timeout)
-{
-    operation.prepare_for_registration ();
-    operation.id = next_operation ();
+detail::request_start_result_t<zlink::submit_result_t>
+public_host_runtime_t::submit_channel_request (
+  const std::string &channel_name,
+  const std::vector<zlink::message_t> &parts,
+  call_id_t &operation,
+  std::chrono::milliseconds timeout,
+  std::function<void (result_t<operation_completion_t>)> receive)
+try {
+    operation = next_operation ();
     const auto host = shared_from_this ();
-    const auto accepted = co_await _transport->request_to_channel (
+    auto accepted = _transport->request_to_channel_submission (
       channel_name, encode_application (parts), timeout,
-      [host, operation] (foundation::operation_terminal_t terminal,
-                         zlink::message_t payload) mutable {
-          host->complete_operation (operation, operation_kind_t::none, terminal,
-                                    std::move (payload));
+      [host, operation, receive = std::move (receive)] (foundation::operation_terminal_t terminal,
+                                                        zlink::message_t payload) mutable {
+          receive (host->decode_operation_completion (operation, operation_kind_t::none, terminal,
+                                                      std::move (payload)));
       });
-    co_return submitted (accepted);
+    try {
+        auto classify = [] (const result_t<bool> &result) {
+            return result ? result_t<zlink::submit_result_t>::success (submitted (result.value ()))
+                          : detail::result_access_t::failure<zlink::submit_result_t> (
+                              result.exception ());
+        };
+        if (accepted.admission.await_ready ())
+            return {task_t<zlink::submit_result_t> (classify (accepted.admission.result ())),
+                    accepted.registered};
+        return {detail::project_task_terminal<zlink::submit_result_t> (accepted.admission,
+                                                                       std::move (classify)),
+                accepted.registered};
+    }
+    catch (...) {
+        return {task_t<zlink::submit_result_t> (
+                  detail::current_exception_result<zlink::submit_result_t> ()),
+                accepted.registered};
+    }
+}
+catch (...) {
+    return {
+      task_t<zlink::submit_result_t> (detail::current_exception_result<zlink::submit_result_t> ()),
+      false};
 }
 
 bool public_host_runtime_t::relocation_target_wire_ready (
@@ -8418,7 +8484,6 @@ bool public_host_runtime_t::reply (const reply_token_t &token,
     }
 }
 
-
 task_t<std::optional<stateful::object_ref_t>>
 public_host_runtime_t::resolve_actor_async (const actor_ref_t &actor) const
 {
@@ -8427,7 +8492,6 @@ public_host_runtime_t::resolve_actor_async (const actor_ref_t &actor) const
         co_return std::nullopt;
     co_return current;
 }
-
 
 task_t<std::optional<stateful::object_ref_t>>
 public_host_runtime_t::resolve_actor_async (std::string actor_id) const
@@ -8563,7 +8627,6 @@ void public_host_runtime_t::register_local_completion (
     operation.local_result = result;
 }
 
-
 bool public_host_runtime_t::enqueue_completion (const pending_operation_t &operation,
                                                 receive_record_t record,
                                                 std::vector<zlink::message_t> parts)
@@ -8655,7 +8718,6 @@ public_host_runtime_t::begin_local_actor_join (const actor_ref_t &actor,
                 fail (classified.first, classified.second);
                 return;
             }
-
 
             const auto actor_type =
               std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (actor));
@@ -9482,11 +9544,21 @@ void public_host_runtime_t::complete_operation (const pending_operation_t &opera
                                                 foundation::operation_terminal_t terminal,
                                                 zlink::message_t payload)
 {
+    operation.completion->complete (
+      decode_operation_completion (operation.id, kind, terminal, std::move (payload)));
+}
+
+result_t<operation_completion_t>
+public_host_runtime_t::decode_operation_completion (call_id_t operation,
+                                                    operation_kind_t kind,
+                                                    foundation::operation_terminal_t terminal,
+                                                    zlink::message_t payload)
+{
     try {
         receive_record_t record;
         record.kind = record_kind_t::completion;
         record.domain = ready_domain_t::infrastructure;
-        record.operation_id = operation.id;
+        record.operation_id = operation;
         record.operation_kind = kind;
         record.source_node_rid =
           zlink::routing_id_t::from (_options.mesh.descriptor.node_routing_id);
@@ -9528,16 +9600,16 @@ void public_host_runtime_t::complete_operation (const pending_operation_t &opera
             }
         }
         if (terminal == foundation::operation_terminal_t::shutdown) {
-            operation.completion->complete (detail::boundary_failure<operation_completion_t> (
-              detail::boundary_error_t::shutdown, "MeshNode operation owner is closed"));
+            return detail::boundary_failure<operation_completion_t> (
+              detail::boundary_error_t::shutdown, "MeshNode operation owner is closed");
         } else {
-            operation.completion->complete (result_t<operation_completion_t>::success (
-              operation_completion_t{std::move (record), std::move (parts)}));
+            return result_t<operation_completion_t>::success (
+              operation_completion_t{std::move (record), std::move (parts)});
         }
     }
     catch (const std::exception &error) {
-        operation.completion->complete (result_t<operation_completion_t>::failure (
-          framework_error_kind_t::internal_failure, error.what ()));
+        return result_t<operation_completion_t>::failure (framework_error_kind_t::internal_failure,
+                                                          error.what ());
     }
 }
 

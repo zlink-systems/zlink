@@ -17,7 +17,7 @@
 #include "runtime/mesh/service_topology_registry.hpp"
 #include "runtime/protocol/service_wire_codec.hpp"
 #include <zlink/Contracts/Core/routing_id.hpp>
-#include <zlink/framework/contracts/dispatch/task.hpp>
+#include <zlink/framework/contracts/dispatch/request_task.hpp>
 
 #include <atomic>
 #include <array>
@@ -194,6 +194,19 @@ class raw_mesh_node_owner_t
                                      std::chrono::milliseconds timeout,
                                      foundation::operation_registry_t::callback_t callback,
                                      std::optional<std::uint64_t> correlation = std::nullopt);
+    using request_submission_t = detail::request_start_result_t<bool>;
+    request_submission_t
+    request_to_node_submission (const std::vector<std::uint8_t> &target_routing_id,
+                                const protocol::application_payload_t &application_payload,
+                                std::chrono::milliseconds timeout,
+                                foundation::operation_registry_t::callback_t callback,
+                                std::optional<std::uint64_t> correlation = std::nullopt);
+    request_submission_t
+    request_to_channel_submission (const std::string &channel_name,
+                                   const protocol::application_payload_t &application_payload,
+                                   std::chrono::milliseconds timeout,
+                                   foundation::operation_registry_t::callback_t callback,
+                                   std::optional<std::uint64_t> correlation = std::nullopt);
     bool reply (const service_mailbox_record_t &request,
                 const protocol::application_payload_t &application_payload);
     bool reply_failure (const service_mailbox_record_t &request,
@@ -501,7 +514,7 @@ class raw_mesh_node_owner_t
                                 std::vector<std::uint8_t> header);
     void send_descriptor_update_on_lane (const service_node_descriptor_t &descriptor,
                                          const std::vector<admitted_peer_t> &peers);
-    task_t<bool> request_with_header (
+    request_submission_t request_with_header (
       const std::vector<std::uint8_t> &target_routing_id,
       const std::function<std::vector<std::uint8_t> (std::uint64_t)> &header,
       const protocol::application_payload_t &application_payload,

@@ -827,12 +827,24 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
                                                     std::vector<zlink::message_t> parts,
                                                     pending_operation_t &operation,
                                                     std::chrono::milliseconds timeout);
-    task_t<zlink::submit_result_t> send_to_channel (const std::string &channel_name,
-                                                    const std::vector<zlink::message_t> &parts);
     task_t<zlink::submit_result_t> request_to_channel (const std::string &channel_name,
                                                        const std::vector<zlink::message_t> &parts,
                                                        pending_operation_t &operation,
                                                        std::chrono::milliseconds timeout);
+    detail::request_start_result_t<zlink::submit_result_t>
+    submit_node_request (const zlink::routing_id_t &target,
+                         std::vector<zlink::message_t> parts,
+                         call_id_t &operation,
+                         std::chrono::milliseconds timeout,
+                         std::function<void (result_t<operation_completion_t>)> receive);
+    task_t<zlink::submit_result_t> send_to_channel (const std::string &channel_name,
+                                                    const std::vector<zlink::message_t> &parts);
+    detail::request_start_result_t<zlink::submit_result_t>
+    submit_channel_request (const std::string &channel_name,
+                            const std::vector<zlink::message_t> &parts,
+                            call_id_t &operation,
+                            std::chrono::milliseconds timeout,
+                            std::function<void (result_t<operation_completion_t>)> receive);
     // The coroutine owns both callbacks; a caller may discard the task.
     task_t<std::size_t> dispatch_ready (
       std::function<void (
@@ -985,6 +997,11 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
                               std::uint64_t target_spot_generation);
     bool complete_local_request (const pending_operation_t &operation,
                                  const std::vector<zlink::message_t> &parts);
+    result_t<operation_completion_t>
+    decode_operation_completion (call_id_t operation,
+                                 operation_kind_t kind,
+                                 foundation::operation_terminal_t terminal,
+                                 zlink::message_t payload);
     void complete_operation (const pending_operation_t &operation,
                              operation_kind_t kind,
                              foundation::operation_terminal_t terminal,

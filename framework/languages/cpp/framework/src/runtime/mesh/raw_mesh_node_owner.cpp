@@ -1011,12 +1011,38 @@ task_t<zlink::submit_result_t> raw_mesh_node_owner_t::send_logical_multicast (
     }
 }
 
-task_t<bool>
-raw_mesh_node_owner_t::request_to_node (const std::vector<std::uint8_t> &target_routing_id,
-                                        const protocol::application_payload_t &application_payload,
-                                        std::chrono::milliseconds timeout,
-                                        foundation::operation_registry_t::callback_t callback,
-                                        std::optional<std::uint64_t> correlation)
+
+
+task_t<bool> raw_mesh_node_owner_t::request_to_node (
+  const std::vector<std::uint8_t> &target_routing_id,
+  const protocol::application_payload_t &application_payload,
+  std::chrono::milliseconds timeout,
+  foundation::operation_registry_t::callback_t callback,
+  std::optional<std::uint64_t> correlation)
+{
+    return request_to_node_submission (target_routing_id, application_payload, timeout,
+                                        std::move (callback), correlation)
+      .admission;
+}
+
+task_t<bool> raw_mesh_node_owner_t::request_to_channel (
+  const std::string &channel_name,
+  const protocol::application_payload_t &application_payload,
+  std::chrono::milliseconds timeout,
+  foundation::operation_registry_t::callback_t callback,
+  std::optional<std::uint64_t> correlation)
+{
+    return request_to_channel_submission (channel_name, application_payload, timeout,
+                                           std::move (callback), correlation)
+      .admission;
+}
+
+raw_mesh_node_owner_t::request_submission_t raw_mesh_node_owner_t::request_to_node_submission (
+  const std::vector<std::uint8_t> &target_routing_id,
+  const protocol::application_payload_t &application_payload,
+  std::chrono::milliseconds timeout,
+  foundation::operation_registry_t::callback_t callback,
+  std::optional<std::uint64_t> correlation)
 try {
     return request_with_header (
       target_routing_id,
@@ -1027,29 +1053,34 @@ try {
       mesh_request_metric_t (_request_metrics, mesh_request_surface_t::node));
 }
 catch (...) {
-    return task_t<bool> (detail::current_exception_result<bool> ());
+    return {task_t<bool> (detail::current_exception_result<bool> ()), false};
 }
 
-task_t<bool> raw_mesh_node_owner_t::request_to_channel (
+
+
+raw_mesh_node_owner_t::request_submission_t raw_mesh_node_owner_t::request_to_channel_submission (
   const std::string &channel_name,
   const protocol::application_payload_t &application_payload,
   std::chrono::milliseconds timeout,
   foundation::operation_registry_t::callback_t callback,
   std::optional<std::uint64_t> correlation)
-{
+try {
     mesh_request_metric_t request_metric (_request_metrics, mesh_request_surface_t::channel);
     service_liveness_registry_t::connection_t admission;
     auto selected = _topology.select (channel_name, &admission);
     if (!selected) {
         throw *selected.error ();
     }
-    co_return co_await request_with_header (
+    return request_with_header (
       std::move (selected.value ()),
       [&channel_name] (std::uint64_t request_correlation) {
           return protocol::encode_channel_request_header (request_correlation, channel_name);
       },
       application_payload, timeout, std::move (callback), correlation, true,
       std::move (request_metric), std::move (admission));
+}
+catch (...) {
+    return {task_t<bool> (detail::current_exception_result<bool> ()), false};
 }
 
 bool raw_mesh_node_owner_t::observe_request (
@@ -1170,7 +1201,7 @@ void raw_mesh_node_owner_t::trace_admission_phase (const std::vector<std::uint8_
         trace_mesh ("handshake phase=bilateral-ready" + admission_context);
 }
 
-task_t<bool> raw_mesh_node_owner_t::request_with_header (
+raw_mesh_node_owner_t::request_submission_t raw_mesh_node_owner_t::request_with_header (
   const std::vector<std::uint8_t> &target_routing_id,
   const std::function<std::vector<std::uint8_t> (std::uint64_t)> &header,
   const protocol::application_payload_t &application_payload,
@@ -1188,7 +1219,7 @@ try {
     if (!target_claimed) {
         const auto peer = _topology.peer (target_routing_id);
         if (!peer || !peer->ready)
-            return task_t<bool> (result_t<bool>::success (false));
+            return {task_t<bool> (result_t<bool>::success (false)), false};
         admission = peer->liveness;
     }
     auto encoded_payload = protocol::encode_application_payload (application_payload);
@@ -1243,17 +1274,24 @@ try {
         return std::optional<request_start_t>{std::move (value)};
     });
     if (!start)
-        return task_t<bool> (result_t<bool>::success (false));
+        return {task_t<bool> (result_t<bool>::success (false)), false};
     if (!start->registered) {
         throw framework_exception_t (framework_error_kind_t::shutting_down,
                                      "raw mesh request registry is closed");
     }
-    auto admitted = start->admitted->task ();
-    (void) observe_request (start->operation, start->correlation, std::move (start->running));
-    return await_request_admission (std::move (admitted));
+    try {
+        auto admitted = start->admitted->task ();
+        (void) observe_request (start->operation, start->correlation, std::move (start->running));
+        return {await_request_admission (std::move (admitted)), true};
+    }
+    catch (...) {
+        (void) _operations->fail (start->operation,
+                                  foundation::operation_terminal_t::transport_failed);
+        return {task_t<bool> (detail::current_exception_result<bool> ()), true};
+    }
 }
 catch (...) {
-    return task_t<bool> (detail::current_exception_result<bool> ());
+    return {task_t<bool> (detail::current_exception_result<bool> ()), false};
 }
 
 struct raw_mesh_node_owner_t::send_completion_state_t
@@ -1951,7 +1989,8 @@ raw_mesh_node_owner_t::request_to_spot (const std::vector<std::uint8_t> &target_
       },
       application_payload, timeout, std::move (callback), correlation, false,
       mesh_request_metric_t (_request_metrics, mesh_request_surface_t::spot), {},
-      request_identity (operation));
+      request_identity (operation))
+      .admission;
 }
 
 task_t<bool> raw_mesh_node_owner_t::send_to_actor (
@@ -2016,7 +2055,8 @@ task_t<bool> raw_mesh_node_owner_t::request_to_actor (
       },
       application_payload, timeout, std::move (callback), correlation, false,
       mesh_request_metric_t (_request_metrics, mesh_request_surface_t::actor), {},
-      request_identity (operation));
+      request_identity (operation))
+      .admission;
 }
 
 task_t<bool> raw_mesh_node_owner_t::request_user_spot_create (

@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+#include "request_admission_fixture.hpp"
 #include "../support/runtime_failure_fixture.hpp"
 
 #include <zlink/framework.hpp>
@@ -3332,15 +3333,16 @@ int main ()
           }
           co_return zlink::framework::result_t<void>::success ();
       },
-      [] (const zlink::routing_id_t &, zlink::framework::runtime::messaging::message_parts_t,
-          std::chrono::milliseconds)
-        -> zlink::framework::request_task_t<
-          zlink::framework::result_t<zlink::framework::runtime::messaging::message_parts_t>> {
-          co_return zlink::framework::
-            result_t<zlink::framework::runtime::messaging::message_parts_t>::failure (
-              zlink::framework::framework_error_kind_t::internal_failure,
-              "spot-only node transport received an unexpected request");
-      });
+      zlink::framework::test::request_receiver (
+        [] (const zlink::routing_id_t &, zlink::framework::runtime::messaging::message_parts_t,
+            std::chrono::milliseconds)
+          -> zlink::framework::request_task_t<
+            zlink::framework::result_t<zlink::framework::runtime::messaging::message_parts_t>> {
+            co_return zlink::framework::
+              result_t<zlink::framework::runtime::messaging::message_parts_t>::failure (
+                zlink::framework::framework_error_kind_t::internal_failure,
+                "spot-only node transport received an unexpected request");
+        }));
     auto spot_only_client = spot_only_builder.route_client (serializers);
     spot_only_client.send_to_spot ("spot-rid", event_t{33}).async ();
     spot_only_client

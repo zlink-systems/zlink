@@ -260,18 +260,32 @@ class mesh_node_runtime_t
     send_to_node (const zlink::routing_id_t &target,
                   const std::vector<zlink::message_t> &parts,
                   const std::map<std::string, std::string> &metadata);
-    request_task_t<result_t<runtime::messaging::message_parts_t>>
-    compose_node_request_reply (host::pending_operation_t operation,
-                                task_t<zlink::submit_result_t> submission);
-    request_task_t<result_t<runtime::messaging::message_parts_t>>
-    request_node_reply (const zlink::routing_id_t &target,
-                        std::vector<zlink::message_t> parts,
-                        std::chrono::milliseconds timeout);
-    task_t<zlink::submit_result_t> request_to_node (const zlink::routing_id_t &target,
-                                                    std::vector<zlink::message_t> parts,
-                                                    host::pending_operation_t &operation_id,
-                                                    std::chrono::milliseconds timeout,
-                                                    std::vector<std::uint8_t> metadata = {});
+    void
+    submit_node_request_reply (const zlink::routing_id_t &target,
+                               std::vector<zlink::message_t> parts,
+                               std::chrono::milliseconds timeout,
+                               request_receiver_t<runtime::messaging::message_parts_t> receiver);
+    void
+    submit_channel_request_reply (const std::string &channel_name,
+                                  std::vector<zlink::message_t> parts,
+                                  std::chrono::milliseconds timeout,
+                                  request_receiver_t<runtime::messaging::message_parts_t> receiver);
+    template <typename TStart, typename TFailure>
+    void start_request_reply (TStart &&submit,
+                              request_receiver_t<runtime::messaging::message_parts_t> receiver,
+                              std::string_view operation_name,
+                              TFailure submission_failure);
+    void
+    start_node_request_reply (const zlink::routing_id_t &target,
+                              std::vector<zlink::message_t> parts,
+                              std::chrono::milliseconds timeout,
+                              request_receiver_t<runtime::messaging::message_parts_t> receiver);
+    task_t<void> submit_unknown_node_request_reply (
+      zlink::routing_id_t target,
+      std::vector<zlink::message_t> parts,
+      std::chrono::milliseconds timeout,
+      request_receiver_t<runtime::messaging::message_parts_t> receiver,
+      task_t<std::optional<zlink::submit_result_t>> classification);
     task_t<zlink::submit_result_t>
     request_to_node (const zlink::routing_id_t &target,
                      const std::vector<zlink::message_t> &parts,
@@ -285,17 +299,28 @@ class mesh_node_runtime_t
     send_to_channel (const std::string &channel_name,
                      const std::vector<zlink::message_t> &parts,
                      const std::map<std::string, std::string> &metadata);
-    task_t<zlink::submit_result_t> request_to_channel (const std::string &channel_name,
-                                                       const std::vector<zlink::message_t> &parts,
-                                                       host::pending_operation_t &operation_id,
-                                                       std::chrono::milliseconds timeout,
-                                                       std::vector<std::uint8_t> metadata = {});
     task_t<zlink::submit_result_t>
     request_to_channel (const std::string &channel_name,
                         const std::vector<zlink::message_t> &parts,
                         host::pending_operation_t &operation_id,
                         std::chrono::milliseconds timeout,
                         const std::map<std::string, std::string> &metadata);
+    task_t<zlink::submit_result_t> request_to_node (const zlink::routing_id_t &target,
+                                                    std::vector<zlink::message_t> parts,
+                                                    host::pending_operation_t &operation_id,
+                                                    std::chrono::milliseconds timeout,
+                                                    std::vector<std::uint8_t> metadata = {});
+    task_t<zlink::submit_result_t>
+    request_to_unknown_node (zlink::routing_id_t target,
+                             std::vector<zlink::message_t> parts,
+                             host::pending_operation_t &operation_id,
+                             std::chrono::milliseconds timeout,
+                             task_t<std::optional<zlink::submit_result_t>> classification);
+    task_t<zlink::submit_result_t> request_to_channel (const std::string &channel_name,
+                                                       const std::vector<zlink::message_t> &parts,
+                                                       host::pending_operation_t &operation_id,
+                                                       std::chrono::milliseconds timeout,
+                                                       std::vector<std::uint8_t> metadata = {});
     task_t<host::spot_handle_t> get_or_create_spot_async (std::string spot_id);
     task_t<zlink::submit_result_t> send_to_spot (const std::string &source_spot_id,
                                                  const zlink::routing_id_t &target_node_rid,
@@ -621,21 +646,7 @@ class mesh_node_runtime_t
                                 Classified &&classified,
                                 Known &&known,
                                 Unknown &&unknown) -> decltype (known ());
-    request_task_t<result_t<runtime::messaging::message_parts_t>>
-    request_unknown_node_reply (zlink::routing_id_t target,
-                                std::vector<zlink::message_t> parts,
-                                std::chrono::milliseconds timeout,
-                                task_t<std::optional<zlink::submit_result_t>> classification);
-    request_task_t<result_t<runtime::messaging::message_parts_t>>
-    await_node_request_submission (host::pending_operation_t operation,
-                                   task_t<zlink::submit_result_t> submission);
 
-    task_t<zlink::submit_result_t>
-    request_to_unknown_node (const zlink::routing_id_t &target,
-                             std::vector<zlink::message_t> parts,
-                             host::pending_operation_t &operation_id,
-                             std::chrono::milliseconds timeout,
-                             task_t<std::optional<zlink::submit_result_t>> classification);
     task_t<zlink::submit_result_t> send_to_unknown_node (zlink::routing_id_t target,
                                                          std::vector<zlink::message_t> parts);
     void configure_relocation_metric_context (

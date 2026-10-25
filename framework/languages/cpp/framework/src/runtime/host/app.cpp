@@ -100,7 +100,6 @@ std::vector<zlink::message_t> encode_bound_session_frame (const stream_runtime_t
     return {zlink::message_t::from (std::move (encoded_frame.value ()))};
 }
 
-
 class session_ingress_completion_t final
 {
   public:
@@ -2172,9 +2171,10 @@ void app_t::_apply_zlink_framework ()
                 "MeshNode send");
           },
           [mesh] (const zlink::routing_id_t &target, runtime::messaging::message_parts_t parts,
-                  std::chrono::milliseconds timeout)
-            -> request_task_t<result_t<runtime::messaging::message_parts_t>> {
-              return mesh->request_node_reply (target, std::move (parts).take_items (), timeout);
+                  std::chrono::milliseconds timeout,
+                  detail::request_receiver_t<runtime::messaging::message_parts_t> receiver) {
+              mesh->submit_node_request_reply (target, std::move (parts).take_items (), timeout,
+                                               std::move (receiver));
           });
         for (const auto &channel_name : mesh->channel_names ()) {
             channel_runtime.bind_mesh_channel_transport (
@@ -2185,28 +2185,11 @@ void app_t::_apply_zlink_framework ()
                     co_await mesh->send_to_channel (channel_name, parts.items ());
                   co_return one_way_native_submit_result (submitted, "RouteMesh channel send");
               },
-              [mesh, channel_name] (runtime::messaging::message_parts_t parts,
-                                    std::chrono::milliseconds timeout)
-                -> request_task_t<result_t<runtime::messaging::message_parts_t>> {
-                  detail::host::pending_operation_t operation;
-                  auto submission =
-                    mesh->request_to_channel (channel_name, parts.items (), operation, timeout);
-                  auto admitted = co_await detail::request_admission_source_t{};
-                  mesh->observe_request_failure (operation, admitted, "RouteMesh channel request");
-                  const auto submitted = co_await submission;
-                  if (submitted != zlink::submit_result_t::ok) {
-                      if (submitted == zlink::submit_result_t::terminated) {
-                          co_return detail::boundary_failure<runtime::messaging::message_parts_t> (
-                            detail::boundary_error_t::shutdown,
-                            "RouteMesh channel request runtime is stopped");
-                      }
-                      co_return result_t<runtime::messaging::message_parts_t>::failure (
-                        runtime::messaging::map_submit_result_error_kind (submitted),
-                        "RouteMesh channel request was not submitted");
-                  }
-                  co_await detail::request_admitted_t{};
-                  co_return co_await mesh->await_request_reply (operation,
-                                                                "RouteMesh channel request");
+              [mesh, channel_name] (
+                runtime::messaging::message_parts_t parts, std::chrono::milliseconds timeout,
+                detail::request_receiver_t<runtime::messaging::message_parts_t> receiver) {
+                  mesh->submit_channel_request_reply (channel_name, std::move (parts).take_items (),
+                                                      timeout, std::move (receiver));
               });
         }
     }

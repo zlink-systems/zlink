@@ -17,13 +17,54 @@ struct request_admission_source_t
 {
 };
 
-// Select the request_task_t constructors that project a selected request:
-// for an internal layer, and for the public reply of a request call.
+// Select the request_task_t constructor that projects a selected request
+// for an internal layer.
 struct request_projection_t
 {
 };
-struct public_request_projection_t
+
+// Both erased shared_ptrs preserve existing typed states and control blocks.
+// prepare() supplies matching static casts; binding adds no result storage.
+struct request_failure_receiver_t
 {
+    std::shared_ptr<void> reply;
+    std::shared_ptr<void> physical;
+    void (*publish) (const std::shared_ptr<void> &,
+                     const std::shared_ptr<void> &,
+                     std::exception_ptr) = nullptr;
+    void (*bind) (const std::shared_ptr<void> &,
+                  const std::shared_ptr<task_completion_source_t<void>> &) = nullptr;
+
+    void operator() (std::exception_ptr failure) const
+    {
+        publish (reply, physical, std::move (failure));
+    }
+
+    void bind_admission (const std::shared_ptr<task_completion_source_t<void>> &admitted) const
+    {
+        bind (reply, admitted);
+    }
+};
+
+// An operation owns this receiver until physical completion. It carries no
+// additional result slot or terminal authority.
+template <typename T> struct request_receiver_t
+{
+    std::shared_ptr<task_completion_source_t<void>> admitted;
+    std::function<void (const result_t<T> &)> complete;
+    request_failure_receiver_t fail;
+};
+
+struct prepared_request_t
+{
+};
+
+// Registration is an immutable result of starting this submission. It is not
+// another pending or terminal state.
+template <typename T> struct request_start_result_t
+{
+    task_t<T> admission;
+    bool registered;
 };
 
 // This signal connects only the selected submission of the same operation.
@@ -54,6 +95,16 @@ void observe_request_failure (task_t<T> &reply,
     });
 }
 
+template <typename T>
+void observe_admission_failure (std::shared_ptr<task_shared_state_t<T>> reply,
+                                const std::shared_ptr<task_completion_source_t<void>> &admitted)
+{
+    auto stage = admitted->task ();
+    observe_task_terminal (stage, [reply = std::move (reply)] (const auto &result) {
+        if (!result)
+            reply->complete (result_access_t::failure<T> (result.exception ()));
+    });
+}
 }
 
 template <typename TReply> class request_task_t : public task_t<TReply>
@@ -148,6 +199,13 @@ template <typename TReply> class request_task_t : public task_t<TReply>
     friend struct detail::request_task_access_t;
     template <typename> friend class request_task_t;
 
+    request_task_t (detail::prepared_request_t,
+                    std::shared_ptr<detail::task_shared_state_t<TReply>> reply,
+                    std::shared_ptr<detail::task_shared_state_t<TReply>> physical) :
+        task_t<TReply> (std::move (reply)), _physical_reply (std::move (physical))
+    {
+    }
+
     // Admission is already fixed by the source. This reply is also the
     // physical terminal, so it does not need an independent admission end.
     request_task_t (detail::request_projection_t,
@@ -188,45 +246,11 @@ template <typename TReply> class request_task_t : public task_t<TReply>
           });
     }
 
-    /* The public reply of a request call over a selected request. Its physical
-     * reply is the selected terminal in this reply type, so a nested owner can
-     * still wait for the whole operation; the public reply also ends at an
-     * admission failure (submit/completion §9). One observer completes both. */
-    template <typename TInput, typename TProject>
-    request_task_t (detail::public_request_projection_t,
-                    request_task_t<TInput> &selected,
-                    TProject &&project) :
-        task_t<TReply> (std::make_shared<detail::application_task_shared_state_t<TReply>> ()),
-        _physical_reply (std::make_shared<detail::application_task_shared_state_t<TReply>> ()),
-        _admitted (selected._admitted)
-    {
-        detail::observe_task_terminal (
-          selected._physical_reply,
-          [reply = this->_state, physical = _physical_reply._state,
-           project = std::forward<TProject> (project)] (const auto &result) mutable {
-              auto projected = [&] () -> result_t<TReply> {
-                  try {
-                      return project (result);
-                  }
-                  catch (...) {
-                      return detail::current_exception_result<TReply> ();
-                  }
-              }();
-              physical->complete (projected);
-              reply->complete (std::move (projected));
-          });
-        end_at_admission_failure ();
-    }
-
     // Submit/completion §9: an admission failure ends the public reply before
     // the physical terminal. A later terminal finds the reply already complete.
     void end_at_admission_failure ()
     {
-        auto stage = _admitted->task ();
-        detail::observe_task_terminal (stage, [reply = this->_state] (const auto &result) {
-            if (!result)
-                reply->complete (detail::result_access_t::failure<TReply> (result.exception ()));
-        });
+        detail::observe_admission_failure (this->_state, _admitted);
     }
 
     task_t<TReply> physical_reply () const
@@ -246,6 +270,72 @@ namespace detail
 {
 struct request_task_access_t
 {
+    template <typename T>
+    static void publish (const std::shared_ptr<task_shared_state_t<T>> &reply,
+                         const std::shared_ptr<task_shared_state_t<T>> &physical,
+                         result_t<T> result)
+    {
+        physical->complete (result);
+        reply->complete (std::move (result));
+    }
+
+    template <typename TOutput, typename TInput, typename TProject>
+    static auto prepare (TProject project)
+    {
+        std::shared_ptr<task_shared_state_t<TOutput>> reply =
+          std::make_shared<application_task_shared_state_t<TOutput>> ();
+        std::shared_ptr<task_shared_state_t<TOutput>> physical =
+          std::make_shared<application_task_shared_state_t<TOutput>> ();
+        request_task_t<TOutput> pending (prepared_request_t{}, reply, physical);
+        request_receiver_t<TInput> receiver{
+          {},
+          [reply, physical, ambient = capture_ambient_context (),
+           owner = capture_current_serial_turn (),
+           project = std::move (project)] (const result_t<TInput> &result) mutable {
+              const auto ambient_guard = enter_ambient_context (ambient);
+              (void) owner;
+              auto projected = [&] () -> result_t<TOutput> {
+                  try {
+                      return project (result);
+                  }
+                  catch (...) {
+                      return current_exception_result<TOutput> ();
+                  }
+              }();
+              publish (reply, physical, std::move (projected));
+          },
+          {std::move (reply), std::move (physical),
+           [] (const std::shared_ptr<void> &reply, const std::shared_ptr<void> &physical,
+               std::exception_ptr failure) {
+               publish (std::static_pointer_cast<task_shared_state_t<TOutput>> (reply),
+                        std::static_pointer_cast<task_shared_state_t<TOutput>> (physical),
+                        result_access_t::failure<TOutput> (std::move (failure)));
+           },
+           [] (const std::shared_ptr<void> &reply,
+               const std::shared_ptr<task_completion_source_t<void>> &admitted) {
+               observe_admission_failure (
+                 std::static_pointer_cast<task_shared_state_t<TOutput>> (reply), admitted);
+           }}};
+        return std::pair{std::move (pending), std::move (receiver)};
+    }
+
+    template <typename T>
+    static auto receive (request_task_t<T> selected, request_receiver_t<T> receiver)
+    {
+        auto admitted = selected._admitted;
+        receiver.fail.bind_admission (admitted);
+        auto physical = selected.physical_reply ();
+        observe_task_terminal (physical, std::move (receiver.complete));
+        return admitted;
+    }
+
+    template <typename T>
+    static void connect_admission (request_task_t<T> &pending,
+                                   std::shared_ptr<task_completion_source_t<void>> admitted)
+    {
+        pending._admitted = std::move (admitted);
+    }
+
     template <typename T> static auto physical_reply (const request_task_t<T> &task)
     {
         return task.physical_reply ();
@@ -267,14 +357,6 @@ struct request_task_access_t
     static request_task_t<TOutput> project (request_task_t<TInput> &selected, TProject &&project)
     {
         return request_task_t<TOutput> (request_projection_t{}, selected,
-                                        std::forward<TProject> (project));
-    }
-
-    template <typename TOutput, typename TInput, typename TProject>
-    static request_task_t<TOutput> project_public (request_task_t<TInput> &selected,
-                                                   TProject &&project)
-    {
-        return request_task_t<TOutput> (public_request_projection_t{}, selected,
                                         std::forward<TProject> (project));
     }
 
@@ -305,13 +387,6 @@ template <typename TOutput, typename TInput, typename TProject>
 request_task_t<TOutput> project_request_reply (request_task_t<TInput> &selected, TProject &&project)
 {
     return request_task_access_t::project<TOutput> (selected, std::forward<TProject> (project));
-}
-
-template <typename TOutput, typename TInput, typename TProject>
-request_task_t<TOutput> public_request_reply (request_task_t<TInput> &selected, TProject &&project)
-{
-    return request_task_access_t::project_public<TOutput> (selected,
-                                                           std::forward<TProject> (project));
 }
 
 template <typename T>

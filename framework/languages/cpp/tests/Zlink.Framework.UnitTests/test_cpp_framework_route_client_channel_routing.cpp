@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+#include "request_admission_fixture.hpp"
 #include "../support/runtime_failure_fixture.hpp"
 
 #include <zlink/framework.hpp>
@@ -118,13 +119,14 @@ TEST (CppFrameworkRouteClientChannelRouting, NodeOperationsRetainTransportWithou
           ++sends;
           co_return result_t<void>::success ();
       },
-      [counter = transport_copy_counter_t (copies),
-       &requests] (const zlink::routing_id_t &, message_parts_t,
-                   std::chrono::milliseconds) -> request_task_t<result_t<message_parts_t>> {
-          ++requests;
-          co_return result_t<message_parts_t>::failure (framework_error_kind_t::not_found,
-                                                        "test target is absent");
-      });
+      zlink::framework::test::request_receiver (
+        [counter = transport_copy_counter_t (copies),
+         &requests] (const zlink::routing_id_t &, message_parts_t,
+                     std::chrono::milliseconds) -> request_task_t<result_t<message_parts_t>> {
+            ++requests;
+            co_return result_t<message_parts_t>::failure (framework_error_kind_t::not_found,
+                                                          "test target is absent");
+        }));
     auto client = builder.route_client (serializers);
     copies = 0;
     EXPECT_TRUE (
@@ -158,13 +160,14 @@ TEST (CppFrameworkRouteClientChannelRouting, PendingNodeRequestRetainsReplacedTr
     task_completion_source_t<result_t<message_parts_t>> physical_reply;
     runtime.bind_mesh_node_transport (
       "held-mesh", {},
-      [lifetime,
-       &physical_reply] (const zlink::routing_id_t &target, message_parts_t,
-                         std::chrono::milliseconds) -> request_task_t<result_t<message_parts_t>> {
-          auto reply = co_await physical_reply.task ();
-          EXPECT_EQ (target.to_string (), "target");
-          co_return reply;
-      });
+      zlink::framework::test::request_receiver (
+        [lifetime,
+         &physical_reply] (const zlink::routing_id_t &target, message_parts_t,
+                           std::chrono::milliseconds) -> request_task_t<result_t<message_parts_t>> {
+            auto reply = co_await physical_reply.task ();
+            EXPECT_EQ (target.to_string (), "target");
+            co_return reply;
+        }));
     lifetime.reset ();
     {
         auto client = builder.route_client (serializers);
@@ -417,36 +420,38 @@ TEST (CppFrameworkRouteClientChannelRouting, ResolvesRouteMeshAndClientServerCha
           ++route_mesh_send_count;
           co_return zlink::framework::result_t<void>::success ();
       },
-      [&] (message_parts_t parts, std::chrono::milliseconds timeout)
-        -> zlink::framework::request_task_t<zlink::framework::result_t<message_parts_t>> {
-          const auto header = envelope.decode_header (parts, false);
-          const auto body = envelope.decode_body (parts);
-          if (!header || !body || header.value ().kind != message_kind_t::request
-              || header.value ().channel_name != "route-mesh-channel"
-              || header.value ().message_name != route_request_t::packet_name || timeout != 37ms
-              || serializers.get<route_request_t> ()
-                     .deserialize (
-                       zlink::framework::detail::encoded_payload_from_raw (body.value ()))
-                     .value
-                   != 23) {
-              route_mesh_request_error =
-                "RouteMesh request did not receive the encoded ChannelName call";
-              co_return zlink::framework::result_t<message_parts_t>::failure (
-                framework_error_kind_t::internal_failure, route_mesh_request_error);
-          }
-          EXPECT_FALSE (header.value ().correlation_id.empty ());
-          ++route_mesh_request_count;
-          auto reply_header = header.value ();
-          reply_header.kind = message_kind_t::response;
-          reply_header.message_name = "channel-route.reply";
-          const auto serialized =
-            serializers.get<route_reply_t> ().serialize_with_content_type (route_reply_t{46});
-          reply_header.content_type = serialized.content_type;
-          auto reply_parts = envelope.encode_raw_body_parts (
-            reply_header, zlink::framework::detail::encoded_payload_to_raw (serialized.payload));
-          co_await zlink::framework::detail::request_admitted_t{};
-          co_return zlink::framework::result_t<message_parts_t>::success (std::move (reply_parts));
-      });
+      zlink::framework::test::channel_request_receiver (
+        [&] (message_parts_t parts, std::chrono::milliseconds timeout)
+          -> zlink::framework::request_task_t<zlink::framework::result_t<message_parts_t>> {
+            const auto header = envelope.decode_header (parts, false);
+            const auto body = envelope.decode_body (parts);
+            if (!header || !body || header.value ().kind != message_kind_t::request
+                || header.value ().channel_name != "route-mesh-channel"
+                || header.value ().message_name != route_request_t::packet_name || timeout != 37ms
+                || serializers.get<route_request_t> ()
+                       .deserialize (
+                         zlink::framework::detail::encoded_payload_from_raw (body.value ()))
+                       .value
+                     != 23) {
+                route_mesh_request_error =
+                  "RouteMesh request did not receive the encoded ChannelName call";
+                co_return zlink::framework::result_t<message_parts_t>::failure (
+                  framework_error_kind_t::internal_failure, route_mesh_request_error);
+            }
+            EXPECT_FALSE (header.value ().correlation_id.empty ());
+            ++route_mesh_request_count;
+            auto reply_header = header.value ();
+            reply_header.kind = message_kind_t::response;
+            reply_header.message_name = "channel-route.reply";
+            const auto serialized =
+              serializers.get<route_reply_t> ().serialize_with_content_type (route_reply_t{46});
+            reply_header.content_type = serialized.content_type;
+            auto reply_parts = envelope.encode_raw_body_parts (
+              reply_header, zlink::framework::detail::encoded_payload_to_raw (serialized.payload));
+            co_await zlink::framework::detail::request_admitted_t{};
+            co_return zlink::framework::result_t<message_parts_t>::success (
+              std::move (reply_parts));
+        }));
 
     runtime.bind_client_server_transport (
       "client-server-channel",
@@ -609,9 +614,10 @@ void verify_mesh_request_admission (bool to_spot)
     };
     runtime.bind_mesh_node_transport (
       "admission-mesh", {},
-      [&] (const zlink::routing_id_t &, message_parts_t parts, std::chrono::milliseconds) {
-          return submit (std::move (parts));
-      });
+      zlink::framework::test::request_receiver (
+        [&] (const zlink::routing_id_t &, message_parts_t parts, std::chrono::milliseconds) {
+            return submit (std::move (parts));
+        }));
     runtime.bind_spot_mesh_transport ("admission-mesh", {},
                                       [&] (const zlink::routing_id_t &, const std::string &spot_id,
                                            std::uint64_t generation, message_parts_t parts,

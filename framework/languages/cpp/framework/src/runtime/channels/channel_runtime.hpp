@@ -161,15 +161,16 @@ class channel_runtime_state_t
     using mesh_node_send_t = std::function<task_t<result_t<void>> (
       const zlink::routing_id_t &, runtime::messaging::message_parts_t)>;
     using mesh_node_request_t =
-      std::function<request_task_t<result_t<runtime::messaging::message_parts_t>> (
-        const zlink::routing_id_t &,
-        runtime::messaging::message_parts_t,
-        std::chrono::milliseconds)>;
+      std::function<void (const zlink::routing_id_t &,
+                          runtime::messaging::message_parts_t,
+                          std::chrono::milliseconds,
+                          request_receiver_t<runtime::messaging::message_parts_t>)>;
     using mesh_channel_send_t =
       std::function<task_t<result_t<void>> (runtime::messaging::message_parts_t)>;
     using mesh_channel_request_t =
-      std::function<request_task_t<result_t<runtime::messaging::message_parts_t>> (
-        runtime::messaging::message_parts_t, std::chrono::milliseconds)>;
+      std::function<void (runtime::messaging::message_parts_t,
+                          std::chrono::milliseconds,
+                          request_receiver_t<runtime::messaging::message_parts_t>)>;
     using client_server_send_t = std::function<task_t<void> (
       std::string, std::string, zlink::message_t, std::map<std::string, std::string>)>;
     using client_server_request_t =

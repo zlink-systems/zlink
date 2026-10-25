@@ -1987,6 +1987,22 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     tests/Zlink.Framework.UnitTests/test_cpp_framework_async_task.cpp
     "framework-unit;framework-regression;async")
   zlink_framework_cpp_add_boost_headers(test_cpp_framework_async_task)
+  add_executable(test_cpp_framework_request_completion_consumer
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_request_completion_consumer.cpp
+    tests/support/allocation_counter.cpp)
+  target_link_libraries(test_cpp_framework_request_completion_consumer PRIVATE zlink::framework)
+  target_link_zlink_test_harness(test_cpp_framework_request_completion_consumer)
+  target_include_directories(test_cpp_framework_request_completion_consumer PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_DIR}/tests/support)
+  find_package(Python3 REQUIRED COMPONENTS Interpreter)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_request_completion_consumer
+    COMMAND ${Python3_EXECUTABLE}
+      ${ZLINK_FRAMEWORK_CPP_DIR}/tests/support/run_request_completion_consumer.py
+      $<TARGET_FILE:test_cpp_framework_request_completion_consumer>
+    LABELS "framework-unit;framework-regression;messaging;resource"
+    TIER unit
+    TIMEOUT 30)
   add_zlink_framework_test(
     test_cpp_framework_completion_allocations
     tests/Zlink.Framework.UnitTests/test_cpp_framework_completion_allocations.cpp

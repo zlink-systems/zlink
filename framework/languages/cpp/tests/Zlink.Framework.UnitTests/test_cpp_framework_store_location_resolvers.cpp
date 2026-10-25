@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+#include "../support/request_admission_fixture.hpp"
 #include "../support/runtime_failure_fixture.hpp"
 
 #include "runtime/locations/in_memory_location_store.hpp"
@@ -73,7 +74,6 @@ using zlink::framework::runtime::location_auto_connect_host_service_t;
 using zlink::framework::runtime::location_runtime_t;
 using zlink::framework::runtime::store_location_resolvers_t;
 using zlink::framework::runtime::store_location_runtime_query_t;
-
 
 location_owner_token_t live_owner_token (zlink::framework::location_repository_t &store,
                                          const std::string &owner_id)
@@ -3802,7 +3802,8 @@ TEST (ZLinkFrameworkStoreLocationResolvers,
       zlink::framework::test::runtime_failure_builder ();
     auto mesh_first =
       zlink::framework::detail::channel_runtime_t::from (mesh_first_builder.message_bus ());
-    mesh_first.bind_mesh_channel_transport ("orders", mesh_send, mesh_request);
+    mesh_first.bind_mesh_channel_transport (
+      "orders", mesh_send, zlink::framework::test::channel_request_receiver (mesh_request));
     EXPECT_THROW (
       mesh_first.bind_client_server_transport ("orders", client_server_send, client_server_request),
       zlink::framework::framework_exception_t);
@@ -3814,7 +3815,8 @@ TEST (ZLinkFrameworkStoreLocationResolvers,
     client_server_first.bind_client_server_transport ("orders", client_server_send,
                                                       client_server_request);
     EXPECT_THROW (
-      client_server_first.bind_mesh_channel_transport ("orders", mesh_send, mesh_request),
+      client_server_first.bind_mesh_channel_transport (
+        "orders", mesh_send, zlink::framework::test::channel_request_receiver (mesh_request)),
       zlink::framework::framework_exception_t);
 }
 
@@ -4295,7 +4297,6 @@ TEST (ZLinkFrameworkStoreLocationResolvers, AppStreamHostStartsAndStopsTcpListen
     ASSERT_NE (nullptr, client_ptr);
     EXPECT_TRUE (client_ptr->observed) << client_ptr->last_error_message ();
 }
-
 
 /* The descriptor owner order checks above rely on this observation: only the
  * observed flow's reads count, and a wrong order or a read from another flow

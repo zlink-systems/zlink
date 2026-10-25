@@ -29,6 +29,12 @@ class stream_compression_codec_t;
 namespace detail
 {
 class stream_write_call_state_t;
+struct request_call_access_t;
+using request_call_submit_t = std::function<std::shared_ptr<task_completion_source_t<void>> (
+  const std::string &,
+  std::chrono::milliseconds,
+  const std::map<std::string, std::string> &,
+  request_receiver_t<zlink::message_t>)>;
 class stream_header_t;
 
 // Reject runtime execution contexts before a blocking terminal starts work.
@@ -161,7 +167,16 @@ class channel_request_call_t
                             submit_fn_t submit) :
         _packet_name (std::move (packet_name)),
         _serializers (serializers),
-        _submit (std::move (submit))
+        _submit (submit ? detail::request_call_submit_t (
+                            [submit = std::move (submit)] (
+                              const std::string &packet,
+                              std::chrono::milliseconds timeout,
+                              const metadata_map_t &metadata,
+                              detail::request_receiver_t<zlink::message_t> receiver) {
+                                return detail::request_task_access_t::receive (
+                                  submit (packet, timeout, metadata), std::move (receiver));
+                            })
+                        : detail::request_call_submit_t{})
     {
     }
 
@@ -193,27 +208,36 @@ class channel_request_call_t
   protected:
     template <typename TReply> request_task_t<TReply> start ()
     {
+        return start_projected<TReply> (
+          [serializers = _serializers] (const result_t<zlink::message_t> &reply) {
+              return decode<TReply> (serializers, reply.value ());
+          });
+    }
+
+    template <typename TReply, typename TProject>
+    request_task_t<TReply> start_projected (TProject project)
+    {
         if (!_submit) {
             return request_task_t<TReply> (
               result_t<TReply>::failure (framework_error_kind_t::protocol_error,
                                          "request call is not bound to a channel client"));
         }
-        /* `async()` and `yield()` are commonly called on a temporary returned
-         * by MessageBus::request(). The submit callable runs and returns
-         * before that temporary can be destroyed; every value the operation
-         * keeps afterwards is owned by the returned reply, never by this
-         * object. The reply is the selected operation's terminal decoded once
-         * (submit/completion §9, hot path E5); no task wraps it again. */
+        auto prepared =
+          detail::request_task_access_t::prepare<TReply, zlink::message_t> (std::move (project));
+        const auto fail = prepared.second.fail;
+        std::shared_ptr<task_completion_source_t<void>> admitted;
         try {
-            auto selected = _submit (_packet_name, _timeout, _metadata);
-            return detail::public_request_reply<TReply> (
-              selected, [serializers = _serializers] (const result_t<zlink::message_t> &reply) {
-                  return decode<TReply> (serializers, reply.value ());
-              });
+            admitted = _submit (_packet_name, _timeout, _metadata, std::move (prepared.second));
         }
         catch (...) {
-            return request_task_t<TReply> (detail::current_exception_result<TReply> ());
+            const auto failure = std::current_exception ();
+            admitted = std::make_shared<task_completion_source_t<void>> ();
+            fail.bind_admission (admitted);
+            admitted->complete (detail::result_access_t::failure<void> (failure));
+            fail (failure);
         }
+        detail::request_task_access_t::connect_admission (prepared.first, std::move (admitted));
+        return std::move (prepared.first);
     }
 
     template <typename TReply>
@@ -234,12 +258,8 @@ class channel_request_call_t
     }
     request_task_t<zlink::message_t> async_raw ()
     {
-        if (!_submit) {
-            return request_task_t<zlink::message_t> (result_t<zlink::message_t>::failure (
-              framework_error_kind_t::protocol_error,
-              "request call is not bound to a channel client"));
-        }
-        return _submit (_packet_name, _timeout, _metadata);
+        return start_projected<zlink::message_t> (
+          [] (const result_t<zlink::message_t> &reply) { return reply; });
     }
 
     const std::string &packet_name_value () const noexcept { return _packet_name; }
@@ -248,16 +268,34 @@ class channel_request_call_t
     serializer_registry_t *serializers () const noexcept { return _serializers; }
 
   private:
+    friend struct detail::request_call_access_t;
+    channel_request_call_t (detail::prepared_request_t,
+                            std::string packet_name,
+                            serializer_registry_t *serializers,
+                            detail::request_call_submit_t submit) :
+        _packet_name (std::move (packet_name)),
+        _serializers (serializers),
+        _submit (std::move (submit))
+    {
+    }
     std::string _packet_name;
     std::chrono::milliseconds _timeout{0};
     metadata_map_t _metadata;
     serializer_registry_t *_serializers = nullptr;
-    submit_fn_t _submit;
+    detail::request_call_submit_t _submit;
 };
-
 
 namespace detail
 {
+struct request_call_access_t
+{
+    static channel_request_call_t
+    make (std::string packet_name, serializer_registry_t *serializers, request_call_submit_t submit)
+    {
+        return channel_request_call_t (prepared_request_t{}, std::move (packet_name), serializers,
+                                       std::move (submit));
+    }
+};
 task_t<void> submit_one_way_task (std::function<result_t<void> ()> submit);
 
 task_t<void> submit_logical_multicast_task (std::function<result_t<void> ()> submit,
