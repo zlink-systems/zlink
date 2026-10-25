@@ -1432,9 +1432,9 @@ serial_execution_queue_t::take_application_suffix (
                           continue;
                       }
                       suffix.push_back (std::move (it->application_record));
-                      --_application.messages;
                       _application.bytes -= it->byte_cost;
                       it = _application.queue.erase (it);
+                      release_messages (_application);
                   }
               });
               if (!producer_cut || !owns_shared_gate ())
@@ -1448,9 +1448,9 @@ serial_execution_queue_t::take_application_suffix (
                       || !item->application_record)
                       continue;
                   suffix.push_back (std::move (item->application_record));
-                  --_application.messages;
                   _application.bytes -= item->byte_cost;
                   item.reset ();
+                  release_messages (_application);
               }
           };
           if (producer_cut) {
@@ -1665,8 +1665,6 @@ serial_execution_queue_t::cancel_submission_owned (serial_submission_id_t submis
               });
             if (item == lane.queue.end ())
                 return false;
-            if (lane.messages > 0)
-                --lane.messages;
             if (owns_shared_gate ())
                 lane.bytes.fetch_sub (item->byte_cost, std::memory_order_acq_rel);
             else if (item->byte_cost <= lane.bytes)
@@ -1680,8 +1678,8 @@ serial_execution_queue_t::cancel_submission_owned (serial_submission_id_t submis
                   lane.queue.erase (item);
               },
               &*item);
-            if (owns_shared_gate ())
-                lane.messages.notify_all ();
+            if (lane.messages > 0)
+                release_messages (lane);
             return true;
         };
 
@@ -2250,13 +2248,11 @@ void serial_execution_queue_t::cancel_pending_owned () noexcept
                   });
                 lane.queue.erase (end, lane.queue.end ());
             });
-            lane.messages -= removed;
             if (owns_shared_gate ())
                 lane.bytes.fetch_sub (queued_bytes, std::memory_order_acq_rel);
             else
                 lane.bytes = queued_bytes <= lane.bytes ? lane.bytes - queued_bytes : 0;
-            if (owns_shared_gate ())
-                lane.messages.notify_all ();
+            release_messages (lane, removed);
         };
         clear_queued (_application);
         clear_queued (_lifecycle);
@@ -2516,6 +2512,13 @@ serial_execution_queue_t::lane_locked (serial_work_lane_t lane) const noexcept
     return lane == serial_work_lane_t::application ? _application : _lifecycle;
 }
 
+void serial_execution_queue_t::release_messages (lane_state_t &lane, std::size_t count) noexcept
+{
+    lane.messages -= count;
+    if (owns_shared_gate ())
+        lane.messages.notify_all ();
+}
+
 bool serial_execution_queue_t::enqueue_locked (std::string name,
                                                async_work_t work,
                                                serial_work_options_t options,
@@ -2544,8 +2547,8 @@ bool serial_execution_queue_t::enqueue_locked (std::string name,
         lane.bytes += bytes;
         if (publish_locked (std::move (node)))
             return true;
-        --lane.messages;
         lane.bytes -= bytes;
+        release_messages (lane);
         return false;
     }
     mutate_fifo_locked (
@@ -2559,8 +2562,8 @@ bool serial_execution_queue_t::enqueue_locked (std::string name,
     if (schedule_drain_locked ())
         return true;
     mutate_fifo_locked (lane, [&] { lane.queue.pop_back (); }, &lane.queue.back ());
-    --lane.messages;
     lane.bytes -= bytes;
+    release_messages (lane);
     return false;
 }
 
@@ -2804,9 +2807,8 @@ void serial_execution_queue_t::disconnect_actor_head (
         if (found == lane->queue.end ())
             continue;
         mutate_fifo_locked (*lane, [&] { lane->queue.erase (found); }, &*found);
-        --lane->messages;
         lane->bytes.fetch_sub (fixed_work_byte_cost, std::memory_order_acq_rel);
-        lane->messages.notify_all ();
+        release_messages (*lane);
     }
 }
 
@@ -3065,10 +3067,9 @@ void serial_execution_queue_t::complete_one (std::string name,
             _handler_turns.pop_back ();
         if (_active_lane) {
             auto &lane = lane_locked (*_active_lane);
-            if (lane.messages > 0)
-                --lane.messages;
             lane.bytes.fetch_sub (_active_bytes, std::memory_order_acq_rel);
-            lane.messages.notify_all ();
+            if (lane.messages > 0)
+                release_messages (lane);
         }
         _active_lane.reset ();
         _active_bytes = 0;
@@ -3090,12 +3091,12 @@ void serial_execution_queue_t::complete_one (std::string name,
         }
         if (_active_lane) {
             auto &lane = lane_locked (*_active_lane);
-            if (lane.messages > 0)
-                --lane.messages;
             if (_active_bytes <= lane.bytes)
                 lane.bytes -= _active_bytes;
             else
                 lane.bytes = 0;
+            if (lane.messages > 0)
+                release_messages (lane);
         }
         _active_lane.reset ();
         _active_bytes = 0;

@@ -398,6 +398,7 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
                                        std::function<void ()> work);
     lane_state_t &lane_locked (serial_work_lane_t lane) noexcept;
     const lane_state_t &lane_locked (serial_work_lane_t lane) const noexcept;
+    void release_messages (lane_state_t &lane, std::size_t count = 1) noexcept;
     bool enqueue_locked (std::string name,
                          async_work_t work,
                          serial_work_options_t options,
