@@ -512,6 +512,7 @@ warmup은 공용 `WARMUP_SECONDS`(기본값 2초) 동안 같은 패턴을 warmup
 전체 경과 시간은 부하 시간 30초보다 길며 원본에 남긴다. 이후 5초 회차 중 source와 target 모두 측정 구간과 겹친
 `jdk.Compilation`이 0인 회차를 시간순으로 3개 선택한다. 처리량은 선택 기준이 아니다.
 이 반복은 같은 JVM을 사용하므로 §10.4의 셀마다 새 process를 사용하는 기본 결과와 구분한다.
+측정 CPU `0-3`과 분석 CPU `4-15` 고정은 이 측정 머신의 `measure-lock` 기준이다.
 
 구간은 driver가 기록한 `active_started_at_ns`부터 `active_ended_at_ns`까지이며,
 request 완료 판정과 처리량 분모, JFR의 `measure.Phase`가 같은 구간을 사용한다. send의

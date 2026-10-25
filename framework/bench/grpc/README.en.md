@@ -550,6 +550,7 @@ The runner then selects the first three five-second windows
 with zero overlapping `jdk.Compilation` events in both source and target. Throughput is not a
 selection criterion. Repetitions share a JVM pair and are distinct from the default fresh-process
 cells in §10.4.
+Pinning measurement CPUs to `0-3` and analysis CPUs to `4-15` follows this measurement machine's `measure-lock`.
 
 The driver records `active_started_at_ns` and `active_ended_at_ns`. Request completion accounting,
 the throughput denominator, and the JFR `measure.Phase` event use that same interval.
