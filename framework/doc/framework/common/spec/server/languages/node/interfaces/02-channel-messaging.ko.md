@@ -202,6 +202,45 @@ surface와 `outcome=dropped`를 기록한다. `instanceSpotType`에는 startup�
 않는다. Reason과 action은 message-flow tracing 계약의 닫힌 값으로 기록하지만 이를 public DTO나 callback
 type으로 노출하지 않는다.
 
+### 2.1 Handler가 받는 message 클래스
+
+```ts
+export type ZLinkMessageTypeResolver<T = unknown> = Type<T> | (() => Type<T>);
+```
+
+TypeScript의 인자 annotation은 runtime에 남지 않으므로 Framework는 이를 수신 형식 등록으로
+쓰지 않는다. 수신 message를 인자로 받는 handler 클래스는 static `messageType`
+(`ZLinkMessageTypeResolver`)로 수신 message 클래스를 선언한다. 대상은 Channel·RouteMesh의
+send·request handler, classic fanout의 publish handler, Spot·Entry Spot·Instance Spot의
+packet·request·subscription handler, Spot의 Actor send·request handler와 Actor handler이며,
+Nest decorator와 builder로 등록한 같은 handler도 포함한다. 함수 형태는 순환 import 때문에 클래스를 나중에 읽어야 할 때 쓰며, Framework는 그 handler의 첫 decode에서
+한 번 불러 결과를 등록에 두고 다시 부르지 않는다.
+
+```ts
+@ZLinkPacket('TableView')
+export class TableView { tableId = ''; seats: string[] = []; }
+
+export class TableViewHandler implements ZLinkSpotActorSendHandler<Room, Player, TableView> {
+ static readonly messageType = TableView;
+ async handle(spot: Room, actor: Player, context: ZLinkMessageContext, message: TableView): Promise<void> {
+  await actor.context.boundSession.send(message).submit(); // TableView packet으로 나간다.
+ }
+}
+```
+
+- Framework는 handler를 등록할 때 `messageType`을 그 handler의 등록 정보에 보관하고, 수신
+  payload를 decode할 때 그 클래스를 공통 decode에 넘긴다. 기본 JSON codec은 constructor를
+  호출하지 않고 그 클래스의 prototype으로 값을 한 번 만든다. Custom serializer에는 같은 클래스를
+  type 인자로 넘긴다.
+- `messageType`이 없는 handler에는 추가 클래스 복원을 하지 않는다. 기본 JSON codec의 객체
+  payload는 구조적 객체로 전달한다. Packet 이름을 제공하지 못하는 값을 typed send에 그대로
+  넘기면 `ZLinkConfigurationException`으로 끝난다. Custom serializer에는 지금처럼 `Object`를
+  type 인자로 넘기고 반환값을 그대로 전달한다.
+- 클래스 선택은 handler 등록 단위로 한다. Packet 이름만으로 process 전체에서 클래스를 고르지
+  않는다.
+- STREAM session handler는 `ZLinkMessage`를 받고 `decode(type)`로 형식을 정하므로 이 규칙의
+  대상이 아니다.
+
 ## 3. Location peer와 Logical Multicast
 
 ```ts

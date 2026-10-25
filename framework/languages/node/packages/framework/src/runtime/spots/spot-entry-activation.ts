@@ -262,7 +262,7 @@ export class ZLinkEntrySpotActivation {
 
   dispatchPacketEncoded(
     packetName: string | undefined,
-    decodePayload: () => unknown,
+    decodePayload: (messageType?: Type) => unknown,
     context: { readonly channelName: string; readonly contentType?: string },
     returnResponse: boolean
   ): Promise<unknown> {
