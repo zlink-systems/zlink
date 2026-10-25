@@ -138,3 +138,28 @@ test('debug guard rejects a bound Session target installed outside its owner met
     /must be installed by installBoundSessionBinding/u
   );
 });
+
+test('structural error identifies the current turn and the awaited lane work after chaining', async () => {
+  const outer = new ZLinkStateLane();
+  const inner = new ZLinkStateLane();
+  try {
+    await assert.rejects(
+      outer.run(async function loginTurn() {
+        await inner
+          .run(function prepareLobby() {
+            return 42;
+          })
+          .catch(() => 0)
+          .finally(() => {});
+      }),
+      (error) => {
+        assert.match(error.message, /current turn:.*lane.*loginTurn/u);
+        assert.match(error.message, /another state lane completion.*lane.*prepareLobby/u);
+        assert.match(error.message, /state-lane-structure-guard\.test\.js/u);
+        return true;
+      }
+    );
+  } finally {
+    await Promise.all([outer.dispose(), inner.dispose()]);
+  }
+});
