@@ -321,12 +321,6 @@ public:
  task_t<void> notify_disconnected();
 };
 
-`relay(...)` is the common contract's one-way push. `relay_request(...)` and the `packet_name`
-overloads are C++-only surfaces; the common [Session–Actor binding](../../../04-session/02-session-actor-binding.en.md)
-defines no Actor-to-session request. The `relay_request_call_t` result is an encoded `message_t` that holds the
-received reply bytes unchanged. The application reads it with `decode<T>()` or passes it to `reply_packet` without
-encoding it again. Aligning this surface with the other languages is a 0.18.0 candidate.
-
 class session_actor_manager_t {
 public:
  std::vector<session_actor_t> bound() const;
@@ -337,6 +331,12 @@ public:
 
 } // namespace zlink::framework
 ```
+
+`relay(...)` is the common contract's one-way push. `relay_request(...)` and the `packet_name`
+overloads are C++-only surfaces; the common [Session–Actor binding](../../../04-session/02-session-actor-binding.en.md)
+defines no Actor-to-session request. The `relay_request_call_t` result is an encoded `zlink::framework::message_t`
+that holds the received reply bytes unchanged. The application reads it with `decode<T>()` or passes it to
+`reply_packet` without encoding it again.
 
 Bind sends a control request only once, to the ActorRef location
 the caller submitted. On a stale/moving result, it doesn't look up the
