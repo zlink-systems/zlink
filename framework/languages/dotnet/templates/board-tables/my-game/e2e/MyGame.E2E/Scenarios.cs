@@ -91,6 +91,28 @@ internal static class Scenarios
         );
         var session1 = await p1.SessionAsync(ct);
         var session2 = await p2.SessionAsync(ct);
+
+        var packetRejected = p2.WaitAsync<ActionRejected>(
+            rejection => rejection.Reason == Rejection.PacketNotAllowed,
+            ct
+        );
+        await p2.SendAsync(new HandResult(0, 0, [], [], []), ct);
+        var internalPacket = await packetRejected;
+        Require(
+            internalPacket.RetryAfterMs == 0,
+            "Packet rejection included a retry delay."
+        );
+        var unchangedAfterPacket = await p2.ViewAsync(
+            view => view.TableId == table && !view.InHand,
+            ct
+        );
+        SameState(joined2, unchangedAfterPacket);
+        var emptyBeforeHand = await p2.WaitAsync<HandDealt>(
+            dealt => dealt.HandNumber == joined2.HandNumber && dealt.Cards.Length == 0,
+            ct
+        );
+        Require(emptyBeforeHand.Cards.Length == 0, "An idle table returned private cards.");
+
         var cards1 = p1.WaitAsync<HandDealt>(_ => true, ct);
         var cards2 = p2.WaitAsync<HandDealt>(_ => true, ct);
         var started1 = p1.WaitAsync<TableView>(view => view.InHand && view.TurnSeat == 0, ct);
@@ -118,10 +140,51 @@ internal static class Scenarios
         {
             var rejected = p2.WaitAsync<ActionRejected>(_ => true, ct);
             await p2.SendAsync(new BetRequest(hand2.HandNumber, SecondBet), ct);
+            var outOfTurn = await rejected;
             Require(
-                (await rejected).Reason == Rejection.NotYourTurn,
+                outOfTurn.Reason == Rejection.NotYourTurn && outOfTurn.RetryAfterMs == 0,
                 "Wrong out-of-turn rejection."
             );
+            var unchangedAfterOutOfTurn = await p2.ViewAsync(
+                view => view.InHand && view.TurnSeat == 0 && view.Pot == 0,
+                ct
+            );
+            SameState(before2, unchangedAfterOutOfTurn);
+
+            var overLimit = p1.WaitAsync<ActionRejected>(
+                rejection => rejection.Reason == Rejection.IntegerOutOfRange,
+                ct
+            );
+            await p1.SendAsync(
+                new BetRequest(hand1.HandNumber, GameNames.MaxContractInteger + 1),
+                ct
+            );
+            var overLimitRejection = await overLimit;
+            Require(overLimitRejection.RetryAfterMs == 0, "Integer rejection included a retry delay.");
+            var unchangedAfterLimit = await p1.ViewAsync(
+                view => view.InHand && view.TurnSeat == 0 && view.Pot == 0,
+                ct
+            );
+            SameState(before1, unchangedAfterLimit);
+
+            var invalidAmount = p1.WaitAsync<ActionRejected>(
+                rejection => rejection.Reason == Rejection.InvalidAmount,
+                ct
+            );
+            await p1.SendAsync(
+                new BetRequest(hand1.HandNumber, GameNames.InitialChips + 1),
+                ct
+            );
+            var invalidAmountRejection = await invalidAmount;
+            Require(
+                invalidAmountRejection.RetryAfterMs == 0,
+                "Invalid amount rejection included a retry delay."
+            );
+            var unchangedAfterAmount = await p1.ViewAsync(
+                view => view.InHand && view.TurnSeat == 0 && view.Pot == 0,
+                ct
+            );
+            SameState(before1, unchangedAfterAmount);
         }
         var amount1 = scenario == "table" ? FirstBet : ContinuityBet;
         var turn1 = p1.WaitAsync<TableView>(
@@ -210,7 +273,7 @@ internal static class Scenarios
         foreach (var message in client.Received)
         {
             Require(message is not HandResult, "Cards were revealed before settlement.");
-            if (message is HandDealt dealt)
+            if (message is HandDealt dealt && dealt.Cards.Length != 0)
                 Require(Equal(dealt, own), "Another player's cards were disclosed.");
             if (message is TableView view)
                 Require(
@@ -252,6 +315,10 @@ internal static class Scenarios
                 ),
             "Revealed cards differ."
         );
+        Require(
+            result.Seats.All(seat => seat.CardCount == 0),
+            "Settlement retained a private card count."
+        );
         var scores = result
             .Hands.Select(hand =>
                 (
@@ -283,14 +350,23 @@ internal static class Scenarios
         );
         foreach (var client in new[] { p1, p2 })
         {
-            var settled = await client.WaitAsync<TableView>(
+            var settledTask = client.WaitAsync<TableView>(
                 view => !view.InHand && view.HandNumber == hand1.HandNumber,
                 ct
             );
+            var emptyHandTask = client.WaitAsync<HandDealt>(
+                dealt => dealt.HandNumber == hand1.HandNumber && dealt.Cards.Length == 0,
+                ct
+            );
+            await client.SendAsync(new TableViewRequest(), ct);
+            var settled = await settledTask;
+            var emptyHand = await emptyHandTask;
             Require(
                 settled.Pot == 0
                     && settled.TurnSeat == GameNames.NoSeat
-                    && Equal(settled.Seats, result.Seats),
+                    && Equal(settled.Seats, result.Seats)
+                    && settled.Seats.All(seat => seat.CardCount == 0)
+                    && emptyHand.Cards.Length == 0,
                 "Final public state differs from settlement."
             );
         }

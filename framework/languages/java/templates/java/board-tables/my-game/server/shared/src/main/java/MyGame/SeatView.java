@@ -1,3 +1,3 @@
 package MyGame;
 
-public record SeatView(int seat, String playerId, int chips, boolean acted, int cardCount) {}
+public record SeatView(int seat, String playerId, long chips, boolean acted, int cardCount) {}

@@ -28,7 +28,7 @@ The Framework package is pinned to `0.30.2` and the binding to `1.20.0`. Copy on
 pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
 ```
 
-This compiles TypeScript and generates the Framework default typed JSON schema from the contract DTOs. The server loads the generated schema through the public `ZLinkPacket` registration path. Do not add per-message codecs.
+This compiles TypeScript and generates the Framework default typed JSON schema from the contract DTOs. The server loads the generated schema through the public `ZLinkPacket` registration path. `--build-only` also runs the seven domain checks and prints `Domain checks: 7/7`; it does not start nodes. Do not add per-message codecs.
 
 ## Docker e2e
 
@@ -54,7 +54,19 @@ Both scripts build Docker images and execute the same runner in a container. Aft
 | reconnect | A new Session restores the same Actor ID, generation, seat, chips, cards, and turn.                                                                           |
 | update    | PlannedMaintenance drain, RELOCATED and SAFE_TO_SHUTDOWN, connection and state preserved, and a new hand completes on the replacement process after shutdown. |
 
-Results print as `✓ <id>` or `✗ <id>` followed by `Scenarios: N/M passed`. A failure or a cleanup failure returns exit code 1. The node stderr and client JSONL of the first failure are retained. Node stderr records dispatch `Normal` message flow through the OpenTelemetry log exporter.
+The E2E runner prints `Domain checks: 7/7`, then `✓ <id>` or `✗ <id>` and `Scenarios: N/M passed`. A failure or a cleanup failure returns exit code 1. The node stderr and client JSONL of the first failure are retained. Node stderr records dispatch `Normal` message flow through the OpenTelemetry log exporter.
+
+## Scenarios
+
+| Scenario | Verified behavior |
+| --- | --- |
+| `table` | Seats, chips, private cards, and settlement. The Session rejects a client-sent `HandResult`; out-of-turn, `integer-out-of-range`, and insufficient-chip bets are also rejected with `retryAfterMs: 0`. Each rejection leaves the table state unchanged. Settlement reports `cardCount: 0` for every seat, and a private-hand query returns an empty list. |
+| `reconnect` | The new Session keeps the same Actor and seat, receives the current hand, and settles with every hand cleared. A post-settlement private-hand query is empty. |
+| `update` | Both clients retain their connection and game state through relocation. The hand settles on the replacement node with every hand cleared; a post-settlement private-hand query is empty. The replacement then hosts a new table. |
+
+The runner executes these scenarios in the order listed in `zlink.structure.json`.
+
+The Node contract represents `handNumber`, bet `amount`, `chips`, and `pot` as `bigint`. The default Framework JSON serializer carries those `int64` values as decimal strings. `ActionRejected.retryAfterMs` is an `int32` JSON number.
 
 To check only the structure, run `./run-e2e.sh --check-structure` or `pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure`. The checker validates the actual structure and configuration files and does not run its own self-tests.
 
@@ -84,6 +96,8 @@ npm run format:check
 node --test dist/e2e/domain.test.js
 ```
 
+The domain test reports `Domain checks: 7/7` after all seven checks pass.
+
 When extending, follow the public API boundaries and state ownership rules in [AGENTS.md](AGENTS.md).
 
 ## Windows
@@ -94,6 +108,14 @@ The e2e runner sets each node's optional `tableCapacity` to the number of select
 
 ## 한국어 실행 안내
 
-기본 빌드와 e2e는 Docker에서 runner와 node를 실행한다. Bash는 `./run-e2e.sh`, PowerShell 7은 `pwsh -NoProfile -File ./run-e2e.ps1`을 사용한다. 로컬 프로세스 디버깅은 Node.js와 npm을 설치한 뒤 `--local` 또는 `-Local`로 실행한다. Docker 빌드·정리 로그는 `.logs/docker-<project>/`에 남는다.
+기본 빌드와 e2e는 Docker에서 runner와 node를 실행한다. Bash는 `./run-e2e.sh`, PowerShell 7은 `pwsh -NoProfile -File ./run-e2e.ps1`을 사용한다. 로컬 프로세스 디버깅은 Node.js와 npm을 설치한 뒤 `--local` 또는 `-Local`로 실행한다. `--build-only`는 일곱 도메인 검사를 실행하고 `Domain checks: 7/7`을 출력한 뒤 종료한다. Docker 빌드·정리 로그는 `.logs/docker-<project>/`에 남는다.
 
-이 프로젝트는 Session node와 Table node 두 개, 그리고 Redis Location Store를 실행한다. `run-e2e.sh`와 `run-e2e.ps1`은 같은 runner를 사용하며, 착석과 카드 비공개, 재접속, node 교체(update)를 공개 stream connector로 확인한 뒤 자신이 시작한 process와 Compose project를 정리한다. 처음에는 `./run-e2e.sh --build-only`로 빌드하고, 전체 시나리오 또는 `--scenario table,reconnect`로 선택하여 실행한다. 실패하면 종료 코드 1을 반환하고 첫 실패의 node stderr와 client JSONL을 `.logs/run-<id>/` 아래에 남긴다. 공개 Framework 0.30.2 패키지로 검증했다. 게임 규칙을 추가할 위치와 공개 API 사용 규칙은 `AGENTS.md`를 따른다.
+이 프로젝트는 Session node 하나, Table node 두 개, Redis Location Store를 실행한다. 실행기는 `table`·`reconnect`·`update` 시나리오를 순서대로 확인하고 자신이 시작한 process와 Compose project를 정리한다.
+
+`table`은 client가 보낸 내부 `HandResult` 패킷을 `packet-not-allowed`로 거부한다. 차례 위반·`integer-out-of-range`·칩 부족 베팅도 거부하고, 각 거부 뒤 상태가 바뀌지 않았는지 확인한다. 모든 거부 응답은 `ActionRejected(reason, retryAfterMs)`이며 현재 `retryAfterMs`는 0이다. 정산 응답에서 모든 좌석의 `cardCount`가 0인지 확인하고, 정산 뒤 개인 패 조회가 빈 목록을 반환하는지도 검사한다. `reconnect`와 `update`는 상태를 유지한 채 정산하고 같은 빈 패 결과를 확인한다.
+
+Node 계약의 `handNumber`, 베팅 `amount`, `chips`, `pot`은 `bigint`로 표현한다. 기본 Framework JSON serializer는 해당 `int64` 값을 10진 문자열로 전달한다. `ActionRejected.retryAfterMs`는 JSON `int32` 정수다.
+
+도메인 시험의 일곱 검사가 모두 통과하면 `Domain checks: 7/7`을 출력한다.
+
+전체 시나리오 또는 `--scenario table,reconnect`로 선택하여 실행한다. 실패하면 종료 코드 1을 반환하고 첫 실패의 node stderr와 client JSONL을 `.logs/run-<id>/` 아래에 남긴다. 공개 Framework 0.30.2 패키지로 검증했다. 게임 규칙을 추가할 위치와 공개 API 사용 규칙은 `AGENTS.md`를 따른다.

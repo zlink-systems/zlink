@@ -87,42 +87,18 @@ Actor가 소속 Spot을 바꾸는 동작은 membership 변경이다. 대상 Spot
 5. 재접속하면 새 Session이 `JoinTableRequest`를 다시 보낸다. `Rejoin` handler가 테이블 view와 플레이어의 카드를 binding된 Session으로 직접 보낸다.
 6. node를 교체할 때 `runHost`의 `drain` 명령이 relocation을 요청한다. Framework는 `TableRelocation`의 `capture`로 게임 상태를 받아 다른 node에서 `restore`한다.
 
-## 이 샘플을 보며 개발하기
+## 도메인 확장
 
-이 샘플은 기능들이 함께 동작하는 방식을 보여 주므로, 자기 게임으로 바꾸지 않고 읽고 실행하는 용도로 쓴다. 자기 프로젝트는 Node.js 기본 셋업에서 시작한다. [ZLink Start](https://zlink.systems/start)의 Initializer에서 Node.js를 고르거나 ZLink 저장소의 `framework/languages/node/templates/starter/my-game`을 사용한다. 그다음 필요한 기능을 이 샘플에서 하나씩 옮긴다. 구조 선택은 기본 셋업의 `AGENTS.md`가 설명하며, 이 절은 `board-tables`만 다룬다. 이 샘플은 바꾸지 않고 프로젝트 옆에 참고용으로 둔다.
+이 템플릿의 도메인을 확장하여 보드게임 서버를 만든다. `server/table/domain/table-state.ts`의 `TableState`가 테이블 상태와 게임 규칙을 판정한다.
 
-### 샘플 먼저 실행하기
+### 규칙 추가
 
-옮기기 전에 [개발 명령](#개발-명령)으로 빌드와 e2e를 한 번 실행해 받은 샘플이 동작하는지 확인하고 동작을 본다. 이 결과가 이후 비교의 기준이 된다. 실패하면 먼저 [README](README.md)의 Known issues와 대조한다.
+1. 새 request·result class는 `server/shared/messages.ts`에 추가한다. 패킷 이름과 거부 사유는 `server/shared/constants.ts`에 두고, 공통 정수 상한은 계약 파일인 `messages.ts`에 둔다.
+2. 상태와 규칙은 `TableState`에 추가한다. Framework callback과 I/O는 `server/table/infrastructure/`에 두고, application snapshot은 `TableRelocation`으로 보존한다. 시간 규칙을 추가할 때는 `TableState` 한 곳에서 단조 시계로 판정하고, 시험 시계는 생성자로만 받으며, snapshot에는 프로세스 절대 시각이 아니라 남은 ms를 저장한다.
+3. client가 보낼 수 있는 request만 `server/session/session.ts`의 허용 목록에 추가한다. 나머지 패킷은 `packet-not-allowed`로 거부한다.
+4. client 관찰은 `e2e/client.mts`, 도메인 경계 시험은 `e2e/domain.test.ts`에 추가한다. `table`·`reconnect`·`update` 시나리오와 순서를 유지하고 README 표 및 `zlink.structure.json`의 `run.scenarios`와 맞춘다.
 
-### 옮길 기능
-
-기능 이름은 기본 셋업 `AGENTS.md`의 기능 표와 같다. 경로는 이 디렉터리를 기준으로 한다. 기본 셋업에는 Session node 하나와 `connect` 시나리오만 있으므로, 마지막 열은 기능마다 기본 셋업에서 함께 늘릴 것이다.
-
-| 기능            | 이 샘플의 파일                                                                                                                                                                                                        | 옮길 것                                                                                                                                                                                                                      | 기본 셋업에서 함께 늘릴 것                                                                                                                                           |
-| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Typed 메시지    | `server/shared/messages.ts`                                                                                                                                                                                           | 사용할 기능의 class: `JoinTableRequest`, `TableViewRequest`, `StartHandRequest`, `BetRequest`, `TableView`, `HandDealt`, `HandResult`, `ActionRejected`. `SessionInfoRequest`·`SessionInfo`는 client가 필요로 할 때만 옮긴다 | `server/shared/constants.ts`의 `PacketNames` 패킷 이름, `Names`의 등록 이름, `Reasons`의 거부 사유                                                                   |
-| Actor           | `server/table/infrastructure/player.ts`                                                                                                                                                                               | 참가 완료 처리를 가진 `Player`, `PlayerFactory`, application 상태가 없어 빈 payload를 쓰는 `PlayerRelocation`                                                                                                                | `main.ts`를 가진 새 `server/table/` 프로젝트와 `server/config/` 파일, Actor factory 등록. `server/shared/constants.ts`의 `NodeEntrypoints`에 `table` 항목. 구조 검사 |
-| Spot            | `server/table/infrastructure/table.ts`, `server/table/domain/table-state.ts`                                                                                                                                          | 참가 수락, view, 발행을 가진 `Table`과 좌석·칩·덱·차례·정산을 가진 `TableState`                                                                                                                                              | `server/table/main.ts`의 Spot factory 등록. `zlink.structure.json`의 `spots`·`nodes` 선언과, 기본 셋업에서는 Spot 0개를 단정하는 구조 검사를 등록과 비교하도록 확장  |
-| Entry·첫 입장   | `server/table/infrastructure/table.ts`의 `Entry`, `server/table/infrastructure/handlers.ts`의 `EntryJoin`·`Rejoin`                                                                                                    | `EntryJoin`의 identity 확인, 동적 Table의 `getOrCreate`, 지연 참가. `Rejoin`의 identity 확인과 재접속 뒤 상태 재전송                                                                                                         | Entry Spot 등록과 `entry` 선언, 동적 `table` Spot 선언. `table` 시나리오와 재접속 뒤 상태를 비교하는 `reconnect` 시나리오                                            |
-| Session binding | `server/session/session.ts`                                                                                                                                                                                           | 첫 패킷 검사, Actor 조회·생성, binding과 원래 typed 패킷 relay, `SessionInfo` 응답                                                                                                                                           | `EntryJoin`과 같은 첫 패킷 이름. 기본 셋업의 `session.ts`에 옮긴다                                                                                                   |
-| Host relocation | `server/table/infrastructure/table.ts`의 `TableRelocation`, `server/table/infrastructure/player.ts`의 `PlayerRelocation`, `server/shared/constants.ts`의 `Control`과 `server/shared/hosting.ts`의 `runHost` 제어 loop | snapshot adapter의 `capture`·`restore`. `drain`·`shutdown`은 기본 셋업에 이미 있다                                                                                                                                           | `preserveStateWith` 등록. 서버 교체 뒤에도 연결·상태가 유지되고 대체 node가 새 테이블을 호스팅하는지 판정하는 `update` 시나리오                                      |
-
-기본 셋업 표의 `동적 던전` 기능은 User Spot을 필요할 때 생성하는 방식이다. 이 샘플에서는 같은 방식으로 `EntryJoin`이 `Table`을 생성하므로 `Entry·첫 입장` 행에 포함된다.
-
-### 옮기는 순서와 규칙
-
-기능은 표의 행 하나씩 옮기고, 하나를 옮길 때마다 빌드, 구조 검사, 관련 e2e 시나리오를 실행한다. 시나리오 ID는 `server/shared/constants.ts`의 `Scenarios` 목록, `zlink.structure.json`의 `run.scenarios`, `run.commands`의 시나리오 선택 예시에 함께 추가한다. 판정은 실제로 받은 응답과 이벤트로 하고, 고정 대기나 기한 확대로 통과시키지 않는다.
-
-메시지 contract부터 옮긴다. `messages.ts`에 class를 먼저 정의한 뒤, 컴파일 오류가 나는 handler를 하나씩 새 메시지로 옮긴다. build는 `server/shared`에서 packet schema를 생성하므로 다른 위치에 정의한 메시지는 등록되지 않는다. 첫 입장 패킷을 바꾸면 `Session`의 첫 패킷 검사, `EntryJoin`, `Rejoin`이 같은 패킷을 받도록 함께 고친다.
-
-상태는 그 상태를 결정하는 객체에 둔다. 테이블 상태는 `TableState`에 두고 `Player`에는 두지 않는다. 상태 필드를 바꿀 때는 `TableSnapshot`과 `TableRelocation` adapter를 함께 고친다. 빠뜨린 필드는 relocation 뒤 사라지고, `update` 시나리오가 그 손실을 잡는다.
-
-Spot 타입은 등록과 선언을 같은 변경에서 함께 추가한다. `server/table/main.ts`의 factory 등록과 `zlink.structure.json`의 `spots` 선언이다. 둘이 다르면 구조 검사가 실패한다.
-
-Table 같은 역할 이름을 이 샘플과 다르게 정하려면 class 이름, `Names`, `server/config/`, `zlink.structure.json`을 한 번에 바꾼다. 이름 변경은 기능을 옮기는 변경과 나눠서 진행하면 실패 원인을 찾기 쉽다.
-
-옮긴 뒤 `update`가 실패하면 snapshot에 빠진 상태가 있는지 먼저 확인한다. 그다음 [디버깅](#디버깅)의 message flow로 첫 실패 단계를 찾는다.
+server가 요청을 검증하고 결과를 계산한다. `9,007,199,254,740,991`을 넘는 값과 계산 결과는 상태를 바꾸기 전에 거부한다. 거부된 행동은 값·순번·쿨다운을 바꾸지 않는다. `ActionRejected`에는 `reason`과 `retryAfterMs`를 둔다. 시간 제한 거부가 아니면 `retryAfterMs`는 0이며, client는 server가 준 양수 대기 시간만 기다린다. 시나리오를 통과시키려고 고정 대기나 기한을 늘리지 않는다.
 
 ## 개발 시 주의점
 

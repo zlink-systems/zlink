@@ -97,7 +97,7 @@ export class Start {
     _request: StartHandRequest
   ): Promise<void> {
     const reason = spot.state.start(actor.context.actorId);
-    if (reason) await actor.context.boundSession.send(new ActionRejected(reason)).submit();
+    if (reason) await actor.context.boundSession.send(new ActionRejected(reason, 0)).submit();
     else await spot.deal();
   }
 }
@@ -116,7 +116,7 @@ export class Bet {
   ): Promise<void> {
     const result = spot.state.bet(actor.context.actorId, request.handNumber, request.amount);
     if (typeof result === 'string')
-      await actor.context.boundSession.send(new ActionRejected(result)).submit();
+      await actor.context.boundSession.send(new ActionRejected(result, 0)).submit();
     else await spot.publish(result ?? null);
   }
 }

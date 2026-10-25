@@ -14,7 +14,7 @@ class Player(override val context: ZLinkActorContext) : ZLinkSuspendingActor() {
         when (completion) {
             is ZLinkActorJoinCompletion.Accepted -> Unit
             is ZLinkActorJoinCompletion.Rejected ->
-                context.boundSession().kotlin().send(ActionRejected(Rules.TABLE_FULL)).await()
+                context.boundSession().kotlin().send(ActionRejected(Rules.TABLE_FULL, 0)).await()
             is ZLinkActorJoinCompletion.Failed -> error("Join failed: ${completion.kind()}")
         }
     }

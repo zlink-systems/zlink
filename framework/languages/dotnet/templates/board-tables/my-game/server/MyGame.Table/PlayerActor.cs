@@ -13,7 +13,7 @@ public sealed class PlayerActor(IZLinkActorContext context) : IZLinkActor
     )
     {
         if (completion is ZLinkActorJoinCompletion.Rejected)
-            await Context.BoundSession.Send(new ActionRejected(Rejection.TableFull)).Async();
+            await Context.BoundSession.Send(new ActionRejected(Rejection.TableFull, 0)).Async();
         else if (completion is ZLinkActorJoinCompletion.Failed failed)
             throw new InvalidOperationException($"Table join failed: {failed.Kind}.");
     }

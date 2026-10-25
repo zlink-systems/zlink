@@ -11,8 +11,9 @@ import type {
 } from '@zlink-systems/framework';
 import { NODE_CONFIG, type NodeConfig } from '../../shared/config';
 import { TableView, HandDealt, JoinTableRequest, type HandResult } from '../../shared/messages';
-import { TableState, type TableSnapshot } from '../domain/table-state';
+import { TableState } from '../domain/table-state';
 import { Player } from './player';
+import { deserializeTableSnapshot, serializeTableSnapshot } from './table-snapshot-json';
 @Injectable({ scope: Scope.TRANSIENT })
 export class Entry implements ZLinkEntrySpot<Player> {
   readonly context!: ZLinkEntrySpotContext<Player, Entry>;
@@ -55,11 +56,12 @@ export class Table implements ZLinkSpot<Player> {
   async respond(actor: Player): Promise<void> {
     const playerId = actor.context.actorId;
     await actor.context.boundSession.send(this.view(playerId)).submit();
-    const cards = this.state.cards(playerId);
-    if (cards.length)
-      await actor.context.boundSession
-        .send(new HandDealt(this.state.snapshot.handNumber, cards))
-        .submit();
+    await actor.context.boundSession
+      .send(this.handFor(playerId))
+      .submit();
+  }
+  private handFor(playerId: string): HandDealt {
+    return new HandDealt(this.state.snapshot.handNumber, this.state.cards(playerId));
   }
   async publish(result: HandResult | null = null): Promise<void> {
     for (const seat of this.state.snapshot.seats) {
@@ -71,19 +73,16 @@ export class Table implements ZLinkSpot<Player> {
     await this.publish();
     for (const seat of this.state.snapshot.seats)
       await this.actors
-        .sendToActor(
-          seat.playerId,
-          new HandDealt(this.state.snapshot.handNumber, this.state.cards(seat.playerId))
-        )
+        .sendToActor(seat.playerId, this.handFor(seat.playerId))
         .submit();
   }
 }
 @Injectable()
 export class TableRelocation implements ZLinkSpotRelocationAdapter<Table> {
   async capture(spot: Table): Promise<Uint8Array> {
-    return Buffer.from(JSON.stringify(spot.state.snapshot));
+    return serializeTableSnapshot(spot.state.snapshot);
   }
   async restore(spot: Table, payload: Uint8Array): Promise<void> {
-    spot.state.snapshot = JSON.parse(Buffer.from(payload).toString('utf8')) as TableSnapshot;
+    spot.state.snapshot = deserializeTableSnapshot(payload);
   }
 }

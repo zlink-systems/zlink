@@ -25,6 +25,10 @@ if ($Local) {
     }
     if ($BuildOnly) { exit 0 }
     $javaHomePath = (Get-Content .logs/java-home.txt -Raw).Trim()
+    if ($RunnerArguments -notcontains '--check-structure') {
+        & "$javaHomePath/bin/java.exe" --enable-native-access=ALL-UNNAMED -cp 'server/table/build/install/table/lib/*' MyGame.table.ProgramKt --check-domain
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    }
     & "$javaHomePath/bin/java.exe" --enable-native-access=ALL-UNNAMED '-Dstdout.encoding=UTF-8' '-Dstderr.encoding=UTF-8' -cp 'e2e/build/install/e2e/lib/*' MyGame.e2e.ProgramKt @RunnerArguments
     exit $LASTEXITCODE
 }
@@ -52,8 +56,10 @@ try {
         $checkArguments = @(if ($CheckStructure) { $RunnerArguments } else { '--check-structure' })
         & docker @compose run --rm --no-deps -T --name "$project-check" runner @checkArguments
         if ($LASTEXITCODE -ne 0) { throw 'Structure check failed.' }
-        if ($CheckStructure) { $result = 0 }
+        if ($RunnerArguments -contains '--check-structure') { $result = 0 }
         else {
+            & docker @compose run --rm --no-deps -T --entrypoint java --name "$project-domain" runner --enable-native-access=ALL-UNNAMED -cp '/template/server/table/build/install/table/lib/*' MyGame.table.ProgramKt --check-domain
+            if ($LASTEXITCODE -ne 0) { throw 'Domain checks failed.' }
             & docker @compose up -d --wait --wait-timeout 30 redis *> (Join-Path $logs 'redis-start.log')
             if ($LASTEXITCODE -ne 0) { throw 'Redis startup failed.' }
             & docker @compose run --rm --no-deps -T --name "$project-control" runner @RunnerArguments

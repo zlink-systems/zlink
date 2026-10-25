@@ -5,6 +5,7 @@ import MyGame.*;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Bean;
 
+import java.util.Arrays;
 import systems.zlink.framework.locations.redis.*;
 import systems.zlink.framework.spring.*;
 
@@ -42,6 +43,14 @@ public class Program {
     }
 
     public static void main(String[] args) throws Exception {
+        if (Arrays.equals(args, new String[] {"--check-domain"})) {
+            int passed = DomainChecks.run();
+            System.out.println("Domain checks: " + passed + "/7 passed");
+            if (passed != 7) System.exit(1);
+            DomainChecks.verifyJsonContract();
+            System.out.println("JSON contract: passed");
+            return;
+        }
         Hosting.run(Program.class, args);
     }
 }

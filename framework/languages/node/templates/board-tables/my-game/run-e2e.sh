@@ -23,7 +23,9 @@ if $local_mode; then
       exit 1
     fi
   fi
-  $build_only && exit 0
+  if $build_only; then
+    exec node dist/e2e/runner.js --domain-checks-only
+  fi
   exec node dist/e2e/runner.js "${arguments[@]}"
 fi
 if $no_build; then
@@ -71,7 +73,10 @@ if ! "${compose[@]}" build >"$logs/build.log" 2>&1; then
   tail -n 30 "$logs/build.log" >&2
   exit 1
 fi
-$build_only && exit 0
+if $build_only; then
+  "${compose[@]}" run --rm --no-deps -T --name "$project-domain" runner --domain-checks-only
+  exit 0
+fi
 if [[ "${arguments[0]:-}" == "--check-structure" ]]; then
   "${compose[@]}" run --rm --no-deps -T --name "$project-check" runner "${arguments[@]}"
   exit 0

@@ -13,7 +13,7 @@ export class Player implements ZLinkActor {
   async onJoinCompleted(completion: ZLinkActorJoinCompletion): Promise<void> {
     if (completion.status === 'failed') throw new Error(`Actor join failed: ${completion.kind}`);
     if (completion.status === 'rejected')
-      await this.context.boundSession.send(new ActionRejected(Reasons.full)).submit();
+      await this.context.boundSession.send(new ActionRejected(Reasons.full, 0)).submit();
   }
 }
 @Injectable()

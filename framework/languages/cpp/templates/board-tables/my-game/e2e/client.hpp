@@ -129,7 +129,7 @@ class Client
         for (const auto &event : history_) {
             require (!std::holds_alternative<HandResult> (event),
                      "Result arrived before settlement");
-            if (const auto *hand = std::get_if<HandDealt> (&event))
+            if (const auto *hand = std::get_if<HandDealt> (&event); hand && !hand->cards.empty ())
                 require (*hand == own, "Another player's private hand was delivered");
             if (const auto *view = std::get_if<TableView> (&event)) {
                 const nlohmann::json public_view = *view;

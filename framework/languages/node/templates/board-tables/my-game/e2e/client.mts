@@ -9,20 +9,66 @@ import {
 } from '@zlink-systems/stream-connector';
 import { Game, Limits, PacketNames, Reasons } from '../server/shared/constants.js';
 import {
+  HandResult,
   BetRequest,
   JoinTableRequest,
+  MaxContractInteger,
   SessionInfoRequest,
   StartHandRequest,
   TableViewRequest,
   type ActionRejected,
   type HandDealt,
-  type HandResult,
   type SessionInfo,
   type TableView
 } from '../server/shared/messages.js';
 interface Received {
   name: string;
   payload: unknown;
+}
+function contractInteger(value: unknown, field: string): bigint {
+  assert(
+    typeof value === 'string' && /^(?:0|[1-9][0-9]*)$/u.test(value),
+    `${field} must use a canonical int64 decimal string on the JSON wire`
+  );
+  return BigInt(value);
+}
+function seatViews(value: unknown, field: string): TableView['seats'] {
+  assert(Array.isArray(value), `${field} must be an array`);
+  return (value as unknown[]).map((seat, index) => {
+    assert(seat !== null && typeof seat === 'object', `${field}[${index}] must be an object`);
+    const fields = seat as Record<string, unknown>;
+    return {
+      ...fields,
+      chips: contractInteger(fields.chips, `${field}[${index}].chips`)
+    };
+  }) as TableView['seats'];
+}
+function decodeWirePayload(name: string, payload: unknown): unknown {
+  if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) return payload;
+  const fields = payload as Record<string, unknown>;
+  if (name === PacketNames.tableView) {
+    return {
+      ...fields,
+      handNumber: contractInteger(fields.handNumber, `${name}.handNumber`),
+      pot: contractInteger(fields.pot, `${name}.pot`),
+      seats: seatViews(fields.seats, `${name}.seats`)
+    } as TableView;
+  }
+  if (name === PacketNames.handDealt) {
+    return {
+      ...fields,
+      handNumber: contractInteger(fields.handNumber, `${name}.handNumber`)
+    } as HandDealt;
+  }
+  if (name === PacketNames.handResult) {
+    return {
+      ...fields,
+      handNumber: contractInteger(fields.handNumber, `${name}.handNumber`),
+      pot: contractInteger(fields.pot, `${name}.pot`),
+      seats: seatViews(fields.seats, `${name}.seats`)
+    } as HandResult;
+  }
+  return payload;
 }
 export interface NodeControl {
   drain(id: string): Promise<void>;
@@ -53,10 +99,11 @@ class PlayerClient {
       PacketNames.actionRejected
     ])
       this.connector.on(name, (message) => {
-        this.messages.push({ name, payload: message.payload });
+        const payload = decodeWirePayload(name, message.payload);
+        this.messages.push({ name, payload });
         appendFileSync(
           log,
-          JSON.stringify({ name, payload: message.payload }, (_, v) =>
+          JSON.stringify({ name, payload }, (_, v) =>
             typeof v === 'bigint' ? v.toString() : v
           ) + '\n'
         );
@@ -122,7 +169,14 @@ class PlayerClient {
     return view;
   }
   async sessionInfo(): Promise<SessionInfo> {
-    return this.connector.request(new SessionInfoRequest()).submit<SessionInfo>();
+    const response = await this.connector
+      .request(new SessionInfoRequest())
+      .submit<SessionInfo>();
+    const fields = response as unknown as Record<string, unknown>;
+    return {
+      ...response,
+      objectGeneration: contractInteger(fields.objectGeneration, 'SessionInfo.objectGeneration')
+    };
   }
   async view(): Promise<TableView> {
     const index = this.messages.length;
@@ -133,8 +187,8 @@ class PlayerClient {
     await this.connector.close();
   }
 }
-function chips(view: { seats: { chips: number }[] }): number {
-  return view.seats.reduce((sum, s) => sum + s.chips, 0);
+function chips(view: { seats: { chips: bigint }[] }): bigint {
+  return view.seats.reduce((sum, s) => sum + s.chips, 0n);
 }
 function identity(before: TableView, after: TableView): void {
   for (const key of ['yourSeat', 'handNumber', 'inHand', 'turnSeat', 'pot'] as const)
@@ -145,7 +199,8 @@ function privacy(client: PlayerClient, cards: number[]): void {
   for (const message of client.messages) {
     if (message.name === PacketNames.handResult) continue;
     if (message.name === PacketNames.handDealt) {
-      assert.deepEqual((message.payload as HandDealt).cards, cards);
+      const dealt = message.payload as HandDealt;
+      if (dealt.cards.length) assert.deepEqual(dealt.cards, cards);
       continue;
     }
     function inspect(value: unknown): void {
@@ -162,12 +217,12 @@ function settlement(
   result: HandResult,
   first: HandDealt,
   second: HandDealt,
-  amounts: number[]
+  amounts: bigint[]
 ): void {
   assert.equal(result.handNumber, first.handNumber);
   assert.equal(
     result.pot,
-    amounts.reduce((a, b) => a + b, 0)
+    amounts.reduce((a, b) => a + b, 0n)
   );
   assert.deepEqual(
     result.hands.map((h) => h.seat),
@@ -184,13 +239,23 @@ function settlement(
   const winners = scores.flatMap((score, i) => (score === high ? [i] : []));
   assert.deepEqual(result.winners, winners);
   const expected = amounts.map((amount) => Game.initialChips - amount);
-  for (const winner of winners) expected[winner] += Math.floor(result.pot / winners.length);
-  expected[winners[0]] += result.pot % winners.length;
+  const divisor = BigInt(winners.length);
+  for (const winner of winners) expected[winner] += result.pot / divisor;
+  expected[winners[0]] += result.pot % divisor;
   assert.deepEqual(
     result.seats.map((s) => s.chips),
     expected
   );
-  assert.equal(chips(result), 2 * Game.initialChips);
+  assert(result.seats.every((s) => s.cardCount === 0));
+  assert.equal(chips(result), 2n * Game.initialChips);
+}
+function sendBet(client: PlayerClient, handNumber: bigint, amount: bigint): Promise<void> {
+  return client.connector
+    .send(
+      { handNumber: handNumber.toString(10), amount: amount.toString(10) },
+      BetRequest
+    )
+    .submit();
 }
 export async function scenario(
   name: string,
@@ -227,6 +292,29 @@ export async function scenario(
     const session1 = await p1.sessionInfo(),
       session2 = await p2.sessionInfo();
     assert.notEqual(session1.sessionId, session2.sessionId);
+    if (name === 'table') {
+      const rejectedAt = p2.messages.length;
+      await p2.connector
+        .send(
+          { handNumber: '0', pot: '0', winners: [], hands: [], seats: [] },
+          HandResult
+        )
+        .submit();
+      const rejected = await p2.wait<ActionRejected>(
+        PacketNames.actionRejected,
+        rejectedAt
+      );
+      assert.equal(rejected.reason, Reasons.packetNotAllowed);
+      assert.equal(rejected.retryAfterMs, 0);
+      const idleViewAt = p2.messages.length;
+      assert.deepEqual(await p2.view(), second);
+      const emptyBeforeHand = await p2.wait<HandDealt>(
+        PacketNames.handDealt,
+        idleViewAt,
+        (dealt) => dealt.handNumber === second.handNumber && dealt.cards.length === 0
+      );
+      assert.deepEqual(emptyBeforeHand.cards, []);
+    }
     const start1 = p1.messages.length,
       start2 = p2.messages.length;
     await p1.connector.send(new StartHandRequest()).submit();
@@ -247,17 +335,36 @@ export async function scenario(
       assert(Number.isInteger(card) && card >= 0 && card < Game.deckSize);
     if (name === 'table') {
       const index = p2.messages.length;
-      await p2.connector.send(new BetRequest(v2.handNumber, 50)).submit();
-      assert.equal(
-        (await p2.wait<ActionRejected>(PacketNames.actionRejected, index)).reason,
-        Reasons.turn
-      );
+      await sendBet(p2, v2.handNumber, 50n);
+      const rejected = await p2.wait<ActionRejected>(PacketNames.actionRejected, index);
+      assert.equal(rejected.reason, Reasons.turn);
+      assert.equal(rejected.retryAfterMs, 0);
       assert.deepEqual(await p2.view(), v2);
+
+      const overLimitAt = p1.messages.length;
+      await sendBet(p1, v1.handNumber, MaxContractInteger + 1n);
+      const overLimit = await p1.wait<ActionRejected>(
+        PacketNames.actionRejected,
+        overLimitAt
+      );
+      assert.equal(overLimit.reason, Reasons.integerOutOfRange);
+      assert.equal(overLimit.retryAfterMs, 0);
+      assert.deepEqual(await p1.view(), v1);
+
+      const invalidAmountAt = p1.messages.length;
+      await sendBet(p1, v1.handNumber, Game.initialChips + 1n);
+      const invalidAmount = await p1.wait<ActionRejected>(
+        PacketNames.actionRejected,
+        invalidAmountAt
+      );
+      assert.equal(invalidAmount.reason, Reasons.amount);
+      assert.equal(invalidAmount.retryAfterMs, 0);
+      assert.deepEqual(await p1.view(), v1);
     }
-    const amount = name === 'table' ? 100 : 10;
+    const amount = name === 'table' ? 100n : 10n;
     const bet1 = p1.messages.length,
       bet2 = p2.messages.length;
-    await p1.connector.send(new BetRequest(v1.handNumber, amount)).submit();
+    await sendBet(p1, v1.handNumber, amount);
     const [b1, b2] = await Promise.all([
       p1.wait<TableView>(PacketNames.tableView, bet1, (v) => v.turnSeat === 1),
       p2.wait<TableView>(PacketNames.tableView, bet2, (v) => v.turnSeat === 1)
@@ -292,19 +399,33 @@ export async function scenario(
     for (const client of clients) if (client !== p1) privacy(client, h2.cards);
     const end1 = p1.messages.length,
       end2 = p2.messages.length;
-    await p2.connector.send(new BetRequest(v2.handNumber, 50)).submit();
+    await sendBet(p2, v2.handNumber, 50n);
     const results = await Promise.all([
       p1.wait<HandResult>(PacketNames.handResult, end1),
       p2.wait<HandResult>(PacketNames.handResult, end2)
     ]);
     assert.deepEqual(results[0], results[1]);
-    settlement(results[0], h1, h2, [amount, 50]);
+    settlement(results[0], h1, h2, [amount, 50n]);
+    for (const client of [p1, p2]) {
+      const from = client.messages.length;
+      const settled = await client.view();
+      assert.deepEqual(settled.seats, results[0].seats);
+      assert(settled.seats.every((s) => s.cardCount === 0));
+      const emptyHand = await client.wait<HandDealt>(
+        PacketNames.handDealt,
+        from,
+        (dealt) => dealt.handNumber === results[0].handNumber
+      );
+      assert.deepEqual(emptyHand.cards, []);
+    }
     for (const client of clients) {
-      const expectedDeals = (name === 'table' && client === p2) || name === 'update' ? 2 : 1;
+      let expectedDeals = (name === 'table' && client === p2) || name === 'update' ? 2 : 1;
+      if (client === p1 || client === p2) expectedDeals++;
+      if (name === 'table') expectedDeals += client === p1 ? 2 : client === p2 ? 1 : 0;
       assert.equal(
         client.messages.filter((m) => m.name === PacketNames.handDealt).length,
         expectedDeals,
-        'HandDealt only at hand start or explicit view/reconnect response'
+        'HandDealt only at hand start or explicit view/reconnect/settlement response'
       );
     }
     assert.equal(p1.disconnects, 0);

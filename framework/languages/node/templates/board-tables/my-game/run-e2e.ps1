@@ -25,7 +25,10 @@ if ($Local) {
             exit 1
         }
     }
-    if ($BuildOnly) { exit 0 }
+    if ($BuildOnly) {
+        & node dist/e2e/runner.js --domain-checks-only
+        exit $LASTEXITCODE
+    }
     & node dist/e2e/runner.js @RunnerArguments
     exit $LASTEXITCODE
 }
@@ -48,7 +51,10 @@ try {
         Get-Content (Join-Path $logs 'build.log') -Tail 30 | Write-Host
         throw 'Docker image build failed.'
     }
-    if ($BuildOnly) { $result = 0 }
+    if ($BuildOnly) {
+        & docker @compose run --rm --no-deps -T --name "$project-domain" runner --domain-checks-only
+        $result = $LASTEXITCODE
+    }
     else {
         $checkArguments = @(if ($CheckStructure) { $RunnerArguments } else { '--check-structure' })
         & docker @compose run --rm --no-deps -T --name "$project-check" runner @checkArguments

@@ -10,7 +10,7 @@ private fun same(before: TableView, after: TableView) {
     check(after.copy(nodeId = before.nodeId) == before) { "State changed: $before -> $after" }
 }
 
-private fun result(result: HandResult, cards: List<List<Int>>, bets: List<Int>) {
+private fun result(result: HandResult, cards: List<List<Int>>, bets: List<Long>) {
     check(result.hands.map { it.cards } == cards)
     val scores = cards.map { it.sumOf { card -> card % Rules.RANKS + Rules.MIN_RANK } }
     val winners = scores.indices.filter { scores[it] == scores.max() }
@@ -24,6 +24,7 @@ private fun result(result: HandResult, cards: List<List<Int>>, bets: List<Int>) 
                 else 0
         }
     check(result.seats.map { it.chips } == expected)
+    check(result.seats.all { it.cardCount == 0 })
     check(result.seats.sumOf { it.chips } == Rules.INITIAL_CHIPS * 2)
 }
 
@@ -53,6 +54,14 @@ suspend fun scenario(id: String, nodes: Nodes, expectedNode: String? = null) {
         )
         val session1 = p1.sessionInfo()
         val session2 = p2.sessionInfo()
+        p2.clear()
+        p2.send(HandResult(0L, 0L, emptyList(), emptyList(), emptyList()))
+        val packetRejection = p2.next<ActionRejected>()
+        check(
+            packetRejection.reason == Rules.PACKET_NOT_ALLOWED && packetRejection.retryAfterMs == 0
+        )
+        same(second, view(p2))
+        check(p2.next<HandDealt>().cards.isEmpty())
         p1.clear()
         p2.clear()
         p1.send(StartHandRequest())
@@ -63,10 +72,25 @@ suspend fun scenario(id: String, nodes: Nodes, expectedNode: String? = null) {
         val start1 = p1.next<TableView> { it.inHand && it.turnSeat == 0 }
         p2.next<TableView> { it.inHand && it.turnSeat == 0 }
         if (id == "table") {
-            p2.send(BetRequest(cards2.handNumber, 50))
-            check(p2.next<ActionRejected>().reason == Rules.NOT_YOUR_TURN)
+            val beforeOutOfTurn = view(p2)
+            p2.send(BetRequest(cards2.handNumber, 50L))
+            val outOfTurn = p2.next<ActionRejected>()
+            check(outOfTurn.reason == Rules.NOT_YOUR_TURN && outOfTurn.retryAfterMs == 0)
+            same(beforeOutOfTurn, view(p2))
+
+            val beforeLimit = view(p1)
+            p1.send(BetRequest(cards1.handNumber, Rules.MAX_CONTRACT_INTEGER + 1L))
+            val overLimit = p1.next<ActionRejected>()
+            check(overLimit.reason == Rules.INTEGER_OUT_OF_RANGE && overLimit.retryAfterMs == 0)
+            same(beforeLimit, view(p1))
+
+            val beforeAmount = view(p1)
+            p1.send(BetRequest(cards1.handNumber, Rules.INITIAL_CHIPS + 1L))
+            val invalidAmount = p1.next<ActionRejected>()
+            check(invalidAmount.reason == Rules.INVALID_AMOUNT && invalidAmount.retryAfterMs == 0)
+            same(beforeAmount, view(p1))
         }
-        val bet1 = if (id == "table") 100 else 10
+        val bet1 = if (id == "table") 100L else 10L
         p1.send(BetRequest(cards1.handNumber, bet1))
         val before1 = p1.next<TableView> { it.turnSeat == 1 && it.pot == bet1 }
         val before2 = p2.next<TableView> { it.turnSeat == 1 && it.pot == bet1 }
@@ -101,7 +125,8 @@ suspend fun scenario(id: String, nodes: Nodes, expectedNode: String? = null) {
             synchronized(player.history) {
                 player.history.forEach { message ->
                     when (message) {
-                        is HandDealt -> check(message == dealt)
+                        is HandDealt ->
+                            if (message.cards.isNotEmpty()) check(message == dealt)
                         is TableView -> check(message.seats.all { it.cardCount in 0..Rules.CARDS })
                         is ActionRejected -> Unit
                         else -> error("Unexpected pre-settlement message: $message")
@@ -109,13 +134,25 @@ suspend fun scenario(id: String, nodes: Nodes, expectedNode: String? = null) {
                 }
             }
         }
-        val bet2 = 50
+        val bet2 = 50L
         p2.send(BetRequest(cards2.handNumber, bet2))
         val result1 = p1.next<HandResult>()
         val result2 = p2.next<HandResult>()
         check(result1 == result2)
         result(result1, listOf(cards1.cards, cards2.cards), listOf(bet1, bet2))
         check(result1.handNumber == start1.handNumber)
+        listOf(p1, p2).forEach { client ->
+            val settled = view(client)
+            val emptyHand = client.next<HandDealt>()
+            check(
+                !settled.inHand &&
+                    settled.handNumber == result1.handNumber &&
+                    settled.turnSeat == Rules.NO_SEAT &&
+                    settled.pot == 0L &&
+                    settled.seats == result1.seats &&
+                    emptyHand.cards.isEmpty()
+            )
+        }
         if (id == "update") {
             nodes.replace(before1.nodeId)
             scenario("table", nodes, before1.nodeId)

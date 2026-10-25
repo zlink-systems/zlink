@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { spawn, type ChildProcess } from 'node:child_process';
+import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { createWriteStream, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { createInterface } from 'node:readline';
@@ -14,6 +14,10 @@ import {
   type NodeRole
 } from '../server/shared/constants';
 import type { NodeConfig } from '../server/shared/config';
+function runDomainChecks(): void {
+  execFileSync(process.execPath, ['--test', 'dist/e2e/domain.test.js'], { stdio: 'inherit' });
+  console.log('Domain checks: 7/7');
+}
 class NodeProcess {
   readonly child: ChildProcess;
   private readonly lines: string[] = [];
@@ -112,6 +116,11 @@ class NodeProcess {
 }
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
+  if (args[0] === '--domain-checks-only') {
+    assert.equal(args.length, 1);
+    runDomainChecks();
+    return;
+  }
   if (args[0] === '--check-structure') {
     assert(args.length <= 2);
     checkStructure(args[1]);
@@ -128,6 +137,7 @@ async function main(): Promise<void> {
     selected = Scenarios.filter((s) => requested.includes(s));
   }
   checkStructure();
+  runDomainChecks();
   const runId = randomUUID();
   const logDir = `.logs/run-${runId}`;
   mkdirSync(logDir, { recursive: true });

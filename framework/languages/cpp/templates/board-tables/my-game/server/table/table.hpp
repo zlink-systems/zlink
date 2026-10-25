@@ -17,7 +17,7 @@ class Player final : public fx::actor_t
     fx::task_t<void> on_join_completed (const fx::actor_join_completion_t &completion) override
     {
         if (std::holds_alternative<fx::actor_join_rejected_t> (completion))
-            co_await context_.bound_session ().send (ActionRejected{Rules::table_full}).async ();
+            co_await context_.bound_session ().send (ActionRejected{Rules::table_full, 0}).async ();
         else if (!std::holds_alternative<fx::actor_join_accepted_t> (completion))
             throw std::runtime_error ("Table join failed");
     }
@@ -106,7 +106,7 @@ class Table final : public fx::spot_t<Player>
         const auto id = player_id (actor);
         co_await actor.context ().bound_session ().send (view (id)).async ();
         const auto index = state.seat_of (id);
-        if (state.inHand && index != Rules::no_seat && !state.seats[index].cards.empty ())
+        if (index != Rules::no_seat)
             co_await actor.context ()
               .bound_session ()
               .send (HandDealt{state.handNumber, state.seats[index].cards})
@@ -159,7 +159,10 @@ class Table final : public fx::spot_t<Player>
     {
         const auto rejection = state.start (player_id (actor));
         if (!rejection.empty ()) {
-            co_await actor.context ().bound_session ().send (ActionRejected{rejection}).async ();
+            co_await actor.context ()
+              .bound_session ()
+              .send (ActionRejected{rejection, 0})
+              .async ();
             co_return;
         }
         co_await publish ();
@@ -172,7 +175,7 @@ class Table final : public fx::spot_t<Player>
         if (!outcome.rejection.empty ()) {
             co_await actor.context ()
               .bound_session ()
-              .send (ActionRejected{outcome.rejection})
+              .send (ActionRejected{outcome.rejection, 0})
               .async ();
             co_return;
         }

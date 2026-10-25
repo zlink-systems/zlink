@@ -25,6 +25,13 @@ if $local_mode; then
   fi
   $build_only && exit 0
   java_home_path=$(cat "$ROOT/.logs/java-home.txt")
+  check_domain=true
+  for argument in "${arguments[@]}"; do
+    [[ "$argument" == "--check-structure" ]] && check_domain=false
+  done
+  if $check_domain; then
+    "$java_home_path/bin/java" --enable-native-access=ALL-UNNAMED -cp 'server/table/build/install/table/lib/*' MyGame.table.Program --check-domain
+  fi
   exec "$java_home_path/bin/java" --enable-native-access=ALL-UNNAMED -Dstdout.encoding=UTF-8 -Dstderr.encoding=UTF-8 -cp 'e2e/build/install/e2e/lib/*' MyGame.e2e.Program "${arguments[@]}"
 fi
 if $no_build; then
@@ -77,5 +84,7 @@ $build_only && exit 0
 for argument in "${arguments[@]}"; do
   [[ "$argument" == "--check-structure" ]] && exit 0
 done
+"${compose[@]}" run --rm --no-deps -T --entrypoint java --name "$project-domain" runner \
+  --enable-native-access=ALL-UNNAMED -cp '/app/table/lib/*' MyGame.table.Program --check-domain
 "${compose[@]}" up -d --wait --wait-timeout 30 redis >"$logs/redis-start.log" 2>&1
 "${compose[@]}" run --rm --no-deps -T --name "$project-control" runner "${arguments[@]}"

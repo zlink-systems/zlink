@@ -60,11 +60,12 @@ async Task<int> RunAsync()
         return 0;
     }
     var selected = Scenarios.Select(Option("--scenario"));
+    StructureCheck.Run(root, null);
+    await DomainChecks.RunAsync();
     run = new TableRun(root, selected.Length);
     await using var ownedRun = run;
     using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellation.Token);
     deadline.CancelAfter(TimeSpan.FromMinutes(3));
-    StructureCheck.Run(root, null);
     await run.StartAsync(deadline.Token);
     await Scenarios.RunAsync(run.Endpoint, run, selected, deadline.Token);
     Console.WriteLine("board-tables=completed");

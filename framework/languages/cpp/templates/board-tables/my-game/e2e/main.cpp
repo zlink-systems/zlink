@@ -52,6 +52,9 @@ int main (int argc, char **argv)
                 if (requested.contains (scenario.name))
                     selected.push_back (scenario);
         }
+        const auto domain_checks = MyGame::E2E::domain_checks ();
+        std::cout << "Domain checks: " << domain_checks << "/"
+                  << MyGame::E2E::domain_check_count << " passed" << std::endl;
         world =
           std::make_unique<MyGame::E2E::World> (root, bin, static_cast<int> (selected.size ()));
         const auto endpoint = world->start ();

@@ -17,8 +17,10 @@ struct Names
 };
 struct Rules
 {
-    static constexpr int seats = 4, initial_chips = 1000, deck_size = 52, ranks = 13,
-                         lowest_rank = 2, cards_per_hand = 2, no_seat = -1, minimum_players = 2;
+    static constexpr int seats = 4, deck_size = 52, ranks = 13, lowest_rank = 2,
+                         cards_per_hand = 2, no_seat = -1, minimum_players = 2;
+    static constexpr std::int64_t initial_chips = 1000;
+    static constexpr std::int64_t max_contract_integer = 9'007'199'254'740'991LL;
     static constexpr auto table_full = "table-full";
     static constexpr auto no_hand = "no-hand";
     static constexpr auto hand_in_progress = "hand-in-progress";
@@ -26,6 +28,24 @@ struct Rules
     static constexpr auto not_your_turn = "not-your-turn";
     static constexpr auto invalid_amount = "invalid-amount";
     static constexpr auto not_seated = "not-seated";
+    static constexpr auto integer_out_of_range = "integer-out-of-range";
+    static constexpr auto packet_not_allowed = "packet-not-allowed";
+
+    static constexpr bool is_contract_integer (std::int64_t value) noexcept
+    {
+        return value >= 0 && value <= max_contract_integer;
+    }
+    static constexpr bool try_add_contract_integers (std::int64_t left, std::int64_t right,
+                                                     std::int64_t &sum) noexcept
+    {
+        if (!is_contract_integer (left) || !is_contract_integer (right)
+            || right > max_contract_integer - left) {
+            sum = 0;
+            return false;
+        }
+        sum = left + right;
+        return true;
+    }
 };
 struct Limits
 {
@@ -87,14 +107,14 @@ struct JoinTableRequest
 struct BetRequest
 {
     static constexpr auto packet_name = "BetRequest";
-    int handNumber = 0, amount = 0;
+    std::int64_t handNumber = 0, amount = 0;
     NLOHMANN_DEFINE_TYPE_INTRUSIVE (BetRequest, handNumber, amount)
 };
 struct SeatView
 {
     int seat = Rules::no_seat;
     std::string playerId;
-    int chips = 0;
+    std::int64_t chips = 0;
     bool acted = false;
     int cardCount = 0;
     bool operator== (const SeatView &) const = default;
@@ -104,9 +124,11 @@ struct TableView
 {
     static constexpr auto packet_name = "TableView";
     std::string tableId, nodeId;
-    int yourSeat = Rules::no_seat, handNumber = 0;
+    int yourSeat = Rules::no_seat;
+    std::int64_t handNumber = 0;
     bool inHand = false;
-    int turnSeat = Rules::no_seat, pot = 0;
+    int turnSeat = Rules::no_seat;
+    std::int64_t pot = 0;
     std::vector<SeatView> seats;
     NLOHMANN_DEFINE_TYPE_INTRUSIVE (
       TableView, tableId, nodeId, yourSeat, handNumber, inHand, turnSeat, pot, seats)
@@ -114,7 +136,7 @@ struct TableView
 struct HandDealt
 {
     static constexpr auto packet_name = "HandDealt";
-    int handNumber = 0;
+    std::int64_t handNumber = 0;
     std::vector<int> cards;
     bool operator== (const HandDealt &) const = default;
     NLOHMANN_DEFINE_TYPE_INTRUSIVE (HandDealt, handNumber, cards)
@@ -130,7 +152,7 @@ struct RevealedHand
 struct HandResult
 {
     static constexpr auto packet_name = "HandResult";
-    int handNumber = 0, pot = 0;
+    std::int64_t handNumber = 0, pot = 0;
     std::vector<int> winners;
     std::vector<RevealedHand> hands;
     std::vector<SeatView> seats;
@@ -141,6 +163,7 @@ struct ActionRejected
 {
     static constexpr auto packet_name = "ActionRejected";
     std::string reason;
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (ActionRejected, reason)
+    std::int32_t retryAfterMs = 0;
+    NLOHMANN_DEFINE_TYPE_INTRUSIVE (ActionRejected, reason, retryAfterMs)
 };
 }

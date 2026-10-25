@@ -6,6 +6,7 @@ import org.springframework.context.annotation.Bean
 import systems.zlink.framework.kotlin.*
 import systems.zlink.framework.locations.redis.*
 import systems.zlink.framework.spring.*
+import kotlin.system.exitProcess
 
 @EnableZLinkFramework
 @SpringBootApplication(proxyBeanMethods = false)
@@ -35,4 +36,14 @@ class Program {
     }
 }
 
-fun main(args: Array<String>) = runNode(Program::class.java, args)
+fun main(args: Array<String>) {
+    if (args.contentEquals(arrayOf("--check-domain"))) {
+        val passed = runDomainChecks()
+        println("Domain checks: $passed/7 passed")
+        if (passed != 7) exitProcess(1)
+        verifyJsonContract()
+        println("JSON contract: passed")
+        return
+    }
+    runNode(Program::class.java, args)
+}
