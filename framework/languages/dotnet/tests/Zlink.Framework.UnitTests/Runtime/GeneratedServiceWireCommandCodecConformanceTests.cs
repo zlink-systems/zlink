@@ -17,13 +17,19 @@ public sealed class GeneratedServiceWireCommandCodecConformanceTests
     public void Bounded_generation_rejects_high_bit_after_optimized_decode()
     {
         using var fixture = ReadJson("golden/stateful-message-v1.json");
-        var frames = fixture.RootElement.GetProperty("valid")[0].GetProperty("framesHex")
-            .EnumerateArray().Select(value => Convert.FromHexString(value.GetString()!)).ToArray();
+        var frames = fixture
+            .RootElement.GetProperty("valid")[0]
+            .GetProperty("framesHex")
+            .EnumerateArray()
+            .Select(value => Convert.FromHexString(value.GetString()!))
+            .ToArray();
         for (var index = 0; index < 100000; index++)
         {
             var generation = index % 2 == 0 ? 5UL : 0x8000000000000000UL;
             System.Buffers.Binary.BinaryPrimitives.WriteUInt64BigEndian(
-                frames[0].AsSpan(frames[0].Length - 36), generation);
+                frames[0].AsSpan(frames[0].Length - 36),
+                generation
+            );
             try
             {
                 var decoded = ServiceWireCodec.DecodeSpotSend21(frames, Context);
@@ -54,8 +60,12 @@ public sealed class GeneratedServiceWireCommandCodecConformanceTests
         }
         else
         {
-            Assert.Throws<InvalidDataException>(() => ServiceWireCodec.DecodeNonzeroU64(bytes, Context));
-            Assert.Throws<InvalidDataException>(() => ServiceWireCodec.EncodeNonzeroU64(new(value), Context));
+            Assert.Throws<InvalidDataException>(() =>
+                ServiceWireCodec.DecodeNonzeroU64(bytes, Context)
+            );
+            Assert.Throws<InvalidDataException>(() =>
+                ServiceWireCodec.EncodeNonzeroU64(new(value), Context)
+            );
         }
         Assert.Equal(value, ServiceWireCodec.DecodeU64(bytes, Context).Value);
         Assert.Equal(bytes, ServiceWireCodec.EncodeU64(new(value), Context));
