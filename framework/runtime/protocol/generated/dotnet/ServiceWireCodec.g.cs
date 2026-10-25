@@ -11,25 +11,25 @@ internal static class ServiceWireCodec
 {
     internal sealed record DecodeContext(MeshOperationKind? OriginalOperationKind,bool? DurableRelocationPresent,bool? ApplicationSnapshotPresent,long? EffectiveCompleteMessageBytesMinusActualEnvelopeOverhead,long? EffectiveCompleteMessageBytes){internal static readonly DecodeContext Empty=new(null,null,null,null,null);}
 
-    internal sealed record U8(byte Value);
+    internal readonly record struct U8(byte Value);
 
-    internal sealed record U16(ushort Value);
+    internal readonly record struct U16(ushort Value);
 
-    internal sealed record U32(uint Value);
+    internal readonly record struct U32(uint Value);
 
-    internal sealed record NonzeroU32(uint Value);
+    internal readonly record struct NonzeroU32(uint Value);
 
-    internal sealed record U64(ulong Value);
+    internal readonly record struct U64(ulong Value);
 
-    internal sealed record NonzeroU64(ulong Value);
+    internal readonly record struct NonzeroU64(ulong Value);
 
-    internal sealed record OrdinalOrZero(ulong Value);
+    internal readonly record struct OrdinalOrZero(ulong Value);
 
-    internal sealed record RelocationLogicalLength(ulong Value);
+    internal readonly record struct RelocationLogicalLength(ulong Value);
 
-    internal sealed record RelocationChunkCount(uint Value);
+    internal readonly record struct RelocationChunkCount(uint Value);
 
-    internal sealed record ApplicationVersion(long Value);
+    internal readonly record struct ApplicationVersion(long Value);
 
     internal enum Bool8 : byte
     {
@@ -37,41 +37,41 @@ internal static class ServiceWireCodec
         True = 1
     }
 
-    internal sealed record Rid(byte[] Value);
+    internal readonly record struct Rid(RoutingId RoutingId) { internal Rid(byte[] value) : this(global::Systems.Zlink.RoutingId.From(value)) {} internal ReadOnlySpan<byte> Value => RoutingId.ToBytes(); }
 
-    internal sealed record OptionalRid(byte[]? Value);
+    internal readonly record struct OptionalRid(byte[]? Value);
 
-    internal sealed record Text8(string Value);
+    internal readonly record struct Text8(string Value);
 
-    internal sealed record OptionalText8(string? Value);
+    internal readonly record struct OptionalText8(string? Value);
 
-    internal sealed record Sha256Bytes(byte[] Value);
+    internal readonly record struct Sha256Bytes(byte[] Value);
 
-    internal sealed record CreationRequestSize(uint Value);
+    internal readonly record struct CreationRequestSize(uint Value);
 
-    internal sealed record Text16(string Value);
+    internal readonly record struct Text16(string Value);
 
-    internal sealed record NonemptyText16(string Value);
+    internal readonly record struct NonemptyText16(string Value);
 
-    internal sealed record Endpoint(string Value);
+    internal readonly record struct Endpoint(string Value);
 
-    internal sealed record Blob16(byte[] Value);
+    internal readonly record struct Blob16(byte[] Value);
 
-    internal sealed record NonemptyBlob16(byte[] Value);
+    internal readonly record struct NonemptyBlob16(byte[] Value);
 
-    internal sealed record PacketName(string Value);
+    internal readonly record struct PacketName(string Value);
 
-    internal sealed record ContentType(string Value);
+    internal readonly record struct ContentType(string Value);
 
-    internal sealed record ApplicationPayloadBytes(byte[] Value);
+    internal readonly record struct ApplicationPayloadBytes(byte[] Value);
 
-    internal sealed record ApplicationPayloadEnvelopeV1(PacketName PacketName, ContentType ContentType, ApplicationPayloadBytes Payload);
+    internal readonly record struct ApplicationPayloadEnvelopeV1(PacketName PacketName, ContentType ContentType, ApplicationPayloadBytes Payload);
 
-    internal sealed record MetadataValue(string Value);
+    internal readonly record struct MetadataValue(string Value);
 
-    internal sealed record MetadataEntry(Text8 Key, MetadataValue Value);
+    internal readonly record struct MetadataEntry(Text8 Key, MetadataValue Value);
 
-    internal sealed record MetadataFrame(IReadOnlyList<MetadataEntry> Entries);
+    internal readonly record struct MetadataFrame(IReadOnlyList<MetadataEntry> Entries);
 
     internal enum RuntimeState : byte
     {
@@ -96,9 +96,9 @@ internal static class ServiceWireCodec
         Server = 2
     }
 
-    internal sealed record ObjectCapacityLimit(uint Value);
+    internal readonly record struct ObjectCapacityLimit(uint Value);
 
-    internal sealed record ObjectPendingCapacityLimit(uint Value);
+    internal readonly record struct ObjectPendingCapacityLimit(uint Value);
 
     internal enum AuthorityObjectKind : byte
     {
@@ -408,22 +408,22 @@ internal static class ServiceWireCodec
         ResourceLimit = 12
     }
 
-    internal sealed record ActorRef(Text8 ActorId, NonzeroU64 ObjectGeneration);
+    internal readonly record struct ActorRef(Text8 ActorId, NonzeroU64 ObjectGeneration);
 
-    internal sealed record SpotRef(Text8 SpotId, NonzeroU64 ObjectGeneration);
+    internal readonly record struct SpotRef(Text8 SpotId, NonzeroU64 ObjectGeneration);
 
     internal abstract record ActorCreateTerminal;
     internal sealed record ActorCreateTerminalCase0(ActorCreateResult CreateResult, ActorRef Actor) : ActorCreateTerminal;
     internal sealed record ActorCreateTerminalCase1(ActorCreateResult CreateResult, ActorRef Actor) : ActorCreateTerminal;
     internal sealed record ActorCreateTerminalCase2(ActorCreateResult CreateResult) : ActorCreateTerminal;
 
-    internal sealed record CreationOperationTerminalV1(RequestTerminalResult TerminalResult, FrameworkErrorCode FailureCode, Bool8 HasCreation, ActorCreateTerminal? Creation, Bool8 HasApplicationPayload, ApplicationPayloadEnvelopeV1? ApplicationPayload);
+    internal readonly record struct CreationOperationTerminalV1(RequestTerminalResult TerminalResult, FrameworkErrorCode FailureCode, Bool8 HasCreation, ActorCreateTerminal? Creation, Bool8 HasApplicationPayload, ApplicationPayloadEnvelopeV1? ApplicationPayload);
 
     internal abstract record OptionalSpotRef;
     internal sealed record OptionalSpotRefCase0(Bool8 HasSpot) : OptionalSpotRef;
     internal sealed record OptionalSpotRefCase1(Bool8 HasSpot, SpotRef Spot) : OptionalSpotRef;
 
-    internal sealed record SpotMembership(SpotRef Spot);
+    internal readonly record struct SpotMembership(SpotRef Spot);
 
     internal abstract record OptionalSpotMembership;
     internal sealed record OptionalSpotMembershipCase0(Bool8 HasMembership) : OptionalSpotMembership;
@@ -433,7 +433,7 @@ internal static class ServiceWireCodec
     internal sealed record BoundSessionBindingTransitionCase0(BoundSessionBindingState BindingState, NonzeroU64 BindingGeneration) : BoundSessionBindingTransition;
     internal sealed record BoundSessionBindingTransitionCase1(BoundSessionBindingState BindingState, NonzeroU64 RetiredBindingGeneration) : BoundSessionBindingTransition;
 
-    internal sealed record RetiredBoundSessionRouteFence(Rid SessionOwnerNodeRid, NonzeroU64 SessionOwnerNodeGeneration, Text8 SessionOwnerId, NonzeroU64 SessionOwnerLeaseGeneration, Rid SessionRid, NonzeroU64 RetiredBindingGeneration);
+    internal readonly record struct RetiredBoundSessionRouteFence(Rid SessionOwnerNodeRid, NonzeroU64 SessionOwnerNodeGeneration, Text8 SessionOwnerId, NonzeroU64 SessionOwnerLeaseGeneration, Rid SessionRid, NonzeroU64 RetiredBindingGeneration);
 
     internal abstract record SessionRelocationRouteUpdate;
     internal sealed record SessionRelocationRouteUpdateCase0(SessionRelocationRouteAction Action, NonzeroU64 PreviousAuthorityOwnerGeneration, NonzeroU64 TargetAuthorityOwnerGeneration, Rid TargetNodeRid, NonzeroU64 TargetNodeGeneration, NonzeroU64 TargetOwnerLeaseGeneration) : SessionRelocationRouteUpdate;
@@ -444,15 +444,15 @@ internal static class ServiceWireCodec
     internal sealed record ObjectCreationKeyCase1(StatefulObjectKind ObjectKind, Text8 SpotId) : ObjectCreationKey;
     internal sealed record ObjectCreationKeyCase2(StatefulObjectKind ObjectKind, Text8 SpotId) : ObjectCreationKey;
 
-    internal sealed record ObjectCreationIntentV1(ObjectCreationKey Key, Text8 StableType, Text8 InitialMeshName, CreationContentReference RequestContentReference, Sha256Bytes RequestSha256, CreationRequestSize RequestEncodedSize);
+    internal readonly record struct ObjectCreationIntentV1(ObjectCreationKey Key, Text8 StableType, Text8 InitialMeshName, CreationContentReference RequestContentReference, Sha256Bytes RequestSha256, CreationRequestSize RequestEncodedSize);
 
-    internal sealed record PendingObjectCreationV1(Text8 ReservationId, CreationContentReference RequestContentReference, Sha256Bytes RequestSha256, CreationRequestSize RequestEncodedSize);
+    internal readonly record struct PendingObjectCreationV1(Text8 ReservationId, CreationContentReference RequestContentReference, Sha256Bytes RequestSha256, CreationRequestSize RequestEncodedSize);
 
-    internal sealed record ObjectCreationTargetV1(Text8 MeshName, Rid NodeRid, NonzeroU64 NodeLifecycleGeneration, Text8 OwnerId, NonzeroU64 OwnerLeaseGeneration);
+    internal readonly record struct ObjectCreationTargetV1(Text8 MeshName, Rid NodeRid, NonzeroU64 NodeLifecycleGeneration, Text8 OwnerId, NonzeroU64 OwnerLeaseGeneration);
 
-    internal sealed record InstanceActivationRecoveryV1(Text8 TargetSpotId, Text8 StableType, Text8 TargetMeshName, Rid TargetNodeRid, NonzeroU64 TargetNodeGeneration, Text8 TargetDescriptorVersion, Rid SourceNodeRid, NonzeroU64 SourceNodeGeneration, Bool8 HasSourceSpotId, Text8? SourceSpotId, InstanceOperationKind OperationKind, OperationId Operation, InstanceReplyRoute ReplyRoute, NonzeroU64 DeadlineUnixMs, Bool8 HasMetadata, MetadataFrame? Metadata, ApplicationPayloadEnvelopeV1 ApplicationPayload);
+    internal readonly record struct InstanceActivationRecoveryV1(Text8 TargetSpotId, Text8 StableType, Text8 TargetMeshName, Rid TargetNodeRid, NonzeroU64 TargetNodeGeneration, Text8 TargetDescriptorVersion, Rid SourceNodeRid, NonzeroU64 SourceNodeGeneration, Bool8 HasSourceSpotId, Text8? SourceSpotId, InstanceOperationKind OperationKind, OperationId Operation, InstanceReplyRoute ReplyRoute, NonzeroU64 DeadlineUnixMs, Bool8 HasMetadata, MetadataFrame? Metadata, ApplicationPayloadEnvelopeV1 ApplicationPayload);
 
-    internal sealed record ObjectReservationFence(Text8 ReservationId, AuthorityStoreVersion ExpectedStoreVersion, NonzeroU64 ObjectGeneration, NonzeroU64 AuthorityOwnerGeneration, Rid TargetNodeRid, NonzeroU64 TargetNodeGeneration, Text8 TargetOwnerId, NonzeroU64 TargetOwnerLeaseGeneration, NonzeroU32 PendingCapacityDelta);
+    internal readonly record struct ObjectReservationFence(Text8 ReservationId, AuthorityStoreVersion ExpectedStoreVersion, NonzeroU64 ObjectGeneration, NonzeroU64 AuthorityOwnerGeneration, Rid TargetNodeRid, NonzeroU64 TargetNodeGeneration, Text8 TargetOwnerId, NonzeroU64 TargetOwnerLeaseGeneration, NonzeroU32 PendingCapacityDelta);
 
     internal enum GenericReservationOperationKind : byte
     {
@@ -466,34 +466,34 @@ internal static class ServiceWireCodec
     internal sealed record GenericObjectReservationV1Case1(GenericReservationOperationKind OperationKind, ObjectCreationKey Key, ObjectReservationFence Fence) : GenericObjectReservationV1;
     internal sealed record GenericObjectReservationV1Case2(GenericReservationOperationKind OperationKind, ObjectCreationKey Key, ObjectReservationFence Fence) : GenericObjectReservationV1;
 
-    internal sealed record AggregateId(U64 High, U64 Low);
+    internal readonly record struct AggregateId(U64 High, U64 Low);
 
-    internal sealed record AggregateParticipantMutationBytes(byte[] Value);
+    internal readonly record struct AggregateParticipantMutationBytes(byte[] Value);
 
-    internal sealed record MaintenanceAggregateParticipantV1(RelocationObjectIdentity Object, AuthorityStoreVersion ExpectedStoreVersion, AggregateParticipantMutationBytes Mutation);
+    internal readonly record struct MaintenanceAggregateParticipantV1(RelocationObjectIdentity Object, AuthorityStoreVersion ExpectedStoreVersion, AggregateParticipantMutationBytes Mutation);
 
-    internal sealed record AggregateParticipantVector(IReadOnlyList<MaintenanceAggregateParticipantV1> Items);
+    internal readonly record struct AggregateParticipantVector(IReadOnlyList<MaintenanceAggregateParticipantV1> Items);
 
-    internal sealed record MaintenanceAggregateV1(AggregateId AggregateId, NonzeroU64 AggregateGeneration, SpotRef OwnerSpot, AggregateParticipantVector Participants, Sha256Bytes InventoryDigestSha256);
+    internal readonly record struct MaintenanceAggregateV1(AggregateId AggregateId, NonzeroU64 AggregateGeneration, SpotRef OwnerSpot, AggregateParticipantVector Participants, Sha256Bytes InventoryDigestSha256);
 
-    internal sealed record ActorRouteFence(ActorRef Actor, Rid TargetNodeRid, NonzeroU64 TargetNodeGeneration, NonzeroU64 ExpectedAuthorityOwnerGeneration, NonzeroU64 ExpectedOwnerLeaseGeneration);
+    internal readonly record struct ActorRouteFence(ActorRef Actor, Rid TargetNodeRid, NonzeroU64 TargetNodeGeneration, NonzeroU64 ExpectedAuthorityOwnerGeneration, NonzeroU64 ExpectedOwnerLeaseGeneration);
 
-    internal sealed record SpotRouteFence(SpotRef Spot, Rid TargetNodeRid, NonzeroU64 TargetNodeGeneration, NonzeroU64 ExpectedAuthorityOwnerGeneration, NonzeroU64 ExpectedOwnerLeaseGeneration);
+    internal readonly record struct SpotRouteFence(SpotRef Spot, Rid TargetNodeRid, NonzeroU64 TargetNodeGeneration, NonzeroU64 ExpectedAuthorityOwnerGeneration, NonzeroU64 ExpectedOwnerLeaseGeneration);
 
-    internal sealed record UserSpotCloseFenceV1(SpotRef Spot, Rid TargetNodeRid, NonzeroU64 TargetNodeGeneration, NonzeroU64 ExpectedAuthorityOwnerGeneration, AuthorityStoreVersion ExpectedStoreVersion);
+    internal readonly record struct UserSpotCloseFenceV1(SpotRef Spot, Rid TargetNodeRid, NonzeroU64 TargetNodeGeneration, NonzeroU64 ExpectedAuthorityOwnerGeneration, AuthorityStoreVersion ExpectedStoreVersion);
 
     internal abstract record MessageFollowRoute;
     internal sealed record MessageFollowRouteCase0(AuthorityObjectKind ObjectKind, ActorRouteFence Actor) : MessageFollowRoute;
     internal sealed record MessageFollowRouteCase1(AuthorityObjectKind ObjectKind, SpotRouteFence Spot) : MessageFollowRoute;
 
-    internal sealed record MessageFollowRouteV1(MessageFollowRoute Source, MessageFollowRoute Target, U8 HopCount, U32 QueuedMessages, U32 QueuedBytes, OperationId OriginalOperation, U64 OriginalReplyRouteId);
+    internal readonly record struct MessageFollowRouteV1(MessageFollowRoute Source, MessageFollowRoute Target, U8 HopCount, U32 QueuedMessages, U32 QueuedBytes, OperationId OriginalOperation, U64 OriginalReplyRouteId);
 
     internal abstract record RelocationObjectIdentity;
     internal sealed record RelocationObjectIdentityCase0(StatefulObjectKind ObjectKind, ActorRef Actor, NonzeroU64 ExpectedAuthorityOwnerGeneration) : RelocationObjectIdentity;
     internal sealed record RelocationObjectIdentityCase1(StatefulObjectKind ObjectKind, SpotRef Spot, NonzeroU64 ExpectedAuthorityOwnerGeneration) : RelocationObjectIdentity;
     internal sealed record RelocationObjectIdentityCase2(StatefulObjectKind ObjectKind, Text8 InstanceType, Text8 SpotId, NonzeroU64 ObjectGeneration) : RelocationObjectIdentity;
 
-    internal sealed record ActorAuthorityIdentity(Text8 ActorType, Text8 ActorId, ActorAuthorityState State, SpotRef CurrentSpot, ActorSpotKind CurrentSpotKind);
+    internal readonly record struct ActorAuthorityIdentity(Text8 ActorType, Text8 ActorId, ActorAuthorityState State, SpotRef CurrentSpot, ActorSpotKind CurrentSpotKind);
 
     internal abstract record InstanceAuthorityIdentity;
     internal sealed record InstanceAuthorityIdentityCase0(InstanceAuthorityState AuthorityState, Text8 InstanceType, Text8 SpotId) : InstanceAuthorityIdentity;
@@ -510,43 +510,43 @@ internal static class ServiceWireCodec
     internal sealed record AuthorityObjectIdentityCase0(AuthorityObjectKind ObjectKind, ActorAuthorityIdentity Actor) : AuthorityObjectIdentity;
     internal sealed record AuthorityObjectIdentityCase1(AuthorityObjectKind ObjectKind, SpotAuthorityIdentity Spot) : AuthorityObjectIdentity;
 
-    internal sealed record OperationId(U64 High, U64 Low);
+    internal readonly record struct OperationId(U64 High, U64 Low);
 
-    internal sealed record OperationIdOrZero(U64 High, U64 Low);
+    internal readonly record struct OperationIdOrZero(U64 High, U64 Low);
 
-    internal sealed record CreationContentReference(string Value);
+    internal readonly record struct CreationContentReference(string Value);
 
-    internal sealed record RelocationReference(string Value);
+    internal readonly record struct RelocationReference(string Value);
 
-    internal sealed record AuthorityStoreVersion(string Value);
+    internal readonly record struct AuthorityStoreVersion(string Value);
 
-    internal sealed record AuthorityGenerationFence(NonzeroU64 ObjectGeneration, Text8 OwnerId, NonzeroU64 AuthorityOwnerGeneration, NonzeroU64 LeaseGeneration, AuthorityStoreVersion StoreVersion);
+    internal readonly record struct AuthorityGenerationFence(NonzeroU64 ObjectGeneration, Text8 OwnerId, NonzeroU64 AuthorityOwnerGeneration, NonzeroU64 LeaseGeneration, AuthorityStoreVersion StoreVersion);
 
-    internal sealed record RelocationCoordinatorFence(Text8 CoordinatorOwnerId, NonzeroU64 CoordinatorLeaseGeneration, Rid CoordinatorNodeRid, NonzeroU64 CoordinatorNodeGeneration, AuthorityStoreVersion ExpectedAuthorityStoreVersion);
+    internal readonly record struct RelocationCoordinatorFence(Text8 CoordinatorOwnerId, NonzeroU64 CoordinatorLeaseGeneration, Rid CoordinatorNodeRid, NonzeroU64 CoordinatorNodeGeneration, AuthorityStoreVersion ExpectedAuthorityStoreVersion);
 
-    internal sealed record RelocationTargetFence(Rid TargetNodeRid, NonzeroU64 TargetNodeGeneration, Text8 TargetOwnerId, NonzeroU64 TargetOwnerLeaseGeneration);
+    internal readonly record struct RelocationTargetFence(Rid TargetNodeRid, NonzeroU64 TargetNodeGeneration, Text8 TargetOwnerId, NonzeroU64 TargetOwnerLeaseGeneration);
 
-    internal sealed record RequestSourceFence(Text8 SourceOwnerId, NonzeroU64 SourceOwnerLeaseGeneration, Rid SourceNodeRid, NonzeroU64 SourceNodeGeneration);
+    internal readonly record struct RequestSourceFence(Text8 SourceOwnerId, NonzeroU64 SourceOwnerLeaseGeneration, Rid SourceNodeRid, NonzeroU64 SourceNodeGeneration);
 
-    internal sealed record RelocationId(U64 High, U64 Low);
+    internal readonly record struct RelocationId(U64 High, U64 Low);
 
-    internal sealed record OptionalActorRef(OptionalText8 ActorId, NonzeroU64? Generation);
+    internal readonly record struct OptionalActorRef(OptionalText8 ActorId, NonzeroU64? Generation);
 
-    internal sealed record OptionalBoundSessionTail(Rid SourceSessionRid, NonzeroU64 SourceBindingGeneration, NonzeroU64 SourceSessionSequence);
+    internal readonly record struct OptionalBoundSessionTail(Rid SourceSessionRid, NonzeroU64 SourceBindingGeneration, NonzeroU64 SourceSessionSequence);
 
-    internal sealed record ChannelEntry(Text8 ChannelName, U32 Weight);
+    internal readonly record struct ChannelEntry(Text8 ChannelName, U32 Weight);
 
-    internal sealed record ChannelVector(IReadOnlyList<ChannelEntry> Items);
+    internal readonly record struct ChannelVector(IReadOnlyList<ChannelEntry> Items);
 
-    internal sealed record SortedText8Vector(IReadOnlyList<Text8> Items);
+    internal readonly record struct SortedText8Vector(IReadOnlyList<Text8> Items);
 
-    internal sealed record StatefulCapabilityEntry(StatefulObjectKind ObjectKind, Text8 Type, RelocationPolicyKind RelocationPolicy, ObjectCapacityLimit ActiveCapacityLimit, ObjectPendingCapacityLimit PendingCapacityLimit, Bool8 HasSnapshotAdapter, OrdinalOrZero Available);
+    internal readonly record struct StatefulCapabilityEntry(StatefulObjectKind ObjectKind, Text8 Type, RelocationPolicyKind RelocationPolicy, ObjectCapacityLimit ActiveCapacityLimit, ObjectPendingCapacityLimit PendingCapacityLimit, Bool8 HasSnapshotAdapter, OrdinalOrZero Available);
 
-    internal sealed record StatefulCapabilityVector(IReadOnlyList<StatefulCapabilityEntry> Items);
+    internal readonly record struct StatefulCapabilityVector(IReadOnlyList<StatefulCapabilityEntry> Items);
 
-    internal sealed record DescriptorExtension(RuntimeState? RuntimeState, ApplicationVersion? ApplicationVersion, SortedText8Vector? SpotTypes, StatefulCapabilityVector? StatefulCapabilities, OptionalText8? MaintenanceWave, SortedText8Vector? ProtocolCapabilities, ObjectRole? ObjectRole, U32? PlacementWeight, ObjectCapacityLimit? ActiveCapacityLimit, ObjectPendingCapacityLimit? PendingCapacityLimit, U32? ActiveCapacityUsed, U32? PendingCapacityUsed);
+    internal readonly record struct DescriptorExtension(RuntimeState? RuntimeState, ApplicationVersion? ApplicationVersion, SortedText8Vector? SpotTypes, StatefulCapabilityVector? StatefulCapabilities, OptionalText8? MaintenanceWave, SortedText8Vector? ProtocolCapabilities, ObjectRole? ObjectRole, U32? PlacementWeight, ObjectCapacityLimit? ActiveCapacityLimit, ObjectPendingCapacityLimit? PendingCapacityLimit, U32? ActiveCapacityUsed, U32? PendingCapacityUsed);
 
-    internal sealed record RouteMeshAdmission(Text8 MeshName, Text8 SecurityIdentity, NonzeroU64 LifecycleGeneration, NonzeroU64 DescriptorRevision, Endpoint AdvertisedEndpoint, ChannelVector Channels, DescriptorExtension Extension);
+    internal readonly record struct RouteMeshAdmission(Text8 MeshName, Text8 SecurityIdentity, NonzeroU64 LifecycleGeneration, NonzeroU64 DescriptorRevision, Endpoint AdvertisedEndpoint, ChannelVector Channels, DescriptorExtension Extension);
 
     internal abstract record ClientServerAdmission;
     internal sealed record ClientServerAdmissionCase0(ClientServerRole Role, Text8 ChannelName, ClientServerDirection Direction, Text8 SecurityIdentity, NonzeroU32 NormalizedEffectiveMaxMessageBytes) : ClientServerAdmission;
@@ -575,7 +575,7 @@ internal static class ServiceWireCodec
     internal sealed record SendReadyDestinationCase3(MeshDestinationKind DestinationKind, ActorRouteFence TargetActor) : SendReadyDestination;
     internal sealed record SendReadyDestinationCase4(MeshDestinationKind DestinationKind, ActorRouteFence TargetActor, NonzeroU64 BindingGeneration) : SendReadyDestination;
 
-    internal sealed record ActorMembershipSnapshot(ActorRef Actor, SpotMembership Membership);
+    internal readonly record struct ActorMembershipSnapshot(ActorRef Actor, SpotMembership Membership);
 
     internal abstract record OptionalActorMembershipSnapshot;
     internal sealed record OptionalActorMembershipSnapshotCase0(Bool8 HasSnapshot) : OptionalActorMembershipSnapshot;
@@ -588,7 +588,7 @@ internal static class ServiceWireCodec
     internal sealed record ActorControlDataCase3(ActorLifecycleKind LifecycleKind, ActorMembershipSnapshot Current) : ActorControlData;
     internal sealed record ActorControlDataCase4(ActorLifecycleKind LifecycleKind, ActorMembershipSnapshot Previous) : ActorControlData;
 
-    internal sealed record RelocationControlData(RelocationPhase Phase, RelocationRole Role, RelocationId Relocation, RelocationObjectIdentity Object, RequestTerminalResult TerminalResult, FrameworkErrorCode FailureCode);
+    internal readonly record struct RelocationControlData(RelocationPhase Phase, RelocationRole Role, RelocationId Relocation, RelocationObjectIdentity Object, RequestTerminalResult TerminalResult, FrameworkErrorCode FailureCode);
 
     internal abstract record RequestSpecificTail;
     internal sealed record RequestSpecificTailCase0(ActorRef Actor, Text8 SpotId, NonzeroU64 SpotGeneration, NonzeroU64 MembershipEpoch, NonzeroU64 AuthorityOwnerGeneration) : RequestSpecificTail;
@@ -629,7 +629,7 @@ internal static class ServiceWireCodec
     internal sealed record FrozenReplyRouteCase4(NonzeroU64 ReplyRouteId) : FrozenReplyRoute;
     internal sealed record FrozenReplyRouteOtherwise() : FrozenReplyRoute;
 
-    internal sealed record FrozenRecord(MeshRecordKind RecordKind, FrozenSourceIdentity Source, Bool8 HasMetadata, MetadataFrame? Metadata, OperationIdOrZero OperationId, MeshOperationKind OperationKind, FrozenReplyRoute ReplyRoute, FrozenRecordBody Body);
+    internal readonly record struct FrozenRecord(MeshRecordKind RecordKind, FrozenSourceIdentity Source, Bool8 HasMetadata, MetadataFrame? Metadata, OperationIdOrZero OperationId, MeshOperationKind OperationKind, FrozenReplyRoute ReplyRoute, FrozenRecordBody Body);
 
     internal abstract record InstanceRouteV1;
     internal sealed record InstanceRouteV1Case0(InstanceRouteKind RouteKind, Rid TargetNodeRid, NonzeroU64 TargetNodeGeneration, Text8 TargetSpotId, AuthorityGenerationFence Authority, Bool8 InstanceIntent) : InstanceRouteV1;
@@ -647,328 +647,372 @@ internal static class ServiceWireCodec
     internal sealed record AuthorityActivationRecoveryStateCase0(Bool8 HasActivationRecovery) : AuthorityActivationRecoveryState;
     internal sealed record AuthorityActivationRecoveryStateCase1(Bool8 HasActivationRecovery, CreationContentReference Reference, Sha256Bytes Sha256, CreationRequestSize EncodedSize, NonzeroU64 InboxSequence, U64 ReplayCursor) : AuthorityActivationRecoveryState;
 
-    internal sealed record AuthorityPayloadV1(AuthorityOperationKind OperationKind, AuthorityObjectIdentity Object, Text8 OwnerId, NonzeroU64 OwnerLeaseGeneration, Text8 OwnerMeshName, Rid OwnerNodeRid, NonzeroU64 OwnerNodeGeneration, AuthorityRelocationState RelocationState, AuthorityActivationRecoveryState ActivationRecoveryState);
+    internal readonly record struct AuthorityPayloadV1(AuthorityOperationKind OperationKind, AuthorityObjectIdentity Object, Text8 OwnerId, NonzeroU64 OwnerLeaseGeneration, Text8 OwnerMeshName, Rid OwnerNodeRid, NonzeroU64 OwnerNodeGeneration, AuthorityRelocationState RelocationState, AuthorityActivationRecoveryState ActivationRecoveryState);
 
-    internal sealed record SavedWorkEntry(NonzeroU64 ParticipantId, NonzeroU64 Order, FrozenRecord Record);
+    internal readonly record struct SavedWorkEntry(NonzeroU64 ParticipantId, NonzeroU64 Order, FrozenRecord Record);
 
-    internal sealed record SavedWorkVector(IReadOnlyList<SavedWorkEntry> Items);
+    internal readonly record struct SavedWorkVector(IReadOnlyList<SavedWorkEntry> Items);
 
-    internal sealed record DurableBlob(byte[] Value);
+    internal readonly record struct DurableBlob(byte[] Value);
 
-    internal sealed record DurableStateBlob(byte[] Value);
+    internal readonly record struct DurableStateBlob(byte[] Value);
 
-    internal sealed record RelocationChunkEntryV1(U32 Order, RelocationReference Reference, NonzeroU64 Length, U32 ChecksumCrc32c);
+    internal readonly record struct RelocationChunkEntryV1(U32 Order, RelocationReference Reference, NonzeroU64 Length, U32 ChecksumCrc32c);
 
-    internal sealed record RelocationChunkVectorV1(IReadOnlyList<RelocationChunkEntryV1> Items);
+    internal readonly record struct RelocationChunkVectorV1(IReadOnlyList<RelocationChunkEntryV1> Items);
 
-    internal sealed record RelocationManifestV1(U8 LogicalFormatVersion, RelocationLogicalLength TotalLength, U32 TotalChecksumCrc32c, Sha256Bytes InventoryDigestSha256, RelocationChunkVectorV1 Chunks);
+    internal readonly record struct RelocationManifestV1(U8 LogicalFormatVersion, RelocationLogicalLength TotalLength, U32 TotalChecksumCrc32c, Sha256Bytes InventoryDigestSha256, RelocationChunkVectorV1 Chunks);
 
-    internal sealed record RelocationDataChunkV1(U32 Order, DurableBlob Data);
+    internal readonly record struct RelocationDataChunkV1(U32 Order, DurableBlob Data);
 
     internal abstract record RelocationApplicationState;
     internal sealed record RelocationApplicationStateCase0(Bool8 HasState) : RelocationApplicationState;
     internal sealed record RelocationApplicationStateCase1(Bool8 HasState, DurableStateBlob Payload) : RelocationApplicationState;
 
-    internal sealed record RelocationParticipantApplicationState(NonzeroU64 ParticipantId, RelocationApplicationState ApplicationState);
+    internal readonly record struct RelocationParticipantApplicationState(NonzeroU64 ParticipantId, RelocationApplicationState ApplicationState);
 
-    internal sealed record RelocationParticipantApplicationStateVector(IReadOnlyList<RelocationParticipantApplicationState> Items);
+    internal readonly record struct RelocationParticipantApplicationStateVector(IReadOnlyList<RelocationParticipantApplicationState> Items);
 
-    internal sealed record RelocationTimerRegistration(NonzeroU64 ParticipantId, Text8 Name, Text8 HandlerType, NonzeroU64 PeriodMilliseconds, TimerOverrunPolicyKind OverrunPolicy, NonzeroU64 MaxCatchUpTicks, Bool8 StopOnUnhandledException, OrdinalOrZero LastCompletedDeliveryIndex, OrdinalOrZero LastCompletedScheduledIndex, U64 NextScheduledAtUnixMilliseconds);
+    internal readonly record struct RelocationTimerRegistration(NonzeroU64 ParticipantId, Text8 Name, Text8 HandlerType, NonzeroU64 PeriodMilliseconds, TimerOverrunPolicyKind OverrunPolicy, NonzeroU64 MaxCatchUpTicks, Bool8 StopOnUnhandledException, OrdinalOrZero LastCompletedDeliveryIndex, OrdinalOrZero LastCompletedScheduledIndex, U64 NextScheduledAtUnixMilliseconds);
 
-    internal sealed record RelocationTimerRegistrationVector(IReadOnlyList<RelocationTimerRegistration> Items);
+    internal readonly record struct RelocationTimerRegistrationVector(IReadOnlyList<RelocationTimerRegistration> Items);
 
-    internal sealed record RelocationPendingTimerTick(NonzeroU64 ParticipantId, NonzeroU64 Order, Text8 TimerName, NonzeroU64 DeliveryIndex, NonzeroU64 ScheduledIndex, U64 ScheduledAtUnixMilliseconds, OrdinalOrZero SkippedTicks);
+    internal readonly record struct RelocationPendingTimerTick(NonzeroU64 ParticipantId, NonzeroU64 Order, Text8 TimerName, NonzeroU64 DeliveryIndex, NonzeroU64 ScheduledIndex, U64 ScheduledAtUnixMilliseconds, OrdinalOrZero SkippedTicks);
 
-    internal sealed record RelocationPendingTimerTickVector(IReadOnlyList<RelocationPendingTimerTick> Items);
+    internal readonly record struct RelocationPendingTimerTickVector(IReadOnlyList<RelocationPendingTimerTick> Items);
 
-    internal sealed record RelocationSessionBinding(NonzeroU64 ParticipantId, Rid SessionOwnerNodeRid, NonzeroU64 SessionOwnerNodeGeneration, Text8 SessionOwnerId, NonzeroU64 SessionOwnerLeaseGeneration, Rid SessionRid, NonzeroU64 BindingGeneration);
+    internal readonly record struct RelocationSessionBinding(NonzeroU64 ParticipantId, Rid SessionOwnerNodeRid, NonzeroU64 SessionOwnerNodeGeneration, Text8 SessionOwnerId, NonzeroU64 SessionOwnerLeaseGeneration, Rid SessionRid, NonzeroU64 BindingGeneration);
 
-    internal sealed record RelocationSessionBindingVector(IReadOnlyList<RelocationSessionBinding> Items);
+    internal readonly record struct RelocationSessionBindingVector(IReadOnlyList<RelocationSessionBinding> Items);
 
-    internal sealed record RelocationEnvelopeV1(RelocationId Relocation, RelocationObjectIdentity Object, ApplicationVersion ApplicationVersion, RelocationParticipantApplicationStateVector ApplicationStates, SavedWorkVector SavedWork, RelocationTimerRegistrationVector TimerRegistrations, RelocationPendingTimerTickVector PendingTimerTicks, RelocationSessionBindingVector SessionBindings);
+    internal readonly record struct RelocationEnvelopeV1(RelocationId Relocation, RelocationObjectIdentity Object, ApplicationVersion ApplicationVersion, RelocationParticipantApplicationStateVector ApplicationStates, SavedWorkVector SavedWork, RelocationTimerRegistrationVector TimerRegistrations, RelocationPendingTimerTickVector PendingTimerTicks, RelocationSessionBindingVector SessionBindings);
 
-    internal sealed record Hello1(byte Flags,ServiceAdmission Admission);
+    internal readonly record struct Hello1(byte Flags,ServiceAdmission Admission);
 
-    internal sealed record Admit2(byte Flags,ServiceAdmission Admission);
+    internal readonly record struct Admit2(byte Flags,ServiceAdmission Admission);
 
-    internal sealed record Reject3(byte Flags,RejectReason Reason);
+    internal readonly record struct Reject3(byte Flags,RejectReason Reason);
 
-    internal sealed record Update4(byte Flags,ServiceAdmission Admission);
+    internal readonly record struct Update4(byte Flags,ServiceAdmission Admission);
 
-    internal sealed record LivenessProbe5(byte Flags,NonzeroU64 ProbeId);
+    internal readonly record struct LivenessProbe5(byte Flags,NonzeroU64 ProbeId);
 
-    internal sealed record LivenessAck6(byte Flags,NonzeroU64 ProbeId);
+    internal readonly record struct LivenessAck6(byte Flags,NonzeroU64 ProbeId);
 
-    internal sealed record NodeSend16(byte Flags,MetadataFrame? Metadata,ApplicationPayloadEnvelopeV1 Payload);
+    internal readonly record struct NodeSend16(byte Flags,MetadataFrame? Metadata,ApplicationPayloadEnvelopeV1 Payload);
 
-    internal sealed record NodeRequest17(byte Flags,NonzeroU64 Correlation,MetadataFrame? Metadata,ApplicationPayloadEnvelopeV1 Payload);
+    internal readonly record struct NodeRequest17(byte Flags,NonzeroU64 Correlation,MetadataFrame? Metadata,ApplicationPayloadEnvelopeV1 Payload);
 
-    internal sealed record ChannelSend18(byte Flags,Text8 ChannelName,MetadataFrame? Metadata,ApplicationPayloadEnvelopeV1 Payload);
+    internal readonly record struct ChannelSend18(byte Flags,Text8 ChannelName,MetadataFrame? Metadata,ApplicationPayloadEnvelopeV1 Payload);
 
-    internal sealed record ChannelRequest19(byte Flags,NonzeroU64 Correlation,Text8 ChannelName,MetadataFrame? Metadata,ApplicationPayloadEnvelopeV1 Payload);
+    internal readonly record struct ChannelRequest19(byte Flags,NonzeroU64 Correlation,Text8 ChannelName,MetadataFrame? Metadata,ApplicationPayloadEnvelopeV1 Payload);
 
-    internal sealed record Reply20(byte Flags,NonzeroU64 Correlation,RequestTerminalResult TerminalResult,FrameworkErrorCode FailureCode,RequestSpecificTail Tail,ApplicationPayloadEnvelopeV1? Payload);
+    internal readonly record struct Reply20(byte Flags,NonzeroU64 Correlation,RequestTerminalResult TerminalResult,FrameworkErrorCode FailureCode,RequestSpecificTail Tail,ApplicationPayloadEnvelopeV1? Payload);
 
-    internal sealed record SpotSend21(byte Flags,OperationId Operation,U8 MessageFollowHopCount,Text8 SourceSpotId,SpotRouteFence TargetSpot,MetadataFrame? Metadata,ApplicationPayloadEnvelopeV1 Payload);
+    internal readonly record struct SpotSend21(byte Flags,OperationId Operation,U8 MessageFollowHopCount,Text8 SourceSpotId,SpotRouteFence TargetSpot,MetadataFrame? Metadata,ApplicationPayloadEnvelopeV1 Payload);
 
-    internal sealed record SpotRequest22(byte Flags,NonzeroU64 Correlation,OperationId Operation,U8 MessageFollowHopCount,Text8 SourceSpotId,SpotRouteFence TargetSpot,MetadataFrame? Metadata,ApplicationPayloadEnvelopeV1 Payload);
+    internal readonly record struct SpotRequest22(byte Flags,NonzeroU64 Correlation,OperationId Operation,U8 MessageFollowHopCount,Text8 SourceSpotId,SpotRouteFence TargetSpot,MetadataFrame? Metadata,ApplicationPayloadEnvelopeV1 Payload);
 
-    internal sealed record LogicalMulticast23(byte Flags,Text8 ChannelName,Text8 Topic,Text8 SourceSpotId,MetadataFrame? Metadata,ApplicationPayloadEnvelopeV1 Payload);
+    internal readonly record struct LogicalMulticast23(byte Flags,Text8 ChannelName,Text8 Topic,Text8 SourceSpotId,MetadataFrame? Metadata,ApplicationPayloadEnvelopeV1 Payload);
 
-    internal sealed record ActorSend24(byte Flags,OperationId Operation,U8 MessageFollowHopCount,OptionalActorRef SourceActor,ActorRouteFence TargetActor,OptionalBoundSessionTail? BoundSessionTail,MetadataFrame? Metadata,ApplicationPayloadEnvelopeV1 Payload);
+    internal readonly record struct ActorSend24(byte Flags,OperationId Operation,U8 MessageFollowHopCount,OptionalActorRef SourceActor,ActorRouteFence TargetActor,OptionalBoundSessionTail? BoundSessionTail,MetadataFrame? Metadata,ApplicationPayloadEnvelopeV1 Payload);
 
-    internal sealed record ActorRequest25(byte Flags,NonzeroU64 Correlation,OperationId Operation,U8 MessageFollowHopCount,OptionalActorRef SourceActor,ActorRouteFence TargetActor,OptionalBoundSessionTail? BoundSessionTail,MetadataFrame? Metadata,ApplicationPayloadEnvelopeV1 Payload);
+    internal readonly record struct ActorRequest25(byte Flags,NonzeroU64 Correlation,OperationId Operation,U8 MessageFollowHopCount,OptionalActorRef SourceActor,ActorRouteFence TargetActor,OptionalBoundSessionTail? BoundSessionTail,MetadataFrame? Metadata,ApplicationPayloadEnvelopeV1 Payload);
 
-    internal sealed record ActorLookup26(byte Flags,NonzeroU64 Correlation,Text8 ActorId);
+    internal readonly record struct ActorLookup26(byte Flags,NonzeroU64 Correlation,Text8 ActorId);
 
-    internal sealed record ActorDestroy27(byte Flags,NonzeroU64 Correlation,ActorRouteFence Actor);
+    internal readonly record struct ActorDestroy27(byte Flags,NonzeroU64 Correlation,ActorRouteFence Actor);
 
-    internal sealed record ActorJoin28(byte Flags,NonzeroU64 Correlation,ActorRouteFence Actor,Bool8 Entry,SpotRouteFence TargetSpot,ApplicationPayloadEnvelopeV1? Payload);
+    internal readonly record struct ActorJoin28(byte Flags,NonzeroU64 Correlation,ActorRouteFence Actor,Bool8 Entry,SpotRouteFence TargetSpot,ApplicationPayloadEnvelopeV1? Payload);
 
-    internal sealed record ActorLeft29(byte Flags,ActorRef Actor,SpotMembership PreviousMembership,NonzeroU64 CurrentAuthorityOwnerGeneration);
+    internal readonly record struct ActorLeft29(byte Flags,ActorRef Actor,SpotMembership PreviousMembership,NonzeroU64 CurrentAuthorityOwnerGeneration);
 
-    internal sealed record RelocationReady30(byte Flags,RelocationId Relocation,NonzeroU64 TargetAttemptGeneration,RelocationCoordinatorFence Coordinator,RelocationTargetFence Target,RelocationObjectIdentity Object,RelocationRole SenderRole);
+    internal readonly record struct RelocationReady30(byte Flags,RelocationId Relocation,NonzeroU64 TargetAttemptGeneration,RelocationCoordinatorFence Coordinator,RelocationTargetFence Target,RelocationObjectIdentity Object,RelocationRole SenderRole);
 
-    internal sealed record RelocationData31(byte Flags,RelocationId Relocation,NonzeroU64 TargetAttemptGeneration,RelocationCoordinatorFence Coordinator,RelocationRole SenderRole,RelocationObjectIdentity Object,FrozenRecord Record);
+    internal readonly record struct RelocationData31(byte Flags,RelocationId Relocation,NonzeroU64 TargetAttemptGeneration,RelocationCoordinatorFence Coordinator,RelocationRole SenderRole,RelocationObjectIdentity Object,FrozenRecord Record);
 
-    internal sealed record ReplyRelay33(byte Flags,OperationId Operation,NonzeroU64 ReplyRouteId,ReplyRelayContext Context,RequestTerminalResult TerminalResult,FrameworkErrorCode FailureCode,ApplicationPayloadEnvelopeV1? Payload);
+    internal readonly record struct ReplyRelay33(byte Flags,OperationId Operation,NonzeroU64 ReplyRouteId,ReplyRelayContext Context,RequestTerminalResult TerminalResult,FrameworkErrorCode FailureCode,ApplicationPayloadEnvelopeV1? Payload);
 
-    internal sealed record RelocationCutover34(byte Flags,RelocationId Relocation,NonzeroU64 TargetAttemptGeneration,RelocationCoordinatorFence Coordinator,RelocationRole SenderRole,RelocationObjectIdentity Object,OrdinalOrZero BoundaryRecordCount,U32 BoundaryChecksumCrc32c);
+    internal readonly record struct RelocationCutover34(byte Flags,RelocationId Relocation,NonzeroU64 TargetAttemptGeneration,RelocationCoordinatorFence Coordinator,RelocationRole SenderRole,RelocationObjectIdentity Object,OrdinalOrZero BoundaryRecordCount,U32 BoundaryChecksumCrc32c);
 
-    internal sealed record BoundSessionSend36(byte Flags,ActorRouteFence Actor,NonzeroU64 ExpectedBindingGeneration,ApplicationPayloadEnvelopeV1 Payload);
+    internal readonly record struct BoundSessionSend36(byte Flags,ActorRouteFence Actor,NonzeroU64 ExpectedBindingGeneration,ApplicationPayloadEnvelopeV1 Payload);
 
-    internal sealed record ActorJoined37(byte Flags,ActorRef Actor,OptionalSpotMembership PreviousMembership,SpotMembership CurrentMembership,NonzeroU64 CurrentAuthorityOwnerGeneration);
+    internal readonly record struct ActorJoined37(byte Flags,ActorRef Actor,OptionalSpotMembership PreviousMembership,SpotMembership CurrentMembership,NonzeroU64 CurrentAuthorityOwnerGeneration);
 
-    internal sealed record BoundSessionBind38(byte Flags,NonzeroU64 Correlation,ActorRouteFence Actor,Rid SessionRid,BoundSessionBindingTransition Binding);
+    internal readonly record struct BoundSessionBind38(byte Flags,NonzeroU64 Correlation,ActorRouteFence Actor,Rid SessionRid,BoundSessionBindingTransition Binding);
 
-    internal sealed record InstanceSpot39(byte Flags,InstanceRouteV1 Route,NonzeroU64 SourceNodeGeneration,Rid SourceNodeRid,OptionalText8 SourceSpotId,InstanceOperationKind OperationKind,OperationIdOrZero Operation,InstanceReplyRoute ReplyRoute,MetadataFrame? Metadata,ApplicationPayloadEnvelopeV1 Payload);
+    internal readonly record struct InstanceSpot39(byte Flags,InstanceRouteV1 Route,NonzeroU64 SourceNodeGeneration,Rid SourceNodeRid,OptionalText8 SourceSpotId,InstanceOperationKind OperationKind,OperationIdOrZero Operation,InstanceReplyRoute ReplyRoute,MetadataFrame? Metadata,ApplicationPayloadEnvelopeV1 Payload);
 
-    internal sealed record RelocationPrepare40(byte Flags,RelocationId Relocation,NonzeroU64 TargetAttemptGeneration,RelocationCoordinatorFence Coordinator,RelocationTargetFence Target,RelocationRole InitiatorRole,RelocationObjectIdentity Object,Rid SourceNodeRid,NonzeroU64 SourceNodeGeneration,RelocationLogicalLength PayloadTotalLength,RelocationChunkCount PayloadChunkCount,U32 PayloadChecksumCrc32c,ApplicationVersion ApplicationVersion,NonzeroU64 DeadlineUnixMs);
+    internal readonly record struct RelocationPrepare40(byte Flags,RelocationId Relocation,NonzeroU64 TargetAttemptGeneration,RelocationCoordinatorFence Coordinator,RelocationTargetFence Target,RelocationRole InitiatorRole,RelocationObjectIdentity Object,Rid SourceNodeRid,NonzeroU64 SourceNodeGeneration,RelocationLogicalLength PayloadTotalLength,RelocationChunkCount PayloadChunkCount,U32 PayloadChecksumCrc32c,ApplicationVersion ApplicationVersion,NonzeroU64 DeadlineUnixMs);
 
-    internal sealed record SessionRelocationSeal42(byte Flags,RelocationId Relocation,RelocationCoordinatorFence Coordinator,RelocationRole SenderRole,ActorRouteFence Actor,Rid SessionOwnerNodeRid,NonzeroU64 SessionOwnerNodeGeneration,Text8 SessionOwnerId,NonzeroU64 SessionOwnerLeaseGeneration,Rid SessionRid,NonzeroU64 BindingGeneration,Rid TargetNodeRid,NonzeroU64 TargetNodeGeneration);
+    internal readonly record struct SessionRelocationSeal42(byte Flags,RelocationId Relocation,RelocationCoordinatorFence Coordinator,RelocationRole SenderRole,ActorRouteFence Actor,Rid SessionOwnerNodeRid,NonzeroU64 SessionOwnerNodeGeneration,Text8 SessionOwnerId,NonzeroU64 SessionOwnerLeaseGeneration,Rid SessionRid,NonzeroU64 BindingGeneration,Rid TargetNodeRid,NonzeroU64 TargetNodeGeneration);
 
-    internal sealed record SessionRelocationSealed43(byte Flags,RelocationId Relocation,RelocationCoordinatorFence Coordinator,ActorRouteFence Actor,Rid SessionOwnerNodeRid,NonzeroU64 SessionOwnerNodeGeneration,Text8 SessionOwnerId,NonzeroU64 SessionOwnerLeaseGeneration,Rid SessionRid,NonzeroU64 BindingGeneration,SessionSealResult SealResult);
+    internal readonly record struct SessionRelocationSealed43(byte Flags,RelocationId Relocation,RelocationCoordinatorFence Coordinator,ActorRouteFence Actor,Rid SessionOwnerNodeRid,NonzeroU64 SessionOwnerNodeGeneration,Text8 SessionOwnerId,NonzeroU64 SessionOwnerLeaseGeneration,Rid SessionRid,NonzeroU64 BindingGeneration,SessionSealResult SealResult);
 
-    internal sealed record SessionRelocationRoute44(byte Flags,RelocationId Relocation,RelocationCoordinatorFence Coordinator,RelocationRole SenderRole,ActorRef Actor,Rid SessionOwnerNodeRid,NonzeroU64 SessionOwnerNodeGeneration,Text8 SessionOwnerId,NonzeroU64 SessionOwnerLeaseGeneration,Rid SessionRid,NonzeroU64 BindingGeneration,SessionRelocationRouteUpdate Route);
+    internal readonly record struct SessionRelocationRoute44(byte Flags,RelocationId Relocation,RelocationCoordinatorFence Coordinator,RelocationRole SenderRole,ActorRef Actor,Rid SessionOwnerNodeRid,NonzeroU64 SessionOwnerNodeGeneration,Text8 SessionOwnerId,NonzeroU64 SessionOwnerLeaseGeneration,Rid SessionRid,NonzeroU64 BindingGeneration,SessionRelocationRouteUpdate Route);
 
-    internal sealed record ReplyRelayAck46(byte Flags,RelocationId Relocation,RelocationCoordinatorFence Coordinator,OperationId Operation,NonzeroU64 ReplyRouteId,RequestSourceFence RequestSource,ReplyRelayAckStatus Status);
+    internal readonly record struct ReplyRelayAck46(byte Flags,RelocationId Relocation,RelocationCoordinatorFence Coordinator,OperationId Operation,NonzeroU64 ReplyRouteId,RequestSourceFence RequestSource,ReplyRelayAckStatus Status);
 
-    internal sealed record UserSpotCreate47(byte Flags,NonzeroU64 Correlation,OperationId Operation,Rid SourceNodeRid,NonzeroU64 SourceNodeGeneration,Text8 SpotId,Text8 StableType,ObjectReservationFence Reservation,NonzeroU64 DeadlineUnixMs);
+    internal readonly record struct UserSpotCreate47(byte Flags,NonzeroU64 Correlation,OperationId Operation,Rid SourceNodeRid,NonzeroU64 SourceNodeGeneration,Text8 SpotId,Text8 StableType,ObjectReservationFence Reservation,NonzeroU64 DeadlineUnixMs);
 
-    internal sealed record UserSpotClose48(byte Flags,NonzeroU64 Correlation,OperationId Operation,Rid SourceNodeRid,NonzeroU64 SourceNodeGeneration,UserSpotCloseFenceV1 Target,NonzeroU64 DeadlineUnixMs);
+    internal readonly record struct UserSpotClose48(byte Flags,NonzeroU64 Correlation,OperationId Operation,Rid SourceNodeRid,NonzeroU64 SourceNodeGeneration,UserSpotCloseFenceV1 Target,NonzeroU64 DeadlineUnixMs);
 
-    internal sealed record ActorCreate49(byte Flags,NonzeroU64 Correlation,OperationId Operation,Rid SourceNodeRid,NonzeroU64 SourceNodeGeneration,Text8 ActorId,Text8 StableType,ObjectReservationFence Reservation,NonzeroU64 DeadlineUnixMs);
+    internal readonly record struct ActorCreate49(byte Flags,NonzeroU64 Correlation,OperationId Operation,Rid SourceNodeRid,NonzeroU64 SourceNodeGeneration,Text8 ActorId,Text8 StableType,ObjectReservationFence Reservation,NonzeroU64 DeadlineUnixMs);
 
-    internal sealed record MessageFollow50(byte Flags,MessageFollowRouteV1 Route);
+    internal readonly record struct MessageFollow50(byte Flags,MessageFollowRouteV1 Route);
 
-    internal sealed record BoundSessionReplaced51(byte Flags,ActorRouteFence ActorAuthority,RetiredBoundSessionRouteFence RetiredSession);
+    internal readonly record struct BoundSessionReplaced51(byte Flags,ActorRouteFence ActorAuthority,RetiredBoundSessionRouteFence RetiredSession);
 
-    internal sealed record RelocationState52(byte Flags,RelocationId Relocation,NonzeroU64 TargetAttemptGeneration,RelocationCoordinatorFence Coordinator,RelocationRole SenderRole,RelocationObjectIdentity Object,U32 ChunkOrdinal,DurableBlob ChunkData);
+    internal readonly record struct RelocationState52(byte Flags,RelocationId Relocation,NonzeroU64 TargetAttemptGeneration,RelocationCoordinatorFence Coordinator,RelocationRole SenderRole,RelocationObjectIdentity Object,U32 ChunkOrdinal,DurableBlob ChunkData);
 
-    internal sealed record RelocationFailed53(byte Flags,RelocationId Relocation,NonzeroU64 TargetAttemptGeneration,RelocationCoordinatorFence Coordinator,RelocationTargetFence Target,RelocationObjectIdentity Object,RelocationRole SenderRole,FrameworkErrorCode FailureCode);
+    internal readonly record struct RelocationFailed53(byte Flags,RelocationId Relocation,NonzeroU64 TargetAttemptGeneration,RelocationCoordinatorFence Coordinator,RelocationTargetFence Target,RelocationObjectIdentity Object,RelocationRole SenderRole,FrameworkErrorCode FailureCode);
 
-    internal sealed record BoundSessionClose54(byte Flags,NonzeroU64 Correlation,ActorRef Actor,RetiredBoundSessionRouteFence Session);
-    private sealed class Reader{private readonly byte[]b;private readonly int limit;private int p;internal Reader(byte[] bytes){b=bytes;limit=bytes.Length;}internal int Remaining=>limit-p;private void N(int n){if(n<0||Remaining<n)throw new EndOfStreamException("truncated");}internal byte U8()=>Bytes(1)[0];internal ushort U16()=>BinaryPrimitives.ReadUInt16BigEndian(Bytes(2));internal uint U32()=>BinaryPrimitives.ReadUInt32BigEndian(Bytes(4));internal ulong U64()=>BinaryPrimitives.ReadUInt64BigEndian(Bytes(8));internal long I64()=>BinaryPrimitives.ReadInt64BigEndian(Bytes(8));internal byte[] Bytes(int n){N(n);var value=b.AsSpan(p,n).ToArray();p+=n;return value;}internal Reader Slice(int n)=>new(Bytes(n));internal void End(string n){if(Remaining!=0)throw Error(n+": trailing");}} private sealed class Writer{private readonly List<byte[]>chunks=[];private long length;internal long Length=>length;private void Add(byte[]v){chunks.Add(v);length=checked(length+v.LongLength);}internal void U8(byte v)=>Add([v]);internal void U16(ushort v){var x=new byte[2];BinaryPrimitives.WriteUInt16BigEndian(x,v);Add(x);}internal void U32(uint v){var x=new byte[4];BinaryPrimitives.WriteUInt32BigEndian(x,v);Add(x);}internal void U64(ulong v){var x=new byte[8];BinaryPrimitives.WriteUInt64BigEndian(x,v);Add(x);}internal void I64(long v){var x=new byte[8];BinaryPrimitives.WriteInt64BigEndian(x,v);Add(x);}internal void Bytes(byte[]v)=>Add(v);internal byte[]ToArray(){if(length>int.MaxValue)throw Capacity("writer capacity");var result=GC.AllocateUninitializedArray<byte>((int)length);var offset=0;foreach(var chunk in chunks){chunk.CopyTo(result,offset);offset+=chunk.Length;}return result;}} private sealed class CapacityException(string message):Exception(message);private static CapacityException Capacity(string m)=>new(m);private static readonly UTF8Encoding Utf8=new(false,true);private static string StrictText(byte[] bytes,string name){try{return Utf8.GetString(bytes);}catch(DecoderFallbackException failure){throw new InvalidDataException(name+": UTF-8",failure);}}private static InvalidDataException Error(string m)=>new(m);private static int CompareBytes(byte[]a,byte[]b){var n=Math.Min(a.Length,b.Length);for(var i=0;i<n;i++){var c=a[i].CompareTo(b[i]);if(c!=0)return c;}return a.Length.CompareTo(b.Length);}private static string AuthorityComponent(string value){var bytes=Utf8.GetBytes(value);var result=new StringBuilder().Append(bytes.Length).Append(':');foreach(var b in bytes){if((b>=(byte)'A'&&b<=(byte)'Z')||(b>=(byte)'a'&&b<=(byte)'z')||(b>=(byte)'0'&&b<=(byte)'9')||b is (byte)'-' or (byte)'.' or (byte)'_' or (byte)'~')result.Append((char)b);else result.Append('%').Append(b.ToString("X2"));}return result.ToString();}private static uint Crc32C(ReadOnlySpan<byte>b){var c=uint.MaxValue;foreach(var v in b){c^=v;for(var i=0;i<8;i++)c=(c>>1)^(0x82f63b78u&(uint)-(int)(c&1));}return~c;}
+    internal readonly record struct BoundSessionClose54(byte Flags,NonzeroU64 Correlation,ActorRef Actor,RetiredBoundSessionRouteFence Session);
+
+    private ref struct Reader
+    {
+        private readonly ReadOnlySpan<byte> bytes;
+        private int position;
+        internal Reader(ReadOnlySpan<byte> value) { bytes = value; position = 0; }
+        internal int Remaining => bytes.Length - position;
+        internal ReadOnlySpan<byte> Bytes(int count)
+        {
+            if (count < 0 || count > Remaining) throw new EndOfStreamException("truncated");
+            var value = bytes.Slice(position, count); position += count; return value;
+        }
+        internal byte U8() => Bytes(1)[0];
+        internal ushort U16() => BinaryPrimitives.ReadUInt16BigEndian(Bytes(2));
+        internal uint U32() => BinaryPrimitives.ReadUInt32BigEndian(Bytes(4));
+        internal ulong U64() => BinaryPrimitives.ReadUInt64BigEndian(Bytes(8));
+        internal long I64() => BinaryPrimitives.ReadInt64BigEndian(Bytes(8));
+        internal Reader Slice(int count) => new(Bytes(count));
+        internal void End(string name) { if (Remaining != 0) throw Error(name + ": trailing"); }
+    }
+    private ref struct Writer
+    {
+        private readonly Span<byte> buffer;
+        private int length;
+        internal Writer(Span<byte> destination) { buffer = destination; length = 0; }
+        internal int Length => length;
+        internal bool IsSizing => buffer.IsEmpty;
+        internal ReadOnlySpan<byte> Written => buffer.IsEmpty ? default : buffer[..length];
+        internal Writer At(int offset) => new(buffer.IsEmpty ? default : buffer[offset..]);
+        private Span<byte> Append(int count)
+        {
+            if (count > int.MaxValue - length) throw Capacity("writer capacity");
+            var offset = length; length += count;
+            return buffer.IsEmpty ? default : buffer.Slice(offset, count);
+        }
+        internal void Reserve(int count) => Append(count);
+        internal void U8(byte value) { var target = Append(1); if (!target.IsEmpty) target[0] = value; }
+        internal void U16(ushort value) { var target = Append(2); if (!target.IsEmpty) BinaryPrimitives.WriteUInt16BigEndian(target, value); }
+        internal void U32(uint value) { var target = Append(4); if (!target.IsEmpty) BinaryPrimitives.WriteUInt32BigEndian(target, value); }
+        internal void U64(ulong value) { var target = Append(8); if (!target.IsEmpty) BinaryPrimitives.WriteUInt64BigEndian(target, value); }
+        internal void I64(long value) { var target = Append(8); if (!target.IsEmpty) BinaryPrimitives.WriteInt64BigEndian(target, value); }
+        internal void Bytes(scoped ReadOnlySpan<byte> value) { var target = Append(value.Length); if (!target.IsEmpty) value.CopyTo(target); }
+        internal void Text(string? value, int byteCount) { var target = Append(byteCount); if (!target.IsEmpty) Utf8.GetBytes(value, target); }
+    }
+ private sealed class CapacityException(string message):Exception(message);private static CapacityException Capacity(string m)=>new(m);private static readonly UTF8Encoding Utf8=new(false,true);private static string StrictText(ReadOnlySpan<byte> bytes,string name){try{return Utf8.GetString(bytes);}catch(DecoderFallbackException failure){throw new InvalidDataException(name+": UTF-8",failure);}}private static InvalidDataException Error(string m)=>new(m);private static int CompareBytes(byte[]a,byte[]b){var n=Math.Min(a.Length,b.Length);for(var i=0;i<n;i++){var c=a[i].CompareTo(b[i]);if(c!=0)return c;}return a.Length.CompareTo(b.Length);}private static string AuthorityComponent(string value){var bytes=Utf8.GetBytes(value);var result=new StringBuilder().Append(bytes.Length).Append(':');foreach(var b in bytes){if((b>=(byte)'A'&&b<=(byte)'Z')||(b>=(byte)'a'&&b<=(byte)'z')||(b>=(byte)'0'&&b<=(byte)'9')||b is (byte)'-' or (byte)'.' or (byte)'_' or (byte)'~')result.Append((char)b);else result.Append('%').Append(b.ToString("X2"));}return result.ToString();}private static uint Crc32C(ReadOnlySpan<byte>b){var c=uint.MaxValue;foreach(var v in b){c^=v;for(var i=0;i<8;i++)c=(c>>1)^(0x82f63b78u&(uint)-(int)(c&1));}return~c;}
     internal static void ValidateTerminalFailure(RequestTerminalResult result, FrameworkErrorCode failure){if(!ServiceWireConstants.ValidTerminalFailure((uint)result,(uint)failure))throw Error("terminal failure integrity");}
-    internal static U8 DecodeU8(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadU8(reader, context); reader.End("u8"); return value; }
-    internal static byte[] EncodeU8(U8 value, DecodeContext context) { var writer = new Writer(); WriteU8(writer, value, context); return writer.ToArray(); }
-    private static U8 ReadU8(Reader reader, DecodeContext context)
+    internal static U8 DecodeU8(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadU8(ref reader, context); reader.End("u8"); return value; }
+    internal static byte[] EncodeU8(U8 value, DecodeContext context) { var writer = new Writer(); WriteU8(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteU8(ref writer, value, context); return bytes; }
+    private static U8 ReadU8(ref Reader reader, DecodeContext context)
     {
         var raw = reader.U8();
         if (raw < 0 || raw > 255) throw Error("u8: range");
         return new(raw);
     }
-    private static void WriteU8(Writer writer, U8 value, DecodeContext context)
+    private static void WriteU8(ref Writer writer, U8 value, DecodeContext context)
     {
         if (value.Value < 0 || value.Value > 255) throw Error("u8: range");
         writer.U8(value.Value);
     }
 
-    internal static U16 DecodeU16(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadU16(reader, context); reader.End("u16"); return value; }
-    internal static byte[] EncodeU16(U16 value, DecodeContext context) { var writer = new Writer(); WriteU16(writer, value, context); return writer.ToArray(); }
-    private static U16 ReadU16(Reader reader, DecodeContext context)
+    internal static U16 DecodeU16(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadU16(ref reader, context); reader.End("u16"); return value; }
+    internal static byte[] EncodeU16(U16 value, DecodeContext context) { var writer = new Writer(); WriteU16(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteU16(ref writer, value, context); return bytes; }
+    private static U16 ReadU16(ref Reader reader, DecodeContext context)
     {
         var raw = reader.U16();
         if (raw < 0 || raw > 65535) throw Error("u16: range");
         return new(raw);
     }
-    private static void WriteU16(Writer writer, U16 value, DecodeContext context)
+    private static void WriteU16(ref Writer writer, U16 value, DecodeContext context)
     {
         if (value.Value < 0 || value.Value > 65535) throw Error("u16: range");
         writer.U16(value.Value);
     }
 
-    internal static U32 DecodeU32(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadU32(reader, context); reader.End("u32"); return value; }
-    internal static byte[] EncodeU32(U32 value, DecodeContext context) { var writer = new Writer(); WriteU32(writer, value, context); return writer.ToArray(); }
-    private static U32 ReadU32(Reader reader, DecodeContext context)
+    internal static U32 DecodeU32(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadU32(ref reader, context); reader.End("u32"); return value; }
+    internal static byte[] EncodeU32(U32 value, DecodeContext context) { var writer = new Writer(); WriteU32(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteU32(ref writer, value, context); return bytes; }
+    private static U32 ReadU32(ref Reader reader, DecodeContext context)
     {
         var raw = reader.U32();
         if (raw < 0U || raw > 4294967295U) throw Error("u32: range");
         return new(raw);
     }
-    private static void WriteU32(Writer writer, U32 value, DecodeContext context)
+    private static void WriteU32(ref Writer writer, U32 value, DecodeContext context)
     {
         if (value.Value < 0U || value.Value > 4294967295U) throw Error("u32: range");
         writer.U32(value.Value);
     }
 
-    internal static NonzeroU32 DecodeNonzeroU32(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadNonzeroU32(reader, context); reader.End("nonzero-u32"); return value; }
-    internal static byte[] EncodeNonzeroU32(NonzeroU32 value, DecodeContext context) { var writer = new Writer(); WriteNonzeroU32(writer, value, context); return writer.ToArray(); }
-    private static NonzeroU32 ReadNonzeroU32(Reader reader, DecodeContext context)
+    internal static NonzeroU32 DecodeNonzeroU32(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadNonzeroU32(ref reader, context); reader.End("nonzero-u32"); return value; }
+    internal static byte[] EncodeNonzeroU32(NonzeroU32 value, DecodeContext context) { var writer = new Writer(); WriteNonzeroU32(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteNonzeroU32(ref writer, value, context); return bytes; }
+    private static NonzeroU32 ReadNonzeroU32(ref Reader reader, DecodeContext context)
     {
         var raw = reader.U32();
         if (raw < 1U || raw > 4294967295U) throw Error("nonzero-u32: range");
         return new(raw);
     }
-    private static void WriteNonzeroU32(Writer writer, NonzeroU32 value, DecodeContext context)
+    private static void WriteNonzeroU32(ref Writer writer, NonzeroU32 value, DecodeContext context)
     {
         if (value.Value < 1U || value.Value > 4294967295U) throw Error("nonzero-u32: range");
         writer.U32(value.Value);
     }
 
-    internal static U64 DecodeU64(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadU64(reader, context); reader.End("u64"); return value; }
-    internal static byte[] EncodeU64(U64 value, DecodeContext context) { var writer = new Writer(); WriteU64(writer, value, context); return writer.ToArray(); }
-    private static U64 ReadU64(Reader reader, DecodeContext context)
+    internal static U64 DecodeU64(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadU64(ref reader, context); reader.End("u64"); return value; }
+    internal static byte[] EncodeU64(U64 value, DecodeContext context) { var writer = new Writer(); WriteU64(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteU64(ref writer, value, context); return bytes; }
+    private static U64 ReadU64(ref Reader reader, DecodeContext context)
     {
         var raw = reader.U64();
         if (unchecked(raw - 0UL) > 18446744073709551615UL) throw Error("u64: range");
         return new(raw);
     }
-    private static void WriteU64(Writer writer, U64 value, DecodeContext context)
+    private static void WriteU64(ref Writer writer, U64 value, DecodeContext context)
     {
         if (unchecked(value.Value - 0UL) > 18446744073709551615UL) throw Error("u64: range");
         writer.U64(value.Value);
     }
 
-    internal static NonzeroU64 DecodeNonzeroU64(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadNonzeroU64(reader, context); reader.End("nonzero-u64"); return value; }
-    internal static byte[] EncodeNonzeroU64(NonzeroU64 value, DecodeContext context) { var writer = new Writer(); WriteNonzeroU64(writer, value, context); return writer.ToArray(); }
-    private static NonzeroU64 ReadNonzeroU64(Reader reader, DecodeContext context)
+    internal static NonzeroU64 DecodeNonzeroU64(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadNonzeroU64(ref reader, context); reader.End("nonzero-u64"); return value; }
+    internal static byte[] EncodeNonzeroU64(NonzeroU64 value, DecodeContext context) { var writer = new Writer(); WriteNonzeroU64(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteNonzeroU64(ref writer, value, context); return bytes; }
+    private static NonzeroU64 ReadNonzeroU64(ref Reader reader, DecodeContext context)
     {
         var raw = reader.U64();
         if (unchecked(raw - 1UL) > 9223372036854775806UL) throw Error("nonzero-u64: range");
         return new(raw);
     }
-    private static void WriteNonzeroU64(Writer writer, NonzeroU64 value, DecodeContext context)
+    private static void WriteNonzeroU64(ref Writer writer, NonzeroU64 value, DecodeContext context)
     {
         if (unchecked(value.Value - 1UL) > 9223372036854775806UL) throw Error("nonzero-u64: range");
         writer.U64(value.Value);
     }
 
-    internal static OrdinalOrZero DecodeOrdinalOrZero(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadOrdinalOrZero(reader, context); reader.End("ordinal-or-zero"); return value; }
-    internal static byte[] EncodeOrdinalOrZero(OrdinalOrZero value, DecodeContext context) { var writer = new Writer(); WriteOrdinalOrZero(writer, value, context); return writer.ToArray(); }
-    private static OrdinalOrZero ReadOrdinalOrZero(Reader reader, DecodeContext context)
+    internal static OrdinalOrZero DecodeOrdinalOrZero(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadOrdinalOrZero(ref reader, context); reader.End("ordinal-or-zero"); return value; }
+    internal static byte[] EncodeOrdinalOrZero(OrdinalOrZero value, DecodeContext context) { var writer = new Writer(); WriteOrdinalOrZero(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteOrdinalOrZero(ref writer, value, context); return bytes; }
+    private static OrdinalOrZero ReadOrdinalOrZero(ref Reader reader, DecodeContext context)
     {
         var raw = reader.U64();
         if (unchecked(raw - 0UL) > 9223372036854775807UL) throw Error("ordinal-or-zero: range");
         return new(raw);
     }
-    private static void WriteOrdinalOrZero(Writer writer, OrdinalOrZero value, DecodeContext context)
+    private static void WriteOrdinalOrZero(ref Writer writer, OrdinalOrZero value, DecodeContext context)
     {
         if (unchecked(value.Value - 0UL) > 9223372036854775807UL) throw Error("ordinal-or-zero: range");
         writer.U64(value.Value);
     }
 
-    internal static RelocationLogicalLength DecodeRelocationLogicalLength(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadRelocationLogicalLength(reader, context); reader.End("relocation-logical-length"); return value; }
-    internal static byte[] EncodeRelocationLogicalLength(RelocationLogicalLength value, DecodeContext context) { var writer = new Writer(); WriteRelocationLogicalLength(writer, value, context); return writer.ToArray(); }
-    private static RelocationLogicalLength ReadRelocationLogicalLength(Reader reader, DecodeContext context)
+    internal static RelocationLogicalLength DecodeRelocationLogicalLength(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadRelocationLogicalLength(ref reader, context); reader.End("relocation-logical-length"); return value; }
+    internal static byte[] EncodeRelocationLogicalLength(RelocationLogicalLength value, DecodeContext context) { var writer = new Writer(); WriteRelocationLogicalLength(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteRelocationLogicalLength(ref writer, value, context); return bytes; }
+    private static RelocationLogicalLength ReadRelocationLogicalLength(ref Reader reader, DecodeContext context)
     {
         var raw = reader.U64();
         if (unchecked(raw - 0UL) > 274877906944UL) throw Error("relocation-logical-length: range");
         return new(raw);
     }
-    private static void WriteRelocationLogicalLength(Writer writer, RelocationLogicalLength value, DecodeContext context)
+    private static void WriteRelocationLogicalLength(ref Writer writer, RelocationLogicalLength value, DecodeContext context)
     {
         if (unchecked(value.Value - 0UL) > 274877906944UL) throw Error("relocation-logical-length: range");
         writer.U64(value.Value);
     }
 
-    internal static RelocationChunkCount DecodeRelocationChunkCount(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadRelocationChunkCount(reader, context); reader.End("relocation-chunk-count"); return value; }
-    internal static byte[] EncodeRelocationChunkCount(RelocationChunkCount value, DecodeContext context) { var writer = new Writer(); WriteRelocationChunkCount(writer, value, context); return writer.ToArray(); }
-    private static RelocationChunkCount ReadRelocationChunkCount(Reader reader, DecodeContext context)
+    internal static RelocationChunkCount DecodeRelocationChunkCount(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadRelocationChunkCount(ref reader, context); reader.End("relocation-chunk-count"); return value; }
+    internal static byte[] EncodeRelocationChunkCount(RelocationChunkCount value, DecodeContext context) { var writer = new Writer(); WriteRelocationChunkCount(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteRelocationChunkCount(ref writer, value, context); return bytes; }
+    private static RelocationChunkCount ReadRelocationChunkCount(ref Reader reader, DecodeContext context)
     {
         var raw = reader.U32();
         if (raw < 0U || raw > 4096U) throw Error("relocation-chunk-count: range");
         return new(raw);
     }
-    private static void WriteRelocationChunkCount(Writer writer, RelocationChunkCount value, DecodeContext context)
+    private static void WriteRelocationChunkCount(ref Writer writer, RelocationChunkCount value, DecodeContext context)
     {
         if (value.Value < 0U || value.Value > 4096U) throw Error("relocation-chunk-count: range");
         writer.U32(value.Value);
     }
 
-    internal static ApplicationVersion DecodeApplicationVersion(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadApplicationVersion(reader, context); reader.End("application-version"); return value; }
-    internal static byte[] EncodeApplicationVersion(ApplicationVersion value, DecodeContext context) { var writer = new Writer(); WriteApplicationVersion(writer, value, context); return writer.ToArray(); }
-    private static ApplicationVersion ReadApplicationVersion(Reader reader, DecodeContext context)
+    internal static ApplicationVersion DecodeApplicationVersion(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadApplicationVersion(ref reader, context); reader.End("application-version"); return value; }
+    internal static byte[] EncodeApplicationVersion(ApplicationVersion value, DecodeContext context) { var writer = new Writer(); WriteApplicationVersion(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteApplicationVersion(ref writer, value, context); return bytes; }
+    private static ApplicationVersion ReadApplicationVersion(ref Reader reader, DecodeContext context)
     {
         var raw = reader.I64();
         if (raw < 0L || raw > 9223372036854775807L) throw Error("application-version: range");
         return new(raw);
     }
-    private static void WriteApplicationVersion(Writer writer, ApplicationVersion value, DecodeContext context)
+    private static void WriteApplicationVersion(ref Writer writer, ApplicationVersion value, DecodeContext context)
     {
         if (value.Value < 0L || value.Value > 9223372036854775807L) throw Error("application-version: range");
         writer.I64(value.Value);
     }
 
-    internal static Bool8 DecodeBool8(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadBool8(reader, context); reader.End("bool8"); return value; }
-    internal static byte[] EncodeBool8(Bool8 value, DecodeContext context) { var writer = new Writer(); WriteBool8(writer, value, context); return writer.ToArray(); }
-    private static Bool8 ReadBool8(Reader reader, DecodeContext context)
+    internal static Bool8 DecodeBool8(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadBool8(ref reader, context); reader.End("bool8"); return value; }
+    internal static byte[] EncodeBool8(Bool8 value, DecodeContext context) { var writer = new Writer(); WriteBool8(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteBool8(ref writer, value, context); return bytes; }
+    private static Bool8 ReadBool8(ref Reader reader, DecodeContext context)
     {
         var raw = reader.U8();
         return raw switch { 0 => Bool8.False, 1 => Bool8.True, _ => throw Error("bool8: unknown enum") };
     }
-    private static void WriteBool8(Writer writer, Bool8 value, DecodeContext context)
+    private static void WriteBool8(ref Writer writer, Bool8 value, DecodeContext context)
     {
         if (!Enum.IsDefined(value)) throw Error("bool8: unknown enum");
         writer.U8((byte)value);
     }
 
-    internal static Rid DecodeRid(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadRid(reader, context); reader.End("rid"); return value; }
-    internal static byte[] EncodeRid(Rid value, DecodeContext context) { var writer = new Writer(); WriteRid(writer, value, context); return writer.ToArray(); }
-    private static Rid ReadRid(Reader reader, DecodeContext context)
+    internal static Rid DecodeRid(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadRid(ref reader, context); reader.End("rid"); return value; }
+    internal static byte[] EncodeRid(Rid value, DecodeContext context) { var writer = new Writer(); WriteRid(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteRid(ref writer, value, context); return bytes; }
+    private static Rid ReadRid(ref Reader reader, DecodeContext context)
     {
-        var encodedLength = (ulong)ReadU8(reader, context).Value;
+        var encodedLength = (ulong)ReadU8(ref reader, context).Value;
         if (encodedLength > 2147483647UL) throw Capacity("rid: capacity");
         if (encodedLength < 1UL || encodedLength > 255UL) throw Error("rid: length");
         var length = checked((int)encodedLength);
         var bytes = reader.Bytes(length);
-        return new(bytes);
+        return new(RoutingId.From(bytes));
     }
-    private static void WriteRid(Writer writer, Rid value, DecodeContext context)
+    private static void WriteRid(ref Writer writer, Rid value, DecodeContext context)
     {
-        var bytes = value.Value ?? Array.Empty<byte>();
-        if ((ulong)bytes.LongLength > 2147483647UL) throw Capacity("rid: capacity");
-        if ((ulong)bytes.LongLength < 1UL || (ulong)bytes.LongLength > 255UL) throw Error("rid: length");
-        WriteU8(writer, new U8(checked((byte)bytes.Length)), context);
+        var bytes = value.Value; var length = bytes.Length;
+        if ((ulong)length > 2147483647UL) throw Capacity("rid: capacity");
+        if ((ulong)length < 1UL || (ulong)length > 255UL) throw Error("rid: length");
+        WriteU8(ref writer, new U8(checked((byte)length)), context);
         writer.Bytes(bytes);
     }
 
-    internal static OptionalRid DecodeOptionalRid(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadOptionalRid(reader, context); reader.End("optional-rid"); return value; }
-    internal static byte[] EncodeOptionalRid(OptionalRid value, DecodeContext context) { var writer = new Writer(); WriteOptionalRid(writer, value, context); return writer.ToArray(); }
-    private static OptionalRid ReadOptionalRid(Reader reader, DecodeContext context)
+    internal static OptionalRid DecodeOptionalRid(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadOptionalRid(ref reader, context); reader.End("optional-rid"); return value; }
+    internal static byte[] EncodeOptionalRid(OptionalRid value, DecodeContext context) { var writer = new Writer(); WriteOptionalRid(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteOptionalRid(ref writer, value, context); return bytes; }
+    private static OptionalRid ReadOptionalRid(ref Reader reader, DecodeContext context)
     {
-        var encodedLength = (ulong)ReadU8(reader, context).Value;
+        var encodedLength = (ulong)ReadU8(ref reader, context).Value;
         if (encodedLength > 2147483647UL) throw Capacity("optional-rid: capacity");
         if (encodedLength < 0UL || encodedLength > 255UL) throw Error("optional-rid: length");
         var length = checked((int)encodedLength);
         var bytes = reader.Bytes(length);
         if (length == 0) return new(null);
-        return new(bytes);
+        return new(bytes.ToArray());
     }
-    private static void WriteOptionalRid(Writer writer, OptionalRid value, DecodeContext context)
+    private static void WriteOptionalRid(ref Writer writer, OptionalRid value, DecodeContext context)
     {
-        var bytes = value.Value ?? Array.Empty<byte>();
-        if ((ulong)bytes.LongLength > 2147483647UL) throw Capacity("optional-rid: capacity");
-        if ((ulong)bytes.LongLength < 0UL || (ulong)bytes.LongLength > 255UL) throw Error("optional-rid: length");
-        WriteU8(writer, new U8(checked((byte)bytes.Length)), context);
+        var bytes = value.Value ?? Array.Empty<byte>(); var length = bytes.Length;
+        if ((ulong)length > 2147483647UL) throw Capacity("optional-rid: capacity");
+        if ((ulong)length < 0UL || (ulong)length > 255UL) throw Error("optional-rid: length");
+        WriteU8(ref writer, new U8(checked((byte)length)), context);
         writer.Bytes(bytes);
     }
 
-    internal static Text8 DecodeText8(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadText8(reader, context); reader.End("text8"); return value; }
-    internal static byte[] EncodeText8(Text8 value, DecodeContext context) { var writer = new Writer(); WriteText8(writer, value, context); return writer.ToArray(); }
-    private static Text8 ReadText8(Reader reader, DecodeContext context)
+    internal static Text8 DecodeText8(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadText8(ref reader, context); reader.End("text8"); return value; }
+    internal static byte[] EncodeText8(Text8 value, DecodeContext context) { var writer = new Writer(); WriteText8(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteText8(ref writer, value, context); return bytes; }
+    private static Text8 ReadText8(ref Reader reader, DecodeContext context)
     {
-        var encodedLength = (ulong)ReadU8(reader, context).Value;
+        var encodedLength = (ulong)ReadU8(ref reader, context).Value;
         if (encodedLength > 2147483647UL) throw Capacity("text8: capacity");
         if (encodedLength < 1UL || encodedLength > 255UL) throw Error("text8: length");
         var length = checked((int)encodedLength);
@@ -976,21 +1020,21 @@ internal static class ServiceWireCodec
         if (bytes.Contains((byte)0)) throw Error("text8: NUL");
         return new(Utf8.GetString(bytes));
     }
-    private static void WriteText8(Writer writer, Text8 value, DecodeContext context)
+    private static void WriteText8(ref Writer writer, Text8 value, DecodeContext context)
     {
-        var bytes = value.Value is null ? Array.Empty<byte>() : Utf8.GetBytes(value.Value);
-        if (bytes.Contains((byte)0)) throw Error("text8: NUL");
-        if ((ulong)bytes.LongLength > 2147483647UL) throw Capacity("text8: capacity");
-        if ((ulong)bytes.LongLength < 1UL || (ulong)bytes.LongLength > 255UL) throw Error("text8: length");
-        WriteU8(writer, new U8(checked((byte)bytes.Length)), context);
-        writer.Bytes(bytes);
+        var length = value.Value is null ? 0 : Utf8.GetByteCount(value.Value);
+        if (value.Value?.IndexOf('\0') >= 0) throw Error("text8: NUL");
+        if ((ulong)length > 2147483647UL) throw Capacity("text8: capacity");
+        if ((ulong)length < 1UL || (ulong)length > 255UL) throw Error("text8: length");
+        WriteU8(ref writer, new U8(checked((byte)length)), context);
+        writer.Text(value.Value, length);
     }
 
-    internal static OptionalText8 DecodeOptionalText8(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadOptionalText8(reader, context); reader.End("optional-text8"); return value; }
-    internal static byte[] EncodeOptionalText8(OptionalText8 value, DecodeContext context) { var writer = new Writer(); WriteOptionalText8(writer, value, context); return writer.ToArray(); }
-    private static OptionalText8 ReadOptionalText8(Reader reader, DecodeContext context)
+    internal static OptionalText8 DecodeOptionalText8(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadOptionalText8(ref reader, context); reader.End("optional-text8"); return value; }
+    internal static byte[] EncodeOptionalText8(OptionalText8 value, DecodeContext context) { var writer = new Writer(); WriteOptionalText8(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteOptionalText8(ref writer, value, context); return bytes; }
+    private static OptionalText8 ReadOptionalText8(ref Reader reader, DecodeContext context)
     {
-        var encodedLength = (ulong)ReadU8(reader, context).Value;
+        var encodedLength = (ulong)ReadU8(ref reader, context).Value;
         if (encodedLength > 2147483647UL) throw Capacity("optional-text8: capacity");
         if (encodedLength < 0UL || encodedLength > 255UL) throw Error("optional-text8: length");
         var length = checked((int)encodedLength);
@@ -999,55 +1043,55 @@ internal static class ServiceWireCodec
         if (bytes.Contains((byte)0)) throw Error("optional-text8: NUL");
         return new(Utf8.GetString(bytes));
     }
-    private static void WriteOptionalText8(Writer writer, OptionalText8 value, DecodeContext context)
+    private static void WriteOptionalText8(ref Writer writer, OptionalText8 value, DecodeContext context)
     {
-        var bytes = value.Value is null ? Array.Empty<byte>() : Utf8.GetBytes(value.Value);
-        if (bytes.Contains((byte)0)) throw Error("optional-text8: NUL");
-        if ((ulong)bytes.LongLength > 2147483647UL) throw Capacity("optional-text8: capacity");
-        if ((ulong)bytes.LongLength < 0UL || (ulong)bytes.LongLength > 255UL) throw Error("optional-text8: length");
-        WriteU8(writer, new U8(checked((byte)bytes.Length)), context);
-        writer.Bytes(bytes);
+        var length = value.Value is null ? 0 : Utf8.GetByteCount(value.Value);
+        if (value.Value?.IndexOf('\0') >= 0) throw Error("optional-text8: NUL");
+        if ((ulong)length > 2147483647UL) throw Capacity("optional-text8: capacity");
+        if ((ulong)length < 0UL || (ulong)length > 255UL) throw Error("optional-text8: length");
+        WriteU8(ref writer, new U8(checked((byte)length)), context);
+        writer.Text(value.Value, length);
     }
 
-    internal static Sha256Bytes DecodeSha256Bytes(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadSha256Bytes(reader, context); reader.End("sha256-bytes"); return value; }
-    internal static byte[] EncodeSha256Bytes(Sha256Bytes value, DecodeContext context) { var writer = new Writer(); WriteSha256Bytes(writer, value, context); return writer.ToArray(); }
-    private static Sha256Bytes ReadSha256Bytes(Reader reader, DecodeContext context)
+    internal static Sha256Bytes DecodeSha256Bytes(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadSha256Bytes(ref reader, context); reader.End("sha256-bytes"); return value; }
+    internal static byte[] EncodeSha256Bytes(Sha256Bytes value, DecodeContext context) { var writer = new Writer(); WriteSha256Bytes(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteSha256Bytes(ref writer, value, context); return bytes; }
+    private static Sha256Bytes ReadSha256Bytes(ref Reader reader, DecodeContext context)
     {
-        var encodedLength = (ulong)ReadU8(reader, context).Value;
+        var encodedLength = (ulong)ReadU8(ref reader, context).Value;
         if (encodedLength > 2147483647UL) throw Capacity("sha256-bytes: capacity");
         if (encodedLength < 32UL || encodedLength > 32UL) throw Error("sha256-bytes: length");
         var length = checked((int)encodedLength);
         var bytes = reader.Bytes(length);
-        return new(bytes);
+        return new(bytes.ToArray());
     }
-    private static void WriteSha256Bytes(Writer writer, Sha256Bytes value, DecodeContext context)
+    private static void WriteSha256Bytes(ref Writer writer, Sha256Bytes value, DecodeContext context)
     {
-        var bytes = value.Value ?? Array.Empty<byte>();
-        if ((ulong)bytes.LongLength > 2147483647UL) throw Capacity("sha256-bytes: capacity");
-        if ((ulong)bytes.LongLength < 32UL || (ulong)bytes.LongLength > 32UL) throw Error("sha256-bytes: length");
-        WriteU8(writer, new U8(checked((byte)bytes.Length)), context);
+        var bytes = value.Value ?? Array.Empty<byte>(); var length = bytes.Length;
+        if ((ulong)length > 2147483647UL) throw Capacity("sha256-bytes: capacity");
+        if ((ulong)length < 32UL || (ulong)length > 32UL) throw Error("sha256-bytes: length");
+        WriteU8(ref writer, new U8(checked((byte)length)), context);
         writer.Bytes(bytes);
     }
 
-    internal static CreationRequestSize DecodeCreationRequestSize(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadCreationRequestSize(reader, context); reader.End("creation-request-size"); return value; }
-    internal static byte[] EncodeCreationRequestSize(CreationRequestSize value, DecodeContext context) { var writer = new Writer(); WriteCreationRequestSize(writer, value, context); return writer.ToArray(); }
-    private static CreationRequestSize ReadCreationRequestSize(Reader reader, DecodeContext context)
+    internal static CreationRequestSize DecodeCreationRequestSize(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadCreationRequestSize(ref reader, context); reader.End("creation-request-size"); return value; }
+    internal static byte[] EncodeCreationRequestSize(CreationRequestSize value, DecodeContext context) { var writer = new Writer(); WriteCreationRequestSize(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteCreationRequestSize(ref writer, value, context); return bytes; }
+    private static CreationRequestSize ReadCreationRequestSize(ref Reader reader, DecodeContext context)
     {
         var raw = reader.U32();
         if (raw < 0U || raw > 1048576U) throw Error("creation-request-size: range");
         return new(raw);
     }
-    private static void WriteCreationRequestSize(Writer writer, CreationRequestSize value, DecodeContext context)
+    private static void WriteCreationRequestSize(ref Writer writer, CreationRequestSize value, DecodeContext context)
     {
         if (value.Value < 0U || value.Value > 1048576U) throw Error("creation-request-size: range");
         writer.U32(value.Value);
     }
 
-    internal static Text16 DecodeText16(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadText16(reader, context); reader.End("text16"); return value; }
-    internal static byte[] EncodeText16(Text16 value, DecodeContext context) { var writer = new Writer(); WriteText16(writer, value, context); return writer.ToArray(); }
-    private static Text16 ReadText16(Reader reader, DecodeContext context)
+    internal static Text16 DecodeText16(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadText16(ref reader, context); reader.End("text16"); return value; }
+    internal static byte[] EncodeText16(Text16 value, DecodeContext context) { var writer = new Writer(); WriteText16(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteText16(ref writer, value, context); return bytes; }
+    private static Text16 ReadText16(ref Reader reader, DecodeContext context)
     {
-        var encodedLength = (ulong)ReadU16(reader, context).Value;
+        var encodedLength = (ulong)ReadU16(ref reader, context).Value;
         if (encodedLength > 2147483647UL) throw Capacity("text16: capacity");
         if (encodedLength < 0UL || encodedLength > 65535UL) throw Error("text16: length");
         var length = checked((int)encodedLength);
@@ -1055,21 +1099,21 @@ internal static class ServiceWireCodec
         if (bytes.Contains((byte)0)) throw Error("text16: NUL");
         return new(Utf8.GetString(bytes));
     }
-    private static void WriteText16(Writer writer, Text16 value, DecodeContext context)
+    private static void WriteText16(ref Writer writer, Text16 value, DecodeContext context)
     {
-        var bytes = value.Value is null ? Array.Empty<byte>() : Utf8.GetBytes(value.Value);
-        if (bytes.Contains((byte)0)) throw Error("text16: NUL");
-        if ((ulong)bytes.LongLength > 2147483647UL) throw Capacity("text16: capacity");
-        if ((ulong)bytes.LongLength < 0UL || (ulong)bytes.LongLength > 65535UL) throw Error("text16: length");
-        WriteU16(writer, new U16(checked((ushort)bytes.Length)), context);
-        writer.Bytes(bytes);
+        var length = value.Value is null ? 0 : Utf8.GetByteCount(value.Value);
+        if (value.Value?.IndexOf('\0') >= 0) throw Error("text16: NUL");
+        if ((ulong)length > 2147483647UL) throw Capacity("text16: capacity");
+        if ((ulong)length < 0UL || (ulong)length > 65535UL) throw Error("text16: length");
+        WriteU16(ref writer, new U16(checked((ushort)length)), context);
+        writer.Text(value.Value, length);
     }
 
-    internal static NonemptyText16 DecodeNonemptyText16(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadNonemptyText16(reader, context); reader.End("nonempty-text16"); return value; }
-    internal static byte[] EncodeNonemptyText16(NonemptyText16 value, DecodeContext context) { var writer = new Writer(); WriteNonemptyText16(writer, value, context); return writer.ToArray(); }
-    private static NonemptyText16 ReadNonemptyText16(Reader reader, DecodeContext context)
+    internal static NonemptyText16 DecodeNonemptyText16(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadNonemptyText16(ref reader, context); reader.End("nonempty-text16"); return value; }
+    internal static byte[] EncodeNonemptyText16(NonemptyText16 value, DecodeContext context) { var writer = new Writer(); WriteNonemptyText16(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteNonemptyText16(ref writer, value, context); return bytes; }
+    private static NonemptyText16 ReadNonemptyText16(ref Reader reader, DecodeContext context)
     {
-        var encodedLength = (ulong)ReadU16(reader, context).Value;
+        var encodedLength = (ulong)ReadU16(ref reader, context).Value;
         if (encodedLength > 2147483647UL) throw Capacity("nonempty-text16: capacity");
         if (encodedLength < 1UL || encodedLength > 65535UL) throw Error("nonempty-text16: length");
         var length = checked((int)encodedLength);
@@ -1077,21 +1121,21 @@ internal static class ServiceWireCodec
         if (bytes.Contains((byte)0)) throw Error("nonempty-text16: NUL");
         return new(Utf8.GetString(bytes));
     }
-    private static void WriteNonemptyText16(Writer writer, NonemptyText16 value, DecodeContext context)
+    private static void WriteNonemptyText16(ref Writer writer, NonemptyText16 value, DecodeContext context)
     {
-        var bytes = value.Value is null ? Array.Empty<byte>() : Utf8.GetBytes(value.Value);
-        if (bytes.Contains((byte)0)) throw Error("nonempty-text16: NUL");
-        if ((ulong)bytes.LongLength > 2147483647UL) throw Capacity("nonempty-text16: capacity");
-        if ((ulong)bytes.LongLength < 1UL || (ulong)bytes.LongLength > 65535UL) throw Error("nonempty-text16: length");
-        WriteU16(writer, new U16(checked((ushort)bytes.Length)), context);
-        writer.Bytes(bytes);
+        var length = value.Value is null ? 0 : Utf8.GetByteCount(value.Value);
+        if (value.Value?.IndexOf('\0') >= 0) throw Error("nonempty-text16: NUL");
+        if ((ulong)length > 2147483647UL) throw Capacity("nonempty-text16: capacity");
+        if ((ulong)length < 1UL || (ulong)length > 65535UL) throw Error("nonempty-text16: length");
+        WriteU16(ref writer, new U16(checked((ushort)length)), context);
+        writer.Text(value.Value, length);
     }
 
-    internal static Endpoint DecodeEndpoint(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadEndpoint(reader, context); reader.End("endpoint"); return value; }
-    internal static byte[] EncodeEndpoint(Endpoint value, DecodeContext context) { var writer = new Writer(); WriteEndpoint(writer, value, context); return writer.ToArray(); }
-    private static Endpoint ReadEndpoint(Reader reader, DecodeContext context)
+    internal static Endpoint DecodeEndpoint(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadEndpoint(ref reader, context); reader.End("endpoint"); return value; }
+    internal static byte[] EncodeEndpoint(Endpoint value, DecodeContext context) { var writer = new Writer(); WriteEndpoint(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteEndpoint(ref writer, value, context); return bytes; }
+    private static Endpoint ReadEndpoint(ref Reader reader, DecodeContext context)
     {
-        var encodedLength = (ulong)ReadU16(reader, context).Value;
+        var encodedLength = (ulong)ReadU16(ref reader, context).Value;
         if (encodedLength > 2147483647UL) throw Capacity("endpoint: capacity");
         if (encodedLength < 1UL || encodedLength > 4096UL) throw Error("endpoint: length");
         var length = checked((int)encodedLength);
@@ -1099,61 +1143,61 @@ internal static class ServiceWireCodec
         if (bytes.Contains((byte)0)) throw Error("endpoint: NUL");
         return new(Utf8.GetString(bytes));
     }
-    private static void WriteEndpoint(Writer writer, Endpoint value, DecodeContext context)
+    private static void WriteEndpoint(ref Writer writer, Endpoint value, DecodeContext context)
     {
-        var bytes = value.Value is null ? Array.Empty<byte>() : Utf8.GetBytes(value.Value);
-        if (bytes.Contains((byte)0)) throw Error("endpoint: NUL");
-        if ((ulong)bytes.LongLength > 2147483647UL) throw Capacity("endpoint: capacity");
-        if ((ulong)bytes.LongLength < 1UL || (ulong)bytes.LongLength > 4096UL) throw Error("endpoint: length");
-        WriteU16(writer, new U16(checked((ushort)bytes.Length)), context);
-        writer.Bytes(bytes);
+        var length = value.Value is null ? 0 : Utf8.GetByteCount(value.Value);
+        if (value.Value?.IndexOf('\0') >= 0) throw Error("endpoint: NUL");
+        if ((ulong)length > 2147483647UL) throw Capacity("endpoint: capacity");
+        if ((ulong)length < 1UL || (ulong)length > 4096UL) throw Error("endpoint: length");
+        WriteU16(ref writer, new U16(checked((ushort)length)), context);
+        writer.Text(value.Value, length);
     }
 
-    internal static Blob16 DecodeBlob16(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadBlob16(reader, context); reader.End("blob16"); return value; }
-    internal static byte[] EncodeBlob16(Blob16 value, DecodeContext context) { var writer = new Writer(); WriteBlob16(writer, value, context); return writer.ToArray(); }
-    private static Blob16 ReadBlob16(Reader reader, DecodeContext context)
+    internal static Blob16 DecodeBlob16(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadBlob16(ref reader, context); reader.End("blob16"); return value; }
+    internal static byte[] EncodeBlob16(Blob16 value, DecodeContext context) { var writer = new Writer(); WriteBlob16(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteBlob16(ref writer, value, context); return bytes; }
+    private static Blob16 ReadBlob16(ref Reader reader, DecodeContext context)
     {
-        var encodedLength = (ulong)ReadU16(reader, context).Value;
+        var encodedLength = (ulong)ReadU16(ref reader, context).Value;
         if (encodedLength > 2147483647UL) throw Capacity("blob16: capacity");
         if (encodedLength < 0UL || encodedLength > 65535UL) throw Error("blob16: length");
         var length = checked((int)encodedLength);
         var bytes = reader.Bytes(length);
-        return new(bytes);
+        return new(bytes.ToArray());
     }
-    private static void WriteBlob16(Writer writer, Blob16 value, DecodeContext context)
+    private static void WriteBlob16(ref Writer writer, Blob16 value, DecodeContext context)
     {
-        var bytes = value.Value ?? Array.Empty<byte>();
-        if ((ulong)bytes.LongLength > 2147483647UL) throw Capacity("blob16: capacity");
-        if ((ulong)bytes.LongLength < 0UL || (ulong)bytes.LongLength > 65535UL) throw Error("blob16: length");
-        WriteU16(writer, new U16(checked((ushort)bytes.Length)), context);
+        var bytes = value.Value ?? Array.Empty<byte>(); var length = bytes.Length;
+        if ((ulong)length > 2147483647UL) throw Capacity("blob16: capacity");
+        if ((ulong)length < 0UL || (ulong)length > 65535UL) throw Error("blob16: length");
+        WriteU16(ref writer, new U16(checked((ushort)length)), context);
         writer.Bytes(bytes);
     }
 
-    internal static NonemptyBlob16 DecodeNonemptyBlob16(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadNonemptyBlob16(reader, context); reader.End("nonempty-blob16"); return value; }
-    internal static byte[] EncodeNonemptyBlob16(NonemptyBlob16 value, DecodeContext context) { var writer = new Writer(); WriteNonemptyBlob16(writer, value, context); return writer.ToArray(); }
-    private static NonemptyBlob16 ReadNonemptyBlob16(Reader reader, DecodeContext context)
+    internal static NonemptyBlob16 DecodeNonemptyBlob16(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadNonemptyBlob16(ref reader, context); reader.End("nonempty-blob16"); return value; }
+    internal static byte[] EncodeNonemptyBlob16(NonemptyBlob16 value, DecodeContext context) { var writer = new Writer(); WriteNonemptyBlob16(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteNonemptyBlob16(ref writer, value, context); return bytes; }
+    private static NonemptyBlob16 ReadNonemptyBlob16(ref Reader reader, DecodeContext context)
     {
-        var encodedLength = (ulong)ReadU16(reader, context).Value;
+        var encodedLength = (ulong)ReadU16(ref reader, context).Value;
         if (encodedLength > 2147483647UL) throw Capacity("nonempty-blob16: capacity");
         if (encodedLength < 1UL || encodedLength > 65535UL) throw Error("nonempty-blob16: length");
         var length = checked((int)encodedLength);
         var bytes = reader.Bytes(length);
-        return new(bytes);
+        return new(bytes.ToArray());
     }
-    private static void WriteNonemptyBlob16(Writer writer, NonemptyBlob16 value, DecodeContext context)
+    private static void WriteNonemptyBlob16(ref Writer writer, NonemptyBlob16 value, DecodeContext context)
     {
-        var bytes = value.Value ?? Array.Empty<byte>();
-        if ((ulong)bytes.LongLength > 2147483647UL) throw Capacity("nonempty-blob16: capacity");
-        if ((ulong)bytes.LongLength < 1UL || (ulong)bytes.LongLength > 65535UL) throw Error("nonempty-blob16: length");
-        WriteU16(writer, new U16(checked((ushort)bytes.Length)), context);
+        var bytes = value.Value ?? Array.Empty<byte>(); var length = bytes.Length;
+        if ((ulong)length > 2147483647UL) throw Capacity("nonempty-blob16: capacity");
+        if ((ulong)length < 1UL || (ulong)length > 65535UL) throw Error("nonempty-blob16: length");
+        WriteU16(ref writer, new U16(checked((ushort)length)), context);
         writer.Bytes(bytes);
     }
 
-    internal static PacketName DecodePacketName(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadPacketName(reader, context); reader.End("packet-name"); return value; }
-    internal static byte[] EncodePacketName(PacketName value, DecodeContext context) { var writer = new Writer(); WritePacketName(writer, value, context); return writer.ToArray(); }
-    private static PacketName ReadPacketName(Reader reader, DecodeContext context)
+    internal static PacketName DecodePacketName(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadPacketName(ref reader, context); reader.End("packet-name"); return value; }
+    internal static byte[] EncodePacketName(PacketName value, DecodeContext context) { var writer = new Writer(); WritePacketName(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WritePacketName(ref writer, value, context); return bytes; }
+    private static PacketName ReadPacketName(ref Reader reader, DecodeContext context)
     {
-        var encodedLength = (ulong)ReadU8(reader, context).Value;
+        var encodedLength = (ulong)ReadU8(ref reader, context).Value;
         if (encodedLength > 2147483647UL) throw Capacity("packet-name: capacity");
         if (encodedLength < 1UL || encodedLength > 255UL) throw Error("packet-name: length");
         var length = checked((int)encodedLength);
@@ -1161,21 +1205,21 @@ internal static class ServiceWireCodec
         if (bytes.Contains((byte)0)) throw Error("packet-name: NUL");
         return new(Utf8.GetString(bytes));
     }
-    private static void WritePacketName(Writer writer, PacketName value, DecodeContext context)
+    private static void WritePacketName(ref Writer writer, PacketName value, DecodeContext context)
     {
-        var bytes = value.Value is null ? Array.Empty<byte>() : Utf8.GetBytes(value.Value);
-        if (bytes.Contains((byte)0)) throw Error("packet-name: NUL");
-        if ((ulong)bytes.LongLength > 2147483647UL) throw Capacity("packet-name: capacity");
-        if ((ulong)bytes.LongLength < 1UL || (ulong)bytes.LongLength > 255UL) throw Error("packet-name: length");
-        WriteU8(writer, new U8(checked((byte)bytes.Length)), context);
-        writer.Bytes(bytes);
+        var length = value.Value is null ? 0 : Utf8.GetByteCount(value.Value);
+        if (value.Value?.IndexOf('\0') >= 0) throw Error("packet-name: NUL");
+        if ((ulong)length > 2147483647UL) throw Capacity("packet-name: capacity");
+        if ((ulong)length < 1UL || (ulong)length > 255UL) throw Error("packet-name: length");
+        WriteU8(ref writer, new U8(checked((byte)length)), context);
+        writer.Text(value.Value, length);
     }
 
-    internal static ContentType DecodeContentType(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadContentType(reader, context); reader.End("content-type"); return value; }
-    internal static byte[] EncodeContentType(ContentType value, DecodeContext context) { var writer = new Writer(); WriteContentType(writer, value, context); return writer.ToArray(); }
-    private static ContentType ReadContentType(Reader reader, DecodeContext context)
+    internal static ContentType DecodeContentType(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadContentType(ref reader, context); reader.End("content-type"); return value; }
+    internal static byte[] EncodeContentType(ContentType value, DecodeContext context) { var writer = new Writer(); WriteContentType(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteContentType(ref writer, value, context); return bytes; }
+    private static ContentType ReadContentType(ref Reader reader, DecodeContext context)
     {
-        var encodedLength = (ulong)ReadU8(reader, context).Value;
+        var encodedLength = (ulong)ReadU8(ref reader, context).Value;
         if (encodedLength > 2147483647UL) throw Capacity("content-type: capacity");
         if (encodedLength < 1UL || encodedLength > 255UL) throw Error("content-type: length");
         var length = checked((int)encodedLength);
@@ -1183,77 +1227,79 @@ internal static class ServiceWireCodec
         if (bytes.Contains((byte)0)) throw Error("content-type: NUL");
         return new(Utf8.GetString(bytes));
     }
-    private static void WriteContentType(Writer writer, ContentType value, DecodeContext context)
+    private static void WriteContentType(ref Writer writer, ContentType value, DecodeContext context)
     {
-        var bytes = value.Value is null ? Array.Empty<byte>() : Utf8.GetBytes(value.Value);
-        if (bytes.Contains((byte)0)) throw Error("content-type: NUL");
-        if ((ulong)bytes.LongLength > 2147483647UL) throw Capacity("content-type: capacity");
-        if ((ulong)bytes.LongLength < 1UL || (ulong)bytes.LongLength > 255UL) throw Error("content-type: length");
-        WriteU8(writer, new U8(checked((byte)bytes.Length)), context);
-        writer.Bytes(bytes);
+        var length = value.Value is null ? 0 : Utf8.GetByteCount(value.Value);
+        if (value.Value?.IndexOf('\0') >= 0) throw Error("content-type: NUL");
+        if ((ulong)length > 2147483647UL) throw Capacity("content-type: capacity");
+        if ((ulong)length < 1UL || (ulong)length > 255UL) throw Error("content-type: length");
+        WriteU8(ref writer, new U8(checked((byte)length)), context);
+        writer.Text(value.Value, length);
     }
 
-    internal static ApplicationPayloadBytes DecodeApplicationPayloadBytes(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadApplicationPayloadBytes(reader, context); reader.End("application-payload-bytes"); return value; }
-    internal static byte[] EncodeApplicationPayloadBytes(ApplicationPayloadBytes value, DecodeContext context) { var writer = new Writer(); WriteApplicationPayloadBytes(writer, value, context); return writer.ToArray(); }
-    private static ApplicationPayloadBytes ReadApplicationPayloadBytes(Reader reader, DecodeContext context)
+    internal static ApplicationPayloadBytes DecodeApplicationPayloadBytes(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadApplicationPayloadBytes(ref reader, context); reader.End("application-payload-bytes"); return value; }
+    internal static byte[] EncodeApplicationPayloadBytes(ApplicationPayloadBytes value, DecodeContext context) { var writer = new Writer(); WriteApplicationPayloadBytes(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteApplicationPayloadBytes(ref writer, value, context); return bytes; }
+    private static ApplicationPayloadBytes ReadApplicationPayloadBytes(ref Reader reader, DecodeContext context)
     {
         var negotiatedMaximum = context.EffectiveCompleteMessageBytesMinusActualEnvelopeOverhead ?? throw Error("missing context effectiveCompleteMessageBytesMinusActualEnvelopeOverhead");
-        var encodedLength = (ulong)ReadU32(reader, context).Value;
+        var encodedLength = (ulong)ReadU32(ref reader, context).Value;
         if (encodedLength > 2147483647UL) throw Capacity("application-payload-bytes: capacity");
         if (encodedLength < 0UL || encodedLength > 4294966774UL) throw Error("application-payload-bytes: length");
         var length = checked((int)encodedLength);
         var bytes = reader.Bytes(length);
-        if (negotiatedMaximum < 0 || negotiatedMaximum > 4294966774L || (ulong)(bytes.LongLength) > (ulong)negotiatedMaximum) throw Error("application-payload-bytes: negotiated bound"); return new(bytes);
+        if (negotiatedMaximum < 0 || negotiatedMaximum > 4294966774L || (ulong)(length) > (ulong)negotiatedMaximum) throw Error("application-payload-bytes: negotiated bound"); return new(bytes.ToArray());
     }
-    private static void WriteApplicationPayloadBytes(Writer writer, ApplicationPayloadBytes value, DecodeContext context)
+    private static void WriteApplicationPayloadBytes(ref Writer writer, ApplicationPayloadBytes value, DecodeContext context)
     {
         var negotiatedMaximum = context.EffectiveCompleteMessageBytesMinusActualEnvelopeOverhead ?? throw Error("missing context effectiveCompleteMessageBytesMinusActualEnvelopeOverhead");
-        var bytes = value.Value ?? Array.Empty<byte>();
-        if ((ulong)bytes.LongLength > 2147483647UL) throw Capacity("application-payload-bytes: capacity");
-        if ((ulong)bytes.LongLength < 0UL || (ulong)bytes.LongLength > 4294966774UL) throw Error("application-payload-bytes: length");
-        WriteU32(writer, new U32(checked((uint)bytes.Length)), context);
+        var bytes = value.Value ?? Array.Empty<byte>(); var length = bytes.Length;
+        if ((ulong)length > 2147483647UL) throw Capacity("application-payload-bytes: capacity");
+        if ((ulong)length < 0UL || (ulong)length > 4294966774UL) throw Error("application-payload-bytes: length");
+        WriteU32(ref writer, new U32(checked((uint)length)), context);
         writer.Bytes(bytes);
-        if (negotiatedMaximum < 0 || negotiatedMaximum > 4294966774L || (ulong)(bytes.LongLength) > (ulong)negotiatedMaximum) throw Error("application-payload-bytes: negotiated bound");
+        if (negotiatedMaximum < 0 || negotiatedMaximum > 4294966774L || (ulong)(length) > (ulong)negotiatedMaximum) throw Error("application-payload-bytes: negotiated bound");
     }
 
-    internal static ApplicationPayloadEnvelopeV1 DecodeApplicationPayloadEnvelopeV1(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadApplicationPayloadEnvelopeV1(reader, context); reader.End("application-payload-envelope-v1"); return value; }
-    internal static byte[] EncodeApplicationPayloadEnvelopeV1(ApplicationPayloadEnvelopeV1 value, DecodeContext context) { var writer = new Writer(); WriteApplicationPayloadEnvelopeV1(writer, value, context); return writer.ToArray(); }
-    private static ApplicationPayloadEnvelopeV1 ReadApplicationPayloadEnvelopeV1(Reader reader, DecodeContext context)
+    internal static ApplicationPayloadEnvelopeV1 DecodeApplicationPayloadEnvelopeV1(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadApplicationPayloadEnvelopeV1(ref reader, context); reader.End("application-payload-envelope-v1"); return value; }
+    internal static byte[] EncodeApplicationPayloadEnvelopeV1(ApplicationPayloadEnvelopeV1 value, DecodeContext context) { var writer = new Writer(); WriteApplicationPayloadEnvelopeV1(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteApplicationPayloadEnvelopeV1(ref writer, value, context); return bytes; }
+    private static ApplicationPayloadEnvelopeV1 ReadApplicationPayloadEnvelopeV1(ref Reader reader, DecodeContext context)
     {
         var encodedStart = reader.Remaining;
         var negotiatedMaximum = context.EffectiveCompleteMessageBytes ?? throw Error("missing context effectiveCompleteMessageBytes");
         var negotiatedStart = reader.Remaining;
-        var version = ReadU8(reader, context);
+        var version = ReadU8(ref reader, context);
         if (version != new U8(1)) throw Error("application-payload-envelope-v1: version");
-        var body = reader.Slice(checked((int)ReadU32(reader, context).Value));
-        var PacketName = ReadPacketName(body, context);
-        var ContentType = ReadContentType(body, context);
-        var Payload = ReadApplicationPayloadBytes(body, context);
+        var body = reader.Slice(checked((int)ReadU32(ref reader, context).Value));
+        var PacketName = ReadPacketName(ref body, context);
+        var ContentType = ReadContentType(ref body, context);
+        var Payload = ReadApplicationPayloadBytes(ref body, context);
         var value = new ApplicationPayloadEnvelopeV1(PacketName, ContentType, Payload);
         body.End("application-payload-envelope-v1");
         if (negotiatedMaximum < 0 || negotiatedMaximum > 4294967295L || (ulong)(negotiatedStart - reader.Remaining) > (ulong)negotiatedMaximum) throw Error("application-payload-envelope-v1: negotiated bound"); if ((ulong)(encodedStart - reader.Remaining) > 4294967295UL) throw Error("application-payload-envelope-v1: encoded limit"); return value;
     }
-    private static void WriteApplicationPayloadEnvelopeV1(Writer writer, ApplicationPayloadEnvelopeV1 value, DecodeContext context)
+    private static void WriteApplicationPayloadEnvelopeV1(ref Writer writer, ApplicationPayloadEnvelopeV1 value, DecodeContext context)
     {
         var encodedStart = writer.Length;
         var negotiatedMaximum = context.EffectiveCompleteMessageBytes ?? throw Error("missing context effectiveCompleteMessageBytes");
         var negotiatedStart = writer.Length;
-        var body = new Writer();
-        WritePacketName(body, value.PacketName, context);
-        WriteContentType(body, value.ContentType, context);
-        WriteApplicationPayloadBytes(body, value.Payload, context);
-        WriteU8(writer, new U8(1), context);
-        WriteU32(writer, new U32(checked((uint)body.Length)), context);
-        writer.Bytes(body.ToArray());
+        WriteU8(ref writer, new U8(1), context);
+        var bodyOffset = writer.Length;
+        writer.Reserve(4);
+        var bodyStart = writer.Length;
+        WritePacketName(ref writer, value.PacketName, context);
+        WriteContentType(ref writer, value.ContentType, context);
+        WriteApplicationPayloadBytes(ref writer, value.Payload, context);
+        var bodyWriter = writer.At(bodyOffset);
+        WriteU32(ref bodyWriter, new U32(checked((uint)(writer.Length - bodyStart))), context);
         if (negotiatedMaximum < 0 || negotiatedMaximum > 4294967295L || (ulong)(writer.Length - negotiatedStart) > (ulong)negotiatedMaximum) throw Error("application-payload-envelope-v1: negotiated bound");
         if ((ulong)(writer.Length - encodedStart) > 4294967295UL) throw Error("application-payload-envelope-v1: encoded limit");
     }
 
-    internal static MetadataValue DecodeMetadataValue(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadMetadataValue(reader, context); reader.End("metadata-value"); return value; }
-    internal static byte[] EncodeMetadataValue(MetadataValue value, DecodeContext context) { var writer = new Writer(); WriteMetadataValue(writer, value, context); return writer.ToArray(); }
-    private static MetadataValue ReadMetadataValue(Reader reader, DecodeContext context)
+    internal static MetadataValue DecodeMetadataValue(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadMetadataValue(ref reader, context); reader.End("metadata-value"); return value; }
+    internal static byte[] EncodeMetadataValue(MetadataValue value, DecodeContext context) { var writer = new Writer(); WriteMetadataValue(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteMetadataValue(ref writer, value, context); return bytes; }
+    private static MetadataValue ReadMetadataValue(ref Reader reader, DecodeContext context)
     {
-        var encodedLength = (ulong)ReadU16(reader, context).Value;
+        var encodedLength = (ulong)ReadU16(ref reader, context).Value;
         if (encodedLength > 2147483647UL) throw Capacity("metadata-value: capacity");
         if (encodedLength < 0UL || encodedLength > 1024UL) throw Error("metadata-value: length");
         var length = checked((int)encodedLength);
@@ -1261,255 +1307,253 @@ internal static class ServiceWireCodec
         if (bytes.Contains((byte)0)) throw Error("metadata-value: NUL");
         return new(Utf8.GetString(bytes));
     }
-    private static void WriteMetadataValue(Writer writer, MetadataValue value, DecodeContext context)
+    private static void WriteMetadataValue(ref Writer writer, MetadataValue value, DecodeContext context)
     {
-        var bytes = value.Value is null ? Array.Empty<byte>() : Utf8.GetBytes(value.Value);
-        if (bytes.Contains((byte)0)) throw Error("metadata-value: NUL");
-        if ((ulong)bytes.LongLength > 2147483647UL) throw Capacity("metadata-value: capacity");
-        if ((ulong)bytes.LongLength < 0UL || (ulong)bytes.LongLength > 1024UL) throw Error("metadata-value: length");
-        WriteU16(writer, new U16(checked((ushort)bytes.Length)), context);
-        writer.Bytes(bytes);
+        var length = value.Value is null ? 0 : Utf8.GetByteCount(value.Value);
+        if (value.Value?.IndexOf('\0') >= 0) throw Error("metadata-value: NUL");
+        if ((ulong)length > 2147483647UL) throw Capacity("metadata-value: capacity");
+        if ((ulong)length < 0UL || (ulong)length > 1024UL) throw Error("metadata-value: length");
+        WriteU16(ref writer, new U16(checked((ushort)length)), context);
+        writer.Text(value.Value, length);
     }
 
-    internal static MetadataEntry DecodeMetadataEntry(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadMetadataEntry(reader, context); reader.End("metadata-entry"); return value; }
-    internal static byte[] EncodeMetadataEntry(MetadataEntry value, DecodeContext context) { var writer = new Writer(); WriteMetadataEntry(writer, value, context); return writer.ToArray(); }
-    private static MetadataEntry ReadMetadataEntry(Reader reader, DecodeContext context)
+    internal static MetadataEntry DecodeMetadataEntry(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadMetadataEntry(ref reader, context); reader.End("metadata-entry"); return value; }
+    internal static byte[] EncodeMetadataEntry(MetadataEntry value, DecodeContext context) { var writer = new Writer(); WriteMetadataEntry(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteMetadataEntry(ref writer, value, context); return bytes; }
+    private static MetadataEntry ReadMetadataEntry(ref Reader reader, DecodeContext context)
     {
-        var Key = ReadText8(reader, context);
-        var Value = ReadMetadataValue(reader, context);
+        var Key = ReadText8(ref reader, context);
+        var Value = ReadMetadataValue(ref reader, context);
         var value = new MetadataEntry(Key, Value);
         return value;
     }
-    private static void WriteMetadataEntry(Writer writer, MetadataEntry value, DecodeContext context)
+    private static void WriteMetadataEntry(ref Writer writer, MetadataEntry value, DecodeContext context)
     {
-        WriteText8(writer, value.Key, context);
-        WriteMetadataValue(writer, value.Value, context);
+        WriteText8(ref writer, value.Key, context);
+        WriteMetadataValue(ref writer, value.Value, context);
     }
 
-    internal static MetadataFrame DecodeMetadataFrame(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadMetadataFrame(reader, context); reader.End("metadata-frame"); return value; }
-    internal static byte[] EncodeMetadataFrame(MetadataFrame value, DecodeContext context) { var writer = new Writer(); WriteMetadataFrame(writer, value, context); return writer.ToArray(); }
-    private static MetadataFrame ReadMetadataFrame(Reader reader, DecodeContext context)
+    internal static MetadataFrame DecodeMetadataFrame(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadMetadataFrame(ref reader, context); reader.End("metadata-frame"); return value; }
+    internal static byte[] EncodeMetadataFrame(MetadataFrame value, DecodeContext context) { var writer = new Writer(); WriteMetadataFrame(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteMetadataFrame(ref writer, value, context); return bytes; }
+    private static MetadataFrame ReadMetadataFrame(ref Reader reader, DecodeContext context)
     {
         var encodedStart = reader.Remaining;
-        var version = ReadU8(reader, context);
+        var version = ReadU8(ref reader, context);
         if (version != new U8(1)) throw Error("metadata-frame: version");
-        var count = checked((int)ReadU8(reader, context).Value);
+        var count = checked((int)ReadU8(ref reader, context).Value);
         var items = new MetadataEntry[count];
-        for (var i = 0; i < count; ++i) items[i] = ReadMetadataEntry(reader, context);
+        for (var i = 0; i < count; ++i) items[i] = ReadMetadataEntry(ref reader, context);
         var value = new MetadataFrame(items);
-        try { var keys0 = value.Entries.Select(item => KeyMetadataFrame0(item, context)).ToArray(); if (keys0.Select(Convert.ToHexString).Distinct(StringComparer.Ordinal).Count() != keys0.Length) throw Error("duplicate vector item"); } catch (OutOfMemoryException) { throw Capacity("metadata-frame constraint capacity"); }
+        try { var keys0 = new HashSet<string>(value.Entries.Count, StringComparer.Ordinal); for (var index = 0; index < value.Entries.Count; index++) { var item = value.Entries[index]; if (!keys0.Add(item.Key.Value!)) throw Error("duplicate vector item"); } } catch (OutOfMemoryException) { throw Capacity("metadata-frame constraint capacity"); }
         if ((ulong)(encodedStart - reader.Remaining) > 1024UL) throw Error("metadata-frame: encoded limit"); return value;
     }
-    private static void WriteMetadataFrame(Writer writer, MetadataFrame value, DecodeContext context)
+    private static void WriteMetadataFrame(ref Writer writer, MetadataFrame value, DecodeContext context)
     {
         var encodedStart = writer.Length;
-        try { var keys0 = value.Entries.Select(item => KeyMetadataFrame0(item, context)).ToArray(); if (keys0.Select(Convert.ToHexString).Distinct(StringComparer.Ordinal).Count() != keys0.Length) throw Error("duplicate vector item"); } catch (OutOfMemoryException) { throw Capacity("metadata-frame constraint capacity"); }
-        WriteU8(writer, new U8(1), context);
-        WriteU8(writer, new U8(checked((byte)value.Entries.Count)), context);
-        foreach (var item in value.Entries) WriteMetadataEntry(writer, item, context);
+        if (writer.IsSizing)
+        {
+            try { var keys0 = new HashSet<string>(value.Entries.Count, StringComparer.Ordinal); for (var index = 0; index < value.Entries.Count; index++) { var item = value.Entries[index]; if (!keys0.Add(item.Key.Value!)) throw Error("duplicate vector item"); } } catch (OutOfMemoryException) { throw Capacity("metadata-frame constraint capacity"); }
+        }
+        WriteU8(ref writer, new U8(1), context);
+        WriteU8(ref writer, new U8(checked((byte)value.Entries.Count)), context);
+        for (var index = 0; index < value.Entries.Count; index++) { var item = value.Entries[index]; WriteMetadataEntry(ref writer, item, context); }
         if ((ulong)(writer.Length - encodedStart) > 1024UL) throw Error("metadata-frame: encoded limit");
     }
-    private static byte[] KeyMetadataFrame0(MetadataEntry item, DecodeContext context)
-    {
-        var writer = new Writer();
-        writer.Bytes(Utf8.GetBytes(item.Key.Value!));
-        return writer.ToArray();
-    }
-    internal static RuntimeState DecodeRuntimeState(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadRuntimeState(reader, context); reader.End("runtime-state"); return value; }
-    internal static byte[] EncodeRuntimeState(RuntimeState value, DecodeContext context) { var writer = new Writer(); WriteRuntimeState(writer, value, context); return writer.ToArray(); }
-    private static RuntimeState ReadRuntimeState(Reader reader, DecodeContext context)
+
+    internal static RuntimeState DecodeRuntimeState(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadRuntimeState(ref reader, context); reader.End("runtime-state"); return value; }
+    internal static byte[] EncodeRuntimeState(RuntimeState value, DecodeContext context) { var writer = new Writer(); WriteRuntimeState(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteRuntimeState(ref writer, value, context); return bytes; }
+    private static RuntimeState ReadRuntimeState(ref Reader reader, DecodeContext context)
     {
         var raw = reader.U8();
         return raw switch { 0 => RuntimeState.Preparing, 1 => RuntimeState.Serving, 2 => RuntimeState.Draining, 3 => RuntimeState.Stopped, 4 => RuntimeState.Error, _ => throw Error("runtime-state: unknown enum") };
     }
-    private static void WriteRuntimeState(Writer writer, RuntimeState value, DecodeContext context)
+    private static void WriteRuntimeState(ref Writer writer, RuntimeState value, DecodeContext context)
     {
         if (!Enum.IsDefined(value)) throw Error("runtime-state: unknown enum");
         writer.U8((byte)value);
     }
 
-    internal static StatefulObjectKind DecodeStatefulObjectKind(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadStatefulObjectKind(reader, context); reader.End("stateful-object-kind"); return value; }
-    internal static byte[] EncodeStatefulObjectKind(StatefulObjectKind value, DecodeContext context) { var writer = new Writer(); WriteStatefulObjectKind(writer, value, context); return writer.ToArray(); }
-    private static StatefulObjectKind ReadStatefulObjectKind(Reader reader, DecodeContext context)
+    internal static StatefulObjectKind DecodeStatefulObjectKind(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadStatefulObjectKind(ref reader, context); reader.End("stateful-object-kind"); return value; }
+    internal static byte[] EncodeStatefulObjectKind(StatefulObjectKind value, DecodeContext context) { var writer = new Writer(); WriteStatefulObjectKind(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteStatefulObjectKind(ref writer, value, context); return bytes; }
+    private static StatefulObjectKind ReadStatefulObjectKind(ref Reader reader, DecodeContext context)
     {
         var raw = reader.U8();
         return raw switch { 1 => StatefulObjectKind.Actor, 2 => StatefulObjectKind.UserSpot, 3 => StatefulObjectKind.InstanceSpot, _ => throw Error("stateful-object-kind: unknown enum") };
     }
-    private static void WriteStatefulObjectKind(Writer writer, StatefulObjectKind value, DecodeContext context)
+    private static void WriteStatefulObjectKind(ref Writer writer, StatefulObjectKind value, DecodeContext context)
     {
         if (!Enum.IsDefined(value)) throw Error("stateful-object-kind: unknown enum");
         writer.U8((byte)value);
     }
 
-    internal static ObjectRole DecodeObjectRole(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadObjectRole(reader, context); reader.End("object-role"); return value; }
-    internal static byte[] EncodeObjectRole(ObjectRole value, DecodeContext context) { var writer = new Writer(); WriteObjectRole(writer, value, context); return writer.ToArray(); }
-    private static ObjectRole ReadObjectRole(Reader reader, DecodeContext context)
+    internal static ObjectRole DecodeObjectRole(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadObjectRole(ref reader, context); reader.End("object-role"); return value; }
+    internal static byte[] EncodeObjectRole(ObjectRole value, DecodeContext context) { var writer = new Writer(); WriteObjectRole(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteObjectRole(ref writer, value, context); return bytes; }
+    private static ObjectRole ReadObjectRole(ref Reader reader, DecodeContext context)
     {
         var raw = reader.U8();
         return raw switch { 0 => ObjectRole.None, 1 => ObjectRole.Client, 2 => ObjectRole.Server, _ => throw Error("object-role: unknown enum") };
     }
-    private static void WriteObjectRole(Writer writer, ObjectRole value, DecodeContext context)
+    private static void WriteObjectRole(ref Writer writer, ObjectRole value, DecodeContext context)
     {
         if (!Enum.IsDefined(value)) throw Error("object-role: unknown enum");
         writer.U8((byte)value);
     }
 
-    internal static ObjectCapacityLimit DecodeObjectCapacityLimit(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadObjectCapacityLimit(reader, context); reader.End("object-capacity-limit"); return value; }
-    internal static byte[] EncodeObjectCapacityLimit(ObjectCapacityLimit value, DecodeContext context) { var writer = new Writer(); WriteObjectCapacityLimit(writer, value, context); return writer.ToArray(); }
-    private static ObjectCapacityLimit ReadObjectCapacityLimit(Reader reader, DecodeContext context)
+    internal static ObjectCapacityLimit DecodeObjectCapacityLimit(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadObjectCapacityLimit(ref reader, context); reader.End("object-capacity-limit"); return value; }
+    internal static byte[] EncodeObjectCapacityLimit(ObjectCapacityLimit value, DecodeContext context) { var writer = new Writer(); WriteObjectCapacityLimit(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteObjectCapacityLimit(ref writer, value, context); return bytes; }
+    private static ObjectCapacityLimit ReadObjectCapacityLimit(ref Reader reader, DecodeContext context)
     {
         var raw = reader.U32();
         if (raw < 1U || raw > 2147483647U) throw Error("object-capacity-limit: range");
         return new(raw);
     }
-    private static void WriteObjectCapacityLimit(Writer writer, ObjectCapacityLimit value, DecodeContext context)
+    private static void WriteObjectCapacityLimit(ref Writer writer, ObjectCapacityLimit value, DecodeContext context)
     {
         if (value.Value < 1U || value.Value > 2147483647U) throw Error("object-capacity-limit: range");
         writer.U32(value.Value);
     }
 
-    internal static ObjectPendingCapacityLimit DecodeObjectPendingCapacityLimit(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadObjectPendingCapacityLimit(reader, context); reader.End("object-pending-capacity-limit"); return value; }
-    internal static byte[] EncodeObjectPendingCapacityLimit(ObjectPendingCapacityLimit value, DecodeContext context) { var writer = new Writer(); WriteObjectPendingCapacityLimit(writer, value, context); return writer.ToArray(); }
-    private static ObjectPendingCapacityLimit ReadObjectPendingCapacityLimit(Reader reader, DecodeContext context)
+    internal static ObjectPendingCapacityLimit DecodeObjectPendingCapacityLimit(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadObjectPendingCapacityLimit(ref reader, context); reader.End("object-pending-capacity-limit"); return value; }
+    internal static byte[] EncodeObjectPendingCapacityLimit(ObjectPendingCapacityLimit value, DecodeContext context) { var writer = new Writer(); WriteObjectPendingCapacityLimit(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteObjectPendingCapacityLimit(ref writer, value, context); return bytes; }
+    private static ObjectPendingCapacityLimit ReadObjectPendingCapacityLimit(ref Reader reader, DecodeContext context)
     {
         var raw = reader.U32();
         if (raw < 0U || raw > 2147483647U) throw Error("object-pending-capacity-limit: range");
         return new(raw);
     }
-    private static void WriteObjectPendingCapacityLimit(Writer writer, ObjectPendingCapacityLimit value, DecodeContext context)
+    private static void WriteObjectPendingCapacityLimit(ref Writer writer, ObjectPendingCapacityLimit value, DecodeContext context)
     {
         if (value.Value < 0U || value.Value > 2147483647U) throw Error("object-pending-capacity-limit: range");
         writer.U32(value.Value);
     }
 
-    internal static AuthorityObjectKind DecodeAuthorityObjectKind(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadAuthorityObjectKind(reader, context); reader.End("authority-object-kind"); return value; }
-    internal static byte[] EncodeAuthorityObjectKind(AuthorityObjectKind value, DecodeContext context) { var writer = new Writer(); WriteAuthorityObjectKind(writer, value, context); return writer.ToArray(); }
-    private static AuthorityObjectKind ReadAuthorityObjectKind(Reader reader, DecodeContext context)
+    internal static AuthorityObjectKind DecodeAuthorityObjectKind(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadAuthorityObjectKind(ref reader, context); reader.End("authority-object-kind"); return value; }
+    internal static byte[] EncodeAuthorityObjectKind(AuthorityObjectKind value, DecodeContext context) { var writer = new Writer(); WriteAuthorityObjectKind(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteAuthorityObjectKind(ref writer, value, context); return bytes; }
+    private static AuthorityObjectKind ReadAuthorityObjectKind(ref Reader reader, DecodeContext context)
     {
         var raw = reader.U8();
         return raw switch { 1 => AuthorityObjectKind.Actor, 2 => AuthorityObjectKind.Spot, _ => throw Error("authority-object-kind: unknown enum") };
     }
-    private static void WriteAuthorityObjectKind(Writer writer, AuthorityObjectKind value, DecodeContext context)
+    private static void WriteAuthorityObjectKind(ref Writer writer, AuthorityObjectKind value, DecodeContext context)
     {
         if (!Enum.IsDefined(value)) throw Error("authority-object-kind: unknown enum");
         writer.U8((byte)value);
     }
 
-    internal static SpotKind DecodeSpotKind(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadSpotKind(reader, context); reader.End("spot-kind"); return value; }
-    internal static byte[] EncodeSpotKind(SpotKind value, DecodeContext context) { var writer = new Writer(); WriteSpotKind(writer, value, context); return writer.ToArray(); }
-    private static SpotKind ReadSpotKind(Reader reader, DecodeContext context)
+    internal static SpotKind DecodeSpotKind(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadSpotKind(ref reader, context); reader.End("spot-kind"); return value; }
+    internal static byte[] EncodeSpotKind(SpotKind value, DecodeContext context) { var writer = new Writer(); WriteSpotKind(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteSpotKind(ref writer, value, context); return bytes; }
+    private static SpotKind ReadSpotKind(ref Reader reader, DecodeContext context)
     {
         var raw = reader.U8();
         return raw switch { 1 => SpotKind.Entry, 2 => SpotKind.User, 3 => SpotKind.Instance, _ => throw Error("spot-kind: unknown enum") };
     }
-    private static void WriteSpotKind(Writer writer, SpotKind value, DecodeContext context)
+    private static void WriteSpotKind(ref Writer writer, SpotKind value, DecodeContext context)
     {
         if (!Enum.IsDefined(value)) throw Error("spot-kind: unknown enum");
         writer.U8((byte)value);
     }
 
-    internal static EntryUserSpotAuthorityState DecodeEntryUserSpotAuthorityState(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadEntryUserSpotAuthorityState(reader, context); reader.End("entry-user-spot-authority-state"); return value; }
-    internal static byte[] EncodeEntryUserSpotAuthorityState(EntryUserSpotAuthorityState value, DecodeContext context) { var writer = new Writer(); WriteEntryUserSpotAuthorityState(writer, value, context); return writer.ToArray(); }
-    private static EntryUserSpotAuthorityState ReadEntryUserSpotAuthorityState(Reader reader, DecodeContext context)
+    internal static EntryUserSpotAuthorityState DecodeEntryUserSpotAuthorityState(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadEntryUserSpotAuthorityState(ref reader, context); reader.End("entry-user-spot-authority-state"); return value; }
+    internal static byte[] EncodeEntryUserSpotAuthorityState(EntryUserSpotAuthorityState value, DecodeContext context) { var writer = new Writer(); WriteEntryUserSpotAuthorityState(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteEntryUserSpotAuthorityState(ref writer, value, context); return bytes; }
+    private static EntryUserSpotAuthorityState ReadEntryUserSpotAuthorityState(ref Reader reader, DecodeContext context)
     {
         var raw = reader.U8();
         return raw switch { 0 => EntryUserSpotAuthorityState.Creating, 1 => EntryUserSpotAuthorityState.Ready, 2 => EntryUserSpotAuthorityState.Closing, 3 => EntryUserSpotAuthorityState.Relocating, _ => throw Error("entry-user-spot-authority-state: unknown enum") };
     }
-    private static void WriteEntryUserSpotAuthorityState(Writer writer, EntryUserSpotAuthorityState value, DecodeContext context)
+    private static void WriteEntryUserSpotAuthorityState(ref Writer writer, EntryUserSpotAuthorityState value, DecodeContext context)
     {
         if (!Enum.IsDefined(value)) throw Error("entry-user-spot-authority-state: unknown enum");
         writer.U8((byte)value);
     }
 
-    internal static ActorAuthorityState DecodeActorAuthorityState(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadActorAuthorityState(reader, context); reader.End("actor-authority-state"); return value; }
-    internal static byte[] EncodeActorAuthorityState(ActorAuthorityState value, DecodeContext context) { var writer = new Writer(); WriteActorAuthorityState(writer, value, context); return writer.ToArray(); }
-    private static ActorAuthorityState ReadActorAuthorityState(Reader reader, DecodeContext context)
+    internal static ActorAuthorityState DecodeActorAuthorityState(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadActorAuthorityState(ref reader, context); reader.End("actor-authority-state"); return value; }
+    internal static byte[] EncodeActorAuthorityState(ActorAuthorityState value, DecodeContext context) { var writer = new Writer(); WriteActorAuthorityState(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteActorAuthorityState(ref writer, value, context); return bytes; }
+    private static ActorAuthorityState ReadActorAuthorityState(ref Reader reader, DecodeContext context)
     {
         var raw = reader.U8();
         return raw switch { 0 => ActorAuthorityState.Creating, 1 => ActorAuthorityState.Ready, _ => throw Error("actor-authority-state: unknown enum") };
     }
-    private static void WriteActorAuthorityState(Writer writer, ActorAuthorityState value, DecodeContext context)
+    private static void WriteActorAuthorityState(ref Writer writer, ActorAuthorityState value, DecodeContext context)
     {
         if (!Enum.IsDefined(value)) throw Error("actor-authority-state: unknown enum");
         writer.U8((byte)value);
     }
 
-    internal static RelocationPolicyKind DecodeRelocationPolicyKind(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadRelocationPolicyKind(reader, context); reader.End("relocation-policy-kind"); return value; }
-    internal static byte[] EncodeRelocationPolicyKind(RelocationPolicyKind value, DecodeContext context) { var writer = new Writer(); WriteRelocationPolicyKind(writer, value, context); return writer.ToArray(); }
-    private static RelocationPolicyKind ReadRelocationPolicyKind(Reader reader, DecodeContext context)
+    internal static RelocationPolicyKind DecodeRelocationPolicyKind(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadRelocationPolicyKind(ref reader, context); reader.End("relocation-policy-kind"); return value; }
+    internal static byte[] EncodeRelocationPolicyKind(RelocationPolicyKind value, DecodeContext context) { var writer = new Writer(); WriteRelocationPolicyKind(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteRelocationPolicyKind(ref writer, value, context); return bytes; }
+    private static RelocationPolicyKind ReadRelocationPolicyKind(ref Reader reader, DecodeContext context)
     {
         var raw = reader.U8();
         return raw switch { 0 => RelocationPolicyKind.Disabled, 1 => RelocationPolicyKind.Recreate, 2 => RelocationPolicyKind.Snapshot, _ => throw Error("relocation-policy-kind: unknown enum") };
     }
-    private static void WriteRelocationPolicyKind(Writer writer, RelocationPolicyKind value, DecodeContext context)
+    private static void WriteRelocationPolicyKind(ref Writer writer, RelocationPolicyKind value, DecodeContext context)
     {
         if (!Enum.IsDefined(value)) throw Error("relocation-policy-kind: unknown enum");
         writer.U8((byte)value);
     }
 
-    internal static TimerOverrunPolicyKind DecodeTimerOverrunPolicyKind(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadTimerOverrunPolicyKind(reader, context); reader.End("timer-overrun-policy-kind"); return value; }
-    internal static byte[] EncodeTimerOverrunPolicyKind(TimerOverrunPolicyKind value, DecodeContext context) { var writer = new Writer(); WriteTimerOverrunPolicyKind(writer, value, context); return writer.ToArray(); }
-    private static TimerOverrunPolicyKind ReadTimerOverrunPolicyKind(Reader reader, DecodeContext context)
+    internal static TimerOverrunPolicyKind DecodeTimerOverrunPolicyKind(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadTimerOverrunPolicyKind(ref reader, context); reader.End("timer-overrun-policy-kind"); return value; }
+    internal static byte[] EncodeTimerOverrunPolicyKind(TimerOverrunPolicyKind value, DecodeContext context) { var writer = new Writer(); WriteTimerOverrunPolicyKind(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteTimerOverrunPolicyKind(ref writer, value, context); return bytes; }
+    private static TimerOverrunPolicyKind ReadTimerOverrunPolicyKind(ref Reader reader, DecodeContext context)
     {
         var raw = reader.U8();
         return raw switch { 1 => TimerOverrunPolicyKind.SkipLateTicks, 2 => TimerOverrunPolicyKind.CatchUpBounded, 3 => TimerOverrunPolicyKind.DelayNextTick, _ => throw Error("timer-overrun-policy-kind: unknown enum") };
     }
-    private static void WriteTimerOverrunPolicyKind(Writer writer, TimerOverrunPolicyKind value, DecodeContext context)
+    private static void WriteTimerOverrunPolicyKind(ref Writer writer, TimerOverrunPolicyKind value, DecodeContext context)
     {
         if (!Enum.IsDefined(value)) throw Error("timer-overrun-policy-kind: unknown enum");
         writer.U8((byte)value);
     }
 
-    internal static ActorSpotKind DecodeActorSpotKind(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadActorSpotKind(reader, context); reader.End("actor-spot-kind"); return value; }
-    internal static byte[] EncodeActorSpotKind(ActorSpotKind value, DecodeContext context) { var writer = new Writer(); WriteActorSpotKind(writer, value, context); return writer.ToArray(); }
-    private static ActorSpotKind ReadActorSpotKind(Reader reader, DecodeContext context)
+    internal static ActorSpotKind DecodeActorSpotKind(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadActorSpotKind(ref reader, context); reader.End("actor-spot-kind"); return value; }
+    internal static byte[] EncodeActorSpotKind(ActorSpotKind value, DecodeContext context) { var writer = new Writer(); WriteActorSpotKind(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteActorSpotKind(ref writer, value, context); return bytes; }
+    private static ActorSpotKind ReadActorSpotKind(ref Reader reader, DecodeContext context)
     {
         var raw = reader.U8();
         return raw switch { 1 => ActorSpotKind.Entry, 2 => ActorSpotKind.User, _ => throw Error("actor-spot-kind: unknown enum") };
     }
-    private static void WriteActorSpotKind(Writer writer, ActorSpotKind value, DecodeContext context)
+    private static void WriteActorSpotKind(ref Writer writer, ActorSpotKind value, DecodeContext context)
     {
         if (!Enum.IsDefined(value)) throw Error("actor-spot-kind: unknown enum");
         writer.U8((byte)value);
     }
 
-    internal static RelocationRole DecodeRelocationRole(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadRelocationRole(reader, context); reader.End("relocation-role"); return value; }
-    internal static byte[] EncodeRelocationRole(RelocationRole value, DecodeContext context) { var writer = new Writer(); WriteRelocationRole(writer, value, context); return writer.ToArray(); }
-    private static RelocationRole ReadRelocationRole(Reader reader, DecodeContext context)
+    internal static RelocationRole DecodeRelocationRole(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadRelocationRole(ref reader, context); reader.End("relocation-role"); return value; }
+    internal static byte[] EncodeRelocationRole(RelocationRole value, DecodeContext context) { var writer = new Writer(); WriteRelocationRole(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteRelocationRole(ref writer, value, context); return bytes; }
+    private static RelocationRole ReadRelocationRole(ref Reader reader, DecodeContext context)
     {
         var raw = reader.U8();
         return raw switch { 1 => RelocationRole.Source, 2 => RelocationRole.Target, 3 => RelocationRole.Coordinator, _ => throw Error("relocation-role: unknown enum") };
     }
-    private static void WriteRelocationRole(Writer writer, RelocationRole value, DecodeContext context)
+    private static void WriteRelocationRole(ref Writer writer, RelocationRole value, DecodeContext context)
     {
         if (!Enum.IsDefined(value)) throw Error("relocation-role: unknown enum");
         writer.U8((byte)value);
     }
 
-    internal static ActorJoinResult DecodeActorJoinResult(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadActorJoinResult(reader, context); reader.End("actor-join-result"); return value; }
-    internal static byte[] EncodeActorJoinResult(ActorJoinResult value, DecodeContext context) { var writer = new Writer(); WriteActorJoinResult(writer, value, context); return writer.ToArray(); }
-    private static ActorJoinResult ReadActorJoinResult(Reader reader, DecodeContext context)
+    internal static ActorJoinResult DecodeActorJoinResult(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadActorJoinResult(ref reader, context); reader.End("actor-join-result"); return value; }
+    internal static byte[] EncodeActorJoinResult(ActorJoinResult value, DecodeContext context) { var writer = new Writer(); WriteActorJoinResult(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteActorJoinResult(ref writer, value, context); return bytes; }
+    private static ActorJoinResult ReadActorJoinResult(ref Reader reader, DecodeContext context)
     {
         var raw = reader.U32();
         return raw switch { 0U => ActorJoinResult.Accepted, 1U => ActorJoinResult.Rejected, _ => throw Error("actor-join-result: unknown enum") };
     }
-    private static void WriteActorJoinResult(Writer writer, ActorJoinResult value, DecodeContext context)
+    private static void WriteActorJoinResult(ref Writer writer, ActorJoinResult value, DecodeContext context)
     {
         if (!Enum.IsDefined(value)) throw Error("actor-join-result: unknown enum");
         writer.U32((uint)value);
     }
 
-    internal static ActorJoinReplyTail DecodeActorJoinReplyTail(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadActorJoinReplyTail(reader, context); reader.End("actor-join-reply-tail"); return value; }
-    internal static byte[] EncodeActorJoinReplyTail(ActorJoinReplyTail value, DecodeContext context) { var writer = new Writer(); WriteActorJoinReplyTail(writer, value, context); return writer.ToArray(); }
-    private static ActorJoinReplyTail ReadActorJoinReplyTail(Reader reader, DecodeContext context)
+    internal static ActorJoinReplyTail DecodeActorJoinReplyTail(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadActorJoinReplyTail(ref reader, context); reader.End("actor-join-reply-tail"); return value; }
+    internal static byte[] EncodeActorJoinReplyTail(ActorJoinReplyTail value, DecodeContext context) { var writer = new Writer(); WriteActorJoinReplyTail(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteActorJoinReplyTail(ref writer, value, context); return bytes; }
+    private static ActorJoinReplyTail ReadActorJoinReplyTail(ref Reader reader, DecodeContext context)
     {
-        var JoinResult = ReadActorJoinResult(reader, context);
-        var selected = reader.Slice(checked((int)ReadU16(reader, context).Value));
+        var JoinResult = ReadActorJoinResult(ref reader, context);
+        var selected = reader.Slice(checked((int)ReadU16(ref reader, context).Value));
         if (JoinResult == ActorJoinResult.Accepted)
         {
-            var Spot = ReadSpotRef(selected, context);
-            var MembershipEpoch = ReadNonzeroU64(selected, context);
-            var ReceiveChunkLimitBytes = ReadU32(selected, context);
+            var Spot = ReadSpotRef(ref selected, context);
+            var MembershipEpoch = ReadNonzeroU64(ref selected, context);
+            var ReceiveChunkLimitBytes = ReadU32(ref selected, context);
             selected.End("actor-join-reply-tail");
             var caseValue = new ActorJoinReplyTailCase0(JoinResult, Spot, MembershipEpoch, ReceiveChunkLimitBytes);
             ActorJoinReplyTail value = caseValue;
@@ -1517,7 +1561,7 @@ internal static class ServiceWireCodec
         }
         else if (JoinResult == ActorJoinResult.Rejected)
         {
-            var Spot = ReadOptionalSpotRef(selected, context);
+            var Spot = ReadOptionalSpotRef(ref selected, context);
             selected.End("actor-join-reply-tail");
             var caseValue = new ActorJoinReplyTailCase1(JoinResult, Spot);
             ActorJoinReplyTail value = caseValue;
@@ -1525,400 +1569,404 @@ internal static class ServiceWireCodec
         }
         throw Error("actor-join-reply-tail: discriminator");
     }
-    private static void WriteActorJoinReplyTail(Writer writer, ActorJoinReplyTail value, DecodeContext context)
+    private static void WriteActorJoinReplyTail(ref Writer writer, ActorJoinReplyTail value, DecodeContext context)
     {
         switch (value)
         {
         case ActorJoinReplyTailCase0 item:
         {
             if (item.JoinResult != ActorJoinResult.Accepted) throw Error("actor-join-reply-tail: discriminator");
-            WriteActorJoinResult(writer, item.JoinResult, context);
-            var body = new Writer();
-            WriteSpotRef(body, item.Spot, context);
-            WriteNonzeroU64(body, item.MembershipEpoch, context);
-            WriteU32(body, item.ReceiveChunkLimitBytes, context);
-            WriteU16(writer, new U16(checked((ushort)body.Length)), context);
-            writer.Bytes(body.ToArray());
+            WriteActorJoinResult(ref writer, item.JoinResult, context);
+            var bodyOffset = writer.Length;
+            writer.Reserve(2);
+            var bodyStart = writer.Length;
+            WriteSpotRef(ref writer, item.Spot, context);
+            WriteNonzeroU64(ref writer, item.MembershipEpoch, context);
+            WriteU32(ref writer, item.ReceiveChunkLimitBytes, context);
+            var bodyWriter = writer.At(bodyOffset);
+            WriteU16(ref bodyWriter, new U16(checked((ushort)(writer.Length - bodyStart))), context);
             break;
         }
         case ActorJoinReplyTailCase1 item:
         {
             if (item.JoinResult != ActorJoinResult.Rejected) throw Error("actor-join-reply-tail: discriminator");
-            WriteActorJoinResult(writer, item.JoinResult, context);
-            var body = new Writer();
-            WriteOptionalSpotRef(body, item.Spot, context);
-            WriteU16(writer, new U16(checked((ushort)body.Length)), context);
-            writer.Bytes(body.ToArray());
+            WriteActorJoinResult(ref writer, item.JoinResult, context);
+            var bodyOffset = writer.Length;
+            writer.Reserve(2);
+            var bodyStart = writer.Length;
+            WriteOptionalSpotRef(ref writer, item.Spot, context);
+            var bodyWriter = writer.At(bodyOffset);
+            WriteU16(ref bodyWriter, new U16(checked((ushort)(writer.Length - bodyStart))), context);
             break;
         }
         default: throw Error("actor-join-reply-tail: variant");
         }
     }
 
-    internal static MeshRecordKind DecodeMeshRecordKind(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadMeshRecordKind(reader, context); reader.End("mesh-record-kind"); return value; }
-    internal static byte[] EncodeMeshRecordKind(MeshRecordKind value, DecodeContext context) { var writer = new Writer(); WriteMeshRecordKind(writer, value, context); return writer.ToArray(); }
-    private static MeshRecordKind ReadMeshRecordKind(Reader reader, DecodeContext context)
+    internal static MeshRecordKind DecodeMeshRecordKind(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadMeshRecordKind(ref reader, context); reader.End("mesh-record-kind"); return value; }
+    internal static byte[] EncodeMeshRecordKind(MeshRecordKind value, DecodeContext context) { var writer = new Writer(); WriteMeshRecordKind(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteMeshRecordKind(ref writer, value, context); return bytes; }
+    private static MeshRecordKind ReadMeshRecordKind(ref Reader reader, DecodeContext context)
     {
         var raw = reader.U8();
         return raw switch { 1 => MeshRecordKind.NodeSend, 2 => MeshRecordKind.NodeRequest, 3 => MeshRecordKind.ChannelSend, 4 => MeshRecordKind.ChannelRequest, 5 => MeshRecordKind.SpotSend, 6 => MeshRecordKind.SpotRequest, 7 => MeshRecordKind.SpotMulticast, 8 => MeshRecordKind.SpotControl, 9 => MeshRecordKind.ActorSend, 10 => MeshRecordKind.ActorRequest, 11 => MeshRecordKind.Completion, 12 => MeshRecordKind.SendReady, 13 => MeshRecordKind.RelocationControl, 14 => MeshRecordKind.InstanceSpotActivation, _ => throw Error("mesh-record-kind: unknown enum") };
     }
-    private static void WriteMeshRecordKind(Writer writer, MeshRecordKind value, DecodeContext context)
+    private static void WriteMeshRecordKind(ref Writer writer, MeshRecordKind value, DecodeContext context)
     {
         if (!Enum.IsDefined(value)) throw Error("mesh-record-kind: unknown enum");
         writer.U8((byte)value);
     }
 
-    internal static FrozenSourceKind DecodeFrozenSourceKind(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadFrozenSourceKind(reader, context); reader.End("frozen-source-kind"); return value; }
-    internal static byte[] EncodeFrozenSourceKind(FrozenSourceKind value, DecodeContext context) { var writer = new Writer(); WriteFrozenSourceKind(writer, value, context); return writer.ToArray(); }
-    private static FrozenSourceKind ReadFrozenSourceKind(Reader reader, DecodeContext context)
+    internal static FrozenSourceKind DecodeFrozenSourceKind(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadFrozenSourceKind(ref reader, context); reader.End("frozen-source-kind"); return value; }
+    internal static byte[] EncodeFrozenSourceKind(FrozenSourceKind value, DecodeContext context) { var writer = new Writer(); WriteFrozenSourceKind(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteFrozenSourceKind(ref writer, value, context); return bytes; }
+    private static FrozenSourceKind ReadFrozenSourceKind(ref Reader reader, DecodeContext context)
     {
         var raw = reader.U8();
         return raw switch { 1 => FrozenSourceKind.Node, 2 => FrozenSourceKind.Spot, 3 => FrozenSourceKind.Actor, 4 => FrozenSourceKind.BoundSession, _ => throw Error("frozen-source-kind: unknown enum") };
     }
-    private static void WriteFrozenSourceKind(Writer writer, FrozenSourceKind value, DecodeContext context)
+    private static void WriteFrozenSourceKind(ref Writer writer, FrozenSourceKind value, DecodeContext context)
     {
         if (!Enum.IsDefined(value)) throw Error("frozen-source-kind: unknown enum");
         writer.U8((byte)value);
     }
 
-    internal static MeshDestinationKind DecodeMeshDestinationKind(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadMeshDestinationKind(reader, context); reader.End("mesh-destination-kind"); return value; }
-    internal static byte[] EncodeMeshDestinationKind(MeshDestinationKind value, DecodeContext context) { var writer = new Writer(); WriteMeshDestinationKind(writer, value, context); return writer.ToArray(); }
-    private static MeshDestinationKind ReadMeshDestinationKind(Reader reader, DecodeContext context)
+    internal static MeshDestinationKind DecodeMeshDestinationKind(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadMeshDestinationKind(ref reader, context); reader.End("mesh-destination-kind"); return value; }
+    internal static byte[] EncodeMeshDestinationKind(MeshDestinationKind value, DecodeContext context) { var writer = new Writer(); WriteMeshDestinationKind(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteMeshDestinationKind(ref writer, value, context); return bytes; }
+    private static MeshDestinationKind ReadMeshDestinationKind(ref Reader reader, DecodeContext context)
     {
         var raw = reader.U8();
         return raw switch { 1 => MeshDestinationKind.Node, 2 => MeshDestinationKind.Channel, 3 => MeshDestinationKind.Spot, 4 => MeshDestinationKind.Actor, 5 => MeshDestinationKind.BoundSession, _ => throw Error("mesh-destination-kind: unknown enum") };
     }
-    private static void WriteMeshDestinationKind(Writer writer, MeshDestinationKind value, DecodeContext context)
+    private static void WriteMeshDestinationKind(ref Writer writer, MeshDestinationKind value, DecodeContext context)
     {
         if (!Enum.IsDefined(value)) throw Error("mesh-destination-kind: unknown enum");
         writer.U8((byte)value);
     }
 
-    internal static ServiceTopologyKind DecodeServiceTopologyKind(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadServiceTopologyKind(reader, context); reader.End("service-topology-kind"); return value; }
-    internal static byte[] EncodeServiceTopologyKind(ServiceTopologyKind value, DecodeContext context) { var writer = new Writer(); WriteServiceTopologyKind(writer, value, context); return writer.ToArray(); }
-    private static ServiceTopologyKind ReadServiceTopologyKind(Reader reader, DecodeContext context)
+    internal static ServiceTopologyKind DecodeServiceTopologyKind(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadServiceTopologyKind(ref reader, context); reader.End("service-topology-kind"); return value; }
+    internal static byte[] EncodeServiceTopologyKind(ServiceTopologyKind value, DecodeContext context) { var writer = new Writer(); WriteServiceTopologyKind(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteServiceTopologyKind(ref writer, value, context); return bytes; }
+    private static ServiceTopologyKind ReadServiceTopologyKind(ref Reader reader, DecodeContext context)
     {
         var raw = reader.U8();
         return raw switch { 1 => ServiceTopologyKind.RouteMesh, 2 => ServiceTopologyKind.ClientServer, _ => throw Error("service-topology-kind: unknown enum") };
     }
-    private static void WriteServiceTopologyKind(Writer writer, ServiceTopologyKind value, DecodeContext context)
+    private static void WriteServiceTopologyKind(ref Writer writer, ServiceTopologyKind value, DecodeContext context)
     {
         if (!Enum.IsDefined(value)) throw Error("service-topology-kind: unknown enum");
         writer.U8((byte)value);
     }
 
-    internal static ClientServerRole DecodeClientServerRole(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadClientServerRole(reader, context); reader.End("client-server-role"); return value; }
-    internal static byte[] EncodeClientServerRole(ClientServerRole value, DecodeContext context) { var writer = new Writer(); WriteClientServerRole(writer, value, context); return writer.ToArray(); }
-    private static ClientServerRole ReadClientServerRole(Reader reader, DecodeContext context)
+    internal static ClientServerRole DecodeClientServerRole(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadClientServerRole(ref reader, context); reader.End("client-server-role"); return value; }
+    internal static byte[] EncodeClientServerRole(ClientServerRole value, DecodeContext context) { var writer = new Writer(); WriteClientServerRole(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteClientServerRole(ref writer, value, context); return bytes; }
+    private static ClientServerRole ReadClientServerRole(ref Reader reader, DecodeContext context)
     {
         var raw = reader.U8();
         return raw switch { 1 => ClientServerRole.Client, 2 => ClientServerRole.Server, _ => throw Error("client-server-role: unknown enum") };
     }
-    private static void WriteClientServerRole(Writer writer, ClientServerRole value, DecodeContext context)
+    private static void WriteClientServerRole(ref Writer writer, ClientServerRole value, DecodeContext context)
     {
         if (!Enum.IsDefined(value)) throw Error("client-server-role: unknown enum");
         writer.U8((byte)value);
     }
 
-    internal static ClientServerDirection DecodeClientServerDirection(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadClientServerDirection(reader, context); reader.End("client-server-direction"); return value; }
-    internal static byte[] EncodeClientServerDirection(ClientServerDirection value, DecodeContext context) { var writer = new Writer(); WriteClientServerDirection(writer, value, context); return writer.ToArray(); }
-    private static ClientServerDirection ReadClientServerDirection(Reader reader, DecodeContext context)
+    internal static ClientServerDirection DecodeClientServerDirection(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadClientServerDirection(ref reader, context); reader.End("client-server-direction"); return value; }
+    internal static byte[] EncodeClientServerDirection(ClientServerDirection value, DecodeContext context) { var writer = new Writer(); WriteClientServerDirection(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteClientServerDirection(ref writer, value, context); return bytes; }
+    private static ClientServerDirection ReadClientServerDirection(ref Reader reader, DecodeContext context)
     {
         var raw = reader.U8();
         return raw switch { 1 => ClientServerDirection.ClientToServer, _ => throw Error("client-server-direction: unknown enum") };
     }
-    private static void WriteClientServerDirection(Writer writer, ClientServerDirection value, DecodeContext context)
+    private static void WriteClientServerDirection(ref Writer writer, ClientServerDirection value, DecodeContext context)
     {
         if (!Enum.IsDefined(value)) throw Error("client-server-direction: unknown enum");
         writer.U8((byte)value);
     }
 
-    internal static ActorLifecycleKind DecodeActorLifecycleKind(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadActorLifecycleKind(reader, context); reader.End("actor-lifecycle-kind"); return value; }
-    internal static byte[] EncodeActorLifecycleKind(ActorLifecycleKind value, DecodeContext context) { var writer = new Writer(); WriteActorLifecycleKind(writer, value, context); return writer.ToArray(); }
-    private static ActorLifecycleKind ReadActorLifecycleKind(Reader reader, DecodeContext context)
+    internal static ActorLifecycleKind DecodeActorLifecycleKind(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadActorLifecycleKind(ref reader, context); reader.End("actor-lifecycle-kind"); return value; }
+    internal static byte[] EncodeActorLifecycleKind(ActorLifecycleKind value, DecodeContext context) { var writer = new Writer(); WriteActorLifecycleKind(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteActorLifecycleKind(ref writer, value, context); return bytes; }
+    private static ActorLifecycleKind ReadActorLifecycleKind(ref Reader reader, DecodeContext context)
     {
         var raw = reader.U8();
         return raw switch { 1 => ActorLifecycleKind.Created, 2 => ActorLifecycleKind.Joined, 3 => ActorLifecycleKind.Left, 4 => ActorLifecycleKind.Disconnected, 5 => ActorLifecycleKind.Destroyed, _ => throw Error("actor-lifecycle-kind: unknown enum") };
     }
-    private static void WriteActorLifecycleKind(Writer writer, ActorLifecycleKind value, DecodeContext context)
+    private static void WriteActorLifecycleKind(ref Writer writer, ActorLifecycleKind value, DecodeContext context)
     {
         if (!Enum.IsDefined(value)) throw Error("actor-lifecycle-kind: unknown enum");
         writer.U8((byte)value);
     }
 
-    internal static BoundSessionBindingState DecodeBoundSessionBindingState(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadBoundSessionBindingState(reader, context); reader.End("bound-session-binding-state"); return value; }
-    internal static byte[] EncodeBoundSessionBindingState(BoundSessionBindingState value, DecodeContext context) { var writer = new Writer(); WriteBoundSessionBindingState(writer, value, context); return writer.ToArray(); }
-    private static BoundSessionBindingState ReadBoundSessionBindingState(Reader reader, DecodeContext context)
+    internal static BoundSessionBindingState DecodeBoundSessionBindingState(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadBoundSessionBindingState(ref reader, context); reader.End("bound-session-binding-state"); return value; }
+    internal static byte[] EncodeBoundSessionBindingState(BoundSessionBindingState value, DecodeContext context) { var writer = new Writer(); WriteBoundSessionBindingState(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteBoundSessionBindingState(ref writer, value, context); return bytes; }
+    private static BoundSessionBindingState ReadBoundSessionBindingState(ref Reader reader, DecodeContext context)
     {
         var raw = reader.U8();
         return raw switch { 1 => BoundSessionBindingState.Active, 2 => BoundSessionBindingState.Tombstone, _ => throw Error("bound-session-binding-state: unknown enum") };
     }
-    private static void WriteBoundSessionBindingState(Writer writer, BoundSessionBindingState value, DecodeContext context)
+    private static void WriteBoundSessionBindingState(ref Writer writer, BoundSessionBindingState value, DecodeContext context)
     {
         if (!Enum.IsDefined(value)) throw Error("bound-session-binding-state: unknown enum");
         writer.U8((byte)value);
     }
 
-    internal static SessionRelocationRouteAction DecodeSessionRelocationRouteAction(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadSessionRelocationRouteAction(reader, context); reader.End("session-relocation-route-action"); return value; }
-    internal static byte[] EncodeSessionRelocationRouteAction(SessionRelocationRouteAction value, DecodeContext context) { var writer = new Writer(); WriteSessionRelocationRouteAction(writer, value, context); return writer.ToArray(); }
-    private static SessionRelocationRouteAction ReadSessionRelocationRouteAction(Reader reader, DecodeContext context)
+    internal static SessionRelocationRouteAction DecodeSessionRelocationRouteAction(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadSessionRelocationRouteAction(ref reader, context); reader.End("session-relocation-route-action"); return value; }
+    internal static byte[] EncodeSessionRelocationRouteAction(SessionRelocationRouteAction value, DecodeContext context) { var writer = new Writer(); WriteSessionRelocationRouteAction(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteSessionRelocationRouteAction(ref writer, value, context); return bytes; }
+    private static SessionRelocationRouteAction ReadSessionRelocationRouteAction(ref Reader reader, DecodeContext context)
     {
         var raw = reader.U8();
         return raw switch { 1 => SessionRelocationRouteAction.Commit, 2 => SessionRelocationRouteAction.Abort, _ => throw Error("session-relocation-route-action: unknown enum") };
     }
-    private static void WriteSessionRelocationRouteAction(Writer writer, SessionRelocationRouteAction value, DecodeContext context)
+    private static void WriteSessionRelocationRouteAction(ref Writer writer, SessionRelocationRouteAction value, DecodeContext context)
     {
         if (!Enum.IsDefined(value)) throw Error("session-relocation-route-action: unknown enum");
         writer.U8((byte)value);
     }
 
-    internal static RelocationPhase DecodeRelocationPhase(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadRelocationPhase(reader, context); reader.End("relocation-phase"); return value; }
-    internal static byte[] EncodeRelocationPhase(RelocationPhase value, DecodeContext context) { var writer = new Writer(); WriteRelocationPhase(writer, value, context); return writer.ToArray(); }
-    private static RelocationPhase ReadRelocationPhase(Reader reader, DecodeContext context)
+    internal static RelocationPhase DecodeRelocationPhase(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadRelocationPhase(ref reader, context); reader.End("relocation-phase"); return value; }
+    internal static byte[] EncodeRelocationPhase(RelocationPhase value, DecodeContext context) { var writer = new Writer(); WriteRelocationPhase(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteRelocationPhase(ref writer, value, context); return bytes; }
+    private static RelocationPhase ReadRelocationPhase(ref Reader reader, DecodeContext context)
     {
         var raw = reader.U8();
         return raw switch { 0 => RelocationPhase.None, 1 => RelocationPhase.Preparing, 2 => RelocationPhase.Captured, 3 => RelocationPhase.Prepared, 4 => RelocationPhase.Committed, 5 => RelocationPhase.Activating, 6 => RelocationPhase.Activated, 7 => RelocationPhase.Cleaning, 8 => RelocationPhase.Completed, 9 => RelocationPhase.Aborted, _ => throw Error("relocation-phase: unknown enum") };
     }
-    private static void WriteRelocationPhase(Writer writer, RelocationPhase value, DecodeContext context)
+    private static void WriteRelocationPhase(ref Writer writer, RelocationPhase value, DecodeContext context)
     {
         if (!Enum.IsDefined(value)) throw Error("relocation-phase: unknown enum");
         writer.U8((byte)value);
     }
 
-    internal static SourceCleanupState DecodeSourceCleanupState(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadSourceCleanupState(reader, context); reader.End("source-cleanup-state"); return value; }
-    internal static byte[] EncodeSourceCleanupState(SourceCleanupState value, DecodeContext context) { var writer = new Writer(); WriteSourceCleanupState(writer, value, context); return writer.ToArray(); }
-    private static SourceCleanupState ReadSourceCleanupState(Reader reader, DecodeContext context)
+    internal static SourceCleanupState DecodeSourceCleanupState(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadSourceCleanupState(ref reader, context); reader.End("source-cleanup-state"); return value; }
+    internal static byte[] EncodeSourceCleanupState(SourceCleanupState value, DecodeContext context) { var writer = new Writer(); WriteSourceCleanupState(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteSourceCleanupState(ref writer, value, context); return bytes; }
+    private static SourceCleanupState ReadSourceCleanupState(ref Reader reader, DecodeContext context)
     {
         var raw = reader.U8();
         return raw switch { 0 => SourceCleanupState.Pending, 1 => SourceCleanupState.Completed, 2 => SourceCleanupState.SourceLeaseExpired, _ => throw Error("source-cleanup-state: unknown enum") };
     }
-    private static void WriteSourceCleanupState(Writer writer, SourceCleanupState value, DecodeContext context)
+    private static void WriteSourceCleanupState(ref Writer writer, SourceCleanupState value, DecodeContext context)
     {
         if (!Enum.IsDefined(value)) throw Error("source-cleanup-state: unknown enum");
         writer.U8((byte)value);
     }
 
-    internal static SessionSealResult DecodeSessionSealResult(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadSessionSealResult(reader, context); reader.End("session-seal-result"); return value; }
-    internal static byte[] EncodeSessionSealResult(SessionSealResult value, DecodeContext context) { var writer = new Writer(); WriteSessionSealResult(writer, value, context); return writer.ToArray(); }
-    private static SessionSealResult ReadSessionSealResult(Reader reader, DecodeContext context)
+    internal static SessionSealResult DecodeSessionSealResult(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadSessionSealResult(ref reader, context); reader.End("session-seal-result"); return value; }
+    internal static byte[] EncodeSessionSealResult(SessionSealResult value, DecodeContext context) { var writer = new Writer(); WriteSessionSealResult(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteSessionSealResult(ref writer, value, context); return bytes; }
+    private static SessionSealResult ReadSessionSealResult(ref Reader reader, DecodeContext context)
     {
         var raw = reader.U8();
         return raw switch { 1 => SessionSealResult.Sealed, 2 => SessionSealResult.BindingAbsent, _ => throw Error("session-seal-result: unknown enum") };
     }
-    private static void WriteSessionSealResult(Writer writer, SessionSealResult value, DecodeContext context)
+    private static void WriteSessionSealResult(ref Writer writer, SessionSealResult value, DecodeContext context)
     {
         if (!Enum.IsDefined(value)) throw Error("session-seal-result: unknown enum");
         writer.U8((byte)value);
     }
 
-    internal static ReplyRelayAckStatus DecodeReplyRelayAckStatus(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadReplyRelayAckStatus(reader, context); reader.End("reply-relay-ack-status"); return value; }
-    internal static byte[] EncodeReplyRelayAckStatus(ReplyRelayAckStatus value, DecodeContext context) { var writer = new Writer(); WriteReplyRelayAckStatus(writer, value, context); return writer.ToArray(); }
-    private static ReplyRelayAckStatus ReadReplyRelayAckStatus(Reader reader, DecodeContext context)
+    internal static ReplyRelayAckStatus DecodeReplyRelayAckStatus(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadReplyRelayAckStatus(ref reader, context); reader.End("reply-relay-ack-status"); return value; }
+    internal static byte[] EncodeReplyRelayAckStatus(ReplyRelayAckStatus value, DecodeContext context) { var writer = new Writer(); WriteReplyRelayAckStatus(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteReplyRelayAckStatus(ref writer, value, context); return bytes; }
+    private static ReplyRelayAckStatus ReadReplyRelayAckStatus(ref Reader reader, DecodeContext context)
     {
         var raw = reader.U8();
         return raw switch { 1 => ReplyRelayAckStatus.TerminalReceived, 2 => ReplyRelayAckStatus.AlreadyTerminal, _ => throw Error("reply-relay-ack-status: unknown enum") };
     }
-    private static void WriteReplyRelayAckStatus(Writer writer, ReplyRelayAckStatus value, DecodeContext context)
+    private static void WriteReplyRelayAckStatus(ref Writer writer, ReplyRelayAckStatus value, DecodeContext context)
     {
         if (!Enum.IsDefined(value)) throw Error("reply-relay-ack-status: unknown enum");
         writer.U8((byte)value);
     }
 
-    internal static AuthorityOperationKind DecodeAuthorityOperationKind(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadAuthorityOperationKind(reader, context); reader.End("authority-operation-kind"); return value; }
-    internal static byte[] EncodeAuthorityOperationKind(AuthorityOperationKind value, DecodeContext context) { var writer = new Writer(); WriteAuthorityOperationKind(writer, value, context); return writer.ToArray(); }
-    private static AuthorityOperationKind ReadAuthorityOperationKind(Reader reader, DecodeContext context)
+    internal static AuthorityOperationKind DecodeAuthorityOperationKind(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadAuthorityOperationKind(ref reader, context); reader.End("authority-operation-kind"); return value; }
+    internal static byte[] EncodeAuthorityOperationKind(AuthorityOperationKind value, DecodeContext context) { var writer = new Writer(); WriteAuthorityOperationKind(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteAuthorityOperationKind(ref writer, value, context); return bytes; }
+    private static AuthorityOperationKind ReadAuthorityOperationKind(ref Reader reader, DecodeContext context)
     {
         var raw = reader.U8();
         return raw switch { 0 => AuthorityOperationKind.Steady, 1 => AuthorityOperationKind.ColdActivation, 2 => AuthorityOperationKind.MaintenanceRelocation, 3 => AuthorityOperationKind.Close, _ => throw Error("authority-operation-kind: unknown enum") };
     }
-    private static void WriteAuthorityOperationKind(Writer writer, AuthorityOperationKind value, DecodeContext context)
+    private static void WriteAuthorityOperationKind(ref Writer writer, AuthorityOperationKind value, DecodeContext context)
     {
         if (!Enum.IsDefined(value)) throw Error("authority-operation-kind: unknown enum");
         writer.U8((byte)value);
     }
 
-    internal static MeshOperationKind DecodeMeshOperationKind(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadMeshOperationKind(reader, context); reader.End("mesh-operation-kind"); return value; }
-    internal static byte[] EncodeMeshOperationKind(MeshOperationKind value, DecodeContext context) { var writer = new Writer(); WriteMeshOperationKind(writer, value, context); return writer.ToArray(); }
-    private static MeshOperationKind ReadMeshOperationKind(Reader reader, DecodeContext context)
+    internal static MeshOperationKind DecodeMeshOperationKind(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadMeshOperationKind(ref reader, context); reader.End("mesh-operation-kind"); return value; }
+    internal static byte[] EncodeMeshOperationKind(MeshOperationKind value, DecodeContext context) { var writer = new Writer(); WriteMeshOperationKind(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteMeshOperationKind(ref writer, value, context); return bytes; }
+    private static MeshOperationKind ReadMeshOperationKind(ref Reader reader, DecodeContext context)
     {
         var raw = reader.U32();
         return raw switch { 0U => MeshOperationKind.None, 1U => MeshOperationKind.NodeRequest, 2U => MeshOperationKind.ChannelRequest, 3U => MeshOperationKind.SpotRequest, 4U => MeshOperationKind.ActorRequest, 5U => MeshOperationKind.ActorLookup, 6U => MeshOperationKind.ActorDestroy, 7U => MeshOperationKind.ActorJoin, 8U => MeshOperationKind.ActorLeave, 9U => MeshOperationKind.StreamBind, 10U => MeshOperationKind.StreamUnbind, 11U => MeshOperationKind.StreamClose, 12U => MeshOperationKind.InstanceSpotRequest, 13U => MeshOperationKind.UserSpotCreate, 14U => MeshOperationKind.UserSpotClose, 15U => MeshOperationKind.ActorCreate, _ => throw Error("mesh-operation-kind: unknown enum") };
     }
-    private static void WriteMeshOperationKind(Writer writer, MeshOperationKind value, DecodeContext context)
+    private static void WriteMeshOperationKind(ref Writer writer, MeshOperationKind value, DecodeContext context)
     {
         if (!Enum.IsDefined(value)) throw Error("mesh-operation-kind: unknown enum");
         writer.U32((uint)value);
     }
 
-    internal static RequestTerminalResult DecodeRequestTerminalResult(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadRequestTerminalResult(reader, context); reader.End("request-terminal-result"); return value; }
-    internal static byte[] EncodeRequestTerminalResult(RequestTerminalResult value, DecodeContext context) { var writer = new Writer(); WriteRequestTerminalResult(writer, value, context); return writer.ToArray(); }
-    private static RequestTerminalResult ReadRequestTerminalResult(Reader reader, DecodeContext context)
+    internal static RequestTerminalResult DecodeRequestTerminalResult(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadRequestTerminalResult(ref reader, context); reader.End("request-terminal-result"); return value; }
+    internal static byte[] EncodeRequestTerminalResult(RequestTerminalResult value, DecodeContext context) { var writer = new Writer(); WriteRequestTerminalResult(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteRequestTerminalResult(ref writer, value, context); return bytes; }
+    private static RequestTerminalResult ReadRequestTerminalResult(ref Reader reader, DecodeContext context)
     {
         var raw = reader.U32();
         return raw switch { 0U => RequestTerminalResult.Ok, 101U => RequestTerminalResult.TimedOut, 102U => RequestTerminalResult.NotFound, 103U => RequestTerminalResult.Terminated, 104U => RequestTerminalResult.ProtocolError, 105U => RequestTerminalResult.InternalError, 106U => RequestTerminalResult.Rejected, 107U => RequestTerminalResult.Conflict, 108U => RequestTerminalResult.Busy, 109U => RequestTerminalResult.NotConnected, 110U => RequestTerminalResult.InvalidArgument, 111U => RequestTerminalResult.InvalidState, 112U => RequestTerminalResult.NotSupported, 113U => RequestTerminalResult.Backpressured, _ => throw Error("request-terminal-result: unknown enum") };
     }
-    private static void WriteRequestTerminalResult(Writer writer, RequestTerminalResult value, DecodeContext context)
+    private static void WriteRequestTerminalResult(ref Writer writer, RequestTerminalResult value, DecodeContext context)
     {
         if (!Enum.IsDefined(value)) throw Error("request-terminal-result: unknown enum");
         writer.U32((uint)value);
     }
 
-    internal static FrameworkErrorCode DecodeFrameworkErrorCode(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadFrameworkErrorCode(reader, context); reader.End("framework-error-code"); return value; }
-    internal static byte[] EncodeFrameworkErrorCode(FrameworkErrorCode value, DecodeContext context) { var writer = new Writer(); WriteFrameworkErrorCode(writer, value, context); return writer.ToArray(); }
-    private static FrameworkErrorCode ReadFrameworkErrorCode(Reader reader, DecodeContext context)
+    internal static FrameworkErrorCode DecodeFrameworkErrorCode(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadFrameworkErrorCode(ref reader, context); reader.End("framework-error-code"); return value; }
+    internal static byte[] EncodeFrameworkErrorCode(FrameworkErrorCode value, DecodeContext context) { var writer = new Writer(); WriteFrameworkErrorCode(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteFrameworkErrorCode(ref writer, value, context); return bytes; }
+    private static FrameworkErrorCode ReadFrameworkErrorCode(ref Reader reader, DecodeContext context)
     {
         var raw = reader.U32();
         return raw switch { 0U => FrameworkErrorCode.None, 1U => FrameworkErrorCode.ActorRouteNotFound, 2U => FrameworkErrorCode.ActorCreateFailed, 3U => FrameworkErrorCode.ActorAlreadyExists, 4U => FrameworkErrorCode.ActorTypeMismatch, 5U => FrameworkErrorCode.SpotCreateFailed, 6U => FrameworkErrorCode.SpotRouteNotFound, 7U => FrameworkErrorCode.SpotTypeMismatch, 8U => FrameworkErrorCode.ActorSessionNotBound, 9U => FrameworkErrorCode.HandlerNotFound, 10U => FrameworkErrorCode.RouteHandlerNotFound, 11U => FrameworkErrorCode.ActorDispatchHandlerNotFound, 12U => FrameworkErrorCode.PayloadDecodeFailed, 13U => FrameworkErrorCode.RouteNotConnected, 14U => FrameworkErrorCode.RequestTargetNotFound, 15U => FrameworkErrorCode.RequestRejected, 16U => FrameworkErrorCode.RequestProtocolError, 17U => FrameworkErrorCode.RequestFailed, 18U => FrameworkErrorCode.WorkerQueueFull, 19U => FrameworkErrorCode.WorkerTimedOut, 20U => FrameworkErrorCode.WorkerFailed, 21U => FrameworkErrorCode.ActorLocationStale, 22U => FrameworkErrorCode.ActorCreateRejected, 33U => FrameworkErrorCode.SpotGenerationStale, 34U => FrameworkErrorCode.SpotMoving, 35U => FrameworkErrorCode.RelocationDataLost, _ => throw Error("framework-error-code: unknown enum") };
     }
-    private static void WriteFrameworkErrorCode(Writer writer, FrameworkErrorCode value, DecodeContext context)
+    private static void WriteFrameworkErrorCode(ref Writer writer, FrameworkErrorCode value, DecodeContext context)
     {
         if (!Enum.IsDefined(value)) throw Error("framework-error-code: unknown enum");
         writer.U32((uint)value);
     }
 
-    internal static InstanceOperationKind DecodeInstanceOperationKind(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadInstanceOperationKind(reader, context); reader.End("instance-operation-kind"); return value; }
-    internal static byte[] EncodeInstanceOperationKind(InstanceOperationKind value, DecodeContext context) { var writer = new Writer(); WriteInstanceOperationKind(writer, value, context); return writer.ToArray(); }
-    private static InstanceOperationKind ReadInstanceOperationKind(Reader reader, DecodeContext context)
+    internal static InstanceOperationKind DecodeInstanceOperationKind(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadInstanceOperationKind(ref reader, context); reader.End("instance-operation-kind"); return value; }
+    internal static byte[] EncodeInstanceOperationKind(InstanceOperationKind value, DecodeContext context) { var writer = new Writer(); WriteInstanceOperationKind(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteInstanceOperationKind(ref writer, value, context); return bytes; }
+    private static InstanceOperationKind ReadInstanceOperationKind(ref Reader reader, DecodeContext context)
     {
         var raw = reader.U8();
         return raw switch { 1 => InstanceOperationKind.Send, 2 => InstanceOperationKind.Request, _ => throw Error("instance-operation-kind: unknown enum") };
     }
-    private static void WriteInstanceOperationKind(Writer writer, InstanceOperationKind value, DecodeContext context)
+    private static void WriteInstanceOperationKind(ref Writer writer, InstanceOperationKind value, DecodeContext context)
     {
         if (!Enum.IsDefined(value)) throw Error("instance-operation-kind: unknown enum");
         writer.U8((byte)value);
     }
 
-    internal static InstanceRouteKind DecodeInstanceRouteKind(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadInstanceRouteKind(reader, context); reader.End("instance-route-kind"); return value; }
-    internal static byte[] EncodeInstanceRouteKind(InstanceRouteKind value, DecodeContext context) { var writer = new Writer(); WriteInstanceRouteKind(writer, value, context); return writer.ToArray(); }
-    private static InstanceRouteKind ReadInstanceRouteKind(Reader reader, DecodeContext context)
+    internal static InstanceRouteKind DecodeInstanceRouteKind(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadInstanceRouteKind(ref reader, context); reader.End("instance-route-kind"); return value; }
+    internal static byte[] EncodeInstanceRouteKind(InstanceRouteKind value, DecodeContext context) { var writer = new Writer(); WriteInstanceRouteKind(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteInstanceRouteKind(ref writer, value, context); return bytes; }
+    private static InstanceRouteKind ReadInstanceRouteKind(ref Reader reader, DecodeContext context)
     {
         var raw = reader.U8();
         return raw switch { 1 => InstanceRouteKind.Ready, 2 => InstanceRouteKind.ColdActivation, _ => throw Error("instance-route-kind: unknown enum") };
     }
-    private static void WriteInstanceRouteKind(Writer writer, InstanceRouteKind value, DecodeContext context)
+    private static void WriteInstanceRouteKind(ref Writer writer, InstanceRouteKind value, DecodeContext context)
     {
         if (!Enum.IsDefined(value)) throw Error("instance-route-kind: unknown enum");
         writer.U8((byte)value);
     }
 
-    internal static UserSpotCreateResult DecodeUserSpotCreateResult(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadUserSpotCreateResult(reader, context); reader.End("user-spot-create-result"); return value; }
-    internal static byte[] EncodeUserSpotCreateResult(UserSpotCreateResult value, DecodeContext context) { var writer = new Writer(); WriteUserSpotCreateResult(writer, value, context); return writer.ToArray(); }
-    private static UserSpotCreateResult ReadUserSpotCreateResult(Reader reader, DecodeContext context)
+    internal static UserSpotCreateResult DecodeUserSpotCreateResult(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadUserSpotCreateResult(ref reader, context); reader.End("user-spot-create-result"); return value; }
+    internal static byte[] EncodeUserSpotCreateResult(UserSpotCreateResult value, DecodeContext context) { var writer = new Writer(); WriteUserSpotCreateResult(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteUserSpotCreateResult(ref writer, value, context); return bytes; }
+    private static UserSpotCreateResult ReadUserSpotCreateResult(ref Reader reader, DecodeContext context)
     {
         var raw = reader.U8();
         return raw switch { 1 => UserSpotCreateResult.Existing, 2 => UserSpotCreateResult.Created, 3 => UserSpotCreateResult.Rejected, _ => throw Error("user-spot-create-result: unknown enum") };
     }
-    private static void WriteUserSpotCreateResult(Writer writer, UserSpotCreateResult value, DecodeContext context)
+    private static void WriteUserSpotCreateResult(ref Writer writer, UserSpotCreateResult value, DecodeContext context)
     {
         if (!Enum.IsDefined(value)) throw Error("user-spot-create-result: unknown enum");
         writer.U8((byte)value);
     }
 
-    internal static ActorCreateResult DecodeActorCreateResult(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadActorCreateResult(reader, context); reader.End("actor-create-result"); return value; }
-    internal static byte[] EncodeActorCreateResult(ActorCreateResult value, DecodeContext context) { var writer = new Writer(); WriteActorCreateResult(writer, value, context); return writer.ToArray(); }
-    private static ActorCreateResult ReadActorCreateResult(Reader reader, DecodeContext context)
+    internal static ActorCreateResult DecodeActorCreateResult(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadActorCreateResult(ref reader, context); reader.End("actor-create-result"); return value; }
+    internal static byte[] EncodeActorCreateResult(ActorCreateResult value, DecodeContext context) { var writer = new Writer(); WriteActorCreateResult(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteActorCreateResult(ref writer, value, context); return bytes; }
+    private static ActorCreateResult ReadActorCreateResult(ref Reader reader, DecodeContext context)
     {
         var raw = reader.U8();
         return raw switch { 1 => ActorCreateResult.Existing, 2 => ActorCreateResult.Created, 3 => ActorCreateResult.Rejected, _ => throw Error("actor-create-result: unknown enum") };
     }
-    private static void WriteActorCreateResult(Writer writer, ActorCreateResult value, DecodeContext context)
+    private static void WriteActorCreateResult(ref Writer writer, ActorCreateResult value, DecodeContext context)
     {
         if (!Enum.IsDefined(value)) throw Error("actor-create-result: unknown enum");
         writer.U8((byte)value);
     }
 
-    internal static InstanceAuthorityState DecodeInstanceAuthorityState(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadInstanceAuthorityState(reader, context); reader.End("instance-authority-state"); return value; }
-    internal static byte[] EncodeInstanceAuthorityState(InstanceAuthorityState value, DecodeContext context) { var writer = new Writer(); WriteInstanceAuthorityState(writer, value, context); return writer.ToArray(); }
-    private static InstanceAuthorityState ReadInstanceAuthorityState(Reader reader, DecodeContext context)
+    internal static InstanceAuthorityState DecodeInstanceAuthorityState(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadInstanceAuthorityState(ref reader, context); reader.End("instance-authority-state"); return value; }
+    internal static byte[] EncodeInstanceAuthorityState(InstanceAuthorityState value, DecodeContext context) { var writer = new Writer(); WriteInstanceAuthorityState(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteInstanceAuthorityState(ref writer, value, context); return bytes; }
+    private static InstanceAuthorityState ReadInstanceAuthorityState(ref Reader reader, DecodeContext context)
     {
         var raw = reader.U8();
         return raw switch { 1 => InstanceAuthorityState.ColdActivating, 2 => InstanceAuthorityState.Ready, 3 => InstanceAuthorityState.Closing, 4 => InstanceAuthorityState.Relocating, _ => throw Error("instance-authority-state: unknown enum") };
     }
-    private static void WriteInstanceAuthorityState(Writer writer, InstanceAuthorityState value, DecodeContext context)
+    private static void WriteInstanceAuthorityState(ref Writer writer, InstanceAuthorityState value, DecodeContext context)
     {
         if (!Enum.IsDefined(value)) throw Error("instance-authority-state: unknown enum");
         writer.U8((byte)value);
     }
 
-    internal static ReplyRelayContextKind DecodeReplyRelayContextKind(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadReplyRelayContextKind(reader, context); reader.End("reply-relay-context-kind"); return value; }
-    internal static byte[] EncodeReplyRelayContextKind(ReplyRelayContextKind value, DecodeContext context) { var writer = new Writer(); WriteReplyRelayContextKind(writer, value, context); return writer.ToArray(); }
-    private static ReplyRelayContextKind ReadReplyRelayContextKind(Reader reader, DecodeContext context)
+    internal static ReplyRelayContextKind DecodeReplyRelayContextKind(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadReplyRelayContextKind(ref reader, context); reader.End("reply-relay-context-kind"); return value; }
+    internal static byte[] EncodeReplyRelayContextKind(ReplyRelayContextKind value, DecodeContext context) { var writer = new Writer(); WriteReplyRelayContextKind(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteReplyRelayContextKind(ref writer, value, context); return bytes; }
+    private static ReplyRelayContextKind ReadReplyRelayContextKind(ref Reader reader, DecodeContext context)
     {
         var raw = reader.U8();
         return raw switch { 1 => ReplyRelayContextKind.ColdActivation, 2 => ReplyRelayContextKind.MaintenanceRelocation, _ => throw Error("reply-relay-context-kind: unknown enum") };
     }
-    private static void WriteReplyRelayContextKind(Writer writer, ReplyRelayContextKind value, DecodeContext context)
+    private static void WriteReplyRelayContextKind(ref Writer writer, ReplyRelayContextKind value, DecodeContext context)
     {
         if (!Enum.IsDefined(value)) throw Error("reply-relay-context-kind: unknown enum");
         writer.U8((byte)value);
     }
 
-    internal static ColdActivationCompletionKind DecodeColdActivationCompletionKind(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadColdActivationCompletionKind(reader, context); reader.End("cold-activation-completion-kind"); return value; }
-    internal static byte[] EncodeColdActivationCompletionKind(ColdActivationCompletionKind value, DecodeContext context) { var writer = new Writer(); WriteColdActivationCompletionKind(writer, value, context); return writer.ToArray(); }
-    private static ColdActivationCompletionKind ReadColdActivationCompletionKind(Reader reader, DecodeContext context)
+    internal static ColdActivationCompletionKind DecodeColdActivationCompletionKind(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadColdActivationCompletionKind(ref reader, context); reader.End("cold-activation-completion-kind"); return value; }
+    internal static byte[] EncodeColdActivationCompletionKind(ColdActivationCompletionKind value, DecodeContext context) { var writer = new Writer(); WriteColdActivationCompletionKind(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteColdActivationCompletionKind(ref writer, value, context); return bytes; }
+    private static ColdActivationCompletionKind ReadColdActivationCompletionKind(ref Reader reader, DecodeContext context)
     {
         var raw = reader.U8();
         return raw switch { 1 => ColdActivationCompletionKind.ReadyBarrier, 2 => ColdActivationCompletionKind.ActivationFailure, _ => throw Error("cold-activation-completion-kind: unknown enum") };
     }
-    private static void WriteColdActivationCompletionKind(Writer writer, ColdActivationCompletionKind value, DecodeContext context)
+    private static void WriteColdActivationCompletionKind(ref Writer writer, ColdActivationCompletionKind value, DecodeContext context)
     {
         if (!Enum.IsDefined(value)) throw Error("cold-activation-completion-kind: unknown enum");
         writer.U8((byte)value);
     }
 
-    internal static RejectReason DecodeRejectReason(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadRejectReason(reader, context); reader.End("reject-reason"); return value; }
-    internal static byte[] EncodeRejectReason(RejectReason value, DecodeContext context) { var writer = new Writer(); WriteRejectReason(writer, value, context); return writer.ToArray(); }
-    private static RejectReason ReadRejectReason(Reader reader, DecodeContext context)
+    internal static RejectReason DecodeRejectReason(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadRejectReason(ref reader, context); reader.End("reject-reason"); return value; }
+    internal static byte[] EncodeRejectReason(RejectReason value, DecodeContext context) { var writer = new Writer(); WriteRejectReason(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteRejectReason(ref writer, value, context); return bytes; }
+    private static RejectReason ReadRejectReason(ref Reader reader, DecodeContext context)
     {
         var raw = reader.U32();
         return raw switch { 1U => RejectReason.ProtocolVersionUnsupported, 2U => RejectReason.TopologyMismatch, 3U => RejectReason.IdentityMismatch, 4U => RejectReason.SecurityIdentityMismatch, 5U => RejectReason.ChannelMismatch, 6U => RejectReason.LifecycleGenerationStale, 7U => RejectReason.DescriptorRevisionStale, 8U => RejectReason.CapabilityMismatch, 9U => RejectReason.RuntimeNotServing, 10U => RejectReason.DuplicateConnection, 11U => RejectReason.InvalidDescriptor, 12U => RejectReason.ResourceLimit, _ => throw Error("reject-reason: unknown enum") };
     }
-    private static void WriteRejectReason(Writer writer, RejectReason value, DecodeContext context)
+    private static void WriteRejectReason(ref Writer writer, RejectReason value, DecodeContext context)
     {
         if (!Enum.IsDefined(value)) throw Error("reject-reason: unknown enum");
         writer.U32((uint)value);
     }
 
-    internal static ActorRef DecodeActorRef(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadActorRef(reader, context); reader.End("actor-ref"); return value; }
-    internal static byte[] EncodeActorRef(ActorRef value, DecodeContext context) { var writer = new Writer(); WriteActorRef(writer, value, context); return writer.ToArray(); }
-    private static ActorRef ReadActorRef(Reader reader, DecodeContext context)
+    internal static ActorRef DecodeActorRef(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadActorRef(ref reader, context); reader.End("actor-ref"); return value; }
+    internal static byte[] EncodeActorRef(ActorRef value, DecodeContext context) { var writer = new Writer(); WriteActorRef(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteActorRef(ref writer, value, context); return bytes; }
+    private static ActorRef ReadActorRef(ref Reader reader, DecodeContext context)
     {
-        var ActorId = ReadText8(reader, context);
-        var ObjectGeneration = ReadNonzeroU64(reader, context);
+        var ActorId = ReadText8(ref reader, context);
+        var ObjectGeneration = ReadNonzeroU64(ref reader, context);
         var value = new ActorRef(ActorId, ObjectGeneration);
         return value;
     }
-    private static void WriteActorRef(Writer writer, ActorRef value, DecodeContext context)
+    private static void WriteActorRef(ref Writer writer, ActorRef value, DecodeContext context)
     {
-        WriteText8(writer, value.ActorId, context);
-        WriteNonzeroU64(writer, value.ObjectGeneration, context);
+        WriteText8(ref writer, value.ActorId, context);
+        WriteNonzeroU64(ref writer, value.ObjectGeneration, context);
     }
 
-    internal static SpotRef DecodeSpotRef(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadSpotRef(reader, context); reader.End("spot-ref"); return value; }
-    internal static byte[] EncodeSpotRef(SpotRef value, DecodeContext context) { var writer = new Writer(); WriteSpotRef(writer, value, context); return writer.ToArray(); }
-    private static SpotRef ReadSpotRef(Reader reader, DecodeContext context)
+    internal static SpotRef DecodeSpotRef(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadSpotRef(ref reader, context); reader.End("spot-ref"); return value; }
+    internal static byte[] EncodeSpotRef(SpotRef value, DecodeContext context) { var writer = new Writer(); WriteSpotRef(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteSpotRef(ref writer, value, context); return bytes; }
+    private static SpotRef ReadSpotRef(ref Reader reader, DecodeContext context)
     {
-        var SpotId = ReadText8(reader, context);
-        var ObjectGeneration = ReadNonzeroU64(reader, context);
+        var SpotId = ReadText8(ref reader, context);
+        var ObjectGeneration = ReadNonzeroU64(ref reader, context);
         var value = new SpotRef(SpotId, ObjectGeneration);
         return value;
     }
-    private static void WriteSpotRef(Writer writer, SpotRef value, DecodeContext context)
+    private static void WriteSpotRef(ref Writer writer, SpotRef value, DecodeContext context)
     {
-        WriteText8(writer, value.SpotId, context);
-        WriteNonzeroU64(writer, value.ObjectGeneration, context);
+        WriteText8(ref writer, value.SpotId, context);
+        WriteNonzeroU64(ref writer, value.ObjectGeneration, context);
     }
 
-    internal static ActorCreateTerminal DecodeActorCreateTerminal(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadActorCreateTerminal(reader, context); reader.End("actor-create-terminal"); return value; }
-    internal static byte[] EncodeActorCreateTerminal(ActorCreateTerminal value, DecodeContext context) { var writer = new Writer(); WriteActorCreateTerminal(writer, value, context); return writer.ToArray(); }
-    private static ActorCreateTerminal ReadActorCreateTerminal(Reader reader, DecodeContext context)
+    internal static ActorCreateTerminal DecodeActorCreateTerminal(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadActorCreateTerminal(ref reader, context); reader.End("actor-create-terminal"); return value; }
+    internal static byte[] EncodeActorCreateTerminal(ActorCreateTerminal value, DecodeContext context) { var writer = new Writer(); WriteActorCreateTerminal(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteActorCreateTerminal(ref writer, value, context); return bytes; }
+    private static ActorCreateTerminal ReadActorCreateTerminal(ref Reader reader, DecodeContext context)
     {
-        var CreateResult = ReadActorCreateResult(reader, context);
-        var selected = reader.Slice(checked((int)ReadU16(reader, context).Value));
+        var CreateResult = ReadActorCreateResult(ref reader, context);
+        var selected = reader.Slice(checked((int)ReadU16(ref reader, context).Value));
         if (CreateResult == ActorCreateResult.Existing)
         {
-            var Actor = ReadActorRef(selected, context);
+            var Actor = ReadActorRef(ref selected, context);
             selected.End("actor-create-terminal");
             var caseValue = new ActorCreateTerminalCase0(CreateResult, Actor);
             ActorCreateTerminal value = caseValue;
@@ -1926,7 +1974,7 @@ internal static class ServiceWireCodec
         }
         else if (CreateResult == ActorCreateResult.Created)
         {
-            var Actor = ReadActorRef(selected, context);
+            var Actor = ReadActorRef(ref selected, context);
             selected.End("actor-create-terminal");
             var caseValue = new ActorCreateTerminalCase1(CreateResult, Actor);
             ActorCreateTerminal value = caseValue;
@@ -1941,65 +1989,71 @@ internal static class ServiceWireCodec
         }
         throw Error("actor-create-terminal: discriminator");
     }
-    private static void WriteActorCreateTerminal(Writer writer, ActorCreateTerminal value, DecodeContext context)
+    private static void WriteActorCreateTerminal(ref Writer writer, ActorCreateTerminal value, DecodeContext context)
     {
         switch (value)
         {
         case ActorCreateTerminalCase0 item:
         {
             if (item.CreateResult != ActorCreateResult.Existing) throw Error("actor-create-terminal: discriminator");
-            WriteActorCreateResult(writer, item.CreateResult, context);
-            var body = new Writer();
-            WriteActorRef(body, item.Actor, context);
-            WriteU16(writer, new U16(checked((ushort)body.Length)), context);
-            writer.Bytes(body.ToArray());
+            WriteActorCreateResult(ref writer, item.CreateResult, context);
+            var bodyOffset = writer.Length;
+            writer.Reserve(2);
+            var bodyStart = writer.Length;
+            WriteActorRef(ref writer, item.Actor, context);
+            var bodyWriter = writer.At(bodyOffset);
+            WriteU16(ref bodyWriter, new U16(checked((ushort)(writer.Length - bodyStart))), context);
             break;
         }
         case ActorCreateTerminalCase1 item:
         {
             if (item.CreateResult != ActorCreateResult.Created) throw Error("actor-create-terminal: discriminator");
-            WriteActorCreateResult(writer, item.CreateResult, context);
-            var body = new Writer();
-            WriteActorRef(body, item.Actor, context);
-            WriteU16(writer, new U16(checked((ushort)body.Length)), context);
-            writer.Bytes(body.ToArray());
+            WriteActorCreateResult(ref writer, item.CreateResult, context);
+            var bodyOffset = writer.Length;
+            writer.Reserve(2);
+            var bodyStart = writer.Length;
+            WriteActorRef(ref writer, item.Actor, context);
+            var bodyWriter = writer.At(bodyOffset);
+            WriteU16(ref bodyWriter, new U16(checked((ushort)(writer.Length - bodyStart))), context);
             break;
         }
         case ActorCreateTerminalCase2 item:
         {
             if (item.CreateResult != ActorCreateResult.Rejected) throw Error("actor-create-terminal: discriminator");
-            WriteActorCreateResult(writer, item.CreateResult, context);
-            var body = new Writer();
-            WriteU16(writer, new U16(checked((ushort)body.Length)), context);
-            writer.Bytes(body.ToArray());
+            WriteActorCreateResult(ref writer, item.CreateResult, context);
+            var bodyOffset = writer.Length;
+            writer.Reserve(2);
+            var bodyStart = writer.Length;
+            var bodyWriter = writer.At(bodyOffset);
+            WriteU16(ref bodyWriter, new U16(checked((ushort)(writer.Length - bodyStart))), context);
             break;
         }
         default: throw Error("actor-create-terminal: variant");
         }
     }
 
-    internal static CreationOperationTerminalV1 DecodeCreationOperationTerminalV1(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadCreationOperationTerminalV1(reader, context); reader.End("creation-operation-terminal-v1"); return value; }
-    internal static byte[] EncodeCreationOperationTerminalV1(CreationOperationTerminalV1 value, DecodeContext context) { var writer = new Writer(); WriteCreationOperationTerminalV1(writer, value, context); return writer.ToArray(); }
-    private static CreationOperationTerminalV1 ReadCreationOperationTerminalV1(Reader reader, DecodeContext context)
+    internal static CreationOperationTerminalV1 DecodeCreationOperationTerminalV1(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadCreationOperationTerminalV1(ref reader, context); reader.End("creation-operation-terminal-v1"); return value; }
+    internal static byte[] EncodeCreationOperationTerminalV1(CreationOperationTerminalV1 value, DecodeContext context) { var writer = new Writer(); WriteCreationOperationTerminalV1(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteCreationOperationTerminalV1(ref writer, value, context); return bytes; }
+    private static CreationOperationTerminalV1 ReadCreationOperationTerminalV1(ref Reader reader, DecodeContext context)
     {
         var encodedStart = reader.Remaining;
-        var version = ReadU8(reader, context);
+        var version = ReadU8(ref reader, context);
         if (version != new U8(1)) throw Error("creation-operation-terminal-v1: version");
-        var body = reader.Slice(checked((int)ReadU32(reader, context).Value));
-        var TerminalResult = ReadRequestTerminalResult(body, context);
-        var FailureCode = ReadFrameworkErrorCode(body, context);
-        var HasCreation = ReadBool8(body, context);
+        var body = reader.Slice(checked((int)ReadU32(ref reader, context).Value));
+        var TerminalResult = ReadRequestTerminalResult(ref body, context);
+        var FailureCode = ReadFrameworkErrorCode(ref body, context);
+        var HasCreation = ReadBool8(ref body, context);
         ActorCreateTerminal? Creation;
         if (HasCreation == Bool8.True)
         {
-            Creation = ReadActorCreateTerminal(body, context);
+            Creation = ReadActorCreateTerminal(ref body, context);
         }
         else Creation = null;
-        var HasApplicationPayload = ReadBool8(body, context);
+        var HasApplicationPayload = ReadBool8(ref body, context);
         ApplicationPayloadEnvelopeV1? ApplicationPayload;
         if (HasApplicationPayload == Bool8.True)
         {
-            ApplicationPayload = ReadApplicationPayloadEnvelopeV1(body, context);
+            ApplicationPayload = ReadApplicationPayloadEnvelopeV1(ref body, context);
         }
         else ApplicationPayload = null;
         var value = new CreationOperationTerminalV1(TerminalResult, FailureCode, HasCreation, Creation, HasApplicationPayload, ApplicationPayload);
@@ -2010,42 +2064,47 @@ internal static class ServiceWireCodec
         body.End("creation-operation-terminal-v1");
         if ((ulong)(encodedStart - reader.Remaining) > 1048576UL) throw Error("creation-operation-terminal-v1: encoded limit"); return value;
     }
-    private static void WriteCreationOperationTerminalV1(Writer writer, CreationOperationTerminalV1 value, DecodeContext context)
+    private static void WriteCreationOperationTerminalV1(ref Writer writer, CreationOperationTerminalV1 value, DecodeContext context)
     {
         var encodedStart = writer.Length;
-        if (value.TerminalResult == RequestTerminalResult.Ok && !(value.FailureCode == FrameworkErrorCode.None && value.HasCreation == Bool8.True)) throw Error("terminal success shape");
-        if (!(value.TerminalResult == RequestTerminalResult.Ok) && !(value.HasCreation == Bool8.False && value.HasApplicationPayload == Bool8.False)) throw Error("terminal failure shape");
-        if (value.Creation is ActorCreateTerminalCase0 && !(value.HasApplicationPayload == Bool8.False)) throw Error("existing payload");
+        if (writer.IsSizing)
+        {
+            if (value.TerminalResult == RequestTerminalResult.Ok && !(value.FailureCode == FrameworkErrorCode.None && value.HasCreation == Bool8.True)) throw Error("terminal success shape");
+            if (!(value.TerminalResult == RequestTerminalResult.Ok) && !(value.HasCreation == Bool8.False && value.HasApplicationPayload == Bool8.False)) throw Error("terminal failure shape");
+            if (value.Creation is ActorCreateTerminalCase0 && !(value.HasApplicationPayload == Bool8.False)) throw Error("existing payload");
+        }
         ValidateTerminalFailure(value.TerminalResult, value.FailureCode);
-        var body = new Writer();
-        WriteRequestTerminalResult(body, value.TerminalResult, context);
-        WriteFrameworkErrorCode(body, value.FailureCode, context);
-        WriteBool8(body, value.HasCreation, context);
+        WriteU8(ref writer, new U8(1), context);
+        var bodyOffset = writer.Length;
+        writer.Reserve(4);
+        var bodyStart = writer.Length;
+        WriteRequestTerminalResult(ref writer, value.TerminalResult, context);
+        WriteFrameworkErrorCode(ref writer, value.FailureCode, context);
+        WriteBool8(ref writer, value.HasCreation, context);
         if (value.HasCreation == Bool8.True)
         {
             if (value.Creation is null) throw Error("creation: required");
-            WriteActorCreateTerminal(body, value.Creation!, context);
+            WriteActorCreateTerminal(ref writer, value.Creation!, context);
         }
         else if (value.Creation is not null) throw Error("creation: forbidden");
-        WriteBool8(body, value.HasApplicationPayload, context);
+        WriteBool8(ref writer, value.HasApplicationPayload, context);
         if (value.HasApplicationPayload == Bool8.True)
         {
             if (value.ApplicationPayload is null) throw Error("applicationPayload: required");
-            WriteApplicationPayloadEnvelopeV1(body, value.ApplicationPayload!, context);
+            WriteApplicationPayloadEnvelopeV1(ref writer, value.ApplicationPayload.Value, context);
         }
         else if (value.ApplicationPayload is not null) throw Error("applicationPayload: forbidden");
-        WriteU8(writer, new U8(1), context);
-        WriteU32(writer, new U32(checked((uint)body.Length)), context);
-        writer.Bytes(body.ToArray());
+        var bodyWriter = writer.At(bodyOffset);
+        WriteU32(ref bodyWriter, new U32(checked((uint)(writer.Length - bodyStart))), context);
         if ((ulong)(writer.Length - encodedStart) > 1048576UL) throw Error("creation-operation-terminal-v1: encoded limit");
     }
 
-    internal static OptionalSpotRef DecodeOptionalSpotRef(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadOptionalSpotRef(reader, context); reader.End("optional-spot-ref"); return value; }
-    internal static byte[] EncodeOptionalSpotRef(OptionalSpotRef value, DecodeContext context) { var writer = new Writer(); WriteOptionalSpotRef(writer, value, context); return writer.ToArray(); }
-    private static OptionalSpotRef ReadOptionalSpotRef(Reader reader, DecodeContext context)
+    internal static OptionalSpotRef DecodeOptionalSpotRef(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadOptionalSpotRef(ref reader, context); reader.End("optional-spot-ref"); return value; }
+    internal static byte[] EncodeOptionalSpotRef(OptionalSpotRef value, DecodeContext context) { var writer = new Writer(); WriteOptionalSpotRef(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteOptionalSpotRef(ref writer, value, context); return bytes; }
+    private static OptionalSpotRef ReadOptionalSpotRef(ref Reader reader, DecodeContext context)
     {
-        var HasSpot = ReadBool8(reader, context);
-        var selected = reader.Slice(checked((int)ReadU16(reader, context).Value));
+        var HasSpot = ReadBool8(ref reader, context);
+        var selected = reader.Slice(checked((int)ReadU16(ref reader, context).Value));
         if (HasSpot == Bool8.False)
         {
             selected.End("optional-spot-ref");
@@ -2055,7 +2114,7 @@ internal static class ServiceWireCodec
         }
         else if (HasSpot == Bool8.True)
         {
-            var Spot = ReadSpotRef(selected, context);
+            var Spot = ReadSpotRef(ref selected, context);
             selected.End("optional-spot-ref");
             var caseValue = new OptionalSpotRefCase1(HasSpot, Spot);
             OptionalSpotRef value = caseValue;
@@ -2063,52 +2122,56 @@ internal static class ServiceWireCodec
         }
         throw Error("optional-spot-ref: discriminator");
     }
-    private static void WriteOptionalSpotRef(Writer writer, OptionalSpotRef value, DecodeContext context)
+    private static void WriteOptionalSpotRef(ref Writer writer, OptionalSpotRef value, DecodeContext context)
     {
         switch (value)
         {
         case OptionalSpotRefCase0 item:
         {
             if (item.HasSpot != Bool8.False) throw Error("optional-spot-ref: discriminator");
-            WriteBool8(writer, item.HasSpot, context);
-            var body = new Writer();
-            WriteU16(writer, new U16(checked((ushort)body.Length)), context);
-            writer.Bytes(body.ToArray());
+            WriteBool8(ref writer, item.HasSpot, context);
+            var bodyOffset = writer.Length;
+            writer.Reserve(2);
+            var bodyStart = writer.Length;
+            var bodyWriter = writer.At(bodyOffset);
+            WriteU16(ref bodyWriter, new U16(checked((ushort)(writer.Length - bodyStart))), context);
             break;
         }
         case OptionalSpotRefCase1 item:
         {
             if (item.HasSpot != Bool8.True) throw Error("optional-spot-ref: discriminator");
-            WriteBool8(writer, item.HasSpot, context);
-            var body = new Writer();
-            WriteSpotRef(body, item.Spot, context);
-            WriteU16(writer, new U16(checked((ushort)body.Length)), context);
-            writer.Bytes(body.ToArray());
+            WriteBool8(ref writer, item.HasSpot, context);
+            var bodyOffset = writer.Length;
+            writer.Reserve(2);
+            var bodyStart = writer.Length;
+            WriteSpotRef(ref writer, item.Spot, context);
+            var bodyWriter = writer.At(bodyOffset);
+            WriteU16(ref bodyWriter, new U16(checked((ushort)(writer.Length - bodyStart))), context);
             break;
         }
         default: throw Error("optional-spot-ref: variant");
         }
     }
 
-    internal static SpotMembership DecodeSpotMembership(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadSpotMembership(reader, context); reader.End("spot-membership"); return value; }
-    internal static byte[] EncodeSpotMembership(SpotMembership value, DecodeContext context) { var writer = new Writer(); WriteSpotMembership(writer, value, context); return writer.ToArray(); }
-    private static SpotMembership ReadSpotMembership(Reader reader, DecodeContext context)
+    internal static SpotMembership DecodeSpotMembership(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadSpotMembership(ref reader, context); reader.End("spot-membership"); return value; }
+    internal static byte[] EncodeSpotMembership(SpotMembership value, DecodeContext context) { var writer = new Writer(); WriteSpotMembership(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteSpotMembership(ref writer, value, context); return bytes; }
+    private static SpotMembership ReadSpotMembership(ref Reader reader, DecodeContext context)
     {
-        var Spot = ReadSpotRef(reader, context);
+        var Spot = ReadSpotRef(ref reader, context);
         var value = new SpotMembership(Spot);
         return value;
     }
-    private static void WriteSpotMembership(Writer writer, SpotMembership value, DecodeContext context)
+    private static void WriteSpotMembership(ref Writer writer, SpotMembership value, DecodeContext context)
     {
-        WriteSpotRef(writer, value.Spot, context);
+        WriteSpotRef(ref writer, value.Spot, context);
     }
 
-    internal static OptionalSpotMembership DecodeOptionalSpotMembership(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadOptionalSpotMembership(reader, context); reader.End("optional-spot-membership"); return value; }
-    internal static byte[] EncodeOptionalSpotMembership(OptionalSpotMembership value, DecodeContext context) { var writer = new Writer(); WriteOptionalSpotMembership(writer, value, context); return writer.ToArray(); }
-    private static OptionalSpotMembership ReadOptionalSpotMembership(Reader reader, DecodeContext context)
+    internal static OptionalSpotMembership DecodeOptionalSpotMembership(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadOptionalSpotMembership(ref reader, context); reader.End("optional-spot-membership"); return value; }
+    internal static byte[] EncodeOptionalSpotMembership(OptionalSpotMembership value, DecodeContext context) { var writer = new Writer(); WriteOptionalSpotMembership(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteOptionalSpotMembership(ref writer, value, context); return bytes; }
+    private static OptionalSpotMembership ReadOptionalSpotMembership(ref Reader reader, DecodeContext context)
     {
-        var HasMembership = ReadBool8(reader, context);
-        var selected = reader.Slice(checked((int)ReadU16(reader, context).Value));
+        var HasMembership = ReadBool8(ref reader, context);
+        var selected = reader.Slice(checked((int)ReadU16(ref reader, context).Value));
         if (HasMembership == Bool8.False)
         {
             selected.End("optional-spot-membership");
@@ -2118,7 +2181,7 @@ internal static class ServiceWireCodec
         }
         else if (HasMembership == Bool8.True)
         {
-            var Membership = ReadSpotMembership(selected, context);
+            var Membership = ReadSpotMembership(ref selected, context);
             selected.End("optional-spot-membership");
             var caseValue = new OptionalSpotMembershipCase1(HasMembership, Membership);
             OptionalSpotMembership value = caseValue;
@@ -2126,42 +2189,46 @@ internal static class ServiceWireCodec
         }
         throw Error("optional-spot-membership: discriminator");
     }
-    private static void WriteOptionalSpotMembership(Writer writer, OptionalSpotMembership value, DecodeContext context)
+    private static void WriteOptionalSpotMembership(ref Writer writer, OptionalSpotMembership value, DecodeContext context)
     {
         switch (value)
         {
         case OptionalSpotMembershipCase0 item:
         {
             if (item.HasMembership != Bool8.False) throw Error("optional-spot-membership: discriminator");
-            WriteBool8(writer, item.HasMembership, context);
-            var body = new Writer();
-            WriteU16(writer, new U16(checked((ushort)body.Length)), context);
-            writer.Bytes(body.ToArray());
+            WriteBool8(ref writer, item.HasMembership, context);
+            var bodyOffset = writer.Length;
+            writer.Reserve(2);
+            var bodyStart = writer.Length;
+            var bodyWriter = writer.At(bodyOffset);
+            WriteU16(ref bodyWriter, new U16(checked((ushort)(writer.Length - bodyStart))), context);
             break;
         }
         case OptionalSpotMembershipCase1 item:
         {
             if (item.HasMembership != Bool8.True) throw Error("optional-spot-membership: discriminator");
-            WriteBool8(writer, item.HasMembership, context);
-            var body = new Writer();
-            WriteSpotMembership(body, item.Membership, context);
-            WriteU16(writer, new U16(checked((ushort)body.Length)), context);
-            writer.Bytes(body.ToArray());
+            WriteBool8(ref writer, item.HasMembership, context);
+            var bodyOffset = writer.Length;
+            writer.Reserve(2);
+            var bodyStart = writer.Length;
+            WriteSpotMembership(ref writer, item.Membership, context);
+            var bodyWriter = writer.At(bodyOffset);
+            WriteU16(ref bodyWriter, new U16(checked((ushort)(writer.Length - bodyStart))), context);
             break;
         }
         default: throw Error("optional-spot-membership: variant");
         }
     }
 
-    internal static BoundSessionBindingTransition DecodeBoundSessionBindingTransition(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadBoundSessionBindingTransition(reader, context); reader.End("bound-session-binding-transition"); return value; }
-    internal static byte[] EncodeBoundSessionBindingTransition(BoundSessionBindingTransition value, DecodeContext context) { var writer = new Writer(); WriteBoundSessionBindingTransition(writer, value, context); return writer.ToArray(); }
-    private static BoundSessionBindingTransition ReadBoundSessionBindingTransition(Reader reader, DecodeContext context)
+    internal static BoundSessionBindingTransition DecodeBoundSessionBindingTransition(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadBoundSessionBindingTransition(ref reader, context); reader.End("bound-session-binding-transition"); return value; }
+    internal static byte[] EncodeBoundSessionBindingTransition(BoundSessionBindingTransition value, DecodeContext context) { var writer = new Writer(); WriteBoundSessionBindingTransition(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteBoundSessionBindingTransition(ref writer, value, context); return bytes; }
+    private static BoundSessionBindingTransition ReadBoundSessionBindingTransition(ref Reader reader, DecodeContext context)
     {
-        var BindingState = ReadBoundSessionBindingState(reader, context);
-        var selected = reader.Slice(checked((int)ReadU16(reader, context).Value));
+        var BindingState = ReadBoundSessionBindingState(ref reader, context);
+        var selected = reader.Slice(checked((int)ReadU16(ref reader, context).Value));
         if (BindingState == BoundSessionBindingState.Active)
         {
-            var BindingGeneration = ReadNonzeroU64(selected, context);
+            var BindingGeneration = ReadNonzeroU64(ref selected, context);
             selected.End("bound-session-binding-transition");
             var caseValue = new BoundSessionBindingTransitionCase0(BindingState, BindingGeneration);
             BoundSessionBindingTransition value = caseValue;
@@ -2169,7 +2236,7 @@ internal static class ServiceWireCodec
         }
         else if (BindingState == BoundSessionBindingState.Tombstone)
         {
-            var RetiredBindingGeneration = ReadNonzeroU64(selected, context);
+            var RetiredBindingGeneration = ReadNonzeroU64(ref selected, context);
             selected.End("bound-session-binding-transition");
             var caseValue = new BoundSessionBindingTransitionCase1(BindingState, RetiredBindingGeneration);
             BoundSessionBindingTransition value = caseValue;
@@ -2177,70 +2244,74 @@ internal static class ServiceWireCodec
         }
         throw Error("bound-session-binding-transition: discriminator");
     }
-    private static void WriteBoundSessionBindingTransition(Writer writer, BoundSessionBindingTransition value, DecodeContext context)
+    private static void WriteBoundSessionBindingTransition(ref Writer writer, BoundSessionBindingTransition value, DecodeContext context)
     {
         switch (value)
         {
         case BoundSessionBindingTransitionCase0 item:
         {
             if (item.BindingState != BoundSessionBindingState.Active) throw Error("bound-session-binding-transition: discriminator");
-            WriteBoundSessionBindingState(writer, item.BindingState, context);
-            var body = new Writer();
-            WriteNonzeroU64(body, item.BindingGeneration, context);
-            WriteU16(writer, new U16(checked((ushort)body.Length)), context);
-            writer.Bytes(body.ToArray());
+            WriteBoundSessionBindingState(ref writer, item.BindingState, context);
+            var bodyOffset = writer.Length;
+            writer.Reserve(2);
+            var bodyStart = writer.Length;
+            WriteNonzeroU64(ref writer, item.BindingGeneration, context);
+            var bodyWriter = writer.At(bodyOffset);
+            WriteU16(ref bodyWriter, new U16(checked((ushort)(writer.Length - bodyStart))), context);
             break;
         }
         case BoundSessionBindingTransitionCase1 item:
         {
             if (item.BindingState != BoundSessionBindingState.Tombstone) throw Error("bound-session-binding-transition: discriminator");
-            WriteBoundSessionBindingState(writer, item.BindingState, context);
-            var body = new Writer();
-            WriteNonzeroU64(body, item.RetiredBindingGeneration, context);
-            WriteU16(writer, new U16(checked((ushort)body.Length)), context);
-            writer.Bytes(body.ToArray());
+            WriteBoundSessionBindingState(ref writer, item.BindingState, context);
+            var bodyOffset = writer.Length;
+            writer.Reserve(2);
+            var bodyStart = writer.Length;
+            WriteNonzeroU64(ref writer, item.RetiredBindingGeneration, context);
+            var bodyWriter = writer.At(bodyOffset);
+            WriteU16(ref bodyWriter, new U16(checked((ushort)(writer.Length - bodyStart))), context);
             break;
         }
         default: throw Error("bound-session-binding-transition: variant");
         }
     }
 
-    internal static RetiredBoundSessionRouteFence DecodeRetiredBoundSessionRouteFence(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadRetiredBoundSessionRouteFence(reader, context); reader.End("retired-bound-session-route-fence"); return value; }
-    internal static byte[] EncodeRetiredBoundSessionRouteFence(RetiredBoundSessionRouteFence value, DecodeContext context) { var writer = new Writer(); WriteRetiredBoundSessionRouteFence(writer, value, context); return writer.ToArray(); }
-    private static RetiredBoundSessionRouteFence ReadRetiredBoundSessionRouteFence(Reader reader, DecodeContext context)
+    internal static RetiredBoundSessionRouteFence DecodeRetiredBoundSessionRouteFence(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadRetiredBoundSessionRouteFence(ref reader, context); reader.End("retired-bound-session-route-fence"); return value; }
+    internal static byte[] EncodeRetiredBoundSessionRouteFence(RetiredBoundSessionRouteFence value, DecodeContext context) { var writer = new Writer(); WriteRetiredBoundSessionRouteFence(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteRetiredBoundSessionRouteFence(ref writer, value, context); return bytes; }
+    private static RetiredBoundSessionRouteFence ReadRetiredBoundSessionRouteFence(ref Reader reader, DecodeContext context)
     {
-        var SessionOwnerNodeRid = ReadRid(reader, context);
-        var SessionOwnerNodeGeneration = ReadNonzeroU64(reader, context);
-        var SessionOwnerId = ReadText8(reader, context);
-        var SessionOwnerLeaseGeneration = ReadNonzeroU64(reader, context);
-        var SessionRid = ReadRid(reader, context);
-        var RetiredBindingGeneration = ReadNonzeroU64(reader, context);
+        var SessionOwnerNodeRid = ReadRid(ref reader, context);
+        var SessionOwnerNodeGeneration = ReadNonzeroU64(ref reader, context);
+        var SessionOwnerId = ReadText8(ref reader, context);
+        var SessionOwnerLeaseGeneration = ReadNonzeroU64(ref reader, context);
+        var SessionRid = ReadRid(ref reader, context);
+        var RetiredBindingGeneration = ReadNonzeroU64(ref reader, context);
         var value = new RetiredBoundSessionRouteFence(SessionOwnerNodeRid, SessionOwnerNodeGeneration, SessionOwnerId, SessionOwnerLeaseGeneration, SessionRid, RetiredBindingGeneration);
         return value;
     }
-    private static void WriteRetiredBoundSessionRouteFence(Writer writer, RetiredBoundSessionRouteFence value, DecodeContext context)
+    private static void WriteRetiredBoundSessionRouteFence(ref Writer writer, RetiredBoundSessionRouteFence value, DecodeContext context)
     {
-        WriteRid(writer, value.SessionOwnerNodeRid, context);
-        WriteNonzeroU64(writer, value.SessionOwnerNodeGeneration, context);
-        WriteText8(writer, value.SessionOwnerId, context);
-        WriteNonzeroU64(writer, value.SessionOwnerLeaseGeneration, context);
-        WriteRid(writer, value.SessionRid, context);
-        WriteNonzeroU64(writer, value.RetiredBindingGeneration, context);
+        WriteRid(ref writer, value.SessionOwnerNodeRid, context);
+        WriteNonzeroU64(ref writer, value.SessionOwnerNodeGeneration, context);
+        WriteText8(ref writer, value.SessionOwnerId, context);
+        WriteNonzeroU64(ref writer, value.SessionOwnerLeaseGeneration, context);
+        WriteRid(ref writer, value.SessionRid, context);
+        WriteNonzeroU64(ref writer, value.RetiredBindingGeneration, context);
     }
 
-    internal static SessionRelocationRouteUpdate DecodeSessionRelocationRouteUpdate(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadSessionRelocationRouteUpdate(reader, context); reader.End("session-relocation-route-update"); return value; }
-    internal static byte[] EncodeSessionRelocationRouteUpdate(SessionRelocationRouteUpdate value, DecodeContext context) { var writer = new Writer(); WriteSessionRelocationRouteUpdate(writer, value, context); return writer.ToArray(); }
-    private static SessionRelocationRouteUpdate ReadSessionRelocationRouteUpdate(Reader reader, DecodeContext context)
+    internal static SessionRelocationRouteUpdate DecodeSessionRelocationRouteUpdate(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadSessionRelocationRouteUpdate(ref reader, context); reader.End("session-relocation-route-update"); return value; }
+    internal static byte[] EncodeSessionRelocationRouteUpdate(SessionRelocationRouteUpdate value, DecodeContext context) { var writer = new Writer(); WriteSessionRelocationRouteUpdate(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteSessionRelocationRouteUpdate(ref writer, value, context); return bytes; }
+    private static SessionRelocationRouteUpdate ReadSessionRelocationRouteUpdate(ref Reader reader, DecodeContext context)
     {
-        var Action = ReadSessionRelocationRouteAction(reader, context);
-        var selected = reader.Slice(checked((int)ReadU16(reader, context).Value));
+        var Action = ReadSessionRelocationRouteAction(ref reader, context);
+        var selected = reader.Slice(checked((int)ReadU16(ref reader, context).Value));
         if (Action == SessionRelocationRouteAction.Commit)
         {
-            var PreviousAuthorityOwnerGeneration = ReadNonzeroU64(selected, context);
-            var TargetAuthorityOwnerGeneration = ReadNonzeroU64(selected, context);
-            var TargetNodeRid = ReadRid(selected, context);
-            var TargetNodeGeneration = ReadNonzeroU64(selected, context);
-            var TargetOwnerLeaseGeneration = ReadNonzeroU64(selected, context);
+            var PreviousAuthorityOwnerGeneration = ReadNonzeroU64(ref selected, context);
+            var TargetAuthorityOwnerGeneration = ReadNonzeroU64(ref selected, context);
+            var TargetNodeRid = ReadRid(ref selected, context);
+            var TargetNodeGeneration = ReadNonzeroU64(ref selected, context);
+            var TargetOwnerLeaseGeneration = ReadNonzeroU64(ref selected, context);
             selected.End("session-relocation-route-update");
             var caseValue = new SessionRelocationRouteUpdateCase0(Action, PreviousAuthorityOwnerGeneration, TargetAuthorityOwnerGeneration, TargetNodeRid, TargetNodeGeneration, TargetOwnerLeaseGeneration);
             SessionRelocationRouteUpdate value = caseValue;
@@ -2248,7 +2319,7 @@ internal static class ServiceWireCodec
         }
         else if (Action == SessionRelocationRouteAction.Abort)
         {
-            var CurrentAuthorityOwnerGeneration = ReadNonzeroU64(selected, context);
+            var CurrentAuthorityOwnerGeneration = ReadNonzeroU64(ref selected, context);
             selected.End("session-relocation-route-update");
             var caseValue = new SessionRelocationRouteUpdateCase1(Action, CurrentAuthorityOwnerGeneration);
             SessionRelocationRouteUpdate value = caseValue;
@@ -2256,47 +2327,51 @@ internal static class ServiceWireCodec
         }
         throw Error("session-relocation-route-update: discriminator");
     }
-    private static void WriteSessionRelocationRouteUpdate(Writer writer, SessionRelocationRouteUpdate value, DecodeContext context)
+    private static void WriteSessionRelocationRouteUpdate(ref Writer writer, SessionRelocationRouteUpdate value, DecodeContext context)
     {
         switch (value)
         {
         case SessionRelocationRouteUpdateCase0 item:
         {
             if (item.Action != SessionRelocationRouteAction.Commit) throw Error("session-relocation-route-update: discriminator");
-            WriteSessionRelocationRouteAction(writer, item.Action, context);
-            var body = new Writer();
-            WriteNonzeroU64(body, item.PreviousAuthorityOwnerGeneration, context);
-            WriteNonzeroU64(body, item.TargetAuthorityOwnerGeneration, context);
-            WriteRid(body, item.TargetNodeRid, context);
-            WriteNonzeroU64(body, item.TargetNodeGeneration, context);
-            WriteNonzeroU64(body, item.TargetOwnerLeaseGeneration, context);
-            WriteU16(writer, new U16(checked((ushort)body.Length)), context);
-            writer.Bytes(body.ToArray());
+            WriteSessionRelocationRouteAction(ref writer, item.Action, context);
+            var bodyOffset = writer.Length;
+            writer.Reserve(2);
+            var bodyStart = writer.Length;
+            WriteNonzeroU64(ref writer, item.PreviousAuthorityOwnerGeneration, context);
+            WriteNonzeroU64(ref writer, item.TargetAuthorityOwnerGeneration, context);
+            WriteRid(ref writer, item.TargetNodeRid, context);
+            WriteNonzeroU64(ref writer, item.TargetNodeGeneration, context);
+            WriteNonzeroU64(ref writer, item.TargetOwnerLeaseGeneration, context);
+            var bodyWriter = writer.At(bodyOffset);
+            WriteU16(ref bodyWriter, new U16(checked((ushort)(writer.Length - bodyStart))), context);
             break;
         }
         case SessionRelocationRouteUpdateCase1 item:
         {
             if (item.Action != SessionRelocationRouteAction.Abort) throw Error("session-relocation-route-update: discriminator");
-            WriteSessionRelocationRouteAction(writer, item.Action, context);
-            var body = new Writer();
-            WriteNonzeroU64(body, item.CurrentAuthorityOwnerGeneration, context);
-            WriteU16(writer, new U16(checked((ushort)body.Length)), context);
-            writer.Bytes(body.ToArray());
+            WriteSessionRelocationRouteAction(ref writer, item.Action, context);
+            var bodyOffset = writer.Length;
+            writer.Reserve(2);
+            var bodyStart = writer.Length;
+            WriteNonzeroU64(ref writer, item.CurrentAuthorityOwnerGeneration, context);
+            var bodyWriter = writer.At(bodyOffset);
+            WriteU16(ref bodyWriter, new U16(checked((ushort)(writer.Length - bodyStart))), context);
             break;
         }
         default: throw Error("session-relocation-route-update: variant");
         }
     }
 
-    internal static ObjectCreationKey DecodeObjectCreationKey(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadObjectCreationKey(reader, context); reader.End("object-creation-key"); return value; }
-    internal static byte[] EncodeObjectCreationKey(ObjectCreationKey value, DecodeContext context) { var writer = new Writer(); WriteObjectCreationKey(writer, value, context); return writer.ToArray(); }
-    private static ObjectCreationKey ReadObjectCreationKey(Reader reader, DecodeContext context)
+    internal static ObjectCreationKey DecodeObjectCreationKey(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadObjectCreationKey(ref reader, context); reader.End("object-creation-key"); return value; }
+    internal static byte[] EncodeObjectCreationKey(ObjectCreationKey value, DecodeContext context) { var writer = new Writer(); WriteObjectCreationKey(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteObjectCreationKey(ref writer, value, context); return bytes; }
+    private static ObjectCreationKey ReadObjectCreationKey(ref Reader reader, DecodeContext context)
     {
-        var ObjectKind = ReadStatefulObjectKind(reader, context);
-        var selected = reader.Slice(checked((int)ReadU16(reader, context).Value));
+        var ObjectKind = ReadStatefulObjectKind(ref reader, context);
+        var selected = reader.Slice(checked((int)ReadU16(ref reader, context).Value));
         if (ObjectKind == StatefulObjectKind.Actor)
         {
-            var ActorId = ReadText8(selected, context);
+            var ActorId = ReadText8(ref selected, context);
             selected.End("object-creation-key");
             var caseValue = new ObjectCreationKeyCase0(ObjectKind, ActorId);
             ObjectCreationKey value = caseValue;
@@ -2304,7 +2379,7 @@ internal static class ServiceWireCodec
         }
         else if (ObjectKind == StatefulObjectKind.UserSpot)
         {
-            var SpotId = ReadText8(selected, context);
+            var SpotId = ReadText8(ref selected, context);
             selected.End("object-creation-key");
             var caseValue = new ObjectCreationKeyCase1(ObjectKind, SpotId);
             ObjectCreationKey value = caseValue;
@@ -2312,7 +2387,7 @@ internal static class ServiceWireCodec
         }
         else if (ObjectKind == StatefulObjectKind.InstanceSpot)
         {
-            var SpotId = ReadText8(selected, context);
+            var SpotId = ReadText8(ref selected, context);
             selected.End("object-creation-key");
             var caseValue = new ObjectCreationKeyCase2(ObjectKind, SpotId);
             ObjectCreationKey value = caseValue;
@@ -2320,241 +2395,249 @@ internal static class ServiceWireCodec
         }
         throw Error("object-creation-key: discriminator");
     }
-    private static void WriteObjectCreationKey(Writer writer, ObjectCreationKey value, DecodeContext context)
+    private static void WriteObjectCreationKey(ref Writer writer, ObjectCreationKey value, DecodeContext context)
     {
         switch (value)
         {
         case ObjectCreationKeyCase0 item:
         {
             if (item.ObjectKind != StatefulObjectKind.Actor) throw Error("object-creation-key: discriminator");
-            WriteStatefulObjectKind(writer, item.ObjectKind, context);
-            var body = new Writer();
-            WriteText8(body, item.ActorId, context);
-            WriteU16(writer, new U16(checked((ushort)body.Length)), context);
-            writer.Bytes(body.ToArray());
+            WriteStatefulObjectKind(ref writer, item.ObjectKind, context);
+            var bodyOffset = writer.Length;
+            writer.Reserve(2);
+            var bodyStart = writer.Length;
+            WriteText8(ref writer, item.ActorId, context);
+            var bodyWriter = writer.At(bodyOffset);
+            WriteU16(ref bodyWriter, new U16(checked((ushort)(writer.Length - bodyStart))), context);
             break;
         }
         case ObjectCreationKeyCase1 item:
         {
             if (item.ObjectKind != StatefulObjectKind.UserSpot) throw Error("object-creation-key: discriminator");
-            WriteStatefulObjectKind(writer, item.ObjectKind, context);
-            var body = new Writer();
-            WriteText8(body, item.SpotId, context);
-            WriteU16(writer, new U16(checked((ushort)body.Length)), context);
-            writer.Bytes(body.ToArray());
+            WriteStatefulObjectKind(ref writer, item.ObjectKind, context);
+            var bodyOffset = writer.Length;
+            writer.Reserve(2);
+            var bodyStart = writer.Length;
+            WriteText8(ref writer, item.SpotId, context);
+            var bodyWriter = writer.At(bodyOffset);
+            WriteU16(ref bodyWriter, new U16(checked((ushort)(writer.Length - bodyStart))), context);
             break;
         }
         case ObjectCreationKeyCase2 item:
         {
             if (item.ObjectKind != StatefulObjectKind.InstanceSpot) throw Error("object-creation-key: discriminator");
-            WriteStatefulObjectKind(writer, item.ObjectKind, context);
-            var body = new Writer();
-            WriteText8(body, item.SpotId, context);
-            WriteU16(writer, new U16(checked((ushort)body.Length)), context);
-            writer.Bytes(body.ToArray());
+            WriteStatefulObjectKind(ref writer, item.ObjectKind, context);
+            var bodyOffset = writer.Length;
+            writer.Reserve(2);
+            var bodyStart = writer.Length;
+            WriteText8(ref writer, item.SpotId, context);
+            var bodyWriter = writer.At(bodyOffset);
+            WriteU16(ref bodyWriter, new U16(checked((ushort)(writer.Length - bodyStart))), context);
             break;
         }
         default: throw Error("object-creation-key: variant");
         }
     }
 
-    internal static ObjectCreationIntentV1 DecodeObjectCreationIntentV1(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadObjectCreationIntentV1(reader, context); reader.End("object-creation-intent-v1"); return value; }
-    internal static byte[] EncodeObjectCreationIntentV1(ObjectCreationIntentV1 value, DecodeContext context) { var writer = new Writer(); WriteObjectCreationIntentV1(writer, value, context); return writer.ToArray(); }
-    private static ObjectCreationIntentV1 ReadObjectCreationIntentV1(Reader reader, DecodeContext context)
+    internal static ObjectCreationIntentV1 DecodeObjectCreationIntentV1(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadObjectCreationIntentV1(ref reader, context); reader.End("object-creation-intent-v1"); return value; }
+    internal static byte[] EncodeObjectCreationIntentV1(ObjectCreationIntentV1 value, DecodeContext context) { var writer = new Writer(); WriteObjectCreationIntentV1(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteObjectCreationIntentV1(ref writer, value, context); return bytes; }
+    private static ObjectCreationIntentV1 ReadObjectCreationIntentV1(ref Reader reader, DecodeContext context)
     {
         var encodedStart = reader.Remaining;
-        var version = ReadU8(reader, context);
+        var version = ReadU8(ref reader, context);
         if (version != new U8(1)) throw Error("object-creation-intent-v1: version");
-        var body = reader.Slice(checked((int)ReadU32(reader, context).Value));
-        var Key = ReadObjectCreationKey(body, context);
-        var StableType = ReadText8(body, context);
-        var InitialMeshName = ReadText8(body, context);
-        var RequestContentReference = ReadCreationContentReference(body, context);
-        var RequestSha256 = ReadSha256Bytes(body, context);
-        var RequestEncodedSize = ReadCreationRequestSize(body, context);
+        var body = reader.Slice(checked((int)ReadU32(ref reader, context).Value));
+        var Key = ReadObjectCreationKey(ref body, context);
+        var StableType = ReadText8(ref body, context);
+        var InitialMeshName = ReadText8(ref body, context);
+        var RequestContentReference = ReadCreationContentReference(ref body, context);
+        var RequestSha256 = ReadSha256Bytes(ref body, context);
+        var RequestEncodedSize = ReadCreationRequestSize(ref body, context);
         var value = new ObjectCreationIntentV1(Key, StableType, InitialMeshName, RequestContentReference, RequestSha256, RequestEncodedSize);
         body.End("object-creation-intent-v1");
         if ((ulong)(encodedStart - reader.Remaining) > 1048576UL) throw Error("object-creation-intent-v1: encoded limit"); return value;
     }
-    private static void WriteObjectCreationIntentV1(Writer writer, ObjectCreationIntentV1 value, DecodeContext context)
+    private static void WriteObjectCreationIntentV1(ref Writer writer, ObjectCreationIntentV1 value, DecodeContext context)
     {
         var encodedStart = writer.Length;
-        var body = new Writer();
-        WriteObjectCreationKey(body, value.Key, context);
-        WriteText8(body, value.StableType, context);
-        WriteText8(body, value.InitialMeshName, context);
-        WriteCreationContentReference(body, value.RequestContentReference, context);
-        WriteSha256Bytes(body, value.RequestSha256, context);
-        WriteCreationRequestSize(body, value.RequestEncodedSize, context);
-        WriteU8(writer, new U8(1), context);
-        WriteU32(writer, new U32(checked((uint)body.Length)), context);
-        writer.Bytes(body.ToArray());
+        WriteU8(ref writer, new U8(1), context);
+        var bodyOffset = writer.Length;
+        writer.Reserve(4);
+        var bodyStart = writer.Length;
+        WriteObjectCreationKey(ref writer, value.Key, context);
+        WriteText8(ref writer, value.StableType, context);
+        WriteText8(ref writer, value.InitialMeshName, context);
+        WriteCreationContentReference(ref writer, value.RequestContentReference, context);
+        WriteSha256Bytes(ref writer, value.RequestSha256, context);
+        WriteCreationRequestSize(ref writer, value.RequestEncodedSize, context);
+        var bodyWriter = writer.At(bodyOffset);
+        WriteU32(ref bodyWriter, new U32(checked((uint)(writer.Length - bodyStart))), context);
         if ((ulong)(writer.Length - encodedStart) > 1048576UL) throw Error("object-creation-intent-v1: encoded limit");
     }
 
-    internal static PendingObjectCreationV1 DecodePendingObjectCreationV1(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadPendingObjectCreationV1(reader, context); reader.End("pending-object-creation-v1"); return value; }
-    internal static byte[] EncodePendingObjectCreationV1(PendingObjectCreationV1 value, DecodeContext context) { var writer = new Writer(); WritePendingObjectCreationV1(writer, value, context); return writer.ToArray(); }
-    private static PendingObjectCreationV1 ReadPendingObjectCreationV1(Reader reader, DecodeContext context)
+    internal static PendingObjectCreationV1 DecodePendingObjectCreationV1(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadPendingObjectCreationV1(ref reader, context); reader.End("pending-object-creation-v1"); return value; }
+    internal static byte[] EncodePendingObjectCreationV1(PendingObjectCreationV1 value, DecodeContext context) { var writer = new Writer(); WritePendingObjectCreationV1(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WritePendingObjectCreationV1(ref writer, value, context); return bytes; }
+    private static PendingObjectCreationV1 ReadPendingObjectCreationV1(ref Reader reader, DecodeContext context)
     {
-        var ReservationId = ReadText8(reader, context);
-        var RequestContentReference = ReadCreationContentReference(reader, context);
-        var RequestSha256 = ReadSha256Bytes(reader, context);
-        var RequestEncodedSize = ReadCreationRequestSize(reader, context);
+        var ReservationId = ReadText8(ref reader, context);
+        var RequestContentReference = ReadCreationContentReference(ref reader, context);
+        var RequestSha256 = ReadSha256Bytes(ref reader, context);
+        var RequestEncodedSize = ReadCreationRequestSize(ref reader, context);
         var value = new PendingObjectCreationV1(ReservationId, RequestContentReference, RequestSha256, RequestEncodedSize);
         return value;
     }
-    private static void WritePendingObjectCreationV1(Writer writer, PendingObjectCreationV1 value, DecodeContext context)
+    private static void WritePendingObjectCreationV1(ref Writer writer, PendingObjectCreationV1 value, DecodeContext context)
     {
-        WriteText8(writer, value.ReservationId, context);
-        WriteCreationContentReference(writer, value.RequestContentReference, context);
-        WriteSha256Bytes(writer, value.RequestSha256, context);
-        WriteCreationRequestSize(writer, value.RequestEncodedSize, context);
+        WriteText8(ref writer, value.ReservationId, context);
+        WriteCreationContentReference(ref writer, value.RequestContentReference, context);
+        WriteSha256Bytes(ref writer, value.RequestSha256, context);
+        WriteCreationRequestSize(ref writer, value.RequestEncodedSize, context);
     }
 
-    internal static ObjectCreationTargetV1 DecodeObjectCreationTargetV1(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadObjectCreationTargetV1(reader, context); reader.End("object-creation-target-v1"); return value; }
-    internal static byte[] EncodeObjectCreationTargetV1(ObjectCreationTargetV1 value, DecodeContext context) { var writer = new Writer(); WriteObjectCreationTargetV1(writer, value, context); return writer.ToArray(); }
-    private static ObjectCreationTargetV1 ReadObjectCreationTargetV1(Reader reader, DecodeContext context)
+    internal static ObjectCreationTargetV1 DecodeObjectCreationTargetV1(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadObjectCreationTargetV1(ref reader, context); reader.End("object-creation-target-v1"); return value; }
+    internal static byte[] EncodeObjectCreationTargetV1(ObjectCreationTargetV1 value, DecodeContext context) { var writer = new Writer(); WriteObjectCreationTargetV1(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteObjectCreationTargetV1(ref writer, value, context); return bytes; }
+    private static ObjectCreationTargetV1 ReadObjectCreationTargetV1(ref Reader reader, DecodeContext context)
     {
-        var MeshName = ReadText8(reader, context);
-        var NodeRid = ReadRid(reader, context);
-        var NodeLifecycleGeneration = ReadNonzeroU64(reader, context);
-        var OwnerId = ReadText8(reader, context);
-        var OwnerLeaseGeneration = ReadNonzeroU64(reader, context);
+        var MeshName = ReadText8(ref reader, context);
+        var NodeRid = ReadRid(ref reader, context);
+        var NodeLifecycleGeneration = ReadNonzeroU64(ref reader, context);
+        var OwnerId = ReadText8(ref reader, context);
+        var OwnerLeaseGeneration = ReadNonzeroU64(ref reader, context);
         var value = new ObjectCreationTargetV1(MeshName, NodeRid, NodeLifecycleGeneration, OwnerId, OwnerLeaseGeneration);
         return value;
     }
-    private static void WriteObjectCreationTargetV1(Writer writer, ObjectCreationTargetV1 value, DecodeContext context)
+    private static void WriteObjectCreationTargetV1(ref Writer writer, ObjectCreationTargetV1 value, DecodeContext context)
     {
-        WriteText8(writer, value.MeshName, context);
-        WriteRid(writer, value.NodeRid, context);
-        WriteNonzeroU64(writer, value.NodeLifecycleGeneration, context);
-        WriteText8(writer, value.OwnerId, context);
-        WriteNonzeroU64(writer, value.OwnerLeaseGeneration, context);
+        WriteText8(ref writer, value.MeshName, context);
+        WriteRid(ref writer, value.NodeRid, context);
+        WriteNonzeroU64(ref writer, value.NodeLifecycleGeneration, context);
+        WriteText8(ref writer, value.OwnerId, context);
+        WriteNonzeroU64(ref writer, value.OwnerLeaseGeneration, context);
     }
 
-    internal static InstanceActivationRecoveryV1 DecodeInstanceActivationRecoveryV1(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadInstanceActivationRecoveryV1(reader, context); reader.End("instance-activation-recovery-v1"); return value; }
-    internal static byte[] EncodeInstanceActivationRecoveryV1(InstanceActivationRecoveryV1 value, DecodeContext context) { var writer = new Writer(); WriteInstanceActivationRecoveryV1(writer, value, context); return writer.ToArray(); }
-    private static InstanceActivationRecoveryV1 ReadInstanceActivationRecoveryV1(Reader reader, DecodeContext context)
+    internal static InstanceActivationRecoveryV1 DecodeInstanceActivationRecoveryV1(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadInstanceActivationRecoveryV1(ref reader, context); reader.End("instance-activation-recovery-v1"); return value; }
+    internal static byte[] EncodeInstanceActivationRecoveryV1(InstanceActivationRecoveryV1 value, DecodeContext context) { var writer = new Writer(); WriteInstanceActivationRecoveryV1(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteInstanceActivationRecoveryV1(ref writer, value, context); return bytes; }
+    private static InstanceActivationRecoveryV1 ReadInstanceActivationRecoveryV1(ref Reader reader, DecodeContext context)
     {
         var encodedStart = reader.Remaining;
-        var TargetSpotId = ReadText8(reader, context);
-        var StableType = ReadText8(reader, context);
-        var TargetMeshName = ReadText8(reader, context);
-        var TargetNodeRid = ReadRid(reader, context);
-        var TargetNodeGeneration = ReadNonzeroU64(reader, context);
-        var TargetDescriptorVersion = ReadText8(reader, context);
-        var SourceNodeRid = ReadRid(reader, context);
-        var SourceNodeGeneration = ReadNonzeroU64(reader, context);
-        var HasSourceSpotId = ReadBool8(reader, context);
+        var TargetSpotId = ReadText8(ref reader, context);
+        var StableType = ReadText8(ref reader, context);
+        var TargetMeshName = ReadText8(ref reader, context);
+        var TargetNodeRid = ReadRid(ref reader, context);
+        var TargetNodeGeneration = ReadNonzeroU64(ref reader, context);
+        var TargetDescriptorVersion = ReadText8(ref reader, context);
+        var SourceNodeRid = ReadRid(ref reader, context);
+        var SourceNodeGeneration = ReadNonzeroU64(ref reader, context);
+        var HasSourceSpotId = ReadBool8(ref reader, context);
         Text8? SourceSpotId;
         if (HasSourceSpotId == Bool8.True)
         {
-            SourceSpotId = ReadText8(reader, context);
+            SourceSpotId = ReadText8(ref reader, context);
         }
         else SourceSpotId = null;
-        var OperationKind = ReadInstanceOperationKind(reader, context);
-        var Operation = ReadOperationId(reader, context);
-        var ReplyRoute = ReadInstanceReplyRoute(reader, context, OperationKind);
-        var DeadlineUnixMs = ReadNonzeroU64(reader, context);
-        var HasMetadata = ReadBool8(reader, context);
+        var OperationKind = ReadInstanceOperationKind(ref reader, context);
+        var Operation = ReadOperationId(ref reader, context);
+        var ReplyRoute = ReadInstanceReplyRoute(ref reader, context, OperationKind);
+        var DeadlineUnixMs = ReadNonzeroU64(ref reader, context);
+        var HasMetadata = ReadBool8(ref reader, context);
         MetadataFrame? Metadata;
         if (HasMetadata == Bool8.True)
         {
-            Metadata = ReadMetadataFrame(reader, context);
+            Metadata = ReadMetadataFrame(ref reader, context);
         }
         else Metadata = null;
-        var ApplicationPayload = ReadApplicationPayloadEnvelopeV1(reader, context);
+        var ApplicationPayload = ReadApplicationPayloadEnvelopeV1(ref reader, context);
         var value = new InstanceActivationRecoveryV1(TargetSpotId, StableType, TargetMeshName, TargetNodeRid, TargetNodeGeneration, TargetDescriptorVersion, SourceNodeRid, SourceNodeGeneration, HasSourceSpotId, SourceSpotId, OperationKind, Operation, ReplyRoute, DeadlineUnixMs, HasMetadata, Metadata, ApplicationPayload);
         if ((ulong)(encodedStart - reader.Remaining) > 1048576UL) throw Error("instance-activation-recovery-v1: encoded limit"); return value;
     }
-    private static void WriteInstanceActivationRecoveryV1(Writer writer, InstanceActivationRecoveryV1 value, DecodeContext context)
+    private static void WriteInstanceActivationRecoveryV1(ref Writer writer, InstanceActivationRecoveryV1 value, DecodeContext context)
     {
         var encodedStart = writer.Length;
-        WriteText8(writer, value.TargetSpotId, context);
-        WriteText8(writer, value.StableType, context);
-        WriteText8(writer, value.TargetMeshName, context);
-        WriteRid(writer, value.TargetNodeRid, context);
-        WriteNonzeroU64(writer, value.TargetNodeGeneration, context);
-        WriteText8(writer, value.TargetDescriptorVersion, context);
-        WriteRid(writer, value.SourceNodeRid, context);
-        WriteNonzeroU64(writer, value.SourceNodeGeneration, context);
-        WriteBool8(writer, value.HasSourceSpotId, context);
+        WriteText8(ref writer, value.TargetSpotId, context);
+        WriteText8(ref writer, value.StableType, context);
+        WriteText8(ref writer, value.TargetMeshName, context);
+        WriteRid(ref writer, value.TargetNodeRid, context);
+        WriteNonzeroU64(ref writer, value.TargetNodeGeneration, context);
+        WriteText8(ref writer, value.TargetDescriptorVersion, context);
+        WriteRid(ref writer, value.SourceNodeRid, context);
+        WriteNonzeroU64(ref writer, value.SourceNodeGeneration, context);
+        WriteBool8(ref writer, value.HasSourceSpotId, context);
         if (value.HasSourceSpotId == Bool8.True)
         {
             if (value.SourceSpotId is null) throw Error("sourceSpotId: required");
-            WriteText8(writer, value.SourceSpotId!, context);
+            WriteText8(ref writer, value.SourceSpotId.Value, context);
         }
         else if (value.SourceSpotId is not null) throw Error("sourceSpotId: forbidden");
-        WriteInstanceOperationKind(writer, value.OperationKind, context);
-        WriteOperationId(writer, value.Operation, context);
-        WriteInstanceReplyRoute(writer, value.ReplyRoute, context, value.OperationKind);
-        WriteNonzeroU64(writer, value.DeadlineUnixMs, context);
-        WriteBool8(writer, value.HasMetadata, context);
+        WriteInstanceOperationKind(ref writer, value.OperationKind, context);
+        WriteOperationId(ref writer, value.Operation, context);
+        WriteInstanceReplyRoute(ref writer, value.ReplyRoute, context, value.OperationKind);
+        WriteNonzeroU64(ref writer, value.DeadlineUnixMs, context);
+        WriteBool8(ref writer, value.HasMetadata, context);
         if (value.HasMetadata == Bool8.True)
         {
             if (value.Metadata is null) throw Error("metadata: required");
-            WriteMetadataFrame(writer, value.Metadata!, context);
+            WriteMetadataFrame(ref writer, value.Metadata.Value, context);
         }
         else if (value.Metadata is not null) throw Error("metadata: forbidden");
-        WriteApplicationPayloadEnvelopeV1(writer, value.ApplicationPayload, context);
+        WriteApplicationPayloadEnvelopeV1(ref writer, value.ApplicationPayload, context);
         if ((ulong)(writer.Length - encodedStart) > 1048576UL) throw Error("instance-activation-recovery-v1: encoded limit");
     }
 
-    internal static ObjectReservationFence DecodeObjectReservationFence(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadObjectReservationFence(reader, context); reader.End("object-reservation-fence"); return value; }
-    internal static byte[] EncodeObjectReservationFence(ObjectReservationFence value, DecodeContext context) { var writer = new Writer(); WriteObjectReservationFence(writer, value, context); return writer.ToArray(); }
-    private static ObjectReservationFence ReadObjectReservationFence(Reader reader, DecodeContext context)
+    internal static ObjectReservationFence DecodeObjectReservationFence(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadObjectReservationFence(ref reader, context); reader.End("object-reservation-fence"); return value; }
+    internal static byte[] EncodeObjectReservationFence(ObjectReservationFence value, DecodeContext context) { var writer = new Writer(); WriteObjectReservationFence(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteObjectReservationFence(ref writer, value, context); return bytes; }
+    private static ObjectReservationFence ReadObjectReservationFence(ref Reader reader, DecodeContext context)
     {
-        var ReservationId = ReadText8(reader, context);
-        var ExpectedStoreVersion = ReadAuthorityStoreVersion(reader, context);
-        var ObjectGeneration = ReadNonzeroU64(reader, context);
-        var AuthorityOwnerGeneration = ReadNonzeroU64(reader, context);
-        var TargetNodeRid = ReadRid(reader, context);
-        var TargetNodeGeneration = ReadNonzeroU64(reader, context);
-        var TargetOwnerId = ReadText8(reader, context);
-        var TargetOwnerLeaseGeneration = ReadNonzeroU64(reader, context);
-        var PendingCapacityDelta = ReadNonzeroU32(reader, context);
+        var ReservationId = ReadText8(ref reader, context);
+        var ExpectedStoreVersion = ReadAuthorityStoreVersion(ref reader, context);
+        var ObjectGeneration = ReadNonzeroU64(ref reader, context);
+        var AuthorityOwnerGeneration = ReadNonzeroU64(ref reader, context);
+        var TargetNodeRid = ReadRid(ref reader, context);
+        var TargetNodeGeneration = ReadNonzeroU64(ref reader, context);
+        var TargetOwnerId = ReadText8(ref reader, context);
+        var TargetOwnerLeaseGeneration = ReadNonzeroU64(ref reader, context);
+        var PendingCapacityDelta = ReadNonzeroU32(ref reader, context);
         var value = new ObjectReservationFence(ReservationId, ExpectedStoreVersion, ObjectGeneration, AuthorityOwnerGeneration, TargetNodeRid, TargetNodeGeneration, TargetOwnerId, TargetOwnerLeaseGeneration, PendingCapacityDelta);
         return value;
     }
-    private static void WriteObjectReservationFence(Writer writer, ObjectReservationFence value, DecodeContext context)
+    private static void WriteObjectReservationFence(ref Writer writer, ObjectReservationFence value, DecodeContext context)
     {
-        WriteText8(writer, value.ReservationId, context);
-        WriteAuthorityStoreVersion(writer, value.ExpectedStoreVersion, context);
-        WriteNonzeroU64(writer, value.ObjectGeneration, context);
-        WriteNonzeroU64(writer, value.AuthorityOwnerGeneration, context);
-        WriteRid(writer, value.TargetNodeRid, context);
-        WriteNonzeroU64(writer, value.TargetNodeGeneration, context);
-        WriteText8(writer, value.TargetOwnerId, context);
-        WriteNonzeroU64(writer, value.TargetOwnerLeaseGeneration, context);
-        WriteNonzeroU32(writer, value.PendingCapacityDelta, context);
+        WriteText8(ref writer, value.ReservationId, context);
+        WriteAuthorityStoreVersion(ref writer, value.ExpectedStoreVersion, context);
+        WriteNonzeroU64(ref writer, value.ObjectGeneration, context);
+        WriteNonzeroU64(ref writer, value.AuthorityOwnerGeneration, context);
+        WriteRid(ref writer, value.TargetNodeRid, context);
+        WriteNonzeroU64(ref writer, value.TargetNodeGeneration, context);
+        WriteText8(ref writer, value.TargetOwnerId, context);
+        WriteNonzeroU64(ref writer, value.TargetOwnerLeaseGeneration, context);
+        WriteNonzeroU32(ref writer, value.PendingCapacityDelta, context);
     }
 
-    internal static GenericReservationOperationKind DecodeGenericReservationOperationKind(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadGenericReservationOperationKind(reader, context); reader.End("generic-reservation-operation-kind"); return value; }
-    internal static byte[] EncodeGenericReservationOperationKind(GenericReservationOperationKind value, DecodeContext context) { var writer = new Writer(); WriteGenericReservationOperationKind(writer, value, context); return writer.ToArray(); }
-    private static GenericReservationOperationKind ReadGenericReservationOperationKind(Reader reader, DecodeContext context)
+    internal static GenericReservationOperationKind DecodeGenericReservationOperationKind(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadGenericReservationOperationKind(ref reader, context); reader.End("generic-reservation-operation-kind"); return value; }
+    internal static byte[] EncodeGenericReservationOperationKind(GenericReservationOperationKind value, DecodeContext context) { var writer = new Writer(); WriteGenericReservationOperationKind(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteGenericReservationOperationKind(ref writer, value, context); return bytes; }
+    private static GenericReservationOperationKind ReadGenericReservationOperationKind(ref Reader reader, DecodeContext context)
     {
         var raw = reader.U8();
         return raw switch { 1 => GenericReservationOperationKind.Reserve, 2 => GenericReservationOperationKind.Commit, 3 => GenericReservationOperationKind.Abort, _ => throw Error("generic-reservation-operation-kind: unknown enum") };
     }
-    private static void WriteGenericReservationOperationKind(Writer writer, GenericReservationOperationKind value, DecodeContext context)
+    private static void WriteGenericReservationOperationKind(ref Writer writer, GenericReservationOperationKind value, DecodeContext context)
     {
         if (!Enum.IsDefined(value)) throw Error("generic-reservation-operation-kind: unknown enum");
         writer.U8((byte)value);
     }
 
-    internal static GenericObjectReservationV1 DecodeGenericObjectReservationV1(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadGenericObjectReservationV1(reader, context); reader.End("generic-object-reservation-v1"); return value; }
-    internal static byte[] EncodeGenericObjectReservationV1(GenericObjectReservationV1 value, DecodeContext context) { var writer = new Writer(); WriteGenericObjectReservationV1(writer, value, context); return writer.ToArray(); }
-    private static GenericObjectReservationV1 ReadGenericObjectReservationV1(Reader reader, DecodeContext context)
+    internal static GenericObjectReservationV1 DecodeGenericObjectReservationV1(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadGenericObjectReservationV1(ref reader, context); reader.End("generic-object-reservation-v1"); return value; }
+    internal static byte[] EncodeGenericObjectReservationV1(GenericObjectReservationV1 value, DecodeContext context) { var writer = new Writer(); WriteGenericObjectReservationV1(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteGenericObjectReservationV1(ref writer, value, context); return bytes; }
+    private static GenericObjectReservationV1 ReadGenericObjectReservationV1(ref Reader reader, DecodeContext context)
     {
         var encodedStart = reader.Remaining;
-        var OperationKind = ReadGenericReservationOperationKind(reader, context);
-        var selected = reader.Slice(checked((int)ReadU32(reader, context).Value));
+        var OperationKind = ReadGenericReservationOperationKind(ref reader, context);
+        var selected = reader.Slice(checked((int)ReadU32(ref reader, context).Value));
         if (OperationKind == GenericReservationOperationKind.Reserve)
         {
-            var Intent = ReadObjectCreationIntentV1(selected, context);
-            var Target = ReadObjectCreationTargetV1(selected, context);
-            var CreatingPayload = ReadDurableBlob(selected, context);
-            var PendingCapacityDelta = ReadNonzeroU32(selected, context);
+            var Intent = ReadObjectCreationIntentV1(ref selected, context);
+            var Target = ReadObjectCreationTargetV1(ref selected, context);
+            var CreatingPayload = ReadDurableBlob(ref selected, context);
+            var PendingCapacityDelta = ReadNonzeroU32(ref selected, context);
             selected.End("generic-object-reservation-v1");
             var caseValue = new GenericObjectReservationV1Case0(OperationKind, Intent, Target, CreatingPayload, PendingCapacityDelta);
             GenericObjectReservationV1 value = caseValue;
@@ -2562,8 +2645,8 @@ internal static class ServiceWireCodec
         }
         else if (OperationKind == GenericReservationOperationKind.Commit)
         {
-            var Key = ReadObjectCreationKey(selected, context);
-            var Fence = ReadObjectReservationFence(selected, context);
+            var Key = ReadObjectCreationKey(ref selected, context);
+            var Fence = ReadObjectReservationFence(ref selected, context);
             selected.End("generic-object-reservation-v1");
             var caseValue = new GenericObjectReservationV1Case1(OperationKind, Key, Fence);
             GenericObjectReservationV1 value = caseValue;
@@ -2571,8 +2654,8 @@ internal static class ServiceWireCodec
         }
         else if (OperationKind == GenericReservationOperationKind.Abort)
         {
-            var Key = ReadObjectCreationKey(selected, context);
-            var Fence = ReadObjectReservationFence(selected, context);
+            var Key = ReadObjectCreationKey(ref selected, context);
+            var Fence = ReadObjectReservationFence(ref selected, context);
             selected.End("generic-object-reservation-v1");
             var caseValue = new GenericObjectReservationV1Case2(OperationKind, Key, Fence);
             GenericObjectReservationV1 value = caseValue;
@@ -2580,7 +2663,7 @@ internal static class ServiceWireCodec
         }
         throw Error("generic-object-reservation-v1: discriminator");
     }
-    private static void WriteGenericObjectReservationV1(Writer writer, GenericObjectReservationV1 value, DecodeContext context)
+    private static void WriteGenericObjectReservationV1(ref Writer writer, GenericObjectReservationV1 value, DecodeContext context)
     {
         var encodedStart = writer.Length;
         switch (value)
@@ -2588,36 +2671,42 @@ internal static class ServiceWireCodec
         case GenericObjectReservationV1Case0 item:
         {
             if (item.OperationKind != GenericReservationOperationKind.Reserve) throw Error("generic-object-reservation-v1: discriminator");
-            WriteGenericReservationOperationKind(writer, item.OperationKind, context);
-            var body = new Writer();
-            WriteObjectCreationIntentV1(body, item.Intent, context);
-            WriteObjectCreationTargetV1(body, item.Target, context);
-            WriteDurableBlob(body, item.CreatingPayload, context);
-            WriteNonzeroU32(body, item.PendingCapacityDelta, context);
-            WriteU32(writer, new U32(checked((uint)body.Length)), context);
-            writer.Bytes(body.ToArray());
+            WriteGenericReservationOperationKind(ref writer, item.OperationKind, context);
+            var bodyOffset = writer.Length;
+            writer.Reserve(4);
+            var bodyStart = writer.Length;
+            WriteObjectCreationIntentV1(ref writer, item.Intent, context);
+            WriteObjectCreationTargetV1(ref writer, item.Target, context);
+            WriteDurableBlob(ref writer, item.CreatingPayload, context);
+            WriteNonzeroU32(ref writer, item.PendingCapacityDelta, context);
+            var bodyWriter = writer.At(bodyOffset);
+            WriteU32(ref bodyWriter, new U32(checked((uint)(writer.Length - bodyStart))), context);
             break;
         }
         case GenericObjectReservationV1Case1 item:
         {
             if (item.OperationKind != GenericReservationOperationKind.Commit) throw Error("generic-object-reservation-v1: discriminator");
-            WriteGenericReservationOperationKind(writer, item.OperationKind, context);
-            var body = new Writer();
-            WriteObjectCreationKey(body, item.Key, context);
-            WriteObjectReservationFence(body, item.Fence, context);
-            WriteU32(writer, new U32(checked((uint)body.Length)), context);
-            writer.Bytes(body.ToArray());
+            WriteGenericReservationOperationKind(ref writer, item.OperationKind, context);
+            var bodyOffset = writer.Length;
+            writer.Reserve(4);
+            var bodyStart = writer.Length;
+            WriteObjectCreationKey(ref writer, item.Key, context);
+            WriteObjectReservationFence(ref writer, item.Fence, context);
+            var bodyWriter = writer.At(bodyOffset);
+            WriteU32(ref bodyWriter, new U32(checked((uint)(writer.Length - bodyStart))), context);
             break;
         }
         case GenericObjectReservationV1Case2 item:
         {
             if (item.OperationKind != GenericReservationOperationKind.Abort) throw Error("generic-object-reservation-v1: discriminator");
-            WriteGenericReservationOperationKind(writer, item.OperationKind, context);
-            var body = new Writer();
-            WriteObjectCreationKey(body, item.Key, context);
-            WriteObjectReservationFence(body, item.Fence, context);
-            WriteU32(writer, new U32(checked((uint)body.Length)), context);
-            writer.Bytes(body.ToArray());
+            WriteGenericReservationOperationKind(ref writer, item.OperationKind, context);
+            var bodyOffset = writer.Length;
+            writer.Reserve(4);
+            var bodyStart = writer.Length;
+            WriteObjectCreationKey(ref writer, item.Key, context);
+            WriteObjectReservationFence(ref writer, item.Fence, context);
+            var bodyWriter = writer.At(bodyOffset);
+            WriteU32(ref bodyWriter, new U32(checked((uint)(writer.Length - bodyStart))), context);
             break;
         }
         default: throw Error("generic-object-reservation-v1: variant");
@@ -2625,195 +2714,205 @@ internal static class ServiceWireCodec
         if ((ulong)(writer.Length - encodedStart) > 1048576UL) throw Error("generic-object-reservation-v1: encoded limit");
     }
 
-    internal static AggregateId DecodeAggregateId(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadAggregateId(reader, context); reader.End("aggregate-id"); return value; }
-    internal static byte[] EncodeAggregateId(AggregateId value, DecodeContext context) { var writer = new Writer(); WriteAggregateId(writer, value, context); return writer.ToArray(); }
-    private static AggregateId ReadAggregateId(Reader reader, DecodeContext context)
+    internal static AggregateId DecodeAggregateId(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadAggregateId(ref reader, context); reader.End("aggregate-id"); return value; }
+    internal static byte[] EncodeAggregateId(AggregateId value, DecodeContext context) { var writer = new Writer(); WriteAggregateId(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteAggregateId(ref writer, value, context); return bytes; }
+    private static AggregateId ReadAggregateId(ref Reader reader, DecodeContext context)
     {
-        var High = ReadU64(reader, context);
-        var Low = ReadU64(reader, context);
+        var High = ReadU64(ref reader, context);
+        var Low = ReadU64(ref reader, context);
         var value = new AggregateId(High, Low);
         if (value.High.Value == 0 && value.Low.Value == 0) throw Error("not-both-zero");
         return value;
     }
-    private static void WriteAggregateId(Writer writer, AggregateId value, DecodeContext context)
+    private static void WriteAggregateId(ref Writer writer, AggregateId value, DecodeContext context)
     {
-        if (value.High.Value == 0 && value.Low.Value == 0) throw Error("not-both-zero");
-        WriteU64(writer, value.High, context);
-        WriteU64(writer, value.Low, context);
+        if (writer.IsSizing)
+        {
+            if (value.High.Value == 0 && value.Low.Value == 0) throw Error("not-both-zero");
+        }
+        WriteU64(ref writer, value.High, context);
+        WriteU64(ref writer, value.Low, context);
     }
 
-    internal static AggregateParticipantMutationBytes DecodeAggregateParticipantMutationBytes(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadAggregateParticipantMutationBytes(reader, context); reader.End("aggregate-participant-mutation-bytes"); return value; }
-    internal static byte[] EncodeAggregateParticipantMutationBytes(AggregateParticipantMutationBytes value, DecodeContext context) { var writer = new Writer(); WriteAggregateParticipantMutationBytes(writer, value, context); return writer.ToArray(); }
-    private static AggregateParticipantMutationBytes ReadAggregateParticipantMutationBytes(Reader reader, DecodeContext context)
+    internal static AggregateParticipantMutationBytes DecodeAggregateParticipantMutationBytes(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadAggregateParticipantMutationBytes(ref reader, context); reader.End("aggregate-participant-mutation-bytes"); return value; }
+    internal static byte[] EncodeAggregateParticipantMutationBytes(AggregateParticipantMutationBytes value, DecodeContext context) { var writer = new Writer(); WriteAggregateParticipantMutationBytes(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteAggregateParticipantMutationBytes(ref writer, value, context); return bytes; }
+    private static AggregateParticipantMutationBytes ReadAggregateParticipantMutationBytes(ref Reader reader, DecodeContext context)
     {
-        var encodedLength = (ulong)ReadU32(reader, context).Value;
+        var encodedLength = (ulong)ReadU32(ref reader, context).Value;
         if (encodedLength > 2147483647UL) throw Capacity("aggregate-participant-mutation-bytes: capacity");
         if (encodedLength < 1UL || encodedLength > 1048576UL) throw Error("aggregate-participant-mutation-bytes: length");
         var length = checked((int)encodedLength);
         var bytes = reader.Bytes(length);
-        return new(bytes);
+        return new(bytes.ToArray());
     }
-    private static void WriteAggregateParticipantMutationBytes(Writer writer, AggregateParticipantMutationBytes value, DecodeContext context)
+    private static void WriteAggregateParticipantMutationBytes(ref Writer writer, AggregateParticipantMutationBytes value, DecodeContext context)
     {
-        var bytes = value.Value ?? Array.Empty<byte>();
-        if ((ulong)bytes.LongLength > 2147483647UL) throw Capacity("aggregate-participant-mutation-bytes: capacity");
-        if ((ulong)bytes.LongLength < 1UL || (ulong)bytes.LongLength > 1048576UL) throw Error("aggregate-participant-mutation-bytes: length");
-        WriteU32(writer, new U32(checked((uint)bytes.Length)), context);
+        var bytes = value.Value ?? Array.Empty<byte>(); var length = bytes.Length;
+        if ((ulong)length > 2147483647UL) throw Capacity("aggregate-participant-mutation-bytes: capacity");
+        if ((ulong)length < 1UL || (ulong)length > 1048576UL) throw Error("aggregate-participant-mutation-bytes: length");
+        WriteU32(ref writer, new U32(checked((uint)length)), context);
         writer.Bytes(bytes);
     }
 
-    internal static MaintenanceAggregateParticipantV1 DecodeMaintenanceAggregateParticipantV1(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadMaintenanceAggregateParticipantV1(reader, context); reader.End("maintenance-aggregate-participant-v1"); return value; }
-    internal static byte[] EncodeMaintenanceAggregateParticipantV1(MaintenanceAggregateParticipantV1 value, DecodeContext context) { var writer = new Writer(); WriteMaintenanceAggregateParticipantV1(writer, value, context); return writer.ToArray(); }
-    private static MaintenanceAggregateParticipantV1 ReadMaintenanceAggregateParticipantV1(Reader reader, DecodeContext context)
+    internal static MaintenanceAggregateParticipantV1 DecodeMaintenanceAggregateParticipantV1(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadMaintenanceAggregateParticipantV1(ref reader, context); reader.End("maintenance-aggregate-participant-v1"); return value; }
+    internal static byte[] EncodeMaintenanceAggregateParticipantV1(MaintenanceAggregateParticipantV1 value, DecodeContext context) { var writer = new Writer(); WriteMaintenanceAggregateParticipantV1(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteMaintenanceAggregateParticipantV1(ref writer, value, context); return bytes; }
+    private static MaintenanceAggregateParticipantV1 ReadMaintenanceAggregateParticipantV1(ref Reader reader, DecodeContext context)
     {
-        var Object = ReadRelocationObjectIdentity(reader, context);
-        var ExpectedStoreVersion = ReadAuthorityStoreVersion(reader, context);
-        var Mutation = ReadAggregateParticipantMutationBytes(reader, context);
+        var Object = ReadRelocationObjectIdentity(ref reader, context);
+        var ExpectedStoreVersion = ReadAuthorityStoreVersion(ref reader, context);
+        var Mutation = ReadAggregateParticipantMutationBytes(ref reader, context);
         var value = new MaintenanceAggregateParticipantV1(Object, ExpectedStoreVersion, Mutation);
         return value;
     }
-    private static void WriteMaintenanceAggregateParticipantV1(Writer writer, MaintenanceAggregateParticipantV1 value, DecodeContext context)
+    private static void WriteMaintenanceAggregateParticipantV1(ref Writer writer, MaintenanceAggregateParticipantV1 value, DecodeContext context)
     {
-        WriteRelocationObjectIdentity(writer, value.Object, context);
-        WriteAuthorityStoreVersion(writer, value.ExpectedStoreVersion, context);
-        WriteAggregateParticipantMutationBytes(writer, value.Mutation, context);
+        WriteRelocationObjectIdentity(ref writer, value.Object, context);
+        WriteAuthorityStoreVersion(ref writer, value.ExpectedStoreVersion, context);
+        WriteAggregateParticipantMutationBytes(ref writer, value.Mutation, context);
     }
 
-    internal static AggregateParticipantVector DecodeAggregateParticipantVector(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadAggregateParticipantVector(reader, context); reader.End("aggregate-participant-vector"); return value; }
-    internal static byte[] EncodeAggregateParticipantVector(AggregateParticipantVector value, DecodeContext context) { var writer = new Writer(); WriteAggregateParticipantVector(writer, value, context); return writer.ToArray(); }
-    private static AggregateParticipantVector ReadAggregateParticipantVector(Reader reader, DecodeContext context)
+    internal static AggregateParticipantVector DecodeAggregateParticipantVector(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadAggregateParticipantVector(ref reader, context); reader.End("aggregate-participant-vector"); return value; }
+    internal static byte[] EncodeAggregateParticipantVector(AggregateParticipantVector value, DecodeContext context) { var writer = new Writer(); WriteAggregateParticipantVector(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteAggregateParticipantVector(ref writer, value, context); return bytes; }
+    private static AggregateParticipantVector ReadAggregateParticipantVector(ref Reader reader, DecodeContext context)
     {
-        var count = checked((int)ReadU16(reader, context).Value);
+        var count = checked((int)ReadU16(ref reader, context).Value);
         if (count > 1024) throw Error("aggregate-participant-vector: count");
         var items = new MaintenanceAggregateParticipantV1[count];
-        for (var i = 0; i < count; ++i) items[i] = ReadMaintenanceAggregateParticipantV1(reader, context);
+        for (var i = 0; i < count; ++i) items[i] = ReadMaintenanceAggregateParticipantV1(ref reader, context);
         var value = new AggregateParticipantVector(items);
         try { for (var index = 1; index < value.Items.Count; index++) { var previous = KeyAggregateParticipantVector0(value.Items[index - 1], context); var current = KeyAggregateParticipantVector0(value.Items[index], context); var compared = CompareBytes(previous, current); if (compared == 0) throw Error("duplicate vector item"); if (compared > 0) throw Error("unsorted vector"); } } catch (OutOfMemoryException) { throw Capacity("aggregate-participant-vector constraint capacity"); }
         return value;
     }
-    private static void WriteAggregateParticipantVector(Writer writer, AggregateParticipantVector value, DecodeContext context)
+    private static void WriteAggregateParticipantVector(ref Writer writer, AggregateParticipantVector value, DecodeContext context)
     {
-        try { for (var index = 1; index < value.Items.Count; index++) { var previous = KeyAggregateParticipantVector0(value.Items[index - 1], context); var current = KeyAggregateParticipantVector0(value.Items[index], context); var compared = CompareBytes(previous, current); if (compared == 0) throw Error("duplicate vector item"); if (compared > 0) throw Error("unsorted vector"); } } catch (OutOfMemoryException) { throw Capacity("aggregate-participant-vector constraint capacity"); }
+        if (writer.IsSizing)
+        {
+            try { for (var index = 1; index < value.Items.Count; index++) { var previous = KeyAggregateParticipantVector0(value.Items[index - 1], context); var current = KeyAggregateParticipantVector0(value.Items[index], context); var compared = CompareBytes(previous, current); if (compared == 0) throw Error("duplicate vector item"); if (compared > 0) throw Error("unsorted vector"); } } catch (OutOfMemoryException) { throw Capacity("aggregate-participant-vector constraint capacity"); }
+        }
         if (value.Items.Count > 1024) throw Error("aggregate-participant-vector: count");
-        WriteU16(writer, new U16(checked((ushort)value.Items.Count)), context);
-        foreach (var item in value.Items) WriteMaintenanceAggregateParticipantV1(writer, item, context);
+        WriteU16(ref writer, new U16(checked((ushort)value.Items.Count)), context);
+        for (var index = 0; index < value.Items.Count; index++) { var item = value.Items[index]; WriteMaintenanceAggregateParticipantV1(ref writer, item, context); }
     }
     private static byte[] KeyAggregateParticipantVector0(MaintenanceAggregateParticipantV1 item, DecodeContext context)
     {
         return item.Object switch { RelocationObjectIdentityCase0 selected => Utf8.GetBytes("zla1:a:" + AuthorityComponent(selected.Actor.ActorId.Value!)), RelocationObjectIdentityCase1 selected => Utf8.GetBytes("zla1:s:" + AuthorityComponent(selected.Spot.SpotId.Value!)), RelocationObjectIdentityCase2 selected => Utf8.GetBytes("zla1:s:" + AuthorityComponent(selected.SpotId.Value!)), _ => throw Error("authority key variant") };
     }
-    internal static MaintenanceAggregateV1 DecodeMaintenanceAggregateV1(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadMaintenanceAggregateV1(reader, context); reader.End("maintenance-aggregate-v1"); return value; }
-    internal static byte[] EncodeMaintenanceAggregateV1(MaintenanceAggregateV1 value, DecodeContext context) { var writer = new Writer(); WriteMaintenanceAggregateV1(writer, value, context); return writer.ToArray(); }
-    private static MaintenanceAggregateV1 ReadMaintenanceAggregateV1(Reader reader, DecodeContext context)
+    internal static MaintenanceAggregateV1 DecodeMaintenanceAggregateV1(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadMaintenanceAggregateV1(ref reader, context); reader.End("maintenance-aggregate-v1"); return value; }
+    internal static byte[] EncodeMaintenanceAggregateV1(MaintenanceAggregateV1 value, DecodeContext context) { var writer = new Writer(); WriteMaintenanceAggregateV1(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteMaintenanceAggregateV1(ref writer, value, context); return bytes; }
+    private static MaintenanceAggregateV1 ReadMaintenanceAggregateV1(ref Reader reader, DecodeContext context)
     {
         var encodedStart = reader.Remaining;
-        var version = ReadU8(reader, context);
+        var version = ReadU8(ref reader, context);
         if (version != new U8(1)) throw Error("maintenance-aggregate-v1: version");
-        var body = reader.Slice(checked((int)ReadU32(reader, context).Value));
-        var AggregateId = ReadAggregateId(body, context);
-        var AggregateGeneration = ReadNonzeroU64(body, context);
-        var OwnerSpot = ReadSpotRef(body, context);
-        var Participants = ReadAggregateParticipantVector(body, context);
-        var InventoryDigestSha256 = ReadSha256Bytes(body, context);
+        var body = reader.Slice(checked((int)ReadU32(ref reader, context).Value));
+        var AggregateId = ReadAggregateId(ref body, context);
+        var AggregateGeneration = ReadNonzeroU64(ref body, context);
+        var OwnerSpot = ReadSpotRef(ref body, context);
+        var Participants = ReadAggregateParticipantVector(ref body, context);
+        var InventoryDigestSha256 = ReadSha256Bytes(ref body, context);
         var value = new MaintenanceAggregateV1(AggregateId, AggregateGeneration, OwnerSpot, Participants, InventoryDigestSha256);
         body.End("maintenance-aggregate-v1");
         if ((ulong)(encodedStart - reader.Remaining) > 1048576UL) throw Error("maintenance-aggregate-v1: encoded limit"); return value;
     }
-    private static void WriteMaintenanceAggregateV1(Writer writer, MaintenanceAggregateV1 value, DecodeContext context)
+    private static void WriteMaintenanceAggregateV1(ref Writer writer, MaintenanceAggregateV1 value, DecodeContext context)
     {
         var encodedStart = writer.Length;
-        var body = new Writer();
-        WriteAggregateId(body, value.AggregateId, context);
-        WriteNonzeroU64(body, value.AggregateGeneration, context);
-        WriteSpotRef(body, value.OwnerSpot, context);
-        WriteAggregateParticipantVector(body, value.Participants, context);
-        WriteSha256Bytes(body, value.InventoryDigestSha256, context);
-        WriteU8(writer, new U8(1), context);
-        WriteU32(writer, new U32(checked((uint)body.Length)), context);
-        writer.Bytes(body.ToArray());
+        WriteU8(ref writer, new U8(1), context);
+        var bodyOffset = writer.Length;
+        writer.Reserve(4);
+        var bodyStart = writer.Length;
+        WriteAggregateId(ref writer, value.AggregateId, context);
+        WriteNonzeroU64(ref writer, value.AggregateGeneration, context);
+        WriteSpotRef(ref writer, value.OwnerSpot, context);
+        WriteAggregateParticipantVector(ref writer, value.Participants, context);
+        WriteSha256Bytes(ref writer, value.InventoryDigestSha256, context);
+        var bodyWriter = writer.At(bodyOffset);
+        WriteU32(ref bodyWriter, new U32(checked((uint)(writer.Length - bodyStart))), context);
         if ((ulong)(writer.Length - encodedStart) > 1048576UL) throw Error("maintenance-aggregate-v1: encoded limit");
     }
 
-    internal static ActorRouteFence DecodeActorRouteFence(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadActorRouteFence(reader, context); reader.End("actor-route-fence"); return value; }
-    internal static byte[] EncodeActorRouteFence(ActorRouteFence value, DecodeContext context) { var writer = new Writer(); WriteActorRouteFence(writer, value, context); return writer.ToArray(); }
-    private static ActorRouteFence ReadActorRouteFence(Reader reader, DecodeContext context)
+    internal static ActorRouteFence DecodeActorRouteFence(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadActorRouteFence(ref reader, context); reader.End("actor-route-fence"); return value; }
+    internal static byte[] EncodeActorRouteFence(ActorRouteFence value, DecodeContext context) { var writer = new Writer(); WriteActorRouteFence(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteActorRouteFence(ref writer, value, context); return bytes; }
+    private static ActorRouteFence ReadActorRouteFence(ref Reader reader, DecodeContext context)
     {
-        var Actor = ReadActorRef(reader, context);
-        var TargetNodeRid = ReadRid(reader, context);
-        var TargetNodeGeneration = ReadNonzeroU64(reader, context);
-        var ExpectedAuthorityOwnerGeneration = ReadNonzeroU64(reader, context);
-        var ExpectedOwnerLeaseGeneration = ReadNonzeroU64(reader, context);
+        var Actor = ReadActorRef(ref reader, context);
+        var TargetNodeRid = ReadRid(ref reader, context);
+        var TargetNodeGeneration = ReadNonzeroU64(ref reader, context);
+        var ExpectedAuthorityOwnerGeneration = ReadNonzeroU64(ref reader, context);
+        var ExpectedOwnerLeaseGeneration = ReadNonzeroU64(ref reader, context);
         var value = new ActorRouteFence(Actor, TargetNodeRid, TargetNodeGeneration, ExpectedAuthorityOwnerGeneration, ExpectedOwnerLeaseGeneration);
         return value;
     }
-    private static void WriteActorRouteFence(Writer writer, ActorRouteFence value, DecodeContext context)
+    private static void WriteActorRouteFence(ref Writer writer, ActorRouteFence value, DecodeContext context)
     {
-        WriteActorRef(writer, value.Actor, context);
-        WriteRid(writer, value.TargetNodeRid, context);
-        WriteNonzeroU64(writer, value.TargetNodeGeneration, context);
-        WriteNonzeroU64(writer, value.ExpectedAuthorityOwnerGeneration, context);
-        WriteNonzeroU64(writer, value.ExpectedOwnerLeaseGeneration, context);
+        WriteActorRef(ref writer, value.Actor, context);
+        WriteRid(ref writer, value.TargetNodeRid, context);
+        WriteNonzeroU64(ref writer, value.TargetNodeGeneration, context);
+        WriteNonzeroU64(ref writer, value.ExpectedAuthorityOwnerGeneration, context);
+        WriteNonzeroU64(ref writer, value.ExpectedOwnerLeaseGeneration, context);
     }
 
-    internal static SpotRouteFence DecodeSpotRouteFence(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadSpotRouteFence(reader, context); reader.End("spot-route-fence"); return value; }
-    internal static byte[] EncodeSpotRouteFence(SpotRouteFence value, DecodeContext context) { var writer = new Writer(); WriteSpotRouteFence(writer, value, context); return writer.ToArray(); }
-    private static SpotRouteFence ReadSpotRouteFence(Reader reader, DecodeContext context)
+    internal static SpotRouteFence DecodeSpotRouteFence(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadSpotRouteFence(ref reader, context); reader.End("spot-route-fence"); return value; }
+    internal static byte[] EncodeSpotRouteFence(SpotRouteFence value, DecodeContext context) { var writer = new Writer(); WriteSpotRouteFence(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteSpotRouteFence(ref writer, value, context); return bytes; }
+    private static SpotRouteFence ReadSpotRouteFence(ref Reader reader, DecodeContext context)
     {
-        var Spot = ReadSpotRef(reader, context);
-        var TargetNodeRid = ReadRid(reader, context);
-        var TargetNodeGeneration = ReadNonzeroU64(reader, context);
-        var ExpectedAuthorityOwnerGeneration = ReadNonzeroU64(reader, context);
-        var ExpectedOwnerLeaseGeneration = ReadNonzeroU64(reader, context);
+        var Spot = ReadSpotRef(ref reader, context);
+        var TargetNodeRid = ReadRid(ref reader, context);
+        var TargetNodeGeneration = ReadNonzeroU64(ref reader, context);
+        var ExpectedAuthorityOwnerGeneration = ReadNonzeroU64(ref reader, context);
+        var ExpectedOwnerLeaseGeneration = ReadNonzeroU64(ref reader, context);
         var value = new SpotRouteFence(Spot, TargetNodeRid, TargetNodeGeneration, ExpectedAuthorityOwnerGeneration, ExpectedOwnerLeaseGeneration);
         return value;
     }
-    private static void WriteSpotRouteFence(Writer writer, SpotRouteFence value, DecodeContext context)
+    private static void WriteSpotRouteFence(ref Writer writer, SpotRouteFence value, DecodeContext context)
     {
-        WriteSpotRef(writer, value.Spot, context);
-        WriteRid(writer, value.TargetNodeRid, context);
-        WriteNonzeroU64(writer, value.TargetNodeGeneration, context);
-        WriteNonzeroU64(writer, value.ExpectedAuthorityOwnerGeneration, context);
-        WriteNonzeroU64(writer, value.ExpectedOwnerLeaseGeneration, context);
+        WriteSpotRef(ref writer, value.Spot, context);
+        WriteRid(ref writer, value.TargetNodeRid, context);
+        WriteNonzeroU64(ref writer, value.TargetNodeGeneration, context);
+        WriteNonzeroU64(ref writer, value.ExpectedAuthorityOwnerGeneration, context);
+        WriteNonzeroU64(ref writer, value.ExpectedOwnerLeaseGeneration, context);
     }
 
-    internal static UserSpotCloseFenceV1 DecodeUserSpotCloseFenceV1(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadUserSpotCloseFenceV1(reader, context); reader.End("user-spot-close-fence-v1"); return value; }
-    internal static byte[] EncodeUserSpotCloseFenceV1(UserSpotCloseFenceV1 value, DecodeContext context) { var writer = new Writer(); WriteUserSpotCloseFenceV1(writer, value, context); return writer.ToArray(); }
-    private static UserSpotCloseFenceV1 ReadUserSpotCloseFenceV1(Reader reader, DecodeContext context)
+    internal static UserSpotCloseFenceV1 DecodeUserSpotCloseFenceV1(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadUserSpotCloseFenceV1(ref reader, context); reader.End("user-spot-close-fence-v1"); return value; }
+    internal static byte[] EncodeUserSpotCloseFenceV1(UserSpotCloseFenceV1 value, DecodeContext context) { var writer = new Writer(); WriteUserSpotCloseFenceV1(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteUserSpotCloseFenceV1(ref writer, value, context); return bytes; }
+    private static UserSpotCloseFenceV1 ReadUserSpotCloseFenceV1(ref Reader reader, DecodeContext context)
     {
-        var version = ReadU8(reader, context);
+        var version = ReadU8(ref reader, context);
         if (version != new U8(1)) throw Error("user-spot-close-fence-v1: version");
-        var body = reader.Slice(checked((int)ReadU16(reader, context).Value));
-        var Spot = ReadSpotRef(body, context);
-        var TargetNodeRid = ReadRid(body, context);
-        var TargetNodeGeneration = ReadNonzeroU64(body, context);
-        var ExpectedAuthorityOwnerGeneration = ReadNonzeroU64(body, context);
-        var ExpectedStoreVersion = ReadAuthorityStoreVersion(body, context);
+        var body = reader.Slice(checked((int)ReadU16(ref reader, context).Value));
+        var Spot = ReadSpotRef(ref body, context);
+        var TargetNodeRid = ReadRid(ref body, context);
+        var TargetNodeGeneration = ReadNonzeroU64(ref body, context);
+        var ExpectedAuthorityOwnerGeneration = ReadNonzeroU64(ref body, context);
+        var ExpectedStoreVersion = ReadAuthorityStoreVersion(ref body, context);
         var value = new UserSpotCloseFenceV1(Spot, TargetNodeRid, TargetNodeGeneration, ExpectedAuthorityOwnerGeneration, ExpectedStoreVersion);
         body.End("user-spot-close-fence-v1");
         return value;
     }
-    private static void WriteUserSpotCloseFenceV1(Writer writer, UserSpotCloseFenceV1 value, DecodeContext context)
+    private static void WriteUserSpotCloseFenceV1(ref Writer writer, UserSpotCloseFenceV1 value, DecodeContext context)
     {
-        var body = new Writer();
-        WriteSpotRef(body, value.Spot, context);
-        WriteRid(body, value.TargetNodeRid, context);
-        WriteNonzeroU64(body, value.TargetNodeGeneration, context);
-        WriteNonzeroU64(body, value.ExpectedAuthorityOwnerGeneration, context);
-        WriteAuthorityStoreVersion(body, value.ExpectedStoreVersion, context);
-        WriteU8(writer, new U8(1), context);
-        WriteU16(writer, new U16(checked((ushort)body.Length)), context);
-        writer.Bytes(body.ToArray());
+        WriteU8(ref writer, new U8(1), context);
+        var bodyOffset = writer.Length;
+        writer.Reserve(2);
+        var bodyStart = writer.Length;
+        WriteSpotRef(ref writer, value.Spot, context);
+        WriteRid(ref writer, value.TargetNodeRid, context);
+        WriteNonzeroU64(ref writer, value.TargetNodeGeneration, context);
+        WriteNonzeroU64(ref writer, value.ExpectedAuthorityOwnerGeneration, context);
+        WriteAuthorityStoreVersion(ref writer, value.ExpectedStoreVersion, context);
+        var bodyWriter = writer.At(bodyOffset);
+        WriteU16(ref bodyWriter, new U16(checked((ushort)(writer.Length - bodyStart))), context);
     }
 
-    internal static MessageFollowRoute DecodeMessageFollowRoute(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadMessageFollowRoute(reader, context); reader.End("message-follow-route"); return value; }
-    internal static byte[] EncodeMessageFollowRoute(MessageFollowRoute value, DecodeContext context) { var writer = new Writer(); WriteMessageFollowRoute(writer, value, context); return writer.ToArray(); }
-    private static MessageFollowRoute ReadMessageFollowRoute(Reader reader, DecodeContext context)
+    internal static MessageFollowRoute DecodeMessageFollowRoute(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadMessageFollowRoute(ref reader, context); reader.End("message-follow-route"); return value; }
+    internal static byte[] EncodeMessageFollowRoute(MessageFollowRoute value, DecodeContext context) { var writer = new Writer(); WriteMessageFollowRoute(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteMessageFollowRoute(ref writer, value, context); return bytes; }
+    private static MessageFollowRoute ReadMessageFollowRoute(ref Reader reader, DecodeContext context)
     {
-        var ObjectKind = ReadAuthorityObjectKind(reader, context);
-        var selected = reader.Slice(checked((int)ReadU16(reader, context).Value));
+        var ObjectKind = ReadAuthorityObjectKind(ref reader, context);
+        var selected = reader.Slice(checked((int)ReadU16(ref reader, context).Value));
         if (ObjectKind == AuthorityObjectKind.Actor)
         {
-            var Actor = ReadActorRouteFence(selected, context);
+            var Actor = ReadActorRouteFence(ref selected, context);
             selected.End("message-follow-route");
             var caseValue = new MessageFollowRouteCase0(ObjectKind, Actor);
             MessageFollowRoute value = caseValue;
@@ -2821,7 +2920,7 @@ internal static class ServiceWireCodec
         }
         else if (ObjectKind == AuthorityObjectKind.Spot)
         {
-            var Spot = ReadSpotRouteFence(selected, context);
+            var Spot = ReadSpotRouteFence(ref selected, context);
             selected.End("message-follow-route");
             var caseValue = new MessageFollowRouteCase1(ObjectKind, Spot);
             MessageFollowRoute value = caseValue;
@@ -2829,88 +2928,94 @@ internal static class ServiceWireCodec
         }
         throw Error("message-follow-route: discriminator");
     }
-    private static void WriteMessageFollowRoute(Writer writer, MessageFollowRoute value, DecodeContext context)
+    private static void WriteMessageFollowRoute(ref Writer writer, MessageFollowRoute value, DecodeContext context)
     {
         switch (value)
         {
         case MessageFollowRouteCase0 item:
         {
             if (item.ObjectKind != AuthorityObjectKind.Actor) throw Error("message-follow-route: discriminator");
-            WriteAuthorityObjectKind(writer, item.ObjectKind, context);
-            var body = new Writer();
-            WriteActorRouteFence(body, item.Actor, context);
-            WriteU16(writer, new U16(checked((ushort)body.Length)), context);
-            writer.Bytes(body.ToArray());
+            WriteAuthorityObjectKind(ref writer, item.ObjectKind, context);
+            var bodyOffset = writer.Length;
+            writer.Reserve(2);
+            var bodyStart = writer.Length;
+            WriteActorRouteFence(ref writer, item.Actor, context);
+            var bodyWriter = writer.At(bodyOffset);
+            WriteU16(ref bodyWriter, new U16(checked((ushort)(writer.Length - bodyStart))), context);
             break;
         }
         case MessageFollowRouteCase1 item:
         {
             if (item.ObjectKind != AuthorityObjectKind.Spot) throw Error("message-follow-route: discriminator");
-            WriteAuthorityObjectKind(writer, item.ObjectKind, context);
-            var body = new Writer();
-            WriteSpotRouteFence(body, item.Spot, context);
-            WriteU16(writer, new U16(checked((ushort)body.Length)), context);
-            writer.Bytes(body.ToArray());
+            WriteAuthorityObjectKind(ref writer, item.ObjectKind, context);
+            var bodyOffset = writer.Length;
+            writer.Reserve(2);
+            var bodyStart = writer.Length;
+            WriteSpotRouteFence(ref writer, item.Spot, context);
+            var bodyWriter = writer.At(bodyOffset);
+            WriteU16(ref bodyWriter, new U16(checked((ushort)(writer.Length - bodyStart))), context);
             break;
         }
         default: throw Error("message-follow-route: variant");
         }
     }
 
-    internal static MessageFollowRouteV1 DecodeMessageFollowRouteV1(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadMessageFollowRouteV1(reader, context); reader.End("message-follow-route-v1"); return value; }
-    internal static byte[] EncodeMessageFollowRouteV1(MessageFollowRouteV1 value, DecodeContext context) { var writer = new Writer(); WriteMessageFollowRouteV1(writer, value, context); return writer.ToArray(); }
-    private static MessageFollowRouteV1 ReadMessageFollowRouteV1(Reader reader, DecodeContext context)
+    internal static MessageFollowRouteV1 DecodeMessageFollowRouteV1(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadMessageFollowRouteV1(ref reader, context); reader.End("message-follow-route-v1"); return value; }
+    internal static byte[] EncodeMessageFollowRouteV1(MessageFollowRouteV1 value, DecodeContext context) { var writer = new Writer(); WriteMessageFollowRouteV1(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteMessageFollowRouteV1(ref writer, value, context); return bytes; }
+    private static MessageFollowRouteV1 ReadMessageFollowRouteV1(ref Reader reader, DecodeContext context)
     {
         var encodedStart = reader.Remaining;
-        var version = ReadU8(reader, context);
+        var version = ReadU8(ref reader, context);
         if (version != new U8(1)) throw Error("message-follow-route-v1: version");
-        var body = reader.Slice(checked((int)ReadU32(reader, context).Value));
-        var Source = ReadMessageFollowRoute(body, context);
-        var Target = ReadMessageFollowRoute(body, context);
-        var HopCount = ReadU8(body, context);
+        var body = reader.Slice(checked((int)ReadU32(ref reader, context).Value));
+        var Source = ReadMessageFollowRoute(ref body, context);
+        var Target = ReadMessageFollowRoute(ref body, context);
+        var HopCount = ReadU8(ref body, context);
         if (HopCount.Value < 1) throw Error("hopCount: minimum");
         if (HopCount.Value > 8) throw Error("hopCount: maximum");
-        var QueuedMessages = ReadU32(body, context);
+        var QueuedMessages = ReadU32(ref body, context);
         if (QueuedMessages.Value < 0U) throw Error("queuedMessages: minimum");
-        var QueuedBytes = ReadU32(body, context);
+        var QueuedBytes = ReadU32(ref body, context);
         if (QueuedBytes.Value < 0U) throw Error("queuedBytes: minimum");
-        var OriginalOperation = ReadOperationId(body, context);
-        var OriginalReplyRouteId = ReadU64(body, context);
+        var OriginalOperation = ReadOperationId(ref body, context);
+        var OriginalReplyRouteId = ReadU64(ref body, context);
         var value = new MessageFollowRouteV1(Source, Target, HopCount, QueuedMessages, QueuedBytes, OriginalOperation, OriginalReplyRouteId);
         body.End("message-follow-route-v1");
         if ((ulong)(encodedStart - reader.Remaining) > 16777216UL) throw Error("message-follow-route-v1: encoded limit"); return value;
     }
-    private static void WriteMessageFollowRouteV1(Writer writer, MessageFollowRouteV1 value, DecodeContext context)
+    private static void WriteMessageFollowRouteV1(ref Writer writer, MessageFollowRouteV1 value, DecodeContext context)
     {
         var encodedStart = writer.Length;
-        var body = new Writer();
-        WriteMessageFollowRoute(body, value.Source, context);
-        WriteMessageFollowRoute(body, value.Target, context);
+        WriteU8(ref writer, new U8(1), context);
+        var bodyOffset = writer.Length;
+        writer.Reserve(4);
+        var bodyStart = writer.Length;
+        WriteMessageFollowRoute(ref writer, value.Source, context);
+        WriteMessageFollowRoute(ref writer, value.Target, context);
         if (value.HopCount.Value < 1) throw Error("hopCount: minimum");
         if (value.HopCount.Value > 8) throw Error("hopCount: maximum");
-        WriteU8(body, value.HopCount, context);
+        WriteU8(ref writer, value.HopCount, context);
         if (value.QueuedMessages.Value < 0U) throw Error("queuedMessages: minimum");
-        WriteU32(body, value.QueuedMessages, context);
+        WriteU32(ref writer, value.QueuedMessages, context);
         if (value.QueuedBytes.Value < 0U) throw Error("queuedBytes: minimum");
-        WriteU32(body, value.QueuedBytes, context);
-        WriteOperationId(body, value.OriginalOperation, context);
-        WriteU64(body, value.OriginalReplyRouteId, context);
-        WriteU8(writer, new U8(1), context);
-        WriteU32(writer, new U32(checked((uint)body.Length)), context);
-        writer.Bytes(body.ToArray());
+        WriteU32(ref writer, value.QueuedBytes, context);
+        WriteOperationId(ref writer, value.OriginalOperation, context);
+        WriteU64(ref writer, value.OriginalReplyRouteId, context);
+        var bodyWriter = writer.At(bodyOffset);
+        WriteU32(ref bodyWriter, new U32(checked((uint)(writer.Length - bodyStart))), context);
         if ((ulong)(writer.Length - encodedStart) > 16777216UL) throw Error("message-follow-route-v1: encoded limit");
     }
 
-    internal static RelocationObjectIdentity DecodeRelocationObjectIdentity(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadRelocationObjectIdentity(reader, context); reader.End("relocation-object-identity"); return value; }
-    internal static byte[] EncodeRelocationObjectIdentity(RelocationObjectIdentity value, DecodeContext context) { var writer = new Writer(); WriteRelocationObjectIdentity(writer, value, context); return writer.ToArray(); }
-    private static RelocationObjectIdentity ReadRelocationObjectIdentity(Reader reader, DecodeContext context)
+    internal static RelocationObjectIdentity DecodeRelocationObjectIdentity(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadRelocationObjectIdentity(ref reader, context); reader.End("relocation-object-identity"); return value; }
+    internal static byte[] EncodeRelocationObjectIdentity(RelocationObjectIdentity value, DecodeContext context) { var writer = new Writer(); WriteRelocationObjectIdentity(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteRelocationObjectIdentity(ref writer, value, context); return bytes; }
+    private static RelocationObjectIdentity ReadRelocationObjectIdentity(ref Reader reader, DecodeContext context)
     {
-        var ObjectKind = ReadStatefulObjectKind(reader, context);
-        var selected = reader.Slice(checked((int)ReadU16(reader, context).Value));
+        var ObjectKind = ReadStatefulObjectKind(ref reader, context);
+        var selected = reader.Slice(checked((int)ReadU16(ref reader, context).Value));
         if (ObjectKind == StatefulObjectKind.Actor)
         {
-            var Actor = ReadActorRef(selected, context);
-            var ExpectedAuthorityOwnerGeneration = ReadNonzeroU64(selected, context);
+            var Actor = ReadActorRef(ref selected, context);
+            var ExpectedAuthorityOwnerGeneration = ReadNonzeroU64(ref selected, context);
             selected.End("relocation-object-identity");
             var caseValue = new RelocationObjectIdentityCase0(ObjectKind, Actor, ExpectedAuthorityOwnerGeneration);
             RelocationObjectIdentity value = caseValue;
@@ -2918,8 +3023,8 @@ internal static class ServiceWireCodec
         }
         else if (ObjectKind == StatefulObjectKind.UserSpot)
         {
-            var Spot = ReadSpotRef(selected, context);
-            var ExpectedAuthorityOwnerGeneration = ReadNonzeroU64(selected, context);
+            var Spot = ReadSpotRef(ref selected, context);
+            var ExpectedAuthorityOwnerGeneration = ReadNonzeroU64(ref selected, context);
             selected.End("relocation-object-identity");
             var caseValue = new RelocationObjectIdentityCase1(ObjectKind, Spot, ExpectedAuthorityOwnerGeneration);
             RelocationObjectIdentity value = caseValue;
@@ -2927,9 +3032,9 @@ internal static class ServiceWireCodec
         }
         else if (ObjectKind == StatefulObjectKind.InstanceSpot)
         {
-            var InstanceType = ReadText8(selected, context);
-            var SpotId = ReadText8(selected, context);
-            var ObjectGeneration = ReadNonzeroU64(selected, context);
+            var InstanceType = ReadText8(ref selected, context);
+            var SpotId = ReadText8(ref selected, context);
+            var ObjectGeneration = ReadNonzeroU64(ref selected, context);
             selected.End("relocation-object-identity");
             var caseValue = new RelocationObjectIdentityCase2(ObjectKind, InstanceType, SpotId, ObjectGeneration);
             RelocationObjectIdentity value = caseValue;
@@ -2937,79 +3042,85 @@ internal static class ServiceWireCodec
         }
         throw Error("relocation-object-identity: discriminator");
     }
-    private static void WriteRelocationObjectIdentity(Writer writer, RelocationObjectIdentity value, DecodeContext context)
+    private static void WriteRelocationObjectIdentity(ref Writer writer, RelocationObjectIdentity value, DecodeContext context)
     {
         switch (value)
         {
         case RelocationObjectIdentityCase0 item:
         {
             if (item.ObjectKind != StatefulObjectKind.Actor) throw Error("relocation-object-identity: discriminator");
-            WriteStatefulObjectKind(writer, item.ObjectKind, context);
-            var body = new Writer();
-            WriteActorRef(body, item.Actor, context);
-            WriteNonzeroU64(body, item.ExpectedAuthorityOwnerGeneration, context);
-            WriteU16(writer, new U16(checked((ushort)body.Length)), context);
-            writer.Bytes(body.ToArray());
+            WriteStatefulObjectKind(ref writer, item.ObjectKind, context);
+            var bodyOffset = writer.Length;
+            writer.Reserve(2);
+            var bodyStart = writer.Length;
+            WriteActorRef(ref writer, item.Actor, context);
+            WriteNonzeroU64(ref writer, item.ExpectedAuthorityOwnerGeneration, context);
+            var bodyWriter = writer.At(bodyOffset);
+            WriteU16(ref bodyWriter, new U16(checked((ushort)(writer.Length - bodyStart))), context);
             break;
         }
         case RelocationObjectIdentityCase1 item:
         {
             if (item.ObjectKind != StatefulObjectKind.UserSpot) throw Error("relocation-object-identity: discriminator");
-            WriteStatefulObjectKind(writer, item.ObjectKind, context);
-            var body = new Writer();
-            WriteSpotRef(body, item.Spot, context);
-            WriteNonzeroU64(body, item.ExpectedAuthorityOwnerGeneration, context);
-            WriteU16(writer, new U16(checked((ushort)body.Length)), context);
-            writer.Bytes(body.ToArray());
+            WriteStatefulObjectKind(ref writer, item.ObjectKind, context);
+            var bodyOffset = writer.Length;
+            writer.Reserve(2);
+            var bodyStart = writer.Length;
+            WriteSpotRef(ref writer, item.Spot, context);
+            WriteNonzeroU64(ref writer, item.ExpectedAuthorityOwnerGeneration, context);
+            var bodyWriter = writer.At(bodyOffset);
+            WriteU16(ref bodyWriter, new U16(checked((ushort)(writer.Length - bodyStart))), context);
             break;
         }
         case RelocationObjectIdentityCase2 item:
         {
             if (item.ObjectKind != StatefulObjectKind.InstanceSpot) throw Error("relocation-object-identity: discriminator");
-            WriteStatefulObjectKind(writer, item.ObjectKind, context);
-            var body = new Writer();
-            WriteText8(body, item.InstanceType, context);
-            WriteText8(body, item.SpotId, context);
-            WriteNonzeroU64(body, item.ObjectGeneration, context);
-            WriteU16(writer, new U16(checked((ushort)body.Length)), context);
-            writer.Bytes(body.ToArray());
+            WriteStatefulObjectKind(ref writer, item.ObjectKind, context);
+            var bodyOffset = writer.Length;
+            writer.Reserve(2);
+            var bodyStart = writer.Length;
+            WriteText8(ref writer, item.InstanceType, context);
+            WriteText8(ref writer, item.SpotId, context);
+            WriteNonzeroU64(ref writer, item.ObjectGeneration, context);
+            var bodyWriter = writer.At(bodyOffset);
+            WriteU16(ref bodyWriter, new U16(checked((ushort)(writer.Length - bodyStart))), context);
             break;
         }
         default: throw Error("relocation-object-identity: variant");
         }
     }
 
-    internal static ActorAuthorityIdentity DecodeActorAuthorityIdentity(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadActorAuthorityIdentity(reader, context); reader.End("actor-authority-identity"); return value; }
-    internal static byte[] EncodeActorAuthorityIdentity(ActorAuthorityIdentity value, DecodeContext context) { var writer = new Writer(); WriteActorAuthorityIdentity(writer, value, context); return writer.ToArray(); }
-    private static ActorAuthorityIdentity ReadActorAuthorityIdentity(Reader reader, DecodeContext context)
+    internal static ActorAuthorityIdentity DecodeActorAuthorityIdentity(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadActorAuthorityIdentity(ref reader, context); reader.End("actor-authority-identity"); return value; }
+    internal static byte[] EncodeActorAuthorityIdentity(ActorAuthorityIdentity value, DecodeContext context) { var writer = new Writer(); WriteActorAuthorityIdentity(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteActorAuthorityIdentity(ref writer, value, context); return bytes; }
+    private static ActorAuthorityIdentity ReadActorAuthorityIdentity(ref Reader reader, DecodeContext context)
     {
-        var ActorType = ReadText8(reader, context);
-        var ActorId = ReadText8(reader, context);
-        var State = ReadActorAuthorityState(reader, context);
-        var CurrentSpot = ReadSpotRef(reader, context);
-        var CurrentSpotKind = ReadActorSpotKind(reader, context);
+        var ActorType = ReadText8(ref reader, context);
+        var ActorId = ReadText8(ref reader, context);
+        var State = ReadActorAuthorityState(ref reader, context);
+        var CurrentSpot = ReadSpotRef(ref reader, context);
+        var CurrentSpotKind = ReadActorSpotKind(ref reader, context);
         var value = new ActorAuthorityIdentity(ActorType, ActorId, State, CurrentSpot, CurrentSpotKind);
         return value;
     }
-    private static void WriteActorAuthorityIdentity(Writer writer, ActorAuthorityIdentity value, DecodeContext context)
+    private static void WriteActorAuthorityIdentity(ref Writer writer, ActorAuthorityIdentity value, DecodeContext context)
     {
-        WriteText8(writer, value.ActorType, context);
-        WriteText8(writer, value.ActorId, context);
-        WriteActorAuthorityState(writer, value.State, context);
-        WriteSpotRef(writer, value.CurrentSpot, context);
-        WriteActorSpotKind(writer, value.CurrentSpotKind, context);
+        WriteText8(ref writer, value.ActorType, context);
+        WriteText8(ref writer, value.ActorId, context);
+        WriteActorAuthorityState(ref writer, value.State, context);
+        WriteSpotRef(ref writer, value.CurrentSpot, context);
+        WriteActorSpotKind(ref writer, value.CurrentSpotKind, context);
     }
 
-    internal static InstanceAuthorityIdentity DecodeInstanceAuthorityIdentity(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadInstanceAuthorityIdentity(reader, context); reader.End("instance-authority-identity"); return value; }
-    internal static byte[] EncodeInstanceAuthorityIdentity(InstanceAuthorityIdentity value, DecodeContext context) { var writer = new Writer(); WriteInstanceAuthorityIdentity(writer, value, context); return writer.ToArray(); }
-    private static InstanceAuthorityIdentity ReadInstanceAuthorityIdentity(Reader reader, DecodeContext context)
+    internal static InstanceAuthorityIdentity DecodeInstanceAuthorityIdentity(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadInstanceAuthorityIdentity(ref reader, context); reader.End("instance-authority-identity"); return value; }
+    internal static byte[] EncodeInstanceAuthorityIdentity(InstanceAuthorityIdentity value, DecodeContext context) { var writer = new Writer(); WriteInstanceAuthorityIdentity(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteInstanceAuthorityIdentity(ref writer, value, context); return bytes; }
+    private static InstanceAuthorityIdentity ReadInstanceAuthorityIdentity(ref Reader reader, DecodeContext context)
     {
-        var AuthorityState = ReadInstanceAuthorityState(reader, context);
-        var selected = reader.Slice(checked((int)ReadU16(reader, context).Value));
+        var AuthorityState = ReadInstanceAuthorityState(ref reader, context);
+        var selected = reader.Slice(checked((int)ReadU16(ref reader, context).Value));
         if (AuthorityState == InstanceAuthorityState.ColdActivating)
         {
-            var InstanceType = ReadText8(selected, context);
-            var SpotId = ReadText8(selected, context);
+            var InstanceType = ReadText8(ref selected, context);
+            var SpotId = ReadText8(ref selected, context);
             selected.End("instance-authority-identity");
             var caseValue = new InstanceAuthorityIdentityCase0(AuthorityState, InstanceType, SpotId);
             InstanceAuthorityIdentity value = caseValue;
@@ -3017,8 +3128,8 @@ internal static class ServiceWireCodec
         }
         else if (AuthorityState == InstanceAuthorityState.Ready)
         {
-            var InstanceType = ReadText8(selected, context);
-            var SpotId = ReadText8(selected, context);
+            var InstanceType = ReadText8(ref selected, context);
+            var SpotId = ReadText8(ref selected, context);
             selected.End("instance-authority-identity");
             var caseValue = new InstanceAuthorityIdentityCase1(AuthorityState, InstanceType, SpotId);
             InstanceAuthorityIdentity value = caseValue;
@@ -3026,8 +3137,8 @@ internal static class ServiceWireCodec
         }
         else if (AuthorityState == InstanceAuthorityState.Closing)
         {
-            var InstanceType = ReadText8(selected, context);
-            var SpotId = ReadText8(selected, context);
+            var InstanceType = ReadText8(ref selected, context);
+            var SpotId = ReadText8(ref selected, context);
             selected.End("instance-authority-identity");
             var caseValue = new InstanceAuthorityIdentityCase2(AuthorityState, InstanceType, SpotId);
             InstanceAuthorityIdentity value = caseValue;
@@ -3035,8 +3146,8 @@ internal static class ServiceWireCodec
         }
         else if (AuthorityState == InstanceAuthorityState.Relocating)
         {
-            var InstanceType = ReadText8(selected, context);
-            var SpotId = ReadText8(selected, context);
+            var InstanceType = ReadText8(ref selected, context);
+            var SpotId = ReadText8(ref selected, context);
             selected.End("instance-authority-identity");
             var caseValue = new InstanceAuthorityIdentityCase3(AuthorityState, InstanceType, SpotId);
             InstanceAuthorityIdentity value = caseValue;
@@ -3044,69 +3155,77 @@ internal static class ServiceWireCodec
         }
         throw Error("instance-authority-identity: discriminator");
     }
-    private static void WriteInstanceAuthorityIdentity(Writer writer, InstanceAuthorityIdentity value, DecodeContext context)
+    private static void WriteInstanceAuthorityIdentity(ref Writer writer, InstanceAuthorityIdentity value, DecodeContext context)
     {
         switch (value)
         {
         case InstanceAuthorityIdentityCase0 item:
         {
             if (item.AuthorityState != InstanceAuthorityState.ColdActivating) throw Error("instance-authority-identity: discriminator");
-            WriteInstanceAuthorityState(writer, item.AuthorityState, context);
-            var body = new Writer();
-            WriteText8(body, item.InstanceType, context);
-            WriteText8(body, item.SpotId, context);
-            WriteU16(writer, new U16(checked((ushort)body.Length)), context);
-            writer.Bytes(body.ToArray());
+            WriteInstanceAuthorityState(ref writer, item.AuthorityState, context);
+            var bodyOffset = writer.Length;
+            writer.Reserve(2);
+            var bodyStart = writer.Length;
+            WriteText8(ref writer, item.InstanceType, context);
+            WriteText8(ref writer, item.SpotId, context);
+            var bodyWriter = writer.At(bodyOffset);
+            WriteU16(ref bodyWriter, new U16(checked((ushort)(writer.Length - bodyStart))), context);
             break;
         }
         case InstanceAuthorityIdentityCase1 item:
         {
             if (item.AuthorityState != InstanceAuthorityState.Ready) throw Error("instance-authority-identity: discriminator");
-            WriteInstanceAuthorityState(writer, item.AuthorityState, context);
-            var body = new Writer();
-            WriteText8(body, item.InstanceType, context);
-            WriteText8(body, item.SpotId, context);
-            WriteU16(writer, new U16(checked((ushort)body.Length)), context);
-            writer.Bytes(body.ToArray());
+            WriteInstanceAuthorityState(ref writer, item.AuthorityState, context);
+            var bodyOffset = writer.Length;
+            writer.Reserve(2);
+            var bodyStart = writer.Length;
+            WriteText8(ref writer, item.InstanceType, context);
+            WriteText8(ref writer, item.SpotId, context);
+            var bodyWriter = writer.At(bodyOffset);
+            WriteU16(ref bodyWriter, new U16(checked((ushort)(writer.Length - bodyStart))), context);
             break;
         }
         case InstanceAuthorityIdentityCase2 item:
         {
             if (item.AuthorityState != InstanceAuthorityState.Closing) throw Error("instance-authority-identity: discriminator");
-            WriteInstanceAuthorityState(writer, item.AuthorityState, context);
-            var body = new Writer();
-            WriteText8(body, item.InstanceType, context);
-            WriteText8(body, item.SpotId, context);
-            WriteU16(writer, new U16(checked((ushort)body.Length)), context);
-            writer.Bytes(body.ToArray());
+            WriteInstanceAuthorityState(ref writer, item.AuthorityState, context);
+            var bodyOffset = writer.Length;
+            writer.Reserve(2);
+            var bodyStart = writer.Length;
+            WriteText8(ref writer, item.InstanceType, context);
+            WriteText8(ref writer, item.SpotId, context);
+            var bodyWriter = writer.At(bodyOffset);
+            WriteU16(ref bodyWriter, new U16(checked((ushort)(writer.Length - bodyStart))), context);
             break;
         }
         case InstanceAuthorityIdentityCase3 item:
         {
             if (item.AuthorityState != InstanceAuthorityState.Relocating) throw Error("instance-authority-identity: discriminator");
-            WriteInstanceAuthorityState(writer, item.AuthorityState, context);
-            var body = new Writer();
-            WriteText8(body, item.InstanceType, context);
-            WriteText8(body, item.SpotId, context);
-            WriteU16(writer, new U16(checked((ushort)body.Length)), context);
-            writer.Bytes(body.ToArray());
+            WriteInstanceAuthorityState(ref writer, item.AuthorityState, context);
+            var bodyOffset = writer.Length;
+            writer.Reserve(2);
+            var bodyStart = writer.Length;
+            WriteText8(ref writer, item.InstanceType, context);
+            WriteText8(ref writer, item.SpotId, context);
+            var bodyWriter = writer.At(bodyOffset);
+            WriteU16(ref bodyWriter, new U16(checked((ushort)(writer.Length - bodyStart))), context);
             break;
         }
         default: throw Error("instance-authority-identity: variant");
         }
     }
 
-    internal static SpotAuthorityIdentity DecodeSpotAuthorityIdentity(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadSpotAuthorityIdentity(reader, context); reader.End("spot-authority-identity"); return value; }
-    internal static byte[] EncodeSpotAuthorityIdentity(SpotAuthorityIdentity value, DecodeContext context) { var writer = new Writer(); WriteSpotAuthorityIdentity(writer, value, context); return writer.ToArray(); }
-    private static SpotAuthorityIdentity ReadSpotAuthorityIdentity(Reader reader, DecodeContext context)
+    internal static SpotAuthorityIdentity DecodeSpotAuthorityIdentity(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadSpotAuthorityIdentity(ref reader, context); reader.End("spot-authority-identity"); return value; }
+    internal static byte[] EncodeSpotAuthorityIdentity(SpotAuthorityIdentity value, DecodeContext context) { var writer = new Writer(); WriteSpotAuthorityIdentity(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteSpotAuthorityIdentity(ref writer, value, context); return bytes; }
+    private static SpotAuthorityIdentity ReadSpotAuthorityIdentity(ref Reader reader, DecodeContext context)
     {
-        var SpotKind = ReadSpotKind(reader, context);
-        var selected = reader.Slice(checked((int)ReadU16(reader, context).Value));
+        var SpotKind = ReadSpotKind(ref reader, context);
+        var selected = reader.Slice(checked((int)ReadU16(ref reader, context).Value));
         if (SpotKind == SpotKind.Entry)
         {
-            var SpotId = ReadText8(selected, context);
-            var SpotType = ReadText8(selected, context);
-            var State = ReadEntryUserSpotAuthorityState(selected, context);
+            var SpotId = ReadText8(ref selected, context);
+            var SpotType = ReadText8(ref selected, context);
+            var State = ReadEntryUserSpotAuthorityState(ref selected, context);
             selected.End("spot-authority-identity");
             var caseValue = new SpotAuthorityIdentityCase0(SpotKind, SpotId, SpotType, State);
             SpotAuthorityIdentity value = caseValue;
@@ -3114,9 +3233,9 @@ internal static class ServiceWireCodec
         }
         else if (SpotKind == SpotKind.User)
         {
-            var SpotId = ReadText8(selected, context);
-            var SpotType = ReadText8(selected, context);
-            var State = ReadEntryUserSpotAuthorityState(selected, context);
+            var SpotId = ReadText8(ref selected, context);
+            var SpotType = ReadText8(ref selected, context);
+            var State = ReadEntryUserSpotAuthorityState(ref selected, context);
             selected.End("spot-authority-identity");
             var caseValue = new SpotAuthorityIdentityCase1(SpotKind, SpotId, SpotType, State);
             SpotAuthorityIdentity value = caseValue;
@@ -3124,7 +3243,7 @@ internal static class ServiceWireCodec
         }
         else if (SpotKind == SpotKind.Instance)
         {
-            var Instance = ReadInstanceAuthorityIdentity(selected, context);
+            var Instance = ReadInstanceAuthorityIdentity(ref selected, context);
             selected.End("spot-authority-identity");
             var caseValue = new SpotAuthorityIdentityCase2(SpotKind, Instance);
             SpotAuthorityIdentity value = caseValue;
@@ -3132,57 +3251,63 @@ internal static class ServiceWireCodec
         }
         throw Error("spot-authority-identity: discriminator");
     }
-    private static void WriteSpotAuthorityIdentity(Writer writer, SpotAuthorityIdentity value, DecodeContext context)
+    private static void WriteSpotAuthorityIdentity(ref Writer writer, SpotAuthorityIdentity value, DecodeContext context)
     {
         switch (value)
         {
         case SpotAuthorityIdentityCase0 item:
         {
             if (item.SpotKind != SpotKind.Entry) throw Error("spot-authority-identity: discriminator");
-            WriteSpotKind(writer, item.SpotKind, context);
-            var body = new Writer();
-            WriteText8(body, item.SpotId, context);
-            WriteText8(body, item.SpotType, context);
-            WriteEntryUserSpotAuthorityState(body, item.State, context);
-            WriteU16(writer, new U16(checked((ushort)body.Length)), context);
-            writer.Bytes(body.ToArray());
+            WriteSpotKind(ref writer, item.SpotKind, context);
+            var bodyOffset = writer.Length;
+            writer.Reserve(2);
+            var bodyStart = writer.Length;
+            WriteText8(ref writer, item.SpotId, context);
+            WriteText8(ref writer, item.SpotType, context);
+            WriteEntryUserSpotAuthorityState(ref writer, item.State, context);
+            var bodyWriter = writer.At(bodyOffset);
+            WriteU16(ref bodyWriter, new U16(checked((ushort)(writer.Length - bodyStart))), context);
             break;
         }
         case SpotAuthorityIdentityCase1 item:
         {
             if (item.SpotKind != SpotKind.User) throw Error("spot-authority-identity: discriminator");
-            WriteSpotKind(writer, item.SpotKind, context);
-            var body = new Writer();
-            WriteText8(body, item.SpotId, context);
-            WriteText8(body, item.SpotType, context);
-            WriteEntryUserSpotAuthorityState(body, item.State, context);
-            WriteU16(writer, new U16(checked((ushort)body.Length)), context);
-            writer.Bytes(body.ToArray());
+            WriteSpotKind(ref writer, item.SpotKind, context);
+            var bodyOffset = writer.Length;
+            writer.Reserve(2);
+            var bodyStart = writer.Length;
+            WriteText8(ref writer, item.SpotId, context);
+            WriteText8(ref writer, item.SpotType, context);
+            WriteEntryUserSpotAuthorityState(ref writer, item.State, context);
+            var bodyWriter = writer.At(bodyOffset);
+            WriteU16(ref bodyWriter, new U16(checked((ushort)(writer.Length - bodyStart))), context);
             break;
         }
         case SpotAuthorityIdentityCase2 item:
         {
             if (item.SpotKind != SpotKind.Instance) throw Error("spot-authority-identity: discriminator");
-            WriteSpotKind(writer, item.SpotKind, context);
-            var body = new Writer();
-            WriteInstanceAuthorityIdentity(body, item.Instance, context);
-            WriteU16(writer, new U16(checked((ushort)body.Length)), context);
-            writer.Bytes(body.ToArray());
+            WriteSpotKind(ref writer, item.SpotKind, context);
+            var bodyOffset = writer.Length;
+            writer.Reserve(2);
+            var bodyStart = writer.Length;
+            WriteInstanceAuthorityIdentity(ref writer, item.Instance, context);
+            var bodyWriter = writer.At(bodyOffset);
+            WriteU16(ref bodyWriter, new U16(checked((ushort)(writer.Length - bodyStart))), context);
             break;
         }
         default: throw Error("spot-authority-identity: variant");
         }
     }
 
-    internal static AuthorityObjectIdentity DecodeAuthorityObjectIdentity(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadAuthorityObjectIdentity(reader, context); reader.End("authority-object-identity"); return value; }
-    internal static byte[] EncodeAuthorityObjectIdentity(AuthorityObjectIdentity value, DecodeContext context) { var writer = new Writer(); WriteAuthorityObjectIdentity(writer, value, context); return writer.ToArray(); }
-    private static AuthorityObjectIdentity ReadAuthorityObjectIdentity(Reader reader, DecodeContext context)
+    internal static AuthorityObjectIdentity DecodeAuthorityObjectIdentity(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadAuthorityObjectIdentity(ref reader, context); reader.End("authority-object-identity"); return value; }
+    internal static byte[] EncodeAuthorityObjectIdentity(AuthorityObjectIdentity value, DecodeContext context) { var writer = new Writer(); WriteAuthorityObjectIdentity(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteAuthorityObjectIdentity(ref writer, value, context); return bytes; }
+    private static AuthorityObjectIdentity ReadAuthorityObjectIdentity(ref Reader reader, DecodeContext context)
     {
-        var ObjectKind = ReadAuthorityObjectKind(reader, context);
-        var selected = reader.Slice(checked((int)ReadU16(reader, context).Value));
+        var ObjectKind = ReadAuthorityObjectKind(ref reader, context);
+        var selected = reader.Slice(checked((int)ReadU16(ref reader, context).Value));
         if (ObjectKind == AuthorityObjectKind.Actor)
         {
-            var Actor = ReadActorAuthorityIdentity(selected, context);
+            var Actor = ReadActorAuthorityIdentity(ref selected, context);
             selected.End("authority-object-identity");
             var caseValue = new AuthorityObjectIdentityCase0(ObjectKind, Actor);
             AuthorityObjectIdentity value = caseValue;
@@ -3190,7 +3315,7 @@ internal static class ServiceWireCodec
         }
         else if (ObjectKind == AuthorityObjectKind.Spot)
         {
-            var Spot = ReadSpotAuthorityIdentity(selected, context);
+            var Spot = ReadSpotAuthorityIdentity(ref selected, context);
             selected.End("authority-object-identity");
             var caseValue = new AuthorityObjectIdentityCase1(ObjectKind, Spot);
             AuthorityObjectIdentity value = caseValue;
@@ -3198,71 +3323,78 @@ internal static class ServiceWireCodec
         }
         throw Error("authority-object-identity: discriminator");
     }
-    private static void WriteAuthorityObjectIdentity(Writer writer, AuthorityObjectIdentity value, DecodeContext context)
+    private static void WriteAuthorityObjectIdentity(ref Writer writer, AuthorityObjectIdentity value, DecodeContext context)
     {
         switch (value)
         {
         case AuthorityObjectIdentityCase0 item:
         {
             if (item.ObjectKind != AuthorityObjectKind.Actor) throw Error("authority-object-identity: discriminator");
-            WriteAuthorityObjectKind(writer, item.ObjectKind, context);
-            var body = new Writer();
-            WriteActorAuthorityIdentity(body, item.Actor, context);
-            WriteU16(writer, new U16(checked((ushort)body.Length)), context);
-            writer.Bytes(body.ToArray());
+            WriteAuthorityObjectKind(ref writer, item.ObjectKind, context);
+            var bodyOffset = writer.Length;
+            writer.Reserve(2);
+            var bodyStart = writer.Length;
+            WriteActorAuthorityIdentity(ref writer, item.Actor, context);
+            var bodyWriter = writer.At(bodyOffset);
+            WriteU16(ref bodyWriter, new U16(checked((ushort)(writer.Length - bodyStart))), context);
             break;
         }
         case AuthorityObjectIdentityCase1 item:
         {
             if (item.ObjectKind != AuthorityObjectKind.Spot) throw Error("authority-object-identity: discriminator");
-            WriteAuthorityObjectKind(writer, item.ObjectKind, context);
-            var body = new Writer();
-            WriteSpotAuthorityIdentity(body, item.Spot, context);
-            WriteU16(writer, new U16(checked((ushort)body.Length)), context);
-            writer.Bytes(body.ToArray());
+            WriteAuthorityObjectKind(ref writer, item.ObjectKind, context);
+            var bodyOffset = writer.Length;
+            writer.Reserve(2);
+            var bodyStart = writer.Length;
+            WriteSpotAuthorityIdentity(ref writer, item.Spot, context);
+            var bodyWriter = writer.At(bodyOffset);
+            WriteU16(ref bodyWriter, new U16(checked((ushort)(writer.Length - bodyStart))), context);
             break;
         }
         default: throw Error("authority-object-identity: variant");
         }
     }
 
-    internal static OperationId DecodeOperationId(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadOperationId(reader, context); reader.End("operation-id"); return value; }
-    internal static byte[] EncodeOperationId(OperationId value, DecodeContext context) { var writer = new Writer(); WriteOperationId(writer, value, context); return writer.ToArray(); }
-    private static OperationId ReadOperationId(Reader reader, DecodeContext context)
+    internal static OperationId DecodeOperationId(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadOperationId(ref reader, context); reader.End("operation-id"); return value; }
+    internal static byte[] EncodeOperationId(OperationId value, DecodeContext context) { var writer = new Writer(); WriteOperationId(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteOperationId(ref writer, value, context); return bytes; }
+    private static OperationId ReadOperationId(ref Reader reader, DecodeContext context)
     {
-        var High = ReadU64(reader, context);
-        var Low = ReadU64(reader, context);
+        var High = ReadU64(ref reader, context);
+        var Low = ReadU64(ref reader, context);
         var value = new OperationId(High, Low);
         if (value.High.Value == 0 && value.Low.Value == 0) throw Error("not-both-zero");
         return value;
     }
-    private static void WriteOperationId(Writer writer, OperationId value, DecodeContext context)
+    private static void WriteOperationId(ref Writer writer, OperationId value, DecodeContext context)
     {
-        if (value.High.Value == 0 && value.Low.Value == 0) throw Error("not-both-zero");
-        WriteU64(writer, value.High, context);
-        WriteU64(writer, value.Low, context);
+        if (writer.IsSizing)
+        {
+            if (value.High.Value == 0 && value.Low.Value == 0) throw Error("not-both-zero");
+        }
+        WriteU64(ref writer, value.High, context);
+        WriteU64(ref writer, value.Low, context);
     }
 
-    internal static OperationIdOrZero DecodeOperationIdOrZero(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadOperationIdOrZero(reader, context); reader.End("operation-id-or-zero"); return value; }
-    internal static byte[] EncodeOperationIdOrZero(OperationIdOrZero value, DecodeContext context) { var writer = new Writer(); WriteOperationIdOrZero(writer, value, context); return writer.ToArray(); }
-    private static OperationIdOrZero ReadOperationIdOrZero(Reader reader, DecodeContext context)
+    internal static OperationIdOrZero DecodeOperationIdOrZero(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadOperationIdOrZero(ref reader, context); reader.End("operation-id-or-zero"); return value; }
+    internal static byte[] EncodeOperationIdOrZero(OperationIdOrZero value, DecodeContext context) { var writer = new Writer(); WriteOperationIdOrZero(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteOperationIdOrZero(ref writer, value, context); return bytes; }
+    private static OperationIdOrZero ReadOperationIdOrZero(ref Reader reader, DecodeContext context)
     {
-        var High = ReadU64(reader, context);
-        var Low = ReadU64(reader, context);
+        var High = ReadU64(ref reader, context);
+        var Low = ReadU64(ref reader, context);
         var value = new OperationIdOrZero(High, Low);
         return value;
     }
-    private static void WriteOperationIdOrZero(Writer writer, OperationIdOrZero value, DecodeContext context)
+    private static void WriteOperationIdOrZero(ref Writer writer, OperationIdOrZero value, DecodeContext context)
     {
-        WriteU64(writer, value.High, context);
-        WriteU64(writer, value.Low, context);
+        WriteU64(ref writer, value.High, context);
+        WriteU64(ref writer, value.Low, context);
     }
 
-    internal static CreationContentReference DecodeCreationContentReference(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadCreationContentReference(reader, context); reader.End("creation-content-reference"); return value; }
-    internal static byte[] EncodeCreationContentReference(CreationContentReference value, DecodeContext context) { var writer = new Writer(); WriteCreationContentReference(writer, value, context); return writer.ToArray(); }
-    private static CreationContentReference ReadCreationContentReference(Reader reader, DecodeContext context)
+    internal static CreationContentReference DecodeCreationContentReference(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadCreationContentReference(ref reader, context); reader.End("creation-content-reference"); return value; }
+    internal static byte[] EncodeCreationContentReference(CreationContentReference value, DecodeContext context) { var writer = new Writer(); WriteCreationContentReference(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteCreationContentReference(ref writer, value, context); return bytes; }
+    private static CreationContentReference ReadCreationContentReference(ref Reader reader, DecodeContext context)
     {
-        var encodedLength = (ulong)ReadU16(reader, context).Value;
+        var encodedLength = (ulong)ReadU16(ref reader, context).Value;
         if (encodedLength > 2147483647UL) throw Capacity("creation-content-reference: capacity");
         if (encodedLength < 1UL || encodedLength > 4096UL) throw Error("creation-content-reference: length");
         var length = checked((int)encodedLength);
@@ -3270,21 +3402,21 @@ internal static class ServiceWireCodec
         if (bytes.Contains((byte)0)) throw Error("creation-content-reference: NUL");
         return new(Utf8.GetString(bytes));
     }
-    private static void WriteCreationContentReference(Writer writer, CreationContentReference value, DecodeContext context)
+    private static void WriteCreationContentReference(ref Writer writer, CreationContentReference value, DecodeContext context)
     {
-        var bytes = value.Value is null ? Array.Empty<byte>() : Utf8.GetBytes(value.Value);
-        if (bytes.Contains((byte)0)) throw Error("creation-content-reference: NUL");
-        if ((ulong)bytes.LongLength > 2147483647UL) throw Capacity("creation-content-reference: capacity");
-        if ((ulong)bytes.LongLength < 1UL || (ulong)bytes.LongLength > 4096UL) throw Error("creation-content-reference: length");
-        WriteU16(writer, new U16(checked((ushort)bytes.Length)), context);
-        writer.Bytes(bytes);
+        var length = value.Value is null ? 0 : Utf8.GetByteCount(value.Value);
+        if (value.Value?.IndexOf('\0') >= 0) throw Error("creation-content-reference: NUL");
+        if ((ulong)length > 2147483647UL) throw Capacity("creation-content-reference: capacity");
+        if ((ulong)length < 1UL || (ulong)length > 4096UL) throw Error("creation-content-reference: length");
+        WriteU16(ref writer, new U16(checked((ushort)length)), context);
+        writer.Text(value.Value, length);
     }
 
-    internal static RelocationReference DecodeRelocationReference(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadRelocationReference(reader, context); reader.End("relocation-reference"); return value; }
-    internal static byte[] EncodeRelocationReference(RelocationReference value, DecodeContext context) { var writer = new Writer(); WriteRelocationReference(writer, value, context); return writer.ToArray(); }
-    private static RelocationReference ReadRelocationReference(Reader reader, DecodeContext context)
+    internal static RelocationReference DecodeRelocationReference(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadRelocationReference(ref reader, context); reader.End("relocation-reference"); return value; }
+    internal static byte[] EncodeRelocationReference(RelocationReference value, DecodeContext context) { var writer = new Writer(); WriteRelocationReference(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteRelocationReference(ref writer, value, context); return bytes; }
+    private static RelocationReference ReadRelocationReference(ref Reader reader, DecodeContext context)
     {
-        var encodedLength = (ulong)ReadU16(reader, context).Value;
+        var encodedLength = (ulong)ReadU16(ref reader, context).Value;
         if (encodedLength > 2147483647UL) throw Capacity("relocation-reference: capacity");
         if (encodedLength < 1UL || encodedLength > 4096UL) throw Error("relocation-reference: length");
         var length = checked((int)encodedLength);
@@ -3292,21 +3424,21 @@ internal static class ServiceWireCodec
         if (bytes.Contains((byte)0)) throw Error("relocation-reference: NUL");
         return new(Utf8.GetString(bytes));
     }
-    private static void WriteRelocationReference(Writer writer, RelocationReference value, DecodeContext context)
+    private static void WriteRelocationReference(ref Writer writer, RelocationReference value, DecodeContext context)
     {
-        var bytes = value.Value is null ? Array.Empty<byte>() : Utf8.GetBytes(value.Value);
-        if (bytes.Contains((byte)0)) throw Error("relocation-reference: NUL");
-        if ((ulong)bytes.LongLength > 2147483647UL) throw Capacity("relocation-reference: capacity");
-        if ((ulong)bytes.LongLength < 1UL || (ulong)bytes.LongLength > 4096UL) throw Error("relocation-reference: length");
-        WriteU16(writer, new U16(checked((ushort)bytes.Length)), context);
-        writer.Bytes(bytes);
+        var length = value.Value is null ? 0 : Utf8.GetByteCount(value.Value);
+        if (value.Value?.IndexOf('\0') >= 0) throw Error("relocation-reference: NUL");
+        if ((ulong)length > 2147483647UL) throw Capacity("relocation-reference: capacity");
+        if ((ulong)length < 1UL || (ulong)length > 4096UL) throw Error("relocation-reference: length");
+        WriteU16(ref writer, new U16(checked((ushort)length)), context);
+        writer.Text(value.Value, length);
     }
 
-    internal static AuthorityStoreVersion DecodeAuthorityStoreVersion(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadAuthorityStoreVersion(reader, context); reader.End("authority-store-version"); return value; }
-    internal static byte[] EncodeAuthorityStoreVersion(AuthorityStoreVersion value, DecodeContext context) { var writer = new Writer(); WriteAuthorityStoreVersion(writer, value, context); return writer.ToArray(); }
-    private static AuthorityStoreVersion ReadAuthorityStoreVersion(Reader reader, DecodeContext context)
+    internal static AuthorityStoreVersion DecodeAuthorityStoreVersion(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadAuthorityStoreVersion(ref reader, context); reader.End("authority-store-version"); return value; }
+    internal static byte[] EncodeAuthorityStoreVersion(AuthorityStoreVersion value, DecodeContext context) { var writer = new Writer(); WriteAuthorityStoreVersion(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteAuthorityStoreVersion(ref writer, value, context); return bytes; }
+    private static AuthorityStoreVersion ReadAuthorityStoreVersion(ref Reader reader, DecodeContext context)
     {
-        var encodedLength = (ulong)ReadU16(reader, context).Value;
+        var encodedLength = (ulong)ReadU16(ref reader, context).Value;
         if (encodedLength > 2147483647UL) throw Capacity("authority-store-version: capacity");
         if (encodedLength < 1UL || encodedLength > 4096UL) throw Error("authority-store-version: length");
         var length = checked((int)encodedLength);
@@ -3314,279 +3446,279 @@ internal static class ServiceWireCodec
         if (bytes.Contains((byte)0)) throw Error("authority-store-version: NUL");
         return new(Utf8.GetString(bytes));
     }
-    private static void WriteAuthorityStoreVersion(Writer writer, AuthorityStoreVersion value, DecodeContext context)
+    private static void WriteAuthorityStoreVersion(ref Writer writer, AuthorityStoreVersion value, DecodeContext context)
     {
-        var bytes = value.Value is null ? Array.Empty<byte>() : Utf8.GetBytes(value.Value);
-        if (bytes.Contains((byte)0)) throw Error("authority-store-version: NUL");
-        if ((ulong)bytes.LongLength > 2147483647UL) throw Capacity("authority-store-version: capacity");
-        if ((ulong)bytes.LongLength < 1UL || (ulong)bytes.LongLength > 4096UL) throw Error("authority-store-version: length");
-        WriteU16(writer, new U16(checked((ushort)bytes.Length)), context);
-        writer.Bytes(bytes);
+        var length = value.Value is null ? 0 : Utf8.GetByteCount(value.Value);
+        if (value.Value?.IndexOf('\0') >= 0) throw Error("authority-store-version: NUL");
+        if ((ulong)length > 2147483647UL) throw Capacity("authority-store-version: capacity");
+        if ((ulong)length < 1UL || (ulong)length > 4096UL) throw Error("authority-store-version: length");
+        WriteU16(ref writer, new U16(checked((ushort)length)), context);
+        writer.Text(value.Value, length);
     }
 
-    internal static AuthorityGenerationFence DecodeAuthorityGenerationFence(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadAuthorityGenerationFence(reader, context); reader.End("authority-generation-fence"); return value; }
-    internal static byte[] EncodeAuthorityGenerationFence(AuthorityGenerationFence value, DecodeContext context) { var writer = new Writer(); WriteAuthorityGenerationFence(writer, value, context); return writer.ToArray(); }
-    private static AuthorityGenerationFence ReadAuthorityGenerationFence(Reader reader, DecodeContext context)
+    internal static AuthorityGenerationFence DecodeAuthorityGenerationFence(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadAuthorityGenerationFence(ref reader, context); reader.End("authority-generation-fence"); return value; }
+    internal static byte[] EncodeAuthorityGenerationFence(AuthorityGenerationFence value, DecodeContext context) { var writer = new Writer(); WriteAuthorityGenerationFence(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteAuthorityGenerationFence(ref writer, value, context); return bytes; }
+    private static AuthorityGenerationFence ReadAuthorityGenerationFence(ref Reader reader, DecodeContext context)
     {
-        var ObjectGeneration = ReadNonzeroU64(reader, context);
-        var OwnerId = ReadText8(reader, context);
-        var AuthorityOwnerGeneration = ReadNonzeroU64(reader, context);
-        var LeaseGeneration = ReadNonzeroU64(reader, context);
-        var StoreVersion = ReadAuthorityStoreVersion(reader, context);
+        var ObjectGeneration = ReadNonzeroU64(ref reader, context);
+        var OwnerId = ReadText8(ref reader, context);
+        var AuthorityOwnerGeneration = ReadNonzeroU64(ref reader, context);
+        var LeaseGeneration = ReadNonzeroU64(ref reader, context);
+        var StoreVersion = ReadAuthorityStoreVersion(ref reader, context);
         var value = new AuthorityGenerationFence(ObjectGeneration, OwnerId, AuthorityOwnerGeneration, LeaseGeneration, StoreVersion);
         return value;
     }
-    private static void WriteAuthorityGenerationFence(Writer writer, AuthorityGenerationFence value, DecodeContext context)
+    private static void WriteAuthorityGenerationFence(ref Writer writer, AuthorityGenerationFence value, DecodeContext context)
     {
-        WriteNonzeroU64(writer, value.ObjectGeneration, context);
-        WriteText8(writer, value.OwnerId, context);
-        WriteNonzeroU64(writer, value.AuthorityOwnerGeneration, context);
-        WriteNonzeroU64(writer, value.LeaseGeneration, context);
-        WriteAuthorityStoreVersion(writer, value.StoreVersion, context);
+        WriteNonzeroU64(ref writer, value.ObjectGeneration, context);
+        WriteText8(ref writer, value.OwnerId, context);
+        WriteNonzeroU64(ref writer, value.AuthorityOwnerGeneration, context);
+        WriteNonzeroU64(ref writer, value.LeaseGeneration, context);
+        WriteAuthorityStoreVersion(ref writer, value.StoreVersion, context);
     }
 
-    internal static RelocationCoordinatorFence DecodeRelocationCoordinatorFence(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadRelocationCoordinatorFence(reader, context); reader.End("relocation-coordinator-fence"); return value; }
-    internal static byte[] EncodeRelocationCoordinatorFence(RelocationCoordinatorFence value, DecodeContext context) { var writer = new Writer(); WriteRelocationCoordinatorFence(writer, value, context); return writer.ToArray(); }
-    private static RelocationCoordinatorFence ReadRelocationCoordinatorFence(Reader reader, DecodeContext context)
+    internal static RelocationCoordinatorFence DecodeRelocationCoordinatorFence(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadRelocationCoordinatorFence(ref reader, context); reader.End("relocation-coordinator-fence"); return value; }
+    internal static byte[] EncodeRelocationCoordinatorFence(RelocationCoordinatorFence value, DecodeContext context) { var writer = new Writer(); WriteRelocationCoordinatorFence(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteRelocationCoordinatorFence(ref writer, value, context); return bytes; }
+    private static RelocationCoordinatorFence ReadRelocationCoordinatorFence(ref Reader reader, DecodeContext context)
     {
-        var CoordinatorOwnerId = ReadText8(reader, context);
-        var CoordinatorLeaseGeneration = ReadNonzeroU64(reader, context);
-        var CoordinatorNodeRid = ReadRid(reader, context);
-        var CoordinatorNodeGeneration = ReadNonzeroU64(reader, context);
-        var ExpectedAuthorityStoreVersion = ReadAuthorityStoreVersion(reader, context);
+        var CoordinatorOwnerId = ReadText8(ref reader, context);
+        var CoordinatorLeaseGeneration = ReadNonzeroU64(ref reader, context);
+        var CoordinatorNodeRid = ReadRid(ref reader, context);
+        var CoordinatorNodeGeneration = ReadNonzeroU64(ref reader, context);
+        var ExpectedAuthorityStoreVersion = ReadAuthorityStoreVersion(ref reader, context);
         var value = new RelocationCoordinatorFence(CoordinatorOwnerId, CoordinatorLeaseGeneration, CoordinatorNodeRid, CoordinatorNodeGeneration, ExpectedAuthorityStoreVersion);
         return value;
     }
-    private static void WriteRelocationCoordinatorFence(Writer writer, RelocationCoordinatorFence value, DecodeContext context)
+    private static void WriteRelocationCoordinatorFence(ref Writer writer, RelocationCoordinatorFence value, DecodeContext context)
     {
-        WriteText8(writer, value.CoordinatorOwnerId, context);
-        WriteNonzeroU64(writer, value.CoordinatorLeaseGeneration, context);
-        WriteRid(writer, value.CoordinatorNodeRid, context);
-        WriteNonzeroU64(writer, value.CoordinatorNodeGeneration, context);
-        WriteAuthorityStoreVersion(writer, value.ExpectedAuthorityStoreVersion, context);
+        WriteText8(ref writer, value.CoordinatorOwnerId, context);
+        WriteNonzeroU64(ref writer, value.CoordinatorLeaseGeneration, context);
+        WriteRid(ref writer, value.CoordinatorNodeRid, context);
+        WriteNonzeroU64(ref writer, value.CoordinatorNodeGeneration, context);
+        WriteAuthorityStoreVersion(ref writer, value.ExpectedAuthorityStoreVersion, context);
     }
 
-    internal static RelocationTargetFence DecodeRelocationTargetFence(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadRelocationTargetFence(reader, context); reader.End("relocation-target-fence"); return value; }
-    internal static byte[] EncodeRelocationTargetFence(RelocationTargetFence value, DecodeContext context) { var writer = new Writer(); WriteRelocationTargetFence(writer, value, context); return writer.ToArray(); }
-    private static RelocationTargetFence ReadRelocationTargetFence(Reader reader, DecodeContext context)
+    internal static RelocationTargetFence DecodeRelocationTargetFence(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadRelocationTargetFence(ref reader, context); reader.End("relocation-target-fence"); return value; }
+    internal static byte[] EncodeRelocationTargetFence(RelocationTargetFence value, DecodeContext context) { var writer = new Writer(); WriteRelocationTargetFence(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteRelocationTargetFence(ref writer, value, context); return bytes; }
+    private static RelocationTargetFence ReadRelocationTargetFence(ref Reader reader, DecodeContext context)
     {
-        var TargetNodeRid = ReadRid(reader, context);
-        var TargetNodeGeneration = ReadNonzeroU64(reader, context);
-        var TargetOwnerId = ReadText8(reader, context);
-        var TargetOwnerLeaseGeneration = ReadNonzeroU64(reader, context);
+        var TargetNodeRid = ReadRid(ref reader, context);
+        var TargetNodeGeneration = ReadNonzeroU64(ref reader, context);
+        var TargetOwnerId = ReadText8(ref reader, context);
+        var TargetOwnerLeaseGeneration = ReadNonzeroU64(ref reader, context);
         var value = new RelocationTargetFence(TargetNodeRid, TargetNodeGeneration, TargetOwnerId, TargetOwnerLeaseGeneration);
         return value;
     }
-    private static void WriteRelocationTargetFence(Writer writer, RelocationTargetFence value, DecodeContext context)
+    private static void WriteRelocationTargetFence(ref Writer writer, RelocationTargetFence value, DecodeContext context)
     {
-        WriteRid(writer, value.TargetNodeRid, context);
-        WriteNonzeroU64(writer, value.TargetNodeGeneration, context);
-        WriteText8(writer, value.TargetOwnerId, context);
-        WriteNonzeroU64(writer, value.TargetOwnerLeaseGeneration, context);
+        WriteRid(ref writer, value.TargetNodeRid, context);
+        WriteNonzeroU64(ref writer, value.TargetNodeGeneration, context);
+        WriteText8(ref writer, value.TargetOwnerId, context);
+        WriteNonzeroU64(ref writer, value.TargetOwnerLeaseGeneration, context);
     }
 
-    internal static RequestSourceFence DecodeRequestSourceFence(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadRequestSourceFence(reader, context); reader.End("request-source-fence"); return value; }
-    internal static byte[] EncodeRequestSourceFence(RequestSourceFence value, DecodeContext context) { var writer = new Writer(); WriteRequestSourceFence(writer, value, context); return writer.ToArray(); }
-    private static RequestSourceFence ReadRequestSourceFence(Reader reader, DecodeContext context)
+    internal static RequestSourceFence DecodeRequestSourceFence(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadRequestSourceFence(ref reader, context); reader.End("request-source-fence"); return value; }
+    internal static byte[] EncodeRequestSourceFence(RequestSourceFence value, DecodeContext context) { var writer = new Writer(); WriteRequestSourceFence(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteRequestSourceFence(ref writer, value, context); return bytes; }
+    private static RequestSourceFence ReadRequestSourceFence(ref Reader reader, DecodeContext context)
     {
-        var SourceOwnerId = ReadText8(reader, context);
-        var SourceOwnerLeaseGeneration = ReadNonzeroU64(reader, context);
-        var SourceNodeRid = ReadRid(reader, context);
-        var SourceNodeGeneration = ReadNonzeroU64(reader, context);
+        var SourceOwnerId = ReadText8(ref reader, context);
+        var SourceOwnerLeaseGeneration = ReadNonzeroU64(ref reader, context);
+        var SourceNodeRid = ReadRid(ref reader, context);
+        var SourceNodeGeneration = ReadNonzeroU64(ref reader, context);
         var value = new RequestSourceFence(SourceOwnerId, SourceOwnerLeaseGeneration, SourceNodeRid, SourceNodeGeneration);
         return value;
     }
-    private static void WriteRequestSourceFence(Writer writer, RequestSourceFence value, DecodeContext context)
+    private static void WriteRequestSourceFence(ref Writer writer, RequestSourceFence value, DecodeContext context)
     {
-        WriteText8(writer, value.SourceOwnerId, context);
-        WriteNonzeroU64(writer, value.SourceOwnerLeaseGeneration, context);
-        WriteRid(writer, value.SourceNodeRid, context);
-        WriteNonzeroU64(writer, value.SourceNodeGeneration, context);
+        WriteText8(ref writer, value.SourceOwnerId, context);
+        WriteNonzeroU64(ref writer, value.SourceOwnerLeaseGeneration, context);
+        WriteRid(ref writer, value.SourceNodeRid, context);
+        WriteNonzeroU64(ref writer, value.SourceNodeGeneration, context);
     }
 
-    internal static RelocationId DecodeRelocationId(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadRelocationId(reader, context); reader.End("relocation-id"); return value; }
-    internal static byte[] EncodeRelocationId(RelocationId value, DecodeContext context) { var writer = new Writer(); WriteRelocationId(writer, value, context); return writer.ToArray(); }
-    private static RelocationId ReadRelocationId(Reader reader, DecodeContext context)
+    internal static RelocationId DecodeRelocationId(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadRelocationId(ref reader, context); reader.End("relocation-id"); return value; }
+    internal static byte[] EncodeRelocationId(RelocationId value, DecodeContext context) { var writer = new Writer(); WriteRelocationId(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteRelocationId(ref writer, value, context); return bytes; }
+    private static RelocationId ReadRelocationId(ref Reader reader, DecodeContext context)
     {
-        var High = ReadU64(reader, context);
-        var Low = ReadU64(reader, context);
+        var High = ReadU64(ref reader, context);
+        var Low = ReadU64(ref reader, context);
         var value = new RelocationId(High, Low);
         if (value.High.Value == 0 && value.Low.Value == 0) throw Error("not-both-zero");
         return value;
     }
-    private static void WriteRelocationId(Writer writer, RelocationId value, DecodeContext context)
+    private static void WriteRelocationId(ref Writer writer, RelocationId value, DecodeContext context)
     {
-        if (value.High.Value == 0 && value.Low.Value == 0) throw Error("not-both-zero");
-        WriteU64(writer, value.High, context);
-        WriteU64(writer, value.Low, context);
+        if (writer.IsSizing)
+        {
+            if (value.High.Value == 0 && value.Low.Value == 0) throw Error("not-both-zero");
+        }
+        WriteU64(ref writer, value.High, context);
+        WriteU64(ref writer, value.Low, context);
     }
 
-    internal static OptionalActorRef DecodeOptionalActorRef(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadOptionalActorRef(reader, context); reader.End("optional-actor-ref"); return value; }
-    internal static byte[] EncodeOptionalActorRef(OptionalActorRef value, DecodeContext context) { var writer = new Writer(); WriteOptionalActorRef(writer, value, context); return writer.ToArray(); }
-    private static OptionalActorRef ReadOptionalActorRef(Reader reader, DecodeContext context)
+    internal static OptionalActorRef DecodeOptionalActorRef(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadOptionalActorRef(ref reader, context); reader.End("optional-actor-ref"); return value; }
+    internal static byte[] EncodeOptionalActorRef(OptionalActorRef value, DecodeContext context) { var writer = new Writer(); WriteOptionalActorRef(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteOptionalActorRef(ref writer, value, context); return bytes; }
+    private static OptionalActorRef ReadOptionalActorRef(ref Reader reader, DecodeContext context)
     {
-        var ActorId = ReadOptionalText8(reader, context);
+        var ActorId = ReadOptionalText8(ref reader, context);
         NonzeroU64? Generation;
         if (ActorId.Value is not null)
         {
-            Generation = ReadNonzeroU64(reader, context);
+            Generation = ReadNonzeroU64(ref reader, context);
         }
         else Generation = null;
         var value = new OptionalActorRef(ActorId, Generation);
         return value;
     }
-    private static void WriteOptionalActorRef(Writer writer, OptionalActorRef value, DecodeContext context)
+    private static void WriteOptionalActorRef(ref Writer writer, OptionalActorRef value, DecodeContext context)
     {
-        WriteOptionalText8(writer, value.ActorId, context);
+        WriteOptionalText8(ref writer, value.ActorId, context);
         if (value.ActorId.Value is not null)
         {
             if (value.Generation is null) throw Error("generation: required");
-            WriteNonzeroU64(writer, value.Generation!, context);
+            WriteNonzeroU64(ref writer, value.Generation.Value, context);
         }
         else if (value.Generation is not null) throw Error("generation: forbidden");
     }
 
-    internal static OptionalBoundSessionTail DecodeOptionalBoundSessionTail(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadOptionalBoundSessionTail(reader, context); reader.End("optional-bound-session-tail"); return value; }
-    internal static byte[] EncodeOptionalBoundSessionTail(OptionalBoundSessionTail value, DecodeContext context) { var writer = new Writer(); WriteOptionalBoundSessionTail(writer, value, context); return writer.ToArray(); }
-    private static OptionalBoundSessionTail ReadOptionalBoundSessionTail(Reader reader, DecodeContext context)
+    internal static OptionalBoundSessionTail DecodeOptionalBoundSessionTail(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadOptionalBoundSessionTail(ref reader, context); reader.End("optional-bound-session-tail"); return value; }
+    internal static byte[] EncodeOptionalBoundSessionTail(OptionalBoundSessionTail value, DecodeContext context) { var writer = new Writer(); WriteOptionalBoundSessionTail(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteOptionalBoundSessionTail(ref writer, value, context); return bytes; }
+    private static OptionalBoundSessionTail ReadOptionalBoundSessionTail(ref Reader reader, DecodeContext context)
     {
-        var SourceSessionRid = ReadRid(reader, context);
-        var SourceBindingGeneration = ReadNonzeroU64(reader, context);
-        var SourceSessionSequence = ReadNonzeroU64(reader, context);
+        var SourceSessionRid = ReadRid(ref reader, context);
+        var SourceBindingGeneration = ReadNonzeroU64(ref reader, context);
+        var SourceSessionSequence = ReadNonzeroU64(ref reader, context);
         var value = new OptionalBoundSessionTail(SourceSessionRid, SourceBindingGeneration, SourceSessionSequence);
         return value;
     }
-    private static void WriteOptionalBoundSessionTail(Writer writer, OptionalBoundSessionTail value, DecodeContext context)
+    private static void WriteOptionalBoundSessionTail(ref Writer writer, OptionalBoundSessionTail value, DecodeContext context)
     {
-        WriteRid(writer, value.SourceSessionRid, context);
-        WriteNonzeroU64(writer, value.SourceBindingGeneration, context);
-        WriteNonzeroU64(writer, value.SourceSessionSequence, context);
+        WriteRid(ref writer, value.SourceSessionRid, context);
+        WriteNonzeroU64(ref writer, value.SourceBindingGeneration, context);
+        WriteNonzeroU64(ref writer, value.SourceSessionSequence, context);
     }
 
-    internal static ChannelEntry DecodeChannelEntry(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadChannelEntry(reader, context); reader.End("channel-entry"); return value; }
-    internal static byte[] EncodeChannelEntry(ChannelEntry value, DecodeContext context) { var writer = new Writer(); WriteChannelEntry(writer, value, context); return writer.ToArray(); }
-    private static ChannelEntry ReadChannelEntry(Reader reader, DecodeContext context)
+    internal static ChannelEntry DecodeChannelEntry(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadChannelEntry(ref reader, context); reader.End("channel-entry"); return value; }
+    internal static byte[] EncodeChannelEntry(ChannelEntry value, DecodeContext context) { var writer = new Writer(); WriteChannelEntry(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteChannelEntry(ref writer, value, context); return bytes; }
+    private static ChannelEntry ReadChannelEntry(ref Reader reader, DecodeContext context)
     {
-        var ChannelName = ReadText8(reader, context);
-        var Weight = ReadU32(reader, context);
+        var ChannelName = ReadText8(ref reader, context);
+        var Weight = ReadU32(ref reader, context);
         if (Weight.Value < 0U) throw Error("weight: minimum");
         if (Weight.Value > 10000U) throw Error("weight: maximum");
         var value = new ChannelEntry(ChannelName, Weight);
         return value;
     }
-    private static void WriteChannelEntry(Writer writer, ChannelEntry value, DecodeContext context)
+    private static void WriteChannelEntry(ref Writer writer, ChannelEntry value, DecodeContext context)
     {
-        WriteText8(writer, value.ChannelName, context);
+        WriteText8(ref writer, value.ChannelName, context);
         if (value.Weight.Value < 0U) throw Error("weight: minimum");
         if (value.Weight.Value > 10000U) throw Error("weight: maximum");
-        WriteU32(writer, value.Weight, context);
+        WriteU32(ref writer, value.Weight, context);
     }
 
-    internal static ChannelVector DecodeChannelVector(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadChannelVector(reader, context); reader.End("channel-vector"); return value; }
-    internal static byte[] EncodeChannelVector(ChannelVector value, DecodeContext context) { var writer = new Writer(); WriteChannelVector(writer, value, context); return writer.ToArray(); }
-    private static ChannelVector ReadChannelVector(Reader reader, DecodeContext context)
+    internal static ChannelVector DecodeChannelVector(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadChannelVector(ref reader, context); reader.End("channel-vector"); return value; }
+    internal static byte[] EncodeChannelVector(ChannelVector value, DecodeContext context) { var writer = new Writer(); WriteChannelVector(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteChannelVector(ref writer, value, context); return bytes; }
+    private static ChannelVector ReadChannelVector(ref Reader reader, DecodeContext context)
     {
-        var count = checked((int)ReadU16(reader, context).Value);
+        var count = checked((int)ReadU16(ref reader, context).Value);
         var items = new ChannelEntry[count];
-        for (var i = 0; i < count; ++i) items[i] = ReadChannelEntry(reader, context);
+        for (var i = 0; i < count; ++i) items[i] = ReadChannelEntry(ref reader, context);
         var value = new ChannelVector(items);
         try { for (var index = 1; index < value.Items.Count; index++) { var previous = KeyChannelVector0(value.Items[index - 1], context); var current = KeyChannelVector0(value.Items[index], context); var compared = CompareBytes(previous, current); if (compared == 0) throw Error("duplicate vector item"); if (compared > 0) throw Error("unsorted vector"); } } catch (OutOfMemoryException) { throw Capacity("channel-vector constraint capacity"); }
         return value;
     }
-    private static void WriteChannelVector(Writer writer, ChannelVector value, DecodeContext context)
+    private static void WriteChannelVector(ref Writer writer, ChannelVector value, DecodeContext context)
     {
-        try { for (var index = 1; index < value.Items.Count; index++) { var previous = KeyChannelVector0(value.Items[index - 1], context); var current = KeyChannelVector0(value.Items[index], context); var compared = CompareBytes(previous, current); if (compared == 0) throw Error("duplicate vector item"); if (compared > 0) throw Error("unsorted vector"); } } catch (OutOfMemoryException) { throw Capacity("channel-vector constraint capacity"); }
-        WriteU16(writer, new U16(checked((ushort)value.Items.Count)), context);
-        foreach (var item in value.Items) WriteChannelEntry(writer, item, context);
+        if (writer.IsSizing)
+        {
+            try { for (var index = 1; index < value.Items.Count; index++) { var previous = KeyChannelVector0(value.Items[index - 1], context); var current = KeyChannelVector0(value.Items[index], context); var compared = CompareBytes(previous, current); if (compared == 0) throw Error("duplicate vector item"); if (compared > 0) throw Error("unsorted vector"); } } catch (OutOfMemoryException) { throw Capacity("channel-vector constraint capacity"); }
+        }
+        WriteU16(ref writer, new U16(checked((ushort)value.Items.Count)), context);
+        for (var index = 0; index < value.Items.Count; index++) { var item = value.Items[index]; WriteChannelEntry(ref writer, item, context); }
     }
-    private static byte[] KeyChannelVector0(ChannelEntry item, DecodeContext context)
+    private static byte[] KeyChannelVector0(ChannelEntry item, DecodeContext context) { var writer = new Writer(); WriteKeyChannelVector0(ref writer, item, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteKeyChannelVector0(ref writer, item, context); return bytes; }
+    private static void WriteKeyChannelVector0(ref Writer writer, ChannelEntry item, DecodeContext context) { writer.Text(item.ChannelName.Value!, Utf8.GetByteCount(item.ChannelName.Value!)); }
+    internal static SortedText8Vector DecodeSortedText8Vector(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadSortedText8Vector(ref reader, context); reader.End("sorted-text8-vector"); return value; }
+    internal static byte[] EncodeSortedText8Vector(SortedText8Vector value, DecodeContext context) { var writer = new Writer(); WriteSortedText8Vector(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteSortedText8Vector(ref writer, value, context); return bytes; }
+    private static SortedText8Vector ReadSortedText8Vector(ref Reader reader, DecodeContext context)
     {
-        var writer = new Writer();
-        writer.Bytes(Utf8.GetBytes(item.ChannelName.Value!));
-        return writer.ToArray();
-    }
-    internal static SortedText8Vector DecodeSortedText8Vector(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadSortedText8Vector(reader, context); reader.End("sorted-text8-vector"); return value; }
-    internal static byte[] EncodeSortedText8Vector(SortedText8Vector value, DecodeContext context) { var writer = new Writer(); WriteSortedText8Vector(writer, value, context); return writer.ToArray(); }
-    private static SortedText8Vector ReadSortedText8Vector(Reader reader, DecodeContext context)
-    {
-        var count = checked((int)ReadU16(reader, context).Value);
+        var count = checked((int)ReadU16(ref reader, context).Value);
         if (count > 1024) throw Error("sorted-text8-vector: count");
         var items = new Text8[count];
-        for (var i = 0; i < count; ++i) items[i] = ReadText8(reader, context);
+        for (var i = 0; i < count; ++i) items[i] = ReadText8(ref reader, context);
         var value = new SortedText8Vector(items);
         try { for (var index = 1; index < value.Items.Count; index++) { var previous = KeySortedText8Vector0(value.Items[index - 1], context); var current = KeySortedText8Vector0(value.Items[index], context); var compared = CompareBytes(previous, current); if (compared == 0) throw Error("duplicate vector item"); if (compared > 0) throw Error("unsorted vector"); } } catch (OutOfMemoryException) { throw Capacity("sorted-text8-vector constraint capacity"); }
         return value;
     }
-    private static void WriteSortedText8Vector(Writer writer, SortedText8Vector value, DecodeContext context)
+    private static void WriteSortedText8Vector(ref Writer writer, SortedText8Vector value, DecodeContext context)
     {
-        try { for (var index = 1; index < value.Items.Count; index++) { var previous = KeySortedText8Vector0(value.Items[index - 1], context); var current = KeySortedText8Vector0(value.Items[index], context); var compared = CompareBytes(previous, current); if (compared == 0) throw Error("duplicate vector item"); if (compared > 0) throw Error("unsorted vector"); } } catch (OutOfMemoryException) { throw Capacity("sorted-text8-vector constraint capacity"); }
+        if (writer.IsSizing)
+        {
+            try { for (var index = 1; index < value.Items.Count; index++) { var previous = KeySortedText8Vector0(value.Items[index - 1], context); var current = KeySortedText8Vector0(value.Items[index], context); var compared = CompareBytes(previous, current); if (compared == 0) throw Error("duplicate vector item"); if (compared > 0) throw Error("unsorted vector"); } } catch (OutOfMemoryException) { throw Capacity("sorted-text8-vector constraint capacity"); }
+        }
         if (value.Items.Count > 1024) throw Error("sorted-text8-vector: count");
-        WriteU16(writer, new U16(checked((ushort)value.Items.Count)), context);
-        foreach (var item in value.Items) WriteText8(writer, item, context);
+        WriteU16(ref writer, new U16(checked((ushort)value.Items.Count)), context);
+        for (var index = 0; index < value.Items.Count; index++) { var item = value.Items[index]; WriteText8(ref writer, item, context); }
     }
-    private static byte[] KeySortedText8Vector0(Text8 item, DecodeContext context)
+    private static byte[] KeySortedText8Vector0(Text8 item, DecodeContext context) { var writer = new Writer(); WriteKeySortedText8Vector0(ref writer, item, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteKeySortedText8Vector0(ref writer, item, context); return bytes; }
+    private static void WriteKeySortedText8Vector0(ref Writer writer, Text8 item, DecodeContext context) { writer.Text(item.Value!, Utf8.GetByteCount(item.Value!)); }
+    internal static StatefulCapabilityEntry DecodeStatefulCapabilityEntry(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadStatefulCapabilityEntry(ref reader, context); reader.End("stateful-capability-entry"); return value; }
+    internal static byte[] EncodeStatefulCapabilityEntry(StatefulCapabilityEntry value, DecodeContext context) { var writer = new Writer(); WriteStatefulCapabilityEntry(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteStatefulCapabilityEntry(ref writer, value, context); return bytes; }
+    private static StatefulCapabilityEntry ReadStatefulCapabilityEntry(ref Reader reader, DecodeContext context)
     {
-        var writer = new Writer();
-        writer.Bytes(Utf8.GetBytes(item.Value!));
-        return writer.ToArray();
-    }
-    internal static StatefulCapabilityEntry DecodeStatefulCapabilityEntry(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadStatefulCapabilityEntry(reader, context); reader.End("stateful-capability-entry"); return value; }
-    internal static byte[] EncodeStatefulCapabilityEntry(StatefulCapabilityEntry value, DecodeContext context) { var writer = new Writer(); WriteStatefulCapabilityEntry(writer, value, context); return writer.ToArray(); }
-    private static StatefulCapabilityEntry ReadStatefulCapabilityEntry(Reader reader, DecodeContext context)
-    {
-        var ObjectKind = ReadStatefulObjectKind(reader, context);
-        var Type = ReadText8(reader, context);
-        var RelocationPolicy = ReadRelocationPolicyKind(reader, context);
-        var ActiveCapacityLimit = ReadObjectCapacityLimit(reader, context);
-        var PendingCapacityLimit = ReadObjectPendingCapacityLimit(reader, context);
-        var HasSnapshotAdapter = ReadBool8(reader, context);
-        var Available = ReadOrdinalOrZero(reader, context);
+        var ObjectKind = ReadStatefulObjectKind(ref reader, context);
+        var Type = ReadText8(ref reader, context);
+        var RelocationPolicy = ReadRelocationPolicyKind(ref reader, context);
+        var ActiveCapacityLimit = ReadObjectCapacityLimit(ref reader, context);
+        var PendingCapacityLimit = ReadObjectPendingCapacityLimit(ref reader, context);
+        var HasSnapshotAdapter = ReadBool8(ref reader, context);
+        var Available = ReadOrdinalOrZero(ref reader, context);
         var value = new StatefulCapabilityEntry(ObjectKind, Type, RelocationPolicy, ActiveCapacityLimit, PendingCapacityLimit, HasSnapshotAdapter, Available);
         return value;
     }
-    private static void WriteStatefulCapabilityEntry(Writer writer, StatefulCapabilityEntry value, DecodeContext context)
+    private static void WriteStatefulCapabilityEntry(ref Writer writer, StatefulCapabilityEntry value, DecodeContext context)
     {
-        WriteStatefulObjectKind(writer, value.ObjectKind, context);
-        WriteText8(writer, value.Type, context);
-        WriteRelocationPolicyKind(writer, value.RelocationPolicy, context);
-        WriteObjectCapacityLimit(writer, value.ActiveCapacityLimit, context);
-        WriteObjectPendingCapacityLimit(writer, value.PendingCapacityLimit, context);
-        WriteBool8(writer, value.HasSnapshotAdapter, context);
-        WriteOrdinalOrZero(writer, value.Available, context);
+        WriteStatefulObjectKind(ref writer, value.ObjectKind, context);
+        WriteText8(ref writer, value.Type, context);
+        WriteRelocationPolicyKind(ref writer, value.RelocationPolicy, context);
+        WriteObjectCapacityLimit(ref writer, value.ActiveCapacityLimit, context);
+        WriteObjectPendingCapacityLimit(ref writer, value.PendingCapacityLimit, context);
+        WriteBool8(ref writer, value.HasSnapshotAdapter, context);
+        WriteOrdinalOrZero(ref writer, value.Available, context);
     }
 
-    internal static StatefulCapabilityVector DecodeStatefulCapabilityVector(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadStatefulCapabilityVector(reader, context); reader.End("stateful-capability-vector"); return value; }
-    internal static byte[] EncodeStatefulCapabilityVector(StatefulCapabilityVector value, DecodeContext context) { var writer = new Writer(); WriteStatefulCapabilityVector(writer, value, context); return writer.ToArray(); }
-    private static StatefulCapabilityVector ReadStatefulCapabilityVector(Reader reader, DecodeContext context)
+    internal static StatefulCapabilityVector DecodeStatefulCapabilityVector(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadStatefulCapabilityVector(ref reader, context); reader.End("stateful-capability-vector"); return value; }
+    internal static byte[] EncodeStatefulCapabilityVector(StatefulCapabilityVector value, DecodeContext context) { var writer = new Writer(); WriteStatefulCapabilityVector(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteStatefulCapabilityVector(ref writer, value, context); return bytes; }
+    private static StatefulCapabilityVector ReadStatefulCapabilityVector(ref Reader reader, DecodeContext context)
     {
-        var count = checked((int)ReadU16(reader, context).Value);
+        var count = checked((int)ReadU16(ref reader, context).Value);
         if (count > 1024) throw Error("stateful-capability-vector: count");
         var items = new StatefulCapabilityEntry[count];
-        for (var i = 0; i < count; ++i) items[i] = ReadStatefulCapabilityEntry(reader, context);
+        for (var i = 0; i < count; ++i) items[i] = ReadStatefulCapabilityEntry(ref reader, context);
         var value = new StatefulCapabilityVector(items);
         try { for (var index = 1; index < value.Items.Count; index++) { var previous = KeyStatefulCapabilityVector0(value.Items[index - 1], context); var current = KeyStatefulCapabilityVector0(value.Items[index], context); var compared = CompareBytes(previous, current); if (compared == 0) throw Error("duplicate vector item"); if (compared > 0) throw Error("unsorted vector"); } } catch (OutOfMemoryException) { throw Capacity("stateful-capability-vector constraint capacity"); }
         return value;
     }
-    private static void WriteStatefulCapabilityVector(Writer writer, StatefulCapabilityVector value, DecodeContext context)
+    private static void WriteStatefulCapabilityVector(ref Writer writer, StatefulCapabilityVector value, DecodeContext context)
     {
-        try { for (var index = 1; index < value.Items.Count; index++) { var previous = KeyStatefulCapabilityVector0(value.Items[index - 1], context); var current = KeyStatefulCapabilityVector0(value.Items[index], context); var compared = CompareBytes(previous, current); if (compared == 0) throw Error("duplicate vector item"); if (compared > 0) throw Error("unsorted vector"); } } catch (OutOfMemoryException) { throw Capacity("stateful-capability-vector constraint capacity"); }
+        if (writer.IsSizing)
+        {
+            try { for (var index = 1; index < value.Items.Count; index++) { var previous = KeyStatefulCapabilityVector0(value.Items[index - 1], context); var current = KeyStatefulCapabilityVector0(value.Items[index], context); var compared = CompareBytes(previous, current); if (compared == 0) throw Error("duplicate vector item"); if (compared > 0) throw Error("unsorted vector"); } } catch (OutOfMemoryException) { throw Capacity("stateful-capability-vector constraint capacity"); }
+        }
         if (value.Items.Count > 1024) throw Error("stateful-capability-vector: count");
-        WriteU16(writer, new U16(checked((ushort)value.Items.Count)), context);
-        foreach (var item in value.Items) WriteStatefulCapabilityEntry(writer, item, context);
+        WriteU16(ref writer, new U16(checked((ushort)value.Items.Count)), context);
+        for (var index = 0; index < value.Items.Count; index++) { var item = value.Items[index]; WriteStatefulCapabilityEntry(ref writer, item, context); }
     }
-    private static byte[] KeyStatefulCapabilityVector0(StatefulCapabilityEntry item, DecodeContext context)
-    {
-        var writer = new Writer();
-        WriteStatefulObjectKind(writer, item.ObjectKind, context);
-        writer.Bytes(Utf8.GetBytes(item.Type.Value!));
-        return writer.ToArray();
-    }
-    internal static DescriptorExtension DecodeDescriptorExtension(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadDescriptorExtension(reader, context); reader.End("descriptor-extension"); return value; }
-    internal static byte[] EncodeDescriptorExtension(DescriptorExtension value, DecodeContext context) { var writer = new Writer(); WriteDescriptorExtension(writer, value, context); return writer.ToArray(); }
-    private static DescriptorExtension ReadDescriptorExtension(Reader reader, DecodeContext context)
+    private static byte[] KeyStatefulCapabilityVector0(StatefulCapabilityEntry item, DecodeContext context) { var writer = new Writer(); WriteKeyStatefulCapabilityVector0(ref writer, item, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteKeyStatefulCapabilityVector0(ref writer, item, context); return bytes; }
+    private static void WriteKeyStatefulCapabilityVector0(ref Writer writer, StatefulCapabilityEntry item, DecodeContext context) { WriteStatefulObjectKind(ref writer, item.ObjectKind, context);
+        writer.Text(item.Type.Value!, Utf8.GetByteCount(item.Type.Value!)); }
+    internal static DescriptorExtension DecodeDescriptorExtension(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadDescriptorExtension(ref reader, context); reader.End("descriptor-extension"); return value; }
+    internal static byte[] EncodeDescriptorExtension(DescriptorExtension value, DecodeContext context) { var writer = new Writer(); WriteDescriptorExtension(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteDescriptorExtension(ref writer, value, context); return bytes; }
+    private static DescriptorExtension ReadDescriptorExtension(ref Reader reader, DecodeContext context)
     {
         var encodedStart = reader.Remaining;
-        var body = reader.Slice(checked((int)ReadU32(reader, context).Value));
+        var body = reader.Slice(checked((int)ReadU32(ref reader, context).Value));
         RuntimeState? RuntimeState = null;
         ApplicationVersion? ApplicationVersion = null;
         SortedText8Vector? SpotTypes = null;
@@ -3602,61 +3734,61 @@ internal static class ServiceWireCodec
         var previous = -1;
         while (body.Remaining > 0)
         {
-            var fieldId = checked((int)ReadU8(body, context).Value);
+            var fieldId = checked((int)ReadU8(ref body, context).Value);
             if (fieldId <= previous) throw Error("descriptor-extension: TLV order");
             previous = fieldId;
-            var item = body.Slice(checked((int)ReadU32(body, context).Value));
+            var item = body.Slice(checked((int)ReadU32(ref body, context).Value));
             switch (fieldId)
             {
             case 1:
-                RuntimeState = ReadRuntimeState(item, context);
+                RuntimeState = ReadRuntimeState(ref item, context);
                 item.End("runtimeState");
                 break;
             case 2:
-                ApplicationVersion = ReadApplicationVersion(item, context);
+                ApplicationVersion = ReadApplicationVersion(ref item, context);
                 item.End("applicationVersion");
                 break;
             case 3:
-                SpotTypes = ReadSortedText8Vector(item, context);
+                SpotTypes = ReadSortedText8Vector(ref item, context);
                 item.End("spotTypes");
                 break;
             case 4:
-                StatefulCapabilities = ReadStatefulCapabilityVector(item, context);
+                StatefulCapabilities = ReadStatefulCapabilityVector(ref item, context);
                 item.End("statefulCapabilities");
                 break;
             case 5:
-                MaintenanceWave = ReadOptionalText8(item, context);
+                MaintenanceWave = ReadOptionalText8(ref item, context);
                 item.End("maintenanceWave");
                 break;
             case 6:
-                ProtocolCapabilities = ReadSortedText8Vector(item, context);
-                if (!ProtocolCapabilities!.Items.Any(item => item.Value == "framework-service-v13")) throw Error("required capability");
+                ProtocolCapabilities = ReadSortedText8Vector(ref item, context);
+                if (!ProtocolCapabilities.Value.Items.Any(item => item.Value == "framework-service-v13")) throw Error("required capability");
                 item.End("protocolCapabilities");
                 break;
             case 7:
-                ObjectRole = ReadObjectRole(item, context);
+                ObjectRole = ReadObjectRole(ref item, context);
                 item.End("objectRole");
                 break;
             case 8:
-                PlacementWeight = ReadU32(item, context);
-                if (PlacementWeight!.Value < 0U) throw Error("placementWeight: minimum");
-                if (PlacementWeight!.Value > 10000U) throw Error("placementWeight: maximum");
+                PlacementWeight = ReadU32(ref item, context);
+                if (PlacementWeight.Value.Value < 0U) throw Error("placementWeight: minimum");
+                if (PlacementWeight.Value.Value > 10000U) throw Error("placementWeight: maximum");
                 item.End("placementWeight");
                 break;
             case 9:
-                ActiveCapacityLimit = ReadObjectCapacityLimit(item, context);
+                ActiveCapacityLimit = ReadObjectCapacityLimit(ref item, context);
                 item.End("activeCapacityLimit");
                 break;
             case 10:
-                PendingCapacityLimit = ReadObjectPendingCapacityLimit(item, context);
+                PendingCapacityLimit = ReadObjectPendingCapacityLimit(ref item, context);
                 item.End("pendingCapacityLimit");
                 break;
             case 11:
-                ActiveCapacityUsed = ReadU32(item, context);
+                ActiveCapacityUsed = ReadU32(ref item, context);
                 item.End("activeCapacityUsed");
                 break;
             case 12:
-                PendingCapacityUsed = ReadU32(item, context);
+                PendingCapacityUsed = ReadU32(ref item, context);
                 item.End("pendingCapacityUsed");
                 break;
             default:
@@ -3676,161 +3808,187 @@ internal static class ServiceWireCodec
         var value = new DescriptorExtension(RuntimeState!, ApplicationVersion!, SpotTypes, StatefulCapabilities, MaintenanceWave, ProtocolCapabilities!, ObjectRole!, PlacementWeight!, ActiveCapacityLimit!, PendingCapacityLimit!, ActiveCapacityUsed!, PendingCapacityUsed!);
         if ((ulong)(encodedStart - reader.Remaining) > 1048576UL) throw Error("descriptor-extension: encoded limit"); return value;
     }
-    private static void WriteDescriptorExtension(Writer writer, DescriptorExtension value, DecodeContext context)
+    private static void WriteDescriptorExtension(ref Writer writer, DescriptorExtension value, DecodeContext context)
     {
         var encodedStart = writer.Length;
-        var body = new Writer();
+        var bodyOffset = writer.Length;
+        writer.Reserve(4);
+        var bodyStart = writer.Length;
         if (value.RuntimeState is null) throw Error("runtimeState: required");
         if (value.RuntimeState is not null)
         {
-            var item = new Writer();
-            WriteRuntimeState(item, value.RuntimeState.Value, context);
-            WriteU8(body, new U8(1), context);
-            WriteU32(body, new U32(checked((uint)item.Length)), context);
-            body.Bytes(item.ToArray());
+            WriteU8(ref writer, new U8(1), context);
+            var itemOffset = writer.Length;
+            writer.Reserve(4);
+            var itemStart = writer.Length;
+            WriteRuntimeState(ref writer, value.RuntimeState.Value, context);
+            var itemWriter = writer.At(itemOffset);
+            WriteU32(ref itemWriter, new U32(checked((uint)(writer.Length - itemStart))), context);
         }
         if (value.ApplicationVersion is null) throw Error("applicationVersion: required");
         if (value.ApplicationVersion is not null)
         {
-            var item = new Writer();
-            WriteApplicationVersion(item, value.ApplicationVersion!, context);
-            WriteU8(body, new U8(2), context);
-            WriteU32(body, new U32(checked((uint)item.Length)), context);
-            body.Bytes(item.ToArray());
+            WriteU8(ref writer, new U8(2), context);
+            var itemOffset = writer.Length;
+            writer.Reserve(4);
+            var itemStart = writer.Length;
+            WriteApplicationVersion(ref writer, value.ApplicationVersion.Value, context);
+            var itemWriter = writer.At(itemOffset);
+            WriteU32(ref itemWriter, new U32(checked((uint)(writer.Length - itemStart))), context);
         }
         if (value.SpotTypes is not null)
         {
-            var item = new Writer();
-            WriteSortedText8Vector(item, value.SpotTypes!, context);
-            WriteU8(body, new U8(3), context);
-            WriteU32(body, new U32(checked((uint)item.Length)), context);
-            body.Bytes(item.ToArray());
+            WriteU8(ref writer, new U8(3), context);
+            var itemOffset = writer.Length;
+            writer.Reserve(4);
+            var itemStart = writer.Length;
+            WriteSortedText8Vector(ref writer, value.SpotTypes.Value, context);
+            var itemWriter = writer.At(itemOffset);
+            WriteU32(ref itemWriter, new U32(checked((uint)(writer.Length - itemStart))), context);
         }
         if (value.StatefulCapabilities is not null)
         {
-            var item = new Writer();
-            WriteStatefulCapabilityVector(item, value.StatefulCapabilities!, context);
-            WriteU8(body, new U8(4), context);
-            WriteU32(body, new U32(checked((uint)item.Length)), context);
-            body.Bytes(item.ToArray());
+            WriteU8(ref writer, new U8(4), context);
+            var itemOffset = writer.Length;
+            writer.Reserve(4);
+            var itemStart = writer.Length;
+            WriteStatefulCapabilityVector(ref writer, value.StatefulCapabilities.Value, context);
+            var itemWriter = writer.At(itemOffset);
+            WriteU32(ref itemWriter, new U32(checked((uint)(writer.Length - itemStart))), context);
         }
         if (value.MaintenanceWave is not null)
         {
-            var item = new Writer();
-            WriteOptionalText8(item, value.MaintenanceWave!, context);
-            WriteU8(body, new U8(5), context);
-            WriteU32(body, new U32(checked((uint)item.Length)), context);
-            body.Bytes(item.ToArray());
+            WriteU8(ref writer, new U8(5), context);
+            var itemOffset = writer.Length;
+            writer.Reserve(4);
+            var itemStart = writer.Length;
+            WriteOptionalText8(ref writer, value.MaintenanceWave.Value, context);
+            var itemWriter = writer.At(itemOffset);
+            WriteU32(ref itemWriter, new U32(checked((uint)(writer.Length - itemStart))), context);
         }
         if (value.ProtocolCapabilities is null) throw Error("protocolCapabilities: required");
         if (value.ProtocolCapabilities is not null)
         {
-            if (!value.ProtocolCapabilities!.Items.Any(item => item.Value == "framework-service-v13")) throw Error("required capability");
-            var item = new Writer();
-            WriteSortedText8Vector(item, value.ProtocolCapabilities!, context);
-            WriteU8(body, new U8(6), context);
-            WriteU32(body, new U32(checked((uint)item.Length)), context);
-            body.Bytes(item.ToArray());
+            if (!value.ProtocolCapabilities.Value.Items.Any(item => item.Value == "framework-service-v13")) throw Error("required capability");
+            WriteU8(ref writer, new U8(6), context);
+            var itemOffset = writer.Length;
+            writer.Reserve(4);
+            var itemStart = writer.Length;
+            WriteSortedText8Vector(ref writer, value.ProtocolCapabilities.Value, context);
+            var itemWriter = writer.At(itemOffset);
+            WriteU32(ref itemWriter, new U32(checked((uint)(writer.Length - itemStart))), context);
         }
         if (value.ObjectRole is null) throw Error("objectRole: required");
         if (value.ObjectRole is not null)
         {
-            var item = new Writer();
-            WriteObjectRole(item, value.ObjectRole.Value, context);
-            WriteU8(body, new U8(7), context);
-            WriteU32(body, new U32(checked((uint)item.Length)), context);
-            body.Bytes(item.ToArray());
+            WriteU8(ref writer, new U8(7), context);
+            var itemOffset = writer.Length;
+            writer.Reserve(4);
+            var itemStart = writer.Length;
+            WriteObjectRole(ref writer, value.ObjectRole.Value, context);
+            var itemWriter = writer.At(itemOffset);
+            WriteU32(ref itemWriter, new U32(checked((uint)(writer.Length - itemStart))), context);
         }
         if (value.PlacementWeight is null) throw Error("placementWeight: required");
         if (value.PlacementWeight is not null)
         {
-            if (value.PlacementWeight!.Value < 0U) throw Error("placementWeight: minimum");
-            if (value.PlacementWeight!.Value > 10000U) throw Error("placementWeight: maximum");
-            var item = new Writer();
-            WriteU32(item, value.PlacementWeight!, context);
-            WriteU8(body, new U8(8), context);
-            WriteU32(body, new U32(checked((uint)item.Length)), context);
-            body.Bytes(item.ToArray());
+            if (value.PlacementWeight.Value.Value < 0U) throw Error("placementWeight: minimum");
+            if (value.PlacementWeight.Value.Value > 10000U) throw Error("placementWeight: maximum");
+            WriteU8(ref writer, new U8(8), context);
+            var itemOffset = writer.Length;
+            writer.Reserve(4);
+            var itemStart = writer.Length;
+            WriteU32(ref writer, value.PlacementWeight.Value, context);
+            var itemWriter = writer.At(itemOffset);
+            WriteU32(ref itemWriter, new U32(checked((uint)(writer.Length - itemStart))), context);
         }
         if (value.ActiveCapacityLimit is null) throw Error("activeCapacityLimit: required");
         if (value.ActiveCapacityLimit is not null)
         {
-            var item = new Writer();
-            WriteObjectCapacityLimit(item, value.ActiveCapacityLimit!, context);
-            WriteU8(body, new U8(9), context);
-            WriteU32(body, new U32(checked((uint)item.Length)), context);
-            body.Bytes(item.ToArray());
+            WriteU8(ref writer, new U8(9), context);
+            var itemOffset = writer.Length;
+            writer.Reserve(4);
+            var itemStart = writer.Length;
+            WriteObjectCapacityLimit(ref writer, value.ActiveCapacityLimit.Value, context);
+            var itemWriter = writer.At(itemOffset);
+            WriteU32(ref itemWriter, new U32(checked((uint)(writer.Length - itemStart))), context);
         }
         if (value.PendingCapacityLimit is null) throw Error("pendingCapacityLimit: required");
         if (value.PendingCapacityLimit is not null)
         {
-            var item = new Writer();
-            WriteObjectPendingCapacityLimit(item, value.PendingCapacityLimit!, context);
-            WriteU8(body, new U8(10), context);
-            WriteU32(body, new U32(checked((uint)item.Length)), context);
-            body.Bytes(item.ToArray());
+            WriteU8(ref writer, new U8(10), context);
+            var itemOffset = writer.Length;
+            writer.Reserve(4);
+            var itemStart = writer.Length;
+            WriteObjectPendingCapacityLimit(ref writer, value.PendingCapacityLimit.Value, context);
+            var itemWriter = writer.At(itemOffset);
+            WriteU32(ref itemWriter, new U32(checked((uint)(writer.Length - itemStart))), context);
         }
         if (value.ActiveCapacityUsed is null) throw Error("activeCapacityUsed: required");
         if (value.ActiveCapacityUsed is not null)
         {
-            var item = new Writer();
-            WriteU32(item, value.ActiveCapacityUsed!, context);
-            WriteU8(body, new U8(11), context);
-            WriteU32(body, new U32(checked((uint)item.Length)), context);
-            body.Bytes(item.ToArray());
+            WriteU8(ref writer, new U8(11), context);
+            var itemOffset = writer.Length;
+            writer.Reserve(4);
+            var itemStart = writer.Length;
+            WriteU32(ref writer, value.ActiveCapacityUsed.Value, context);
+            var itemWriter = writer.At(itemOffset);
+            WriteU32(ref itemWriter, new U32(checked((uint)(writer.Length - itemStart))), context);
         }
         if (value.PendingCapacityUsed is null) throw Error("pendingCapacityUsed: required");
         if (value.PendingCapacityUsed is not null)
         {
-            var item = new Writer();
-            WriteU32(item, value.PendingCapacityUsed!, context);
-            WriteU8(body, new U8(12), context);
-            WriteU32(body, new U32(checked((uint)item.Length)), context);
-            body.Bytes(item.ToArray());
+            WriteU8(ref writer, new U8(12), context);
+            var itemOffset = writer.Length;
+            writer.Reserve(4);
+            var itemStart = writer.Length;
+            WriteU32(ref writer, value.PendingCapacityUsed.Value, context);
+            var itemWriter = writer.At(itemOffset);
+            WriteU32(ref itemWriter, new U32(checked((uint)(writer.Length - itemStart))), context);
         }
-        WriteU32(writer, new U32(checked((uint)body.Length)), context);
-        writer.Bytes(body.ToArray());
+        var bodyWriter = writer.At(bodyOffset);
+        WriteU32(ref bodyWriter, new U32(checked((uint)(writer.Length - bodyStart))), context);
         if ((ulong)(writer.Length - encodedStart) > 1048576UL) throw Error("descriptor-extension: encoded limit");
     }
 
-    internal static RouteMeshAdmission DecodeRouteMeshAdmission(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadRouteMeshAdmission(reader, context); reader.End("route-mesh-admission"); return value; }
-    internal static byte[] EncodeRouteMeshAdmission(RouteMeshAdmission value, DecodeContext context) { var writer = new Writer(); WriteRouteMeshAdmission(writer, value, context); return writer.ToArray(); }
-    private static RouteMeshAdmission ReadRouteMeshAdmission(Reader reader, DecodeContext context)
+    internal static RouteMeshAdmission DecodeRouteMeshAdmission(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadRouteMeshAdmission(ref reader, context); reader.End("route-mesh-admission"); return value; }
+    internal static byte[] EncodeRouteMeshAdmission(RouteMeshAdmission value, DecodeContext context) { var writer = new Writer(); WriteRouteMeshAdmission(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteRouteMeshAdmission(ref writer, value, context); return bytes; }
+    private static RouteMeshAdmission ReadRouteMeshAdmission(ref Reader reader, DecodeContext context)
     {
-        var MeshName = ReadText8(reader, context);
-        var SecurityIdentity = ReadText8(reader, context);
-        var LifecycleGeneration = ReadNonzeroU64(reader, context);
-        var DescriptorRevision = ReadNonzeroU64(reader, context);
-        var AdvertisedEndpoint = ReadEndpoint(reader, context);
-        var Channels = ReadChannelVector(reader, context);
-        var Extension = ReadDescriptorExtension(reader, context);
+        var MeshName = ReadText8(ref reader, context);
+        var SecurityIdentity = ReadText8(ref reader, context);
+        var LifecycleGeneration = ReadNonzeroU64(ref reader, context);
+        var DescriptorRevision = ReadNonzeroU64(ref reader, context);
+        var AdvertisedEndpoint = ReadEndpoint(ref reader, context);
+        var Channels = ReadChannelVector(ref reader, context);
+        var Extension = ReadDescriptorExtension(ref reader, context);
         var value = new RouteMeshAdmission(MeshName, SecurityIdentity, LifecycleGeneration, DescriptorRevision, AdvertisedEndpoint, Channels, Extension);
         return value;
     }
-    private static void WriteRouteMeshAdmission(Writer writer, RouteMeshAdmission value, DecodeContext context)
+    private static void WriteRouteMeshAdmission(ref Writer writer, RouteMeshAdmission value, DecodeContext context)
     {
-        WriteText8(writer, value.MeshName, context);
-        WriteText8(writer, value.SecurityIdentity, context);
-        WriteNonzeroU64(writer, value.LifecycleGeneration, context);
-        WriteNonzeroU64(writer, value.DescriptorRevision, context);
-        WriteEndpoint(writer, value.AdvertisedEndpoint, context);
-        WriteChannelVector(writer, value.Channels, context);
-        WriteDescriptorExtension(writer, value.Extension, context);
+        WriteText8(ref writer, value.MeshName, context);
+        WriteText8(ref writer, value.SecurityIdentity, context);
+        WriteNonzeroU64(ref writer, value.LifecycleGeneration, context);
+        WriteNonzeroU64(ref writer, value.DescriptorRevision, context);
+        WriteEndpoint(ref writer, value.AdvertisedEndpoint, context);
+        WriteChannelVector(ref writer, value.Channels, context);
+        WriteDescriptorExtension(ref writer, value.Extension, context);
     }
 
-    internal static ClientServerAdmission DecodeClientServerAdmission(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadClientServerAdmission(reader, context); reader.End("client-server-admission"); return value; }
-    internal static byte[] EncodeClientServerAdmission(ClientServerAdmission value, DecodeContext context) { var writer = new Writer(); WriteClientServerAdmission(writer, value, context); return writer.ToArray(); }
-    private static ClientServerAdmission ReadClientServerAdmission(Reader reader, DecodeContext context)
+    internal static ClientServerAdmission DecodeClientServerAdmission(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadClientServerAdmission(ref reader, context); reader.End("client-server-admission"); return value; }
+    internal static byte[] EncodeClientServerAdmission(ClientServerAdmission value, DecodeContext context) { var writer = new Writer(); WriteClientServerAdmission(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteClientServerAdmission(ref writer, value, context); return bytes; }
+    private static ClientServerAdmission ReadClientServerAdmission(ref Reader reader, DecodeContext context)
     {
-        var Role = ReadClientServerRole(reader, context);
-        var selected = reader.Slice(checked((int)ReadU16(reader, context).Value));
+        var Role = ReadClientServerRole(ref reader, context);
+        var selected = reader.Slice(checked((int)ReadU16(ref reader, context).Value));
         if (Role == ClientServerRole.Client)
         {
-            var ChannelName = ReadText8(selected, context);
-            var Direction = ReadClientServerDirection(selected, context);
+            var ChannelName = ReadText8(ref selected, context);
+            var Direction = ReadClientServerDirection(ref selected, context);
             if (Direction != ClientServerDirection.ClientToServer) throw Error("direction: constant");
-            var SecurityIdentity = ReadText8(selected, context);
-            var NormalizedEffectiveMaxMessageBytes = ReadNonzeroU32(selected, context);
+            var SecurityIdentity = ReadText8(ref selected, context);
+            var NormalizedEffectiveMaxMessageBytes = ReadNonzeroU32(ref selected, context);
             selected.End("client-server-admission");
             var caseValue = new ClientServerAdmissionCase0(Role, ChannelName, Direction, SecurityIdentity, NormalizedEffectiveMaxMessageBytes);
             ClientServerAdmission value = caseValue;
@@ -3838,19 +3996,19 @@ internal static class ServiceWireCodec
         }
         else if (Role == ClientServerRole.Server)
         {
-            var ChannelName = ReadText8(selected, context);
-            var Direction = ReadClientServerDirection(selected, context);
+            var ChannelName = ReadText8(ref selected, context);
+            var Direction = ReadClientServerDirection(ref selected, context);
             if (Direction != ClientServerDirection.ClientToServer) throw Error("direction: constant");
-            var ServerRid = ReadRid(selected, context);
-            var LifecycleGeneration = ReadNonzeroU64(selected, context);
-            var DescriptorRevision = ReadNonzeroU64(selected, context);
-            var Weight = ReadU32(selected, context);
+            var ServerRid = ReadRid(ref selected, context);
+            var LifecycleGeneration = ReadNonzeroU64(ref selected, context);
+            var DescriptorRevision = ReadNonzeroU64(ref selected, context);
+            var Weight = ReadU32(ref selected, context);
             if (Weight.Value < 0U) throw Error("weight: minimum");
             if (Weight.Value > 10000U) throw Error("weight: maximum");
-            var RuntimeState = ReadRuntimeState(selected, context);
-            var SecurityIdentity = ReadText8(selected, context);
-            var NormalizedEffectiveMaxMessageBytes = ReadNonzeroU32(selected, context);
-            var AdvertisedEndpoint = ReadEndpoint(selected, context);
+            var RuntimeState = ReadRuntimeState(ref selected, context);
+            var SecurityIdentity = ReadText8(ref selected, context);
+            var NormalizedEffectiveMaxMessageBytes = ReadNonzeroU32(ref selected, context);
+            var AdvertisedEndpoint = ReadEndpoint(ref selected, context);
             selected.End("client-server-admission");
             var caseValue = new ClientServerAdmissionCase1(Role, ChannelName, Direction, ServerRid, LifecycleGeneration, DescriptorRevision, Weight, RuntimeState, SecurityIdentity, NormalizedEffectiveMaxMessageBytes, AdvertisedEndpoint);
             ClientServerAdmission value = caseValue;
@@ -3858,60 +4016,64 @@ internal static class ServiceWireCodec
         }
         throw Error("client-server-admission: discriminator");
     }
-    private static void WriteClientServerAdmission(Writer writer, ClientServerAdmission value, DecodeContext context)
+    private static void WriteClientServerAdmission(ref Writer writer, ClientServerAdmission value, DecodeContext context)
     {
         switch (value)
         {
         case ClientServerAdmissionCase0 item:
         {
             if (item.Role != ClientServerRole.Client) throw Error("client-server-admission: discriminator");
-            WriteClientServerRole(writer, item.Role, context);
-            var body = new Writer();
-            WriteText8(body, item.ChannelName, context);
+            WriteClientServerRole(ref writer, item.Role, context);
+            var bodyOffset = writer.Length;
+            writer.Reserve(2);
+            var bodyStart = writer.Length;
+            WriteText8(ref writer, item.ChannelName, context);
             if (item.Direction != ClientServerDirection.ClientToServer) throw Error("direction: constant");
-            WriteClientServerDirection(body, item.Direction, context);
-            WriteText8(body, item.SecurityIdentity, context);
-            WriteNonzeroU32(body, item.NormalizedEffectiveMaxMessageBytes, context);
-            WriteU16(writer, new U16(checked((ushort)body.Length)), context);
-            writer.Bytes(body.ToArray());
+            WriteClientServerDirection(ref writer, item.Direction, context);
+            WriteText8(ref writer, item.SecurityIdentity, context);
+            WriteNonzeroU32(ref writer, item.NormalizedEffectiveMaxMessageBytes, context);
+            var bodyWriter = writer.At(bodyOffset);
+            WriteU16(ref bodyWriter, new U16(checked((ushort)(writer.Length - bodyStart))), context);
             break;
         }
         case ClientServerAdmissionCase1 item:
         {
             if (item.Role != ClientServerRole.Server) throw Error("client-server-admission: discriminator");
-            WriteClientServerRole(writer, item.Role, context);
-            var body = new Writer();
-            WriteText8(body, item.ChannelName, context);
+            WriteClientServerRole(ref writer, item.Role, context);
+            var bodyOffset = writer.Length;
+            writer.Reserve(2);
+            var bodyStart = writer.Length;
+            WriteText8(ref writer, item.ChannelName, context);
             if (item.Direction != ClientServerDirection.ClientToServer) throw Error("direction: constant");
-            WriteClientServerDirection(body, item.Direction, context);
-            WriteRid(body, item.ServerRid, context);
-            WriteNonzeroU64(body, item.LifecycleGeneration, context);
-            WriteNonzeroU64(body, item.DescriptorRevision, context);
+            WriteClientServerDirection(ref writer, item.Direction, context);
+            WriteRid(ref writer, item.ServerRid, context);
+            WriteNonzeroU64(ref writer, item.LifecycleGeneration, context);
+            WriteNonzeroU64(ref writer, item.DescriptorRevision, context);
             if (item.Weight.Value < 0U) throw Error("weight: minimum");
             if (item.Weight.Value > 10000U) throw Error("weight: maximum");
-            WriteU32(body, item.Weight, context);
-            WriteRuntimeState(body, item.RuntimeState, context);
-            WriteText8(body, item.SecurityIdentity, context);
-            WriteNonzeroU32(body, item.NormalizedEffectiveMaxMessageBytes, context);
-            WriteEndpoint(body, item.AdvertisedEndpoint, context);
-            WriteU16(writer, new U16(checked((ushort)body.Length)), context);
-            writer.Bytes(body.ToArray());
+            WriteU32(ref writer, item.Weight, context);
+            WriteRuntimeState(ref writer, item.RuntimeState, context);
+            WriteText8(ref writer, item.SecurityIdentity, context);
+            WriteNonzeroU32(ref writer, item.NormalizedEffectiveMaxMessageBytes, context);
+            WriteEndpoint(ref writer, item.AdvertisedEndpoint, context);
+            var bodyWriter = writer.At(bodyOffset);
+            WriteU16(ref bodyWriter, new U16(checked((ushort)(writer.Length - bodyStart))), context);
             break;
         }
         default: throw Error("client-server-admission: variant");
         }
     }
 
-    internal static ServiceAdmission DecodeServiceAdmission(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadServiceAdmission(reader, context); reader.End("service-admission"); return value; }
-    internal static byte[] EncodeServiceAdmission(ServiceAdmission value, DecodeContext context) { var writer = new Writer(); WriteServiceAdmission(writer, value, context); return writer.ToArray(); }
-    private static ServiceAdmission ReadServiceAdmission(Reader reader, DecodeContext context)
+    internal static ServiceAdmission DecodeServiceAdmission(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadServiceAdmission(ref reader, context); reader.End("service-admission"); return value; }
+    internal static byte[] EncodeServiceAdmission(ServiceAdmission value, DecodeContext context) { var writer = new Writer(); WriteServiceAdmission(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteServiceAdmission(ref writer, value, context); return bytes; }
+    private static ServiceAdmission ReadServiceAdmission(ref Reader reader, DecodeContext context)
     {
         var encodedStart = reader.Remaining;
-        var TopologyKind = ReadServiceTopologyKind(reader, context);
-        var selected = reader.Slice(checked((int)ReadU32(reader, context).Value));
+        var TopologyKind = ReadServiceTopologyKind(ref reader, context);
+        var selected = reader.Slice(checked((int)ReadU32(ref reader, context).Value));
         if (TopologyKind == ServiceTopologyKind.RouteMesh)
         {
-            var RouteMesh = ReadRouteMeshAdmission(selected, context);
+            var RouteMesh = ReadRouteMeshAdmission(ref selected, context);
             selected.End("service-admission");
             var caseValue = new ServiceAdmissionCase0(TopologyKind, RouteMesh);
             ServiceAdmission value = caseValue;
@@ -3919,7 +4081,7 @@ internal static class ServiceWireCodec
         }
         else if (TopologyKind == ServiceTopologyKind.ClientServer)
         {
-            var ClientServer = ReadClientServerAdmission(selected, context);
+            var ClientServer = ReadClientServerAdmission(ref selected, context);
             selected.End("service-admission");
             var caseValue = new ServiceAdmissionCase1(TopologyKind, ClientServer);
             ServiceAdmission value = caseValue;
@@ -3927,7 +4089,7 @@ internal static class ServiceWireCodec
         }
         throw Error("service-admission: discriminator");
     }
-    private static void WriteServiceAdmission(Writer writer, ServiceAdmission value, DecodeContext context)
+    private static void WriteServiceAdmission(ref Writer writer, ServiceAdmission value, DecodeContext context)
     {
         var encodedStart = writer.Length;
         switch (value)
@@ -3935,21 +4097,25 @@ internal static class ServiceWireCodec
         case ServiceAdmissionCase0 item:
         {
             if (item.TopologyKind != ServiceTopologyKind.RouteMesh) throw Error("service-admission: discriminator");
-            WriteServiceTopologyKind(writer, item.TopologyKind, context);
-            var body = new Writer();
-            WriteRouteMeshAdmission(body, item.RouteMesh, context);
-            WriteU32(writer, new U32(checked((uint)body.Length)), context);
-            writer.Bytes(body.ToArray());
+            WriteServiceTopologyKind(ref writer, item.TopologyKind, context);
+            var bodyOffset = writer.Length;
+            writer.Reserve(4);
+            var bodyStart = writer.Length;
+            WriteRouteMeshAdmission(ref writer, item.RouteMesh, context);
+            var bodyWriter = writer.At(bodyOffset);
+            WriteU32(ref bodyWriter, new U32(checked((uint)(writer.Length - bodyStart))), context);
             break;
         }
         case ServiceAdmissionCase1 item:
         {
             if (item.TopologyKind != ServiceTopologyKind.ClientServer) throw Error("service-admission: discriminator");
-            WriteServiceTopologyKind(writer, item.TopologyKind, context);
-            var body = new Writer();
-            WriteClientServerAdmission(body, item.ClientServer, context);
-            WriteU32(writer, new U32(checked((uint)body.Length)), context);
-            writer.Bytes(body.ToArray());
+            WriteServiceTopologyKind(ref writer, item.TopologyKind, context);
+            var bodyOffset = writer.Length;
+            writer.Reserve(4);
+            var bodyStart = writer.Length;
+            WriteClientServerAdmission(ref writer, item.ClientServer, context);
+            var bodyWriter = writer.At(bodyOffset);
+            WriteU32(ref bodyWriter, new U32(checked((uint)(writer.Length - bodyStart))), context);
             break;
         }
         default: throw Error("service-admission: variant");
@@ -3957,12 +4123,12 @@ internal static class ServiceWireCodec
         if ((ulong)(writer.Length - encodedStart) > 1048576UL) throw Error("service-admission: encoded limit");
     }
 
-    internal static InstanceReplyRoute DecodeInstanceReplyRoute(byte[] bytes, DecodeContext context, InstanceOperationKind enclosingOperationKind) { var reader = new Reader(bytes); var value = ReadInstanceReplyRoute(reader, context, enclosingOperationKind); reader.End("instance-reply-route"); return value; }
-    internal static byte[] EncodeInstanceReplyRoute(InstanceReplyRoute value, DecodeContext context, InstanceOperationKind enclosingOperationKind) { var writer = new Writer(); WriteInstanceReplyRoute(writer, value, context, enclosingOperationKind); return writer.ToArray(); }
-    private static InstanceReplyRoute ReadInstanceReplyRoute(Reader reader, DecodeContext context, InstanceOperationKind enclosingOperationKind)
+    internal static InstanceReplyRoute DecodeInstanceReplyRoute(byte[] bytes, DecodeContext context, InstanceOperationKind enclosingOperationKind) { var reader = new Reader(bytes); var value = ReadInstanceReplyRoute(ref reader, context, enclosingOperationKind); reader.End("instance-reply-route"); return value; }
+    internal static byte[] EncodeInstanceReplyRoute(InstanceReplyRoute value, DecodeContext context, InstanceOperationKind enclosingOperationKind) { var writer = new Writer(); WriteInstanceReplyRoute(ref writer, value, context, enclosingOperationKind); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteInstanceReplyRoute(ref writer, value, context, enclosingOperationKind); return bytes; }
+    private static InstanceReplyRoute ReadInstanceReplyRoute(ref Reader reader, DecodeContext context, InstanceOperationKind enclosingOperationKind)
     {
         var OperationKind = enclosingOperationKind;
-        var selected = reader;
+        ref var selected = ref reader;
         if (OperationKind == InstanceOperationKind.Send)
         {
             var caseValue = new InstanceReplyRouteCase0();
@@ -3971,14 +4137,14 @@ internal static class ServiceWireCodec
         }
         else if (OperationKind == InstanceOperationKind.Request)
         {
-            var ReplyRouteId = ReadNonzeroU64(selected, context);
+            var ReplyRouteId = ReadNonzeroU64(ref selected, context);
             var caseValue = new InstanceReplyRouteCase1(ReplyRouteId);
             InstanceReplyRoute value = caseValue;
             return value;
         }
         throw Error("instance-reply-route: discriminator");
     }
-    private static void WriteInstanceReplyRoute(Writer writer, InstanceReplyRoute value, DecodeContext context, InstanceOperationKind enclosingOperationKind)
+    private static void WriteInstanceReplyRoute(ref Writer writer, InstanceReplyRoute value, DecodeContext context, InstanceOperationKind enclosingOperationKind)
     {
         switch (value)
         {
@@ -3990,22 +4156,22 @@ internal static class ServiceWireCodec
         case InstanceReplyRouteCase1 item:
         {
             if (enclosingOperationKind != InstanceOperationKind.Request) throw Error("instance-reply-route: discriminator");
-            WriteNonzeroU64(writer, item.ReplyRouteId, context);
+            WriteNonzeroU64(ref writer, item.ReplyRouteId, context);
             break;
         }
         default: throw Error("instance-reply-route: variant");
         }
     }
 
-    internal static ColdActivationReplyContext DecodeColdActivationReplyContext(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadColdActivationReplyContext(reader, context); reader.End("cold-activation-reply-context"); return value; }
-    internal static byte[] EncodeColdActivationReplyContext(ColdActivationReplyContext value, DecodeContext context) { var writer = new Writer(); WriteColdActivationReplyContext(writer, value, context); return writer.ToArray(); }
-    private static ColdActivationReplyContext ReadColdActivationReplyContext(Reader reader, DecodeContext context)
+    internal static ColdActivationReplyContext DecodeColdActivationReplyContext(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadColdActivationReplyContext(ref reader, context); reader.End("cold-activation-reply-context"); return value; }
+    internal static byte[] EncodeColdActivationReplyContext(ColdActivationReplyContext value, DecodeContext context) { var writer = new Writer(); WriteColdActivationReplyContext(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteColdActivationReplyContext(ref writer, value, context); return bytes; }
+    private static ColdActivationReplyContext ReadColdActivationReplyContext(ref Reader reader, DecodeContext context)
     {
-        var CompletionKind = ReadColdActivationCompletionKind(reader, context);
-        var selected = reader.Slice(checked((int)ReadU16(reader, context).Value));
+        var CompletionKind = ReadColdActivationCompletionKind(ref reader, context);
+        var selected = reader.Slice(checked((int)ReadU16(ref reader, context).Value));
         if (CompletionKind == ColdActivationCompletionKind.ReadyBarrier)
         {
-            var Authority = ReadAuthorityGenerationFence(selected, context);
+            var Authority = ReadAuthorityGenerationFence(ref selected, context);
             selected.End("cold-activation-reply-context");
             var caseValue = new ColdActivationReplyContextCase0(CompletionKind, Authority);
             ColdActivationReplyContext value = caseValue;
@@ -4013,7 +4179,7 @@ internal static class ServiceWireCodec
         }
         else if (CompletionKind == ColdActivationCompletionKind.ActivationFailure)
         {
-            var Authority = ReadAuthorityGenerationFence(selected, context);
+            var Authority = ReadAuthorityGenerationFence(ref selected, context);
             selected.End("cold-activation-reply-context");
             var caseValue = new ColdActivationReplyContextCase1(CompletionKind, Authority);
             ColdActivationReplyContext value = caseValue;
@@ -4021,43 +4187,47 @@ internal static class ServiceWireCodec
         }
         throw Error("cold-activation-reply-context: discriminator");
     }
-    private static void WriteColdActivationReplyContext(Writer writer, ColdActivationReplyContext value, DecodeContext context)
+    private static void WriteColdActivationReplyContext(ref Writer writer, ColdActivationReplyContext value, DecodeContext context)
     {
         switch (value)
         {
         case ColdActivationReplyContextCase0 item:
         {
             if (item.CompletionKind != ColdActivationCompletionKind.ReadyBarrier) throw Error("cold-activation-reply-context: discriminator");
-            WriteColdActivationCompletionKind(writer, item.CompletionKind, context);
-            var body = new Writer();
-            WriteAuthorityGenerationFence(body, item.Authority, context);
-            WriteU16(writer, new U16(checked((ushort)body.Length)), context);
-            writer.Bytes(body.ToArray());
+            WriteColdActivationCompletionKind(ref writer, item.CompletionKind, context);
+            var bodyOffset = writer.Length;
+            writer.Reserve(2);
+            var bodyStart = writer.Length;
+            WriteAuthorityGenerationFence(ref writer, item.Authority, context);
+            var bodyWriter = writer.At(bodyOffset);
+            WriteU16(ref bodyWriter, new U16(checked((ushort)(writer.Length - bodyStart))), context);
             break;
         }
         case ColdActivationReplyContextCase1 item:
         {
             if (item.CompletionKind != ColdActivationCompletionKind.ActivationFailure) throw Error("cold-activation-reply-context: discriminator");
-            WriteColdActivationCompletionKind(writer, item.CompletionKind, context);
-            var body = new Writer();
-            WriteAuthorityGenerationFence(body, item.Authority, context);
-            WriteU16(writer, new U16(checked((ushort)body.Length)), context);
-            writer.Bytes(body.ToArray());
+            WriteColdActivationCompletionKind(ref writer, item.CompletionKind, context);
+            var bodyOffset = writer.Length;
+            writer.Reserve(2);
+            var bodyStart = writer.Length;
+            WriteAuthorityGenerationFence(ref writer, item.Authority, context);
+            var bodyWriter = writer.At(bodyOffset);
+            WriteU16(ref bodyWriter, new U16(checked((ushort)(writer.Length - bodyStart))), context);
             break;
         }
         default: throw Error("cold-activation-reply-context: variant");
         }
     }
 
-    internal static ReplyRelayContext DecodeReplyRelayContext(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadReplyRelayContext(reader, context); reader.End("reply-relay-context"); return value; }
-    internal static byte[] EncodeReplyRelayContext(ReplyRelayContext value, DecodeContext context) { var writer = new Writer(); WriteReplyRelayContext(writer, value, context); return writer.ToArray(); }
-    private static ReplyRelayContext ReadReplyRelayContext(Reader reader, DecodeContext context)
+    internal static ReplyRelayContext DecodeReplyRelayContext(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadReplyRelayContext(ref reader, context); reader.End("reply-relay-context"); return value; }
+    internal static byte[] EncodeReplyRelayContext(ReplyRelayContext value, DecodeContext context) { var writer = new Writer(); WriteReplyRelayContext(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteReplyRelayContext(ref writer, value, context); return bytes; }
+    private static ReplyRelayContext ReadReplyRelayContext(ref Reader reader, DecodeContext context)
     {
-        var ContextKind = ReadReplyRelayContextKind(reader, context);
-        var selected = reader.Slice(checked((int)ReadU16(reader, context).Value));
+        var ContextKind = ReadReplyRelayContextKind(ref reader, context);
+        var selected = reader.Slice(checked((int)ReadU16(ref reader, context).Value));
         if (ContextKind == ReplyRelayContextKind.ColdActivation)
         {
-            var ColdActivation = ReadColdActivationReplyContext(selected, context);
+            var ColdActivation = ReadColdActivationReplyContext(ref selected, context);
             selected.End("reply-relay-context");
             var caseValue = new ReplyRelayContextCase0(ContextKind, ColdActivation);
             ReplyRelayContext value = caseValue;
@@ -4065,11 +4235,11 @@ internal static class ServiceWireCodec
         }
         else if (ContextKind == ReplyRelayContextKind.MaintenanceRelocation)
         {
-            var Relocation = ReadRelocationId(selected, context);
-            var TargetAttemptGeneration = ReadNonzeroU64(selected, context);
-            var Coordinator = ReadRelocationCoordinatorFence(selected, context);
-            var ParticipantId = ReadNonzeroU64(selected, context);
-            var Sequence = ReadNonzeroU64(selected, context);
+            var Relocation = ReadRelocationId(ref selected, context);
+            var TargetAttemptGeneration = ReadNonzeroU64(ref selected, context);
+            var Coordinator = ReadRelocationCoordinatorFence(ref selected, context);
+            var ParticipantId = ReadNonzeroU64(ref selected, context);
+            var Sequence = ReadNonzeroU64(ref selected, context);
             selected.End("reply-relay-context");
             var caseValue = new ReplyRelayContextCase1(ContextKind, Relocation, TargetAttemptGeneration, Coordinator, ParticipantId, Sequence);
             ReplyRelayContext value = caseValue;
@@ -4077,47 +4247,51 @@ internal static class ServiceWireCodec
         }
         throw Error("reply-relay-context: discriminator");
     }
-    private static void WriteReplyRelayContext(Writer writer, ReplyRelayContext value, DecodeContext context)
+    private static void WriteReplyRelayContext(ref Writer writer, ReplyRelayContext value, DecodeContext context)
     {
         switch (value)
         {
         case ReplyRelayContextCase0 item:
         {
             if (item.ContextKind != ReplyRelayContextKind.ColdActivation) throw Error("reply-relay-context: discriminator");
-            WriteReplyRelayContextKind(writer, item.ContextKind, context);
-            var body = new Writer();
-            WriteColdActivationReplyContext(body, item.ColdActivation, context);
-            WriteU16(writer, new U16(checked((ushort)body.Length)), context);
-            writer.Bytes(body.ToArray());
+            WriteReplyRelayContextKind(ref writer, item.ContextKind, context);
+            var bodyOffset = writer.Length;
+            writer.Reserve(2);
+            var bodyStart = writer.Length;
+            WriteColdActivationReplyContext(ref writer, item.ColdActivation, context);
+            var bodyWriter = writer.At(bodyOffset);
+            WriteU16(ref bodyWriter, new U16(checked((ushort)(writer.Length - bodyStart))), context);
             break;
         }
         case ReplyRelayContextCase1 item:
         {
             if (item.ContextKind != ReplyRelayContextKind.MaintenanceRelocation) throw Error("reply-relay-context: discriminator");
-            WriteReplyRelayContextKind(writer, item.ContextKind, context);
-            var body = new Writer();
-            WriteRelocationId(body, item.Relocation, context);
-            WriteNonzeroU64(body, item.TargetAttemptGeneration, context);
-            WriteRelocationCoordinatorFence(body, item.Coordinator, context);
-            WriteNonzeroU64(body, item.ParticipantId, context);
-            WriteNonzeroU64(body, item.Sequence, context);
-            WriteU16(writer, new U16(checked((ushort)body.Length)), context);
-            writer.Bytes(body.ToArray());
+            WriteReplyRelayContextKind(ref writer, item.ContextKind, context);
+            var bodyOffset = writer.Length;
+            writer.Reserve(2);
+            var bodyStart = writer.Length;
+            WriteRelocationId(ref writer, item.Relocation, context);
+            WriteNonzeroU64(ref writer, item.TargetAttemptGeneration, context);
+            WriteRelocationCoordinatorFence(ref writer, item.Coordinator, context);
+            WriteNonzeroU64(ref writer, item.ParticipantId, context);
+            WriteNonzeroU64(ref writer, item.Sequence, context);
+            var bodyWriter = writer.At(bodyOffset);
+            WriteU16(ref bodyWriter, new U16(checked((ushort)(writer.Length - bodyStart))), context);
             break;
         }
         default: throw Error("reply-relay-context: variant");
         }
     }
 
-    internal static SendReadyDestination DecodeSendReadyDestination(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadSendReadyDestination(reader, context); reader.End("send-ready-destination"); return value; }
-    internal static byte[] EncodeSendReadyDestination(SendReadyDestination value, DecodeContext context) { var writer = new Writer(); WriteSendReadyDestination(writer, value, context); return writer.ToArray(); }
-    private static SendReadyDestination ReadSendReadyDestination(Reader reader, DecodeContext context)
+    internal static SendReadyDestination DecodeSendReadyDestination(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadSendReadyDestination(ref reader, context); reader.End("send-ready-destination"); return value; }
+    internal static byte[] EncodeSendReadyDestination(SendReadyDestination value, DecodeContext context) { var writer = new Writer(); WriteSendReadyDestination(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteSendReadyDestination(ref writer, value, context); return bytes; }
+    private static SendReadyDestination ReadSendReadyDestination(ref Reader reader, DecodeContext context)
     {
-        var DestinationKind = ReadMeshDestinationKind(reader, context);
-        var selected = reader.Slice(checked((int)ReadU16(reader, context).Value));
+        var DestinationKind = ReadMeshDestinationKind(ref reader, context);
+        var selected = reader.Slice(checked((int)ReadU16(ref reader, context).Value));
         if (DestinationKind == MeshDestinationKind.Node)
         {
-            var TargetNodeRid = ReadRid(selected, context);
+            var TargetNodeRid = ReadRid(ref selected, context);
             selected.End("send-ready-destination");
             var caseValue = new SendReadyDestinationCase0(DestinationKind, TargetNodeRid);
             SendReadyDestination value = caseValue;
@@ -4125,7 +4299,7 @@ internal static class ServiceWireCodec
         }
         else if (DestinationKind == MeshDestinationKind.Channel)
         {
-            var ChannelName = ReadText8(selected, context);
+            var ChannelName = ReadText8(ref selected, context);
             selected.End("send-ready-destination");
             var caseValue = new SendReadyDestinationCase1(DestinationKind, ChannelName);
             SendReadyDestination value = caseValue;
@@ -4133,7 +4307,7 @@ internal static class ServiceWireCodec
         }
         else if (DestinationKind == MeshDestinationKind.Spot)
         {
-            var TargetSpot = ReadSpotRouteFence(selected, context);
+            var TargetSpot = ReadSpotRouteFence(ref selected, context);
             selected.End("send-ready-destination");
             var caseValue = new SendReadyDestinationCase2(DestinationKind, TargetSpot);
             SendReadyDestination value = caseValue;
@@ -4141,7 +4315,7 @@ internal static class ServiceWireCodec
         }
         else if (DestinationKind == MeshDestinationKind.Actor)
         {
-            var TargetActor = ReadActorRouteFence(selected, context);
+            var TargetActor = ReadActorRouteFence(ref selected, context);
             selected.End("send-ready-destination");
             var caseValue = new SendReadyDestinationCase3(DestinationKind, TargetActor);
             SendReadyDestination value = caseValue;
@@ -4149,8 +4323,8 @@ internal static class ServiceWireCodec
         }
         else if (DestinationKind == MeshDestinationKind.BoundSession)
         {
-            var TargetActor = ReadActorRouteFence(selected, context);
-            var BindingGeneration = ReadNonzeroU64(selected, context);
+            var TargetActor = ReadActorRouteFence(ref selected, context);
+            var BindingGeneration = ReadNonzeroU64(ref selected, context);
             selected.End("send-ready-destination");
             var caseValue = new SendReadyDestinationCase4(DestinationKind, TargetActor, BindingGeneration);
             SendReadyDestination value = caseValue;
@@ -4158,86 +4332,96 @@ internal static class ServiceWireCodec
         }
         throw Error("send-ready-destination: discriminator");
     }
-    private static void WriteSendReadyDestination(Writer writer, SendReadyDestination value, DecodeContext context)
+    private static void WriteSendReadyDestination(ref Writer writer, SendReadyDestination value, DecodeContext context)
     {
         switch (value)
         {
         case SendReadyDestinationCase0 item:
         {
             if (item.DestinationKind != MeshDestinationKind.Node) throw Error("send-ready-destination: discriminator");
-            WriteMeshDestinationKind(writer, item.DestinationKind, context);
-            var body = new Writer();
-            WriteRid(body, item.TargetNodeRid, context);
-            WriteU16(writer, new U16(checked((ushort)body.Length)), context);
-            writer.Bytes(body.ToArray());
+            WriteMeshDestinationKind(ref writer, item.DestinationKind, context);
+            var bodyOffset = writer.Length;
+            writer.Reserve(2);
+            var bodyStart = writer.Length;
+            WriteRid(ref writer, item.TargetNodeRid, context);
+            var bodyWriter = writer.At(bodyOffset);
+            WriteU16(ref bodyWriter, new U16(checked((ushort)(writer.Length - bodyStart))), context);
             break;
         }
         case SendReadyDestinationCase1 item:
         {
             if (item.DestinationKind != MeshDestinationKind.Channel) throw Error("send-ready-destination: discriminator");
-            WriteMeshDestinationKind(writer, item.DestinationKind, context);
-            var body = new Writer();
-            WriteText8(body, item.ChannelName, context);
-            WriteU16(writer, new U16(checked((ushort)body.Length)), context);
-            writer.Bytes(body.ToArray());
+            WriteMeshDestinationKind(ref writer, item.DestinationKind, context);
+            var bodyOffset = writer.Length;
+            writer.Reserve(2);
+            var bodyStart = writer.Length;
+            WriteText8(ref writer, item.ChannelName, context);
+            var bodyWriter = writer.At(bodyOffset);
+            WriteU16(ref bodyWriter, new U16(checked((ushort)(writer.Length - bodyStart))), context);
             break;
         }
         case SendReadyDestinationCase2 item:
         {
             if (item.DestinationKind != MeshDestinationKind.Spot) throw Error("send-ready-destination: discriminator");
-            WriteMeshDestinationKind(writer, item.DestinationKind, context);
-            var body = new Writer();
-            WriteSpotRouteFence(body, item.TargetSpot, context);
-            WriteU16(writer, new U16(checked((ushort)body.Length)), context);
-            writer.Bytes(body.ToArray());
+            WriteMeshDestinationKind(ref writer, item.DestinationKind, context);
+            var bodyOffset = writer.Length;
+            writer.Reserve(2);
+            var bodyStart = writer.Length;
+            WriteSpotRouteFence(ref writer, item.TargetSpot, context);
+            var bodyWriter = writer.At(bodyOffset);
+            WriteU16(ref bodyWriter, new U16(checked((ushort)(writer.Length - bodyStart))), context);
             break;
         }
         case SendReadyDestinationCase3 item:
         {
             if (item.DestinationKind != MeshDestinationKind.Actor) throw Error("send-ready-destination: discriminator");
-            WriteMeshDestinationKind(writer, item.DestinationKind, context);
-            var body = new Writer();
-            WriteActorRouteFence(body, item.TargetActor, context);
-            WriteU16(writer, new U16(checked((ushort)body.Length)), context);
-            writer.Bytes(body.ToArray());
+            WriteMeshDestinationKind(ref writer, item.DestinationKind, context);
+            var bodyOffset = writer.Length;
+            writer.Reserve(2);
+            var bodyStart = writer.Length;
+            WriteActorRouteFence(ref writer, item.TargetActor, context);
+            var bodyWriter = writer.At(bodyOffset);
+            WriteU16(ref bodyWriter, new U16(checked((ushort)(writer.Length - bodyStart))), context);
             break;
         }
         case SendReadyDestinationCase4 item:
         {
             if (item.DestinationKind != MeshDestinationKind.BoundSession) throw Error("send-ready-destination: discriminator");
-            WriteMeshDestinationKind(writer, item.DestinationKind, context);
-            var body = new Writer();
-            WriteActorRouteFence(body, item.TargetActor, context);
-            WriteNonzeroU64(body, item.BindingGeneration, context);
-            WriteU16(writer, new U16(checked((ushort)body.Length)), context);
-            writer.Bytes(body.ToArray());
+            WriteMeshDestinationKind(ref writer, item.DestinationKind, context);
+            var bodyOffset = writer.Length;
+            writer.Reserve(2);
+            var bodyStart = writer.Length;
+            WriteActorRouteFence(ref writer, item.TargetActor, context);
+            WriteNonzeroU64(ref writer, item.BindingGeneration, context);
+            var bodyWriter = writer.At(bodyOffset);
+            WriteU16(ref bodyWriter, new U16(checked((ushort)(writer.Length - bodyStart))), context);
             break;
         }
         default: throw Error("send-ready-destination: variant");
         }
     }
 
-    internal static ActorMembershipSnapshot DecodeActorMembershipSnapshot(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadActorMembershipSnapshot(reader, context); reader.End("actor-membership-snapshot"); return value; }
-    internal static byte[] EncodeActorMembershipSnapshot(ActorMembershipSnapshot value, DecodeContext context) { var writer = new Writer(); WriteActorMembershipSnapshot(writer, value, context); return writer.ToArray(); }
-    private static ActorMembershipSnapshot ReadActorMembershipSnapshot(Reader reader, DecodeContext context)
+    internal static ActorMembershipSnapshot DecodeActorMembershipSnapshot(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadActorMembershipSnapshot(ref reader, context); reader.End("actor-membership-snapshot"); return value; }
+    internal static byte[] EncodeActorMembershipSnapshot(ActorMembershipSnapshot value, DecodeContext context) { var writer = new Writer(); WriteActorMembershipSnapshot(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteActorMembershipSnapshot(ref writer, value, context); return bytes; }
+    private static ActorMembershipSnapshot ReadActorMembershipSnapshot(ref Reader reader, DecodeContext context)
     {
-        var Actor = ReadActorRef(reader, context);
-        var Membership = ReadSpotMembership(reader, context);
+        var Actor = ReadActorRef(ref reader, context);
+        var Membership = ReadSpotMembership(ref reader, context);
         var value = new ActorMembershipSnapshot(Actor, Membership);
         return value;
     }
-    private static void WriteActorMembershipSnapshot(Writer writer, ActorMembershipSnapshot value, DecodeContext context)
+    private static void WriteActorMembershipSnapshot(ref Writer writer, ActorMembershipSnapshot value, DecodeContext context)
     {
-        WriteActorRef(writer, value.Actor, context);
-        WriteSpotMembership(writer, value.Membership, context);
+        WriteActorRef(ref writer, value.Actor, context);
+        WriteSpotMembership(ref writer, value.Membership, context);
     }
 
-    internal static OptionalActorMembershipSnapshot DecodeOptionalActorMembershipSnapshot(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadOptionalActorMembershipSnapshot(reader, context); reader.End("optional-actor-membership-snapshot"); return value; }
-    internal static byte[] EncodeOptionalActorMembershipSnapshot(OptionalActorMembershipSnapshot value, DecodeContext context) { var writer = new Writer(); WriteOptionalActorMembershipSnapshot(writer, value, context); return writer.ToArray(); }
-    private static OptionalActorMembershipSnapshot ReadOptionalActorMembershipSnapshot(Reader reader, DecodeContext context)
+    internal static OptionalActorMembershipSnapshot DecodeOptionalActorMembershipSnapshot(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadOptionalActorMembershipSnapshot(ref reader, context); reader.End("optional-actor-membership-snapshot"); return value; }
+    internal static byte[] EncodeOptionalActorMembershipSnapshot(OptionalActorMembershipSnapshot value, DecodeContext context) { var writer = new Writer(); WriteOptionalActorMembershipSnapshot(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteOptionalActorMembershipSnapshot(ref writer, value, context); return bytes; }
+    private static OptionalActorMembershipSnapshot ReadOptionalActorMembershipSnapshot(ref Reader reader, DecodeContext context)
     {
-        var HasSnapshot = ReadBool8(reader, context);
-        var selected = reader.Slice(checked((int)ReadU16(reader, context).Value));
+        var HasSnapshot = ReadBool8(ref reader, context);
+        var selected = reader.Slice(checked((int)ReadU16(ref reader, context).Value));
         if (HasSnapshot == Bool8.False)
         {
             selected.End("optional-actor-membership-snapshot");
@@ -4247,7 +4431,7 @@ internal static class ServiceWireCodec
         }
         else if (HasSnapshot == Bool8.True)
         {
-            var Snapshot = ReadActorMembershipSnapshot(selected, context);
+            var Snapshot = ReadActorMembershipSnapshot(ref selected, context);
             selected.End("optional-actor-membership-snapshot");
             var caseValue = new OptionalActorMembershipSnapshotCase1(HasSnapshot, Snapshot);
             OptionalActorMembershipSnapshot value = caseValue;
@@ -4255,42 +4439,46 @@ internal static class ServiceWireCodec
         }
         throw Error("optional-actor-membership-snapshot: discriminator");
     }
-    private static void WriteOptionalActorMembershipSnapshot(Writer writer, OptionalActorMembershipSnapshot value, DecodeContext context)
+    private static void WriteOptionalActorMembershipSnapshot(ref Writer writer, OptionalActorMembershipSnapshot value, DecodeContext context)
     {
         switch (value)
         {
         case OptionalActorMembershipSnapshotCase0 item:
         {
             if (item.HasSnapshot != Bool8.False) throw Error("optional-actor-membership-snapshot: discriminator");
-            WriteBool8(writer, item.HasSnapshot, context);
-            var body = new Writer();
-            WriteU16(writer, new U16(checked((ushort)body.Length)), context);
-            writer.Bytes(body.ToArray());
+            WriteBool8(ref writer, item.HasSnapshot, context);
+            var bodyOffset = writer.Length;
+            writer.Reserve(2);
+            var bodyStart = writer.Length;
+            var bodyWriter = writer.At(bodyOffset);
+            WriteU16(ref bodyWriter, new U16(checked((ushort)(writer.Length - bodyStart))), context);
             break;
         }
         case OptionalActorMembershipSnapshotCase1 item:
         {
             if (item.HasSnapshot != Bool8.True) throw Error("optional-actor-membership-snapshot: discriminator");
-            WriteBool8(writer, item.HasSnapshot, context);
-            var body = new Writer();
-            WriteActorMembershipSnapshot(body, item.Snapshot, context);
-            WriteU16(writer, new U16(checked((ushort)body.Length)), context);
-            writer.Bytes(body.ToArray());
+            WriteBool8(ref writer, item.HasSnapshot, context);
+            var bodyOffset = writer.Length;
+            writer.Reserve(2);
+            var bodyStart = writer.Length;
+            WriteActorMembershipSnapshot(ref writer, item.Snapshot, context);
+            var bodyWriter = writer.At(bodyOffset);
+            WriteU16(ref bodyWriter, new U16(checked((ushort)(writer.Length - bodyStart))), context);
             break;
         }
         default: throw Error("optional-actor-membership-snapshot: variant");
         }
     }
 
-    internal static ActorControlData DecodeActorControlData(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadActorControlData(reader, context); reader.End("actor-control-data"); return value; }
-    internal static byte[] EncodeActorControlData(ActorControlData value, DecodeContext context) { var writer = new Writer(); WriteActorControlData(writer, value, context); return writer.ToArray(); }
-    private static ActorControlData ReadActorControlData(Reader reader, DecodeContext context)
+    internal static ActorControlData DecodeActorControlData(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadActorControlData(ref reader, context); reader.End("actor-control-data"); return value; }
+    internal static byte[] EncodeActorControlData(ActorControlData value, DecodeContext context) { var writer = new Writer(); WriteActorControlData(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteActorControlData(ref writer, value, context); return bytes; }
+    private static ActorControlData ReadActorControlData(ref Reader reader, DecodeContext context)
     {
-        var LifecycleKind = ReadActorLifecycleKind(reader, context);
-        var selected = reader.Slice(checked((int)ReadU16(reader, context).Value));
+        var LifecycleKind = ReadActorLifecycleKind(ref reader, context);
+        var selected = reader.Slice(checked((int)ReadU16(ref reader, context).Value));
         if (LifecycleKind == ActorLifecycleKind.Created)
         {
-            var Current = ReadActorMembershipSnapshot(selected, context);
+            var Current = ReadActorMembershipSnapshot(ref selected, context);
             selected.End("actor-control-data");
             var caseValue = new ActorControlDataCase0(LifecycleKind, Current);
             ActorControlData value = caseValue;
@@ -4298,8 +4486,8 @@ internal static class ServiceWireCodec
         }
         else if (LifecycleKind == ActorLifecycleKind.Joined)
         {
-            var Previous = ReadOptionalActorMembershipSnapshot(selected, context);
-            var Current = ReadActorMembershipSnapshot(selected, context);
+            var Previous = ReadOptionalActorMembershipSnapshot(ref selected, context);
+            var Current = ReadActorMembershipSnapshot(ref selected, context);
             selected.End("actor-control-data");
             var caseValue = new ActorControlDataCase1(LifecycleKind, Previous, Current);
             ActorControlData value = caseValue;
@@ -4307,8 +4495,8 @@ internal static class ServiceWireCodec
         }
         else if (LifecycleKind == ActorLifecycleKind.Left)
         {
-            var Previous = ReadActorMembershipSnapshot(selected, context);
-            var Current = ReadActorMembershipSnapshot(selected, context);
+            var Previous = ReadActorMembershipSnapshot(ref selected, context);
+            var Current = ReadActorMembershipSnapshot(ref selected, context);
             selected.End("actor-control-data");
             var caseValue = new ActorControlDataCase2(LifecycleKind, Previous, Current);
             ActorControlData value = caseValue;
@@ -4316,7 +4504,7 @@ internal static class ServiceWireCodec
         }
         else if (LifecycleKind == ActorLifecycleKind.Disconnected)
         {
-            var Current = ReadActorMembershipSnapshot(selected, context);
+            var Current = ReadActorMembershipSnapshot(ref selected, context);
             selected.End("actor-control-data");
             var caseValue = new ActorControlDataCase3(LifecycleKind, Current);
             ActorControlData value = caseValue;
@@ -4324,7 +4512,7 @@ internal static class ServiceWireCodec
         }
         else if (LifecycleKind == ActorLifecycleKind.Destroyed)
         {
-            var Previous = ReadActorMembershipSnapshot(selected, context);
+            var Previous = ReadActorMembershipSnapshot(ref selected, context);
             selected.End("actor-control-data");
             var caseValue = new ActorControlDataCase4(LifecycleKind, Previous);
             ActorControlData value = caseValue;
@@ -4332,149 +4520,159 @@ internal static class ServiceWireCodec
         }
         throw Error("actor-control-data: discriminator");
     }
-    private static void WriteActorControlData(Writer writer, ActorControlData value, DecodeContext context)
+    private static void WriteActorControlData(ref Writer writer, ActorControlData value, DecodeContext context)
     {
         switch (value)
         {
         case ActorControlDataCase0 item:
         {
             if (item.LifecycleKind != ActorLifecycleKind.Created) throw Error("actor-control-data: discriminator");
-            WriteActorLifecycleKind(writer, item.LifecycleKind, context);
-            var body = new Writer();
-            WriteActorMembershipSnapshot(body, item.Current, context);
-            WriteU16(writer, new U16(checked((ushort)body.Length)), context);
-            writer.Bytes(body.ToArray());
+            WriteActorLifecycleKind(ref writer, item.LifecycleKind, context);
+            var bodyOffset = writer.Length;
+            writer.Reserve(2);
+            var bodyStart = writer.Length;
+            WriteActorMembershipSnapshot(ref writer, item.Current, context);
+            var bodyWriter = writer.At(bodyOffset);
+            WriteU16(ref bodyWriter, new U16(checked((ushort)(writer.Length - bodyStart))), context);
             break;
         }
         case ActorControlDataCase1 item:
         {
             if (item.LifecycleKind != ActorLifecycleKind.Joined) throw Error("actor-control-data: discriminator");
-            WriteActorLifecycleKind(writer, item.LifecycleKind, context);
-            var body = new Writer();
-            WriteOptionalActorMembershipSnapshot(body, item.Previous, context);
-            WriteActorMembershipSnapshot(body, item.Current, context);
-            WriteU16(writer, new U16(checked((ushort)body.Length)), context);
-            writer.Bytes(body.ToArray());
+            WriteActorLifecycleKind(ref writer, item.LifecycleKind, context);
+            var bodyOffset = writer.Length;
+            writer.Reserve(2);
+            var bodyStart = writer.Length;
+            WriteOptionalActorMembershipSnapshot(ref writer, item.Previous, context);
+            WriteActorMembershipSnapshot(ref writer, item.Current, context);
+            var bodyWriter = writer.At(bodyOffset);
+            WriteU16(ref bodyWriter, new U16(checked((ushort)(writer.Length - bodyStart))), context);
             break;
         }
         case ActorControlDataCase2 item:
         {
             if (item.LifecycleKind != ActorLifecycleKind.Left) throw Error("actor-control-data: discriminator");
-            WriteActorLifecycleKind(writer, item.LifecycleKind, context);
-            var body = new Writer();
-            WriteActorMembershipSnapshot(body, item.Previous, context);
-            WriteActorMembershipSnapshot(body, item.Current, context);
-            WriteU16(writer, new U16(checked((ushort)body.Length)), context);
-            writer.Bytes(body.ToArray());
+            WriteActorLifecycleKind(ref writer, item.LifecycleKind, context);
+            var bodyOffset = writer.Length;
+            writer.Reserve(2);
+            var bodyStart = writer.Length;
+            WriteActorMembershipSnapshot(ref writer, item.Previous, context);
+            WriteActorMembershipSnapshot(ref writer, item.Current, context);
+            var bodyWriter = writer.At(bodyOffset);
+            WriteU16(ref bodyWriter, new U16(checked((ushort)(writer.Length - bodyStart))), context);
             break;
         }
         case ActorControlDataCase3 item:
         {
             if (item.LifecycleKind != ActorLifecycleKind.Disconnected) throw Error("actor-control-data: discriminator");
-            WriteActorLifecycleKind(writer, item.LifecycleKind, context);
-            var body = new Writer();
-            WriteActorMembershipSnapshot(body, item.Current, context);
-            WriteU16(writer, new U16(checked((ushort)body.Length)), context);
-            writer.Bytes(body.ToArray());
+            WriteActorLifecycleKind(ref writer, item.LifecycleKind, context);
+            var bodyOffset = writer.Length;
+            writer.Reserve(2);
+            var bodyStart = writer.Length;
+            WriteActorMembershipSnapshot(ref writer, item.Current, context);
+            var bodyWriter = writer.At(bodyOffset);
+            WriteU16(ref bodyWriter, new U16(checked((ushort)(writer.Length - bodyStart))), context);
             break;
         }
         case ActorControlDataCase4 item:
         {
             if (item.LifecycleKind != ActorLifecycleKind.Destroyed) throw Error("actor-control-data: discriminator");
-            WriteActorLifecycleKind(writer, item.LifecycleKind, context);
-            var body = new Writer();
-            WriteActorMembershipSnapshot(body, item.Previous, context);
-            WriteU16(writer, new U16(checked((ushort)body.Length)), context);
-            writer.Bytes(body.ToArray());
+            WriteActorLifecycleKind(ref writer, item.LifecycleKind, context);
+            var bodyOffset = writer.Length;
+            writer.Reserve(2);
+            var bodyStart = writer.Length;
+            WriteActorMembershipSnapshot(ref writer, item.Previous, context);
+            var bodyWriter = writer.At(bodyOffset);
+            WriteU16(ref bodyWriter, new U16(checked((ushort)(writer.Length - bodyStart))), context);
             break;
         }
         default: throw Error("actor-control-data: variant");
         }
     }
 
-    internal static RelocationControlData DecodeRelocationControlData(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadRelocationControlData(reader, context); reader.End("relocation-control-data"); return value; }
-    internal static byte[] EncodeRelocationControlData(RelocationControlData value, DecodeContext context) { var writer = new Writer(); WriteRelocationControlData(writer, value, context); return writer.ToArray(); }
-    private static RelocationControlData ReadRelocationControlData(Reader reader, DecodeContext context)
+    internal static RelocationControlData DecodeRelocationControlData(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadRelocationControlData(ref reader, context); reader.End("relocation-control-data"); return value; }
+    internal static byte[] EncodeRelocationControlData(RelocationControlData value, DecodeContext context) { var writer = new Writer(); WriteRelocationControlData(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteRelocationControlData(ref writer, value, context); return bytes; }
+    private static RelocationControlData ReadRelocationControlData(ref Reader reader, DecodeContext context)
     {
-        var Phase = ReadRelocationPhase(reader, context);
-        var Role = ReadRelocationRole(reader, context);
-        var Relocation = ReadRelocationId(reader, context);
-        var Object = ReadRelocationObjectIdentity(reader, context);
-        var TerminalResult = ReadRequestTerminalResult(reader, context);
-        var FailureCode = ReadFrameworkErrorCode(reader, context);
+        var Phase = ReadRelocationPhase(ref reader, context);
+        var Role = ReadRelocationRole(ref reader, context);
+        var Relocation = ReadRelocationId(ref reader, context);
+        var Object = ReadRelocationObjectIdentity(ref reader, context);
+        var TerminalResult = ReadRequestTerminalResult(ref reader, context);
+        var FailureCode = ReadFrameworkErrorCode(ref reader, context);
         var value = new RelocationControlData(Phase, Role, Relocation, Object, TerminalResult, FailureCode);
         ValidateTerminalFailure(value.TerminalResult, value.FailureCode);
         return value;
     }
-    private static void WriteRelocationControlData(Writer writer, RelocationControlData value, DecodeContext context)
+    private static void WriteRelocationControlData(ref Writer writer, RelocationControlData value, DecodeContext context)
     {
         ValidateTerminalFailure(value.TerminalResult, value.FailureCode);
-        WriteRelocationPhase(writer, value.Phase, context);
-        WriteRelocationRole(writer, value.Role, context);
-        WriteRelocationId(writer, value.Relocation, context);
-        WriteRelocationObjectIdentity(writer, value.Object, context);
-        WriteRequestTerminalResult(writer, value.TerminalResult, context);
-        WriteFrameworkErrorCode(writer, value.FailureCode, context);
+        WriteRelocationPhase(ref writer, value.Phase, context);
+        WriteRelocationRole(ref writer, value.Role, context);
+        WriteRelocationId(ref writer, value.Relocation, context);
+        WriteRelocationObjectIdentity(ref writer, value.Object, context);
+        WriteRequestTerminalResult(ref writer, value.TerminalResult, context);
+        WriteFrameworkErrorCode(ref writer, value.FailureCode, context);
     }
 
-    internal static RequestSpecificTail DecodeRequestSpecificTail(byte[] bytes, DecodeContext context, RequestTerminalResult enclosingTerminalResult) { var reader = new Reader(bytes); var value = ReadRequestSpecificTail(reader, context, enclosingTerminalResult); reader.End("request-specific-tail"); return value; }
-    internal static byte[] EncodeRequestSpecificTail(RequestSpecificTail value, DecodeContext context, RequestTerminalResult enclosingTerminalResult) { var writer = new Writer(); WriteRequestSpecificTail(writer, value, context, enclosingTerminalResult); return writer.ToArray(); }
-    private static RequestSpecificTail ReadRequestSpecificTail(Reader reader, DecodeContext context, RequestTerminalResult enclosingTerminalResult)
+    internal static RequestSpecificTail DecodeRequestSpecificTail(byte[] bytes, DecodeContext context, RequestTerminalResult enclosingTerminalResult) { var reader = new Reader(bytes); var value = ReadRequestSpecificTail(ref reader, context, enclosingTerminalResult); reader.End("request-specific-tail"); return value; }
+    internal static byte[] EncodeRequestSpecificTail(RequestSpecificTail value, DecodeContext context, RequestTerminalResult enclosingTerminalResult) { var writer = new Writer(); WriteRequestSpecificTail(ref writer, value, context, enclosingTerminalResult); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteRequestSpecificTail(ref writer, value, context, enclosingTerminalResult); return bytes; }
+    private static RequestSpecificTail ReadRequestSpecificTail(ref Reader reader, DecodeContext context, RequestTerminalResult enclosingTerminalResult)
     {
         var OriginalOperationKind = context.OriginalOperationKind ?? throw Error("missing context originalOperationKind");
         var TerminalResult = enclosingTerminalResult;
-        var selected = reader;
+        ref var selected = ref reader;
         if (OriginalOperationKind == MeshOperationKind.ActorLookup && TerminalResult == RequestTerminalResult.Ok)
         {
-            var Actor = ReadActorRef(selected, context);
-            var SpotId = ReadText8(selected, context);
-            var SpotGeneration = ReadNonzeroU64(selected, context);
-            var MembershipEpoch = ReadNonzeroU64(selected, context);
-            var AuthorityOwnerGeneration = ReadNonzeroU64(selected, context);
+            var Actor = ReadActorRef(ref selected, context);
+            var SpotId = ReadText8(ref selected, context);
+            var SpotGeneration = ReadNonzeroU64(ref selected, context);
+            var MembershipEpoch = ReadNonzeroU64(ref selected, context);
+            var AuthorityOwnerGeneration = ReadNonzeroU64(ref selected, context);
             var caseValue = new RequestSpecificTailCase0(Actor, SpotId, SpotGeneration, MembershipEpoch, AuthorityOwnerGeneration);
             RequestSpecificTail value = caseValue;
             return value;
         }
         else if (OriginalOperationKind == MeshOperationKind.ActorJoin && TerminalResult == RequestTerminalResult.Ok)
         {
-            var Join = ReadActorJoinReplyTail(selected, context);
+            var Join = ReadActorJoinReplyTail(ref selected, context);
             var caseValue = new RequestSpecificTailCase1(Join);
             RequestSpecificTail value = caseValue;
             return value;
         }
         else if (OriginalOperationKind == MeshOperationKind.StreamBind && TerminalResult == RequestTerminalResult.Ok)
         {
-            var BindingGeneration = ReadNonzeroU64(selected, context);
-            var AuthorityOwnerGeneration = ReadNonzeroU64(selected, context);
+            var BindingGeneration = ReadNonzeroU64(ref selected, context);
+            var AuthorityOwnerGeneration = ReadNonzeroU64(ref selected, context);
             var caseValue = new RequestSpecificTailCase2(BindingGeneration, AuthorityOwnerGeneration);
             RequestSpecificTail value = caseValue;
             return value;
         }
         else if (OriginalOperationKind == MeshOperationKind.UserSpotCreate && TerminalResult == RequestTerminalResult.Ok)
         {
-            var CreateResult = ReadUserSpotCreateResult(selected, context);
-            var Spot = ReadSpotRef(selected, context);
+            var CreateResult = ReadUserSpotCreateResult(ref selected, context);
+            var Spot = ReadSpotRef(ref selected, context);
             var caseValue = new RequestSpecificTailCase3(CreateResult, Spot);
             RequestSpecificTail value = caseValue;
             return value;
         }
         else if (OriginalOperationKind == MeshOperationKind.UserSpotClose && TerminalResult == RequestTerminalResult.Ok)
         {
-            var Closed = ReadBool8(selected, context);
+            var Closed = ReadBool8(ref selected, context);
             var caseValue = new RequestSpecificTailCase4(Closed);
             RequestSpecificTail value = caseValue;
             return value;
         }
         else if (OriginalOperationKind == MeshOperationKind.ActorCreate && TerminalResult == RequestTerminalResult.Ok)
         {
-            var Creation = ReadActorCreateTerminal(selected, context);
+            var Creation = ReadActorCreateTerminal(ref selected, context);
             var caseValue = new RequestSpecificTailCase5(Creation);
             RequestSpecificTail value = caseValue;
             return value;
         }
         return new RequestSpecificTailOtherwise();
     }
-    private static void WriteRequestSpecificTail(Writer writer, RequestSpecificTail value, DecodeContext context, RequestTerminalResult enclosingTerminalResult)
+    private static void WriteRequestSpecificTail(ref Writer writer, RequestSpecificTail value, DecodeContext context, RequestTerminalResult enclosingTerminalResult)
     {
         switch (value)
         {
@@ -4482,48 +4680,48 @@ internal static class ServiceWireCodec
         {
             if ((context.OriginalOperationKind ?? throw Error("missing context originalOperationKind")) != MeshOperationKind.ActorLookup) throw Error("request-specific-tail: discriminator");
             if (enclosingTerminalResult != RequestTerminalResult.Ok) throw Error("request-specific-tail: discriminator");
-            WriteActorRef(writer, item.Actor, context);
-            WriteText8(writer, item.SpotId, context);
-            WriteNonzeroU64(writer, item.SpotGeneration, context);
-            WriteNonzeroU64(writer, item.MembershipEpoch, context);
-            WriteNonzeroU64(writer, item.AuthorityOwnerGeneration, context);
+            WriteActorRef(ref writer, item.Actor, context);
+            WriteText8(ref writer, item.SpotId, context);
+            WriteNonzeroU64(ref writer, item.SpotGeneration, context);
+            WriteNonzeroU64(ref writer, item.MembershipEpoch, context);
+            WriteNonzeroU64(ref writer, item.AuthorityOwnerGeneration, context);
             break;
         }
         case RequestSpecificTailCase1 item:
         {
             if ((context.OriginalOperationKind ?? throw Error("missing context originalOperationKind")) != MeshOperationKind.ActorJoin) throw Error("request-specific-tail: discriminator");
             if (enclosingTerminalResult != RequestTerminalResult.Ok) throw Error("request-specific-tail: discriminator");
-            WriteActorJoinReplyTail(writer, item.Join, context);
+            WriteActorJoinReplyTail(ref writer, item.Join, context);
             break;
         }
         case RequestSpecificTailCase2 item:
         {
             if ((context.OriginalOperationKind ?? throw Error("missing context originalOperationKind")) != MeshOperationKind.StreamBind) throw Error("request-specific-tail: discriminator");
             if (enclosingTerminalResult != RequestTerminalResult.Ok) throw Error("request-specific-tail: discriminator");
-            WriteNonzeroU64(writer, item.BindingGeneration, context);
-            WriteNonzeroU64(writer, item.AuthorityOwnerGeneration, context);
+            WriteNonzeroU64(ref writer, item.BindingGeneration, context);
+            WriteNonzeroU64(ref writer, item.AuthorityOwnerGeneration, context);
             break;
         }
         case RequestSpecificTailCase3 item:
         {
             if ((context.OriginalOperationKind ?? throw Error("missing context originalOperationKind")) != MeshOperationKind.UserSpotCreate) throw Error("request-specific-tail: discriminator");
             if (enclosingTerminalResult != RequestTerminalResult.Ok) throw Error("request-specific-tail: discriminator");
-            WriteUserSpotCreateResult(writer, item.CreateResult, context);
-            WriteSpotRef(writer, item.Spot, context);
+            WriteUserSpotCreateResult(ref writer, item.CreateResult, context);
+            WriteSpotRef(ref writer, item.Spot, context);
             break;
         }
         case RequestSpecificTailCase4 item:
         {
             if ((context.OriginalOperationKind ?? throw Error("missing context originalOperationKind")) != MeshOperationKind.UserSpotClose) throw Error("request-specific-tail: discriminator");
             if (enclosingTerminalResult != RequestTerminalResult.Ok) throw Error("request-specific-tail: discriminator");
-            WriteBool8(writer, item.Closed, context);
+            WriteBool8(ref writer, item.Closed, context);
             break;
         }
         case RequestSpecificTailCase5 item:
         {
             if ((context.OriginalOperationKind ?? throw Error("missing context originalOperationKind")) != MeshOperationKind.ActorCreate) throw Error("request-specific-tail: discriminator");
             if (enclosingTerminalResult != RequestTerminalResult.Ok) throw Error("request-specific-tail: discriminator");
-            WriteActorCreateTerminal(writer, item.Creation, context);
+            WriteActorCreateTerminal(ref writer, item.Creation, context);
             break;
         }
         case RequestSpecificTailOtherwise item:
@@ -4540,99 +4738,99 @@ internal static class ServiceWireCodec
         }
     }
 
-    internal static FrozenRecordBody DecodeFrozenRecordBody(byte[] bytes, DecodeContext context, MeshRecordKind enclosingRecordKind) { var reader = new Reader(bytes); var value = ReadFrozenRecordBody(reader, context, enclosingRecordKind); reader.End("frozen-record-body"); return value; }
-    internal static byte[] EncodeFrozenRecordBody(FrozenRecordBody value, DecodeContext context, MeshRecordKind enclosingRecordKind) { var writer = new Writer(); WriteFrozenRecordBody(writer, value, context, enclosingRecordKind); return writer.ToArray(); }
-    private static FrozenRecordBody ReadFrozenRecordBody(Reader reader, DecodeContext context, MeshRecordKind enclosingRecordKind)
+    internal static FrozenRecordBody DecodeFrozenRecordBody(byte[] bytes, DecodeContext context, MeshRecordKind enclosingRecordKind) { var reader = new Reader(bytes); var value = ReadFrozenRecordBody(ref reader, context, enclosingRecordKind); reader.End("frozen-record-body"); return value; }
+    internal static byte[] EncodeFrozenRecordBody(FrozenRecordBody value, DecodeContext context, MeshRecordKind enclosingRecordKind) { var writer = new Writer(); WriteFrozenRecordBody(ref writer, value, context, enclosingRecordKind); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteFrozenRecordBody(ref writer, value, context, enclosingRecordKind); return bytes; }
+    private static FrozenRecordBody ReadFrozenRecordBody(ref Reader reader, DecodeContext context, MeshRecordKind enclosingRecordKind)
     {
         var RecordKind = enclosingRecordKind;
-        var selected = reader;
+        ref var selected = ref reader;
         if (RecordKind == MeshRecordKind.NodeSend)
         {
-            var Payload = ReadApplicationPayloadEnvelopeV1(selected, context);
+            var Payload = ReadApplicationPayloadEnvelopeV1(ref selected, context);
             var caseValue = new FrozenRecordBodyCase0(Payload);
             FrozenRecordBody value = caseValue;
             return value;
         }
         else if (RecordKind == MeshRecordKind.NodeRequest)
         {
-            var Payload = ReadApplicationPayloadEnvelopeV1(selected, context);
+            var Payload = ReadApplicationPayloadEnvelopeV1(ref selected, context);
             var caseValue = new FrozenRecordBodyCase1(Payload);
             FrozenRecordBody value = caseValue;
             return value;
         }
         else if (RecordKind == MeshRecordKind.ChannelSend)
         {
-            var ChannelName = ReadText8(selected, context);
-            var Payload = ReadApplicationPayloadEnvelopeV1(selected, context);
+            var ChannelName = ReadText8(ref selected, context);
+            var Payload = ReadApplicationPayloadEnvelopeV1(ref selected, context);
             var caseValue = new FrozenRecordBodyCase2(ChannelName, Payload);
             FrozenRecordBody value = caseValue;
             return value;
         }
         else if (RecordKind == MeshRecordKind.ChannelRequest)
         {
-            var ChannelName = ReadText8(selected, context);
-            var Payload = ReadApplicationPayloadEnvelopeV1(selected, context);
+            var ChannelName = ReadText8(ref selected, context);
+            var Payload = ReadApplicationPayloadEnvelopeV1(ref selected, context);
             var caseValue = new FrozenRecordBodyCase3(ChannelName, Payload);
             FrozenRecordBody value = caseValue;
             return value;
         }
         else if (RecordKind == MeshRecordKind.SpotSend)
         {
-            var TargetSpot = ReadSpotRouteFence(selected, context);
-            var Payload = ReadApplicationPayloadEnvelopeV1(selected, context);
+            var TargetSpot = ReadSpotRouteFence(ref selected, context);
+            var Payload = ReadApplicationPayloadEnvelopeV1(ref selected, context);
             var caseValue = new FrozenRecordBodyCase4(TargetSpot, Payload);
             FrozenRecordBody value = caseValue;
             return value;
         }
         else if (RecordKind == MeshRecordKind.SpotRequest)
         {
-            var TargetSpot = ReadSpotRouteFence(selected, context);
-            var Payload = ReadApplicationPayloadEnvelopeV1(selected, context);
+            var TargetSpot = ReadSpotRouteFence(ref selected, context);
+            var Payload = ReadApplicationPayloadEnvelopeV1(ref selected, context);
             var caseValue = new FrozenRecordBodyCase5(TargetSpot, Payload);
             FrozenRecordBody value = caseValue;
             return value;
         }
         else if (RecordKind == MeshRecordKind.SpotMulticast)
         {
-            var ChannelName = ReadText8(selected, context);
-            var Topic = ReadText8(selected, context);
-            var Payload = ReadApplicationPayloadEnvelopeV1(selected, context);
+            var ChannelName = ReadText8(ref selected, context);
+            var Topic = ReadText8(ref selected, context);
+            var Payload = ReadApplicationPayloadEnvelopeV1(ref selected, context);
             var caseValue = new FrozenRecordBodyCase6(ChannelName, Topic, Payload);
             FrozenRecordBody value = caseValue;
             return value;
         }
         else if (RecordKind == MeshRecordKind.SpotControl)
         {
-            var Control = ReadActorControlData(selected, context);
+            var Control = ReadActorControlData(ref selected, context);
             var caseValue = new FrozenRecordBodyCase7(Control);
             FrozenRecordBody value = caseValue;
             return value;
         }
         else if (RecordKind == MeshRecordKind.ActorSend)
         {
-            var TargetActor = ReadActorRouteFence(selected, context);
-            var Payload = ReadApplicationPayloadEnvelopeV1(selected, context);
+            var TargetActor = ReadActorRouteFence(ref selected, context);
+            var Payload = ReadApplicationPayloadEnvelopeV1(ref selected, context);
             var caseValue = new FrozenRecordBodyCase8(TargetActor, Payload);
             FrozenRecordBody value = caseValue;
             return value;
         }
         else if (RecordKind == MeshRecordKind.ActorRequest)
         {
-            var TargetActor = ReadActorRouteFence(selected, context);
-            var Payload = ReadApplicationPayloadEnvelopeV1(selected, context);
+            var TargetActor = ReadActorRouteFence(ref selected, context);
+            var Payload = ReadApplicationPayloadEnvelopeV1(ref selected, context);
             var caseValue = new FrozenRecordBodyCase9(TargetActor, Payload);
             FrozenRecordBody value = caseValue;
             return value;
         }
         else if (RecordKind == MeshRecordKind.Completion)
         {
-            var TerminalResult = ReadRequestTerminalResult(selected, context);
-            var FailureCode = ReadFrameworkErrorCode(selected, context);
-            var HasPayload = ReadBool8(selected, context);
+            var TerminalResult = ReadRequestTerminalResult(ref selected, context);
+            var FailureCode = ReadFrameworkErrorCode(ref selected, context);
+            var HasPayload = ReadBool8(ref selected, context);
             ApplicationPayloadEnvelopeV1? Payload;
             if (HasPayload == Bool8.True)
             {
-                Payload = ReadApplicationPayloadEnvelopeV1(selected, context);
+                Payload = ReadApplicationPayloadEnvelopeV1(ref selected, context);
             }
             else Payload = null;
             var caseValue = new FrozenRecordBodyCase10(TerminalResult, FailureCode, HasPayload, Payload);
@@ -4642,113 +4840,113 @@ internal static class ServiceWireCodec
         }
         else if (RecordKind == MeshRecordKind.SendReady)
         {
-            var Destination = ReadSendReadyDestination(selected, context);
+            var Destination = ReadSendReadyDestination(ref selected, context);
             var caseValue = new FrozenRecordBodyCase11(Destination);
             FrozenRecordBody value = caseValue;
             return value;
         }
         else if (RecordKind == MeshRecordKind.RelocationControl)
         {
-            var Control = ReadRelocationControlData(selected, context);
+            var Control = ReadRelocationControlData(ref selected, context);
             var caseValue = new FrozenRecordBodyCase12(Control);
             FrozenRecordBody value = caseValue;
             return value;
         }
         else if (RecordKind == MeshRecordKind.InstanceSpotActivation)
         {
-            var Route = ReadInstanceRouteV1(selected, context);
-            var SourceNodeGeneration = ReadNonzeroU64(selected, context);
-            var OperationKind = ReadInstanceOperationKind(selected, context);
-            var Payload = ReadApplicationPayloadEnvelopeV1(selected, context);
+            var Route = ReadInstanceRouteV1(ref selected, context);
+            var SourceNodeGeneration = ReadNonzeroU64(ref selected, context);
+            var OperationKind = ReadInstanceOperationKind(ref selected, context);
+            var Payload = ReadApplicationPayloadEnvelopeV1(ref selected, context);
             var caseValue = new FrozenRecordBodyCase13(Route, SourceNodeGeneration, OperationKind, Payload);
             FrozenRecordBody value = caseValue;
             return value;
         }
         throw Error("frozen-record-body: discriminator");
     }
-    private static void WriteFrozenRecordBody(Writer writer, FrozenRecordBody value, DecodeContext context, MeshRecordKind enclosingRecordKind)
+    private static void WriteFrozenRecordBody(ref Writer writer, FrozenRecordBody value, DecodeContext context, MeshRecordKind enclosingRecordKind)
     {
         switch (value)
         {
         case FrozenRecordBodyCase0 item:
         {
             if (enclosingRecordKind != MeshRecordKind.NodeSend) throw Error("frozen-record-body: discriminator");
-            WriteApplicationPayloadEnvelopeV1(writer, item.Payload, context);
+            WriteApplicationPayloadEnvelopeV1(ref writer, item.Payload, context);
             break;
         }
         case FrozenRecordBodyCase1 item:
         {
             if (enclosingRecordKind != MeshRecordKind.NodeRequest) throw Error("frozen-record-body: discriminator");
-            WriteApplicationPayloadEnvelopeV1(writer, item.Payload, context);
+            WriteApplicationPayloadEnvelopeV1(ref writer, item.Payload, context);
             break;
         }
         case FrozenRecordBodyCase2 item:
         {
             if (enclosingRecordKind != MeshRecordKind.ChannelSend) throw Error("frozen-record-body: discriminator");
-            WriteText8(writer, item.ChannelName, context);
-            WriteApplicationPayloadEnvelopeV1(writer, item.Payload, context);
+            WriteText8(ref writer, item.ChannelName, context);
+            WriteApplicationPayloadEnvelopeV1(ref writer, item.Payload, context);
             break;
         }
         case FrozenRecordBodyCase3 item:
         {
             if (enclosingRecordKind != MeshRecordKind.ChannelRequest) throw Error("frozen-record-body: discriminator");
-            WriteText8(writer, item.ChannelName, context);
-            WriteApplicationPayloadEnvelopeV1(writer, item.Payload, context);
+            WriteText8(ref writer, item.ChannelName, context);
+            WriteApplicationPayloadEnvelopeV1(ref writer, item.Payload, context);
             break;
         }
         case FrozenRecordBodyCase4 item:
         {
             if (enclosingRecordKind != MeshRecordKind.SpotSend) throw Error("frozen-record-body: discriminator");
-            WriteSpotRouteFence(writer, item.TargetSpot, context);
-            WriteApplicationPayloadEnvelopeV1(writer, item.Payload, context);
+            WriteSpotRouteFence(ref writer, item.TargetSpot, context);
+            WriteApplicationPayloadEnvelopeV1(ref writer, item.Payload, context);
             break;
         }
         case FrozenRecordBodyCase5 item:
         {
             if (enclosingRecordKind != MeshRecordKind.SpotRequest) throw Error("frozen-record-body: discriminator");
-            WriteSpotRouteFence(writer, item.TargetSpot, context);
-            WriteApplicationPayloadEnvelopeV1(writer, item.Payload, context);
+            WriteSpotRouteFence(ref writer, item.TargetSpot, context);
+            WriteApplicationPayloadEnvelopeV1(ref writer, item.Payload, context);
             break;
         }
         case FrozenRecordBodyCase6 item:
         {
             if (enclosingRecordKind != MeshRecordKind.SpotMulticast) throw Error("frozen-record-body: discriminator");
-            WriteText8(writer, item.ChannelName, context);
-            WriteText8(writer, item.Topic, context);
-            WriteApplicationPayloadEnvelopeV1(writer, item.Payload, context);
+            WriteText8(ref writer, item.ChannelName, context);
+            WriteText8(ref writer, item.Topic, context);
+            WriteApplicationPayloadEnvelopeV1(ref writer, item.Payload, context);
             break;
         }
         case FrozenRecordBodyCase7 item:
         {
             if (enclosingRecordKind != MeshRecordKind.SpotControl) throw Error("frozen-record-body: discriminator");
-            WriteActorControlData(writer, item.Control, context);
+            WriteActorControlData(ref writer, item.Control, context);
             break;
         }
         case FrozenRecordBodyCase8 item:
         {
             if (enclosingRecordKind != MeshRecordKind.ActorSend) throw Error("frozen-record-body: discriminator");
-            WriteActorRouteFence(writer, item.TargetActor, context);
-            WriteApplicationPayloadEnvelopeV1(writer, item.Payload, context);
+            WriteActorRouteFence(ref writer, item.TargetActor, context);
+            WriteApplicationPayloadEnvelopeV1(ref writer, item.Payload, context);
             break;
         }
         case FrozenRecordBodyCase9 item:
         {
             if (enclosingRecordKind != MeshRecordKind.ActorRequest) throw Error("frozen-record-body: discriminator");
-            WriteActorRouteFence(writer, item.TargetActor, context);
-            WriteApplicationPayloadEnvelopeV1(writer, item.Payload, context);
+            WriteActorRouteFence(ref writer, item.TargetActor, context);
+            WriteApplicationPayloadEnvelopeV1(ref writer, item.Payload, context);
             break;
         }
         case FrozenRecordBodyCase10 item:
         {
             ValidateTerminalFailure(item.TerminalResult, item.FailureCode);
             if (enclosingRecordKind != MeshRecordKind.Completion) throw Error("frozen-record-body: discriminator");
-            WriteRequestTerminalResult(writer, item.TerminalResult, context);
-            WriteFrameworkErrorCode(writer, item.FailureCode, context);
-            WriteBool8(writer, item.HasPayload, context);
+            WriteRequestTerminalResult(ref writer, item.TerminalResult, context);
+            WriteFrameworkErrorCode(ref writer, item.FailureCode, context);
+            WriteBool8(ref writer, item.HasPayload, context);
             if (item.HasPayload == Bool8.True)
             {
                 if (item.Payload is null) throw Error("payload: required");
-                WriteApplicationPayloadEnvelopeV1(writer, item.Payload!, context);
+                WriteApplicationPayloadEnvelopeV1(ref writer, item.Payload.Value, context);
             }
             else if (item.Payload is not null) throw Error("payload: forbidden");
             break;
@@ -4756,40 +4954,40 @@ internal static class ServiceWireCodec
         case FrozenRecordBodyCase11 item:
         {
             if (enclosingRecordKind != MeshRecordKind.SendReady) throw Error("frozen-record-body: discriminator");
-            WriteSendReadyDestination(writer, item.Destination, context);
+            WriteSendReadyDestination(ref writer, item.Destination, context);
             break;
         }
         case FrozenRecordBodyCase12 item:
         {
             if (enclosingRecordKind != MeshRecordKind.RelocationControl) throw Error("frozen-record-body: discriminator");
-            WriteRelocationControlData(writer, item.Control, context);
+            WriteRelocationControlData(ref writer, item.Control, context);
             break;
         }
         case FrozenRecordBodyCase13 item:
         {
             if (enclosingRecordKind != MeshRecordKind.InstanceSpotActivation) throw Error("frozen-record-body: discriminator");
-            WriteInstanceRouteV1(writer, item.Route, context);
-            WriteNonzeroU64(writer, item.SourceNodeGeneration, context);
-            WriteInstanceOperationKind(writer, item.OperationKind, context);
-            WriteApplicationPayloadEnvelopeV1(writer, item.Payload, context);
+            WriteInstanceRouteV1(ref writer, item.Route, context);
+            WriteNonzeroU64(ref writer, item.SourceNodeGeneration, context);
+            WriteInstanceOperationKind(ref writer, item.OperationKind, context);
+            WriteApplicationPayloadEnvelopeV1(ref writer, item.Payload, context);
             break;
         }
         default: throw Error("frozen-record-body: variant");
         }
     }
 
-    internal static FrozenSourceIdentity DecodeFrozenSourceIdentity(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadFrozenSourceIdentity(reader, context); reader.End("frozen-source-identity"); return value; }
-    internal static byte[] EncodeFrozenSourceIdentity(FrozenSourceIdentity value, DecodeContext context) { var writer = new Writer(); WriteFrozenSourceIdentity(writer, value, context); return writer.ToArray(); }
-    private static FrozenSourceIdentity ReadFrozenSourceIdentity(Reader reader, DecodeContext context)
+    internal static FrozenSourceIdentity DecodeFrozenSourceIdentity(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadFrozenSourceIdentity(ref reader, context); reader.End("frozen-source-identity"); return value; }
+    internal static byte[] EncodeFrozenSourceIdentity(FrozenSourceIdentity value, DecodeContext context) { var writer = new Writer(); WriteFrozenSourceIdentity(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteFrozenSourceIdentity(ref writer, value, context); return bytes; }
+    private static FrozenSourceIdentity ReadFrozenSourceIdentity(ref Reader reader, DecodeContext context)
     {
-        var SourceKind = ReadFrozenSourceKind(reader, context);
-        var selected = reader.Slice(checked((int)ReadU16(reader, context).Value));
+        var SourceKind = ReadFrozenSourceKind(ref reader, context);
+        var selected = reader.Slice(checked((int)ReadU16(ref reader, context).Value));
         if (SourceKind == FrozenSourceKind.Node)
         {
-            var SourceNodeRid = ReadRid(selected, context);
-            var SourceNodeGeneration = ReadNonzeroU64(selected, context);
-            var SourceOwnerId = ReadText8(selected, context);
-            var SourceOwnerLeaseGeneration = ReadNonzeroU64(selected, context);
+            var SourceNodeRid = ReadRid(ref selected, context);
+            var SourceNodeGeneration = ReadNonzeroU64(ref selected, context);
+            var SourceOwnerId = ReadText8(ref selected, context);
+            var SourceOwnerLeaseGeneration = ReadNonzeroU64(ref selected, context);
             selected.End("frozen-source-identity");
             var caseValue = new FrozenSourceIdentityCase0(SourceKind, SourceNodeRid, SourceNodeGeneration, SourceOwnerId, SourceOwnerLeaseGeneration);
             FrozenSourceIdentity value = caseValue;
@@ -4797,11 +4995,11 @@ internal static class ServiceWireCodec
         }
         else if (SourceKind == FrozenSourceKind.Spot)
         {
-            var SourceNodeRid = ReadRid(selected, context);
-            var SourceNodeGeneration = ReadNonzeroU64(selected, context);
-            var SourceOwnerId = ReadText8(selected, context);
-            var SourceOwnerLeaseGeneration = ReadNonzeroU64(selected, context);
-            var SourceSpotId = ReadText8(selected, context);
+            var SourceNodeRid = ReadRid(ref selected, context);
+            var SourceNodeGeneration = ReadNonzeroU64(ref selected, context);
+            var SourceOwnerId = ReadText8(ref selected, context);
+            var SourceOwnerLeaseGeneration = ReadNonzeroU64(ref selected, context);
+            var SourceSpotId = ReadText8(ref selected, context);
             selected.End("frozen-source-identity");
             var caseValue = new FrozenSourceIdentityCase1(SourceKind, SourceNodeRid, SourceNodeGeneration, SourceOwnerId, SourceOwnerLeaseGeneration, SourceSpotId);
             FrozenSourceIdentity value = caseValue;
@@ -4809,11 +5007,11 @@ internal static class ServiceWireCodec
         }
         else if (SourceKind == FrozenSourceKind.Actor)
         {
-            var SourceNodeRid = ReadRid(selected, context);
-            var SourceNodeGeneration = ReadNonzeroU64(selected, context);
-            var SourceOwnerId = ReadText8(selected, context);
-            var SourceOwnerLeaseGeneration = ReadNonzeroU64(selected, context);
-            var SourceActor = ReadActorRef(selected, context);
+            var SourceNodeRid = ReadRid(ref selected, context);
+            var SourceNodeGeneration = ReadNonzeroU64(ref selected, context);
+            var SourceOwnerId = ReadText8(ref selected, context);
+            var SourceOwnerLeaseGeneration = ReadNonzeroU64(ref selected, context);
+            var SourceActor = ReadActorRef(ref selected, context);
             selected.End("frozen-source-identity");
             var caseValue = new FrozenSourceIdentityCase2(SourceKind, SourceNodeRid, SourceNodeGeneration, SourceOwnerId, SourceOwnerLeaseGeneration, SourceActor);
             FrozenSourceIdentity value = caseValue;
@@ -4821,14 +5019,14 @@ internal static class ServiceWireCodec
         }
         else if (SourceKind == FrozenSourceKind.BoundSession)
         {
-            var SourceNodeRid = ReadRid(selected, context);
-            var SourceNodeGeneration = ReadNonzeroU64(selected, context);
-            var SourceOwnerId = ReadText8(selected, context);
-            var SourceOwnerLeaseGeneration = ReadNonzeroU64(selected, context);
-            var SourceActor = ReadActorRef(selected, context);
-            var SourceSessionRid = ReadRid(selected, context);
-            var SourceBindingGeneration = ReadNonzeroU64(selected, context);
-            var SourceSessionSequence = ReadNonzeroU64(selected, context);
+            var SourceNodeRid = ReadRid(ref selected, context);
+            var SourceNodeGeneration = ReadNonzeroU64(ref selected, context);
+            var SourceOwnerId = ReadText8(ref selected, context);
+            var SourceOwnerLeaseGeneration = ReadNonzeroU64(ref selected, context);
+            var SourceActor = ReadActorRef(ref selected, context);
+            var SourceSessionRid = ReadRid(ref selected, context);
+            var SourceBindingGeneration = ReadNonzeroU64(ref selected, context);
+            var SourceSessionSequence = ReadNonzeroU64(ref selected, context);
             selected.End("frozen-source-identity");
             var caseValue = new FrozenSourceIdentityCase3(SourceKind, SourceNodeRid, SourceNodeGeneration, SourceOwnerId, SourceOwnerLeaseGeneration, SourceActor, SourceSessionRid, SourceBindingGeneration, SourceSessionSequence);
             FrozenSourceIdentity value = caseValue;
@@ -4836,81 +5034,89 @@ internal static class ServiceWireCodec
         }
         throw Error("frozen-source-identity: discriminator");
     }
-    private static void WriteFrozenSourceIdentity(Writer writer, FrozenSourceIdentity value, DecodeContext context)
+    private static void WriteFrozenSourceIdentity(ref Writer writer, FrozenSourceIdentity value, DecodeContext context)
     {
         switch (value)
         {
         case FrozenSourceIdentityCase0 item:
         {
             if (item.SourceKind != FrozenSourceKind.Node) throw Error("frozen-source-identity: discriminator");
-            WriteFrozenSourceKind(writer, item.SourceKind, context);
-            var body = new Writer();
-            WriteRid(body, item.SourceNodeRid, context);
-            WriteNonzeroU64(body, item.SourceNodeGeneration, context);
-            WriteText8(body, item.SourceOwnerId, context);
-            WriteNonzeroU64(body, item.SourceOwnerLeaseGeneration, context);
-            WriteU16(writer, new U16(checked((ushort)body.Length)), context);
-            writer.Bytes(body.ToArray());
+            WriteFrozenSourceKind(ref writer, item.SourceKind, context);
+            var bodyOffset = writer.Length;
+            writer.Reserve(2);
+            var bodyStart = writer.Length;
+            WriteRid(ref writer, item.SourceNodeRid, context);
+            WriteNonzeroU64(ref writer, item.SourceNodeGeneration, context);
+            WriteText8(ref writer, item.SourceOwnerId, context);
+            WriteNonzeroU64(ref writer, item.SourceOwnerLeaseGeneration, context);
+            var bodyWriter = writer.At(bodyOffset);
+            WriteU16(ref bodyWriter, new U16(checked((ushort)(writer.Length - bodyStart))), context);
             break;
         }
         case FrozenSourceIdentityCase1 item:
         {
             if (item.SourceKind != FrozenSourceKind.Spot) throw Error("frozen-source-identity: discriminator");
-            WriteFrozenSourceKind(writer, item.SourceKind, context);
-            var body = new Writer();
-            WriteRid(body, item.SourceNodeRid, context);
-            WriteNonzeroU64(body, item.SourceNodeGeneration, context);
-            WriteText8(body, item.SourceOwnerId, context);
-            WriteNonzeroU64(body, item.SourceOwnerLeaseGeneration, context);
-            WriteText8(body, item.SourceSpotId, context);
-            WriteU16(writer, new U16(checked((ushort)body.Length)), context);
-            writer.Bytes(body.ToArray());
+            WriteFrozenSourceKind(ref writer, item.SourceKind, context);
+            var bodyOffset = writer.Length;
+            writer.Reserve(2);
+            var bodyStart = writer.Length;
+            WriteRid(ref writer, item.SourceNodeRid, context);
+            WriteNonzeroU64(ref writer, item.SourceNodeGeneration, context);
+            WriteText8(ref writer, item.SourceOwnerId, context);
+            WriteNonzeroU64(ref writer, item.SourceOwnerLeaseGeneration, context);
+            WriteText8(ref writer, item.SourceSpotId, context);
+            var bodyWriter = writer.At(bodyOffset);
+            WriteU16(ref bodyWriter, new U16(checked((ushort)(writer.Length - bodyStart))), context);
             break;
         }
         case FrozenSourceIdentityCase2 item:
         {
             if (item.SourceKind != FrozenSourceKind.Actor) throw Error("frozen-source-identity: discriminator");
-            WriteFrozenSourceKind(writer, item.SourceKind, context);
-            var body = new Writer();
-            WriteRid(body, item.SourceNodeRid, context);
-            WriteNonzeroU64(body, item.SourceNodeGeneration, context);
-            WriteText8(body, item.SourceOwnerId, context);
-            WriteNonzeroU64(body, item.SourceOwnerLeaseGeneration, context);
-            WriteActorRef(body, item.SourceActor, context);
-            WriteU16(writer, new U16(checked((ushort)body.Length)), context);
-            writer.Bytes(body.ToArray());
+            WriteFrozenSourceKind(ref writer, item.SourceKind, context);
+            var bodyOffset = writer.Length;
+            writer.Reserve(2);
+            var bodyStart = writer.Length;
+            WriteRid(ref writer, item.SourceNodeRid, context);
+            WriteNonzeroU64(ref writer, item.SourceNodeGeneration, context);
+            WriteText8(ref writer, item.SourceOwnerId, context);
+            WriteNonzeroU64(ref writer, item.SourceOwnerLeaseGeneration, context);
+            WriteActorRef(ref writer, item.SourceActor, context);
+            var bodyWriter = writer.At(bodyOffset);
+            WriteU16(ref bodyWriter, new U16(checked((ushort)(writer.Length - bodyStart))), context);
             break;
         }
         case FrozenSourceIdentityCase3 item:
         {
             if (item.SourceKind != FrozenSourceKind.BoundSession) throw Error("frozen-source-identity: discriminator");
-            WriteFrozenSourceKind(writer, item.SourceKind, context);
-            var body = new Writer();
-            WriteRid(body, item.SourceNodeRid, context);
-            WriteNonzeroU64(body, item.SourceNodeGeneration, context);
-            WriteText8(body, item.SourceOwnerId, context);
-            WriteNonzeroU64(body, item.SourceOwnerLeaseGeneration, context);
-            WriteActorRef(body, item.SourceActor, context);
-            WriteRid(body, item.SourceSessionRid, context);
-            WriteNonzeroU64(body, item.SourceBindingGeneration, context);
-            WriteNonzeroU64(body, item.SourceSessionSequence, context);
-            WriteU16(writer, new U16(checked((ushort)body.Length)), context);
-            writer.Bytes(body.ToArray());
+            WriteFrozenSourceKind(ref writer, item.SourceKind, context);
+            var bodyOffset = writer.Length;
+            writer.Reserve(2);
+            var bodyStart = writer.Length;
+            WriteRid(ref writer, item.SourceNodeRid, context);
+            WriteNonzeroU64(ref writer, item.SourceNodeGeneration, context);
+            WriteText8(ref writer, item.SourceOwnerId, context);
+            WriteNonzeroU64(ref writer, item.SourceOwnerLeaseGeneration, context);
+            WriteActorRef(ref writer, item.SourceActor, context);
+            WriteRid(ref writer, item.SourceSessionRid, context);
+            WriteNonzeroU64(ref writer, item.SourceBindingGeneration, context);
+            WriteNonzeroU64(ref writer, item.SourceSessionSequence, context);
+            var bodyWriter = writer.At(bodyOffset);
+            WriteU16(ref bodyWriter, new U16(checked((ushort)(writer.Length - bodyStart))), context);
             break;
         }
         default: throw Error("frozen-source-identity: variant");
         }
     }
 
-    internal static FrozenReplyRoute DecodeFrozenReplyRoute(byte[] bytes, DecodeContext context, MeshOperationKind enclosingOperationKind) { var reader = new Reader(bytes); var value = ReadFrozenReplyRoute(reader, context, enclosingOperationKind); reader.End("frozen-reply-route"); return value; }
-    internal static byte[] EncodeFrozenReplyRoute(FrozenReplyRoute value, DecodeContext context, MeshOperationKind enclosingOperationKind) { var writer = new Writer(); WriteFrozenReplyRoute(writer, value, context, enclosingOperationKind); return writer.ToArray(); }
-    private static FrozenReplyRoute ReadFrozenReplyRoute(Reader reader, DecodeContext context, MeshOperationKind enclosingOperationKind)
+    internal static FrozenReplyRoute DecodeFrozenReplyRoute(byte[] bytes, DecodeContext context, MeshOperationKind enclosingOperationKind) { var reader = new Reader(bytes); var value = ReadFrozenReplyRoute(ref reader, context, enclosingOperationKind); reader.End("frozen-reply-route"); return value; }
+    internal static byte[] EncodeFrozenReplyRoute(FrozenReplyRoute value, DecodeContext context, MeshOperationKind enclosingOperationKind) { var writer = new Writer(); WriteFrozenReplyRoute(ref writer, value, context, enclosingOperationKind); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteFrozenReplyRoute(ref writer, value, context, enclosingOperationKind); return bytes; }
+    private static FrozenReplyRoute ReadFrozenReplyRoute(ref Reader reader, DecodeContext context, MeshOperationKind enclosingOperationKind)
     {
         var OriginalOperationKind = enclosingOperationKind;
-        var selected = reader.Slice(checked((int)ReadU16(reader, context).Value));
+        var selected = reader.Slice(checked((int)ReadU16(ref reader, context).Value));
         if (OriginalOperationKind == MeshOperationKind.NodeRequest)
         {
-            var ReplyRouteId = ReadNonzeroU64(selected, context);
+            var ReplyRouteId = ReadNonzeroU64(ref selected, context);
             selected.End("frozen-reply-route");
             var caseValue = new FrozenReplyRouteCase0(ReplyRouteId);
             FrozenReplyRoute value = caseValue;
@@ -4918,7 +5124,7 @@ internal static class ServiceWireCodec
         }
         else if (OriginalOperationKind == MeshOperationKind.ChannelRequest)
         {
-            var ReplyRouteId = ReadNonzeroU64(selected, context);
+            var ReplyRouteId = ReadNonzeroU64(ref selected, context);
             selected.End("frozen-reply-route");
             var caseValue = new FrozenReplyRouteCase1(ReplyRouteId);
             FrozenReplyRoute value = caseValue;
@@ -4926,7 +5132,7 @@ internal static class ServiceWireCodec
         }
         else if (OriginalOperationKind == MeshOperationKind.SpotRequest)
         {
-            var ReplyRouteId = ReadNonzeroU64(selected, context);
+            var ReplyRouteId = ReadNonzeroU64(ref selected, context);
             selected.End("frozen-reply-route");
             var caseValue = new FrozenReplyRouteCase2(ReplyRouteId);
             FrozenReplyRoute value = caseValue;
@@ -4934,7 +5140,7 @@ internal static class ServiceWireCodec
         }
         else if (OriginalOperationKind == MeshOperationKind.ActorRequest)
         {
-            var ReplyRouteId = ReadNonzeroU64(selected, context);
+            var ReplyRouteId = ReadNonzeroU64(ref selected, context);
             selected.End("frozen-reply-route");
             var caseValue = new FrozenReplyRouteCase3(ReplyRouteId);
             FrozenReplyRoute value = caseValue;
@@ -4942,7 +5148,7 @@ internal static class ServiceWireCodec
         }
         else if (OriginalOperationKind == MeshOperationKind.InstanceSpotRequest)
         {
-            var ReplyRouteId = ReadNonzeroU64(selected, context);
+            var ReplyRouteId = ReadNonzeroU64(ref selected, context);
             selected.End("frozen-reply-route");
             var caseValue = new FrozenReplyRouteCase4(ReplyRouteId);
             FrozenReplyRoute value = caseValue;
@@ -4951,53 +5157,63 @@ internal static class ServiceWireCodec
         selected.End("frozen-reply-route");
         return new FrozenReplyRouteOtherwise();
     }
-    private static void WriteFrozenReplyRoute(Writer writer, FrozenReplyRoute value, DecodeContext context, MeshOperationKind enclosingOperationKind)
+    private static void WriteFrozenReplyRoute(ref Writer writer, FrozenReplyRoute value, DecodeContext context, MeshOperationKind enclosingOperationKind)
     {
         switch (value)
         {
         case FrozenReplyRouteCase0 item:
         {
             if (enclosingOperationKind != MeshOperationKind.NodeRequest) throw Error("frozen-reply-route: discriminator");
-            var body = new Writer();
-            WriteNonzeroU64(body, item.ReplyRouteId, context);
-            WriteU16(writer, new U16(checked((ushort)body.Length)), context);
-            writer.Bytes(body.ToArray());
+            var bodyOffset = writer.Length;
+            writer.Reserve(2);
+            var bodyStart = writer.Length;
+            WriteNonzeroU64(ref writer, item.ReplyRouteId, context);
+            var bodyWriter = writer.At(bodyOffset);
+            WriteU16(ref bodyWriter, new U16(checked((ushort)(writer.Length - bodyStart))), context);
             break;
         }
         case FrozenReplyRouteCase1 item:
         {
             if (enclosingOperationKind != MeshOperationKind.ChannelRequest) throw Error("frozen-reply-route: discriminator");
-            var body = new Writer();
-            WriteNonzeroU64(body, item.ReplyRouteId, context);
-            WriteU16(writer, new U16(checked((ushort)body.Length)), context);
-            writer.Bytes(body.ToArray());
+            var bodyOffset = writer.Length;
+            writer.Reserve(2);
+            var bodyStart = writer.Length;
+            WriteNonzeroU64(ref writer, item.ReplyRouteId, context);
+            var bodyWriter = writer.At(bodyOffset);
+            WriteU16(ref bodyWriter, new U16(checked((ushort)(writer.Length - bodyStart))), context);
             break;
         }
         case FrozenReplyRouteCase2 item:
         {
             if (enclosingOperationKind != MeshOperationKind.SpotRequest) throw Error("frozen-reply-route: discriminator");
-            var body = new Writer();
-            WriteNonzeroU64(body, item.ReplyRouteId, context);
-            WriteU16(writer, new U16(checked((ushort)body.Length)), context);
-            writer.Bytes(body.ToArray());
+            var bodyOffset = writer.Length;
+            writer.Reserve(2);
+            var bodyStart = writer.Length;
+            WriteNonzeroU64(ref writer, item.ReplyRouteId, context);
+            var bodyWriter = writer.At(bodyOffset);
+            WriteU16(ref bodyWriter, new U16(checked((ushort)(writer.Length - bodyStart))), context);
             break;
         }
         case FrozenReplyRouteCase3 item:
         {
             if (enclosingOperationKind != MeshOperationKind.ActorRequest) throw Error("frozen-reply-route: discriminator");
-            var body = new Writer();
-            WriteNonzeroU64(body, item.ReplyRouteId, context);
-            WriteU16(writer, new U16(checked((ushort)body.Length)), context);
-            writer.Bytes(body.ToArray());
+            var bodyOffset = writer.Length;
+            writer.Reserve(2);
+            var bodyStart = writer.Length;
+            WriteNonzeroU64(ref writer, item.ReplyRouteId, context);
+            var bodyWriter = writer.At(bodyOffset);
+            WriteU16(ref bodyWriter, new U16(checked((ushort)(writer.Length - bodyStart))), context);
             break;
         }
         case FrozenReplyRouteCase4 item:
         {
             if (enclosingOperationKind != MeshOperationKind.InstanceSpotRequest) throw Error("frozen-reply-route: discriminator");
-            var body = new Writer();
-            WriteNonzeroU64(body, item.ReplyRouteId, context);
-            WriteU16(writer, new U16(checked((ushort)body.Length)), context);
-            writer.Bytes(body.ToArray());
+            var bodyOffset = writer.Length;
+            writer.Reserve(2);
+            var bodyStart = writer.Length;
+            WriteNonzeroU64(ref writer, item.ReplyRouteId, context);
+            var bodyWriter = writer.At(bodyOffset);
+            WriteU16(ref bodyWriter, new U16(checked((ushort)(writer.Length - bodyStart))), context);
             break;
         }
         case FrozenReplyRouteOtherwise item:
@@ -5007,65 +5223,67 @@ internal static class ServiceWireCodec
             if (enclosingOperationKind == MeshOperationKind.SpotRequest) throw Error("frozen-reply-route: otherwise matches case");
             if (enclosingOperationKind == MeshOperationKind.ActorRequest) throw Error("frozen-reply-route: otherwise matches case");
             if (enclosingOperationKind == MeshOperationKind.InstanceSpotRequest) throw Error("frozen-reply-route: otherwise matches case");
-            var body = new Writer();
-            WriteU16(writer, new U16(checked((ushort)body.Length)), context);
-            writer.Bytes(body.ToArray());
+            var bodyOffset = writer.Length;
+            writer.Reserve(2);
+            var bodyStart = writer.Length;
+            var bodyWriter = writer.At(bodyOffset);
+            WriteU16(ref bodyWriter, new U16(checked((ushort)(writer.Length - bodyStart))), context);
             break;
         }
         default: throw Error("frozen-reply-route: variant");
         }
     }
 
-    internal static FrozenRecord DecodeFrozenRecord(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadFrozenRecord(reader, context); reader.End("frozen-record"); return value; }
-    internal static byte[] EncodeFrozenRecord(FrozenRecord value, DecodeContext context) { var writer = new Writer(); WriteFrozenRecord(writer, value, context); return writer.ToArray(); }
-    private static FrozenRecord ReadFrozenRecord(Reader reader, DecodeContext context)
+    internal static FrozenRecord DecodeFrozenRecord(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadFrozenRecord(ref reader, context); reader.End("frozen-record"); return value; }
+    internal static byte[] EncodeFrozenRecord(FrozenRecord value, DecodeContext context) { var writer = new Writer(); WriteFrozenRecord(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteFrozenRecord(ref writer, value, context); return bytes; }
+    private static FrozenRecord ReadFrozenRecord(ref Reader reader, DecodeContext context)
     {
-        var RecordKind = ReadMeshRecordKind(reader, context);
-        var Source = ReadFrozenSourceIdentity(reader, context);
-        var HasMetadata = ReadBool8(reader, context);
+        var RecordKind = ReadMeshRecordKind(ref reader, context);
+        var Source = ReadFrozenSourceIdentity(ref reader, context);
+        var HasMetadata = ReadBool8(ref reader, context);
         MetadataFrame? Metadata;
         if (HasMetadata == Bool8.True)
         {
-            Metadata = ReadMetadataFrame(reader, context);
+            Metadata = ReadMetadataFrame(ref reader, context);
         }
         else Metadata = null;
-        var OperationId = ReadOperationIdOrZero(reader, context);
-        var OperationKind = ReadMeshOperationKind(reader, context);
-        var ReplyRoute = ReadFrozenReplyRoute(reader, context, OperationKind);
-        var Body = ReadFrozenRecordBody(reader, context, RecordKind);
+        var OperationId = ReadOperationIdOrZero(ref reader, context);
+        var OperationKind = ReadMeshOperationKind(ref reader, context);
+        var ReplyRoute = ReadFrozenReplyRoute(ref reader, context, OperationKind);
+        var Body = ReadFrozenRecordBody(ref reader, context, RecordKind);
         var value = new FrozenRecord(RecordKind, Source, HasMetadata, Metadata, OperationId, OperationKind, ReplyRoute, Body);
         return value;
     }
-    private static void WriteFrozenRecord(Writer writer, FrozenRecord value, DecodeContext context)
+    private static void WriteFrozenRecord(ref Writer writer, FrozenRecord value, DecodeContext context)
     {
-        WriteMeshRecordKind(writer, value.RecordKind, context);
-        WriteFrozenSourceIdentity(writer, value.Source, context);
-        WriteBool8(writer, value.HasMetadata, context);
+        WriteMeshRecordKind(ref writer, value.RecordKind, context);
+        WriteFrozenSourceIdentity(ref writer, value.Source, context);
+        WriteBool8(ref writer, value.HasMetadata, context);
         if (value.HasMetadata == Bool8.True)
         {
             if (value.Metadata is null) throw Error("metadata: required");
-            WriteMetadataFrame(writer, value.Metadata!, context);
+            WriteMetadataFrame(ref writer, value.Metadata.Value, context);
         }
         else if (value.Metadata is not null) throw Error("metadata: forbidden");
-        WriteOperationIdOrZero(writer, value.OperationId, context);
-        WriteMeshOperationKind(writer, value.OperationKind, context);
-        WriteFrozenReplyRoute(writer, value.ReplyRoute, context, value.OperationKind);
-        WriteFrozenRecordBody(writer, value.Body, context, value.RecordKind);
+        WriteOperationIdOrZero(ref writer, value.OperationId, context);
+        WriteMeshOperationKind(ref writer, value.OperationKind, context);
+        WriteFrozenReplyRoute(ref writer, value.ReplyRoute, context, value.OperationKind);
+        WriteFrozenRecordBody(ref writer, value.Body, context, value.RecordKind);
     }
 
-    internal static InstanceRouteV1 DecodeInstanceRouteV1(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadInstanceRouteV1(reader, context); reader.End("instance-route-v1"); return value; }
-    internal static byte[] EncodeInstanceRouteV1(InstanceRouteV1 value, DecodeContext context) { var writer = new Writer(); WriteInstanceRouteV1(writer, value, context); return writer.ToArray(); }
-    private static InstanceRouteV1 ReadInstanceRouteV1(Reader reader, DecodeContext context)
+    internal static InstanceRouteV1 DecodeInstanceRouteV1(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadInstanceRouteV1(ref reader, context); reader.End("instance-route-v1"); return value; }
+    internal static byte[] EncodeInstanceRouteV1(InstanceRouteV1 value, DecodeContext context) { var writer = new Writer(); WriteInstanceRouteV1(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteInstanceRouteV1(ref writer, value, context); return bytes; }
+    private static InstanceRouteV1 ReadInstanceRouteV1(ref Reader reader, DecodeContext context)
     {
-        var RouteKind = ReadInstanceRouteKind(reader, context);
-        var selected = reader.Slice(checked((int)ReadU16(reader, context).Value));
+        var RouteKind = ReadInstanceRouteKind(ref reader, context);
+        var selected = reader.Slice(checked((int)ReadU16(ref reader, context).Value));
         if (RouteKind == InstanceRouteKind.Ready)
         {
-            var TargetNodeRid = ReadRid(selected, context);
-            var TargetNodeGeneration = ReadNonzeroU64(selected, context);
-            var TargetSpotId = ReadText8(selected, context);
-            var Authority = ReadAuthorityGenerationFence(selected, context);
-            var InstanceIntent = ReadBool8(selected, context);
+            var TargetNodeRid = ReadRid(ref selected, context);
+            var TargetNodeGeneration = ReadNonzeroU64(ref selected, context);
+            var TargetSpotId = ReadText8(ref selected, context);
+            var Authority = ReadAuthorityGenerationFence(ref selected, context);
+            var InstanceIntent = ReadBool8(ref selected, context);
             selected.End("instance-route-v1");
             var caseValue = new InstanceRouteV1Case0(RouteKind, TargetNodeRid, TargetNodeGeneration, TargetSpotId, Authority, InstanceIntent);
             InstanceRouteV1 value = caseValue;
@@ -5073,13 +5291,13 @@ internal static class ServiceWireCodec
         }
         else if (RouteKind == InstanceRouteKind.ColdActivation)
         {
-            var TargetNodeRid = ReadRid(selected, context);
-            var TargetNodeGeneration = ReadNonzeroU64(selected, context);
-            var TargetSpotId = ReadText8(selected, context);
-            var TargetMeshName = ReadText8(selected, context);
-            var StableType = ReadText8(selected, context);
-            var TargetDescriptorVersion = ReadText8(selected, context);
-            var DeadlineUnixMs = ReadNonzeroU64(selected, context);
+            var TargetNodeRid = ReadRid(ref selected, context);
+            var TargetNodeGeneration = ReadNonzeroU64(ref selected, context);
+            var TargetSpotId = ReadText8(ref selected, context);
+            var TargetMeshName = ReadText8(ref selected, context);
+            var StableType = ReadText8(ref selected, context);
+            var TargetDescriptorVersion = ReadText8(ref selected, context);
+            var DeadlineUnixMs = ReadNonzeroU64(ref selected, context);
             selected.End("instance-route-v1");
             var caseValue = new InstanceRouteV1Case1(RouteKind, TargetNodeRid, TargetNodeGeneration, TargetSpotId, TargetMeshName, StableType, TargetDescriptorVersion, DeadlineUnixMs);
             InstanceRouteV1 value = caseValue;
@@ -5087,50 +5305,54 @@ internal static class ServiceWireCodec
         }
         throw Error("instance-route-v1: discriminator");
     }
-    private static void WriteInstanceRouteV1(Writer writer, InstanceRouteV1 value, DecodeContext context)
+    private static void WriteInstanceRouteV1(ref Writer writer, InstanceRouteV1 value, DecodeContext context)
     {
         switch (value)
         {
         case InstanceRouteV1Case0 item:
         {
             if (item.RouteKind != InstanceRouteKind.Ready) throw Error("instance-route-v1: discriminator");
-            WriteInstanceRouteKind(writer, item.RouteKind, context);
-            var body = new Writer();
-            WriteRid(body, item.TargetNodeRid, context);
-            WriteNonzeroU64(body, item.TargetNodeGeneration, context);
-            WriteText8(body, item.TargetSpotId, context);
-            WriteAuthorityGenerationFence(body, item.Authority, context);
-            WriteBool8(body, item.InstanceIntent, context);
-            WriteU16(writer, new U16(checked((ushort)body.Length)), context);
-            writer.Bytes(body.ToArray());
+            WriteInstanceRouteKind(ref writer, item.RouteKind, context);
+            var bodyOffset = writer.Length;
+            writer.Reserve(2);
+            var bodyStart = writer.Length;
+            WriteRid(ref writer, item.TargetNodeRid, context);
+            WriteNonzeroU64(ref writer, item.TargetNodeGeneration, context);
+            WriteText8(ref writer, item.TargetSpotId, context);
+            WriteAuthorityGenerationFence(ref writer, item.Authority, context);
+            WriteBool8(ref writer, item.InstanceIntent, context);
+            var bodyWriter = writer.At(bodyOffset);
+            WriteU16(ref bodyWriter, new U16(checked((ushort)(writer.Length - bodyStart))), context);
             break;
         }
         case InstanceRouteV1Case1 item:
         {
             if (item.RouteKind != InstanceRouteKind.ColdActivation) throw Error("instance-route-v1: discriminator");
-            WriteInstanceRouteKind(writer, item.RouteKind, context);
-            var body = new Writer();
-            WriteRid(body, item.TargetNodeRid, context);
-            WriteNonzeroU64(body, item.TargetNodeGeneration, context);
-            WriteText8(body, item.TargetSpotId, context);
-            WriteText8(body, item.TargetMeshName, context);
-            WriteText8(body, item.StableType, context);
-            WriteText8(body, item.TargetDescriptorVersion, context);
-            WriteNonzeroU64(body, item.DeadlineUnixMs, context);
-            WriteU16(writer, new U16(checked((ushort)body.Length)), context);
-            writer.Bytes(body.ToArray());
+            WriteInstanceRouteKind(ref writer, item.RouteKind, context);
+            var bodyOffset = writer.Length;
+            writer.Reserve(2);
+            var bodyStart = writer.Length;
+            WriteRid(ref writer, item.TargetNodeRid, context);
+            WriteNonzeroU64(ref writer, item.TargetNodeGeneration, context);
+            WriteText8(ref writer, item.TargetSpotId, context);
+            WriteText8(ref writer, item.TargetMeshName, context);
+            WriteText8(ref writer, item.StableType, context);
+            WriteText8(ref writer, item.TargetDescriptorVersion, context);
+            WriteNonzeroU64(ref writer, item.DeadlineUnixMs, context);
+            var bodyWriter = writer.At(bodyOffset);
+            WriteU16(ref bodyWriter, new U16(checked((ushort)(writer.Length - bodyStart))), context);
             break;
         }
         default: throw Error("instance-route-v1: variant");
         }
     }
 
-    internal static RelocationRootPointer DecodeRelocationRootPointer(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadRelocationRootPointer(reader, context); reader.End("relocation-root-pointer"); return value; }
-    internal static byte[] EncodeRelocationRootPointer(RelocationRootPointer value, DecodeContext context) { var writer = new Writer(); WriteRelocationRootPointer(writer, value, context); return writer.ToArray(); }
-    private static RelocationRootPointer ReadRelocationRootPointer(Reader reader, DecodeContext context)
+    internal static RelocationRootPointer DecodeRelocationRootPointer(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadRelocationRootPointer(ref reader, context); reader.End("relocation-root-pointer"); return value; }
+    internal static byte[] EncodeRelocationRootPointer(RelocationRootPointer value, DecodeContext context) { var writer = new Writer(); WriteRelocationRootPointer(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteRelocationRootPointer(ref writer, value, context); return bytes; }
+    private static RelocationRootPointer ReadRelocationRootPointer(ref Reader reader, DecodeContext context)
     {
-        var HasRelocation = ReadBool8(reader, context);
-        var selected = reader.Slice(checked((int)ReadU16(reader, context).Value));
+        var HasRelocation = ReadBool8(ref reader, context);
+        var selected = reader.Slice(checked((int)ReadU16(ref reader, context).Value));
         if (HasRelocation == Bool8.False)
         {
             selected.End("relocation-root-pointer");
@@ -5140,8 +5362,8 @@ internal static class ServiceWireCodec
         }
         else if (HasRelocation == Bool8.True)
         {
-            var Reference = ReadRelocationReference(selected, context);
-            var ChecksumCrc32c = ReadU32(selected, context);
+            var Reference = ReadRelocationReference(ref selected, context);
+            var ChecksumCrc32c = ReadU32(ref selected, context);
             selected.End("relocation-root-pointer");
             var caseValue = new RelocationRootPointerCase1(HasRelocation, Reference, ChecksumCrc32c);
             RelocationRootPointer value = caseValue;
@@ -5149,41 +5371,45 @@ internal static class ServiceWireCodec
         }
         throw Error("relocation-root-pointer: discriminator");
     }
-    private static void WriteRelocationRootPointer(Writer writer, RelocationRootPointer value, DecodeContext context)
+    private static void WriteRelocationRootPointer(ref Writer writer, RelocationRootPointer value, DecodeContext context)
     {
         switch (value)
         {
         case RelocationRootPointerCase0 item:
         {
             if (item.HasRelocation != Bool8.False) throw Error("relocation-root-pointer: discriminator");
-            WriteBool8(writer, item.HasRelocation, context);
-            var body = new Writer();
-            WriteU16(writer, new U16(checked((ushort)body.Length)), context);
-            writer.Bytes(body.ToArray());
+            WriteBool8(ref writer, item.HasRelocation, context);
+            var bodyOffset = writer.Length;
+            writer.Reserve(2);
+            var bodyStart = writer.Length;
+            var bodyWriter = writer.At(bodyOffset);
+            WriteU16(ref bodyWriter, new U16(checked((ushort)(writer.Length - bodyStart))), context);
             break;
         }
         case RelocationRootPointerCase1 item:
         {
             if (item.HasRelocation != Bool8.True) throw Error("relocation-root-pointer: discriminator");
-            WriteBool8(writer, item.HasRelocation, context);
-            var body = new Writer();
-            WriteRelocationReference(body, item.Reference, context);
-            WriteU32(body, item.ChecksumCrc32c, context);
-            WriteU16(writer, new U16(checked((ushort)body.Length)), context);
-            writer.Bytes(body.ToArray());
+            WriteBool8(ref writer, item.HasRelocation, context);
+            var bodyOffset = writer.Length;
+            writer.Reserve(2);
+            var bodyStart = writer.Length;
+            WriteRelocationReference(ref writer, item.Reference, context);
+            WriteU32(ref writer, item.ChecksumCrc32c, context);
+            var bodyWriter = writer.At(bodyOffset);
+            WriteU16(ref bodyWriter, new U16(checked((ushort)(writer.Length - bodyStart))), context);
             break;
         }
         default: throw Error("relocation-root-pointer: variant");
         }
     }
 
-    internal static AuthorityRelocationState DecodeAuthorityRelocationState(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadAuthorityRelocationState(reader, context); reader.End("authority-relocation-state"); return value; }
-    internal static byte[] EncodeAuthorityRelocationState(AuthorityRelocationState value, DecodeContext context) { var writer = new Writer(); WriteAuthorityRelocationState(writer, value, context); return writer.ToArray(); }
-    private static AuthorityRelocationState ReadAuthorityRelocationState(Reader reader, DecodeContext context)
+    internal static AuthorityRelocationState DecodeAuthorityRelocationState(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadAuthorityRelocationState(ref reader, context); reader.End("authority-relocation-state"); return value; }
+    internal static byte[] EncodeAuthorityRelocationState(AuthorityRelocationState value, DecodeContext context) { var writer = new Writer(); WriteAuthorityRelocationState(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteAuthorityRelocationState(ref writer, value, context); return bytes; }
+    private static AuthorityRelocationState ReadAuthorityRelocationState(ref Reader reader, DecodeContext context)
     {
         var encodedStart = reader.Remaining;
-        var HasRelocation = ReadBool8(reader, context);
-        var selected = reader.Slice(checked((int)ReadU32(reader, context).Value));
+        var HasRelocation = ReadBool8(ref reader, context);
+        var selected = reader.Slice(checked((int)ReadU32(ref reader, context).Value));
         if (HasRelocation == Bool8.False)
         {
             selected.End("authority-relocation-state");
@@ -5193,28 +5419,28 @@ internal static class ServiceWireCodec
         }
         else if (HasRelocation == Bool8.True)
         {
-            var Relocation = ReadRelocationId(selected, context);
-            var AggregateGeneration = ReadOrdinalOrZero(selected, context);
+            var Relocation = ReadRelocationId(ref selected, context);
+            var AggregateGeneration = ReadOrdinalOrZero(ref selected, context);
             if (AggregateGeneration.Value > 9223372036854775806UL) throw Error("aggregateGeneration: maximum");
-            var TargetAttemptGeneration = ReadOrdinalOrZero(selected, context);
-            var RelocationReference = ReadRelocationReference(selected, context);
-            var RelocationChecksumCrc32c = ReadU32(selected, context);
-            var SourceNodeRid = ReadRid(selected, context);
-            var SourceNodeGeneration = ReadNonzeroU64(selected, context);
-            var SourceOwnerId = ReadText8(selected, context);
-            var SourceOwnerLeaseGeneration = ReadNonzeroU64(selected, context);
-            var TargetNodeRid = ReadOptionalRid(selected, context);
-            var TargetNodeGeneration = ReadOrdinalOrZero(selected, context);
-            var TargetOwnerId = ReadOptionalText8(selected, context);
-            var TargetOwnerLeaseGeneration = ReadOrdinalOrZero(selected, context);
-            var CoordinatorOwnerId = ReadText8(selected, context);
-            var CoordinatorLeaseGeneration = ReadNonzeroU64(selected, context);
-            var CoordinatorNodeRid = ReadRid(selected, context);
-            var CoordinatorNodeGeneration = ReadNonzeroU64(selected, context);
-            var CoordinatorExpectedStoreVersion = ReadOptionalText8(selected, context);
-            var Phase = ReadRelocationPhase(selected, context);
-            var ApplicationVersion = ReadApplicationVersion(selected, context);
-            var SourceCleanupState = ReadSourceCleanupState(selected, context);
+            var TargetAttemptGeneration = ReadOrdinalOrZero(ref selected, context);
+            var RelocationReference = ReadRelocationReference(ref selected, context);
+            var RelocationChecksumCrc32c = ReadU32(ref selected, context);
+            var SourceNodeRid = ReadRid(ref selected, context);
+            var SourceNodeGeneration = ReadNonzeroU64(ref selected, context);
+            var SourceOwnerId = ReadText8(ref selected, context);
+            var SourceOwnerLeaseGeneration = ReadNonzeroU64(ref selected, context);
+            var TargetNodeRid = ReadOptionalRid(ref selected, context);
+            var TargetNodeGeneration = ReadOrdinalOrZero(ref selected, context);
+            var TargetOwnerId = ReadOptionalText8(ref selected, context);
+            var TargetOwnerLeaseGeneration = ReadOrdinalOrZero(ref selected, context);
+            var CoordinatorOwnerId = ReadText8(ref selected, context);
+            var CoordinatorLeaseGeneration = ReadNonzeroU64(ref selected, context);
+            var CoordinatorNodeRid = ReadRid(ref selected, context);
+            var CoordinatorNodeGeneration = ReadNonzeroU64(ref selected, context);
+            var CoordinatorExpectedStoreVersion = ReadOptionalText8(ref selected, context);
+            var Phase = ReadRelocationPhase(ref selected, context);
+            var ApplicationVersion = ReadApplicationVersion(ref selected, context);
+            var SourceCleanupState = ReadSourceCleanupState(ref selected, context);
             selected.End("authority-relocation-state");
             var caseValue = new AuthorityRelocationStateCase1(HasRelocation, Relocation, AggregateGeneration, TargetAttemptGeneration, RelocationReference, RelocationChecksumCrc32c, SourceNodeRid, SourceNodeGeneration, SourceOwnerId, SourceOwnerLeaseGeneration, TargetNodeRid, TargetNodeGeneration, TargetOwnerId, TargetOwnerLeaseGeneration, CoordinatorOwnerId, CoordinatorLeaseGeneration, CoordinatorNodeRid, CoordinatorNodeGeneration, CoordinatorExpectedStoreVersion, Phase, ApplicationVersion, SourceCleanupState);
             AuthorityRelocationState value = caseValue;
@@ -5222,7 +5448,7 @@ internal static class ServiceWireCodec
         }
         throw Error("authority-relocation-state: discriminator");
     }
-    private static void WriteAuthorityRelocationState(Writer writer, AuthorityRelocationState value, DecodeContext context)
+    private static void WriteAuthorityRelocationState(ref Writer writer, AuthorityRelocationState value, DecodeContext context)
     {
         var encodedStart = writer.Length;
         switch (value)
@@ -5230,41 +5456,45 @@ internal static class ServiceWireCodec
         case AuthorityRelocationStateCase0 item:
         {
             if (item.HasRelocation != Bool8.False) throw Error("authority-relocation-state: discriminator");
-            WriteBool8(writer, item.HasRelocation, context);
-            var body = new Writer();
-            WriteU32(writer, new U32(checked((uint)body.Length)), context);
-            writer.Bytes(body.ToArray());
+            WriteBool8(ref writer, item.HasRelocation, context);
+            var bodyOffset = writer.Length;
+            writer.Reserve(4);
+            var bodyStart = writer.Length;
+            var bodyWriter = writer.At(bodyOffset);
+            WriteU32(ref bodyWriter, new U32(checked((uint)(writer.Length - bodyStart))), context);
             break;
         }
         case AuthorityRelocationStateCase1 item:
         {
             if (item.HasRelocation != Bool8.True) throw Error("authority-relocation-state: discriminator");
-            WriteBool8(writer, item.HasRelocation, context);
-            var body = new Writer();
-            WriteRelocationId(body, item.Relocation, context);
+            WriteBool8(ref writer, item.HasRelocation, context);
+            var bodyOffset = writer.Length;
+            writer.Reserve(4);
+            var bodyStart = writer.Length;
+            WriteRelocationId(ref writer, item.Relocation, context);
             if (item.AggregateGeneration.Value > 9223372036854775806UL) throw Error("aggregateGeneration: maximum");
-            WriteOrdinalOrZero(body, item.AggregateGeneration, context);
-            WriteOrdinalOrZero(body, item.TargetAttemptGeneration, context);
-            WriteRelocationReference(body, item.RelocationReference, context);
-            WriteU32(body, item.RelocationChecksumCrc32c, context);
-            WriteRid(body, item.SourceNodeRid, context);
-            WriteNonzeroU64(body, item.SourceNodeGeneration, context);
-            WriteText8(body, item.SourceOwnerId, context);
-            WriteNonzeroU64(body, item.SourceOwnerLeaseGeneration, context);
-            WriteOptionalRid(body, item.TargetNodeRid, context);
-            WriteOrdinalOrZero(body, item.TargetNodeGeneration, context);
-            WriteOptionalText8(body, item.TargetOwnerId, context);
-            WriteOrdinalOrZero(body, item.TargetOwnerLeaseGeneration, context);
-            WriteText8(body, item.CoordinatorOwnerId, context);
-            WriteNonzeroU64(body, item.CoordinatorLeaseGeneration, context);
-            WriteRid(body, item.CoordinatorNodeRid, context);
-            WriteNonzeroU64(body, item.CoordinatorNodeGeneration, context);
-            WriteOptionalText8(body, item.CoordinatorExpectedStoreVersion, context);
-            WriteRelocationPhase(body, item.Phase, context);
-            WriteApplicationVersion(body, item.ApplicationVersion, context);
-            WriteSourceCleanupState(body, item.SourceCleanupState, context);
-            WriteU32(writer, new U32(checked((uint)body.Length)), context);
-            writer.Bytes(body.ToArray());
+            WriteOrdinalOrZero(ref writer, item.AggregateGeneration, context);
+            WriteOrdinalOrZero(ref writer, item.TargetAttemptGeneration, context);
+            WriteRelocationReference(ref writer, item.RelocationReference, context);
+            WriteU32(ref writer, item.RelocationChecksumCrc32c, context);
+            WriteRid(ref writer, item.SourceNodeRid, context);
+            WriteNonzeroU64(ref writer, item.SourceNodeGeneration, context);
+            WriteText8(ref writer, item.SourceOwnerId, context);
+            WriteNonzeroU64(ref writer, item.SourceOwnerLeaseGeneration, context);
+            WriteOptionalRid(ref writer, item.TargetNodeRid, context);
+            WriteOrdinalOrZero(ref writer, item.TargetNodeGeneration, context);
+            WriteOptionalText8(ref writer, item.TargetOwnerId, context);
+            WriteOrdinalOrZero(ref writer, item.TargetOwnerLeaseGeneration, context);
+            WriteText8(ref writer, item.CoordinatorOwnerId, context);
+            WriteNonzeroU64(ref writer, item.CoordinatorLeaseGeneration, context);
+            WriteRid(ref writer, item.CoordinatorNodeRid, context);
+            WriteNonzeroU64(ref writer, item.CoordinatorNodeGeneration, context);
+            WriteOptionalText8(ref writer, item.CoordinatorExpectedStoreVersion, context);
+            WriteRelocationPhase(ref writer, item.Phase, context);
+            WriteApplicationVersion(ref writer, item.ApplicationVersion, context);
+            WriteSourceCleanupState(ref writer, item.SourceCleanupState, context);
+            var bodyWriter = writer.At(bodyOffset);
+            WriteU32(ref bodyWriter, new U32(checked((uint)(writer.Length - bodyStart))), context);
             break;
         }
         default: throw Error("authority-relocation-state: variant");
@@ -5272,12 +5502,12 @@ internal static class ServiceWireCodec
         if ((ulong)(writer.Length - encodedStart) > 1048576UL) throw Error("authority-relocation-state: encoded limit");
     }
 
-    internal static AuthorityActivationRecoveryState DecodeAuthorityActivationRecoveryState(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadAuthorityActivationRecoveryState(reader, context); reader.End("authority-activation-recovery-state"); return value; }
-    internal static byte[] EncodeAuthorityActivationRecoveryState(AuthorityActivationRecoveryState value, DecodeContext context) { var writer = new Writer(); WriteAuthorityActivationRecoveryState(writer, value, context); return writer.ToArray(); }
-    private static AuthorityActivationRecoveryState ReadAuthorityActivationRecoveryState(Reader reader, DecodeContext context)
+    internal static AuthorityActivationRecoveryState DecodeAuthorityActivationRecoveryState(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadAuthorityActivationRecoveryState(ref reader, context); reader.End("authority-activation-recovery-state"); return value; }
+    internal static byte[] EncodeAuthorityActivationRecoveryState(AuthorityActivationRecoveryState value, DecodeContext context) { var writer = new Writer(); WriteAuthorityActivationRecoveryState(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteAuthorityActivationRecoveryState(ref writer, value, context); return bytes; }
+    private static AuthorityActivationRecoveryState ReadAuthorityActivationRecoveryState(ref Reader reader, DecodeContext context)
     {
-        var HasActivationRecovery = ReadBool8(reader, context);
-        var selected = reader.Slice(checked((int)ReadU32(reader, context).Value));
+        var HasActivationRecovery = ReadBool8(ref reader, context);
+        var selected = reader.Slice(checked((int)ReadU32(ref reader, context).Value));
         if (HasActivationRecovery == Bool8.False)
         {
             selected.End("authority-activation-recovery-state");
@@ -5287,11 +5517,11 @@ internal static class ServiceWireCodec
         }
         else if (HasActivationRecovery == Bool8.True)
         {
-            var Reference = ReadCreationContentReference(selected, context);
-            var Sha256 = ReadSha256Bytes(selected, context);
-            var EncodedSize = ReadCreationRequestSize(selected, context);
-            var InboxSequence = ReadNonzeroU64(selected, context);
-            var ReplayCursor = ReadU64(selected, context);
+            var Reference = ReadCreationContentReference(ref selected, context);
+            var Sha256 = ReadSha256Bytes(ref selected, context);
+            var EncodedSize = ReadCreationRequestSize(ref selected, context);
+            var InboxSequence = ReadNonzeroU64(ref selected, context);
+            var ReplayCursor = ReadU64(ref selected, context);
             selected.End("authority-activation-recovery-state");
             var caseValue = new AuthorityActivationRecoveryStateCase1(HasActivationRecovery, Reference, Sha256, EncodedSize, InboxSequence, ReplayCursor);
             if (caseValue.ReplayCursor.Value > caseValue.InboxSequence.Value) throw Error("field order");
@@ -5300,237 +5530,242 @@ internal static class ServiceWireCodec
         }
         throw Error("authority-activation-recovery-state: discriminator");
     }
-    private static void WriteAuthorityActivationRecoveryState(Writer writer, AuthorityActivationRecoveryState value, DecodeContext context)
+    private static void WriteAuthorityActivationRecoveryState(ref Writer writer, AuthorityActivationRecoveryState value, DecodeContext context)
     {
         switch (value)
         {
         case AuthorityActivationRecoveryStateCase0 item:
         {
             if (item.HasActivationRecovery != Bool8.False) throw Error("authority-activation-recovery-state: discriminator");
-            WriteBool8(writer, item.HasActivationRecovery, context);
-            var body = new Writer();
-            WriteU32(writer, new U32(checked((uint)body.Length)), context);
-            writer.Bytes(body.ToArray());
+            WriteBool8(ref writer, item.HasActivationRecovery, context);
+            var bodyOffset = writer.Length;
+            writer.Reserve(4);
+            var bodyStart = writer.Length;
+            var bodyWriter = writer.At(bodyOffset);
+            WriteU32(ref bodyWriter, new U32(checked((uint)(writer.Length - bodyStart))), context);
             break;
         }
         case AuthorityActivationRecoveryStateCase1 item:
         {
-            if (item.ReplayCursor.Value > item.InboxSequence.Value) throw Error("field order");
+            if (writer.IsSizing)
+            {
+                if (item.ReplayCursor.Value > item.InboxSequence.Value) throw Error("field order");
+            }
             if (item.HasActivationRecovery != Bool8.True) throw Error("authority-activation-recovery-state: discriminator");
-            WriteBool8(writer, item.HasActivationRecovery, context);
-            var body = new Writer();
-            WriteCreationContentReference(body, item.Reference, context);
-            WriteSha256Bytes(body, item.Sha256, context);
-            WriteCreationRequestSize(body, item.EncodedSize, context);
-            WriteNonzeroU64(body, item.InboxSequence, context);
-            WriteU64(body, item.ReplayCursor, context);
-            WriteU32(writer, new U32(checked((uint)body.Length)), context);
-            writer.Bytes(body.ToArray());
+            WriteBool8(ref writer, item.HasActivationRecovery, context);
+            var bodyOffset = writer.Length;
+            writer.Reserve(4);
+            var bodyStart = writer.Length;
+            WriteCreationContentReference(ref writer, item.Reference, context);
+            WriteSha256Bytes(ref writer, item.Sha256, context);
+            WriteCreationRequestSize(ref writer, item.EncodedSize, context);
+            WriteNonzeroU64(ref writer, item.InboxSequence, context);
+            WriteU64(ref writer, item.ReplayCursor, context);
+            var bodyWriter = writer.At(bodyOffset);
+            WriteU32(ref bodyWriter, new U32(checked((uint)(writer.Length - bodyStart))), context);
             break;
         }
         default: throw Error("authority-activation-recovery-state: variant");
         }
     }
 
-    internal static AuthorityPayloadV1 DecodeAuthorityPayloadV1(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadAuthorityPayloadV1(reader, context); reader.End("authority-payload-v1"); return value; }
-    internal static byte[] EncodeAuthorityPayloadV1(AuthorityPayloadV1 value, DecodeContext context) { var writer = new Writer(); WriteAuthorityPayloadV1(writer, value, context); return writer.ToArray(); }
-    private static AuthorityPayloadV1 ReadAuthorityPayloadV1(Reader reader, DecodeContext context)
+    internal static AuthorityPayloadV1 DecodeAuthorityPayloadV1(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadAuthorityPayloadV1(ref reader, context); reader.End("authority-payload-v1"); return value; }
+    internal static byte[] EncodeAuthorityPayloadV1(AuthorityPayloadV1 value, DecodeContext context) { var writer = new Writer(); WriteAuthorityPayloadV1(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteAuthorityPayloadV1(ref writer, value, context); return bytes; }
+    private static AuthorityPayloadV1 ReadAuthorityPayloadV1(ref Reader reader, DecodeContext context)
     {
-        var OperationKind = ReadAuthorityOperationKind(reader, context);
-        var Object = ReadAuthorityObjectIdentity(reader, context);
-        var OwnerId = ReadText8(reader, context);
-        var OwnerLeaseGeneration = ReadNonzeroU64(reader, context);
-        var OwnerMeshName = ReadText8(reader, context);
-        var OwnerNodeRid = ReadRid(reader, context);
-        var OwnerNodeGeneration = ReadNonzeroU64(reader, context);
-        var RelocationState = ReadAuthorityRelocationState(reader, context);
-        var ActivationRecoveryState = ReadAuthorityActivationRecoveryState(reader, context);
+        var OperationKind = ReadAuthorityOperationKind(ref reader, context);
+        var Object = ReadAuthorityObjectIdentity(ref reader, context);
+        var OwnerId = ReadText8(ref reader, context);
+        var OwnerLeaseGeneration = ReadNonzeroU64(ref reader, context);
+        var OwnerMeshName = ReadText8(ref reader, context);
+        var OwnerNodeRid = ReadRid(ref reader, context);
+        var OwnerNodeGeneration = ReadNonzeroU64(ref reader, context);
+        var RelocationState = ReadAuthorityRelocationState(ref reader, context);
+        var ActivationRecoveryState = ReadAuthorityActivationRecoveryState(ref reader, context);
         var value = new AuthorityPayloadV1(OperationKind, Object, OwnerId, OwnerLeaseGeneration, OwnerMeshName, OwnerNodeRid, OwnerNodeGeneration, RelocationState, ActivationRecoveryState);
         return value;
     }
-    private static void WriteAuthorityPayloadV1(Writer writer, AuthorityPayloadV1 value, DecodeContext context)
+    private static void WriteAuthorityPayloadV1(ref Writer writer, AuthorityPayloadV1 value, DecodeContext context)
     {
-        WriteAuthorityOperationKind(writer, value.OperationKind, context);
-        WriteAuthorityObjectIdentity(writer, value.Object, context);
-        WriteText8(writer, value.OwnerId, context);
-        WriteNonzeroU64(writer, value.OwnerLeaseGeneration, context);
-        WriteText8(writer, value.OwnerMeshName, context);
-        WriteRid(writer, value.OwnerNodeRid, context);
-        WriteNonzeroU64(writer, value.OwnerNodeGeneration, context);
-        WriteAuthorityRelocationState(writer, value.RelocationState, context);
-        WriteAuthorityActivationRecoveryState(writer, value.ActivationRecoveryState, context);
+        WriteAuthorityOperationKind(ref writer, value.OperationKind, context);
+        WriteAuthorityObjectIdentity(ref writer, value.Object, context);
+        WriteText8(ref writer, value.OwnerId, context);
+        WriteNonzeroU64(ref writer, value.OwnerLeaseGeneration, context);
+        WriteText8(ref writer, value.OwnerMeshName, context);
+        WriteRid(ref writer, value.OwnerNodeRid, context);
+        WriteNonzeroU64(ref writer, value.OwnerNodeGeneration, context);
+        WriteAuthorityRelocationState(ref writer, value.RelocationState, context);
+        WriteAuthorityActivationRecoveryState(ref writer, value.ActivationRecoveryState, context);
     }
 
-    internal static SavedWorkEntry DecodeSavedWorkEntry(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadSavedWorkEntry(reader, context); reader.End("saved-work-entry"); return value; }
-    internal static byte[] EncodeSavedWorkEntry(SavedWorkEntry value, DecodeContext context) { var writer = new Writer(); WriteSavedWorkEntry(writer, value, context); return writer.ToArray(); }
-    private static SavedWorkEntry ReadSavedWorkEntry(Reader reader, DecodeContext context)
+    internal static SavedWorkEntry DecodeSavedWorkEntry(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadSavedWorkEntry(ref reader, context); reader.End("saved-work-entry"); return value; }
+    internal static byte[] EncodeSavedWorkEntry(SavedWorkEntry value, DecodeContext context) { var writer = new Writer(); WriteSavedWorkEntry(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteSavedWorkEntry(ref writer, value, context); return bytes; }
+    private static SavedWorkEntry ReadSavedWorkEntry(ref Reader reader, DecodeContext context)
     {
-        var ParticipantId = ReadNonzeroU64(reader, context);
-        var Order = ReadNonzeroU64(reader, context);
-        var Record = ReadFrozenRecord(reader, context);
+        var ParticipantId = ReadNonzeroU64(ref reader, context);
+        var Order = ReadNonzeroU64(ref reader, context);
+        var Record = ReadFrozenRecord(ref reader, context);
         var value = new SavedWorkEntry(ParticipantId, Order, Record);
         return value;
     }
-    private static void WriteSavedWorkEntry(Writer writer, SavedWorkEntry value, DecodeContext context)
+    private static void WriteSavedWorkEntry(ref Writer writer, SavedWorkEntry value, DecodeContext context)
     {
-        WriteNonzeroU64(writer, value.ParticipantId, context);
-        WriteNonzeroU64(writer, value.Order, context);
-        WriteFrozenRecord(writer, value.Record, context);
+        WriteNonzeroU64(ref writer, value.ParticipantId, context);
+        WriteNonzeroU64(ref writer, value.Order, context);
+        WriteFrozenRecord(ref writer, value.Record, context);
     }
 
-    internal static SavedWorkVector DecodeSavedWorkVector(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadSavedWorkVector(reader, context); reader.End("saved-work-vector"); return value; }
-    internal static byte[] EncodeSavedWorkVector(SavedWorkVector value, DecodeContext context) { var writer = new Writer(); WriteSavedWorkVector(writer, value, context); return writer.ToArray(); }
-    private static SavedWorkVector ReadSavedWorkVector(Reader reader, DecodeContext context)
+    internal static SavedWorkVector DecodeSavedWorkVector(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadSavedWorkVector(ref reader, context); reader.End("saved-work-vector"); return value; }
+    internal static byte[] EncodeSavedWorkVector(SavedWorkVector value, DecodeContext context) { var writer = new Writer(); WriteSavedWorkVector(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteSavedWorkVector(ref writer, value, context); return bytes; }
+    private static SavedWorkVector ReadSavedWorkVector(ref Reader reader, DecodeContext context)
     {
-        var count = checked((int)ReadU32(reader, context).Value);
+        var count = checked((int)ReadU32(ref reader, context).Value);
         var items = new SavedWorkEntry[count];
-        for (var i = 0; i < count; ++i) items[i] = ReadSavedWorkEntry(reader, context);
+        for (var i = 0; i < count; ++i) items[i] = ReadSavedWorkEntry(ref reader, context);
         var value = new SavedWorkVector(items);
         try { for (var index = 1; index < value.Items.Count; index++) { var previous = KeySavedWorkVector0(value.Items[index - 1], context); var current = KeySavedWorkVector0(value.Items[index], context); var compared = CompareBytes(previous, current); if (compared == 0) throw Error("duplicate vector item"); if (compared > 0) throw Error("unsorted vector"); } } catch (OutOfMemoryException) { throw Capacity("saved-work-vector constraint capacity"); }
         return value;
     }
-    private static void WriteSavedWorkVector(Writer writer, SavedWorkVector value, DecodeContext context)
+    private static void WriteSavedWorkVector(ref Writer writer, SavedWorkVector value, DecodeContext context)
     {
-        try { for (var index = 1; index < value.Items.Count; index++) { var previous = KeySavedWorkVector0(value.Items[index - 1], context); var current = KeySavedWorkVector0(value.Items[index], context); var compared = CompareBytes(previous, current); if (compared == 0) throw Error("duplicate vector item"); if (compared > 0) throw Error("unsorted vector"); } } catch (OutOfMemoryException) { throw Capacity("saved-work-vector constraint capacity"); }
-        WriteU32(writer, new U32(checked((uint)value.Items.Count)), context);
-        foreach (var item in value.Items) WriteSavedWorkEntry(writer, item, context);
+        if (writer.IsSizing)
+        {
+            try { for (var index = 1; index < value.Items.Count; index++) { var previous = KeySavedWorkVector0(value.Items[index - 1], context); var current = KeySavedWorkVector0(value.Items[index], context); var compared = CompareBytes(previous, current); if (compared == 0) throw Error("duplicate vector item"); if (compared > 0) throw Error("unsorted vector"); } } catch (OutOfMemoryException) { throw Capacity("saved-work-vector constraint capacity"); }
+        }
+        WriteU32(ref writer, new U32(checked((uint)value.Items.Count)), context);
+        for (var index = 0; index < value.Items.Count; index++) { var item = value.Items[index]; WriteSavedWorkEntry(ref writer, item, context); }
     }
-    private static byte[] KeySavedWorkVector0(SavedWorkEntry item, DecodeContext context)
+    private static byte[] KeySavedWorkVector0(SavedWorkEntry item, DecodeContext context) { var writer = new Writer(); WriteKeySavedWorkVector0(ref writer, item, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteKeySavedWorkVector0(ref writer, item, context); return bytes; }
+    private static void WriteKeySavedWorkVector0(ref Writer writer, SavedWorkEntry item, DecodeContext context) { WriteNonzeroU64(ref writer, item.ParticipantId, context);
+        WriteNonzeroU64(ref writer, item.Order, context); }
+    internal static DurableBlob DecodeDurableBlob(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadDurableBlob(ref reader, context); reader.End("durable-blob"); return value; }
+    internal static byte[] EncodeDurableBlob(DurableBlob value, DecodeContext context) { var writer = new Writer(); WriteDurableBlob(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteDurableBlob(ref writer, value, context); return bytes; }
+    private static DurableBlob ReadDurableBlob(ref Reader reader, DecodeContext context)
     {
-        var writer = new Writer();
-        WriteNonzeroU64(writer, item.ParticipantId, context);
-        WriteNonzeroU64(writer, item.Order, context);
-        return writer.ToArray();
-    }
-    internal static DurableBlob DecodeDurableBlob(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadDurableBlob(reader, context); reader.End("durable-blob"); return value; }
-    internal static byte[] EncodeDurableBlob(DurableBlob value, DecodeContext context) { var writer = new Writer(); WriteDurableBlob(writer, value, context); return writer.ToArray(); }
-    private static DurableBlob ReadDurableBlob(Reader reader, DecodeContext context)
-    {
-        var encodedLength = (ulong)ReadU32(reader, context).Value;
+        var encodedLength = (ulong)ReadU32(ref reader, context).Value;
         if (encodedLength > 2147483647UL) throw Capacity("durable-blob: capacity");
         if (encodedLength < 0UL || encodedLength > 67108864UL) throw Error("durable-blob: length");
         var length = checked((int)encodedLength);
         var bytes = reader.Bytes(length);
-        return new(bytes);
+        return new(bytes.ToArray());
     }
-    private static void WriteDurableBlob(Writer writer, DurableBlob value, DecodeContext context)
+    private static void WriteDurableBlob(ref Writer writer, DurableBlob value, DecodeContext context)
     {
-        var bytes = value.Value ?? Array.Empty<byte>();
-        if ((ulong)bytes.LongLength > 2147483647UL) throw Capacity("durable-blob: capacity");
-        if ((ulong)bytes.LongLength < 0UL || (ulong)bytes.LongLength > 67108864UL) throw Error("durable-blob: length");
-        WriteU32(writer, new U32(checked((uint)bytes.Length)), context);
+        var bytes = value.Value ?? Array.Empty<byte>(); var length = bytes.Length;
+        if ((ulong)length > 2147483647UL) throw Capacity("durable-blob: capacity");
+        if ((ulong)length < 0UL || (ulong)length > 67108864UL) throw Error("durable-blob: length");
+        WriteU32(ref writer, new U32(checked((uint)length)), context);
         writer.Bytes(bytes);
     }
 
-    internal static DurableStateBlob DecodeDurableStateBlob(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadDurableStateBlob(reader, context); reader.End("durable-state-blob"); return value; }
-    internal static byte[] EncodeDurableStateBlob(DurableStateBlob value, DecodeContext context) { var writer = new Writer(); WriteDurableStateBlob(writer, value, context); return writer.ToArray(); }
-    private static DurableStateBlob ReadDurableStateBlob(Reader reader, DecodeContext context)
+    internal static DurableStateBlob DecodeDurableStateBlob(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadDurableStateBlob(ref reader, context); reader.End("durable-state-blob"); return value; }
+    internal static byte[] EncodeDurableStateBlob(DurableStateBlob value, DecodeContext context) { var writer = new Writer(); WriteDurableStateBlob(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteDurableStateBlob(ref writer, value, context); return bytes; }
+    private static DurableStateBlob ReadDurableStateBlob(ref Reader reader, DecodeContext context)
     {
-        var encodedLength = (ulong)ReadU64(reader, context).Value;
+        var encodedLength = (ulong)ReadU64(ref reader, context).Value;
         if (encodedLength > 2147483647UL) throw Capacity("durable-state-blob: capacity");
         if (encodedLength < 0UL || encodedLength > 67108864UL) throw Error("durable-state-blob: length");
         var length = checked((int)encodedLength);
         var bytes = reader.Bytes(length);
-        return new(bytes);
+        return new(bytes.ToArray());
     }
-    private static void WriteDurableStateBlob(Writer writer, DurableStateBlob value, DecodeContext context)
+    private static void WriteDurableStateBlob(ref Writer writer, DurableStateBlob value, DecodeContext context)
     {
-        var bytes = value.Value ?? Array.Empty<byte>();
-        if ((ulong)bytes.LongLength > 2147483647UL) throw Capacity("durable-state-blob: capacity");
-        if ((ulong)bytes.LongLength < 0UL || (ulong)bytes.LongLength > 67108864UL) throw Error("durable-state-blob: length");
-        WriteU64(writer, new U64(checked((ulong)bytes.Length)), context);
+        var bytes = value.Value ?? Array.Empty<byte>(); var length = bytes.Length;
+        if ((ulong)length > 2147483647UL) throw Capacity("durable-state-blob: capacity");
+        if ((ulong)length < 0UL || (ulong)length > 67108864UL) throw Error("durable-state-blob: length");
+        WriteU64(ref writer, new U64(checked((ulong)length)), context);
         writer.Bytes(bytes);
     }
 
-    internal static RelocationChunkEntryV1 DecodeRelocationChunkEntryV1(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadRelocationChunkEntryV1(reader, context); reader.End("relocation-chunk-entry-v1"); return value; }
-    internal static byte[] EncodeRelocationChunkEntryV1(RelocationChunkEntryV1 value, DecodeContext context) { var writer = new Writer(); WriteRelocationChunkEntryV1(writer, value, context); return writer.ToArray(); }
-    private static RelocationChunkEntryV1 ReadRelocationChunkEntryV1(Reader reader, DecodeContext context)
+    internal static RelocationChunkEntryV1 DecodeRelocationChunkEntryV1(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadRelocationChunkEntryV1(ref reader, context); reader.End("relocation-chunk-entry-v1"); return value; }
+    internal static byte[] EncodeRelocationChunkEntryV1(RelocationChunkEntryV1 value, DecodeContext context) { var writer = new Writer(); WriteRelocationChunkEntryV1(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteRelocationChunkEntryV1(ref writer, value, context); return bytes; }
+    private static RelocationChunkEntryV1 ReadRelocationChunkEntryV1(ref Reader reader, DecodeContext context)
     {
-        var Order = ReadU32(reader, context);
-        var Reference = ReadRelocationReference(reader, context);
-        var Length = ReadNonzeroU64(reader, context);
-        var ChecksumCrc32c = ReadU32(reader, context);
+        var Order = ReadU32(ref reader, context);
+        var Reference = ReadRelocationReference(ref reader, context);
+        var Length = ReadNonzeroU64(ref reader, context);
+        var ChecksumCrc32c = ReadU32(ref reader, context);
         var value = new RelocationChunkEntryV1(Order, Reference, Length, ChecksumCrc32c);
         return value;
     }
-    private static void WriteRelocationChunkEntryV1(Writer writer, RelocationChunkEntryV1 value, DecodeContext context)
+    private static void WriteRelocationChunkEntryV1(ref Writer writer, RelocationChunkEntryV1 value, DecodeContext context)
     {
-        WriteU32(writer, value.Order, context);
-        WriteRelocationReference(writer, value.Reference, context);
-        WriteNonzeroU64(writer, value.Length, context);
-        WriteU32(writer, value.ChecksumCrc32c, context);
+        WriteU32(ref writer, value.Order, context);
+        WriteRelocationReference(ref writer, value.Reference, context);
+        WriteNonzeroU64(ref writer, value.Length, context);
+        WriteU32(ref writer, value.ChecksumCrc32c, context);
     }
 
-    internal static RelocationChunkVectorV1 DecodeRelocationChunkVectorV1(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadRelocationChunkVectorV1(reader, context); reader.End("relocation-chunk-vector-v1"); return value; }
-    internal static byte[] EncodeRelocationChunkVectorV1(RelocationChunkVectorV1 value, DecodeContext context) { var writer = new Writer(); WriteRelocationChunkVectorV1(writer, value, context); return writer.ToArray(); }
-    private static RelocationChunkVectorV1 ReadRelocationChunkVectorV1(Reader reader, DecodeContext context)
+    internal static RelocationChunkVectorV1 DecodeRelocationChunkVectorV1(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadRelocationChunkVectorV1(ref reader, context); reader.End("relocation-chunk-vector-v1"); return value; }
+    internal static byte[] EncodeRelocationChunkVectorV1(RelocationChunkVectorV1 value, DecodeContext context) { var writer = new Writer(); WriteRelocationChunkVectorV1(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteRelocationChunkVectorV1(ref writer, value, context); return bytes; }
+    private static RelocationChunkVectorV1 ReadRelocationChunkVectorV1(ref Reader reader, DecodeContext context)
     {
-        var count = checked((int)ReadU32(reader, context).Value);
+        var count = checked((int)ReadU32(ref reader, context).Value);
         if (count > 4096) throw Error("relocation-chunk-vector-v1: count");
         var items = new RelocationChunkEntryV1[count];
-        for (var i = 0; i < count; ++i) items[i] = ReadRelocationChunkEntryV1(reader, context);
+        for (var i = 0; i < count; ++i) items[i] = ReadRelocationChunkEntryV1(ref reader, context);
         var value = new RelocationChunkVectorV1(items);
         try { for (var index = 1; index < value.Items.Count; index++) { var previous = KeyRelocationChunkVectorV10(value.Items[index - 1], context); var current = KeyRelocationChunkVectorV10(value.Items[index], context); var compared = CompareBytes(previous, current); if (compared == 0) throw Error("duplicate vector item"); if (compared > 0) throw Error("unsorted vector"); } } catch (OutOfMemoryException) { throw Capacity("relocation-chunk-vector-v1 constraint capacity"); }
         return value;
     }
-    private static void WriteRelocationChunkVectorV1(Writer writer, RelocationChunkVectorV1 value, DecodeContext context)
+    private static void WriteRelocationChunkVectorV1(ref Writer writer, RelocationChunkVectorV1 value, DecodeContext context)
     {
-        try { for (var index = 1; index < value.Items.Count; index++) { var previous = KeyRelocationChunkVectorV10(value.Items[index - 1], context); var current = KeyRelocationChunkVectorV10(value.Items[index], context); var compared = CompareBytes(previous, current); if (compared == 0) throw Error("duplicate vector item"); if (compared > 0) throw Error("unsorted vector"); } } catch (OutOfMemoryException) { throw Capacity("relocation-chunk-vector-v1 constraint capacity"); }
+        if (writer.IsSizing)
+        {
+            try { for (var index = 1; index < value.Items.Count; index++) { var previous = KeyRelocationChunkVectorV10(value.Items[index - 1], context); var current = KeyRelocationChunkVectorV10(value.Items[index], context); var compared = CompareBytes(previous, current); if (compared == 0) throw Error("duplicate vector item"); if (compared > 0) throw Error("unsorted vector"); } } catch (OutOfMemoryException) { throw Capacity("relocation-chunk-vector-v1 constraint capacity"); }
+        }
         if (value.Items.Count > 4096) throw Error("relocation-chunk-vector-v1: count");
-        WriteU32(writer, new U32(checked((uint)value.Items.Count)), context);
-        foreach (var item in value.Items) WriteRelocationChunkEntryV1(writer, item, context);
+        WriteU32(ref writer, new U32(checked((uint)value.Items.Count)), context);
+        for (var index = 0; index < value.Items.Count; index++) { var item = value.Items[index]; WriteRelocationChunkEntryV1(ref writer, item, context); }
     }
-    private static byte[] KeyRelocationChunkVectorV10(RelocationChunkEntryV1 item, DecodeContext context)
+    private static byte[] KeyRelocationChunkVectorV10(RelocationChunkEntryV1 item, DecodeContext context) { var writer = new Writer(); WriteKeyRelocationChunkVectorV10(ref writer, item, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteKeyRelocationChunkVectorV10(ref writer, item, context); return bytes; }
+    private static void WriteKeyRelocationChunkVectorV10(ref Writer writer, RelocationChunkEntryV1 item, DecodeContext context) { WriteU32(ref writer, item.Order, context); }
+    internal static RelocationManifestV1 DecodeRelocationManifestV1(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadRelocationManifestV1(ref reader, context); reader.End("relocation-manifest-v1"); return value; }
+    internal static byte[] EncodeRelocationManifestV1(RelocationManifestV1 value, DecodeContext context) { var writer = new Writer(); WriteRelocationManifestV1(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteRelocationManifestV1(ref writer, value, context); return bytes; }
+    private static RelocationManifestV1 ReadRelocationManifestV1(ref Reader reader, DecodeContext context)
     {
-        var writer = new Writer();
-        WriteU32(writer, item.Order, context);
-        return writer.ToArray();
-    }
-    internal static RelocationManifestV1 DecodeRelocationManifestV1(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadRelocationManifestV1(reader, context); reader.End("relocation-manifest-v1"); return value; }
-    internal static byte[] EncodeRelocationManifestV1(RelocationManifestV1 value, DecodeContext context) { var writer = new Writer(); WriteRelocationManifestV1(writer, value, context); return writer.ToArray(); }
-    private static RelocationManifestV1 ReadRelocationManifestV1(Reader reader, DecodeContext context)
-    {
-        var LogicalFormatVersion = ReadU8(reader, context);
+        var LogicalFormatVersion = ReadU8(ref reader, context);
         if (LogicalFormatVersion != new U8(1)) throw Error("logicalFormatVersion: constant");
-        var TotalLength = ReadRelocationLogicalLength(reader, context);
-        var TotalChecksumCrc32c = ReadU32(reader, context);
-        var InventoryDigestSha256 = ReadSha256Bytes(reader, context);
-        var Chunks = ReadRelocationChunkVectorV1(reader, context);
+        var TotalLength = ReadRelocationLogicalLength(ref reader, context);
+        var TotalChecksumCrc32c = ReadU32(ref reader, context);
+        var InventoryDigestSha256 = ReadSha256Bytes(ref reader, context);
+        var Chunks = ReadRelocationChunkVectorV1(ref reader, context);
         var value = new RelocationManifestV1(LogicalFormatVersion, TotalLength, TotalChecksumCrc32c, InventoryDigestSha256, Chunks);
         return value;
     }
-    private static void WriteRelocationManifestV1(Writer writer, RelocationManifestV1 value, DecodeContext context)
+    private static void WriteRelocationManifestV1(ref Writer writer, RelocationManifestV1 value, DecodeContext context)
     {
         if (value.LogicalFormatVersion != new U8(1)) throw Error("logicalFormatVersion: constant");
-        WriteU8(writer, value.LogicalFormatVersion, context);
-        WriteRelocationLogicalLength(writer, value.TotalLength, context);
-        WriteU32(writer, value.TotalChecksumCrc32c, context);
-        WriteSha256Bytes(writer, value.InventoryDigestSha256, context);
-        WriteRelocationChunkVectorV1(writer, value.Chunks, context);
+        WriteU8(ref writer, value.LogicalFormatVersion, context);
+        WriteRelocationLogicalLength(ref writer, value.TotalLength, context);
+        WriteU32(ref writer, value.TotalChecksumCrc32c, context);
+        WriteSha256Bytes(ref writer, value.InventoryDigestSha256, context);
+        WriteRelocationChunkVectorV1(ref writer, value.Chunks, context);
     }
 
-    internal static RelocationDataChunkV1 DecodeRelocationDataChunkV1(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadRelocationDataChunkV1(reader, context); reader.End("relocation-data-chunk-v1"); return value; }
-    internal static byte[] EncodeRelocationDataChunkV1(RelocationDataChunkV1 value, DecodeContext context) { var writer = new Writer(); WriteRelocationDataChunkV1(writer, value, context); return writer.ToArray(); }
-    private static RelocationDataChunkV1 ReadRelocationDataChunkV1(Reader reader, DecodeContext context)
+    internal static RelocationDataChunkV1 DecodeRelocationDataChunkV1(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadRelocationDataChunkV1(ref reader, context); reader.End("relocation-data-chunk-v1"); return value; }
+    internal static byte[] EncodeRelocationDataChunkV1(RelocationDataChunkV1 value, DecodeContext context) { var writer = new Writer(); WriteRelocationDataChunkV1(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteRelocationDataChunkV1(ref writer, value, context); return bytes; }
+    private static RelocationDataChunkV1 ReadRelocationDataChunkV1(ref Reader reader, DecodeContext context)
     {
-        var Order = ReadU32(reader, context);
-        var Data = ReadDurableBlob(reader, context);
+        var Order = ReadU32(ref reader, context);
+        var Data = ReadDurableBlob(ref reader, context);
         var value = new RelocationDataChunkV1(Order, Data);
         return value;
     }
-    private static void WriteRelocationDataChunkV1(Writer writer, RelocationDataChunkV1 value, DecodeContext context)
+    private static void WriteRelocationDataChunkV1(ref Writer writer, RelocationDataChunkV1 value, DecodeContext context)
     {
-        WriteU32(writer, value.Order, context);
-        WriteDurableBlob(writer, value.Data, context);
+        WriteU32(ref writer, value.Order, context);
+        WriteDurableBlob(ref writer, value.Data, context);
     }
 
-    internal static RelocationApplicationState DecodeRelocationApplicationState(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadRelocationApplicationState(reader, context); reader.End("relocation-application-state"); return value; }
-    internal static byte[] EncodeRelocationApplicationState(RelocationApplicationState value, DecodeContext context) { var writer = new Writer(); WriteRelocationApplicationState(writer, value, context); return writer.ToArray(); }
-    private static RelocationApplicationState ReadRelocationApplicationState(Reader reader, DecodeContext context)
+    internal static RelocationApplicationState DecodeRelocationApplicationState(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadRelocationApplicationState(ref reader, context); reader.End("relocation-application-state"); return value; }
+    internal static byte[] EncodeRelocationApplicationState(RelocationApplicationState value, DecodeContext context) { var writer = new Writer(); WriteRelocationApplicationState(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteRelocationApplicationState(ref writer, value, context); return bytes; }
+    private static RelocationApplicationState ReadRelocationApplicationState(ref Reader reader, DecodeContext context)
     {
         var encodedStart = reader.Remaining;
-        var HasState = ReadBool8(reader, context);
-        var selected = reader.Slice(checked((int)ReadU64(reader, context).Value));
+        var HasState = ReadBool8(ref reader, context);
+        var selected = reader.Slice(checked((int)ReadU64(ref reader, context).Value));
         if (HasState == Bool8.False)
         {
             selected.End("relocation-application-state");
@@ -5540,7 +5775,7 @@ internal static class ServiceWireCodec
         }
         else if (HasState == Bool8.True)
         {
-            var Payload = ReadDurableStateBlob(selected, context);
+            var Payload = ReadDurableStateBlob(ref selected, context);
             selected.End("relocation-application-state");
             var caseValue = new RelocationApplicationStateCase1(HasState, Payload);
             RelocationApplicationState value = caseValue;
@@ -5548,7 +5783,7 @@ internal static class ServiceWireCodec
         }
         throw Error("relocation-application-state: discriminator");
     }
-    private static void WriteRelocationApplicationState(Writer writer, RelocationApplicationState value, DecodeContext context)
+    private static void WriteRelocationApplicationState(ref Writer writer, RelocationApplicationState value, DecodeContext context)
     {
         var encodedStart = writer.Length;
         switch (value)
@@ -5556,20 +5791,24 @@ internal static class ServiceWireCodec
         case RelocationApplicationStateCase0 item:
         {
             if (item.HasState != Bool8.False) throw Error("relocation-application-state: discriminator");
-            WriteBool8(writer, item.HasState, context);
-            var body = new Writer();
-            WriteU64(writer, new U64(checked((ulong)body.Length)), context);
-            writer.Bytes(body.ToArray());
+            WriteBool8(ref writer, item.HasState, context);
+            var bodyOffset = writer.Length;
+            writer.Reserve(8);
+            var bodyStart = writer.Length;
+            var bodyWriter = writer.At(bodyOffset);
+            WriteU64(ref bodyWriter, new U64(checked((ulong)(writer.Length - bodyStart))), context);
             break;
         }
         case RelocationApplicationStateCase1 item:
         {
             if (item.HasState != Bool8.True) throw Error("relocation-application-state: discriminator");
-            WriteBool8(writer, item.HasState, context);
-            var body = new Writer();
-            WriteDurableStateBlob(body, item.Payload, context);
-            WriteU64(writer, new U64(checked((ulong)body.Length)), context);
-            writer.Bytes(body.ToArray());
+            WriteBool8(ref writer, item.HasState, context);
+            var bodyOffset = writer.Length;
+            writer.Reserve(8);
+            var bodyStart = writer.Length;
+            WriteDurableStateBlob(ref writer, item.Payload, context);
+            var bodyWriter = writer.At(bodyOffset);
+            WriteU64(ref bodyWriter, new U64(checked((ulong)(writer.Length - bodyStart))), context);
             break;
         }
         default: throw Error("relocation-application-state: variant");
@@ -5577,1807 +5816,2155 @@ internal static class ServiceWireCodec
         if ((ulong)(writer.Length - encodedStart) > 274877906944UL) throw Error("relocation-application-state: encoded limit");
     }
 
-    internal static RelocationParticipantApplicationState DecodeRelocationParticipantApplicationState(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadRelocationParticipantApplicationState(reader, context); reader.End("relocation-participant-application-state"); return value; }
-    internal static byte[] EncodeRelocationParticipantApplicationState(RelocationParticipantApplicationState value, DecodeContext context) { var writer = new Writer(); WriteRelocationParticipantApplicationState(writer, value, context); return writer.ToArray(); }
-    private static RelocationParticipantApplicationState ReadRelocationParticipantApplicationState(Reader reader, DecodeContext context)
+    internal static RelocationParticipantApplicationState DecodeRelocationParticipantApplicationState(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadRelocationParticipantApplicationState(ref reader, context); reader.End("relocation-participant-application-state"); return value; }
+    internal static byte[] EncodeRelocationParticipantApplicationState(RelocationParticipantApplicationState value, DecodeContext context) { var writer = new Writer(); WriteRelocationParticipantApplicationState(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteRelocationParticipantApplicationState(ref writer, value, context); return bytes; }
+    private static RelocationParticipantApplicationState ReadRelocationParticipantApplicationState(ref Reader reader, DecodeContext context)
     {
-        var ParticipantId = ReadNonzeroU64(reader, context);
-        var ApplicationState = ReadRelocationApplicationState(reader, context);
+        var ParticipantId = ReadNonzeroU64(ref reader, context);
+        var ApplicationState = ReadRelocationApplicationState(ref reader, context);
         var value = new RelocationParticipantApplicationState(ParticipantId, ApplicationState);
         return value;
     }
-    private static void WriteRelocationParticipantApplicationState(Writer writer, RelocationParticipantApplicationState value, DecodeContext context)
+    private static void WriteRelocationParticipantApplicationState(ref Writer writer, RelocationParticipantApplicationState value, DecodeContext context)
     {
-        WriteNonzeroU64(writer, value.ParticipantId, context);
-        WriteRelocationApplicationState(writer, value.ApplicationState, context);
+        WriteNonzeroU64(ref writer, value.ParticipantId, context);
+        WriteRelocationApplicationState(ref writer, value.ApplicationState, context);
     }
 
-    internal static RelocationParticipantApplicationStateVector DecodeRelocationParticipantApplicationStateVector(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadRelocationParticipantApplicationStateVector(reader, context); reader.End("relocation-participant-application-state-vector"); return value; }
-    internal static byte[] EncodeRelocationParticipantApplicationStateVector(RelocationParticipantApplicationStateVector value, DecodeContext context) { var writer = new Writer(); WriteRelocationParticipantApplicationStateVector(writer, value, context); return writer.ToArray(); }
-    private static RelocationParticipantApplicationStateVector ReadRelocationParticipantApplicationStateVector(Reader reader, DecodeContext context)
+    internal static RelocationParticipantApplicationStateVector DecodeRelocationParticipantApplicationStateVector(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadRelocationParticipantApplicationStateVector(ref reader, context); reader.End("relocation-participant-application-state-vector"); return value; }
+    internal static byte[] EncodeRelocationParticipantApplicationStateVector(RelocationParticipantApplicationStateVector value, DecodeContext context) { var writer = new Writer(); WriteRelocationParticipantApplicationStateVector(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteRelocationParticipantApplicationStateVector(ref writer, value, context); return bytes; }
+    private static RelocationParticipantApplicationStateVector ReadRelocationParticipantApplicationStateVector(ref Reader reader, DecodeContext context)
     {
-        var count = checked((int)ReadU32(reader, context).Value);
+        var count = checked((int)ReadU32(ref reader, context).Value);
         if (count > 1024) throw Error("relocation-participant-application-state-vector: count");
         var items = new RelocationParticipantApplicationState[count];
-        for (var i = 0; i < count; ++i) items[i] = ReadRelocationParticipantApplicationState(reader, context);
+        for (var i = 0; i < count; ++i) items[i] = ReadRelocationParticipantApplicationState(ref reader, context);
         var value = new RelocationParticipantApplicationStateVector(items);
         try { for (var index = 1; index < value.Items.Count; index++) { var previous = KeyRelocationParticipantApplicationStateVector0(value.Items[index - 1], context); var current = KeyRelocationParticipantApplicationStateVector0(value.Items[index], context); var compared = CompareBytes(previous, current); if (compared == 0) throw Error("duplicate vector item"); if (compared > 0) throw Error("unsorted vector"); } } catch (OutOfMemoryException) { throw Capacity("relocation-participant-application-state-vector constraint capacity"); }
         return value;
     }
-    private static void WriteRelocationParticipantApplicationStateVector(Writer writer, RelocationParticipantApplicationStateVector value, DecodeContext context)
+    private static void WriteRelocationParticipantApplicationStateVector(ref Writer writer, RelocationParticipantApplicationStateVector value, DecodeContext context)
     {
-        try { for (var index = 1; index < value.Items.Count; index++) { var previous = KeyRelocationParticipantApplicationStateVector0(value.Items[index - 1], context); var current = KeyRelocationParticipantApplicationStateVector0(value.Items[index], context); var compared = CompareBytes(previous, current); if (compared == 0) throw Error("duplicate vector item"); if (compared > 0) throw Error("unsorted vector"); } } catch (OutOfMemoryException) { throw Capacity("relocation-participant-application-state-vector constraint capacity"); }
+        if (writer.IsSizing)
+        {
+            try { for (var index = 1; index < value.Items.Count; index++) { var previous = KeyRelocationParticipantApplicationStateVector0(value.Items[index - 1], context); var current = KeyRelocationParticipantApplicationStateVector0(value.Items[index], context); var compared = CompareBytes(previous, current); if (compared == 0) throw Error("duplicate vector item"); if (compared > 0) throw Error("unsorted vector"); } } catch (OutOfMemoryException) { throw Capacity("relocation-participant-application-state-vector constraint capacity"); }
+        }
         if (value.Items.Count > 1024) throw Error("relocation-participant-application-state-vector: count");
-        WriteU32(writer, new U32(checked((uint)value.Items.Count)), context);
-        foreach (var item in value.Items) WriteRelocationParticipantApplicationState(writer, item, context);
+        WriteU32(ref writer, new U32(checked((uint)value.Items.Count)), context);
+        for (var index = 0; index < value.Items.Count; index++) { var item = value.Items[index]; WriteRelocationParticipantApplicationState(ref writer, item, context); }
     }
-    private static byte[] KeyRelocationParticipantApplicationStateVector0(RelocationParticipantApplicationState item, DecodeContext context)
+    private static byte[] KeyRelocationParticipantApplicationStateVector0(RelocationParticipantApplicationState item, DecodeContext context) { var writer = new Writer(); WriteKeyRelocationParticipantApplicationStateVector0(ref writer, item, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteKeyRelocationParticipantApplicationStateVector0(ref writer, item, context); return bytes; }
+    private static void WriteKeyRelocationParticipantApplicationStateVector0(ref Writer writer, RelocationParticipantApplicationState item, DecodeContext context) { WriteNonzeroU64(ref writer, item.ParticipantId, context); }
+    internal static RelocationTimerRegistration DecodeRelocationTimerRegistration(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadRelocationTimerRegistration(ref reader, context); reader.End("relocation-timer-registration"); return value; }
+    internal static byte[] EncodeRelocationTimerRegistration(RelocationTimerRegistration value, DecodeContext context) { var writer = new Writer(); WriteRelocationTimerRegistration(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteRelocationTimerRegistration(ref writer, value, context); return bytes; }
+    private static RelocationTimerRegistration ReadRelocationTimerRegistration(ref Reader reader, DecodeContext context)
     {
-        var writer = new Writer();
-        WriteNonzeroU64(writer, item.ParticipantId, context);
-        return writer.ToArray();
-    }
-    internal static RelocationTimerRegistration DecodeRelocationTimerRegistration(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadRelocationTimerRegistration(reader, context); reader.End("relocation-timer-registration"); return value; }
-    internal static byte[] EncodeRelocationTimerRegistration(RelocationTimerRegistration value, DecodeContext context) { var writer = new Writer(); WriteRelocationTimerRegistration(writer, value, context); return writer.ToArray(); }
-    private static RelocationTimerRegistration ReadRelocationTimerRegistration(Reader reader, DecodeContext context)
-    {
-        var ParticipantId = ReadNonzeroU64(reader, context);
-        var Name = ReadText8(reader, context);
-        var HandlerType = ReadText8(reader, context);
-        var PeriodMilliseconds = ReadNonzeroU64(reader, context);
-        var OverrunPolicy = ReadTimerOverrunPolicyKind(reader, context);
-        var MaxCatchUpTicks = ReadNonzeroU64(reader, context);
-        var StopOnUnhandledException = ReadBool8(reader, context);
-        var LastCompletedDeliveryIndex = ReadOrdinalOrZero(reader, context);
-        var LastCompletedScheduledIndex = ReadOrdinalOrZero(reader, context);
-        var NextScheduledAtUnixMilliseconds = ReadU64(reader, context);
+        var ParticipantId = ReadNonzeroU64(ref reader, context);
+        var Name = ReadText8(ref reader, context);
+        var HandlerType = ReadText8(ref reader, context);
+        var PeriodMilliseconds = ReadNonzeroU64(ref reader, context);
+        var OverrunPolicy = ReadTimerOverrunPolicyKind(ref reader, context);
+        var MaxCatchUpTicks = ReadNonzeroU64(ref reader, context);
+        var StopOnUnhandledException = ReadBool8(ref reader, context);
+        var LastCompletedDeliveryIndex = ReadOrdinalOrZero(ref reader, context);
+        var LastCompletedScheduledIndex = ReadOrdinalOrZero(ref reader, context);
+        var NextScheduledAtUnixMilliseconds = ReadU64(ref reader, context);
         var value = new RelocationTimerRegistration(ParticipantId, Name, HandlerType, PeriodMilliseconds, OverrunPolicy, MaxCatchUpTicks, StopOnUnhandledException, LastCompletedDeliveryIndex, LastCompletedScheduledIndex, NextScheduledAtUnixMilliseconds);
         return value;
     }
-    private static void WriteRelocationTimerRegistration(Writer writer, RelocationTimerRegistration value, DecodeContext context)
+    private static void WriteRelocationTimerRegistration(ref Writer writer, RelocationTimerRegistration value, DecodeContext context)
     {
-        WriteNonzeroU64(writer, value.ParticipantId, context);
-        WriteText8(writer, value.Name, context);
-        WriteText8(writer, value.HandlerType, context);
-        WriteNonzeroU64(writer, value.PeriodMilliseconds, context);
-        WriteTimerOverrunPolicyKind(writer, value.OverrunPolicy, context);
-        WriteNonzeroU64(writer, value.MaxCatchUpTicks, context);
-        WriteBool8(writer, value.StopOnUnhandledException, context);
-        WriteOrdinalOrZero(writer, value.LastCompletedDeliveryIndex, context);
-        WriteOrdinalOrZero(writer, value.LastCompletedScheduledIndex, context);
-        WriteU64(writer, value.NextScheduledAtUnixMilliseconds, context);
+        WriteNonzeroU64(ref writer, value.ParticipantId, context);
+        WriteText8(ref writer, value.Name, context);
+        WriteText8(ref writer, value.HandlerType, context);
+        WriteNonzeroU64(ref writer, value.PeriodMilliseconds, context);
+        WriteTimerOverrunPolicyKind(ref writer, value.OverrunPolicy, context);
+        WriteNonzeroU64(ref writer, value.MaxCatchUpTicks, context);
+        WriteBool8(ref writer, value.StopOnUnhandledException, context);
+        WriteOrdinalOrZero(ref writer, value.LastCompletedDeliveryIndex, context);
+        WriteOrdinalOrZero(ref writer, value.LastCompletedScheduledIndex, context);
+        WriteU64(ref writer, value.NextScheduledAtUnixMilliseconds, context);
     }
 
-    internal static RelocationTimerRegistrationVector DecodeRelocationTimerRegistrationVector(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadRelocationTimerRegistrationVector(reader, context); reader.End("relocation-timer-registration-vector"); return value; }
-    internal static byte[] EncodeRelocationTimerRegistrationVector(RelocationTimerRegistrationVector value, DecodeContext context) { var writer = new Writer(); WriteRelocationTimerRegistrationVector(writer, value, context); return writer.ToArray(); }
-    private static RelocationTimerRegistrationVector ReadRelocationTimerRegistrationVector(Reader reader, DecodeContext context)
+    internal static RelocationTimerRegistrationVector DecodeRelocationTimerRegistrationVector(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadRelocationTimerRegistrationVector(ref reader, context); reader.End("relocation-timer-registration-vector"); return value; }
+    internal static byte[] EncodeRelocationTimerRegistrationVector(RelocationTimerRegistrationVector value, DecodeContext context) { var writer = new Writer(); WriteRelocationTimerRegistrationVector(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteRelocationTimerRegistrationVector(ref writer, value, context); return bytes; }
+    private static RelocationTimerRegistrationVector ReadRelocationTimerRegistrationVector(ref Reader reader, DecodeContext context)
     {
-        var count = checked((int)ReadU32(reader, context).Value);
+        var count = checked((int)ReadU32(ref reader, context).Value);
         var items = new RelocationTimerRegistration[count];
-        for (var i = 0; i < count; ++i) items[i] = ReadRelocationTimerRegistration(reader, context);
+        for (var i = 0; i < count; ++i) items[i] = ReadRelocationTimerRegistration(ref reader, context);
         var value = new RelocationTimerRegistrationVector(items);
         try { for (var index = 1; index < value.Items.Count; index++) { var previous = KeyRelocationTimerRegistrationVector0(value.Items[index - 1], context); var current = KeyRelocationTimerRegistrationVector0(value.Items[index], context); var compared = CompareBytes(previous, current); if (compared == 0) throw Error("duplicate vector item"); if (compared > 0) throw Error("unsorted vector"); } } catch (OutOfMemoryException) { throw Capacity("relocation-timer-registration-vector constraint capacity"); }
         return value;
     }
-    private static void WriteRelocationTimerRegistrationVector(Writer writer, RelocationTimerRegistrationVector value, DecodeContext context)
+    private static void WriteRelocationTimerRegistrationVector(ref Writer writer, RelocationTimerRegistrationVector value, DecodeContext context)
     {
-        try { for (var index = 1; index < value.Items.Count; index++) { var previous = KeyRelocationTimerRegistrationVector0(value.Items[index - 1], context); var current = KeyRelocationTimerRegistrationVector0(value.Items[index], context); var compared = CompareBytes(previous, current); if (compared == 0) throw Error("duplicate vector item"); if (compared > 0) throw Error("unsorted vector"); } } catch (OutOfMemoryException) { throw Capacity("relocation-timer-registration-vector constraint capacity"); }
-        WriteU32(writer, new U32(checked((uint)value.Items.Count)), context);
-        foreach (var item in value.Items) WriteRelocationTimerRegistration(writer, item, context);
+        if (writer.IsSizing)
+        {
+            try { for (var index = 1; index < value.Items.Count; index++) { var previous = KeyRelocationTimerRegistrationVector0(value.Items[index - 1], context); var current = KeyRelocationTimerRegistrationVector0(value.Items[index], context); var compared = CompareBytes(previous, current); if (compared == 0) throw Error("duplicate vector item"); if (compared > 0) throw Error("unsorted vector"); } } catch (OutOfMemoryException) { throw Capacity("relocation-timer-registration-vector constraint capacity"); }
+        }
+        WriteU32(ref writer, new U32(checked((uint)value.Items.Count)), context);
+        for (var index = 0; index < value.Items.Count; index++) { var item = value.Items[index]; WriteRelocationTimerRegistration(ref writer, item, context); }
     }
-    private static byte[] KeyRelocationTimerRegistrationVector0(RelocationTimerRegistration item, DecodeContext context)
+    private static byte[] KeyRelocationTimerRegistrationVector0(RelocationTimerRegistration item, DecodeContext context) { var writer = new Writer(); WriteKeyRelocationTimerRegistrationVector0(ref writer, item, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteKeyRelocationTimerRegistrationVector0(ref writer, item, context); return bytes; }
+    private static void WriteKeyRelocationTimerRegistrationVector0(ref Writer writer, RelocationTimerRegistration item, DecodeContext context) { WriteNonzeroU64(ref writer, item.ParticipantId, context);
+        writer.Text(item.Name.Value!, Utf8.GetByteCount(item.Name.Value!)); }
+    internal static RelocationPendingTimerTick DecodeRelocationPendingTimerTick(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadRelocationPendingTimerTick(ref reader, context); reader.End("relocation-pending-timer-tick"); return value; }
+    internal static byte[] EncodeRelocationPendingTimerTick(RelocationPendingTimerTick value, DecodeContext context) { var writer = new Writer(); WriteRelocationPendingTimerTick(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteRelocationPendingTimerTick(ref writer, value, context); return bytes; }
+    private static RelocationPendingTimerTick ReadRelocationPendingTimerTick(ref Reader reader, DecodeContext context)
     {
-        var writer = new Writer();
-        WriteNonzeroU64(writer, item.ParticipantId, context);
-        writer.Bytes(Utf8.GetBytes(item.Name.Value!));
-        return writer.ToArray();
-    }
-    internal static RelocationPendingTimerTick DecodeRelocationPendingTimerTick(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadRelocationPendingTimerTick(reader, context); reader.End("relocation-pending-timer-tick"); return value; }
-    internal static byte[] EncodeRelocationPendingTimerTick(RelocationPendingTimerTick value, DecodeContext context) { var writer = new Writer(); WriteRelocationPendingTimerTick(writer, value, context); return writer.ToArray(); }
-    private static RelocationPendingTimerTick ReadRelocationPendingTimerTick(Reader reader, DecodeContext context)
-    {
-        var ParticipantId = ReadNonzeroU64(reader, context);
-        var Order = ReadNonzeroU64(reader, context);
-        var TimerName = ReadText8(reader, context);
-        var DeliveryIndex = ReadNonzeroU64(reader, context);
-        var ScheduledIndex = ReadNonzeroU64(reader, context);
-        var ScheduledAtUnixMilliseconds = ReadU64(reader, context);
-        var SkippedTicks = ReadOrdinalOrZero(reader, context);
+        var ParticipantId = ReadNonzeroU64(ref reader, context);
+        var Order = ReadNonzeroU64(ref reader, context);
+        var TimerName = ReadText8(ref reader, context);
+        var DeliveryIndex = ReadNonzeroU64(ref reader, context);
+        var ScheduledIndex = ReadNonzeroU64(ref reader, context);
+        var ScheduledAtUnixMilliseconds = ReadU64(ref reader, context);
+        var SkippedTicks = ReadOrdinalOrZero(ref reader, context);
         var value = new RelocationPendingTimerTick(ParticipantId, Order, TimerName, DeliveryIndex, ScheduledIndex, ScheduledAtUnixMilliseconds, SkippedTicks);
         return value;
     }
-    private static void WriteRelocationPendingTimerTick(Writer writer, RelocationPendingTimerTick value, DecodeContext context)
+    private static void WriteRelocationPendingTimerTick(ref Writer writer, RelocationPendingTimerTick value, DecodeContext context)
     {
-        WriteNonzeroU64(writer, value.ParticipantId, context);
-        WriteNonzeroU64(writer, value.Order, context);
-        WriteText8(writer, value.TimerName, context);
-        WriteNonzeroU64(writer, value.DeliveryIndex, context);
-        WriteNonzeroU64(writer, value.ScheduledIndex, context);
-        WriteU64(writer, value.ScheduledAtUnixMilliseconds, context);
-        WriteOrdinalOrZero(writer, value.SkippedTicks, context);
+        WriteNonzeroU64(ref writer, value.ParticipantId, context);
+        WriteNonzeroU64(ref writer, value.Order, context);
+        WriteText8(ref writer, value.TimerName, context);
+        WriteNonzeroU64(ref writer, value.DeliveryIndex, context);
+        WriteNonzeroU64(ref writer, value.ScheduledIndex, context);
+        WriteU64(ref writer, value.ScheduledAtUnixMilliseconds, context);
+        WriteOrdinalOrZero(ref writer, value.SkippedTicks, context);
     }
 
-    internal static RelocationPendingTimerTickVector DecodeRelocationPendingTimerTickVector(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadRelocationPendingTimerTickVector(reader, context); reader.End("relocation-pending-timer-tick-vector"); return value; }
-    internal static byte[] EncodeRelocationPendingTimerTickVector(RelocationPendingTimerTickVector value, DecodeContext context) { var writer = new Writer(); WriteRelocationPendingTimerTickVector(writer, value, context); return writer.ToArray(); }
-    private static RelocationPendingTimerTickVector ReadRelocationPendingTimerTickVector(Reader reader, DecodeContext context)
+    internal static RelocationPendingTimerTickVector DecodeRelocationPendingTimerTickVector(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadRelocationPendingTimerTickVector(ref reader, context); reader.End("relocation-pending-timer-tick-vector"); return value; }
+    internal static byte[] EncodeRelocationPendingTimerTickVector(RelocationPendingTimerTickVector value, DecodeContext context) { var writer = new Writer(); WriteRelocationPendingTimerTickVector(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteRelocationPendingTimerTickVector(ref writer, value, context); return bytes; }
+    private static RelocationPendingTimerTickVector ReadRelocationPendingTimerTickVector(ref Reader reader, DecodeContext context)
     {
-        var count = checked((int)ReadU32(reader, context).Value);
+        var count = checked((int)ReadU32(ref reader, context).Value);
         var items = new RelocationPendingTimerTick[count];
-        for (var i = 0; i < count; ++i) items[i] = ReadRelocationPendingTimerTick(reader, context);
+        for (var i = 0; i < count; ++i) items[i] = ReadRelocationPendingTimerTick(ref reader, context);
         var value = new RelocationPendingTimerTickVector(items);
         try { for (var index = 1; index < value.Items.Count; index++) { var previous = KeyRelocationPendingTimerTickVector0(value.Items[index - 1], context); var current = KeyRelocationPendingTimerTickVector0(value.Items[index], context); var compared = CompareBytes(previous, current); if (compared == 0) throw Error("duplicate vector item"); if (compared > 0) throw Error("unsorted vector"); } } catch (OutOfMemoryException) { throw Capacity("relocation-pending-timer-tick-vector constraint capacity"); }
         return value;
     }
-    private static void WriteRelocationPendingTimerTickVector(Writer writer, RelocationPendingTimerTickVector value, DecodeContext context)
+    private static void WriteRelocationPendingTimerTickVector(ref Writer writer, RelocationPendingTimerTickVector value, DecodeContext context)
     {
-        try { for (var index = 1; index < value.Items.Count; index++) { var previous = KeyRelocationPendingTimerTickVector0(value.Items[index - 1], context); var current = KeyRelocationPendingTimerTickVector0(value.Items[index], context); var compared = CompareBytes(previous, current); if (compared == 0) throw Error("duplicate vector item"); if (compared > 0) throw Error("unsorted vector"); } } catch (OutOfMemoryException) { throw Capacity("relocation-pending-timer-tick-vector constraint capacity"); }
-        WriteU32(writer, new U32(checked((uint)value.Items.Count)), context);
-        foreach (var item in value.Items) WriteRelocationPendingTimerTick(writer, item, context);
+        if (writer.IsSizing)
+        {
+            try { for (var index = 1; index < value.Items.Count; index++) { var previous = KeyRelocationPendingTimerTickVector0(value.Items[index - 1], context); var current = KeyRelocationPendingTimerTickVector0(value.Items[index], context); var compared = CompareBytes(previous, current); if (compared == 0) throw Error("duplicate vector item"); if (compared > 0) throw Error("unsorted vector"); } } catch (OutOfMemoryException) { throw Capacity("relocation-pending-timer-tick-vector constraint capacity"); }
+        }
+        WriteU32(ref writer, new U32(checked((uint)value.Items.Count)), context);
+        for (var index = 0; index < value.Items.Count; index++) { var item = value.Items[index]; WriteRelocationPendingTimerTick(ref writer, item, context); }
     }
-    private static byte[] KeyRelocationPendingTimerTickVector0(RelocationPendingTimerTick item, DecodeContext context)
+    private static byte[] KeyRelocationPendingTimerTickVector0(RelocationPendingTimerTick item, DecodeContext context) { var writer = new Writer(); WriteKeyRelocationPendingTimerTickVector0(ref writer, item, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteKeyRelocationPendingTimerTickVector0(ref writer, item, context); return bytes; }
+    private static void WriteKeyRelocationPendingTimerTickVector0(ref Writer writer, RelocationPendingTimerTick item, DecodeContext context) { WriteNonzeroU64(ref writer, item.ParticipantId, context);
+        WriteNonzeroU64(ref writer, item.Order, context); }
+    internal static RelocationSessionBinding DecodeRelocationSessionBinding(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadRelocationSessionBinding(ref reader, context); reader.End("relocation-session-binding"); return value; }
+    internal static byte[] EncodeRelocationSessionBinding(RelocationSessionBinding value, DecodeContext context) { var writer = new Writer(); WriteRelocationSessionBinding(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteRelocationSessionBinding(ref writer, value, context); return bytes; }
+    private static RelocationSessionBinding ReadRelocationSessionBinding(ref Reader reader, DecodeContext context)
     {
-        var writer = new Writer();
-        WriteNonzeroU64(writer, item.ParticipantId, context);
-        WriteNonzeroU64(writer, item.Order, context);
-        return writer.ToArray();
-    }
-    internal static RelocationSessionBinding DecodeRelocationSessionBinding(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadRelocationSessionBinding(reader, context); reader.End("relocation-session-binding"); return value; }
-    internal static byte[] EncodeRelocationSessionBinding(RelocationSessionBinding value, DecodeContext context) { var writer = new Writer(); WriteRelocationSessionBinding(writer, value, context); return writer.ToArray(); }
-    private static RelocationSessionBinding ReadRelocationSessionBinding(Reader reader, DecodeContext context)
-    {
-        var ParticipantId = ReadNonzeroU64(reader, context);
-        var SessionOwnerNodeRid = ReadRid(reader, context);
-        var SessionOwnerNodeGeneration = ReadNonzeroU64(reader, context);
-        var SessionOwnerId = ReadText8(reader, context);
-        var SessionOwnerLeaseGeneration = ReadNonzeroU64(reader, context);
-        var SessionRid = ReadRid(reader, context);
-        var BindingGeneration = ReadNonzeroU64(reader, context);
+        var ParticipantId = ReadNonzeroU64(ref reader, context);
+        var SessionOwnerNodeRid = ReadRid(ref reader, context);
+        var SessionOwnerNodeGeneration = ReadNonzeroU64(ref reader, context);
+        var SessionOwnerId = ReadText8(ref reader, context);
+        var SessionOwnerLeaseGeneration = ReadNonzeroU64(ref reader, context);
+        var SessionRid = ReadRid(ref reader, context);
+        var BindingGeneration = ReadNonzeroU64(ref reader, context);
         var value = new RelocationSessionBinding(ParticipantId, SessionOwnerNodeRid, SessionOwnerNodeGeneration, SessionOwnerId, SessionOwnerLeaseGeneration, SessionRid, BindingGeneration);
         return value;
     }
-    private static void WriteRelocationSessionBinding(Writer writer, RelocationSessionBinding value, DecodeContext context)
+    private static void WriteRelocationSessionBinding(ref Writer writer, RelocationSessionBinding value, DecodeContext context)
     {
-        WriteNonzeroU64(writer, value.ParticipantId, context);
-        WriteRid(writer, value.SessionOwnerNodeRid, context);
-        WriteNonzeroU64(writer, value.SessionOwnerNodeGeneration, context);
-        WriteText8(writer, value.SessionOwnerId, context);
-        WriteNonzeroU64(writer, value.SessionOwnerLeaseGeneration, context);
-        WriteRid(writer, value.SessionRid, context);
-        WriteNonzeroU64(writer, value.BindingGeneration, context);
+        WriteNonzeroU64(ref writer, value.ParticipantId, context);
+        WriteRid(ref writer, value.SessionOwnerNodeRid, context);
+        WriteNonzeroU64(ref writer, value.SessionOwnerNodeGeneration, context);
+        WriteText8(ref writer, value.SessionOwnerId, context);
+        WriteNonzeroU64(ref writer, value.SessionOwnerLeaseGeneration, context);
+        WriteRid(ref writer, value.SessionRid, context);
+        WriteNonzeroU64(ref writer, value.BindingGeneration, context);
     }
 
-    internal static RelocationSessionBindingVector DecodeRelocationSessionBindingVector(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadRelocationSessionBindingVector(reader, context); reader.End("relocation-session-binding-vector"); return value; }
-    internal static byte[] EncodeRelocationSessionBindingVector(RelocationSessionBindingVector value, DecodeContext context) { var writer = new Writer(); WriteRelocationSessionBindingVector(writer, value, context); return writer.ToArray(); }
-    private static RelocationSessionBindingVector ReadRelocationSessionBindingVector(Reader reader, DecodeContext context)
+    internal static RelocationSessionBindingVector DecodeRelocationSessionBindingVector(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadRelocationSessionBindingVector(ref reader, context); reader.End("relocation-session-binding-vector"); return value; }
+    internal static byte[] EncodeRelocationSessionBindingVector(RelocationSessionBindingVector value, DecodeContext context) { var writer = new Writer(); WriteRelocationSessionBindingVector(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteRelocationSessionBindingVector(ref writer, value, context); return bytes; }
+    private static RelocationSessionBindingVector ReadRelocationSessionBindingVector(ref Reader reader, DecodeContext context)
     {
-        var count = checked((int)ReadU32(reader, context).Value);
+        var count = checked((int)ReadU32(ref reader, context).Value);
         if (count > 1024) throw Error("relocation-session-binding-vector: count");
         var items = new RelocationSessionBinding[count];
-        for (var i = 0; i < count; ++i) items[i] = ReadRelocationSessionBinding(reader, context);
+        for (var i = 0; i < count; ++i) items[i] = ReadRelocationSessionBinding(ref reader, context);
         var value = new RelocationSessionBindingVector(items);
         try { for (var index = 1; index < value.Items.Count; index++) { var previous = KeyRelocationSessionBindingVector0(value.Items[index - 1], context); var current = KeyRelocationSessionBindingVector0(value.Items[index], context); var compared = CompareBytes(previous, current); if (compared == 0) throw Error("duplicate vector item"); if (compared > 0) throw Error("unsorted vector"); } } catch (OutOfMemoryException) { throw Capacity("relocation-session-binding-vector constraint capacity"); }
         return value;
     }
-    private static void WriteRelocationSessionBindingVector(Writer writer, RelocationSessionBindingVector value, DecodeContext context)
+    private static void WriteRelocationSessionBindingVector(ref Writer writer, RelocationSessionBindingVector value, DecodeContext context)
     {
-        try { for (var index = 1; index < value.Items.Count; index++) { var previous = KeyRelocationSessionBindingVector0(value.Items[index - 1], context); var current = KeyRelocationSessionBindingVector0(value.Items[index], context); var compared = CompareBytes(previous, current); if (compared == 0) throw Error("duplicate vector item"); if (compared > 0) throw Error("unsorted vector"); } } catch (OutOfMemoryException) { throw Capacity("relocation-session-binding-vector constraint capacity"); }
+        if (writer.IsSizing)
+        {
+            try { for (var index = 1; index < value.Items.Count; index++) { var previous = KeyRelocationSessionBindingVector0(value.Items[index - 1], context); var current = KeyRelocationSessionBindingVector0(value.Items[index], context); var compared = CompareBytes(previous, current); if (compared == 0) throw Error("duplicate vector item"); if (compared > 0) throw Error("unsorted vector"); } } catch (OutOfMemoryException) { throw Capacity("relocation-session-binding-vector constraint capacity"); }
+        }
         if (value.Items.Count > 1024) throw Error("relocation-session-binding-vector: count");
-        WriteU32(writer, new U32(checked((uint)value.Items.Count)), context);
-        foreach (var item in value.Items) WriteRelocationSessionBinding(writer, item, context);
+        WriteU32(ref writer, new U32(checked((uint)value.Items.Count)), context);
+        for (var index = 0; index < value.Items.Count; index++) { var item = value.Items[index]; WriteRelocationSessionBinding(ref writer, item, context); }
     }
-    private static byte[] KeyRelocationSessionBindingVector0(RelocationSessionBinding item, DecodeContext context)
+    private static byte[] KeyRelocationSessionBindingVector0(RelocationSessionBinding item, DecodeContext context) { var writer = new Writer(); WriteKeyRelocationSessionBindingVector0(ref writer, item, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteKeyRelocationSessionBindingVector0(ref writer, item, context); return bytes; }
+    private static void WriteKeyRelocationSessionBindingVector0(ref Writer writer, RelocationSessionBinding item, DecodeContext context) { WriteNonzeroU64(ref writer, item.ParticipantId, context); }
+    internal static RelocationEnvelopeV1 DecodeRelocationEnvelopeV1(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadRelocationEnvelopeV1(ref reader, context); reader.End("relocation-envelope-v1"); return value; }
+    internal static byte[] EncodeRelocationEnvelopeV1(RelocationEnvelopeV1 value, DecodeContext context) { var writer = new Writer(); WriteRelocationEnvelopeV1(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteRelocationEnvelopeV1(ref writer, value, context); return bytes; }
+    private static RelocationEnvelopeV1 ReadRelocationEnvelopeV1(ref Reader reader, DecodeContext context)
     {
-        var writer = new Writer();
-        WriteNonzeroU64(writer, item.ParticipantId, context);
-        return writer.ToArray();
-    }
-    internal static RelocationEnvelopeV1 DecodeRelocationEnvelopeV1(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadRelocationEnvelopeV1(reader, context); reader.End("relocation-envelope-v1"); return value; }
-    internal static byte[] EncodeRelocationEnvelopeV1(RelocationEnvelopeV1 value, DecodeContext context) { var writer = new Writer(); WriteRelocationEnvelopeV1(writer, value, context); return writer.ToArray(); }
-    private static RelocationEnvelopeV1 ReadRelocationEnvelopeV1(Reader reader, DecodeContext context)
-    {
-        var Relocation = ReadRelocationId(reader, context);
-        var Object = ReadRelocationObjectIdentity(reader, context);
-        var ApplicationVersion = ReadApplicationVersion(reader, context);
-        var ApplicationStates = ReadRelocationParticipantApplicationStateVector(reader, context);
-        var SavedWork = ReadSavedWorkVector(reader, context);
-        var TimerRegistrations = ReadRelocationTimerRegistrationVector(reader, context);
-        var PendingTimerTicks = ReadRelocationPendingTimerTickVector(reader, context);
-        var SessionBindings = ReadRelocationSessionBindingVector(reader, context);
+        var Relocation = ReadRelocationId(ref reader, context);
+        var Object = ReadRelocationObjectIdentity(ref reader, context);
+        var ApplicationVersion = ReadApplicationVersion(ref reader, context);
+        var ApplicationStates = ReadRelocationParticipantApplicationStateVector(ref reader, context);
+        var SavedWork = ReadSavedWorkVector(ref reader, context);
+        var TimerRegistrations = ReadRelocationTimerRegistrationVector(ref reader, context);
+        var PendingTimerTicks = ReadRelocationPendingTimerTickVector(ref reader, context);
+        var SessionBindings = ReadRelocationSessionBindingVector(ref reader, context);
         var value = new RelocationEnvelopeV1(Relocation, Object, ApplicationVersion, ApplicationStates, SavedWork, TimerRegistrations, PendingTimerTicks, SessionBindings);
         return value;
     }
-    private static void WriteRelocationEnvelopeV1(Writer writer, RelocationEnvelopeV1 value, DecodeContext context)
+    private static void WriteRelocationEnvelopeV1(ref Writer writer, RelocationEnvelopeV1 value, DecodeContext context)
     {
-        WriteRelocationId(writer, value.Relocation, context);
-        WriteRelocationObjectIdentity(writer, value.Object, context);
-        WriteApplicationVersion(writer, value.ApplicationVersion, context);
-        WriteRelocationParticipantApplicationStateVector(writer, value.ApplicationStates, context);
-        WriteSavedWorkVector(writer, value.SavedWork, context);
-        WriteRelocationTimerRegistrationVector(writer, value.TimerRegistrations, context);
-        WriteRelocationPendingTimerTickVector(writer, value.PendingTimerTicks, context);
-        WriteRelocationSessionBindingVector(writer, value.SessionBindings, context);
+        WriteRelocationId(ref writer, value.Relocation, context);
+        WriteRelocationObjectIdentity(ref writer, value.Object, context);
+        WriteApplicationVersion(ref writer, value.ApplicationVersion, context);
+        WriteRelocationParticipantApplicationStateVector(ref writer, value.ApplicationStates, context);
+        WriteSavedWorkVector(ref writer, value.SavedWork, context);
+        WriteRelocationTimerRegistrationVector(ref writer, value.TimerRegistrations, context);
+        WriteRelocationPendingTimerTickVector(ref writer, value.PendingTimerTicks, context);
+        WriteRelocationSessionBindingVector(ref writer, value.SessionBindings, context);
     }
-    internal static Hello1 DecodeHello1(IReadOnlyList<byte[]> frames,DecodeContext context)
+    internal static Hello1 DecodeHello1Header(ReadOnlySpan<byte> frame,DecodeContext context)
     {
-        if(frames.Count==0)throw Error("frames");
-        var body=new Reader(frames[0]);
+        var body = new Reader(frame);
         if(body.U8()!=90)throw Error("magic");
         if(body.U8()!=77)throw Error("magic");
         if(body.U8()!=1||body.U8()!=1)throw Error("header");
         var flags=body.U8();
         if((flags&~0)!=0||(flags&0)!=0)throw Error("flags");
-        var Admission = ReadServiceAdmission(body, context);
+        var Admission = ReadServiceAdmission(ref body, context);
         body.End("body");
+        var value=new Hello1(flags,Admission);
+        return value;
+    }
+    internal static byte[] EncodeHello1Header(Hello1 value,DecodeContext context) { var writer = new Writer(); WriteHello1Header(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteHello1Header(ref writer, value, context); return bytes; }
+    private static void WriteHello1Header(ref Writer body, Hello1 value, DecodeContext context)
+    {
+        if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
+        body.U8(90);
+        body.U8(77);
+        body.U8(1);body.U8(1);body.U8(value.Flags);
+        WriteServiceAdmission(ref body, value.Admission, context);
+    }
+    internal static Hello1 DecodeHello1(IReadOnlyList<byte[]> frames,DecodeContext context)
+    {
+        if(frames.Count==0)throw Error("frames");
+        var value=DecodeHello1Header(frames[0],context);
         var index=1;
         if(index!=frames.Count)throw Error("extra frame");
-        var value=new Hello1(flags,Admission);
         return value;
     }
     internal static Hello1 DecodeHello1(byte[] frame,DecodeContext context)=>DecodeHello1(new[]{frame},context);
     internal static byte[][] EncodeHello1(Hello1 value,DecodeContext context)
     {
-        if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
-        var body=new Writer();
-        body.U8(90);
-        body.U8(77);
-        body.U8(1);body.U8(1);body.U8(value.Flags);
-        WriteServiceAdmission(body, value.Admission, context);
-        var frames=new List<byte[]>{body.ToArray()};
-        return frames.ToArray();
+        var frames=new byte[1][];
+        frames[0]=EncodeHello1Header(value,context);
+        return frames;
     }
-    internal static Admit2 DecodeAdmit2(IReadOnlyList<byte[]> frames,DecodeContext context)
+    internal static Admit2 DecodeAdmit2Header(ReadOnlySpan<byte> frame,DecodeContext context)
     {
-        if(frames.Count==0)throw Error("frames");
-        var body=new Reader(frames[0]);
+        var body = new Reader(frame);
         if(body.U8()!=90)throw Error("magic");
         if(body.U8()!=77)throw Error("magic");
         if(body.U8()!=1||body.U8()!=2)throw Error("header");
         var flags=body.U8();
         if((flags&~0)!=0||(flags&0)!=0)throw Error("flags");
-        var Admission = ReadServiceAdmission(body, context);
+        var Admission = ReadServiceAdmission(ref body, context);
         body.End("body");
+        var value=new Admit2(flags,Admission);
+        return value;
+    }
+    internal static byte[] EncodeAdmit2Header(Admit2 value,DecodeContext context) { var writer = new Writer(); WriteAdmit2Header(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteAdmit2Header(ref writer, value, context); return bytes; }
+    private static void WriteAdmit2Header(ref Writer body, Admit2 value, DecodeContext context)
+    {
+        if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
+        body.U8(90);
+        body.U8(77);
+        body.U8(1);body.U8(2);body.U8(value.Flags);
+        WriteServiceAdmission(ref body, value.Admission, context);
+    }
+    internal static Admit2 DecodeAdmit2(IReadOnlyList<byte[]> frames,DecodeContext context)
+    {
+        if(frames.Count==0)throw Error("frames");
+        var value=DecodeAdmit2Header(frames[0],context);
         var index=1;
         if(index!=frames.Count)throw Error("extra frame");
-        var value=new Admit2(flags,Admission);
         return value;
     }
     internal static Admit2 DecodeAdmit2(byte[] frame,DecodeContext context)=>DecodeAdmit2(new[]{frame},context);
     internal static byte[][] EncodeAdmit2(Admit2 value,DecodeContext context)
     {
-        if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
-        var body=new Writer();
-        body.U8(90);
-        body.U8(77);
-        body.U8(1);body.U8(2);body.U8(value.Flags);
-        WriteServiceAdmission(body, value.Admission, context);
-        var frames=new List<byte[]>{body.ToArray()};
-        return frames.ToArray();
+        var frames=new byte[1][];
+        frames[0]=EncodeAdmit2Header(value,context);
+        return frames;
     }
-    internal static Reject3 DecodeReject3(IReadOnlyList<byte[]> frames,DecodeContext context)
+    internal static Reject3 DecodeReject3Header(ReadOnlySpan<byte> frame,DecodeContext context)
     {
-        if(frames.Count==0)throw Error("frames");
-        var body=new Reader(frames[0]);
+        var body = new Reader(frame);
         if(body.U8()!=90)throw Error("magic");
         if(body.U8()!=77)throw Error("magic");
         if(body.U8()!=1||body.U8()!=3)throw Error("header");
         var flags=body.U8();
         if((flags&~0)!=0||(flags&0)!=0)throw Error("flags");
-        var Reason = ReadRejectReason(body, context);
+        var Reason = ReadRejectReason(ref body, context);
         body.End("body");
+        var value=new Reject3(flags,Reason);
+        return value;
+    }
+    internal static byte[] EncodeReject3Header(Reject3 value,DecodeContext context) { var writer = new Writer(); WriteReject3Header(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteReject3Header(ref writer, value, context); return bytes; }
+    private static void WriteReject3Header(ref Writer body, Reject3 value, DecodeContext context)
+    {
+        if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
+        body.U8(90);
+        body.U8(77);
+        body.U8(1);body.U8(3);body.U8(value.Flags);
+        WriteRejectReason(ref body, value.Reason, context);
+    }
+    internal static Reject3 DecodeReject3(IReadOnlyList<byte[]> frames,DecodeContext context)
+    {
+        if(frames.Count==0)throw Error("frames");
+        var value=DecodeReject3Header(frames[0],context);
         var index=1;
         if(index!=frames.Count)throw Error("extra frame");
-        var value=new Reject3(flags,Reason);
         return value;
     }
     internal static Reject3 DecodeReject3(byte[] frame,DecodeContext context)=>DecodeReject3(new[]{frame},context);
     internal static byte[][] EncodeReject3(Reject3 value,DecodeContext context)
     {
-        if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
-        var body=new Writer();
-        body.U8(90);
-        body.U8(77);
-        body.U8(1);body.U8(3);body.U8(value.Flags);
-        WriteRejectReason(body, value.Reason, context);
-        var frames=new List<byte[]>{body.ToArray()};
-        return frames.ToArray();
+        var frames=new byte[1][];
+        frames[0]=EncodeReject3Header(value,context);
+        return frames;
     }
-    internal static Update4 DecodeUpdate4(IReadOnlyList<byte[]> frames,DecodeContext context)
+    internal static Update4 DecodeUpdate4Header(ReadOnlySpan<byte> frame,DecodeContext context)
     {
-        if(frames.Count==0)throw Error("frames");
-        var body=new Reader(frames[0]);
+        var body = new Reader(frame);
         if(body.U8()!=90)throw Error("magic");
         if(body.U8()!=77)throw Error("magic");
         if(body.U8()!=1||body.U8()!=4)throw Error("header");
         var flags=body.U8();
         if((flags&~0)!=0||(flags&0)!=0)throw Error("flags");
-        var Admission = ReadServiceAdmission(body, context);
+        var Admission = ReadServiceAdmission(ref body, context);
         body.End("body");
+        var value=new Update4(flags,Admission);
+        return value;
+    }
+    internal static byte[] EncodeUpdate4Header(Update4 value,DecodeContext context) { var writer = new Writer(); WriteUpdate4Header(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteUpdate4Header(ref writer, value, context); return bytes; }
+    private static void WriteUpdate4Header(ref Writer body, Update4 value, DecodeContext context)
+    {
+        if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
+        body.U8(90);
+        body.U8(77);
+        body.U8(1);body.U8(4);body.U8(value.Flags);
+        WriteServiceAdmission(ref body, value.Admission, context);
+    }
+    internal static Update4 DecodeUpdate4(IReadOnlyList<byte[]> frames,DecodeContext context)
+    {
+        if(frames.Count==0)throw Error("frames");
+        var value=DecodeUpdate4Header(frames[0],context);
         var index=1;
         if(index!=frames.Count)throw Error("extra frame");
-        var value=new Update4(flags,Admission);
         return value;
     }
     internal static Update4 DecodeUpdate4(byte[] frame,DecodeContext context)=>DecodeUpdate4(new[]{frame},context);
     internal static byte[][] EncodeUpdate4(Update4 value,DecodeContext context)
     {
-        if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
-        var body=new Writer();
-        body.U8(90);
-        body.U8(77);
-        body.U8(1);body.U8(4);body.U8(value.Flags);
-        WriteServiceAdmission(body, value.Admission, context);
-        var frames=new List<byte[]>{body.ToArray()};
-        return frames.ToArray();
+        var frames=new byte[1][];
+        frames[0]=EncodeUpdate4Header(value,context);
+        return frames;
     }
-    internal static LivenessProbe5 DecodeLivenessProbe5(IReadOnlyList<byte[]> frames,DecodeContext context)
+    internal static LivenessProbe5 DecodeLivenessProbe5Header(ReadOnlySpan<byte> frame,DecodeContext context)
     {
-        if(frames.Count==0)throw Error("frames");
-        var body=new Reader(frames[0]);
+        var body = new Reader(frame);
         if(body.U8()!=90)throw Error("magic");
         if(body.U8()!=77)throw Error("magic");
         if(body.U8()!=1||body.U8()!=5)throw Error("header");
         var flags=body.U8();
         if((flags&~0)!=0||(flags&0)!=0)throw Error("flags");
-        var ProbeId = ReadNonzeroU64(body, context);
+        var ProbeId = ReadNonzeroU64(ref body, context);
         body.End("body");
+        var value=new LivenessProbe5(flags,ProbeId);
+        return value;
+    }
+    internal static byte[] EncodeLivenessProbe5Header(LivenessProbe5 value,DecodeContext context) { var writer = new Writer(); WriteLivenessProbe5Header(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteLivenessProbe5Header(ref writer, value, context); return bytes; }
+    private static void WriteLivenessProbe5Header(ref Writer body, LivenessProbe5 value, DecodeContext context)
+    {
+        if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
+        body.U8(90);
+        body.U8(77);
+        body.U8(1);body.U8(5);body.U8(value.Flags);
+        WriteNonzeroU64(ref body, value.ProbeId, context);
+    }
+    internal static LivenessProbe5 DecodeLivenessProbe5(IReadOnlyList<byte[]> frames,DecodeContext context)
+    {
+        if(frames.Count==0)throw Error("frames");
+        var value=DecodeLivenessProbe5Header(frames[0],context);
         var index=1;
         if(index!=frames.Count)throw Error("extra frame");
-        var value=new LivenessProbe5(flags,ProbeId);
         return value;
     }
     internal static LivenessProbe5 DecodeLivenessProbe5(byte[] frame,DecodeContext context)=>DecodeLivenessProbe5(new[]{frame},context);
     internal static byte[][] EncodeLivenessProbe5(LivenessProbe5 value,DecodeContext context)
     {
-        if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
-        var body=new Writer();
-        body.U8(90);
-        body.U8(77);
-        body.U8(1);body.U8(5);body.U8(value.Flags);
-        WriteNonzeroU64(body, value.ProbeId, context);
-        var frames=new List<byte[]>{body.ToArray()};
-        return frames.ToArray();
+        var frames=new byte[1][];
+        frames[0]=EncodeLivenessProbe5Header(value,context);
+        return frames;
     }
-    internal static LivenessAck6 DecodeLivenessAck6(IReadOnlyList<byte[]> frames,DecodeContext context)
+    internal static LivenessAck6 DecodeLivenessAck6Header(ReadOnlySpan<byte> frame,DecodeContext context)
     {
-        if(frames.Count==0)throw Error("frames");
-        var body=new Reader(frames[0]);
+        var body = new Reader(frame);
         if(body.U8()!=90)throw Error("magic");
         if(body.U8()!=77)throw Error("magic");
         if(body.U8()!=1||body.U8()!=6)throw Error("header");
         var flags=body.U8();
         if((flags&~0)!=0||(flags&0)!=0)throw Error("flags");
-        var ProbeId = ReadNonzeroU64(body, context);
+        var ProbeId = ReadNonzeroU64(ref body, context);
         body.End("body");
+        var value=new LivenessAck6(flags,ProbeId);
+        return value;
+    }
+    internal static byte[] EncodeLivenessAck6Header(LivenessAck6 value,DecodeContext context) { var writer = new Writer(); WriteLivenessAck6Header(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteLivenessAck6Header(ref writer, value, context); return bytes; }
+    private static void WriteLivenessAck6Header(ref Writer body, LivenessAck6 value, DecodeContext context)
+    {
+        if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
+        body.U8(90);
+        body.U8(77);
+        body.U8(1);body.U8(6);body.U8(value.Flags);
+        WriteNonzeroU64(ref body, value.ProbeId, context);
+    }
+    internal static LivenessAck6 DecodeLivenessAck6(IReadOnlyList<byte[]> frames,DecodeContext context)
+    {
+        if(frames.Count==0)throw Error("frames");
+        var value=DecodeLivenessAck6Header(frames[0],context);
         var index=1;
         if(index!=frames.Count)throw Error("extra frame");
-        var value=new LivenessAck6(flags,ProbeId);
         return value;
     }
     internal static LivenessAck6 DecodeLivenessAck6(byte[] frame,DecodeContext context)=>DecodeLivenessAck6(new[]{frame},context);
     internal static byte[][] EncodeLivenessAck6(LivenessAck6 value,DecodeContext context)
     {
-        if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
-        var body=new Writer();
-        body.U8(90);
-        body.U8(77);
-        body.U8(1);body.U8(6);body.U8(value.Flags);
-        WriteNonzeroU64(body, value.ProbeId, context);
-        var frames=new List<byte[]>{body.ToArray()};
-        return frames.ToArray();
+        var frames=new byte[1][];
+        frames[0]=EncodeLivenessAck6Header(value,context);
+        return frames;
     }
-    internal static NodeSend16 DecodeNodeSend16(IReadOnlyList<byte[]> frames,DecodeContext context)
+    internal static NodeSend16 DecodeNodeSend16Header(ReadOnlySpan<byte> frame,DecodeContext context)
     {
-        if(frames.Count==0)throw Error("frames");
-        var body=new Reader(frames[0]);
+        var body = new Reader(frame);
         if(body.U8()!=90)throw Error("magic");
         if(body.U8()!=77)throw Error("magic");
         if(body.U8()!=1||body.U8()!=16)throw Error("header");
         var flags=body.U8();
         if((flags&~1)!=0||(flags&0)!=0)throw Error("flags");
         body.End("body");
+        var value=new NodeSend16(flags,default,default);
+        return value;
+    }
+    internal static byte[] EncodeNodeSend16Header(NodeSend16 value,DecodeContext context) { var writer = new Writer(); WriteNodeSend16Header(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteNodeSend16Header(ref writer, value, context); return bytes; }
+    private static void WriteNodeSend16Header(ref Writer body, NodeSend16 value, DecodeContext context)
+    {
+        if((value.Flags&~1)!=0||(value.Flags&0)!=0)throw Error("flags");
+        body.U8(90);
+        body.U8(77);
+        body.U8(1);body.U8(16);body.U8(value.Flags);
+    }
+    internal static NodeSend16 DecodeNodeSend16(IReadOnlyList<byte[]> frames,DecodeContext context)
+    {
+        if(frames.Count==0)throw Error("frames");
+        var value=DecodeNodeSend16Header(frames[0],context);
         var index=1;
-        MetadataFrame? metadata=null;
-        if((flags&1)!=0){if(index>=frames.Count)throw Error("metadata required");var x=new Reader(frames[index++]);metadata=ReadMetadataFrame(x, context);x.End("metadata");}
-        ApplicationPayloadEnvelopeV1? payload=null;
+        if((value.Flags&1)!=0){if(index>=frames.Count)throw Error("metadata required");value=value with { Metadata=DecodeMetadataFrame(frames[index++],context) };}
         if(index>=frames.Count)throw Error("payload required");
-        if(index<frames.Count){var x=new Reader(frames[index++]);payload=ReadApplicationPayloadEnvelopeV1(x, context);x.End("payload");}
+        if(index<frames.Count)value=value with { Payload=DecodeApplicationPayloadEnvelopeV1(frames[index++],context) };
         if(index!=frames.Count)throw Error("extra frame");
-        var value=new NodeSend16(flags,metadata,payload!);
         return value;
     }
     internal static NodeSend16 DecodeNodeSend16(byte[] frame,DecodeContext context)=>DecodeNodeSend16(new[]{frame},context);
     internal static byte[][] EncodeNodeSend16(NodeSend16 value,DecodeContext context)
     {
-        if((value.Flags&~1)!=0||(value.Flags&0)!=0)throw Error("flags");
-        var body=new Writer();
-        body.U8(90);
-        body.U8(77);
-        body.U8(1);body.U8(16);body.U8(value.Flags);
-        var frames=new List<byte[]>{body.ToArray()};
-        if((value.Flags&1)!=0){if(value.Metadata is null)throw Error("metadata required");var x=new Writer();WriteMetadataFrame(x, value.Metadata, context);frames.Add(x.ToArray());}else if(value.Metadata is not null)throw Error("metadata forbidden");
-        if(value.Payload is null)throw Error("payload required");
-        if(value.Payload is not null){var x=new Writer();WriteApplicationPayloadEnvelopeV1(x, value.Payload, context);frames.Add(x.ToArray());}
-        return frames.ToArray();
+        var frames=new byte[1+((value.Flags&1)!=0?1:0)+1][];
+        frames[0]=EncodeNodeSend16Header(value,context);
+        var index=1;
+        if((value.Flags&1)!=0){if(value.Metadata is null)throw Error("metadata required");frames[index++]=EncodeMetadataFrame(value.Metadata.Value,context);}else if(value.Metadata is not null)throw Error("metadata forbidden");
+        frames[index++]=EncodeApplicationPayloadEnvelopeV1(value.Payload,context);
+        return frames;
     }
-    internal static NodeRequest17 DecodeNodeRequest17(IReadOnlyList<byte[]> frames,DecodeContext context)
+    internal static NodeRequest17 DecodeNodeRequest17Header(ReadOnlySpan<byte> frame,DecodeContext context)
     {
-        if(frames.Count==0)throw Error("frames");
-        var body=new Reader(frames[0]);
+        var body = new Reader(frame);
         if(body.U8()!=90)throw Error("magic");
         if(body.U8()!=77)throw Error("magic");
         if(body.U8()!=1||body.U8()!=17)throw Error("header");
         var flags=body.U8();
         if((flags&~1)!=0||(flags&0)!=0)throw Error("flags");
-        var Correlation = ReadNonzeroU64(body, context);
+        var Correlation = ReadNonzeroU64(ref body, context);
         body.End("body");
+        var value=new NodeRequest17(flags,Correlation,default,default);
+        return value;
+    }
+    internal static byte[] EncodeNodeRequest17Header(NodeRequest17 value,DecodeContext context) { var writer = new Writer(); WriteNodeRequest17Header(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteNodeRequest17Header(ref writer, value, context); return bytes; }
+    private static void WriteNodeRequest17Header(ref Writer body, NodeRequest17 value, DecodeContext context)
+    {
+        if((value.Flags&~1)!=0||(value.Flags&0)!=0)throw Error("flags");
+        body.U8(90);
+        body.U8(77);
+        body.U8(1);body.U8(17);body.U8(value.Flags);
+        WriteNonzeroU64(ref body, value.Correlation, context);
+    }
+    internal static NodeRequest17 DecodeNodeRequest17(IReadOnlyList<byte[]> frames,DecodeContext context)
+    {
+        if(frames.Count==0)throw Error("frames");
+        var value=DecodeNodeRequest17Header(frames[0],context);
         var index=1;
-        MetadataFrame? metadata=null;
-        if((flags&1)!=0){if(index>=frames.Count)throw Error("metadata required");var x=new Reader(frames[index++]);metadata=ReadMetadataFrame(x, context);x.End("metadata");}
-        ApplicationPayloadEnvelopeV1? payload=null;
+        if((value.Flags&1)!=0){if(index>=frames.Count)throw Error("metadata required");value=value with { Metadata=DecodeMetadataFrame(frames[index++],context) };}
         if(index>=frames.Count)throw Error("payload required");
-        if(index<frames.Count){var x=new Reader(frames[index++]);payload=ReadApplicationPayloadEnvelopeV1(x, context);x.End("payload");}
+        if(index<frames.Count)value=value with { Payload=DecodeApplicationPayloadEnvelopeV1(frames[index++],context) };
         if(index!=frames.Count)throw Error("extra frame");
-        var value=new NodeRequest17(flags,Correlation,metadata,payload!);
         return value;
     }
     internal static NodeRequest17 DecodeNodeRequest17(byte[] frame,DecodeContext context)=>DecodeNodeRequest17(new[]{frame},context);
     internal static byte[][] EncodeNodeRequest17(NodeRequest17 value,DecodeContext context)
     {
-        if((value.Flags&~1)!=0||(value.Flags&0)!=0)throw Error("flags");
-        var body=new Writer();
-        body.U8(90);
-        body.U8(77);
-        body.U8(1);body.U8(17);body.U8(value.Flags);
-        WriteNonzeroU64(body, value.Correlation, context);
-        var frames=new List<byte[]>{body.ToArray()};
-        if((value.Flags&1)!=0){if(value.Metadata is null)throw Error("metadata required");var x=new Writer();WriteMetadataFrame(x, value.Metadata, context);frames.Add(x.ToArray());}else if(value.Metadata is not null)throw Error("metadata forbidden");
-        if(value.Payload is null)throw Error("payload required");
-        if(value.Payload is not null){var x=new Writer();WriteApplicationPayloadEnvelopeV1(x, value.Payload, context);frames.Add(x.ToArray());}
-        return frames.ToArray();
+        var frames=new byte[1+((value.Flags&1)!=0?1:0)+1][];
+        frames[0]=EncodeNodeRequest17Header(value,context);
+        var index=1;
+        if((value.Flags&1)!=0){if(value.Metadata is null)throw Error("metadata required");frames[index++]=EncodeMetadataFrame(value.Metadata.Value,context);}else if(value.Metadata is not null)throw Error("metadata forbidden");
+        frames[index++]=EncodeApplicationPayloadEnvelopeV1(value.Payload,context);
+        return frames;
     }
-    internal static ChannelSend18 DecodeChannelSend18(IReadOnlyList<byte[]> frames,DecodeContext context)
+    internal static ChannelSend18 DecodeChannelSend18Header(ReadOnlySpan<byte> frame,DecodeContext context)
     {
-        if(frames.Count==0)throw Error("frames");
-        var body=new Reader(frames[0]);
+        var body = new Reader(frame);
         if(body.U8()!=90)throw Error("magic");
         if(body.U8()!=77)throw Error("magic");
         if(body.U8()!=1||body.U8()!=18)throw Error("header");
         var flags=body.U8();
         if((flags&~1)!=0||(flags&0)!=0)throw Error("flags");
-        var ChannelName = ReadText8(body, context);
+        var ChannelName = ReadText8(ref body, context);
         body.End("body");
+        var value=new ChannelSend18(flags,ChannelName,default,default);
+        return value;
+    }
+    internal static byte[] EncodeChannelSend18Header(ChannelSend18 value,DecodeContext context) { var writer = new Writer(); WriteChannelSend18Header(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteChannelSend18Header(ref writer, value, context); return bytes; }
+    private static void WriteChannelSend18Header(ref Writer body, ChannelSend18 value, DecodeContext context)
+    {
+        if((value.Flags&~1)!=0||(value.Flags&0)!=0)throw Error("flags");
+        body.U8(90);
+        body.U8(77);
+        body.U8(1);body.U8(18);body.U8(value.Flags);
+        WriteText8(ref body, value.ChannelName, context);
+    }
+    internal static ChannelSend18 DecodeChannelSend18(IReadOnlyList<byte[]> frames,DecodeContext context)
+    {
+        if(frames.Count==0)throw Error("frames");
+        var value=DecodeChannelSend18Header(frames[0],context);
         var index=1;
-        MetadataFrame? metadata=null;
-        if((flags&1)!=0){if(index>=frames.Count)throw Error("metadata required");var x=new Reader(frames[index++]);metadata=ReadMetadataFrame(x, context);x.End("metadata");}
-        ApplicationPayloadEnvelopeV1? payload=null;
+        if((value.Flags&1)!=0){if(index>=frames.Count)throw Error("metadata required");value=value with { Metadata=DecodeMetadataFrame(frames[index++],context) };}
         if(index>=frames.Count)throw Error("payload required");
-        if(index<frames.Count){var x=new Reader(frames[index++]);payload=ReadApplicationPayloadEnvelopeV1(x, context);x.End("payload");}
+        if(index<frames.Count)value=value with { Payload=DecodeApplicationPayloadEnvelopeV1(frames[index++],context) };
         if(index!=frames.Count)throw Error("extra frame");
-        var value=new ChannelSend18(flags,ChannelName,metadata,payload!);
         return value;
     }
     internal static ChannelSend18 DecodeChannelSend18(byte[] frame,DecodeContext context)=>DecodeChannelSend18(new[]{frame},context);
     internal static byte[][] EncodeChannelSend18(ChannelSend18 value,DecodeContext context)
     {
-        if((value.Flags&~1)!=0||(value.Flags&0)!=0)throw Error("flags");
-        var body=new Writer();
-        body.U8(90);
-        body.U8(77);
-        body.U8(1);body.U8(18);body.U8(value.Flags);
-        WriteText8(body, value.ChannelName, context);
-        var frames=new List<byte[]>{body.ToArray()};
-        if((value.Flags&1)!=0){if(value.Metadata is null)throw Error("metadata required");var x=new Writer();WriteMetadataFrame(x, value.Metadata, context);frames.Add(x.ToArray());}else if(value.Metadata is not null)throw Error("metadata forbidden");
-        if(value.Payload is null)throw Error("payload required");
-        if(value.Payload is not null){var x=new Writer();WriteApplicationPayloadEnvelopeV1(x, value.Payload, context);frames.Add(x.ToArray());}
-        return frames.ToArray();
+        var frames=new byte[1+((value.Flags&1)!=0?1:0)+1][];
+        frames[0]=EncodeChannelSend18Header(value,context);
+        var index=1;
+        if((value.Flags&1)!=0){if(value.Metadata is null)throw Error("metadata required");frames[index++]=EncodeMetadataFrame(value.Metadata.Value,context);}else if(value.Metadata is not null)throw Error("metadata forbidden");
+        frames[index++]=EncodeApplicationPayloadEnvelopeV1(value.Payload,context);
+        return frames;
     }
-    internal static ChannelRequest19 DecodeChannelRequest19(IReadOnlyList<byte[]> frames,DecodeContext context)
+    internal static ChannelRequest19 DecodeChannelRequest19Header(ReadOnlySpan<byte> frame,DecodeContext context)
     {
-        if(frames.Count==0)throw Error("frames");
-        var body=new Reader(frames[0]);
+        var body = new Reader(frame);
         if(body.U8()!=90)throw Error("magic");
         if(body.U8()!=77)throw Error("magic");
         if(body.U8()!=1||body.U8()!=19)throw Error("header");
         var flags=body.U8();
         if((flags&~1)!=0||(flags&0)!=0)throw Error("flags");
-        var Correlation = ReadNonzeroU64(body, context);
-        var ChannelName = ReadText8(body, context);
+        var Correlation = ReadNonzeroU64(ref body, context);
+        var ChannelName = ReadText8(ref body, context);
         body.End("body");
+        var value=new ChannelRequest19(flags,Correlation,ChannelName,default,default);
+        return value;
+    }
+    internal static byte[] EncodeChannelRequest19Header(ChannelRequest19 value,DecodeContext context) { var writer = new Writer(); WriteChannelRequest19Header(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteChannelRequest19Header(ref writer, value, context); return bytes; }
+    private static void WriteChannelRequest19Header(ref Writer body, ChannelRequest19 value, DecodeContext context)
+    {
+        if((value.Flags&~1)!=0||(value.Flags&0)!=0)throw Error("flags");
+        body.U8(90);
+        body.U8(77);
+        body.U8(1);body.U8(19);body.U8(value.Flags);
+        WriteNonzeroU64(ref body, value.Correlation, context);
+        WriteText8(ref body, value.ChannelName, context);
+    }
+    internal static ChannelRequest19 DecodeChannelRequest19(IReadOnlyList<byte[]> frames,DecodeContext context)
+    {
+        if(frames.Count==0)throw Error("frames");
+        var value=DecodeChannelRequest19Header(frames[0],context);
         var index=1;
-        MetadataFrame? metadata=null;
-        if((flags&1)!=0){if(index>=frames.Count)throw Error("metadata required");var x=new Reader(frames[index++]);metadata=ReadMetadataFrame(x, context);x.End("metadata");}
-        ApplicationPayloadEnvelopeV1? payload=null;
+        if((value.Flags&1)!=0){if(index>=frames.Count)throw Error("metadata required");value=value with { Metadata=DecodeMetadataFrame(frames[index++],context) };}
         if(index>=frames.Count)throw Error("payload required");
-        if(index<frames.Count){var x=new Reader(frames[index++]);payload=ReadApplicationPayloadEnvelopeV1(x, context);x.End("payload");}
+        if(index<frames.Count)value=value with { Payload=DecodeApplicationPayloadEnvelopeV1(frames[index++],context) };
         if(index!=frames.Count)throw Error("extra frame");
-        var value=new ChannelRequest19(flags,Correlation,ChannelName,metadata,payload!);
         return value;
     }
     internal static ChannelRequest19 DecodeChannelRequest19(byte[] frame,DecodeContext context)=>DecodeChannelRequest19(new[]{frame},context);
     internal static byte[][] EncodeChannelRequest19(ChannelRequest19 value,DecodeContext context)
     {
-        if((value.Flags&~1)!=0||(value.Flags&0)!=0)throw Error("flags");
-        var body=new Writer();
-        body.U8(90);
-        body.U8(77);
-        body.U8(1);body.U8(19);body.U8(value.Flags);
-        WriteNonzeroU64(body, value.Correlation, context);
-        WriteText8(body, value.ChannelName, context);
-        var frames=new List<byte[]>{body.ToArray()};
-        if((value.Flags&1)!=0){if(value.Metadata is null)throw Error("metadata required");var x=new Writer();WriteMetadataFrame(x, value.Metadata, context);frames.Add(x.ToArray());}else if(value.Metadata is not null)throw Error("metadata forbidden");
-        if(value.Payload is null)throw Error("payload required");
-        if(value.Payload is not null){var x=new Writer();WriteApplicationPayloadEnvelopeV1(x, value.Payload, context);frames.Add(x.ToArray());}
-        return frames.ToArray();
+        var frames=new byte[1+((value.Flags&1)!=0?1:0)+1][];
+        frames[0]=EncodeChannelRequest19Header(value,context);
+        var index=1;
+        if((value.Flags&1)!=0){if(value.Metadata is null)throw Error("metadata required");frames[index++]=EncodeMetadataFrame(value.Metadata.Value,context);}else if(value.Metadata is not null)throw Error("metadata forbidden");
+        frames[index++]=EncodeApplicationPayloadEnvelopeV1(value.Payload,context);
+        return frames;
     }
-    internal static Reply20 DecodeReply20(IReadOnlyList<byte[]> frames,DecodeContext context)
+    internal static Reply20 DecodeReply20Header(ReadOnlySpan<byte> frame,DecodeContext context)
     {
-        if(frames.Count==0)throw Error("frames");
-        var body=new Reader(frames[0]);
+        var body = new Reader(frame);
         if(body.U8()!=90)throw Error("magic");
         if(body.U8()!=77)throw Error("magic");
         if(body.U8()!=1||body.U8()!=20)throw Error("header");
         var flags=body.U8();
         if((flags&~0)!=0||(flags&0)!=0)throw Error("flags");
-        var Correlation = ReadNonzeroU64(body, context);
-        var TerminalResult = ReadRequestTerminalResult(body, context);
-        var FailureCode = ReadFrameworkErrorCode(body, context);
-        var Tail = ReadRequestSpecificTail(body, context, TerminalResult);
+        var Correlation = ReadNonzeroU64(ref body, context);
+        var TerminalResult = ReadRequestTerminalResult(ref body, context);
+        var FailureCode = ReadFrameworkErrorCode(ref body, context);
+        var Tail = ReadRequestSpecificTail(ref body, context, TerminalResult);
         body.End("body");
-        var index=1;
-        ApplicationPayloadEnvelopeV1? payload=null;
-        if(index<frames.Count){var x=new Reader(frames[index++]);payload=ReadApplicationPayloadEnvelopeV1(x, context);x.End("payload");}
-        if(index!=frames.Count)throw Error("extra frame");
-        var value=new Reply20(flags,Correlation,TerminalResult,FailureCode,Tail,payload);
+        var value=new Reply20(flags,Correlation,TerminalResult,FailureCode,Tail,default);
         ValidateTerminalFailure(value.TerminalResult, value.FailureCode);
+        return value;
+    }
+    internal static byte[] EncodeReply20Header(Reply20 value,DecodeContext context) { var writer = new Writer(); WriteReply20Header(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteReply20Header(ref writer, value, context); return bytes; }
+    private static void WriteReply20Header(ref Writer body, Reply20 value, DecodeContext context)
+    {
+        if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
+        body.U8(90);
+        body.U8(77);
+        body.U8(1);body.U8(20);body.U8(value.Flags);
+        WriteNonzeroU64(ref body, value.Correlation, context);
+        WriteRequestTerminalResult(ref body, value.TerminalResult, context);
+        WriteFrameworkErrorCode(ref body, value.FailureCode, context);
+        WriteRequestSpecificTail(ref body, value.Tail, context, value.TerminalResult);
+        ValidateTerminalFailure(value.TerminalResult, value.FailureCode);
+    }
+    internal static Reply20 DecodeReply20(IReadOnlyList<byte[]> frames,DecodeContext context)
+    {
+        if(frames.Count==0)throw Error("frames");
+        var value=DecodeReply20Header(frames[0],context);
+        var index=1;
+        if(index<frames.Count)value=value with { Payload=DecodeApplicationPayloadEnvelopeV1(frames[index++],context) };
+        if(index!=frames.Count)throw Error("extra frame");
         return value;
     }
     internal static Reply20 DecodeReply20(byte[] frame,DecodeContext context)=>DecodeReply20(new[]{frame},context);
     internal static byte[][] EncodeReply20(Reply20 value,DecodeContext context)
     {
-        if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
-        var body=new Writer();
-        body.U8(90);
-        body.U8(77);
-        body.U8(1);body.U8(20);body.U8(value.Flags);
-        WriteNonzeroU64(body, value.Correlation, context);
-        WriteRequestTerminalResult(body, value.TerminalResult, context);
-        WriteFrameworkErrorCode(body, value.FailureCode, context);
-        WriteRequestSpecificTail(body, value.Tail, context, value.TerminalResult);
-        var frames=new List<byte[]>{body.ToArray()};
-        if(value.Payload is not null){var x=new Writer();WriteApplicationPayloadEnvelopeV1(x, value.Payload, context);frames.Add(x.ToArray());}
-        ValidateTerminalFailure(value.TerminalResult, value.FailureCode);
-        return frames.ToArray();
+        var frames=new byte[1+(value.Payload is not null?1:0)][];
+        frames[0]=EncodeReply20Header(value,context);
+        var index=1;
+        if(value.Payload is not null)frames[index++]=EncodeApplicationPayloadEnvelopeV1(value.Payload.Value,context);
+        return frames;
     }
-    internal static SpotSend21 DecodeSpotSend21(IReadOnlyList<byte[]> frames,DecodeContext context)
+    internal static SpotSend21 DecodeSpotSend21Header(ReadOnlySpan<byte> frame,DecodeContext context)
     {
-        if(frames.Count==0)throw Error("frames");
-        var body=new Reader(frames[0]);
+        var body = new Reader(frame);
         if(body.U8()!=90)throw Error("magic");
         if(body.U8()!=77)throw Error("magic");
         if(body.U8()!=1||body.U8()!=21)throw Error("header");
         var flags=body.U8();
         if((flags&~1)!=0||(flags&0)!=0)throw Error("flags");
-        var Operation = ReadOperationId(body, context);
-        var MessageFollowHopCount = ReadU8(body, context);
+        var Operation = ReadOperationId(ref body, context);
+        var MessageFollowHopCount = ReadU8(ref body, context);
         if (MessageFollowHopCount.Value < 0) throw Error("messageFollowHopCount: minimum");
         if (MessageFollowHopCount.Value > 8) throw Error("messageFollowHopCount: maximum");
-        var SourceSpotId = ReadText8(body, context);
-        var TargetSpot = ReadSpotRouteFence(body, context);
+        var SourceSpotId = ReadText8(ref body, context);
+        var TargetSpot = ReadSpotRouteFence(ref body, context);
         body.End("body");
+        var value=new SpotSend21(flags,Operation,MessageFollowHopCount,SourceSpotId,TargetSpot,default,default);
+        return value;
+    }
+    internal static byte[] EncodeSpotSend21Header(SpotSend21 value,DecodeContext context) { var writer = new Writer(); WriteSpotSend21Header(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteSpotSend21Header(ref writer, value, context); return bytes; }
+    private static void WriteSpotSend21Header(ref Writer body, SpotSend21 value, DecodeContext context)
+    {
+        if((value.Flags&~1)!=0||(value.Flags&0)!=0)throw Error("flags");
+        body.U8(90);
+        body.U8(77);
+        body.U8(1);body.U8(21);body.U8(value.Flags);
+        WriteOperationId(ref body, value.Operation, context);
+        if (value.MessageFollowHopCount.Value < 0) throw Error("messageFollowHopCount: minimum");
+        if (value.MessageFollowHopCount.Value > 8) throw Error("messageFollowHopCount: maximum");
+        WriteU8(ref body, value.MessageFollowHopCount, context);
+        WriteText8(ref body, value.SourceSpotId, context);
+        WriteSpotRouteFence(ref body, value.TargetSpot, context);
+    }
+    internal static SpotSend21 DecodeSpotSend21(IReadOnlyList<byte[]> frames,DecodeContext context)
+    {
+        if(frames.Count==0)throw Error("frames");
+        var value=DecodeSpotSend21Header(frames[0],context);
         var index=1;
-        MetadataFrame? metadata=null;
-        if((flags&1)!=0){if(index>=frames.Count)throw Error("metadata required");var x=new Reader(frames[index++]);metadata=ReadMetadataFrame(x, context);x.End("metadata");}
-        ApplicationPayloadEnvelopeV1? payload=null;
+        if((value.Flags&1)!=0){if(index>=frames.Count)throw Error("metadata required");value=value with { Metadata=DecodeMetadataFrame(frames[index++],context) };}
         if(index>=frames.Count)throw Error("payload required");
-        if(index<frames.Count){var x=new Reader(frames[index++]);payload=ReadApplicationPayloadEnvelopeV1(x, context);x.End("payload");}
+        if(index<frames.Count)value=value with { Payload=DecodeApplicationPayloadEnvelopeV1(frames[index++],context) };
         if(index!=frames.Count)throw Error("extra frame");
-        var value=new SpotSend21(flags,Operation,MessageFollowHopCount,SourceSpotId,TargetSpot,metadata,payload!);
         return value;
     }
     internal static SpotSend21 DecodeSpotSend21(byte[] frame,DecodeContext context)=>DecodeSpotSend21(new[]{frame},context);
     internal static byte[][] EncodeSpotSend21(SpotSend21 value,DecodeContext context)
     {
-        if((value.Flags&~1)!=0||(value.Flags&0)!=0)throw Error("flags");
-        var body=new Writer();
-        body.U8(90);
-        body.U8(77);
-        body.U8(1);body.U8(21);body.U8(value.Flags);
-        WriteOperationId(body, value.Operation, context);
-        if (value.MessageFollowHopCount.Value < 0) throw Error("messageFollowHopCount: minimum");
-        if (value.MessageFollowHopCount.Value > 8) throw Error("messageFollowHopCount: maximum");
-        WriteU8(body, value.MessageFollowHopCount, context);
-        WriteText8(body, value.SourceSpotId, context);
-        WriteSpotRouteFence(body, value.TargetSpot, context);
-        var frames=new List<byte[]>{body.ToArray()};
-        if((value.Flags&1)!=0){if(value.Metadata is null)throw Error("metadata required");var x=new Writer();WriteMetadataFrame(x, value.Metadata, context);frames.Add(x.ToArray());}else if(value.Metadata is not null)throw Error("metadata forbidden");
-        if(value.Payload is null)throw Error("payload required");
-        if(value.Payload is not null){var x=new Writer();WriteApplicationPayloadEnvelopeV1(x, value.Payload, context);frames.Add(x.ToArray());}
-        return frames.ToArray();
+        var frames=new byte[1+((value.Flags&1)!=0?1:0)+1][];
+        frames[0]=EncodeSpotSend21Header(value,context);
+        var index=1;
+        if((value.Flags&1)!=0){if(value.Metadata is null)throw Error("metadata required");frames[index++]=EncodeMetadataFrame(value.Metadata.Value,context);}else if(value.Metadata is not null)throw Error("metadata forbidden");
+        frames[index++]=EncodeApplicationPayloadEnvelopeV1(value.Payload,context);
+        return frames;
     }
-    internal static SpotRequest22 DecodeSpotRequest22(IReadOnlyList<byte[]> frames,DecodeContext context)
+    internal static SpotRequest22 DecodeSpotRequest22Header(ReadOnlySpan<byte> frame,DecodeContext context)
     {
-        if(frames.Count==0)throw Error("frames");
-        var body=new Reader(frames[0]);
+        var body = new Reader(frame);
         if(body.U8()!=90)throw Error("magic");
         if(body.U8()!=77)throw Error("magic");
         if(body.U8()!=1||body.U8()!=22)throw Error("header");
         var flags=body.U8();
         if((flags&~1)!=0||(flags&0)!=0)throw Error("flags");
-        var Correlation = ReadNonzeroU64(body, context);
-        var Operation = ReadOperationId(body, context);
-        var MessageFollowHopCount = ReadU8(body, context);
+        var Correlation = ReadNonzeroU64(ref body, context);
+        var Operation = ReadOperationId(ref body, context);
+        var MessageFollowHopCount = ReadU8(ref body, context);
         if (MessageFollowHopCount.Value < 0) throw Error("messageFollowHopCount: minimum");
         if (MessageFollowHopCount.Value > 8) throw Error("messageFollowHopCount: maximum");
-        var SourceSpotId = ReadText8(body, context);
-        var TargetSpot = ReadSpotRouteFence(body, context);
+        var SourceSpotId = ReadText8(ref body, context);
+        var TargetSpot = ReadSpotRouteFence(ref body, context);
         body.End("body");
+        var value=new SpotRequest22(flags,Correlation,Operation,MessageFollowHopCount,SourceSpotId,TargetSpot,default,default);
+        return value;
+    }
+    internal static byte[] EncodeSpotRequest22Header(SpotRequest22 value,DecodeContext context) { var writer = new Writer(); WriteSpotRequest22Header(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteSpotRequest22Header(ref writer, value, context); return bytes; }
+    private static void WriteSpotRequest22Header(ref Writer body, SpotRequest22 value, DecodeContext context)
+    {
+        if((value.Flags&~1)!=0||(value.Flags&0)!=0)throw Error("flags");
+        body.U8(90);
+        body.U8(77);
+        body.U8(1);body.U8(22);body.U8(value.Flags);
+        WriteNonzeroU64(ref body, value.Correlation, context);
+        WriteOperationId(ref body, value.Operation, context);
+        if (value.MessageFollowHopCount.Value < 0) throw Error("messageFollowHopCount: minimum");
+        if (value.MessageFollowHopCount.Value > 8) throw Error("messageFollowHopCount: maximum");
+        WriteU8(ref body, value.MessageFollowHopCount, context);
+        WriteText8(ref body, value.SourceSpotId, context);
+        WriteSpotRouteFence(ref body, value.TargetSpot, context);
+    }
+    internal static SpotRequest22 DecodeSpotRequest22(IReadOnlyList<byte[]> frames,DecodeContext context)
+    {
+        if(frames.Count==0)throw Error("frames");
+        var value=DecodeSpotRequest22Header(frames[0],context);
         var index=1;
-        MetadataFrame? metadata=null;
-        if((flags&1)!=0){if(index>=frames.Count)throw Error("metadata required");var x=new Reader(frames[index++]);metadata=ReadMetadataFrame(x, context);x.End("metadata");}
-        ApplicationPayloadEnvelopeV1? payload=null;
+        if((value.Flags&1)!=0){if(index>=frames.Count)throw Error("metadata required");value=value with { Metadata=DecodeMetadataFrame(frames[index++],context) };}
         if(index>=frames.Count)throw Error("payload required");
-        if(index<frames.Count){var x=new Reader(frames[index++]);payload=ReadApplicationPayloadEnvelopeV1(x, context);x.End("payload");}
+        if(index<frames.Count)value=value with { Payload=DecodeApplicationPayloadEnvelopeV1(frames[index++],context) };
         if(index!=frames.Count)throw Error("extra frame");
-        var value=new SpotRequest22(flags,Correlation,Operation,MessageFollowHopCount,SourceSpotId,TargetSpot,metadata,payload!);
         return value;
     }
     internal static SpotRequest22 DecodeSpotRequest22(byte[] frame,DecodeContext context)=>DecodeSpotRequest22(new[]{frame},context);
     internal static byte[][] EncodeSpotRequest22(SpotRequest22 value,DecodeContext context)
     {
-        if((value.Flags&~1)!=0||(value.Flags&0)!=0)throw Error("flags");
-        var body=new Writer();
-        body.U8(90);
-        body.U8(77);
-        body.U8(1);body.U8(22);body.U8(value.Flags);
-        WriteNonzeroU64(body, value.Correlation, context);
-        WriteOperationId(body, value.Operation, context);
-        if (value.MessageFollowHopCount.Value < 0) throw Error("messageFollowHopCount: minimum");
-        if (value.MessageFollowHopCount.Value > 8) throw Error("messageFollowHopCount: maximum");
-        WriteU8(body, value.MessageFollowHopCount, context);
-        WriteText8(body, value.SourceSpotId, context);
-        WriteSpotRouteFence(body, value.TargetSpot, context);
-        var frames=new List<byte[]>{body.ToArray()};
-        if((value.Flags&1)!=0){if(value.Metadata is null)throw Error("metadata required");var x=new Writer();WriteMetadataFrame(x, value.Metadata, context);frames.Add(x.ToArray());}else if(value.Metadata is not null)throw Error("metadata forbidden");
-        if(value.Payload is null)throw Error("payload required");
-        if(value.Payload is not null){var x=new Writer();WriteApplicationPayloadEnvelopeV1(x, value.Payload, context);frames.Add(x.ToArray());}
-        return frames.ToArray();
+        var frames=new byte[1+((value.Flags&1)!=0?1:0)+1][];
+        frames[0]=EncodeSpotRequest22Header(value,context);
+        var index=1;
+        if((value.Flags&1)!=0){if(value.Metadata is null)throw Error("metadata required");frames[index++]=EncodeMetadataFrame(value.Metadata.Value,context);}else if(value.Metadata is not null)throw Error("metadata forbidden");
+        frames[index++]=EncodeApplicationPayloadEnvelopeV1(value.Payload,context);
+        return frames;
     }
-    internal static LogicalMulticast23 DecodeLogicalMulticast23(IReadOnlyList<byte[]> frames,DecodeContext context)
+    internal static LogicalMulticast23 DecodeLogicalMulticast23Header(ReadOnlySpan<byte> frame,DecodeContext context)
     {
-        if(frames.Count==0)throw Error("frames");
-        var body=new Reader(frames[0]);
+        var body = new Reader(frame);
         if(body.U8()!=90)throw Error("magic");
         if(body.U8()!=77)throw Error("magic");
         if(body.U8()!=1||body.U8()!=23)throw Error("header");
         var flags=body.U8();
         if((flags&~1)!=0||(flags&0)!=0)throw Error("flags");
-        var ChannelName = ReadText8(body, context);
-        var Topic = ReadText8(body, context);
-        var SourceSpotId = ReadText8(body, context);
+        var ChannelName = ReadText8(ref body, context);
+        var Topic = ReadText8(ref body, context);
+        var SourceSpotId = ReadText8(ref body, context);
         body.End("body");
+        var value=new LogicalMulticast23(flags,ChannelName,Topic,SourceSpotId,default,default);
+        return value;
+    }
+    internal static byte[] EncodeLogicalMulticast23Header(LogicalMulticast23 value,DecodeContext context) { var writer = new Writer(); WriteLogicalMulticast23Header(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteLogicalMulticast23Header(ref writer, value, context); return bytes; }
+    private static void WriteLogicalMulticast23Header(ref Writer body, LogicalMulticast23 value, DecodeContext context)
+    {
+        if((value.Flags&~1)!=0||(value.Flags&0)!=0)throw Error("flags");
+        body.U8(90);
+        body.U8(77);
+        body.U8(1);body.U8(23);body.U8(value.Flags);
+        WriteText8(ref body, value.ChannelName, context);
+        WriteText8(ref body, value.Topic, context);
+        WriteText8(ref body, value.SourceSpotId, context);
+    }
+    internal static LogicalMulticast23 DecodeLogicalMulticast23(IReadOnlyList<byte[]> frames,DecodeContext context)
+    {
+        if(frames.Count==0)throw Error("frames");
+        var value=DecodeLogicalMulticast23Header(frames[0],context);
         var index=1;
-        MetadataFrame? metadata=null;
-        if((flags&1)!=0){if(index>=frames.Count)throw Error("metadata required");var x=new Reader(frames[index++]);metadata=ReadMetadataFrame(x, context);x.End("metadata");}
-        ApplicationPayloadEnvelopeV1? payload=null;
+        if((value.Flags&1)!=0){if(index>=frames.Count)throw Error("metadata required");value=value with { Metadata=DecodeMetadataFrame(frames[index++],context) };}
         if(index>=frames.Count)throw Error("payload required");
-        if(index<frames.Count){var x=new Reader(frames[index++]);payload=ReadApplicationPayloadEnvelopeV1(x, context);x.End("payload");}
+        if(index<frames.Count)value=value with { Payload=DecodeApplicationPayloadEnvelopeV1(frames[index++],context) };
         if(index!=frames.Count)throw Error("extra frame");
-        var value=new LogicalMulticast23(flags,ChannelName,Topic,SourceSpotId,metadata,payload!);
         return value;
     }
     internal static LogicalMulticast23 DecodeLogicalMulticast23(byte[] frame,DecodeContext context)=>DecodeLogicalMulticast23(new[]{frame},context);
     internal static byte[][] EncodeLogicalMulticast23(LogicalMulticast23 value,DecodeContext context)
     {
-        if((value.Flags&~1)!=0||(value.Flags&0)!=0)throw Error("flags");
-        var body=new Writer();
-        body.U8(90);
-        body.U8(77);
-        body.U8(1);body.U8(23);body.U8(value.Flags);
-        WriteText8(body, value.ChannelName, context);
-        WriteText8(body, value.Topic, context);
-        WriteText8(body, value.SourceSpotId, context);
-        var frames=new List<byte[]>{body.ToArray()};
-        if((value.Flags&1)!=0){if(value.Metadata is null)throw Error("metadata required");var x=new Writer();WriteMetadataFrame(x, value.Metadata, context);frames.Add(x.ToArray());}else if(value.Metadata is not null)throw Error("metadata forbidden");
-        if(value.Payload is null)throw Error("payload required");
-        if(value.Payload is not null){var x=new Writer();WriteApplicationPayloadEnvelopeV1(x, value.Payload, context);frames.Add(x.ToArray());}
-        return frames.ToArray();
+        var frames=new byte[1+((value.Flags&1)!=0?1:0)+1][];
+        frames[0]=EncodeLogicalMulticast23Header(value,context);
+        var index=1;
+        if((value.Flags&1)!=0){if(value.Metadata is null)throw Error("metadata required");frames[index++]=EncodeMetadataFrame(value.Metadata.Value,context);}else if(value.Metadata is not null)throw Error("metadata forbidden");
+        frames[index++]=EncodeApplicationPayloadEnvelopeV1(value.Payload,context);
+        return frames;
     }
-    internal static ActorSend24 DecodeActorSend24(IReadOnlyList<byte[]> frames,DecodeContext context)
+    internal static ActorSend24 DecodeActorSend24Header(ReadOnlySpan<byte> frame,DecodeContext context)
     {
-        if(frames.Count==0)throw Error("frames");
-        var body=new Reader(frames[0]);
+        var body = new Reader(frame);
         if(body.U8()!=90)throw Error("magic");
         if(body.U8()!=77)throw Error("magic");
         if(body.U8()!=1||body.U8()!=24)throw Error("header");
         var flags=body.U8();
         if((flags&~7)!=0||(flags&0)!=0)throw Error("flags");
         var fc=((flags&2)!=0?1:0)+((flags&4)!=0?1:0);if(fc!=0&&fc!=2)throw Error("flag constraint");
-        var Operation = ReadOperationId(body, context);
-        var MessageFollowHopCount = ReadU8(body, context);
+        var Operation = ReadOperationId(ref body, context);
+        var MessageFollowHopCount = ReadU8(ref body, context);
         if (MessageFollowHopCount.Value < 0) throw Error("messageFollowHopCount: minimum");
         if (MessageFollowHopCount.Value > 8) throw Error("messageFollowHopCount: maximum");
-        var SourceActor = ReadOptionalActorRef(body, context);
-        var TargetActor = ReadActorRouteFence(body, context);
+        var SourceActor = ReadOptionalActorRef(ref body, context);
+        var TargetActor = ReadActorRouteFence(ref body, context);
         OptionalBoundSessionTail? BoundSessionTail;
         if (((flags & 2) != 0 && (flags & 4) != 0))
         {
-            BoundSessionTail = ReadOptionalBoundSessionTail(body, context);
+            BoundSessionTail = ReadOptionalBoundSessionTail(ref body, context);
         }
         else BoundSessionTail = null;
         body.End("body");
+        var value=new ActorSend24(flags,Operation,MessageFollowHopCount,SourceActor,TargetActor,BoundSessionTail,default,default);
+        return value;
+    }
+    internal static byte[] EncodeActorSend24Header(ActorSend24 value,DecodeContext context) { var writer = new Writer(); WriteActorSend24Header(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteActorSend24Header(ref writer, value, context); return bytes; }
+    private static void WriteActorSend24Header(ref Writer body, ActorSend24 value, DecodeContext context)
+    {
+        if((value.Flags&~7)!=0||(value.Flags&0)!=0)throw Error("flags");
+        var fc=((value.Flags&2)!=0?1:0)+((value.Flags&4)!=0?1:0);if(fc!=0&&fc!=2)throw Error("flag constraint");
+        body.U8(90);
+        body.U8(77);
+        body.U8(1);body.U8(24);body.U8(value.Flags);
+        WriteOperationId(ref body, value.Operation, context);
+        if (value.MessageFollowHopCount.Value < 0) throw Error("messageFollowHopCount: minimum");
+        if (value.MessageFollowHopCount.Value > 8) throw Error("messageFollowHopCount: maximum");
+        WriteU8(ref body, value.MessageFollowHopCount, context);
+        WriteOptionalActorRef(ref body, value.SourceActor, context);
+        WriteActorRouteFence(ref body, value.TargetActor, context);
+        if (((value.Flags & 2) != 0 && (value.Flags & 4) != 0))
+        {
+            if (value.BoundSessionTail is null) throw Error("boundSessionTail: required");
+            WriteOptionalBoundSessionTail(ref body, value.BoundSessionTail.Value, context);
+        }
+        else if (value.BoundSessionTail is not null) throw Error("boundSessionTail: forbidden");
+    }
+    internal static ActorSend24 DecodeActorSend24(IReadOnlyList<byte[]> frames,DecodeContext context)
+    {
+        if(frames.Count==0)throw Error("frames");
+        var value=DecodeActorSend24Header(frames[0],context);
         var index=1;
-        MetadataFrame? metadata=null;
-        if((flags&1)!=0){if(index>=frames.Count)throw Error("metadata required");var x=new Reader(frames[index++]);metadata=ReadMetadataFrame(x, context);x.End("metadata");}
-        ApplicationPayloadEnvelopeV1? payload=null;
+        if((value.Flags&1)!=0){if(index>=frames.Count)throw Error("metadata required");value=value with { Metadata=DecodeMetadataFrame(frames[index++],context) };}
         if(index>=frames.Count)throw Error("payload required");
-        if(index<frames.Count){var x=new Reader(frames[index++]);payload=ReadApplicationPayloadEnvelopeV1(x, context);x.End("payload");}
+        if(index<frames.Count)value=value with { Payload=DecodeApplicationPayloadEnvelopeV1(frames[index++],context) };
         if(index!=frames.Count)throw Error("extra frame");
-        var value=new ActorSend24(flags,Operation,MessageFollowHopCount,SourceActor,TargetActor,BoundSessionTail,metadata,payload!);
         return value;
     }
     internal static ActorSend24 DecodeActorSend24(byte[] frame,DecodeContext context)=>DecodeActorSend24(new[]{frame},context);
     internal static byte[][] EncodeActorSend24(ActorSend24 value,DecodeContext context)
     {
-        if((value.Flags&~7)!=0||(value.Flags&0)!=0)throw Error("flags");
-        var fc=((value.Flags&2)!=0?1:0)+((value.Flags&4)!=0?1:0);if(fc!=0&&fc!=2)throw Error("flag constraint");
-        var body=new Writer();
-        body.U8(90);
-        body.U8(77);
-        body.U8(1);body.U8(24);body.U8(value.Flags);
-        WriteOperationId(body, value.Operation, context);
-        if (value.MessageFollowHopCount.Value < 0) throw Error("messageFollowHopCount: minimum");
-        if (value.MessageFollowHopCount.Value > 8) throw Error("messageFollowHopCount: maximum");
-        WriteU8(body, value.MessageFollowHopCount, context);
-        WriteOptionalActorRef(body, value.SourceActor, context);
-        WriteActorRouteFence(body, value.TargetActor, context);
-        if (((value.Flags & 2) != 0 && (value.Flags & 4) != 0))
-        {
-            if (value.BoundSessionTail is null) throw Error("boundSessionTail: required");
-            WriteOptionalBoundSessionTail(body, value.BoundSessionTail!, context);
-        }
-        else if (value.BoundSessionTail is not null) throw Error("boundSessionTail: forbidden");
-        var frames=new List<byte[]>{body.ToArray()};
-        if((value.Flags&1)!=0){if(value.Metadata is null)throw Error("metadata required");var x=new Writer();WriteMetadataFrame(x, value.Metadata, context);frames.Add(x.ToArray());}else if(value.Metadata is not null)throw Error("metadata forbidden");
-        if(value.Payload is null)throw Error("payload required");
-        if(value.Payload is not null){var x=new Writer();WriteApplicationPayloadEnvelopeV1(x, value.Payload, context);frames.Add(x.ToArray());}
-        return frames.ToArray();
+        var frames=new byte[1+((value.Flags&1)!=0?1:0)+1][];
+        frames[0]=EncodeActorSend24Header(value,context);
+        var index=1;
+        if((value.Flags&1)!=0){if(value.Metadata is null)throw Error("metadata required");frames[index++]=EncodeMetadataFrame(value.Metadata.Value,context);}else if(value.Metadata is not null)throw Error("metadata forbidden");
+        frames[index++]=EncodeApplicationPayloadEnvelopeV1(value.Payload,context);
+        return frames;
     }
-    internal static ActorRequest25 DecodeActorRequest25(IReadOnlyList<byte[]> frames,DecodeContext context)
+    internal static ActorRequest25 DecodeActorRequest25Header(ReadOnlySpan<byte> frame,DecodeContext context)
     {
-        if(frames.Count==0)throw Error("frames");
-        var body=new Reader(frames[0]);
+        var body = new Reader(frame);
         if(body.U8()!=90)throw Error("magic");
         if(body.U8()!=77)throw Error("magic");
         if(body.U8()!=1||body.U8()!=25)throw Error("header");
         var flags=body.U8();
         if((flags&~7)!=0||(flags&0)!=0)throw Error("flags");
         var fc=((flags&2)!=0?1:0)+((flags&4)!=0?1:0);if(fc!=0&&fc!=2)throw Error("flag constraint");
-        var Correlation = ReadNonzeroU64(body, context);
-        var Operation = ReadOperationId(body, context);
-        var MessageFollowHopCount = ReadU8(body, context);
+        var Correlation = ReadNonzeroU64(ref body, context);
+        var Operation = ReadOperationId(ref body, context);
+        var MessageFollowHopCount = ReadU8(ref body, context);
         if (MessageFollowHopCount.Value < 0) throw Error("messageFollowHopCount: minimum");
         if (MessageFollowHopCount.Value > 8) throw Error("messageFollowHopCount: maximum");
-        var SourceActor = ReadOptionalActorRef(body, context);
-        var TargetActor = ReadActorRouteFence(body, context);
+        var SourceActor = ReadOptionalActorRef(ref body, context);
+        var TargetActor = ReadActorRouteFence(ref body, context);
         OptionalBoundSessionTail? BoundSessionTail;
         if (((flags & 2) != 0 && (flags & 4) != 0))
         {
-            BoundSessionTail = ReadOptionalBoundSessionTail(body, context);
+            BoundSessionTail = ReadOptionalBoundSessionTail(ref body, context);
         }
         else BoundSessionTail = null;
         body.End("body");
+        var value=new ActorRequest25(flags,Correlation,Operation,MessageFollowHopCount,SourceActor,TargetActor,BoundSessionTail,default,default);
+        return value;
+    }
+    internal static byte[] EncodeActorRequest25Header(ActorRequest25 value,DecodeContext context) { var writer = new Writer(); WriteActorRequest25Header(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteActorRequest25Header(ref writer, value, context); return bytes; }
+    private static void WriteActorRequest25Header(ref Writer body, ActorRequest25 value, DecodeContext context)
+    {
+        if((value.Flags&~7)!=0||(value.Flags&0)!=0)throw Error("flags");
+        var fc=((value.Flags&2)!=0?1:0)+((value.Flags&4)!=0?1:0);if(fc!=0&&fc!=2)throw Error("flag constraint");
+        body.U8(90);
+        body.U8(77);
+        body.U8(1);body.U8(25);body.U8(value.Flags);
+        WriteNonzeroU64(ref body, value.Correlation, context);
+        WriteOperationId(ref body, value.Operation, context);
+        if (value.MessageFollowHopCount.Value < 0) throw Error("messageFollowHopCount: minimum");
+        if (value.MessageFollowHopCount.Value > 8) throw Error("messageFollowHopCount: maximum");
+        WriteU8(ref body, value.MessageFollowHopCount, context);
+        WriteOptionalActorRef(ref body, value.SourceActor, context);
+        WriteActorRouteFence(ref body, value.TargetActor, context);
+        if (((value.Flags & 2) != 0 && (value.Flags & 4) != 0))
+        {
+            if (value.BoundSessionTail is null) throw Error("boundSessionTail: required");
+            WriteOptionalBoundSessionTail(ref body, value.BoundSessionTail.Value, context);
+        }
+        else if (value.BoundSessionTail is not null) throw Error("boundSessionTail: forbidden");
+    }
+    internal static ActorRequest25 DecodeActorRequest25(IReadOnlyList<byte[]> frames,DecodeContext context)
+    {
+        if(frames.Count==0)throw Error("frames");
+        var value=DecodeActorRequest25Header(frames[0],context);
         var index=1;
-        MetadataFrame? metadata=null;
-        if((flags&1)!=0){if(index>=frames.Count)throw Error("metadata required");var x=new Reader(frames[index++]);metadata=ReadMetadataFrame(x, context);x.End("metadata");}
-        ApplicationPayloadEnvelopeV1? payload=null;
+        if((value.Flags&1)!=0){if(index>=frames.Count)throw Error("metadata required");value=value with { Metadata=DecodeMetadataFrame(frames[index++],context) };}
         if(index>=frames.Count)throw Error("payload required");
-        if(index<frames.Count){var x=new Reader(frames[index++]);payload=ReadApplicationPayloadEnvelopeV1(x, context);x.End("payload");}
+        if(index<frames.Count)value=value with { Payload=DecodeApplicationPayloadEnvelopeV1(frames[index++],context) };
         if(index!=frames.Count)throw Error("extra frame");
-        var value=new ActorRequest25(flags,Correlation,Operation,MessageFollowHopCount,SourceActor,TargetActor,BoundSessionTail,metadata,payload!);
         return value;
     }
     internal static ActorRequest25 DecodeActorRequest25(byte[] frame,DecodeContext context)=>DecodeActorRequest25(new[]{frame},context);
     internal static byte[][] EncodeActorRequest25(ActorRequest25 value,DecodeContext context)
     {
-        if((value.Flags&~7)!=0||(value.Flags&0)!=0)throw Error("flags");
-        var fc=((value.Flags&2)!=0?1:0)+((value.Flags&4)!=0?1:0);if(fc!=0&&fc!=2)throw Error("flag constraint");
-        var body=new Writer();
-        body.U8(90);
-        body.U8(77);
-        body.U8(1);body.U8(25);body.U8(value.Flags);
-        WriteNonzeroU64(body, value.Correlation, context);
-        WriteOperationId(body, value.Operation, context);
-        if (value.MessageFollowHopCount.Value < 0) throw Error("messageFollowHopCount: minimum");
-        if (value.MessageFollowHopCount.Value > 8) throw Error("messageFollowHopCount: maximum");
-        WriteU8(body, value.MessageFollowHopCount, context);
-        WriteOptionalActorRef(body, value.SourceActor, context);
-        WriteActorRouteFence(body, value.TargetActor, context);
-        if (((value.Flags & 2) != 0 && (value.Flags & 4) != 0))
-        {
-            if (value.BoundSessionTail is null) throw Error("boundSessionTail: required");
-            WriteOptionalBoundSessionTail(body, value.BoundSessionTail!, context);
-        }
-        else if (value.BoundSessionTail is not null) throw Error("boundSessionTail: forbidden");
-        var frames=new List<byte[]>{body.ToArray()};
-        if((value.Flags&1)!=0){if(value.Metadata is null)throw Error("metadata required");var x=new Writer();WriteMetadataFrame(x, value.Metadata, context);frames.Add(x.ToArray());}else if(value.Metadata is not null)throw Error("metadata forbidden");
-        if(value.Payload is null)throw Error("payload required");
-        if(value.Payload is not null){var x=new Writer();WriteApplicationPayloadEnvelopeV1(x, value.Payload, context);frames.Add(x.ToArray());}
-        return frames.ToArray();
+        var frames=new byte[1+((value.Flags&1)!=0?1:0)+1][];
+        frames[0]=EncodeActorRequest25Header(value,context);
+        var index=1;
+        if((value.Flags&1)!=0){if(value.Metadata is null)throw Error("metadata required");frames[index++]=EncodeMetadataFrame(value.Metadata.Value,context);}else if(value.Metadata is not null)throw Error("metadata forbidden");
+        frames[index++]=EncodeApplicationPayloadEnvelopeV1(value.Payload,context);
+        return frames;
     }
-    internal static ActorLookup26 DecodeActorLookup26(IReadOnlyList<byte[]> frames,DecodeContext context)
+    internal static ActorLookup26 DecodeActorLookup26Header(ReadOnlySpan<byte> frame,DecodeContext context)
     {
-        if(frames.Count==0)throw Error("frames");
-        var body=new Reader(frames[0]);
+        var body = new Reader(frame);
         if(body.U8()!=90)throw Error("magic");
         if(body.U8()!=77)throw Error("magic");
         if(body.U8()!=1||body.U8()!=26)throw Error("header");
         var flags=body.U8();
         if((flags&~0)!=0||(flags&0)!=0)throw Error("flags");
-        var Correlation = ReadNonzeroU64(body, context);
-        var ActorId = ReadText8(body, context);
+        var Correlation = ReadNonzeroU64(ref body, context);
+        var ActorId = ReadText8(ref body, context);
         body.End("body");
+        var value=new ActorLookup26(flags,Correlation,ActorId);
+        return value;
+    }
+    internal static byte[] EncodeActorLookup26Header(ActorLookup26 value,DecodeContext context) { var writer = new Writer(); WriteActorLookup26Header(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteActorLookup26Header(ref writer, value, context); return bytes; }
+    private static void WriteActorLookup26Header(ref Writer body, ActorLookup26 value, DecodeContext context)
+    {
+        if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
+        body.U8(90);
+        body.U8(77);
+        body.U8(1);body.U8(26);body.U8(value.Flags);
+        WriteNonzeroU64(ref body, value.Correlation, context);
+        WriteText8(ref body, value.ActorId, context);
+    }
+    internal static ActorLookup26 DecodeActorLookup26(IReadOnlyList<byte[]> frames,DecodeContext context)
+    {
+        if(frames.Count==0)throw Error("frames");
+        var value=DecodeActorLookup26Header(frames[0],context);
         var index=1;
         if(index!=frames.Count)throw Error("extra frame");
-        var value=new ActorLookup26(flags,Correlation,ActorId);
         return value;
     }
     internal static ActorLookup26 DecodeActorLookup26(byte[] frame,DecodeContext context)=>DecodeActorLookup26(new[]{frame},context);
     internal static byte[][] EncodeActorLookup26(ActorLookup26 value,DecodeContext context)
     {
-        if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
-        var body=new Writer();
-        body.U8(90);
-        body.U8(77);
-        body.U8(1);body.U8(26);body.U8(value.Flags);
-        WriteNonzeroU64(body, value.Correlation, context);
-        WriteText8(body, value.ActorId, context);
-        var frames=new List<byte[]>{body.ToArray()};
-        return frames.ToArray();
+        var frames=new byte[1][];
+        frames[0]=EncodeActorLookup26Header(value,context);
+        return frames;
     }
-    internal static ActorDestroy27 DecodeActorDestroy27(IReadOnlyList<byte[]> frames,DecodeContext context)
+    internal static ActorDestroy27 DecodeActorDestroy27Header(ReadOnlySpan<byte> frame,DecodeContext context)
     {
-        if(frames.Count==0)throw Error("frames");
-        var body=new Reader(frames[0]);
+        var body = new Reader(frame);
         if(body.U8()!=90)throw Error("magic");
         if(body.U8()!=77)throw Error("magic");
         if(body.U8()!=1||body.U8()!=27)throw Error("header");
         var flags=body.U8();
         if((flags&~0)!=0||(flags&0)!=0)throw Error("flags");
-        var Correlation = ReadNonzeroU64(body, context);
-        var Actor = ReadActorRouteFence(body, context);
+        var Correlation = ReadNonzeroU64(ref body, context);
+        var Actor = ReadActorRouteFence(ref body, context);
         body.End("body");
+        var value=new ActorDestroy27(flags,Correlation,Actor);
+        return value;
+    }
+    internal static byte[] EncodeActorDestroy27Header(ActorDestroy27 value,DecodeContext context) { var writer = new Writer(); WriteActorDestroy27Header(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteActorDestroy27Header(ref writer, value, context); return bytes; }
+    private static void WriteActorDestroy27Header(ref Writer body, ActorDestroy27 value, DecodeContext context)
+    {
+        if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
+        body.U8(90);
+        body.U8(77);
+        body.U8(1);body.U8(27);body.U8(value.Flags);
+        WriteNonzeroU64(ref body, value.Correlation, context);
+        WriteActorRouteFence(ref body, value.Actor, context);
+    }
+    internal static ActorDestroy27 DecodeActorDestroy27(IReadOnlyList<byte[]> frames,DecodeContext context)
+    {
+        if(frames.Count==0)throw Error("frames");
+        var value=DecodeActorDestroy27Header(frames[0],context);
         var index=1;
         if(index!=frames.Count)throw Error("extra frame");
-        var value=new ActorDestroy27(flags,Correlation,Actor);
         return value;
     }
     internal static ActorDestroy27 DecodeActorDestroy27(byte[] frame,DecodeContext context)=>DecodeActorDestroy27(new[]{frame},context);
     internal static byte[][] EncodeActorDestroy27(ActorDestroy27 value,DecodeContext context)
     {
-        if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
-        var body=new Writer();
-        body.U8(90);
-        body.U8(77);
-        body.U8(1);body.U8(27);body.U8(value.Flags);
-        WriteNonzeroU64(body, value.Correlation, context);
-        WriteActorRouteFence(body, value.Actor, context);
-        var frames=new List<byte[]>{body.ToArray()};
-        return frames.ToArray();
+        var frames=new byte[1][];
+        frames[0]=EncodeActorDestroy27Header(value,context);
+        return frames;
     }
-    internal static ActorJoin28 DecodeActorJoin28(IReadOnlyList<byte[]> frames,DecodeContext context)
+    internal static ActorJoin28 DecodeActorJoin28Header(ReadOnlySpan<byte> frame,DecodeContext context)
     {
-        if(frames.Count==0)throw Error("frames");
-        var body=new Reader(frames[0]);
+        var body = new Reader(frame);
         if(body.U8()!=90)throw Error("magic");
         if(body.U8()!=77)throw Error("magic");
         if(body.U8()!=1||body.U8()!=28)throw Error("header");
         var flags=body.U8();
         if((flags&~0)!=0||(flags&0)!=0)throw Error("flags");
-        var Correlation = ReadNonzeroU64(body, context);
-        var Actor = ReadActorRouteFence(body, context);
-        var Entry = ReadBool8(body, context);
-        var TargetSpot = ReadSpotRouteFence(body, context);
+        var Correlation = ReadNonzeroU64(ref body, context);
+        var Actor = ReadActorRouteFence(ref body, context);
+        var Entry = ReadBool8(ref body, context);
+        var TargetSpot = ReadSpotRouteFence(ref body, context);
         body.End("body");
+        var value=new ActorJoin28(flags,Correlation,Actor,Entry,TargetSpot,default);
+        return value;
+    }
+    internal static byte[] EncodeActorJoin28Header(ActorJoin28 value,DecodeContext context) { var writer = new Writer(); WriteActorJoin28Header(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteActorJoin28Header(ref writer, value, context); return bytes; }
+    private static void WriteActorJoin28Header(ref Writer body, ActorJoin28 value, DecodeContext context)
+    {
+        if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
+        body.U8(90);
+        body.U8(77);
+        body.U8(1);body.U8(28);body.U8(value.Flags);
+        WriteNonzeroU64(ref body, value.Correlation, context);
+        WriteActorRouteFence(ref body, value.Actor, context);
+        WriteBool8(ref body, value.Entry, context);
+        WriteSpotRouteFence(ref body, value.TargetSpot, context);
+    }
+    internal static ActorJoin28 DecodeActorJoin28(IReadOnlyList<byte[]> frames,DecodeContext context)
+    {
+        if(frames.Count==0)throw Error("frames");
+        var value=DecodeActorJoin28Header(frames[0],context);
         var index=1;
-        ApplicationPayloadEnvelopeV1? payload=null;
-        if(index<frames.Count){var x=new Reader(frames[index++]);payload=ReadApplicationPayloadEnvelopeV1(x, context);x.End("payload");}
+        if(index<frames.Count)value=value with { Payload=DecodeApplicationPayloadEnvelopeV1(frames[index++],context) };
         if(index!=frames.Count)throw Error("extra frame");
-        var value=new ActorJoin28(flags,Correlation,Actor,Entry,TargetSpot,payload);
         return value;
     }
     internal static ActorJoin28 DecodeActorJoin28(byte[] frame,DecodeContext context)=>DecodeActorJoin28(new[]{frame},context);
     internal static byte[][] EncodeActorJoin28(ActorJoin28 value,DecodeContext context)
     {
-        if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
-        var body=new Writer();
-        body.U8(90);
-        body.U8(77);
-        body.U8(1);body.U8(28);body.U8(value.Flags);
-        WriteNonzeroU64(body, value.Correlation, context);
-        WriteActorRouteFence(body, value.Actor, context);
-        WriteBool8(body, value.Entry, context);
-        WriteSpotRouteFence(body, value.TargetSpot, context);
-        var frames=new List<byte[]>{body.ToArray()};
-        if(value.Payload is not null){var x=new Writer();WriteApplicationPayloadEnvelopeV1(x, value.Payload, context);frames.Add(x.ToArray());}
-        return frames.ToArray();
+        var frames=new byte[1+(value.Payload is not null?1:0)][];
+        frames[0]=EncodeActorJoin28Header(value,context);
+        var index=1;
+        if(value.Payload is not null)frames[index++]=EncodeApplicationPayloadEnvelopeV1(value.Payload.Value,context);
+        return frames;
     }
-    internal static ActorLeft29 DecodeActorLeft29(IReadOnlyList<byte[]> frames,DecodeContext context)
+    internal static ActorLeft29 DecodeActorLeft29Header(ReadOnlySpan<byte> frame,DecodeContext context)
     {
-        if(frames.Count==0)throw Error("frames");
-        var body=new Reader(frames[0]);
+        var body = new Reader(frame);
         if(body.U8()!=90)throw Error("magic");
         if(body.U8()!=77)throw Error("magic");
         if(body.U8()!=1||body.U8()!=29)throw Error("header");
         var flags=body.U8();
         if((flags&~0)!=0||(flags&0)!=0)throw Error("flags");
-        var Actor = ReadActorRef(body, context);
-        var PreviousMembership = ReadSpotMembership(body, context);
-        var CurrentAuthorityOwnerGeneration = ReadNonzeroU64(body, context);
+        var Actor = ReadActorRef(ref body, context);
+        var PreviousMembership = ReadSpotMembership(ref body, context);
+        var CurrentAuthorityOwnerGeneration = ReadNonzeroU64(ref body, context);
         body.End("body");
+        var value=new ActorLeft29(flags,Actor,PreviousMembership,CurrentAuthorityOwnerGeneration);
+        return value;
+    }
+    internal static byte[] EncodeActorLeft29Header(ActorLeft29 value,DecodeContext context) { var writer = new Writer(); WriteActorLeft29Header(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteActorLeft29Header(ref writer, value, context); return bytes; }
+    private static void WriteActorLeft29Header(ref Writer body, ActorLeft29 value, DecodeContext context)
+    {
+        if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
+        body.U8(90);
+        body.U8(77);
+        body.U8(1);body.U8(29);body.U8(value.Flags);
+        WriteActorRef(ref body, value.Actor, context);
+        WriteSpotMembership(ref body, value.PreviousMembership, context);
+        WriteNonzeroU64(ref body, value.CurrentAuthorityOwnerGeneration, context);
+    }
+    internal static ActorLeft29 DecodeActorLeft29(IReadOnlyList<byte[]> frames,DecodeContext context)
+    {
+        if(frames.Count==0)throw Error("frames");
+        var value=DecodeActorLeft29Header(frames[0],context);
         var index=1;
         if(index!=frames.Count)throw Error("extra frame");
-        var value=new ActorLeft29(flags,Actor,PreviousMembership,CurrentAuthorityOwnerGeneration);
         return value;
     }
     internal static ActorLeft29 DecodeActorLeft29(byte[] frame,DecodeContext context)=>DecodeActorLeft29(new[]{frame},context);
     internal static byte[][] EncodeActorLeft29(ActorLeft29 value,DecodeContext context)
     {
-        if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
-        var body=new Writer();
-        body.U8(90);
-        body.U8(77);
-        body.U8(1);body.U8(29);body.U8(value.Flags);
-        WriteActorRef(body, value.Actor, context);
-        WriteSpotMembership(body, value.PreviousMembership, context);
-        WriteNonzeroU64(body, value.CurrentAuthorityOwnerGeneration, context);
-        var frames=new List<byte[]>{body.ToArray()};
-        return frames.ToArray();
+        var frames=new byte[1][];
+        frames[0]=EncodeActorLeft29Header(value,context);
+        return frames;
     }
-    internal static RelocationReady30 DecodeRelocationReady30(IReadOnlyList<byte[]> frames,DecodeContext context)
+    internal static RelocationReady30 DecodeRelocationReady30Header(ReadOnlySpan<byte> frame,DecodeContext context)
     {
-        if(frames.Count==0)throw Error("frames");
-        var body=new Reader(frames[0]);
+        var body = new Reader(frame);
         if(body.U8()!=90)throw Error("magic");
         if(body.U8()!=77)throw Error("magic");
         if(body.U8()!=1||body.U8()!=30)throw Error("header");
         var flags=body.U8();
         if((flags&~0)!=0||(flags&0)!=0)throw Error("flags");
-        var Relocation = ReadRelocationId(body, context);
-        var TargetAttemptGeneration = ReadNonzeroU64(body, context);
-        var Coordinator = ReadRelocationCoordinatorFence(body, context);
-        var Target = ReadRelocationTargetFence(body, context);
-        var Object = ReadRelocationObjectIdentity(body, context);
-        var SenderRole = ReadRelocationRole(body, context);
+        var Relocation = ReadRelocationId(ref body, context);
+        var TargetAttemptGeneration = ReadNonzeroU64(ref body, context);
+        var Coordinator = ReadRelocationCoordinatorFence(ref body, context);
+        var Target = ReadRelocationTargetFence(ref body, context);
+        var Object = ReadRelocationObjectIdentity(ref body, context);
+        var SenderRole = ReadRelocationRole(ref body, context);
         body.End("body");
+        var value=new RelocationReady30(flags,Relocation,TargetAttemptGeneration,Coordinator,Target,Object,SenderRole);
+        return value;
+    }
+    internal static byte[] EncodeRelocationReady30Header(RelocationReady30 value,DecodeContext context) { var writer = new Writer(); WriteRelocationReady30Header(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteRelocationReady30Header(ref writer, value, context); return bytes; }
+    private static void WriteRelocationReady30Header(ref Writer body, RelocationReady30 value, DecodeContext context)
+    {
+        if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
+        body.U8(90);
+        body.U8(77);
+        body.U8(1);body.U8(30);body.U8(value.Flags);
+        WriteRelocationId(ref body, value.Relocation, context);
+        WriteNonzeroU64(ref body, value.TargetAttemptGeneration, context);
+        WriteRelocationCoordinatorFence(ref body, value.Coordinator, context);
+        WriteRelocationTargetFence(ref body, value.Target, context);
+        WriteRelocationObjectIdentity(ref body, value.Object, context);
+        WriteRelocationRole(ref body, value.SenderRole, context);
+    }
+    internal static RelocationReady30 DecodeRelocationReady30(IReadOnlyList<byte[]> frames,DecodeContext context)
+    {
+        if(frames.Count==0)throw Error("frames");
+        var value=DecodeRelocationReady30Header(frames[0],context);
         var index=1;
         if(index!=frames.Count)throw Error("extra frame");
-        var value=new RelocationReady30(flags,Relocation,TargetAttemptGeneration,Coordinator,Target,Object,SenderRole);
         return value;
     }
     internal static RelocationReady30 DecodeRelocationReady30(byte[] frame,DecodeContext context)=>DecodeRelocationReady30(new[]{frame},context);
     internal static byte[][] EncodeRelocationReady30(RelocationReady30 value,DecodeContext context)
     {
-        if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
-        var body=new Writer();
-        body.U8(90);
-        body.U8(77);
-        body.U8(1);body.U8(30);body.U8(value.Flags);
-        WriteRelocationId(body, value.Relocation, context);
-        WriteNonzeroU64(body, value.TargetAttemptGeneration, context);
-        WriteRelocationCoordinatorFence(body, value.Coordinator, context);
-        WriteRelocationTargetFence(body, value.Target, context);
-        WriteRelocationObjectIdentity(body, value.Object, context);
-        WriteRelocationRole(body, value.SenderRole, context);
-        var frames=new List<byte[]>{body.ToArray()};
-        return frames.ToArray();
+        var frames=new byte[1][];
+        frames[0]=EncodeRelocationReady30Header(value,context);
+        return frames;
     }
-    internal static RelocationData31 DecodeRelocationData31(IReadOnlyList<byte[]> frames,DecodeContext context)
+    internal static RelocationData31 DecodeRelocationData31Header(ReadOnlySpan<byte> frame,DecodeContext context)
     {
-        if(frames.Count==0)throw Error("frames");
-        var body=new Reader(frames[0]);
+        var body = new Reader(frame);
         if(body.U8()!=90)throw Error("magic");
         if(body.U8()!=77)throw Error("magic");
         if(body.U8()!=1||body.U8()!=31)throw Error("header");
         var flags=body.U8();
         if((flags&~0)!=0||(flags&0)!=0)throw Error("flags");
-        var Relocation = ReadRelocationId(body, context);
-        var TargetAttemptGeneration = ReadNonzeroU64(body, context);
-        var Coordinator = ReadRelocationCoordinatorFence(body, context);
-        var SenderRole = ReadRelocationRole(body, context);
-        var Object = ReadRelocationObjectIdentity(body, context);
-        var Record = ReadFrozenRecord(body, context);
+        var Relocation = ReadRelocationId(ref body, context);
+        var TargetAttemptGeneration = ReadNonzeroU64(ref body, context);
+        var Coordinator = ReadRelocationCoordinatorFence(ref body, context);
+        var SenderRole = ReadRelocationRole(ref body, context);
+        var Object = ReadRelocationObjectIdentity(ref body, context);
+        var Record = ReadFrozenRecord(ref body, context);
         body.End("body");
+        var value=new RelocationData31(flags,Relocation,TargetAttemptGeneration,Coordinator,SenderRole,Object,Record);
+        return value;
+    }
+    internal static byte[] EncodeRelocationData31Header(RelocationData31 value,DecodeContext context) { var writer = new Writer(); WriteRelocationData31Header(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteRelocationData31Header(ref writer, value, context); return bytes; }
+    private static void WriteRelocationData31Header(ref Writer body, RelocationData31 value, DecodeContext context)
+    {
+        if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
+        body.U8(90);
+        body.U8(77);
+        body.U8(1);body.U8(31);body.U8(value.Flags);
+        WriteRelocationId(ref body, value.Relocation, context);
+        WriteNonzeroU64(ref body, value.TargetAttemptGeneration, context);
+        WriteRelocationCoordinatorFence(ref body, value.Coordinator, context);
+        WriteRelocationRole(ref body, value.SenderRole, context);
+        WriteRelocationObjectIdentity(ref body, value.Object, context);
+        WriteFrozenRecord(ref body, value.Record, context);
+    }
+    internal static RelocationData31 DecodeRelocationData31(IReadOnlyList<byte[]> frames,DecodeContext context)
+    {
+        if(frames.Count==0)throw Error("frames");
+        var value=DecodeRelocationData31Header(frames[0],context);
         var index=1;
         if(index!=frames.Count)throw Error("extra frame");
-        var value=new RelocationData31(flags,Relocation,TargetAttemptGeneration,Coordinator,SenderRole,Object,Record);
         return value;
     }
     internal static RelocationData31 DecodeRelocationData31(byte[] frame,DecodeContext context)=>DecodeRelocationData31(new[]{frame},context);
     internal static byte[][] EncodeRelocationData31(RelocationData31 value,DecodeContext context)
     {
-        if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
-        var body=new Writer();
-        body.U8(90);
-        body.U8(77);
-        body.U8(1);body.U8(31);body.U8(value.Flags);
-        WriteRelocationId(body, value.Relocation, context);
-        WriteNonzeroU64(body, value.TargetAttemptGeneration, context);
-        WriteRelocationCoordinatorFence(body, value.Coordinator, context);
-        WriteRelocationRole(body, value.SenderRole, context);
-        WriteRelocationObjectIdentity(body, value.Object, context);
-        WriteFrozenRecord(body, value.Record, context);
-        var frames=new List<byte[]>{body.ToArray()};
-        return frames.ToArray();
+        var frames=new byte[1][];
+        frames[0]=EncodeRelocationData31Header(value,context);
+        return frames;
     }
-    internal static ReplyRelay33 DecodeReplyRelay33(IReadOnlyList<byte[]> frames,DecodeContext context)
+    internal static ReplyRelay33 DecodeReplyRelay33Header(ReadOnlySpan<byte> frame,DecodeContext context)
     {
-        if(frames.Count==0)throw Error("frames");
-        var body=new Reader(frames[0]);
+        var body = new Reader(frame);
         if(body.U8()!=90)throw Error("magic");
         if(body.U8()!=77)throw Error("magic");
         if(body.U8()!=1||body.U8()!=33)throw Error("header");
         var flags=body.U8();
         if((flags&~0)!=0||(flags&0)!=0)throw Error("flags");
-        var Operation = ReadOperationId(body, context);
-        var ReplyRouteId = ReadNonzeroU64(body, context);
-        var Context = ReadReplyRelayContext(body, context);
-        var TerminalResult = ReadRequestTerminalResult(body, context);
-        var FailureCode = ReadFrameworkErrorCode(body, context);
+        var Operation = ReadOperationId(ref body, context);
+        var ReplyRouteId = ReadNonzeroU64(ref body, context);
+        var Context = ReadReplyRelayContext(ref body, context);
+        var TerminalResult = ReadRequestTerminalResult(ref body, context);
+        var FailureCode = ReadFrameworkErrorCode(ref body, context);
         body.End("body");
-        var index=1;
-        ApplicationPayloadEnvelopeV1? payload=null;
-        if(index<frames.Count){var x=new Reader(frames[index++]);payload=ReadApplicationPayloadEnvelopeV1(x, context);x.End("payload");}
-        if(index!=frames.Count)throw Error("extra frame");
-        var value=new ReplyRelay33(flags,Operation,ReplyRouteId,Context,TerminalResult,FailureCode,payload);
+        var value=new ReplyRelay33(flags,Operation,ReplyRouteId,Context,TerminalResult,FailureCode,default);
         ValidateTerminalFailure(value.TerminalResult, value.FailureCode);
+        return value;
+    }
+    internal static byte[] EncodeReplyRelay33Header(ReplyRelay33 value,DecodeContext context) { var writer = new Writer(); WriteReplyRelay33Header(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteReplyRelay33Header(ref writer, value, context); return bytes; }
+    private static void WriteReplyRelay33Header(ref Writer body, ReplyRelay33 value, DecodeContext context)
+    {
+        if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
+        body.U8(90);
+        body.U8(77);
+        body.U8(1);body.U8(33);body.U8(value.Flags);
+        WriteOperationId(ref body, value.Operation, context);
+        WriteNonzeroU64(ref body, value.ReplyRouteId, context);
+        WriteReplyRelayContext(ref body, value.Context, context);
+        WriteRequestTerminalResult(ref body, value.TerminalResult, context);
+        WriteFrameworkErrorCode(ref body, value.FailureCode, context);
+        ValidateTerminalFailure(value.TerminalResult, value.FailureCode);
+    }
+    internal static ReplyRelay33 DecodeReplyRelay33(IReadOnlyList<byte[]> frames,DecodeContext context)
+    {
+        if(frames.Count==0)throw Error("frames");
+        var value=DecodeReplyRelay33Header(frames[0],context);
+        var index=1;
+        if(index<frames.Count)value=value with { Payload=DecodeApplicationPayloadEnvelopeV1(frames[index++],context) };
+        if(index!=frames.Count)throw Error("extra frame");
         return value;
     }
     internal static ReplyRelay33 DecodeReplyRelay33(byte[] frame,DecodeContext context)=>DecodeReplyRelay33(new[]{frame},context);
     internal static byte[][] EncodeReplyRelay33(ReplyRelay33 value,DecodeContext context)
     {
-        if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
-        var body=new Writer();
-        body.U8(90);
-        body.U8(77);
-        body.U8(1);body.U8(33);body.U8(value.Flags);
-        WriteOperationId(body, value.Operation, context);
-        WriteNonzeroU64(body, value.ReplyRouteId, context);
-        WriteReplyRelayContext(body, value.Context, context);
-        WriteRequestTerminalResult(body, value.TerminalResult, context);
-        WriteFrameworkErrorCode(body, value.FailureCode, context);
-        var frames=new List<byte[]>{body.ToArray()};
-        if(value.Payload is not null){var x=new Writer();WriteApplicationPayloadEnvelopeV1(x, value.Payload, context);frames.Add(x.ToArray());}
-        ValidateTerminalFailure(value.TerminalResult, value.FailureCode);
-        return frames.ToArray();
+        var frames=new byte[1+(value.Payload is not null?1:0)][];
+        frames[0]=EncodeReplyRelay33Header(value,context);
+        var index=1;
+        if(value.Payload is not null)frames[index++]=EncodeApplicationPayloadEnvelopeV1(value.Payload.Value,context);
+        return frames;
     }
-    internal static RelocationCutover34 DecodeRelocationCutover34(IReadOnlyList<byte[]> frames,DecodeContext context)
+    internal static RelocationCutover34 DecodeRelocationCutover34Header(ReadOnlySpan<byte> frame,DecodeContext context)
     {
-        if(frames.Count==0)throw Error("frames");
-        var body=new Reader(frames[0]);
+        var body = new Reader(frame);
         if(body.U8()!=90)throw Error("magic");
         if(body.U8()!=77)throw Error("magic");
         if(body.U8()!=1||body.U8()!=34)throw Error("header");
         var flags=body.U8();
         if((flags&~0)!=0||(flags&0)!=0)throw Error("flags");
-        var Relocation = ReadRelocationId(body, context);
-        var TargetAttemptGeneration = ReadNonzeroU64(body, context);
-        var Coordinator = ReadRelocationCoordinatorFence(body, context);
-        var SenderRole = ReadRelocationRole(body, context);
-        var Object = ReadRelocationObjectIdentity(body, context);
-        var BoundaryRecordCount = ReadOrdinalOrZero(body, context);
-        var BoundaryChecksumCrc32c = ReadU32(body, context);
+        var Relocation = ReadRelocationId(ref body, context);
+        var TargetAttemptGeneration = ReadNonzeroU64(ref body, context);
+        var Coordinator = ReadRelocationCoordinatorFence(ref body, context);
+        var SenderRole = ReadRelocationRole(ref body, context);
+        var Object = ReadRelocationObjectIdentity(ref body, context);
+        var BoundaryRecordCount = ReadOrdinalOrZero(ref body, context);
+        var BoundaryChecksumCrc32c = ReadU32(ref body, context);
         body.End("body");
+        var value=new RelocationCutover34(flags,Relocation,TargetAttemptGeneration,Coordinator,SenderRole,Object,BoundaryRecordCount,BoundaryChecksumCrc32c);
+        return value;
+    }
+    internal static byte[] EncodeRelocationCutover34Header(RelocationCutover34 value,DecodeContext context) { var writer = new Writer(); WriteRelocationCutover34Header(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteRelocationCutover34Header(ref writer, value, context); return bytes; }
+    private static void WriteRelocationCutover34Header(ref Writer body, RelocationCutover34 value, DecodeContext context)
+    {
+        if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
+        body.U8(90);
+        body.U8(77);
+        body.U8(1);body.U8(34);body.U8(value.Flags);
+        WriteRelocationId(ref body, value.Relocation, context);
+        WriteNonzeroU64(ref body, value.TargetAttemptGeneration, context);
+        WriteRelocationCoordinatorFence(ref body, value.Coordinator, context);
+        WriteRelocationRole(ref body, value.SenderRole, context);
+        WriteRelocationObjectIdentity(ref body, value.Object, context);
+        WriteOrdinalOrZero(ref body, value.BoundaryRecordCount, context);
+        WriteU32(ref body, value.BoundaryChecksumCrc32c, context);
+    }
+    internal static RelocationCutover34 DecodeRelocationCutover34(IReadOnlyList<byte[]> frames,DecodeContext context)
+    {
+        if(frames.Count==0)throw Error("frames");
+        var value=DecodeRelocationCutover34Header(frames[0],context);
         var index=1;
         if(index!=frames.Count)throw Error("extra frame");
-        var value=new RelocationCutover34(flags,Relocation,TargetAttemptGeneration,Coordinator,SenderRole,Object,BoundaryRecordCount,BoundaryChecksumCrc32c);
         return value;
     }
     internal static RelocationCutover34 DecodeRelocationCutover34(byte[] frame,DecodeContext context)=>DecodeRelocationCutover34(new[]{frame},context);
     internal static byte[][] EncodeRelocationCutover34(RelocationCutover34 value,DecodeContext context)
     {
-        if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
-        var body=new Writer();
-        body.U8(90);
-        body.U8(77);
-        body.U8(1);body.U8(34);body.U8(value.Flags);
-        WriteRelocationId(body, value.Relocation, context);
-        WriteNonzeroU64(body, value.TargetAttemptGeneration, context);
-        WriteRelocationCoordinatorFence(body, value.Coordinator, context);
-        WriteRelocationRole(body, value.SenderRole, context);
-        WriteRelocationObjectIdentity(body, value.Object, context);
-        WriteOrdinalOrZero(body, value.BoundaryRecordCount, context);
-        WriteU32(body, value.BoundaryChecksumCrc32c, context);
-        var frames=new List<byte[]>{body.ToArray()};
-        return frames.ToArray();
+        var frames=new byte[1][];
+        frames[0]=EncodeRelocationCutover34Header(value,context);
+        return frames;
     }
-    internal static BoundSessionSend36 DecodeBoundSessionSend36(IReadOnlyList<byte[]> frames,DecodeContext context)
+    internal static BoundSessionSend36 DecodeBoundSessionSend36Header(ReadOnlySpan<byte> frame,DecodeContext context)
     {
-        if(frames.Count==0)throw Error("frames");
-        var body=new Reader(frames[0]);
+        var body = new Reader(frame);
         if(body.U8()!=90)throw Error("magic");
         if(body.U8()!=77)throw Error("magic");
         if(body.U8()!=1||body.U8()!=36)throw Error("header");
         var flags=body.U8();
         if((flags&~0)!=0||(flags&0)!=0)throw Error("flags");
-        var Actor = ReadActorRouteFence(body, context);
-        var ExpectedBindingGeneration = ReadNonzeroU64(body, context);
+        var Actor = ReadActorRouteFence(ref body, context);
+        var ExpectedBindingGeneration = ReadNonzeroU64(ref body, context);
         body.End("body");
+        var value=new BoundSessionSend36(flags,Actor,ExpectedBindingGeneration,default);
+        return value;
+    }
+    internal static byte[] EncodeBoundSessionSend36Header(BoundSessionSend36 value,DecodeContext context) { var writer = new Writer(); WriteBoundSessionSend36Header(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteBoundSessionSend36Header(ref writer, value, context); return bytes; }
+    private static void WriteBoundSessionSend36Header(ref Writer body, BoundSessionSend36 value, DecodeContext context)
+    {
+        if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
+        body.U8(90);
+        body.U8(77);
+        body.U8(1);body.U8(36);body.U8(value.Flags);
+        WriteActorRouteFence(ref body, value.Actor, context);
+        WriteNonzeroU64(ref body, value.ExpectedBindingGeneration, context);
+    }
+    internal static BoundSessionSend36 DecodeBoundSessionSend36(IReadOnlyList<byte[]> frames,DecodeContext context)
+    {
+        if(frames.Count==0)throw Error("frames");
+        var value=DecodeBoundSessionSend36Header(frames[0],context);
         var index=1;
-        ApplicationPayloadEnvelopeV1? payload=null;
         if(index>=frames.Count)throw Error("payload required");
-        if(index<frames.Count){var x=new Reader(frames[index++]);payload=ReadApplicationPayloadEnvelopeV1(x, context);x.End("payload");}
+        if(index<frames.Count)value=value with { Payload=DecodeApplicationPayloadEnvelopeV1(frames[index++],context) };
         if(index!=frames.Count)throw Error("extra frame");
-        var value=new BoundSessionSend36(flags,Actor,ExpectedBindingGeneration,payload!);
         return value;
     }
     internal static BoundSessionSend36 DecodeBoundSessionSend36(byte[] frame,DecodeContext context)=>DecodeBoundSessionSend36(new[]{frame},context);
     internal static byte[][] EncodeBoundSessionSend36(BoundSessionSend36 value,DecodeContext context)
     {
-        if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
-        var body=new Writer();
-        body.U8(90);
-        body.U8(77);
-        body.U8(1);body.U8(36);body.U8(value.Flags);
-        WriteActorRouteFence(body, value.Actor, context);
-        WriteNonzeroU64(body, value.ExpectedBindingGeneration, context);
-        var frames=new List<byte[]>{body.ToArray()};
-        if(value.Payload is null)throw Error("payload required");
-        if(value.Payload is not null){var x=new Writer();WriteApplicationPayloadEnvelopeV1(x, value.Payload, context);frames.Add(x.ToArray());}
-        return frames.ToArray();
+        var frames=new byte[1+1][];
+        frames[0]=EncodeBoundSessionSend36Header(value,context);
+        var index=1;
+        frames[index++]=EncodeApplicationPayloadEnvelopeV1(value.Payload,context);
+        return frames;
     }
-    internal static ActorJoined37 DecodeActorJoined37(IReadOnlyList<byte[]> frames,DecodeContext context)
+    internal static ActorJoined37 DecodeActorJoined37Header(ReadOnlySpan<byte> frame,DecodeContext context)
     {
-        if(frames.Count==0)throw Error("frames");
-        var body=new Reader(frames[0]);
+        var body = new Reader(frame);
         if(body.U8()!=90)throw Error("magic");
         if(body.U8()!=77)throw Error("magic");
         if(body.U8()!=1||body.U8()!=37)throw Error("header");
         var flags=body.U8();
         if((flags&~0)!=0||(flags&0)!=0)throw Error("flags");
-        var Actor = ReadActorRef(body, context);
-        var PreviousMembership = ReadOptionalSpotMembership(body, context);
-        var CurrentMembership = ReadSpotMembership(body, context);
-        var CurrentAuthorityOwnerGeneration = ReadNonzeroU64(body, context);
+        var Actor = ReadActorRef(ref body, context);
+        var PreviousMembership = ReadOptionalSpotMembership(ref body, context);
+        var CurrentMembership = ReadSpotMembership(ref body, context);
+        var CurrentAuthorityOwnerGeneration = ReadNonzeroU64(ref body, context);
         body.End("body");
+        var value=new ActorJoined37(flags,Actor,PreviousMembership,CurrentMembership,CurrentAuthorityOwnerGeneration);
+        return value;
+    }
+    internal static byte[] EncodeActorJoined37Header(ActorJoined37 value,DecodeContext context) { var writer = new Writer(); WriteActorJoined37Header(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteActorJoined37Header(ref writer, value, context); return bytes; }
+    private static void WriteActorJoined37Header(ref Writer body, ActorJoined37 value, DecodeContext context)
+    {
+        if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
+        body.U8(90);
+        body.U8(77);
+        body.U8(1);body.U8(37);body.U8(value.Flags);
+        WriteActorRef(ref body, value.Actor, context);
+        WriteOptionalSpotMembership(ref body, value.PreviousMembership, context);
+        WriteSpotMembership(ref body, value.CurrentMembership, context);
+        WriteNonzeroU64(ref body, value.CurrentAuthorityOwnerGeneration, context);
+    }
+    internal static ActorJoined37 DecodeActorJoined37(IReadOnlyList<byte[]> frames,DecodeContext context)
+    {
+        if(frames.Count==0)throw Error("frames");
+        var value=DecodeActorJoined37Header(frames[0],context);
         var index=1;
         if(index!=frames.Count)throw Error("extra frame");
-        var value=new ActorJoined37(flags,Actor,PreviousMembership,CurrentMembership,CurrentAuthorityOwnerGeneration);
         return value;
     }
     internal static ActorJoined37 DecodeActorJoined37(byte[] frame,DecodeContext context)=>DecodeActorJoined37(new[]{frame},context);
     internal static byte[][] EncodeActorJoined37(ActorJoined37 value,DecodeContext context)
     {
-        if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
-        var body=new Writer();
-        body.U8(90);
-        body.U8(77);
-        body.U8(1);body.U8(37);body.U8(value.Flags);
-        WriteActorRef(body, value.Actor, context);
-        WriteOptionalSpotMembership(body, value.PreviousMembership, context);
-        WriteSpotMembership(body, value.CurrentMembership, context);
-        WriteNonzeroU64(body, value.CurrentAuthorityOwnerGeneration, context);
-        var frames=new List<byte[]>{body.ToArray()};
-        return frames.ToArray();
+        var frames=new byte[1][];
+        frames[0]=EncodeActorJoined37Header(value,context);
+        return frames;
     }
-    internal static BoundSessionBind38 DecodeBoundSessionBind38(IReadOnlyList<byte[]> frames,DecodeContext context)
+    internal static BoundSessionBind38 DecodeBoundSessionBind38Header(ReadOnlySpan<byte> frame,DecodeContext context)
     {
-        if(frames.Count==0)throw Error("frames");
-        var body=new Reader(frames[0]);
+        var body = new Reader(frame);
         if(body.U8()!=90)throw Error("magic");
         if(body.U8()!=77)throw Error("magic");
         if(body.U8()!=1||body.U8()!=38)throw Error("header");
         var flags=body.U8();
         if((flags&~0)!=0||(flags&0)!=0)throw Error("flags");
-        var Correlation = ReadNonzeroU64(body, context);
-        var Actor = ReadActorRouteFence(body, context);
-        var SessionRid = ReadRid(body, context);
-        var Binding = ReadBoundSessionBindingTransition(body, context);
+        var Correlation = ReadNonzeroU64(ref body, context);
+        var Actor = ReadActorRouteFence(ref body, context);
+        var SessionRid = ReadRid(ref body, context);
+        var Binding = ReadBoundSessionBindingTransition(ref body, context);
         body.End("body");
+        var value=new BoundSessionBind38(flags,Correlation,Actor,SessionRid,Binding);
+        return value;
+    }
+    internal static byte[] EncodeBoundSessionBind38Header(BoundSessionBind38 value,DecodeContext context) { var writer = new Writer(); WriteBoundSessionBind38Header(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteBoundSessionBind38Header(ref writer, value, context); return bytes; }
+    private static void WriteBoundSessionBind38Header(ref Writer body, BoundSessionBind38 value, DecodeContext context)
+    {
+        if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
+        body.U8(90);
+        body.U8(77);
+        body.U8(1);body.U8(38);body.U8(value.Flags);
+        WriteNonzeroU64(ref body, value.Correlation, context);
+        WriteActorRouteFence(ref body, value.Actor, context);
+        WriteRid(ref body, value.SessionRid, context);
+        WriteBoundSessionBindingTransition(ref body, value.Binding, context);
+    }
+    internal static BoundSessionBind38 DecodeBoundSessionBind38(IReadOnlyList<byte[]> frames,DecodeContext context)
+    {
+        if(frames.Count==0)throw Error("frames");
+        var value=DecodeBoundSessionBind38Header(frames[0],context);
         var index=1;
         if(index!=frames.Count)throw Error("extra frame");
-        var value=new BoundSessionBind38(flags,Correlation,Actor,SessionRid,Binding);
         return value;
     }
     internal static BoundSessionBind38 DecodeBoundSessionBind38(byte[] frame,DecodeContext context)=>DecodeBoundSessionBind38(new[]{frame},context);
     internal static byte[][] EncodeBoundSessionBind38(BoundSessionBind38 value,DecodeContext context)
     {
-        if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
-        var body=new Writer();
-        body.U8(90);
-        body.U8(77);
-        body.U8(1);body.U8(38);body.U8(value.Flags);
-        WriteNonzeroU64(body, value.Correlation, context);
-        WriteActorRouteFence(body, value.Actor, context);
-        WriteRid(body, value.SessionRid, context);
-        WriteBoundSessionBindingTransition(body, value.Binding, context);
-        var frames=new List<byte[]>{body.ToArray()};
-        return frames.ToArray();
+        var frames=new byte[1][];
+        frames[0]=EncodeBoundSessionBind38Header(value,context);
+        return frames;
     }
-    internal static InstanceSpot39 DecodeInstanceSpot39(IReadOnlyList<byte[]> frames,DecodeContext context)
+    internal static InstanceSpot39 DecodeInstanceSpot39Header(ReadOnlySpan<byte> frame,DecodeContext context)
     {
-        if(frames.Count==0)throw Error("frames");
-        var body=new Reader(frames[0]);
+        var body = new Reader(frame);
         if(body.U8()!=90)throw Error("magic");
         if(body.U8()!=77)throw Error("magic");
         if(body.U8()!=1||body.U8()!=39)throw Error("header");
         var flags=body.U8();
         if((flags&~1)!=0||(flags&0)!=0)throw Error("flags");
-        var Route = ReadInstanceRouteV1(body, context);
-        var SourceNodeGeneration = ReadNonzeroU64(body, context);
-        var SourceNodeRid = ReadRid(body, context);
-        var SourceSpotId = ReadOptionalText8(body, context);
-        var OperationKind = ReadInstanceOperationKind(body, context);
-        var Operation = ReadOperationIdOrZero(body, context);
-        var ReplyRoute = ReadInstanceReplyRoute(body, context, OperationKind);
+        var Route = ReadInstanceRouteV1(ref body, context);
+        var SourceNodeGeneration = ReadNonzeroU64(ref body, context);
+        var SourceNodeRid = ReadRid(ref body, context);
+        var SourceSpotId = ReadOptionalText8(ref body, context);
+        var OperationKind = ReadInstanceOperationKind(ref body, context);
+        var Operation = ReadOperationIdOrZero(ref body, context);
+        var ReplyRoute = ReadInstanceReplyRoute(ref body, context, OperationKind);
         body.End("body");
+        var value=new InstanceSpot39(flags,Route,SourceNodeGeneration,SourceNodeRid,SourceSpotId,OperationKind,Operation,ReplyRoute,default,default);
+        return value;
+    }
+    internal static byte[] EncodeInstanceSpot39Header(InstanceSpot39 value,DecodeContext context) { var writer = new Writer(); WriteInstanceSpot39Header(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteInstanceSpot39Header(ref writer, value, context); return bytes; }
+    private static void WriteInstanceSpot39Header(ref Writer body, InstanceSpot39 value, DecodeContext context)
+    {
+        if((value.Flags&~1)!=0||(value.Flags&0)!=0)throw Error("flags");
+        body.U8(90);
+        body.U8(77);
+        body.U8(1);body.U8(39);body.U8(value.Flags);
+        WriteInstanceRouteV1(ref body, value.Route, context);
+        WriteNonzeroU64(ref body, value.SourceNodeGeneration, context);
+        WriteRid(ref body, value.SourceNodeRid, context);
+        WriteOptionalText8(ref body, value.SourceSpotId, context);
+        WriteInstanceOperationKind(ref body, value.OperationKind, context);
+        WriteOperationIdOrZero(ref body, value.Operation, context);
+        WriteInstanceReplyRoute(ref body, value.ReplyRoute, context, value.OperationKind);
+    }
+    internal static InstanceSpot39 DecodeInstanceSpot39(IReadOnlyList<byte[]> frames,DecodeContext context)
+    {
+        if(frames.Count==0)throw Error("frames");
+        var value=DecodeInstanceSpot39Header(frames[0],context);
         var index=1;
-        MetadataFrame? metadata=null;
-        if((flags&1)!=0){if(index>=frames.Count)throw Error("metadata required");var x=new Reader(frames[index++]);metadata=ReadMetadataFrame(x, context);x.End("metadata");}
-        ApplicationPayloadEnvelopeV1? payload=null;
+        if((value.Flags&1)!=0){if(index>=frames.Count)throw Error("metadata required");value=value with { Metadata=DecodeMetadataFrame(frames[index++],context) };}
         if(index>=frames.Count)throw Error("payload required");
-        if(index<frames.Count){var x=new Reader(frames[index++]);payload=ReadApplicationPayloadEnvelopeV1(x, context);x.End("payload");}
+        if(index<frames.Count)value=value with { Payload=DecodeApplicationPayloadEnvelopeV1(frames[index++],context) };
         if(index!=frames.Count)throw Error("extra frame");
-        var value=new InstanceSpot39(flags,Route,SourceNodeGeneration,SourceNodeRid,SourceSpotId,OperationKind,Operation,ReplyRoute,metadata,payload!);
         return value;
     }
     internal static InstanceSpot39 DecodeInstanceSpot39(byte[] frame,DecodeContext context)=>DecodeInstanceSpot39(new[]{frame},context);
     internal static byte[][] EncodeInstanceSpot39(InstanceSpot39 value,DecodeContext context)
     {
-        if((value.Flags&~1)!=0||(value.Flags&0)!=0)throw Error("flags");
-        var body=new Writer();
-        body.U8(90);
-        body.U8(77);
-        body.U8(1);body.U8(39);body.U8(value.Flags);
-        WriteInstanceRouteV1(body, value.Route, context);
-        WriteNonzeroU64(body, value.SourceNodeGeneration, context);
-        WriteRid(body, value.SourceNodeRid, context);
-        WriteOptionalText8(body, value.SourceSpotId, context);
-        WriteInstanceOperationKind(body, value.OperationKind, context);
-        WriteOperationIdOrZero(body, value.Operation, context);
-        WriteInstanceReplyRoute(body, value.ReplyRoute, context, value.OperationKind);
-        var frames=new List<byte[]>{body.ToArray()};
-        if((value.Flags&1)!=0){if(value.Metadata is null)throw Error("metadata required");var x=new Writer();WriteMetadataFrame(x, value.Metadata, context);frames.Add(x.ToArray());}else if(value.Metadata is not null)throw Error("metadata forbidden");
-        if(value.Payload is null)throw Error("payload required");
-        if(value.Payload is not null){var x=new Writer();WriteApplicationPayloadEnvelopeV1(x, value.Payload, context);frames.Add(x.ToArray());}
-        return frames.ToArray();
+        var frames=new byte[1+((value.Flags&1)!=0?1:0)+1][];
+        frames[0]=EncodeInstanceSpot39Header(value,context);
+        var index=1;
+        if((value.Flags&1)!=0){if(value.Metadata is null)throw Error("metadata required");frames[index++]=EncodeMetadataFrame(value.Metadata.Value,context);}else if(value.Metadata is not null)throw Error("metadata forbidden");
+        frames[index++]=EncodeApplicationPayloadEnvelopeV1(value.Payload,context);
+        return frames;
     }
-    internal static RelocationPrepare40 DecodeRelocationPrepare40(IReadOnlyList<byte[]> frames,DecodeContext context)
+    internal static RelocationPrepare40 DecodeRelocationPrepare40Header(ReadOnlySpan<byte> frame,DecodeContext context)
     {
-        if(frames.Count==0)throw Error("frames");
-        var body=new Reader(frames[0]);
+        var body = new Reader(frame);
         if(body.U8()!=90)throw Error("magic");
         if(body.U8()!=77)throw Error("magic");
         if(body.U8()!=1||body.U8()!=40)throw Error("header");
         var flags=body.U8();
         if((flags&~0)!=0||(flags&0)!=0)throw Error("flags");
-        var Relocation = ReadRelocationId(body, context);
-        var TargetAttemptGeneration = ReadNonzeroU64(body, context);
-        var Coordinator = ReadRelocationCoordinatorFence(body, context);
-        var Target = ReadRelocationTargetFence(body, context);
-        var InitiatorRole = ReadRelocationRole(body, context);
-        var Object = ReadRelocationObjectIdentity(body, context);
-        var SourceNodeRid = ReadRid(body, context);
-        var SourceNodeGeneration = ReadNonzeroU64(body, context);
-        var PayloadTotalLength = ReadRelocationLogicalLength(body, context);
-        var PayloadChunkCount = ReadRelocationChunkCount(body, context);
-        var PayloadChecksumCrc32c = ReadU32(body, context);
-        var ApplicationVersion = ReadApplicationVersion(body, context);
-        var DeadlineUnixMs = ReadNonzeroU64(body, context);
+        var Relocation = ReadRelocationId(ref body, context);
+        var TargetAttemptGeneration = ReadNonzeroU64(ref body, context);
+        var Coordinator = ReadRelocationCoordinatorFence(ref body, context);
+        var Target = ReadRelocationTargetFence(ref body, context);
+        var InitiatorRole = ReadRelocationRole(ref body, context);
+        var Object = ReadRelocationObjectIdentity(ref body, context);
+        var SourceNodeRid = ReadRid(ref body, context);
+        var SourceNodeGeneration = ReadNonzeroU64(ref body, context);
+        var PayloadTotalLength = ReadRelocationLogicalLength(ref body, context);
+        var PayloadChunkCount = ReadRelocationChunkCount(ref body, context);
+        var PayloadChecksumCrc32c = ReadU32(ref body, context);
+        var ApplicationVersion = ReadApplicationVersion(ref body, context);
+        var DeadlineUnixMs = ReadNonzeroU64(ref body, context);
         body.End("body");
+        var value=new RelocationPrepare40(flags,Relocation,TargetAttemptGeneration,Coordinator,Target,InitiatorRole,Object,SourceNodeRid,SourceNodeGeneration,PayloadTotalLength,PayloadChunkCount,PayloadChecksumCrc32c,ApplicationVersion,DeadlineUnixMs);
+        return value;
+    }
+    internal static byte[] EncodeRelocationPrepare40Header(RelocationPrepare40 value,DecodeContext context) { var writer = new Writer(); WriteRelocationPrepare40Header(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteRelocationPrepare40Header(ref writer, value, context); return bytes; }
+    private static void WriteRelocationPrepare40Header(ref Writer body, RelocationPrepare40 value, DecodeContext context)
+    {
+        if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
+        body.U8(90);
+        body.U8(77);
+        body.U8(1);body.U8(40);body.U8(value.Flags);
+        WriteRelocationId(ref body, value.Relocation, context);
+        WriteNonzeroU64(ref body, value.TargetAttemptGeneration, context);
+        WriteRelocationCoordinatorFence(ref body, value.Coordinator, context);
+        WriteRelocationTargetFence(ref body, value.Target, context);
+        WriteRelocationRole(ref body, value.InitiatorRole, context);
+        WriteRelocationObjectIdentity(ref body, value.Object, context);
+        WriteRid(ref body, value.SourceNodeRid, context);
+        WriteNonzeroU64(ref body, value.SourceNodeGeneration, context);
+        WriteRelocationLogicalLength(ref body, value.PayloadTotalLength, context);
+        WriteRelocationChunkCount(ref body, value.PayloadChunkCount, context);
+        WriteU32(ref body, value.PayloadChecksumCrc32c, context);
+        WriteApplicationVersion(ref body, value.ApplicationVersion, context);
+        WriteNonzeroU64(ref body, value.DeadlineUnixMs, context);
+    }
+    internal static RelocationPrepare40 DecodeRelocationPrepare40(IReadOnlyList<byte[]> frames,DecodeContext context)
+    {
+        if(frames.Count==0)throw Error("frames");
+        var value=DecodeRelocationPrepare40Header(frames[0],context);
         var index=1;
         if(index!=frames.Count)throw Error("extra frame");
-        var value=new RelocationPrepare40(flags,Relocation,TargetAttemptGeneration,Coordinator,Target,InitiatorRole,Object,SourceNodeRid,SourceNodeGeneration,PayloadTotalLength,PayloadChunkCount,PayloadChecksumCrc32c,ApplicationVersion,DeadlineUnixMs);
         return value;
     }
     internal static RelocationPrepare40 DecodeRelocationPrepare40(byte[] frame,DecodeContext context)=>DecodeRelocationPrepare40(new[]{frame},context);
     internal static byte[][] EncodeRelocationPrepare40(RelocationPrepare40 value,DecodeContext context)
     {
-        if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
-        var body=new Writer();
-        body.U8(90);
-        body.U8(77);
-        body.U8(1);body.U8(40);body.U8(value.Flags);
-        WriteRelocationId(body, value.Relocation, context);
-        WriteNonzeroU64(body, value.TargetAttemptGeneration, context);
-        WriteRelocationCoordinatorFence(body, value.Coordinator, context);
-        WriteRelocationTargetFence(body, value.Target, context);
-        WriteRelocationRole(body, value.InitiatorRole, context);
-        WriteRelocationObjectIdentity(body, value.Object, context);
-        WriteRid(body, value.SourceNodeRid, context);
-        WriteNonzeroU64(body, value.SourceNodeGeneration, context);
-        WriteRelocationLogicalLength(body, value.PayloadTotalLength, context);
-        WriteRelocationChunkCount(body, value.PayloadChunkCount, context);
-        WriteU32(body, value.PayloadChecksumCrc32c, context);
-        WriteApplicationVersion(body, value.ApplicationVersion, context);
-        WriteNonzeroU64(body, value.DeadlineUnixMs, context);
-        var frames=new List<byte[]>{body.ToArray()};
-        return frames.ToArray();
+        var frames=new byte[1][];
+        frames[0]=EncodeRelocationPrepare40Header(value,context);
+        return frames;
     }
-    internal static SessionRelocationSeal42 DecodeSessionRelocationSeal42(IReadOnlyList<byte[]> frames,DecodeContext context)
+    internal static SessionRelocationSeal42 DecodeSessionRelocationSeal42Header(ReadOnlySpan<byte> frame,DecodeContext context)
     {
-        if(frames.Count==0)throw Error("frames");
-        var body=new Reader(frames[0]);
+        var body = new Reader(frame);
         if(body.U8()!=90)throw Error("magic");
         if(body.U8()!=77)throw Error("magic");
         if(body.U8()!=1||body.U8()!=42)throw Error("header");
         var flags=body.U8();
         if((flags&~0)!=0||(flags&0)!=0)throw Error("flags");
-        var Relocation = ReadRelocationId(body, context);
-        var Coordinator = ReadRelocationCoordinatorFence(body, context);
-        var SenderRole = ReadRelocationRole(body, context);
-        var Actor = ReadActorRouteFence(body, context);
-        var SessionOwnerNodeRid = ReadRid(body, context);
-        var SessionOwnerNodeGeneration = ReadNonzeroU64(body, context);
-        var SessionOwnerId = ReadText8(body, context);
-        var SessionOwnerLeaseGeneration = ReadNonzeroU64(body, context);
-        var SessionRid = ReadRid(body, context);
-        var BindingGeneration = ReadNonzeroU64(body, context);
-        var TargetNodeRid = ReadRid(body, context);
-        var TargetNodeGeneration = ReadNonzeroU64(body, context);
+        var Relocation = ReadRelocationId(ref body, context);
+        var Coordinator = ReadRelocationCoordinatorFence(ref body, context);
+        var SenderRole = ReadRelocationRole(ref body, context);
+        var Actor = ReadActorRouteFence(ref body, context);
+        var SessionOwnerNodeRid = ReadRid(ref body, context);
+        var SessionOwnerNodeGeneration = ReadNonzeroU64(ref body, context);
+        var SessionOwnerId = ReadText8(ref body, context);
+        var SessionOwnerLeaseGeneration = ReadNonzeroU64(ref body, context);
+        var SessionRid = ReadRid(ref body, context);
+        var BindingGeneration = ReadNonzeroU64(ref body, context);
+        var TargetNodeRid = ReadRid(ref body, context);
+        var TargetNodeGeneration = ReadNonzeroU64(ref body, context);
         body.End("body");
+        var value=new SessionRelocationSeal42(flags,Relocation,Coordinator,SenderRole,Actor,SessionOwnerNodeRid,SessionOwnerNodeGeneration,SessionOwnerId,SessionOwnerLeaseGeneration,SessionRid,BindingGeneration,TargetNodeRid,TargetNodeGeneration);
+        return value;
+    }
+    internal static byte[] EncodeSessionRelocationSeal42Header(SessionRelocationSeal42 value,DecodeContext context) { var writer = new Writer(); WriteSessionRelocationSeal42Header(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteSessionRelocationSeal42Header(ref writer, value, context); return bytes; }
+    private static void WriteSessionRelocationSeal42Header(ref Writer body, SessionRelocationSeal42 value, DecodeContext context)
+    {
+        if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
+        body.U8(90);
+        body.U8(77);
+        body.U8(1);body.U8(42);body.U8(value.Flags);
+        WriteRelocationId(ref body, value.Relocation, context);
+        WriteRelocationCoordinatorFence(ref body, value.Coordinator, context);
+        WriteRelocationRole(ref body, value.SenderRole, context);
+        WriteActorRouteFence(ref body, value.Actor, context);
+        WriteRid(ref body, value.SessionOwnerNodeRid, context);
+        WriteNonzeroU64(ref body, value.SessionOwnerNodeGeneration, context);
+        WriteText8(ref body, value.SessionOwnerId, context);
+        WriteNonzeroU64(ref body, value.SessionOwnerLeaseGeneration, context);
+        WriteRid(ref body, value.SessionRid, context);
+        WriteNonzeroU64(ref body, value.BindingGeneration, context);
+        WriteRid(ref body, value.TargetNodeRid, context);
+        WriteNonzeroU64(ref body, value.TargetNodeGeneration, context);
+    }
+    internal static SessionRelocationSeal42 DecodeSessionRelocationSeal42(IReadOnlyList<byte[]> frames,DecodeContext context)
+    {
+        if(frames.Count==0)throw Error("frames");
+        var value=DecodeSessionRelocationSeal42Header(frames[0],context);
         var index=1;
         if(index!=frames.Count)throw Error("extra frame");
-        var value=new SessionRelocationSeal42(flags,Relocation,Coordinator,SenderRole,Actor,SessionOwnerNodeRid,SessionOwnerNodeGeneration,SessionOwnerId,SessionOwnerLeaseGeneration,SessionRid,BindingGeneration,TargetNodeRid,TargetNodeGeneration);
         return value;
     }
     internal static SessionRelocationSeal42 DecodeSessionRelocationSeal42(byte[] frame,DecodeContext context)=>DecodeSessionRelocationSeal42(new[]{frame},context);
     internal static byte[][] EncodeSessionRelocationSeal42(SessionRelocationSeal42 value,DecodeContext context)
     {
-        if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
-        var body=new Writer();
-        body.U8(90);
-        body.U8(77);
-        body.U8(1);body.U8(42);body.U8(value.Flags);
-        WriteRelocationId(body, value.Relocation, context);
-        WriteRelocationCoordinatorFence(body, value.Coordinator, context);
-        WriteRelocationRole(body, value.SenderRole, context);
-        WriteActorRouteFence(body, value.Actor, context);
-        WriteRid(body, value.SessionOwnerNodeRid, context);
-        WriteNonzeroU64(body, value.SessionOwnerNodeGeneration, context);
-        WriteText8(body, value.SessionOwnerId, context);
-        WriteNonzeroU64(body, value.SessionOwnerLeaseGeneration, context);
-        WriteRid(body, value.SessionRid, context);
-        WriteNonzeroU64(body, value.BindingGeneration, context);
-        WriteRid(body, value.TargetNodeRid, context);
-        WriteNonzeroU64(body, value.TargetNodeGeneration, context);
-        var frames=new List<byte[]>{body.ToArray()};
-        return frames.ToArray();
+        var frames=new byte[1][];
+        frames[0]=EncodeSessionRelocationSeal42Header(value,context);
+        return frames;
     }
-    internal static SessionRelocationSealed43 DecodeSessionRelocationSealed43(IReadOnlyList<byte[]> frames,DecodeContext context)
+    internal static SessionRelocationSealed43 DecodeSessionRelocationSealed43Header(ReadOnlySpan<byte> frame,DecodeContext context)
     {
-        if(frames.Count==0)throw Error("frames");
-        var body=new Reader(frames[0]);
+        var body = new Reader(frame);
         if(body.U8()!=90)throw Error("magic");
         if(body.U8()!=77)throw Error("magic");
         if(body.U8()!=1||body.U8()!=43)throw Error("header");
         var flags=body.U8();
         if((flags&~0)!=0||(flags&0)!=0)throw Error("flags");
-        var Relocation = ReadRelocationId(body, context);
-        var Coordinator = ReadRelocationCoordinatorFence(body, context);
-        var Actor = ReadActorRouteFence(body, context);
-        var SessionOwnerNodeRid = ReadRid(body, context);
-        var SessionOwnerNodeGeneration = ReadNonzeroU64(body, context);
-        var SessionOwnerId = ReadText8(body, context);
-        var SessionOwnerLeaseGeneration = ReadNonzeroU64(body, context);
-        var SessionRid = ReadRid(body, context);
-        var BindingGeneration = ReadNonzeroU64(body, context);
-        var SealResult = ReadSessionSealResult(body, context);
+        var Relocation = ReadRelocationId(ref body, context);
+        var Coordinator = ReadRelocationCoordinatorFence(ref body, context);
+        var Actor = ReadActorRouteFence(ref body, context);
+        var SessionOwnerNodeRid = ReadRid(ref body, context);
+        var SessionOwnerNodeGeneration = ReadNonzeroU64(ref body, context);
+        var SessionOwnerId = ReadText8(ref body, context);
+        var SessionOwnerLeaseGeneration = ReadNonzeroU64(ref body, context);
+        var SessionRid = ReadRid(ref body, context);
+        var BindingGeneration = ReadNonzeroU64(ref body, context);
+        var SealResult = ReadSessionSealResult(ref body, context);
         body.End("body");
+        var value=new SessionRelocationSealed43(flags,Relocation,Coordinator,Actor,SessionOwnerNodeRid,SessionOwnerNodeGeneration,SessionOwnerId,SessionOwnerLeaseGeneration,SessionRid,BindingGeneration,SealResult);
+        return value;
+    }
+    internal static byte[] EncodeSessionRelocationSealed43Header(SessionRelocationSealed43 value,DecodeContext context) { var writer = new Writer(); WriteSessionRelocationSealed43Header(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteSessionRelocationSealed43Header(ref writer, value, context); return bytes; }
+    private static void WriteSessionRelocationSealed43Header(ref Writer body, SessionRelocationSealed43 value, DecodeContext context)
+    {
+        if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
+        body.U8(90);
+        body.U8(77);
+        body.U8(1);body.U8(43);body.U8(value.Flags);
+        WriteRelocationId(ref body, value.Relocation, context);
+        WriteRelocationCoordinatorFence(ref body, value.Coordinator, context);
+        WriteActorRouteFence(ref body, value.Actor, context);
+        WriteRid(ref body, value.SessionOwnerNodeRid, context);
+        WriteNonzeroU64(ref body, value.SessionOwnerNodeGeneration, context);
+        WriteText8(ref body, value.SessionOwnerId, context);
+        WriteNonzeroU64(ref body, value.SessionOwnerLeaseGeneration, context);
+        WriteRid(ref body, value.SessionRid, context);
+        WriteNonzeroU64(ref body, value.BindingGeneration, context);
+        WriteSessionSealResult(ref body, value.SealResult, context);
+    }
+    internal static SessionRelocationSealed43 DecodeSessionRelocationSealed43(IReadOnlyList<byte[]> frames,DecodeContext context)
+    {
+        if(frames.Count==0)throw Error("frames");
+        var value=DecodeSessionRelocationSealed43Header(frames[0],context);
         var index=1;
         if(index!=frames.Count)throw Error("extra frame");
-        var value=new SessionRelocationSealed43(flags,Relocation,Coordinator,Actor,SessionOwnerNodeRid,SessionOwnerNodeGeneration,SessionOwnerId,SessionOwnerLeaseGeneration,SessionRid,BindingGeneration,SealResult);
         return value;
     }
     internal static SessionRelocationSealed43 DecodeSessionRelocationSealed43(byte[] frame,DecodeContext context)=>DecodeSessionRelocationSealed43(new[]{frame},context);
     internal static byte[][] EncodeSessionRelocationSealed43(SessionRelocationSealed43 value,DecodeContext context)
     {
-        if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
-        var body=new Writer();
-        body.U8(90);
-        body.U8(77);
-        body.U8(1);body.U8(43);body.U8(value.Flags);
-        WriteRelocationId(body, value.Relocation, context);
-        WriteRelocationCoordinatorFence(body, value.Coordinator, context);
-        WriteActorRouteFence(body, value.Actor, context);
-        WriteRid(body, value.SessionOwnerNodeRid, context);
-        WriteNonzeroU64(body, value.SessionOwnerNodeGeneration, context);
-        WriteText8(body, value.SessionOwnerId, context);
-        WriteNonzeroU64(body, value.SessionOwnerLeaseGeneration, context);
-        WriteRid(body, value.SessionRid, context);
-        WriteNonzeroU64(body, value.BindingGeneration, context);
-        WriteSessionSealResult(body, value.SealResult, context);
-        var frames=new List<byte[]>{body.ToArray()};
-        return frames.ToArray();
+        var frames=new byte[1][];
+        frames[0]=EncodeSessionRelocationSealed43Header(value,context);
+        return frames;
     }
-    internal static SessionRelocationRoute44 DecodeSessionRelocationRoute44(IReadOnlyList<byte[]> frames,DecodeContext context)
+    internal static SessionRelocationRoute44 DecodeSessionRelocationRoute44Header(ReadOnlySpan<byte> frame,DecodeContext context)
     {
-        if(frames.Count==0)throw Error("frames");
-        var body=new Reader(frames[0]);
+        var body = new Reader(frame);
         if(body.U8()!=90)throw Error("magic");
         if(body.U8()!=77)throw Error("magic");
         if(body.U8()!=1||body.U8()!=44)throw Error("header");
         var flags=body.U8();
         if((flags&~0)!=0||(flags&0)!=0)throw Error("flags");
-        var Relocation = ReadRelocationId(body, context);
-        var Coordinator = ReadRelocationCoordinatorFence(body, context);
-        var SenderRole = ReadRelocationRole(body, context);
-        var Actor = ReadActorRef(body, context);
-        var SessionOwnerNodeRid = ReadRid(body, context);
-        var SessionOwnerNodeGeneration = ReadNonzeroU64(body, context);
-        var SessionOwnerId = ReadText8(body, context);
-        var SessionOwnerLeaseGeneration = ReadNonzeroU64(body, context);
-        var SessionRid = ReadRid(body, context);
-        var BindingGeneration = ReadNonzeroU64(body, context);
-        var Route = ReadSessionRelocationRouteUpdate(body, context);
+        var Relocation = ReadRelocationId(ref body, context);
+        var Coordinator = ReadRelocationCoordinatorFence(ref body, context);
+        var SenderRole = ReadRelocationRole(ref body, context);
+        var Actor = ReadActorRef(ref body, context);
+        var SessionOwnerNodeRid = ReadRid(ref body, context);
+        var SessionOwnerNodeGeneration = ReadNonzeroU64(ref body, context);
+        var SessionOwnerId = ReadText8(ref body, context);
+        var SessionOwnerLeaseGeneration = ReadNonzeroU64(ref body, context);
+        var SessionRid = ReadRid(ref body, context);
+        var BindingGeneration = ReadNonzeroU64(ref body, context);
+        var Route = ReadSessionRelocationRouteUpdate(ref body, context);
         body.End("body");
+        var value=new SessionRelocationRoute44(flags,Relocation,Coordinator,SenderRole,Actor,SessionOwnerNodeRid,SessionOwnerNodeGeneration,SessionOwnerId,SessionOwnerLeaseGeneration,SessionRid,BindingGeneration,Route);
+        return value;
+    }
+    internal static byte[] EncodeSessionRelocationRoute44Header(SessionRelocationRoute44 value,DecodeContext context) { var writer = new Writer(); WriteSessionRelocationRoute44Header(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteSessionRelocationRoute44Header(ref writer, value, context); return bytes; }
+    private static void WriteSessionRelocationRoute44Header(ref Writer body, SessionRelocationRoute44 value, DecodeContext context)
+    {
+        if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
+        body.U8(90);
+        body.U8(77);
+        body.U8(1);body.U8(44);body.U8(value.Flags);
+        WriteRelocationId(ref body, value.Relocation, context);
+        WriteRelocationCoordinatorFence(ref body, value.Coordinator, context);
+        WriteRelocationRole(ref body, value.SenderRole, context);
+        WriteActorRef(ref body, value.Actor, context);
+        WriteRid(ref body, value.SessionOwnerNodeRid, context);
+        WriteNonzeroU64(ref body, value.SessionOwnerNodeGeneration, context);
+        WriteText8(ref body, value.SessionOwnerId, context);
+        WriteNonzeroU64(ref body, value.SessionOwnerLeaseGeneration, context);
+        WriteRid(ref body, value.SessionRid, context);
+        WriteNonzeroU64(ref body, value.BindingGeneration, context);
+        WriteSessionRelocationRouteUpdate(ref body, value.Route, context);
+    }
+    internal static SessionRelocationRoute44 DecodeSessionRelocationRoute44(IReadOnlyList<byte[]> frames,DecodeContext context)
+    {
+        if(frames.Count==0)throw Error("frames");
+        var value=DecodeSessionRelocationRoute44Header(frames[0],context);
         var index=1;
         if(index!=frames.Count)throw Error("extra frame");
-        var value=new SessionRelocationRoute44(flags,Relocation,Coordinator,SenderRole,Actor,SessionOwnerNodeRid,SessionOwnerNodeGeneration,SessionOwnerId,SessionOwnerLeaseGeneration,SessionRid,BindingGeneration,Route);
         return value;
     }
     internal static SessionRelocationRoute44 DecodeSessionRelocationRoute44(byte[] frame,DecodeContext context)=>DecodeSessionRelocationRoute44(new[]{frame},context);
     internal static byte[][] EncodeSessionRelocationRoute44(SessionRelocationRoute44 value,DecodeContext context)
     {
-        if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
-        var body=new Writer();
-        body.U8(90);
-        body.U8(77);
-        body.U8(1);body.U8(44);body.U8(value.Flags);
-        WriteRelocationId(body, value.Relocation, context);
-        WriteRelocationCoordinatorFence(body, value.Coordinator, context);
-        WriteRelocationRole(body, value.SenderRole, context);
-        WriteActorRef(body, value.Actor, context);
-        WriteRid(body, value.SessionOwnerNodeRid, context);
-        WriteNonzeroU64(body, value.SessionOwnerNodeGeneration, context);
-        WriteText8(body, value.SessionOwnerId, context);
-        WriteNonzeroU64(body, value.SessionOwnerLeaseGeneration, context);
-        WriteRid(body, value.SessionRid, context);
-        WriteNonzeroU64(body, value.BindingGeneration, context);
-        WriteSessionRelocationRouteUpdate(body, value.Route, context);
-        var frames=new List<byte[]>{body.ToArray()};
-        return frames.ToArray();
+        var frames=new byte[1][];
+        frames[0]=EncodeSessionRelocationRoute44Header(value,context);
+        return frames;
     }
-    internal static ReplyRelayAck46 DecodeReplyRelayAck46(IReadOnlyList<byte[]> frames,DecodeContext context)
+    internal static ReplyRelayAck46 DecodeReplyRelayAck46Header(ReadOnlySpan<byte> frame,DecodeContext context)
     {
-        if(frames.Count==0)throw Error("frames");
-        var body=new Reader(frames[0]);
+        var body = new Reader(frame);
         if(body.U8()!=90)throw Error("magic");
         if(body.U8()!=77)throw Error("magic");
         if(body.U8()!=1||body.U8()!=46)throw Error("header");
         var flags=body.U8();
         if((flags&~0)!=0||(flags&0)!=0)throw Error("flags");
-        var Relocation = ReadRelocationId(body, context);
-        var Coordinator = ReadRelocationCoordinatorFence(body, context);
-        var Operation = ReadOperationId(body, context);
-        var ReplyRouteId = ReadNonzeroU64(body, context);
-        var RequestSource = ReadRequestSourceFence(body, context);
-        var Status = ReadReplyRelayAckStatus(body, context);
+        var Relocation = ReadRelocationId(ref body, context);
+        var Coordinator = ReadRelocationCoordinatorFence(ref body, context);
+        var Operation = ReadOperationId(ref body, context);
+        var ReplyRouteId = ReadNonzeroU64(ref body, context);
+        var RequestSource = ReadRequestSourceFence(ref body, context);
+        var Status = ReadReplyRelayAckStatus(ref body, context);
         body.End("body");
+        var value=new ReplyRelayAck46(flags,Relocation,Coordinator,Operation,ReplyRouteId,RequestSource,Status);
+        return value;
+    }
+    internal static byte[] EncodeReplyRelayAck46Header(ReplyRelayAck46 value,DecodeContext context) { var writer = new Writer(); WriteReplyRelayAck46Header(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteReplyRelayAck46Header(ref writer, value, context); return bytes; }
+    private static void WriteReplyRelayAck46Header(ref Writer body, ReplyRelayAck46 value, DecodeContext context)
+    {
+        if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
+        body.U8(90);
+        body.U8(77);
+        body.U8(1);body.U8(46);body.U8(value.Flags);
+        WriteRelocationId(ref body, value.Relocation, context);
+        WriteRelocationCoordinatorFence(ref body, value.Coordinator, context);
+        WriteOperationId(ref body, value.Operation, context);
+        WriteNonzeroU64(ref body, value.ReplyRouteId, context);
+        WriteRequestSourceFence(ref body, value.RequestSource, context);
+        WriteReplyRelayAckStatus(ref body, value.Status, context);
+    }
+    internal static ReplyRelayAck46 DecodeReplyRelayAck46(IReadOnlyList<byte[]> frames,DecodeContext context)
+    {
+        if(frames.Count==0)throw Error("frames");
+        var value=DecodeReplyRelayAck46Header(frames[0],context);
         var index=1;
         if(index!=frames.Count)throw Error("extra frame");
-        var value=new ReplyRelayAck46(flags,Relocation,Coordinator,Operation,ReplyRouteId,RequestSource,Status);
         return value;
     }
     internal static ReplyRelayAck46 DecodeReplyRelayAck46(byte[] frame,DecodeContext context)=>DecodeReplyRelayAck46(new[]{frame},context);
     internal static byte[][] EncodeReplyRelayAck46(ReplyRelayAck46 value,DecodeContext context)
     {
-        if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
-        var body=new Writer();
-        body.U8(90);
-        body.U8(77);
-        body.U8(1);body.U8(46);body.U8(value.Flags);
-        WriteRelocationId(body, value.Relocation, context);
-        WriteRelocationCoordinatorFence(body, value.Coordinator, context);
-        WriteOperationId(body, value.Operation, context);
-        WriteNonzeroU64(body, value.ReplyRouteId, context);
-        WriteRequestSourceFence(body, value.RequestSource, context);
-        WriteReplyRelayAckStatus(body, value.Status, context);
-        var frames=new List<byte[]>{body.ToArray()};
-        return frames.ToArray();
+        var frames=new byte[1][];
+        frames[0]=EncodeReplyRelayAck46Header(value,context);
+        return frames;
     }
-    internal static UserSpotCreate47 DecodeUserSpotCreate47(IReadOnlyList<byte[]> frames,DecodeContext context)
+    internal static UserSpotCreate47 DecodeUserSpotCreate47Header(ReadOnlySpan<byte> frame,DecodeContext context)
     {
-        if(frames.Count==0)throw Error("frames");
-        var body=new Reader(frames[0]);
+        var body = new Reader(frame);
         if(body.U8()!=90)throw Error("magic");
         if(body.U8()!=77)throw Error("magic");
         if(body.U8()!=1||body.U8()!=47)throw Error("header");
         var flags=body.U8();
         if((flags&~0)!=0||(flags&0)!=0)throw Error("flags");
-        var Correlation = ReadNonzeroU64(body, context);
-        var Operation = ReadOperationId(body, context);
-        var SourceNodeRid = ReadRid(body, context);
-        var SourceNodeGeneration = ReadNonzeroU64(body, context);
-        var SpotId = ReadText8(body, context);
-        var StableType = ReadText8(body, context);
-        var Reservation = ReadObjectReservationFence(body, context);
-        var DeadlineUnixMs = ReadNonzeroU64(body, context);
+        var Correlation = ReadNonzeroU64(ref body, context);
+        var Operation = ReadOperationId(ref body, context);
+        var SourceNodeRid = ReadRid(ref body, context);
+        var SourceNodeGeneration = ReadNonzeroU64(ref body, context);
+        var SpotId = ReadText8(ref body, context);
+        var StableType = ReadText8(ref body, context);
+        var Reservation = ReadObjectReservationFence(ref body, context);
+        var DeadlineUnixMs = ReadNonzeroU64(ref body, context);
         body.End("body");
+        var value=new UserSpotCreate47(flags,Correlation,Operation,SourceNodeRid,SourceNodeGeneration,SpotId,StableType,Reservation,DeadlineUnixMs);
+        return value;
+    }
+    internal static byte[] EncodeUserSpotCreate47Header(UserSpotCreate47 value,DecodeContext context) { var writer = new Writer(); WriteUserSpotCreate47Header(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteUserSpotCreate47Header(ref writer, value, context); return bytes; }
+    private static void WriteUserSpotCreate47Header(ref Writer body, UserSpotCreate47 value, DecodeContext context)
+    {
+        if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
+        body.U8(90);
+        body.U8(77);
+        body.U8(1);body.U8(47);body.U8(value.Flags);
+        WriteNonzeroU64(ref body, value.Correlation, context);
+        WriteOperationId(ref body, value.Operation, context);
+        WriteRid(ref body, value.SourceNodeRid, context);
+        WriteNonzeroU64(ref body, value.SourceNodeGeneration, context);
+        WriteText8(ref body, value.SpotId, context);
+        WriteText8(ref body, value.StableType, context);
+        WriteObjectReservationFence(ref body, value.Reservation, context);
+        WriteNonzeroU64(ref body, value.DeadlineUnixMs, context);
+    }
+    internal static UserSpotCreate47 DecodeUserSpotCreate47(IReadOnlyList<byte[]> frames,DecodeContext context)
+    {
+        if(frames.Count==0)throw Error("frames");
+        var value=DecodeUserSpotCreate47Header(frames[0],context);
         var index=1;
         if(index!=frames.Count)throw Error("extra frame");
-        var value=new UserSpotCreate47(flags,Correlation,Operation,SourceNodeRid,SourceNodeGeneration,SpotId,StableType,Reservation,DeadlineUnixMs);
         return value;
     }
     internal static UserSpotCreate47 DecodeUserSpotCreate47(byte[] frame,DecodeContext context)=>DecodeUserSpotCreate47(new[]{frame},context);
     internal static byte[][] EncodeUserSpotCreate47(UserSpotCreate47 value,DecodeContext context)
     {
-        if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
-        var body=new Writer();
-        body.U8(90);
-        body.U8(77);
-        body.U8(1);body.U8(47);body.U8(value.Flags);
-        WriteNonzeroU64(body, value.Correlation, context);
-        WriteOperationId(body, value.Operation, context);
-        WriteRid(body, value.SourceNodeRid, context);
-        WriteNonzeroU64(body, value.SourceNodeGeneration, context);
-        WriteText8(body, value.SpotId, context);
-        WriteText8(body, value.StableType, context);
-        WriteObjectReservationFence(body, value.Reservation, context);
-        WriteNonzeroU64(body, value.DeadlineUnixMs, context);
-        var frames=new List<byte[]>{body.ToArray()};
-        return frames.ToArray();
+        var frames=new byte[1][];
+        frames[0]=EncodeUserSpotCreate47Header(value,context);
+        return frames;
     }
-    internal static UserSpotClose48 DecodeUserSpotClose48(IReadOnlyList<byte[]> frames,DecodeContext context)
+    internal static UserSpotClose48 DecodeUserSpotClose48Header(ReadOnlySpan<byte> frame,DecodeContext context)
     {
-        if(frames.Count==0)throw Error("frames");
-        var body=new Reader(frames[0]);
+        var body = new Reader(frame);
         if(body.U8()!=90)throw Error("magic");
         if(body.U8()!=77)throw Error("magic");
         if(body.U8()!=1||body.U8()!=48)throw Error("header");
         var flags=body.U8();
         if((flags&~0)!=0||(flags&0)!=0)throw Error("flags");
-        var Correlation = ReadNonzeroU64(body, context);
-        var Operation = ReadOperationId(body, context);
-        var SourceNodeRid = ReadRid(body, context);
-        var SourceNodeGeneration = ReadNonzeroU64(body, context);
-        var Target = ReadUserSpotCloseFenceV1(body, context);
-        var DeadlineUnixMs = ReadNonzeroU64(body, context);
+        var Correlation = ReadNonzeroU64(ref body, context);
+        var Operation = ReadOperationId(ref body, context);
+        var SourceNodeRid = ReadRid(ref body, context);
+        var SourceNodeGeneration = ReadNonzeroU64(ref body, context);
+        var Target = ReadUserSpotCloseFenceV1(ref body, context);
+        var DeadlineUnixMs = ReadNonzeroU64(ref body, context);
         body.End("body");
+        var value=new UserSpotClose48(flags,Correlation,Operation,SourceNodeRid,SourceNodeGeneration,Target,DeadlineUnixMs);
+        return value;
+    }
+    internal static byte[] EncodeUserSpotClose48Header(UserSpotClose48 value,DecodeContext context) { var writer = new Writer(); WriteUserSpotClose48Header(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteUserSpotClose48Header(ref writer, value, context); return bytes; }
+    private static void WriteUserSpotClose48Header(ref Writer body, UserSpotClose48 value, DecodeContext context)
+    {
+        if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
+        body.U8(90);
+        body.U8(77);
+        body.U8(1);body.U8(48);body.U8(value.Flags);
+        WriteNonzeroU64(ref body, value.Correlation, context);
+        WriteOperationId(ref body, value.Operation, context);
+        WriteRid(ref body, value.SourceNodeRid, context);
+        WriteNonzeroU64(ref body, value.SourceNodeGeneration, context);
+        WriteUserSpotCloseFenceV1(ref body, value.Target, context);
+        WriteNonzeroU64(ref body, value.DeadlineUnixMs, context);
+    }
+    internal static UserSpotClose48 DecodeUserSpotClose48(IReadOnlyList<byte[]> frames,DecodeContext context)
+    {
+        if(frames.Count==0)throw Error("frames");
+        var value=DecodeUserSpotClose48Header(frames[0],context);
         var index=1;
         if(index!=frames.Count)throw Error("extra frame");
-        var value=new UserSpotClose48(flags,Correlation,Operation,SourceNodeRid,SourceNodeGeneration,Target,DeadlineUnixMs);
         return value;
     }
     internal static UserSpotClose48 DecodeUserSpotClose48(byte[] frame,DecodeContext context)=>DecodeUserSpotClose48(new[]{frame},context);
     internal static byte[][] EncodeUserSpotClose48(UserSpotClose48 value,DecodeContext context)
     {
-        if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
-        var body=new Writer();
-        body.U8(90);
-        body.U8(77);
-        body.U8(1);body.U8(48);body.U8(value.Flags);
-        WriteNonzeroU64(body, value.Correlation, context);
-        WriteOperationId(body, value.Operation, context);
-        WriteRid(body, value.SourceNodeRid, context);
-        WriteNonzeroU64(body, value.SourceNodeGeneration, context);
-        WriteUserSpotCloseFenceV1(body, value.Target, context);
-        WriteNonzeroU64(body, value.DeadlineUnixMs, context);
-        var frames=new List<byte[]>{body.ToArray()};
-        return frames.ToArray();
+        var frames=new byte[1][];
+        frames[0]=EncodeUserSpotClose48Header(value,context);
+        return frames;
     }
-    internal static ActorCreate49 DecodeActorCreate49(IReadOnlyList<byte[]> frames,DecodeContext context)
+    internal static ActorCreate49 DecodeActorCreate49Header(ReadOnlySpan<byte> frame,DecodeContext context)
     {
-        if(frames.Count==0)throw Error("frames");
-        var body=new Reader(frames[0]);
+        var body = new Reader(frame);
         if(body.U8()!=90)throw Error("magic");
         if(body.U8()!=77)throw Error("magic");
         if(body.U8()!=1||body.U8()!=49)throw Error("header");
         var flags=body.U8();
         if((flags&~0)!=0||(flags&0)!=0)throw Error("flags");
-        var Correlation = ReadNonzeroU64(body, context);
-        var Operation = ReadOperationId(body, context);
-        var SourceNodeRid = ReadRid(body, context);
-        var SourceNodeGeneration = ReadNonzeroU64(body, context);
-        var ActorId = ReadText8(body, context);
-        var StableType = ReadText8(body, context);
-        var Reservation = ReadObjectReservationFence(body, context);
-        var DeadlineUnixMs = ReadNonzeroU64(body, context);
+        var Correlation = ReadNonzeroU64(ref body, context);
+        var Operation = ReadOperationId(ref body, context);
+        var SourceNodeRid = ReadRid(ref body, context);
+        var SourceNodeGeneration = ReadNonzeroU64(ref body, context);
+        var ActorId = ReadText8(ref body, context);
+        var StableType = ReadText8(ref body, context);
+        var Reservation = ReadObjectReservationFence(ref body, context);
+        var DeadlineUnixMs = ReadNonzeroU64(ref body, context);
         body.End("body");
+        var value=new ActorCreate49(flags,Correlation,Operation,SourceNodeRid,SourceNodeGeneration,ActorId,StableType,Reservation,DeadlineUnixMs);
+        return value;
+    }
+    internal static byte[] EncodeActorCreate49Header(ActorCreate49 value,DecodeContext context) { var writer = new Writer(); WriteActorCreate49Header(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteActorCreate49Header(ref writer, value, context); return bytes; }
+    private static void WriteActorCreate49Header(ref Writer body, ActorCreate49 value, DecodeContext context)
+    {
+        if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
+        body.U8(90);
+        body.U8(77);
+        body.U8(1);body.U8(49);body.U8(value.Flags);
+        WriteNonzeroU64(ref body, value.Correlation, context);
+        WriteOperationId(ref body, value.Operation, context);
+        WriteRid(ref body, value.SourceNodeRid, context);
+        WriteNonzeroU64(ref body, value.SourceNodeGeneration, context);
+        WriteText8(ref body, value.ActorId, context);
+        WriteText8(ref body, value.StableType, context);
+        WriteObjectReservationFence(ref body, value.Reservation, context);
+        WriteNonzeroU64(ref body, value.DeadlineUnixMs, context);
+    }
+    internal static ActorCreate49 DecodeActorCreate49(IReadOnlyList<byte[]> frames,DecodeContext context)
+    {
+        if(frames.Count==0)throw Error("frames");
+        var value=DecodeActorCreate49Header(frames[0],context);
         var index=1;
         if(index!=frames.Count)throw Error("extra frame");
-        var value=new ActorCreate49(flags,Correlation,Operation,SourceNodeRid,SourceNodeGeneration,ActorId,StableType,Reservation,DeadlineUnixMs);
         return value;
     }
     internal static ActorCreate49 DecodeActorCreate49(byte[] frame,DecodeContext context)=>DecodeActorCreate49(new[]{frame},context);
     internal static byte[][] EncodeActorCreate49(ActorCreate49 value,DecodeContext context)
     {
-        if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
-        var body=new Writer();
-        body.U8(90);
-        body.U8(77);
-        body.U8(1);body.U8(49);body.U8(value.Flags);
-        WriteNonzeroU64(body, value.Correlation, context);
-        WriteOperationId(body, value.Operation, context);
-        WriteRid(body, value.SourceNodeRid, context);
-        WriteNonzeroU64(body, value.SourceNodeGeneration, context);
-        WriteText8(body, value.ActorId, context);
-        WriteText8(body, value.StableType, context);
-        WriteObjectReservationFence(body, value.Reservation, context);
-        WriteNonzeroU64(body, value.DeadlineUnixMs, context);
-        var frames=new List<byte[]>{body.ToArray()};
-        return frames.ToArray();
+        var frames=new byte[1][];
+        frames[0]=EncodeActorCreate49Header(value,context);
+        return frames;
     }
-    internal static MessageFollow50 DecodeMessageFollow50(IReadOnlyList<byte[]> frames,DecodeContext context)
+    internal static MessageFollow50 DecodeMessageFollow50Header(ReadOnlySpan<byte> frame,DecodeContext context)
     {
-        if(frames.Count==0)throw Error("frames");
-        var body=new Reader(frames[0]);
+        var body = new Reader(frame);
         if(body.U8()!=90)throw Error("magic");
         if(body.U8()!=77)throw Error("magic");
         if(body.U8()!=1||body.U8()!=50)throw Error("header");
         var flags=body.U8();
         if((flags&~0)!=0||(flags&0)!=0)throw Error("flags");
-        var Route = ReadMessageFollowRouteV1(body, context);
+        var Route = ReadMessageFollowRouteV1(ref body, context);
         body.End("body");
+        var value=new MessageFollow50(flags,Route);
+        return value;
+    }
+    internal static byte[] EncodeMessageFollow50Header(MessageFollow50 value,DecodeContext context) { var writer = new Writer(); WriteMessageFollow50Header(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteMessageFollow50Header(ref writer, value, context); return bytes; }
+    private static void WriteMessageFollow50Header(ref Writer body, MessageFollow50 value, DecodeContext context)
+    {
+        if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
+        body.U8(90);
+        body.U8(77);
+        body.U8(1);body.U8(50);body.U8(value.Flags);
+        WriteMessageFollowRouteV1(ref body, value.Route, context);
+    }
+    internal static MessageFollow50 DecodeMessageFollow50(IReadOnlyList<byte[]> frames,DecodeContext context)
+    {
+        if(frames.Count==0)throw Error("frames");
+        var value=DecodeMessageFollow50Header(frames[0],context);
         var index=1;
         if(index!=frames.Count)throw Error("extra frame");
-        var value=new MessageFollow50(flags,Route);
         return value;
     }
     internal static MessageFollow50 DecodeMessageFollow50(byte[] frame,DecodeContext context)=>DecodeMessageFollow50(new[]{frame},context);
     internal static byte[][] EncodeMessageFollow50(MessageFollow50 value,DecodeContext context)
     {
-        if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
-        var body=new Writer();
-        body.U8(90);
-        body.U8(77);
-        body.U8(1);body.U8(50);body.U8(value.Flags);
-        WriteMessageFollowRouteV1(body, value.Route, context);
-        var frames=new List<byte[]>{body.ToArray()};
-        return frames.ToArray();
+        var frames=new byte[1][];
+        frames[0]=EncodeMessageFollow50Header(value,context);
+        return frames;
     }
-    internal static BoundSessionReplaced51 DecodeBoundSessionReplaced51(IReadOnlyList<byte[]> frames,DecodeContext context)
+    internal static BoundSessionReplaced51 DecodeBoundSessionReplaced51Header(ReadOnlySpan<byte> frame,DecodeContext context)
     {
-        if(frames.Count==0)throw Error("frames");
-        var body=new Reader(frames[0]);
+        var body = new Reader(frame);
         if(body.U8()!=90)throw Error("magic");
         if(body.U8()!=77)throw Error("magic");
         if(body.U8()!=1||body.U8()!=51)throw Error("header");
         var flags=body.U8();
         if((flags&~0)!=0||(flags&0)!=0)throw Error("flags");
-        var ActorAuthority = ReadActorRouteFence(body, context);
-        var RetiredSession = ReadRetiredBoundSessionRouteFence(body, context);
+        var ActorAuthority = ReadActorRouteFence(ref body, context);
+        var RetiredSession = ReadRetiredBoundSessionRouteFence(ref body, context);
         body.End("body");
+        var value=new BoundSessionReplaced51(flags,ActorAuthority,RetiredSession);
+        return value;
+    }
+    internal static byte[] EncodeBoundSessionReplaced51Header(BoundSessionReplaced51 value,DecodeContext context) { var writer = new Writer(); WriteBoundSessionReplaced51Header(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteBoundSessionReplaced51Header(ref writer, value, context); return bytes; }
+    private static void WriteBoundSessionReplaced51Header(ref Writer body, BoundSessionReplaced51 value, DecodeContext context)
+    {
+        if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
+        body.U8(90);
+        body.U8(77);
+        body.U8(1);body.U8(51);body.U8(value.Flags);
+        WriteActorRouteFence(ref body, value.ActorAuthority, context);
+        WriteRetiredBoundSessionRouteFence(ref body, value.RetiredSession, context);
+    }
+    internal static BoundSessionReplaced51 DecodeBoundSessionReplaced51(IReadOnlyList<byte[]> frames,DecodeContext context)
+    {
+        if(frames.Count==0)throw Error("frames");
+        var value=DecodeBoundSessionReplaced51Header(frames[0],context);
         var index=1;
         if(index!=frames.Count)throw Error("extra frame");
-        var value=new BoundSessionReplaced51(flags,ActorAuthority,RetiredSession);
         return value;
     }
     internal static BoundSessionReplaced51 DecodeBoundSessionReplaced51(byte[] frame,DecodeContext context)=>DecodeBoundSessionReplaced51(new[]{frame},context);
     internal static byte[][] EncodeBoundSessionReplaced51(BoundSessionReplaced51 value,DecodeContext context)
     {
-        if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
-        var body=new Writer();
-        body.U8(90);
-        body.U8(77);
-        body.U8(1);body.U8(51);body.U8(value.Flags);
-        WriteActorRouteFence(body, value.ActorAuthority, context);
-        WriteRetiredBoundSessionRouteFence(body, value.RetiredSession, context);
-        var frames=new List<byte[]>{body.ToArray()};
-        return frames.ToArray();
+        var frames=new byte[1][];
+        frames[0]=EncodeBoundSessionReplaced51Header(value,context);
+        return frames;
     }
-    internal static RelocationState52 DecodeRelocationState52(IReadOnlyList<byte[]> frames,DecodeContext context)
+    internal static RelocationState52 DecodeRelocationState52Header(ReadOnlySpan<byte> frame,DecodeContext context)
     {
-        if(frames.Count==0)throw Error("frames");
-        var body=new Reader(frames[0]);
+        var body = new Reader(frame);
         if(body.U8()!=90)throw Error("magic");
         if(body.U8()!=77)throw Error("magic");
         if(body.U8()!=1||body.U8()!=52)throw Error("header");
         var flags=body.U8();
         if((flags&~0)!=0||(flags&0)!=0)throw Error("flags");
-        var Relocation = ReadRelocationId(body, context);
-        var TargetAttemptGeneration = ReadNonzeroU64(body, context);
-        var Coordinator = ReadRelocationCoordinatorFence(body, context);
-        var SenderRole = ReadRelocationRole(body, context);
-        var Object = ReadRelocationObjectIdentity(body, context);
-        var ChunkOrdinal = ReadU32(body, context);
-        var ChunkData = ReadDurableBlob(body, context);
+        var Relocation = ReadRelocationId(ref body, context);
+        var TargetAttemptGeneration = ReadNonzeroU64(ref body, context);
+        var Coordinator = ReadRelocationCoordinatorFence(ref body, context);
+        var SenderRole = ReadRelocationRole(ref body, context);
+        var Object = ReadRelocationObjectIdentity(ref body, context);
+        var ChunkOrdinal = ReadU32(ref body, context);
+        var ChunkData = ReadDurableBlob(ref body, context);
         body.End("body");
+        var value=new RelocationState52(flags,Relocation,TargetAttemptGeneration,Coordinator,SenderRole,Object,ChunkOrdinal,ChunkData);
+        return value;
+    }
+    internal static byte[] EncodeRelocationState52Header(RelocationState52 value,DecodeContext context) { var writer = new Writer(); WriteRelocationState52Header(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteRelocationState52Header(ref writer, value, context); return bytes; }
+    private static void WriteRelocationState52Header(ref Writer body, RelocationState52 value, DecodeContext context)
+    {
+        if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
+        body.U8(90);
+        body.U8(77);
+        body.U8(1);body.U8(52);body.U8(value.Flags);
+        WriteRelocationId(ref body, value.Relocation, context);
+        WriteNonzeroU64(ref body, value.TargetAttemptGeneration, context);
+        WriteRelocationCoordinatorFence(ref body, value.Coordinator, context);
+        WriteRelocationRole(ref body, value.SenderRole, context);
+        WriteRelocationObjectIdentity(ref body, value.Object, context);
+        WriteU32(ref body, value.ChunkOrdinal, context);
+        WriteDurableBlob(ref body, value.ChunkData, context);
+    }
+    internal static RelocationState52 DecodeRelocationState52(IReadOnlyList<byte[]> frames,DecodeContext context)
+    {
+        if(frames.Count==0)throw Error("frames");
+        var value=DecodeRelocationState52Header(frames[0],context);
         var index=1;
         if(index!=frames.Count)throw Error("extra frame");
-        var value=new RelocationState52(flags,Relocation,TargetAttemptGeneration,Coordinator,SenderRole,Object,ChunkOrdinal,ChunkData);
         return value;
     }
     internal static RelocationState52 DecodeRelocationState52(byte[] frame,DecodeContext context)=>DecodeRelocationState52(new[]{frame},context);
     internal static byte[][] EncodeRelocationState52(RelocationState52 value,DecodeContext context)
     {
-        if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
-        var body=new Writer();
-        body.U8(90);
-        body.U8(77);
-        body.U8(1);body.U8(52);body.U8(value.Flags);
-        WriteRelocationId(body, value.Relocation, context);
-        WriteNonzeroU64(body, value.TargetAttemptGeneration, context);
-        WriteRelocationCoordinatorFence(body, value.Coordinator, context);
-        WriteRelocationRole(body, value.SenderRole, context);
-        WriteRelocationObjectIdentity(body, value.Object, context);
-        WriteU32(body, value.ChunkOrdinal, context);
-        WriteDurableBlob(body, value.ChunkData, context);
-        var frames=new List<byte[]>{body.ToArray()};
-        return frames.ToArray();
+        var frames=new byte[1][];
+        frames[0]=EncodeRelocationState52Header(value,context);
+        return frames;
     }
-    internal static RelocationFailed53 DecodeRelocationFailed53(IReadOnlyList<byte[]> frames,DecodeContext context)
+    internal static RelocationFailed53 DecodeRelocationFailed53Header(ReadOnlySpan<byte> frame,DecodeContext context)
     {
-        if(frames.Count==0)throw Error("frames");
-        var body=new Reader(frames[0]);
+        var body = new Reader(frame);
         if(body.U8()!=90)throw Error("magic");
         if(body.U8()!=77)throw Error("magic");
         if(body.U8()!=1||body.U8()!=53)throw Error("header");
         var flags=body.U8();
         if((flags&~0)!=0||(flags&0)!=0)throw Error("flags");
-        var Relocation = ReadRelocationId(body, context);
-        var TargetAttemptGeneration = ReadNonzeroU64(body, context);
-        var Coordinator = ReadRelocationCoordinatorFence(body, context);
-        var Target = ReadRelocationTargetFence(body, context);
-        var Object = ReadRelocationObjectIdentity(body, context);
-        var SenderRole = ReadRelocationRole(body, context);
-        var FailureCode = ReadFrameworkErrorCode(body, context);
+        var Relocation = ReadRelocationId(ref body, context);
+        var TargetAttemptGeneration = ReadNonzeroU64(ref body, context);
+        var Coordinator = ReadRelocationCoordinatorFence(ref body, context);
+        var Target = ReadRelocationTargetFence(ref body, context);
+        var Object = ReadRelocationObjectIdentity(ref body, context);
+        var SenderRole = ReadRelocationRole(ref body, context);
+        var FailureCode = ReadFrameworkErrorCode(ref body, context);
         body.End("body");
+        var value=new RelocationFailed53(flags,Relocation,TargetAttemptGeneration,Coordinator,Target,Object,SenderRole,FailureCode);
+        return value;
+    }
+    internal static byte[] EncodeRelocationFailed53Header(RelocationFailed53 value,DecodeContext context) { var writer = new Writer(); WriteRelocationFailed53Header(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteRelocationFailed53Header(ref writer, value, context); return bytes; }
+    private static void WriteRelocationFailed53Header(ref Writer body, RelocationFailed53 value, DecodeContext context)
+    {
+        if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
+        body.U8(90);
+        body.U8(77);
+        body.U8(1);body.U8(53);body.U8(value.Flags);
+        WriteRelocationId(ref body, value.Relocation, context);
+        WriteNonzeroU64(ref body, value.TargetAttemptGeneration, context);
+        WriteRelocationCoordinatorFence(ref body, value.Coordinator, context);
+        WriteRelocationTargetFence(ref body, value.Target, context);
+        WriteRelocationObjectIdentity(ref body, value.Object, context);
+        WriteRelocationRole(ref body, value.SenderRole, context);
+        WriteFrameworkErrorCode(ref body, value.FailureCode, context);
+    }
+    internal static RelocationFailed53 DecodeRelocationFailed53(IReadOnlyList<byte[]> frames,DecodeContext context)
+    {
+        if(frames.Count==0)throw Error("frames");
+        var value=DecodeRelocationFailed53Header(frames[0],context);
         var index=1;
         if(index!=frames.Count)throw Error("extra frame");
-        var value=new RelocationFailed53(flags,Relocation,TargetAttemptGeneration,Coordinator,Target,Object,SenderRole,FailureCode);
         return value;
     }
     internal static RelocationFailed53 DecodeRelocationFailed53(byte[] frame,DecodeContext context)=>DecodeRelocationFailed53(new[]{frame},context);
     internal static byte[][] EncodeRelocationFailed53(RelocationFailed53 value,DecodeContext context)
     {
-        if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
-        var body=new Writer();
-        body.U8(90);
-        body.U8(77);
-        body.U8(1);body.U8(53);body.U8(value.Flags);
-        WriteRelocationId(body, value.Relocation, context);
-        WriteNonzeroU64(body, value.TargetAttemptGeneration, context);
-        WriteRelocationCoordinatorFence(body, value.Coordinator, context);
-        WriteRelocationTargetFence(body, value.Target, context);
-        WriteRelocationObjectIdentity(body, value.Object, context);
-        WriteRelocationRole(body, value.SenderRole, context);
-        WriteFrameworkErrorCode(body, value.FailureCode, context);
-        var frames=new List<byte[]>{body.ToArray()};
-        return frames.ToArray();
+        var frames=new byte[1][];
+        frames[0]=EncodeRelocationFailed53Header(value,context);
+        return frames;
     }
-    internal static BoundSessionClose54 DecodeBoundSessionClose54(IReadOnlyList<byte[]> frames,DecodeContext context)
+    internal static BoundSessionClose54 DecodeBoundSessionClose54Header(ReadOnlySpan<byte> frame,DecodeContext context)
     {
-        if(frames.Count==0)throw Error("frames");
-        var body=new Reader(frames[0]);
+        var body = new Reader(frame);
         if(body.U8()!=90)throw Error("magic");
         if(body.U8()!=77)throw Error("magic");
         if(body.U8()!=1||body.U8()!=54)throw Error("header");
         var flags=body.U8();
         if((flags&~0)!=0||(flags&0)!=0)throw Error("flags");
-        var Correlation = ReadNonzeroU64(body, context);
-        var Actor = ReadActorRef(body, context);
-        var Session = ReadRetiredBoundSessionRouteFence(body, context);
+        var Correlation = ReadNonzeroU64(ref body, context);
+        var Actor = ReadActorRef(ref body, context);
+        var Session = ReadRetiredBoundSessionRouteFence(ref body, context);
         body.End("body");
+        var value=new BoundSessionClose54(flags,Correlation,Actor,Session);
+        return value;
+    }
+    internal static byte[] EncodeBoundSessionClose54Header(BoundSessionClose54 value,DecodeContext context) { var writer = new Writer(); WriteBoundSessionClose54Header(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteBoundSessionClose54Header(ref writer, value, context); return bytes; }
+    private static void WriteBoundSessionClose54Header(ref Writer body, BoundSessionClose54 value, DecodeContext context)
+    {
+        if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
+        body.U8(90);
+        body.U8(77);
+        body.U8(1);body.U8(54);body.U8(value.Flags);
+        WriteNonzeroU64(ref body, value.Correlation, context);
+        WriteActorRef(ref body, value.Actor, context);
+        WriteRetiredBoundSessionRouteFence(ref body, value.Session, context);
+    }
+    internal static BoundSessionClose54 DecodeBoundSessionClose54(IReadOnlyList<byte[]> frames,DecodeContext context)
+    {
+        if(frames.Count==0)throw Error("frames");
+        var value=DecodeBoundSessionClose54Header(frames[0],context);
         var index=1;
         if(index!=frames.Count)throw Error("extra frame");
-        var value=new BoundSessionClose54(flags,Correlation,Actor,Session);
         return value;
     }
     internal static BoundSessionClose54 DecodeBoundSessionClose54(byte[] frame,DecodeContext context)=>DecodeBoundSessionClose54(new[]{frame},context);
     internal static byte[][] EncodeBoundSessionClose54(BoundSessionClose54 value,DecodeContext context)
     {
-        if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
-        var body=new Writer();
-        body.U8(90);
-        body.U8(77);
-        body.U8(1);body.U8(54);body.U8(value.Flags);
-        WriteNonzeroU64(body, value.Correlation, context);
-        WriteActorRef(body, value.Actor, context);
-        WriteRetiredBoundSessionRouteFence(body, value.Session, context);
-        var frames=new List<byte[]>{body.ToArray()};
-        return frames.ToArray();
-    }    internal static AuthorityPayloadV1 DecodeDurableAuthorityPayloadV1(byte[] bytes,DecodeContext context){if(bytes.LongLength>1048576L)throw Error("limit");var r=new Reader(bytes);if(r.U8()!=90)throw Error("magic");if(r.U8()!=76)throw Error("magic");if(r.U8()!=65)throw Error("magic");if(r.U8()!=85)throw Error("magic");if(r.U8()!=1)throw Error("version");if(ReadU16(r,context).Value!=0)throw Error("flags");var x=r.Slice(checked((int)ReadU32(r,context).Value));var sum=r.U32();r.End("durable");if(Crc32C(bytes.AsSpan(0,bytes.Length-4))!=sum)throw Error("checksum");var v=ReadAuthorityPayloadV1(x,context);x.End("body");return v;}
-    internal static byte[] EncodeDurableAuthorityPayloadV1(AuthorityPayloadV1 value,DecodeContext context){var body=new Writer();WriteAuthorityPayloadV1(body,value,context);var w=new Writer();w.U8(90);w.U8(76);w.U8(65);w.U8(85);w.U8(1);WriteU16(w,new U16(0),context);WriteU32(w,new U32(checked((uint)body.Length)),context);w.Bytes(body.ToArray());var p=w.ToArray();w.U32(Crc32C(p));var r=w.ToArray();if(r.LongLength>1048576L)throw Error("limit");return r;}
-    internal static InstanceActivationRecoveryV1 DecodeDurableInstanceActivationRecoveryV1(byte[] bytes,DecodeContext context){if(bytes.LongLength>1048576L)throw Error("limit");var r=new Reader(bytes);if(r.U8()!=90)throw Error("magic");if(r.U8()!=76)throw Error("magic");if(r.U8()!=73)throw Error("magic");if(r.U8()!=65)throw Error("magic");if(r.U8()!=1)throw Error("version");if(ReadU16(r,context).Value!=0)throw Error("flags");var x=r.Slice(checked((int)ReadU32(r,context).Value));var sum=r.U32();r.End("durable");if(Crc32C(bytes.AsSpan(0,bytes.Length-4))!=sum)throw Error("checksum");var v=ReadInstanceActivationRecoveryV1(x,context);x.End("body");return v;}
-    internal static byte[] EncodeDurableInstanceActivationRecoveryV1(InstanceActivationRecoveryV1 value,DecodeContext context){var body=new Writer();WriteInstanceActivationRecoveryV1(body,value,context);var w=new Writer();w.U8(90);w.U8(76);w.U8(73);w.U8(65);w.U8(1);WriteU16(w,new U16(0),context);WriteU32(w,new U32(checked((uint)body.Length)),context);w.Bytes(body.ToArray());var p=w.ToArray();w.U32(Crc32C(p));var r=w.ToArray();if(r.LongLength>1048576L)throw Error("limit");return r;}
-    internal static RelocationDataChunkV1 DecodeDurableRelocationDataChunkV1(byte[] bytes,DecodeContext context){if(bytes.LongLength>67108886L)throw Error("limit");var r=new Reader(bytes);if(r.U8()!=90)throw Error("magic");if(r.U8()!=76)throw Error("magic");if(r.U8()!=84)throw Error("magic");if(r.U8()!=67)throw Error("magic");if(r.U8()!=1)throw Error("version");if(ReadU16(r,context).Value!=0)throw Error("flags");var x=r.Slice(checked((int)ReadU32(r,context).Value));var sum=r.U32();r.End("durable");if(Crc32C(bytes.AsSpan(0,bytes.Length-4))!=sum)throw Error("checksum");var v=ReadRelocationDataChunkV1(x,context);x.End("body");return v;}
-    internal static byte[] EncodeDurableRelocationDataChunkV1(RelocationDataChunkV1 value,DecodeContext context){var body=new Writer();WriteRelocationDataChunkV1(body,value,context);var w=new Writer();w.U8(90);w.U8(76);w.U8(84);w.U8(67);w.U8(1);WriteU16(w,new U16(0),context);WriteU32(w,new U32(checked((uint)body.Length)),context);w.Bytes(body.ToArray());var p=w.ToArray();w.U32(Crc32C(p));var r=w.ToArray();if(r.LongLength>67108886L)throw Error("limit");return r;}
-    internal static RelocationManifestV1 DecodeDurableRelocationManifestV1(byte[] bytes,DecodeContext context){if(bytes.LongLength>33554432L)throw Error("limit");var r=new Reader(bytes);if(r.U8()!=90)throw Error("magic");if(r.U8()!=76)throw Error("magic");if(r.U8()!=84)throw Error("magic");if(r.U8()!=77)throw Error("magic");if(r.U8()!=1)throw Error("version");if(ReadU16(r,context).Value!=0)throw Error("flags");var x=r.Slice(checked((int)ReadU32(r,context).Value));var sum=r.U32();r.End("durable");if(Crc32C(bytes.AsSpan(0,bytes.Length-4))!=sum)throw Error("checksum");var v=ReadRelocationManifestV1(x,context);x.End("body");return v;}
-    internal static byte[] EncodeDurableRelocationManifestV1(RelocationManifestV1 value,DecodeContext context){var body=new Writer();WriteRelocationManifestV1(body,value,context);var w=new Writer();w.U8(90);w.U8(76);w.U8(84);w.U8(77);w.U8(1);WriteU16(w,new U16(0),context);WriteU32(w,new U32(checked((uint)body.Length)),context);w.Bytes(body.ToArray());var p=w.ToArray();w.U32(Crc32C(p));var r=w.ToArray();if(r.LongLength>33554432L)throw Error("limit");return r;}    internal enum LogicalDecodeProgress { NeedMore, Complete }
+        var frames=new byte[1][];
+        frames[0]=EncodeBoundSessionClose54Header(value,context);
+        return frames;
+    }    internal static AuthorityPayloadV1 DecodeDurableAuthorityPayloadV1(byte[] bytes,DecodeContext context){if(bytes.LongLength>1048576L)throw Error("limit");var r=new Reader(bytes);if(r.U8()!=90)throw Error("magic");if(r.U8()!=76)throw Error("magic");if(r.U8()!=65)throw Error("magic");if(r.U8()!=85)throw Error("magic");if(r.U8()!=1)throw Error("version");if(ReadU16(ref r,context).Value!=0)throw Error("flags");var x=r.Slice(checked((int)ReadU32(ref r,context).Value));var sum=r.U32();r.End("durable");if(Crc32C(bytes.AsSpan(0,bytes.Length-4))!=sum)throw Error("checksum");var v=ReadAuthorityPayloadV1(ref x,context);x.End("body");return v;}
+    internal static byte[] EncodeDurableAuthorityPayloadV1(AuthorityPayloadV1 value,DecodeContext context){var writer = new Writer(); WriteDurableAuthorityPayloadV1(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteDurableAuthorityPayloadV1(ref writer, value, context); return bytes;}
+    private static void WriteDurableAuthorityPayloadV1(ref Writer writer, AuthorityPayloadV1 value, DecodeContext context) { writer.U8(90);writer.U8(76);writer.U8(65);writer.U8(85); writer.U8(1); WriteU16(ref writer,new U16(0),context); var bodyOffset = writer.Length; writer.Reserve(4); var bodyStart = writer.Length; WriteAuthorityPayloadV1(ref writer,value,context); var bodyWriter = writer.At(bodyOffset); WriteU32(ref bodyWriter, new U32(checked((uint)(writer.Length - bodyStart))), context); writer.U32(Crc32C(writer.Written)); if(writer.Length>1048576L)throw Error("limit"); }
+    internal static InstanceActivationRecoveryV1 DecodeDurableInstanceActivationRecoveryV1(byte[] bytes,DecodeContext context){if(bytes.LongLength>1048576L)throw Error("limit");var r=new Reader(bytes);if(r.U8()!=90)throw Error("magic");if(r.U8()!=76)throw Error("magic");if(r.U8()!=73)throw Error("magic");if(r.U8()!=65)throw Error("magic");if(r.U8()!=1)throw Error("version");if(ReadU16(ref r,context).Value!=0)throw Error("flags");var x=r.Slice(checked((int)ReadU32(ref r,context).Value));var sum=r.U32();r.End("durable");if(Crc32C(bytes.AsSpan(0,bytes.Length-4))!=sum)throw Error("checksum");var v=ReadInstanceActivationRecoveryV1(ref x,context);x.End("body");return v;}
+    internal static byte[] EncodeDurableInstanceActivationRecoveryV1(InstanceActivationRecoveryV1 value,DecodeContext context){var writer = new Writer(); WriteDurableInstanceActivationRecoveryV1(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteDurableInstanceActivationRecoveryV1(ref writer, value, context); return bytes;}
+    private static void WriteDurableInstanceActivationRecoveryV1(ref Writer writer, InstanceActivationRecoveryV1 value, DecodeContext context) { writer.U8(90);writer.U8(76);writer.U8(73);writer.U8(65); writer.U8(1); WriteU16(ref writer,new U16(0),context); var bodyOffset = writer.Length; writer.Reserve(4); var bodyStart = writer.Length; WriteInstanceActivationRecoveryV1(ref writer,value,context); var bodyWriter = writer.At(bodyOffset); WriteU32(ref bodyWriter, new U32(checked((uint)(writer.Length - bodyStart))), context); writer.U32(Crc32C(writer.Written)); if(writer.Length>1048576L)throw Error("limit"); }
+    internal static RelocationDataChunkV1 DecodeDurableRelocationDataChunkV1(byte[] bytes,DecodeContext context){if(bytes.LongLength>67108886L)throw Error("limit");var r=new Reader(bytes);if(r.U8()!=90)throw Error("magic");if(r.U8()!=76)throw Error("magic");if(r.U8()!=84)throw Error("magic");if(r.U8()!=67)throw Error("magic");if(r.U8()!=1)throw Error("version");if(ReadU16(ref r,context).Value!=0)throw Error("flags");var x=r.Slice(checked((int)ReadU32(ref r,context).Value));var sum=r.U32();r.End("durable");if(Crc32C(bytes.AsSpan(0,bytes.Length-4))!=sum)throw Error("checksum");var v=ReadRelocationDataChunkV1(ref x,context);x.End("body");return v;}
+    internal static byte[] EncodeDurableRelocationDataChunkV1(RelocationDataChunkV1 value,DecodeContext context){var writer = new Writer(); WriteDurableRelocationDataChunkV1(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteDurableRelocationDataChunkV1(ref writer, value, context); return bytes;}
+    private static void WriteDurableRelocationDataChunkV1(ref Writer writer, RelocationDataChunkV1 value, DecodeContext context) { writer.U8(90);writer.U8(76);writer.U8(84);writer.U8(67); writer.U8(1); WriteU16(ref writer,new U16(0),context); var bodyOffset = writer.Length; writer.Reserve(4); var bodyStart = writer.Length; WriteRelocationDataChunkV1(ref writer,value,context); var bodyWriter = writer.At(bodyOffset); WriteU32(ref bodyWriter, new U32(checked((uint)(writer.Length - bodyStart))), context); writer.U32(Crc32C(writer.Written)); if(writer.Length>67108886L)throw Error("limit"); }
+    internal static RelocationManifestV1 DecodeDurableRelocationManifestV1(byte[] bytes,DecodeContext context){if(bytes.LongLength>33554432L)throw Error("limit");var r=new Reader(bytes);if(r.U8()!=90)throw Error("magic");if(r.U8()!=76)throw Error("magic");if(r.U8()!=84)throw Error("magic");if(r.U8()!=77)throw Error("magic");if(r.U8()!=1)throw Error("version");if(ReadU16(ref r,context).Value!=0)throw Error("flags");var x=r.Slice(checked((int)ReadU32(ref r,context).Value));var sum=r.U32();r.End("durable");if(Crc32C(bytes.AsSpan(0,bytes.Length-4))!=sum)throw Error("checksum");var v=ReadRelocationManifestV1(ref x,context);x.End("body");return v;}
+    internal static byte[] EncodeDurableRelocationManifestV1(RelocationManifestV1 value,DecodeContext context){var writer = new Writer(); WriteDurableRelocationManifestV1(ref writer, value, context); var bytes = GC.AllocateUninitializedArray<byte>(writer.Length); writer = new Writer(bytes); WriteDurableRelocationManifestV1(ref writer, value, context); return bytes;}
+    private static void WriteDurableRelocationManifestV1(ref Writer writer, RelocationManifestV1 value, DecodeContext context) { writer.U8(90);writer.U8(76);writer.U8(84);writer.U8(77); writer.U8(1); WriteU16(ref writer,new U16(0),context); var bodyOffset = writer.Length; writer.Reserve(4); var bodyStart = writer.Length; WriteRelocationManifestV1(ref writer,value,context); var bodyWriter = writer.At(bodyOffset); WriteU32(ref bodyWriter, new U32(checked((uint)(writer.Length - bodyStart))), context); writer.U32(Crc32C(writer.Written)); if(writer.Length>33554432L)throw Error("limit"); }    internal enum LogicalDecodeProgress { NeedMore, Complete }
     internal enum LogicalFailureKind { Truncated, Trailing, Capacity, Limit, Protocol }
     internal sealed class LogicalDecodeException(LogicalFailureKind kind,long offset,Exception inner):IOException($"{kind.ToString().ToLowerInvariant()} at byte {offset}",inner){internal LogicalFailureKind Kind{get;}=kind;internal long Offset{get;}=offset;}
     private sealed class LogicalInternalException(LogicalFailureKind kind,string message):IOException(message){internal LogicalFailureKind Kind{get;}=kind;}
-    internal sealed record LogicalDecodeStep<T>(LogicalDecodeProgress Progress,T? Value,int BufferedInputByteCount,long ConsumedByteCount,int ContinuationDepth);
+    internal sealed record LogicalDecodeStep<T>(LogicalDecodeProgress Progress,T? Value,int BufferedInputByteCount,long ConsumedByteCount,int ContinuationDepth) where T : struct;
     private abstract class LogicalFrame{internal readonly long End;internal long Start;internal int State,Filled;internal object? Child;internal byte[]? Scratch;protected LogicalFrame(long end){End=end;}protected object TakeChild(){var value=Child!;Child=null;return value;}internal abstract void Resume(LogicalMachine machine);}
     private sealed class LogicalMachine
     {
@@ -7419,7 +8006,7 @@ internal static class ServiceWireCodec
     private sealed class LogicalFrozenSourceIdentityFrame:LogicalFrame{private readonly object?[] values=new object?[1];private object?[] caseValues=Array.Empty<object?>();private long bodyEnd;internal LogicalFrozenSourceIdentityFrame(long end):base(end){}internal override void Resume(LogicalMachine m){var context=m.Context;switch(State){case 0:{State=1;m.Push(new LogicalFrozenSourceKindFrame(End));return;}case 1:{values[0]=TakeChild();State=2;return;}case 2:{State=3;m.Push(new LogicalU16Frame(End));return;}case 3:{bodyEnd=m.Bound(End,(ulong)((U16)TakeChild()).Value);State=4;return;}case 5:{State=6;m.Push(new LogicalRidFrame(bodyEnd));return;}case 6:{caseValues[0]=TakeChild();State=7;return;}case 7:{State=8;m.Push(new LogicalNonzeroU64Frame(bodyEnd));return;}case 8:{caseValues[1]=TakeChild();State=9;return;}case 9:{State=10;m.Push(new LogicalText8Frame(bodyEnd));return;}case 10:{caseValues[2]=TakeChild();State=11;return;}case 11:{State=12;m.Push(new LogicalNonzeroU64Frame(bodyEnd));return;}case 12:{caseValues[3]=TakeChild();State=13;return;}case 13:{m.Exact(bodyEnd,"frozen-source-identity");var value=new FrozenSourceIdentityCase0(((FrozenSourceKind)values[0]!),((Rid)caseValues[0]!),((NonzeroU64)caseValues[1]!),((Text8)caseValues[2]!),((NonzeroU64)caseValues[3]!));m.Complete(value);return;}case 14:{State=15;m.Push(new LogicalRidFrame(bodyEnd));return;}case 15:{caseValues[0]=TakeChild();State=16;return;}case 16:{State=17;m.Push(new LogicalNonzeroU64Frame(bodyEnd));return;}case 17:{caseValues[1]=TakeChild();State=18;return;}case 18:{State=19;m.Push(new LogicalText8Frame(bodyEnd));return;}case 19:{caseValues[2]=TakeChild();State=20;return;}case 20:{State=21;m.Push(new LogicalNonzeroU64Frame(bodyEnd));return;}case 21:{caseValues[3]=TakeChild();State=22;return;}case 22:{State=23;m.Push(new LogicalText8Frame(bodyEnd));return;}case 23:{caseValues[4]=TakeChild();State=24;return;}case 24:{m.Exact(bodyEnd,"frozen-source-identity");var value=new FrozenSourceIdentityCase1(((FrozenSourceKind)values[0]!),((Rid)caseValues[0]!),((NonzeroU64)caseValues[1]!),((Text8)caseValues[2]!),((NonzeroU64)caseValues[3]!),((Text8)caseValues[4]!));m.Complete(value);return;}case 25:{State=26;m.Push(new LogicalRidFrame(bodyEnd));return;}case 26:{caseValues[0]=TakeChild();State=27;return;}case 27:{State=28;m.Push(new LogicalNonzeroU64Frame(bodyEnd));return;}case 28:{caseValues[1]=TakeChild();State=29;return;}case 29:{State=30;m.Push(new LogicalText8Frame(bodyEnd));return;}case 30:{caseValues[2]=TakeChild();State=31;return;}case 31:{State=32;m.Push(new LogicalNonzeroU64Frame(bodyEnd));return;}case 32:{caseValues[3]=TakeChild();State=33;return;}case 33:{State=34;m.Push(new LogicalActorRefFrame(bodyEnd));return;}case 34:{caseValues[4]=TakeChild();State=35;return;}case 35:{m.Exact(bodyEnd,"frozen-source-identity");var value=new FrozenSourceIdentityCase2(((FrozenSourceKind)values[0]!),((Rid)caseValues[0]!),((NonzeroU64)caseValues[1]!),((Text8)caseValues[2]!),((NonzeroU64)caseValues[3]!),((ActorRef)caseValues[4]!));m.Complete(value);return;}case 36:{State=37;m.Push(new LogicalRidFrame(bodyEnd));return;}case 37:{caseValues[0]=TakeChild();State=38;return;}case 38:{State=39;m.Push(new LogicalNonzeroU64Frame(bodyEnd));return;}case 39:{caseValues[1]=TakeChild();State=40;return;}case 40:{State=41;m.Push(new LogicalText8Frame(bodyEnd));return;}case 41:{caseValues[2]=TakeChild();State=42;return;}case 42:{State=43;m.Push(new LogicalNonzeroU64Frame(bodyEnd));return;}case 43:{caseValues[3]=TakeChild();State=44;return;}case 44:{State=45;m.Push(new LogicalActorRefFrame(bodyEnd));return;}case 45:{caseValues[4]=TakeChild();State=46;return;}case 46:{State=47;m.Push(new LogicalRidFrame(bodyEnd));return;}case 47:{caseValues[5]=TakeChild();State=48;return;}case 48:{State=49;m.Push(new LogicalNonzeroU64Frame(bodyEnd));return;}case 49:{caseValues[6]=TakeChild();State=50;return;}case 50:{State=51;m.Push(new LogicalNonzeroU64Frame(bodyEnd));return;}case 51:{caseValues[7]=TakeChild();State=52;return;}case 52:{m.Exact(bodyEnd,"frozen-source-identity");var value=new FrozenSourceIdentityCase3(((FrozenSourceKind)values[0]!),((Rid)caseValues[0]!),((NonzeroU64)caseValues[1]!),((Text8)caseValues[2]!),((NonzeroU64)caseValues[3]!),((ActorRef)caseValues[4]!),((Rid)caseValues[5]!),((NonzeroU64)caseValues[6]!),((NonzeroU64)caseValues[7]!));m.Complete(value);return;}case 4:{if(((FrozenSourceKind)values[0]!)==FrozenSourceKind.Node){caseValues=new object?[4];State=5;return;}else if(((FrozenSourceKind)values[0]!)==FrozenSourceKind.Spot){caseValues=new object?[5];State=14;return;}else if(((FrozenSourceKind)values[0]!)==FrozenSourceKind.Actor){caseValues=new object?[5];State=25;return;}else if(((FrozenSourceKind)values[0]!)==FrozenSourceKind.BoundSession){caseValues=new object?[8];State=36;return;}throw Error("frozen-source-identity: discriminator");}default:throw new InvalidOperationException();}}}
     private sealed class LogicalFrozenSourceKindFrame:LogicalFrame{internal LogicalFrozenSourceKindFrame(long end):base(end){}internal override void Resume(LogicalMachine m){var context=m.Context;var bytes=m.Take(this,1,true);if(bytes is null)return;var raw=m.UInt(bytes);var value=raw switch{1=>FrozenSourceKind.Node,2=>FrozenSourceKind.Spot,3=>FrozenSourceKind.Actor,4=>FrozenSourceKind.BoundSession,_=>throw Error("frozen-source-kind: unknown enum")};m.Complete(value);}}
     private sealed class LogicalRidFrame:LogicalFrame{private int length;private byte[] value=Array.Empty<byte>();internal LogicalRidFrame(long end):base(end){}internal override void Resume(LogicalMachine m){var context=m.Context;switch(State){case 0:{State=1;m.Push(new LogicalU8Frame(End));return;}case 1:{var encodedLength=(ulong)((U8)TakeChild()).Value;if(encodedLength>2147483647UL)throw Capacity("rid: capacity");if(encodedLength<1UL||encodedLength>255UL)throw Error("rid: length");length=checked((int)encodedLength);try{value=GC.AllocateUninitializedArray<byte>(length);}catch(OutOfMemoryException){throw Capacity("rid: capacity");}State=2;return;}case 2:{if(!m.Fill(this,value))return;m.Complete(new Rid(value));return;}default:throw new InvalidOperationException();}}}
-    private sealed class LogicalMetadataFrameFrame:LogicalFrame{private int count,index;private List<MetadataEntry> values=null!;internal LogicalMetadataFrameFrame(long end):base(end){}internal override void Resume(LogicalMachine m){var context=m.Context;switch(State){case 0:{State=1;m.Push(new LogicalU8Frame(End));return;}case 1:{var version=(U8)TakeChild();if(version.Value!=1)throw Error("metadata-frame: version");State=2;m.Push(new LogicalU8Frame(End));return;}case 2:{var encodedCount=(ulong)((U8)TakeChild()).Value;if(encodedCount>int.MaxValue)throw Capacity("metadata-frame: capacity");count=(int)encodedCount;values=new List<MetadataEntry>();State=3;return;}case 3:{if(index==count){var value=new MetadataFrame(values);try { var keys0 = value.Entries.Select(item => KeyMetadataFrame0(item, context)).ToArray(); if (keys0.Select(Convert.ToHexString).Distinct(StringComparer.Ordinal).Count() != keys0.Length) throw Error("duplicate vector item"); } catch (OutOfMemoryException) { throw Capacity("metadata-frame constraint capacity"); }if((ulong)(m.Consumed-Start)>1024UL)throw Error("metadata-frame: encoded limit");m.Complete(value);return;}State=4;m.Push(new LogicalMetadataEntryFrame(End));return;}case 4:{try{values.Add((MetadataEntry)TakeChild());}catch(OutOfMemoryException){throw Capacity("metadata-frame: capacity");}index++;State=3;return;}default:throw new InvalidOperationException();}}}
+    private sealed class LogicalMetadataFrameFrame:LogicalFrame{private int count,index;private List<MetadataEntry> values=null!;internal LogicalMetadataFrameFrame(long end):base(end){}internal override void Resume(LogicalMachine m){var context=m.Context;switch(State){case 0:{State=1;m.Push(new LogicalU8Frame(End));return;}case 1:{var version=(U8)TakeChild();if(version.Value!=1)throw Error("metadata-frame: version");State=2;m.Push(new LogicalU8Frame(End));return;}case 2:{var encodedCount=(ulong)((U8)TakeChild()).Value;if(encodedCount>int.MaxValue)throw Capacity("metadata-frame: capacity");count=(int)encodedCount;values=new List<MetadataEntry>();State=3;return;}case 3:{if(index==count){var value=new MetadataFrame(values);try { var keys0 = new HashSet<string>(value.Entries.Count, StringComparer.Ordinal); for (var index = 0; index < value.Entries.Count; index++) { var item = value.Entries[index]; if (!keys0.Add(item.Key.Value!)) throw Error("duplicate vector item"); } } catch (OutOfMemoryException) { throw Capacity("metadata-frame constraint capacity"); }if((ulong)(m.Consumed-Start)>1024UL)throw Error("metadata-frame: encoded limit");m.Complete(value);return;}State=4;m.Push(new LogicalMetadataEntryFrame(End));return;}case 4:{try{values.Add((MetadataEntry)TakeChild());}catch(OutOfMemoryException){throw Capacity("metadata-frame: capacity");}index++;State=3;return;}default:throw new InvalidOperationException();}}}
     private sealed class LogicalMetadataEntryFrame:LogicalFrame{private readonly object?[] values=new object?[2];internal LogicalMetadataEntryFrame(long end):base(end){}internal override void Resume(LogicalMachine m){var context=m.Context;switch(State){case 0:{State=1;m.Push(new LogicalText8Frame(End));return;}case 1:{values[0]=TakeChild();State=2;return;}case 2:{State=3;m.Push(new LogicalMetadataValueFrame(End));return;}case 3:{values[1]=TakeChild();State=4;return;}case 4:{var value=new MetadataEntry(((Text8)values[0]!),((MetadataValue)values[1]!));m.Complete(value);return;}default:throw new InvalidOperationException();}}}
     private sealed class LogicalMetadataValueFrame:LogicalFrame{private int length,remaining,codePoint,needed,minimum;private readonly StringBuilder value=new();internal LogicalMetadataValueFrame(long end):base(end){}private void Append(int item){try{if(item<=0xffff)value.Append((char)item);else{item-=0x10000;value.Append((char)(0xd800+(item>>10)));value.Append((char)(0xdc00+(item&0x3ff)));}}catch(OutOfMemoryException){throw Capacity("metadata-value: capacity");}}private string Finish(){try{return value.ToString();}catch(OutOfMemoryException){throw Capacity("metadata-value: capacity");}}internal override void Resume(LogicalMachine m){var context=m.Context;switch(State){case 0:{State=1;m.Push(new LogicalU16Frame(End));return;}case 1:{var encodedLength=(ulong)((U16)TakeChild()).Value;if(encodedLength>2147483647UL)throw Capacity("metadata-value: capacity");if(encodedLength<0UL||encodedLength>1024UL)throw Error("metadata-value: length");length=checked((int)encodedLength);remaining=length;State=2;return;}case 2:{while(remaining>0){var item=m.ReadByte(this,0);if(item<0)return;remaining--;if(needed==0){if(item<=0x7f){if(item==0)throw Error("metadata-value: NUL");Append(item);continue;}if(item>=0xc2&&item<=0xdf){codePoint=item&0x1f;needed=1;minimum=0x80;continue;}if(item>=0xe0&&item<=0xef){codePoint=item&0x0f;needed=2;minimum=0x800;continue;}if(item>=0xf0&&item<=0xf4){codePoint=item&0x07;needed=3;minimum=0x10000;continue;}throw Error("metadata-value: UTF-8");}if((item&0xc0)!=0x80)throw Error("metadata-value: UTF-8");codePoint=(codePoint<<6)|(item&0x3f);if(--needed==0){if(codePoint<minimum||codePoint>0x10ffff||(codePoint>=0xd800&&codePoint<=0xdfff)||codePoint==0)throw Error("metadata-value: UTF-8");Append(codePoint);}}if(needed!=0)throw Error("metadata-value: UTF-8");m.Complete(new MetadataValue(Finish()));return;}default:throw new InvalidOperationException();}}}
     private sealed class LogicalOperationIdOrZeroFrame:LogicalFrame{private readonly object?[] values=new object?[2];internal LogicalOperationIdOrZeroFrame(long end):base(end){}internal override void Resume(LogicalMachine m){var context=m.Context;switch(State){case 0:{State=1;m.Push(new LogicalU64Frame(End));return;}case 1:{values[0]=TakeChild();State=2;return;}case 2:{State=3;m.Push(new LogicalU64Frame(End));return;}case 3:{values[1]=TakeChild();State=4;return;}case 4:{var value=new OperationIdOrZero(((U64)values[0]!),((U64)values[1]!));m.Complete(value);return;}default:throw new InvalidOperationException();}}}
@@ -7464,6 +8051,6 @@ internal static class ServiceWireCodec
         internal void SetSyntheticPriorInputByteCountForTest(long value){if(totalInputByteCount!=0)throw new InvalidOperationException();totalInputByteCount=value;}
         internal LogicalDecodeStep<RelocationEnvelopeV1> Push(byte[] chunk,bool finalChunk){if(terminal)throw new InvalidOperationException("terminal logical decoder push");if(chunk.LongLength>274877906944L-totalInputByteCount){terminal=true;throw new LogicalDecodeException(LogicalFailureKind.Limit,machine.Consumed,Error("relocation-envelope-v1: encoded limit"));}totalInputByteCount+=chunk.LongLength;try{var value=machine.Run(chunk,finalChunk);if(value is null)return new(LogicalDecodeProgress.NeedMore,null,machine.Buffered,machine.Consumed,machine.Depth);terminal=true;return new(LogicalDecodeProgress.Complete,(RelocationEnvelopeV1)value,0,machine.Consumed,0);}catch(Exception failure)when(failure is not LogicalDecodeException){terminal=true;var kind=failure is LogicalInternalException internalFailure?internalFailure.Kind:failure is CapacityException?LogicalFailureKind.Capacity:failure is EndOfStreamException?LogicalFailureKind.Truncated:LogicalFailureKind.Protocol;throw new LogicalDecodeException(kind,machine.Consumed,failure);}}
     }
-    internal static RelocationEnvelopeV1 DecodeLogicalRelocationEnvelopeV1(byte[] b,DecodeContext c){var step=new LogicalRelocationEnvelopeV1Decoder(c).Push(b,true);if(step.Progress!=LogicalDecodeProgress.Complete)throw new EndOfStreamException("truncated logical stream");return step.Value!;}
+    internal static RelocationEnvelopeV1 DecodeLogicalRelocationEnvelopeV1(byte[] b,DecodeContext c){var step=new LogicalRelocationEnvelopeV1Decoder(c).Push(b,true);if(step.Progress!=LogicalDecodeProgress.Complete)throw new EndOfStreamException("truncated logical stream");return step.Value!.Value;}
     internal static byte[] EncodeLogicalRelocationEnvelopeV1(RelocationEnvelopeV1 v,DecodeContext c){var b=EncodeRelocationEnvelopeV1(v,c);if(b.LongLength>274877906944L)throw Error("limit");return b;}
 }
