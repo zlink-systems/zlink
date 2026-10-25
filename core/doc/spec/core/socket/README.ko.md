@@ -945,8 +945,8 @@ ZLINK_EXPORT zlink_config_result_t zlink_socket_connection_attempts_snapshot (
 ```
 
 **Core는 성공한 `zlink_connect()` 등록(intent)마다 연결 상태와 최근 실패 결과를 보존하고, 이 함수가
-그 사실의 정본이다.** 행 하나가 intent 하나다. Intent는 local socket과 `zlink_connect()`에 넘긴 endpoint로
-정하며, 주소 해석 결과나 physical pipe·lane은 행을 나누지 않는다. 같은 intent의 자동 재연결은 같은 행의
+그 사실의 정본이다.** 행 하나는 성공한 `zlink_connect()` 호출 하나(intent)다. 같은 endpoint로 여러 번
+connect하면 행도 여럿이며 `intent_id`로 구분한다. 주소 해석 결과나 physical pipe·lane은 행을 나누지 않는다. 같은 intent의 자동 재연결은 같은 행의
 수명에 속한다.
 
 - **상태.** 행은 `zlink_connect()`가 성공을 반환하기 전에 `CONNECTING`으로 생긴다. 주소 해석, transport

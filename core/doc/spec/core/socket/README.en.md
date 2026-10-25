@@ -1001,8 +1001,8 @@ ZLINK_EXPORT zlink_config_result_t zlink_socket_connection_attempts_snapshot (
 
 **Core keeps the connection state and the latest failure result for each successful `zlink_connect()`
 registration (intent), and this function is the authoritative source of that fact.** One row is one
-intent. An intent is identified by the local socket and the endpoint passed to `zlink_connect()`; address
-resolution results and physical pipes or lanes don't split rows. Automatic reconnection of the same intent
+successful `zlink_connect()` call (intent). Connecting to the same endpoint more than once gives more than
+one row, told apart by `intent_id`. Address resolution results and physical pipes or lanes don't split rows. Automatic reconnection of the same intent
 belongs to the same row's lifetime.
 
 - **State.** The row appears as `CONNECTING` before `zlink_connect()` returns success. When address
