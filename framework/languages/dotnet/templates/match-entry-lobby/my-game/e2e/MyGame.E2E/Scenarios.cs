@@ -5,13 +5,13 @@ namespace MyGame.E2E;
 
 internal static class Scenarios
 {
-    private static readonly string[] Order = ["hit", "reconnect", "update"];
+    private static readonly string[] Order = ["hit", "wall", "input", "reconnect", "update"];
     internal static IReadOnlyList<string> All => Order;
-    private const double NearX = 10;
-    private const double TargetX = 20;
-    private const double WallBehindX = 60;
-    private const double FarX = 200;
-    private const double LaneY = 10;
+    private const double TargetX = GameNames.SecondSpawnX;
+    private const double WallCenterY = (GameNames.WallMinY + GameNames.WallMaxY) / 2;
+    private const double FarX = GameNames.MapMaxX;
+    private const double FarY = GameNames.MapMaxY - 10;
+    private const double LaneY = GameNames.FirstSpawnY;
 
     public static string[] Select(string? requested)
     {
@@ -21,7 +21,7 @@ internal static class Scenarios
             || selected.Distinct().Count() != selected.Length
             || selected.Any(s => !Order.Contains(s))
         )
-            throw new ArgumentException("Select distinct scenarios from hit,reconnect,update.");
+            throw new ArgumentException("Select distinct scenarios from hit,wall,input,reconnect,update.");
         return Order.Where(selected.Contains).ToArray();
     }
 
@@ -107,34 +107,115 @@ internal static class Scenarios
             ct
         );
         Require(
-            Equal(ready1, ready2) && ready1.Players.All(p => p.Hp == GameNames.InitialHp),
+            Equal(ready1, ready2)
+                && ready1.Players.All(p => p.Hp == GameNames.InitialHp && p.LastSequence == 0)
+                && ready1.Phase == GameNames.PlayingPhase
+                && ready1.Winner is null,
             "Initial room state differs."
         );
+        if (scenario == "input")
+        {
+            await InputAsync(p1, p2, ct);
+            Require(!p1.Disconnected && p1.Connector.IsConnected, "First player disconnected.");
+            Require(!p2.Disconnected && p2.Connector.IsConnected, "Second player disconnected.");
+            return;
+        }
         var session1 = await p1.SessionAsync(ct);
         var session2 = await p2.SessionAsync(ct);
-        await MoveAsync(p1, p2, p1, NearX, LaneY, 1, ct);
-        await MoveAsync(p1, p2, p2, TargetX, LaneY, 1, ct);
+        await MoveByAsync(p1, p2, p1, 0, 0, 1, ct);
+        await MoveByAsync(p1, p2, p2, 0, 0, 1, ct);
         var before = await HitAsync(p1, p2, 2, GameNames.InitialHp - GameNames.ShotDamage, ct);
         if (scenario == "hit")
         {
-            await MoveAsync(p1, p2, p2, WallBehindX, LaneY, 2, ct);
-            await RejectShotAsync(p1, p2, 3, Rejection.BlockedByWall, ct);
-            await MoveAsync(p1, p2, p2, FarX, LaneY, 3, ct);
-            await RejectShotAsync(p1, p2, 4, Rejection.OutOfRange, ct);
-            await RejectShotAsync(p1, p2, 5, Rejection.NoTarget, ct, "missing-player");
-            await MoveAsync(p1, p2, p2, TargetX, LaneY, 4, ct);
-            for (var sequence = 6L; sequence <= 8; sequence++)
+            await RejectActionAsync(
+                p1,
+                new RoomAssignment(found1.RoomId),
+                Rejection.PacketNotAllowed,
+                ct
+            );
+            await WalkAsync(p1, p2, p1, GameNames.FirstSpawnX, GameNames.FirstSpawnY, ct);
+            await WalkAsync(p1, p2, p2, TargetX, WallCenterY, ct);
+            await RejectShotAsync(
+                p1,
+                p2,
+                await NextSequenceAsync(p1, ct),
+                Rejection.BlockedByWall,
+                ct
+            );
+            await WalkAsync(p1, p2, p2, FarX, FarY, ct);
+            await RejectShotAsync(
+                p1,
+                p2,
+                await NextSequenceAsync(p1, ct),
+                Rejection.OutOfRange,
+                ct
+            );
+            await RejectShotAsync(
+                p1,
+                p2,
+                await NextSequenceAsync(p1, ct),
+                Rejection.NoTarget,
+                ct,
+                "missing-player"
+            );
+            await WalkAsync(p1, p2, p2, TargetX, LaneY, ct);
+            for (var hp = GameNames.InitialHp - 2 * GameNames.ShotDamage; hp >= 0; hp -= GameNames.ShotDamage)
                 await HitAsync(
                     p1,
                     p2,
-                    sequence,
-                    GameNames.InitialHp - GameNames.ShotDamage * (int)(sequence - 4),
+                    await NextSequenceAsync(p1, ct),
+                    hp,
                     ct
                 );
             Require(
                 (await p1.WaitAsync<MatchEnded>(_ => true, ct)).Winner == p1.PlayerId
                     && (await p2.WaitAsync<MatchEnded>(_ => true, ct)).Winner == p1.PlayerId,
                 "Wrong match winner."
+            );
+        }
+        else if (scenario == "wall")
+        {
+            var left = GameNames.WallX - GameNames.MaxStep;
+            var right = GameNames.WallX + GameNames.MaxStep;
+            await WalkAsync(p1, p2, p1, left, WallCenterY, ct);
+            await WalkAsync(p1, p2, p2, right, WallCenterY, ct);
+            var beforeWall = await p1.ViewAsync(_ => true, ct);
+            var targetBefore = beforeWall.Players.Single(player => player.PlayerId == p2.PlayerId);
+            await RejectActionAsync(
+                p1,
+                new MoveRequest(GameNames.MaxStep, 0, await NextSequenceAsync(p1, ct)),
+                Rejection.MoveBlockedByWall,
+                ct
+            );
+            await RejectShotAsync(
+                p1,
+                p2,
+                await NextSequenceAsync(p1, ct),
+                Rejection.BlockedByWall,
+                ct
+            );
+            var afterWall = await p1.ViewAsync(_ => true, ct);
+            SameState(beforeWall, afterWall);
+            Require(
+                afterWall.Players.Single(player => player.PlayerId == p2.PlayerId).Hp == targetBefore.Hp,
+                "Wall-blocked shot changed HP."
+            );
+
+            await WalkAsync(p1, p2, p1, GameNames.FirstSpawnX, GameNames.FirstSpawnY, ct);
+            await WalkAsync(p1, p2, p2, GameNames.SecondSpawnX, GameNames.SecondSpawnY, ct);
+            var beforeClearShot = await p1.ViewAsync(_ => true, ct);
+            var expectedHp = beforeClearShot.Players.Single(player => player.PlayerId == p2.PlayerId).Hp
+                - GameNames.ShotDamage;
+            var clearShot = await HitAsync(
+                p1,
+                p2,
+                await NextSequenceAsync(p1, ct),
+                expectedHp,
+                ct
+            );
+            Require(
+                clearShot.Players.Single(player => player.PlayerId == p2.PlayerId).Hp == expectedHp,
+                "Wall behind target blocked a clear shot."
             );
         }
         else if (scenario == "reconnect")
@@ -156,7 +237,44 @@ internal static class Scenarios
                 "Reconnect changed Actor identity."
             );
             SameState(before, restored);
+            Require(
+                restored.Phase == GameNames.PlayingPhase
+                    && restored.Winner is null
+                    && restored.Players.Single(player => player.PlayerId == again.PlayerId).LastSequence == 1,
+                "Reconnect did not restore the active phase and last sequence."
+            );
+            await MoveByAsync(again, p1, again, 0, 0, 2, ct);
             await HitAsync(p1, again, 3, GameNames.InitialHp - GameNames.ShotDamage * 2, ct);
+            await HitAsync(p1, again, 4, GameNames.InitialHp - GameNames.ShotDamage * 3, ct);
+            var finished = await HitAsync(p1, again, 5, 0, ct);
+            Require(
+                finished.Phase == GameNames.FinishedPhase && finished.Winner == p1.PlayerId,
+                "Room view did not restore the finished phase and winner."
+            );
+            await using var finishedReconnect = await GameClient.ConnectAsync(
+                run.Outcome,
+                endpoint,
+                again.PlayerId,
+                ct
+            );
+            await finishedReconnect.QueueAsync(ct);
+            var restoredFinished = await finishedReconnect.WaitAsync<RoomView>(
+                view => view.Phase == GameNames.FinishedPhase,
+                ct
+            );
+            var finishedIdentity = await finishedReconnect.SessionAsync(ct);
+            Require(
+                finishedIdentity.SessionId != identity.SessionId
+                    && finishedIdentity.ActorId == identity.ActorId
+                    && finishedIdentity.ObjectGeneration == identity.ObjectGeneration,
+                "Finished reconnect changed Actor identity."
+            );
+            SameState(finished, restoredFinished);
+            Require(
+                restoredFinished.Winner == p1.PlayerId
+                    && restoredFinished.Players.Single(player => player.PlayerId == again.PlayerId).LastSequence == 2,
+                "Finished reconnect did not restore the winner and last sequence."
+            );
         }
         else
         {
@@ -181,6 +299,152 @@ internal static class Scenarios
         Require(!p1.Disconnected && p1.Connector.IsConnected, "First player disconnected.");
         if (scenario != "reconnect")
             Require(!p2.Disconnected && p2.Connector.IsConnected, "Second player disconnected.");
+    }
+
+    private static async Task InputAsync(GameClient p1, GameClient p2, CancellationToken ct)
+    {
+        var beforeMove = await p1.ViewAsync(_ => true, ct);
+        var firstSpawn = beforeMove.Players.Single(
+            player => player.X == GameNames.FirstSpawnX && player.Y == GameNames.FirstSpawnY
+        );
+        var mover = firstSpawn.PlayerId == p1.PlayerId ? p1 : p2;
+        var other = mover.PlayerId == p1.PlayerId ? p2 : p1;
+        var source = beforeMove.Players.Single(player => player.PlayerId == mover.PlayerId);
+        var target = beforeMove.Players.Single(player => player.PlayerId == other.PlayerId);
+        var moveDelta = target.X >= source.X ? GameNames.MaxStep : -GameNames.MaxStep;
+        var moveSequence = source.LastSequence + 1;
+        var acceptedMove = new MoveRequest(moveDelta, 0, moveSequence);
+        var rejectedMove = new MoveRequest(moveDelta, 0, moveSequence + 1);
+        var acceptedMoveTask = mover.WaitAsync<MoveResult>(result => result.Sequence == moveSequence, ct);
+        var rejectedMoveTask = mover.WaitAsync<ActionRejected>(_ => true, ct);
+        await mover.SendAsync(acceptedMove, ct);
+        await mover.SendAsync(rejectedMove, ct);
+        var moveResult = await acceptedMoveTask;
+        var moveRejection = await rejectedMoveTask;
+        Require(moveResult.Sequence == moveSequence, "Expected accepted movement before movement-budget rejection.");
+        Require(
+            moveRejection.Reason == Rejection.MoveBudget && moveRejection.RetryAfterMs > 0,
+            "Expected movement-budget rejection."
+        );
+        var afterMoveA = await mover.ViewAsync(_ => true, ct);
+        var afterMovePlayer = afterMoveA.Players.Single(player => player.PlayerId == mover.PlayerId);
+        Require(
+            afterMovePlayer.X == moveResult.X
+                && afterMovePlayer.Y == moveResult.Y
+                && afterMovePlayer.LastSequence == moveSequence
+                && afterMoveA.Players.Single(player => player.PlayerId == other.PlayerId).Hp == target.Hp,
+            "Movement-budget rejection changed the accepted movement state."
+        );
+        await Task.Delay(TimeSpan.FromMilliseconds(moveRejection.RetryAfterMs), ct);
+        await mover.SendAsync(rejectedMove, ct);
+        var retriedMove = await mover.WaitAsync<MoveResult>(result => result.Sequence == moveSequence + 1, ct);
+        Require(retriedMove.Sequence == rejectedMove.Sequence, "Server movement retry delay was insufficient.");
+
+        var beforeShot = await p1.ViewAsync(_ => true, ct);
+        var shotSequence = beforeShot.Players.Single(player => player.PlayerId == p1.PlayerId).LastSequence + 1;
+        var shotTarget = beforeShot.Players.Single(player => player.PlayerId == p2.PlayerId);
+        var acceptedShot = new ShootRequest(p2.PlayerId, shotSequence);
+        var rejectedShot = new ShootRequest(p2.PlayerId, shotSequence + 1);
+        var acceptedShotTask = p1.WaitAsync<ShotResult>(result => result.Sequence == shotSequence, ct);
+        var rejectedShotTask = p1.WaitAsync<ActionRejected>(_ => true, ct);
+        await p1.SendAsync(acceptedShot, ct);
+        await p1.SendAsync(rejectedShot, ct);
+        var shotResult = await acceptedShotTask;
+        var fireRejection = await rejectedShotTask;
+        Require(shotResult.Sequence == shotSequence, "Expected accepted shot before fire-too-soon rejection.");
+        Require(
+            fireRejection.Reason == Rejection.FireTooSoon && fireRejection.RetryAfterMs > 0,
+            "Expected fire-interval rejection."
+        );
+        var afterShotA = await p1.ViewAsync(_ => true, ct);
+        Require(
+            afterShotA.Players.Single(player => player.PlayerId == p2.PlayerId).Hp
+                == shotTarget.Hp - GameNames.ShotDamage
+                && afterShotA.Players.Single(player => player.PlayerId == p1.PlayerId).LastSequence == shotSequence,
+            "Fire-too-soon rejection changed the accepted shot state."
+        );
+        await Task.Delay(TimeSpan.FromMilliseconds(fireRejection.RetryAfterMs), ct);
+        await p1.SendAsync(rejectedShot, ct);
+        var retriedShot = await p1.WaitAsync<ShotResult>(result => result.Sequence == shotSequence + 1, ct);
+        Require(retriedShot.Sequence == rejectedShot.Sequence, "Server fire retry delay was insufficient.");
+        var afterShotB = await p1.ViewAsync(_ => true, ct);
+        Require(
+            afterShotB.Players.Single(player => player.PlayerId == p2.PlayerId).Hp
+                == shotTarget.Hp - 2 * GameNames.ShotDamage,
+            "Retried shot did not update the target state."
+        );
+
+        var staleSequence = (await mover.ViewAsync(_ => true, ct))
+            .Players.Single(player => player.PlayerId == mover.PlayerId)
+            .LastSequence;
+        await RejectActionAsync(
+            mover,
+            new MoveRequest(0, 0, staleSequence),
+            Rejection.StaleSequence,
+            ct
+        );
+        await RejectActionAsync(
+            mover,
+            new MoveRequest(0, 0, moveSequence),
+            Rejection.StaleSequence,
+            ct
+        );
+        var stepTooLargeSequence = staleSequence + 1;
+        await RejectActionAsync(
+            mover,
+            new MoveRequest(GameNames.MaxStep + 0.01, 0, stepTooLargeSequence),
+            Rejection.StepTooLarge,
+            ct
+        );
+        await RejectActionAsync(
+            mover,
+            new MoveRequest(0, 0, GameNames.MaxSafeInteger + 1),
+            Rejection.IntegerOutOfRange,
+            ct
+        );
+
+        var outsideStart = await WalkAsync(p1, p2, mover, 1, LaneY, ct);
+        var outsideSequence = outsideStart
+            .Players.Single(player => player.PlayerId == mover.PlayerId)
+            .LastSequence + 1;
+        await RejectActionAsync(
+            mover,
+            new MoveRequest(-GameNames.MaxStep, 0, outsideSequence),
+            Rejection.OutsideMap,
+            ct
+        );
+
+        var beforeWall = await WalkAsync(
+            p1,
+            p2,
+            mover,
+            GameNames.WallX - GameNames.MaxStep,
+            WallCenterY,
+            ct
+        );
+        var wallSequence = beforeWall
+            .Players.Single(player => player.PlayerId == mover.PlayerId)
+            .LastSequence + 1;
+        await RejectActionAsync(
+            mover,
+            new MoveRequest(GameNames.MaxStep, 0, wallSequence),
+            Rejection.MoveBlockedByWall,
+            ct
+        );
+
+        await MoveByAsync(p1, p2, mover, -0.1, 0, GameNames.MaxSafeInteger, ct);
+        var atMaximum = await mover.ViewAsync(_ => true, ct);
+        Require(
+            atMaximum.Players.Single(player => player.PlayerId == mover.PlayerId).LastSequence
+                == GameNames.MaxSafeInteger,
+            "Maximum safe sequence was not accepted."
+        );
+        await RejectActionAsync(
+            mover,
+            new MoveRequest(0, 0, GameNames.MaxSafeInteger + 1),
+            Rejection.IntegerOutOfRange,
+            ct
+        );
     }
 
     private static async Task NewMatchAsync(
@@ -216,22 +480,99 @@ internal static class Scenarios
         Require(room.NodeId == replacementId, "Replacement node did not accept the new room.");
     }
 
-    private static async Task MoveAsync(
+    private static async Task<long> NextSequenceAsync(GameClient player, CancellationToken ct)
+    {
+        var view = await player.ViewAsync(_ => true, ct);
+        return view.Players.Single(candidate => candidate.PlayerId == player.PlayerId).LastSequence + 1;
+    }
+
+    private static async Task<RoomView> WalkAsync(
         GameClient a,
         GameClient b,
         GameClient mover,
-        double x,
-        double y,
-        long sequence,
+        double destinationX,
+        double destinationY,
         CancellationToken ct
     )
     {
-        bool Moved(RoomView v) =>
-            v.Players.Any(p => p.PlayerId == mover.PlayerId && p.X == x && p.Y == y);
-        var va = a.WaitAsync<RoomView>(Moved, ct);
-        var vb = b.WaitAsync<RoomView>(Moved, ct);
-        await mover.SendAsync(new MoveRequest(x, y, sequence), ct);
-        Require(Equal(await va, await vb), "Movement views differ.");
+        var view = await mover.ViewAsync(_ => true, ct);
+        var player = view.Players.Single(candidate => candidate.PlayerId == mover.PlayerId);
+        while (player.X != destinationX || player.Y != destinationY)
+        {
+            var remainingX = destinationX - player.X;
+            var dx = remainingX == 0
+                ? 0
+                : Math.Clamp(remainingX, -GameNames.MaxStep, GameNames.MaxStep);
+            var remainingY = destinationY - player.Y;
+            var dy = dx != 0 || remainingY == 0
+                ? 0
+                : Math.Clamp(remainingY, -GameNames.MaxStep, GameNames.MaxStep);
+            view = await MoveByAsync(
+                a,
+                b,
+                mover,
+                dx,
+                dy,
+                player.LastSequence + 1,
+                ct,
+                view
+            );
+            player = view.Players.Single(candidate => candidate.PlayerId == mover.PlayerId);
+        }
+        return view;
+    }
+
+    private static async Task<RoomView> MoveByAsync(
+        GameClient a,
+        GameClient b,
+        GameClient mover,
+        double dx,
+        double dy,
+        long sequence,
+        CancellationToken ct,
+        RoomView? priorView = null,
+        bool requireMoveBudget = false
+    )
+    {
+        var before = priorView ?? await mover.ViewAsync(_ => true, ct);
+        var player = before.Players.Single(view => view.PlayerId == mover.PlayerId);
+        var targetX = player.X + dx;
+        var targetY = player.Y + dy;
+        bool Moved(RoomView view) => view.Players.Any(
+            candidate =>
+                candidate.PlayerId == mover.PlayerId
+                && candidate.X == targetX
+                && candidate.Y == targetY
+                && candidate.LastSequence == sequence
+        );
+        var request = new MoveRequest(dx, dy, sequence);
+        var moveBudgetRejected = false;
+        while (true)
+        {
+            mover.ClearActionResults();
+            var resultTask = mover.WaitForActionResultAsync(Moved, ct);
+            await mover.SendAsync(request, ct);
+            var result = await resultTask;
+            if (result is ActionRejected rejection)
+            {
+                Require(!moveBudgetRejected, "Move was rejected again after RetryAfterMs.");
+                moveBudgetRejected = true;
+                Require(
+                    rejection.Reason == Rejection.MoveBudget && rejection.RetryAfterMs > 0,
+                    $"Unexpected movement rejection: {rejection.Reason}."
+                );
+                SameState(before, await mover.ViewAsync(_ => true, ct));
+                await Task.Delay(TimeSpan.FromMilliseconds(rejection.RetryAfterMs), ct);
+                continue;
+            }
+
+            var moverView = (RoomView)result;
+            var other = mover.PlayerId == a.PlayerId ? b : a;
+            var otherView = await other.WaitAsync<RoomView>(Moved, ct);
+            Require(Equal(moverView, otherView), "Movement views differ.");
+            Require(!requireMoveBudget || moveBudgetRejected, "Move budget rejection was not observed.");
+            return moverView;
+        }
     }
 
     private static async Task<RoomView> HitAsync(
@@ -239,16 +580,42 @@ internal static class Scenarios
         GameClient b,
         long sequence,
         int hp,
-        CancellationToken ct
+        CancellationToken ct,
+        bool allowFireRetry = true
     )
     {
-        bool Hit(RoomView v) => v.Players.Any(p => p.PlayerId == b.PlayerId && p.Hp == hp);
-        var va = a.WaitAsync<RoomView>(Hit, ct);
-        var vb = b.WaitAsync<RoomView>(Hit, ct);
-        await a.SendAsync(new ShootRequest(b.PlayerId, sequence), ct);
-        var view = await va;
-        Require(Equal(view, await vb), "Hit views differ.");
-        return view;
+        bool Hit(RoomView view) =>
+            view.Players.Any(player => player.PlayerId == b.PlayerId && player.Hp == hp)
+            && (hp != 0 || (view.Phase == GameNames.FinishedPhase && view.Winner == a.PlayerId));
+        var before = await a.ViewAsync(_ => true, ct);
+        var request = new ShootRequest(b.PlayerId, sequence);
+        var fireTooSoonRejected = false;
+        while (true)
+        {
+            a.ClearActionResults();
+            var resultTask = a.WaitForActionResultAsync(Hit, ct);
+            await a.SendAsync(request, ct);
+            var result = await resultTask;
+            if (result is ActionRejected rejection)
+            {
+                Require(!fireTooSoonRejected, "Shot was rejected again after RetryAfterMs.");
+                fireTooSoonRejected = true;
+                Require(
+                    rejection.Reason == Rejection.FireTooSoon && rejection.RetryAfterMs > 0,
+                    $"Unexpected shot rejection: {rejection.Reason}."
+                );
+                SameState(before, await a.ViewAsync(_ => true, ct));
+                Require(allowFireRetry, "Shot was rejected after the explicit RetryAfterMs wait.");
+                await Task.Delay(TimeSpan.FromMilliseconds(rejection.RetryAfterMs), ct);
+                before = await a.ViewAsync(_ => true, ct);
+                continue;
+            }
+
+            var view = (RoomView)result;
+            var peerView = await b.WaitAsync<RoomView>(Hit, ct);
+            Require(Equal(view, peerView), "Hit views differ.");
+            return view;
+        }
     }
 
     private static async Task RejectShotAsync(
@@ -260,10 +627,33 @@ internal static class Scenarios
         string? target = null
     )
     {
-        var before = await b.ViewAsync(_ => true, ct);
-        var rejected = a.WaitAsync<ShotRejected>(_ => true, ct);
-        await a.SendAsync(new ShootRequest(target ?? b.PlayerId, sequence), ct);
-        Require((await rejected).Reason == reason, "Wrong shot rejection.");
-        SameState(before, await b.ViewAsync(_ => true, ct));
+        await RejectActionAsync(
+            a,
+            new ShootRequest(target ?? b.PlayerId, sequence),
+            reason,
+            ct
+        );
+    }
+
+    private static async Task<ActionRejected> RejectActionAsync<T>(
+        GameClient player,
+        T request,
+        string reason,
+        CancellationToken ct
+    )
+    {
+        var before = await player.ViewAsync(_ => true, ct);
+        player.ClearActionResults();
+        var rejected = player.WaitAsync<ActionRejected>(_ => true, ct);
+        await player.SendAsync(request, ct);
+        var response = await rejected;
+        Require(response.Reason == reason, $"Expected {reason}; received {response.Reason}.");
+        var timeLimited = reason is Rejection.MoveBudget or Rejection.FireTooSoon;
+        Require(
+            timeLimited ? response.RetryAfterMs > 0 : response.RetryAfterMs == 0,
+            $"Unexpected RetryAfterMs for {reason}."
+        );
+        SameState(before, await player.ViewAsync(_ => true, ct));
+        return response;
     }
 }

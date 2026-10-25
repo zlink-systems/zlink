@@ -15,7 +15,7 @@
 ```powershell
 pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
 pwsh -NoProfile -File ./run-e2e.ps1
-pwsh -NoProfile -File ./run-e2e.ps1 -Scenario hit,reconnect,update
+pwsh -NoProfile -File ./run-e2e.ps1 -Scenario hit,wall,input,reconnect,update
 pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
 ```
 
@@ -24,7 +24,7 @@ Bash도 같은 절차를 실행한다.
 ```bash
 ./run-e2e.sh --build-only
 ./run-e2e.sh
-./run-e2e.sh --scenario hit,reconnect,update
+./run-e2e.sh --scenario hit,wall,input,reconnect,update
 ./run-e2e.sh --check-structure
 ```
 
@@ -44,11 +44,11 @@ Bash도 같은 절차를 실행한다.
 
 ### 공통 계약과 hosting
 
-`server/shared/src/main/java/MyGame/`는 process 간 메시지와 게임 상수(`QueueRequest`, `RoomAssignment`, `RoomAdmission`, `MatchFound`, `RoomViewRequest`, `RoomView`, `PlayerView`, `MoveRequest`, `ShootRequest`, `ShotRejected`, `MatchEnded`, `ActionRejected`, `SessionInfoRequest`, `SessionInfo`)를, `NodeConfig.java`는 process 설정을, `Names.java`는 mesh와 타입 이름을 정의한다. `Hosting.java`는 hosting과 진단을 설정하고 stdin 제어 loop(`drain`, `shutdown`)를 실행하며, `Control.java`는 제어 marker와 기한을, `Stores.java`는 Redis Location·Relocation store를 만든다. `Rules.java`는 matchmaking 정원, 사거리, 벽과 거부 사유를 담는다. 여러 process가 사용하는 계약은 여기에 추가하며, 전투 사실은 `RoomState`에 유지하여 서로 다른 process가 같은 값을 따로 변경하지 않게 한다.
+`server/shared/src/main/java/MyGame/`는 process 간 메시지와 게임 상수(`QueueRequest`, `RoomAssignment`, `RoomAdmission`, `MatchFound`, `RoomViewRequest`, `RoomView`, `PlayerView`, `MoveRequest`, `ShootRequest`, `MatchEnded`, `ActionRejected`, `SessionInfoRequest`, `SessionInfo`)를, `NodeConfig.java`는 process 설정을, `Names.java`는 mesh와 타입 이름을 정의한다. `Hosting.java`는 hosting과 진단을 설정하고 stdin 제어 loop(`drain`, `shutdown`)를 실행하며, `Control.java`는 제어 marker와 기한을, `Stores.java`는 Redis Location·Relocation store를 만든다. `Rules.java`는 matchmaking 정원, 이동·사격 제한, 벽과 거부 사유를 담는다. 여러 process가 사용하는 계약은 여기에 추가하며, 전투 사실은 `RoomState`에 유지하여 서로 다른 process가 같은 값을 따로 변경하지 않게 한다.
 
 ### E2E client
 
-`e2e/src/main/java/MyGame/e2e/Client.java`는 공개 connector로 게임에 접속하고 `e2e/src/main/java/MyGame/e2e/Scenarios.java`는 client가 관찰할 결과를 검사한다. `e2e/src/main/java/MyGame/e2e/Nodes.java`는 node를 시작하고 로그를 보존하며 실행별 자원을 정리한다. `e2e/src/main/java/MyGame/e2e/Program.java`는 시나리오 실패 다음에 정리 실패를 보고하며 둘 중 하나라도 있으면 종료 코드는 1이다. `e2e/src/main/java/MyGame/e2e/Structure.java`는 시작 전에 실제 파일을 검사한다. 시나리오 순서 `hit,reconnect,update`를 유지한다. 새 게임 동작은 client가 받은 결과로 검증하며, `server/match/src/test/java/MyGame/match/DomainTest.java`의 domain test가 domain 경계와 application 상태 직렬화를 검사하며 `./gradlew --no-daemon :server:match:test`로 실행한다. formatter 설정은 포함되어 있지 않다.
+`e2e/src/main/java/MyGame/e2e/Client.java`는 공개 connector로 게임에 접속하고 `e2e/src/main/java/MyGame/e2e/Scenarios.java`는 client가 관찰할 결과를 검사한다. `e2e/src/main/java/MyGame/e2e/Nodes.java`는 node를 시작하고 로그를 보존하며 실행별 자원을 정리한다. `e2e/src/main/java/MyGame/e2e/Program.java`는 시나리오 실패 다음에 정리 실패를 보고하며 둘 중 하나라도 있으면 종료 코드는 1이다. `e2e/src/main/java/MyGame/e2e/Structure.java`는 시작 전에 실제 파일을 검사한다. 시나리오 순서 `hit,wall,input,reconnect,update`를 유지한다. 새 게임 동작은 client가 받은 결과로 검증하며, `server/match/src/test/java/MyGame/match/DomainTest.java`의 domain test가 domain 경계, 시간 제한, relocation snapshot과 application 상태 직렬화를 검사하며 `./gradlew --no-daemon :server:match:test`로 실행한다. formatter 설정은 포함되어 있지 않다.
 
 ## 프로젝트의 ZLink 개념
 
@@ -84,42 +84,19 @@ Actor가 소속 Spot을 바꾸는 동작은 membership 변경이다. 대상 Spot
 2. 새 Actor는 Entry Spot에서 시작한다. `EnterQueue.queue`가 identity를 확인하고 `joinSpot(Names.MATCHMAKING_ID, request).defer()`를 요청한다. `Matchmaking.onActorJoin`이 요청을 대기열에 넣고 `onJoinedActor`가 대기열의 짝짓기를 시도한다.
 3. 같은 mode의 두 플레이어가 기다리면 `Matchmaking.match`가 `room-<sequence>`를 배정하고 `getOrCreate(roomId, Names.ROOM)`으로 Room을 만든 뒤 두 Actor에게 플레이어 ID로 `RoomAssignment`를 보낸다.
 4. `Actions.assign`이 각 Actor에 대해 `joinSpot(roomId, ...).defer()`를 요청한다. `Room.onActorJoin`이 `RoomState.admit`으로 플레이어를 수락하고 `Room.onJoinedActor`가 `MatchFound`를 보내고 `RoomView`를 broadcast한다.
-5. `MoveRequest`와 `ShootRequest`는 `Actions`를 거쳐 `Room.move`와 `Room.shoot`에 전달된다. `RoomState`가 사거리·벽·피해를 판정하고 `Room`이 `RoomView`와, 체력이 0이 되면 `MatchEnded`를 broadcast한다. `Actions.forward`가 수신 Actor의 binding된 Session으로 전달한다.
+5. `MoveRequest`와 `ShootRequest`는 `Actions`를 거쳐 `Room.move`와 `Room.shoot`에 전달된다. `RoomState`가 이동·사거리·벽·쿨다운·순번·피해를 판정한다. 모든 거부는 `ActionRejected`로 응답하고, 시간 제한이 있는 거부만 양수 `retryAfterMs`를 포함한다. 수락된 행동은 `RoomView`를 broadcast하며, 체력이 0이 되면 `MatchEnded`도 보낸다. `Actions.forward`가 수신 Actor의 binding된 Session으로 전달한다.
 6. node를 교체할 때 `Hosting.run`의 `drain` 제어가 relocation을 요청한다. Framework는 `MatchmakingTransfer`·`RoomTransfer`·`PlayerTransfer`의 `capture`로 게임 상태를 받아 다른 node에서 `restore`한다.
 
-## 이 샘플을 보며 개발하기
+## 프로젝트 개발
 
-이 샘플은 기능들이 함께 동작하는 방식을 보여 주므로, 자기 게임으로 바꾸지 않고 읽고 실행하는 용도로 쓴다. 자기 프로젝트는 Java 기본 셋업에서 시작한다. [ZLink Start](https://zlink.systems/start)의 Initializer에서 Java를 고르거나 ZLink 저장소의 `framework/languages/java/templates/java/starter/my-game`을 사용한다. 그다음 필요한 기능을 이 샘플에서 하나씩 옮긴다. 구조 선택은 기본 셋업의 `AGENTS.md`가 설명하며, 이 절은 `match-entry-lobby`만 다룬다. 이 샘플은 바꾸지 않고 프로젝트 옆에 참고용으로 둔다.
+이 템플릿의 domain을 확장해 action game server를 구현한다. 실행·배포 절차는 [README](README.md)가, 초기 topology와 시나리오 순서는 [zlink.structure.json](zlink.structure.json)이 관리한다.
 
-### 샘플 먼저 실행하기
+### Domain 확장 위치
 
-옮기기 전에 [개발 명령](#개발-명령)으로 빌드와 e2e를 한 번 실행해 받은 샘플이 동작하는지 확인하고 동작을 본다. 이 결과가 이후 비교의 기준이 된다. 실패하면 먼저 [README](README.md)의 Known issues와 대조한다.
-
-### 옮길 기능
-
-기능 이름은 기본 셋업 `AGENTS.md`의 기능 표와 같다. 경로는 이 디렉터리를 기준으로 한다. 기본 셋업에는 Session node 하나와 `connect` 시나리오만 있으므로, 마지막 열은 기능마다 기본 셋업에서 함께 늘릴 것이다.
-
-| 기능 | 이 샘플의 파일 | 옮길 것 | 기본 셋업에서 함께 늘릴 것 |
-| --- | --- | --- | --- |
-| Typed 메시지 | `server/shared/src/main/java/MyGame/QueueRequest.java` | 사용할 기능의 record: `QueueRequest`, `RoomAssignment`, `RoomAdmission`, `MatchFound`, `RoomViewRequest`, `RoomView`, `PlayerView`, `MoveRequest`, `ShootRequest`, `ShotRejected`, `MatchEnded`, `ActionRejected`. `SessionInfoRequest`·`SessionInfo`는 client가 필요로 할 때만 옮긴다 | `Names.java`의 등록 이름. `Control.java`와 `Json.java`는 기본 셋업에 이미 있다 |
-| Actor | `server/match/src/main/java/MyGame/match/Player.java`, `server/match/src/main/java/MyGame/match/PlayerFactory.java` | 참가 완료 처리를 가진 `Player`와 그 factory | 새 `server/match/` module(`build.gradle.kts`, `Program.java`)과 `settings.gradle.kts`의 `include("server:match")`, `server/config/` 파일, `Program.java`의 Actor factory 등록. `zlink.structure.json`의 node 선언과 `Structure.java`의 검사. 기본 셋업의 `Nodes.java`는 Session 역할만 시작하므로 새 역할을 위해 `Nodes.java`와 `Roles.java`를 확장한다 |
-| Spot | `server/match/src/main/java/MyGame/match/Matchmaking.java`, `server/match/src/main/java/MyGame/match/MatchmakingState.java`, `server/match/src/main/java/MyGame/match/Room.java`, `server/match/src/main/java/MyGame/match/RoomState.java` | 대기열과 짝짓기 규칙을 가진 `Matchmaking`, 전투 규칙을 가진 `Room`. 규칙은 state class에 둔다 | `Program.java`의 Spot factory 등록. `zlink.structure.json`의 `spots`·`nodes` 선언과 이를 등록과 비교하는 `Structure.java` 검사(기본 셋업은 Spot을 선언하지 않는다) |
-| Entry·첫 입장 | `server/match/src/main/java/MyGame/match/Entry.java`, `server/match/src/main/java/MyGame/match/EnterQueue.java`, `reconnect` in `server/match/src/main/java/MyGame/match/Actions.java` | `EnterQueue.queue`, 첫 입장 경로, `reconnect`의 identity 확인과 view 재전송 | Entry Spot 등록과 `entry` 선언. 첫 입장 시나리오와 재접속 뒤 상태를 비교하는 `reconnect` 시나리오 |
-| Session binding | `server/session/src/main/java/MyGame/session/GameSession.java` | 첫 packet 검사, 그다음 Actor 조회·생성, binding과 원래 typed packet relay | `EnterQueue.queue`와 같은 첫 packet 타입. 기본 셋업의 `PlayerSession.java`에 옮긴다 |
-| Host relocation | `server/match/src/main/java/MyGame/match/MatchmakingTransfer.java`, `server/match/src/main/java/MyGame/match/RoomTransfer.java`, `server/match/src/main/java/MyGame/match/PlayerTransfer.java`, `server/match/src/main/java/MyGame/match/Transfer.java`, `server/shared/src/main/java/MyGame/Hosting.java` | 대기열과 Room 상태의 `capture`·`restore`를 가진 snapshot adapter | `preserveStateWith(...)` 등록. 서버 교체 뒤에도 연결·상태가 유지되고 대체 node가 새 작업을 받는지 판정하는 `update` 시나리오 |
-| 동적 던전 | `match()` in `server/match/src/main/java/MyGame/match/Matchmaking.java`, `onActorJoin` in `server/match/src/main/java/MyGame/match/Room.java`, `Actions.assign` in `server/match/src/main/java/MyGame/match/Actions.java` | 동적 User Spot 생성 형태(여기서는 Room): `getOrCreate`, 배정 push, 지연 join과 admission | `zlink.structure.json`의 동적 `room` Spot과 고정 `matchmaking` Spot. 첫 Match node가 `READY` 전에 `matchmaking`을 만들도록 하는 `bootstrap` 설정 |
-
-### 옮기는 순서와 규칙
-
-기능은 표의 행 하나씩 옮기고, 하나를 옮길 때마다 빌드, 구조 검사, 관련 e2e 시나리오를 실행한다. 시나리오 ID는 `server/shared/src/main/java/MyGame/Scenario.java`의 `Scenario` enum, `e2e/src/main/java/MyGame/e2e/Scenarios.java`의 분기, `zlink.structure.json`의 `run.scenarios`, `run.commands`의 시나리오 선택 예시에 함께 추가한다. 판정은 실제로 받은 응답과 이벤트로 하고, 고정 대기나 기한 확대로 통과시키지 않는다.
-
-메시지 contract부터 옮긴다. `server/shared/src/main/java/MyGame/`에 typed record를 먼저 정의한 뒤, 컴파일 오류가 나는 handler를 하나씩 새 메시지로 옮긴다. 첫 입장 packet을 바꾸면 `GameSession`의 첫 packet 검사, `EnterQueue`, `Actions.reconnect`가 같은 타입을 받도록 함께 고친다.
-
-상태는 그 상태를 결정하는 객체에 둔다. 전투 사실은 `RoomState`, 대기열과 방 번호는 `MatchmakingState`에 두고 `Player`는 application 상태를 두지 않는다. 상태 필드를 바꿀 때는 해당 state class와 `RoomTransfer`·`MatchmakingTransfer`의 `capture`·`restore`를 함께 고친다. 빠뜨린 필드는 relocation 뒤 사라지고, `update` 시나리오가 그 손실을 잡는다.
-
-역할 이름을 이 샘플과 다르게 정하려면 타입 이름, `Names.java`, `server/config/`, module·package 이름과 `settings.gradle.kts`, `zlink.structure.json`을 한 번에 바꾼다. 이름 변경은 기능을 옮기는 변경과 나눠서 진행하면 실패 원인을 찾기 쉽다.
-
-옮긴 뒤 `update`가 실패하면 snapshot에 빠진 상태가 있는지 먼저 확인한다. 그다음 [디버깅](#디버깅)의 message flow로 첫 실패 단계를 찾는다.
+1. 게임 상태와 판정은 `server/match/src/main/java/MyGame/match/RoomState.java`에 둔다. 상태를 바꾸면 `RoomTransfer.java`의 relocation snapshot도 갱신한다.
+2. process 간 packet contract와 게임 상수는 `server/shared/src/main/java/MyGame/`에 추가한다.
+3. client packet allow list는 `server/session/src/main/java/MyGame/session/GameSession.java`에서 client가 보낼 수 있는 `QueueRequest`, `RoomViewRequest`, `MoveRequest`, `ShootRequest`, `SessionInfoRequest`로 제한한다. Session은 내부 packet을 `packet-not-allowed`로 거부한다.
+4. 시나리오 동작은 `e2e/src/main/java/MyGame/e2e/Scenarios.java`에, client 전송·관찰 helper는 `Client.java`에 둔다. README 시나리오 표, `zlink.structure.json`의 `run.scenarios`, 시나리오 선택 명령을 함께 갱신한다.
 
 ## 개발 시 주의점
 

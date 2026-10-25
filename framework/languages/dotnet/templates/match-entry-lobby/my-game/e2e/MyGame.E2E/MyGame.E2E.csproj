@@ -2,6 +2,7 @@
   <PropertyGroup><OutputType>Exe</OutputType></PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../../server/MyGame.Shared/MyGame.Shared.csproj" />
+    <ProjectReference Include="../../server/MyGame.Match/MyGame.Match.csproj" />
     <PackageReference Include="Zlink.Stream.Connector" />
   </ItemGroup>
 </Project>

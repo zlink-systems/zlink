@@ -11,6 +11,8 @@ namespace MyGame::E2E
 enum class Scenario
 {
     hit,
+    wall,
+    input,
     reconnect,
     update
 };
@@ -20,6 +22,8 @@ struct ScenarioDefinition
     const char *name;
 };
 inline constexpr std::array scenario_order{ScenarioDefinition{Scenario::hit, "hit"},
+                                           ScenarioDefinition{Scenario::wall, "wall"},
+                                           ScenarioDefinition{Scenario::input, "input"},
                                            ScenarioDefinition{Scenario::reconnect, "reconnect"},
                                            ScenarioDefinition{Scenario::update, "update"}};
 inline std::vector<std::string> scenario_names ()

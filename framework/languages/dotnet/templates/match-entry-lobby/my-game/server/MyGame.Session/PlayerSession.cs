@@ -28,6 +28,12 @@ public sealed class PlayerSession(IZLinkSessionContext context, IZLinkActorManag
         CancellationToken cancellationToken
     )
     {
+        if (!IsClientPacket(dispatch.PacketName))
+        {
+            await Context.Client.Send(new ActionRejected(Rejection.PacketNotAllowed)).Async();
+            return;
+        }
+
         if (Context.Actors.Bound.Count == 0)
         {
             if (dispatch.PacketName != nameof(QueueRequest))
@@ -64,4 +70,11 @@ public sealed class PlayerSession(IZLinkSessionContext context, IZLinkActorManag
         // Relaying the original packet establishes the authoritative actor's session route.
         await Context.Actors.Bound.Single().RelayAsync(payload);
     }
+
+    private static bool IsClientPacket(string packetName) =>
+        packetName is nameof(QueueRequest)
+            or nameof(RoomViewRequest)
+            or nameof(MoveRequest)
+            or nameof(ShootRequest)
+            or nameof(SessionInfoRequest);
 }

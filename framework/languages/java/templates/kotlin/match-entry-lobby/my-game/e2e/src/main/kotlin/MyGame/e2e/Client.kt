@@ -43,8 +43,9 @@ class Client(endpoint: String, val playerId: String) {
         listOf(
                 RoomView::class.java,
                 MatchFound::class.java,
+                MoveResult::class.java,
+                ShotResult::class.java,
                 MatchEnded::class.java,
-                ShotRejected::class.java,
                 ActionRejected::class.java,
             )
             .forEach { type ->
@@ -87,6 +88,11 @@ class Client(endpoint: String, val playerId: String) {
 
     suspend fun send(message: Any) = connector.kotlin().send(message).await()
 
+    fun clearActionResults() {
+        pending.removeAll { it is ActionRejected }
+        queue.removeIf { it is ActionRejected }
+    }
+
     suspend fun close() {
         connector.kotlin().close().await()
         registrations.forEach { it.close() }
@@ -108,6 +114,22 @@ class Client(endpoint: String, val playerId: String) {
                 queue.poll((expires - System.nanoTime()).coerceAtLeast(0), TimeUnit.NANOSECONDS)
                     ?: error("Timed out waiting for ${type.simpleName}, pending=$pending")
             if (event is Throwable) throw event
+            pending.add(event)
+        }
+    }
+
+    fun nextActionResult(predicate: (RoomView) -> Boolean): Any {
+        val expires = System.nanoTime() + TimeUnit.SECONDS.toNanos(MESSAGE_SECONDS)
+        fun matches(message: Any) =
+            message is ActionRejected || (message is RoomView && predicate(message))
+        while (true) {
+            val index = pending.indexOfFirst(::matches)
+            if (index >= 0) return pending.removeAt(index)
+            val event =
+                queue.poll((expires - System.nanoTime()).coerceAtLeast(0), TimeUnit.NANOSECONDS)
+                    ?: error("Timed out waiting for an action result, pending=$pending")
+            if (event is Throwable) throw event
+            if (matches(event)) return event
             pending.add(event)
         }
     }

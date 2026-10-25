@@ -15,7 +15,7 @@ Default builds and e2e run the nodes and the runner in Docker without a host too
 ```powershell
 pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
 pwsh -NoProfile -File ./run-e2e.ps1
-pwsh -NoProfile -File ./run-e2e.ps1 -Scenario hit,reconnect,update
+pwsh -NoProfile -File ./run-e2e.ps1 -Scenario hit,wall,input,reconnect,update
 pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
 ```
 
@@ -24,7 +24,7 @@ Bash provides the same workflow:
 ```bash
 ./run-e2e.sh --build-only
 ./run-e2e.sh
-./run-e2e.sh --scenario hit,reconnect,update
+./run-e2e.sh --scenario hit,wall,input,reconnect,update
 ./run-e2e.sh --check-structure
 ```
 
@@ -84,47 +84,25 @@ Requests in the example game follow this path. Reading the code along this path 
 2. A new Actor starts in the Entry Spot `Entry`. `Entry::queue` checks the identity and requests `join_spot(...).defer()` for the `Matchmaking` Spot. `NodeControl` creates that Spot at startup on the node whose `BootstrapMatchmaking` setting is true (`matchA`).
 3. `Matchmaking::on_actor_join` enqueues the request, and `Matchmaking::match` pairs two players of the same mode through `MatchmakingState::pair`. It allocates a Room name, calls `get_or_create` for the Room, and sends `RoomAssignment` to both players through the Actor client.
 4. `Matchmaking::assignment` runs for each player and requests `join_spot(...).defer()` to the Room with `RoomAdmission`. `Room::on_actor_join` admits the player, `Room::on_actor_joined` pushes `MatchFound`, and the Room broadcasts `RoomView` to both players; `Room::deliver_view` and the other `Room::deliver_*` handlers forward pushes to the bound Session.
-5. `MoveRequest` and `ShootRequest` are handled by `Room::move` and `Room::shoot`, which apply the `RoomState` rules, answer a rejection with `ActionRejected` or `ShotRejected`, and broadcast the new `RoomView` and, when a player wins, `MatchEnded`.
+5. `MoveRequest` and `ShootRequest` are handled by `Room::move` and `Room::shoot`, which apply the `RoomState` rules. Every rejection uses `ActionRejected`; time-limited rejections include the server-computed `RetryAfterMs`. Accepted actions broadcast the new `RoomView` and, when a player wins, `MatchEnded`.
 6. To replace a node, `drain` in `NodeControl` requests relocation. Framework takes the game state from `capture` in `MatchmakingRelocation` and `RoomRelocation` (both `StateRelocation` aliases in `server/match/spots.hpp`) and calls `restore` on another node.
 
-## Developing from this sample
+## Project development
 
-This sample shows how the features work together, so read and run it rather than turning it into your game. Start your own project from the C++ starter: choose C++ in the Initializer at [ZLink Start](https://zlink.systems/start), or use `framework/languages/cpp/templates/starter/my-game` in the ZLink repository. Then transfer the features you need from this sample one at a time. The starter's `AGENTS.md` owns the choice between structures; this section covers only `match-entry-lobby`. Keep this sample unchanged next to your project as a reference.
+Extend this template's domain to build an action game server. The [README](README.md) owns execution and deployment details; [zlink.structure.json](zlink.structure.json) describes the initial topology and ordered scenarios.
 
-### Run the sample first
+### Run the template first
 
-Before transferring anything, run the build and e2e once with the [Development commands](#development-commands) to confirm the downloaded sample works and to see its behavior. This result is the baseline for comparison. If it fails, compare the failure with Known issues in the [README](README.md) first.
+Before changing the domain, run the build and e2e commands in this guide. Confirm the template's current behavior and compare any failure with Known issues in the [README](README.md).
 
-### Features to transfer
+### Domain extension points
 
-Feature names match the feature table in the starter's `AGENTS.md`, except Matchmaking queue and Dynamic room, which only this structure has. Paths are relative to this directory. The starter has one Session node and the `connect` scenario only, so the last column lists what grows in the starter with each feature.
+1. Put game state and its decisions in the responsible type under `server/match/domain.hpp`. `RoomState` owns movement, shooting, and winner decisions; `MatchmakingState` owns the waiting queues. Update the JSON snapshot in the same domain type when its state changes. Relocation restores movement and fire limits from remaining milliseconds against the destination node's monotonic clock.
+2. Add packet contracts and game constants to `server/shared/contracts.hpp`.
+3. Keep the client packet allow list in `server/session/session.hpp` limited to `QueueRequest`, `RoomViewRequest`, `MoveRequest`, `ShootRequest`, and `SessionInfoRequest`. The Session rejects internal packets with `packet-not-allowed`.
+4. Add scenario behavior to `e2e/scenarios.hpp` and client send/observation helpers to `e2e/client.hpp`. Keep scenario order and selection examples in `e2e/structure.hpp`, `e2e/main.cpp`, `zlink.structure.json`, and the README in sync. Add domain rule checks to `e2e/domain_test.cpp` and run them with `ctest --test-dir build --output-on-failure`.
 
-| Feature | File in this sample | What to transfer | What to grow in the starter alongside |
-| --- | --- | --- | --- |
-| Typed messages | `server/shared/contracts.hpp` | The structs of the features you adopt: `QueueRequest`, `RoomAssignment`, `RoomAdmission`, `MatchFound`, `MoveRequest`, `ShootRequest`, `RoomViewRequest`, `RoomView`, `PlayerView`, `ShotRejected`, `ActionRejected`, `MatchEnded`; `SessionInfoRequest` and `SessionInfo` only if your client needs them | The `Names`, `Game`, and `Rejection` constants that the messages refer to |
-| Actor | `Player`, `PlayerFactory` in `server/match/player.hpp` | The minimal player Actor: `Player::on_join_completed` reports a rejected join, and `PlayerFactory` creates it | A new `server/match/` role with its `main.cpp`, `server/config/` files, and an entry in the `CMakeLists.txt` role list; the Actor factory registration in `main.cpp`; the `nodes` declaration in `zlink.structure.json` and the structure check in `e2e/structure.hpp` |
-| Spot | `Room` in `server/match/spots.hpp`, `RoomState` in `server/match/domain.hpp` | `Room` with the admission rule, movement and shooting rules, and winner calculation in `RoomState`, and the `deliver_*` forwarders | The Spot factory registration in `main.cpp` with `RoomCapacity`; the `spots` declarations in `zlink.structure.json` that the structure check compares with the node configuration |
-| Matchmaking queue | `Matchmaking` in `server/match/spots.hpp`, `MatchmakingState` in `server/match/domain.hpp` | The singleton queue Spot: `MatchmakingState` (`enqueue`, `pair`, `allocate_room`, `remove`) and the `Matchmaking` handlers `queue` and `assignment` | The `BootstrapMatchmaking` setting and its creation in `NodeControl` (`server/shared/hosting.hpp`); the `matchmaking` Spot in `zlink.structure.json` |
-| Entry and first admission | `Entry` in `server/match/player.hpp`, `Room::queue` in `server/match/spots.hpp` | `Entry::queue` (identity check, deferred join to `Matchmaking`) and `Room::queue`, which answers the first packet replayed on reconnect with the current `RoomView` | The `add_entry_spot` registration and the `entry` declarations; a first-entry scenario (`hit`) and a `reconnect` scenario that compares state after reconnection |
-| Dynamic room | `Matchmaking::match`, `Matchmaking::assignment` in `server/match/spots.hpp` | The dynamic User Spot creation pattern: allocate a name, `get_or_create` the `Room`, send `RoomAssignment`, and join with `RoomAdmission` | The `Room` factory registration with `RoomCapacity`; the `room` Spot declaration in `zlink.structure.json` |
-| Session binding | `server/session/session.hpp` | The first-packet check, then find or create the Actor, `bind_or_get`, and relay the original typed packet | The same first-packet type as `Entry::queue`; transfer it into the starter's `server/session/session.hpp` |
-| Host relocation | `PlayerRelocation` in `server/match/player.hpp`, `MatchmakingRelocation` and `RoomRelocation` in `server/match/spots.hpp`, `NodeControl` in `server/shared/hosting.hpp` | The `StateRelocation` adapters with `capture` and `restore`, `PlayerRelocation` for the stateless Actor, and the `drain` and `shutdown` controls | The `preserve_state_with` registrations in `main.cpp`; the `update` scenario, which checks that connections and state survive a server replacement and that the replacement node accepts new work |
-
-`drain` and `shutdown` are transferred together with `NodeControl`. A replacement node sets `BootstrapMatchmaking` to false, because the singleton Matchmaking Spot already exists.
-
-### Transfer order and rules
-
-Transfer one row at a time and run the build, the structure check, and the related e2e scenario after each. Add a scenario ID to the `Scenario` enum and `scenario_order` in `e2e/structure.hpp`, to the `scenario` function in `e2e/scenarios.hpp` and the usage message in `e2e/main.cpp`, to `run.scenarios`, and to the selection examples in `run.commands` of `zlink.structure.json` together. Judge results by the replies and events actually received; do not make tests pass with fixed sleeps or longer deadlines.
-
-Start with the message contracts. Define the packet structs in `server/shared/contracts.hpp` first, each with a `packet_name` and its JSON conversion, then move each handler that fails to compile to the new messages. When you change the first-entry packet, update the first-packet check in `Session::on_packet` in `server/session/session.hpp` and `Entry::queue` and `Room::queue` to receive the same type.
-
-Keep each piece of state in the object that decides it. Queues belong in `Matchmaking` through `MatchmakingState`; HP, position, and sequence belong in `Room` through `RoomState`. `Player` holds no application state. When you change state fields, update that object's state struct with its JSON conversion and the `capture` and `restore` of its relocation adapter together. A missing field disappears after relocation, and the `update` scenario detects the loss.
-
-Reconnection replays the first packet: a new Session sends `QueueRequest` again, `Session::on_packet` binds the existing Actor, and the Spot that now holds the Actor answers it (`Room::queue` returns the current view, `Matchmaking::queue` queues the player again). Keep a handler for the first-packet type in every Spot the Actor can be in.
-
-To name roles such as Match, Matchmaking, or Room differently from this sample, change the type names, `Names`, `server/config/`, `zlink.structure.json`, and the role list in `CMakeLists.txt` at once. Do the renaming in its own change, separate from transferring a feature, so failures are easier to trace.
-
-If `update` fails after a transfer, first check whether the snapshot is missing any state, then use the message flow in [Debugging](#debugging) to find the first failing step.
+Every rejected action uses `ActionRejected`. A rejected action preserves positions, HP, winner, and last accepted sequence. Time-limited rejections include the server-computed `RetryAfterMs`; scenarios wait for that value before resending the same request.
 
 ## Development considerations
 

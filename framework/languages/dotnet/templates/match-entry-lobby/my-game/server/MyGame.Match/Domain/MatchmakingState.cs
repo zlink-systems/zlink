@@ -26,7 +26,17 @@ public sealed class MatchmakingState
         return [];
     }
 
-    public string AllocateRoom() => GameNames.RoomPrefix + checked(++RoomSequence);
+    public bool TryAllocateRoom(out string roomId)
+    {
+        if (RoomSequence >= GameNames.MaxSafeInteger)
+        {
+            roomId = string.Empty;
+            return false;
+        }
+
+        roomId = GameNames.RoomPrefix + ++RoomSequence;
+        return true;
+    }
 
     public void Remove(QueueRequest[] pair)
     {

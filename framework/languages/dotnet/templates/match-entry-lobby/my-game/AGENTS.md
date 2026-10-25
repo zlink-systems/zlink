@@ -15,8 +15,9 @@ Default builds and e2e run nodes and the client in Docker without a host SDK. Ru
 ```powershell
 pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
 pwsh -NoProfile -File ./run-e2e.ps1
-pwsh -NoProfile -File ./run-e2e.ps1 -Scenario hit,reconnect,update
+pwsh -NoProfile -File ./run-e2e.ps1 -Scenario hit,wall,input,reconnect,update
 pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
+pwsh -NoProfile -File ./run-e2e.ps1 -CheckDomain
 ```
 
 Bash provides the same workflow:
@@ -24,8 +25,9 @@ Bash provides the same workflow:
 ```bash
 ./run-e2e.sh --build-only
 ./run-e2e.sh
-./run-e2e.sh --scenario hit,reconnect,update
+./run-e2e.sh --scenario hit,wall,input,reconnect,update
 ./run-e2e.sh --check-structure
+./run-e2e.sh --check-domain
 ```
 
 For host process debugging, install the .NET 8 SDK and add `--local` or `-Local`. Add `--no-build` or `-NoBuild` only with an existing local Debug build. Keep canonical scenario order and assertions; compare first failures with Known issues in the README.
@@ -84,46 +86,24 @@ Requests in the example game follow this path. Reading the code along this path 
 2. A new Actor starts in the Entry Spot `MatchEntry`. `EnterQueueHandler` checks the identity and requests `JoinSpot(...).Defer()` into the fixed `matchmaking` Spot.
 3. `MatchmakingSpot` enqueues the player in `MatchmakingState`. When `Pair()` finds two players of the same mode, it calls `GetOrCreate` for a new Room and sends `RoomAssignment` to each player by player ID.
 4. `AssignmentHandler` runs on the assigned Actor and requests the join into the Room. `RoomSpot.OnActorJoinAsync` admits the player through `RoomState.Admit`, and `OnJoinedActorAsync` sends `MatchFound` and then broadcasts `RoomView`; the delivery handlers forward both through each Actor's bound Session.
-5. `MoveRequest` and `ShootRequest` reach `MoveHandler` and `ShootHandler`, which call the rules in `RoomState`. A rejection goes through the requester's bound Session as `ActionRejected` or `ShotRejected`; an accepted action broadcasts `RoomView`, and a lethal shot ends with `MatchEnded`.
+5. `MoveRequest` and `ShootRequest` reach `MoveHandler` and `ShootHandler`, which call the rules in `RoomState`. Every rejection uses `ActionRejected`; only time-limited rejections include a positive `RetryAfterMs`. Accepted actions broadcast `RoomView`, and a lethal shot ends with `MatchEnded`.
 6. When the same player reconnects, `PlayerSession` binds the existing Actor to the new Session, and `RoomReconnectHandler` checks the identity and resends the current `RoomView`.
 7. To replace a node, `drain` in `NodeControl` requests relocation. Framework takes the state from `MatchmakingRelocation` and `RoomRelocation` and restores it on another node.
 
-## Developing from this sample
+## Project development
 
-This sample shows how the features work together, so read and run it rather than turning it into your game. Start your own project from the .NET starter: choose .NET in the Initializer at [ZLink Start](https://zlink.systems/start), or use `framework/languages/dotnet/templates/starter/my-game` in the ZLink repository. Then transfer the features you need from this sample one at a time. The starter's `AGENTS.md` owns the choice between structures; this section covers only `match-entry-lobby`. Keep this sample unchanged next to your project as a reference.
+Extend this template's domain to build an action game server. The [README](README.md) owns execution and deployment details; [zlink.structure.json](zlink.structure.json) describes the initial topology and ordered scenarios.
 
-### Run the sample first
+### Run the template first
 
-Before transferring anything, run the build and e2e once with the [Development commands](#development-commands) to confirm the downloaded sample works and to see its behavior. This result is the baseline for comparison. If it fails, compare the failure with Known issues in the [README](README.md) first.
+Before changing the domain, run the build and e2e commands in this guide. Confirm the template's current behavior and compare any failure with Known issues in the [README](README.md).
 
-### Features to transfer
+### Domain extension points
 
-Feature names match the feature table in the starter's `AGENTS.md`. Paths are relative to this directory. The starter has one Session node and the `connect` scenario only, so the last column lists what grows in the starter with each feature.
-
-| Feature | File in this sample | What to transfer | What to grow in the starter alongside |
-| --- | --- | --- | --- |
-| Typed messages | `server/MyGame.Shared/Contracts.cs` | The records of the features you adopt: `QueueRequest`, `RoomAdmission`, `RoomAssignment`, `MatchFound`, `MoveRequest`, `ShootRequest`, `RoomViewRequest`, `PlayerView`, `RoomView`, `ShotRejected`, `ActionRejected`, `MatchEnded`; `SessionInfoRequest` and `SessionInfo` only if your client needs them | The registration names in `GameNames` and the `Rejection` reasons; the starter already has `NodeReady` and `NodeProtocol` |
-| Spot | `server/MyGame.Match/Infrastructure/ZLink/MatchmakingSpot.cs`, `server/MyGame.Match/Infrastructure/ZLink/RoomSpot.cs`, `server/MyGame.Match/Domain/MatchmakingState.cs`, `server/MyGame.Match/Domain/RoomState.cs` | `MatchmakingSpot` with the queue, pairing, and Room creation through `GetOrCreate`; `RoomSpot` with admission, movement, shooting, and the winner; the Domain rules behind both | A new `server/MyGame.Match/` project, its `server/config/` files, and the `AddSpotFactory<MatchmakingSpot>` and `AddSpotFactory<RoomSpot>` registrations in `Program.cs`; the `BootstrapMatchmaking` setting and the bootstrap callback that creates the fixed Spot; the `spots` and `nodes` declarations in `zlink.structure.json` and the structure check that compares them with the registrations |
-| Actor | `server/MyGame.Match/Infrastructure/ZLink/PlayerActor.cs` | `PlayerActor` with the join-completion rejection reply, and `PlayerFactory` | The `AddActorFactory<PlayerActor, PlayerFactory>` registration in `Program.cs` |
-| Entry and first admission | `server/MyGame.Match/Infrastructure/ZLink/MatchEntry.cs`, `RoomReconnectHandler` and `AssignmentHandler` in `server/MyGame.Match/Infrastructure/ZLink/` | `EnterQueueHandler` and the deferred join into the matchmaking Spot, the assignment-driven join into the Room, and the identity check and state resend of `RoomReconnectHandler` | The Entry Spot registration and its `entry` declarations; the `hit` scenario for the first match and a `reconnect` scenario that compares state after reconnection |
-| Session binding | `server/MyGame.Session/PlayerSession.cs` | The first-packet check, then find or create the Actor, bind, and relay the original typed packet | The same first-packet type as `EnterQueueHandler`; transfer it into the starter's `PlayerSession.cs` |
-| Host relocation | `MatchmakingRelocation` in `MatchmakingSpot.cs`, `RoomRelocation` in `RoomSpot.cs`, `PlayerRelocation` in `PlayerActor.cs`, `server/MyGame.Shared/NodeControl.cs` | The relocation adapters with `Capture` and `Restore`, and the `drain` and `shutdown` controls | The `PreserveStateWith` relocation registrations; the `update` scenario, which checks that connections and state survive a server replacement and that the replacement node accepts new work |
-
-### Transfer order and rules
-
-Transfer one row at a time and run the build, the structure check, and the related e2e scenario after each. Add a scenario ID to the list in `e2e/MyGame.E2E/Scenarios.cs`, to `run.scenarios`, and to the selection examples in `run.commands` of `zlink.structure.json` together. Judge results by the replies and events actually received; do not make tests pass with fixed sleeps or longer deadlines.
-
-Start with the message contracts. Define the typed records in `Contracts.cs` first, then move each handler that fails to compile to the new messages. When you change the first-entry packet, update the first-packet check in `PlayerSession`, `EnterQueueHandler`, and `RoomReconnectHandler` to receive the same type.
-
-Keep each piece of state in the object that decides it. The waiting queue belongs in `MatchmakingState` behind `MatchmakingSpot`, and positions, HP, the action sequence, and the winner belong in `RoomState` behind `RoomSpot`. When you change state fields, update the relocation adapter of that Spot, which serializes the whole Domain state object; a state kept outside it disappears after relocation, and the `update` scenario detects the loss.
-
-Keep the checks of the `hit` scenario when changing the combat rules: a hit lowers HP by the shot damage, a wall, an excessive range, and a missing target reject the shot without damage, and lethal damage declares the winner. The action sequence must increase across Move and Shoot requests.
-
-The fixed `matchmaking` Spot is created by the host whose `BootstrapMatchmaking` setting is true. Start that host and wait for its `READY` line before starting another Match host, as the README Deployment sequence describes.
-
-To name roles such as Match or Room differently from this sample, change the type names, `GameNames`, `server/config/`, and `zlink.structure.json` at once. Do the renaming in its own change, separate from transferring a feature, so failures are easier to trace.
-
-If `update` fails after a transfer, first check whether a Domain state object is missing a field, then use the message flow in [Debugging](#debugging) to find the first failing step.
+1. Put game state and its decisions in the responsible type under `server/MyGame.Match/Domain/`. `RoomState.cs` owns movement, shooting, and winner decisions. Update the relocation snapshot in `server/MyGame.Match/Infrastructure/ZLink/RoomSpot.cs` when that state changes.
+2. Add shared packet contracts and game constants to `server/MyGame.Shared/Contracts.cs`.
+3. Keep the client packet allow list in `server/MyGame.Session/PlayerSession.cs` limited to packets clients may send: `QueueRequest`, `RoomViewRequest`, `MoveRequest`, `ShootRequest`, and `SessionInfoRequest`. The Session rejects internal packets with `packet-not-allowed`.
+4. Add scenario behavior to `e2e/MyGame.E2E/Scenarios.cs` and client send/observation helpers to `GameClient.cs`. Keep the README scenario table, `zlink.structure.json` `run.scenarios`, and its scenario selection commands in sync.
 
 ## Development considerations
 

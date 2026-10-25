@@ -38,6 +38,17 @@ fun main(args: Array<String>) = runNode(Program::class.java, args)
 
 class GameSession(private val session: ZLinkSessionContext, private val actors: ZLinkActorManager) :
     ZLinkSuspendingSession() {
+    private companion object {
+        val CLIENT_PACKET_ALLOWLIST =
+            setOf(
+                QueueRequest::class.java.simpleName,
+                RoomViewRequest::class.java.simpleName,
+                MoveRequest::class.java.simpleName,
+                ShootRequest::class.java.simpleName,
+                SessionInfoRequest::class.java.simpleName,
+            )
+    }
+
     override fun context() = session
 
     override suspend fun onDispatchSuspending(
@@ -78,7 +89,15 @@ class GameSession(private val session: ZLinkSessionContext, private val actors: 
                     }
                 session.actors().bindOrGet(actor).await().kotlin().relay(dispatch, payload).await()
             }
-            else -> session.actors().bound().single().kotlin().relay(dispatch, payload).await()
+            else ->
+                if (dispatch.packetName() in CLIENT_PACKET_ALLOWLIST)
+                    session.actors().bound().single().kotlin().relay(dispatch, payload).await()
+                else
+                    session
+                        .client()
+                        .kotlin()
+                        .send(ActionRejected(Rejection.PACKET_NOT_ALLOWED))
+                        .await()
         }
     }
 }

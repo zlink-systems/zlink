@@ -35,6 +35,9 @@ public final class GameSession implements ZLinkSession {
 
     public CompletionStage<Void> onDispatch(
             ZLinkSessionDispatchContext dispatch, ZLinkMessage payload) {
+        if (!isClientPacket(dispatch.packetName()))
+            return context.client().send(new ActionRejected(Rules.PACKET_NOT_ALLOWED)).submit();
+
         if (dispatch.packetName().equals(SessionInfoRequest.class.getSimpleName())) {
             var actor = bound();
             return context.client()
@@ -74,6 +77,14 @@ public final class GameSession implements ZLinkSession {
                             });
         }
         return bound().relay(dispatch, payload);
+    }
+
+    private static boolean isClientPacket(String packetName) {
+        return packetName.equals(QueueRequest.class.getSimpleName())
+                || packetName.equals(RoomViewRequest.class.getSimpleName())
+                || packetName.equals(MoveRequest.class.getSimpleName())
+                || packetName.equals(ShootRequest.class.getSimpleName())
+                || packetName.equals(SessionInfoRequest.class.getSimpleName());
     }
 
     private ZLinkSessionActor bound() {

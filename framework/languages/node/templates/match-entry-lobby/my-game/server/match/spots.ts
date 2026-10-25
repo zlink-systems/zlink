@@ -12,16 +12,17 @@ import {
   type ZLinkSpotRelocationAdapter
 } from '@zlink-systems/framework';
 import { NODE_CONFIG, type NodeConfig } from '../shared/config';
-import { Names } from '../shared/constants';
+import { Names, Rejection } from '../shared/constants';
 import {
   ActionRejected,
   MatchEnded,
   MatchFound,
+  MoveResult,
   QueueRequest,
   RoomAdmission,
   RoomAssignment,
   RoomView,
-  ShotRejected,
+  ShotResult,
   type MoveRequest,
   type ShootRequest
 } from '../shared/messages';
@@ -60,6 +61,13 @@ export class Matchmaking implements ZLinkSpot<Player> {
     const pair = this.state.pair();
     if (!pair.length) return;
     const roomId = this.state.allocateRoom();
+    if (!roomId) {
+      for (const player of pair)
+        await this.actors
+          .sendToActor(player.playerId, new ActionRejected(Rejection.integerOutOfRange))
+          .submit();
+      return;
+    }
     const created = await this.spots.getOrCreate(roomId, Names.room).inMesh(Names.mesh).submit();
     if (created.state === ZLinkSpotCreateState.Rejected) throw new Error('Room creation rejected');
     this.state.remove(pair);
@@ -98,7 +106,13 @@ export class Room implements ZLinkSpot<Player> {
   }
   async onLeaveActor(_actor: Player): Promise<void> {}
   private view(): RoomView {
-    return new RoomView(String(this.context.spotId), this.config.id, this.state.view());
+    return new RoomView(
+      String(this.context.spotId),
+      this.config.id,
+      this.state.Phase,
+      this.state.Winner,
+      this.state.view()
+    );
   }
   async sendView(actor: Player): Promise<void> {
     await actor.context.boundSession.send(this.view()).submit();
@@ -108,24 +122,34 @@ export class Room implements ZLinkSpot<Player> {
       await this.actors.sendToActor(player.playerId, message).submit();
   }
   async move(actor: Player, request: MoveRequest): Promise<void> {
-    const reason = this.state.move(actor.context.actorId, request);
-    if (reason) await actor.context.boundSession.send(new ActionRejected(reason)).submit();
-    else await this.broadcast(this.view());
-  }
-  async shoot(actor: Player, request: ShootRequest): Promise<void> {
-    const reason = this.state.shoot(actor.context.actorId, request);
-    if (reason) {
-      await actor.context.boundSession.send(new ShotRejected(reason)).submit();
+    const rejection = this.state.move(actor.context.actorId, request);
+    if (rejection) {
+      await actor.context.boundSession.send(rejection).submit();
       return;
     }
+    const player = this.state.players.find((candidate) => candidate.playerId === actor.context.actorId);
+    if (!player) throw new Error('Unknown room player');
+    await actor.context.boundSession.send(new MoveResult(player.x, player.y, request.sequence)).submit();
     await this.broadcast(this.view());
-    if (this.state.winner !== null) await this.broadcast(new MatchEnded(this.state.winner));
+  }
+  async shoot(actor: Player, request: ShootRequest): Promise<void> {
+    const rejection = this.state.shoot(actor.context.actorId, request);
+    if (rejection) {
+      await actor.context.boundSession.send(rejection).submit();
+      return;
+    }
+    await actor.context.boundSession
+      .send(new ShotResult('hit', request.targetId, request.sequence))
+      .submit();
+    await this.broadcast(this.view());
+    if (this.state.Winner !== null) await this.broadcast(new MatchEnded(this.state.Winner));
   }
   capture(): Uint8Array {
-    return Buffer.from(JSON.stringify(this.state));
+    return this.state.capture();
   }
   restore(payload: Uint8Array): void {
-    this.state = Object.assign(new RoomState(), JSON.parse(Buffer.from(payload).toString('utf8')));
+    this.state = new RoomState();
+    this.state.restore(payload);
   }
 }
 @Injectable()

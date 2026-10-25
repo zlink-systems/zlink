@@ -11,7 +11,8 @@ public final class RoomTransfer implements ZLinkSpotRelocationAdapter<Room> {
     public CompletionStage<byte[]> capture(Room entity, ZLinkRelocationCancellation cancellation) {
         Transfer.check(cancellation);
         try {
-            return CompletableFuture.completedFuture(Json.MAPPER.writeValueAsBytes(entity.state));
+            return CompletableFuture.completedFuture(
+                    Json.MAPPER.writeValueAsBytes(entity.state.snapshot()));
         } catch (Exception error) {
             return CompletableFuture.failedFuture(error);
         }
@@ -21,7 +22,8 @@ public final class RoomTransfer implements ZLinkSpotRelocationAdapter<Room> {
             Room entity, byte[] state, ZLinkRelocationCancellation cancellation) {
         Transfer.check(cancellation);
         try {
-            entity.state = Json.MAPPER.readValue(state, RoomState.class);
+            var snapshot = Json.MAPPER.readValue(state, RoomState.Snapshot.class);
+            entity.state.restore(snapshot);
             return CompletableFuture.completedFuture(null);
         } catch (Exception error) {
             return CompletableFuture.failedFuture(error);

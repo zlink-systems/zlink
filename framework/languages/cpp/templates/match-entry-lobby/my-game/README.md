@@ -42,7 +42,7 @@ Bash:
 
 ```sh
 ./run-e2e.sh
-./run-e2e.sh --scenario hit,reconnect,update
+./run-e2e.sh --scenario hit,wall,input,reconnect,update
 ./run-e2e.sh --check-structure
 ```
 
@@ -50,7 +50,7 @@ PowerShell:
 
 ```powershell
 pwsh -NoProfile -File ./run-e2e.ps1
-pwsh -NoProfile -File ./run-e2e.ps1 -Scenario hit,reconnect,update
+pwsh -NoProfile -File ./run-e2e.ps1 -Scenario hit,wall,input,reconnect,update
 pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
 ```
 
@@ -62,11 +62,13 @@ The scripts and runner check `zlink.structure.json`, start a uniquely named Redi
 
 | Scenario | Assertions |
 | --- | --- |
-| `hit` | Two players share a Room. An unobstructed shot removes 25 HP; wall, range and missing-target rejections leave state unchanged. Four hits produce the winner for both players. |
-| `reconnect` | A new connection rebinds the same Actor generation and Room, preserving HP and position; another shot succeeds. |
+| `hit` | Two players receive the defined spawn positions. An unobstructed shot removes 25 HP; internal-packet, wall, range and missing-target rejections preserve the Room view. Four hits produce the same winner for both players. |
+| `wall` | The closed wall segment blocks movement and shots at its endpoints without changing the Room view. A clear shot succeeds when the wall lies behind the target. |
+| `input` | Movement respects `MaxStep`, map bounds and the speed budget; shots respect `FireIntervalMs`; stale and out-of-range sequences are rejected. Rejections preserve Room state, and retries wait only for the server-provided `RetryAfterMs`. |
+| `reconnect` | A new connection rebinds the same Actor generation and Room, preserving HP, position, phase, winner and sequence; active and finished Rooms remain observable after reconnect. |
 | `update` | Drain the current Room host through `RELOCATION_REQUESTED`, `RELOCATED`, `SAFE_TO_SHUTDOWN`; preserve both Sessions and Room state; stop and replace the host; the replacement accepts a new Room. |
 
-The wire contracts are in `server/shared/contracts.hpp`. This template answers `SessionInfoRequest` with a typed `SessionInfo` push; Framework 0.30.2 adds a typed Session reply API (#1785), and the template has not switched to it. `RoomViewRequest` asks the authoritative Room for its current view. Requests and pushes use the Framework default typed JSON serializer. The runner never retries a failed scenario.
+The wire contracts are in `server/shared/contracts.hpp`. This template answers `SessionInfoRequest` with a typed `SessionInfo` push; Framework 0.30.2 adds a typed Session reply API (#1785), and the template has not switched to it. `RoomViewRequest` asks the authoritative Room for its current view. Requests and pushes use the Framework default typed JSON serializer. The Framework message model carries only finite JSON numbers, so nonfinite input reaches only the domain checks. The runner never retries a failed scenario.
 
 Each scenario uses isolated Redis key prefixes and node containers, with Room capacity set to one per match host. After relocation fills the surviving host, only the replacement has capacity for a new Room. Deployment capacity is configured independently.
 
@@ -107,7 +109,7 @@ Wait for the bootstrap owner to report `READY` before starting another match hos
 3. Keep Room capacity available on surviving hosts. Write `drain` to the selected Match host's stdin. Wait for all three relocation markers, then write `shutdown` and require `STOPPED` and exit code zero.
 4. Start its replacement with the same node settings and `BootstrapMatchmaking` disabled. Require `READY` before accepting new work. Framework owns Actor placement, membership, binding and relocation; application adapters preserve only queue and combat state.
 
-Room coordinates have no arena bounds. Shots have range 80 and deal 25 damage against 100 initial HP. The closed vertical wall at x=50, y=0–100 blocks intersecting shots, including endpoints. A player's strictly increasing sequence is shared by movement and shooting; rejected attempts with a new sequence consume that sequence. A disconnected player's Room state remains until application lifecycle policy removes it.
+The map spans x=[0,100] and y=[0,100]. Players spawn at (40,10) and (60,10). A move carries a delta with length at most 2; accepted movement is limited to 10 units per second, with a full 2-unit budget on the first move. The closed vertical wall at x=50, y=[20,60] blocks movement and intersecting shots, including endpoint contact. Shots have range 80, deal 25 damage against 100 initial HP, and require 250 ms between accepted shots. A player's sequence is shared by movement and shooting; rejected actions do not consume it. The maximum accepted sequence is 9007199254740991. Room snapshots store remaining movement and fire times in milliseconds, then restore them against the destination node's monotonic clock. A disconnected player's Room state remains until application lifecycle policy removes it.
 
 ## 한국어 실행 안내
 

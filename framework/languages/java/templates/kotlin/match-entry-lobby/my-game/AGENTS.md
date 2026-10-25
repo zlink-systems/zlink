@@ -15,7 +15,7 @@ Default builds and e2e run nodes and the client in Docker without a host JDK. Ru
 ```powershell
 pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
 pwsh -NoProfile -File ./run-e2e.ps1
-pwsh -NoProfile -File ./run-e2e.ps1 -Scenario hit,reconnect,update
+pwsh -NoProfile -File ./run-e2e.ps1 -Scenario hit,wall,input,reconnect,update
 pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
 ```
 
@@ -24,7 +24,7 @@ Bash provides the same workflow:
 ```bash
 ./run-e2e.sh --build-only
 ./run-e2e.sh
-./run-e2e.sh --scenario hit,reconnect,update
+./run-e2e.sh --scenario hit,wall,input,reconnect,update
 ./run-e2e.sh --check-structure
 ```
 
@@ -34,7 +34,7 @@ For host process debugging, install JDK 25 and add `--local` or `-Local`. Add `-
 
 ### Session gateway
 
-`server/session/src/main/kotlin/MyGame/session/Program.kt` registers the STREAM node and the RouteMesh client, and `GameSession` (in the same file) handles incoming packets. A Session is a communication object for a connection; Framework provides binding to associate it with a player state object. `GameSession` answers `SessionInfoRequest` from the binding, finds or creates the Player Actor and binds it when it receives `QueueRequest`, and relays every other packet to the bound Actor. Add authentication before binding and retain the typed packet relay so Framework can identify the connection for replies to that player.
+`server/session/src/main/kotlin/MyGame/session/Program.kt` registers the STREAM node and the RouteMesh client, and `GameSession` (in the same file) handles incoming packets. A Session is a communication object for a connection; Framework provides binding to associate it with a player state object. `GameSession` answers `SessionInfoRequest` from the binding, finds or creates the Player Actor and binds it when it receives `QueueRequest`, relays only allowed client packets to the bound Actor, and rejects internal packets. Add authentication before binding and retain the typed packet relay so Framework can identify the connection for replies to that player.
 
 ### Matchmaking and rooms
 
@@ -84,17 +84,24 @@ Requests in the example game follow this path. Reading the code along this path 
 2. A new Actor starts in the Entry Spot `Entry`. `EnterQueue.queue` checks the identity and requests `joinSpot(Names.MATCHMAKING_ID, request).defer()`.
 3. `Matchmaking.onActorJoinSuspending` enqueues the request. After the join, `Matchmaking.match` pairs two players of the same mode, creates the next room with `getOrCreate`, and sends each player a `RoomAssignment`.
 4. `Actions.assign` receives the assignment and requests `joinSpot(roomId, RoomAdmission).defer()`. `Room.onActorJoinSuspending` admits the player; `Room.onJoinedActorSuspending` sends `MatchFound` and broadcasts `RoomView`.
-5. In the room, `move` and `shoot` requests reach `Room`, which applies the `RoomState` rules. Rejections (`ActionRejected`, `ShotRejected`) go through the requester's bound Session; accepted actions broadcast `RoomView`, and the winner is announced with `MatchEnded`. The receiving `Actions` handlers (`viewPush`, `foundPush`, `endedPush`) forward pushes through each Actor's bound Session.
+5. In the room, `move` and `shoot` requests reach `Room`, which applies the `RoomState` rules. Every rejection uses `ActionRejected`; only time-limited rejections include a positive `RetryAfterMs`. Accepted actions broadcast `RoomView`, and the winner is announced with `MatchEnded`. The receiving `Actions` handlers (`viewPush`, `foundPush`, `endedPush`) forward pushes through each Actor's bound Session.
 6. A reconnecting client sends `QueueRequest` on a new Session. The same Actor is bound, and `Actions.reconnect` resends the room view after checking the identity.
 7. To replace a node, `drain` in `runNode` requests relocation. Framework takes the application state from `capture` in `MatchmakingTransfer`, `RoomTransfer`, and `PlayerTransfer` and calls `restore` on another node.
 
-## Developing from this sample
+## Extending this action domain
 
-This sample shows how the features work together, so read and run it rather than turning it into your game. Start your own project from the Kotlin starter: choose Kotlin in the Initializer at [ZLink Start](https://zlink.systems/start), or use `framework/languages/java/templates/kotlin/starter/my-game` in the ZLink repository. Then transfer the features you need from this sample one at a time. The starter's `AGENTS.md` owns the choice between structures; this section covers only `match-entry-lobby`. Keep this sample unchanged next to your project as a reference.
+Extend this template's action domain to build an action game server. The domain extension procedure below identifies where to keep game state and decisions, add packet contracts, limit client packets in the Session allow list, and add scenarios.
 
 ### Run the sample first
 
-Before transferring anything, run the build and e2e once with the [Development commands](#development-commands) to confirm the downloaded sample works and to see its behavior. This result is the baseline for comparison. If it fails, compare the failure with Known issues in the [README](README.md) first.
+Before extending the domain, run the build and e2e once with the [Development commands](#development-commands) to confirm the downloaded template works and to see its behavior. This result is the baseline for comparison. If it fails, compare the failure with Known issues in the [README](README.md) first.
+
+### Domain extension procedure
+
+1. Keep game state and its decisions in the responsible type under `server/match/src/main/kotlin/MyGame/match/`. `Domain.kt` owns movement, shooting, and winner decisions; update the same state's relocation `capture` and `restore` when its state changes.
+2. Add shared packet contracts and game constants to `server/shared/src/main/kotlin/MyGame/Contracts.kt`.
+3. Keep the client packet allow list in `server/session/src/main/kotlin/MyGame/session/Program.kt` limited to `QueueRequest`, `RoomViewRequest`, `MoveRequest`, `ShootRequest`, and `SessionInfoRequest`. The Session rejects internal packets with `packet-not-allowed`.
+4. Add scenario behavior to `e2e/src/main/kotlin/MyGame/e2e/Scenarios.kt` and client send/observation helpers to `Client.kt`. Keep the README scenario table, `zlink.structure.json` `run.scenarios`, and its scenario selection commands in sync.
 
 ### Features to transfer
 
@@ -102,7 +109,7 @@ Feature names match the feature table in the starter's `AGENTS.md`. Paths are re
 
 | Feature | File in this sample | What to transfer | What to grow in the starter alongside |
 | --- | --- | --- | --- |
-| Typed messages | `server/shared/src/main/kotlin/MyGame/Contracts.kt` | The classes of the features you adopt: `QueueRequest`, `RoomAdmission`, `RoomAssignment`, `MatchFound`, `MoveRequest`, `ShootRequest`, `RoomViewRequest`, `PlayerView`, `RoomView`, `ShotRejected`, `ActionRejected`, `MatchEnded`; `SessionInfoRequest` and `SessionInfo` only if your client needs them | The mesh and type names in `Names`, `Game`, and `Rejection`; the starter already has the node `Roles` and the control strings |
+| Typed messages | `server/shared/src/main/kotlin/MyGame/Contracts.kt` | The classes of the features you adopt: `QueueRequest`, `RoomAdmission`, `RoomAssignment`, `MatchFound`, `MoveRequest`, `ShootRequest`, `RoomViewRequest`, `PlayerView`, `RoomView`, `ActionRejected`, `MatchEnded`; `SessionInfoRequest` and `SessionInfo` only if your client needs them | The mesh and type names in `Names`, `Game`, and `Rejection`; the starter already has the node `Roles` and the control strings |
 | Actor | `server/match/src/main/kotlin/MyGame/match/Player.kt` | `Player` with `onJoinCompletedSuspending` (rejection reported as `ActionRejected`) and `PlayerFactory` | A new `server/match/` Gradle module (included in `settings.gradle.kts`) with its `Program.kt` and the `server/config/match-a.json`, `server/config/match-b.json` files, its start-up in `e2e/.../Nodes.kt`, and a `Roles` entry; the `addActorFactory` registration in `Program.kt`; the node declarations in `zlink.structure.json` and the matching `Structure.kt` check (the starter's check accepts only the `session` role) |
 | Spot | `server/match/src/main/kotlin/MyGame/match/Spots.kt` (`Room`, `Matchmaking`), `server/match/src/main/kotlin/MyGame/match/Domain.kt` | `Room` with `RoomState` (admission, movement, hits, winner) and, for a lobby, `Matchmaking` with `MatchmakingState`; the pure rules in `Domain.kt` | The `addSpotFactory` registrations in `Program.kt` (`SPOT_WIDE`, `stableTypeLimit`) and `roomCapacity` in `NodeConfig`; the unit tests for the rules; the `spots` declarations in `zlink.structure.json` and the `Structure.kt` check that compares them with the registrations (the starter's check requires no Spots) |
 | Entry and first admission | `server/match/src/main/kotlin/MyGame/match/Player.kt` (`Entry`, `EnterQueue`), `Actions.reconnect` in `server/match/src/main/kotlin/MyGame/match/Handlers.kt` | `EnterQueue.queue`: the identity check and the deferred join to `Matchmaking`, and the identity check and view resend of `Actions.reconnect` | The `addEntrySpot` registration and its `entry` declaration; the `hit` scenario for the first match and the `reconnect` scenario that compares state after reconnection |

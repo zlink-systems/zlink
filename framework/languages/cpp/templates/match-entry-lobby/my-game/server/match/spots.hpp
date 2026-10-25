@@ -74,7 +74,8 @@ class Room final : public fx::spot_t<Player>
     fx::actor_client_t &actors_;
     RoomView view () const
     {
-        return {std::string (context_.spot_id ()), config_.Id, state.view ()};
+        return {std::string (context_.spot_id ()), config_.Id, state.phase (), state.winner,
+                state.view ()};
     }
     template <class T> fx::task_t<void> broadcast (const T &message)
     {
@@ -129,20 +130,33 @@ class Room final : public fx::spot_t<Player>
     }
     fx::task_t<void> move (Player &actor, fx::message_context_t &, const MoveRequest &request)
     {
-        if (auto reason = state.move (actor.context ().actor_id ().value (), request))
-            co_await actor.context ().bound_session ().send (ActionRejected{reason}).async ();
-        else
+        if (auto rejection = state.move (actor.context ().actor_id ().value (), request))
+            co_await actor.context ().bound_session ().send (*rejection).async ();
+        else {
+            const auto players = state.view ();
+            const auto player = std::find_if (players.begin (), players.end (), [&] (const auto &value) {
+                return value.playerId == actor.context ().actor_id ().value ();
+            });
+            if (player == players.end ())
+                throw std::runtime_error ("Unknown room player");
+            co_await actor.context ().bound_session ()
+              .send (MoveResult{player->x, player->y, request.sequence})
+              .async ();
             co_await broadcast (view ());
+        }
     }
     fx::task_t<void> shoot (Player &actor, fx::message_context_t &, const ShootRequest &request)
     {
-        if (auto reason = state.shoot (actor.context ().actor_id ().value (), request)) {
-            co_await actor.context ().bound_session ().send (ShotRejected{reason}).async ();
+        if (auto rejection = state.shoot (actor.context ().actor_id ().value (), request)) {
+            co_await actor.context ().bound_session ().send (*rejection).async ();
             co_return;
         }
+        co_await actor.context ().bound_session ()
+          .send (ShotResult{"hit", request.targetId, request.sequence})
+          .async ();
         co_await broadcast (view ());
-        if (!state.winner.empty ())
-            co_await broadcast (MatchEnded{state.winner});
+        if (state.winner)
+            co_await broadcast (MatchEnded{*state.winner});
     }
     fx::task_t<void> deliver_view (Player &actor, fx::message_context_t &, const RoomView &message)
     {
