@@ -341,9 +341,6 @@ class stateful_object_runtime_t
     void replace_placement_candidates (std::vector<placement_candidate_t> candidates);
     create_result_t begin_create (const create_request_t &request);
     task_t<create_result_t> begin_create_async (create_request_t request);
-    create_result_t begin_reserved_object (const object_ref_t &reserved,
-                                           const std::string &stable_type,
-                                           std::vector<std::uint8_t> creation_request);
     task_t<create_result_t> begin_reserved_object_async (
       object_ref_t reserved, std::string stable_type, std::vector<std::uint8_t> creation_request);
     // Accepts the next authority fence for an actor that is retained as a

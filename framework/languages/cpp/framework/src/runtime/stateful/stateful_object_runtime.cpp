@@ -218,16 +218,6 @@ task_t<create_result_t> stateful_object_runtime_t::begin_create_async (create_re
     });
 }
 
-create_result_t
-stateful_object_runtime_t::begin_reserved_object (const object_ref_t &reserved,
-                                                  const std::string &stable_type,
-                                                  std::vector<std::uint8_t> creation_request)
-{
-    return begin_reserved_object_async (reserved, stable_type, std::move (creation_request))
-      .result ()
-      .value ();
-}
-
 task_t<create_result_t> stateful_object_runtime_t::begin_reserved_object_async (
   object_ref_t reserved, std::string stable_type, std::vector<std::uint8_t> creation_request)
 {

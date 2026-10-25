@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+#include "../support/stateful_object_sync.hpp"
 #include "runtime/mesh/mesh_node_host_service.hpp"
 #include "../support/runtime_failure_fixture.hpp"
 #include "../support/stateful_ingress_fixture.hpp"
@@ -75,6 +76,8 @@
 #include <thread>
 #include <type_traits>
 #include <vector>
+
+using zlink::framework::test::begin_reserved_object;
 
 namespace zlink::framework::runtime::host
 {
@@ -1682,7 +1685,7 @@ void verify_bind_handler_rejects_missing_session_owner_descriptor (bool test_sea
     const stateful::object_ref_t actor{
       stateful::object_kind_t::actor,  "descriptor-actor", 7, 11, "m6b-mesh",
       local.routing_id ().to_string ()};
-    const auto creation = target->objects ().begin_reserved_object (actor, "descriptor.actor", {});
+    const auto creation = begin_reserved_object (target->objects (), actor, "descriptor.actor", {});
     assert (creation.error == stateful::stateful_error_t::none);
     assert (target->objects ().commit_create (creation.attempt)
             == stateful::stateful_error_t::none);
@@ -2908,12 +2911,12 @@ void verify_global_identity_remote_create_and_generation_fence ()
 
     const stateful::object_ref_t reserved_spot{
       stateful::object_kind_t::user_spot, "spot-1", 1, 1, "mesh-a", "node-a"};
-    auto first_spot = runtime.begin_reserved_object (reserved_spot, "lobby", {});
+    auto first_spot = begin_reserved_object (runtime, reserved_spot, "lobby", {});
     assert (first_spot.status == stateful::create_status_t::reserved);
-    const auto joined_spot = runtime.begin_reserved_object (reserved_spot, "lobby", {});
+    const auto joined_spot = begin_reserved_object (runtime, reserved_spot, "lobby", {});
     assert (joined_spot.status == stateful::create_status_t::joined);
     assert (joined_spot.attempt == first_spot.attempt);
-    const auto spot_type_mismatch = runtime.begin_reserved_object (reserved_spot, "match", {});
+    const auto spot_type_mismatch = begin_reserved_object (runtime, reserved_spot, "match", {});
     assert (spot_type_mismatch.status == stateful::create_status_t::failed);
     assert (spot_type_mismatch.error == stateful::stateful_error_t::type_mismatch);
     assert (runtime.commit_create (first_spot.attempt) == stateful::stateful_error_t::none);
@@ -2990,7 +2993,7 @@ void verify_global_identity_remote_create_and_generation_fence ()
     // incarnation is reserved.
     const stateful::object_ref_t reserved_actor{
       stateful::object_kind_t::actor, "reserved-actor", 1, 1, "mesh-a", "node-a"};
-    const auto reserved_create = runtime.begin_reserved_object (reserved_actor, "player", {});
+    const auto reserved_create = begin_reserved_object (runtime, reserved_actor, "player", {});
     assert (reserved_create.status == stateful::create_status_t::reserved);
     assert (runtime.commit_create (reserved_create.attempt) == stateful::stateful_error_t::none);
     assert (runtime.destroy_actor (reserved_actor) == stateful::stateful_error_t::none);
@@ -4524,7 +4527,7 @@ void verify_creating_spot_subscription_uses_native_object_lifetime ()
                                            1,
                                            "m6b-mesh",
                                            "creating-subscription"};
-    const auto creating = host->objects ().begin_reserved_object (reference, "room", {});
+    const auto creating = begin_reserved_object (host->objects (), reference, "room", {});
     assert (creating.factory_owner);
     assert (await_task (host->objects ().contains_async (reference)));
     assert (!host->objects ().find (reference.kind, reference.key));
@@ -4561,7 +4564,7 @@ void verify_creating_spot_subscription_uses_native_object_lifetime ()
 
     auto failed_reference = reference;
     ++failed_reference.object_generation;
-    const auto failed = host->objects ().begin_reserved_object (failed_reference, "room", {});
+    const auto failed = begin_reserved_object (host->objects (), failed_reference, "room", {});
     assert (failed.factory_owner);
     host::spot_handle_t failed_spot (host, failed_reference);
     failed_spot.set_subscription ("local", "aborted-topic");
@@ -4571,7 +4574,7 @@ void verify_creating_spot_subscription_uses_native_object_lifetime ()
     auto replacement_reference = failed_reference;
     ++replacement_reference.object_generation;
     const auto replacement =
-      host->objects ().begin_reserved_object (replacement_reference, "room", {});
+      begin_reserved_object (host->objects (), replacement_reference, "room", {});
     assert (replacement.factory_owner);
     assert (host->objects ().commit_create (replacement.attempt)
             == stateful::stateful_error_t::none);
@@ -4595,7 +4598,7 @@ void verify_creating_spot_subscription_uses_native_object_lifetime ()
     auto actor_reference = replacement_reference;
     actor_reference.kind = stateful::object_kind_t::actor;
     actor_reference.key = "not-a-subscriber";
-    const auto actor = host->objects ().begin_reserved_object (actor_reference, "actor", {});
+    const auto actor = begin_reserved_object (host->objects (), actor_reference, "actor", {});
     assert (actor.factory_owner);
     host::spot_handle_t actor_as_spot (host, actor_reference);
     bool actor_subscription_rejected = false;
@@ -5305,7 +5308,7 @@ void verify_memory_accepted_record_authority ()
           1,
           target.mesh_name,
           zlink::routing_id_t::from (target.node_routing_id).to_string ()};
-        const auto created = native->objects ().begin_reserved_object (object, "memory", {});
+        const auto created = begin_reserved_object (native->objects (), object, "memory", {});
         assert (created.error == stateful::stateful_error_t::none);
         assert (native->objects ().commit_create (created.attempt)
                 == stateful::stateful_error_t::none);
@@ -5363,7 +5366,7 @@ void verify_memory_accepted_record_authority ()
                   target.mesh_name,
                   zlink::routing_id_t::from (target.node_routing_id).to_string ()};
                 const auto created =
-                  native->objects ().begin_reserved_object (object, "memory", {});
+                  begin_reserved_object (native->objects (), object, "memory", {});
                 assert (created.error == stateful::stateful_error_t::none);
                 assert (native->objects ().commit_create (created.attempt)
                         == stateful::stateful_error_t::none);
@@ -8696,7 +8699,7 @@ bool verify_remote_user_spot_create_close_terminal_once (bool cleanup_only = fal
       reservation->fence.target.mesh_name,
       std::string (reservation->fence.target.node_rid.value ())};
     const auto local_reservation =
-      target->objects ().begin_reserved_object (reserved_ref, "room", {0x41, 0x42});
+      begin_reserved_object (target->objects (), reserved_ref, "room", {0x41, 0x42});
     assert (local_reservation.status == stateful::create_status_t::reserved);
     assert (local_reservation.factory_owner);
     auto joined_create = create;
@@ -9358,7 +9361,7 @@ void verify_dispatch_callbacks_survive_suspension (bool through_mesh, bool dispa
     const stateful::object_ref_t actor{
       stateful::object_kind_t::actor,  "lifetime-actor", 7, 11, "m6b-mesh",
       local.routing_id ().to_string ()};
-    const auto creation = target.objects ().begin_reserved_object (actor, "lifetime.actor", {});
+    const auto creation = begin_reserved_object (target.objects (), actor, "lifetime.actor", {});
     assert (creation.error == stateful::stateful_error_t::none);
     assert (target.objects ().commit_create (creation.attempt) == stateful::stateful_error_t::none);
     const protocol::bound_session_bind_t bind{

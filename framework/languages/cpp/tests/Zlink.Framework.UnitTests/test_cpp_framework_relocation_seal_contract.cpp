@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+#include "../support/stateful_object_sync.hpp"
 #include "../support/runtime_failure_fixture.hpp"
 #include "../support/manual_internal_scheduler.hpp"
 #include "runtime/execution/serial_application_record.hpp"
@@ -34,6 +35,8 @@
 #include <type_traits>
 #include <variant>
 #include <vector>
+
+using zlink::framework::test::begin_reserved_object;
 
 namespace zlink::framework::runtime
 {
@@ -1386,7 +1389,7 @@ TEST (FrameworkRelocationSealContract, exhausted_follow_request_settles_original
     stateful::stateful_object_runtime_t objects;
     const stateful::object_ref_t owner{
       stateful::object_kind_t::actor, "moving", 7, 1, "mesh", "source"};
-    const auto created = objects.begin_reserved_object (owner, "actor", {});
+    const auto created = begin_reserved_object (objects, owner, "actor", {});
     ASSERT_EQ (created.error, stateful::stateful_error_t::none);
     ASSERT_EQ (objects.commit_create (created.attempt), stateful::stateful_error_t::none);
     stateful::raw_stateful_dispatch_t dispatch (objects, transport);
@@ -1474,7 +1477,7 @@ TEST (FrameworkRelocationSealContract, retained_follow_rejects_previous_object_g
     auto &objects = host->objects ();
     const stateful::object_ref_t object{
       stateful::object_kind_t::actor, "moving", 7, 1, "mesh", "source"};
-    const auto created = objects.begin_reserved_object (object, "actor", {});
+    const auto created = begin_reserved_object (objects, object, "actor", {});
     ASSERT_EQ (created.error, stateful::stateful_error_t::none);
     ASSERT_EQ (objects.commit_create (created.attempt), stateful::stateful_error_t::none);
     const auto sealed = objects.try_seal_relocation_aggregate ({object}).result ().value ();
@@ -1528,7 +1531,7 @@ TEST (FrameworkRelocationSealContract, retained_spot_rejects_previous_object_gen
     auto &objects = host->objects ();
     const stateful::object_ref_t object{
       stateful::object_kind_t::user_spot, "moving", 7, 1, "mesh", "source"};
-    const auto created = objects.begin_reserved_object (object, "actor", {});
+    const auto created = begin_reserved_object (objects, object, "actor", {});
     ASSERT_EQ (created.error, stateful::stateful_error_t::none);
     ASSERT_EQ (objects.commit_create (created.attempt), stateful::stateful_error_t::none);
     const auto sealed = objects.try_seal_relocation_aggregate ({object}).result ().value ();
@@ -1925,7 +1928,7 @@ TEST (FrameworkRelocationSealContract, cut_exception_preserves_cause_after_abort
     stateful::stateful_object_runtime_t objects;
     const stateful::object_ref_t spot{
       stateful::object_kind_t::user_spot, "spot", 1, 1, "mesh", "source"};
-    const auto created = objects.begin_reserved_object (spot, "room", {});
+    const auto created = begin_reserved_object (objects, spot, "room", {});
     ASSERT_EQ (objects.commit_create (created.attempt), stateful::stateful_error_t::none);
     objects.configure_relocation_cut (
       [] (auto, auto,
@@ -1968,7 +1971,7 @@ TEST (FrameworkRelocationSealContract, cut_local_exception_reports_original_caus
       });
     const stateful::object_ref_t spot{
       stateful::object_kind_t::user_spot, "spot", 1, 1, "mesh", "source"};
-    const auto created = host->objects ().begin_reserved_object (spot, "room", {});
+    const auto created = begin_reserved_object (host->objects (), spot, "room", {});
     ASSERT_EQ (host->objects ().commit_create (created.attempt), stateful::stateful_error_t::none);
     auto application = std::make_shared<host::local_application_dispatch_t> ();
     application->owner.spot_id = spot.key;
@@ -2015,7 +2018,7 @@ TEST (FrameworkRelocationSealContract, seal_cut_saves_each_unstarted_original_on
     auto &mailbox = host->transport ().mailbox ();
     const stateful::object_ref_t spot{
       stateful::object_kind_t::user_spot, "cut-spot", 1, 1, "mesh", "source"};
-    const auto created = objects.begin_reserved_object (spot, "room", {});
+    const auto created = begin_reserved_object (objects, spot, "room", {});
     ASSERT_EQ (created.error, stateful::stateful_error_t::none);
     ASSERT_EQ (objects.commit_create (created.attempt), stateful::stateful_error_t::none);
     std::vector<mesh::service_mailbox_record_t> claimed;
@@ -2100,7 +2103,7 @@ void verify_native_spot_seal (bool fail_second,
     const stateful::object_ref_t spot{
       stateful::object_kind_t::user_spot, "native-spot", 1, 1, "mesh", "source"};
     auto &objects = host->objects ();
-    const auto created = objects.begin_reserved_object (spot, "room", {});
+    const auto created = begin_reserved_object (objects, spot, "room", {});
     ASSERT_EQ (created.error, stateful::stateful_error_t::none);
     ASSERT_EQ (objects.commit_create (created.attempt), stateful::stateful_error_t::none);
     offload_executor_t worker (1, "native-cut-test");
@@ -2283,7 +2286,7 @@ TEST (FrameworkRelocationSealContract, native_spot_commit_releases_source_gate)
       });
     const stateful::object_ref_t spot{
       stateful::object_kind_t::user_spot, "committed-spot", 1, 1, "mesh", "source"};
-    const auto created = host->objects ().begin_reserved_object (spot, "room", {});
+    const auto created = begin_reserved_object (host->objects (), spot, "room", {});
     ASSERT_EQ (host->objects ().commit_create (created.attempt), stateful::stateful_error_t::none);
     offload_executor_t worker (1, "source-commit");
     auto gate = std::make_shared<serial_execution_queue_t> (
@@ -2338,7 +2341,7 @@ TEST (FrameworkRelocationSealContract, native_spot_fallback_rereads_remote_and_l
               });
             const stateful::object_ref_t spot{
               stateful::object_kind_t::user_spot, "fallback-spot", 1, 1, "mesh", "source"};
-            const auto created = host->objects ().begin_reserved_object (spot, "room", {});
+            const auto created = begin_reserved_object (host->objects (), spot, "room", {});
             ASSERT_EQ (host->objects ().commit_create (created.attempt),
                        stateful::stateful_error_t::none);
             auto original = native_spot_record (*host, spot, 91, std::nullopt);
@@ -2399,7 +2402,7 @@ TEST (FrameworkRelocationSealContract, native_spot_target_wait_keeps_original_an
       });
     const stateful::object_ref_t spot{
       stateful::object_kind_t::user_spot, "target-spot", 1, 1, "mesh", "source"};
-    const auto created = host->objects ().begin_reserved_object (spot, "room", {});
+    const auto created = begin_reserved_object (host->objects (), spot, "room", {});
     ASSERT_EQ (created.error, stateful::stateful_error_t::none);
     ASSERT_EQ (host->objects ().commit_create (created.attempt), stateful::stateful_error_t::none);
     offload_executor_t worker (1, "target-owner");
@@ -2466,7 +2469,7 @@ TEST (FrameworkRelocationSealContract, native_preparation_outcomes_preserve_cont
                 });
                 const stateful::object_ref_t spot{
                   stateful::object_kind_t::user_spot, "target", 1, 1, "mesh", "source"};
-                const auto created = host->objects ().begin_reserved_object (spot, "room", {});
+                const auto created = begin_reserved_object (host->objects (), spot, "room", {});
                 ASSERT_EQ (created.error, stateful::stateful_error_t::none);
                 ASSERT_EQ (host->objects ().commit_create (created.attempt),
                            stateful::stateful_error_t::none);
@@ -2553,7 +2556,7 @@ TEST (FrameworkRelocationSealContract,
             });
             const stateful::object_ref_t spot{
               stateful::object_kind_t::user_spot, "suffix", 1, 1, "mesh", "source"};
-            const auto created = host->objects ().begin_reserved_object (spot, "room", {});
+            const auto created = begin_reserved_object (host->objects (), spot, "room", {});
             ASSERT_EQ (created.error, stateful::stateful_error_t::none);
             ASSERT_EQ (host->objects ().commit_create (created.attempt),
                        stateful::stateful_error_t::none);
@@ -2618,7 +2621,7 @@ TEST (FrameworkRelocationSealContract, per_actor_native_publication_and_cut_shar
       });
     const stateful::object_ref_t spot{
       stateful::object_kind_t::user_spot, "publication-spot", 1, 1, "mesh", "source"};
-    const auto created = host->objects ().begin_reserved_object (spot, "room", {});
+    const auto created = begin_reserved_object (host->objects (), spot, "room", {});
     ASSERT_EQ (created.error, stateful::stateful_error_t::none);
     ASSERT_EQ (host->objects ().commit_create (created.attempt), stateful::stateful_error_t::none);
     offload_executor_t worker (1, "publication-owner");
@@ -2696,7 +2699,7 @@ TEST (FrameworkRelocationSealContract, seal_conversion_failure_restores_fifo_onc
     auto &mailbox = host->transport ().mailbox ();
     const stateful::object_ref_t spot{
       stateful::object_kind_t::user_spot, "restore-spot", 1, 1, "mesh", "source"};
-    const auto created = objects.begin_reserved_object (spot, "room", {});
+    const auto created = begin_reserved_object (objects, spot, "room", {});
     ASSERT_EQ (created.error, stateful::stateful_error_t::none);
     ASSERT_EQ (objects.commit_create (created.attempt), stateful::stateful_error_t::none);
     std::vector<mesh::service_mailbox_record_t> claimed;
@@ -2748,7 +2751,7 @@ TEST (FrameworkRelocationSealContract, lookup_owner_ports_suspend_without_blocki
     stateful::stateful_object_runtime_t objects;
     const stateful::object_ref_t spot{
       stateful::object_kind_t::user_spot, "spot", 1, 1, "mesh", "source"};
-    const auto created = objects.begin_reserved_object (spot, "room", {});
+    const auto created = begin_reserved_object (objects, spot, "room", {});
     ASSERT_EQ (objects.commit_create (created.attempt), stateful::stateful_error_t::none);
     auto release = stateful::stateful_object_runtime_test_access_t::hold_lane (objects);
     auto find = objects.find_async (spot.kind, spot.key);
@@ -2770,7 +2773,7 @@ TEST (FrameworkRelocationSealContract, relocated_stage_returns_before_owner_lane
     auto &objects = host->objects ();
     const stateful::object_ref_t spot{
       stateful::object_kind_t::user_spot, "spot", 1, 1, "mesh", "source"};
-    const auto created = objects.begin_reserved_object (spot, "room", {});
+    const auto created = begin_reserved_object (objects, spot, "room", {});
     ASSERT_EQ (objects.commit_create (created.attempt), stateful::stateful_error_t::none);
     stateful::raw_stateful_dispatch_t dispatch (objects, host->transport ());
     protocol::spot_message_header_t header;
@@ -2811,7 +2814,7 @@ TEST (FrameworkRelocationSealContract, raw_dispatch_waits_for_state_lane_outside
         auto &objects = host->objects ();
         const stateful::object_ref_t object{
           stateful::object_kind_t::actor, "lane-owner", 1, 1, "mesh", "source"};
-        const auto created = objects.begin_reserved_object (object, "actor", {});
+        const auto created = begin_reserved_object (objects, object, "actor", {});
         ASSERT_EQ (created.error, stateful::stateful_error_t::none);
         ASSERT_EQ (objects.commit_create (created.attempt), stateful::stateful_error_t::none);
         const protocol::request_source_fence_t fence{"source-owner", 3, {2}, 1};
@@ -2947,7 +2950,7 @@ TEST (FrameworkRelocationSealContract, retained_target_keeps_recorded_sender_wit
     auto &objects = host->objects ();
     const stateful::object_ref_t object{
       stateful::object_kind_t::actor, "moving", 7, 1, "mesh", "source"};
-    const auto created = objects.begin_reserved_object (object, "actor", {});
+    const auto created = begin_reserved_object (objects, object, "actor", {});
     ASSERT_EQ (created.error, stateful::stateful_error_t::none);
     ASSERT_EQ (objects.commit_create (created.attempt), stateful::stateful_error_t::none);
     int resolves = 0;
@@ -3041,7 +3044,7 @@ TEST (FrameworkRelocationSealContract,
         .descriptor = test_descriptor ("cleanup-native"),
         .runtime_failures = std::make_shared<runtime::runtime_failure_collector_t> ()}});
     auto &objects = native->objects ();
-    const auto created = objects.begin_reserved_object (sources.front (), "actor", {});
+    const auto created = begin_reserved_object (objects, sources.front (), "actor", {});
     ASSERT_EQ (created.error, stateful::stateful_error_t::none);
     ASSERT_EQ (objects.commit_create (created.attempt), stateful::stateful_error_t::none);
     const auto sealed =
@@ -3113,7 +3116,7 @@ TEST (FrameworkRelocationSealContract, committed_payload_release_keeps_later_fol
       });
     const stateful::object_ref_t spot{
       stateful::object_kind_t::user_spot, "committed-spot", 1, 1, "mesh", "committed-source"};
-    const auto created = host->objects ().begin_reserved_object (spot, "room", {});
+    const auto created = begin_reserved_object (host->objects (), spot, "room", {});
     ASSERT_EQ (created.error, stateful::stateful_error_t::none);
     ASSERT_EQ (host->objects ().commit_create (created.attempt), stateful::stateful_error_t::none);
     const auto turn = [&] (std::uint64_t operation) {
@@ -3208,7 +3211,7 @@ TEST (FrameworkRelocationSealContract, native_public_requester_terminal_uses_reg
       });
     const stateful::object_ref_t spot{
       stateful::object_kind_t::user_spot, "native-local", 1, 1, "mesh", "native-requester"};
-    const auto created = host->objects ().begin_reserved_object (spot, "framework.spot", {});
+    const auto created = begin_reserved_object (host->objects (), spot, "framework.spot", {});
     ASSERT_EQ (created.error, stateful::stateful_error_t::none);
     ASSERT_EQ (host->objects ().commit_create (created.attempt), stateful::stateful_error_t::none);
     offload_executor_t worker (1, "native-requester-owner");
@@ -3607,7 +3610,7 @@ TEST (FrameworkRelocationSealContract, native_protocol_rejection_preserves_follo
     });
     const stateful::object_ref_t spot{
       stateful::object_kind_t::user_spot, "protocol", 1, 1, "mesh", "source"};
-    const auto created = host->objects ().begin_reserved_object (spot, "room", {});
+    const auto created = begin_reserved_object (host->objects (), spot, "room", {});
     ASSERT_EQ (created.error, stateful::stateful_error_t::none);
     ASSERT_EQ (host->objects ().commit_create (created.attempt), stateful::stateful_error_t::none);
     unsigned preparations = 0;
@@ -3657,7 +3660,7 @@ TEST (FrameworkRelocationSealContract, native_pending_locator_retains_prepared_t
         });
         const stateful::object_ref_t spot{
           stateful::object_kind_t::user_spot, std::string (197, 'p'), 1, 1, "mesh", "source"};
-        const auto created = host->objects ().begin_reserved_object (spot, "room", {});
+        const auto created = begin_reserved_object (host->objects (), spot, "room", {});
         ASSERT_EQ (created.error, stateful::stateful_error_t::none);
         ASSERT_EQ (host->objects ().commit_create (created.attempt),
                    stateful::stateful_error_t::none);

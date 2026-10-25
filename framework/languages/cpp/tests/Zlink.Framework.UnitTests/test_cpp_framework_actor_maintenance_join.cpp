@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+#include "../support/stateful_object_sync.hpp"
 #include "../support/manual_internal_scheduler.hpp"
 #include <zlink/framework.hpp>
 #include "../support/runtime_failure_fixture.hpp"
@@ -48,6 +49,8 @@
 #include <thread>
 #include <tuple>
 #include <utility>
+
+using zlink::framework::test::begin_reserved_object;
 
 namespace zlink::framework::detail
 {
@@ -1397,7 +1400,7 @@ TEST (RelayAdmission, AcceptedSourceRejectsWrongFences)
     ASSERT_TRUE (pair.await_ready ());
     stateful::object_ref_t actor{
       stateful::object_kind_t::actor, actor_id, 1, 1, mesh_name, "relay-target"};
-    const auto created = pair.target->objects ().begin_reserved_object (actor, actor_type, {});
+    const auto created = begin_reserved_object (pair.target->objects (), actor, actor_type, {});
     ASSERT_EQ (created.error, stateful::stateful_error_t::none);
     ASSERT_EQ (pair.target->objects ().commit_create (created.attempt),
                stateful::stateful_error_t::none);
@@ -1460,7 +1463,7 @@ TEST (RelayAdmission, AcceptedRecordKeepsSourceOriginalAcrossDiscoveryChange)
         ASSERT_TRUE (pair.await_ready ());
         stateful::object_ref_t actor{
           stateful::object_kind_t::actor, actor_id, 1, 1, mesh_name, "relay-target"};
-        const auto created = pair.target->objects ().begin_reserved_object (actor, actor_type, {});
+        const auto created = begin_reserved_object (pair.target->objects (), actor, actor_type, {});
         ASSERT_EQ (created.error, stateful::stateful_error_t::none);
         ASSERT_EQ (pair.target->objects ().commit_create (created.attempt),
                    stateful::stateful_error_t::none);
@@ -2728,7 +2731,7 @@ TEST (NativeIntake, CoordinatorAdmissionReturnsNativeClaimWithoutLaneReentry)
                                   1,
                                   mesh_name,
                                   zlink::routing_id_t::from (fixture.rid).to_string ()};
-    const auto created = objects.begin_reserved_object (object, actor_type, {});
+    const auto created = begin_reserved_object (objects, object, actor_type, {});
     ASSERT_EQ (st::stateful_error_t::none, created.error);
     ASSERT_EQ (st::stateful_error_t::none, objects.commit_create (created.attempt));
     st::raw_stateful_dispatch_t raw (objects, fixture.host->transport (), fixture.resolver);
@@ -2878,7 +2881,7 @@ TEST (ActorMaintenanceJoin, ObjectSealCapturesChangesAfterJoinSealAndRejectsLate
     const auto added_commit = objects.commit_create (added.attempt);
     const st::object_ref_t reserved{
       st::object_kind_t::user_spot, "reserved", 1, 1, mesh_name, first_rid};
-    const auto reserved_create = objects.begin_reserved_object (reserved, actor_type, {});
+    const auto reserved_create = begin_reserved_object (objects, reserved, actor_type, {});
     const auto reserved_commit = objects.commit_create (reserved_create.attempt);
     transfers->cancel_move ("prior");
     const auto snapshot = inventory.result ().value ();
@@ -2896,7 +2899,7 @@ TEST (ActorMaintenanceJoin, ObjectSealCapturesChangesAfterJoinSealAndRejectsLate
     auto late_reserved = reserved;
     late_reserved.key = "after-reserved";
     EXPECT_EQ (st::stateful_error_t::moving,
-               objects.begin_reserved_object (late_reserved, actor_type, {}).error);
+               begin_reserved_object (objects, late_reserved, actor_type, {}).error);
     EXPECT_EQ (st::stateful_error_t::moving, objects.destroy_actor (added.object));
     EXPECT_EQ (st::stateful_error_t::moving, objects.close_spot (reserved).first);
     objects.end_maintenance_inventory ().result ().value ();
@@ -3130,7 +3133,7 @@ TEST (NativeIntake, CanonicalAdmissionReportsOnlyActualSuccessWhenEnabled)
                                       1,
                                       mesh_name,
                                       zlink::routing_id_t::from (fixture.rid).to_string ()};
-        const auto created = host->objects ().begin_reserved_object (object, actor_type, {});
+        const auto created = begin_reserved_object (host->objects (), object, actor_type, {});
         ASSERT_EQ (created.error, st::stateful_error_t::none);
         ASSERT_EQ (host->objects ().commit_create (created.attempt), st::stateful_error_t::none);
         st::raw_stateful_dispatch_t raw (host->objects (), host->transport (), fixture.resolver);
@@ -3295,7 +3298,7 @@ TEST (NativeIntake, TypedControlMalformedWireAndKernelMetadata)
                                   1,
                                   mesh_name,
                                   zlink::routing_id_t::from (rid).to_string ()};
-    const auto created = host->objects ().begin_reserved_object (object, actor_type, {});
+    const auto created = begin_reserved_object (host->objects (), object, actor_type, {});
     ASSERT_EQ (created.error, st::stateful_error_t::none);
     ASSERT_EQ (host->objects ().commit_create (created.attempt), st::stateful_error_t::none);
     auto &mailbox = host->transport ().mailbox ();
@@ -3449,7 +3452,7 @@ TEST (NativeIntake, NativeMailboxTransferKeepsActualPrivateMClaim)
                                       1,
                                       mesh_name,
                                       zlink::routing_id_t::from (fixture.rid).to_string ()};
-        const auto created = host->objects ().begin_reserved_object (object, actor_type, {});
+        const auto created = begin_reserved_object (host->objects (), object, actor_type, {});
         ASSERT_EQ (created.error, st::stateful_error_t::none);
         ASSERT_EQ (host->objects ().commit_create (created.attempt), st::stateful_error_t::none);
         auto &mailbox = host->transport ().mailbox ();
@@ -5193,7 +5196,7 @@ TEST (ActorMaintenanceJoin, CreateEntryJoinWaitsOutsideConfigurationTurn)
                    .value ();
     const sf::object_ref_t target{
       sf::object_kind_t::user_spot, access_t::entry_id (*node), 1, 1, mesh_name, rid.to_string ()};
-    auto created = node->objects ().begin_reserved_object (target, room_type, {});
+    auto created = begin_reserved_object (node->objects (), target, room_type, {});
     ASSERT_EQ (node->objects ().commit_create (created.attempt), sf::stateful_error_t::none);
     host::pending_operation_t operation;
     auto manager = fw::detail::actor_manager_access_t::create (
@@ -5292,7 +5295,7 @@ TEST_P (ActorLocalJoinLane, PendingSubmissionDoesNotHoldLifecycleTurn)
       1,
       mesh_name,
       rid.to_string ()};
-    const auto created = node->objects ().begin_reserved_object (target, room_type, {});
+    const auto created = begin_reserved_object (node->objects (), target, room_type, {});
     ASSERT_EQ (created.error, fw::runtime::stateful::stateful_error_t::none);
     ASSERT_EQ (node->objects ().commit_create (created.attempt),
                fw::runtime::stateful::stateful_error_t::none);
@@ -6824,7 +6827,7 @@ TEST (ActorMaintenanceJoin, ActiveInventoryExcludesCreatingRecoveringAndFinalize
     const stateful::object_ref_t owner{
       stateful::object_kind_t::actor, actor_id, 1, 1, mesh_name, first_rid};
     const auto materialized_key = std::string (actor_type) + ":" + actor_id;
-    const auto reserved = source.begin_reserved_object (owner, actor_type, {});
+    const auto reserved = begin_reserved_object (source, owner, actor_type, {});
     ASSERT_EQ (reserved.error, stateful::stateful_error_t::none);
     source_state->lane
       .run (
@@ -6854,7 +6857,7 @@ TEST (ActorMaintenanceJoin, ActiveInventoryExcludesCreatingRecoveringAndFinalize
         const fw::detail::spot_node_runtime_t remote_runtime (remote_state);
         const stateful::object_ref_t remote{
           stateful::object_kind_t::actor, "remote-inventory", 1, 1, mesh_name, second_rid};
-        const auto remote_reserved = remote_objects.begin_reserved_object (remote, actor_type, {});
+        const auto remote_reserved = begin_reserved_object (remote_objects, remote, actor_type, {});
         ASSERT_EQ (remote_reserved.error, stateful::stateful_error_t::none);
         ASSERT_EQ (remote_objects.commit_create (remote_reserved.attempt),
                    stateful::stateful_error_t::none);

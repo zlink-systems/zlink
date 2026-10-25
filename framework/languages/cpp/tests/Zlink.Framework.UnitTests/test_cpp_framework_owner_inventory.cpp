@@ -1,10 +1,13 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+#include "../support/stateful_object_sync.hpp"
 #include "allocation_counter.hpp"
 #include "runtime/stateful/public_host_runtime.hpp"
 #include "runtime/execution/serial_application_record.hpp"
 #include <gtest/gtest.h>
 #include <cstdio>
 #include <thread>
+
+using zlink::framework::test::begin_reserved_object;
 
 namespace
 {
@@ -37,7 +40,7 @@ stateful::object_ref_t create (stateful::stateful_object_runtime_t &objects,
                                std::string node = "n")
 {
     stateful::object_ref_t owner{kind, std::move (key), 1, 1, "owner-inventory", std::move (node)};
-    const auto created = objects.begin_reserved_object (owner, std::string (80, 't'), {});
+    const auto created = begin_reserved_object (objects, owner, std::string (80, 't'), {});
     EXPECT_EQ (created.error, stateful::stateful_error_t::none);
     EXPECT_EQ (objects.commit_create (created.attempt), stateful::stateful_error_t::none);
     return owner;

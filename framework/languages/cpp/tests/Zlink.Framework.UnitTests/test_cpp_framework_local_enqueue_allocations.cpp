@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+#include "../support/stateful_object_sync.hpp"
 #include "allocation_counter.hpp"
 #include "runtime/stateful/public_host_runtime.hpp"
 #include "runtime/stateful/raw_stateful_dispatch.hpp"
@@ -16,6 +17,8 @@
 #include <atomic>
 #include <cstdio>
 #include <thread>
+
+using zlink::framework::test::begin_reserved_object;
 
 namespace zlink::framework::runtime::host
 {
@@ -311,7 +314,7 @@ struct stateful_spot_fixture_t
         object = {stateful::object_kind_t::user_spot, "stateful",           fence.object_generation,
                   fence.authority_owner_generation,   descriptor.mesh_name, "n"};
         const auto created =
-          runtime->objects ().begin_reserved_object (object, "framework.spot", {});
+          begin_reserved_object (runtime->objects (), object, "framework.spot", {});
         EXPECT_EQ (created.error, stateful::stateful_error_t::none);
         EXPECT_EQ (runtime->objects ().commit_create (created.attempt),
                    stateful::stateful_error_t::none);
@@ -808,7 +811,7 @@ TEST (LocalEnqueueAllocations, NativeSpotPublicationMovesCanonicalRecordStorage)
           result_t<std::optional<stateful::accepted_record_authority_t>>::success (
             stateful::accepted_record_authority_t{{"source", 1, {'n'}, 1}, 1}));
     });
-    const auto created = runtime->objects ().begin_reserved_object (object, "framework.spot", {});
+    const auto created = begin_reserved_object (runtime->objects (), object, "framework.spot", {});
     ASSERT_EQ (created.error, stateful::stateful_error_t::none);
     ASSERT_EQ (runtime->objects ().commit_create (created.attempt),
                stateful::stateful_error_t::none);
@@ -1059,7 +1062,7 @@ TEST (LocalEnqueueAllocations, ReadyNativePublicationMovesFinalIdentityStorage)
           result_t<std::optional<stateful::accepted_record_authority_t>>::success (
             stateful::accepted_record_authority_t{{"source", 1, {'n'}, 1}, 1}));
     });
-    const auto created = runtime->objects ().begin_reserved_object (object, "framework.spot", {});
+    const auto created = begin_reserved_object (runtime->objects (), object, "framework.spot", {});
     ASSERT_EQ (created.error, stateful::stateful_error_t::none);
     ASSERT_EQ (runtime->objects ().commit_create (created.attempt),
                stateful::stateful_error_t::none);
