@@ -98,44 +98,15 @@ Actor가 소속 Spot을 바꾸는 동작은 membership 변경이다. 대상 Spot
 8. 같은 플레이어가 재접속하면 `PlayerSession`이 기존 Actor를 새 Session에 binding하고, Actor를 가진 Spot의 `ReconnectHandler` 또는 `DungeonReconnect`가 identity를 확인한 뒤 현재 상태를 다시 보낸다.
 9. node를 교체할 때 `NodeControl`의 `drain`이 relocation을 요청한다. Framework는 relocation adapter로 상태를 받아 다른 node에서 복원한다.
 
-## 이 샘플을 보며 개발하기
+## 템플릿 도메인 확장
 
-이 샘플은 기능들이 함께 동작하는 방식을 보여 주므로, 자기 게임으로 바꾸지 않고 읽고 실행하는 용도로 쓴다. 자기 프로젝트는 .NET 기본 셋업에서 시작한다. [ZLink Start](https://zlink.systems/start)의 Initializer에서 .NET을 고르거나 ZLink 저장소의 `framework/languages/dotnet/templates/starter/my-game`을 사용한다. 그다음 필요한 기능을 이 샘플에서 하나씩 옮긴다. 구조 선택은 기본 셋업의 `AGENTS.md`가 설명하며, 이 절은 `morpg-fields-instances`만 다룬다. 이 샘플은 바꾸지 않고 프로젝트 옆에 참고용으로 둔다.
+이 템플릿의 도메인을 확장하여 MORPG 서버를 만든다. 기능을 추가하기 전에 README의 빌드와 e2e를 실행한다.
 
-### 샘플 먼저 실행하기
-
-옮기기 전에 [개발 명령](#개발-명령)으로 빌드와 e2e를 한 번 실행해 받은 샘플이 동작하는지 확인하고 동작을 본다. 이 결과가 이후 비교의 기준이 된다. 실패하면 먼저 [README](README.md)의 Known issues와 대조한다.
-
-### 옮길 기능
-
-기능 이름은 기본 셋업 `AGENTS.md`의 기능 표와 같다. 경로는 이 디렉터리를 기준으로 한다. 기본 셋업에는 Session node 하나와 `connect` 시나리오만 있으므로, 마지막 열은 기능마다 기본 셋업에서 함께 늘릴 것이다.
-
-| 기능 | 이 샘플의 파일 | 옮길 것 | 기본 셋업에서 함께 늘릴 것 |
-| --- | --- | --- | --- |
-| Typed 메시지 | `server/MyGame.Shared/Contracts.cs` | 사용할 기능의 record: `JoinWorldRequest`, `MoveRequest`, `EnterField`, `WorldState`, `BorderPresence`, `BorderVisible`, `CreatePartyRequest`, `JoinPartyRequest`, `EnterDungeonRequest`, `AdvanceRequest`, `ViewRequest`, `PartyView`, `FieldView`, `DungeonView`, `PrepareDungeon`, `DungeonPrepared`, `JoinDungeon`, `ActionRejected`. `SessionInfoRequest`·`SessionInfo`는 client가 필요로 할 때만 옮긴다 | `GameNames`의 등록 이름과 field helper, `GameTiming`, `Rejection` 사유. `NodeReady`와 `NodeProtocol`은 기본 셋업에 이미 있다 |
-| Spot | `server/MyGame.Field/FieldSpot.cs`, `server/MyGame.Instance/DungeonSpot.cs` | 가시성 projection·도착 정보·파티를 가진 `FieldSpot`, 명단과 stage를 가진 `DungeonSpot` | 새 `server/MyGame.Field/`·`server/MyGame.Instance/` 프로젝트와 `server/config/` 파일, 각 `Program.cs`의 `AddSpotFactory<FieldSpot>`·`AddSpotFactory<DungeonSpot>` 등록. `FieldIds`·`FieldCapacity` 설정과 고정 field를 만드는 시작 callback. `zlink.structure.json`의 `spots`·`nodes` 선언과 이를 등록과 비교하는 구조 검사 |
-| Actor | `server/MyGame.Shared/PlayerActor.cs` | 좌표 `X`, `Sequence`, `Move`를 가진 `PlayerActor`와 `PlayerFactory` | 각 `Program.cs`의 `AddActorFactory<PlayerActor, PlayerFactory>` 등록 |
-| Entry·첫 입장 | `server/MyGame.Shared/WorldEntry.cs`, `server/MyGame.Field/Handlers.cs`의 `ReconnectHandler`, `server/MyGame.Instance/Handlers.cs`의 `DungeonReconnect` | `EnterWorldHandler`와 field로의 지연 join, 재접속 handler의 identity 확인과 상태 재전송 | Field와 Instance node의 Entry Spot 등록과 `entry` 선언. 첫 입장을 확인하는 `field` 시나리오와 재접속 뒤 상태를 비교하는 `reconnect` 시나리오 |
-| Session binding | `server/MyGame.Session/PlayerSession.cs` | 첫 패킷 검사, Actor 조회·생성, binding과 원래 typed 패킷 relay | `EnterWorldHandler`와 같은 첫 패킷 타입. 기본 셋업의 `PlayerSession.cs`에 옮긴다 |
-| Host relocation | `server/MyGame.Shared/PlayerActor.cs`의 `PlayerRelocation`, `server/MyGame.Field/FieldSpot.cs`의 `FieldRelocation`, `server/MyGame.Instance/DungeonSpot.cs`의 `DungeonRelocation`, `server/MyGame.Shared/NodeControl.cs` | `Capture`·`Restore`를 가진 snapshot record와 `drain`·`shutdown` 제어 | `PreserveStateWith` relocation 등록. 서버 교체 뒤에도 연결·상태가 유지되고 대체 node가 새 Dungeon을 받는지 판정하는 `update` 시나리오 |
-| 동적 던전 | `server/MyGame.Field/FieldSpot.cs`의 `EnterAsync`, `server/MyGame.Field/Handlers.cs`의 `DungeonTravel`, `server/MyGame.Instance/DungeonSpot.cs`, `server/MyGame.Instance/Program.cs` | 파티 Dungeon의 `GetOrCreate`와 typed 준비, 명단에 있는 구성원만 받는 admission, stage | 각 Instance의 동적 `dungeon` Spot과 `zlink.structure.json`의 `GetOrCreate` edge. `dungeon` 시나리오 |
-| Channel pub/sub·심리스 이동 | `server/MyGame.Field/FieldSpot.cs`의 `Configure()`·`OnInitializeAsync`, `server/MyGame.Field/Handlers.cs`의 `BorderTick`·`BorderHandler`·`BorderDelivery` | 경계 timer, 구독·발행과 수신 Actor의 binding된 Session으로의 전달 | `Program.cs`의 `border` channel 등록과 `zlink.structure.json`의 `channels` 선언. `BorderVisible` 이벤트와 `SessionInfo` 유지를 확인하는 `field` 시나리오 |
-
-### 옮기는 순서와 규칙
-
-기능은 표의 행 하나씩 옮기고, 하나를 옮길 때마다 빌드, 구조 검사, 관련 e2e 시나리오를 실행한다. 시나리오 ID는 `e2e/MyGame.E2E/Scenarios.cs`의 목록, `zlink.structure.json`의 `run.scenarios`, `run.commands`의 시나리오 선택 예시에 함께 추가한다. 판정은 실제로 받은 응답과 이벤트로 하고, 고정 대기나 기한 확대로 통과시키지 않는다.
-
-메시지 contract부터 옮긴다. `Contracts.cs`에 typed record를 먼저 정의한 뒤, 컴파일 오류가 나는 handler를 하나씩 새 메시지로 옮긴다. 첫 입장 패킷을 바꾸면 `PlayerSession`의 첫 패킷 검사, `EnterWorldHandler`, 재접속 handler가 같은 타입을 받도록 함께 고친다.
-
-상태는 그 상태를 결정하는 객체에 둔다. 플레이어별 상태는 `PlayerActor`, 여러 플레이어가 공유하는 상태는 Spot에 둔다. Session binding이 Actor identity를 소유하므로 게임 상태 view에는 Actor generation이나 Session identity를 넣지 않는다. 상태 필드를 바꿀 때는 같은 객체의 snapshot record와 `Capture`·`Restore`를 함께 고친다. 빠뜨린 필드는 relocation 뒤 사라지고, `update` 시나리오가 그 손실을 잡는다.
-
-channel은 등록·structure 선언·구독을 같은 변경에서 함께 추가한다. 구독은 `FieldSpot.Configure()`, channel 등록은 `Program.cs`, 선언은 `zlink.structure.json`의 `channels`다. 셋이 다르면 구조 검사가 실행 전에 실패한다.
-
-Actor를 호스팅할 수 있는 모든 node에 공통 Entry와 Player factory를 등록하고, Instance node도 포함하여 Field와 Instance node마다 `zlink.structure.json`에 Entry 하나를 선언한다. Framework 기본 Entry는 structure에 넣지 않는다. 처음 Field host는 하나씩 시작하고 field를 모두 만든 뒤 나오는 `READY` 줄을 확인한 다음 다음 host를 시작한다. 각 host의 `FieldCapacity`는 `FieldIds` 수와 정확히 같게 두어, 앞선 host는 가득 차고 새로 시작한 host만 선언된 field를 받게 한다.
-
-Field·Dungeon 같은 역할 이름을 이 샘플과 다르게 정하려면 타입 이름, `GameNames`, `server/config/`, `zlink.structure.json`을 한 번에 바꾼다. 이름 변경은 기능을 옮기는 변경과 나눠서 진행하면 실패 원인을 찾기 쉽다.
-
-옮긴 뒤 `update`가 실패하면 snapshot에 빠진 필드가 있는지 먼저 확인한다. 그다음 [디버깅](#디버깅)의 message flow로 첫 실패 단계를 찾는다.
+1. 이동 판정은 `server/MyGame.Field/FieldPositionDomain.cs`, 파티 실행 판정은 `server/MyGame.Field/PartyRun.cs`, 던전 단계 판정은 `server/MyGame.Instance/DungeonRun.cs`에서 확장한다. Actor의 좌표는 이동 결과의 관찰값이다. Field 이탈은 파티를 변경하지 않는다.
+2. 새 메시지는 `server/MyGame.Shared/Contracts.cs`에 추가한다. 서버가 결과를 계산하고, 거부는 `ActionRejected(Reason, RetryAfterMs)`로 반환한다. 거부된 입력은 값·순번·쿨다운을 변경하지 않는다.
+3. 클라이언트 요청만 `server/MyGame.Session/PlayerSession.cs`의 허용 목록에 추가한다. 서버 간 메시지는 중계하지 않는다.
+4. 경계 시험은 `e2e/MyGame.E2E/DomainChecks.cs`, 수신 결과 시나리오는 `e2e/MyGame.E2E/Scenarios.cs`에 추가한다. README와 `zlink.structure.json`의 시나리오 목록을 함께 맞춘다. 시간 제한 거부는 서버가 반환한 `RetryAfterMs`만 기다린다.
+5. 상태 필드를 추가하면 해당 relocation 스냅샷도 갱신한다. 프로세스 시각 대신 남은 ms를 저장한다.
 
 ## 개발 시 주의점
 
@@ -143,7 +114,7 @@ Field·Dungeon 같은 역할 이름을 이 샘플과 다르게 정하려면 타�
 
 의존성은 중앙에서 고정한 공개 NuGet package를 사용하며, project reference는 이 프로젝트의 모듈 사이에 둔다. typed 메시지는 기본 Framework JSON serializer로 처리하여 process마다 같은 계약을 사용한다. relocation adapter가 직접 직렬화하는 대상은 application 상태로 한정하여 Framework의 실행 상태와 게임 상태의 관리 책임을 분리한다.
 
-게임 사실은 그것을 변경하는 객체 한 곳에서 관리한다. 좌표와 sequence는 `PlayerActor`, 파티는 `FieldSpot`, 명단과 stage는 `DungeonSpot`의 것이다. Spot에는 플레이어 ID와 관찰용 복사 값을 보관하며, 이동 뒤에도 같은 Actor 객체 참조를 사용할 수 있다고 가정하지 않는다. request handler 안의 응답은 handler가 받은 Actor의 `BoundSession`으로 보내고, 그 밖의 push는 공개 Actor client로 player ID에 보내 delivery handler가 binding된 Session으로 전달하게 한다. Session은 인증과 binding 뒤 packet을 전달하고, 이동과 게임 판정은 해당 상태를 관리하는 Actor나 Spot에서 수행한다.
+게임 사실은 그것을 변경하는 객체 한 곳에서 관리한다. 좌표와 sequence는 `PlayerActor`, 파티는 `PartySpot`, 명단과 stage는 `DungeonSpot`의 것이다. Spot에는 플레이어 ID와 관찰용 복사 값을 보관하며, 이동 뒤에도 같은 Actor 객체 참조를 사용할 수 있다고 가정하지 않는다. request handler 안의 응답은 handler가 받은 Actor의 `BoundSession`으로 보내고, 그 밖의 push는 공개 Actor client로 player ID에 보내 delivery handler가 binding된 Session으로 전달하게 한다. Session은 인증과 binding 뒤 packet을 전달하고, 이동과 게임 판정은 해당 상태를 관리하는 Actor나 Spot에서 수행한다.
 
 ### 비동기 실행과 lifecycle
 

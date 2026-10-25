@@ -2,7 +2,7 @@
 
 ## Project overview
 
-This C++20 project is an MORPG example with shared fields on several nodes and party dungeons. It runs a Session gateway for connections, Field nodes A and B that host four Fields with border visibility, Instance nodes A and B that host party Dungeons, and Redis for location and relocation state. `bootstrap.cmake` installs the ZLink Framework prebuilt of the version named by its `ZLINK_FRAMEWORK_CPP_VERSION`, the only place that names the Framework version; no package manager runs.
+This C++20 project is an MORPG example with shared fields on several nodes and party dungeons. It runs a Session gateway for connections, Field nodes A and B that host four Fields with border visibility and dynamic Party Spots, Instance nodes A and B that host party Dungeons, and Redis for location and relocation state. A Party Spot is independent of Fields and its ID is the party ID. `bootstrap.cmake` installs the ZLink Framework prebuilt of the version named by its `ZLINK_FRAMEWORK_CPP_VERSION`, the only place that names the Framework version; no package manager runs.
 
 The project layout and feature procedure below describe where to add gameplay. The [README](README.md) covers prerequisites, deployment, and known issues in the public packages. [zlink.structure.json](zlink.structure.json) describes the initial node composition and scenarios; Framework and Redis manage object placement at runtime.
 
@@ -26,6 +26,7 @@ Bash provides the same workflow:
 ./run-e2e.sh
 ./run-e2e.sh --scenario field,dungeon,reconnect,update
 ./run-e2e.sh --check-structure
+./run-e2e.sh --check-domain
 ```
 
 For host process debugging, install a C++20 compiler (GCC 13 or later, or Visual Studio 2022 17.4 or later in a Visual Studio developer shell on Windows), CMake 3.24 or later, and Ninja, then add `--local` or `-Local`. Local mode runs `cmake -P bootstrap.cmake`, `cmake --preset default` and `cmake --build --preset default`, then starts `build/bin/my-game-e2e`. Add `--no-build` or `-NoBuild` only with an existing local build. Keep canonical scenario order and assertions; compare first failures with Known issues in the README. Domain rule tests (`game-domain`, built from `tests/domain.cpp`) are built with the project; after a local build, run `ctest --test-dir build --output-on-failure`.
@@ -38,13 +39,13 @@ For host process debugging, install a C++20 compiler (GCC 13 or later, or Visual
 
 ### Fields, parties and players
 
-An Actor is a game state object addressed by ID; `Player` in `server/shared/player.hpp` hosts the player's `PlayerState`, whose coordinate and movement rules are in `server/shared/player-state.hpp`. `WorldEntry` in `server/shared/entry.hpp` handles the first packet, and both Field and Instance nodes register it together with the `Player` factory. A Spot is a state object that accepts Actors and executes shared game rules; `Field` in `server/field/field.hpp` manages field visibility, pending arrivals, and parties in `FieldState` from `server/field/domain.hpp`. Visibility values are copies of Actor movement state used for observation, so apply player state changes to the Actor.
+An Actor is a game state object addressed by ID; `Player` in `server/shared/player.hpp` hosts the player's `PlayerState`, which retains accepted coordinates, movement sequence, and Party ID. `FieldPositionDomain` in `server/field/domain.hpp` owns movement decisions, arrival validation, and remaining movement budget. `WorldEntry` in `server/shared/entry.hpp` handles the first packet, and both Field and Instance nodes register it together with the `Player` factory. A Spot is a state object that accepts Actors and executes shared game rules; `Field` in `server/field/field.hpp` manages field visibility and movement observations, while `PartySpot` in `server/field/party.hpp` owns party membership and run progress. Visibility values are copies of Actor movement state used for observation, so apply accepted player state changes to the Actor.
 
-`server/field/main.cpp` registers `WorldEntry`, the `Player` factory, and the `Field` factory with the `FieldCapacity` stable type limit, and `NodeControl` creates the fields listed in `FieldIds` at startup. Add handlers in `Field::configure()` with `add_actor_send`. When changing node composition, update registrations, `server/config/`, and the descriptor together so the structure check validates the same composition.
+`server/field/main.cpp` registers `WorldEntry`, the `Player` factory, the dynamic `PartySpot` factory, and the `Field` factory with the `FieldCapacity` stable type limit. `NodeControl` creates the fields listed in `FieldIds` at startup. Add handlers in `Field::configure()` with `add_actor_send`. When changing node composition, update registrations, `server/config/`, and the descriptor together so the structure check validates the same composition.
 
 ### Dungeons
 
-`server/instance/main.cpp` registers the Player factory, `WorldEntry`, and the `Dungeon` factory with the `DungeonCapacity` stable type limit. `Dungeon` in `server/instance/dungeon.hpp` is an application-created User Spot, distinct from the Framework Instance Spot with its separate creation and initialization contract. It owns the party roster and stage in `DungeonState` from `server/instance/domain.hpp`. Add encounters, rewards, and Dungeon lifecycle behavior in this project.
+`server/instance/main.cpp` registers the Player factory, `WorldEntry`, and the `Dungeon` factory with the `DungeonCapacity` stable type limit. `Dungeon` in `server/instance/dungeon.hpp` is an application-created User Spot, distinct from the Framework Instance Spot with its separate creation and initialization contract. `DungeonRun` in `server/instance/domain.hpp` owns the roster, run phase, and stage; it retains the owning Party Spot ID so the Dungeon can report member entry, start, and completion. `PartyRun` in `server/field/party-domain.hpp` owns the matching party phase and server-issued Run ID. Add encounters and rewards in this project.
 
 ### Shared contracts and hosting
 
@@ -52,7 +53,7 @@ An Actor is a game state object addressed by ID; `Player` in `server/shared/play
 
 ### Build and e2e runner
 
-`CMakeLists.txt` builds one executable per role (`my-game-session`, `my-game-field`, `my-game-instance`) from `server/<role>/main.cpp` and the `my-game-e2e` runner; add a node role to its `foreach(role ...)` list. `e2e/client.hpp` connects through the public stream connector, and `e2e/scenarios.hpp` checks results observable by the client. `e2e/world.hpp` starts the nodes and infrastructure through `e2e/process.hpp`, `e2e/main.cpp` selects and runs scenarios, and `e2e/structure.hpp` validates `zlink.structure.json` against `server/config/` and the names in `contracts.hpp`. Verify new gameplay through received client results; the movement, party, and dungeon rules are covered by the separate unit test target `my-game-domain-tests` from `tests/domain.cpp`. The project has no formatter configuration.
+`CMakeLists.txt` builds one executable per role (`my-game-session`, `my-game-field`, `my-game-instance`) from `server/<role>/main.cpp` and the `my-game-e2e` runner; add a node role to its `foreach(role ...)` list. `e2e/client.hpp` connects through the public stream connector, and `e2e/scenarios.hpp` checks results observable by the client. `e2e/world.hpp` starts the nodes and infrastructure through `e2e/process.hpp`, `e2e/main.cpp` selects and runs scenarios, and `e2e/structure.hpp` validates `zlink.structure.json` against `server/config/` and the names in `contracts.hpp`. Verify new gameplay through received client results; movement, party, and dungeon boundary cases are covered by `tests/domain.cpp` and can also run through `./run-e2e.sh --check-domain`. The project has no formatter configuration.
 
 ## ZLink concepts in this project
 
@@ -62,7 +63,7 @@ A RouteMesh connects nodes that exchange messages between processes; this projec
 
 ### Spots and Actors
 
-`WorldEntry` handles Actor entry, `Field` represents a geographical field with its parties, and `Dungeon` represents a dynamically created party Dungeon. The [Spot guide](https://docs.zlink.systems/cpp/guide/server/21-spot/) describes registration and calls for these objects. `Player` retains movement state when its host Spot changes; the [Actor guide](https://docs.zlink.systems/cpp/guide/server/22-actor/) describes Actor creation and calls.
+`WorldEntry` handles Actor entry, `Field` represents a geographical field, `PartySpot` owns a party independently of Field membership, and `Dungeon` represents that run's dynamically created Dungeon. The [Spot guide](https://docs.zlink.systems/cpp/guide/server/21-spot/) describes registration and calls for these objects. `Player` retains movement and Party ID when its host Spot changes; the [Actor guide](https://docs.zlink.systems/cpp/guide/server/22-actor/) describes Actor creation and calls.
 
 ### STREAM and Sessions
 
@@ -92,51 +93,19 @@ Requests in the example game follow this path. Reading the code along this path 
 2. A new Actor starts in the Entry Spot `WorldEntry`. `WorldEntry::enter` checks the identity and calls `Player::move`, which requests `join_spot(...).defer()` for the Field that covers the coordinate (`Names::field_id`).
 3. `Field::on_actor_join` accepts the arrival and `Field::on_actor_joined` applies it to the Actor. When the join completes, `Player::on_join_completed` sends `WorldState` through the bound Session. Later packets from the same client are handled by the handlers of the Field that holds the Actor (such as `Field::move`), which send results through the same Session. When movement reaches another Field, `Field::move` calls `Player::move` again.
 4. Every `Names::tick_period`, `BorderTick` publishes the players near a border on the `border` channel. The adjacent Field's `Field::border` sends `BorderVisible` to the nearby players through the Actor client, and `Field::deliver` forwards it to the bound Session.
-5. `CreatePartyRequest` and `JoinPartyRequest` are handled by `Field::create_party` and `Field::join_party`, which apply `FieldState::party` and send the updated `FieldView`, or answer `ActionRejected`.
-6. `EnterDungeonRequest` is handled by `Field::enter_dungeon`. For the party led by the requester, it calls `get_or_create` for the Dungeon, asks it with `request_to_spot` and `PrepareDungeon`, and sends `JoinDungeon` to every member through the Actor client. Each member's `Field::travel` requests `join_spot(...).defer()` for the Dungeon; `Dungeon::on_actor_join` admits the members, and `Dungeon::advance` raises the stage and sends the new view to every member.
-7. To replace a node, `drain` in `NodeControl` requests relocation. Framework takes the game state from `capture` in `PlayerRelocation`, `FieldRelocation`, and `DungeonRelocation` and calls `restore` on another node.
+5. `CreatePartyRequest` and `JoinPartyRequest` are handled by `Field::create_party` and `Field::join_party`. Field issues a Party ID, creates or finds that Party Spot, and forwards `PartyCommand` with `request_to_spot`. `PartySpot` rejects invalid requests and broadcasts the current `PartyView` on success. Leaving a Field removes only its visibility and movement projection.
+6. `EnterDungeonRequest` is handled by `Field::enter_dungeon`, which forwards the request to the player's Party Spot. The Party Spot issues a Run ID, creates the Dungeon, and sends `PrepareDungeon` with an idempotent `request_to_spot`; it then sends `JoinDungeon` to members who have not entered. Each member's `Field::travel` requests `join_spot(...).defer()` for the Dungeon. `Dungeon::on_actor_join` checks the run ID and roster, and `on_actor_joined` reports member entry and run start to the Party Spot. `Dungeon::advance` reports completion and sends the current view to every member.
+7. To replace a node, `drain` in `NodeControl` requests relocation. Framework takes the game state from `capture` in `PlayerRelocation`, `FieldRelocation`, `PartyRelocation`, and `DungeonRelocation` and calls `restore` on another node.
 
-## Developing from this sample
+## Extending the template domain
 
-This sample shows how the features work together, so read and run it rather than turning it into your game. Start your own project from the C++ starter: choose C++ in the Initializer at [ZLink Start](https://zlink.systems/start), or use `framework/languages/cpp/templates/starter/my-game` in the ZLink repository. Then transfer the features you need from this sample one at a time. The starter's `AGENTS.md` owns the choice between structures; this section covers only `morpg-fields-instances`. Keep this sample unchanged next to your project as a reference.
+Extend this template's domain to build a MORPG server. Run the README build and e2e commands before adding features.
 
-### Run the sample first
-
-Before transferring anything, run the build and e2e once with the [Development commands](#development-commands) to confirm the downloaded sample works and to see its behavior. This result is the baseline for comparison. If it fails, compare the failure with Known issues in the [README](README.md) first.
-
-### Features to transfer
-
-Feature names match the feature table in the starter's `AGENTS.md`, except Party, which only this structure has. Paths are relative to this directory. The starter has one Session node and the `connect` scenario only, so the last column lists what grows in the starter with each feature.
-
-| Feature | File in this sample | What to transfer | What to grow in the starter alongside |
-| --- | --- | --- | --- |
-| Typed messages | `server/shared/contracts.hpp` | The structs of the features you adopt: `JoinWorldRequest`, `MoveRequest`, `EnterField`, `WorldState`, `BorderPresence`, `BorderVisible`, `CreatePartyRequest`, `JoinPartyRequest`, `EnterDungeonRequest`, `PrepareDungeon`, `DungeonPrepared`, `JoinDungeon`, `AdvanceRequest`, `ViewRequest`, `FieldView`, `DungeonView`, `ActionRejected`; `SessionInfoRequest` and `SessionInfo` only if your client needs them | The `Names` and `Rejection` constants that the messages refer to |
-| Actor | `Player`, `PlayerFactory` in `server/shared/player.hpp`, `PlayerState` in `server/shared/player-state.hpp` | `Player` with `PlayerState` (coordinate, `sequence`, `validate`, `apply`), `move`, and `send_state` | A new `server/field/` role with its `main.cpp`, `server/config/` files, and an entry in the `CMakeLists.txt` role list; the Actor factory registration in `main.cpp`; the `nodes` declaration in `zlink.structure.json` and the structure check in `e2e/structure.hpp` |
-| Spot | `Field` in `server/field/field.hpp`, `FieldState` in `server/field/domain.hpp` | `Field` with `FieldState` (visibility, pending arrivals, parties) and the `deliver` forwarders | The Spot factory registration in `main.cpp` with `FieldCapacity`; the `FieldIds` setting and the `spots` declarations in `zlink.structure.json` that the structure check compares |
-| Party | `Field::create_party`, `Field::join_party` in `server/field/field.hpp`, `FieldState::party` in `server/field/domain.hpp` | The party rules (one party per player, a size limit, leader entry) and the handlers that apply them and answer `ActionRejected` | The `Names::maximum_party_members` constant and the `Rejection` strings; the `dungeon` scenario, which creates and joins a party |
-| Entry and first admission | `WorldEntry` in `server/shared/entry.hpp`, `Field::reconnect` in `server/field/field.hpp` | `WorldEntry::enter` (identity check, first move to the Field of the coordinate) and the identity check and state resend of `Field::reconnect` | The `add_entry_spot` registration and the `entry` declarations; a first-entry scenario (`field`) and a `reconnect` scenario that compares state after reconnection |
-| Session binding | `server/session/session.hpp` | The first-packet check, then find or create the Actor, `bind_or_get`, and relay the original typed packet | The same first-packet type as `WorldEntry::enter`; transfer it into the starter's `server/session/session.hpp` |
-| Host relocation | `PlayerRelocation` in `server/shared/player.hpp`, `FieldRelocation` in `server/field/field.hpp`, `DungeonRelocation` in `server/instance/dungeon.hpp`, `NodeControl` in `server/shared/hosting.hpp` | The adapters with `capture` and `restore` of `PlayerState`, `FieldState`, and `DungeonState`, and the `drain` and `shutdown` controls | The `preserve_state_with` registrations in `main.cpp`; the `update` scenario, which checks that connections and state survive a server replacement and that the replacement node accepts new work |
-| Dynamic dungeon | `Field::enter_dungeon`, `Field::travel` in `server/field/field.hpp`, `server/instance/dungeon.hpp`, `server/instance/main.cpp` | The dynamic User Spot creation pattern (`get_or_create`, then `request_to_spot` with `PrepareDungeon`), the member-only admission of `Dungeon`, and `DungeonState` | A new `server/instance/` role with its config (`DungeonCapacity`) and `CMakeLists.txt` entry; the dynamic `dungeon` Spot and the `GetOrCreate` edge in `zlink.structure.json` |
-| Channel pub/sub and seamless movement | `Field::configure()`, `Field::publish_border`, `Field::border`, `Field::deliver`, and `BorderTick` in `server/field/field.hpp` | The border subscription and publication, and the delivery to the receiving Actor's bound Session | The `border` channel registration in the node `main.cpp` files and its `channels` declaration in `zlink.structure.json`; a scenario that checks a border publication (`field`) |
-
-`drain` and `shutdown` are transferred together with `NodeControl`.
-
-### Transfer order and rules
-
-Transfer one row at a time and run the build, the structure check, and the related e2e scenario after each. Add a scenario ID to the `Scenario` enum and `scenario_order` in `e2e/structure.hpp`, to the `switch` and the usage message in `e2e/main.cpp`, to `run.scenarios`, and to the selection examples in `run.commands` of `zlink.structure.json` together. Judge results by the replies and events actually received; do not make tests pass with fixed sleeps or longer deadlines.
-
-Start with the message contracts. Define the packet structs in `server/shared/contracts.hpp` first, each with a `packet_name` and its JSON conversion, then move each handler that fails to compile to the new messages. When you change the first-entry packet, update the first-packet check in `Session::on_packet` in `server/session/session.hpp` and `WorldEntry::enter`, `Field::reconnect`, and `Dungeon::reconnect` to receive the same type.
-
-Keep each piece of state in the object that decides it. Per-player state belongs in `Player`; state shared by several players belongs in a Spot. When you change state fields, update that object's state struct with its JSON conversion and the `capture` and `restore` of its relocation adapter together. A missing field disappears after relocation, and the `update` scenario detects the loss.
-
-Add a channel, its subscription, and its declaration in the same change: the subscription in `Field::configure()`, the channel registration in the Field `main.cpp`, and the `channels` declaration in `zlink.structure.json`. If they disagree, the structure check fails before startup. The subscription calls `add_subscribe(channel, topic)` through `subscribe_border`; when the installed Framework lacks that call, Field startup fails with an explicit message instead of switching the subscription to `Names::mesh` (see Known issues in the README).
-
-Declare one Entry in `zlink.structure.json` for each node that registers `WorldEntry` (the Field and Instance nodes), and keep the dynamic Dungeon declarations complete for every Instance. Both Instance nodes set `DungeonCapacity` to 1 in the e2e configuration, so a replacement must accept a fresh Dungeon while the surviving node holds the relocated one; placement itself remains a Framework decision.
-
-To name roles such as Field or Dungeon differently from this sample, change the type names, `Names`, `server/config/`, `zlink.structure.json`, and the role list in `CMakeLists.txt` at once. Do the renaming in its own change, separate from transferring a feature, so failures are easier to trace.
-
-If `update` fails after a transfer, first check whether the snapshot is missing any state, then use the message flow in [Debugging](#debugging) to find the first failing step.
+1. Extend authoritative movement decisions in `server/field/domain.hpp`, Party Spot transitions in `server/field/party-domain.hpp`, and dungeon rules in `server/instance/domain.hpp`. Keep one owner for each state change.
+2. Add shared contracts in `server/shared/contracts.hpp`. The server validates inputs and calculates results. Rejected inputs must preserve values, sequences, and cooldowns.
+3. Add only client packets to the Session allowlist in `server/session/session.hpp`. Keep internal messages and result packets outside that list.
+4. Add received-result scenarios in `e2e/scenarios.hpp` and boundary cases in `tests/domain_checks.hpp`. Update the README scenario table and `run.scenarios` in `zlink.structure.json` together. For time-limited rejection, send the accepted request and the request expected to be rejected before waiting for either reply, then wait only for the server's `RetryAfterMs`.
+5. Update the owning relocation snapshot and boundary checks when adding state. Store remaining milliseconds rather than process timestamps.
 
 ## Development considerations
 
@@ -144,7 +113,7 @@ If `update` fails after a transfer, first check whether the snapshot is missing 
 
 Use the public Framework prebuilt that `bootstrap.cmake` installs at the pinned version, and add no repository sources or local feeds to the project. Process typed messages with the default Framework JSON serializer so processes use the same contract: declare each message in `server/shared/contracts.hpp` with a `packet_name` and JSON conversion, and add no per-message codecs, manual encoding, or raw frame parsing. Limit direct serialization in relocation adapters to application state (`zlink::message_t::from_json` in `capture`, `parse_json` in `restore`), keeping management of Framework execution state separate from game state.
 
-Manage each game fact, such as a player's coordinate, in the object responsible for changing it. Store player IDs and observational copies in Spots, and never retain Actor references: a Spot handler receives the Actor as an argument and reaches other players through `actor_client_t` by player ID. Sessions forward packets after authentication and binding; movement is decided by the Actor's `PlayerState`, parties and visibility by the `Field`, and dungeon membership and stage by the `Dungeon`, each of which owns that state. Keep game rules in `server/field/domain.hpp`, `server/instance/domain.hpp`, and `server/shared/player-state.hpp`, and keep Framework callbacks in the Spot, Actor, and Session files.
+Manage each game fact in its owner. Store player IDs and observational copies in Spots, and never retain Actor references: a Spot handler receives the Actor as an argument and reaches other players through `actor_client_t` by player ID. Sessions forward packets after authentication and binding. `FieldPositionDomain` decides movement, `PlayerState` retains accepted values and Party ID, `PartySpot` decides party membership and run phase, and `DungeonRun` decides the dungeon roster, phase, and stage. Field departure removes visibility only and leaves Party Spot state unchanged. Keep these rules in `server/field/domain.hpp`, `server/field/party-domain.hpp`, `server/instance/domain.hpp`, and `server/shared/player-state.hpp`, and keep Framework callbacks in the Spot, Actor, and Session files.
 
 ### Asynchronous execution and lifecycle
 

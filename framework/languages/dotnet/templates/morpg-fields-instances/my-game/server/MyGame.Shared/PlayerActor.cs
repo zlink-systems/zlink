@@ -6,8 +6,9 @@ namespace MyGame.Shared;
 public sealed class PlayerActor(IZLinkActorContext context, NodeSettings settings) : IZLinkActor
 {
     public IZLinkActorContext Context { get; } = context;
-    public int X { get; private set; }
-    public int Sequence { get; private set; }
+    public double X { get; private set; }
+    public long Sequence { get; private set; }
+    public string? PartyId { get; set; }
     public string FieldId => GameNames.FieldId(X);
 
     public void Apply(EnterField position)
@@ -36,15 +37,16 @@ public sealed class PlayerActor(IZLinkActorContext context, NodeSettings setting
             await SendStateAsync();
     }
 
-    public PlayerSnapshot Capture() => new(X, Sequence);
+    public PlayerSnapshot Capture() => new(X, Sequence, PartyId);
 
     public void Restore(PlayerSnapshot state)
     {
         Apply(new EnterField(state.X, state.Sequence));
+        PartyId = state.PartyId;
     }
 }
 
-public sealed record PlayerSnapshot(int X, int Sequence);
+public sealed record PlayerSnapshot(double X, long Sequence, string? PartyId);
 
 public sealed class PlayerFactory(NodeSettings settings) : IZLinkActorFactory<PlayerActor>
 {

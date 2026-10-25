@@ -2,7 +2,7 @@
 
 ## 프로젝트 개요
 
-이 C++20 프로젝트는 여러 node의 공용 필드와 파티 Dungeon을 가진 MORPG 예제다. 연결을 처리하는 Session gateway, 경계 가시성을 가진 Field 4개를 호스팅하는 Field node A·B, 파티 Dungeon을 호스팅하는 Instance node A·B와 위치·이동 상태를 저장하는 Redis를 실행한다. `bootstrap.cmake`는 `ZLINK_FRAMEWORK_CPP_VERSION`이 가리키는 버전의 ZLink Framework prebuilt를 설치하며, 이 변수가 Framework 버전을 정하는 유일한 곳이다. package manager는 실행하지 않는다.
+이 C++20 프로젝트는 여러 node의 공용 필드와 파티 Dungeon을 가진 MORPG 예제다. 연결을 처리하는 Session gateway, 경계 가시성을 가진 Field 4개와 독립 Party Spot을 호스팅하는 Field node A·B, 파티 Dungeon을 호스팅하는 Instance node A·B와 위치·이동 상태를 저장하는 Redis를 실행한다. Party Spot ID가 곧 Party ID이며 Field membership과 별도로 유지된다. `bootstrap.cmake`는 `ZLINK_FRAMEWORK_CPP_VERSION`이 가리키는 버전의 ZLink Framework prebuilt를 설치하며, 이 변수가 Framework 버전을 정하는 유일한 곳이다. package manager는 실행하지 않는다.
 
 게임 기능은 아래의 프로젝트 구성과 확장 절차에 따라 추가한다. 실행 환경·배포·공개 package의 알려진 문제는 [README](README.md)가 설명한다. 초기 node 구성과 scenario 목록은 [zlink.structure.json](zlink.structure.json)에 있으며, 실행 중 객체의 위치는 Framework와 Redis가 관리한다.
 
@@ -26,6 +26,7 @@ Bash도 같은 절차를 실행한다.
 ./run-e2e.sh
 ./run-e2e.sh --scenario field,dungeon,reconnect,update
 ./run-e2e.sh --check-structure
+./run-e2e.sh --check-domain
 ```
 
 로컬 process 디버깅은 C++20 컴파일러(GCC 13 이상 또는 Visual Studio 2022 17.4 이상이며 Windows에서는 Visual Studio 개발자 셸), CMake 3.24 이상과 Ninja를 설치한 뒤 `--local` 또는 `-Local`로 실행한다. 로컬 모드는 `cmake -P bootstrap.cmake`, `cmake --preset default`, `cmake --build --preset default`를 실행한 뒤 `build/bin/my-game-e2e`를 시작한다. 로컬 빌드가 있으면 `--no-build` 또는 `-NoBuild`를 추가한다. 시나리오 순서와 assertion은 유지하며 최초 실패를 README의 Known issues와 대조한다. 도메인 규칙 테스트(`tests/domain.cpp`로 빌드되는 `game-domain`)는 프로젝트와 함께 빌드되며, 로컬 빌드 뒤 `ctest --test-dir build --output-on-failure`로 실행한다.
@@ -38,13 +39,13 @@ Bash도 같은 절차를 실행한다.
 
 ### Field, 파티와 플레이어
 
-ID로 찾는 게임 상태 객체가 Actor이며, `server/shared/player.hpp`의 `Player`가 플레이어의 `PlayerState`를 가진다. 좌표와 이동 규칙은 `server/shared/player-state.hpp`에 있다. `server/shared/entry.hpp`의 `WorldEntry`가 첫 패킷을 처리하며, Field node와 Instance node 모두 `Player` factory와 함께 이를 등록한다. Actor를 받아 공통 게임 규칙을 실행하는 상태 객체가 Spot이며, `server/field/field.hpp`의 `Field`가 `server/field/domain.hpp`의 `FieldState`에 필드의 가시성 정보, 도착 대기 정보와 파티를 관리한다. 가시성 정보는 Actor의 이동 상태에서 복사한 관찰용 값이므로, 플레이어 상태 변경은 Actor에 적용한다.
+ID로 찾는 게임 상태 객체가 Actor이며, `server/shared/player.hpp`의 `Player`가 플레이어의 `PlayerState`를 가진다. `PlayerState`는 수락된 좌표·순번·Party ID를 보관하고 이동 판정과 남은 예산 스냅샷은 `server/field/domain.hpp`의 `FieldPositionDomain`이 소유한다. `server/shared/entry.hpp`의 `WorldEntry`가 첫 패킷을 처리하며, Field node와 Instance node 모두 `Player` factory와 함께 이를 등록한다. Actor를 받아 공통 게임 규칙을 실행하는 상태 객체가 Spot이다. `Field`는 가시성과 이동 관찰값만 관리하고, `server/field/party.hpp`의 독립 `PartySpot`이 파티 구성원과 run 상태를 소유한다. 가시성 값은 Actor 이동 상태의 관찰용 복사본이므로, 수락된 플레이어 상태 변경은 Actor에 적용한다.
 
-`server/field/main.cpp`가 `WorldEntry`, `Player` factory, `FieldCapacity` stable type limit을 지정한 `Field` factory를 등록하고, `NodeControl`이 `FieldIds`에 적힌 field를 시작 때 만든다. handler는 `Field::configure()`에서 `add_actor_send`로 추가한다. node 구성을 바꾸면 실제 등록과 `server/config/`, descriptor를 함께 맞추어 구조 검사가 같은 구성을 검사하게 한다.
+`server/field/main.cpp`가 `WorldEntry`, `Player` factory, dynamic `PartySpot` factory와 `FieldCapacity` stable type limit을 지정한 `Field` factory를 등록한다. `NodeControl`은 `FieldIds`에 적힌 field를 시작 때 만든다. handler는 `Field::configure()`에서 `add_actor_send`로 추가한다. node 구성을 바꾸면 실제 등록과 `server/config/`, descriptor를 함께 맞추어 구조 검사가 같은 구성을 검사하게 한다.
 
 ### Dungeon
 
-`server/instance/main.cpp`는 Player factory, `WorldEntry`, `DungeonCapacity` stable type limit을 지정한 `Dungeon` factory를 등록한다. `server/instance/dungeon.hpp`의 `Dungeon`은 application이 생성하는 User Spot이며 Framework가 별도 생성·초기화 계약으로 제공하는 Instance Spot과 구분된다. `server/instance/domain.hpp`의 `DungeonState`로 파티 구성원과 stage를 관리한다. 전투·보상·Dungeon lifecycle은 이 프로젝트에 추가한다.
+`server/instance/main.cpp`는 Player factory, `WorldEntry`, `DungeonCapacity` stable type limit을 지정한 `Dungeon` factory를 등록한다. `server/instance/dungeon.hpp`의 `Dungeon`은 application이 생성하는 User Spot이며 Framework가 별도 생성·초기화 계약으로 제공하는 Instance Spot과 구분된다. `server/instance/domain.hpp`의 `DungeonRun`은 구성원·run phase·stage를 소유하고, progress를 보낼 Party Spot ID도 보관한다. `server/field/party-domain.hpp`의 `PartyRun`은 대응하는 파티 phase와 서버 발급 Run ID를 소유한다. 전투와 보상은 이 프로젝트에 추가한다.
 
 ### 공통 계약과 hosting
 
@@ -52,7 +53,7 @@ ID로 찾는 게임 상태 객체가 Actor이며, `server/shared/player.hpp`의 
 
 ### 빌드와 e2e runner
 
-`CMakeLists.txt`는 role마다 `server/<role>/main.cpp`로 실행 파일(`my-game-session`, `my-game-field`, `my-game-instance`)을 만들고 `my-game-e2e` runner를 만든다. node role을 추가하면 `foreach(role ...)` 목록에 넣는다. `e2e/client.hpp`는 공개 stream connector로 게임에 접속하고 `e2e/scenarios.hpp`는 client가 관찰할 결과를 검사한다. `e2e/world.hpp`는 `e2e/process.hpp`로 node와 기반 시설을 시작하고, `e2e/main.cpp`는 시나리오를 선택해 실행하며, `e2e/structure.hpp`는 `zlink.structure.json`을 `server/config/`와 `contracts.hpp`의 이름에 대조해 검사한다. 새 게임 동작은 client가 받은 결과로 검증하며, 이동·파티·Dungeon 규칙은 `tests/domain.cpp`의 별도 unit test target `my-game-domain-tests`가 검사한다. formatter 설정은 포함되어 있지 않다.
+`CMakeLists.txt`는 role마다 `server/<role>/main.cpp`로 실행 파일(`my-game-session`, `my-game-field`, `my-game-instance`)을 만들고 `my-game-e2e` runner를 만든다. node role을 추가하면 `foreach(role ...)` 목록에 넣는다. `e2e/client.hpp`는 공개 stream connector로 게임에 접속하고 `e2e/scenarios.hpp`는 client가 관찰할 결과를 검사한다. `e2e/world.hpp`는 `e2e/process.hpp`로 node와 기반 시설을 시작하고, `e2e/main.cpp`는 시나리오를 선택해 실행하며, `e2e/structure.hpp`는 `zlink.structure.json`을 `server/config/`와 `contracts.hpp`의 이름에 대조해 검사한다. 새 게임 동작은 client가 받은 결과로 검증하며, 이동·파티·Dungeon 경계 시험은 `tests/domain.cpp`와 `./run-e2e.sh --check-domain`으로 실행한다. formatter 설정은 포함되어 있지 않다.
 
 ## 프로젝트의 ZLink 개념
 
@@ -62,7 +63,7 @@ process 간 메시지를 전달할 node들을 연결하는 구성이 RouteMesh�
 
 ### Spot과 Actor
 
-`WorldEntry`는 Actor 진입을 처리하고 `Field`는 파티를 가진 지리적 필드를, `Dungeon`은 동적으로 생성한 파티 Dungeon을 표현한다. [Spot 가이드](https://docs.zlink.systems/ko/cpp/guide/server/21-spot/)는 이 객체들의 등록과 호출을 설명한다. `Player`는 소속 Spot이 바뀌어도 플레이어 이동 상태를 유지한다. 생성과 호출은 [Actor 가이드](https://docs.zlink.systems/ko/cpp/guide/server/22-actor/)에서 설명한다.
+`WorldEntry`는 Actor 진입을 처리하고 `Field`는 지리적 필드를, `PartySpot`은 Field membership과 별개인 파티를, `Dungeon`은 동적으로 생성한 파티 Dungeon을 표현한다. [Spot 가이드](https://docs.zlink.systems/ko/cpp/guide/server/21-spot/)는 이 객체들의 등록과 호출을 설명한다. `Player`는 소속 Spot이 바뀌어도 이동 상태와 Party ID를 유지한다. 생성과 호출은 [Actor 가이드](https://docs.zlink.systems/ko/cpp/guide/server/22-actor/)에서 설명한다.
 
 ### STREAM과 Session
 
@@ -92,51 +93,19 @@ Actor가 소속 Spot을 바꾸는 동작은 membership 변경이다. 대상 Spot
 2. 새 Actor는 Entry Spot `WorldEntry`에서 시작한다. `WorldEntry::enter`가 identity를 확인하고 `Player::move`로 좌표에 해당하는 Field(`Names::field_id`)에 `join_spot(...).defer()`를 요청한다.
 3. `Field::on_actor_join`이 도착을 수락하고 `Field::on_actor_joined`가 이를 Actor에 적용한다. 참가가 끝나면 `Player::on_join_completed`가 binding된 Session으로 `WorldState`를 보낸다. 이후 같은 client의 패킷은 Actor가 속한 Field의 handler(`Field::move` 등)가 처리하고 결과를 같은 Session으로 보낸다. 이동이 다른 Field에 닿으면 `Field::move`가 다시 `Player::move`를 호출한다.
 4. `BorderTick`은 `Names::tick_period`마다 경계 근처 플레이어를 `border` channel로 publish한다. 인접 Field의 `Field::border`가 가까운 플레이어에게 Actor client로 `BorderVisible`을 보내고, `Field::deliver`가 이를 binding된 Session으로 전달한다.
-5. `CreatePartyRequest`와 `JoinPartyRequest`는 `Field::create_party`와 `Field::join_party`가 처리하며 `FieldState::party`를 적용해 갱신된 `FieldView`를 보내거나 `ActionRejected`로 답한다.
-6. `EnterDungeonRequest`는 `Field::enter_dungeon`이 처리한다. 요청자가 이끄는 파티에 대해 Dungeon을 `get_or_create`하고 `request_to_spot`과 `PrepareDungeon`으로 준비시킨 뒤 Actor client로 모든 구성원에게 `JoinDungeon`을 보낸다. 각 구성원의 `Field::travel`이 Dungeon에 `join_spot(...).defer()`를 요청하고, `Dungeon::on_actor_join`이 구성원을 수락하며, `Dungeon::advance`는 stage를 올리고 새 view를 모든 구성원에게 보낸다.
-7. node를 교체할 때 `NodeControl`의 `drain`이 relocation을 요청한다. Framework는 `PlayerRelocation`·`FieldRelocation`·`DungeonRelocation`의 `capture`로 게임 상태를 받아 다른 node에서 `restore`한다.
+5. `CreatePartyRequest`와 `JoinPartyRequest`는 `Field::create_party`와 `Field::join_party`가 처리한다. Field는 Party ID를 발급하거나 기존 Party Spot을 찾아 `request_to_spot`으로 `PartyCommand`를 전달한다. 성공하면 `PartySpot`이 `PartyView`를 보내고 실패하면 `ActionRejected`를 보낸다. Field 이탈은 가시성과 이동 관찰값만 제거한다.
+6. `EnterDungeonRequest`는 `Field::enter_dungeon`이 Party Spot으로 전달한다. Party Spot이 Run ID를 발급하고 Dungeon을 생성해 `request_to_spot`과 `PrepareDungeon`으로 멱등 준비한 뒤 미입장 구성원에게 `JoinDungeon`을 보낸다. 각 구성원의 `Field::travel`이 Dungeon에 `join_spot(...).defer()`를 요청하고, Dungeon은 run ID와 roster로 admission을 판정한다. 모든 구성원 도착·run 시작·완료를 Party Spot에 보고하며 `Dungeon::advance`가 stage와 view를 갱신한다.
+7. node를 교체할 때 `NodeControl`의 `drain`이 relocation을 요청한다. Framework는 `PlayerRelocation`·`FieldRelocation`·`PartyRelocation`·`DungeonRelocation`의 `capture`로 게임 상태를 받아 다른 node에서 `restore`한다.
 
-## 이 샘플을 보며 개발하기
+## 템플릿 도메인 확장
 
-이 샘플은 기능들이 함께 동작하는 방식을 보여 주므로, 자기 게임으로 바꾸지 않고 읽고 실행하는 용도로 쓴다. 자기 프로젝트는 C++ 기본 셋업에서 시작한다. [ZLink Start](https://zlink.systems/start)의 Initializer에서 C++를 고르거나 ZLink 저장소의 `framework/languages/cpp/templates/starter/my-game`을 사용한다. 그다음 필요한 기능을 이 샘플에서 하나씩 옮긴다. 구조 선택은 기본 셋업의 `AGENTS.md`가 설명하며, 이 절은 `morpg-fields-instances`만 다룬다. 이 샘플은 바꾸지 않고 프로젝트 옆에 참고용으로 둔다.
+이 템플릿의 도메인을 확장하여 MORPG 서버를 만든다. 기능을 추가하기 전에 README의 빌드와 e2e를 실행한다.
 
-### 샘플 먼저 실행하기
-
-옮기기 전에 [개발 명령](#개발-명령)으로 빌드와 e2e를 한 번 실행해 받은 샘플이 동작하는지 확인하고 동작을 본다. 이 결과가 이후 비교의 기준이 된다. 실패하면 먼저 [README](README.md)의 Known issues와 대조한다.
-
-### 옮길 기능
-
-기능 이름은 기본 셋업 `AGENTS.md`의 기능 표와 같다(파티은 이 구조에만 있는 기능이다). 경로는 이 디렉터리를 기준으로 한다. 기본 셋업에는 Session node 하나와 `connect` 시나리오만 있으므로, 마지막 열은 기능마다 기본 셋업에서 함께 늘릴 것이다.
-
-| 기능 | 이 샘플의 파일 | 옮길 것 | 기본 셋업에서 함께 늘릴 것 |
-| --- | --- | --- | --- |
-| Typed 메시지 | `server/shared/contracts.hpp` | 사용할 기능의 struct: `JoinWorldRequest`, `MoveRequest`, `EnterField`, `WorldState`, `BorderPresence`, `BorderVisible`, `CreatePartyRequest`, `JoinPartyRequest`, `EnterDungeonRequest`, `PrepareDungeon`, `DungeonPrepared`, `JoinDungeon`, `AdvanceRequest`, `ViewRequest`, `FieldView`, `DungeonView`, `ActionRejected`. `SessionInfoRequest`·`SessionInfo`는 client가 필요로 할 때만 옮긴다 | 메시지가 가리키는 `Names`·`Rejection` 상수 |
-| Actor | `server/shared/player.hpp`의 `Player`, `PlayerFactory`, `server/shared/player-state.hpp`의 `PlayerState` | `PlayerState`(좌표, `sequence`, `validate`, `apply`), `move`, `send_state`를 가진 `Player` | 새 `server/field/` role과 그 `main.cpp`, `server/config/` 파일, `CMakeLists.txt` role 목록의 항목. `main.cpp`의 Actor factory 등록. `zlink.structure.json`의 `nodes` 선언과 `e2e/structure.hpp`의 구조 검사 |
-| Spot | `server/field/field.hpp`의 `Field`, `server/field/domain.hpp`의 `FieldState` | `FieldState`(가시성 정보, 도착 대기 정보, 파티)를 가진 `Field`와 `deliver` forwarder | `main.cpp`의 `FieldCapacity`를 지정한 Spot factory 등록. 구조 검사가 대조하는 `FieldIds` 설정과 `zlink.structure.json`의 `spots` 선언 |
-| 파티 | `server/field/field.hpp`의 `Field::create_party`·`Field::join_party`, `server/field/domain.hpp`의 `FieldState::party` | 파티 규칙(플레이어당 파티 하나, 인원 제한, 파티장 입장)과 이를 적용하고 `ActionRejected`로 답하는 handler | `Names::maximum_party_members` 상수와 `Rejection` 문자열. 파티를 만들고 참가하는 `dungeon` 시나리오 |
-| Entry·첫 입장 | `server/shared/entry.hpp`의 `WorldEntry`, `server/field/field.hpp`의 `Field::reconnect` | `WorldEntry::enter`(identity 확인, 좌표의 Field로의 첫 이동)와 `Field::reconnect`의 identity 확인과 상태 재전송 | `add_entry_spot` 등록과 `entry` 선언. 첫 입장 시나리오(`field`)와 재접속 뒤 상태를 비교하는 `reconnect` 시나리오 |
-| Session binding | `server/session/session.hpp` | 첫 패킷 검사, Actor 조회·생성, `bind_or_get` binding과 원래 typed 패킷 relay | `WorldEntry::enter`와 같은 첫 패킷 타입. 기본 셋업의 `server/session/session.hpp`에 옮긴다 |
-| Host relocation | `server/shared/player.hpp`의 `PlayerRelocation`, `server/field/field.hpp`의 `FieldRelocation`, `server/instance/dungeon.hpp`의 `DungeonRelocation`, `server/shared/hosting.hpp`의 `NodeControl` | `PlayerState`·`FieldState`·`DungeonState`의 `capture`·`restore`를 가진 adapter와 `drain`·`shutdown` 제어 | `main.cpp`의 `preserve_state_with` 등록. 서버 교체 뒤에도 연결·상태가 유지되고 대체 node가 새 작업을 받는지 판정하는 `update` 시나리오 |
-| 동적 던전 | `server/field/field.hpp`의 `Field::enter_dungeon`·`Field::travel`, `server/instance/dungeon.hpp`, `server/instance/main.cpp` | 동적 User Spot 생성 형태(`get_or_create` 뒤 `PrepareDungeon`으로 `request_to_spot`), 구성원만 수락하는 `Dungeon`, `DungeonState` | 새 `server/instance/` role과 그 설정(`DungeonCapacity`), `CMakeLists.txt` 항목. `zlink.structure.json`의 동적 `dungeon` Spot과 `GetOrCreate` edge |
-| Channel pub/sub·심리스 이동 | `server/field/field.hpp`의 `Field::configure()`, `Field::publish_border`, `Field::border`, `Field::deliver`, `BorderTick` | 경계 구독·발행과 수신 Actor의 binding된 Session으로의 전달 | node `main.cpp`의 `border` channel 등록과 `zlink.structure.json`의 `channels` 선언. 경계 publication을 확인하는 시나리오(`field`) |
-
-`drain`과 `shutdown`은 `NodeControl`과 함께 옮긴다.
-
-### 옮기는 순서와 규칙
-
-기능은 표의 행 하나씩 옮기고, 하나를 옮길 때마다 빌드, 구조 검사, 관련 e2e 시나리오를 실행한다. 시나리오 ID는 `e2e/structure.hpp`의 `Scenario` enum과 `scenario_order`, `e2e/main.cpp`의 `switch`와 usage 메시지, `zlink.structure.json`의 `run.scenarios`, `run.commands`의 시나리오 선택 예시에 함께 추가한다. 판정은 실제로 받은 응답과 이벤트로 하고, 고정 대기나 기한 확대로 통과시키지 않는다.
-
-메시지 contract부터 옮긴다. `server/shared/contracts.hpp`에 packet struct를 `packet_name`과 JSON 변환을 갖춰 먼저 정의한 뒤, 컴파일 오류가 나는 handler를 하나씩 새 메시지로 옮긴다. 첫 입장 패킷을 바꾸면 `server/session/session.hpp`의 `Session::on_packet`에 있는 첫 패킷 검사와 `WorldEntry::enter`, `Field::reconnect`, `Dungeon::reconnect`가 같은 타입을 받도록 함께 고친다.
-
-상태는 그 상태를 결정하는 객체에 둔다. 플레이어별 상태는 `Player`, 여러 플레이어가 공유하는 상태는 Spot에 둔다. 상태 필드를 바꿀 때는 같은 객체의 상태 struct와 JSON 변환, relocation adapter의 `capture`·`restore`를 함께 고친다. 빠뜨린 필드는 relocation 뒤 사라지고, `update` 시나리오가 그 손실을 잡는다.
-
-channel은 등록·structure 선언·구독을 같은 변경에서 함께 추가한다. 구독은 `Field::configure()`, channel 등록은 Field의 `main.cpp`, 선언은 `zlink.structure.json`의 `channels`다. 이들이 다르면 구조 검사가 실행 전에 실패한다. 구독은 `subscribe_border`를 거쳐 `add_subscribe(channel, topic)`을 호출하며, 설치된 Framework에 이 호출이 없으면 Field는 구독을 `Names::mesh`로 바꾸지 않고 명시적인 메시지와 함께 시작에 실패한다(README의 Known issues 참조).
-
-`zlink.structure.json`에는 `WorldEntry`를 등록하는 node(Field와 Instance node)마다 Entry 하나를 선언하고, 모든 Instance의 동적 Dungeon 선언을 빠뜨리지 않는다. e2e 설정은 두 Instance node의 `DungeonCapacity`를 1로 두므로, 대체 node는 살아 있는 node가 relocation된 Dungeon을 가진 동안 새 Dungeon을 받아야 한다. 배치 자체는 Framework가 결정한다.
-
-Field·Dungeon 같은 역할 이름을 이 샘플과 다르게 정하려면 타입 이름, `Names`, `server/config/`, `zlink.structure.json`, `CMakeLists.txt`의 role 목록을 한 번에 바꾼다. 이름 변경은 기능을 옮기는 변경과 나눠서 진행하면 실패 원인을 찾기 쉽다.
-
-옮긴 뒤 `update`가 실패하면 snapshot에 빠진 상태가 있는지 먼저 확인한다. 그다음 [디버깅](#디버깅)의 message flow로 첫 실패 단계를 찾는다.
+1. 권위 이동 판정은 `server/field/domain.hpp`, 파티 run 전이는 `server/field/party-domain.hpp`, Dungeon 규칙은 `server/instance/domain.hpp`에서 확장한다. 상태 변경의 소유자는 하나로 유지한다.
+2. 새 공통 계약은 `server/shared/contracts.hpp`에 추가한다. 서버가 입력을 검사하고 결과를 계산한다. 거부된 입력은 값·순번·쿨다운을 변경하지 않는다.
+3. 클라이언트 패킷만 `server/session/session.hpp`의 Session 허용 목록에 추가한다. 서버 간 메시지와 결과 메시지는 중계하지 않는다.
+4. 관찰 시나리오는 `e2e/scenarios.hpp`, 경계 시험은 `tests/domain_checks.hpp`에 추가한다. README의 시나리오 표와 `zlink.structure.json`의 `run.scenarios`를 함께 갱신한다. 시간 제한 거부 시험은 수락 요청과 거부될 요청을 응답 대기 없이 연달아 보내고, 서버가 반환한 `RetryAfterMs`만 기다린다.
+5. 상태 필드를 추가하면 해당 relocation 스냅샷과 경계 시험도 갱신한다. 시각은 프로세스 절대 시각 대신 남은 ms로 저장한다.
 
 ## 개발 시 주의점
 
@@ -144,7 +113,7 @@ Field·Dungeon 같은 역할 이름을 이 샘플과 다르게 정하려면 타�
 
 `bootstrap.cmake`가 고정 버전으로 설치하는 공개 Framework prebuilt를 사용하며, 저장소 소스나 로컬 feed를 프로젝트에 추가하지 않는다. typed 메시지는 기본 Framework JSON serializer로 처리하여 process마다 같은 계약을 사용한다. 메시지는 `server/shared/contracts.hpp`에 `packet_name`과 JSON 변환을 갖춰 선언하고, 메시지별 codec·수동 encode·raw frame 해석은 추가하지 않는다. relocation adapter가 직접 직렬화하는 대상은 application 상태(`capture`의 `zlink::message_t::from_json`, `restore`의 `parse_json`)로 한정하여 Framework의 실행 상태와 게임 상태의 관리 책임을 분리한다.
 
-플레이어 좌표 같은 게임 사실은 그것을 변경하는 객체 한 곳에서 관리한다. Spot에는 플레이어 ID와 관찰용 복사 값을 보관하고 Actor 참조는 보관하지 않는다. Spot handler는 Actor를 인자로 받으며 다른 플레이어에게는 `actor_client_t`로 플레이어 ID를 지정해 보낸다. Session은 인증과 binding 뒤 packet을 전달하고, 이동은 Actor의 `PlayerState`가, 파티와 가시성은 `Field`가, Dungeon 구성원과 stage는 `Dungeon`이 판정하며 각 객체가 해당 상태를 관리한다. 게임 규칙은 `server/field/domain.hpp`, `server/instance/domain.hpp`, `server/shared/player-state.hpp`에 두고 Framework callback은 Spot·Actor·Session 파일에 둔다.
+게임 사실은 소유자 한 곳에서 관리한다. Spot에는 플레이어 ID와 관찰용 복사 값을 보관하고 Actor 참조는 보관하지 않는다. Spot handler는 Actor를 인자로 받으며 다른 플레이어에게는 `actor_client_t`로 플레이어 ID를 지정해 보낸다. Session은 인증과 binding 뒤 packet을 전달한다. `FieldPositionDomain`은 이동을, `PlayerState`는 수락된 값과 Party ID를, `PartySpot`은 파티 구성원과 run phase를, `DungeonRun`은 dungeon roster·phase·stage를 소유한다. Field 이탈은 파티 상태를 변경하지 않고 가시성만 제거한다. 규칙은 `server/field/domain.hpp`, `server/field/party-domain.hpp`, `server/instance/domain.hpp`, `server/shared/player-state.hpp`에 두고 Framework callback은 Spot·Actor·Session 파일에 둔다.
 
 ### 비동기 실행과 lifecycle
 

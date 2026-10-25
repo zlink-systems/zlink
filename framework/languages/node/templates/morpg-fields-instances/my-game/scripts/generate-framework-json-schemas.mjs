@@ -50,6 +50,7 @@ const packetNames = collectUsedPacketNames(
 );
 const handlerTypes = collectHandlerTypes(sourceFiles, checker);
 const contracts = new Map();
+const runtimePackets = new Map();
 const unmatched = [];
 
 for (const packetName of [...packetNames].sort()) {
@@ -70,6 +71,16 @@ for (const packetName of [...packetNames].sort()) {
       contract.reply = schemaForType(replyType, checker, `${packetName}.reply`);
     }
     contracts.set(packetName, contract);
+    const declaration = payloadSymbol?.declarations?.find(ts.isClassDeclaration);
+    if (declaration !== undefined) {
+      const sourcePath = declaration.getSourceFile().fileName;
+      const relativeSource = path.relative(config.options.rootDir ?? path.dirname(projectPath), sourcePath);
+      const compiledPath = path.resolve(config.options.outDir ?? path.dirname(projectPath),
+        relativeSource.replace(/\.[cm]?tsx?$/u, '.js'));
+      let modulePath = path.relative(path.dirname(path.resolve(options.out)), compiledPath).replaceAll('\\', '/');
+      if (!modulePath.startsWith('.')) modulePath = './' + modulePath;
+      runtimePackets.set(packetName, { modulePath, exportName: payloadSymbol.getName() });
+    }
   } catch (error) {
     throw new Error(`${formatError(error)} (packet '${packetName}')`);
   }
@@ -622,7 +633,8 @@ function serializeContracts(contracts) {
 }
 
 function renderCommonJs(serialized) {
-  return `'use strict';\n\nconst packetContracts = Object.freeze(${serialized});\n\nfunction register(registerPacket) {\n  for (const [packetName, contract] of Object.entries(packetContracts)) {\n    registerPacket(packetName, contract)(class GeneratedZLinkPacket {});\n  }\n}\n\nconst framework = require('@zlink-systems/framework');\nregister(framework.ZLinkPacket);\nmodule.exports = Object.freeze({ packetContracts, register });\n`;
+  const modules = JSON.stringify(Object.fromEntries(runtimePackets));
+  return `'use strict';\n\nconst packetContracts = Object.freeze(${serialized});\nconst packetTypes = ${modules};\n\nfunction register(registerPacket) {\n  for (const [packetName, contract] of Object.entries(packetContracts)) {\n    const location = packetTypes[packetName];\n    const target = location === undefined ? class GeneratedZLinkPacket {} : require(location.modulePath)[location.exportName];\n    registerPacket(packetName, contract)(target);\n  }\n}\n\nconst framework = require('@zlink-systems/framework');\nregister(framework.ZLinkPacket);\nmodule.exports = Object.freeze({ packetContracts, register });\n`;
 }
 
 function writeOutput(filePath, content) {

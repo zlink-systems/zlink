@@ -1,3 +1,3 @@
 package MyGame;
 
-public record JoinWorldRequest(String playerId, int x) {}
+public record JoinWorldRequest(String playerId, double x) {}

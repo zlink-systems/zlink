@@ -5,18 +5,17 @@ import type {
   ZLinkPublishMessageContext,
   ZLinkTimerTick
 } from '@zlink-systems/framework';
-import { PacketNames, fieldId } from '../shared/constants';
+import { PacketNames } from '../shared/constants';
 import {
   JoinWorldRequest,
   MoveRequest,
-  EnterField,
   BorderPresence,
   BorderVisible,
   CreatePartyRequest,
   JoinPartyRequest,
   EnterDungeonRequest,
   JoinDungeon,
-  FieldView
+  PartyView, ViewRequest
 } from '../shared/messages';
 import { Player } from '../shared/player';
 import { Field } from './spots';
@@ -51,15 +50,7 @@ export class Move {
     _context: ZLinkMessageContext,
     request: MoveRequest
   ): Promise<void> {
-    if (request.sequence !== actor.sequence + 1)
-      throw new Error('Move sequence must increase by one');
-    const position = new EnterField(request.x, request.sequence);
-    if (fieldId(request.x) !== String(spot.context.spotId)) actor.move(position);
-    else {
-      actor.apply(position);
-      spot.remember(actor);
-      await actor.sendState();
-    }
+    await spot.move(actor, request);
   }
 }
 @Injectable()
@@ -73,9 +64,9 @@ export class CreateParty {
     spot: Field,
     actor: Player,
     _context: ZLinkMessageContext,
-    request: CreatePartyRequest
+    _request: CreatePartyRequest
   ): Promise<void> {
-    await spot.party(actor, request.partyId, true);
+    await spot.party(actor, '', true);
   }
 }
 @Injectable()
@@ -124,7 +115,7 @@ export class DungeonTravel {
     request: JoinDungeon
   ): Promise<void> {
     actor.context
-      .joinSpot(request.dungeonId, new JoinDungeon(request.dungeonId, request.partyId))
+      .joinSpot(request.dungeonId, new JoinDungeon(request.dungeonId, request.runId))
       .defer();
   }
 }
@@ -145,14 +136,14 @@ export class BorderHandler {
   }
 }
 const deliveryPackets: ReadonlyMap<string, new () => object> = new Map<string, new () => object>([
-  [PacketNames.fieldView, FieldView],
+  [PacketNames.partyView, PartyView],
   [PacketNames.borderVisible, BorderVisible]
 ]);
 @Injectable()
 @zlinkSpotActorSendHandler({
   spot: () => Field,
   actor: () => Player,
-  packetName: PacketNames.fieldView
+  packetName: PacketNames.partyView
 })
 @zlinkSpotActorSendHandler({
   spot: () => Field,
@@ -164,11 +155,19 @@ export class Delivery {
     _spot: Field,
     actor: Player,
     context: ZLinkMessageContext,
-    message: FieldView | BorderVisible
+    message: PartyView | BorderVisible
   ): Promise<void> {
     const type = deliveryPackets.get(context.packetName);
     if (!type) throw new Error(`Unregistered field push: ${context.packetName}`);
     // Restore the declared public DTO class before forwarding (#1731).
     await actor.context.boundSession.send(Object.assign(new type(), message)).submit();
+  }
+}
+
+@Injectable()
+@zlinkSpotActorSendHandler({ spot: () => Field, actor: () => Player, packetName: PacketNames.viewRequest })
+export class FieldQuery {
+  async handle(spot: Field, actor: Player, _context: ZLinkMessageContext, _request: ViewRequest): Promise<void> {
+    await spot.show(actor);
   }
 }

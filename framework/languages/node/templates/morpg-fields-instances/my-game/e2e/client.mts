@@ -1,3 +1,4 @@
+import '../.zlink-framework-json-schemas.cjs';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { appendFileSync } from 'node:fs';
@@ -16,12 +17,12 @@ import {
   CreatePartyRequest,
   JoinPartyRequest,
   EnterDungeonRequest,
-  AdvanceRequest,
+  AdvanceRequest, JoinDungeon,
   type SessionInfo,
-  type WorldState,
-  type BorderVisible,
-  type FieldView,
-  type DungeonView
+  WorldState,
+  BorderVisible,
+  ActionRejected, PartyView, MaxSafeInteger,
+  DungeonView
 } from '../server/shared/messages.js';
 import { dungeonId } from '../server/shared/constants.js';
 interface Received {
@@ -51,14 +52,9 @@ class PlayerClient {
       requestTimeoutMs: Limits.messageMs,
       reconnect: { enabled: false }
     });
-    for (const name of [
-      PacketNames.worldState,
-      PacketNames.borderVisible,
-      PacketNames.fieldView,
-      PacketNames.dungeonView,
-      PacketNames.actionRejected
-    ])
-      this.connector.on(name, (message) => {
+    for (const packetType of [WorldState, BorderVisible, PartyView, DungeonView, ActionRejected])
+      this.connector.on(packetType, (message) => {
+        const name = packetType.name;
         this.messages.push({ name, payload: message.payload });
         appendFileSync(
           log,
@@ -153,40 +149,27 @@ function sameActor(before: SessionInfo, after: SessionInfo): void {
   assert.equal(after.objectGeneration, before.objectGeneration);
 }
 async function enter(a: PlayerClient, b: PlayerClient, party: string): Promise<DungeonView> {
-  const owns = (v: FieldView, count: number): boolean =>
-    v.parties.some((p) => p.partyId === party && p.members.length === count);
-  const created = await a.send<FieldView>(
-    new CreatePartyRequest(party),
-    PacketNames.fieldView,
-    (v) => owns(v, 1)
-  );
-  assert.deepEqual(created.parties.find((p) => p.partyId === party)!.members, [a.playerId]);
+  const created = await a.send<PartyView>(new CreatePartyRequest(), PacketNames.partyView);
+  party = created.partyId;
+  assert.match(party, /^party-[0-9a-f]{32}$/);
+  assert.deepEqual(created.members, [a.playerId]);
   const markA = a.messages.length;
-  const joined = await b.send<FieldView>(new JoinPartyRequest(party), PacketNames.fieldView, (v) =>
-    owns(v, 2)
-  );
-  assert.deepEqual(joined.parties.find((p) => p.partyId === party)!.members, [
-    a.playerId,
-    b.playerId
-  ]);
-  assert.deepEqual(
-    joined,
-    await a.wait<FieldView>(PacketNames.fieldView, markA, (v) => owns(v, 2))
-  );
-  const markB = b.messages.length;
-  const first = await a.send<DungeonView>(
-    new EnterDungeonRequest(),
-    PacketNames.dungeonView,
-    (v) => v.partyId === party
-  );
-  const second = await b.wait<DungeonView>(
-    PacketNames.dungeonView,
-    markB,
-    (v) => v.partyId === party
-  );
+  const joined = await b.send<PartyView>(new JoinPartyRequest(party), PacketNames.partyView, v => v.members.length === 2);
+  assert.deepEqual(joined.members, [a.playerId, b.playerId]);
+  assert.deepEqual(joined, await a.wait<PartyView>(PacketNames.partyView, markA, v => v.members.length === 2));
+  const rejected = await b.send<ActionRejected>(new EnterDungeonRequest(), PacketNames.actionRejected);
+  assert.deepEqual(rejected, { reason: 'not-leader', retryAfterMs: 0 });
+  assert.deepEqual(await b.send<PartyView>(new ViewRequest(), PacketNames.partyView), joined);
+  const markB = b.messages.length, markLeader = a.messages.length;
+  await a.connector.send(new EnterDungeonRequest()).submit();
+  await a.connector.send(new EnterDungeonRequest()).submit();
+  const first = await a.wait<DungeonView>(PacketNames.dungeonView, markLeader, v => v.partyId === party);
+  const second = await b.wait<DungeonView>(PacketNames.dungeonView, markB, v => v.partyId === party);
   assert.deepEqual(first, second);
-  assert.equal(first.dungeonId, dungeonId(party));
+  assert.equal(first.dungeonId, dungeonId(first.runId));
   assert.equal(first.stage, 0);
+  assert.equal(first.phase, 'Active');
+  assert.match(first.runId, /^run-[0-9a-f]{32}$/);
   assert.deepEqual(first.members, [a.playerId, b.playerId]);
   // Current Spot replies confirm that both deferred joins have completed.
   sameDungeon(first, await a.view());
@@ -220,12 +203,18 @@ export async function scenario(
       assert.equal(origin.fieldId, 'field-2');
       assert.equal(origin.nodeId, 'fieldA');
       assert.equal(observed.nodeId, 'fieldA');
+      assert.deepEqual(await a.send<ActionRejected>(new JoinPartyRequest('party-' + '0'.repeat(32)),
+        PacketNames.actionRejected), { reason: 'invalid-party', retryAfterMs: 0 });
+      const party = await a.send<PartyView>(new CreatePartyRequest(), PacketNames.partyView);
+      await b.send<PartyView>(new JoinPartyRequest(party.partyId), PacketNames.partyView, v => v.members.length === 2);
+      assert.deepEqual(await a.send<ActionRejected>(new JoinDungeon('internal', 'internal'), PacketNames.actionRejected),
+        { reason: 'packet-not-allowed', retryAfterMs: 0 });
       const identity = await a.sessionInfo(),
         mark = b.messages.length;
       const moved = await a.send<WorldState>(
-        new MoveRequest(Positions.fieldDestination, 1),
+        new MoveRequest(Positions.fieldDestination - Positions.fieldOrigin, 1n),
         PacketNames.worldState,
-        (v) => v.sequence === 1
+        (v) => v.sequence === 1n
       );
       assert.equal(moved.fieldId, 'field-3');
       assert.equal(moved.nodeId, 'fieldB');
@@ -233,12 +222,38 @@ export async function scenario(
       const visible = await b.wait<BorderVisible>(
         PacketNames.borderVisible,
         mark,
-        (v) => v.playerId === a.playerId && v.sequence === 1
+        (v) => v.playerId === a.playerId && v.sequence === 1n
       );
       assert.equal(visible.observerFieldId, 'field-2');
       assert.equal(visible.sourceFieldId, 'field-3');
       assert.equal(visible.x, Positions.fieldDestination);
       assert.deepEqual(await a.sessionInfo(), identity);
+      const cross = await a.send<PartyView>(new ViewRequest(), PacketNames.partyView);
+      const other = await b.send<PartyView>(new ViewRequest(), PacketNames.partyView);
+      assert.deepEqual(cross, other);
+      assert.equal(cross.partyId, party.partyId);
+      assert.deepEqual(cross.members, [a.playerId, b.playerId]);
+      assert.equal(cross.leaderId, a.playerId);
+      for (const [request, reason] of [
+        [new MoveRequest(11, 2n), 'step-too-large'],
+        [new MoveRequest(0, MaxSafeInteger + 1n), 'integer-out-of-range'],
+        [new MoveRequest(0, 1n), 'stale-sequence']
+      ] as const) {
+        assert.deepEqual(await a.send<ActionRejected>(request, PacketNames.actionRejected), { reason, retryAfterMs: 0 });
+        const state = await a.send<WorldState>(new ViewRequest(), PacketNames.worldState);
+        assert.equal(state.x, moved.x); assert.equal(state.sequence, moved.sequence);
+      }
+      const markMove = a.messages.length;
+      await a.connector.send(new MoveRequest(0, 2n)).submit();
+      await a.connector.send(new MoveRequest(10, 3n)).submit();
+      await a.wait<WorldState>(PacketNames.worldState, markMove, v => v.sequence === 2n);
+      const rejection = await a.wait<ActionRejected>(PacketNames.actionRejected, markMove, v => v.reason === 'move-budget');
+      assert.ok(rejection.retryAfterMs > 0);
+      const unchanged = await a.send<WorldState>(new ViewRequest(), PacketNames.worldState);
+      assert.equal(unchanged.x, moved.x); assert.equal(unchanged.sequence, 2n);
+      await new Promise(resolve => setTimeout(resolve, rejection.retryAfterMs));
+      await a.send<WorldState>(new MoveRequest(10, 3n), PacketNames.worldState, v => v.sequence === 3n);
+
     } else {
       await a.join(Positions.dungeon);
       await b.join(Positions.dungeon);
@@ -246,7 +261,7 @@ export async function scenario(
         sb = await b.sessionInfo();
       const initial = await enter(a, b, `party-${runId}`),
         mark = b.messages.length;
-      const advanced = await a.send<DungeonView>(
+      let advanced = await a.send<DungeonView>(
         new AdvanceRequest(),
         PacketNames.dungeonView,
         (v) => v.stage === 1
@@ -256,6 +271,12 @@ export async function scenario(
         await b.wait<DungeonView>(PacketNames.dungeonView, mark, (v) => v.stage === 1)
       );
       assert.equal(advanced.nodeId, initial.nodeId);
+      for (let stage = 2; stage <= 3; stage++)
+        advanced = await a.send<DungeonView>(new AdvanceRequest(), PacketNames.dungeonView, v => v.stage === stage);
+      assert.equal(advanced.phase, 'Completed');
+      assert.deepEqual(await a.send<ActionRejected>(new AdvanceRequest(), PacketNames.actionRejected),
+        { reason: 'run-not-active', retryAfterMs: 0 });
+      sameDungeon(advanced, await a.view());
       assert.deepEqual(await a.sessionInfo(), sa);
       assert.deepEqual(await b.sessionInfo(), sb);
       if (name === 'reconnect') {
@@ -287,10 +308,19 @@ export async function scenario(
         await c.join(Positions.dungeon);
         await d.join(Positions.dungeon);
         const fresh = await enter(c, d, `replacement-${runId}`);
+        assert.notEqual(fresh.runId, advanced.runId);
+        assert.notEqual(fresh.dungeonId, advanced.dungeonId);
         assert.equal(fresh.nodeId, advanced.nodeId, 'Replacement instance did not accept new work');
         assert.deepEqual(await a.sessionInfo(), sa);
         assert.deepEqual(await b.sessionInfo(), sb);
-      } else assert.equal(name, 'dungeon');
+      } else {
+        assert.equal(name, 'dungeon');
+        const c = await create('other-p1'), d = await create('other-p2');
+        await c.join(Positions.dungeon); await d.join(Positions.dungeon);
+        const other = await enter(c, d, '');
+        assert.notEqual(other.dungeonId, advanced.dungeonId);
+        assert.notEqual(other.runId, advanced.runId);
+      }
     }
     assert.equal(a.disconnects, 0);
     if (name !== 'reconnect') assert.equal(b.disconnects, 0);

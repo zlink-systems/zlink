@@ -1,3 +1,5 @@
 package MyGame;
 
-public record EnterField(int x, int sequence) {}
+public record EnterField(double x, long sequence, int remainingMs) {
+    public EnterField(double x, long sequence) { this(x, sequence, 0); }
+}

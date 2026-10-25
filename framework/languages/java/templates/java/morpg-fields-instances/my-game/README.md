@@ -1,6 +1,6 @@
 # my-game
 
-A Java MORPG template using public ZLink Framework 0.30.2 packages. Field nodes host four fixed Field User Spots; parties enter dynamically allocated Dungeon User Spots. Player Actors preserve movement state across field boundaries, while Dungeon owns party membership and stage.
+A Java MORPG template using public ZLink Framework 0.30.2 packages. Field nodes host four fixed Field User Spots; each server-issued Party ID also identifies a dynamic Party User Spot, and each Run ID identifies a dynamic Dungeon User Spot. `FieldPositionDomain` owns movement authority, `PartySpot` owns party membership and run phases, and `DungeonRun` owns the active run and stage.
 
 ```mermaid
 flowchart LR
@@ -21,6 +21,7 @@ Docker with Compose v2, and PowerShell 7 on Windows. The Gradle wrapper is inclu
 
 ```sh
 ./run-e2e.sh --build-only
+./run-e2e.sh --check-domain
 ```
 
 ```powershell
@@ -49,17 +50,17 @@ The Java runner checks the structure, starts an isolated Redis Compose project a
 
 | Scenario | Assertion |
 | --- | --- |
-| field | p1 crosses field-2 on fieldA to field-3 on fieldB with the same Session; p2 observes the border publication. |
-| dungeon | Two players in the same field form a party, enter the same fresh Dungeon, and observe stage 1 together. |
+| field | The server issues a Party ID, players cross from field-2 to field-3 with the same Session, p2 observes the border publication, and party membership persists across the Field change. Movement limits and retry budget are checked. |
+| dungeon | Two players join a server-issued party and Run ID, enter the same Dungeon, advance through completion, and verify the completed run is reported to the Party Spot. |
 | reconnect | A new physical Session binds the same Actor and observes the same Dungeon, members and stage. |
 | update | The occupied instance drains through all relocation signals; both Sessions and Dungeon state persist; the replacement instance accepts a new party. |
 
-Non-field scenarios share their party fixture. Selecting reconnect or update alone creates that fixture first. Structure-only validation is available through `./run-e2e.sh --check-structure` or `pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure`.
+The domain check covers movement rejection order, sequence bounds, relative-time relocation snapshots, PartyRun transitions, idempotent Dungeon preparation, run completion, enum names, and nullable JSON. Run it separately with `./run-e2e.sh --check-domain`. Non-field scenarios share their party fixture. Selecting reconnect or update alone creates that fixture first. Structure-only validation is available through `./run-e2e.sh --check-structure` or `pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure`.
 
 ## Known issues
 
 Validated against the published Framework 0.30.2 packages.
-This template declares one handler per adjacent-field topic; Framework 0.30.2 adds runtime `(channelName, topic)` registration (#1783), which the template has not adopted.
+Border subscriptions use Framework 0.30.2 `addSubscribe(handlerType, channelName, topic)` at Field activation. One handler serves all adjacent-field topics.
 
 ## Deployment sequence
 

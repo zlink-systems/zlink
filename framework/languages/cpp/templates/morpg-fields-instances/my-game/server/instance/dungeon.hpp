@@ -10,7 +10,7 @@ class Dungeon final : public fx::spot_t<Player>
     fx::actor_client_t &actors_;
 
   public:
-    DungeonState state;
+    DungeonRun state;
     Dungeon (fx::spot_context_t context, const NodeConfig &config, fx::actor_client_t &actors) :
         context_ (std::move (context)), config_ (config), actors_ (actors)
     {
@@ -24,27 +24,55 @@ class Dungeon final : public fx::spot_t<Player>
           .add_actor_send<&Dungeon::reconnect> ()
           .add_actor_send<&Dungeon::query> ()
           .add_actor_send<&Dungeon::advance> ()
-          .add_actor_send<&Dungeon::deliver> ();
+          .add_actor_send<&Dungeon::deliver> ()
+          .add_actor_send<&Dungeon::deliver_party> ()
+          .add_actor_send<&Dungeon::enter> ()
+          .add_actor_send<&Dungeon::create_party> ()
+          .add_actor_send<&Dungeon::join_party> ()
+          .add_actor_send<&Dungeon::travel> ();
     }
     fx::task_t<DungeonPrepared> prepare (const PrepareDungeon &request)
     {
-        state.prepare (context_.spot_id (), request);
-        co_return DungeonPrepared{context_.spot_id ()};
+        const auto rejection = Names::dungeon_id (request.runId) != context_.spot_id ()
+                                ? std::optional<ActionRejected> (
+                                    ActionRejected{Rejection::run_mismatch})
+                                : state.prepare (request);
+        co_return DungeonPrepared{context_.spot_id (), request.runId, rejection};
     }
     DungeonView view () const
     {
-        return {context_.spot_id (), config_.Id, state.partyId, state.members, state.stage};
+        return {context_.spot_id (), config_.Id, state.partyId, state.members,
+                state.stage, state.runId, state.phase};
     }
     fx::task_t<fx::spot_actor_join_result_t> on_actor_join (std::string_view actor,
                                                             const fx::message_t &payload) override
     {
-        co_return state.accepts (actor, context_.spot_id (), payload.decode<JoinDungeon> ())
-          ? fx::spot_actor_join_result_t::accept ()
-          : fx::spot_actor_join_result_t::reject ();
+        const auto request = payload.decode<JoinDungeon> ();
+        co_return request.dungeonId == context_.spot_id ()
+                       && state.can_join (std::string (actor), request.runId)
+                 ? fx::spot_actor_join_result_t::accept ()
+                 : fx::spot_actor_join_result_t::reject ();
     }
     fx::task_t<void> on_actor_joined (Player &actor) override
     {
-        co_await actors_.send (actor.context ().actor_id (), view ()).async ();
+        const auto actor_id = std::string (actor.context ().actor_id ().value ());
+        state.arrived (actor_id);
+        const auto entered = co_await context_
+                               .request_to_spot (state.partyId,
+                                                 DungeonMemberEntered{state.runId, actor_id})
+                               .async<PartyCommandResult> ();
+        if (entered.rejection)
+            throw std::runtime_error (entered.rejection->reason);
+        if (state.phase == RunPhase::Active) {
+            const auto started = co_await context_
+                                   .request_to_spot (state.partyId, RunStarted{state.runId})
+                                   .async<PartyCommandResult> ();
+            if (started.rejection)
+                throw std::runtime_error (started.rejection->reason);
+            const auto current = view ();
+            for (const auto &id : state.members)
+                co_await actors_.send (fx::actor_id_t (id), current).async ();
+        }
     }
     fx::task_t<void> on_leave_actor (Player &) override { co_return; }
     fx::task_t<void> on_disconnect_actor (Player &) override { co_return; }
@@ -53,9 +81,13 @@ class Dungeon final : public fx::spot_t<Player>
     {
         if (request.playerId != actor.context ().actor_id ().value ())
             throw std::invalid_argument ("Player does not match bound Actor");
-        co_await actor.context ().bound_session ().send (view ()).async ();
+        co_await show (actor);
     }
     fx::task_t<void> query (Player &actor, fx::message_context_t &, const ViewRequest &)
+    {
+        co_await show (actor);
+    }
+    fx::task_t<void> show (Player &actor)
     {
         co_await actor.context ().bound_session ().send (view ()).async ();
     }
@@ -63,14 +95,55 @@ class Dungeon final : public fx::spot_t<Player>
     {
         co_await actor.context ().bound_session ().send (event).async ();
     }
+    fx::task_t<void> deliver_party (Player &actor, fx::message_context_t &, const PartyView &event)
+    {
+        co_await actor.context ().bound_session ().send (event).async ();
+    }
+    fx::task_t<void> enter (Player &actor, fx::message_context_t &, const EnterDungeonRequest &)
+    {
+        co_await show (actor);
+    }
+    fx::task_t<void> reject_town_request (Player &actor)
+    {
+        co_await actor.context ().bound_session ()
+          .send (ActionRejected{Rejection::run_in_progress})
+          .async ();
+    }
+    fx::task_t<void>
+    create_party (Player &actor, fx::message_context_t &, const CreatePartyRequest &)
+    {
+        co_await reject_town_request (actor);
+    }
+    fx::task_t<void>
+    join_party (Player &actor, fx::message_context_t &, const JoinPartyRequest &)
+    {
+        co_await reject_town_request (actor);
+    }
+    fx::task_t<void> travel (Player &actor, fx::message_context_t &, const JoinDungeon &request)
+    {
+        if (request.dungeonId != context_.spot_id ())
+            actor.context ().join_spot (request.dungeonId, request).defer ();
+        co_return;
+    }
     fx::task_t<void> advance (Player &actor, fx::message_context_t &, const AdvanceRequest &)
     {
-        state.advance ();
-        const auto result = view ();
-        co_await actor.context ().bound_session ().send (result).async ();
+        if (auto rejection = state.advance ()) {
+            co_await actor.context ().bound_session ().send (*rejection).async ();
+            co_return;
+        }
+        if (state.phase == RunPhase::Completed) {
+            const auto completed = co_await context_
+                                     .request_to_spot (state.partyId, RunCompleted{state.runId})
+                                     .async<PartyCommandResult> ();
+            if (completed.rejection)
+                throw std::runtime_error (completed.rejection->reason);
+        }
+        const auto current = view ();
+        const auto requester = actor.context ().actor_id ().value ();
+        co_await actor.context ().bound_session ().send (current).async ();
         for (const auto &id : state.members)
-            if (id != actor.context ().actor_id ().value ())
-                co_await actors_.send (fx::actor_id_t (id), result).async ();
+            if (id != requester)
+                co_await actors_.send (fx::actor_id_t (id), current).async ();
     }
 };
 class DungeonRelocation final : public fx::spot_relocation_adapter_t<Dungeon>
@@ -85,7 +158,7 @@ class DungeonRelocation final : public fx::spot_relocation_adapter_t<Dungeon>
     restore (Dungeon &spot, std::vector<std::byte> payload, std::stop_token) override
     {
         spot.state =
-          zlink::message_t::from (std::span<const std::byte> (payload)).parse_json<DungeonState> ();
+          zlink::message_t::from (std::span<const std::byte> (payload)).parse_json<DungeonRun> ();
         co_return;
     }
 };

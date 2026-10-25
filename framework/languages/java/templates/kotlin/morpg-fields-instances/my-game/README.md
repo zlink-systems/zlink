@@ -1,6 +1,6 @@
 # my-game
 
-A Kotlin MORPG template using public ZLink Framework 0.30.2 packages. Field nodes host four fixed Field User Spots; parties enter dynamically allocated Dungeon User Spots. Player Actors preserve movement state across field boundaries, while Dungeon owns party membership and stage.
+A Kotlin MORPG template using public ZLink Framework 0.30.2 packages. Field nodes host four fixed Field User Spots; each server-issued Party ID identifies a dynamic Party User Spot, and each Run ID identifies a dynamic Dungeon User Spot. `FieldPositionDomain` owns movement authority, `PartySpot` owns party membership and run phases, and `DungeonRun` owns the active run and stage.
 
 ```mermaid
 flowchart LR
@@ -21,15 +21,17 @@ Docker with Compose v2 and Linux containers, network access to Maven Central and
 
 ```sh
 ./run-e2e.sh --build-only
+./run-e2e.sh --check-domain
 ```
 
 ```powershell
 pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
+pwsh -NoProfile -File ./run-e2e.ps1 -CheckDomain
 ```
 
 ## Docker e2e
 
-Docker builds a shared node image for all roles and a runner image. The pinned Eclipse Temurin JDK/JRE bases are defined by the Dockerfile ARGs. The runner uses the Docker socket to create sibling nodes sharing its network namespace, preserving loopback listeners and stdin/stdout control. Each invocation removes its containers, network and image tags; cleanup errors return exit 1. Logs remain in `.logs/`.
+Docker builds a shared node image for all roles and a runner image. The pinned Eclipse Temurin JDK/JRE bases are defined by the Dockerfile ARGs. The runner uses the Docker socket to create sibling nodes sharing its network namespace, preserving loopback listeners and stdin/stdout control. Each invocation removes its containers, network and image tags; cleanup errors return exit 1. Logs remain in `.logs/` by default; set `MY_GAME_E2E_LOGS` to choose another directory.
 
 For local process debugging, run `./run-e2e.sh --local` or `pwsh -NoProfile -File ./run-e2e.ps1 -Local`. Local mode uses JDK 25 and Compose Redis. Scenario and structure options work in both modes.
 
@@ -47,17 +49,17 @@ The Kotlin runner checks the structure, starts an isolated Redis Compose project
 
 | Scenario | Assertion |
 | --- | --- |
-| field | p1 crosses field-2 on fieldA to field-3 on fieldB with the same Session; p2 observes the border publication. |
-| dungeon | Two players in the same field form a party, enter the same fresh Dungeon, and observe stage 1 together. |
+| field | The server issues a Party ID, players cross from field-2 to field-3 with the same Session, p2 observes the border publication, and party membership persists across the Field change. Movement limits and retry budget are checked. |
+| dungeon | Two players join a server-issued party and Run ID, enter the same Dungeon, advance through completion, and verify that the completed run is reported to the Party Spot. |
 | reconnect | A new physical Session binds the same Actor and observes the same Dungeon, members and stage. |
 | update | The occupied instance drains through all relocation signals; both Sessions and Dungeon state persist; the replacement instance accepts a new party. |
 
-Non-field scenarios share their party fixture. Selecting reconnect or update alone creates that fixture first. Structure-only validation is available through `./run-e2e.sh --check-structure` or `pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure`.
+The domain check covers movement rejection order, sequence bounds, relative-time relocation snapshots, PartyRun transitions, idempotent Dungeon preparation, run completion, enum names, and nullable JSON. Run it separately with `./run-e2e.sh --check-domain` or `pwsh -NoProfile -File ./run-e2e.ps1 -CheckDomain`. Non-field scenarios share their party fixture. Selecting reconnect or update alone creates that fixture first. Structure-only validation is available through `./run-e2e.sh --check-structure` or `pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure`.
 
 ## Known issues
 
 Validated against the published Framework 0.30.2 packages.
-This template declares one handler per adjacent-field topic; Framework 0.30.2 adds runtime `(channelName, topic)` registration (#1783), which the template has not adopted.
+Border subscriptions use Framework 0.30.2 `addSubscribe(handlerType, channelName, topic)` at Field activation. One handler serves all adjacent-field topics.
 
 ## Deployment sequence
 
@@ -73,6 +75,6 @@ Initial Field placement uses public stable-type capacity and sequential startup.
 
 ## 한국어 실행 안내
 
-기본 e2e는 Docker에서 실행합니다. 로컬 process 디버깅은 JDK 25를 준비하고 `--local` 또는 `-Local`로 실행합니다. Docker Compose v2를 준비한 뒤 위 Build와 Docker e2e 명령을 실행합니다. Windows에서는 PowerShell 7을 사용합니다. 기본 실행은 `field`, `dungeon`, `reconnect`, `update`를 순서대로 검증하며 시나리오 선택도 지원합니다.
+기본 e2e는 Docker에서 실행합니다. 로컬 process 디버깅은 JDK 25를 준비하고 `--local` 또는 `-Local`로 실행합니다. Docker Compose v2를 준비한 뒤 위 Build와 Docker e2e 명령을 실행합니다. Windows에서는 PowerShell 7을 사용합니다. `--check-domain`은 이동·PartyRun·DungeonRun 경계 시험을 별도로 실행합니다. 기본 실행은 `field`, `dungeon`, `reconnect`, `update`를 순서대로 검증하며 시나리오 선택도 지원합니다.
 
 실행별 설정과 node 로그는 `.logs/run-<id>/`에 기록됩니다. update는 Dungeon을 소유한 instance의 drain과 종료, 대체 process의 신규 파티 수락을 확인합니다. Framework 결함이 발생하면 첫 실패와 message-flow 기록을 보존하고 해당 공개 패키지의 수정 여부를 확인합니다.

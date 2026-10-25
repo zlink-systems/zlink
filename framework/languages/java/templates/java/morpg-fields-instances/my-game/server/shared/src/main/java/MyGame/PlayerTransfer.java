@@ -10,7 +10,7 @@ public final class PlayerTransfer implements ZLinkActorRelocationAdapter<Player>
         Transfer.check(cancellation);
         try {
             return CompletableFuture.completedFuture(
-                    Json.MAPPER.writeValueAsBytes(actor.position()));
+                    Json.MAPPER.writeValueAsBytes(actor.capture()));
         } catch (java.io.IOException error) {
             return CompletableFuture.failedFuture(error);
         }
@@ -20,7 +20,7 @@ public final class PlayerTransfer implements ZLinkActorRelocationAdapter<Player>
             Player actor, byte[] state, ZLinkRelocationCancellation cancellation) {
         Transfer.check(cancellation);
         try {
-            actor.apply(Json.MAPPER.readValue(state, EnterField.class));
+            actor.restore(Json.MAPPER.readValue(state, Player.PlayerSnapshot.class));
             return CompletableFuture.completedFuture(null);
         } catch (java.io.IOException error) {
             return CompletableFuture.failedFuture(error);

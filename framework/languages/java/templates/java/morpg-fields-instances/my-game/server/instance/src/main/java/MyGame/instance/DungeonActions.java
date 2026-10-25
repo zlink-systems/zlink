@@ -33,4 +33,36 @@ public final class DungeonActions {
             Dungeon spot, Player actor, ZLinkMessageContext dispatch, DungeonView message) {
         return actor.context().boundSession().send(message).submit();
     }
+
+    @ZLinkSpotActorSend
+    public CompletionStage<Void> deliverParty(
+            Dungeon spot, Player actor, ZLinkMessageContext dispatch, PartyView message) {
+        return actor.context().boundSession().send(message).submit();
+    }
+
+    @ZLinkSpotActorSend
+    public CompletionStage<Void> enter(
+            Dungeon spot, Player actor, ZLinkMessageContext dispatch, EnterDungeonRequest request) {
+        return spot.enter(actor);
+    }
+
+    @ZLinkSpotActorSend
+    public CompletionStage<Void> createParty(
+            Dungeon spot, Player actor, ZLinkMessageContext dispatch, CreatePartyRequest request) {
+        return spot.rejectTownRequest(actor);
+    }
+
+    @ZLinkSpotActorSend
+    public CompletionStage<Void> joinParty(
+            Dungeon spot, Player actor, ZLinkMessageContext dispatch, JoinPartyRequest request) {
+        return spot.rejectTownRequest(actor);
+    }
+
+    @ZLinkSpotActorSend
+    public CompletionStage<Void> travel(
+            Dungeon spot, Player actor, ZLinkMessageContext dispatch, JoinDungeon request) {
+        if (!request.dungeonId().equals(spot.context().spotId()))
+            actor.context().joinSpot(request.dungeonId(), request).defer();
+        return CompletableFuture.completedFuture(null);
+    }
 }

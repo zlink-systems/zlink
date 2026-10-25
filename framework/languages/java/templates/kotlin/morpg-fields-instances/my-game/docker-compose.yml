@@ -32,4 +32,4 @@ services:
       my-game.e2e: ${COMPOSE_PROJECT_NAME}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - ./.logs:/template/.logs
+      - ${MY_GAME_E2E_LOGS:-./.logs}:/template/.logs

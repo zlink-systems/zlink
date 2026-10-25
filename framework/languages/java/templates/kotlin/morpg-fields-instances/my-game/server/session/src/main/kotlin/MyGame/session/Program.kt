@@ -44,6 +44,11 @@ class GameSession(private val session: ZLinkSessionContext, private val actors: 
         dispatch: ZLinkSessionDispatchContext,
         payload: ZLinkMessage,
     ) {
+        if (dispatch.packetName() !in setOf("JoinWorldRequest", "MoveRequest", "CreatePartyRequest",
+                "JoinPartyRequest", "EnterDungeonRequest", "AdvanceRequest", "ViewRequest", "SessionInfoRequest")) {
+            session.client().kotlin().send(ActionRejected("packet-not-allowed")).await()
+            return
+        }
         when (dispatch.packetName()) {
             SessionInfoRequest::class.java.simpleName -> {
                 val actor = session.actors().bound().single()

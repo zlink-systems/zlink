@@ -9,13 +9,20 @@ import type {
   ZLinkSessionFactory
 } from '@zlink-systems/framework';
 import { Names, PacketNames } from '../shared/constants';
-import { JoinWorldRequest, SessionInfo } from '../shared/messages';
+import { ActionRejected, JoinWorldRequest, SessionInfo } from '../shared/messages';
 export class Session implements ZLinkSession {
   constructor(
     readonly context: ZLinkSessionContext,
     private readonly actors: ZLinkActorManager
   ) {}
   async onDispatch(dispatch: ZLinkSessionDispatchContext, payload: ZLinkMessage): Promise<void> {
+    const allowed: readonly string[] = [PacketNames.joinWorldRequest, PacketNames.moveRequest,
+      PacketNames.createPartyRequest, PacketNames.joinPartyRequest, PacketNames.enterDungeonRequest,
+      PacketNames.advanceRequest, PacketNames.viewRequest, PacketNames.sessionInfoRequest];
+    if (!allowed.includes(dispatch.packetName)) {
+      await this.context.client.send(new ActionRejected('packet-not-allowed')).submit();
+      return;
+    }
     if (!this.context.actors.bound.length) {
       if (dispatch.packetName !== PacketNames.joinWorldRequest)
         throw new Error('JoinWorldRequest must be first');

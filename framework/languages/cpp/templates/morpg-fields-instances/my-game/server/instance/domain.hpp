@@ -2,38 +2,64 @@
 #include "server/shared/contracts.hpp"
 #include <algorithm>
 #include <set>
-#include <limits>
+
 namespace MyGame
 {
-struct DungeonState
+struct DungeonRun
 {
+    // partyId is the owning Party Spot ID used for progress requests.
     std::string partyId;
+    std::string runId;
     std::vector<std::string> members;
+    std::vector<std::string> entered;
+    RunPhase phase = RunPhase::Preparing;
     int stage = 0;
-    void prepare (const std::string &id, const PrepareDungeon &request)
+
+    std::optional<ActionRejected> prepare (const PrepareDungeon &request)
     {
+        if (!runId.empty ())
+            return runId == request.runId && partyId == request.partyId
+                           && members == request.members
+                     ? std::nullopt
+                     : std::optional<ActionRejected> (ActionRejected{Rejection::run_mismatch});
         const std::set<std::string> unique (request.members.begin (), request.members.end ());
-        if (!partyId.empty () || !Names::valid_id (request.partyId)
-            || Names::dungeon_id (request.partyId) != id || request.members.empty ()
-            || request.members.size () > Names::maximum_party_members
+        if (!Names::valid_id (request.partyId) || !Names::valid_id (request.runId)
+            || request.members.empty () || request.members.size () > Names::maximum_party_members
             || unique.size () != request.members.size ()
             || std::any_of (request.members.begin (), request.members.end (),
                             [] (const auto &member) { return !Names::valid_id (member); }))
-            throw std::invalid_argument ("Invalid dungeon party preparation");
+            return ActionRejected{Rejection::invalid_party};
+        runId = request.runId;
         partyId = request.partyId;
         members = request.members;
+        phase = RunPhase::Entering;
+        return std::nullopt;
     }
-    bool accepts (std::string_view actor, const std::string &id, const JoinDungeon &join) const
+
+    bool can_join (const std::string &actor_id, const std::string &id) const
     {
-        return join.dungeonId == id && join.partyId == partyId
-               && std::find (members.begin (), members.end (), actor) != members.end ();
+        return id == runId
+               && std::find (members.begin (), members.end (), actor_id) != members.end ();
     }
-    void advance ()
+
+    void arrived (const std::string &actor_id)
     {
-        if (stage == std::numeric_limits<int>::max ())
-            throw std::overflow_error ("Dungeon stage exhausted");
+        if (std::find (entered.begin (), entered.end (), actor_id) == entered.end ())
+            entered.push_back (actor_id);
+        if (entered.size () == members.size () && phase == RunPhase::Entering)
+            phase = RunPhase::Active;
+    }
+
+    std::optional<ActionRejected> advance ()
+    {
+        if (phase != RunPhase::Active)
+            return ActionRejected{Rejection::run_not_active};
         ++stage;
+        if (stage == Names::final_stage)
+            phase = RunPhase::Completed;
+        return std::nullopt;
     }
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (DungeonState, partyId, members, stage)
+
+    NLOHMANN_DEFINE_TYPE_INTRUSIVE (DungeonRun, partyId, runId, members, entered, phase, stage)
 };
 }

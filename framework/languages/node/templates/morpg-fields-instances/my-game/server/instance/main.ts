@@ -4,7 +4,7 @@ import { Names } from '../shared/constants';
 import { Entry, EnterWorld } from '../shared/entry';
 import { PlayerFactory, PlayerRelocation } from '../shared/player';
 import { Dungeon, DungeonRelocation } from './spots';
-import { Reconnect, View, Advance, Prepare, Delivery } from './handlers';
+import { Reconnect, View, Advance, Prepare, Delivery, EnterAgain, TravelAgain } from './handlers';
 runHost((_builder, config, mesh) => {
   const objects = mesh.objects().server();
   objects.addEntrySpot(Entry, Names.actor);
@@ -15,7 +15,7 @@ runHost((_builder, config, mesh) => {
     f.preserveStateWith(DungeonRelocation);
   });
   return {
-    providers: [
+    providers: [EnterAgain, TravelAgain,
       Entry,
       EnterWorld,
       Dungeon,

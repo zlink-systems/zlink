@@ -125,19 +125,19 @@ public final class Structure {
                                         && !spot.has("dynamic"),
                                 "Invalid Entry Spot declaration");
                 case "user" -> {
-                    userTypes.add(text(spot, "type"));
+                    var spotType = text(spot, "type");
+                    userTypes.add(spotType);
+                    var ownerRole = roles.get(owner(spot, roles));
                     require(
-                            text(spot, "type")
-                                    .equals(
-                                            roles.get(owner(spot, roles)).equals(Roles.FIELD)
-                                                    ? Names.FIELD
-                                                    : Names.DUNGEON),
+                            spotType.equals(ownerRole.equals(Roles.FIELD)
+                                    ? (spot.path("dynamic").asBoolean() ? Names.PARTY : Names.FIELD)
+                                    : Names.DUNGEON),
                             "Unregistered stable type");
                     if (spot.has("dynamic"))
                         require(spot.path("dynamic").isBoolean(), "Invalid dynamic flag");
                     require(
                             spot.path("dynamic").asBoolean()
-                                    == text(spot, "type").equals(Names.DUNGEON),
+                                    == (spotType.equals(Names.DUNGEON) || spotType.equals(Names.PARTY)),
                             "Spot family dynamic mismatch");
                     if (spot.path("dynamic").asBoolean()) {
                         require(!spot.has("logicalId"), "Dynamic Spot declares logicalId");
@@ -148,7 +148,7 @@ public final class Structure {
         }
         unique(logical);
         require(
-                userTypes.equals(Set.of(Names.FIELD, Names.DUNGEON)),
+                userTypes.equals(Set.of(Names.FIELD, Names.PARTY, Names.DUNGEON)),
                 "Missing registered User Spot type");
         for (var node : nodes)
             if (roles.get(text(node, "id")).equals(Roles.FIELD)) {

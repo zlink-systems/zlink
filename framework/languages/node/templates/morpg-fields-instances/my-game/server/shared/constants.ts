@@ -3,6 +3,7 @@ export const Names = {
   stream: 'players',
   actor: 'Player',
   field: 'Field',
+  party: 'Party',
   dungeon: 'Dungeon',
   border: 'border',
   borderTimer: 'border-tick',
@@ -14,9 +15,10 @@ export const Game = {
   fieldCount: 4,
   borderRadius: 10,
   tickMs: 100,
-  maximumPartyMembers: 4
+  maximumPartyMembers: 4,
+  finalStage: 3
 } as const;
-export const Rejection = { invalidParty: 'INVALID_PARTY', notLeader: 'NOT_LEADER' } as const;
+export const Rejection = { invalidParty: 'invalid-party', notLeader: 'not-leader' } as const;
 const messageFollowMs = 30_000;
 const relocationMs = 25_000;
 export const Limits = {
@@ -45,7 +47,7 @@ export const NodeEntrypoints = {
 } as const;
 export type NodeRole = keyof typeof NodeEntrypoints;
 export function fieldId(x: number): string {
-  if (!Number.isSafeInteger(x) || x < 0 || x >= Game.fieldWidth * Game.fieldCount)
+  if (!Number.isFinite(x) || x < 0 || x >= Game.fieldWidth * Game.fieldCount)
     throw new Error('Position outside world');
   return Names.fieldPrefix + (Math.floor(x / Game.fieldWidth) + 1);
 }
@@ -56,7 +58,7 @@ export function adjacentFields(id: string): string[] {
     .map((n) => Names.fieldPrefix + n);
 }
 export const borderTopic = (source: string, target: string): string => `${source}:${target}`;
-export const dungeonId = (party: string): string => Names.dungeonPrefix + party;
+export const dungeonId = (runId: string): string => Names.dungeonPrefix + runId;
 export const PacketNames = {
   enterField: 'EnterField',
   borderPresence: 'BorderPresence',
@@ -71,6 +73,7 @@ export const PacketNames = {
   advanceRequest: 'AdvanceRequest',
   viewRequest: 'ViewRequest',
   fieldView: 'FieldView',
+  partyView: 'PartyView',
   dungeonView: 'DungeonView',
   prepareDungeon: 'PrepareDungeon',
   joinDungeon: 'JoinDungeon',

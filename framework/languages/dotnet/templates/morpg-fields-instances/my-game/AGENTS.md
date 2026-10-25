@@ -38,7 +38,7 @@ For host process debugging, install the .NET 8 SDK and add `--local` or `-Local`
 
 ### Fields and players
 
-An Actor is a game state object addressed by ID; `PlayerActor` in `server/MyGame.Shared/PlayerActor.cs` owns the player's coordinate `X` and movement `Sequence`. A Spot is a state object that accepts Actors and executes shared game rules; `FieldSpot` in `server/MyGame.Field/FieldSpot.cs` owns the parties of one field and a visibility projection of its players. The projection is a copy of Actor movement state used for observation, so apply player state changes to the Actor.
+An Actor is a game state object addressed by ID; `PlayerActor` in `server/MyGame.Shared/PlayerActor.cs` owns the player's coordinate `X` and movement `Sequence`. A Spot is a state object that accepts Actors and executes shared game rules; `FieldSpot` in `server/MyGame.Field/FieldSpot.cs` owns movement decisions and a visibility projection of its players; the independent `PartySpot` owns party membership and run state. The projection is a copy of Actor movement state used for observation, so apply player state changes to the Actor.
 
 `server/MyGame.Field/Program.cs` registers types, handlers, and the `border` channel, and creates the fixed fields listed in `FieldIds` of the node settings when the host starts. `server/MyGame.Field/Handlers.cs` holds the Field handlers, including movement, party creation and joining, dungeon entry, the border timer and subscription handlers, and the delivery handlers that forward pushes to the client. `server/MyGame.Shared/WorldEntry.cs` receives the first packet and moves the Actor to the field that covers its coordinate; it is registered on Field and Instance nodes alike. When changing node composition, update registrations, `server/config/`, and the descriptor together so the structure check validates the same composition.
 
@@ -98,44 +98,15 @@ Requests in the example game follow this path. Reading the code along this path 
 8. When the same player reconnects, `PlayerSession` binds the existing Actor to the new Session, and `ReconnectHandler` or `DungeonReconnect` in the Spot that holds the Actor checks the identity and resends the current state.
 9. To replace a node, `drain` in `NodeControl` requests relocation. Framework takes the state from the relocation adapters and restores it on another node.
 
-## Developing from this sample
+## Extending the template domain
 
-This sample shows how the features work together, so read and run it rather than turning it into your game. Start your own project from the .NET starter: choose .NET in the Initializer at [ZLink Start](https://zlink.systems/start), or use `framework/languages/dotnet/templates/starter/my-game` in the ZLink repository. Then transfer the features you need from this sample one at a time. The starter's `AGENTS.md` owns the choice between structures; this section covers only `morpg-fields-instances`. Keep this sample unchanged next to your project as a reference.
+Extend this template's domain to build a MORPG server. Run the README build and e2e commands before adding features.
 
-### Run the sample first
-
-Before transferring anything, run the build and e2e once with the [Development commands](#development-commands) to confirm the downloaded sample works and to see its behavior. This result is the baseline for comparison. If it fails, compare the failure with Known issues in the [README](README.md) first.
-
-### Features to transfer
-
-Feature names match the feature table in the starter's `AGENTS.md`. Paths are relative to this directory. The starter has one Session node and the `connect` scenario only, so the last column lists what grows in the starter with each feature.
-
-| Feature | File in this sample | What to transfer | What to grow in the starter alongside |
-| --- | --- | --- | --- |
-| Typed messages | `server/MyGame.Shared/Contracts.cs` | The records of the features you adopt: `JoinWorldRequest`, `MoveRequest`, `EnterField`, `WorldState`, `BorderPresence`, `BorderVisible`, `CreatePartyRequest`, `JoinPartyRequest`, `EnterDungeonRequest`, `AdvanceRequest`, `ViewRequest`, `PartyView`, `FieldView`, `DungeonView`, `PrepareDungeon`, `DungeonPrepared`, `JoinDungeon`, `ActionRejected`; `SessionInfoRequest` and `SessionInfo` only if your client needs them | The registration names and the field helpers in `GameNames`, `GameTiming`, and the `Rejection` reasons; the starter already has `NodeReady` and `NodeProtocol` |
-| Spot | `server/MyGame.Field/FieldSpot.cs`, `server/MyGame.Instance/DungeonSpot.cs` | `FieldSpot` with the visibility projection, arrivals, and parties, and `DungeonSpot` with the roster and stage | New `server/MyGame.Field/` and `server/MyGame.Instance/` projects, their `server/config/` files, and the `AddSpotFactory<FieldSpot>` and `AddSpotFactory<DungeonSpot>` registrations in `Program.cs`; the `FieldIds` and `FieldCapacity` settings and the startup callback that creates the fixed fields; the `spots` and `nodes` declarations in `zlink.structure.json` and the structure check that compares them with the registrations |
-| Actor | `server/MyGame.Shared/PlayerActor.cs` | `PlayerActor` with the coordinate `X`, `Sequence`, and `Move`, and `PlayerFactory` | The `AddActorFactory<PlayerActor, PlayerFactory>` registration in each `Program.cs` |
-| Entry and first admission | `server/MyGame.Shared/WorldEntry.cs`, `ReconnectHandler` in `server/MyGame.Field/Handlers.cs`, `DungeonReconnect` in `server/MyGame.Instance/Handlers.cs` | `EnterWorldHandler` and the deferred join into the field, and the identity check and state resend of the reconnect handlers | The Entry Spot registration on Field and Instance nodes and its `entry` declarations; the `field` scenario for first entry and a `reconnect` scenario that compares state after reconnection |
-| Session binding | `server/MyGame.Session/PlayerSession.cs` | The first-packet check, then find or create the Actor, bind, and relay the original typed packet | The same first-packet type as `EnterWorldHandler`; transfer it into the starter's `PlayerSession.cs` |
-| Host relocation | `PlayerRelocation` in `server/MyGame.Shared/PlayerActor.cs`, `FieldRelocation` in `server/MyGame.Field/FieldSpot.cs`, `DungeonRelocation` in `server/MyGame.Instance/DungeonSpot.cs`, `server/MyGame.Shared/NodeControl.cs` | The snapshot records with `Capture` and `Restore`, and the `drain` and `shutdown` controls | The `PreserveStateWith` relocation registrations; the `update` scenario, which checks that connections and state survive a server replacement and that the replacement node accepts a new Dungeon |
-| Dynamic dungeon | `FieldSpot.EnterAsync` in `server/MyGame.Field/FieldSpot.cs`, `DungeonTravel` in `server/MyGame.Field/Handlers.cs`, `server/MyGame.Instance/DungeonSpot.cs`, `server/MyGame.Instance/Program.cs` | The `GetOrCreate` and typed preparation of a party Dungeon, the roster-only admission, and the stage | The dynamic `dungeon` Spots of each Instance and the `GetOrCreate` edge in `zlink.structure.json`; a `dungeon` scenario |
-| Channel pub/sub and seamless movement | `Configure()` and `OnInitializeAsync` in `server/MyGame.Field/FieldSpot.cs`; `BorderTick`, `BorderHandler`, and `BorderDelivery` in `server/MyGame.Field/Handlers.cs` | The border timer, subscription, and publication, and the delivery to the receiving Actor's bound Session | The `border` channel registration in `Program.cs` and its `channels` declarations in `zlink.structure.json`; the `field` scenario, which checks the `BorderVisible` event and an unchanged `SessionInfo` |
-
-### Transfer order and rules
-
-Transfer one row at a time and run the build, the structure check, and the related e2e scenario after each. Add a scenario ID to the list in `e2e/MyGame.E2E/Scenarios.cs`, to `run.scenarios`, and to the selection examples in `run.commands` of `zlink.structure.json` together. Judge results by the replies and events actually received; do not make tests pass with fixed sleeps or longer deadlines.
-
-Start with the message contracts. Define the typed records in `Contracts.cs` first, then move each handler that fails to compile to the new messages. When you change the first-entry packet, update the first-packet check in `PlayerSession`, `EnterWorldHandler`, and the reconnect handlers to receive the same type.
-
-Keep each piece of state in the object that decides it. Per-player state belongs in `PlayerActor`, and state shared by several players belongs in a Spot. Game state views must not include the Actor generation or the Session identity, because Session binding owns Actor identity. When you change state fields, update the snapshot record and its `Capture` and `Restore` of that object together; a missing field disappears after relocation, and the `update` scenario detects the loss.
-
-Add a channel, its subscription, and its declaration in the same change: the subscription in `FieldSpot.Configure()`, the channel registration in `Program.cs`, and the `channels` declaration in `zlink.structure.json`. If the three disagree, the structure check fails before startup.
-
-Register the shared Entry and the Player factory on every node that can host an Actor, including the Instance nodes, and declare one Entry for each Field and Instance node in `zlink.structure.json`; the Framework default Entries are not part of the structure. Start the initial Field hosts one at a time and wait for each `READY` line, which follows the creation of all its fields, before starting the next. Set each host's `FieldCapacity` to exactly its `FieldIds` count, so earlier hosts are full and only the newly started host can take its declared fields.
-
-To name roles such as Field or Dungeon differently from this sample, change the type names, `GameNames`, `server/config/`, and `zlink.structure.json` at once. Do the renaming in its own change, separate from transferring a feature, so failures are easier to trace.
-
-If `update` fails after a transfer, first check whether a snapshot is missing a field, then use the message flow in [Debugging](#debugging) to find the first failing step.
+1. Extend movement decisions in `server/MyGame.Field/FieldPositionDomain.cs`, party run decisions in `server/MyGame.Field/PartyRun.cs`, and dungeon stages in `server/MyGame.Instance/DungeonRun.cs`. Actor coordinates are observations of accepted movement. Leaving a Field does not change the party.
+2. Add shared messages in `server/MyGame.Shared/Contracts.cs`. The server calculates results and returns `ActionRejected(Reason, RetryAfterMs)` for rejected inputs. Rejections must preserve values, sequences, and cooldowns.
+3. Add only client requests to the allowlist in `server/MyGame.Session/PlayerSession.cs`. Keep server messages outside that list.
+4. Add boundary checks in `e2e/MyGame.E2E/DomainChecks.cs` and received-result scenarios in `e2e/MyGame.E2E/Scenarios.cs`. Update the README and `zlink.structure.json` scenario lists together. Wait only for the server's `RetryAfterMs` after a time-limited rejection.
+5. Update the owning relocation snapshot when adding state. Store remaining milliseconds rather than process timestamps.
 
 ## Development considerations
 
@@ -143,7 +114,7 @@ If `update` fails after a transfer, first check whether a snapshot is missing a 
 
 Use public NuGet packages at the centrally pinned versions, and keep project references between this project's own modules. Process typed messages with the default Framework JSON serializer so processes use the same contract. Limit direct serialization in relocation adapters to application state, keeping management of Framework execution state separate from game state.
 
-Manage each game fact in the object responsible for changing it: the coordinate and sequence in `PlayerActor`, parties in `FieldSpot`, and the roster and stage in `DungeonSpot`. Store player IDs and observational copies in Spots, without assuming the same Actor object reference remains usable after movement. Deliver replies inside a request handler through the `BoundSession` of the Actor the handler receives, and deliver other pushes by player ID through the public Actor client to a delivery handler that forwards them to the bound Session. Sessions forward packets after authentication and binding; the Actor or Spot responsible for the state makes movement and gameplay decisions.
+Manage each game fact in the object responsible for changing it: the coordinate and sequence in `PlayerActor`, parties in `PartySpot`, and the roster and stage in `DungeonSpot`. Store player IDs and observational copies in Spots, without assuming the same Actor object reference remains usable after movement. Deliver replies inside a request handler through the `BoundSession` of the Actor the handler receives, and deliver other pushes by player ID through the public Actor client to a delivery handler that forwards them to the bound Session. Sessions forward packets after authentication and binding; the Actor or Spot responsible for the state makes movement and gameplay decisions.
 
 ### Asynchronous execution and lifecycle
 

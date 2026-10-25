@@ -35,6 +35,11 @@ public final class GameSession implements ZLinkSession {
 
     public CompletionStage<Void> onDispatch(
             ZLinkSessionDispatchContext dispatch, ZLinkMessage payload) {
+        if (!java.util.Set.of("JoinWorldRequest", "MoveRequest", "CreatePartyRequest",
+                "JoinPartyRequest", "EnterDungeonRequest", "AdvanceRequest", "ViewRequest",
+                "SessionInfoRequest").contains(dispatch.packetName())) {
+            return context.client().send(new ActionRejected(Rejection.PACKET_NOT_ALLOWED)).submit();
+        }
         if (dispatch.packetName().equals(SessionInfoRequest.class.getSimpleName())) {
             var actor = bound();
             return context.client()

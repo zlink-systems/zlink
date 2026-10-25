@@ -196,11 +196,11 @@ internal static class StructureCheck
             }
             var type = Text(spot, "type");
             Require(
-                kind == "user" && (type == GameNames.FieldType || type == GameNames.DungeonType),
+                kind == "user" && (type == GameNames.FieldType || type == GameNames.PartyType || type == GameNames.DungeonType),
                 "Spot kind or type differs from server registration."
             );
             Require(
-                roles[owner] == (type == GameNames.FieldType ? "field" : "instance"),
+                roles[owner] == (type != GameNames.DungeonType ? "field" : "instance"),
                 "Spot type differs from its owner registration."
             );
             userTypes.Add(type);
@@ -213,7 +213,7 @@ internal static class StructureCheck
                 );
             }
             Require(
-                dynamic == (type == GameNames.DungeonType),
+                dynamic == (type is GameNames.DungeonType or GameNames.PartyType),
                 "Spot family dynamic flag differs from registration."
             );
             if (dynamic)
@@ -236,7 +236,7 @@ internal static class StructureCheck
             "Entry owners differ from application Entry registrations."
         );
         Require(
-            userTypes.SetEquals([GameNames.FieldType, GameNames.DungeonType]),
+            userTypes.SetEquals([GameNames.FieldType, GameNames.PartyType, GameNames.DungeonType]),
             "Missing registered User Spot type."
         );
         foreach (var (id, configured) in settings)

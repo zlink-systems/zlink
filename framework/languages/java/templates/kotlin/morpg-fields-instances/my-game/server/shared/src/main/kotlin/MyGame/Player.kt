@@ -9,6 +9,7 @@ class Player(override val context: ZLinkActorContext, private val config: NodeCo
     ZLinkSuspendingActor() {
     var position = EnterField()
         private set
+    var partyId: String? = null
 
     fun apply(position: EnterField) {
         this.position = position
@@ -47,7 +48,9 @@ class PlayerTransfer : ZLinkActorRelocationAdapter<Player> {
         cancellation: ZLinkRelocationCancellation,
     ): CompletionStage<ByteArray> {
         cancellation.ensureActive()
-        return CompletableFuture.completedFuture(Json.mapper.writeValueAsBytes(actor.position))
+        return CompletableFuture.completedFuture(
+            Json.mapper.writeValueAsBytes(PlayerSnapshot(actor.position.x, actor.position.sequence, actor.partyId))
+        )
     }
 
     override fun restore(
@@ -56,7 +59,11 @@ class PlayerTransfer : ZLinkActorRelocationAdapter<Player> {
         cancellation: ZLinkRelocationCancellation,
     ): CompletionStage<Void> {
         cancellation.ensureActive()
-        actor.apply(Json.mapper.readValue(state, EnterField::class.java))
+        val snapshot = Json.mapper.readValue(state, PlayerSnapshot::class.java)
+        actor.apply(EnterField(snapshot.x, snapshot.sequence))
+        actor.partyId = snapshot.partyId
         return CompletableFuture.completedFuture(null)
     }
 }
+
+data class PlayerSnapshot(val x: Double = 0.0, val sequence: Long = 0L, val partyId: String? = null)

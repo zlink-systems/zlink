@@ -36,6 +36,10 @@ class Program {
                 executionMode(ZLinkUserSpotExecutionMode.SPOT_WIDE)
                 preserveStateWith<Field, FieldTransfer>()
             }
+            .addSpotFactory<PartySpot>(Names.PARTY) {
+                executionMode(ZLinkUserSpotExecutionMode.SPOT_WIDE)
+                preserveStateWith<PartySpot, PartyTransfer>()
+            }
             .addActorFactory<Player, PlayerFactory>(Names.PLAYER) {
                 preserveStateWith<Player, PlayerTransfer>()
             }

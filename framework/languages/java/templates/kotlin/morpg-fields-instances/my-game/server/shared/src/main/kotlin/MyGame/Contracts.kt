@@ -8,6 +8,7 @@ object Names {
     const val STREAM = "players"
     const val PLAYER = "Player"
     const val FIELD = "Field"
+    const val PARTY = "Party"
     const val DUNGEON = "Dungeon"
     const val BORDER = "border"
     const val BORDER_TIMER = "border-tick"
@@ -24,14 +25,21 @@ object Rules {
     const val BORDER_RADIUS = 10
     const val TICK_MILLIS = 100L
     const val MAXIMUM_PARTY_MEMBERS = 4
+    const val FINAL_STAGE = 3
+    const val MAX_SAFE_INTEGER = 9_007_199_254_740_991L
+    const val MAX_STEP = 10.0
+    const val MAX_SPEED = MAX_STEP * 5
+    const val FULL_BUDGET_MS = 200
 
-    fun dungeonId(partyId: String) = "dungeon-$partyId"
+    fun dungeonId(runId: String) = "dungeon-$runId"
 
     const val FIELD_PREFIX = "field-"
 
-    fun fieldId(x: Int): String {
-        require(x in 0 until FIELD_WIDTH * FIELD_COUNT) { "Position outside world" }
-        return "$FIELD_PREFIX${x / FIELD_WIDTH + 1}"
+    fun fieldId(x: Double): String {
+        require(x.isFinite() && x >= 0 && x < FIELD_WIDTH * FIELD_COUNT) {
+            "Position outside world"
+        }
+        return "$FIELD_PREFIX${(x / FIELD_WIDTH).toInt() + 1}"
     }
 
     fun adjacentFields(id: String): List<String> {
@@ -45,6 +53,14 @@ object Rules {
     fun borderTopic(source: String, target: String) = "$source:$target"
 }
 
+enum class RunPhase {
+    Forming,
+    Preparing,
+    Entering,
+    Active,
+    Completed,
+}
+
 @JsonSerialize class SessionInfoRequest
 
 data class SessionInfo(
@@ -53,35 +69,35 @@ data class SessionInfo(
     val objectGeneration: Long = 0,
 )
 
-data class JoinWorldRequest(val playerId: String = "", val x: Int = 0)
+data class JoinWorldRequest(val playerId: String = "", val x: Double = 0.0)
 
-data class MoveRequest(val x: Int = 0, val sequence: Int = 0)
+data class MoveRequest(val delta: Double = 0.0, val sequence: Long = 0L)
 
-data class EnterField(val x: Int = 0, val sequence: Int = 0)
+data class EnterField(val x: Double = 0.0, val sequence: Long = 0L, val remainingMs: Int = 0)
 
 data class WorldState(
     val fieldId: String = "",
     val nodeId: String = "",
-    val x: Int = 0,
-    val sequence: Int = 0,
+    val x: Double = 0.0,
+    val sequence: Long = 0L,
 )
 
 data class BorderPresence(
     val sourceFieldId: String = "",
     val playerId: String = "",
-    val x: Int = 0,
-    val sequence: Int = 0,
+    val x: Double = 0.0,
+    val sequence: Long = 0L,
 )
 
 data class BorderVisible(
     val observerFieldId: String = "",
     val sourceFieldId: String = "",
     val playerId: String = "",
-    val x: Int = 0,
-    val sequence: Int = 0,
+    val x: Double = 0.0,
+    val sequence: Long = 0L,
 )
 
-data class CreatePartyRequest(val partyId: String = "")
+@JsonSerialize class CreatePartyRequest
 
 data class JoinPartyRequest(val partyId: String = "")
 
@@ -91,20 +107,27 @@ data class JoinPartyRequest(val partyId: String = "")
 
 @JsonSerialize class AdvanceRequest
 
-data class PartyView(val partyId: String = "", val members: List<String> = emptyList())
-
-data class FieldView(
-    val fieldId: String = "",
-    val nodeId: String = "",
-    val players: List<String> = emptyList(),
-    val parties: List<PartyView> = emptyList(),
+data class PartyView(
+    val partyId: String = "",
+    val members: List<String> = emptyList(),
+    val leaderId: String = "",
+    val phase: RunPhase = RunPhase.Forming,
+    val runId: String? = null,
 )
 
-data class PrepareDungeon(val partyId: String = "", val members: List<String> = emptyList())
+data class PrepareDungeon(
+    val runId: String = "",
+    val partyId: String = "",
+    val members: List<String> = emptyList(),
+)
 
-data class DungeonPrepared(val dungeonId: String = "")
+data class DungeonPrepared(
+    val dungeonId: String = "",
+    val runId: String = "",
+    val rejection: ActionRejected? = null,
+)
 
-data class JoinDungeon(val dungeonId: String = "", val partyId: String = "")
+data class JoinDungeon(val dungeonId: String = "", val runId: String = "")
 
 data class DungeonView(
     val dungeonId: String = "",
@@ -112,11 +135,33 @@ data class DungeonView(
     val partyId: String = "",
     val members: List<String> = emptyList(),
     val stage: Int = 0,
+    val runId: String = "",
+    val phase: RunPhase = RunPhase.Preparing,
 )
 
-data class ActionRejected(val reason: String = "")
+data class ActionRejected(val reason: String = "", val retryAfterMs: Int = 0)
 
 object Rejection {
-    const val INVALID_PARTY = "INVALID_PARTY"
-    const val NOT_LEADER = "NOT_LEADER"
+    const val INVALID_PARTY = "invalid-party"
+    const val NOT_LEADER = "not-leader"
+    const val RUN_MISMATCH = "run-mismatch"
+    const val RUN_IN_PROGRESS = "run-in-progress"
+    const val RUN_NOT_ACTIVE = "run-not-active"
+    const val PACKET_NOT_ALLOWED = "packet-not-allowed"
+    const val NON_FINITE = "non-finite"
+    const val OUTSIDE_WORLD = "outside-world"
+    const val STEP_TOO_LARGE = "step-too-large"
+    const val INTEGER_OUT_OF_RANGE = "integer-out-of-range"
+    const val STALE_SEQUENCE = "stale-sequence"
+    const val MOVE_BUDGET = "move-budget"
 }
+
+data class PartyCommand(val actorId: String = "", val join: Boolean = false, val enter: Boolean = false)
+
+data class PartyCommandResult(val view: PartyView? = null, val rejection: ActionRejected? = null)
+
+data class DungeonMemberEntered(val runId: String = "", val actorId: String = "")
+
+data class RunStarted(val runId: String = "")
+
+data class RunCompleted(val runId: String = "")

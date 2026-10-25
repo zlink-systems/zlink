@@ -11,7 +11,7 @@ public final class FieldTransfer implements ZLinkSpotRelocationAdapter<Field> {
     public CompletionStage<byte[]> capture(Field spot, ZLinkRelocationCancellation cancellation) {
         Transfer.check(cancellation);
         try {
-            return CompletableFuture.completedFuture(Json.MAPPER.writeValueAsBytes(spot.state));
+            return CompletableFuture.completedFuture(Json.MAPPER.writeValueAsBytes(spot.capture()));
         } catch (java.io.IOException error) {
             return CompletableFuture.failedFuture(error);
         }
@@ -21,7 +21,7 @@ public final class FieldTransfer implements ZLinkSpotRelocationAdapter<Field> {
             Field spot, byte[] state, ZLinkRelocationCancellation cancellation) {
         Transfer.check(cancellation);
         try {
-            spot.state = Json.MAPPER.readValue(state, FieldState.class);
+            spot.restore(Json.MAPPER.readValue(state, Field.FieldSnapshot.class));
             return CompletableFuture.completedFuture(null);
         } catch (java.io.IOException error) {
             return CompletableFuture.failedFuture(error);

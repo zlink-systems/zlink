@@ -36,6 +36,7 @@ class Client(endpoint: String, val playerId: String) {
     val connector = createConnector(endpoint)
     private val queue = LinkedBlockingQueue<Any>()
     private val pending = mutableListOf<Any>()
+    private val history = mutableListOf<Any>()
     private val registrations = mutableListOf<AutoCloseable>()
     @Volatile var disconnects = 0
 
@@ -44,18 +45,15 @@ class Client(endpoint: String, val playerId: String) {
                 WorldState::class.java,
                 BorderVisible::class.java,
                 DungeonView::class.java,
-                FieldView::class.java,
+                PartyView::class.java,
                 ActionRejected::class.java,
             )
             .forEach { type ->
                 registrations +=
                     connector.on(type) { message ->
                         val payload = message.payload()
-                        queue.add(
-                            if (payload is ActionRejected)
-                                IllegalStateException("Action rejected: ${payload.reason}")
-                            else payload
-                        )
+                        history.add(payload)
+                        queue.add(payload)
                         CompletableFuture.completedFuture(null)
                     }
             }
@@ -74,15 +72,15 @@ class Client(endpoint: String, val playerId: String) {
 
     suspend fun connect() = connector.kotlin().connect().await()
 
-    suspend fun join(x: Int): WorldState {
+    suspend fun join(x: Double): WorldState {
         send(JoinWorldRequest(playerId, x))
         return next<WorldState>()
     }
 
-    suspend fun move(x: Int, sequence: Int): WorldState {
-        send(MoveRequest(x, sequence))
+    suspend fun move(delta: Double, sequence: Long): WorldState {
+        send(MoveRequest(delta, sequence))
         val state = next<WorldState> { it.sequence == sequence }
-        check(state.x == x && state.sequence == sequence) { "Movement lost or changed" }
+        check(state.sequence == sequence) { "Movement lost or changed" }
         return state
     }
 
@@ -111,8 +109,10 @@ class Client(endpoint: String, val playerId: String) {
             if (index >= 0) return type.cast(pending.removeAt(index))
             val event =
                 queue.poll((expires - System.nanoTime()).coerceAtLeast(0), TimeUnit.NANOSECONDS)
-                    ?: error("Timed out waiting for ${type.simpleName}, pending=$pending")
+                    ?: error("Timed out waiting for ${type.simpleName}, received=$history")
             if (event is Throwable) throw event
+            if (type.isInstance(event) && predicate(type.cast(event))) return type.cast(event)
+            if (event is ActionRejected) error("Action rejected: ${event.reason}")
             pending.add(event)
         }
     }

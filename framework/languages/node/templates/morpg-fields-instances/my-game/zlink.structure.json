@@ -16,7 +16,12 @@
         "pwsh -NoProfile -File ./run-e2e.ps1 -Scenario field,dungeon,reconnect,update"
       ]
     },
-    "scenarios": ["field", "dungeon", "reconnect", "update"]
+    "scenarios": [
+      "field",
+      "dungeon",
+      "reconnect",
+      "update"
+    ]
   },
   "nodes": [
     {
@@ -133,6 +138,13 @@
       "kind": "entry",
       "owner": "instanceB",
       "type": null
+    },
+    {
+      "id": "party",
+      "kind": "user",
+      "type": "Party",
+      "owner": "fieldA",
+      "dynamic": true
     }
   ],
   "edges": [

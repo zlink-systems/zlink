@@ -138,6 +138,13 @@
       "kind": "entry",
       "owner": "instanceB",
       "type": null
+    },
+    {
+      "id": "party",
+      "kind": "user",
+      "type": "Party",
+      "owner": "fieldA",
+      "dynamic": true
     }
   ],
   "edges": [

@@ -68,3 +68,27 @@ public sealed class DungeonDelivery
         return actor.Context.BoundSession.Send(request).Async();
     }
 }
+
+[ZLinkSpotActorSendHandler(nameof(PartyView))]
+public sealed class DungeonPartyDelivery : IZLinkSpotActorSendHandler<DungeonSpot, PlayerActor, PartyView>
+{
+    public ValueTask HandleAsync(DungeonSpot spot, PlayerActor actor, IZLinkMessageContext context,
+        PartyView request, CancellationToken ct) => actor.Context.BoundSession.Send(request).Async();
+}
+[ZLinkSpotActorSendHandler(nameof(EnterDungeonRequest))]
+public sealed class DungeonEnter : IZLinkSpotActorSendHandler<DungeonSpot, PlayerActor, EnterDungeonRequest>
+{
+    public ValueTask HandleAsync(DungeonSpot spot, PlayerActor actor, IZLinkMessageContext context,
+        EnterDungeonRequest request, CancellationToken ct) => spot.EnterAsync(actor, ct);
+}
+[ZLinkSpotActorSendHandler(nameof(JoinDungeon))]
+public sealed class DungeonTravelAgain : IZLinkSpotActorSendHandler<DungeonSpot, PlayerActor, JoinDungeon>
+{
+    public ValueTask HandleAsync(DungeonSpot spot, PlayerActor actor, IZLinkMessageContext context,
+        JoinDungeon request, CancellationToken ct)
+    {
+        if (request.DungeonId != spot.Context.SpotId)
+            actor.Context.JoinSpot(request.DungeonId, request).Defer();
+        return ValueTask.CompletedTask;
+    }
+}

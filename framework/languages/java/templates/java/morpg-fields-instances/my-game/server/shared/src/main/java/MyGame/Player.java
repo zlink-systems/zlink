@@ -8,6 +8,7 @@ public final class Player implements ZLinkActor {
     private final ZLinkActorContext context;
     private final NodeConfig config;
     private EnterField position = new EnterField(0, 0);
+    private String partyId;
 
     public Player(ZLinkActorContext context, NodeConfig config) {
         this.context = context;
@@ -20,6 +21,14 @@ public final class Player implements ZLinkActor {
 
     public EnterField position() {
         return position;
+    }
+
+    public String partyId() {
+        return partyId;
+    }
+
+    public void setPartyId(String partyId) {
+        this.partyId = partyId;
     }
 
     public void apply(EnterField position) {
@@ -46,6 +55,15 @@ public final class Player implements ZLinkActor {
                 .submit();
     }
 
+    public PlayerSnapshot capture() {
+        return new PlayerSnapshot(position.x(), position.sequence(), partyId);
+    }
+
+    public void restore(PlayerSnapshot state) {
+        apply(new EnterField(state.x(), state.sequence()));
+        partyId = state.partyId();
+    }
+
     public CompletionStage<Void> onJoinCompleted(ZLinkActorJoinCompletion completion) {
         if (!(completion instanceof ZLinkActorJoinCompletion.Accepted))
             return CompletableFuture.failedFuture(
@@ -54,4 +72,6 @@ public final class Player implements ZLinkActor {
                 ? sendState()
                 : CompletableFuture.completedFuture(null);
     }
+
+    public record PlayerSnapshot(double x, long sequence, String partyId) {}
 }
