@@ -5,6 +5,112 @@ namespace Zlink.Framework.UnitTests;
 
 public sealed class SerialExecutorTests
 {
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task SharedChildTerminal_ParentDisposePreservesAcceptedClaim(
+        bool closeParentBeforeTerminal,
+        bool lifecycle
+    )
+    {
+        using var errors = new ZLinkRuntimeErrorSink();
+        var runner = new ZLinkRuntimeTaskRunner(errors, CancellationToken.None);
+        var parent = new ZLinkSerialExecutionQueue(
+            runner,
+            errors,
+            CancellationToken.None,
+            ZLinkExecutionLanePolicy.Default,
+            sharedGate: true
+        );
+        var child = new ZLinkSerialExecutionQueue(runner, errors, CancellationToken.None);
+        ZLinkSerialExecutionQueue? owner = parent;
+        child.BindExecutionOwner(() => owner);
+        using var selected = new ManualResetEventSlim();
+        using var acceptClaim = new ManualResetEventSlim();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseBody = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var closeDrain = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        child.ConsumerSelected = () =>
+        {
+            selected.Set();
+            Assert.True(acceptClaim.Wait(TimeSpan.FromSeconds(5)));
+        };
+        parent.GateOperation = operation =>
+        {
+            if (operation == ZLinkSerialGateOperation.Release && parent.IsDisposed)
+                closeDrain.TrySetResult();
+        };
+        Task? disposingParent = null;
+        Task? disposingChild = null;
+        ZLinkSerialWorkItem? item = null;
+        var parentEndedBeforeTerminal = false;
+        try
+        {
+            async ValueTask Callback(CancellationToken _)
+            {
+                // ActorSerialExecutor.Waiter.RunAsync uses this same finite
+                // gate return while retaining its accepted mailbox claim.
+                ZLinkSerialTurn.Current!.SignalSuspended();
+                entered.TrySetResult();
+                await releaseBody.Task.ConfigureAwait(false);
+            }
+            if (lifecycle)
+                Assert.True(child.TryPostNext(Callback, out item));
+            else
+                item = await child.PostAsync(Callback, CancellationToken.None);
+            Assert.True(selected.Wait(TimeSpan.FromSeconds(5)));
+            if (closeParentBeforeTerminal)
+                disposingParent = parent.DisposeAsync().AsTask();
+            acceptClaim.Set();
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Same(parent, item.TerminalExecutionOwner);
+            if (disposingParent is not null)
+            {
+                await closeDrain.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                try
+                {
+                    await disposingParent.WaitAsync(TimeSpan.FromSeconds(1));
+                    parentEndedBeforeTerminal = true;
+                }
+                catch (TimeoutException) { }
+            }
+            disposingChild = child.DisposeAsync().AsTask();
+            owner = null;
+            releaseBody.TrySetResult();
+            var childEnded = true;
+            try
+            {
+                await disposingChild.WaitAsync(TimeSpan.FromSeconds(2));
+            }
+            catch (TimeoutException)
+            {
+                childEnded = false;
+            }
+            Assert.True(
+                childEnded,
+                $"Child dispose did not finish after callback release; parentEndedBeforeTerminal={parentEndedBeforeTerminal}, callbackReleased={releaseBody.Task.IsCompleted}."
+            );
+            Assert.False(parentEndedBeforeTerminal);
+        }
+        finally
+        {
+            acceptClaim.Set();
+            owner = null;
+            releaseBody.TrySetResult();
+            if (item is not null)
+                await item.Completion.WaitAsync(TimeSpan.FromSeconds(5));
+            await child.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+            await parent.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+            await runner.StopAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        }
+    }
+
     [Fact]
     public async Task CanceledActorAdmissionReturnsCanceledTaskAndAllowsLaterWork()
     {

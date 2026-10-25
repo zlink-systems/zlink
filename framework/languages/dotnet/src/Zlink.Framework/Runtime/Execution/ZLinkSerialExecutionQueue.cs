@@ -26,7 +26,6 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
     private readonly Func<CancellationToken, ValueTask> _notifyShared;
     private readonly Action<ZLinkSerialWorkItem> _importSharedApplication;
     private readonly Action<ZLinkSerialWorkItem> _importSharedLifecycle;
-    private readonly Func<Action, ValueTask> _dispatchTerminal;
     private readonly IZLinkRuntimeFailureReporter _errorSink;
     private readonly CancellationToken _executionToken;
     private readonly ZLinkExecutionLanePolicy _policy;
@@ -148,7 +147,6 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
         _notifyShared = NotifySharedAsync;
         _importSharedApplication = ImportSharedApplication;
         _importSharedLifecycle = ImportSharedLifecycle;
-        _dispatchTerminal = DispatchTerminalAsync;
         _applicationStartAllowed = applicationStartAllowed;
         _postResume = PostResume;
         _tryPostCallback = TryPostCallback;
@@ -1623,7 +1621,7 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
         return item;
     }
 
-    private ValueTask DispatchTerminalAsync(Action operation) =>
+    internal ValueTask DispatchTerminalAsync(Action operation) =>
         new(PostSharedControl(operation).Completion);
 
     private void CompleteSharedSealRequest()
@@ -1746,9 +1744,12 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
     private ulong ClaimUnderLock(ZLinkSerialWorkItem item)
     {
         ConsumerSelected?.Invoke();
-        if (_sharedOwner is not null)
+        if (_sharedOwner is { } owner)
         {
-            item.DispatchTerminal = _dispatchTerminal;
+            item.TerminalExecutionOwner = owner;
+            if (item.ReservationHeld && !ReferenceEquals(owner, this))
+                lock (owner._admissionGate)
+                    owner._pendingCount++;
             if (item.ReservationHeld)
                 _active = item;
             if (item.Lane == ZLinkSerialWorkLane.Lifecycle && item.LifecycleOwner is null)
@@ -2081,43 +2082,61 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
 
     internal void CompletePendingItem(ZLinkSerialWorkItem item)
     {
-        if (_sharedOwner is not null)
+        try
         {
-            if (ReferenceEquals(_active, item))
-                _active = null;
-            if (ReferenceEquals(_activeLifecycle, item))
-                _activeLifecycle = null;
-            if (item.IsAccepted)
-                _acceptedOperations--;
-            if (item.ReservationHeld)
-                lock (_admissionGate)
-                    ReleaseReservedSlotUnderLock(item.Lane);
-            CompleteSharedSealRequest();
-            ImportSharedPublished();
-            if (RedirectIdleMailbox())
-                SchedulePendingWork();
-            else
-                RegisterSharedHead();
-            TrySignalDrained();
-            return;
-        }
-        Func<CancellationToken, ValueTask>? drain = null;
-        lock (_admissionGate)
-        {
-            if (ReferenceEquals(_activeLifecycle, item))
+            if (_sharedOwner is not null)
             {
-                _activeLifecycle = null;
-                if (_lifecycleQueue.Count > 0)
-                    drain = ReserveDrainUnderLock();
+                if (ReferenceEquals(_active, item))
+                    _active = null;
+                if (ReferenceEquals(_activeLifecycle, item))
+                    _activeLifecycle = null;
+                if (item.IsAccepted)
+                    _acceptedOperations--;
+                if (item.ReservationHeld)
+                    lock (_admissionGate)
+                        ReleaseReservedSlotUnderLock(item.Lane);
+                CompleteSharedSealRequest();
+                ImportSharedPublished();
+                if (RedirectIdleMailbox())
+                    SchedulePendingWork();
+                else
+                    RegisterSharedHead();
+                TrySignalDrained();
             }
-            if (item.IsAccepted)
-                _acceptedOperations--;
-            if (item.ReservationHeld)
-                ReleaseReservedSlotUnderLock(item.Lane);
-            CompleteSealRequestUnderLock();
+            else
+            {
+                Func<CancellationToken, ValueTask>? drain = null;
+                lock (_admissionGate)
+                {
+                    if (ReferenceEquals(_activeLifecycle, item))
+                    {
+                        _activeLifecycle = null;
+                        if (_lifecycleQueue.Count > 0)
+                            drain = ReserveDrainUnderLock();
+                    }
+                    if (item.IsAccepted)
+                        _acceptedOperations--;
+                    if (item.ReservationHeld)
+                        ReleaseReservedSlotUnderLock(item.Lane);
+                    CompleteSealRequestUnderLock();
+                }
+                PublishDrain(drain);
+                TrySignalDrained();
+            }
         }
-        PublishDrain(drain);
-        TrySignalDrained();
+        finally
+        {
+            if (
+                item.ReservationHeld
+                && item.TerminalExecutionOwner is { } owner
+                && !ReferenceEquals(owner, this)
+            )
+            {
+                lock (owner._admissionGate)
+                    owner._pendingCount--;
+                owner.TrySignalDrained();
+            }
+        }
     }
 
     private void TrySignalDrained()
