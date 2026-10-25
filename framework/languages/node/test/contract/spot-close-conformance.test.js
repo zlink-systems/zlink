@@ -92,7 +92,7 @@ function joiningActor(actorId, nodeRid = NODE_RID) {
 async function createOwner(given) {
   const events = [];
   const diagnostics = [];
-  const counters = { onClosing: 0, handler: 0, creationIntent: 0 };
+  const counters = { onClosing: 0, handler: 0, creationIntent: 0, join: 0 };
   const live = new Set([OWNER_LIVENESS]);
   const base = new ZLinkInMemoryAuthorityStore(
     {
@@ -109,6 +109,16 @@ async function createOwner(given) {
   let releaseFailures = given.failOnce === 'authorityReleased' ? 1 : 0;
   const store = Object.create(base);
   store.compareExchangeAuthority = async (key, expected, mutation, signal) => {
+    if (
+      given.closingPut !== undefined &&
+      mutation.kind === 'put' &&
+      decodeServiceClosingSpotAuthority(
+        serviceRelocationAuthorityApplicationPayload(mutation.payload)
+      ) !== undefined
+    ) {
+      given.closingPut.entered.resolve();
+      await given.closingPut.release.promise;
+    }
     if (mutation.kind === 'delete' && releaseFailures > 0) {
       releaseFailures--;
       throw new Error('authority release failed once');
@@ -125,6 +135,7 @@ async function createOwner(given) {
     async onJoinedActor() {}
 
     async onActorJoin() {
+      counters.join++;
       if (given.joinGate !== undefined) await given.joinGate.promise;
       return { accepted: true };
     }
@@ -516,6 +527,50 @@ for (const decision of [
     assert.equal(remainedPending, true);
     assert.equal(operationRan, !decision.committed);
   });
+}
+
+test('Joins admitted before Closing authority Put completes do not run after commit', async () => {
+  const closingPut = { entered: deferred(), release: deferred() };
+  const owner = await createOwner({ authority: 'Ready', closingPut });
+  const activation = owner.manager.activations.activationForClose(MESH, owner.spotId);
+  const closing = owner.spots.close(owner.ref);
+  await closingPut.entered.promise;
+  assert.equal(await owner.authority(), 'Ready');
+  const local = outcome(() => owner.join('pending-local'));
+  const remote = outcome(() => owner.join('pending-remote', 'node-b'));
+  assert.equal(owner.counters.join, 0);
+  closingPut.release.resolve();
+  assert.equal(await closing, true);
+  assert.deepEqual(await Promise.all([local, remote]), ['NotFound', 'NotFound']);
+  assert.equal(owner.counters.join, 0);
+  assert.equal(activation.resolveJoinedActor('pending-local'), undefined);
+  assert.equal(activation.resolveJoinedActor('pending-remote'), undefined);
+});
+
+for (const closeStarted of [false, true]) {
+  for (const commits of [false, true]) {
+    test(`queued lifecycle Join rechecks Closing (started=${closeStarted}, commits=${commits})`, async () => {
+      const serial = new ZLinkSpotSerialTurnExecutor();
+      const entered = deferred();
+      const release = deferred();
+      let calls = 0;
+      const close = serial.executeControlLifecycleOperation(async () => {
+        entered.resolve();
+        await release.promise;
+        if (commits) serial.setLifecycleAdmissionClosed(true);
+      });
+      if (closeStarted) await entered.promise;
+      const joining = outcome(() => serial.executeLifecycleOperation(() => {
+        calls++;
+        return 'accepted';
+      }));
+      assert.equal(calls, 0);
+      release.resolve();
+      await close;
+      assert.equal(await joining, commits ? 'NotFound' : 'accepted');
+      assert.equal(calls, commits ? 0 : 1);
+    });
+  }
 }
 
 test('completed Close answers lifecycle submission with NotFound without retaining work', async () => {

@@ -1153,15 +1153,19 @@ test('Instance context close returns after activation completion', async () => {
   const laterLifecycle = activation.serial.executeLifecycleOperation(() => {
     events.push('later-lifecycle');
   });
+  const laterLifecycleRejected = assert.rejects(
+    laterLifecycle,
+    (error) => error.kind === framework.ZLinkFrameworkErrorKind.NotFound
+  );
   await Promise.resolve();
   assert.equal(events.includes('later-lifecycle'), false);
 
   releaseQuiescence.resolve();
   assert.equal(await closeResult, true);
-  await laterLifecycle;
+  await laterLifecycleRejected;
   await waitFor(() => durableCloseCalls === 1);
   assert.equal(await manager.find('test.mesh', spotId), null);
-  assert.deepEqual(events, ['close-returned', 'wait-for-terminal', 'durable-closing', 'later-lifecycle']);
+  assert.deepEqual(events, ['close-returned', 'wait-for-terminal', 'durable-closing']);
 });
 
 test('Spot Close retains its lifecycle item until a failed authority decision settles', async () => {
