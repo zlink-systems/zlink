@@ -11,6 +11,7 @@ import {
 import type {
   ActorRef,
   RoutingId,
+  Type,
   ZLinkActor,
   ZLinkMessageSerializer,
   ZLinkSpot
@@ -444,12 +445,12 @@ export class ZLinkSpotActorPacketDispatch {
   private createPayloadDecoder(
     message: Message,
     header: ReturnType<typeof decodeStreamHeader>
-  ): () => unknown {
-    return () =>
+  ): (messageType?: Type) => unknown {
+    return (messageType) =>
       decodeFrameworkTypedPayloadMessage(
         message,
         this.options.messageSerializers,
-        undefined,
+        messageType,
         streamCodecContentType(header.codec),
         header.name
       );

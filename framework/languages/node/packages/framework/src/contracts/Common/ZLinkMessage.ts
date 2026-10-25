@@ -123,13 +123,17 @@ export function materializeZLinkMessageValue<T>(value: T, type?: Type<T>): T {
   }
 
   const materialized = Object.create(prototype) as Record<string, unknown>;
-  for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
-    Object.defineProperty(materialized, key, {
-      configurable: true,
-      enumerable: true,
-      value: item,
-      writable: true
-    });
+  const descriptor: PropertyDescriptor = {
+    configurable: true,
+    enumerable: true,
+    value: undefined,
+    writable: true
+  };
+  for (const key in value) {
+    if (Object.prototype.hasOwnProperty.call(value, key)) {
+      descriptor.value = (value as Record<string, unknown>)[key];
+      Object.defineProperty(materialized, key, descriptor);
+    }
   }
   return materialized as T;
 }
