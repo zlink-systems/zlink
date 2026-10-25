@@ -1482,9 +1482,9 @@ route_client_t::submit_channel_send_erased (std::shared_ptr<detail::route_client
     try {
         if (const auto *client_server = std::get_if<0> (&*channel_transport)) {
             auto serialized = encode_payload (*state->serializers);
-            co_await (*client_server) (packet_name, std::move (serialized.content_type),
-                                       detail::encoded_payload_to_raw (serialized.payload),
-                                       metadata);
+            co_await (*client_server) (
+              packet_name, std::move (serialized.content_type),
+              detail::encoded_payload_to_raw (std::move (serialized.payload)), metadata);
             detail::message_flow_tracer_t (state->runtime->dispatch)
               .trace (message_flow_outcome_t::sent, [&] {
                   return message_flow_event_t{.outcome = message_flow_outcome_t::sent,
@@ -1941,9 +1941,10 @@ try {
                                               .channel_name = channel_name,
                                               .channel_route_kind = std::string ("client_server")};
               });
-            auto selected = (*client_server) (packet_name, std::move (serialized.content_type),
-                                              detail::encoded_payload_to_raw (serialized.payload),
-                                              effective_timeout, std::move (metadata));
+            auto selected =
+              (*client_server) (packet_name, std::move (serialized.content_type),
+                                detail::encoded_payload_to_raw (std::move (serialized.payload)),
+                                effective_timeout, std::move (metadata));
             // The selected callable stays owned until its terminal.
             return detail::project_request_reply<zlink::message_t> (
               selected, [transport = std::move (*channel_transport)] (

@@ -170,8 +170,8 @@ encode_channel_payload_parts (runtime::messaging::envelope_header_t header,
     auto serialized = encode_payload (serializers);
     header.content_type = std::move (serialized.content_type);
     runtime::messaging::envelope_codec_t envelope;
-    return envelope.encode_raw_body_parts (header,
-                                           detail::encoded_payload_to_raw (serialized.payload));
+    return envelope.encode_raw_body_parts (
+      header, detail::encoded_payload_to_raw (std::move (serialized.payload)));
 }
 
 // The binding typed result owns the classification; errno only details the
@@ -962,7 +962,7 @@ channel_outbound_exchange_t::submit_request (std::string channel_name,
         if (const auto requester = client_server_requester (state, channel_name)) {
             try {
                 auto serialized = encode_payload (*state->serializers);
-                auto payload = detail::encoded_payload_to_raw (serialized.payload);
+                auto payload = detail::encoded_payload_to_raw (std::move (serialized.payload));
                 if (client->max_message_size && client->max_message_size->bytes () > 0
                     && static_cast<std::int64_t> (payload.size ())
                          > client->max_message_size->bytes ()) {
@@ -1171,7 +1171,7 @@ channel_outbound_exchange_t::submit_send (std::string channel_name,
         if (const auto sender = client_server_sender (state, channel_name)) {
             try {
                 auto serialized = encode_payload (*state->serializers);
-                auto payload = detail::encoded_payload_to_raw (serialized.payload);
+                auto payload = detail::encoded_payload_to_raw (std::move (serialized.payload));
                 if (client->max_message_size && client->max_message_size->bytes () > 0
                     && static_cast<std::int64_t> (payload.size ())
                          > client->max_message_size->bytes ()) {
@@ -1289,7 +1289,7 @@ channel_outbound_exchange_t::submit_publish (std::string channel_name,
         if (const auto publish = fanout_publisher (state, channel_name)) {
             try {
                 auto serialized = encode_payload (*state->serializers);
-                auto payload = detail::encoded_payload_to_raw (serialized.payload);
+                auto payload = detail::encoded_payload_to_raw (std::move (serialized.payload));
                 if (publisher->max_message_size && publisher->max_message_size->bytes () > 0
                     && static_cast<std::int64_t> (payload.size ())
                          > publisher->max_message_size->bytes ()) {

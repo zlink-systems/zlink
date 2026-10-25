@@ -32,8 +32,8 @@ class client_call_codec_t
                                           serialized_payload_t serialized) const
     {
         header.content_type = std::move (serialized.content_type);
-        return _codec.encode_raw_body_parts (header,
-                                             detail::encoded_payload_to_raw (serialized.payload));
+        return _codec.encode_raw_body_parts (
+          header, detail::encoded_payload_to_raw (std::move (serialized.payload)));
     }
 
     template <typename TEncodePayload>

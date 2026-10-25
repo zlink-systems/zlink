@@ -2661,6 +2661,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_use_zlink_gtest_main(test_cpp_framework_source_wire_allocations)
   target_sources(test_cpp_framework_source_wire_allocations PRIVATE
     tests/support/allocation_counter.cpp)
+  target_link_libraries(test_cpp_framework_source_wire_allocations PRIVATE ${CMAKE_DL_LIBS})
   add_zlink_framework_test(
     test_cpp_framework_request_observer_lifetime
     tests/Zlink.Framework.UnitTests/test_cpp_framework_request_observer_lifetime.cpp

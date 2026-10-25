@@ -8,11 +8,66 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cstdlib>
 #include <future>
 #include <memory>
 #include <optional>
 #include <thread>
+#include <utility>
 #include <vector>
+#if !defined(_WIN32)
+#include <dlfcn.h>
+#include <zlink/message/api.h>
+
+namespace
+{
+struct native_copy_observation_t
+{
+    const void *payload = nullptr;
+    std::size_t size = 0;
+    std::size_t serializations = 0;
+    std::size_t copies = 0;
+};
+
+thread_local native_copy_observation_t *native_copy_observation = nullptr;
+
+class native_copy_scope_t
+{
+  public:
+    explicit native_copy_scope_t (native_copy_observation_t &observation) :
+        _previous (std::exchange (native_copy_observation, &observation))
+    {
+    }
+    ~native_copy_scope_t () { native_copy_observation = _previous; }
+    native_copy_scope_t (const native_copy_scope_t &) = delete;
+    native_copy_scope_t &operator= (const native_copy_scope_t &) = delete;
+
+  private:
+    native_copy_observation_t *_previous;
+};
+
+using native_copy_fn_t = zlink_config_result_t (*) (zlink_msg_t *, zlink_msg_t *);
+
+native_copy_fn_t native_copy ()
+{
+    static const auto function =
+      reinterpret_cast<native_copy_fn_t> (dlsym (RTLD_NEXT, "zlink_msg_copy"));
+    if (!function)
+        std::abort ();
+    return function;
+}
+} // namespace
+
+// Use the same Core C API interposition as the MeshNode runtime contract test.
+extern "C" zlink_config_result_t zlink_msg_copy (zlink_msg_t *destination, zlink_msg_t *source)
+{
+    auto *observation = native_copy_observation;
+    if (observation && observation->payload == zlink_msg_data (source)
+        && observation->size == zlink_msg_size (source))
+        ++observation->copies;
+    return native_copy () (destination, source);
+}
+#endif
 
 namespace
 {
@@ -29,7 +84,16 @@ struct wire_payload_t
 
 fw::encoded_payload_t serialize_wire_payload (const wire_payload_t &payload)
 {
-    return fw::encoded_payload_t::from_bytes (std::span<const std::uint8_t> (*payload.bytes));
+    auto encoded =
+      fw::encoded_payload_t::from_bytes (std::span<const std::uint8_t> (*payload.bytes));
+#if !defined(_WIN32)
+    if (auto *observation = native_copy_observation) {
+        observation->payload = encoded.bytes ().data ();
+        observation->size = encoded.size ();
+        ++observation->serializations;
+    }
+#endif
+    return encoded;
 }
 
 wire_payload_t deserialize_wire_payload (const fw::encoded_payload_t &payload)
@@ -144,8 +208,52 @@ measured_buffers_t measure_payload_buffers (std::size_t payload_size, Action &&a
     return {count, measurement.largest, log.overflow};
 }
 
+#if !defined(_WIN32)
+TEST (SourceWireAllocations, NativeCopyProbeObservesOnlyTheWatchedCallerStorage)
+{
+    auto payload = zlink::message_t::allocate (64u * 1024u);
+    ASSERT_TRUE (payload.valid ());
+    native_copy_observation_t observation;
+    native_copy_scope_t capture (observation);
+    observation.payload = payload.data ();
+    observation.size = payload.size ();
+    {
+        auto unrelated = zlink::message_t::allocate (payload.size ());
+        ASSERT_TRUE (unrelated.valid ());
+        auto copy = unrelated.copy ();
+        ASSERT_TRUE (copy.valid ());
+    }
+    EXPECT_EQ (observation.copies, 0u);
+    {
+        auto copy = payload.copy ();
+        ASSERT_TRUE (copy.valid ());
+        EXPECT_EQ (copy.data (), payload.data ());
+    }
+    // A disabled or unbound interposer must fail this positive/negative probe.
+    EXPECT_EQ (observation.copies, 1u);
+    std::thread other ([&payload] { auto copy = payload.copy (); });
+    other.join ();
+    EXPECT_EQ (observation.copies, 1u);
+}
+#endif
+
 TEST (SourceWireAllocations, PublicRouteSubmissionHasNoPayloadSizedIntermediateCppBuffer)
 {
+#if !defined(_WIN32)
+    // Check binding-internal symbol interception in this public-path test too.
+    // A zero counter is meaningful only after an actual copy has been observed.
+    {
+        auto payload = zlink::message_t::allocate (64u * 1024u);
+        ASSERT_TRUE (payload.valid ());
+        native_copy_observation_t observation;
+        native_copy_scope_t capture (observation);
+        observation.payload = payload.data ();
+        observation.size = payload.size ();
+        auto copy = payload.copy ();
+        ASSERT_TRUE (copy.valid ());
+        ASSERT_EQ (observation.copies, 1u);
+    }
+#endif
     constexpr const char *mesh_name = "source-wire-allocation";
     const auto target_id = zlink::routing_id_t::from ("source-wire-target");
     public_mesh_host_t target;
@@ -211,9 +319,19 @@ TEST (SourceWireAllocations, PublicRouteSubmissionHasNoPayloadSizedIntermediateC
         ASSERT_EQ (reference.count, 0u);
 
         std::optional<fw::task_t<void>> send;
+#if !defined(_WIN32)
+        native_copy_observation_t send_copies;
+#endif
         const auto send_buffers = measure_payload_buffers (payload_size, [&] {
+#if !defined(_WIN32)
+            native_copy_scope_t capture (send_copies);
+#endif
             send.emplace (source.client->send_to_node (mesh_name, target_id, payload).async ());
         });
+#if !defined(_WIN32)
+        EXPECT_EQ (send_copies.serializations, 1u);
+        EXPECT_EQ (send_copies.copies, 0u) << "send payload=" << payload_size;
+#endif
         ASSERT_TRUE (send->result ());
         expected_send_bytes += payload_size;
         EXPECT_FALSE (send_buffers.overflow);
@@ -221,11 +339,21 @@ TEST (SourceWireAllocations, PublicRouteSubmissionHasNoPayloadSizedIntermediateC
           << "send payload=" << payload_size << " largest=" << send_buffers.largest;
 
         std::optional<fw::request_task_t<wire_payload_t>> request;
+#if !defined(_WIN32)
+        native_copy_observation_t request_copies;
+#endif
         const auto request_buffers = measure_payload_buffers (payload_size, [&] {
+#if !defined(_WIN32)
+            native_copy_scope_t capture (request_copies);
+#endif
             request.emplace (source.client->request_to_node (mesh_name, target_id, payload)
                                .timeout (1s)
                                .async<wire_payload_t> ());
         });
+#if !defined(_WIN32)
+        EXPECT_EQ (request_copies.serializations, 1u);
+        EXPECT_EQ (request_copies.copies, 0u) << "request payload=" << payload_size;
+#endif
         const auto reply = request->result ();
         ASSERT_TRUE (reply);
         EXPECT_EQ (*reply.value ().bytes, *payload.bytes);
