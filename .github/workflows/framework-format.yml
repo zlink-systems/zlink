@@ -1,0 +1,50 @@
+name: Framework Format
+
+# One check for the four languages: scripts/format/format.sh owns the formatter
+# per language and its pinned version (doc/principal/dev/source-formatting.ko.md).
+on:
+  workflow_dispatch:
+  # Mergify merge-queue batches and backports run CI on their own branches only,
+  # as in the language workflows.
+  push:
+    branches:
+      - "mergify/merge-queue/**"
+      - "mergify/bp/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  framework-format:
+    name: Framework source format
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Install clang-format 18
+        run: sudo apt-get update && sudo apt-get install -y clang-format-18
+
+      - name: Check source format
+        run: bash scripts/format/format.sh --check
