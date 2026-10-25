@@ -437,7 +437,7 @@ test('Closing DirectSpot request terminates as NotFound without running the old 
   assert.equal(await close, true);
 });
 
-test('Closing commit rejects local and remote ActorRef joins', async () => {
+test('Closing commit answers local and remote ActorRef joins with NotFound', async () => {
   const owner = await createOwner({ authority: 'Ready', holdOnClosing: true });
   const close = owner.spots.close(owner.ref);
   try {
@@ -447,14 +447,78 @@ test('Closing commit rejects local and remote ActorRef joins', async () => {
       outcome(() => owner.join('local-member')),
       outcome(() => owner.join('remote-member', 'node-b'))
     ]);
-    assert.deepEqual(outcomes, ['Rejected', 'Rejected']);
+    assert.deepEqual(outcomes, ['NotFound', 'NotFound']);
   } finally {
     owner.finishClosing.resolve();
   }
   assert.equal(await close, true);
 });
 
-test('completed Close rejects lifecycle submission without retaining work', async () => {
+test('a second Close during committed Closing joins the first Close', async () => {
+  const owner = await createOwner({ authority: 'Ready', holdOnClosing: true });
+  const firstClose = owner.spots.close(owner.ref);
+  let secondClose;
+  let secondCloseSettled = false;
+  try {
+    await owner.closingEntered.promise;
+    assert.equal(await owner.authority(), 'Closing');
+    secondClose = owner.spots.close(owner.ref);
+    void secondClose.then(
+      () => { secondCloseSettled = true; },
+      () => { secondCloseSettled = true; }
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(secondCloseSettled, false);
+  } finally {
+    owner.finishClosing.resolve();
+  }
+  assert.deepEqual(await Promise.all([firstClose, secondClose]), [true, true]);
+});
+
+for (const decision of [
+  { name: 'commit', committed: true },
+  { name: 'abort', committed: false }
+]) {
+  test(`lifecycle admission waits for Close authority CAS ${decision.name}`, async () => {
+    const barrier = new ZLinkExecutionBarrier();
+    const serial = new ZLinkSpotSerialTurnExecutor();
+    serial.setExecutionBarrier(barrier);
+    const seal = barrier.seal('close');
+    const authorityCas = deferred();
+    let operationSettled = false;
+    let operationRan = false;
+    const operation = serial.executeLifecycleOperation(() => {
+      operationRan = true;
+      return 'accepted';
+    });
+    void operation.then(
+      () => { operationSettled = true; },
+      () => { operationSettled = true; }
+    );
+
+    await new Promise((resolve) => setImmediate(resolve));
+    const remainedPending = !operationSettled;
+    authorityCas.resolve(decision.committed);
+    const casCommitted = await authorityCas.promise;
+    assert.equal(
+      casCommitted ? barrier.commit(seal) : barrier.abort(seal),
+      true
+    );
+
+    if (decision.committed) {
+      await assert.rejects(
+        () => operation,
+        (error) => errorKindName(error) === 'NotFound'
+      );
+    } else {
+      assert.equal(await operation, 'accepted');
+    }
+    assert.equal(remainedPending, true);
+    assert.equal(operationRan, !decision.committed);
+  });
+}
+
+test('completed Close answers lifecycle submission with NotFound without retaining work', async () => {
   const owner = await createOwner({ authority: 'Ready' });
   const activation = owner.manager.activations.activationForClose(MESH, owner.spotId);
   assert.notEqual(activation, undefined);
@@ -466,7 +530,7 @@ test('completed Close rejects lifecycle submission without retaining work', asyn
       activation.serial.executeLifecycleOperation(() => {
         ran = true;
       }),
-    (error) => errorKindName(error) === 'Rejected'
+    (error) => errorKindName(error) === 'NotFound'
   );
   assert.equal(activation.serial.hasPendingWork, false);
   assert.equal(ran, false);
