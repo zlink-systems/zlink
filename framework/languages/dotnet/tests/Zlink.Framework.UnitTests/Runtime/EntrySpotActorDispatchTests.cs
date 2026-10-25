@@ -6044,30 +6044,41 @@ public sealed partial class EntrySpotActorDispatchTests
         var stateA = new ZLinkActorRuntimeState(actorA.ActorId);
         var stateB = new ZLinkActorRuntimeState(actorB.ActorId);
 
-        var firstA = DispatchAsync(activation, descriptor, stateA, actorA, "first");
-        await probe.ActorAFirstStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        try
+        {
+            var firstA = DispatchAsync(activation, descriptor, stateA, actorA, "first");
+            await probe.ActorAFirstStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
-        var firstB = DispatchAsync(activation, descriptor, stateB, actorB, "first");
-        await probe.ActorBStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            var firstB = DispatchAsync(activation, descriptor, stateB, actorB, "first");
+            await probe.ActorBStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
-        var secondA = DispatchAsync(activation, descriptor, stateA, actorA, "second");
-        await Task.Delay(100);
-        Assert.False(probe.ActorASecondStarted.Task.IsCompleted);
+            var secondA = DispatchAsync(activation, descriptor, stateA, actorA, "second");
+            await Task.Delay(100);
+            Assert.False(probe.ActorASecondStarted.Task.IsCompleted);
 
-        probe.ReleaseActorAFirst.SetResult();
-        await probe.ActorASecondStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        await Task.WhenAll(firstA, firstB, secondA).WaitAsync(TimeSpan.FromSeconds(5));
+            probe.ReleaseActorAFirst.SetResult();
+            await probe.ActorASecondStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await Task.WhenAll(firstA, firstB, secondA).WaitAsync(TimeSpan.FromSeconds(5));
 
-        Assert.Equal(
-            new[]
-            {
-                "actor-a:first:start",
-                "actor-b:first:start",
-                "actor-a:first:end",
-                "actor-a:second:start",
-            },
-            probe.Events.ToArray()
-        );
+            Assert.Equal(
+                new[]
+                {
+                    "actor-a:first:start",
+                    "actor-b:first:start",
+                    "actor-a:first:end",
+                    "actor-a:second:start",
+                },
+                probe.Events.ToArray()
+            );
+        }
+        finally
+        {
+            probe.ReleaseActorAFirst.TrySetResult();
+            await Task.WhenAll(
+                stateA.InvalidateRuntimeGenerationAfterDispatchesAsync().AsTask(),
+                stateB.InvalidateRuntimeGenerationAfterDispatchesAsync().AsTask()
+            );
+        }
     }
 
     [Fact]
