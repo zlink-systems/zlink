@@ -2507,6 +2507,14 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     tests/support/allocation_counter.cpp)
   target_include_directories(test_cpp_framework_envelope_allocations PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  add_zlink_framework_test(
+    test_cpp_framework_envelope_equivalence
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_envelope_equivalence.cpp
+    "framework-unit;framework-regression;messaging")
+  add_zlink_framework_test(
+    test_cpp_framework_envelope_public_allocations
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_envelope_public_allocations.cpp
+    "framework-unit;framework-regression;messaging")
   if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     add_zlink_framework_test(
       test_cpp_framework_raw_send_sync

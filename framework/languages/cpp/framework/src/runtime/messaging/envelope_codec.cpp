@@ -4,10 +4,11 @@
 
 #include "runtime/diagnostics/flow_context.hpp"
 
-#include <nlohmann/json.hpp>
+#include <nlohmann/detail/exceptions.hpp>
 #include <service_wire_constants.hpp>
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <charconv>
 #include <cmath>
@@ -498,26 +499,7 @@ zlink::message_t envelope_codec_t::encode_header (const envelope_header_t &heade
 namespace
 {
 
-enum class header_member_t
-{
-    none,
-    kind,
-    channel_name,
-    message_name,
-    content_type,
-    correlation_id,
-    deadline,
-    topic,
-    error_code,
-    error_message,
-    source,
-    flow_id,
-    flow_origin,
-    format_marker,
-    metadata
-};
-
-enum class header_value_t
+enum class header_value_t : unsigned char
 {
     missing,
     null,
@@ -526,390 +508,699 @@ enum class header_value_t
     other
 };
 
-struct header_scalar_t
-{
-    header_value_t type = header_value_t::missing;
-    std::string string;
-    int number = 0;
-
-    void set_null ()
-    {
-        type = header_value_t::null;
-        string.clear ();
-    }
-
-    void set_string (std::string value)
-    {
-        type = header_value_t::string;
-        string = std::move (value);
-    }
-
-    template <typename TInteger> void set_number (TInteger value)
-    {
-        if (!std::in_range<int> (value)) {
-            set_other ();
-            return;
-        }
-        type = header_value_t::number;
-        number = static_cast<int> (value);
-        string.clear ();
-    }
-
-    void set_other ()
-    {
-        type = header_value_t::other;
-        string.clear ();
-    }
-};
-
-class header_sax_t final : public nlohmann::json_sax<nlohmann::json>
+// The reader owns JSON syntax and writes values directly into the returned
+// header. Type tags retain the last occurrence without a second value model.
+class header_reader_t
 {
   public:
-    explicit header_sax_t (bool capture_flow) : _capture_flow (capture_flow) {}
-
-    bool null () override
+    header_reader_t (std::span<const std::byte> bytes,
+                     bool capture_flow,
+                     envelope_header_t &header) :
+        _begin (bytes.empty () ? "" : reinterpret_cast<const char *> (bytes.data ())),
+        _position (_begin),
+        _end (_begin + bytes.size ()),
+        _capture_flow (capture_flow),
+        _header (header)
     {
-        return scalar ([] (header_scalar_t &value) { value.set_null (); });
-    }
-    bool boolean (bool) override
-    {
-        return scalar ([] (header_scalar_t &target) { target.set_other (); });
-    }
-    bool number_integer (number_integer_t value) override
-    {
-        return scalar ([value] (header_scalar_t &target) { target.set_number (value); });
-    }
-    bool number_unsigned (number_unsigned_t value) override
-    {
-        return scalar ([value] (header_scalar_t &target) { target.set_number (value); });
-    }
-    bool number_float (number_float_t, const string_t &) override
-    {
-        return scalar ([] (header_scalar_t &target) { target.set_other (); });
-    }
-    bool string (string_t &value) override
-    {
-        return scalar (
-          [&value] (header_scalar_t &target) { target.set_string (std::move (value)); });
-    }
-    bool binary (binary_t &) override
-    {
-        return scalar ([] (header_scalar_t &value) { value.set_other (); });
     }
 
-    bool start_object (std::size_t) override
+    void read (std::optional<envelope_header_t> *rejection_context)
     {
-        if (_depth == 0) {
-            _root_object = true;
-        } else if (_depth == 1 && _member == header_member_t::metadata) {
-            _metadata_object_depth = _depth + 1;
-            clear_metadata ();
-            _invalid_metadata_shape = false;
-            _member = header_member_t::none;
+        if (_end - _position >= 3 && static_cast<unsigned char> (_position[0]) == 0xef
+            && static_cast<unsigned char> (_position[1]) == 0xbb
+            && static_cast<unsigned char> (_position[2]) == 0xbf)
+            _position += 3;
+        whitespace ();
+        const bool object = _position != _end && *_position == '{';
+        if (object) {
+            ++_position;
+            whitespace ();
+            if (!consume ('}')) {
+                do {
+                    whitespace ();
+                    const auto name = string (&_key, true);
+                    whitespace ();
+                    expect (':');
+                    whitespace ();
+                    field (name);
+                    whitespace ();
+                    if (consume ('}'))
+                        break;
+                    expect (',');
+                } while (true);
+            }
         } else {
-            container_value ();
+            skip_value ();
         }
-        ++_depth;
-        return true;
-    }
-
-    bool key (string_t &value) override
-    {
-        if (_depth == 1) {
-            _member = member (value);
-        } else if (_depth == _metadata_object_depth) {
-            _metadata_key = std::move (value);
-        }
-        return true;
-    }
-
-    bool end_object () override
-    {
-        if (_depth == _metadata_object_depth) {
-            _metadata_object_depth = 0;
-        }
-        if (_depth == 1)
-            _root_closed = true;
-        --_depth;
-        return true;
-    }
-
-    bool start_array (std::size_t) override
-    {
-        container_value ();
-        ++_depth;
-        return true;
-    }
-
-    bool end_array () override
-    {
-        --_depth;
-        return true;
-    }
-
-    bool parse_error (std::size_t,
-                      const std::string &,
-                      const nlohmann::detail::exception &error) override
-    {
-        _parse_error = error.what ();
-        return false;
-    }
-
-    result_t<envelope_header_t> finish (std::optional<envelope_header_t> *rejection_context)
-    {
-        if (!_parse_error.empty ())
-            return failure (_parse_error);
-        if (!_root_object || !_root_closed || _depth != 0)
+        whitespace ();
+        // The established JSON lexer treats a raw NUL as end of input. This
+        // applies only after a complete value, never inside strings/containers.
+        if (_position != _end && *_position != '\0')
+            syntax ("unexpected data after JSON value");
+        if (!object)
             return failure ("ZLink envelope header must be a JSON object");
-        envelope_header_t header{.kind = static_cast<message_kind_t> (_kind.number),
-                                 .channel_name = std::move (_channel_name.string),
-                                 .message_name = std::move (_message_name.string),
-                                 .content_type = _content_type.type == header_value_t::string
-                                                   ? std::move (_content_type.string)
-                                                   : envelope_codec_t::default_content_type,
-                                 .correlation_id = std::move (_correlation_id.string)};
-        header.deadline = take_optional (_deadline);
-        header.topic = take_optional (_topic);
-        header.error_code = take_optional (_error_code);
-        header.error_message = take_optional (_error_message);
-        header.source = take_optional (_source);
-        const auto reject = [&] (const std::string &message) {
-            if (rejection_context)
-                *rejection_context = std::move (header);
-            return failure (message);
-        };
-        if (_kind.type != header_value_t::number || _channel_name.type != header_value_t::string
-            || _message_name.type != header_value_t::string)
-            return reject ("ZLink envelope header has invalid required fields");
-        if (_content_type.type != header_value_t::missing
-            && _content_type.type != header_value_t::string)
-            return reject ("ZLink envelope header contentType is invalid");
-        if (!optional_string (_correlation_id) || !optional_string (_deadline)
-            || !optional_string (_topic) || !optional_string (_error_code)
-            || !optional_string (_error_message) || !optional_string (_source)
-            || !number_or_default (_format_marker))
-            return reject ("ZLink envelope header has an invalid field type");
-        if (_capture_flow && (!optional_string (_flow_id) || !number_or_default (_flow_origin)))
-            return reject ("ZLink envelope header flow fields are invalid");
-        if (_capture_flow) {
-            header.flow_id = take_optional (_flow_id);
-            if (_flow_origin.type == header_value_t::number)
-                header.flow_origin = static_cast<flow_origin_t> (_flow_origin.number);
-        }
-        const auto format_marker =
-          _format_marker.type == header_value_t::number ? _format_marker.number : 0;
-        if (auto valid = validate_protocol_header (header, format_marker,
-                                                   header.flow_id ? &*header.flow_id : nullptr,
-                                                   header.flow_origin);
-            !valid) {
-            header.flow_id.reset ();
-            header.flow_origin.reset ();
-            return reject (valid.error ()->what ());
-        }
-        if (_invalid_metadata_shape)
-            return reject ("ZLink envelope header metadata must be an object");
-        if (!_invalid_metadata_keys.empty ())
-            return reject ("ZLink envelope header metadata value is invalid");
-        header_writer_t<header_output_t::measure> metadata_measure;
-        try {
-            write_metadata (metadata_measure, _metadata);
-        }
-        catch (...) {
-            if (rejection_context)
-                *rejection_context = std::move (header);
-            throw;
-        }
-        header.metadata = std::move (_metadata);
-        return result_t<envelope_header_t>::success (std::move (header));
+        return finish (rejection_context);
     }
 
   private:
-    using number_integer_t = nlohmann::json::number_integer_t;
-    using number_unsigned_t = nlohmann::json::number_unsigned_t;
-    using number_float_t = nlohmann::json::number_float_t;
-    using string_t = nlohmann::json::string_t;
-    using binary_t = nlohmann::json::binary_t;
-
-    static header_member_t member (std::string_view name)
+    enum field_t : unsigned char
     {
-        using namespace std::string_view_literals;
-        if (name == "kind"sv)
-            return header_member_t::kind;
-        if (name == "channelName"sv)
-            return header_member_t::channel_name;
-        if (name == "messageName"sv)
-            return header_member_t::message_name;
-        if (name == "contentType"sv)
-            return header_member_t::content_type;
-        if (name == "correlationId"sv)
-            return header_member_t::correlation_id;
-        if (name == "deadline"sv)
-            return header_member_t::deadline;
-        if (name == "topic"sv)
-            return header_member_t::topic;
-        if (name == "errorCode"sv)
-            return header_member_t::error_code;
-        if (name == "errorMessage"sv)
-            return header_member_t::error_message;
-        if (name == "source"sv)
-            return header_member_t::source;
-        if (name == "flowId"sv)
-            return header_member_t::flow_id;
-        if (name == "flowOrigin"sv)
-            return header_member_t::flow_origin;
-        if (name == "formatMarker"sv)
-            return header_member_t::format_marker;
-        if (name == "metadata"sv)
-            return header_member_t::metadata;
-        return header_member_t::none;
+        kind,
+        channel_name,
+        message_name,
+        content_type,
+        correlation_id,
+        deadline,
+        topic,
+        error_code,
+        error_message,
+        source,
+        flow_id,
+        flow_origin,
+        format_marker
+    };
+
+    enum class container_t : unsigned char
+    {
+        object_first,
+        object_key,
+        object_next,
+        array_first,
+        array_value,
+        array_next
+    };
+
+    [[noreturn]] void syntax (std::string_view reason) const
+    {
+        throw std::runtime_error ("JSON parse error at byte "
+                                  + std::to_string (_position - _begin + 1) + ": "
+                                  + std::string (reason));
     }
 
-    header_scalar_t *current ()
+    void whitespace () noexcept
     {
-        if (_depth != 1)
-            return nullptr;
-        switch (_member) {
-            case header_member_t::kind:
-                return &_kind;
-            case header_member_t::channel_name:
-                return &_channel_name;
-            case header_member_t::message_name:
-                return &_message_name;
-            case header_member_t::content_type:
-                return &_content_type;
-            case header_member_t::correlation_id:
-                return &_correlation_id;
-            case header_member_t::deadline:
-                return &_deadline;
-            case header_member_t::topic:
-                return &_topic;
-            case header_member_t::error_code:
-                return &_error_code;
-            case header_member_t::error_message:
-                return &_error_message;
-            case header_member_t::source:
-                return &_source;
-            case header_member_t::flow_id:
-                return _capture_flow ? &_flow_id : nullptr;
-            case header_member_t::flow_origin:
-                return _capture_flow ? &_flow_origin : nullptr;
-            case header_member_t::format_marker:
-                return &_format_marker;
-            default:
-                return nullptr;
+        while (_position != _end) {
+            const auto byte = static_cast<unsigned char> (*_position);
+            if (byte > ' ' || (byte != ' ' && byte != '\t' && byte != '\r' && byte != '\n'))
+                return;
+            ++_position;
         }
     }
 
-    template <typename Set> bool scalar (Set set)
+    bool consume (char value) noexcept
     {
-        if (_metadata_object_depth != 0 && _depth == _metadata_object_depth) {
-            header_scalar_t value;
-            set (value);
-            if (value.type == header_value_t::string)
-                set_metadata_value (std::move (value.string));
-            else
-                set_metadata_invalid ();
-        } else if (auto *value = current ()) {
-            set (*value);
-            _member = header_member_t::none;
-        } else if (_depth == 1 && _member == header_member_t::metadata) {
-            _invalid_metadata_shape = true;
-            clear_metadata ();
-            _member = header_member_t::none;
-        }
+        if (_position == _end || *_position != value)
+            return false;
+        ++_position;
         return true;
     }
 
-    void container_value ()
+    void expect (char value)
     {
-        if (_metadata_object_depth != 0 && _depth == _metadata_object_depth) {
-            set_metadata_invalid ();
-        } else if (auto *value = current ()) {
-            value->set_other ();
-            _member = header_member_t::none;
-        } else if (_depth == 1 && _member == header_member_t::metadata) {
-            _invalid_metadata_shape = true;
-            clear_metadata ();
-            _member = header_member_t::none;
+        if (!consume (value))
+            syntax ("unexpected JSON token");
+    }
+
+    static unsigned hex (unsigned char value) noexcept
+    {
+        if (value >= '0' && value <= '9')
+            return value - '0';
+        if (value >= 'a' && value <= 'f')
+            return value - 'a' + 10;
+        if (value >= 'A' && value <= 'F')
+            return value - 'A' + 10;
+        return 16;
+    }
+
+    unsigned code_unit ()
+    {
+        if (_end - _position < 4)
+            syntax ("incomplete Unicode escape");
+        unsigned value = 0;
+        for (unsigned part = 0; part < 4; ++part) {
+            const auto digit = hex (static_cast<unsigned char> (*_position++));
+            if (digit == 16)
+                syntax ("invalid Unicode escape");
+            value = (value << 4) | digit;
+        }
+        return value;
+    }
+
+    static void append_codepoint (std::string &output, unsigned value)
+    {
+        if (value <= 0x7f) {
+            output.push_back (static_cast<char> (value));
+        } else if (value <= 0x7ff) {
+            output.push_back (static_cast<char> (0xc0 | (value >> 6)));
+            output.push_back (static_cast<char> (0x80 | (value & 0x3f)));
+        } else if (value <= 0xffff) {
+            output.push_back (static_cast<char> (0xe0 | (value >> 12)));
+            output.push_back (static_cast<char> (0x80 | ((value >> 6) & 0x3f)));
+            output.push_back (static_cast<char> (0x80 | (value & 0x3f)));
+        } else {
+            output.push_back (static_cast<char> (0xf0 | (value >> 18)));
+            output.push_back (static_cast<char> (0x80 | ((value >> 12) & 0x3f)));
+            output.push_back (static_cast<char> (0x80 | ((value >> 6) & 0x3f)));
+            output.push_back (static_cast<char> (0x80 | (value & 0x3f)));
         }
     }
 
-    void set_metadata_value (std::string value)
+    // Plain keys borrow the input for classification. Values are owned by their
+    // final destination; escaped keys alone use the reusable key string.
+    std::string_view string (std::string *output, bool borrow_plain = false)
     {
-        _invalid_metadata_keys.erase (std::remove (_invalid_metadata_keys.begin (),
-                                                   _invalid_metadata_keys.end (), _metadata_key),
-                                      _invalid_metadata_keys.end ());
-        const auto existing = _metadata.find (_metadata_key);
-        if (existing != _metadata.end ())
-            existing->second = std::move (value);
-        else
-            _metadata.emplace (std::move (_metadata_key), std::move (value));
-        _metadata_key.clear ();
+        expect ('"');
+        const char *start = _position;
+        const char *segment = start;
+        bool escaped = false;
+        while (_position != _end) {
+            _position = plain_string_end (_position, _end);
+            if (_position == _end)
+                break;
+            const auto byte = static_cast<unsigned char> (*_position);
+            if (byte == '"') {
+                const auto raw = std::string_view (start, _position - start);
+                if (output) {
+                    if (escaped)
+                        output->append (segment, _position - segment);
+                    else if (!borrow_plain)
+                        output->assign (raw);
+                }
+                ++_position;
+                return escaped && output ? std::string_view (*output) : raw;
+            }
+            if (byte < 0x20)
+                syntax ("unescaped control character in string");
+            if (byte >= 0x80) {
+                const auto length = utf8_sequence_length (_position, _end);
+                if (length == 0)
+                    syntax ("invalid UTF-8 string");
+                _position += length;
+                continue;
+            }
+            if (output) {
+                if (!escaped)
+                    output->assign (segment, _position - segment);
+                else
+                    output->append (segment, _position - segment);
+            }
+            escaped = true;
+            ++_position;
+            if (_position == _end)
+                syntax ("incomplete string escape");
+            const char escape = *_position++;
+            char decoded;
+            switch (escape) {
+                case '"':
+                    decoded = '"';
+                    break;
+                case '\\':
+                    decoded = '\\';
+                    break;
+                case '/':
+                    decoded = '/';
+                    break;
+                case 'b':
+                    decoded = '\b';
+                    break;
+                case 'f':
+                    decoded = '\f';
+                    break;
+                case 'n':
+                    decoded = '\n';
+                    break;
+                case 'r':
+                    decoded = '\r';
+                    break;
+                case 't':
+                    decoded = '\t';
+                    break;
+                case 'u': {
+                    unsigned value = code_unit ();
+                    if (value >= 0xd800 && value <= 0xdbff) {
+                        expect ('\\');
+                        expect ('u');
+                        const auto low = code_unit ();
+                        if (low < 0xdc00 || low > 0xdfff)
+                            syntax ("invalid Unicode surrogate pair");
+                        value = 0x10000 + ((value - 0xd800) << 10) + low - 0xdc00;
+                    } else if (value >= 0xdc00 && value <= 0xdfff) {
+                        syntax ("unpaired Unicode surrogate");
+                    }
+                    if (output)
+                        append_codepoint (*output, value);
+                    segment = _position;
+                    continue;
+                }
+                default:
+                    syntax ("invalid string escape");
+            }
+            if (output)
+                output->push_back (decoded);
+            segment = _position;
+        }
+        syntax ("unterminated JSON string");
     }
 
-    void set_metadata_invalid ()
+    void literal (std::string_view value)
     {
-        _metadata.erase (_metadata_key);
-        _invalid_metadata_keys.push_back (std::move (_metadata_key));
-        _metadata_key.clear ();
+        if (static_cast<std::size_t> (_end - _position) < value.size ()
+            || std::string_view (_position, value.size ()) != value)
+            syntax ("invalid JSON literal");
+        _position += value.size ();
     }
 
-    void clear_metadata ()
+    static bool digit (char value) noexcept { return value >= '0' && value <= '9'; }
+
+    // from_chars reports both finite underflow and non-finite overflow as
+    // out_of_range. For those values alone, decimal order distinguishes them
+    // without a locale-dependent conversion or another number parser.
+    static bool underflows (const char *first, const char *last) noexcept
     {
-        _metadata.clear ();
+        if (*first == '-')
+            ++first;
+        const auto limit = static_cast<std::size_t> (last - first);
+        std::size_t digits_before_point = 0;
+        std::size_t leading_zeroes = 0;
+        bool point = false;
+        bool significant = false;
+        while (first != last && *first != 'e' && *first != 'E') {
+            if (*first == '.')
+                point = true;
+            else {
+                if (!point)
+                    ++digits_before_point;
+                if (!significant && *first == '0')
+                    ++leading_zeroes;
+                else
+                    significant = true;
+            }
+            ++first;
+        }
+        if (!significant)
+            return true;
+        const auto order = static_cast<std::ptrdiff_t> (digits_before_point)
+                           - static_cast<std::ptrdiff_t> (leading_zeroes) - 1;
+        bool negative = false;
+        std::size_t exponent = 0;
+        if (first != last) {
+            ++first;
+            if (first != last && (*first == '+' || *first == '-'))
+                negative = *first++ == '-';
+            while (first != last) {
+                const auto next = static_cast<std::size_t> (*first++ - '0');
+                if (next > limit || exponent > (limit - next) / 10)
+                    exponent = limit;
+                else
+                    exponent = exponent * 10 + next;
+            }
+        }
+        if (negative)
+            return order < 0 || exponent > static_cast<std::size_t> (order);
+        return order < 0 && exponent < static_cast<std::size_t> (-(order + 1)) + 1;
+    }
+
+    header_value_t number (int *output)
+    {
+        const char *start = _position;
+        const bool negative = consume ('-');
+        if (_position == _end || !digit (*_position))
+            syntax ("invalid JSON number");
+        if (consume ('0')) {
+            if (_position != _end && digit (*_position))
+                syntax ("leading zero in JSON number");
+        } else {
+            while (_position != _end && digit (*_position))
+                ++_position;
+        }
+        bool integer = true;
+        if (consume ('.')) {
+            integer = false;
+            if (_position == _end || !digit (*_position))
+                syntax ("missing JSON fraction");
+            while (_position != _end && digit (*_position))
+                ++_position;
+        }
+        if (_position != _end && (*_position == 'e' || *_position == 'E')) {
+            integer = false;
+            ++_position;
+            if (_position != _end && (*_position == '+' || *_position == '-'))
+                ++_position;
+            if (_position == _end || !digit (*_position))
+                syntax ("missing JSON exponent");
+            while (_position != _end && digit (*_position))
+                ++_position;
+        }
+        if (integer) {
+            std::uint64_t magnitude = 0;
+            const auto result = std::from_chars (start + negative, _position, magnitude);
+            if (result.ec == std::errc{}) {
+                const auto maximum = static_cast<std::uint64_t> (std::numeric_limits<int>::max ());
+                if (magnitude <= maximum + negative) {
+                    if (output)
+                        *output = negative
+                                    ? static_cast<int> (-static_cast<std::int64_t> (magnitude))
+                                    : static_cast<int> (magnitude);
+                    return header_value_t::number;
+                }
+                // nlohmann promotes negative integers below int64 to double.
+                if (!negative || magnitude <= (std::uint64_t{1} << 63))
+                    return header_value_t::other;
+            }
+        }
+        double value;
+        const auto converted = std::from_chars (start, _position, value);
+        if (converted.ec == std::errc::result_out_of_range) {
+            if (!underflows (start, _position))
+                syntax ("JSON number overflow");
+            value = 0;
+        } else if (converted.ec != std::errc{} || converted.ptr != _position) {
+            syntax ("invalid JSON number");
+        }
+        if (!std::isfinite (value))
+            syntax ("JSON number overflow");
+        return header_value_t::other;
+    }
+
+    void atom (std::vector<container_t> &stack)
+    {
+        if (_position == _end)
+            syntax ("missing JSON value");
+        switch (*_position) {
+            case '{':
+                ++_position;
+                stack.push_back (container_t::object_first);
+                break;
+            case '[':
+                ++_position;
+                stack.push_back (container_t::array_first);
+                break;
+            case '"':
+                string (nullptr);
+                break;
+            case 'n':
+                literal ("null");
+                break;
+            case 't':
+                literal ("true");
+                break;
+            case 'f':
+                literal ("false");
+                break;
+            default:
+                number (nullptr);
+                break;
+        }
+    }
+
+    void skip_value ()
+    {
+        std::vector<container_t> stack;
+        atom (stack);
+        while (!stack.empty ()) {
+            whitespace ();
+            switch (stack.back ()) {
+                case container_t::object_first:
+                    if (consume ('}')) {
+                        stack.pop_back ();
+                        break;
+                    }
+                    [[fallthrough]];
+                case container_t::object_key:
+                    string (nullptr);
+                    whitespace ();
+                    expect (':');
+                    whitespace ();
+                    stack.back () = container_t::object_next;
+                    atom (stack);
+                    break;
+                case container_t::object_next:
+                    if (consume ('}'))
+                        stack.pop_back ();
+                    else {
+                        expect (',');
+                        stack.back () = container_t::object_key;
+                    }
+                    break;
+                case container_t::array_first:
+                    if (consume (']')) {
+                        stack.pop_back ();
+                        break;
+                    }
+                    [[fallthrough]];
+                case container_t::array_value:
+                    stack.back () = container_t::array_next;
+                    atom (stack);
+                    break;
+                case container_t::array_next:
+                    if (consume (']'))
+                        stack.pop_back ();
+                    else {
+                        expect (',');
+                        stack.back () = container_t::array_value;
+                    }
+                    break;
+            }
+        }
+    }
+
+    static constexpr std::size_t field_count = static_cast<std::size_t> (format_marker) + 1;
+
+    header_value_t type (field_t field) const noexcept { return _types[field]; }
+
+    void type (field_t field, header_value_t value) noexcept { _types[field] = value; }
+
+    header_value_t scalar (std::string *text, int *integer = nullptr)
+    {
+        if (_position == _end)
+            syntax ("missing JSON value");
+        if (*_position == '"') {
+            string (text);
+            return header_value_t::string;
+        }
+        if (text)
+            text->clear ();
+        if (*_position == 'n') {
+            literal ("null");
+            return header_value_t::null;
+        }
+        if (*_position == '-' || digit (*_position))
+            return number (integer);
+        skip_value ();
+        return header_value_t::other;
+    }
+
+    void text (field_t field, std::string &destination)
+    {
+        const auto value = scalar (&destination);
+        type (field, value == header_value_t::number ? header_value_t::other : value);
+    }
+
+    void text (field_t field, std::optional<std::string> &destination)
+    {
+        if (_position != _end && *_position == '"') {
+            if (!destination)
+                destination.emplace ();
+            string (&*destination);
+            type (field, header_value_t::string);
+        } else {
+            destination.reset ();
+            const auto value = scalar (nullptr);
+            type (field, value == header_value_t::number ? header_value_t::other : value);
+        }
+    }
+
+    void integer (field_t field, int &destination)
+    {
+        // A string on an integer field still has a string type tag, but never
+        // materializes a string that cannot enter the final header.
+        type (field, scalar (nullptr, &destination));
+    }
+
+    void metadata ()
+    {
+        _header.metadata.clear ();
         _invalid_metadata_keys.clear ();
+        _invalid_metadata_shape = !consume ('{');
+        if (_invalid_metadata_shape) {
+            skip_value ();
+            return;
+        }
+        whitespace ();
+        if (consume ('}'))
+            return;
+        do {
+            whitespace ();
+            // Metadata keys must be owned by their final map entry.
+            std::string key;
+            string (&key);
+            whitespace ();
+            expect (':');
+            whitespace ();
+            if (_position != _end && *_position == '"') {
+                _invalid_metadata_keys.erase (
+                  std::remove (_invalid_metadata_keys.begin (), _invalid_metadata_keys.end (), key),
+                  _invalid_metadata_keys.end ());
+                auto [entry, inserted] = _header.metadata.try_emplace (std::move (key));
+                (void) inserted;
+                string (&entry->second);
+            } else {
+                _header.metadata.erase (key);
+                _invalid_metadata_keys.push_back (std::move (key));
+                skip_value ();
+            }
+            whitespace ();
+            if (consume ('}'))
+                break;
+            expect (',');
+        } while (true);
     }
 
-    static bool optional_string (const header_scalar_t &value)
+    void field (std::string_view name)
     {
-        return value.type == header_value_t::missing || value.type == header_value_t::null
-               || value.type == header_value_t::string;
+        // This is the only key-to-destination mapping. No member enum is
+        // translated a second time when the value arrives.
+        using namespace std::string_view_literals;
+        switch (name.size ()) {
+            case 4:
+                if (name == "kind"sv) {
+                    int value = static_cast<int> (_header.kind);
+                    integer (kind, value);
+                    _header.kind = static_cast<message_kind_t> (value);
+                    return;
+                }
+                break;
+            case 5:
+                if (name == "topic"sv)
+                    return text (topic, _header.topic);
+                break;
+            case 6:
+                if (name == "source"sv)
+                    return text (source, _header.source);
+                if (name == "flowId"sv && _capture_flow)
+                    return text (flow_id, _header.flow_id);
+                break;
+            case 8:
+                if (name == "deadline"sv)
+                    return text (deadline, _header.deadline);
+                if (name == "metadata"sv)
+                    return metadata ();
+                break;
+            case 9:
+                if (name == "errorCode"sv)
+                    return text (error_code, _header.error_code);
+                break;
+            case 10:
+                if (name == "flowOrigin"sv && _capture_flow)
+                    return integer (flow_origin, _flow_origin);
+                break;
+            case 11:
+                if (name == "channelName"sv)
+                    return text (channel_name, _header.channel_name);
+                if (name == "messageName"sv)
+                    return text (message_name, _header.message_name);
+                if (name == "contentType"sv)
+                    return text (content_type, _header.content_type);
+                break;
+            case 12:
+                if (name == "formatMarker"sv)
+                    return integer (format_marker, _format_marker);
+                if (name == "errorMessage"sv)
+                    return text (error_message, _header.error_message);
+                break;
+            case 13:
+                if (name == "correlationId"sv)
+                    return text (correlation_id, _header.correlation_id);
+                break;
+        }
+        skip_value ();
     }
 
-    static bool number_or_default (const header_scalar_t &value)
+    bool optional_string (field_t field) const noexcept
     {
-        return value.type == header_value_t::missing || value.type == header_value_t::null
-               || value.type == header_value_t::number;
+        const auto value = type (field);
+        return value == header_value_t::missing || value == header_value_t::null
+               || value == header_value_t::string;
     }
 
-    static std::optional<std::string> take_optional (header_scalar_t &value)
+    bool number_or_default (field_t field) const noexcept
     {
-        if (value.type != header_value_t::string)
-            return std::nullopt;
-        return std::move (value.string);
+        const auto value = type (field);
+        return value == header_value_t::missing || value == header_value_t::null
+               || value == header_value_t::number;
     }
 
-    static result_t<envelope_header_t> failure (std::string_view reason)
+    void finish (std::optional<envelope_header_t> *rejection_context)
     {
-        return result_t<envelope_header_t>::failure (framework_error_kind_t::protocol_error,
-                                                     std::string ("invalid ZLink envelope header: ")
-                                                       + std::string (reason));
+        if (type (content_type) != header_value_t::string)
+            _header.content_type = envelope_codec_t::default_content_type;
+        const auto reject = [&] (std::string_view message, bool retain_flow = false) {
+            if (!retain_flow) {
+                _header.flow_id.reset ();
+                _header.flow_origin.reset ();
+            }
+            _header.metadata.clear ();
+            if (rejection_context)
+                *rejection_context = std::move (_header);
+            return failure (message);
+        };
+        if (type (kind) != header_value_t::number || type (channel_name) != header_value_t::string
+            || type (message_name) != header_value_t::string)
+            return reject ("ZLink envelope header has invalid required fields");
+        if (type (content_type) != header_value_t::missing
+            && type (content_type) != header_value_t::string)
+            return reject ("ZLink envelope header contentType is invalid");
+        if (!optional_string (correlation_id) || !optional_string (deadline)
+            || !optional_string (topic) || !optional_string (error_code)
+            || !optional_string (error_message) || !optional_string (source)
+            || !number_or_default (format_marker))
+            return reject ("ZLink envelope header has an invalid field type");
+        if (_capture_flow && (!optional_string (flow_id) || !number_or_default (flow_origin))) {
+            _header.flow_id.reset ();
+            return reject ("ZLink envelope header flow fields are invalid");
+        }
+        if (_capture_flow && type (flow_origin) == header_value_t::number)
+            _header.flow_origin = static_cast<flow_origin_t> (_flow_origin);
+        const auto marker = type (format_marker) == header_value_t::number ? _format_marker : 0;
+        if (auto valid = validate_protocol_header (
+              _header, marker, _header.flow_id ? &*_header.flow_id : nullptr, _header.flow_origin);
+            !valid) {
+            _header.flow_id.reset ();
+            _header.flow_origin.reset ();
+            return reject (valid.error ()->what ());
+        }
+        if (_invalid_metadata_shape)
+            return reject ("ZLink envelope header metadata must be an object", true);
+        if (!_invalid_metadata_keys.empty ())
+            return reject ("ZLink envelope header metadata value is invalid", true);
+        header_writer_t<header_output_t::measure> measure;
+        try {
+            write_metadata (measure, _header.metadata);
+        }
+        catch (...) {
+            _header.metadata.clear ();
+            if (rejection_context)
+                *rejection_context = std::move (_header);
+            throw;
+        }
     }
 
+    [[noreturn]] static void failure (std::string_view reason)
+    {
+        throw std::runtime_error (std::string (reason));
+    }
+
+    const char *_begin;
+    const char *_position;
+    const char *_end;
     bool _capture_flow;
-    std::size_t _depth = 0;
-    std::size_t _metadata_object_depth = 0;
-    bool _root_object = false;
-    bool _root_closed = false;
+    envelope_header_t &_header;
+    std::array<header_value_t, field_count> _types{};
+    int _format_marker = 0;
+    int _flow_origin = 0;
+    std::string _key;
     bool _invalid_metadata_shape = false;
-    header_member_t _member = header_member_t::none;
-    std::string _metadata_key;
-    std::string _parse_error;
-    std::map<std::string, std::string> _metadata;
     std::vector<std::string> _invalid_metadata_keys;
-    header_scalar_t _kind;
-    header_scalar_t _channel_name;
-    header_scalar_t _message_name;
-    header_scalar_t _content_type;
-    header_scalar_t _correlation_id;
-    header_scalar_t _deadline;
-    header_scalar_t _topic;
-    header_scalar_t _error_code;
-    header_scalar_t _error_message;
-    header_scalar_t _source;
-    header_scalar_t _flow_id;
-    header_scalar_t _flow_origin;
-    header_scalar_t _format_marker;
 };
 
 } // namespace
@@ -930,16 +1221,30 @@ envelope_codec_t::decode_header (const zlink::message_t &message,
 {
     if (rejection_context)
         rejection_context->reset ();
-    try {
-        const auto bytes = message.bytes ();
-        header_sax_t sax (capture_flow);
-        (void) nlohmann::json::sax_parse (bytes.begin (), bytes.end (), &sax);
-        return sax.finish (rejection_context);
-    }
-    catch (const std::exception &ex) {
+    const auto failure = [] (const std::exception &error) {
         return result_t<envelope_header_t>::failure (framework_error_kind_t::protocol_error,
                                                      std::string ("invalid ZLink envelope header: ")
-                                                       + ex.what ());
+                                                       + error.what ());
+    };
+    try {
+        // One result owns the header throughout decoding. The outer boundary
+        // also covers platforms whose empty map construction can allocate.
+        return [&] {
+            auto result = result_t<envelope_header_t>::success (
+              envelope_header_t{.kind = static_cast<message_kind_t> (0), .content_type = {}});
+            try {
+                const auto bytes = message.bytes ();
+                header_reader_t reader (bytes, capture_flow, result.value ());
+                reader.read (rejection_context);
+            }
+            catch (const std::exception &error) {
+                result = failure (error);
+            }
+            return result;
+        }();
+    }
+    catch (const std::exception &error) {
+        return failure (error);
     }
 }
 
