@@ -452,8 +452,16 @@ TEST (ZLinkFrameworkSyncSubmit, ChannelRequestWaitsForTypedApplicationReply)
 
 TEST (ZLinkFrameworkSyncSubmit, StreamSendWaitsForAdmission)
 {
-    detail::stream_runtime_t runtime (std::make_shared<detail::stream_runtime_state_t> ());
-    stream_t stream;
+    serializer_registry_t serializers;
+    serializers.add<std::string> (
+      [] (const std::string &value) { return encoded_payload_t::from_string (value); },
+      [] (const encoded_payload_t &payload) { return payload.to_string (); });
+    auto runtime_state = std::make_shared<detail::stream_runtime_state_t> ();
+    runtime_state->serializers = &serializers;
+    runtime_state->streams.emplace (
+      "sync-stream", std::make_shared<detail::stream_builder_state_t> ("sync-stream"));
+    detail::stream_runtime_t runtime (runtime_state);
+    auto stream = runtime.open_session ("sync-stream");
     task_completion_source_t<void> admitted;
     std::promise<void> submitted;
     runtime.attach_transport_writer (stream, [&] (const auto &header, const auto &payload) {
@@ -462,7 +470,7 @@ TEST (ZLinkFrameworkSyncSubmit, StreamSendWaitsForAdmission)
         submitted.set_value ();
         return admitted.task ();
     });
-    auto call = stream.write_packet (zlink::message_t::from (std::string ("payload")));
+    auto call = stream.write_packet (zlink::framework::message_t::from (std::string ("payload")));
     call.packet_name ("sync-packet");
     auto result = std::async (std::launch::async, [&] { call.submit (); });
     submitted.get_future ().wait ();
@@ -473,15 +481,23 @@ TEST (ZLinkFrameworkSyncSubmit, StreamSendWaitsForAdmission)
 
 TEST (ZLinkFrameworkSyncSubmit, StreamSendPropagatesDeferredAdmissionFailure)
 {
-    detail::stream_runtime_t runtime (std::make_shared<detail::stream_runtime_state_t> ());
-    stream_t stream;
+    serializer_registry_t serializers;
+    serializers.add<std::string> (
+      [] (const std::string &value) { return encoded_payload_t::from_string (value); },
+      [] (const encoded_payload_t &payload) { return payload.to_string (); });
+    auto runtime_state = std::make_shared<detail::stream_runtime_state_t> ();
+    runtime_state->serializers = &serializers;
+    runtime_state->streams.emplace (
+      "sync-stream", std::make_shared<detail::stream_builder_state_t> ("sync-stream"));
+    detail::stream_runtime_t runtime (runtime_state);
+    auto stream = runtime.open_session ("sync-stream");
     task_completion_source_t<void> admitted;
     std::promise<void> submitted;
     runtime.attach_transport_writer (stream, [&] (const auto &, const auto &) {
         submitted.set_value ();
         return admitted.task ();
     });
-    auto call = stream.write_packet (zlink::message_t::from (std::string ("payload")));
+    auto call = stream.write_packet (zlink::framework::message_t::from (std::string ("payload")));
     auto result = std::async (std::launch::async, [&] { call.submit (); });
     submitted.get_future ().wait ();
     admitted.complete (
@@ -507,7 +523,7 @@ class reply_session_t final : public packet_stream_session_t
 
     task_t<void> on_packet (stream_t &stream,
                             const session_message_context_t &,
-                            const zlink::message_t &payload) override
+                            const zlink::framework::message_t &payload) override
     {
         reply.emplace (stream.reply_packet (payload));
         expect_invalid_operation ([&] { reply->submit (); });
@@ -522,8 +538,16 @@ TEST (ZLinkFrameworkSyncSubmit, SessionHandlerRejectionPreservesReplyAdmission)
         dispatch_executor_scope_t () { detail::configure_stream_dispatch_executor (); }
         ~dispatch_executor_scope_t () { detail::shutdown_stream_dispatch_executor (); }
     } dispatch_executor_scope;
-    detail::stream_runtime_t runtime (std::make_shared<detail::stream_runtime_state_t> ());
-    stream_t stream;
+    serializer_registry_t serializers;
+    serializers.add<std::string> (
+      [] (const std::string &value) { return encoded_payload_t::from_string (value); },
+      [] (const encoded_payload_t &payload) { return payload.to_string (); });
+    auto runtime_state = std::make_shared<detail::stream_runtime_state_t> ();
+    runtime_state->serializers = &serializers;
+    runtime_state->streams.emplace (
+      "sync-stream", std::make_shared<detail::stream_builder_state_t> ("sync-stream"));
+    detail::stream_runtime_t runtime (runtime_state);
+    auto stream = runtime.open_session ("sync-stream");
     reply_session_t session;
     task_completion_source_t<void> admitted;
     std::promise<void> submitted;

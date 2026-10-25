@@ -3,9 +3,6 @@
 
 #include "../../../Configuration/sample_names.hpp"
 #include "../../../Configuration/sample_topology.hpp"
-#include "../../../../Shared/Contracts/stream_message_codec.hpp"
-
-
 #include <zlink/framework.hpp>
 
 namespace zlink::samples::bingo
@@ -26,12 +23,10 @@ class authenticate_session_handler_t
     }
 
     task_t<session_actor_t>
-    handle (session_actor_manager_t &actors, stream_t &stream, const zlink::message_t &payload)
+    handle (session_actor_manager_t &actors, stream_t &stream, const message_t &payload)
     {
         /* client stream의 payload도 Protobuf다 — JSON으로 파싱하지 않는다. */
-        const auto
-          request = zlink::stream_connector::codecs::codec_traits<authenticate_req_t>::decode (
-            payload.to_bytes ());
+        const auto request = payload.decode<authenticate_req_t> ();
         // --8<-- [start:doc-bingo-session-auth]
         authenticate_player_req_t authenticate_request;
         authenticate_request.set_access_token (request.access_token ());
@@ -64,7 +59,7 @@ class authenticate_session_handler_t
         authenticate_res_t reply_payload;
         reply_payload.set_actor_id (authenticated.actor_id ());
         reply_payload.set_display_name (authenticated.display_name ());
-        stream.reply_packet (encode_authenticate_response (reply_payload)).async ();
+        stream.reply_packet (zlink::framework::message_t::from (reply_payload)).async ();
         // --8<-- [end:doc-bingo-session-bind]
 
         co_return actor;

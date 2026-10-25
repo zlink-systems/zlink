@@ -196,7 +196,9 @@ void verify_relay_seal (bool close_owner, bool request_timeout = false)
         ASSERT_EQ (other_seal.error, stateful::stateful_error_t::none);
         other_barrier = other_seal.barrier;
         ASSERT_TRUE (
-          other_bound->relay ("OtherSealRelay", zlink::message_t::from ("other")).result ());
+          other_bound
+            ->relay ("OtherSealRelay", zlink::framework::message_t::from (std::string ("other")))
+            .result ());
     }
 
     auto completed = std::async (std::launch::async, [bound, request_timeout] () mutable {
@@ -210,25 +212,31 @@ void verify_relay_seal (bool close_owner, bool request_timeout = false)
         header.with_correlation_id ("seal-correlation");
         const detail::stream_relay_dispatch_scope_t scope (header);
         if (request_timeout) {
-            const auto reply = bound.relay_request (zlink::message_t::from ("payload"))
-                                 .timeout (50ms)
-                                 .async ()
-                                 .result ();
+            const auto reply =
+              bound.relay_request (zlink::framework::message_t::from (std::string ("payload")))
+                .timeout (50ms)
+                .async ()
+                .result ();
             return reply ? result_t<void>::success ()
                          : result_t<void>::failure (reply.error_kind (), reply.error ()->what ());
         }
-        auto relay = bound.relay (zlink::message_t::from ("payload"));
+        auto relay = bound.relay (zlink::framework::message_t::from (std::string ("payload")));
         return relay.result ();
     });
     const auto before_release = completed.wait_for (2s);
     EXPECT_EQ (before_release, std::future_status::ready)
       << "one-way relay must complete at Session owner seal retention admission";
     if (request_timeout) {
-        const auto next = bound.relay ("AfterExpired", zlink::message_t::from ("next")).result ();
+        const auto next =
+          bound.relay ("AfterExpired", zlink::framework::message_t::from (std::string ("next")))
+            .result ();
         ASSERT_TRUE (next) << "next relay must be accepted on the same sealed binding";
     }
     if (!close_owner && !request_timeout)
-        ASSERT_TRUE (bound.relay ("SealRelaySecond", zlink::message_t::from ("second")).result ());
+        ASSERT_TRUE (
+          bound
+            .relay ("SealRelaySecond", zlink::framework::message_t::from (std::string ("second")))
+            .result ());
     if (close_owner)
         EXPECT_TRUE (sessions.close (connection));
     else
@@ -450,7 +458,9 @@ TEST (FrameworkSessionSealRelay, public_request_preserves_wire_correlation_and_f
     ASSERT_TRUE (peer_ready ());
     auto gateway_state = std::make_shared<actor_gateway_state_t> ();
     gateway_state->dispatch.message_flow (message_flow_log_mode_t::normal);
+    serializer_registry_t relay_serializers;
     actor_gateway_runtime_t gateway (gateway_state);
+    gateway.bind_serializers (relay_serializers);
     gateway.on_relay ([&] (const actor_ref_t &actor, const actor_context_t &,
                            const stream_header_t &header, const zlink::message_t &payload,
                            std::optional<bound_session_relay_source_t> relay_source,
@@ -470,7 +480,7 @@ TEST (FrameworkSessionSealRelay, public_request_preserves_wire_correlation_and_f
         header.with_flow ("0199a500-0000-7000-8000-000000000001", flow_origin_t::inbound);
         header.with_correlation_id ("seal-wire-correlation");
         const stream_relay_dispatch_scope_t scope (header);
-        return bound.relay_request (zlink::message_t::from ("payload"))
+        return bound.relay_request (zlink::framework::message_t::from (std::string ("payload")))
           .timeout (2s)
           .async ()
           .result ();
@@ -674,7 +684,9 @@ TEST (FrameworkSessionSealRelay, different_sessions_do_not_share_replies_for_sam
               complete ();
       },
       [] {});
+    serializer_registry_t relay_serializers;
     actor_gateway_runtime_t gateway;
+    gateway.bind_serializers (relay_serializers);
     gateway.on_relay ([&] (const actor_ref_t &target, const actor_context_t &,
                            const stream_header_t &header, const zlink::message_t &payload,
                            std::optional<bound_session_relay_source_t> relay_source,
@@ -701,24 +713,23 @@ TEST (FrameworkSessionSealRelay, different_sessions_do_not_share_replies_for_sam
         auto binding = manager.bind (actor).async ().result ();
         EXPECT_TRUE (binding);
         if (!binding)
-            return result_t<zlink::message_t>::failure (binding.error_kind (),
-                                                        binding.error ()->what ());
+            return result_t<message_t>::failure (binding.error_kind (), binding.error ()->what ());
         stream_header_t header (stream_message_kind_t::request, stream_codec_t::json,
                                 stream_header_flags_t::none, 17, "SessionIdentityRequest");
         header.with_correlation_id ("same-upstream-correlation");
         const stream_relay_dispatch_scope_t scope (header);
         return binding.value ()
-          .relay_request (zlink::message_t::from (std::move (payload)))
+          .relay_request (zlink::framework::message_t::from (std::move (payload)))
           .timeout (2s)
           .async ()
           .result ();
     };
     const auto first = invoke (first_manager, "first-session-result");
     ASSERT_TRUE (first) << (first.error () ? first.error ()->what () : "");
-    EXPECT_EQ (first.value ().to_string (), "first-session-result");
+    EXPECT_EQ (first.value ().decode<std::string> (), "first-session-result");
     const auto second = invoke (second_manager, "second-session-result");
     ASSERT_TRUE (second) << (second.error () ? second.error ()->what () : "");
-    EXPECT_EQ (second.value ().to_string (), "second-session-result");
+    EXPECT_EQ (second.value ().decode<std::string> (), "second-session-result");
     EXPECT_EQ (executions.load (std::memory_order_relaxed), 2u);
     const auto original = delivered_operation;
     const auto original_reply_route = delivered_reply_route;
@@ -748,8 +759,7 @@ TEST (FrameworkSessionSealRelay, different_sessions_do_not_share_replies_for_sam
         header.message_name = "SessionIdentityRequest";
         header.content_type = "application/json";
         header.correlation_id = "same-upstream-correlation";
-        auto encoded =
-          detail::encode_actor_packet (header, zlink::message_t::from (std::move (payload)));
+        auto encoded = detail::encode_actor_packet (header, zlink::message_t::from_json (payload));
         auto parts = std::move (encoded).take_items ();
         // Redeliver the received operation at the Framework ingress boundary.
         // Submitting another local client request would allocate a new operation.
@@ -817,21 +827,21 @@ TEST (FrameworkSessionSealRelay, different_sessions_do_not_share_replies_for_sam
     const auto duplicate = replay (original, "second-session-result");
     ASSERT_TRUE (duplicate);
     ASSERT_TRUE (duplicate.value ());
-    EXPECT_EQ (duplicate.value ()->to_string (), "second-session-result");
+    EXPECT_EQ (duplicate.value ()->parse_json<std::string> (), "second-session-result");
     EXPECT_EQ (executions.load (std::memory_order_relaxed), 2u);
     auto other_high = original;
     other_high.high ^= 0x100;
     const auto high_result = replay (other_high, "other-high-result");
     ASSERT_TRUE (high_result);
     ASSERT_TRUE (high_result.value ());
-    EXPECT_EQ (high_result.value ()->to_string (), "other-high-result");
+    EXPECT_EQ (high_result.value ()->parse_json<std::string> (), "other-high-result");
     EXPECT_EQ (executions.load (std::memory_order_relaxed), 3u);
     auto other_low = original;
     other_low.low ^= 0x100;
     const auto low_result = replay (other_low, "other-low-result");
     ASSERT_TRUE (low_result);
     ASSERT_TRUE (low_result.value ());
-    EXPECT_EQ (low_result.value ()->to_string (), "other-low-result");
+    EXPECT_EQ (low_result.value ()->parse_json<std::string> (), "other-low-result");
     EXPECT_EQ (executions.load (std::memory_order_relaxed), 4u);
 }
 
@@ -983,7 +993,9 @@ TEST (FrameworkSessionSealRelay, bound_request_to_relocated_local_actor_keeps_bi
       status.lifecycle_generation (),
       native_object->authority_owner_generation,
       static_cast<std::uint64_t> (target_owner.lease_generation)};
+    serializer_registry_t relay_serializers;
     actor_gateway_runtime_t gateway;
+    gateway.bind_serializers (relay_serializers);
     gateway.on_relay ([&] (const actor_ref_t &target, const actor_context_t &,
                            const stream_header_t &header, const zlink::message_t &payload,
                            std::optional<bound_session_relay_source_t> relay_source,
@@ -1010,13 +1022,13 @@ TEST (FrameworkSessionSealRelay, bound_request_to_relocated_local_actor_keeps_bi
     const auto reply = [&] {
         const stream_relay_dispatch_scope_t scope (header);
         return binding.value ()
-          .relay_request (zlink::message_t::from ("relocated-result"))
+          .relay_request (zlink::framework::message_t::from (std::string ("relocated-result")))
           .timeout (2s)
           .async ()
           .result ();
     }();
     ASSERT_TRUE (reply) << (reply.error () ? reply.error ()->what () : "");
-    EXPECT_EQ (reply.value ().to_string (), "relocated-result");
+    EXPECT_EQ (reply.value ().decode<std::string> (), "relocated-result");
     std::lock_guard lock (received_mutex);
     ASSERT_TRUE (received_actor_route);
     EXPECT_EQ (received_actor_route->authority_owner_generation,

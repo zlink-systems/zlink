@@ -27,17 +27,17 @@ class perf_session_t final : public fw::packet_stream_session_t
 
     fw::task_t<void> on_packet (fw::stream_t &stream,
                                 const fw::session_message_context_t &,
-                                const zlink::message_t &payload) override
+                                const zlink::framework::message_t &payload) override
     {
         const auto received = now_ticks ();
         auto &measurement = _role.measurement;
         const handler_scope_t scope (measurement);
         try {
-            const auto request = payload.parse_json<echo_request_t> ();
+            const auto request = payload.decode<echo_request_t> ();
             measurement.validate_request (request);
             const auto reply = payload_pattern_t::reply (request, received);
             measurement.record_reply (request);
-            co_await stream.reply_packet (zlink::message_t::from_json (reply)).async ();
+            co_await stream.reply_packet (zlink::framework::message_t::from (reply)).async ();
             if (measurement.phase () == "setup")
                 measurement.set_setup_evidence (
                   json::array ({{{"kind", "typedProbeReply"},

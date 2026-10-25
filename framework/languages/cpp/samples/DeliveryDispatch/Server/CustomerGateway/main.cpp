@@ -7,6 +7,8 @@
 #include <zlink/framework.hpp>
 #include <zlink/locations/redis.hpp>
 
+#include <nlohmann/json.hpp>
+
 #include <set>
 #include <format>
 #include <mutex>
@@ -184,7 +186,7 @@ class customer_gateway_session_t final : public packet_stream_session_t
 
     task_t<void> on_packet (stream_t &stream,
                             const session_message_context_t &dispatch,
-                            const zlink::message_t &payload) override
+                            const zlink::framework::message_t &payload) override
     {
         const std::string line = std::format (
           "deliverydispatch customer-gateway: dispatch packet={}\n", dispatch.packet_name);
@@ -199,7 +201,7 @@ class customer_gateway_session_t final : public packet_stream_session_t
             co_await actor.relay (payload);
             co_return;
         }
-        const auto request = payload.parse_json<subscribe_delivery_req_t> ();
+        const auto request = payload.decode<subscribe_delivery_req_t> ();
         auto &actors = stream.actors ();
         auto actor = actors.get_or_create (
           sample_names_t::customer_actor_type,
@@ -224,7 +226,7 @@ class customer_gateway_session_t final : public packet_stream_session_t
             throw framework_exception_t (framework_error_kind_t::not_found,
                                          "bound customer actor route is not found");
         }
-        auto reply = co_await current->relay_request (zlink::message_t::from_json (request))
+        auto reply = co_await current->relay_request (framework::message_t::from (request))
                        .async ();
         _sessions.subscribe (actor_id, request.delivery_id, stream);
         stream.reply_packet (reply).async ();

@@ -261,11 +261,11 @@ class gamequest_session_t final : public packet_stream_session_t
 
     task_t<void> on_packet (stream_t &stream,
                             const session_message_context_t &dispatch,
-                            const zlink::message_t &payload) override
+                            const zlink::framework::message_t &payload) override
     {
         const auto packet = std::string (dispatch.packet_name);
         if (packet == join_session_req_t::packet_name) {
-            const auto request = payload.parse_json<join_session_req_t> ();
+            const auto request = payload.decode<join_session_req_t> ();
             // --8<-- [start:doc-gq-join-bind]
             auto actor = _actors.get_or_create (gamequest_player_actor_type, request.player_id);
             if (!actor) {
@@ -286,37 +286,37 @@ class gamequest_session_t final : public packet_stream_session_t
             }
             auto reply = co_await current
                            ->relay_request (join_session_req_t::packet_name,
-                                            zlink::message_t::from_json (request))
+                                            framework::message_t::from (request))
                            .async ();
             stream.reply_packet (reply).async ();
             co_return;
         }
         if (packet == get_quest_progress_req_t::packet_name) {
-            const auto request = payload.parse_json<get_quest_progress_req_t> ();
+            const auto request = payload.decode<get_quest_progress_req_t> ();
             auto synced = co_await sync_projection (request.player_id);
             _store.merge_projection (request.player_id, synced.updated_quests);
             stream
               .reply_packet (
-                zlink::message_t::from_json (get_quest_progress_res_t{synced.updated_quests}))
+                zlink::framework::message_t::from (get_quest_progress_res_t{synced.updated_quests}))
               .async ();
             co_return;
         }
         if (packet == sync_quest_progress_req_t::packet_name) {
-            const auto request = payload.parse_json<sync_quest_progress_req_t> ();
+            const auto request = payload.decode<sync_quest_progress_req_t> ();
             auto synced = co_await sync_projection (request.player_id);
             _store.merge_projection (request.player_id, synced.updated_quests);
-            stream.reply_packet (zlink::message_t::from_json (synced)).async ();
+            stream.reply_packet (zlink::framework::message_t::from (synced)).async ();
             co_return;
         }
         if (packet == projection_admin_req_t::packet_name) {
-            const auto request = payload.parse_json<projection_admin_req_t> ();
+            const auto request = payload.decode<projection_admin_req_t> ();
             if (request.operation == "close") {
                 co_await _routes
                   .send_to_spot (player_spot_id (request.player_id),
                                  close_player_quest_msg_t{std::string ("client-self-check")})
                   .async ();
                 stream
-                  .reply_packet (zlink::message_t::from_json (
+                  .reply_packet (zlink::framework::message_t::from (
                     projection_admin_res_t{true, _store.projection (request.player_id)}))
                   .async ();
                 co_return;
@@ -325,19 +325,19 @@ class gamequest_session_t final : public packet_stream_session_t
                             .request_to_spot (player_spot_id (request.player_id), request)
                             .instance_spot (sample_names_t::player_quest_spot)
                             .template async<projection_admin_res_t> ();
-            stream.reply_packet (zlink::message_t::from_json (result)).async ();
+            stream.reply_packet (zlink::framework::message_t::from (result)).async ();
             co_return;
         }
         if (packet == unpublished_kill_req_t::packet_name) {
-            const auto request = payload.parse_json<unpublished_kill_req_t> ();
+            const auto request = payload.decode<unpublished_kill_req_t> ();
             _store.add_unpublished_kills (request.player_id, request.count);
-            stream.reply_packet (zlink::message_t::from_json (unpublished_kill_res_t{true}))
+            stream.reply_packet (zlink::framework::message_t::from (unpublished_kill_res_t{true}))
               .async ();
             co_return;
         }
         // --8<-- [start:doc-gq-action-handler]
         if (packet == kill_monster_req_t::packet_name) {
-            const auto request = payload.parse_json<kill_monster_req_t> ();
+            const auto request = payload.decode<kill_monster_req_t> ();
             // --8<-- [start:doc-gq-store-dispatch]
             const auto event = event_for (
               request.player_id, request.idempotency_key, "MonsterKilled", request.monster_id, 1);
@@ -353,13 +353,14 @@ class gamequest_session_t final : public packet_stream_session_t
                 throw;
             }
             // --8<-- [end:doc-gq-store-dispatch]
-            stream.reply_packet (zlink::message_t::from_json (kill_monster_res_t{event.event_id}))
+            stream
+              .reply_packet (zlink::framework::message_t::from (kill_monster_res_t{event.event_id}))
               .async ();
             co_return;
         }
         // --8<-- [end:doc-gq-action-handler]
         if (packet == collect_item_req_t::packet_name) {
-            const auto request = payload.parse_json<collect_item_req_t> ();
+            const auto request = payload.decode<collect_item_req_t> ();
             const auto event = event_for (request.player_id,
                                           request.idempotency_key,
                                           "ItemCollected",
@@ -369,7 +370,7 @@ class gamequest_session_t final : public packet_stream_session_t
             co_return;
         }
         if (packet == enter_area_req_t::packet_name) {
-            const auto request = payload.parse_json<enter_area_req_t> ();
+            const auto request = payload.decode<enter_area_req_t> ();
             const auto event = event_for (
               request.player_id, request.idempotency_key, "AreaEntered", request.area_id, 1);
             co_await apply_event (event);

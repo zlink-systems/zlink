@@ -1312,8 +1312,20 @@ result_t<std::uint64_t> session_actor_t::reserve_relay_sequence ()
 
 task_t<void> session_actor_t::relay_internal (detail::stream_header_t header,
                                               std::uint64_t relay_sequence,
-                                              const zlink::message_t &payload)
+                                              const message_t &message)
 {
+    if (!_state->serializers) {
+        return task_t<void> (result_t<void>::failure (
+          framework_error_kind_t::protocol_error, "actor relay requires a serializer registry"));
+    }
+    zlink::message_t payload;
+    try {
+        payload = detail::message_to_raw (message, *_state->serializers);
+    }
+    catch (const framework_exception_t &error) {
+        return task_t<void> (detail::result_access_t::failure<void> (error));
+    }
+
     detail::actor_gateway_state_t::relay_dispatcher_t dispatcher;
     detail::stream_header_t relay_header;
     std::optional<detail::bound_session_relay_source_t> relay_source;
@@ -1424,7 +1436,7 @@ task_t<void> session_actor_t::relay_internal (detail::stream_header_t header,
       });
 }
 
-task_t<void> session_actor_t::relay (const zlink::message_t &payload)
+task_t<void> session_actor_t::relay (const message_t &payload)
 {
     const auto header = detail::current_stream_relay_dispatch ();
     if (!header) {
@@ -1440,7 +1452,7 @@ task_t<void> session_actor_t::relay (const zlink::message_t &payload)
     return relay_internal (*header, sequence.value (), payload);
 }
 
-task_t<void> session_actor_t::relay (std::string packet_name, const zlink::message_t &payload)
+task_t<void> session_actor_t::relay (std::string packet_name, const message_t &payload)
 {
     auto header = detail::actor_relay_header (stream_message_kind_t::send, std::move (packet_name));
     const auto sequence = reserve_relay_sequence ();
@@ -1451,25 +1463,34 @@ task_t<void> session_actor_t::relay (std::string packet_name, const zlink::messa
     return relay_internal (std::move (header), sequence.value (), payload);
 }
 
-relay_request_call_t session_actor_t::relay_request (const zlink::message_t &payload)
+relay_request_call_t session_actor_t::relay_request (const message_t &payload)
 {
     const auto header = detail::current_stream_relay_dispatch ();
     if (!header) {
-        return relay_request_call_t (result_t<zlink::message_t>::failure (
+        return relay_request_call_t (result_t<message_t>::failure (
           framework_error_kind_t::protocol_error,
           "actor relay request requires current stream dispatch state"));
     }
     return relay_request_call_t (
       std::string (header->packet_name ()),
-      [actor = *this, header = *header,
-       payload] (const std::string &, std::chrono::milliseconds timeout,
-                 const request_call_t<zlink::message_t>::metadata_map_t &) mutable {
+      [actor = *this, header = *header, payload] (
+        const std::string &, std::chrono::milliseconds timeout,
+        const request_call_t<message_t>::metadata_map_t &) mutable -> request_task_t<message_t> {
           const auto relay_sequence = actor.reserve_relay_sequence ();
           if (!relay_sequence) {
-              return request_task_t<zlink::message_t> (detail::propagate_failure<zlink::message_t> (
-                relay_sequence, "actor relay request sequence failed"));
+              co_return detail::propagate_failure<message_t> (
+                relay_sequence, "actor relay request sequence failed");
           }
-          return actor.relay_request_internal (header, relay_sequence.value (), payload, timeout);
+          if (!actor._state->serializers) {
+              co_return result_t<message_t>::failure (
+                framework_error_kind_t::protocol_error,
+                "actor relay request requires a serializer registry");
+          }
+          auto pending = actor.relay_request_internal (
+            header, relay_sequence.value (),
+            detail::message_to_raw (payload, *actor._state->serializers), timeout);
+          auto reply = co_await detail::request_submission (std::move (pending));
+          co_return message_t::from_raw (std::move (reply), actor._state->serializers);
       });
 }
 
@@ -1573,7 +1594,7 @@ session_actor_t::relay_request_internal (detail::stream_header_t header,
 }
 
 relay_request_call_t session_actor_t::relay_request (std::string packet_name,
-                                                     const zlink::message_t &payload)
+                                                     const message_t &payload)
 {
     const detail::stream_relay_dispatch_scope_t relay_scope (
       detail::actor_relay_header (stream_message_kind_t::request, std::move (packet_name)));

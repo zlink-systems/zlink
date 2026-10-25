@@ -875,7 +875,7 @@ class expired_actor_bind_session_t final : public zlink::framework::packet_strea
     }
     zlink::framework::task_t<void> on_packet (zlink::framework::stream_t &,
                                               const zlink::framework::session_message_context_t &,
-                                              const zlink::message_t &) override
+                                              const zlink::framework::message_t &) override
     {
         co_return;
     }

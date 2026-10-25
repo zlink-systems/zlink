@@ -1100,7 +1100,7 @@ class relay_session_t final : public fw::packet_stream_session_t
     fw::task_t<void> on_error (fw::stream_t &, const fw::stream_error_t &) override { co_return; }
     fw::task_t<void> on_packet (fw::stream_t &stream,
                                 const fw::session_message_context_t &dispatch,
-                                const zlink::message_t &payload) override
+                                const zlink::framework::message_t &payload) override
     {
         auto bound = stream.actors ().bound ();
         if (bound.empty ()) {
@@ -1825,7 +1825,7 @@ class sealed_gap_session_t final : public fw::packet_stream_session_t
     fw::task_t<void> on_error (fw::stream_t &, const fw::stream_error_t &) override { co_return; }
     fw::task_t<void> on_packet (fw::stream_t &,
                                 const fw::session_message_context_t &,
-                                const zlink::message_t &) override
+                                const zlink::framework::message_t &) override
     {
         co_return;
     }
@@ -1929,10 +1929,9 @@ void expired_sealed_request_preserves_next_live_actor_relay (bool remote)
     request_header.with_flow ("0199a500-0000-7000-8000-000000000011", fw::flow_origin_t::inbound);
     {
         const fw::detail::stream_relay_dispatch_scope_t dispatch (request_header);
-        auto request =
-          bound->relay_request (zlink::message_t::from (nlohmann::json (probe_t{1}).dump ()))
-            .timeout (50ms)
-            .async ();
+        auto request = bound->relay_request (zlink::framework::message_t::from (probe_t{1}))
+                         .timeout (50ms)
+                         .async ();
         const auto expired = request.result_for (2s);
         ASSERT_TRUE (expired);
         EXPECT_FALSE (*expired);
@@ -1946,7 +1945,7 @@ void expired_sealed_request_preserves_next_live_actor_relay (bool remote)
     send_header.with_flow ("0199a500-0000-7000-8000-000000000012", fw::flow_origin_t::inbound);
     {
         const fw::detail::stream_relay_dispatch_scope_t dispatch (send_header);
-        auto sent = bound->relay (zlink::message_t::from (nlohmann::json (record_t{2}).dump ()));
+        auto sent = bound->relay (zlink::framework::message_t::from (record_t{2}));
         const auto accepted = sent.result_for (2s);
         ASSERT_TRUE (accepted);
         ASSERT_TRUE (*accepted) << "one-way must complete while the matching seal is retained";

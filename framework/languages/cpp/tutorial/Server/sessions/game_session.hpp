@@ -36,17 +36,18 @@ class game_session_t final : public fw::packet_stream_session_t
 
     fw::task_t<void> on_packet (fw::stream_t &stream,
                                 const fw::session_message_context_t &dispatch,
-                                const zlink::message_t &payload) override
+                                const zlink::framework::message_t &payload) override
     {
         const auto packet = std::string (dispatch.packet_name);
 
         // --8<-- [start:session-handler]
         if (packet == ping_t::packet_name) {
-            const auto request = payload.parse_json<ping_t> ();
+            const auto request = payload.decode<ping_t> ();
 
             // reply_packet answers a request. To push to a client that is not
             // waiting for one, use write_packet instead.
-            stream.reply_packet (zlink::message_t::from_json (pong_t{request.sent_at_unix_ms}))
+            stream
+              .reply_packet (zlink::framework::message_t::from (pong_t{request.sent_at_unix_ms}))
               .async ();
             co_return;
         }
@@ -55,7 +56,7 @@ class game_session_t final : public fw::packet_stream_session_t
         // --8<-- [start:session-actor-bind]
         // Each authenticate packet binds its player to this connection.
         if (packet == authenticate_t::packet_name) {
-            const auto request = payload.parse_json<authenticate_t> ();
+            const auto request = payload.decode<authenticate_t> ();
 
             // A returning client finds its existing player rather than a new one.
             auto &actors = stream.actors ();
@@ -67,8 +68,8 @@ class game_session_t final : public fw::packet_stream_session_t
 
             auto bound = co_await actors.bind_or_get (located.value ().ref ()).async ();
             stream
-              .reply_packet (
-                zlink::message_t::from_json (authenticated_t{std::string (bound.actor_id ())}))
+              .reply_packet (zlink::framework::message_t::from (
+                authenticated_t{std::string (bound.actor_id ())}))
               .async ();
             co_return;
         }
