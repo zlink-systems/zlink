@@ -213,7 +213,8 @@ TypeScript의 인자 annotation은 runtime에 남지 않으므로 Framework는 �
 (`ZLinkMessageTypeResolver`)로 수신 message 클래스를 선언한다. 대상은 Channel·RouteMesh의
 send·request handler, classic fanout의 publish handler, Spot·Entry Spot·Instance Spot의
 packet·request·subscription handler, Spot의 Actor send·request handler와 Actor handler이며,
-Nest decorator와 builder로 등록한 같은 handler도 포함한다. 함수 형태는 순환 import 때문에 클래스를 나중에 읽어야 할 때 쓴다.
+Nest decorator와 builder로 등록한 같은 handler도 포함한다. 함수 형태는 순환 import 때문에 클래스를 나중에 읽어야 할 때 쓰며, Framework는 그 handler의 첫 decode에서
+한 번 불러 결과를 등록에 두고 다시 부르지 않는다.
 
 ```ts
 @ZLinkPacket('TableView')

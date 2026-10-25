@@ -249,7 +249,9 @@ handlers; Spot, Entry Spot, and Instance Spot packet, request, and
 subscription handlers; a Spot's Actor send and request handlers; and Actor
 handlers, including the same handlers registered with Nest decorators and
 builders. The function form is for when a circular
-import requires reading the class later.
+import requires reading the class later; the Framework calls it once at that
+handler's first decode, keeps the result in the registration, and doesn't
+call it again.
 
 ```ts
 @ZLinkPacket('TableView')
