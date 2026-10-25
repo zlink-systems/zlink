@@ -285,6 +285,8 @@ public:
 
 `relay(...)`는 공통 계약의 one-way push다. `relay_request(...)`와 `packet_name` overload는 C++ 전용 표면이며
 공통 [Session–Actor binding](../../../04-session/02-session-actor-binding.ko.md)에는 Actor→session request가 없다.
+`relay_request_call_t`의 결과는 받은 reply bytes를 그대로 담은 encoded `message_t`다. Application은 `decode<T>()`로
+읽거나 다시 encode하지 않고 그대로 `reply_packet`에 넘긴다.
 다른 언어와의 표면 정합은 0.18.0 후보다.
 
 class session_actor_manager_t {
