@@ -7093,7 +7093,8 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                 // when the Close cannot be scheduled.
                 try {
                     if (user_spot_closer)
-                        user_spot_closer (request.target.spot_id, begin, done);
+                        user_spot_closer (request.target.spot_id, request.target.object_generation,
+                                          begin, done);
                     else
                         run_authority_close (begin, done, {});
                 }
