@@ -1163,11 +1163,6 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
             || stage.Spot.Activation is not ZLinkUserSpotActivation userSpot
         )
             return;
-        if (stage.AbortState != TargetStageAbortState.Staged)
-            throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.Unavailable,
-                "Relocation target initialization has already ended."
-            );
         try
         {
             await userSpot
