@@ -259,7 +259,10 @@ relocation PREPARE) do the same. Each language decides this in one logical reque
   owners, and the Framework doesn't make up Core identifiers or keep a separate physical intent list.
 - If the target RID has a Core selected route and that route's service admission has finished, the binding request
   starts once with the remaining timeout. A failure of another physical connection unrelated to that route doesn't
-  invalidate it, and a new request using an already ready route isn't rejected for a past failure alone.
+  invalidate it, and a new request using an already ready route isn't rejected for a past failure alone. This
+  readiness check only reads the state the observer has already applied; the connection state snapshot is read
+  only when `ZLINK_POLLCONNECT` is ready. The wait and baseline handling below applies only to requests that
+  aren't ready.
 - If there's no selected route and the target endpoint's [connection state](../../../../../../../core/doc/spec/core/socket/README.en.md#zlink_socket_connection_attempts_snapshot) is
   `ATTEMPT_FAILED`, the request ends at once with `Unavailable`. It doesn't wait even while Core is reconnecting.
 - If the connection state is `CONNECTING`, or a valid descriptor exists but there's no Core connection row yet, or a
