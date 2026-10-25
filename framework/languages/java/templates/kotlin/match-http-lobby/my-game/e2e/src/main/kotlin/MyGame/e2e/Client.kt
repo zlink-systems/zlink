@@ -42,8 +42,9 @@ class Client(endpoint: String, val playerId: String, private val roomId: String)
     init {
         listOf(
                 RoomView::class.java,
+                MoveResult::class.java,
+                ShotResult::class.java,
                 MatchEnded::class.java,
-                ShotRejected::class.java,
                 ActionRejected::class.java,
             )
             .forEach { type ->
@@ -105,4 +106,15 @@ class Client(endpoint: String, val playerId: String, private val roomId: String)
             pending.add(event)
         }
     }
+    suspend fun view(predicate: (RoomView) -> Boolean = { true }): RoomView {
+        pending.removeAll { it is RoomView }
+        while (true) {
+            val event = queue.poll() ?: break
+            if (event is Throwable) throw event
+            if (event !is RoomView) pending.add(event)
+        }
+        send(RoomViewRequest())
+        return next(predicate)
+    }
+
 }

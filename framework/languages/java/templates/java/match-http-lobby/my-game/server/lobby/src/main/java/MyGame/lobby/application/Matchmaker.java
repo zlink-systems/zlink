@@ -6,10 +6,11 @@ import java.util.*;
 import java.util.concurrent.*;
 
 public final class Matchmaker implements AutoCloseable {
+    private record Pending(String playerId, String mode, CompletableFuture<MatchResponse> result) {}
+
     private final RoomProvisioner rooms;
-    private final Map<String, CompletableFuture<MatchResponse>> waiting = new HashMap<>();
-    private final Map<String, CompletableFuture<MatchResponse>> participants = new HashMap<>();
-    private long sequence;
+    private final Map<String, Pending> waiting = new HashMap<>();
+    private final Map<String, Pending> participants = new HashMap<>();
     private boolean closed;
 
     public Matchmaker(RoomProvisioner rooms) {
@@ -17,50 +18,58 @@ public final class Matchmaker implements AutoCloseable {
     }
 
     public CompletionStage<MatchResponse> match(MatchRequest request) {
-        if (request == null
-                || request.playerId() == null
-                || request.playerId().isBlank()
-                || request.mode() == null
-                || request.mode().isBlank())
-            throw new IllegalArgumentException("Player and mode are required");
+        if (request == null || request.playerId() == null || request.playerId().isBlank())
+            throw new IllegalArgumentException("Player is required");
+        String mode = request.mode() == null ? Names.DEFAULT_MODE : request.mode();
+        if (mode.isBlank()) throw new IllegalArgumentException("Mode is required");
+
         var result = new CompletableFuture<MatchResponse>();
-        CompletableFuture<MatchResponse> partner;
-        String roomId = null;
+        var current = new Pending(request.playerId(), mode, result);
+        Pending partner;
+        String roomId;
         synchronized (this) {
             if (closed) throw new IllegalStateException("Lobby is closed");
-            if (participants.containsKey(request.playerId()))
+            if (participants.containsKey(current.playerId()))
                 throw new IllegalArgumentException("Player already waiting");
-            if (waiting.containsKey(request.mode())) {
-                sequence = Math.incrementExact(sequence);
-                roomId = Names.ROOM_PREFIX + sequence;
+            participants.put(current.playerId(), current);
+            partner = waiting.remove(mode);
+            if (partner == null) {
+                waiting.put(mode, current);
+                roomId = null;
             }
-            participants.put(request.playerId(), result);
-            partner = waiting.remove(request.mode());
-            if (partner == null) waiting.put(request.mode(), result);
+            else roomId = Names.ROOM_PREFIX + UUID.randomUUID().toString().replace("-", "");
         }
         result.whenComplete(
                 (value, error) -> {
                     synchronized (this) {
-                        participants.remove(request.playerId(), result);
-                        waiting.remove(request.mode(), result);
+                        participants.remove(current.playerId(), current);
+                        waiting.remove(current.mode(), current);
                     }
                 });
+
         if (partner != null) {
-            var first = partner;
+            List<String> members = List.of(partner.playerId(), current.playerId());
             try {
-                rooms.prepare(roomId)
+                rooms.prepare(roomId, members)
                         .whenComplete(
-                                (value, error) -> {
-                                    if (error == null) {
-                                        first.complete(value);
-                                        result.complete(value);
-                                    } else {
-                                        first.completeExceptionally(error);
+                                (assignment, error) -> {
+                                    if (error != null) {
+                                        partner.result().completeExceptionally(error);
                                         result.completeExceptionally(error);
+                                    } else if (assignment == null
+                                            || !roomId.equals(assignment.roomId())) {
+                                        var failure =
+                                                new IllegalStateException(
+                                                        "Prepared Room identity mismatch");
+                                        partner.result().completeExceptionally(failure);
+                                        result.completeExceptionally(failure);
+                                    } else {
+                                        partner.result().complete(assignment);
+                                        result.complete(assignment);
                                     }
                                 });
             } catch (Exception error) {
-                first.completeExceptionally(error);
+                partner.result().completeExceptionally(error);
                 result.completeExceptionally(error);
             }
         }
@@ -69,7 +78,10 @@ public final class Matchmaker implements AutoCloseable {
 
     public synchronized boolean cancelWaiting(
             MatchRequest request, CompletableFuture<MatchResponse> result) {
-        if (waiting.get(request.mode()) != result) return false;
+        if (request == null || request.playerId() == null || result == null) return false;
+        var pending = participants.get(request.playerId());
+        if (pending == null || pending.result() != result || !waiting.remove(pending.mode(), pending))
+            return false;
         result.cancel(false);
         return true;
     }
@@ -78,7 +90,7 @@ public final class Matchmaker implements AutoCloseable {
         List<CompletableFuture<MatchResponse>> pending;
         synchronized (this) {
             closed = true;
-            pending = List.copyOf(participants.values());
+            pending = participants.values().stream().map(Pending::result).toList();
         }
         for (var request : pending)
             request.completeExceptionally(new IllegalStateException("Lobby shutdown"));

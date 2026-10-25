@@ -3,7 +3,7 @@ import { runHost, failHost } from '../shared/hosting';
 import { Names } from '../shared/constants';
 import { Entry, Room, RoomRelocation } from './spots';
 import { PlayerFactory, PlayerRelocation } from './player';
-import { JoinRoom, Reconnect, View, Move, Shoot, Delivery } from './handlers';
+import { JoinRoom, Reconnect, View, Move, Shoot, PrepareRoomHandler, Delivery } from './handlers';
 runHost((_builder, config, mesh) => {
   const capacity = config.roomCapacity;
   if (capacity === undefined || !Number.isSafeInteger(capacity) || capacity < 1)
@@ -28,6 +28,7 @@ runHost((_builder, config, mesh) => {
       View,
       Move,
       Shoot,
+      PrepareRoomHandler,
       Delivery
     ],
     listener: { kind: 'routeMesh', name: Names.mesh },

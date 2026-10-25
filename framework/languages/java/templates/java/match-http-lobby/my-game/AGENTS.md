@@ -15,8 +15,9 @@ Default builds and e2e run nodes and the client in Docker, so they need Docker w
 ```powershell
 pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
 pwsh -NoProfile -File ./run-e2e.ps1
-pwsh -NoProfile -File ./run-e2e.ps1 -Scenario lobby,hit,reconnect,update
+pwsh -NoProfile -File ./run-e2e.ps1 -Scenario lobby,hit,wall,input,reconnect,update
 pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
+pwsh -NoProfile -File ./run-e2e.ps1 -CheckDomain
 ```
 
 Bash provides the same workflow:
@@ -24,8 +25,9 @@ Bash provides the same workflow:
 ```bash
 ./run-e2e.sh --build-only
 ./run-e2e.sh
-./run-e2e.sh --scenario lobby,hit,reconnect,update
+./run-e2e.sh --scenario lobby,hit,wall,input,reconnect,update
 ./run-e2e.sh --check-structure
+./run-e2e.sh --check-domain
 ```
 
 For host process debugging, install JDK 25 and add `--local` or `-Local`. Add `--no-build` or `-NoBuild` only with an existing local build. Keep canonical scenario order and assertions; compare first failures with Known issues in the README.
@@ -34,23 +36,23 @@ For host process debugging, install JDK 25 and add `--local` or `-Local`. Add `-
 
 ### Session gateway
 
-`server/session/src/main/java/MyGame/session/Program.java` registers STREAM and the mesh listener, and `server/session/src/main/java/MyGame/session/GameSession.java` handles connection callbacks and forwards incoming packets. A Session is a communication object for a connection; Framework provides binding to associate it with a player state object. `GameSession.onDispatch` requires `JoinRoomRequest` as the first packet, gets or creates the Player Actor by `playerId`, binds it, and relays the original packet. Add authentication before binding and retain the typed relay so Framework can identify the connection for replies to that player.
+`server/session/src/main/java/MyGame/session/Program.java` registers STREAM and the mesh listener, and `server/session/src/main/java/MyGame/session/GameSession.java` handles connection callbacks and forwards incoming packets. A Session is a communication object for a connection; Framework provides binding to associate it with a player state object. `GameSession.onDispatch` accepts only `JoinRoomRequest`, `RoomViewRequest`, `MoveRequest`, `ShootRequest`, and `SessionInfoRequest`, requires `JoinRoomRequest` first, gets or creates the Player Actor by `playerId`, binds it, and relays the original typed packet. Other packets, including internal requests, receive `ActionRejected("packet-not-allowed", 0)`. Add authentication before binding and retain the typed relay so Framework can identify the connection for replies to that player.
 
 ### HTTP lobby
 
-`server/lobby/src/main/java/MyGame/lobby/Program.java` joins the mesh as an object client only and creates the `HttpLobby` bean. `server/lobby/src/main/java/MyGame/lobby/infrastructure/HttpLobby.java` is the Netty HTTP endpoint for `POST /match` (`Names.MATCH_PATH`); it decodes `MatchRequest` and holds the response until a partner arrives. `server/lobby/src/main/java/MyGame/lobby/application/Matchmaker.java` pairs requests of the same mode, assigns `room-<sequence>`, and completes both responses with `MatchResponse` after `RoomProvisioner.prepare` returns. `server/lobby/src/main/java/MyGame/lobby/infrastructure/ZLinkRooms.java` implements that port by creating the Room with `getOrCreate` and returns the Session endpoint from `server/config/lobby.json`. Keep matching decisions in `Matchmaker` and ZLink calls in `ZLinkRooms`.
+`server/lobby/src/main/java/MyGame/lobby/Program.java` joins the mesh as an object client only and creates the `HttpLobby` bean. `server/lobby/src/main/java/MyGame/lobby/infrastructure/HttpLobby.java` is the Netty HTTP endpoint for `POST /match` (`Names.MATCH_PATH`); it decodes `MatchRequest` and holds the response until a partner arrives. `server/lobby/src/main/java/MyGame/lobby/application/Matchmaker.java` pairs requests of the same mode, defaults omitted mode to `duel`, assigns `room-` plus a lowercase 32-character UUID, and passes the matched members to `RoomProvisioner.prepare`. `server/lobby/src/main/java/MyGame/lobby/infrastructure/ZLinkRooms.java` creates the Room with `getOrCreate`, sends `PrepareRoom`, waits for the matching `RoomPrepared`, and then returns the Session endpoint from `server/config/lobby.json`. Keep matching decisions in `Matchmaker` and ZLink calls in `ZLinkRooms`.
 
 ### Match rooms
 
-`server/match/src/main/java/MyGame/match/domain/RoomState.java` (`RoomState`) keeps positions, health, shot range, wall intersection, and the winner. `server/match/src/main/java/MyGame/match/infrastructure/zlink/Room.java` is the Room User Spot that applies it, `server/match/src/main/java/MyGame/match/infrastructure/zlink/Entry.java` and `server/match/src/main/java/MyGame/match/infrastructure/zlink/Join.java` accept a player's first entry and defer the join to the prepared Room, and `server/match/src/main/java/MyGame/match/infrastructure/zlink/Player.java` has no application state. `server/match/src/main/java/MyGame/match/infrastructure/zlink/Actions.java` holds the handlers that connect requests to `Room`. `server/match/src/main/java/MyGame/match/Program.java` registers the Entry Spot, the Room factory (`roomCapacity` from `server/config/match-a.json`), and the Player factory. When changing node composition, update registrations, `server/config/`, and the descriptor together so the structure check validates the same composition.
+`server/match/src/main/java/MyGame/match/domain/RoomState.java` (`RoomState`) owns positions, health, accepted sequence, phase, winner, monotonic movement budget, fire cooldown, and the decisions for movement and shooting. `server/match/src/main/java/MyGame/match/domain/RoomRoster.java` owns the prepared member list and admission decision. `server/match/src/main/java/MyGame/match/infrastructure/zlink/Room.java` is the Room User Spot that applies both domain objects; its `Prepare` handler accepts only the internal server request. `Entry` and `Join` defer first entry to the prepared Room, and `Player` has no application state. `Actions` connects client requests to `Room`. `Program` registers the Entry Spot, Room factory (`roomCapacity` from `server/config/match-a.json`), and Player factory. When changing node composition, update registrations, `server/config/`, and the descriptor together so the structure check validates the same composition.
 
 ### Shared contracts and hosting
 
-`server/shared/src/main/java/MyGame/` holds the messages and game constants shared by processes (`MatchRequest`, `MatchResponse`, `JoinRoomRequest`, `RoomViewRequest`, `RoomView`, `PlayerView`, `MoveRequest`, `ShootRequest`, `ShotRejected`, `MatchEnded`, `ActionRejected`, `SessionInfoRequest`, `SessionInfo`), `NodeConfig.java` defines process settings, and `Names.java` defines the mesh and type names. `Hosting.java` configures hosting and diagnostics and runs the stdin control loop (`drain`, `shutdown`), `Control.java` defines the control markers and deadlines, and `Stores.java` creates the Redis Location and Relocation stores. `HttpProtocol.java` holds the HTTP method, content type, and status constants, `Rules.java` the shot range, walls, and rejection reasons, and `Roles.java` the node roles. Add contracts used by several processes here, and keep combat facts in `RoomState` so separate processes do not independently modify the same fact.
+`server/shared/src/main/java/MyGame/` holds the messages and game constants shared by processes (`MatchRequest`, `MatchResponse`, `JoinRoomRequest`, `PrepareRoom`, `RoomPrepared`, `RoomViewRequest`, `RoomView`, `PlayerView`, `MoveRequest`, `ShootRequest`, `MatchEnded`, `ActionRejected`), `NodeConfig.java` defines process settings, and `Names.java` defines the mesh and type names. `ActionRejected` carries `reason` and `retryAfterMs`; `Rules.java` holds the common safe-integer maximum, map, movement, shooting, and rejection constants. `Hosting.java` configures hosting and diagnostics and runs the stdin control loop (`drain`, `shutdown`), `Control.java` defines the control markers and deadlines, and `Stores.java` creates the Redis Location and Relocation stores. Add shared contracts here, and keep decisions in their owning domain objects.
 
 ### E2E client
 
-`e2e/src/main/java/MyGame/e2e/Client.java` connects through the public connector, and `e2e/src/main/java/MyGame/e2e/Scenarios.java` checks results observable by the client. `e2e/src/main/java/MyGame/e2e/Nodes.java` starts the nodes, keeps their logs, and cleans up the resources of each run; `e2e/src/main/java/MyGame/e2e/Program.java` reports cleanup failures after scenario failures, and either one makes the exit code 1. `e2e/src/main/java/MyGame/e2e/Structure.java` validates the actual files before startup. Keep the scenario order `lobby,hit,reconnect,update`. Verify new gameplay through received client results; the unit tests `server/lobby/src/test/java/MyGame/lobby/application/MatchmakerTest.java` and `server/match/src/test/java/MyGame/match/domain/RoomStateTest.java` cover the matching and combat rules without Framework. The project includes no formatter configuration.
+`e2e/src/main/java/MyGame/e2e/Client.java` connects through the public connector, and `e2e/src/main/java/MyGame/e2e/Scenarios.java` checks results observable by the client. `RoomStateTest.java` verifies game boundaries and `ContractSerializationTest.java` verifies eight wire samples during the build. `LobbyDomainChecks.java` verifies 19 HTTP boundaries before the six scenarios. `Nodes.java` starts the nodes, keeps their logs, and cleans up the resources of each run; `Program.java` reports cleanup failures after scenario failures, and either one makes the exit code 1. `Structure.java` validates the actual files before startup. Keep the scenario order `lobby,hit,wall,input,reconnect,update`. The JUnit tests in `server/lobby/src/test/java/MyGame/lobby/application/MatchmakerTest.java` and `server/match/src/test/java/MyGame/match/domain/RoomStateTest.java` cover lobby and domain boundaries.
 
 ## ZLink concepts in this project
 
@@ -72,7 +74,7 @@ The Location Store records an object's current runtime location by ID; this proj
 
 ### Actor membership
 
-A membership change moves an Actor from one Spot to another. Admission is the target Spot's decision to accept or reject the membership request. `Join.join` requests deferred admission to the prepared `Room`, `Room.onActorJoin` accepts or rejects it, and `Player.onJoinCompleted` observes the completion result. [Actor membership](https://docs.zlink.systems/java/guide/server/35-actor-membership/) explains the order of admission and completion.
+A membership change moves an Actor from one Spot to another. Admission is the target Spot's decision to accept or reject the membership request. `Join.join` requests deferred admission to the prepared `Room`, `Room.onActorJoin` checks `RoomRoster.canAdmit` before `RoomState.admit`, and `Player.onJoinCompleted` observes a rejection. [Actor membership](https://docs.zlink.systems/java/guide/server/35-actor-membership/) explains the order of admission and completion.
 
 ### Host relocation and drain
 
@@ -82,49 +84,22 @@ Relocation changes an object's execution host; drain moves a host's workload els
 
 Requests in the example game follow this path. Reading the code along this path before adding or transferring a feature locates the places to change.
 
-1. The client sends `POST /match` with `MatchRequest` (`playerId`, `mode`) to the lobby. `HttpLobby` passes it to `Matchmaker.match`, and `Matchmaker.match` holds the response until another player of the same mode arrives.
-2. When the second request arrives, `Matchmaker` assigns `room-<sequence>` and calls `ZLinkRooms.prepare`, and `ZLinkRooms.prepare` creates the Room with `getOrCreate(roomId, Names.ROOM)`. After the Room is prepared, both HTTP responses complete with `MatchResponse` (`roomId`, `sessionEndpoint`).
+1. The client sends `POST /match` with `MatchRequest` (`playerId`, optional `mode`) to the lobby. Omitted mode defaults to `duel`. `Matchmaker.match` holds the response until another player of the same mode arrives.
+2. When the second request arrives, `Matchmaker` assigns a UUID Room ID and passes both member IDs to `ZLinkRooms.prepare`. `ZLinkRooms` creates the Room, sends `PrepareRoom(matchId, members)`, and waits for the matching `RoomPrepared` before completing both HTTP responses with `MatchResponse` (`roomId`, `sessionEndpoint`).
 3. Each client connects to the returned Session endpoint over STREAM and sends the first packet, `JoinRoomRequest`. `GameSession` checks the first packet type, calls `getOrCreate` for the Player Actor by `playerId`, binds it with `bindOrGet`, and relays the original packet.
-4. A new Actor starts in the Entry Spot. `Join.join` checks the identity and requests `joinSpot(request.roomId(), request).defer()`. `Room.onActorJoin` admits the player, and the Room sends the current `RoomView` to the players.
-5. `MoveRequest` and `ShootRequest` are delivered to `Room` through `Actions`. `RoomState` decides range, wall, and damage; `Actions.forward` delivers the results through the receiving Actor's bound Session.
-6. To replace a Match node, the `drain` control in `Hosting.run` requests relocation. Framework takes the game state from `capture` in `RoomTransfer` and `PlayerTransfer` and calls `restore` on another node. The lobby is outside host relocation.
+4. A new Actor starts in the Entry Spot. `Join.join` checks the identity and requests `joinSpot(request.roomId(), request).defer()`. `Room.onActorJoin` asks `RoomRoster` to admit only a prepared member, then lets `RoomState` allocate the server spawn and phase. An outsider receives `ActionRejected("admission-rejected", 0)`.
+5. `MoveRequest(Dx, Dy, Sequence)` and `ShootRequest` are delivered to `Room` through `Actions`. `RoomState` validates and calculates results. Only accepted actions advance sequence or change game state. Every rejection is `ActionRejected(Reason, RetryAfterMs)`; only time-limited rejections have a positive retry value.
+6. To replace a Match node, the `drain` control in `Hosting.run` requests relocation. `RoomTransfer` captures `{game, roster}`; game snapshots store move and fire timers as remaining milliseconds, not process timestamps. Framework restores both domain snapshots on another node. The lobby is outside host relocation.
 
-## Developing from this sample
+## Developing this template
 
-This sample shows how the features work together, so read and run it rather than turning it into your game. Start your own project from the Java starter: choose Java in the Initializer at [ZLink Start](https://zlink.systems/start), or use `framework/languages/java/templates/java/starter/my-game` in the ZLink repository. Then transfer the features you need from this sample one at a time. The starter's `AGENTS.md` owns the choice between structures; this section covers only `match-http-lobby`. Keep this sample unchanged next to your project as a reference.
+Extend this template's domain to build a two-dimensional action server.
 
-### Run the sample first
-
-Before transferring anything, run the build and e2e once with the [Development commands](#development-commands) to confirm the downloaded sample works and to see its behavior. This result is the baseline for comparison. If it fails, compare the failure with Known issues in the [README](README.md) first.
-
-### Features to transfer
-
-Feature names match the feature table in the starter's `AGENTS.md`. Paths are relative to this directory. The starter has one Session node and the `connect` scenario only, so the last column lists what grows in the starter with each feature.
-
-| Feature | File in this sample | What to transfer | What to grow in the starter alongside |
-| --- | --- | --- | --- |
-| Typed messages | `server/shared/src/main/java/MyGame/JoinRoomRequest.java` | The records of the features you adopt: `JoinRoomRequest`, `RoomViewRequest`, `RoomView`, `PlayerView`, `MoveRequest`, `ShootRequest`, `ShotRejected`, `MatchEnded`, `ActionRejected`; `MatchRequest` and `MatchResponse` for the HTTP lobby; `SessionInfoRequest` and `SessionInfo` only if your client needs them | The registration names in `Names.java`; the starter already has `Control.java` and `Json.java` |
-| Actor | `server/match/src/main/java/MyGame/match/infrastructure/zlink/Player.java`, `server/match/src/main/java/MyGame/match/infrastructure/zlink/PlayerFactory.java` | `Player` with its join-completion handling, and its factory | A new `server/match/` module (`build.gradle.kts`, `Program.java`) with `include("server:match")` in `settings.gradle.kts`, its `server/config/` files, and the Actor factory registration in `Program.java`; the node declaration in `zlink.structure.json` and the check in `Structure.java`. The starter's `Nodes.java` starts only the Session role, so extend `Nodes.java` and `Roles.java` for the new role |
-| Spot | `server/match/src/main/java/MyGame/match/infrastructure/zlink/Room.java`, `server/match/src/main/java/MyGame/match/domain/RoomState.java` | `Room` and its `RoomState` combat rules; keep the rules in the domain class | The Spot factory registration in `Program.java`; the `spots` and `nodes` declarations in `zlink.structure.json`, and a `Structure.java` check that compares them with the registrations (the starter declares no Spots) |
-| Entry and first admission | `server/match/src/main/java/MyGame/match/infrastructure/zlink/Entry.java`, `server/match/src/main/java/MyGame/match/infrastructure/zlink/Join.java` | `Join.join`, which defers the admission to the prepared Room | The Entry Spot registration and its `entry` declaration; a first-entry scenario and a `reconnect` scenario that compares state after reconnection |
-| Session binding | `server/session/src/main/java/MyGame/session/GameSession.java` | The first-packet check, then find or create the Actor, bind, and relay the original typed packet | The same first-packet type as `Join.join`; transfer it into the starter's `PlayerSession.java` |
-| Host relocation | `server/match/src/main/java/MyGame/match/infrastructure/zlink/RoomTransfer.java`, `server/match/src/main/java/MyGame/match/infrastructure/zlink/PlayerTransfer.java`, `server/match/src/main/java/MyGame/match/infrastructure/zlink/Transfer.java`, `server/shared/src/main/java/MyGame/Hosting.java` | The snapshot adapters with `capture` and `restore` for the Room state and the Player | The `preserveStateWith(...)` registrations; the `update` scenario, which checks that connections and state survive a server replacement and that the replacement node accepts new work |
-| Dynamic dungeon | `server/lobby/src/main/java/MyGame/lobby/infrastructure/ZLinkRooms.java`, `server/lobby/src/main/java/MyGame/lobby/application/RoomProvisioner.java` | The dynamic User Spot creation pattern, here for Rooms: `getOrCreate` through the public Spot manager before the client is told where to connect | The dynamic `room` Spot in `zlink.structure.json` and the `lobby` to `location` "Find room" edge |
-| HTTP lobby | `server/lobby/src/main/java/MyGame/lobby/infrastructure/HttpLobby.java`, `server/lobby/src/main/java/MyGame/lobby/application/Matchmaker.java` | The HTTP endpoint and the matching port; keep matching decisions in `Matchmaker` | A new `server/lobby/` module, its `lobby.json` (`httpEndpoint`, `sessionEndpoint`), and the `lobby` node and `HTTP` edge in `zlink.structure.json`; a `lobby` scenario that checks both players receive the same room |
-
-### Transfer order and rules
-
-Transfer one row at a time and run the build, the structure check, and the related e2e scenario after each. Add a scenario ID to the `Scenario` enum in `server/shared/src/main/java/MyGame/Scenario.java`, to the dispatch in `e2e/src/main/java/MyGame/e2e/Scenarios.java`, to `run.scenarios`, and to the selection examples in `run.commands` of `zlink.structure.json` together. Judge results by the replies and events actually received; do not make tests pass with fixed sleeps or longer deadlines.
-
-Start with the message contracts. Define the typed records in `server/shared/src/main/java/MyGame/` first, then move each handler that fails to compile to the new messages. When you change the first-entry packet, update the first-packet check in `GameSession` and `Join.join` to receive the same type.
-
-Keep each piece of state in the object that decides it. Combat facts belong in `RoomState`, the waiting queue in `Matchmaker`, and `Player` keeps no application state. When you change `RoomState` fields, update `RoomTransfer`'s `capture` and `restore` together; the lobby queue is not relocated. A missing field disappears after relocation, and the `update` scenario detects the loss.
-
-Run the HTTP request path with the `lobby` scenario. The lobby answers only after the Room is prepared, so the client never connects to a Room that does not exist; keep that order when you change `Matchmaker` or `ZLinkRooms`.
-
-To name roles differently from this sample, change the type names, `Names.java`, `server/config/`, the module and package names with `settings.gradle.kts`, and `zlink.structure.json` at once. Do the renaming in its own change, separate from transferring a feature, so failures are easier to trace.
-
-If `update` fails after a transfer, first check whether the snapshot is missing any state, then use the message flow in [Debugging](#debugging) to find the first failing step.
+1. Put domain state and rule decisions in `server/match/src/main/java/MyGame/match/domain/RoomState.java`; it owns positions, HP, accepted sequence, phase, winner, monotonic movement budget and fire cooldown. Keep its boundary tests in `server/match/src/test/java/MyGame/match/domain/RoomStateTest.java`.
+2. Add shared typed contracts in `server/shared/src/main/java/MyGame/`. The matched member list and admission decision belong to `RoomRoster`; `PrepareRoom` and `RoomPrepared` stay internal to server-to-server requests.
+3. Update the client packet allowlist in `server/session/src/main/java/MyGame/session/GameSession.java` whenever the set of client packets changes. Internal packets remain outside that list.
+4. Add the observation to `server/shared/src/main/java/MyGame/Scenario.java` and `e2e/src/main/java/MyGame/e2e/Scenarios.java`; update the scenario table in `README.md` and `run.scenarios` and selection examples in `zlink.structure.json`.
+5. Keep the order `lobby,hit,wall,input,reconnect,update`. Rejected requests preserve game state and sequence; time-limited rejections use the server-provided `RetryAfterMs`.
 
 ## Development considerations
 
@@ -132,7 +107,7 @@ If `update` fails after a transfer, first check whether the snapshot is missing 
 
 Use public Maven Central packages at the versions pinned centrally in `build.gradle.kts`, and keep project dependencies between this project's own modules; do not commit local package feeds or dependencies on repository sources. Process typed messages with the default Framework JSON serializer so processes use the same contract. Limit direct serialization in relocation adapters to application snapshots, keeping management of Framework execution state separate from game state.
 
-`RoomState` owns combat facts, `Matchmaker` owns the waiting queue, and Session binding owns identity; `RoomView` contains game state only. Store player IDs in `Room` state, never Actor references, because host relocation does not call `onJoinedActor` again on the target. Framework owns routing, membership, execution serialization, and relocation. Reply to the requester through the handler Actor's bound Session (`actor.context().boundSession().send(...)`). Send other pushes to the Actor by player ID with `ZLinkActorClient.sendToActor`, and let a Spot Actor handler such as `Actions.forward` forward the message to the bound Session. `SessionInfo` reads identity from the Session binding, and game-state messages contain no binding identity.
+`RoomState` owns positions, HP, accepted sequence, phase, winner, and monotonic action timers; `RoomRoster` owns the prepared member set and admission; `Matchmaker` owns the waiting queue; Session binding owns identity. The server validates and calculates movement and shot results. A rejected request changes no game value, sequence, or cooldown. `RoomView` contains game state only. Store player IDs in `Room` state, never Actor references, because host relocation does not call `onJoinedActor` again on the target. Relocation stores timer remaining milliseconds, not process timestamps. Framework owns routing, membership, execution serialization, and relocation. Reply to the requester through the handler Actor's bound Session (`actor.context().boundSession().send(...)`). Send other pushes to the Actor by player ID with `ZLinkActorClient.sendToActor`, and let a Spot Actor handler such as `Actions.forward` forward the message to the bound Session. `SessionInfo` reads identity from the Session binding, and game-state messages contain no binding identity.
 
 ### Asynchronous execution and lifecycle
 

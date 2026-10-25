@@ -86,3 +86,17 @@ public sealed class MatchEndedDelivery
         CancellationToken ct
     ) => actor.Context.BoundSession.Send(message).Async();
 }
+
+[ZLinkSpotRequestHandler(nameof(PrepareRoom))]
+public sealed class PrepareRoomHandler : IZLinkSpotRequestHandler<RoomSpot, PrepareRoom, RoomPrepared>
+{
+    public ValueTask<RoomPrepared> HandleAsync(
+        RoomSpot spot,
+        PrepareRoom request,
+        CancellationToken ct
+    )
+    {
+        ct.ThrowIfCancellationRequested();
+        return ValueTask.FromResult(spot.Prepare(request));
+    }
+}

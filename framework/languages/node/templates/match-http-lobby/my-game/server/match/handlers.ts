@@ -1,11 +1,17 @@
 import { Injectable } from '@nestjs/common';
-import { zlinkEntrySpotActorSendHandler, zlinkSpotActorSendHandler } from '@zlink-systems/nestjs';
-import type { ZLinkMessageContext } from '@zlink-systems/framework';
+import {
+  zlinkEntrySpotActorSendHandler,
+  zlinkSpotActorSendHandler,
+  zlinkSpotPacketHandler
+} from '@zlink-systems/nestjs';
+import type { ZLinkMessageContext, ZLinkSpotRequestHandler } from '@zlink-systems/framework';
 import { PacketNames } from '../shared/constants';
 import {
   MatchEnded,
   RoomView,
   JoinRoomRequest,
+  PrepareRoom,
+  RoomPrepared,
   type RoomViewRequest,
   type MoveRequest,
   type ShootRequest
@@ -99,6 +105,15 @@ export class Shoot {
     request: ShootRequest
   ): Promise<void> {
     await spot.shoot(actor, request);
+  }
+}
+@Injectable()
+@zlinkSpotPacketHandler({ spot: () => Room, packetName: PacketNames.prepareRoom })
+export class PrepareRoomHandler
+  implements ZLinkSpotRequestHandler<Room, PrepareRoom, RoomPrepared>
+{
+  async handle(spot: Room, request: PrepareRoom): Promise<RoomPrepared> {
+    return spot.prepare(request);
   }
 }
 const deliveryPackets: ReadonlyMap<string, new () => object> = new Map<string, new () => object>([

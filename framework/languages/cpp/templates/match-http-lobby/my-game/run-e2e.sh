@@ -6,24 +6,29 @@ cd "$ROOT"
 local_mode=false
 no_build=false
 build_only=false
+domain_only=false
 arguments=()
 for argument in "$@"; do
   case "$argument" in
     --local) local_mode=true ;;
     --no-build) no_build=true ;;
     --build-only) build_only=true ;;
+    --check-domain) domain_only=true ;;
     *) arguments+=("$argument") ;;
   esac
 done
 mkdir -p "$ROOT/.logs"
 if $local_mode; then
   if ! $no_build; then
-    if ! { cmake -P bootstrap.cmake && cmake --preset default && cmake --build --preset default; } >"$ROOT/.logs/build.log" 2>&1; then
+    if ! { cmake -P bootstrap.cmake && cmake --preset default && cmake --build --preset default && ctest --test-dir build --verbose; } >"$ROOT/.logs/build.log" 2>&1; then
       tail -n 20 "$ROOT/.logs/build.log" >&2
       exit 1
     fi
   fi
-  $build_only && exit 0
+  if $no_build && $domain_only; then
+    ctest --test-dir "$ROOT/build" --verbose --no-tests=error
+  fi
+  if $build_only || $domain_only; then exit 0; fi
   exec "$ROOT/build/bin/my-game-e2e" --root "$ROOT" "${arguments[@]}"
 fi
 if $no_build; then
@@ -71,7 +76,7 @@ if ! "${compose[@]}" build >"$logs/build.log" 2>&1; then
   tail -n 30 "$logs/build.log" >&2
   exit 1
 fi
-$build_only && exit 0
+if $build_only || $domain_only; then exit 0; fi
 "${compose[@]}" run --rm --no-deps -T --name "$project-check" runner "${arguments[@]}" --check-structure
 for argument in "${arguments[@]}"; do
   [[ "$argument" == "--check-structure" ]] && exit 0

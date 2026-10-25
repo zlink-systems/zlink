@@ -12,6 +12,8 @@ public final class Program {
         var root = Path.of("").toAbsolutePath().normalize();
         Structure.check(root);
         if (Arrays.equals(args, new String[] {"--check-structure"})) return;
+        LobbyDomainChecks.run();
+        if (Arrays.equals(args, new String[] {"--check-domain"})) return;
         Structure.require(
                 args.length == 0 || (args.length == 2 && args[0].equals("--scenario")),
                 "Use --scenario a,b");

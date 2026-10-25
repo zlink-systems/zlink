@@ -11,6 +11,7 @@ COPY CMakeLists.txt CMakePresets.json ./
 COPY server server
 COPY e2e e2e
 RUN cmake --preset default && cmake --build --preset default \
+    && ctest --test-dir build --verbose \
     && mkdir -p /out/bin /out/lib \
     && cp build/bin/my-game-* /out/bin/ \
     && cp -P .zlink/install/lib/*.so* /out/lib/

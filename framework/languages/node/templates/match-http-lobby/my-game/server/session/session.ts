@@ -8,17 +8,30 @@ import type {
   ZLinkSessionDispatchContext,
   ZLinkSessionFactory
 } from '@zlink-systems/framework';
-import { Names, PacketNames } from '../shared/constants';
-import { JoinRoomRequest, SessionInfo } from '../shared/messages';
+import { Names, PacketNames, Rejection } from '../shared/constants';
+import { ActionRejected, JoinRoomRequest, SessionInfo } from '../shared/messages';
+const clientPackets = new Set<string>([
+  PacketNames.joinRoomRequest,
+  PacketNames.roomViewRequest,
+  PacketNames.moveRequest,
+  PacketNames.shootRequest,
+  PacketNames.sessionInfoRequest
+]);
 export class Session implements ZLinkSession {
   constructor(
     readonly context: ZLinkSessionContext,
     private readonly actors: ZLinkActorManager
   ) {}
   async onDispatch(dispatch: ZLinkSessionDispatchContext, payload: ZLinkMessage): Promise<void> {
+    if (!clientPackets.has(dispatch.packetName)) {
+      await this.rejectPacket();
+      return;
+    }
     if (!this.context.actors.bound.length) {
-      if (dispatch.packetName !== PacketNames.joinRoomRequest)
-        throw new Error('JoinRoomRequest must be first');
+      if (dispatch.packetName !== PacketNames.joinRoomRequest) {
+        await this.rejectPacket();
+        return;
+      }
       const request = payload.decode(JoinRoomRequest);
       const ensured = await this.actors
         .getOrCreate(request.playerId, Names.actor)
@@ -42,6 +55,11 @@ export class Session implements ZLinkSession {
       return;
     }
     await actor.relay(payload);
+  }
+  private async rejectPacket(): Promise<void> {
+    await this.context.client
+      .send(new ActionRejected(Rejection.packetNotAllowed))
+      .submit();
   }
 }
 @Injectable()

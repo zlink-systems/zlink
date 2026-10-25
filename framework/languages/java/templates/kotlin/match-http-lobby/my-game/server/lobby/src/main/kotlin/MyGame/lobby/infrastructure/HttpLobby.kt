@@ -16,15 +16,31 @@ import java.io.IOException
 import java.net.InetSocketAddress
 import java.net.URI
 import java.util.concurrent.*
+import systems.zlink.framework.channels.ZLinkRouteClient
 import systems.zlink.framework.spots.*
 
-class ZLinkRooms(private val spots: ZLinkSpotManager, private val config: NodeConfig) :
+class ZLinkRooms(
+    private val spots: ZLinkSpotManager,
+    private val routes: ZLinkRouteClient,
+    private val config: NodeConfig,
+) :
     RoomProvisioner {
-    override fun prepare(roomId: String) =
-        spots.getOrCreate(roomId, Names.ROOM).inMesh(Names.MESH).submit().thenApply { created ->
-            check(created.state() != ZLinkSpotCreateState.REJECTED) { "Room creation rejected" }
-            MatchResponse(created.spot().spotId(), requireNotNull(config.sessionEndpoint))
-        }
+    override fun prepare(roomId: String, members: List<String>) =
+        spots
+            .getOrCreate(roomId, Names.ROOM)
+            .inMesh(Names.MESH)
+            .submit()
+            .thenCompose { created ->
+                check(created.state() != ZLinkSpotCreateState.REJECTED) { "Room creation rejected" }
+                check(roomId == created.spot().spotId()) { "Created Room identity mismatch" }
+                routes
+                    .requestToSpot(roomId, PrepareRoom(roomId, members))
+                    .submit(RoomPrepared::class.java)
+            }
+            .thenApply { prepared ->
+                check(roomId == prepared.matchId) { "Prepared Room identity mismatch" }
+                MatchResponse(roomId, requireNotNull(config.sessionEndpoint))
+            }
 }
 
 class HttpLobby(config: NodeConfig, private val matches: Matchmaker) : AutoCloseable, HttpEndpoint {

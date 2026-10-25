@@ -15,6 +15,7 @@ public sealed class RoomSpot(
 {
     public IZLinkSpotContext Context { get; } = context;
     private RoomState state = new();
+    private readonly RoomRoster roster = new();
 
     public void Configure()
     {
@@ -36,9 +37,13 @@ public sealed class RoomSpot(
         if (admission.PlayerId != id || admission.RoomId != Context.SpotId)
             throw new InvalidDataException("Room admission identity mismatch.");
         return ValueTask.FromResult(
-            state.Admit(id) ? ZLinkSpotActorJoinResult.Accept() : ZLinkSpotActorJoinResult.Reject()
+            roster.CanAdmit(id) && state.Admit(id)
+                ? ZLinkSpotActorJoinResult.Accept()
+                : ZLinkSpotActorJoinResult.Reject()
         );
     }
+
+    public RoomPrepared Prepare(PrepareRoom request) => roster.Prepare(Context.SpotId, request);
 
     public async ValueTask OnJoinedActorAsync(PlayerActor actor, CancellationToken ct)
     {
@@ -48,7 +53,8 @@ public sealed class RoomSpot(
     public ValueTask OnLeaveActorAsync(PlayerActor actor, CancellationToken ct) =>
         ValueTask.CompletedTask;
 
-    private RoomView View() => new(Context.SpotId, settings.Id, state.View());
+    private RoomView View() =>
+        new(Context.SpotId, settings.Id, state.Phase, state.Winner, state.View());
 
     public ValueTask ViewAsync(PlayerActor actor) =>
         actor.Context.BoundSession.Send(View()).Async();
@@ -62,32 +68,50 @@ public sealed class RoomSpot(
 
     public async ValueTask MoveAsync(PlayerActor actor, MoveRequest request, CancellationToken ct)
     {
-        var reason = state.Move(actor.Context.ActorId, request);
-        if (reason is not null)
-            await actor.Context.BoundSession.Send(new ActionRejected(reason)).Async();
+        var rejection = state.Move(actor.Context.ActorId, request);
+        if (rejection is not null)
+            await actor.Context.BoundSession.Send(rejection).Async();
         else
+        {
+            var player = state.View().Single(candidate => candidate.PlayerId == actor.Context.ActorId);
+            await actor.Context.BoundSession
+                .Send(new MoveResult(player.X, player.Y, request.Sequence))
+                .Async();
             await BroadcastAsync(View(), ct);
+        }
     }
 
     public async ValueTask ShootAsync(PlayerActor actor, ShootRequest request, CancellationToken ct)
     {
-        var reason = state.Shoot(actor.Context.ActorId, request);
-        if (reason is not null)
+        var rejection = state.Shoot(actor.Context.ActorId, request);
+        if (rejection is not null)
         {
-            await actor.Context.BoundSession.Send(new ShotRejected(reason)).Async();
+            await actor.Context.BoundSession.Send(rejection).Async();
             return;
         }
+        await actor.Context.BoundSession
+            .Send(new ShotResult("hit", request.TargetId, request.Sequence))
+            .Async();
         await BroadcastAsync(View(), ct);
         if (state.Winner is { } winner)
             await BroadcastAsync(new MatchEnded(winner), ct);
     }
 
-    public byte[] Capture() => JsonSerializer.SerializeToUtf8Bytes(state);
+    public byte[] Capture()
+    {
+        using var game = JsonDocument.Parse(state.Capture());
+        return JsonSerializer.SerializeToUtf8Bytes(
+            new HttpRoomSnapshot(game.RootElement.Clone(), roster.Capture())
+        );
+    }
 
-    public void Restore(ReadOnlyMemory<byte> payload) =>
-        state =
-            JsonSerializer.Deserialize<RoomState>(payload.Span)
+    public void Restore(ReadOnlyMemory<byte> payload)
+    {
+        var snapshot = JsonSerializer.Deserialize<HttpRoomSnapshot>(payload.Span)
             ?? throw new InvalidDataException("Missing room state.");
+        roster.Restore(snapshot.Roster);
+        state.Restore(JsonSerializer.SerializeToUtf8Bytes(snapshot.Game));
+    }
 }
 
 public sealed class RoomRelocation : IZLinkSpotRelocationAdapter<RoomSpot>

@@ -3,88 +3,247 @@ package MyGame.match.domain;
 import MyGame.*;
 
 import java.util.*;
+import java.util.function.LongSupplier;
 
 public final class RoomState {
-    public List<Combatant> players = new ArrayList<>();
-    public String winner;
+    private static final long MOVE_BUDGET_MS =
+            Math.round(Rules.MAX_STEP * 1000.0 / Rules.MOVE_SPEED);
 
-    public static final class Combatant {
-        public String playerId;
-        public double x, y;
-        public int hp = Rules.INITIAL_HP;
-        public long sequence;
+    public record CombatantSnapshot(
+            String playerId,
+            double x,
+            double y,
+            int hp,
+            long lastSequence,
+            Long moveBudgetRemainingMs,
+            Long fireCooldownRemainingMs) {}
 
-        public Combatant() {}
+    public record RoomSnapshot(String phase, String winner, List<CombatantSnapshot> players) {}
 
-        Combatant(String id) {
-            playerId = id;
+    private static final class Combatant {
+        final String playerId;
+        double x;
+        double y;
+        int hp = Rules.INITIAL_HP;
+        long lastSequence;
+        Long lastMoveTimestamp;
+        Long lastShotTimestamp;
+
+        Combatant(String playerId, double x, double y) {
+            this.playerId = playerId;
+            this.x = x;
+            this.y = y;
         }
     }
 
+    private final LongSupplier monotonicClock;
+    private final List<Combatant> players = new ArrayList<>();
+    private String winner;
+
+    public RoomState() {
+        this(System::nanoTime);
+    }
+
+    public RoomState(LongSupplier monotonicClock) {
+        this.monotonicClock = Objects.requireNonNull(monotonicClock);
+    }
+
     public boolean admit(String id) {
-        if (players.stream().anyMatch(p -> p.playerId.equals(id))) return true;
+        if (players.stream().anyMatch(player -> player.playerId.equals(id))) return true;
         if (players.size() >= Rules.PLAYERS) return false;
-        players.add(new Combatant(id));
+
+        var spawn = players.isEmpty()
+                ? new double[] {Rules.SPAWN_AX, Rules.SPAWN_AY}
+                : new double[] {Rules.SPAWN_BX, Rules.SPAWN_BY};
+        players.add(new Combatant(id, spawn[0], spawn[1]));
         return true;
     }
 
     private Combatant player(String id) {
         return players.stream()
-                .filter(p -> p.playerId.equals(id))
+                .filter(player -> player.playerId.equals(id))
                 .findFirst()
                 .orElseThrow(() -> new IllegalArgumentException("Unknown room player"));
     }
 
-    private String validate(Combatant player, long sequence) {
-        if (sequence <= player.sequence) return Rules.STALE_SEQUENCE;
-        player.sequence = sequence;
-        return winner == null ? null : Rules.FINISHED;
+    private ActionRejected validate(Combatant player, long sequence) {
+        if (sequence > Rules.MAX_SAFE_INTEGER)
+            return new ActionRejected(Rules.INTEGER_OUT_OF_RANGE);
+        if (sequence <= player.lastSequence) return new ActionRejected(Rules.STALE_SEQUENCE);
+        return winner == null ? null : new ActionRejected(Rules.FINISHED);
     }
 
-    public String move(String id, MoveRequest request) {
-        var p = player(id);
-        var reason = validate(p, request.sequence());
-        if (reason != null) return reason;
-        if (!Double.isFinite(request.x()) || !Double.isFinite(request.y()))
-            return Rules.INVALID_MOVE;
-        p.x = request.x();
-        p.y = request.y();
+    private static void commitAcceptedAction(Combatant player, long sequence) {
+        player.lastSequence = sequence;
+    }
+
+    public ActionRejected move(String id, MoveRequest move) {
+        var player = player(id);
+        var rejection = validate(player, move.sequence());
+        if (rejection != null) return rejection;
+        if (!Double.isFinite(move.dx()) || !Double.isFinite(move.dy()))
+            return new ActionRejected(Rules.INVALID_MOVE);
+
+        var distance = Math.sqrt(move.dx() * move.dx() + move.dy() * move.dy());
+        if (distance > Rules.MAX_STEP) return new ActionRejected(Rules.STEP_TOO_LARGE);
+
+        var targetX = player.x + move.dx();
+        var targetY = player.y + move.dy();
+        if (targetX < Rules.MAP_MIN
+                || targetX > Rules.MAP_MAX
+                || targetY < Rules.MAP_MIN
+                || targetY > Rules.MAP_MAX)
+            return new ActionRejected(Rules.OUTSIDE_MAP);
+
+        if (Rules.WALLS.stream()
+                .anyMatch(wall -> intersectsWall(player.x, player.y, targetX, targetY, wall)))
+            return new ActionRejected(Rules.MOVE_BLOCKED_BY_WALL);
+
+        var now = monotonicClock.getAsLong();
+        if (player.lastMoveTimestamp != null) {
+            var elapsedMs = elapsedMilliseconds(player.lastMoveTimestamp, now);
+            var budget = Math.min(Rules.MAX_STEP, Rules.MOVE_SPEED * elapsedMs / 1000.0);
+            if (distance > budget) {
+                var remainingDistance = distance - budget;
+                var retryAfterMs = Math.toIntExact(Math.max(
+                        1L,
+                        (long) Math.ceil(remainingDistance * 1000.0 / Rules.MOVE_SPEED)));
+                return new ActionRejected(Rules.MOVE_BUDGET, retryAfterMs);
+            }
+        }
+
+        player.x = targetX;
+        player.y = targetY;
+        commitAcceptedAction(player, move.sequence());
+        player.lastMoveTimestamp = now;
         return null;
     }
 
-    public String shoot(String id, ShootRequest request) {
-        var p = player(id);
-        var reason = validate(p, request.sequence());
-        if (reason != null) return reason;
-        var target =
-                players.stream()
-                        .filter(
-                                t ->
-                                        t.playerId.equals(request.targetId())
-                                                && !t.playerId.equals(id)
-                                                && t.hp > 0)
-                        .findFirst()
-                        .orElse(null);
-        if (target == null) return Rules.NO_TARGET;
-        double dx = target.x - p.x, dy = target.y - p.y;
-        if (dx * dx + dy * dy > Rules.RANGE * Rules.RANGE) return Rules.OUT_OF_RANGE;
-        boolean blocked;
-        if (dx == 0)
-            blocked =
-                    p.x == Rules.WALL_X
-                            && Math.max(p.y, target.y) >= Rules.WALL_MIN_Y
-                            && Math.min(p.y, target.y) <= Rules.WALL_MAX_Y;
-        else {
-            double t = (Rules.WALL_X - p.x) / dx, y = p.y + t * dy;
-            blocked = t >= 0 && t <= 1 && y >= Rules.WALL_MIN_Y && y <= Rules.WALL_MAX_Y;
+    public ActionRejected shoot(String id, ShootRequest shot) {
+        var shooter = player(id);
+        var rejection = validate(shooter, shot.sequence());
+        if (rejection != null) return rejection;
+
+        var target = players.stream()
+                .filter(player -> player.playerId.equals(shot.targetId())
+                        && !player.playerId.equals(id)
+                        && player.hp > 0)
+                .findFirst()
+                .orElse(null);
+        if (target == null) return new ActionRejected(Rules.NO_TARGET);
+
+        var dx = target.x - shooter.x;
+        var dy = target.y - shooter.y;
+        if (dx * dx + dy * dy > Rules.RANGE * Rules.RANGE)
+            return new ActionRejected(Rules.OUT_OF_RANGE);
+        if (Rules.WALLS.stream()
+                .anyMatch(wall -> intersectsWall(shooter.x, shooter.y, target.x, target.y, wall)))
+            return new ActionRejected(Rules.BLOCKED);
+
+        var now = monotonicClock.getAsLong();
+        if (shooter.lastShotTimestamp != null) {
+            var remainingMs = Rules.FIRE_INTERVAL_MS
+                    - elapsedMilliseconds(shooter.lastShotTimestamp, now);
+            if (remainingMs > 0) {
+                var retryAfterMs = Math.toIntExact((long) Math.ceil(remainingMs));
+                return new ActionRejected(Rules.FIRE_TOO_SOON, retryAfterMs);
+            }
         }
-        if (blocked) return Rules.BLOCKED;
+
         target.hp = Math.max(0, target.hp - Rules.DAMAGE);
         if (target.hp == 0) winner = id;
+        commitAcceptedAction(shooter, shot.sequence());
+        shooter.lastShotTimestamp = now;
         return null;
+    }
+
+    private static double elapsedMilliseconds(long startingTimestamp, long endingTimestamp) {
+        return Math.max(0, endingTimestamp - startingTimestamp) / 1_000_000.0;
+    }
+
+    private static boolean intersectsWall(
+            double ax, double ay, double bx, double by, Rules.Wall wall) {
+        if (ax == bx)
+            return ax == wall.x()
+                    && Math.max(ay, by) >= wall.minY()
+                    && Math.min(ay, by) <= wall.maxY();
+
+        var t = (wall.x() - ax) / (bx - ax);
+        var y = ay + t * (by - ay);
+        return t >= 0 && t <= 1 && y >= wall.minY() && y <= wall.maxY();
     }
 
     public List<PlayerView> view() {
-        return players.stream().map(p -> new PlayerView(p.playerId, p.x, p.y, p.hp)).toList();
+        return players.stream()
+                .map(player -> new PlayerView(
+                        player.playerId, player.x, player.y, player.hp, player.lastSequence))
+                .toList();
+    }
+
+    public List<String> playerIds() {
+        return players.stream().map(player -> player.playerId).toList();
+    }
+
+    public String phase() {
+        return winner == null ? Rules.PLAYING : Rules.FINISHED_PHASE;
+    }
+
+    public String winner() {
+        return winner;
+    }
+
+    public RoomSnapshot capture() {
+        var now = monotonicClock.getAsLong();
+        var snapshots = players.stream()
+                .map(player -> new CombatantSnapshot(
+                        player.playerId,
+                        player.x,
+                        player.y,
+                        player.hp,
+                        player.lastSequence,
+                        remainingMilliseconds(player.lastMoveTimestamp, MOVE_BUDGET_MS, now),
+                        remainingMilliseconds(
+                                player.lastShotTimestamp, Rules.FIRE_INTERVAL_MS, now)))
+                .toList();
+        return new RoomSnapshot(phase(), winner, List.copyOf(snapshots));
+    }
+
+    public void restore(RoomSnapshot snapshot) {
+        if (snapshot == null || snapshot.players() == null)
+            throw new IllegalArgumentException("Missing room state snapshot");
+        var expectedPhase = snapshot.winner() == null
+                ? Rules.PLAYING
+                : Rules.FINISHED_PHASE;
+        if (!expectedPhase.equals(snapshot.phase())
+                || snapshot.players().size() > Rules.PLAYERS)
+            throw new IllegalArgumentException("Invalid room state snapshot");
+
+        var now = monotonicClock.getAsLong();
+        players.clear();
+        for (var player : snapshot.players()) {
+            var restored = new Combatant(player.playerId(), player.x(), player.y());
+            restored.hp = player.hp();
+            restored.lastSequence = player.lastSequence();
+            restored.lastMoveTimestamp = restoreTimestamp(
+                    player.moveBudgetRemainingMs(), MOVE_BUDGET_MS, now);
+            restored.lastShotTimestamp = restoreTimestamp(
+                    player.fireCooldownRemainingMs(), Rules.FIRE_INTERVAL_MS, now);
+            players.add(restored);
+        }
+        winner = snapshot.winner();
+    }
+
+    private static Long remainingMilliseconds(Long lastTimestamp, long durationMs, long now) {
+        if (lastTimestamp == null) return null;
+        return Math.max(
+                0,
+                (long) Math.ceil(durationMs - elapsedMilliseconds(lastTimestamp, now)));
+    }
+
+    private static Long restoreTimestamp(Long remainingMilliseconds, long durationMs, long now) {
+        if (remainingMilliseconds == null) return null;
+        var boundedRemaining = Math.max(0, Math.min(durationMs, remainingMilliseconds));
+        var elapsedNanos = (long) Math.ceil((durationMs - boundedRemaining) * 1_000_000.0);
+        return now - elapsedNanos;
     }
 }

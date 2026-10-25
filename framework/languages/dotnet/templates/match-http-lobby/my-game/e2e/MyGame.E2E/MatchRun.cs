@@ -20,6 +20,7 @@ internal sealed class MatchRun(string root) : IAsyncDisposable
     private readonly List<string> containers = [];
     private bool composeStarted;
     private string redisEndpoint = "";
+    private ManagedProcess? lobbyProcess;
     private readonly Dictionary<string, (string Config, ManagedProcess Process)> matches = [];
     public string Endpoint { get; private set; } = "";
     public string LobbyEndpoint { get; private set; } = "";
@@ -59,6 +60,7 @@ internal sealed class MatchRun(string root) : IAsyncDisposable
             session.Ready.StreamEndpoint
             ?? throw new InvalidOperationException("Session stream endpoint was not published.");
         var lobby = await StartNodeAsync("lobby", "MyGame.Lobby", false, ct);
+        lobbyProcess = lobby.Process;
         LobbyEndpoint =
             lobby.Ready.HttpEndpoint
             ?? throw new InvalidOperationException("HTTP endpoint was not published.");
@@ -182,6 +184,18 @@ internal sealed class MatchRun(string root) : IAsyncDisposable
         await matches[nodeId].Process.StopAsync();
         var replacement = await StartNodeAsync(matches[nodeId].Config, "MyGame.Match", true, ct);
         matches[nodeId] = (matches[nodeId].Config, replacement.Process);
+    }
+
+    public async Task RestartLobbyAsync(CancellationToken ct)
+    {
+        if (lobbyProcess is null)
+            throw new InvalidOperationException("The HTTP lobby is not running.");
+        await lobbyProcess.StopAsync();
+        var lobby = await StartNodeAsync("lobby", "MyGame.Lobby", true, ct);
+        lobbyProcess = lobby.Process;
+        LobbyEndpoint =
+            lobby.Ready.HttpEndpoint
+            ?? throw new InvalidOperationException("HTTP endpoint was not published.");
     }
 
     public async ValueTask DisposeAsync()

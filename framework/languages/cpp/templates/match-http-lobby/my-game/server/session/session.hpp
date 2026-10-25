@@ -10,6 +10,21 @@ class Session final : public fx::packet_stream_session_t
     fx::actor_manager_t &actors_;
     fx::serializer_registry_t &serializers_;
 
+    static bool client_packet_allowed (std::string_view packet)
+    {
+        return packet == JoinRoomRequest::packet_name || packet == RoomViewRequest::packet_name
+               || packet == MoveRequest::packet_name || packet == ShootRequest::packet_name
+               || packet == SessionInfoRequest::packet_name;
+    }
+
+    static fx::task_t<void> reject_packet (fx::stream_t &stream)
+    {
+        const auto response =
+          zlink::message_t::from_json (ActionRejected{Rejection::packet_not_allowed});
+        co_await stream.write_packet (response).packet_name (ActionRejected::packet_name).async ();
+        co_return;
+    }
+
   public:
     Session (fx::actor_manager_t &actors, fx::serializer_registry_t &serializers) :
         actors_ (actors), serializers_ (serializers)
@@ -26,10 +41,16 @@ class Session final : public fx::packet_stream_session_t
                                 const fx::session_message_context_t &dispatch,
                                 const zlink::message_t &payload) override
     {
+        if (!client_packet_allowed (dispatch.packet_name)) {
+            co_await reject_packet (stream);
+            co_return;
+        }
         auto bound = stream.actors ().bound ();
         if (bound.empty ()) {
-            if (dispatch.packet_name != JoinRoomRequest::packet_name)
-                throw std::invalid_argument ("JoinRoomRequest must be first");
+            if (dispatch.packet_name != JoinRoomRequest::packet_name) {
+                co_await reject_packet (stream);
+                co_return;
+            }
             const auto request = serializers_.get<JoinRoomRequest> ().deserialize (
               fx::encoded_payload_t::from_bytes (payload.bytes ()));
             const auto ensured =

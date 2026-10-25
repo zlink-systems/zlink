@@ -15,7 +15,9 @@ class Player final : public fx::actor_t
     fx::task_t<void> on_join_completed (const fx::actor_join_completion_t &completion) override
     {
         if (std::holds_alternative<fx::actor_join_rejected_t> (completion))
-            co_await context_.bound_session ().send (ActionRejected{Rejection::admission}).async ();
+            co_await context_.bound_session ()
+              .send (ActionRejected{Rejection::admission_rejected})
+              .async ();
         else if (!std::holds_alternative<fx::actor_join_accepted_t> (completion))
             throw std::runtime_error ("Room join failed");
     }

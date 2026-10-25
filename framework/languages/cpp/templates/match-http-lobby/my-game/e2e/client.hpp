@@ -1,6 +1,7 @@
 #pragma once
 #include "world.hpp"
 #include <zlink/stream_connector.hpp>
+#include <type_traits>
 #include <variant>
 namespace MyGame::E2E
 {
@@ -18,10 +19,11 @@ inline void checked (sc::result_t<void> result)
 }
 class Client
 {
-    using Event = std::variant<RoomView, SessionInfo, ShotRejected, ActionRejected, MatchEnded>;
+    using Event = std::variant<RoomView, SessionInfo, ActionRejected, MatchEnded, MoveResult, ShotResult>;
     std::mutex mutex_;
     std::condition_variable changed_;
     std::vector<Event> events_;
+    std::vector<bool> consumed_;
     std::string error_;
     sc::connector_t connector_;
     std::vector<sc::subscription_t> subscriptions_;
@@ -31,6 +33,7 @@ class Client
             {
                 std::lock_guard lock (mutex_);
                 events_.emplace_back (message.payload);
+                consumed_.push_back (false);
             }
             changed_.notify_all ();
         }));
@@ -47,8 +50,9 @@ class Client
         options.dispatch_mode = sc::dispatch_mode_t::immediate;
         connector_ = sc::connector_factory_t::create (options);
         observe<RoomView> ();
+        observe<MoveResult> ();
+        observe<ShotResult> ();
         observe<SessionInfo> ();
-        observe<ShotRejected> ();
         observe<ActionRejected> ();
         observe<MatchEnded> ();
         subscriptions_.push_back (connector_.on_error ([this] (const auto &error) {
@@ -78,12 +82,17 @@ class Client
         std::optional<T> found;
         auto find = [&] {
             for (auto i = from; i < events_.size (); ++i) {
+                if (consumed_[i])
+                    continue;
                 if (const auto *value = std::get_if<T> (&events_[i]); value && predicate (*value)) {
                     found = *value;
+                    if constexpr (std::is_same_v<T, ActionRejected>)
+                        consumed_[i] = true;
                     return true;
                 }
-                if (const auto *error = std::get_if<ActionRejected> (&events_[i]))
-                    throw std::runtime_error ("Action rejected: " + error->reason);
+                if constexpr (!std::is_same_v<T, ActionRejected>)
+                    if (const auto *error = std::get_if<ActionRejected> (&events_[i]))
+                        throw std::runtime_error ("Action rejected: " + error->reason);
             }
             return !error_.empty ();
         };
@@ -97,6 +106,34 @@ class Client
     template <class T> T receive (std::size_t from)
     {
         return receive<T> (from, [] (const T &) { return true; });
+    }
+    template <class Predicate> std::variant<RoomView, ActionRejected>
+    receive_action (std::size_t from, Predicate predicate)
+    {
+        std::unique_lock lock (mutex_);
+        std::optional<std::variant<RoomView, ActionRejected>> found;
+        auto find = [&] {
+            for (auto i = from; i < events_.size (); ++i) {
+                if (consumed_[i])
+                    continue;
+                if (const auto *rejected = std::get_if<ActionRejected> (&events_[i])) {
+                    found = *rejected;
+                    consumed_[i] = true;
+                    return true;
+                }
+                if (const auto *view = std::get_if<RoomView> (&events_[i]);
+                    view && predicate (*view)) {
+                    found = *view;
+                    return true;
+                }
+            }
+            return !error_.empty ();
+        };
+        require (changed_.wait_for (lock, Limits::packet, find), "Packet deadline: action outcome");
+        require (found.has_value (), "Connector error: " + error_);
+        lock.unlock ();
+        healthy ();
+        return *found;
     }
     template <class T> void send (const T &message)
     {

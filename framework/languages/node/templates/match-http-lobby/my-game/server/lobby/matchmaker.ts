@@ -1,15 +1,18 @@
+import { randomUUID } from 'node:crypto';
 import { Names } from '../shared/constants';
 import { MatchRequest, MatchResponse } from '../shared/messages';
 export class InvalidMatchRequest extends TypeError {}
 interface Waiting {
+  playerId: string;
   resolve(value: MatchResponse): void;
   reject(error: unknown): void;
 }
 export class Matchmaker {
   private readonly queues = new Map<string, Waiting>();
   private readonly participants = new Set<string>();
-  private sequence = 0;
-  constructor(private readonly prepare: (roomId: string) => Promise<MatchResponse>) {}
+  constructor(
+    private readonly prepare: (roomId: string, members: string[]) => Promise<MatchResponse>
+  ) {}
   async match(request: MatchRequest, signal: AbortSignal): Promise<MatchResponse> {
     if (
       typeof request.playerId !== 'string' ||
@@ -29,8 +32,8 @@ export class Matchmaker {
       if (partner) {
         this.queues.delete(request.mode);
         try {
-          if (!Number.isSafeInteger(this.sequence + 1)) throw new Error('Room sequence exhausted');
-          const assignment = await this.prepare(Names.roomPrefix + ++this.sequence);
+          const roomId = Names.roomPrefix + randomUUID().replaceAll('-', '');
+          const assignment = await this.prepare(roomId, [partner.playerId, request.playerId]);
           partner.resolve(assignment);
           signal.throwIfAborted();
           return assignment;
@@ -40,7 +43,7 @@ export class Matchmaker {
         }
       }
       return await new Promise<MatchResponse>((resolve, reject) => {
-        waiting = { resolve, reject };
+        waiting = { playerId: request.playerId, resolve, reject };
         this.queues.set(request.mode, waiting);
         cancel = () => reject(signal.reason);
         signal.addEventListener('abort', cancel, { once: true });

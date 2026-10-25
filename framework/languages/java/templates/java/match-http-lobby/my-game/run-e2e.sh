@@ -18,7 +18,7 @@ cd "$ROOT"
 mkdir -p "$ROOT/.logs"
 if $local_mode; then
   if ! $no_build; then
-    if ! ./gradlew --no-daemon installDist :e2e:javaHome >"$ROOT/.logs/build.log" 2>&1; then
+    if ! ./gradlew --no-daemon test installDist :e2e:javaHome >"$ROOT/.logs/build.log" 2>&1; then
       tail -n 35 "$ROOT/.logs/build.log" >&2
       exit 1
     fi
@@ -76,6 +76,12 @@ $build_only && exit 0
 "${compose[@]}" run --rm --no-deps -T --name "$project-check" runner --check-structure
 for argument in "${arguments[@]}"; do
   [[ "$argument" == "--check-structure" ]] && exit 0
+done
+for argument in "${arguments[@]}"; do
+  if [[ "$argument" == "--check-domain" ]]; then
+    "${compose[@]}" run --rm --no-deps -T --name "$project-domain" runner --check-domain
+    exit $?
+  fi
 done
 "${compose[@]}" up -d --wait --wait-timeout 30 redis >"$logs/redis-start.log" 2>&1
 "${compose[@]}" run --rm --no-deps -T --name "$project-control" runner "${arguments[@]}"

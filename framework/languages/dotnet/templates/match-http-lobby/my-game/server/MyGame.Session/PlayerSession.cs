@@ -28,12 +28,19 @@ public sealed class PlayerSession(IZLinkSessionContext context, IZLinkActorManag
         CancellationToken cancellationToken
     )
     {
+        if (!IsClientPacketAllowed(dispatch.PacketName))
+        {
+            await RejectPacketAsync();
+            return;
+        }
+
         if (Context.Actors.Bound.Count == 0)
         {
             if (dispatch.PacketName != nameof(JoinRoomRequest))
-                throw new InvalidOperationException(
-                    "JoinRoomRequest must be the first player packet."
-                );
+            {
+                await RejectPacketAsync();
+                return;
+            }
 
             var join = payload.Decode<JoinRoomRequest>();
             var result = await actors
@@ -63,5 +70,18 @@ public sealed class PlayerSession(IZLinkSessionContext context, IZLinkActorManag
 
         // Relaying the original packet establishes the authoritative actor's session route.
         await Context.Actors.Bound.Single().RelayAsync(payload);
+    }
+
+    private static bool IsClientPacketAllowed(string packetName) =>
+        packetName is nameof(JoinRoomRequest)
+            or nameof(RoomViewRequest)
+            or nameof(MoveRequest)
+            or nameof(ShootRequest)
+            or nameof(SessionInfoRequest);
+
+    private ValueTask RejectPacketAsync()
+    {
+        var rejection = new ActionRejected(Rejection.PacketNotAllowed);
+        return Context.Client.Send(rejection).Async();
     }
 }

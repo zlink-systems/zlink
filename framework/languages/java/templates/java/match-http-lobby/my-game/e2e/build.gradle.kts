@@ -1,5 +1,10 @@
 plugins { application }
-dependencies { implementation(project(":server:shared")); implementation("systems.zlink:zlink-stream-connector:${rootProject.extra["frameworkVersion"]}") }
+dependencies {
+    implementation(project(":server:shared"))
+    implementation(project(":server:match"))
+    implementation(project(":server:lobby"))
+    implementation("systems.zlink:zlink-stream-connector:${rootProject.extra["frameworkVersion"]}")
+}
 application {
     mainClass.set("MyGame.e2e.Program")
     applicationDefaultJvmArgs = listOf("--enable-native-access=ALL-UNNAMED")

@@ -124,6 +124,19 @@ public final class Nodes implements AutoCloseable {
         startNode(id);
     }
 
+    String restartLobby() throws Exception {
+        String id =
+                modules.entrySet().stream()
+                        .filter(entry -> entry.getValue().equals("lobby"))
+                        .map(Map.Entry::getKey)
+                        .findFirst()
+                        .orElseThrow(() -> new IllegalStateException("HTTP lobby is missing"));
+        nodes.get(id).stop();
+        var ready = startNode(id);
+        lobbyEndpoint = ready.path("httpEndpoint").asText();
+        return lobbyEndpoint;
+    }
+
     public void close() throws Exception {
         Exception failure = null;
         for (var node : new ArrayList<>(nodes.values()).reversed())

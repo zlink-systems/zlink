@@ -23,7 +23,7 @@ int main (int argc, char **argv)
                 selection = argv[++i];
             else
                 throw std::invalid_argument ("Usage: my-game-e2e [--root path] [--scenario "
-                                             "lobby,hit,reconnect,update] [--check-structure]");
+                                             "lobby,hit,wall,input,reconnect,update] [--check-structure]");
         }
         MyGame::E2E::check_structure (root);
         if (check_only) {
@@ -62,6 +62,12 @@ int main (int argc, char **argv)
                     break;
                 case MyGame::E2E::Scenario::hit:
                     MyGame::E2E::hit (endpoint, *world);
+                    break;
+                case MyGame::E2E::Scenario::wall:
+                    MyGame::E2E::wall (endpoint, *world);
+                    break;
+                case MyGame::E2E::Scenario::input:
+                    MyGame::E2E::input (endpoint, *world);
                     break;
                 case MyGame::E2E::Scenario::reconnect:
                     MyGame::E2E::reconnect (endpoint, *world);

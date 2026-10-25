@@ -1,9 +1,12 @@
 #pragma once
 #include "server/shared/http.hpp"
 #include "server/shared/hosting.hpp"
+#include <algorithm>
 #include <functional>
 #include <map>
 #include <set>
+#include <boost/uuid/uuid_generators.hpp>
+#include <boost/uuid/uuid_io.hpp>
 namespace MyGame
 {
 // All lobby queue and HTTP socket state belongs to this single IO executor.
@@ -37,7 +40,7 @@ class HttpLobby final : public fx::hosted_service_t
     Tcp::acceptor acceptor_;
     std::thread worker_;
     const NodeConfig &config_;
-    std::function<MatchResponse (const std::string &)> prepare_;
+    std::function<MatchResponse (const std::string &, const std::vector<std::string> &)> prepare_;
     struct Waiting
     {
         std::string player;
@@ -45,7 +48,6 @@ class HttpLobby final : public fx::hosted_service_t
     };
     std::map<std::string, Waiting> queues_;
     std::set<std::string> participants_;
-    std::uint64_t sequence_ = 0;
     void watch_waiter (const std::string &mode, const std::shared_ptr<Connection> &connection)
     {
         connection->stream.expires_never ();
@@ -93,12 +95,15 @@ class HttpLobby final : public fx::hosted_service_t
             partner = found->second.connection;
             boost::system::error_code ignored;
             partner->stream.socket ().cancel (ignored);
+            const auto partner_player = found->second.player;
             participants_.erase (found->second.player);
             queues_.erase (found);
-            if (sequence_ == std::numeric_limits<std::uint64_t>::max ())
-                throw std::overflow_error ("Room sequence exhausted");
-            const auto room = std::string (Names::room_prefix) + std::to_string (++sequence_);
-            const nlohmann::json assignment = prepare_ (room);
+            auto room_uuid = boost::uuids::to_string (boost::uuids::random_generator{} ());
+            room_uuid.erase (std::remove (room_uuid.begin (), room_uuid.end (), '-'),
+                             room_uuid.end ());
+            const auto room = std::string (Names::room_prefix) + room_uuid;
+            const std::vector<std::string> members{partner_player, player};
+            const nlohmann::json assignment = prepare_ (room, members);
             partner->reply (http::status::ok, assignment);
             connection->reply (http::status::ok, assignment);
         }
@@ -146,7 +151,7 @@ class HttpLobby final : public fx::hosted_service_t
     {
     }
     HttpLobby (const NodeConfig &config,
-               std::function<MatchResponse (const std::string &)> prepare) :
+               std::function<MatchResponse (const std::string &, const std::vector<std::string> &)> prepare) :
         HttpLobby (config)
     {
         prepare_ = std::move (prepare);
@@ -160,12 +165,20 @@ class HttpLobby final : public fx::hosted_service_t
     fx::task_t<void> start (fx::service_provider_t &services) override
     {
         auto &spots = services.get_required<fx::spot_manager_t> ();
-        prepare_ = [this, &spots] (const std::string &room) {
+        auto &routes = services.get_required<fx::route_client_t> ();
+        prepare_ = [this, &spots, &routes] (const std::string &room,
+                                            const std::vector<std::string> &members) {
             const auto created =
               await_host (spots.get_or_create (room, Names::room).in_mesh (Names::mesh).async (),
                           Limits::packet);
             if (created.state == fx::spot_create_state_t::rejected)
                 throw std::runtime_error ("Room preparation rejected");
+            const auto prepared = await_host (
+              routes.request_to_spot (room, PrepareRoom{room, members})
+                .async<RoomPrepared> (),
+              Limits::packet);
+            if (prepared.matchId != room)
+                throw std::runtime_error ("Prepared Room identity differs from the match");
             return MatchResponse{room, config_.SessionEndpoint};
         };
         start_io ();
