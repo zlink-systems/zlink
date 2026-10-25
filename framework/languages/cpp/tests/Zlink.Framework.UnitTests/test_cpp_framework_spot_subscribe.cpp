@@ -153,7 +153,7 @@ TEST_F (SpotSubscribe, ClosedTurnDoesNotEnterApplicationHandler)
     auto submitted = detail::spot_node_runtime_t (node).dispatch_subscription (
       context, "closed-turn", parts.items (), provider, serializers,
       [&] { handler_entries.fetch_add (1, std::memory_order_relaxed); });
-    node->lane.run ([this] { state->closed = true; }).get ();
+    node->lane.run ([this] { state->closed = fw::spot_close_reason_t::explicit_close; }).get ();
     // The admitted turn must observe the closed incarnation before handler entry.
     release_on_exit.reset ();
     ASSERT_TRUE (submitted);

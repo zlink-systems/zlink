@@ -154,6 +154,8 @@ public sealed class ActivationReadyTests
             Assert.False(serial.IsPreparing);
             Assert.Equal(0, admission.Active);
             Assert.False(await probe.Close.WaitAsync(Timeout));
+            Assert.Equal(0, await node.Catalog.CloseTransactionCountAsync());
+            Assert.Equal(0, await catalog.CloseTransactionCountAsync());
             Assert.True(probe.Timer!.IsDisposed);
             try
             {

@@ -270,6 +270,18 @@ export interface ZLinkExecutionBarrierSeal {
   readonly kind: 'close' | 'relocation' | 'activation';
 }
 
+function createExecutionBarrierAdmissionException(
+  seal: ZLinkExecutionBarrierSeal,
+  message: string
+) {
+  return createInternalFrameworkException(
+    seal.kind === 'close'
+      ? ZLinkFrameworkInternalErrorKind.RequestTargetNotFound
+      : ZLinkFrameworkInternalErrorKind.SpotMoving,
+    message
+  );
+}
+
 export interface ZLinkExecutionBarrierClaim {
   release(): void;
   /** The turn yielded; it no longer runs until resume() admits it again. */
@@ -308,20 +320,12 @@ export class ZLinkExecutionBarrier {
 
   enter(): ZLinkExecutionBarrierClaim | Promise<ZLinkExecutionBarrierClaim> {
     if (this.committedSeal !== undefined) {
-      throw createInternalFrameworkException(
-        this.committedSeal.kind === 'close'
-          ? ZLinkFrameworkInternalErrorKind.RequestRejected
-          : ZLinkFrameworkInternalErrorKind.SpotMoving,
+      throw createExecutionBarrierAdmissionException(
+        this.committedSeal,
         'ZLink execution barrier is committed.'
       );
     }
     if (this.currentSeal !== undefined) {
-      if (this.currentSeal.kind === 'close') {
-        throw createInternalFrameworkException(
-          ZLinkFrameworkInternalErrorKind.RequestRejected,
-          'ZLink execution barrier is sealed for Close.'
-        );
-      }
       return new Promise<ZLinkExecutionBarrierClaim>((resolve, reject) => {
         this.admissionWaiters.push({ resolve, reject });
       });
@@ -400,10 +404,8 @@ export class ZLinkExecutionBarrier {
     if (!this.isCurrent(seal)) return false;
     this.currentSeal = undefined;
     this.committedSeal = seal;
-    const error = createInternalFrameworkException(
-      seal.kind === 'close'
-        ? ZLinkFrameworkInternalErrorKind.RequestRejected
-        : ZLinkFrameworkInternalErrorKind.SpotMoving,
+    const error = createExecutionBarrierAdmissionException(
+      seal,
       'ZLink execution barrier is committed.'
     );
     for (const waiter of this.admissionWaiters) waiter.reject(error);

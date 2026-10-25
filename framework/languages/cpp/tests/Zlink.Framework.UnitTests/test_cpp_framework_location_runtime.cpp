@@ -592,7 +592,7 @@ class startup_owner_lease_repository_t final : public in_memory_location_reposit
     enum class claim_mode_t
     {
         fail_first,
-        delay_first,
+        hold_first,
         commit_then_fail,
         never_complete,
         generation_exhausted,
@@ -607,10 +607,16 @@ class startup_owner_lease_repository_t final : public in_memory_location_reposit
 
     void set_claim_mode (claim_mode_t mode) { _claim_mode = mode; }
 
-    void delay_first_claim (std::chrono::milliseconds delay)
+    void hold_first_claim () { _claim_mode = claim_mode_t::hold_first; }
+
+    // Commits the held first claim from another thread, as a late provider reply would.
+    void release_first_claim ()
     {
-        _claim_mode = claim_mode_t::delay_first;
-        _claim_delay = delay;
+        _delayed_claim = std::thread ([this] {
+            auto committed = in_memory_location_repository_t::claim_owner_lease (
+              std::move (_held_owner_id), _held_lease_ttl);
+            _held_claim->complete (committed.result ());
+        });
     }
 
     void cancel_after_next_claim (std::stop_source &cancellation) { _cancellation = &cancellation; }
@@ -663,18 +669,12 @@ class startup_owner_lease_repository_t final : public in_memory_location_reposit
                 zlink::framework::framework_error_kind_t::unavailable,
                 "injected owner lease provider failure"));
         }
-        if (_claim_mode == claim_mode_t::delay_first && call == 0) {
-            auto completion = std::make_shared<zlink::framework::task_completion_source_t<
+        if (_claim_mode == claim_mode_t::hold_first && call == 0) {
+            _held_claim = std::make_shared<zlink::framework::task_completion_source_t<
               zlink::framework::owner_lease_claim_result_t>> ();
-            auto pending = completion->task ();
-            _delayed_claim = std::thread (
-              [this, completion, owner_id = std::move (owner_id), lease_ttl] () mutable {
-                  std::this_thread::sleep_for (_claim_delay);
-                  auto committed = in_memory_location_repository_t::claim_owner_lease (
-                    std::move (owner_id), lease_ttl);
-                  completion->complete (committed.result ());
-              });
-            return pending;
+            _held_owner_id = std::move (owner_id);
+            _held_lease_ttl = lease_ttl;
+            return _held_claim->task ();
         }
         if (_claim_mode == claim_mode_t::commit_then_fail) {
             in_memory_location_repository_t::claim_owner_lease (std::move (owner_id), lease_ttl)
@@ -732,8 +732,12 @@ class startup_owner_lease_repository_t final : public in_memory_location_reposit
   private:
     claim_mode_t _claim_mode = claim_mode_t::fail_first;
     std::stop_source *_cancellation = nullptr;
-    std::chrono::milliseconds _claim_delay{0};
     std::thread _delayed_claim;
+    std::shared_ptr<
+      zlink::framework::task_completion_source_t<zlink::framework::owner_lease_claim_result_t>>
+      _held_claim;
+    std::string _held_owner_id;
+    std::chrono::milliseconds _held_lease_ttl{0};
     std::shared_ptr<
       zlink::framework::task_completion_source_t<zlink::framework::owner_lease_claim_result_t>>
       _pending_claim;
@@ -901,7 +905,7 @@ TEST (ZLinkFrameworkLocationRuntime, RecordsInitialClaimConfirmationReadFailure)
 TEST (ZLinkFrameworkLocationRuntime, InstallsLateCommittedClaimAfterHeartbeatConflict)
 {
     startup_owner_lease_repository_t store;
-    store.delay_first_claim (std::chrono::milliseconds (50));
+    store.hold_first_claim ();
     const auto renew_timeout = std::chrono::milliseconds (20);
     location_runtime_t runtime (
       store,
@@ -910,14 +914,13 @@ TEST (ZLinkFrameworkLocationRuntime, InstallsLateCommittedClaimAfterHeartbeatCon
                          .owner_lease_renew_timeout = renew_timeout},
       "owner-a");
 
-    const auto started_at = std::chrono::steady_clock::now ();
+    // The first claim stays pending, so start() returns only through the renew timeout.
     runtime.start (zlink::routing_id_t::from ("node-a"));
-    const auto startup_duration = std::chrono::steady_clock::now () - started_at;
 
-    EXPECT_LT (startup_duration, renew_timeout + std::chrono::milliseconds (60));
     EXPECT_FALSE (runtime.owner_lease_healthy ());
     EXPECT_FALSE (runtime.current_owner_token ().has_value ());
 
+    store.release_first_claim ();
     for (int attempt = 0; attempt != 250 && !runtime.current_owner_token (); ++attempt)
         std::this_thread::sleep_for (std::chrono::milliseconds (1));
     EXPECT_EQ (0, store.release_calls ());
