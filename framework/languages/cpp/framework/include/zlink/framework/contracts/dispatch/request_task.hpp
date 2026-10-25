@@ -53,6 +53,29 @@ template <typename T> struct request_receiver_t
     std::shared_ptr<task_completion_source_t<void>> admitted;
     std::function<void (const result_t<T> &)> complete;
     request_failure_receiver_t fail;
+
+    // Admission can end the public wait while the physical receiver remains
+    // registered. Its completion source keeps the first admission result.
+    void admit (result_t<void> result = result_t<void>::success ())
+    {
+        if (!admitted) {
+            admitted = std::make_shared<task_completion_source_t<void>> ();
+            fail.bind_admission (admitted);
+        }
+        admitted->complete (std::move (result));
+    }
+
+    // A rejected submission or physical terminal also ends the physical reply.
+    // Both reply sources retain their first result through existing completion.
+    auto reject (std::exception_ptr failure)
+    {
+        admit (result_access_t::failure<void> (failure));
+        fail (std::move (failure));
+        return admitted;
+    }
+
+    // Exception paths retain publication rights without copying the codec closure.
+    request_receiver_t rejection_receiver () const { return {admitted, {}, fail}; }
 };
 
 struct prepared_request_t

@@ -635,7 +635,16 @@ TEST (RequestCallAllocations, AdmissionFailureEndsThePublicReplyBeforeThePhysica
 {
     for (const bool channel_request : {false, true}) {
         fw::serializer_registry_t serializers;
-        add_payload (serializers);
+        unsigned decoded = 0;
+        serializers.add<payload_t> (
+          [] (const payload_t &payload) {
+              return fw::encoded_payload_t::from_string (std::to_string (payload.value));
+          },
+          [&] (const fw::encoded_payload_t &payload) {
+              ++decoded;
+              return payload_t{std::stoi (payload.to_string ())};
+          },
+          "x/y");
         auto builder = fw::test::runtime_failure_builder ();
         auto runtime = fw::detail::channel_runtime_t::from (builder.message_bus ());
         runtime.bind_serializers (serializers);
@@ -660,16 +669,28 @@ TEST (RequestCallAllocations, AdmissionFailureEndsThePublicReplyBeforeThePhysica
         auto admission = pending.admitted ();
         EXPECT_FALSE (pending.await_ready ());
         EXPECT_FALSE (admission.await_ready ());
-        EXPECT_TRUE (admitted->complete (fw::result_t<void>::failure (
-          fw::framework_error_kind_t::unavailable, "admission refused")));
+        const auto failure = fw::result_t<void>::failure (fw::framework_error_kind_t::unavailable,
+                                                          "admission refused");
+        EXPECT_TRUE (admitted->complete (failure));
         ASSERT_TRUE (pending.await_ready ());
         EXPECT_EQ (pending.result ().error_kind (), fw::framework_error_kind_t::unavailable);
         ASSERT_NE (pending.result ().error (), nullptr);
         EXPECT_STREQ (pending.result ().error ()->what (), "admission refused");
-        EXPECT_EQ (admission.result ().error_kind (), fw::framework_error_kind_t::unavailable);
+        EXPECT_EQ (admission.result ().exception (), failure.exception ());
+        EXPECT_EQ (pending.result ().exception (), failure.exception ());
+        EXPECT_FALSE (admitted->complete (fw::result_t<void>::success ()));
+        EXPECT_EQ (admission.result ().exception (), failure.exception ());
+        EXPECT_EQ (decoded, 0u);
         EXPECT_TRUE (physical.complete (
           fw::result_t<transport_reply_t>::success (transport_reply_t::success (reply_parts (5)))));
-        EXPECT_EQ (pending.result ().error_kind (), fw::framework_error_kind_t::unavailable);
+        EXPECT_EQ (decoded, 1u);
+        EXPECT_EQ (pending.result ().exception (), failure.exception ());
+        const auto later = transport_reply_t::failure (
+          fw::framework_error_kind_t::deadline_exceeded, "late physical failure");
+        EXPECT_FALSE (physical.complete (fw::result_t<transport_reply_t>::success (later)));
+        EXPECT_EQ (decoded, 1u);
+        EXPECT_EQ (pending.result ().exception (), failure.exception ());
+        EXPECT_EQ (admission.result ().exception (), failure.exception ());
     }
 }
 // A rejected raw request has no pending admission and returns only its
@@ -915,9 +936,7 @@ TEST (RequestCallAllocations, AppClassifiedNodeFailureAddsNoTransportReplyState)
           fw::detail::request_receiver_t<fw::runtime::messaging::message_parts_t> receiver) {
           auto failure = fw::result_t<fw::runtime::messaging::message_parts_t>::failure (
             fw::framework_error_kind_t::not_found, "MeshNode request target was not found");
-          receiver.admitted->complete (
-            fw::detail::result_access_t::failure<void> (failure.exception ()));
-          receiver.complete (failure);
+          receiver.reject (failure.exception ());
       });
     auto reference = builder.route_client (serializers);
     const auto target_bytes = sample_allocations ([&] { (void) target.to_bytes (); });

@@ -224,17 +224,13 @@ class channel_request_call_t
         }
         auto prepared =
           detail::request_task_access_t::prepare<TReply, zlink::message_t> (std::move (project));
-        const auto fail = prepared.second.fail;
+        auto rejected = prepared.second.rejection_receiver ();
         std::shared_ptr<task_completion_source_t<void>> admitted;
         try {
             admitted = _submit (_packet_name, _timeout, _metadata, std::move (prepared.second));
         }
         catch (...) {
-            const auto failure = std::current_exception ();
-            admitted = std::make_shared<task_completion_source_t<void>> ();
-            fail.bind_admission (admitted);
-            admitted->complete (detail::result_access_t::failure<void> (failure));
-            fail (failure);
+            admitted = rejected.reject (std::current_exception ());
         }
         detail::request_task_access_t::connect_admission (prepared.first, std::move (admitted));
         return std::move (prepared.first);

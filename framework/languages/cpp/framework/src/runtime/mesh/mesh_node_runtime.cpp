@@ -4284,15 +4284,12 @@ void mesh_node_runtime_t::submit_node_request_reply (
   std::chrono::milliseconds timeout,
   request_receiver_t<runtime::messaging::message_parts_t> receiver)
 {
-    const auto admitted = receiver.admitted;
-    const auto fail = receiver.fail;
+    auto rejected = receiver.rejection_receiver ();
     try {
         dispatch_node_request (
           target,
           [&] (zlink::submit_result_t submitted) {
-              auto failure = node_submission_failure (submitted);
-              receiver.admitted->complete (result_access_t::failure<void> (failure.exception ()));
-              receiver.complete (std::move (failure));
+              receiver.reject (node_submission_failure (submitted).exception ());
           },
           [&] {
               start_node_request_reply (target, std::move (parts), timeout, std::move (receiver));
@@ -4304,9 +4301,7 @@ void mesh_node_runtime_t::submit_node_request_reply (
           });
     }
     catch (...) {
-        const auto failure = std::current_exception ();
-        admitted->complete (result_access_t::failure<void> (failure));
-        fail (failure);
+        rejected.reject (std::current_exception ());
     }
 }
 
@@ -4317,54 +4312,41 @@ void mesh_node_runtime_t::start_request_reply (
   std::string_view operation_name,
   TFailure submission_failure)
 {
-    const auto admitted = receiver.admitted;
-    auto fail = std::move (receiver.fail);
+    auto rejected = receiver.rejection_receiver ();
     try {
-        auto start = submit ([admitted, complete = std::move (receiver.complete), operation_name] (
+        auto start = submit ([receiver = std::move (receiver), operation_name] (
                                result_t<host::operation_completion_t> completed) mutable {
-            auto failure = request_completion_failure (completed, operation_name);
-            if (failure)
-                admitted->complete (result_access_t::failure<void> (failure));
-            complete (failure
-                        ? result_access_t::failure<runtime::messaging::message_parts_t> (failure)
-                        : node_reply_t::success (runtime::messaging::message_parts_t (
-                            std::move (completed.value ().parts))));
+            if (auto failure = request_completion_failure (completed, operation_name))
+                receiver.reject (std::move (failure));
+            else
+                receiver.complete (node_reply_t::success (
+                  runtime::messaging::message_parts_t (std::move (completed.value ().parts))));
         });
-        // Without registration, start has already fixed the submit failure and
-        // no registry callback can own the physical result.
+        // Without registration, no registry callback can own the physical result.
         if (!start.registered) {
             const auto &submitted = start.admission.result ();
-            const auto failure = submitted
-                                   ? submission_failure (submitted.value ())
-                                   : result_access_t::failure<runtime::messaging::message_parts_t> (
-                                       submitted.exception ());
-            admitted->complete (result_access_t::failure<void> (failure.exception ()));
-            fail (failure.exception ());
+            rejected.reject (submitted ? submission_failure (submitted.value ()).exception ()
+                                       : submitted.exception ());
             return;
         }
         try {
             observe_task_terminal (
-              start.admission,
-              [admitted, submission_failure] (const result_t<zlink::submit_result_t> &submitted) {
-                  if (submitted && submitted.value () == zlink::submit_result_t::ok) {
-                      admitted->complete (result_t<void>::success ());
-                      return;
-                  }
-                  const auto failure =
-                    submitted ? submission_failure (submitted.value ())
-                              : result_access_t::failure<runtime::messaging::message_parts_t> (
-                                  submitted.exception ());
-                  admitted->complete (result_access_t::failure<void> (failure.exception ()));
+              start.admission, [rejected, submission_failure] (
+                                 const result_t<zlink::submit_result_t> &submitted) mutable {
+                  if (submitted && submitted.value () == zlink::submit_result_t::ok)
+                      rejected.admit ();
+                  else
+                      rejected.admit (result_access_t::failure<void> (
+                        submitted ? submission_failure (submitted.value ()).exception ()
+                                  : submitted.exception ()));
               });
         }
         catch (...) {
-            admitted->complete (result_access_t::failure<void> (std::current_exception ()));
+            rejected.admit (result_access_t::failure<void> (std::current_exception ()));
         }
     }
     catch (...) {
-        const auto failure = std::current_exception ();
-        admitted->complete (result_access_t::failure<void> (failure));
-        fail (failure);
+        rejected.reject (std::current_exception ());
     }
 }
 
@@ -4421,8 +4403,7 @@ task_t<void> mesh_node_runtime_t::submit_unknown_node_request_reply (
           result
             ? node_submission_failure (*result.value ())
             : result_access_t::failure<runtime::messaging::message_parts_t> (result.exception ());
-        receiver.admitted->complete (result_access_t::failure<void> (failure.exception ()));
-        receiver.complete (std::move (failure));
+        receiver.reject (failure.exception ());
         co_return;
     }
     // Classification is complete; the same source submission owns registration.

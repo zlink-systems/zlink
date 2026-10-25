@@ -1743,12 +1743,7 @@ route_client_t::submit_request_reply_message_erased (
     const auto admitted = std::make_shared<task_completion_source_t<void>> ();
     receiver.admitted = admitted;
     receiver.fail.bind_admission (admitted);
-    const auto fail_reply = receiver.fail;
-    auto fail = [&] (result_t<zlink::message_t> result) {
-        admitted->complete (detail::result_access_t::failure<void> (result.exception ()));
-        fail_reply (result.exception ());
-        return admitted;
-    };
+    auto rejected = receiver.rejection_receiver ();
     try {
         // Retain the runtime through the physical reply conversion.
         const auto state = state_ref;
@@ -1758,22 +1753,27 @@ route_client_t::submit_request_reply_message_erased (
                                   : message_flow_log_mode_t::off);
         const auto ambient_context = detail::capture_ambient_context ();
         if (!state || !state->runtime || state->serializers == nullptr) {
-            return fail (result_t<zlink::message_t>::failure (
-              framework_error_kind_t::protocol_error, "route client is not configured"));
+            return rejected.reject (
+              result_t<zlink::message_t>::failure (framework_error_kind_t::protocol_error,
+                                                   "route client is not configured")
+                .exception ());
         }
         runtime::messaging::message_parts_t parts;
         auto transport = detail::resolve_node_transport (state->runtime, router_channel_id);
         if (!transport)
-            return fail (detail::propagate_failure<zlink::message_t> (
-              transport, "node transport lookup failed"));
+            return rejected.reject (detail::propagate_failure<zlink::message_t> (
+                                      transport, "node transport lookup failed")
+                                      .exception ());
         const auto route =
           std::get_if<std::shared_ptr<detail::route_channel_runtime_t>> (&transport.value ());
         const auto mesh = std::get_if<detail::channel_runtime_state_t::mesh_node_transport_ptr_t> (
           &transport.value ());
         if (!route && !mesh) {
-            return fail (result_t<zlink::message_t>::failure (
-              framework_error_kind_t::unavailable,
-              "route channel or MeshNode '" + router_channel_id + "' is not registered"));
+            return rejected.reject (
+              result_t<zlink::message_t>::failure (framework_error_kind_t::unavailable,
+                                                   "route channel or MeshNode '" + router_channel_id
+                                                     + "' is not registered")
+                .exception ());
         }
         // Move the coroutine parameter's existing target storage to a stable owner:
         // selected transports may borrow this address until physical completion.
@@ -1811,7 +1811,8 @@ route_client_t::submit_request_reply_message_erased (
               codec.encode_payload_parts (std::move (header), encode_payload (*state->serializers));
         }
         catch (const framework_exception_t &error) {
-            return fail (detail::result_access_t::failure<zlink::message_t> (error));
+            return rejected.reject (
+              detail::result_access_t::failure<zlink::message_t> (error).exception ());
         }
         // The conversion must not retain a route channel whose final release drains
         // its executor. The worker resolves that channel through the runtime state.
@@ -1907,14 +1908,16 @@ route_client_t::submit_request_reply_message_erased (
           });
     }
     catch (const framework_exception_t &error) {
-        return fail (detail::result_access_t::failure<zlink::message_t> (error));
+        return rejected.reject (
+          detail::result_access_t::failure<zlink::message_t> (error).exception ());
     }
     catch (const std::exception &error) {
-        return fail (result_t<zlink::message_t>::failure (framework_error_kind_t::internal_failure,
-                                                          error.what ()));
+        return rejected.reject (result_t<zlink::message_t>::failure (
+                                  framework_error_kind_t::internal_failure, error.what ())
+                                  .exception ());
     }
     catch (...) {
-        return fail (detail::current_exception_result<zlink::message_t> ());
+        return rejected.reject (std::current_exception ());
     }
     return admitted;
 }
@@ -1931,16 +1934,7 @@ route_client_t::submit_channel_request_reply_message_erased (
   detail::request_receiver_t<zlink::message_t> receiver)
 {
     std::shared_ptr<task_completion_source_t<void>> admitted;
-    const auto fail_reply = receiver.fail;
-    auto fail = [&] (result_t<zlink::message_t> result) {
-        if (!admitted) {
-            admitted = std::make_shared<task_completion_source_t<void>> ();
-            fail_reply.bind_admission (admitted);
-        }
-        admitted->complete (detail::result_access_t::failure<void> (result.exception ()));
-        fail_reply (result.exception ());
-        return admitted;
-    };
+    auto rejected = receiver.rejection_receiver ();
     try {
         // The reply owns this copy: the referenced state lives in the call closure.
         const auto state = state_ref;
@@ -1950,16 +1944,19 @@ route_client_t::submit_channel_request_reply_message_erased (
                                   : message_flow_log_mode_t::off);
         const auto ambient_context = detail::capture_ambient_context ();
         if (!state || !state->runtime || state->serializers == nullptr) {
-            return fail (result_t<zlink::message_t>::failure (
-              framework_error_kind_t::protocol_error, "route client is not configured"));
+            return rejected.reject (
+              result_t<zlink::message_t>::failure (framework_error_kind_t::protocol_error,
+                                                   "route client is not configured")
+                .exception ());
         }
         auto channel_transport = detail::resolve_route_client_channel_transport (
           state->runtime, channel_name, state->runtime->client_server_requesters,
           state->runtime->mesh_channel_requesters);
         if (!channel_transport) {
-            return fail (result_t<zlink::message_t>::failure (framework_error_kind_t::not_found,
-                                                              "ChannelName '" + channel_name
-                                                                + "' is not registered"));
+            return rejected.reject (result_t<zlink::message_t>::failure (
+                                      framework_error_kind_t::not_found,
+                                      "ChannelName '" + channel_name + "' is not registered")
+                                      .exception ());
         }
         const auto effective_timeout = timeout > std::chrono::milliseconds::zero ()
                                          ? timeout
@@ -1994,6 +1991,7 @@ route_client_t::submit_channel_request_reply_message_erased (
         admitted = std::make_shared<task_completion_source_t<void>> ();
         receiver.admitted = admitted;
         receiver.fail.bind_admission (admitted);
+        rejected = receiver.rejection_receiver ();
         runtime::messaging::message_parts_t parts;
         try {
             runtime::messaging::client_call_codec_t codec;
@@ -2018,7 +2016,8 @@ route_client_t::submit_channel_request_reply_message_erased (
               codec.encode_payload_parts (std::move (header), encode_payload (*state->serializers));
         }
         catch (const framework_exception_t &error) {
-            return fail (detail::result_access_t::failure<zlink::message_t> (error));
+            return rejected.reject (
+              detail::result_access_t::failure<zlink::message_t> (error).exception ());
         }
 
         const auto ambient_guard = detail::enter_ambient_context (ambient_context);
@@ -2089,14 +2088,16 @@ route_client_t::submit_channel_request_reply_message_erased (
                                         std::move (parts_receiver));
     }
     catch (const framework_exception_t &error) {
-        return fail (detail::result_access_t::failure<zlink::message_t> (error));
+        return rejected.reject (
+          detail::result_access_t::failure<zlink::message_t> (error).exception ());
     }
     catch (const std::exception &error) {
-        return fail (result_t<zlink::message_t>::failure (framework_error_kind_t::internal_failure,
-                                                          error.what ()));
+        return rejected.reject (result_t<zlink::message_t>::failure (
+                                  framework_error_kind_t::internal_failure, error.what ())
+                                  .exception ());
     }
     catch (...) {
-        return fail (detail::current_exception_result<zlink::message_t> ());
+        return rejected.reject (std::current_exception ());
     }
     return admitted;
 }
