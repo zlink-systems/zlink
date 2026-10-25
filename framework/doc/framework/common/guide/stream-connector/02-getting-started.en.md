@@ -34,7 +34,7 @@ options and their defaults is covered by [Connector Options](03-connector-option
 
     ```kotlin
     dependencies {
-        implementation("systems.zlink:zlink-stream-connector:0.30.2")
+        implementation("systems.zlink:zlink-stream-connector:0.30.3")
     }
     ```
 
@@ -42,9 +42,9 @@ options and their defaults is covered by [Connector Options](03-connector-option
 
     ```kotlin
     dependencies {
-        implementation("systems.zlink:zlink-stream-connector:0.30.2")
+        implementation("systems.zlink:zlink-stream-connector:0.30.3")
         // Coroutine wrapper. The surfaces that suspend with await() live in this module.
-        implementation("systems.zlink:zlink-framework-kotlin:0.30.2")
+        implementation("systems.zlink:zlink-framework-kotlin:0.30.3")
     }
     ```
 

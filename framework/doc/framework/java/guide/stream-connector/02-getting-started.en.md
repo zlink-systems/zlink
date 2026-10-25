@@ -32,7 +32,7 @@ options and their defaults is covered by [Connector Options](03-connector-option
 
 ```kotlin
 dependencies {
-    implementation("systems.zlink:zlink-stream-connector:0.30.2")
+    implementation("systems.zlink:zlink-stream-connector:0.30.3")
 }
 ```
 
