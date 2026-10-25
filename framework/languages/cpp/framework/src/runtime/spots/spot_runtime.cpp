@@ -8959,7 +8959,10 @@ spot_node_runtime_t::find_active_remote_actor_join_target (const spot_id_t &targ
     return _state->lane
       .run ([&] () -> result_t<std::shared_ptr<spot_context_state_t>> {
           const auto found = _state->spot_contexts_by_id.find (std::string (target_spot_id));
-          if (found != _state->spot_contexts_by_id.end () && found->second._state) {
+          if (found == _state->spot_contexts_by_id.end ())
+              return result_t<std::shared_ptr<spot_context_state_t>>::failure (
+                framework_error_kind_t::not_found, "target spot is not registered");
+          if (found->second._state) {
               const auto context = found->second._state;
               if (context->accepts_membership_core (*_state))
                   return result_t<std::shared_ptr<spot_context_state_t>>::success (context);
