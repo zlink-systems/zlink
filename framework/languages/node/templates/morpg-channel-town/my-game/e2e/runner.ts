@@ -10,6 +10,7 @@ import { createInterface } from 'node:readline';
 import { EventEmitter } from 'node:events';
 import { finished } from 'node:stream/promises';
 import { checkStructure } from './structure';
+import { runDomainChecks } from './domain-checks';
 import {
   Limits,
   Scenarios,
@@ -137,6 +138,11 @@ async function main(): Promise<void> {
   if (args[0] === '--check-structure') {
     assert(args.length <= 2);
     checkStructure(args[1]);
+    return;
+  }
+  runDomainChecks();
+  if (args[0] === '--check-domain') {
+    assert.equal(args.length, 1);
     return;
   }
   let selected: readonly string[] = Scenarios;

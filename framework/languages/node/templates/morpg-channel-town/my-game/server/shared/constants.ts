@@ -5,11 +5,22 @@ export const Names = {
   town: 'Town',
   dungeon: 'Dungeon'
 } as const;
-export const Game = { maximumPartyMembers: 4, channelCount: 2 } as const;
+export const Game = {
+  maximumPartyMembers: 4,
+  channelCount: 2,
+  maximumInteger: 9_007_199_254_740_991n,
+  finalStage: 3n
+} as const;
 export const Rejection = {
-  joinRejected: 'JOIN_REJECTED',
-  invalidParty: 'INVALID_PARTY',
-  notLeader: 'NOT_LEADER'
+  joinRejected: 'join-rejected',
+  invalidParty: 'invalid-party',
+  notLeader: 'not-leader',
+  runMismatch: 'run-mismatch',
+  runInProgress: 'run-in-progress',
+  runNotActive: 'run-not-active',
+  integerOutOfRange: 'integer-out-of-range',
+  invalidChannel: 'invalid-channel',
+  packetNotAllowed: 'packet-not-allowed'
 } as const;
 const messageFollowMs = 30_000;
 const relocationMs = 25_000;
@@ -38,7 +49,10 @@ export const PacketNames = {
   prepareDungeon: 'PrepareDungeon',
   dungeonPrepared: 'DungeonPrepared',
   joinDungeon: 'JoinDungeon',
-  actionRejected: 'ActionRejected'
+  actionRejected: 'ActionRejected',
+  runStarted: 'RunStarted',
+  runCompleted: 'RunCompleted',
+  partyViewRequest: 'PartyViewRequest'
 } as const;
 export const Control = {
   ready: 'READY ',
@@ -55,11 +69,11 @@ export const NodeEntrypoints = {
   instance: 'server/instance/main.ts'
 } as const;
 export type NodeRole = keyof typeof NodeEntrypoints;
-export function townId(channel: number): string {
-  if (!Number.isInteger(channel) || channel < 1 || channel > Game.channelCount)
+export function townId(channel: bigint): string {
+  if (channel < 1n || channel > BigInt(Game.channelCount))
     throw new Error('Invalid channel');
   return `town-${channel}`;
 }
-export function dungeonId(partyId: string): string {
-  return `dungeon-${partyId}`;
+export function dungeonId(runId: string): string {
+  return `dungeon-${runId}`;
 }

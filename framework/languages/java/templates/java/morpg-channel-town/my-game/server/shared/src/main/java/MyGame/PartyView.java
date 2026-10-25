@@ -1,3 +1,7 @@
 package MyGame;
 
-public record PartyView(String partyId, java.util.List<String> members) {}
+public record PartyView(
+        String partyId,
+        java.util.List<String> members,
+        RunPhase phase,
+        String runId) {}

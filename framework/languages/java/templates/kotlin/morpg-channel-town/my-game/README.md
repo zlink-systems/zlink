@@ -39,22 +39,24 @@ For local process debugging, run `./run-e2e.sh --local` or `pwsh -NoProfile -Fil
 ./run-e2e.sh
 ./run-e2e.sh --scenario channel,dungeon,reconnect,update
 ./run-e2e.sh --check-structure
+./run-e2e.sh --check-domain
 ```
 
 ```powershell
 pwsh -NoProfile -File ./run-e2e.ps1
 pwsh -NoProfile -File ./run-e2e.ps1 -Scenario channel,dungeon,reconnect,update
 pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
+pwsh -NoProfile -File ./run-e2e.ps1 -CheckDomain
 ```
 
-The runner checks the structure, starts a unique Compose project with Redis on an OS-assigned loopback port, starts the application processes, and removes its resources. Run-specific configurations and stdout, stderr, and message-flow records are in `.logs/run-<id>/`. Use `--check-structure` or `-CheckStructure` for structure validation only.
+The runner checks the structure, starts a unique Compose project with Redis on an OS-assigned loopback port, starts the application processes, and removes its resources. Run-specific configurations and stdout, stderr, and message-flow records are in `.logs/run-<id>/`. Use `--check-structure` or `-CheckStructure` for structure validation only. Use `--check-domain` or `-CheckDomain` to run the domain checks without starting nodes.
 
 | Scenario | Verification |
 | --- | --- |
-| channel | town-1 to town-2, nodeId townB, unchanged SessionInfo and connection |
-| dungeon | same party and Dungeon for both players, stage 0 then stage 1 |
-| reconnect | same Actor identity, Dungeon, host, members, and stage after reconnect |
-| update | drain observed through SafeToShutdown, unchanged bindings and state on the other instance, stopped source replaced, new Dungeon accepted by replacement |
+| `channel` | Session continuity while changing towns; invalid channel rejection leaves state unchanged; a forming party leaves with its member. |
+| `dungeon` | Server-issued PartyId and RunId; duplicate entry sends; identical active Dungeon views; nonleader and internal packet rejection leave state unchanged; FinalStage completion; distinct dungeons for parties in town-1 and town-2. |
+| `reconnect` | Actor identity and Dungeon RunId, Phase, Stage, and roster after reconnect. |
+| `update` | Drain completion, preserved Dungeon state and Session identity, and a replacement instance accepting a distinct party run from the other channel. |
 
 ## Known issues
 
@@ -73,10 +75,10 @@ Application distributions are under `server/<role>/build/install/<role>/`. The e
 
 All Object Servers that register Player factories also register the shared Entry and first-admission handler, including both Instance nodes. Entry admission joins the requested fixed Town channel. Each Instance declares its dynamic Dungeon factory in `zlink.structure.json`.
 
-The e2e configuration uses one Dungeon slot per Instance. After drain, the surviving Instance is full, so only the replacement can accept the fresh Dungeon. The structure checker enforces this configuration. Message Follow remains 30 seconds; the SafeToShutdown observation budget is derived from that duration plus the existing relocation operation budget.
+The e2e configuration uses one Dungeon slot per Instance. After drain, the surviving Instance is full, so only the replacement can accept the fresh Dungeon. The structure checker enforces this configuration. Message Follow remains 30 seconds; the SafeToShutdown observation budget is derived from that duration plus the existing relocation operation budget. Party members can leave a Forming party when changing towns; run rosters remain recorded after departure.
 
 ## 한국어 실행 안내
 
-기본 e2e는 Docker에서 실행합니다. 로컬 process 디버깅은 JDK 25를 준비하고 `--local` 또는 `-Local`로 실행합니다. Docker Compose를 준비한 뒤 위 Build 명령을 템플릿 디렉터리에서 실행합니다. Docker e2e 명령은 구조 검사, Redis와 노드 기동, 시나리오 실행, 해당 실행의 자원 정리를 수행합니다. 실행별 설정과 message-flow 기록은 `.logs/run-<id>/`에 보존합니다.
+기본 e2e는 Docker에서 실행합니다. 로컬 process 디버깅은 JDK 25를 준비하고 `--local` 또는 `-Local`로 실행합니다. Docker Compose를 준비한 뒤 위 Build 명령을 템플릿 디렉터리에서 실행합니다. Docker e2e 명령은 구조 검사, Redis와 노드 기동, 시나리오 실행, 해당 실행의 자원 정리를 수행합니다. `./run-e2e.sh --check-domain` 또는 `-CheckDomain`은 노드를 기동하지 않고 도메인 경계를 검사합니다. 실행별 설정과 message-flow 기록은 `.logs/run-<id>/`에 보존합니다.
 
-마을 채널 변경, 파티 던전 입장과 진행도, 재접속, instance 교체를 실제 응답으로 확인합니다. 운영 시에는 배포별 Redis key prefix와 네트워크에 맞는 listener 주소를 지정합니다. 노드 교체는 drain 관찰이 완료된 뒤 shutdown하고 같은 설정으로 대체 프로세스를 기동합니다.
+네 시나리오는 채널 이동, 서버 발급 ID와 중복 입장, 거부 뒤 상태 불변, FinalStage 완료, 재접속과 instance 교체 뒤 RunId·Phase·Stage 보존을 실제 응답으로 확인합니다. 운영 시에는 배포별 Redis key prefix와 네트워크에 맞는 listener 주소를 지정합니다. 노드 교체는 drain 관찰이 완료된 뒤 shutdown하고 같은 설정으로 대체 프로세스를 기동합니다.

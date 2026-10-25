@@ -8,14 +8,28 @@ import type {
   ZLinkSessionDispatchContext,
   ZLinkSessionFactory
 } from '@zlink-systems/framework';
-import { Names, PacketNames } from '../shared/constants';
-import { JoinTownRequest, SessionInfo } from '../shared/messages';
+import { Names, PacketNames, Rejection } from '../shared/constants';
+import { ActionRejected, JoinTownRequest, SessionInfo } from '../shared/messages';
+const allowedClientPackets = new Set<string>([
+  PacketNames.joinTownRequest,
+  PacketNames.changeChannelRequest,
+  PacketNames.createPartyRequest,
+  PacketNames.joinPartyRequest,
+  PacketNames.enterDungeonRequest,
+  PacketNames.advanceRequest,
+  PacketNames.viewRequest,
+  PacketNames.sessionInfoRequest
+]);
 export class Session implements ZLinkSession {
   constructor(
     readonly context: ZLinkSessionContext,
     private readonly actors: ZLinkActorManager
   ) {}
   async onDispatch(dispatch: ZLinkSessionDispatchContext, payload: ZLinkMessage): Promise<void> {
+    if (!allowedClientPackets.has(dispatch.packetName)) {
+      await this.context.client.send(new ActionRejected(Rejection.packetNotAllowed)).submit();
+      return;
+    }
     if (!this.context.actors.bound.length) {
       if (dispatch.packetName !== PacketNames.joinTownRequest)
         throw new Error('JoinTownRequest must be first');

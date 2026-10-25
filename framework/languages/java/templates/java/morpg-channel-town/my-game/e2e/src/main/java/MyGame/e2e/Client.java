@@ -71,13 +71,19 @@ public final class Client implements AutoCloseable {
     }
 
     void connect() throws Exception {
+        connect(Names.CHANNEL_COUNT);
+    }
+
+    void connect(long channel) throws Exception {
         connector.connect().submit().toCompletableFuture().join();
-        send(new JoinTownRequest(playerId, Names.CHANNEL_COUNT));
+        send(new JoinTownRequest(playerId, channel));
     }
 
     static boolean sameDungeonState(DungeonView a, DungeonView b) {
         return a.dungeonId().equals(b.dungeonId())
                 && a.partyId().equals(b.partyId())
+                && Objects.equals(a.runId(), b.runId())
+                && a.phase() == b.phase()
                 && a.members().equals(b.members())
                 && a.stage() == b.stage();
     }

@@ -1,13 +1,16 @@
 import { Injectable } from '@nestjs/common';
-import { zlinkSpotActorSendHandler } from '@zlink-systems/nestjs';
+import { zlinkSpotActorSendHandler, zlinkSpotPacketHandler } from '@zlink-systems/nestjs';
 import type { ZLinkMessageContext } from '@zlink-systems/framework';
-import { PacketNames, townId } from '../shared/constants';
+import { PacketNames } from '../shared/constants';
 import {
   JoinTownRequest,
   ChangeChannelRequest,
-  CreatePartyRequest,
   JoinPartyRequest,
   JoinDungeon,
+  PartyViewRequest,
+  RunStarted,
+  RunCompleted,
+  ActionRejected,
   TownView,
   restorePush
 } from '../shared/messages';
@@ -49,17 +52,12 @@ export class TownQuery {
 })
 export class ChangeChannel {
   async handle(
-    _spot: Town,
+    spot: Town,
     actor: Player,
     _context: ZLinkMessageContext,
     request: ChangeChannelRequest
   ): Promise<void> {
-    actor.context
-      .joinSpot(
-        townId(request.channel),
-        new JoinTownRequest(actor.context.actorId, request.channel)
-      )
-      .defer();
+    await spot.changeChannel(actor, request.channel);
   }
 }
 @Injectable()
@@ -72,10 +70,9 @@ export class CreateParty {
   async handle(
     spot: Town,
     actor: Player,
-    _context: ZLinkMessageContext,
-    request: CreatePartyRequest
+    _context: ZLinkMessageContext
   ): Promise<void> {
-    await spot.party(actor, request.partyId, true);
+    await spot.party(actor, null, true);
   }
 }
 @Injectable()
@@ -119,7 +116,7 @@ export class DungeonTravel {
     request: JoinDungeon
   ): Promise<void> {
     actor.context
-      .joinSpot(request.dungeonId, new JoinDungeon(request.dungeonId, request.partyId))
+      .joinSpot(request.dungeonId, new JoinDungeon(request.dungeonId, request.runId))
       .defer();
   }
 }
@@ -137,5 +134,46 @@ export class TownDelivery {
     view: TownView
   ): Promise<void> {
     await actor.context.boundSession.send(restorePush(context.packetName, view)).submit();
+  }
+}
+
+@Injectable()
+@zlinkSpotPacketHandler({ spot: () => Town, packetName: PacketNames.runStarted })
+export class RunStartedHandler {
+  async handle(spot: Town, message: RunStarted): Promise<void> {
+    await spot.runStarted(message);
+  }
+}
+
+@Injectable()
+@zlinkSpotPacketHandler({ spot: () => Town, packetName: PacketNames.runCompleted })
+export class RunCompletedHandler {
+  async handle(spot: Town, message: RunCompleted): Promise<void> {
+    await spot.runCompleted(message);
+  }
+}
+
+@Injectable()
+@zlinkSpotPacketHandler({ spot: () => Town, packetName: PacketNames.partyViewRequest })
+export class PartyViewRequestHandler {
+  async handle(spot: Town, message: PartyViewRequest): Promise<void> {
+    await spot.showParty(message);
+  }
+}
+
+@Injectable()
+@zlinkSpotActorSendHandler({
+  spot: () => Town,
+  actor: () => Player,
+  packetName: PacketNames.actionRejected
+})
+export class TownActionRejectedDelivery {
+  async handle(
+    _spot: Town,
+    actor: Player,
+    context: ZLinkMessageContext,
+    message: ActionRejected
+  ): Promise<void> {
+    await actor.context.boundSession.send(restorePush(context.packetName, message)).submit();
   }
 }

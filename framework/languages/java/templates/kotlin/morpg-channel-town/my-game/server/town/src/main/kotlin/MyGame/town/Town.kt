@@ -10,7 +10,7 @@ import systems.zlink.framework.spots.*
 
 data class TownState(
     val players: MutableSet<String> = linkedSetOf(),
-    val parties: MutableMap<String, MutableList<String>> = linkedMapOf(),
+    val parties: MutableMap<String, PartyRun> = linkedMapOf(),
 )
 
 class Town(
@@ -26,8 +26,11 @@ class Town(
         request: ZLinkMessage,
     ): ZLinkSpotActorJoinResult {
         val join = request.decode<JoinTownRequest>()
-        if (join.playerId != actorId || Names.townId(join.channel) != context.spotId())
-            return ZLinkSpotActorJoinResult.reject()
+        if (
+            join.playerId != actorId ||
+                ChannelRules.validate(join.channel) != null ||
+                Names.townId(join.channel) != context.spotId()
+        ) return ZLinkSpotActorJoinResult.reject()
         state.players.add(actorId)
         return ZLinkSpotActorJoinResult.accept()
     }
@@ -37,11 +40,11 @@ class Town(
     override suspend fun onLeaveActorSuspending(actor: Player) {
         val id = actor.context.actorId()
         state.players.remove(id)
-        val iterator = state.parties.values.iterator()
+        val iterator = state.parties.entries.iterator()
         while (iterator.hasNext()) {
-            val members = iterator.next()
-            members.remove(id)
-            if (members.isEmpty()) iterator.remove()
+            val party = iterator.next().value
+            party.leave(id)
+            if (party.members.isEmpty()) iterator.remove()
         }
         broadcast()
     }
@@ -54,61 +57,117 @@ class Town(
             context.spotId(),
             config.id,
             state.players.sorted(),
-            state.parties.toSortedMap().map { (id, members) -> PartyView(id, members.toList()) },
+            state.parties.toSortedMap().values.map { it.view() },
         )
 
     suspend fun show(actor: Player) = actor.context.boundSession().kotlin().send(view()).await()
+
+    suspend fun showParty(playerId: String) = actors.kotlin().sendToActor(playerId, view()).await()
 
     private suspend fun broadcast() {
         val message = view()
         for (id in state.players) actors.kotlin().sendToActor(id, message).await()
     }
 
-    suspend fun party(actor: Player, partyId: String, create: Boolean) {
+    suspend fun party(actor: Player, partyId: String?, create: Boolean) {
         val id = actor.context.actorId()
+        val existing = partyId?.let(state.parties::get)
         if (
-            partyId.isBlank() ||
-                id !in state.players ||
-                state.parties.values.any { id in it } ||
-                (if (create) partyId in state.parties
-                else
-                    state.parties[partyId]?.let { it.size >= Names.MAXIMUM_PARTY_MEMBERS } != false)
+            id !in state.players ||
+                state.parties.values.any { id in it.members } ||
+                (!create &&
+                    (existing == null ||
+                        existing.phase != RunPhase.Forming ||
+                        existing.members.size >= Names.MAXIMUM_PARTY_MEMBERS))
         ) {
-            actor.context
-                .boundSession()
-                .kotlin()
-                .send(ActionRejected(Rejection.INVALID_PARTY))
-                .await()
+            actor.context.boundSession().kotlin().send(ActionRejected(Rejection.INVALID_PARTY)).await()
             return
         }
-        if (create) state.parties[partyId] = mutableListOf(id)
-        else state.parties.getValue(partyId).add(id)
+        if (create) {
+            val party = PartyRun(members = mutableListOf(id))
+            state.parties[party.partyId] = party
+        } else {
+            existing!!.members.add(id)
+        }
         broadcast()
     }
 
     suspend fun enter(actor: Player) {
-        val party =
-            state.parties.entries.firstOrNull { it.value.first() == actor.context.actorId() }
-        if (party == null) {
-            actor.context.boundSession().kotlin().send(ActionRejected(Rejection.NOT_LEADER)).await()
+        val id = actor.context.actorId()
+        val party = state.parties.values.firstOrNull { id in it.members }
+        val reason = party?.enter(id) ?: if (party == null) Rejection.NOT_LEADER else null
+        if (reason != null) {
+            actor.context.boundSession().kotlin().send(ActionRejected(reason)).await()
             return
         }
-        val dungeonId = Names.dungeonId(party.key)
-        val created =
-            spots.kotlin().getOrCreate(dungeonId, Names.DUNGEON).inMesh(Names.MESH).await()
+        if (party!!.phase == RunPhase.Active) {
+            show(actor)
+            return
+        }
+
+        val runId = requireNotNull(party.runId)
+        val dungeonId = Names.dungeonId(runId)
+        val created = spots.kotlin().getOrCreate(dungeonId, Names.DUNGEON).inMesh(Names.MESH).await()
         check(created.state() != ZLinkSpotCreateState.REJECTED) { "Dungeon creation rejected" }
-        val members = party.value.toList()
         val prepared =
             context
                 .outbound()
                 .kotlin()
-                .requestToSpot<DungeonPrepared>(dungeonId, PrepareDungeon(party.key, members))
+                .requestToSpot<DungeonPrepared>(
+                    dungeonId,
+                    PrepareDungeon(runId, party.partyId, context.spotId(), party.members.toList()),
+                )
                 .await()
-        check(prepared.dungeonId == dungeonId) { "Dungeon preparation identity mismatch" }
-        for (id in members) actors
-            .kotlin()
-            .sendToActor(id, JoinDungeon(dungeonId, party.key))
-            .await()
+        if (
+            prepared.reason != null ||
+                prepared.dungeonId != dungeonId ||
+                party.prepared(prepared.runId) != null
+        ) {
+            actor.context.boundSession().kotlin().send(ActionRejected(Rejection.RUN_MISMATCH)).await()
+            return
+        }
+        val join = JoinDungeon(dungeonId, runId)
+        for (member in party.members) {
+            if (member in state.players) actors.kotlin().sendToActor(member, join).await()
+        }
+    }
+
+    suspend fun changeChannel(actor: Player, channel: Long) {
+        val party = state.parties.values.firstOrNull { actor.context.actorId() in it.members }
+        val reason = ChannelRules.validate(channel) ?: party?.changeChannel()
+        if (reason != null) {
+            actor.context.boundSession().kotlin().send(ActionRejected(reason)).await()
+            return
+        }
+        actor.context
+            .joinSpot(
+                Names.townId(channel),
+                JoinTownRequest(actor.context.actorId(), channel),
+            )
+            .defer()
+    }
+
+    suspend fun runStarted(message: RunStarted) {
+        val party = state.parties.values.singleOrNull { it.runId == message.runId }
+        if (party == null || party.started(message.runId) != null) {
+            rejectRunMismatch(party)
+            return
+        }
+        broadcast()
+    }
+
+    suspend fun runCompleted(message: RunCompleted) {
+        val party = state.parties.values.singleOrNull { it.runId == message.runId }
+        if (party == null || party.completed(message.runId) != null) {
+            rejectRunMismatch(party)
+            return
+        }
+        broadcast()
+    }
+
+    private suspend fun rejectRunMismatch(party: PartyRun?) {
+        val leader = party?.members?.firstOrNull() ?: return
+        actors.kotlin().sendToActor(leader, ActionRejected(Rejection.RUN_MISMATCH)).await()
     }
 }
 

@@ -4,7 +4,18 @@ import { Names } from '../shared/constants';
 import { PlayerFactory, PlayerRelocation } from '../shared/player';
 import { Entry, EnterTown } from '../shared/entry';
 import { Dungeon, DungeonRelocation } from './dungeon';
-import { Prepare, DungeonQuery, DungeonReconnect, Advance, DungeonDelivery } from './handlers';
+import {
+  Prepare,
+  DungeonQuery,
+  DungeonReconnect,
+  Advance,
+  DungeonDelivery,
+  DungeonActionRejectedDelivery,
+  TownDelivery,
+  DungeonEnter,
+  DungeonTravelRepeat,
+  DungeonChangeChannel
+} from './handlers';
 runHost((_builder, config, mesh) => {
   if (!Number.isInteger(config.dungeonCapacity) || config.dungeonCapacity! < 1)
     throw new Error('Dungeon capacity required');
@@ -28,7 +39,12 @@ runHost((_builder, config, mesh) => {
       DungeonQuery,
       DungeonReconnect,
       Advance,
-      DungeonDelivery
+      DungeonDelivery,
+      DungeonActionRejectedDelivery,
+      TownDelivery,
+      DungeonEnter,
+      DungeonTravelRepeat,
+      DungeonChangeChannel
     ],
     listener: { kind: 'routeMesh', name: Names.mesh },
     ready: (status) => status.placement.isAvailable

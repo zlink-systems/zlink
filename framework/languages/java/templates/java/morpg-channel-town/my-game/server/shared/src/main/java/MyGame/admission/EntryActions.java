@@ -13,6 +13,9 @@ public final class EntryActions {
     public CompletionStage<Void> join(
             Entry spot, Player actor, ZLinkMessageContext context, JoinTownRequest request) {
         actor.checkIdentity(request.playerId());
+        String reason = ChannelRules.validate(request.channel());
+        if (reason != null)
+            return actor.context().boundSession().send(new ActionRejected(reason)).submit();
         actor.context().joinSpot(Names.townId(request.channel()), request).defer();
         return CompletableFuture.completedFuture(null);
     }

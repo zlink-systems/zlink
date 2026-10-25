@@ -33,7 +33,9 @@ public final class Town implements ZLinkSpot<Player> {
 
     public CompletionStage<ZLinkSpotActorJoinResult> onActorJoin(String id, ZLinkMessage payload) {
         var join = payload.decode(JoinTownRequest.class);
-        if (!id.equals(join.playerId()) || !Names.townId(join.channel()).equals(context.spotId()))
+        if (!id.equals(join.playerId())
+                || ChannelRules.validate(join.channel()) != null
+                || !Names.townId(join.channel()).equals(context.spotId()))
             return CompletableFuture.completedFuture(ZLinkSpotActorJoinResult.reject());
         state.players.add(id);
         return CompletableFuture.completedFuture(ZLinkSpotActorJoinResult.accept());
@@ -61,6 +63,10 @@ public final class Town implements ZLinkSpot<Player> {
         return actor.context().boundSession().send(view()).submit();
     }
 
+    public CompletionStage<Void> showParty(String playerId) {
+        return actors.sendToActor(playerId, view()).submit();
+    }
+
     private CompletionStage<Void> broadcast() {
         var view = view();
         CompletionStage<Void> sent = CompletableFuture.completedFuture(null);
@@ -78,16 +84,33 @@ public final class Town implements ZLinkSpot<Player> {
         return broadcast();
     }
 
+    public CompletionStage<Void> changeChannel(Player actor, long channel) {
+        var party = state.partyFor(actor.context().actorId());
+        String reason = ChannelRules.validate(channel);
+        if (reason == null && party != null) reason = party.changeChannel();
+        if (reason != null)
+            return actor.context().boundSession().send(new ActionRejected(reason)).submit();
+        actor.context()
+                .joinSpot(
+                        Names.townId(channel),
+                        new JoinTownRequest(actor.context().actorId(), channel))
+                .defer();
+        return CompletableFuture.completedFuture(null);
+    }
+
     public CompletionStage<Void> enter(Player actor) {
-        var party = state.ledParty(actor.context().actorId());
+        var party = state.partyFor(actor.context().actorId());
         if (party == null)
             return actor.context()
                     .boundSession()
                     .send(new ActionRejected(Rules.NOT_LEADER))
                     .submit();
-        String id = Names.DUNGEON_PREFIX + party.getKey();
-        var members = List.copyOf(party.getValue());
-        var partyId = party.getKey();
+        var reason = party.enter(actor.context().actorId());
+        if (reason != null)
+            return actor.context().boundSession().send(new ActionRejected(reason)).submit();
+        if (party.phase == RunPhase.Active) return show(actor);
+        String runId = party.runId;
+        String id = Names.dungeonId(runId);
         return spots.getOrCreate(id, Names.DUNGEON)
                 .inMesh(Names.MESH)
                 .submit()
@@ -96,23 +119,56 @@ public final class Town implements ZLinkSpot<Player> {
                             if (result.state() == ZLinkSpotCreateState.REJECTED)
                                 throw new IllegalStateException("Dungeon creation rejected");
                             return context.outbound()
-                                    .requestToSpot(id, new PrepareDungeon(partyId, members))
+                                    .requestToSpot(
+                                            id,
+                                            new PrepareDungeon(
+                                                    runId,
+                                                    party.partyId,
+                                                    context.spotId(),
+                                                    List.copyOf(party.members)))
                                     .submit(DungeonPrepared.class);
                         })
                 .thenCompose(
                         prepared -> {
-                            if (!id.equals(prepared.dungeonId()))
-                                throw new IllegalStateException(
-                                        "Dungeon preparation identity mismatch");
+                            if (prepared.reason() != null
+                                    || !id.equals(prepared.dungeonId())
+                                    || party.prepared(prepared.runId()) != null)
+                                return actor.context()
+                                        .boundSession()
+                                        .send(new ActionRejected(Rules.RUN_MISMATCH))
+                                        .submit();
                             CompletionStage<Void> sent = CompletableFuture.completedFuture(null);
-                            var travel = new JoinDungeon(id, partyId);
-                            for (var member : members)
+                            var travel = new JoinDungeon(id, runId);
+                            for (var member : party.members) {
+                                if (!state.players.contains(member)) continue;
                                 sent =
                                         sent.thenCompose(
                                                 ignored ->
                                                         actors.sendToActor(member, travel)
                                                                 .submit());
+                            }
                             return sent;
                         });
+    }
+
+    public CompletionStage<Void> runStarted(RunStarted message) {
+        var party = state.partyForRun(message.runId());
+        if (party == null || party.started(message.runId()) != null)
+            return rejectRunMismatch(party);
+        return broadcast();
+    }
+
+    public CompletionStage<Void> runCompleted(RunCompleted message) {
+        var party = state.partyForRun(message.runId());
+        if (party == null || party.completed(message.runId()) != null)
+            return rejectRunMismatch(party);
+        return broadcast();
+    }
+
+    private CompletionStage<Void> rejectRunMismatch(PartyRun party) {
+        if (party == null || party.members.isEmpty()) return CompletableFuture.completedFuture(null);
+        return actors.sendToActor(
+                        party.members.getFirst(), new ActionRejected(Rules.RUN_MISMATCH))
+                .submit();
     }
 }

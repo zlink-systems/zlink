@@ -6,7 +6,8 @@ import type {
   ZLinkMessageContext
 } from '@zlink-systems/framework';
 import { PacketNames, townId } from './constants';
-import { JoinTownRequest } from './messages';
+import { ChannelRules } from './channel-rules';
+import { ActionRejected, JoinTownRequest } from './messages';
 import { Player } from './player';
 @Injectable({ scope: Scope.TRANSIENT })
 export class Entry implements ZLinkEntrySpot<Player> {
@@ -28,6 +29,11 @@ export class EnterTown {
     request: JoinTownRequest
   ): Promise<void> {
     actor.assertIdentity(request.playerId);
+    const reason = ChannelRules.validate(request.channel);
+    if (reason !== null) {
+      await actor.context.boundSession.send(new ActionRejected(reason)).submit();
+      return;
+    }
     actor.context
       .joinSpot(townId(request.channel), new JoinTownRequest(request.playerId, request.channel))
       .defer();

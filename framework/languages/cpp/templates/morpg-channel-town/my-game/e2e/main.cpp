@@ -1,4 +1,5 @@
 #include "scenarios.hpp"
+#include "domain_checks.hpp"
 int main (int argc, char **argv)
 {
 #ifndef _WIN32
@@ -7,7 +8,7 @@ int main (int argc, char **argv)
     std::filesystem::path root = std::filesystem::current_path ();
     std::filesystem::path bin = std::filesystem::absolute (argv[0]).parent_path ();
     std::string selection;
-    bool check_only = false;
+    bool structure_only = false, domain_only = false;
     std::unique_ptr<MyGame::E2E::World> world;
     int exit = 0, passed = 0;
     std::vector<MyGame::E2E::ScenarioDefinition> selected;
@@ -16,7 +17,9 @@ int main (int argc, char **argv)
         for (int i = 1; i < argc; ++i) {
             const std::string option (argv[i]);
             if (option == "--check-structure")
-                check_only = true;
+                structure_only = true;
+            else if (option == "--check-domain")
+                domain_only = true;
             else if (i + 1 < argc && option == "--root")
                 root = argv[++i];
             else if (i + 1 < argc && option == "--scenario")
@@ -24,13 +27,16 @@ int main (int argc, char **argv)
             else
                 throw std::invalid_argument (
                   "Usage: my-game-e2e [--root path] [--scenario "
-                  "channel,dungeon,reconnect,update] [--check-structure]");
+                  "channel,dungeon,reconnect,update] [--check-structure] [--check-domain]");
         }
         MyGame::E2E::check_structure (root);
-        if (check_only) {
+        if (structure_only) {
             std::cout << "Structure: passed" << std::endl;
             return 0;
         }
+        MyGame::E2E::run_domain_checks ();
+        if (domain_only)
+            return 0;
         if (selection.empty ())
             selected.assign (MyGame::E2E::scenario_order.begin (),
                              MyGame::E2E::scenario_order.end ());
@@ -65,8 +71,12 @@ int main (int argc, char **argv)
                     MyGame::E2E::channel (endpoint);
                     break;
                 case MyGame::E2E::Scenario::dungeon:
+                    if (std::none_of (selected.begin (), selected.end (), [] (const auto &item) {
+                            return item.id == MyGame::E2E::Scenario::update;
+                        }))
+                        party->distinct_party ();
                     break;
-                // PartyRun construction verifies dungeon entry and Advance.
+                // PartyRun construction verifies entry and completion through FinalStage.
                 case MyGame::E2E::Scenario::reconnect:
                     party->reconnect ();
                     break;
@@ -95,7 +105,7 @@ int main (int argc, char **argv)
             exit = 1;
         }
     }
-    if (!check_only)
+    if (!structure_only && !domain_only)
         std::cout << "Scenarios: " << passed << "/" << selected.size () << " passed" << std::endl;
     return exit;
 }

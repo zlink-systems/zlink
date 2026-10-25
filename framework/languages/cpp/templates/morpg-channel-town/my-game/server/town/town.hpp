@@ -10,12 +10,13 @@ class Town final : public fx::spot_t<Player>
     const NodeConfig &config_;
     fx::actor_client_t &actors_;
     fx::spot_manager_t &spots_;
+
     TownView view () const
     {
         TownView result{
           context_.spot_id (), config_.Id, {state.players.begin (), state.players.end ()}, {}};
-        for (const auto &[id, members] : state.parties)
-            result.parties.push_back ({id, members});
+        for (const auto &[id, party] : state.parties)
+            result.parties.push_back (party.view ());
         return result;
     }
     fx::task_t<void> broadcast ()
@@ -24,9 +25,9 @@ class Town final : public fx::spot_t<Player>
         for (const auto &id : snapshot.players)
             co_await actors_.send (fx::actor_id_t (id), snapshot).async ();
     }
-    fx::task_t<void> party (Player &actor, const std::string &id, bool create)
+    fx::task_t<void> party (Player &actor, const std::optional<std::string> &party_id, bool create)
     {
-        if (!state.party (std::string (actor.context ().actor_id ().value ()), id, create)) {
+        if (!state.party (std::string (actor.context ().actor_id ().value ()), party_id, create)) {
             co_await actor.context ()
               .bound_session ()
               .send (ActionRejected{Rejection::invalid_party})
@@ -38,9 +39,7 @@ class Town final : public fx::spot_t<Player>
 
   public:
     TownState state;
-    Town (fx::spot_context_t context,
-          const NodeConfig &config,
-          fx::actor_client_t &actors,
+    Town (fx::spot_context_t context, const NodeConfig &config, fx::actor_client_t &actors,
           fx::spot_manager_t &spots) :
         context_ (std::move (context)), config_ (config), actors_ (actors), spots_ (spots)
     {
@@ -57,13 +56,18 @@ class Town final : public fx::spot_t<Player>
           .add_actor_send<&Town::enter> ()
           .add_actor_send<&Town::travel> ()
           .add_actor_send<&Town::query> ()
-          .add_actor_send<&Town::deliver> ();
+          .add_actor_send<&Town::deliver> ()
+          .add_actor_send<&Town::deliver_rejection> ()
+          .add_handler<&Town::run_started> ()
+          .add_handler<&Town::run_completed> ()
+          .add_handler<&Town::show_party> ();
     }
     fx::task_t<fx::spot_actor_join_result_t> on_actor_join (std::string_view id,
                                                             const fx::message_t &payload) override
     {
         const auto request = payload.decode<JoinTownRequest> ();
-        if (request.playerId != id || Names::town_id (request.channel) != context_.spot_id ())
+        if (request.playerId != id || ChannelRules::validate (request.channel)
+            || Names::town_id (request.channel) != context_.spot_id ())
             co_return fx::spot_actor_join_result_t::reject ();
         state.players.emplace (id);
         co_return fx::spot_actor_join_result_t::accept ();
@@ -90,6 +94,22 @@ class Town final : public fx::spot_t<Player>
     fx::task_t<void>
     change (Player &actor, fx::message_context_t &, const ChangeChannelRequest &request)
     {
+        auto reason = ChannelRules::validate (request.channel);
+        if (!reason) {
+            const auto id = std::string (actor.context ().actor_id ().value ());
+            const auto party = std::find_if (state.parties.begin (), state.parties.end (),
+                                             [&] (const auto &item) {
+                                                 return std::find (item.second.members.begin (),
+                                                                   item.second.members.end (), id)
+                                                        != item.second.members.end ();
+                                             });
+            if (party != state.parties.end ())
+                reason = party->second.change_channel ();
+        }
+        if (reason) {
+            co_await actor.context ().bound_session ().send (ActionRejected{*reason}).async ();
+            co_return;
+        }
         actor.context ()
           .join_spot (
             Names::town_id (request.channel),
@@ -97,40 +117,101 @@ class Town final : public fx::spot_t<Player>
           .defer ();
         co_return;
     }
-    fx::task_t<void>
-    create_party (Player &actor, fx::message_context_t &, const CreatePartyRequest &request)
+    fx::task_t<void> create_party (Player &actor, fx::message_context_t &, const CreatePartyRequest &)
     {
-        co_await party (actor, request.partyId, true);
+        co_await party (actor, std::nullopt, true);
     }
-    fx::task_t<void>
-    join_party (Player &actor, fx::message_context_t &, const JoinPartyRequest &request)
+    fx::task_t<void> join_party (Player &actor, fx::message_context_t &, const JoinPartyRequest &request)
     {
         co_await party (actor, request.partyId, false);
     }
     fx::task_t<void> enter (Player &actor, fx::message_context_t &, const EnterDungeonRequest &)
     {
-        const auto found = state.led_by (std::string (actor.context ().actor_id ().value ()));
-        if (found == state.parties.end ()) {
-            co_await actor.context ()
-              .bound_session ()
-              .send (ActionRejected{Rejection::not_leader})
-              .async ();
+        const auto player_id = std::string (actor.context ().actor_id ().value ());
+        const auto found = std::find_if (state.parties.begin (), state.parties.end (),
+                                         [&] (const auto &item) {
+                                             return std::find (item.second.members.begin (),
+                                                               item.second.members.end (), player_id)
+                                                    != item.second.members.end ();
+                                         });
+        auto reason = found == state.parties.end ()
+                        ? std::optional<std::string> (Rejection::not_leader)
+                        : found->second.enter (player_id);
+        if (reason) {
+            co_await actor.context ().bound_session ().send (ActionRejected{*reason}).async ();
             co_return;
         }
-        const auto party_id = found->first;
-        const auto members = found->second;
-        const auto id = Names::dungeon_id (party_id);
+        auto &party = found->second;
+        if (party.phase == RunPhase::Active) {
+            co_await actor.context ().bound_session ().send (view ()).async ();
+            co_return;
+        }
+        if (!party.runId) {
+            co_await actor.context ().bound_session ().send (ActionRejected{"run-mismatch"}).async ();
+            co_return;
+        }
+        const auto run_id = *party.runId;
+        const auto party_id = party.partyId;
+        const auto members = party.members;
+        const auto id = Names::dungeon_id (run_id);
         const auto created =
           co_await spots_.get_or_create (id, Names::dungeon).in_mesh (Names::mesh).async ();
         if (created.state == fx::spot_create_state_t::rejected)
             throw std::runtime_error ("Dungeon creation rejected");
         const auto prepared =
-          co_await context_.request_to_spot (id, PrepareDungeon{party_id, members})
+          co_await context_
+            .request_to_spot (id, PrepareDungeon{run_id, party_id, std::string (context_.spot_id ()),
+                                                members})
             .async<DungeonPrepared> ();
-        if (prepared.dungeonId != id)
-            throw std::runtime_error ("Dungeon preparation identity mismatch");
+        if (prepared.reason || prepared.dungeonId != id || party.prepared (prepared.runId)) {
+            co_await actor.context ().bound_session ().send (ActionRejected{"run-mismatch"}).async ();
+            co_return;
+        }
         for (const auto &member : members)
-            co_await actors_.send (fx::actor_id_t (member), JoinDungeon{id, party_id}).async ();
+            if (state.players.contains (member))
+                co_await actors_.send (fx::actor_id_t (member), JoinDungeon{id, run_id}).async ();
+    }
+    fx::task_t<void> run_started (const RunStarted &message)
+    {
+        const auto party = std::find_if (state.parties.begin (), state.parties.end (),
+                                         [&] (const auto &item) {
+                                             return item.second.runId
+                                                    && *item.second.runId == message.runId;
+                                         });
+        if (party == state.parties.end ())
+            co_return;
+        if (party->second.started (message.runId)) {
+            if (!party->second.members.empty ())
+                co_await actors_
+                  .send (fx::actor_id_t (party->second.members.front ()),
+                         ActionRejected{"run-mismatch"})
+                  .async ();
+            co_return;
+        }
+        co_await broadcast ();
+    }
+    fx::task_t<void> run_completed (const RunCompleted &message)
+    {
+        const auto party = std::find_if (state.parties.begin (), state.parties.end (),
+                                         [&] (const auto &item) {
+                                             return item.second.runId
+                                                    && *item.second.runId == message.runId;
+                                         });
+        if (party == state.parties.end ())
+            co_return;
+        if (party->second.completed (message.runId)) {
+            if (!party->second.members.empty ())
+                co_await actors_
+                  .send (fx::actor_id_t (party->second.members.front ()),
+                         ActionRejected{"run-mismatch"})
+                  .async ();
+            co_return;
+        }
+        co_await broadcast ();
+    }
+    fx::task_t<void> show_party (const PartyViewRequest &request)
+    {
+        co_await actors_.send (fx::actor_id_t (request.playerId), view ()).async ();
     }
     fx::task_t<void> travel (Player &actor, fx::message_context_t &, const JoinDungeon &request)
     {
@@ -138,6 +219,11 @@ class Town final : public fx::spot_t<Player>
         co_return;
     }
     fx::task_t<void> deliver (Player &actor, fx::message_context_t &, const TownView &message)
+    {
+        co_await actor.context ().bound_session ().send (message).async ();
+    }
+    fx::task_t<void> deliver_rejection (Player &actor, fx::message_context_t &,
+                                        const ActionRejected &message)
     {
         co_await actor.context ().bound_session ().send (message).async ();
     }

@@ -1,5 +1,6 @@
 #pragma once
 #include "config.hpp"
+#include "domain.hpp"
 #include <zlink/framework.hpp>
 
 namespace MyGame
@@ -61,6 +62,10 @@ class TownEntry final : public fx::entry_spot_t<Player>
     {
         if (request.playerId != actor.context ().actor_id ().value ())
             throw std::invalid_argument ("Player identity mismatch");
+        if (const auto reason = ChannelRules::validate (request.channel)) {
+            co_await actor.context ().bound_session ().send (ActionRejected{*reason}).async ();
+            co_return;
+        }
         actor.context ().join_spot (Names::town_id (request.channel), request).defer ();
         co_return;
     }

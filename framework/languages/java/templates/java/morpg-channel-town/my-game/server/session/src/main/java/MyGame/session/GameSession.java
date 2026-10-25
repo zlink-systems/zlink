@@ -6,9 +6,20 @@ import systems.zlink.framework.actors.*;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.streams.*;
 
+import java.util.Set;
 import java.util.concurrent.*;
 
 public final class GameSession implements ZLinkSession {
+    private static final Set<String> ALLOWED_CLIENT_PACKETS = Set.of(
+            JoinTownRequest.class.getSimpleName(),
+            ChangeChannelRequest.class.getSimpleName(),
+            CreatePartyRequest.class.getSimpleName(),
+            JoinPartyRequest.class.getSimpleName(),
+            EnterDungeonRequest.class.getSimpleName(),
+            AdvanceRequest.class.getSimpleName(),
+            ViewRequest.class.getSimpleName(),
+            SessionInfoRequest.class.getSimpleName());
+
     private final ZLinkSessionContext context;
     private final ZLinkActorManager actors;
 
@@ -35,7 +46,10 @@ public final class GameSession implements ZLinkSession {
 
     public CompletionStage<Void> onDispatch(
             ZLinkSessionDispatchContext dispatch, ZLinkMessage payload) {
-        if (dispatch.packetName().equals(SessionInfoRequest.class.getSimpleName())) {
+        String packetName = dispatch.packetName();
+        if (!ALLOWED_CLIENT_PACKETS.contains(packetName))
+            return context.client().send(new ActionRejected(Rules.PACKET_NOT_ALLOWED)).submit();
+        if (packetName.equals(SessionInfoRequest.class.getSimpleName())) {
             var actor = bound();
             return context.client()
                     .reply(
@@ -45,7 +59,7 @@ public final class GameSession implements ZLinkSession {
                                     actor.ref().objectGeneration()))
                     .submit();
         }
-        if (dispatch.packetName().equals(JoinTownRequest.class.getSimpleName())) {
+        if (packetName.equals(JoinTownRequest.class.getSimpleName())) {
             var request = payload.decode(JoinTownRequest.class);
             if (request.playerId() == null || request.playerId().isBlank())
                 throw new IllegalArgumentException("Player ID is required");

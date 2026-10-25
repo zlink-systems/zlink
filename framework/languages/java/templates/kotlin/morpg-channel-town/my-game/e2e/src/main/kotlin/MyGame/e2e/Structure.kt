@@ -136,7 +136,7 @@ fun checkStructure(root: Path) {
                 check(config.townCapacity == config.townIds.size && config.townIds.isNotEmpty())
                 check(
                     config.townIds.all { townId ->
-                        (1..Names.CHANNEL_COUNT).any { Names.townId(it) == townId }
+                        (1..Names.CHANNEL_COUNT).any { Names.townId(it.toLong()) == townId }
                     }
                 )
                 val declared =

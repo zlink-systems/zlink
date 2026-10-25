@@ -22,7 +22,7 @@ class Actions {
         request: JoinTownRequest,
     ) {
         require(request.playerId == actor.context.actorId()) { "Player identity mismatch" }
-        spot.show(actor)
+        spot.showWithParty(actor)
     }
 
     @ZLinkSpotActorSend
@@ -31,7 +31,7 @@ class Actions {
         actor: Player,
         dispatch: ZLinkMessageContext,
         request: ViewRequest,
-    ) = spot.show(actor)
+    ) = spot.showWithParty(actor)
 
     @ZLinkSpotActorSend
     suspend fun advance(
@@ -39,7 +39,31 @@ class Actions {
         actor: Player,
         dispatch: ZLinkMessageContext,
         request: AdvanceRequest,
-    ) = spot.advance()
+    ) = spot.advance(actor)
+
+    @ZLinkSpotActorSend
+    suspend fun enterAgain(
+        spot: Dungeon,
+        actor: Player,
+        dispatch: ZLinkMessageContext,
+        request: EnterDungeonRequest,
+    ) = spot.show(actor)
+
+    @ZLinkSpotActorSend
+    suspend fun travelAgain(
+        spot: Dungeon,
+        actor: Player,
+        dispatch: ZLinkMessageContext,
+        request: JoinDungeon,
+    ) = Unit
+
+    @ZLinkSpotActorSend
+    suspend fun changeChannel(
+        spot: Dungeon,
+        actor: Player,
+        dispatch: ZLinkMessageContext,
+        request: ChangeChannelRequest,
+    ) = actor.context.boundSession().kotlin().send(ActionRejected(Rejection.RUN_IN_PROGRESS)).await()
 
     @ZLinkSpotActorSend
     suspend fun push(
@@ -47,6 +71,16 @@ class Actions {
         actor: Player,
         dispatch: ZLinkMessageContext,
         message: DungeonView,
+    ) {
+        actor.context.boundSession().kotlin().send(message).await()
+    }
+
+    @ZLinkSpotActorSend
+    suspend fun pushTown(
+        spot: Dungeon,
+        actor: Player,
+        dispatch: ZLinkMessageContext,
+        message: TownView,
     ) {
         actor.context.boundSession().kotlin().send(message).await()
     }

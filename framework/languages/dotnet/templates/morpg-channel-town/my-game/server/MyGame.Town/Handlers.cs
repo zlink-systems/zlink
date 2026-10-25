@@ -35,13 +35,7 @@ public sealed class ChangeChannel
         CancellationToken ct
     )
     {
-        actor
-            .Context.JoinSpot(
-                GameNames.TownId(request.Channel),
-                new JoinTownRequest(actor.Context.ActorId, request.Channel)
-            )
-            .Defer();
-        return ValueTask.CompletedTask;
+        return spot.ChangeChannelAsync(actor, request.Channel);
     }
 }
 
@@ -57,7 +51,7 @@ public sealed class CreateParty
         CancellationToken ct
     )
     {
-        return spot.PartyAsync(actor, request.PartyId, true, ct);
+        return spot.PartyAsync(actor, null, true, ct);
     }
 }
 
@@ -136,4 +130,25 @@ public sealed class TownDelivery : IZLinkSpotActorSendHandler<TownSpot, PlayerAc
     {
         return actor.Context.BoundSession.Send(request).Async();
     }
+}
+
+[ZLinkSpotPacketHandler(nameof(RunStarted))]
+public sealed class RunStartedHandler : IZLinkSpotPacketHandler<TownSpot, RunStarted>
+{
+    public ValueTask HandleAsync(TownSpot spot, RunStarted message, CancellationToken ct) =>
+        spot.RunStartedAsync(message);
+}
+
+[ZLinkSpotPacketHandler(nameof(RunCompleted))]
+public sealed class RunCompletedHandler : IZLinkSpotPacketHandler<TownSpot, RunCompleted>
+{
+    public ValueTask HandleAsync(TownSpot spot, RunCompleted message, CancellationToken ct) =>
+        spot.RunCompletedAsync(message);
+}
+
+[ZLinkSpotPacketHandler(nameof(PartyViewRequest))]
+public sealed class PartyViewRequestHandler : IZLinkSpotPacketHandler<TownSpot, PartyViewRequest>
+{
+    public ValueTask HandleAsync(TownSpot spot, PartyViewRequest message, CancellationToken ct) =>
+        spot.ShowPartyAsync(message.PlayerId);
 }

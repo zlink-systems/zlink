@@ -17,6 +17,7 @@ pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
 pwsh -NoProfile -File ./run-e2e.ps1
 pwsh -NoProfile -File ./run-e2e.ps1 -Scenario channel,dungeon,reconnect,update
 pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
+pwsh -NoProfile -File ./run-e2e.ps1 -CheckDomain
 ```
 
 Bash provides the same workflow:
@@ -26,6 +27,7 @@ Bash provides the same workflow:
 ./run-e2e.sh
 ./run-e2e.sh --scenario channel,dungeon,reconnect,update
 ./run-e2e.sh --check-structure
+./run-e2e.sh --check-domain
 ```
 
 For host process debugging, install JDK 25 and add `--local` or `-Local`. Add `--no-build` or `-NoBuild` only together with `--local`/`-Local` and an existing local build. Keep canonical scenario order and assertions; compare first failures with Known issues in the README. Run the build and e2e on both Windows and Linux. The runner validates the structure before it starts nodes, and each run uses its own Redis key prefix, Compose project, and OS-assigned ports; keep that isolation when changing the runner.
@@ -52,7 +54,7 @@ An Actor is a game state object addressed by ID; `Player` in `server/shared/src/
 
 ### E2E client
 
-`e2e/src/main/kotlin/MyGame/e2e/Client.kt` connects through the public stream connector, and `Scenarios.kt` checks results observable by the client. `Nodes.kt` manages the processes and the Compose project for each run, `Structure.kt` validates the composition, and `Program.kt` selects scenarios and sets the exit code (a failed scenario or a failed cleanup exits with 1). `DockerRuntime.kt` runs nodes as containers in Docker mode, and `Cleanup.kt` collects cleanup failures. Verify new gameplay through received client results. The project includes no separate unit-test module.
+`e2e/src/main/kotlin/MyGame/e2e/Client.kt` connects through the public stream connector, and `Scenarios.kt` checks results observable by the client. `DomainChecks.kt` checks PartyRun and DungeonState boundaries without starting nodes; run it with `./run-e2e.sh --check-domain`. `Nodes.kt` manages the processes and the Compose project for each run, `Structure.kt` validates the composition, and `Program.kt` selects scenarios and sets the exit code (a failed scenario or a failed cleanup exits with 1). `DockerRuntime.kt` runs nodes as containers in Docker mode, and `Cleanup.kt` collects cleanup failures. Verify new gameplay through received client results. The project includes no separate unit-test module.
 
 ## ZLink concepts in this project
 
@@ -92,46 +94,16 @@ Requests in the example game follow this path. Reading the code along this path 
 6. A reconnecting client sends `JoinTownRequest` on a new Session. The same Actor is bound, and `Actions.reconnect` in the Spot that holds the Actor (`Town` or `Dungeon`) resends the current view. A Session disconnect does not remove the Actor from its Spot.
 7. To replace a node, `drain` in `runNode` requests relocation. Framework takes the application state from `capture` in `TownTransfer`, `DungeonTransfer`, and `PlayerTransfer` and calls `restore` on another node.
 
-## Developing from this sample
+## Extending the template domain
 
-This sample shows how the features work together, so read and run it rather than turning it into your game. Start your own project from the Kotlin starter: choose Kotlin in the Initializer at [ZLink Start](https://zlink.systems/start), or use `framework/languages/java/templates/kotlin/starter/my-game` in the ZLink repository. Then transfer the features you need from this sample one at a time. The starter's `AGENTS.md` owns the choice between structures; this section covers only `morpg-channel-town`. Keep this sample unchanged next to your project as a reference.
+Extend this template's domain to build a MORPG server. Follow the [README](README.md) for execution and deployment.
 
-### Run the sample first
+1. Extend channel population and party rules in `server/town/src/main/kotlin/MyGame/town/Town.kt`, and Dungeon roster and stage rules in `server/instance/src/main/kotlin/MyGame/instance/Dungeon.kt`. `server/shared/src/main/kotlin/MyGame/PartyRun.kt` owns run transitions, Dungeon preparation and progression, and channel bounds. Keep each decision in its owning domain.
+2. Add shared contracts in `server/shared/src/main/kotlin/MyGame/Contracts.kt`. Distinguish client input from internal messages and use the default typed serializer.
+3. Add new client packets to the Session allowlist in `server/session/src/main/kotlin/MyGame/session/Program.kt`. Internal messages must not be accepted from clients.
+4. Add scenarios in `e2e/src/main/kotlin/MyGame/e2e/Scenarios.kt` that observe replies and unchanged state after rejection. Update the README scenario table and `run.scenarios` in `zlink.structure.json` together.
 
-Before transferring anything, run the build and e2e once with the [Development commands](#development-commands) to confirm the downloaded sample works and to see its behavior. This result is the baseline for comparison. If it fails, compare the failure with Known issues in the [README](README.md) first.
-
-### Features to transfer
-
-Feature names match the feature table in the starter's `AGENTS.md`. Paths are relative to this directory. The starter has one Session node and the `connect` scenario only, so the last column lists what grows in the starter with each feature.
-
-| Feature | File in this sample | What to transfer | What to grow in the starter alongside |
-| --- | --- | --- | --- |
-| Typed messages | `server/shared/src/main/kotlin/MyGame/Contracts.kt` | The classes of the features you adopt: `JoinTownRequest`, `ChangeChannelRequest`, `CreatePartyRequest`, `JoinPartyRequest`, `EnterDungeonRequest`, `AdvanceRequest`, `ViewRequest`, `PartyView`, `TownView`, `DungeonView`, `PrepareDungeon`, `DungeonPrepared`, `JoinDungeon`, `ActionRejected`; `SessionInfoRequest` and `SessionInfo` only if your client needs them | The names, `townId`, and `dungeonId` in `Names` and the reasons in `Rejection`; the starter already has the node `Roles` and the control strings |
-| Actor | `server/shared/src/main/kotlin/MyGame/Player.kt` | `Player` with `onJoinCompletedSuspending` (rejection reported as `ActionRejected`), `PlayerFactory`, and `PlayerTransfer` | A new `server/town/` Gradle module (included in `settings.gradle.kts`) with its `Program.kt` and the `server/config/townA.json`, `server/config/townB.json` files, its start-up in `e2e/.../Nodes.kt`, and a `Roles` entry; the `addActorFactory` registration in `Program.kt`; the node declarations in `zlink.structure.json` and the matching `Structure.kt` check (the starter's check accepts only the `session` role) |
-| Spot | `server/town/src/main/kotlin/MyGame/town/Town.kt` | `Town` with `TownState` (players and parties), admission, the party rules, and the `Actions` handlers | The `addSpotFactory` registration in `Program.kt` (`stableTypeLimit`, `SPOT_WIDE`) and `townCapacity` and `townIds` in `NodeConfig`, with the Town creation in `Hosting.kt`; the `spots` declarations in `zlink.structure.json` and the `Structure.kt` check that compares them with the registrations (the starter's check requires no Spots) |
-| Entry and first admission | `server/shared/src/main/kotlin/MyGame/admission/Entry.kt` (`Entry`, `EntryActions`), `Actions.reconnect` in `server/town/src/main/kotlin/MyGame/town/Handlers.kt` | `EntryActions.join`: the identity check and the deferred join to the town of the requested channel, and the identity check and view resend of `Actions.reconnect` | The `addEntrySpot` registration, `addHandlersFromPackageOf<EntryActions>()`, and the `entry` declaration; the `channel` scenario for first entry and the `reconnect` scenario that compares state after reconnection |
-| Session binding | `server/session/src/main/kotlin/MyGame/session/Program.kt` (`GameSession`) | The first-packet branch: find or create the Actor, `bindOrGet`, and relay the original typed packet | The same first-packet type as `EntryActions.join`; transfer it into the starter's `PlayerSession.kt` |
-| Host relocation | `TownTransfer` in `server/town/src/main/kotlin/MyGame/town/Town.kt`, `DungeonTransfer` in `server/instance/src/main/kotlin/MyGame/instance/Dungeon.kt`, `PlayerTransfer` in `server/shared/src/main/kotlin/MyGame/Player.kt`, and `server/shared/src/main/kotlin/MyGame/Transfer.kt` | `TownState` and `DungeonState` stored as JSON with `capture` and `restore`, the empty Player adapter, and `ensureActive` | The `preserveStateWith` registrations; the `update` scenario, which checks that connections and dungeon state survive a server replacement and that the replacement node hosts a new dungeon |
-| Dynamic dungeon | `Town.enter` in `server/town/src/main/kotlin/MyGame/town/Town.kt`; `server/instance/src/main/kotlin/MyGame/instance/Program.kt`, `server/instance/src/main/kotlin/MyGame/instance/Dungeon.kt`, `Preparation` in `server/instance/src/main/kotlin/MyGame/instance/Handlers.kt` | The dynamic Dungeon creation with `getOrCreate` and `requestToSpot` preparation, the prepared-member admission, and the stage advance | A new `server/instance/` Gradle module with `instanceA.json` and `instanceB.json`, its start-up, and role; `dungeonCapacity` in `NodeConfig`; the dynamic `dungeon` Spot and the `GetOrCreate` edge in `zlink.structure.json`; the `dungeon` scenario |
-| World/channel selection | `Actions.change` in `server/town/src/main/kotlin/MyGame/town/Handlers.kt`, `Names.townId` in `server/shared/src/main/kotlin/MyGame/Contracts.kt` | The channel change as a deferred Spot join to the town of the new channel | A second Town node and its fixed Town in `townIds`; the `channel` scenario, which checks that the connection and `SessionInfo` survive the change |
-
-The channels of this sample are player-selected towns (Town Spots). They differ from messaging subscription channels, and this sample registers no pub/sub subscriptions.
-
-### Transfer order and rules
-
-Transfer one row at a time and run the build, the structure check, and the related e2e scenario after each. Add a scenario ID to `Names.SCENARIOS` in `Contracts.kt`, to the `scenario` function in `e2e/src/main/kotlin/MyGame/e2e/Scenarios.kt`, to `run.scenarios`, and to the selection examples in `run.commands` of `zlink.structure.json` together. Judge results by the replies and events actually received; do not make tests pass with fixed sleeps or longer deadlines.
-
-Start with the message contracts. Define the typed classes in `Contracts.kt` first, then move each handler that fails to compile to the new messages. When you change the first packet (`JoinTownRequest`), update the first-packet branch in `GameSession`, `EntryActions.join`, and the `reconnect` handlers of `Town` and `Dungeon` to receive the same type.
-
-Keep each piece of state in the object that decides it. The players and parties belong in `Town`, the members and stage in `Dungeon`, and `Player` keeps no state. When you change `TownState` or `DungeonState` fields, update `TownTransfer` or `DungeonTransfer` together. A missing field disappears after relocation, and the `update` scenario detects the loss.
-
-Prepare the Dungeon before any member joins it: `Town.enter` waits for `Preparation.prepare` to answer and only then pushes `JoinDungeon`, because `Dungeon.onActorJoinSuspending` admits only the prepared members. Capacity is one Town per Town node (`townCapacity`) and one Dungeon per Instance node (`dungeonCapacity`) so that placement is observable; keep that arrangement when you add a scenario that creates them.
-
-Declare one Entry in the structure for each Town and Instance node, which register the shared `Entry`, and none for other roles; the Framework's default Entries are not part of the structure. Declare the dynamic `Dungeon` for every Instance node that owns it. Start the Town nodes one at a time and wait for each `READY` before starting the next, with `townCapacity` equal to the node's fixed Town count (`townIds`), so that earlier nodes are full and later nodes are absent during bootstrap and only the declared owner can create each fixed Town. The structure check enforces the exact Town capacity and one Dungeon per Instance node.
-
-To name roles differently from this sample, change the type names, `Names`, `server/config/`, and `zlink.structure.json` at once. Do the renaming in its own change, separate from transferring a feature, so failures are easier to trace.
-
-If `update` fails after a transfer, first check whether the snapshot is missing any state, then use the message flow in [Debugging](#debugging) to find the first failing step.
+When adding state fields, update relocation capture and restore together. Framework owns routing, membership and binding; keep those decisions out of the game domain.
 
 ## Development considerations
 

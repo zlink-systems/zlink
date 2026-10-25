@@ -17,6 +17,7 @@ pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
 pwsh -NoProfile -File ./run-e2e.ps1
 pwsh -NoProfile -File ./run-e2e.ps1 -Scenario channel,dungeon,reconnect,update
 pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
+pwsh -NoProfile -File ./run-e2e.ps1 -CheckDomain
 ```
 
 Bash도 같은 절차를 실행한다.
@@ -26,6 +27,7 @@ Bash도 같은 절차를 실행한다.
 ./run-e2e.sh
 ./run-e2e.sh --scenario channel,dungeon,reconnect,update
 ./run-e2e.sh --check-structure
+./run-e2e.sh --check-domain
 ```
 
 로컬 process 디버깅은 JDK 25를 설치한 뒤 `--local` 또는 `-Local`로 실행한다. 로컬 빌드가 있으면 `--no-build` 또는 `-NoBuild`를 추가하며, 이 옵션은 `--local`/`-Local`과 함께만 쓴다. 시나리오 순서와 assertion은 유지하며 최초 실패를 README의 Known issues와 대조한다. 빌드와 e2e는 Windows와 Linux 모두에서 실행한다. runner는 node를 시작하기 전에 구조를 검사하며, 실행마다 고유한 Redis key prefix, Compose project, OS가 배정한 포트를 쓰므로 runner를 고칠 때도 이 격리를 유지한다.
@@ -92,46 +94,16 @@ Actor가 소속 Spot을 바꾸는 동작은 membership 변경이다. 대상 Spot
 6. 재접속한 client는 새 Session에서 `JoinTownRequest`를 보낸다. 같은 Actor가 binding되고 Actor가 속한 Spot(`Town` 또는 `Dungeon`)의 `Actions.reconnect`가 현재 view를 다시 보낸다. Session 연결이 끊겨도 Actor는 Spot에 남는다.
 7. node를 교체할 때 `runNode`의 `drain`이 relocation을 요청한다. Framework는 `TownTransfer`·`DungeonTransfer`·`PlayerTransfer`의 `capture`로 application 상태를 받아 다른 node에서 `restore`한다.
 
-## 이 샘플을 보며 개발하기
+## 템플릿 도메인 확장
 
-이 샘플은 기능들이 함께 동작하는 방식을 보여 주므로, 자기 게임으로 바꾸지 않고 읽고 실행하는 용도로 쓴다. 자기 프로젝트는 Kotlin 기본 셋업에서 시작한다. [ZLink Start](https://zlink.systems/start)의 Initializer에서 Kotlin을 고르거나 ZLink 저장소의 `framework/languages/java/templates/kotlin/starter/my-game`을 사용한다. 그다음 필요한 기능을 이 샘플에서 하나씩 옮긴다. 구조 선택은 기본 셋업의 `AGENTS.md`가 설명하며, 이 절은 `morpg-channel-town`만 다룬다. 이 샘플은 바꾸지 않고 프로젝트 옆에 참고용으로 둔다.
+이 템플릿의 도메인을 확장하여 MORPG 서버를 만든다. 실행과 배포 절차는 [README](README.md)를 따른다.
 
-### 샘플 먼저 실행하기
+1. `server/town/src/main/kotlin/MyGame/town/Town.kt`에서 채널 인원과 파티 규칙을 확장하고, `server/instance/src/main/kotlin/MyGame/instance/Dungeon.kt`에서 던전 멤버와 단계 규칙을 확장한다. `server/shared/src/main/kotlin/MyGame/PartyRun.kt`는 run 전이·던전 준비·진행·채널 범위를 판정한다. 각 상태의 판정 위치를 도메인 한 곳에 유지한다.
+2. 새 공통 계약은 `server/shared/src/main/kotlin/MyGame/Contracts.kt`에 추가한다. 클라이언트 입력과 서버 내부 메시지를 구분하고 기본 typed serializer를 사용한다.
+3. 새 클라이언트 패킷은 `server/session/src/main/kotlin/MyGame/session/Program.kt`의 Session 허용 목록에 추가한다. 내부 메시지는 클라이언트가 보낼 수 없다.
+4. `e2e/src/main/kotlin/MyGame/e2e/Scenarios.kt`에 응답과 거부 뒤 상태 불변을 관찰하는 시나리오를 추가한다. `DomainChecks.kt`는 node 시작 없이 PartyRun과 DungeonState 경계를 검사하며 `./run-e2e.sh --check-domain`으로 실행한다. README의 시나리오 표와 `zlink.structure.json`의 `run.scenarios`를 함께 맞춘다.
 
-옮기기 전에 [개발 명령](#개발-명령)으로 빌드와 e2e를 한 번 실행해 받은 샘플이 동작하는지 확인하고 동작을 본다. 이 결과가 이후 비교의 기준이 된다. 실패하면 먼저 [README](README.md)의 Known issues와 대조한다.
-
-### 옮길 기능
-
-기능 이름은 기본 셋업 `AGENTS.md`의 기능 표와 같다. 경로는 이 디렉터리를 기준으로 한다. 기본 셋업에는 Session node 하나와 `connect` 시나리오만 있으므로, 마지막 열은 기능마다 기본 셋업에서 함께 늘릴 것이다.
-
-| 기능 | 이 샘플의 파일 | 옮길 것 | 기본 셋업에서 함께 늘릴 것 |
-| --- | --- | --- | --- |
-| Typed 메시지 | `server/shared/src/main/kotlin/MyGame/Contracts.kt` | 사용할 기능의 클래스: `JoinTownRequest`, `ChangeChannelRequest`, `CreatePartyRequest`, `JoinPartyRequest`, `EnterDungeonRequest`, `AdvanceRequest`, `ViewRequest`, `PartyView`, `TownView`, `DungeonView`, `PrepareDungeon`, `DungeonPrepared`, `JoinDungeon`, `ActionRejected`. `SessionInfoRequest`·`SessionInfo`는 client가 필요로 할 때만 옮긴다 | `Names`의 이름·`townId`·`dungeonId`와 `Rejection`의 사유. node `Roles`와 제어 문자열은 기본 셋업에 이미 있다 |
-| Actor | `server/shared/src/main/kotlin/MyGame/Player.kt` | `onJoinCompletedSuspending`(거부를 `ActionRejected`로 전달)을 가진 `Player`, `PlayerFactory`, `PlayerTransfer` | 새 `server/town/` Gradle 모듈(`settings.gradle.kts`에 포함)과 그 `Program.kt`, `server/config/townA.json`, `server/config/townB.json`, `e2e/.../Nodes.kt`의 시작 처리, `Roles` 항목. `Program.kt`의 `addActorFactory` 등록. `zlink.structure.json`의 node 선언과 이에 맞춘 `Structure.kt` 검사(기본 셋업의 검사는 `session` 역할만 받는다) |
-| Spot | `server/town/src/main/kotlin/MyGame/town/Town.kt` | `TownState`(플레이어와 파티)를 가진 `Town`, admission, 파티 규칙, `Actions` handler | `Program.kt`의 `addSpotFactory` 등록(`stableTypeLimit`, `SPOT_WIDE`)과 `NodeConfig`의 `townCapacity`·`townIds`, `Hosting.kt`의 Town 생성. `zlink.structure.json`의 `spots` 선언과 이를 등록과 비교하는 `Structure.kt` 검사(기본 셋업의 검사는 Spot이 없다고 단정한다) |
-| Entry·첫 입장 | `server/shared/src/main/kotlin/MyGame/admission/Entry.kt`의 `Entry`·`EntryActions`, `server/town/src/main/kotlin/MyGame/town/Handlers.kt`의 `Actions.reconnect` | `EntryActions.join`: identity 확인과 요청한 channel의 town으로의 deferred join, `Actions.reconnect`의 identity 확인과 view 재전송 | `addEntrySpot` 등록, `addHandlersFromPackageOf<EntryActions>()`, `entry` 선언. 첫 입장을 보는 `channel` 시나리오와 재접속 뒤 상태를 비교하는 `reconnect` 시나리오 |
-| Session binding | `server/session/src/main/kotlin/MyGame/session/Program.kt` (`GameSession`) | 첫 패킷 분기: Actor 조회·생성, `bindOrGet`, 원래 typed 패킷 relay | `EntryActions.join`과 같은 첫 패킷 타입. 기본 셋업의 `PlayerSession.kt`에 옮긴다 |
-| Host relocation | `server/town/src/main/kotlin/MyGame/town/Town.kt`의 `TownTransfer`, `server/instance/src/main/kotlin/MyGame/instance/Dungeon.kt`의 `DungeonTransfer`, `server/shared/src/main/kotlin/MyGame/Player.kt`의 `PlayerTransfer`, `server/shared/src/main/kotlin/MyGame/Transfer.kt` | JSON으로 저장하는 `TownState`·`DungeonState`와 `capture`·`restore`, 비어 있는 Player adapter, `ensureActive` | `preserveStateWith` 등록. 서버 교체 뒤에도 연결·던전 상태가 유지되고 대체 node가 새 던전을 받는지 판정하는 `update` 시나리오 |
-| 동적 던전 | `server/town/src/main/kotlin/MyGame/town/Town.kt`의 `Town.enter`, `server/instance/src/main/kotlin/MyGame/instance/Program.kt`, `server/instance/src/main/kotlin/MyGame/instance/Dungeon.kt`, `server/instance/src/main/kotlin/MyGame/instance/Handlers.kt`의 `Preparation` | `getOrCreate`와 `requestToSpot` 준비로 하는 동적 Dungeon 생성, 준비된 멤버만 받는 admission, 단계 진행 | 새 `server/instance/` Gradle 모듈과 `instanceA.json`·`instanceB.json`, 시작 처리, 역할. `NodeConfig`의 `dungeonCapacity`. `zlink.structure.json`의 동적 `dungeon` Spot과 `GetOrCreate` edge. `dungeon` 시나리오 |
-| 월드·채널 선택 | `Actions.change` in `server/town/src/main/kotlin/MyGame/town/Handlers.kt`, `Names.townId` in `server/shared/src/main/kotlin/MyGame/Contracts.kt` | 새 channel의 town으로 하는 deferred Spot join으로서의 channel 변경 | 두 번째 Town node와 `townIds`의 고정 Town. 변경 뒤에도 연결과 `SessionInfo`가 유지되는지 보는 `channel` 시나리오 |
-
-이 샘플의 channel은 플레이어가 선택하는 마을(Town Spot)이다. 메시지 구독 channel과는 구분하며, 이 샘플에는 pub/sub 구독이 없다.
-
-### 옮기는 순서와 규칙
-
-기능은 표의 행 하나씩 옮기고, 하나를 옮길 때마다 빌드, 구조 검사, 관련 e2e 시나리오를 실행한다. 시나리오 ID는 `Contracts.kt`의 `Names.SCENARIOS`, `e2e/src/main/kotlin/MyGame/e2e/Scenarios.kt`의 `scenario` 함수, `zlink.structure.json`의 `run.scenarios`, `run.commands`의 시나리오 선택 예시에 함께 추가한다. 판정은 실제로 받은 응답과 이벤트로 하고, 고정 대기나 기한 확대로 통과시키지 않는다.
-
-메시지 contract부터 옮긴다. `Contracts.kt`에 typed 클래스를 먼저 정의한 뒤, 컴파일 오류가 나는 handler를 하나씩 새 메시지로 옮긴다. 첫 패킷(`JoinTownRequest`)을 바꾸면 `GameSession`의 첫 패킷 분기, `EntryActions.join`, `Town`과 `Dungeon`의 `reconnect` handler가 같은 타입을 받도록 함께 고친다.
-
-상태는 그 상태를 결정하는 객체에 둔다. 플레이어와 파티는 `Town`, 멤버와 단계는 `Dungeon`에 두며 `Player`는 상태를 갖지 않는다. `TownState`나 `DungeonState` 필드를 바꿀 때는 `TownTransfer`나 `DungeonTransfer`를 함께 고친다. 빠뜨린 필드는 relocation 뒤 사라지고, `update` 시나리오가 그 손실을 잡는다.
-
-멤버가 참가하기 전에 Dungeon을 준비한다. `Dungeon.onActorJoinSuspending`이 준비된 멤버만 받으므로 `Town.enter`는 `Preparation.prepare`의 응답을 기다린 뒤에만 `JoinDungeon`을 push한다. 용량은 Town node당 Town 하나(`townCapacity`), Instance node당 Dungeon 하나(`dungeonCapacity`)여서 배치를 관찰할 수 있다. 이를 만드는 시나리오를 추가할 때도 이 구성을 유지한다.
-
-공유 `Entry`를 등록하는 Town·Instance node마다 structure에 Entry를 하나씩 선언하고 다른 role에는 선언하지 않는다. Framework 기본 Entry는 structure에 포함하지 않는다. 동적 `Dungeon`은 그것을 소유한 모든 Instance node에 선언한다. Town node는 하나씩 시작하며 각 `READY`를 기다린 뒤 다음을 시작하고, `townCapacity`를 node의 고정 Town 수(`townIds`)와 같게 두어 bootstrap 동안 앞선 node는 가득 차고 뒤의 node는 아직 없게 하여 선언한 소유자만 각 고정 Town을 만들 수 있게 한다. 구조 검사는 정확한 Town 용량과 Instance node당 Dungeon 하나를 확인한다.
-
-역할 이름을 이 샘플과 다르게 정하려면 타입 이름, `Names`, `server/config/`, `zlink.structure.json`을 한 번에 바꾼다. 이름 변경은 기능을 옮기는 변경과 나눠서 진행하면 실패 원인을 찾기 쉽다.
-
-옮긴 뒤 `update`가 실패하면 snapshot에 빠진 상태가 있는지 먼저 확인한다. 그다음 [디버깅](#디버깅)의 message flow로 첫 실패 단계를 찾는다.
+상태 필드를 추가할 때 relocation capture와 restore를 함께 수정한다. Framework가 소유한 라우팅·membership·binding 결정을 도메인에 재구현하지 않는다.
 
 ## 개발 시 주의점
 

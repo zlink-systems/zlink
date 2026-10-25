@@ -22,6 +22,11 @@ class EntryActions {
         request: JoinTownRequest,
     ) {
         require(request.playerId == actor.context.actorId()) { "Player identity mismatch" }
+        val reason = ChannelRules.validate(request.channel)
+        if (reason != null) {
+            actor.context.boundSession().kotlin().send(ActionRejected(reason)).await()
+            return
+        }
         actor.context.joinSpot(Names.townId(request.channel), request).defer()
     }
 }

@@ -19,18 +19,13 @@ public final class TownActions {
     @ZLinkSpotActorSend
     public CompletionStage<Void> change(
             Town spot, Player actor, ZLinkMessageContext context, ChangeChannelRequest request) {
-        actor.context()
-                .joinSpot(
-                        Names.townId(request.channel()),
-                        new JoinTownRequest(actor.context().actorId(), request.channel()))
-                .defer();
-        return CompletableFuture.completedFuture(null);
+        return spot.changeChannel(actor, request.channel());
     }
 
     @ZLinkSpotActorSend
     public CompletionStage<Void> create(
             Town spot, Player actor, ZLinkMessageContext context, CreatePartyRequest request) {
-        return spot.party(actor, request.partyId(), true);
+        return spot.party(actor, null, true);
     }
 
     @ZLinkSpotActorSend

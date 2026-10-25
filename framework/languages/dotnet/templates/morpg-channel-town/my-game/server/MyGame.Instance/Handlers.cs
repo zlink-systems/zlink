@@ -19,7 +19,7 @@ public sealed class DungeonReconnect
     {
         if (request.PlayerId != actor.Context.ActorId)
             throw new InvalidDataException("Player identity mismatch.");
-        return spot.ShowAsync(actor);
+        return spot.ShowWithPartyAsync(actor);
     }
 }
 
@@ -34,7 +34,7 @@ public sealed class DungeonQuery : IZLinkSpotActorSendHandler<DungeonSpot, Playe
         CancellationToken ct
     )
     {
-        return spot.ShowAsync(actor);
+        return spot.ShowWithPartyAsync(actor);
     }
 }
 
@@ -49,7 +49,7 @@ public sealed class Advance : IZLinkSpotActorSendHandler<DungeonSpot, PlayerActo
         CancellationToken ct
     )
     {
-        return spot.AdvanceAsync(ct);
+        return spot.AdvanceAsync(actor, ct);
     }
 }
 
@@ -67,4 +67,37 @@ public sealed class DungeonDelivery
     {
         return actor.Context.BoundSession.Send(request).Async();
     }
+}
+
+[ZLinkSpotActorSendHandler(nameof(TownView))]
+public sealed class TownDelivery : IZLinkSpotActorSendHandler<DungeonSpot, PlayerActor, TownView>
+{
+    public ValueTask HandleAsync(
+        DungeonSpot spot,
+        PlayerActor actor,
+        IZLinkMessageContext context,
+        TownView request,
+        CancellationToken ct
+    ) => actor.Context.BoundSession.Send(request).Async();
+}
+
+[ZLinkSpotActorSendHandler(nameof(EnterDungeonRequest))]
+public sealed class DungeonEnter : IZLinkSpotActorSendHandler<DungeonSpot, PlayerActor, EnterDungeonRequest>
+{
+    public ValueTask HandleAsync(DungeonSpot spot, PlayerActor actor, IZLinkMessageContext context, EnterDungeonRequest request, CancellationToken ct)
+        => spot.ShowAsync(actor);
+}
+
+[ZLinkSpotActorSendHandler(nameof(JoinDungeon))]
+public sealed class DungeonTravelRepeat : IZLinkSpotActorSendHandler<DungeonSpot, PlayerActor, JoinDungeon>
+{
+    public ValueTask HandleAsync(DungeonSpot spot, PlayerActor actor, IZLinkMessageContext context, JoinDungeon request, CancellationToken ct)
+        => ValueTask.CompletedTask;
+}
+
+[ZLinkSpotActorSendHandler(nameof(ChangeChannelRequest))]
+public sealed class DungeonChangeChannel : IZLinkSpotActorSendHandler<DungeonSpot, PlayerActor, ChangeChannelRequest>
+{
+    public ValueTask HandleAsync(DungeonSpot spot, PlayerActor actor, IZLinkMessageContext context, ChangeChannelRequest request, CancellationToken ct)
+        => actor.Context.BoundSession.Send(new ActionRejected(Rejection.RunInProgress)).Async();
 }

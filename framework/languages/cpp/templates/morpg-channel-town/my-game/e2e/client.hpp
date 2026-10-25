@@ -1,6 +1,9 @@
 #pragma once
 #include "world.hpp"
 #include <zlink/stream_connector.hpp>
+#include <cstddef>
+#include <condition_variable>
+#include <variant>
 
 namespace MyGame::E2E
 {
@@ -18,15 +21,31 @@ inline void checked (sc::result_t<void> result)
 }
 inline bool same_dungeon_state (const DungeonView &a, const DungeonView &b)
 {
-    return a.dungeonId == b.dungeonId && a.partyId == b.partyId && a.members == b.members
-           && a.stage == b.stage;
+    return a.dungeonId == b.dungeonId && a.partyId == b.partyId && a.runId == b.runId
+           && a.phase == b.phase && a.members == b.members && a.stage == b.stage;
 }
 class Client
 {
-    std::mutex error_mutex_;
-    std::string error_;
+    using Received = std::variant<TownView, DungeonView, ActionRejected, SessionInfo>;
+    std::mutex mutex_;
+    std::condition_variable changed_;
+    std::vector<Received> received_;
+    std::string failure_;
+    int disconnects_ = 0;
+    bool closed_ = false;
     sc::connector_t connector_;
-    sc::subscription_t error_subscription_;
+    std::vector<sc::subscription_t> subscriptions_;
+
+    template <class T> void observe ()
+    {
+        subscriptions_.push_back (connector_.on<T> ([this] (const auto &message) {
+            {
+                std::lock_guard lock (mutex_);
+                received_.push_back (message.payload);
+            }
+            changed_.notify_all ();
+        }));
+    }
 
   public:
     const std::string player_id;
@@ -34,45 +53,99 @@ class Client
     {
         sc::connector_options_t options;
         options.endpoint = endpoint;
+        options.dispatch_mode = sc::dispatch_mode_t::immediate;
         options.reconnect.enabled = false;
         options.wait_timeout = Limits::packet;
         connector_ = sc::connector_factory_t::create (options);
-        error_subscription_ = connector_.on_error ([this] (const auto &error) {
-            std::lock_guard lock (error_mutex_);
-            if (error_.empty ())
-                error_ = error.message;
-        });
+        observe<TownView> ();
+        observe<DungeonView> ();
+        observe<ActionRejected> ();
+        observe<SessionInfo> ();
+        subscriptions_.push_back (connector_.on_error ([this] (const auto &error) {
+            {
+                std::lock_guard lock (mutex_);
+                if (failure_.empty ())
+                    failure_ = error.message;
+            }
+            changed_.notify_all ();
+        }));
+        subscriptions_.push_back (connector_.on_disconnected ([this] (auto) {
+            {
+                std::lock_guard lock (mutex_);
+                ++disconnects_;
+            }
+            changed_.notify_all ();
+        }));
         checked (connector_.connect ());
+    }
+    ~Client ()
+    {
+        if (closed_)
+            return;
+        const auto result = connector_.close ();
+        if (!result)
+            std::cerr << "Client cleanup failed: "
+                      << (result.error () ? result.error ()->message : "Connector close failed")
+                      << std::endl;
+    }
+    std::size_t mark ()
+    {
+        std::lock_guard lock (mutex_);
+        return received_.size ();
     }
     void healthy ()
     {
         require (connector_.is_connected (), "Client disconnected");
-        std::lock_guard lock (error_mutex_);
-        require (error_.empty (), "Connector error: " + error_);
+        std::lock_guard lock (mutex_);
+        require (failure_.empty (), "Connector error: " + failure_);
+        require (disconnects_ == 0, "Unexpected disconnect");
     }
-    template <class Reply, class Predicate> Reply receive (Predicate predicate)
+    template <class T, class Predicate> T wait (std::size_t from, Predicate predicate)
     {
-        const auto reply = checked (connector_.wait_for<Reply> ()
-                                      .where ([predicate] (const auto &message) {
-                                          return predicate (message.payload);
-                                      })
-                                      .submit ())
-                             .payload;
+        std::unique_lock lock (mutex_);
+        const auto find = [&] () {
+            return std::find_if (received_.begin () + static_cast<std::ptrdiff_t> (from),
+                                 received_.end (), [&] (const auto &item) {
+                                     const auto *value = std::get_if<T> (&item);
+                                     return value && predicate (*value);
+                                 });
+        };
+        require (changed_.wait_for (lock, Limits::packet,
+                                    [&] {
+                                        return find () != received_.end () || !failure_.empty ()
+                                               || disconnects_ != 0;
+                                    }),
+                 std::string ("Packet deadline: ") + T::packet_name);
+        require (failure_.empty (), "Connector error: " + failure_);
+        require (disconnects_ == 0, "Disconnected waiting for packet");
+        const auto result = find ();
+        require (result != received_.end (), "Missing packet");
+        return std::get<T> (*result);
+    }
+    template <class T, class Predicate> T receive (Predicate predicate)
+    {
+        return wait<T> (0, std::move (predicate));
+    }
+    template <class T> T receive () { return wait<T> (0, [] (const T &) { return true; }); }
+    template <class T> void send (const T &message)
+    {
         healthy ();
-        return reply;
+        connector_.send (message).submit ();
     }
     template <class Reply, class Request, class Predicate>
     Reply exchange (const Request &request, Predicate predicate)
     {
+        const auto from = mark ();
+        send (request);
+        const auto result = wait<Reply> (from, std::move (predicate));
         healthy ();
-        connector_.send (request).submit ();
-        return receive<Reply> (predicate);
+        return result;
     }
     template <class Reply, class Request> Reply exchange (const Request &request)
     {
         return exchange<Reply> (request, [] (const auto &) { return true; });
     }
-    TownView join (int channel)
+    TownView join (std::int64_t channel)
     {
         return exchange<TownView> (
           JoinTownRequest{player_id, channel}, [this, channel] (const auto &view) {
@@ -92,8 +165,11 @@ class Client
     }
     void close ()
     {
+        if (closed_)
+            return;
         healthy ();
         checked (connector_.close ());
+        closed_ = true;
     }
 };
 }

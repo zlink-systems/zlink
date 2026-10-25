@@ -17,6 +17,7 @@ pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
 pwsh -NoProfile -File ./run-e2e.ps1
 pwsh -NoProfile -File ./run-e2e.ps1 -Scenario channel,dungeon,reconnect,update
 pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
+pwsh -NoProfile -File ./run-e2e.ps1 -CheckDomain
 ```
 
 Bash도 같은 절차를 실행한다.
@@ -26,6 +27,7 @@ Bash도 같은 절차를 실행한다.
 ./run-e2e.sh
 ./run-e2e.sh --scenario channel,dungeon,reconnect,update
 ./run-e2e.sh --check-structure
+./run-e2e.sh --check-domain
 ```
 
 호스트 process 디버깅은 Node.js 22 이상과 npm을 설치한 뒤 `--local` 또는 `-Local`로 실행한다. node는 로컬 process로, Redis는 Docker로 실행된다. 로컬 빌드가 있으면 `--no-build` 또는 `-NoBuild`를 추가한다. 시나리오 순서와 assertion은 유지하며 최초 실패를 README의 Known issues와 대조한다.
@@ -56,7 +58,7 @@ Actor를 받아 공통 게임 규칙을 실행하는 상태 객체가 Spot이며
 
 ### E2E client
 
-`e2e/client.mts`는 공개 connector로 게임에 접속하여 client가 관찰할 결과를 검사하는 시나리오를 실행한다. `e2e/runner.ts`는 node를 시작하고 로그를 수집하며 실행이 만든 자원을 정리하고, `e2e/structure.ts`는 구성을 검사한다. 새 게임 동작은 client가 받은 결과로 검증하며, 별도 unit-test 프로젝트는 포함되어 있지 않다.
+`e2e/client.mts`는 공개 connector로 게임에 접속하여 client가 관찰할 결과를 검사하는 시나리오를 실행한다. `e2e/domain-checks.ts`는 node를 시작하지 않고 도메인 경계를 검사하며 `--check-domain`으로 따로 실행한다. `e2e/runner.ts`는 node를 시작하고 로그를 수집하며 실행이 만든 자원을 정리하고, `e2e/structure.ts`는 구성을 검사한다. 새 게임 동작은 client가 받은 결과로 검증하며, 별도 unit-test 프로젝트는 포함되어 있지 않다.
 
 ## 프로젝트의 ZLink 개념
 
@@ -91,46 +93,20 @@ Actor가 소속 Spot을 바꾸는 동작은 membership 변경이다. 대상 Spot
 1. client가 Session node에 STREAM으로 연결하고 첫 패킷 `JoinTownRequest`를 보낸다. `Session`은 첫 패킷 이름을 확인하고 `playerId`로 Player Actor를 `getOrCreate`한 뒤 Session에 binding하고 원래 패킷을 relay한다.
 2. 새 Actor는 Entry Spot `Entry`에서 시작한다. `EnterTown` handler가 `Player.assertIdentity`로 identity를 확인하고 `joinSpot(townId(channel), ...).defer()`를 요청한다. `Town.onActorJoin`이 플레이어를 수락하고 `Town.onJoinedActor`가 Town의 플레이어에게 `TownView`를 broadcast한다.
 3. `ChangeChannel`은 다른 Town으로의 참가를 요청한다. 그 Town이 다른 node에 있어도 client 연결과 binding된 Session은 바뀌지 않는다.
-4. `CreateParty`와 `JoinParty`는 `Town`의 파티를 바꾸고 `TownView`를 broadcast한다. 리더가 `EnterDungeon`을 보내면 `Town.enter`가 `Dungeon`을 `getOrCreate`하고, 여기에 `PrepareDungeon`을 request로 보낸 뒤 각 멤버의 Actor에 `JoinDungeon`을 보낸다.
-5. `DungeonTravel`이 Dungeon 참가를 요청하고 `Dungeon.onJoinedActor`가 `DungeonDelivery`를 거쳐 `DungeonView`를 push하며, `Advance`가 stage를 올려 멤버에게 push한다.
+4. `CreateParty`와 `JoinParty`는 `Town`의 파티를 바꾸고 `TownView`를 broadcast한다. `Town`이 PartyId를 발급한다. 리더가 `EnterDungeon`을 보내면 `Town.enter`가 RunId를 발급하고 `dungeon-{runId}`를 `getOrCreate`한 뒤 멱등 준비하고, 같은 RunId의 `JoinDungeon`을 접속 중인 멤버에게 보낸다.
+5. `DungeonTravel`이 Dungeon 참가를 요청한다. 파티 전원이 도착하면 `Dungeon`이 소유 Town으로 `RunStarted`를 보내고 Active `DungeonView`를 push한다. `Advance`는 bigint stage를 진행하고 마지막 stage에서 Town으로 `RunCompleted`를 보낸다.
 6. node를 교체할 때 `runHost`의 `drain` 명령이 relocation을 요청한다. Framework는 `TownRelocation`·`DungeonRelocation`의 `capture`로 게임 상태를 받아 다른 node에서 `restore`한다.
 
-## 이 샘플을 보며 개발하기
+## 템플릿 도메인 확장
 
-이 샘플은 기능들이 함께 동작하는 방식을 보여 주므로, 자기 게임으로 바꾸지 않고 읽고 실행하는 용도로 쓴다. 자기 프로젝트는 Node.js 기본 셋업에서 시작한다. [ZLink Start](https://zlink.systems/start)의 Initializer에서 Node.js를 고르거나 ZLink 저장소의 `framework/languages/node/templates/starter/my-game`을 사용한다. 그다음 필요한 기능을 이 샘플에서 하나씩 옮긴다. 구조 선택은 기본 셋업의 `AGENTS.md`가 설명하며, 이 절은 `morpg-channel-town`만 다룬다. 이 샘플은 바꾸지 않고 프로젝트 옆에 참고용으로 둔다.
+이 템플릿의 도메인을 확장하여 MORPG 서버를 만든다. 실행과 배포 절차는 [README](README.md)를 따른다.
 
-### 샘플 먼저 실행하기
+1. `server/town/town.ts`와 `server/town/party-run.ts`에서 채널 인원과 파티 규칙을, `server/instance/dungeon.ts`와 `server/instance/dungeon-state.ts`에서 던전 멤버와 단계 규칙을 확장한다. 각 상태의 판정 위치를 도메인 한 곳에 유지한다. 실행 전이는 `PartyRun`, 준비·입장·도착·단계 진행은 `DungeonState`가 소유한다.
+2. 새 공통 계약은 `server/shared/messages.ts`에 추가한다. 클라이언트 입력과 서버 내부 메시지를 구분하고 기본 typed serializer를 사용한다.
+3. 새 클라이언트 패킷은 `server/session/session.ts`의 Session 허용 목록에 추가한다. 내부 메시지는 클라이언트가 보낼 수 없다.
+4. `e2e/client.mts`에 응답과 거부 뒤 상태 불변을 관찰하는 시나리오를 추가한다. 경계 검사는 `e2e/domain-checks.ts`에 추가하고 `--check-domain`으로 실행한다. README의 시나리오 표와 `zlink.structure.json`의 `run.scenarios`를 함께 맞춘다.
 
-옮기기 전에 [개발 명령](#개발-명령)으로 빌드와 e2e를 한 번 실행해 받은 샘플이 동작하는지 확인하고 동작을 본다. 이 결과가 이후 비교의 기준이 된다. 실패하면 먼저 [README](README.md)의 Known issues와 대조한다.
-
-### 옮길 기능
-
-기능 이름은 기본 셋업 `AGENTS.md`의 기능 표와 같다. 경로는 이 디렉터리를 기준으로 한다. 기본 셋업에는 Session node 하나와 `connect` 시나리오만 있으므로, 마지막 열은 기능마다 기본 셋업에서 함께 늘릴 것이다.
-
-| 기능            | 이 샘플의 파일                                                                                                                                                                                                                            | 옮길 것                                                                                                                                                                                                                                                                                                                                                            | 기본 셋업에서 함께 늘릴 것                                                                                                                                                         |
-| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Typed 메시지    | `server/shared/messages.ts`                                                                                                                                                                                                               | 사용할 기능의 class: `JoinTownRequest`, `ChangeChannelRequest`, `CreatePartyRequest`, `JoinPartyRequest`, `EnterDungeonRequest`, `AdvanceRequest`, `ViewRequest`, `PartyView`, `TownView`, `DungeonView`, `PrepareDungeon`, `DungeonPrepared`, `JoinDungeon`, `ActionRejected`, `restorePush`. `SessionInfoRequest`·`SessionInfo`는 client가 필요로 할 때만 옮긴다 | `server/shared/constants.ts`의 `PacketNames` 패킷 이름과 `Names`의 등록 이름                                                                                                       |
-| Actor           | `server/shared/player.ts`                                                                                                                                                                                                                 | `assertIdentity`와 참가 완료 처리를 가진 `Player`, `PlayerFactory`, 빈 payload를 쓰는 `PlayerRelocation`                                                                                                                                                                                                                                                           | `main.ts`를 가진 새 `server/town/` 프로젝트와 `server/config/` 파일, Actor factory 등록. `server/shared/constants.ts`의 `NodeEntrypoints`에 `town` 항목. Actor 선언과 구조 검사    |
-| Spot            | `server/town/town.ts`                                                                                                                                                                                                                     | 플레이어, 파티, 참가 수락, `TownView` broadcast를 가진 `Town`                                                                                                                                                                                                                                                                                                      | `server/town/main.ts`의 Spot factory 등록과 `townId` 생성. `zlink.structure.json`의 `spots`·`nodes` 선언과, 기본 셋업에서는 Spot 0개를 단정하는 구조 검사를 등록과 비교하도록 확장 |
-| Entry·첫 입장   | `server/shared/entry.ts`, `server/town/handlers.ts`의 `TownReconnect`                                                                                                                                                                     | `Entry`, `EnterTown`, `TownReconnect`의 identity 확인과 상태 재전송                                                                                                                                                                                                                                                                                                | Entry Spot 등록과 `entry` 선언. 첫 입장 시나리오와 재접속 뒤 상태를 비교하는 `reconnect` 시나리오                                                                                  |
-| Session binding | `server/session/session.ts`                                                                                                                                                                                                               | 첫 패킷 검사, Actor 조회·생성, binding과 원래 typed 패킷 relay, `SessionInfo` 응답                                                                                                                                                                                                                                                                                 | `EnterTown`과 같은 첫 패킷 이름. 기본 셋업의 `session.ts`에 옮긴다                                                                                                                 |
-| Host relocation | `server/shared/player.ts`의 `PlayerRelocation`, `server/town/town.ts`의 `TownRelocation`, `server/instance/dungeon.ts`의 `DungeonRelocation`, `server/shared/constants.ts`의 `Control`과 `server/shared/hosting.ts`의 `runHost` 제어 loop | snapshot adapter의 `capture`·`restore`. `drain`·`shutdown`은 기본 셋업에 이미 있다                                                                                                                                                                                                                                                                                 | `preserveStateWith` 등록. 서버 교체 뒤에도 연결·상태가 유지되고 대체 node가 새 던전을 받는지 판정하는 `update` 시나리오                                                            |
-| 동적 던전       | `server/instance/dungeon.ts`, `server/instance/handlers.ts`, `server/town/town.ts`의 `Town.enter`, `server/town/handlers.ts`의 `EnterDungeon`·`DungeonTravel`                                                                             | 동적 User Spot 생성 형태, `PrepareDungeon`으로 파티를 입장시키는 방식, 던전 stage                                                                                                                                                                                                                                                                                  | `main.ts`와 설정을 가진 새 `server/instance/` 프로젝트. `NodeEntrypoints`의 `instance` 항목. `zlink.structure.json`의 동적 `dungeon` Spot과 `GetOrCreate` edge. `dungeon` 시나리오 |
-| 월드·채널 선택  | `server/town/handlers.ts`의 `ChangeChannel`, `server/shared/constants.ts`의 `townId`                                                                                                                                                      | 연결을 유지하는 다른 Town으로의 지연 참가와 channel-Town 대응                                                                                                                                                                                                                                                                                                      | `zlink.structure.json`의 고정 `Town` Spot과 node 배정. 같은 연결과 `SessionInfo`를 검사하는 `channel` 시나리오                                                                     |
-
-### 옮기는 순서와 규칙
-
-기능은 표의 행 하나씩 옮기고, 하나를 옮길 때마다 빌드, 구조 검사, 관련 e2e 시나리오를 실행한다. 시나리오 ID는 `server/shared/constants.ts`의 `Scenarios` 목록, `zlink.structure.json`의 `run.scenarios`, `run.commands`의 시나리오 선택 예시에 함께 추가한다. 판정은 실제로 받은 응답과 이벤트로 하고, 고정 대기나 기한 확대로 통과시키지 않는다.
-
-메시지 contract부터 옮긴다. `messages.ts`에 class를 먼저 정의한 뒤, 컴파일 오류가 나는 handler를 하나씩 새 메시지로 옮긴다. build는 `server/shared`에서 packet schema를 생성하므로 다른 위치에 정의한 메시지는 등록되지 않는다. 첫 입장 패킷을 바꾸면 `Session`의 첫 패킷 검사, `EnterTown`, `TownReconnect`가 같은 패킷을 받도록 함께 고친다. `Player` factory를 등록한 모든 node에 `Entry`와 `EnterTown`을 등록하고, 그런 node마다 `zlink.structure.json`에 Entry를 하나씩 선언한다(여기서는 Town과 Instance). Framework 기본 Entry는 선언하지 않는다.
-
-상태는 그 상태를 결정하는 객체에 둔다. channel 소속과 파티는 `Town`, 입장한 파티와 stage는 `Dungeon`에 두고 `Player`에는 두지 않는다. 상태 필드를 바꿀 때는 같은 객체의 snapshot과 `capture`·`restore`를 함께 고친다. 빠뜨린 필드는 relocation 뒤 사라지고, `update` 시나리오가 그 손실을 잡는다.
-
-고정 Town은 시작할 때 `townId`로 생성한다. 각 Town node의 `townCapacity`는 그 node가 생성하는 Town 개수와 정확히 같게 두고, Town node는 하나씩 시작하여 `READY`를 기다린다. 앞선 node는 가득 찼고 뒤 node는 아직 없으므로 선언된 소유 node만 각 Town을 생성한다. Town node의 대체 process는 `bootstrap`을 `false`로 시작한다. 논리 Town을 Location Store가 이미 소유하기 때문이다. e2e 설정은 Instance node마다 `dungeonCapacity`를 1로 두므로, drain 뒤 남은 node는 가득 차 있고 대체 node만 새 던전을 호스팅할 수 있다.
-
-Town이나 Dungeon 같은 역할 이름을 이 샘플과 다르게 정하려면 class 이름, `Names`, `server/config/`, `zlink.structure.json`을 한 번에 바꾼다. 이름 변경은 기능을 옮기는 변경과 나눠서 진행하면 실패 원인을 찾기 쉽다.
-
-옮긴 뒤 `update`가 실패하면 snapshot에 빠진 상태가 있는지 먼저 확인한다. 그다음 [디버깅](#디버깅)의 message flow로 첫 실패 단계를 찾는다.
+상태 필드를 추가할 때 relocation capture와 restore를 함께 수정한다. Framework가 소유한 라우팅·membership·binding 결정을 도메인에 재구현하지 않는다.
 
 ## 개발 시 주의점
 

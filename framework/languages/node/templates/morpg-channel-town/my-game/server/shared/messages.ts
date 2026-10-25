@@ -10,25 +10,32 @@ export class SessionInfo {
 export class JoinTownRequest {
   constructor(
     readonly playerId: string,
-    readonly channel: number
+    readonly channel: bigint
   ) {}
 }
 export class ChangeChannelRequest {
-  constructor(readonly channel: number) {}
+  constructor(readonly channel: bigint) {}
 }
-export class CreatePartyRequest {
-  constructor(readonly partyId: string) {}
-}
+export class CreatePartyRequest {}
 export class JoinPartyRequest {
   constructor(readonly partyId: string) {}
 }
 export class EnterDungeonRequest {}
 export class AdvanceRequest {}
 export class ViewRequest {}
+export enum RunPhase {
+  Forming = 'Forming',
+  Preparing = 'Preparing',
+  Entering = 'Entering',
+  Active = 'Active',
+  Completed = 'Completed'
+}
 export class PartyView {
   constructor(
     readonly partyId: string,
-    readonly members: string[]
+    readonly members: string[],
+    readonly phase: RunPhase = RunPhase.Forming,
+    readonly runId: string | null = null
   ) {}
 }
 export class TownView {
@@ -45,41 +52,65 @@ export class DungeonView {
     readonly nodeId = '',
     readonly partyId = '',
     readonly members: string[] = [],
-    readonly stage = 0
+    readonly stage: bigint = 0n,
+    readonly runId = '',
+    readonly phase: RunPhase = RunPhase.Forming
   ) {}
 }
 export class PrepareDungeon {
   constructor(
+    readonly runId: string,
     readonly partyId: string,
+    readonly ownerSpotId: string,
     readonly members: string[]
   ) {}
 }
 export class DungeonPrepared {
-  constructor(readonly dungeonId: string) {}
+  constructor(
+    readonly dungeonId: string,
+    readonly runId: string,
+    readonly reason: string | null = null
+  ) {}
 }
 export class JoinDungeon {
   constructor(
     readonly dungeonId: string,
-    readonly partyId: string
+    readonly runId: string
   ) {}
 }
 export class ActionRejected {
-  constructor(readonly reason: string) {}
+  constructor(
+    readonly reason: string,
+    readonly retryAfterMs = 0
+  ) {}
+}
+export class RunStarted {
+  constructor(readonly runId: string) {}
+}
+export class RunCompleted {
+  constructor(readonly runId: string) {}
+}
+export class PartyViewRequest {
+  constructor(readonly playerId: string) {}
 }
 
-const pushTypes: ReadonlyMap<string, typeof TownView | typeof DungeonView> = new Map<
+const pushTypes: ReadonlyMap<
   string,
-  typeof TownView | typeof DungeonView
+  () => TownView | DungeonView | ActionRejected
+> = new Map<
+  string,
+  () => TownView | DungeonView | ActionRejected
 >([
-  [PacketNames.townView, TownView],
-  [PacketNames.dungeonView, DungeonView]
+  [PacketNames.townView, () => new TownView()],
+  [PacketNames.dungeonView, () => new DungeonView()],
+  [PacketNames.actionRejected, () => new ActionRejected('')]
 ]);
 export function restorePush(
   packetName: string,
-  payload: TownView | DungeonView
-): TownView | DungeonView {
-  const type = pushTypes.get(packetName);
-  if (!type) throw new Error(`Unknown push ${packetName}`);
+  payload: TownView | DungeonView | ActionRejected
+): TownView | DungeonView | ActionRejected {
+  const create = pushTypes.get(packetName);
+  if (!create) throw new Error(`Unknown push ${packetName}`);
   // Restore the declared DTO class before forwarding (#1731).
-  return Object.assign(new type(), payload);
+  return Object.assign(create(), payload);
 }
