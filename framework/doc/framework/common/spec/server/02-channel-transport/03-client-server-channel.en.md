@@ -446,6 +446,31 @@ lowercase `\u00xx`), every other character is written as raw UTF-8, and no white
 structural characters. A sender writes this form, and a receiver judges by the length of the received
 value re-measured in this form. The business payload frame carries no metadata.
 
+<a id="envelope-header-grammar"></a>
+**Header grammar.** The JSON header frame is one [RFC 8259](https://www.rfc-editor.org/rfc/rfc8259) JSON object
+written in UTF-8 without a BOM. A receiver classifies the record as a protocol error if any of the following is
+violated.
+
+- Only JSON whitespace may follow the object. Any other byte, NUL included, is a violation.
+- Strings must be valid Unicode. A `\u` escape that denotes an unpaired surrogate is a violation.
+- Field names must match the names in the table below exactly, case included. A table field that appears twice
+  in one object, or a key that appears twice in the `metadata` object, is a violation. A key not in the table is
+  ignored with its value however many times it appears.
+- An integer field's value is an integer literal without a decimal point or exponent, and it must belong to the
+  table's value set.
+
+| Field | JSON value |
+|---|---|
+| `formatMarker` | integer `242` (`0xF2`) |
+| `kind` | integer `1` request, `2` response, `3` command, `4` publish, `5` error |
+| `channelName`, `messageName`, `contentType` | string |
+| `correlationId`, `deadline`, `errorCode`, `errorMessage`, `flowId`, `source`, `topic` | string or `null` |
+| `flowOrigin` | integer `1` inbound, `2` timer, `3` application, `4` lifecycle, or `null` |
+| `metadata` | object whose values are all strings |
+
+This grammar doesn't change whether a field must be present or what its value means. The sections of this
+document and of [channel messaging](02-channel-messaging.en.md) define that.
+
 ## 6. Drain
 
 Server drain is a procedure that blocks new requests and finishes already-

@@ -394,6 +394,28 @@ escape하고(제어 문자는 `\b` `\f` `\n` `\r` `\t`가 있으면 그것을, �
 문자는 UTF-8 그대로 쓰며, 구조 문자 사이에 공백을 두지 않는다. 송신은 이 표현으로 쓰고, 수신은 받은 값을
 이 표현으로 다시 잰 길이로 판정한다. 업무 payload frame에는 metadata를 넣지 않는다.
 
+<a id="envelope-header-grammar"></a>
+**Header 문법.** JSON header frame은 BOM 없는 UTF-8로 쓴 [RFC 8259](https://www.rfc-editor.org/rfc/rfc8259) JSON
+object 하나다. 받는 쪽은 다음 중 하나라도 어기면 그 record를 protocol error로 판정한다.
+
+- Object 뒤에는 JSON 공백만 올 수 있다. NUL을 포함한 다른 byte가 오면 위반이다.
+- 문자열은 유효한 Unicode여야 한다. 짝이 없는 surrogate를 나타내는 `\u` escape는 위반이다.
+- Field 이름은 아래 표의 이름과 대소문자까지 일치해야 한다. 표의 field가 한 object에 두 번 나오거나
+  `metadata` object에 같은 key가 두 번 나오면 위반이다. 표에 없는 key는 몇 번 나오든 값과 함께 무시한다.
+- 정수 field의 값은 소수점과 지수가 없는 정수 literal이며 표의 값 집합에 속해야 한다.
+
+| Field | JSON 값 |
+|---|---|
+| `formatMarker` | 정수 `242`(`0xF2`) |
+| `kind` | 정수 `1` request, `2` response, `3` command, `4` publish, `5` error |
+| `channelName`, `messageName`, `contentType` | 문자열 |
+| `correlationId`, `deadline`, `errorCode`, `errorMessage`, `flowId`, `source`, `topic` | 문자열 또는 `null` |
+| `flowOrigin` | 정수 `1` inbound, `2` timer, `3` application, `4` lifecycle 또는 `null` |
+| `metadata` | 값이 모두 문자열인 object |
+
+이 문법은 field가 있어야 하는지와 그 값의 의미를 바꾸지 않는다. 그것은 이 문서와
+[channel messaging](02-channel-messaging.ko.md)의 각 절이 정한다.
+
 ## 6. Drain
 
 Server drain은 새 요청을 막고 이미 받은 요청을 끝내는 절차이며 다음 순서로
