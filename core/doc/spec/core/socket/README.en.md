@@ -934,7 +934,124 @@ library handles reconnection automatically if the peer becomes unavailable.
 
 **Returns:** `ZLINK_CONNECT_OK` on success; otherwise a `zlink_connect_result_t` value. `zlink_errno()` retains the detailed internal errno for diagnostics.
 
-**See also:** `zlink_bind`, `zlink_disconnect`
+**See also:** `zlink_bind`, `zlink_disconnect`, `zlink_socket_connection_attempts_snapshot`
+
+---
+
+### zlink_socket_connection_attempts_snapshot
+
+Reads the current connection state and the latest failure result for each connection registered with connect.
+
+```c
+typedef enum zlink_connection_attempt_state_t {
+  ZLINK_CONNECTION_CONNECTING     = 0, /* no success or failure result yet */
+  ZLINK_CONNECTION_CONNECTED      = 1, /* this registration's Core connection is ready */
+  ZLINK_CONNECTION_ATTEMPT_FAILED = 2  /* no ready connection; the latest attempt failed */
+} zlink_connection_attempt_state_t;
+
+typedef enum zlink_connection_failure_kind_t {
+  ZLINK_CONNECTION_FAILURE_NONE             = 0,
+  ZLINK_CONNECTION_FAILURE_REFUSED          = 1, /* the peer refused the connection (ECONNREFUSED etc.) */
+  ZLINK_CONNECTION_FAILURE_ENDPOINT_MISSING = 2, /* the IPC path doesn't exist (ENOENT) */
+  ZLINK_CONNECTION_FAILURE_TIMED_OUT        = 3, /* a Core connect or handshake deadline passed */
+  ZLINK_CONNECTION_FAILURE_UNREACHABLE      = 4, /* the network or host can't be reached */
+  ZLINK_CONNECTION_FAILURE_NAME_RESOLUTION  = 5, /* address resolution failed */
+  ZLINK_CONNECTION_FAILURE_AUTH_FAILED      = 6, /* TLS authentication failed */
+  ZLINK_CONNECTION_FAILURE_PROTOCOL_FAILED  = 7, /* the Core protocol, TLS, or WS handshake failed */
+  ZLINK_CONNECTION_FAILURE_CONNECTION_LOST  = 8, /* a ready connection ended */
+  ZLINK_CONNECTION_FAILURE_OTHER            = 9
+} zlink_connection_failure_kind_t;
+
+typedef enum zlink_connection_failure_stage_t {
+  ZLINK_CONNECTION_STAGE_NONE           = 0,
+  ZLINK_CONNECTION_STAGE_RESOLVE        = 1,
+  ZLINK_CONNECTION_STAGE_TRANSPORT      = 2,
+  ZLINK_CONNECTION_STAGE_TLS            = 3,
+  ZLINK_CONNECTION_STAGE_WEBSOCKET      = 4,
+  ZLINK_CONNECTION_STAGE_CORE_HANDSHAKE = 5,
+  ZLINK_CONNECTION_STAGE_ESTABLISHED    = 6
+} zlink_connection_failure_stage_t;
+
+typedef struct zlink_connection_failure_t {
+  uint32_t kind;              /* zlink_connection_failure_kind_t */
+  uint32_t stage;             /* zlink_connection_failure_stage_t */
+  int32_t normalized_errno;   /* diagnostic; 0 means none */
+  uint32_t disconnect_reason; /* Monitoring's disconnect reason for CONNECTION_LOST */
+} zlink_connection_failure_t;
+
+typedef struct zlink_connection_attempt_t {
+  size_t endpoint_offset;    /* start position inside endpoint_bytes_out_ */
+  size_t endpoint_length;    /* UTF-8 byte count excluding NUL */
+  uint64_t intent_id;        /* nonzero opaque value; compared for equality only */
+  uint64_t revision;         /* nonzero opaque value; compared for equality only */
+  uint64_t last_failure_id;  /* 0 if no failure; compared for equality only */
+  uint32_t state;            /* zlink_connection_attempt_state_t */
+  zlink_connection_failure_t last_failure;
+} zlink_connection_attempt_t;
+
+ZLINK_EXPORT zlink_config_result_t zlink_socket_connection_attempts_snapshot (
+  void *s_,
+  zlink_connection_attempt_t *attempts_out_,
+  size_t capacity_,
+  size_t *attempt_count_out_,
+  char *endpoint_bytes_out_,
+  size_t endpoint_bytes_capacity_,
+  size_t *endpoint_bytes_required_out_);
+```
+
+**Core keeps the connection state and the latest failure result for each successful `zlink_connect()`
+registration (intent), and this function is the authoritative source of that fact.** One row is one
+successful `zlink_connect()` call (intent). Connecting to the same endpoint more than once gives more than
+one row, told apart by `intent_id`. Address resolution results and physical pipes or lanes don't split rows. Automatic reconnection of the same intent
+belongs to the same row's lifetime.
+
+- **State.** The row appears as `CONNECTING` before `zlink_connect()` returns success. When address
+  resolution, the transport connection, TLS or WebSocket, the Core protocol handshake, and the required lane
+  setup have all finished and the Core connection is ready, it's `CONNECTED`. The transport
+  `ZLINK_EVENT_CONNECTED` isn't this readiness. When an attempt fails or a ready connection ends and no usable
+  connection remains, it's `ATTEMPT_FAILED`, and the cause is kept in `last_failure`. A failure isn't
+  published while another address candidate or a required lane of the same attempt is still in progress.
+  While a usable connection remains, the failure of a single replacement attempt doesn't change the state
+  to `ATTEMPT_FAILED`.
+- **A failure stays until a new success.** `ATTEMPT_FAILED` doesn't say whether a physical attempt is in
+  progress; it says no connection is usable now and the latest result was a failure. Core keeps
+  reconnecting as the intent and settings allow, and scheduling or starting a reconnect doesn't move the
+  state back to `CONNECTING`. When the next connection setup succeeds, it becomes `CONNECTED`. A failure
+  doesn't mean the intent was removed, a lease expired, or the peer process is gone for good.
+- **Identifiers.** `intent_id` is a new value for each intent lifetime. An intent connected to the same
+  endpoint again after an explicit `zlink_disconnect()` gets a new `intent_id`. `revision` takes a new value
+  whenever the row's observable content changes. `last_failure_id` takes a new value each time a failure is
+  confirmed and isn't cleared on success, so a caller doesn't miss a failure even if a success followed it
+  between two snapshots. The three values aren't reused within one socket lifetime, and a caller doesn't
+  interpret their size or order.
+- **Cause.** `kind` and `stage` are closed values that Core normalizes from platform errors. A TLS
+  authentication failure is `AUTH_FAILED`/`TLS`, an expired Core handshake deadline is
+  `TIMED_OUT`/`CORE_HANDSHAKE`, and the end of a ready connection is `CONNECTION_LOST`/`ESTABLISHED`.
+  `normalized_errno` and `disconnect_reason` are diagnostic, and bindings and upper layers don't reclassify
+  the cause. IPC's `ENDPOINT_MISSING` differs from `ZLINK_CONNECT_NOT_FOUND`, which means there's no intent.
+- **Removal.** A successful `zlink_disconnect()` and a socket close remove the row. Removal isn't turned into a
+  failure, and a late attempt result for a removed intent doesn't change a new intent's row. If
+  `zlink_connect()` itself fails, no row is left.
+- **Query.** A snapshot returns every row as one consistent point-in-time value, independent of monitor
+  creation, event consumption, and monitor queue loss. Endpoints are written one after another into
+  `endpoint_bytes_out_` as NUL-terminated strings, and each row's `endpoint_offset` and `endpoint_length` point
+  to one. The failure of an asynchronous attempt isn't a failure of the query, so the query returns
+  `ZLINK_CONFIG_OK` and the row carries the failure.
+- **Change notification.** When a row is added or removed or its content changes, `ZLINK_POLLCONNECT` becomes
+  ready ([Polling §3](../05-polling.en.md#3-source-types-and-readiness)). It's a level readiness, cleared when
+  a snapshot that reflects that change succeeds. A later change that races the snapshot leaves the readiness
+  set. Each socket has a single observer for this snapshot and `ZLINK_POLLCONNECT`.
+- If `capacity_` or `endpoint_bytes_capacity_` is too small, the required row count and byte count (including
+  NULs) are written to `*attempt_count_out_` and `*endpoint_bytes_required_out_`, `ZLINK_CONFIG_BUFFER_TOO_SMALL`
+  is returned, and the readiness isn't cleared. There's no partial success. On success, the row count and the
+  bytes written are stored; with no rows it succeeds with 0. The two count output pointers are required. Each
+  output buffer may be NULL when its capacity is 0, and a NULL/0 size query follows the insufficient-capacity rule
+  above. A NULL required pointer or a NULL buffer with a positive capacity is `ZLINK_CONFIG_INVALID_HANDLE`, and a
+  socket that doesn't support connect (including the bind-only STREAM) is `ZLINK_CONFIG_NOT_SUPPORTED`. If close
+  took the socket first, it's `ZLINK_CONFIG_INVALID_STATE` (`ESHUTDOWN`); an already invalid handle is
+  `ZLINK_CONFIG_INVALID_HANDLE`; context termination follows the existing config lifecycle classification.
+
+**See also:** `zlink_connect`, `zlink_disconnect`, [ROUTER §10.1](07-router.en.md#101-observing-the-selected-route)
 
 ---
 
@@ -967,7 +1084,7 @@ ZLINK_EXPORT zlink_connect_result_t zlink_disconnect (void *s_, const char *addr
 Removes a previously established connection.
 
 A successful `zlink_disconnect(endpoint)` removes that local connection registration and its automatic
-reconnect intent. A later new submit never selects the removed connection for admission again. The
+reconnect intent, along with that intent's [connection state row](#zlink_socket_connection_attempts_snapshot). A later new submit never selects the removed connection for admission again. The
 asynchronous teardown of the removed connection's physical resources may overlap with the new attempt
 started by a following `zlink_connect(endpoint)`, and the new attempt's progress does not depend on monitor
 event consumption or on observing the previous connection's terminal edge (05-polling §3 command
