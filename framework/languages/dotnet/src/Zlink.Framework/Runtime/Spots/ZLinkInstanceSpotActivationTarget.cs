@@ -696,7 +696,7 @@ internal sealed class ZLinkInstanceSpotActivationTarget(
                         || (
                             hasMetadata
                             && !ServiceWireCodec
-                                .EncodeMetadataFrame(prior.Metadata!, context)
+                                .EncodeMetadataFrame(prior.Metadata!.Value, context)
                                 .AsSpan()
                                 .SequenceEqual(metadata!.Value.Span)
                         )
@@ -1038,7 +1038,7 @@ internal sealed class ZLinkInstanceSpotActivationTarget(
         ReadOnlyMemory<byte>? metadata = record.Metadata is null
             ? null
             : ServiceWireCodec.EncodeMetadataFrame(
-                record.Metadata,
+                record.Metadata.Value,
                 ServiceWireCodec.DecodeContext.Empty
             );
 
