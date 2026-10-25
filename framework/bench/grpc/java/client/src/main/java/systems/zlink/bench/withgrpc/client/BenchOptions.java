@@ -26,7 +26,6 @@ public final class BenchOptions {
     public final String targetStatsUrl;
     public final String rawSocket;
     public final String runIdText;
-    public final String cellId;
     public final int runId;
     public final String output;
     public final String reportFile;
@@ -50,7 +49,6 @@ public final class BenchOptions {
         targetStatsUrl = Args.value(argv, "--target-stats-url", "");
         rawSocket = Args.value(argv, "--raw-socket", "router");
         runIdText = Args.value(argv, "--run-id", "");
-        cellId = Args.value(argv, "--cell-id", "");
         runId = headerRunId(runIdText);
         output = Args.value(argv, "--output", "log/latest");
         reportFile = Args.value(argv, "--report-file", "report.txt");
@@ -71,8 +69,8 @@ public final class BenchOptions {
         if (!"router".equals(rawSocket)) {
             throw new IllegalArgumentException("RAW_SOCKET must remain router");
         }
-        if (runIdText.isBlank() || cellId.isBlank()) {
-            throw new IllegalArgumentException("run-id and cell-id are required");
+        if (runIdText.isBlank()) {
+            throw new IllegalArgumentException("run-id is required");
         }
         requireLoopback(triggerUrl, "http://", "trigger URL");
         requireLoopback(statsUrl, "http://", "stats URL");
