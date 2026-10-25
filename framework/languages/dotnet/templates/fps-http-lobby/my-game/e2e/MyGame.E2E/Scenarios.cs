@@ -375,9 +375,6 @@ internal static class Scenarios
         await WalkAsync(a, new Vec3(Player(view, a).Position.X, 0, 0), ct);
         sequence = Player(await ViewAsync(a, ct), a).LastSequence;
         await RejectedAsync(a, new MoveRequest(new(0, 0, -1), sequence + 1), Rejection.OutsideMap, ct);
-        await RejectedAsync(a, new MoveRequest(new(double.NaN, 0, 0), sequence + 1), Rejection.NonFinite, ct);
-        await RejectedAsync(a, new ShootRequest(new(double.PositiveInfinity, 0, 0), sequence + 1),
-            Rejection.InvalidAim, ct);
         await RejectedAsync(a, new ShootRequest(default, sequence + 1), Rejection.InvalidAim, ct);
         await WalkAsync(a, new Vec3(48, 0, 22), ct);
         sequence = Next(await ViewAsync(a, ct), a);

@@ -2,10 +2,7 @@ using System.Text.Json.Serialization;
 
 namespace MyGame.Shared;
 
-public readonly record struct Vec3(
-    [property: JsonNumberHandling(JsonNumberHandling.AllowNamedFloatingPointLiterals)] double X,
-    [property: JsonNumberHandling(JsonNumberHandling.AllowNamedFloatingPointLiterals)] double Y,
-    [property: JsonNumberHandling(JsonNumberHandling.AllowNamedFloatingPointLiterals)] double Z)
+public readonly record struct Vec3(double X, double Y, double Z)
 {
     [JsonIgnore]
     public bool IsFinite => double.IsFinite(X) && double.IsFinite(Y) && double.IsFinite(Z);
