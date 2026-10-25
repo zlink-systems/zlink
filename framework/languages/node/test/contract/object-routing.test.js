@@ -355,7 +355,7 @@ test('cached Ready direct Spot route applies host admission before Spot Close se
   const seal = barrier.seal('close');
   assert.equal(barrier.commit(seal), true);
   authorityState = 'closing';
-  await assert.rejects(request, error => error.kind === framework.ZLinkFrameworkErrorKind.Rejected);
+  await assert.rejects(request, error => error.kind === framework.ZLinkFrameworkErrorKind.NotFound);
   admission.close();
   await assert.rejects(request, error => error.kind === framework.ZLinkFrameworkErrorKind.ShuttingDown);
   authorityState = 'creating';

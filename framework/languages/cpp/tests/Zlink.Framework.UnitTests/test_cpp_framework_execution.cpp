@@ -5386,7 +5386,7 @@ bool verify_wire_actor_join_admission_is_approval_only_and_later_attempt_wins ()
             admit_wire_actor_join (node, local_rid, second_actor, std::nullopt, &serializers));
           co_return;
       },
-      [second_promise] { second_promise->set_value ({}); });
+      [second_promise] (result_t<void>) { second_promise->set_value ({}); });
     node->actor_transfer_coordinator->fail_commit (transfer_id_for (4213), false);
     const bool second_completed =
       second_future.wait_for (std::chrono::seconds (2)) == std::future_status::ready
@@ -5454,7 +5454,7 @@ bool verify_wire_join_requires_active_local_target ()
               ++accepted;
               co_return;
           },
-          [&] { ++unavailable; });
+          [&] (result_t<void>) { ++unavailable; });
     };
     receive ("cold-target");
     receive ("inactive-target");
@@ -5503,7 +5503,7 @@ bool verify_relocation_abort_does_not_hold_receive_worker ()
           {{.kind = runtime::stateful::object_kind_t::user_spot, .key = "abort-target"}});
         owner.dispatch_wire_actor_join_admission (
           spot_id_t ("following-target"), std::string_view{}, [] () -> task_t<void> { co_return; },
-          [&] { following_frame.set_value (); });
+          [&] (result_t<void>) { following_frame.set_value (); });
     });
     const bool entered = started.wait_for (std::chrono::seconds (2)) == std::future_status::ready;
     const bool progressed =
@@ -6089,7 +6089,7 @@ bool verify_join_commit_does_not_wait_for_joined_callback (bool lifecycle_failur
         committed.store (owner.commit_relocation_materialization ({target}));
         owner.dispatch_wire_actor_join_admission (
           spot_id_t ("following-target"), std::string_view{}, [] () -> task_t<void> { co_return; },
-          [&] { following_frame.set_value (); });
+          [&] (result_t<void>) { following_frame.set_value (); });
     });
     const bool entered = started.wait_for (std::chrono::seconds (2)) == std::future_status::ready;
     const bool progressed =
@@ -8877,7 +8877,7 @@ bool verify_aggregate_capture_waits_for_participant_terminal ()
           membership_ran.store (true);
           co_return;
       },
-      [] {});
+      [] (fw::result_t<void>) {});
     std::thread capture ([&] {
         error = objects.try_seal_relocation_aggregate ({source, participant, other})
                   .result ()
