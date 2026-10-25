@@ -568,6 +568,7 @@ remaining repetitions. Reaching the supplied end time without three valid window
 failure and no definitive ratio. Product errors, drain overruns, and invalid recordings are not
 retried. `--help` describes the classpath manifest and end-time inputs. `compilation.jfc` validates
 windows; `profile.jfc` supports separate CPU and allocation diagnostics.
+Pass the artifact names to compare explicitly with `--versions`; the runner has no default version list.
 
 This procedure changes neither JVM compiler policy nor measured product code. C++, .NET, and
 Node.js retain their driver, completion-count, and throughput definitions. Kotlin shares Java's

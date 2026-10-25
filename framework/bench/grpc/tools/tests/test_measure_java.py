@@ -5,6 +5,8 @@ from copy import deepcopy
 import importlib.util
 import json
 import os
+import subprocess
+import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import tempfile
@@ -16,6 +18,21 @@ RUNNER_PATH = Path(__file__).resolve().parents[1] / "jit/measure_java.py"
 spec = importlib.util.spec_from_file_location("measure_java", RUNNER_PATH)
 runner = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(runner)
+
+
+class RequiredArgumentsTest(unittest.TestCase):
+    def test_versions_must_be_explicit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            result = subprocess.run(
+                [sys.executable, str(RUNNER_PATH),
+                 "--classpath-dir", str(root), "--harness-classpath", str(root),
+                 "--output", str(root / "output"), "--stop-before-utc", "2030-01-01T00:00:00Z",
+                 "--java-home", "/tmp"],
+                capture_output=True, text=True)
+        self.assertEqual(2, result.returncode, result.stderr)
+        self.assertIn("--versions", result.stderr)
+        self.assertIn("required", result.stderr)
 
 
 class WindowIdentityTest(unittest.TestCase):

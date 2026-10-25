@@ -435,7 +435,8 @@ def parse_args():
     parser.add_argument("--harness-classpath", required=True,
                         help="Ordered harness classpath with absolute entries only")
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--versions", default="main,pr2354,pr2608")
+    parser.add_argument("--versions", required=True,
+                        help="Comma-separated artifact names to compare")
     parser.add_argument("--patterns", default=",".join(PATTERNS))
     parser.add_argument("--implementations", default=",".join(SERVERS))
     parser.add_argument("--stop-before-utc", required=True,

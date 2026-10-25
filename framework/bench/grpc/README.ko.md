@@ -528,6 +528,7 @@ request 완료 판정과 처리량 분모, JFR의 `measure.Phase`가 같은 구�
 실패로 종료하며 비율을 확정하지 않는다. 제품 오류·drain 초과·잘못된 기록은 재시도하지 않는다.
 `--help`에 classpath manifest·종료 시각 입력을 설명한다. `compilation.jfc`는 유효성 판정용,
 `profile.jfc`는 CPU·할당 귀속을 조사하는 별도 진단용이다.
+비교할 artifact 이름은 기본값 없이 명령행에서 `--versions`로 반드시 지정한다.
 
 이 절은 JVM compiler 정책이나 측정 대상 코드를 바꾸지 않는다. C++·.NET·Node.js의
 driver·완료 수·처리량 정의는 그대로다. Java와 같은 driver·HTTP listener를 쓰는 Kotlin에는
