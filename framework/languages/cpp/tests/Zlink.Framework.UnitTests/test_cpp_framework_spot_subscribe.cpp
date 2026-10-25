@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+#include "../support/stateful_object_sync.hpp"
 #include "../support/runtime_failure_fixture.hpp"
 #include "runtime/dispatch/offload_executor.hpp"
 #include "runtime/diagnostics/dispatch_options_access.hpp"
@@ -17,6 +18,8 @@
 #include <thread>
 #include <utility>
 #include <zlink/framework.hpp>
+
+using zlink::framework::test::begin_reserved_object;
 
 namespace
 {
@@ -153,7 +156,7 @@ TEST_F (SpotSubscribe, ClosedTurnDoesNotEnterApplicationHandler)
     auto submitted = detail::spot_node_runtime_t (node).dispatch_subscription (
       context, "closed-turn", parts.items (), provider, serializers,
       [&] { handler_entries.fetch_add (1, std::memory_order_relaxed); });
-    node->lane.run ([this] { state->closed = true; }).get ();
+    node->lane.run ([this] { state->closed = fw::spot_close_reason_t::explicit_close; }).get ();
     // The admitted turn must observe the closed incarnation before handler entry.
     release_on_exit.reset ();
     ASSERT_TRUE (submitted);
@@ -415,7 +418,7 @@ void SpotSubscribe::verify_pre_ready (bool reject, bool fail_initialize)
     const stateful::object_ref_t reference{
       stateful::object_kind_t::user_spot, "pre-ready-spot", 7, 1, "mesh", "publisher"};
     const auto reservation =
-      native->objects ().begin_reserved_object (reference, "framework.spot", {});
+      begin_reserved_object (native->objects (), reference, "framework.spot", {});
     ASSERT_TRUE (reservation.factory_owner);
     std::function<fw::task_t<void> (bool)> preparation_terminal;
     fw::task_completion_source_t<void> entered;

@@ -105,6 +105,7 @@
         <Compile Include="Runtime/SourceMembershipLeaveCompletionTests.cs"/>
         <Compile Include="Runtime/ActorRemoteJoinRecoveryCodecBoundaryTests.cs"/>
         <Compile Include="Runtime/ActorHandoffTests.cs"/>
+        <Compile Include="Runtime/ActorHandoffDrainTests.cs"/>
         <Compile Include="Runtime/JoinCallbackSendTests.cs"/>
         <Compile Include="Runtime/ActorJoinPrewarmRegistryTests.cs"/>
         <Compile Include="Runtime/ActorHandlerActivationTests.cs"/>
@@ -272,6 +273,7 @@
         <Compile Include="Runtime/RouteChangeProxy.cs"/>
         <Compile Include="Runtime/RelocationTargetShutdownTests.cs"/>
         <Compile Include="Runtime/SpotCloseConformanceTests.cs"/>
+        <Compile Include="Runtime/SpotCloseConformanceTests.Closing.cs"/>
         <Compile Include="Runtime/SpotCloseAdmissionSealTests.cs"/>
         <Compile Include="Runtime/RelocationTreeParallelIoTests.cs"/>
         <Compile Include="Runtime/StandaloneActorRelocationRuntimeTests.cs"/>

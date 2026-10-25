@@ -58,7 +58,6 @@ internal abstract partial class ZLinkSpotActivation
                 Volatile.Write(ref _disposed, 1);
                 if (_serial.IsPreparing)
                 {
-                    Volatile.Read(ref _close)?.TrySetResult(false);
                     _ = _serial.FinishActivationPreparation();
                 }
                 var completion = new TaskCompletionSource(
@@ -479,17 +478,17 @@ internal abstract partial class ZLinkSpotActivation
                         static (activation, ct) => activation.DispatchSubscriptionsAsync(ct),
                         countAsRequest: false,
                         () =>
-                            QueueSerialized(
+                            QueueNativeControl(
                                 static (activation, ct) =>
                                     activation._dispatcher.DiscardSubscriptionsAsync(ct)
                             )
                     ),
                 () =>
-                    QueueSerialized(
+                    QueueNativeControl(
                         static (activation, ct) => activation.DispatchActorJoinDrainTurnAsync(ct)
                     ),
                 () =>
-                    QueueSerialized(
+                    QueueNativeControl(
                         static (activation, ct) => activation.DispatchActorLifecycleDrainAsync(ct)
                     ),
                 (origin, actorParts, payloadOwner) =>
@@ -1065,18 +1064,6 @@ internal abstract partial class ZLinkSpotActivation
     internal ValueTask AwaitStartedCloseCallsAsync(CancellationToken cancellationToken) =>
         _serial.AwaitStartedCloseCallsAsync(cancellationToken);
 
-    // The Close of this incarnation (spec 06 §7 step 1: one Close job). The
-    // first Close request claims it and later requests join it. A Close that
-    // ends without closing the incarnation releases it; a closed incarnation
-    // keeps its Close as the result. Null result means the caller holds it.
-    internal TaskCompletionSource<bool>? ClaimClose(TaskCompletionSource<bool> close) =>
-        Interlocked.CompareExchange(ref _close, close, null);
-
-    internal void ReleaseClose(TaskCompletionSource<bool> close) =>
-        Interlocked.CompareExchange(ref _close, null, close);
-
-    internal bool HasPendingClose => Volatile.Read(ref _close) is { Task.IsCompleted: false };
-
     internal bool HasCommittedClose => _successor is not null;
     internal bool HasCompletedClose => _successor?.Task.IsCompleted == true;
 
@@ -1396,10 +1383,11 @@ internal abstract partial class ZLinkSpotActivation
             await _serial.ExecuteAsync(operation, state, cancellationToken).ConfigureAwait(false);
     }
 
-    private bool QueueSerialized(Func<ZLinkSpotActivation, CancellationToken, ValueTask> operation)
-    {
-        return _serial.QueueLifecycle(operation);
-    }
+    // Native control reads and payload disposal progress independently of lifecycle
+    // admission. The existing runtime task owner tracks their completion and failure.
+    private bool QueueNativeControl(
+        Func<ZLinkSpotActivation, CancellationToken, ValueTask> operation
+    ) => _serial.TryRunDetached("spot-native-control", ct => operation(this, ct));
 
     private bool QueueSerialized<TState>(
         Func<ZLinkSpotActivation, TState, CancellationToken, ValueTask> operation,
@@ -1799,7 +1787,7 @@ internal abstract partial class ZLinkSpotActivation
         await _dispatcher.DispatchSubscriptionsAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    private async ValueTask DispatchActorLifecycleDrainAsync(CancellationToken cancellationToken)
+    private ValueTask DispatchActorLifecycleDrainAsync(CancellationToken cancellationToken)
     {
         var startedAt = Stopwatch.GetTimestamp();
         var count = 0;
@@ -1809,52 +1797,60 @@ internal abstract partial class ZLinkSpotActivation
             if (ZLinkReceiveBatchBudget.IsExhausted(count, bytes, startedAt))
             {
                 if (!cancellationToken.IsCancellationRequested)
-                    QueueSerialized(
+                    QueueNativeControl(
                         static (activation, ct) => activation.DispatchActorLifecycleDrainAsync(ct)
                     );
-                return;
+                return ValueTask.CompletedTask;
             }
             var lifecycle = NativeSpot.RecvActorLifecycle(RecvFlags.DontWait);
             if (lifecycle is null)
-                return;
-            using var applicationAdmission = lifecycle.Value.ApplicationJobAdmission
-                is { } admission
-                ? ZLinkApplicationJobQueueInvocation.Enter(admission)
-                : null;
+                return ValueTask.CompletedTask;
             count++;
             bytes = checked(bytes + (lifecycle.Value.Info.CurrentActor?.ActorId?.Length ?? 0));
-            if (lifecycle.Value.Kind != ZLinkBackendActorLifecycleEventKind.Disconnected)
-                continue;
-
-            var actorId = lifecycle.Value.Info.CurrentActor?.ActorId;
-            if (actorId is null)
-                continue;
-
-            if (
-                _actors.TryGetActor(
-                    ZLinkActorId.FromBoundary(actorId, nameof(actorId)),
-                    out var actor
-                ) && actor is not null
-            )
-            {
-                await NotifyActorDisconnectedCoreAsync(actor, cancellationToken)
-                    .ConfigureAwait(false);
-                continue;
-            }
-
-            await _runtime
-                .NotifyActorDisconnectedByIdAsync(actorId, cancellationToken)
-                .ConfigureAwait(false);
+            var captured = lifecycle.Value;
+            QueueSerialized(
+                static (activation, state, ct) =>
+                    activation.DispatchActorLifecycleEventAsync(state, ct),
+                captured,
+                () => captured.ApplicationJobAdmission?.Dispose()
+            );
         }
+    }
+
+    private async ValueTask DispatchActorLifecycleEventAsync(
+        ZLinkBackendSpotActorLifecycleEvent lifecycle,
+        CancellationToken cancellationToken
+    )
+    {
+        using var applicationAdmission = lifecycle.ApplicationJobAdmission is { } admission
+            ? ZLinkApplicationJobQueueInvocation.Enter(admission)
+            : null;
+        if (lifecycle.Kind != ZLinkBackendActorLifecycleEventKind.Disconnected)
+            return;
+        var actorId = lifecycle.Info.CurrentActor?.ActorId;
+        if (actorId is null)
+            return;
+        if (
+            _actors.TryGetActor(ZLinkActorId.FromBoundary(actorId, nameof(actorId)), out var actor)
+            && actor is not null
+        )
+        {
+            await NotifyActorDisconnectedCoreAsync(actor, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+        await _runtime
+            .NotifyActorDisconnectedByIdAsync(actorId, cancellationToken)
+            .ConfigureAwait(false);
     }
 
     private async ValueTask DispatchActorJoinDrainTurnAsync(CancellationToken cancellationToken)
     {
         if (
-            await _dispatcher.DispatchActorJoinDrainAsync(cancellationToken).ConfigureAwait(false)
-            && !cancellationToken.IsCancellationRequested
+            await _dispatcher
+                .DispatchActorJoinDrainAsync(cancellationToken, _serial)
+                .ConfigureAwait(false) && !cancellationToken.IsCancellationRequested
         )
-            QueueSerialized(
+            QueueNativeControl(
                 static (activation, ct) => activation.DispatchActorJoinDrainTurnAsync(ct)
             );
     }

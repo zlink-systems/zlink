@@ -106,8 +106,11 @@ void host_close_does_not_wait_for_population_retirement ()
                                                      {},
                                                      mesh::service_node_state_t::preparing}})});
     node->start ();
-    (void) node->create_reserved_actor ("player", {stateful::object_kind_t::actor, "actor", 1, 1,
-                                                   "population-close-mesh", rid.to_string ()});
+    (void) node
+      ->create_reserved_actor_async ("player", {stateful::object_kind_t::actor, "actor", 1, 1,
+                                                "population-close-mesh", rid.to_string ()})
+      .result ()
+      .value ();
     require (point (provider, "zlink.actor.count", {{"mesh_name", "population-close-mesh"}}) == 1,
              "host Actor population was not recorded");
     auto release = stateful::stateful_object_runtime_test_access_t::hold_lane (node->objects ());
@@ -482,6 +485,7 @@ void contract_rejects_wrong_metadata ()
 } // namespace
 int main ()
 {
+    completion_owner_t completion_owner;
     try {
         host_close_does_not_wait_for_population_retirement ();
         population_retirement_orders_after_pending_configuration ();

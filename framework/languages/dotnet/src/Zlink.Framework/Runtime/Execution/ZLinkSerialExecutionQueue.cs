@@ -2272,6 +2272,7 @@ internal static class ZLinkAcceptedWorkAdmissionErrors
         {
             ZLinkAcceptedWorkAdmission.Closed => ZLinkFrameworkErrorKind.ShuttingDown,
             ZLinkAcceptedWorkAdmission.RelocationMoving => ZLinkFrameworkErrorKind.Unavailable,
+            ZLinkAcceptedWorkAdmission.Closing => ZLinkFrameworkErrorKind.NotFound,
             _ => ZLinkFrameworkErrorKind.Rejected,
         };
 }

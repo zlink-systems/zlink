@@ -5,6 +5,7 @@
 
 #include <zlink/framework.hpp>
 #include "runtime/locations/in_memory_store_providers.hpp"
+#include "runtime/dispatch/completion_turn.hpp"
 #include "runtime/mesh/mesh_node_runtime.hpp"
 
 #include <nlohmann/json.hpp>
@@ -18,6 +19,7 @@
 #include <exception>
 #include <fstream>
 #include <functional>
+#include <future>
 #include <iostream>
 #include <memory>
 #include <mutex>
@@ -25,12 +27,57 @@
 #include <set>
 #include <string>
 #include <thread>
+#include <latch>
+#include <map>
+#include <typeindex>
 #include <utility>
 #include <vector>
 
 #ifndef ZLINK_ROUTE_MESH_PLACEMENT_CONFORMANCE_PATH
 #error "RouteMesh placement conformance fixture path is required"
 #endif
+
+namespace zlink::framework::runtime
+{
+struct state_lane_test_access_t
+{
+    static std::size_t pending (state_lane_t &lane)
+    {
+        std::lock_guard lock (lane._mailbox_mutex);
+        // Each lane submission site has one erased callable type. Maintenance
+        // submissions must not count toward the group of Actor operations.
+        std::map<std::type_index, std::size_t> groups;
+        std::size_t largest = 0;
+        for (const auto &item : lane._mailbox)
+            largest = std::max (largest, ++groups[std::type_index (item.work.target_type ())]);
+        return largest;
+    }
+};
+}
+
+namespace zlink::framework::runtime::stateful
+{
+struct stateful_object_runtime_test_access_t
+{
+    static runtime::state_lane_t &lane (stateful_object_runtime_t &objects)
+    {
+        return objects._lane;
+    }
+
+    static std::size_t reserved_actor_count_on_lane (stateful_object_runtime_t &objects)
+    {
+        std::size_t count = 0;
+        for (const auto &[key, object] : objects._objects) {
+            if (object.reference.kind == object_kind_t::actor
+                && object.reference.key.starts_with ("2610-actor-")
+                && object.state == object_state_t::creating
+                && objects._attempts.contains (object.attempt))
+                ++count;
+        }
+        return count;
+    }
+};
+}
 
 namespace
 {
@@ -716,6 +763,107 @@ bool concurrent_actor_handle_lookup (const nlohmann::json &lease)
     return created && rejected_missing;
 }
 
+bool actor_creation_releases_completion_workers (const nlohmann::json &lease)
+{
+    hold.reset ({});
+    fw::completion_owner_t completion_owner;
+    const auto workers = fw::detail::completion_dispatcher_worker_count ();
+    const auto nodes = nlohmann::json::array ({{{"meshName", "completion-progress"},
+                                                {"actorLimit", 0},
+                                                {"spotLimit", 0},
+                                                {"activationConcurrency", workers},
+                                                {"actorFactory", true},
+                                                {"instanceSpotFactory", false}}});
+    host_t host;
+    configure_host (host, lease, nodes, "2610-completion-progress");
+    auto &builder = host.app.advanced ().zlink ();
+    for (const auto &registration : fw::detail::mesh_node_runtime_t::registrations (builder))
+        registration->core_context = std::make_shared<zlink::context_t> ();
+    auto mesh = fw::detail::mesh_node_runtime_t::from (builder, "completion-progress");
+    mesh->start ();
+    auto *native = &mesh->native_node ();
+    auto &lane =
+      fw::runtime::stateful::stateful_object_runtime_test_access_t::lane (native->objects ());
+    std::promise<void> first_entered, first_release, commits_release;
+    std::promise<std::size_t> commits_entered;
+    auto first_ready = first_entered.get_future ();
+    auto first_held = first_release.get_future ().share ();
+    auto commits_ready = commits_entered.get_future ();
+    auto commits_held = commits_release.get_future ().share ();
+    if (!lane.try_post ([&] {
+            first_entered.set_value ();
+            first_held.wait ();
+        })) {
+        std::cerr << "[2610] Object lane rejected reservation hold\n";
+        mesh->stop ();
+        return false;
+    }
+    first_ready.wait ();
+    std::vector<fw::task_t<fw::actor_ref_t>> pending;
+    std::mutex pending_mutex;
+    std::latch registered (workers);
+    for (std::size_t index = 0; index < workers; ++index) {
+        fw::detail::dispatch_completion (
+          [&, index] {
+              auto creating = mesh->create_application_actor_async (
+                "placement-actor", "2610-actor-" + std::to_string (index), 1, 1);
+              std::lock_guard lock (pending_mutex);
+              pending.push_back (std::move (creating));
+              registered.count_down ();
+          },
+          false);
+    }
+    const auto wait_pending = [&] {
+        const auto deadline = std::chrono::steady_clock::now () + operation_timeout;
+        while (fw::runtime::state_lane_test_access_t::pending (lane) < workers) {
+            if (std::chrono::steady_clock::now () >= deadline)
+                return false;
+            std::this_thread::yield ();
+        }
+        return true;
+    };
+    const auto reservations_pending = wait_pending ();
+    // FIFO puts this hold after every reservation and before its Ready commit.
+    if (!lane.try_post ([&] {
+            commits_entered.set_value (
+              fw::runtime::stateful::stateful_object_runtime_test_access_t::
+                reserved_actor_count_on_lane (native->objects ()));
+            commits_held.wait ();
+        })) {
+        std::cerr << "[2610] Object lane rejected Ready commit hold\n";
+        first_release.set_value ();
+        mesh->stop ();
+        return false;
+    }
+    first_release.set_value ();
+    const auto reserved_actors = commits_ready.get ();
+    const auto commits_pending = wait_pending ();
+    std::cout << "[2610] completion workers=" << workers
+              << " reservations pending=" << reservations_pending
+              << " reserved Actors=" << reserved_actors
+              << " Ready commits pending=" << commits_pending << std::endl;
+    commits_release.set_value ();
+    // This barrier itself needs the completion pool, so starvation is observable
+    // before any public operation timeout can hide the missing Ready publication.
+    std::promise<void> dispatcher_progress;
+    auto progress = dispatcher_progress.get_future ();
+    fw::detail::dispatch_completion ([&] { dispatcher_progress.set_value (); }, false);
+    progress.wait ();
+    registered.wait ();
+    bool ok = reservations_pending && commits_pending && reserved_actors == workers;
+    {
+        std::lock_guard lock (pending_mutex);
+        ok = ok && pending.size () == workers;
+        for (const auto &creating : pending) {
+            const auto created = creating.result ();
+            ok = ok && created && created.value ().actor_id ().value ().starts_with ("2610-actor-");
+        }
+    }
+    mesh->stop ();
+    std::cout << "[2610] Actor creation leaves completion workers available=" << ok << '\n';
+    return ok;
+}
+
 bool concurrent_actor_creation (const nlohmann::json &lease)
 {
     constexpr int actor_count = 64;
@@ -793,6 +941,8 @@ int main (int argc, char **argv)
         return concurrent_actor_creation (fixture.at ("ownerLease")) ? 0 : 1;
     if (argc == 2 && std::string_view (argv[1]) == "--2036-handle-lookup")
         return concurrent_actor_handle_lookup (fixture.at ("ownerLease")) ? 0 : 1;
+    if (argc == 2 && std::string_view (argv[1]) == "--2610-completion-progress")
+        return actor_creation_releases_completion_workers (fixture.at ("ownerLease")) ? 0 : 1;
     int index = 0;
     int failures = 0;
     int scenarios = 0;
@@ -803,6 +953,8 @@ int main (int argc, char **argv)
     std::cout << "[placement] " << scenarios - failures << "/" << scenarios
               << " scenarios passed\n";
     if (!zero_weight_at_startup (fixture.at ("ownerLease")))
+        ++failures;
+    if (!actor_creation_releases_completion_workers (fixture.at ("ownerLease")))
         ++failures;
     if (!concurrent_actor_creation (fixture.at ("ownerLease")))
         ++failures;

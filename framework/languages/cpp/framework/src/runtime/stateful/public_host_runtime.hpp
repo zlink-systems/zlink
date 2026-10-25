@@ -285,7 +285,7 @@ using spot_close_done_t = std::function<void (result_t<bool>)>;
 /* The owner runtime runs a Close for one local User Spot on that Spot's
  * lifecycle lane and reports its result through `done`. */
 using user_spot_closer_t =
-  std::function<void (const std::string &, spot_close_begin_t, spot_close_done_t)>;
+  std::function<void (const std::string &, std::uint64_t, spot_close_begin_t, spot_close_done_t)>;
 
 /* Continues a Close step when `task` completes. `resume` returns the
  * continuation to the Spot lifecycle turn that waits for the step, which
@@ -791,7 +791,8 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     spot_handle_t get_or_create_spot (std::string spot_id);
     task_t<spot_handle_t> get_or_create_spot_async (std::string spot_id);
     actor_handle_t create_actor (std::string actor_type, std::string actor_id);
-    actor_handle_t create_reserved_actor (std::string actor_type, stateful::object_ref_t reserved);
+    task_t<actor_handle_t> create_reserved_actor_async (std::string actor_type,
+                                                        stateful::object_ref_t reserved);
     task_t<zlink::submit_result_t> send_to_actor (
       const actor_ref_t &target,
       const std::vector<zlink::message_t> &parts,

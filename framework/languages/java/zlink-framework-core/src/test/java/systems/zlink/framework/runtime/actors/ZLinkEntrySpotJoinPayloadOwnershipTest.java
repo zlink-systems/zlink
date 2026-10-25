@@ -141,10 +141,16 @@ final class ZLinkEntrySpotJoinPayloadOwnershipTest {
         assertResolvedOwnerSnapshot(OwnerSnapshot.MISSING_GENERATION);
     }
 
+    @Test
+    void joinReturnsNotFoundWhenOwnerDisappearsAfterHandleResolution() throws Exception {
+        assertResolvedOwnerSnapshot(OwnerSnapshot.DISAPPEARED);
+    }
+
     private enum OwnerSnapshot {
         COMPLETE,
         MISSING_NODE,
-        MISSING_GENERATION
+        MISSING_GENERATION,
+        DISAPPEARED
     }
 
     private void assertResolvedOwnerSnapshot(OwnerSnapshot snapshot) throws Exception {
@@ -202,6 +208,9 @@ final class ZLinkEntrySpotJoinPayloadOwnershipTest {
                     }
 
                     public CompletionStage<Optional<SpotTransportAddress>> resolve(String spotId) {
+                        if (snapshot == OwnerSnapshot.DISAPPEARED) {
+                            return CompletableFuture.completedFuture(Optional.empty());
+                        }
                         return handles.resolve(spotId)
                                 .thenApply(
                                         address ->
@@ -296,6 +305,19 @@ final class ZLinkEntrySpotJoinPayloadOwnershipTest {
                     assertInstanceOf(
                             ZLinkActorJoinOutcome.Accepted.class, outcome.get(5, TimeUnit.SECONDS));
                     assertEquals("resolved-room", context.spotId().orElseThrow());
+                } else if (snapshot == OwnerSnapshot.DISAPPEARED) {
+                    var failure =
+                            assertThrows(
+                                    ExecutionException.class,
+                                    () -> outcome.get(5, TimeUnit.SECONDS));
+                    var missing =
+                            assertInstanceOf(
+                                    systems.zlink.framework.errors.ZLinkFrameworkException.class,
+                                    failure.getCause());
+                    assertEquals(
+                            systems.zlink.framework.errors.ZLinkFrameworkErrorKind.NOT_FOUND,
+                            missing.kind());
+                    assertEquals(initialSpotId, context.spotId());
                 } else {
                     var failure =
                             assertThrows(
