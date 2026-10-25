@@ -273,8 +273,9 @@ static_assert (has_submit<zlink::framework::stream_write_call_t>);
 static_assert (!has_callback_async<zlink::framework::stream_write_call_t, void>);
 static_assert (!has_submit<zlink::framework::route_send_call_t>);
 static_assert (!has_callback_async<zlink::framework::route_send_call_t, void>);
-// C++ channel interfaces §4: route and Spot calls expose metadata/option setters and
-// terminals only. route_client_t is the only producer of these calls.
+// languages/cpp/interfaces/03-channel-messaging.ko.md §4 (route_client_t, route_send_call_t and
+// spot_*_call_t declarations): the calls expose metadata/option setters and terminals only, and
+// route_client_t is their only producer.
 using route_metadata_t = zlink::framework::route_send_call_t::metadata_map_t;
 static_assert (
   !std::is_constructible_v<
