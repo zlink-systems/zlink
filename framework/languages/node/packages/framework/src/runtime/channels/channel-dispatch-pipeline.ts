@@ -1,3 +1,4 @@
+import type { ZLinkHandlerMessageType } from '../../contracts/Common/HandlerMessageType';
 import type { ZLinkMeshDispatchAdmission } from '../admission';
 import {
   ZLinkFrameworkInternalErrorKind,
@@ -35,6 +36,7 @@ import type { ZLinkMalformedChannelHeaderInfo } from './channel-envelope-inspect
 import type { ZLinkDispatchErrorReporter } from './dispatch-error-reporter';
 import { createInboundFlow, runWithFlow } from '../diagnostics/flow-context';
 import { releaseApplicationJobPermitBeforeHandler } from '../application-jobs/application-job-queue-scope';
+import { resolveMessageTypeForDecode } from '../../contracts/Common/HandlerMessageType';
 
 export interface ZLinkChannelDispatchPipelineOptions {
   readonly dispatchErrors: ZLinkDispatchErrorReporter;
@@ -58,11 +60,12 @@ interface ZLinkChannelDispatchHandler<TContext extends ZLinkMessageContext, TRes
   handle(payload: unknown, context: TContext): Promise<TResult> | TResult;
 }
 
-interface ZLinkOneWayDispatch<TContext extends ZLinkMessageContext> {
+export interface ZLinkOneWayDispatch<TContext extends ZLinkMessageContext> {
   readonly fields: ZLinkChannelDispatchFields;
   readonly envelope: ZLinkChannelEnvelope;
   readonly codecs?: ZLinkChannelEnvelopeCodecRegistry;
   readonly handler?: ZLinkChannelDispatchHandler<TContext, void>;
+  readonly messageType?: ZLinkHandlerMessageType;
   readonly context: TContext;
   readonly signal?: AbortSignal;
 }
@@ -72,6 +75,7 @@ export interface ZLinkRequestDispatch<TContext extends ZLinkMessageContext> {
   readonly envelope: ZLinkChannelEnvelope;
   readonly codecs?: ZLinkChannelEnvelopeCodecRegistry;
   readonly handler?: ZLinkChannelDispatchHandler<TContext, unknown>;
+  readonly messageType?: ZLinkHandlerMessageType;
   readonly context: TContext;
   readonly signal?: AbortSignal;
   readonly missingHandlerMessage: string;
@@ -352,11 +356,23 @@ export class ZLinkChannelDispatchPipeline {
     if (this.filters.length === 0) {
       //  Fast path for the dominant unfiltered dispatch: skip the filter
       //  context object and chain machinery entirely.
-      const payload = decodeChannelPayload(envelope, codecs);
+      const payload = decodeChannelPayload(
+        envelope,
+        codecs,
+        resolveMessageTypeForDecode(dispatch.messageType)
+      );
       this.trace(ZLinkMessageFlowOutcome.Dispatched, fields);
       return handler.handle(payload, context);
     }
-    return this.invokeFiltered(envelope, codecs, handler, context, fields, signal);
+    return this.invokeFiltered(
+      envelope,
+      codecs,
+      handler,
+      context,
+      fields,
+      dispatch.messageType,
+      signal
+    );
   }
 
   private async invokeFiltered<TContext extends ZLinkMessageContext, TResult>(
@@ -365,6 +381,7 @@ export class ZLinkChannelDispatchPipeline {
     handler: ZLinkChannelDispatchHandler<TContext, TResult>,
     context: TContext,
     fields: ZLinkChannelDispatchFields,
+    messageType?: ZLinkHandlerMessageType,
     signal?: AbortSignal
   ): Promise<TResult | undefined | typeof HANDLER_FILTER_REJECTED> {
     let value: TResult | undefined;
@@ -374,7 +391,11 @@ export class ZLinkChannelDispatchPipeline {
       async () => {
         // Filters are the channel admission gate. Decode only after they have
         // allowed the handler turn to proceed.
-        const payload = decodeChannelPayload(envelope, codecs);
+        const payload = decodeChannelPayload(
+          envelope,
+          codecs,
+          resolveMessageTypeForDecode(messageType)
+        );
         this.trace(ZLinkMessageFlowOutcome.Dispatched, fields);
         value = await handler.handle(payload, context);
       },

@@ -1,3 +1,4 @@
+import type { ZLinkHandlerMessageType } from './framework-integration-contracts';
 import type { InjectionToken } from '@nestjs/common';
 import { ContextIdFactory, ModuleRef } from '@nestjs/core';
 import type {
@@ -157,14 +158,17 @@ function createManualHandlerRegistrations<TContext extends ManualHandlerContext,
   result: (value: unknown) => TResult
 ): Array<{
   readonly packetName: string;
+  readonly messageType?: ZLinkHandlerMessageType;
   readonly handler: {
     handle(payload: Buffer, context: TContext): Promise<TResult>;
   };
 }> {
   return (handlerTypes ?? []).map((registration) => {
     const factory = registeredNestHandlerFactory(factories, registration.handlerType, moduleRef);
+    const messageType = framework.resolveHandlerMessageType(registration.handlerType);
     return {
       packetName: registration.packetName,
+      ...(messageType === undefined ? {} : { messageType }),
       handler: {
         async handle(payload: Buffer, context: TContext): Promise<TResult> {
           return result(
@@ -193,11 +197,17 @@ function createDiscoveredHandlerRegistrations<THandler>(
     metadata: ZLinkNestHandlerMetadata,
     factory: NestHandlerFactory
   ) => THandler
-): Array<{ readonly packetName: string; readonly handler: THandler }> {
+): Array<{
+  readonly packetName: string;
+  readonly messageType?: ZLinkHandlerMessageType;
+  readonly handler: THandler;
+}> {
   const descriptors = createDiscoveredHandlerDescriptors(providerRefs, handlerGroups, kind);
   return descriptors.map(({ ref, metadata }) => {
+    const messageType = framework.resolveHandlerMessageType(ref.handlerKey as Type);
     return {
       packetName: metadata.packetName,
+      ...(messageType === undefined ? {} : { messageType }),
       handler: createHandler(
         ref,
         metadata,

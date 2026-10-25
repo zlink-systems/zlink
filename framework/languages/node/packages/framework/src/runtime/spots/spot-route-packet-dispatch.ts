@@ -46,6 +46,7 @@ import {
 } from '../framework-errors-internal';
 import { resolveLifecycleHandler } from '../handlers/handler-instance-scope';
 import type { ZLinkSpotHandlerRegistration } from './spot-handler-registry';
+import { resolveMessageTypeForDecode } from '../../contracts/Common/HandlerMessageType';
 import { REMOTE_ACTOR_JOIN_PACKET } from './spot-remote-codec';
 import { appendRouteReplyParts, hasReplyToken, submitRouteReply } from './spot-route-replies';
 import type { ZLinkSpotSerialTurnExecutor } from './spot-serial-turn-executor';
@@ -167,7 +168,11 @@ export class ZLinkSpotRoutePacketDispatch {
                 // Keep the wire payload raw until this Spot has acquired its
                 // execution authority. A rejected or superseded work item must not
                 // pay the deserialization cost.
-                const payload = decodeChannelPayload(envelope, this.channelCodecs());
+                const payload = decodeChannelPayload(
+                  envelope,
+                  this.channelCodecs(),
+                  resolveMessageTypeForDecode(registrations[0]?.messageType)
+                );
                 for (const registration of registrations) {
                   const handler = await resolveLifecycleHandler(
                     spot,

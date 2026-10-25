@@ -19,6 +19,7 @@ export {
   validateMessageFollowDuration,
   validateSessionReplacementCallbackTimeout
 } from './contracts/Configuration/RegistrationBuilderPolicy';
+export { resolveHandlerMessageType } from './contracts/Common/HandlerMessageType';
 
 import type {
   ZLinkLocationRuntimeQuery,
