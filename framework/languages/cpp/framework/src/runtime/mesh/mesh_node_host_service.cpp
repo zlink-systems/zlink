@@ -1100,22 +1100,23 @@ mesh_node_host_service_t::create_actor (bool exclusive,
             // MeshNode §5.1: the target MeshNode holds one activation admission for this Actor
             // creation until Ready, rejection or failure.
             std::shared_ptr<void> activation_admission;
-            const auto created = [&] {
-                try {
-                    activation_admission =
-                      (*target_runtime)
-                        ->activation_admission ()
-                        .enter_scoped (detail::activation_admission_t::actor_key (
-                          std::string (actor_id.value ())));
-                }
-                catch (const framework_exception_t &error) {
-                    return detail::result_access_t::failure<actor_ref_t> (error);
-                }
-                return (*target_runtime)
-                  ->create_application_actor (stable_type, std::string (actor_id.value ()),
-                                              raw_request, winner->fence.object_generation,
-                                              winner->fence.authority_owner_generation, timeout);
-            }();
+            std::optional<result_t<actor_ref_t>> factory_result;
+            try {
+                activation_admission = (*target_runtime)
+                                         ->activation_admission ()
+                                         .enter_scoped (detail::activation_admission_t::actor_key (
+                                           std::string (actor_id.value ())));
+            }
+            catch (const framework_exception_t &error) {
+                factory_result.emplace (detail::result_access_t::failure<actor_ref_t> (error));
+            }
+            if (!factory_result)
+                factory_result.emplace (co_await await_result (
+                  (*target_runtime)
+                    ->create_application_actor_async (stable_type, std::string (actor_id.value ()),
+                                                      winner->fence.object_generation,
+                                                      winner->fence.authority_owner_generation)));
+            const auto created = std::move (*factory_result);
             if (!created) {
                 const auto failed_envelope = actor_terminal_envelope (
                   terminal_codec::request_terminal_result_t::internalError,
@@ -2336,7 +2337,8 @@ void execute_actor_create_operation_target (
             finish_failed ();
             return;
         }
-        const auto creation_request = zlink::message_t::from (*creation_bytes);
+        auto creation_request =
+          std::make_shared<const zlink::message_t> (zlink::message_t::from (*creation_bytes));
         // MeshNode §5.1: admission remains held through terminal publication.
         std::shared_ptr<void> activation_admission;
         try {
@@ -2347,86 +2349,94 @@ void execute_actor_create_operation_target (
             finish_failed ();
             return;
         }
-        const auto created =
-          node->create_application_actor (request.stable_type, request.actor_id, creation_request,
-                                          request.reservation.object_generation,
-                                          request.reservation.authority_owner_generation, timeout);
-        if (!created) {
-            publish (std::nullopt, std::nullopt, std::nullopt,
-                     [completion, failed, activation_admission] (bool) mutable {
-                         activation_admission.reset ();
-                         completion (failed ());
-                     });
-            return;
-        }
-        const auto actor = created.value ();
-        auto finish_creation = [node, actor, completion, activation_admission] (
-                                 host::actor_create_operation_result_t result, bool ready) mutable {
-            activation_admission.reset ();
-            if (!ready)
-                node->settle_application_actor_creation (actor, false);
-            completion (std::move (result));
-            if (ready)
-                node->settle_application_actor_creation (actor, true);
-        };
-        auto join_operation = std::make_shared<host::pending_operation_t> ();
-        auto joined = node->submit_application_actor_entry_spot_join (
-          actor, node_rid_t::from_string (status.routing_id ().to_string ()), creation_request,
-          timeout, *join_operation,
-          [request, actor, finish_creation,
-           publish] (result_t<detail::actor_join_reply_t> joined) mutable {
-              host::actor_create_operation_result_t result;
-              result.reply.header = {
-                request.correlation, 105u,
-                static_cast<std::uint32_t> (protocol::framework_error_code::actorCreateFailed)};
-              if (!joined) {
+        //  State lanes §blocking boundary (06:211-226): this callback runs on a completion
+        //  worker, so the creation continues when its task completes instead of blocking it.
+        auto creating = node->create_application_actor_async (
+          request.stable_type, request.actor_id, request.reservation.object_generation,
+          request.reservation.authority_owner_generation);
+        detail::observe_task_completion (
+          creating, [node, request, status, completion, failed, publish, activation_admission,
+                     creation_request = std::move (creation_request),
+                     timeout] (const result_t<actor_ref_t> &created) mutable {
+              if (!created) {
                   publish (std::nullopt, std::nullopt, std::nullopt,
-                           [finish_creation, result = std::move (result)] (bool) mutable {
-                               finish_creation (std::move (result), false);
+                           [completion, failed, activation_admission] (bool) mutable {
+                               activation_admission.reset ();
+                               completion (failed ());
                            });
                   return;
               }
-              std::optional<protocol::application_payload_t> application_reply;
-              if (!joined.value ().reply.is_empty ()) {
-                  application_reply =
-                    protocol::application_payload_t{request.stable_type, "application/octet-stream",
-                                                    joined.value ().reply.to_bytes ()};
-                  result.application_reply = application_reply;
-              }
-              result.reply.header = {request.correlation, 0u, 0u};
-              const auto accepted = joined.value ().result_code == 0;
-              result.reply.result = accepted ? protocol::actor_create_result_t::created
-                                             : protocol::actor_create_result_t::rejected;
-              result.reply.node_routing_id =
-                zlink::routing_id_t::from (std::string (actor.node_rid ().value ())).to_bytes ();
-              result.reply.actor_id = std::string (actor.actor_id ().value ());
-              result.reply.object_generation = actor.object_generation ();
-              const auto creation_result = accepted
-                                             ? terminal_codec::actor_create_result_t::created
-                                             : terminal_codec::actor_create_result_t::rejected;
-              publish (creation_result, accepted ? std::make_optional (actor) : std::nullopt,
-                       application_reply,
-                       [request, result = std::move (result), finish_creation,
-                        accepted] (bool published) mutable {
-                           if (!published) {
-                               result.reply.header = {
-                                 request.correlation, 105u,
-                                 static_cast<std::uint32_t> (
-                                   protocol::framework_error_code::actorCreateFailed)};
-                               result.application_reply.reset ();
-                           }
-                           finish_creation (std::move (result), published && accepted);
-                       });
+              const auto actor = created.value ();
+              auto finish_creation = [node, actor, completion, activation_admission] (
+                                       host::actor_create_operation_result_t result,
+                                       bool ready) mutable {
+                  activation_admission.reset ();
+                  if (!ready)
+                      node->settle_application_actor_creation (actor, false);
+                  completion (std::move (result));
+                  if (ready)
+                      node->settle_application_actor_creation (actor, true);
+              };
+              auto join_operation = std::make_shared<host::pending_operation_t> ();
+              auto joined = node->submit_application_actor_entry_spot_join (
+                actor, node_rid_t::from_string (status.routing_id ().to_string ()),
+                *creation_request, timeout, *join_operation,
+                [request, actor, finish_creation,
+                 publish] (result_t<detail::actor_join_reply_t> joined) mutable {
+                    host::actor_create_operation_result_t result;
+                    result.reply.header = {request.correlation, 105u,
+                                           static_cast<std::uint32_t> (
+                                             protocol::framework_error_code::actorCreateFailed)};
+                    if (!joined) {
+                        publish (std::nullopt, std::nullopt, std::nullopt,
+                                 [finish_creation, result = std::move (result)] (bool) mutable {
+                                     finish_creation (std::move (result), false);
+                                 });
+                        return;
+                    }
+                    std::optional<protocol::application_payload_t> application_reply;
+                    if (!joined.value ().reply.is_empty ()) {
+                        application_reply = protocol::application_payload_t{
+                          request.stable_type, "application/octet-stream",
+                          joined.value ().reply.to_bytes ()};
+                        result.application_reply = application_reply;
+                    }
+                    result.reply.header = {request.correlation, 0u, 0u};
+                    const auto accepted = joined.value ().result_code == 0;
+                    result.reply.result = accepted ? protocol::actor_create_result_t::created
+                                                   : protocol::actor_create_result_t::rejected;
+                    result.reply.node_routing_id =
+                      zlink::routing_id_t::from (std::string (actor.node_rid ().value ()))
+                        .to_bytes ();
+                    result.reply.actor_id = std::string (actor.actor_id ().value ());
+                    result.reply.object_generation = actor.object_generation ();
+                    const auto creation_result =
+                      accepted ? terminal_codec::actor_create_result_t::created
+                               : terminal_codec::actor_create_result_t::rejected;
+                    publish (creation_result, accepted ? std::make_optional (actor) : std::nullopt,
+                             application_reply,
+                             [request, result = std::move (result), finish_creation,
+                              accepted] (bool published) mutable {
+                                 if (!published) {
+                                     result.reply.header = {
+                                       request.correlation, 105u,
+                                       static_cast<std::uint32_t> (
+                                         protocol::framework_error_code::actorCreateFailed)};
+                                     result.application_reply.reset ();
+                                 }
+                                 finish_creation (std::move (result), published && accepted);
+                             });
+                });
+              detail::observe_task_completion (
+                joined, [node, join_operation, publish, finish_creation,
+                         failed] (const result_t<result_t<void>> &submitted) {
+                    if (!submitted || !submitted.value ())
+                        publish (std::nullopt, std::nullopt, std::nullopt,
+                                 [finish_creation, failed] (bool) mutable {
+                                     finish_creation (failed (), false);
+                                 });
+                });
           });
-        detail::observe_task_completion (joined,
-                                         [node, join_operation, publish, finish_creation,
-                                          failed] (const result_t<result_t<void>> &submitted) {
-                                             if (!submitted || !submitted.value ())
-                                                 publish (std::nullopt, std::nullopt, std::nullopt,
-                                                          [finish_creation, failed] (bool) mutable {
-                                                              finish_creation (failed (), false);
-                                                          });
-                                         });
     });
 }
 

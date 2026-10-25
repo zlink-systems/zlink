@@ -791,7 +791,8 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     spot_handle_t get_or_create_spot (std::string spot_id);
     task_t<spot_handle_t> get_or_create_spot_async (std::string spot_id);
     actor_handle_t create_actor (std::string actor_type, std::string actor_id);
-    actor_handle_t create_reserved_actor (std::string actor_type, stateful::object_ref_t reserved);
+    task_t<actor_handle_t> create_reserved_actor_async (std::string actor_type,
+                                                        stateful::object_ref_t reserved);
     task_t<zlink::submit_result_t> send_to_actor (
       const actor_ref_t &target,
       const std::vector<zlink::message_t> &parts,

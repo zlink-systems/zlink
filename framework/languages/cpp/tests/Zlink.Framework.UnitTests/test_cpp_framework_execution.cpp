@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+#include "../support/stateful_object_sync.hpp"
 #include "runtime/mesh/mesh_node_host_service.hpp"
 #include "../support/runtime_failure_fixture.hpp"
 #include "../support/manual_internal_scheduler.hpp"
@@ -67,6 +68,8 @@
 #include <thread>
 #include <type_traits>
 #include <vector>
+
+using zlink::framework::test::begin_reserved_object;
 
 namespace
 {
@@ -7794,9 +7797,11 @@ bool verify_remote_actor_cutover_completion_is_target_owned (bool cancel_source_
         return false;
     }
     const auto created_actor =
-      source.create_application_actor ("actor.cutover.probe", "actor-cutover-probe", std::nullopt,
-                                       actor_reserved->fence.object_generation,
-                                       actor_reserved->fence.authority_owner_generation, 1s);
+      source
+        .create_application_actor_async ("actor.cutover.probe", "actor-cutover-probe",
+                                         actor_reserved->fence.object_generation,
+                                         actor_reserved->fence.authority_owner_generation)
+        .result ();
     if (source_spot.state != spot_create_state_t::created
         || target_spot.state != spot_create_state_t::created || !created_actor) {
         std::cerr << "cutover production setup: application materialization failed\n";
@@ -10924,7 +10929,7 @@ bool verify_async_capture_releases_state_owner ()
     using namespace zlink::framework::runtime::stateful;
     stateful_object_runtime_t objects;
     const object_ref_t object{object_kind_t::user_spot, "async-capture", 1, 1, "mesh", "node"};
-    const auto created = objects.begin_reserved_object (object, "spot", {});
+    const auto created = begin_reserved_object (objects, object, "spot", {});
     if (created.error != stateful_error_t::none
         || objects.commit_create (created.attempt) != stateful_error_t::none)
         return false;
