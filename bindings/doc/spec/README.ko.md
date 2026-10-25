@@ -1042,6 +1042,13 @@ Raw builder는 `routerSocket.request(rid).message(part).submit()`처럼 사용�
   [Core ROUTER §10.1](../../../core/doc/spec/core/socket/07-router.ko.md#101-선택-route-관찰)이 정한
   의미대로 투영한다. Route generation 은 0이 아닌 opaque equality token 이며 부호나 크기로 순서를
   판단하지 않는다.
+- connect 가능한 raw socket 의 연결 상태 snapshot(`zlink_socket_connection_attempts_snapshot()`)과
+  `ZLINK_POLLCONNECT` 는 [Core socket](../../../core/doc/spec/core/socket/README.ko.md#zlink_socket_connection_attempts_snapshot)이
+  정한 의미대로 손실 없이 투영한다. 상태·실패 원인·단계는 닫힌 언어 enum 으로, `intent_id`·`revision`·
+  `last_failure_id` 는 0이 아닌 opaque equality token 으로 공개하고 부호나 크기로 순서를 판단하지 않는다.
+  Readiness 는 기존 Poller 와 비동기 진행 경로로 전달한다. 바인딩은 monitor event 이력이나 timer polling 으로
+  연결 결과를 추정하지 않으며, 실패 상태를 담은 정상 snapshot 을 request 실패로 바꾸지 않는다. 조회 자체의
+  오류만 기존 config 오류로 전달한다. 이 표면이 없는 Core 와 함께 load 되면 대체 동작 없이 거부한다.
 - core raw `STREAM` 은 `recv`, raw callback (`zlink_recv_handler()`),
   packet callback (`zlink_stream_packet_handler()`) 의 세 모드 중 하나를
   선택하는 예외 타입이다. 고수준 바인딩의 canonical public 계약은

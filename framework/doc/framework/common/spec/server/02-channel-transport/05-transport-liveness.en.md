@@ -279,7 +279,7 @@ acceptance of a connect request is enough to make a connection ready.
 
 | Connection method | Condition to become ready |
 |---|---|
-| RouteMesh/ClientServer | Completes the transport connection, service handshake, identity/generation verification, and handler preparation. A RouteMesh Object Client pair with no Server membership is excluded from ready targets. |
+| RouteMesh/ClientServer | Completes the transport connection, service handshake, identity/generation verification, and handler preparation. The service handshake finishes when the peer's ADMIT is received on the current Core selected route and that route and the expected identity and generation match; receiving HELLO, local registration, or sending ADMIT alone doesn't finish it. A RouteMesh Object Client pair with no Server membership is excluded from ready targets. |
 | Classic fanout | The per-publisher SUB socket is connected, the descriptor or manual endpoint relationship is valid, and the first normal application record or beacon is received. |
 
 A connection is immediately removed from the ready target list when any of the following is
@@ -322,7 +322,7 @@ complete a request's final result exactly once.
 
 | When the connection was lost | Request handling |
 |---|---|
-| Before transport accepted the request | Ends as route-not-connected. |
+| Before a binding operation starts | Follows the connection readiness rule in [Submit and completion §5](../01-execution/01-submit-and-completion.en.md#5-backpressure-and-error-classification). |
 | Whether transport accepted it is unknown | Follows the resubmission boundary in [Submit and completion §5](../01-execution/01-submit-and-completion.en.md#5-backpressure-and-error-classification). |
 | Already accepted | Ends exactly once, via one of a reply, request timeout, cancellation, `Shutdown`, or route failure. |
 

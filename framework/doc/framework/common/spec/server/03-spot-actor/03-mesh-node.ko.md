@@ -281,8 +281,9 @@ handshake만 admission한다.
 
 **선택 route에서 handshake로 admission을 확인하기 전에 그 route로 받은 handshake 밖의 record는 처리하지
 않고 버리며, 응답을 보내지 않는다.** 선택 route가 바뀐 뒤 상대가 새 route의 handshake보다 먼저 보낸
-record도 같다. 이렇게 잃은 durable operation은 송신 측이 [Actor 모델 §8.1](04-actor-model.ko.md#81-실패)대로
-다시 보낸다.
+record도 같다. 이렇게 잃은 request는 다시 보내지 않는다. 송신 측은 상대의 ADMIT를 받은 선택 route에서만
+request를 시작하므로([Submit과 완료 §5](../01-execution/01-submit-and-completion.ko.md#5-backpressure와-오류-분류)) 이 손실은 선택 route가 바뀌는
+경계에서만 생기며, 그 request는 binding의 typed 결과나 deadline으로 끝난다.
 
 Lifecycle generation은 0이 아닌 opaque equality token이다. 숫자 크기로 어느
 lifecycle이 더 새로운지 판단하지 않는다.
@@ -319,8 +320,8 @@ RID가 더 작은 쪽만 connect를 시작하는 규칙도 그대로다. 이 요
   관찰이지 새 연결 의도가 아니므로, 제거된 intent를 다시 활성화하지 않고 새 intent만 활성화한다.
   이를 위한 별도 generation이나 상태는 두지 않는다.
 - **Intent 제거와 admitted peer 부재가 함께 성립한 상태가 그 peer의 lifecycle 종료다.** Transport
-  단절이나 peer 부재 단독은 재연결로 회복될 수 있는 transient 상태다. 이 사실을 durable operation이
-  어떻게 소비하는지는 [Actor 모델 §8.1](04-actor-model.ko.md#81-실패)이 정한다.
+  단절이나 peer 부재 단독은 재연결로 회복될 수 있는 transient 상태다. Request가 이 사실과 Core의 연결 시도
+  결과를 어떻게 쓰는지는 [Submit과 완료 §5](../01-execution/01-submit-and-completion.ko.md#5-backpressure와-오류-분류)가 정한다.
 - **Binding이 connect를 거절하면 그 attempt만 실패하고 intent는 남는다.** Intent 소유자는
   binding의 typed 오류를 runtime 오류 보고 경로에 그대로 남기고, 같은 intent의 다음 reconcile에서
   connect를 다시 호출한다. 거절은 그 intent를 제거하지 않으며 다른 peer의 discovery나 host

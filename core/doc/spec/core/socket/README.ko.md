@@ -879,7 +879,115 @@ library가 자동으로 재연결을 처리한다.
 
 **반환값:** 성공 시 `ZLINK_CONNECT_OK`, 실패 시 `zlink_connect_result_t` 값. `zlink_errno()`는 진단용 내부 errno를 그대로 유지한다.
 
-**참고:** `zlink_bind`, `zlink_disconnect`
+**참고:** `zlink_bind`, `zlink_disconnect`, `zlink_socket_connection_attempts_snapshot`
+
+---
+
+### zlink_socket_connection_attempts_snapshot
+
+connect로 등록한 연결마다 현재 연결 상태와 최근 실패 결과를 조회한다.
+
+```c
+typedef enum zlink_connection_attempt_state_t {
+  ZLINK_CONNECTION_CONNECTING     = 0, /* 아직 성공·실패 결과가 없다 */
+  ZLINK_CONNECTION_CONNECTED      = 1, /* 이 등록의 Core 연결이 준비되어 있다 */
+  ZLINK_CONNECTION_ATTEMPT_FAILED = 2  /* 준비된 연결이 없고 최근 시도가 실패했다 */
+} zlink_connection_attempt_state_t;
+
+typedef enum zlink_connection_failure_kind_t {
+  ZLINK_CONNECTION_FAILURE_NONE             = 0,
+  ZLINK_CONNECTION_FAILURE_REFUSED          = 1, /* 상대가 연결을 거부했다(ECONNREFUSED 등) */
+  ZLINK_CONNECTION_FAILURE_ENDPOINT_MISSING = 2, /* IPC 경로가 없다(ENOENT) */
+  ZLINK_CONNECTION_FAILURE_TIMED_OUT        = 3, /* Core의 connect·handshake 기한이 지났다 */
+  ZLINK_CONNECTION_FAILURE_UNREACHABLE      = 4, /* network·host에 닿지 않는다 */
+  ZLINK_CONNECTION_FAILURE_NAME_RESOLUTION  = 5, /* 주소 해석에 실패했다 */
+  ZLINK_CONNECTION_FAILURE_AUTH_FAILED      = 6, /* TLS 인증이 실패했다 */
+  ZLINK_CONNECTION_FAILURE_PROTOCOL_FAILED  = 7, /* Core protocol·TLS·WS handshake가 실패했다 */
+  ZLINK_CONNECTION_FAILURE_CONNECTION_LOST  = 8, /* 준비된 연결이 끝났다 */
+  ZLINK_CONNECTION_FAILURE_OTHER            = 9
+} zlink_connection_failure_kind_t;
+
+typedef enum zlink_connection_failure_stage_t {
+  ZLINK_CONNECTION_STAGE_NONE           = 0,
+  ZLINK_CONNECTION_STAGE_RESOLVE        = 1,
+  ZLINK_CONNECTION_STAGE_TRANSPORT      = 2,
+  ZLINK_CONNECTION_STAGE_TLS            = 3,
+  ZLINK_CONNECTION_STAGE_WEBSOCKET      = 4,
+  ZLINK_CONNECTION_STAGE_CORE_HANDSHAKE = 5,
+  ZLINK_CONNECTION_STAGE_ESTABLISHED    = 6
+} zlink_connection_failure_stage_t;
+
+typedef struct zlink_connection_failure_t {
+  uint32_t kind;             /* zlink_connection_failure_kind_t */
+  uint32_t stage;            /* zlink_connection_failure_stage_t */
+  int32_t normalized_errno;  /* 진단용. 0이면 없음 */
+  uint32_t disconnect_reason; /* CONNECTION_LOST일 때 Monitoring의 disconnect reason */
+} zlink_connection_failure_t;
+
+typedef struct zlink_connection_attempt_t {
+  size_t endpoint_offset;    /* endpoint_bytes_out_ 안의 시작 위치 */
+  size_t endpoint_length;    /* NUL을 뺀 UTF-8 byte 수 */
+  uint64_t intent_id;        /* 0이 아닌 opaque 값. 동등성만 비교한다 */
+  uint64_t revision;         /* 0이 아닌 opaque 값. 동등성만 비교한다 */
+  uint64_t last_failure_id;  /* 실패가 없으면 0. 동등성만 비교한다 */
+  uint32_t state;            /* zlink_connection_attempt_state_t */
+  zlink_connection_failure_t last_failure;
+} zlink_connection_attempt_t;
+
+ZLINK_EXPORT zlink_config_result_t zlink_socket_connection_attempts_snapshot (
+  void *s_,
+  zlink_connection_attempt_t *attempts_out_,
+  size_t capacity_,
+  size_t *attempt_count_out_,
+  char *endpoint_bytes_out_,
+  size_t endpoint_bytes_capacity_,
+  size_t *endpoint_bytes_required_out_);
+```
+
+**Core는 성공한 `zlink_connect()` 등록(intent)마다 연결 상태와 최근 실패 결과를 보존하고, 이 함수가
+그 사실의 정본이다.** 행 하나가 intent 하나다. Intent는 local socket과 `zlink_connect()`에 넘긴 endpoint로
+정하며, 주소 해석 결과나 physical pipe·lane은 행을 나누지 않는다. 같은 intent의 자동 재연결은 같은 행의
+수명에 속한다.
+
+- **상태.** 행은 `zlink_connect()`가 성공을 반환하기 전에 `CONNECTING`으로 생긴다. 주소 해석, transport
+  연결, TLS·WebSocket, Core protocol handshake와 필요한 lane 준비가 모두 끝나 Core 연결이 준비되면
+  `CONNECTED`다. Transport `ZLINK_EVENT_CONNECTED`는 이 준비가 아니다. 시도가 실패하거나 준비된 연결이 끝나
+  쓸 수 있는 연결이 없으면 `ATTEMPT_FAILED`이며, 그 원인을 `last_failure`에 남긴다. 같은 시도의 다른 주소
+  후보나 필수 lane이 아직 진행 중이면 실패를 게시하지 않는다. 쓸 수 있는 연결이 남아 있는 동안 교체
+  시도 하나의 실패로 상태를 `ATTEMPT_FAILED`로 바꾸지 않는다.
+- **실패는 새 성공까지 남는다.** `ATTEMPT_FAILED`는 진행 중인 physical 시도의 유무가 아니라 지금 쓸 수
+  있는 연결이 없고 마지막 결과가 실패라는 뜻이다. Core는 intent와 설정이 허락하는 자동 재연결을 계속하며,
+  재연결을 예약하거나 시작해도 상태를 `CONNECTING`으로 되돌리지 않는다. 다음 연결 준비가 성공하면
+  `CONNECTED`가 된다. 실패는 intent 제거·lease 만료·상대 process의 영구 부재를 뜻하지 않는다.
+- **식별자.** `intent_id`는 intent의 수명마다 새 값이다. 명시적 `zlink_disconnect()` 뒤 같은 endpoint로
+  다시 connect한 intent는 새 `intent_id`를 받는다. `revision`은 행의 관찰 가능한 내용이 바뀔 때마다 새
+  값이다. `last_failure_id`는 실패가 확정될 때마다 새 값이며 성공해도 지우지 않는다. 그래서 caller는 두
+  snapshot 사이에 실패 뒤 성공이 일어났어도 실패를 놓치지 않는다. 세 값은 같은 socket 수명에서 다시 쓰지
+  않으며 caller는 크기나 순서를 해석하지 않는다.
+- **원인.** `kind`와 `stage`는 Core가 platform 오류를 정규화한 닫힌 값이다. TLS 인증 실패는
+  `AUTH_FAILED`·`TLS`, Core handshake 기한 초과는 `TIMED_OUT`·`CORE_HANDSHAKE`, 준비된 연결의 종료는
+  `CONNECTION_LOST`·`ESTABLISHED`다. `normalized_errno`와 `disconnect_reason`은 진단용이며 binding과
+  상위 계층은 원인을 다시 분류하지 않는다. IPC의 `ENDPOINT_MISSING`은 intent가 없다는 뜻의
+  `ZLINK_CONNECT_NOT_FOUND`와 다르다.
+- **제거.** 성공한 `zlink_disconnect()`와 socket close는 행을 제거한다. 행 제거를 실패로 바꾸지 않으며,
+  제거된 intent의 늦은 시도 결과는 새 intent의 행을 바꾸지 않는다. `zlink_connect()` 자체가 실패하면 행을
+  남기지 않는다.
+- **조회.** Snapshot은 행 전체를 한 시점의 일관된 값으로 반환하며 monitor 생성·event 소비·monitor queue
+  유실과 무관하다. Endpoint는 `endpoint_bytes_out_`에 NUL로 끝나는 문자열로 이어 쓰고 각 행의
+  `endpoint_offset`·`endpoint_length`가 가리킨다. 비동기 시도의 실패는 조회의 실패가 아니므로 조회는
+  `ZLINK_CONFIG_OK`이고 행이 실패를 담는다.
+- **변경 통지.** 행이 추가·제거되거나 내용이 바뀌면 `ZLINK_POLLCONNECT`가 준비된다
+  ([Polling §3](../05-polling.ko.md#3-source-종류와-readiness)). 이 readiness는 level이며, 그 변경까지 반영한
+  snapshot이 성공할 때 해제된다. Snapshot과 경합한 후속 변경은 readiness를 남긴다. Socket마다 이 snapshot과
+  `ZLINK_POLLCONNECT`의 관찰자는 하나만 둔다.
+- `capacity_`나 `endpoint_bytes_capacity_`가 모자라면 필요한 행 수와 byte 수(NUL 포함)를
+  `*attempt_count_out_`·`*endpoint_bytes_required_out_`에 쓰고 `ZLINK_CONFIG_BUFFER_TOO_SMALL`을 반환하며
+  readiness를 해제하지 않는다. 일부만 쓰는 성공은 없다. 성공하면 행 수와 쓴 byte 수를 쓴다. 행이 없으면
+  0으로 성공한다. 출력 pointer가 NULL이거나 양수 용량의 배열이 NULL이면 `ZLINK_CONFIG_INVALID_HANDLE`,
+  connect를 지원하지 않는 socket(bind 전용 STREAM 포함)은 `ZLINK_CONFIG_NOT_SUPPORTED`, close된 socket은
+  `ZLINK_CONFIG_INVALID_STATE`다.
+
+**참고:** `zlink_connect`, `zlink_disconnect`, [ROUTER §10.1](07-router.ko.md#101-선택-route-관찰)
 
 ---
 
@@ -911,7 +1019,7 @@ ZLINK_EXPORT zlink_connect_result_t zlink_disconnect (void *s_, const char *addr
 
 이전에 설정된 연결을 제거한다.
 
-성공한 `zlink_disconnect(endpoint)`는 해당 local 연결 등록과 자동 재연결 intent를 제거한다. 이후의 새 submit은
+성공한 `zlink_disconnect(endpoint)`는 해당 local 연결 등록과 자동 재연결 intent를 제거한다. 그 intent의 [연결 상태 행](#zlink_socket_connection_attempts_snapshot)도 함께 없어진다. 이후의 새 submit은
 제거된 연결을 admission 대상으로 다시 선택하지 않는다. 제거된 연결의 physical 자원 정리(비동기)와 뒤이은
 `zlink_connect(endpoint)`가 시작하는 새 연결 시도는 겹칠 수 있으며, 새 시도의 진행은 monitor event 소비나 이전
 연결의 terminal edge 관찰을 조건으로 하지 않는다(05-polling §3 command progress). 원격 ROUTER에 남아 있는 같은

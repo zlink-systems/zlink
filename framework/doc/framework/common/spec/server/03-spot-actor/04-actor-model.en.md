@@ -614,53 +614,16 @@ During drain, new Actor creation and membership assignment are blocked.
 Already-accepted Actor turns and control transactions proceed to the
 deadline.
 
-The resend (replay) and termination of a durable lifecycle operation carrying an
-`OperationId` (Actor create/join, session bind, and so on) are decided by the
-following rules. How the target retains and re-encodes the terminal record is
-owned by
-[membership §2](05-spot-actor-membership.en.md#2-the-process-that-confirms-only-one-object-is-created).
+The initial admission, failure, and resubmission boundary of a durable lifecycle
+operation carrying an `OperationId` (Actor create/join, session bind, and so on)
+are decided, as for an application request, by
+[Submit and completion §5](../01-execution/01-submit-and-completion.en.md#5-backpressure-and-error-classification)
+and [§9](../01-execution/01-submit-and-completion.en.md#9-request-completion--the-completion-race-and-timeout-budget).
+The Framework doesn't resend such an operation. The `OperationId` and the target's
+terminal record are the contract for operation identity and result ownership
+([membership §2](05-spot-actor-membership.en.md#2-the-process-that-confirms-only-one-object-is-created)),
+not a basis for automatic resending.
 
-- **The replayer is the framework runtime that started the operation, and only
-  durable lifecycle operations carrying an `OperationId` are replayed.**
-  The resubmission boundary for application requests is defined by
-  [Submit and completion §5](../01-execution/01-submit-and-completion.en.md#5-backpressure-and-error-classification). The "caller resends after the handover"
-  in the Core socket contract means the application for application requests
-  and the framework for durable operations.
-- **The only replay condition is a typed transient transport failure with no
-  terminal envelope received (a missing route, observing after submission a
-  selected route of the peer whose route generation differs from the one that was
-  ready at submission, a lost reply, a disconnect).** A protocol error, an encode or
-  configuration failure, or a typed non-replayable terminal ends the operation
-  with that failure at once — resending the same input wouldn't change the
-  result. An operation whose terminal envelope (`Created`, `Existing`,
-  `Rejected`, `Failed`, and so on) was received is not resent.
-- **A replay is submitted when a resend is needed and the target peer is ready
-  on the current route.** If the peer is already ready when the failure is
-  handled, the replay is submitted at once; otherwise it is submitted on the
-  transition in which the peer becomes ready. No separate retry timer or
-  periodic check is kept.
-- **Each attempt uses the entire remaining deadline and there is no attempt
-  limit.** The cause decides the kind of exhaustion: exhausted without any
-  attempt ever being admitted ends with `Unavailable` per the
-  [error model](../00-foundation/07-framework-error-model.en.md); exhausted
-  while an admitted request's reply never arrived ends with
-  `DeadlineExceeded`. The target's terminal record guarantees that execution is
-  not duplicated, so the sender does not guess whether execution happened.
-
-- **The only signal that stops replay before the deadline is the target node's
-  lifecycle termination.** That judgment is the fact that the logical owner
-  (the Location / auto-connect owner) removed the
-  [connection intent](../00-foundation/02-glossary.en.md#connection-intent) for
-  the target node and no admitted peer remains for that node
-  ([MeshNode §7.1](03-mesh-node.en.md#71-peer-connection)); the sender then ends
-  the operation with `Unavailable` immediately, per "owner process terminated"
-  in
-  [08-routing §2.6](08-routing.en.md#26-where-objectgeneration-is-used-and-where-its-not).
-  Transport loss or the mere absence of a peer can be recovered by
-  reconnection, so replay continues. The sender keeps no separate state, timer,
-  or monitor for this judgment and observes the intent-removal transition that
-  already exists — with two judges, one side would treat the same target as
-  terminated while the other treats it as transient.
 - **The deadline has one owner: the operation (sender).** Layers that wrap an
   operation — deferred join, remote transaction wrapper — pass the deadline to
   the operation and wait for its terminal, and don't race with their own timer
@@ -742,20 +705,14 @@ Gate, Yield, Actor-claim, and self-request observations reference
   reservation when no Ready authority exists.
 - After `Rejected` or `Failed`, `Find` doesn't find the Actor and the reserved
   capacity is returned.
-- A durable lifecycle operation (Actor create/join, session bind) continues
-  with the same `OperationId` after a missing route, a change of the selected
-  route after submission, or a lost reply, and receives its original terminal within the
-  deadline; resubmission of an application request in the same situation follows
-  [Submit and completion §5](../01-execution/01-submit-and-completion.en.md#5-backpressure-and-error-classification).
-- A durable operation that was never admitted by the deadline ends with
-  `Unavailable`, one admitted but left without a reply by the deadline ends
-  with `DeadlineExceeded`, and a typed non-transient failure such as a protocol
-  error or an encode failure ends it with that failure at once.
-- When the logical owner removes the connection intent for the target node of
-  a durable operation that is replaying and no admitted peer remains on that
-  node, the operation ends with `Unavailable` before its deadline. When only a
-  transport loss occurs it doesn't end, and replay with the same `OperationId`
-  continues after reconnection.
+- A durable lifecycle operation (Actor create/join, session bind) follows the
+  initial admission of
+  [Submit and completion §5](../01-execution/01-submit-and-completion.en.md#5-backpressure-and-error-classification)
+  and starts the binding request zero times or once. While the target connection
+  is being attempted, it waits within the deadline and starts once; if the target
+  connection's latest result is a failure, it doesn't start and ends with
+  `Unavailable`. A handover, loss, or lost reply after the start ends with the
+  binding's typed result, and the same operation isn't sent again.
 - A call that went through deferred join or a remote transaction wrapper ends
   with the same kind at the same moment as the wrapped operation's terminal,
   and the wrapper doesn't produce a timeout first while admission is pending.
