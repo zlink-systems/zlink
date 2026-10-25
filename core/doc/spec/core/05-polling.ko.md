@@ -114,6 +114,11 @@ ROUTER는 `zlink_poll()`과 poller 모두에서 `ZLINK_POLLROUTE`를 쓸 수 있
 준비되는 level readiness이며, 준비·해제 규칙은 [ROUTER §10.1](socket/07-router.ko.md#101-선택-route-관찰)이
 정한다. ROUTER가 아닌 source와 close된 source는 지원하지 않는 event와 close된 source의 기존 규칙을 따른다.
 
+Connect를 지원하는 socket은 `zlink_poll()`과 poller 모두에서 `ZLINK_POLLCONNECT`를 쓸 수 있다. 연결 상태 행이
+추가·제거되거나 내용이 바뀌면 준비되는 level readiness이며, 준비·해제 규칙은
+[`zlink_socket_connection_attempts_snapshot`](socket/README.ko.md#zlink_socket_connection_attempts_snapshot)이
+정한다. `ZLINK_POLLIN`·`ZLINK_POLLCOMPLETION`·`ZLINK_POLLROUTE`와 독립이며 서로의 readiness를 해제하지 않는다.
+
 `zlink_poller_wait()`는 completion을 제거하거나 callback을 호출하지 않는다. Event array에는
 operation payload를 넣지 않으며 event array 용량과 completion 개수는 관계가 없다. Caller는
 준비된 socket마다 `zlink_completion_recv(..., ZLINK_RECV_FLAGS_DONTWAIT)`를
@@ -184,7 +189,8 @@ typedef enum zlink_poller_event_flag_e {
   ZLINK_POLLPRI        = 8,   // FD의 platform POLLPRI (§3)
   ZLINK_POLLITEMS_DFLT = 16,  // 권장 초기 item 수. readiness bit가 아니다 (§3)
   ZLINK_POLLCOMPLETION = 32,  // socket completion queue readiness (§4)
-  ZLINK_POLLROUTE      = 64   // ROUTER 선택 route 변경 (ROUTER §10.1)
+  ZLINK_POLLROUTE      = 64,  // ROUTER 선택 route 변경 (ROUTER §10.1)
+  ZLINK_POLLCONNECT    = 128  // 연결 상태 행 변경 (Socket zlink_socket_connection_attempts_snapshot)
 } zlink_poller_event_flag_e;
 
 #define ZLINK_HAVE_POLLER 1   // public poller API가 build에 포함됨

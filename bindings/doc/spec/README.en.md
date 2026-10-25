@@ -1230,6 +1230,16 @@ is the baseline.
   `ZLINK_POLLROUTE` with the meaning defined in
   [Core ROUTER §10.1](../../../core/doc/spec/core/socket/07-router.en.md#101-observing-the-selected-route).
   A route generation is a nonzero opaque equality token; its sign or size does not imply order.
+- The connection state snapshot of a raw socket that supports connect
+  (`zlink_socket_connection_attempts_snapshot()`) and `ZLINK_POLLCONNECT` are projected without loss, with
+  the meaning defined by [Core socket](../../../core/doc/spec/core/socket/README.en.md#zlink_socket_connection_attempts_snapshot).
+  State, failure cause, and stage are published as closed language enums, and `intent_id` and `revision` as nonzero
+  opaque equality tokens. `last_failure_id` is 0 with no failure history and a nonzero opaque equality token after a
+  failure. No value's sign or size is used for ordering. Readiness
+  is delivered through the existing Poller and asynchronous progress path. A binding doesn't infer a
+  connection result from monitor event history or timer polling, and doesn't turn a successful snapshot that
+  carries a failure state into a request failure. Only errors of the query itself are delivered as the
+  existing config errors. Loaded with a Core that lacks this surface, it refuses with no fallback behavior.
 - Core's raw `STREAM` is an exceptional type that picks one of three
   modes: `recv`, the raw callback (`zlink_recv_handler()`), or the packet
   callback (`zlink_stream_packet_handler()`). A high-level binding's
