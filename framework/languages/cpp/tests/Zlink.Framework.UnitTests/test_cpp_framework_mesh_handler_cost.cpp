@@ -4,6 +4,7 @@
 #include "allocation_counter.hpp"
 #include "runtime/channels/route_handler_registry.hpp"
 #include "runtime/mesh/mesh_record_dispatcher.hpp"
+#include "runtime/stateful/public_host_runtime.hpp"
 
 #include <gtest/gtest.h>
 
@@ -11,13 +12,16 @@
 #include <atomic>
 #include <chrono>
 #include <cstdio>
+#include <functional>
 #include <future>
 #include <memory>
 #include <optional>
+#include <pthread.h>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <thread>
+#include <utility>
 
 namespace fw = zlink::framework;
 namespace
@@ -38,6 +42,59 @@ std::array<bool, channel_names.size ()> dispatch_success{};
 constexpr const char *pending_channel = "cost-pending";
 std::shared_ptr<fw::task_completion_source_t<void>> pending_release;
 std::atomic<bool> pending_entered{false};
+
+struct owner_work_observation_t
+{
+    std::atomic<unsigned> completed{0};
+    fw::tests::allocation_measurement_t dispatch_to_idle{}, suffix{};
+    unsigned handlers = 0, claims = 0, ready_claims = 0, empty_claims = 0;
+};
+struct owner_work_scope_t
+{
+    unsigned handlers = 0, claims = 0, ready_claims = 0, empty_claims = 0;
+    std::size_t last_ready_count = 0, last_ready_bytes = 0;
+    bool previous_tracking = false;
+    std::size_t previous_count = 0, previous_bytes = 0, previous_largest = 0, previous_size = 0;
+    std::shared_ptr<owner_work_observation_t> observation;
+};
+std::atomic<std::shared_ptr<owner_work_observation_t>> selected_owner_work;
+thread_local owner_work_scope_t owner_work_scope;
+thread_local owner_work_scope_t *current_owner_work = nullptr;
+
+void finish_owner_measurement () noexcept
+{
+    auto *scope = std::exchange (current_owner_work, nullptr);
+    if (!scope)
+        return;
+    const fw::tests::allocation_measurement_t total{fw::tests::tracked_allocation_count,
+                                                    fw::tests::tracked_allocation_bytes,
+                                                    fw::tests::largest_allocation};
+    const fw::tests::allocation_measurement_t suffix{total.count - scope->last_ready_count,
+                                                     total.bytes - scope->last_ready_bytes, 0};
+    fw::tests::tracking_allocations = scope->previous_tracking;
+    fw::tests::tracked_allocation_count = scope->previous_count;
+    fw::tests::tracked_allocation_bytes = scope->previous_bytes;
+    fw::tests::largest_allocation = scope->previous_largest;
+    fw::tests::tracked_allocation_size = scope->previous_size;
+    auto observation = std::move (scope->observation);
+    observation->dispatch_to_idle = total;
+    observation->suffix = suffix;
+    observation->handlers = scope->handlers;
+    observation->claims = scope->claims;
+    observation->ready_claims = scope->ready_claims;
+    observation->empty_claims = scope->empty_claims;
+    observation->completed.fetch_add (1, std::memory_order_release);
+}
+
+struct owner_cost_send_t
+{
+    void handle (const std::string &value)
+    {
+        if (value != "owner-cost" || !current_owner_work)
+            throw std::runtime_error ("public local send bypassed the observed owner work");
+        ++current_owner_work->handlers;
+    }
+};
 
 void check_payload (const std::string &payload)
 {
@@ -172,6 +229,91 @@ template <typename T> std::size_t ready_handler_cost (fw::result_t<T> value)
     return cost;
 }
 } // namespace
+
+// The first condition wait after synchronous dispatch is the worker's idle
+// boundary. The last ready claim may be nonempty when the owner budget expires.
+// Preserve every wait argument and result; only read counters.
+extern "C" int __real_pthread_cond_wait (pthread_cond_t *, pthread_mutex_t *);
+extern "C" int __wrap_pthread_cond_wait (pthread_cond_t *condition, pthread_mutex_t *mutex)
+{
+    finish_owner_measurement ();
+    return __real_pthread_cond_wait (condition, mutex);
+}
+extern "C" int
+__real_pthread_cond_timedwait (pthread_cond_t *, pthread_mutex_t *, const timespec *);
+extern "C" int __wrap_pthread_cond_timedwait (pthread_cond_t *condition,
+                                              pthread_mutex_t *mutex,
+                                              const timespec *deadline)
+{
+    finish_owner_measurement ();
+    return __real_pthread_cond_timedwait (condition, mutex, deadline);
+}
+#if defined(_GLIBCXX_USE_PTHREAD_COND_CLOCKWAIT)
+extern "C" int
+__real_pthread_cond_clockwait (pthread_cond_t *, pthread_mutex_t *, clockid_t, const timespec *);
+extern "C" int __wrap_pthread_cond_clockwait (pthread_cond_t *condition,
+                                              pthread_mutex_t *mutex,
+                                              clockid_t clock,
+                                              const timespec *deadline)
+{
+    finish_owner_measurement ();
+    return __real_pthread_cond_clockwait (condition, mutex, clock, deadline);
+}
+#endif
+
+using owner_dispatch_t = std::function<void (const fw::runtime::host::ready_record_t &,
+                                             const fw::runtime::host::receive_record_t &,
+                                             std::vector<zlink::message_t>)>;
+#define OWNER_CLAIM_SYMBOL                                                                         \
+    "_ZN5zlink9framework7runtime4host21public_host_runtime_t26dispatch_application_ownerENSt7__"   \
+    "cxx1112basic_stringIcSt11char_traitsIcESaIcEEESt8functionIFvRKNS2_14ready_record_tERKNS2_"    \
+    "16receive_record_tESt6vectorINS_9message_tESaISI_EEEESA_IFvvEESO_"
+extern "C" fw::task_t<bool>
+real_owner_claim (fw::runtime::host::public_host_runtime_t *,
+                  std::string,
+                  owner_dispatch_t,
+                  std::function<void ()>,
+                  std::function<void ()>) __asm__ ("__real_" OWNER_CLAIM_SYMBOL);
+extern "C" fw::task_t<bool>
+wrap_owner_claim (fw::runtime::host::public_host_runtime_t *,
+                  std::string,
+                  owner_dispatch_t,
+                  std::function<void ()>,
+                  std::function<void ()>) __asm__ ("__wrap_" OWNER_CLAIM_SYMBOL);
+#undef OWNER_CLAIM_SYMBOL
+extern "C" fw::task_t<bool> wrap_owner_claim (fw::runtime::host::public_host_runtime_t *host,
+                                              std::string owner,
+                                              owner_dispatch_t dispatch,
+                                              std::function<void ()> started,
+                                              std::function<void ()> rejected)
+{
+    if (!current_owner_work) {
+        if (auto observation = selected_owner_work.load (std::memory_order_acquire)) {
+            owner_work_scope = {};
+            auto &scope = owner_work_scope;
+            scope.observation = std::move (observation);
+            scope.previous_tracking = std::exchange (fw::tests::tracking_allocations, true);
+            scope.previous_count = std::exchange (fw::tests::tracked_allocation_count, 0);
+            scope.previous_bytes = std::exchange (fw::tests::tracked_allocation_bytes, 0);
+            scope.previous_largest = std::exchange (fw::tests::largest_allocation, 0);
+            scope.previous_size = std::exchange (fw::tests::tracked_allocation_size, 0);
+            current_owner_work = &scope;
+        }
+    }
+    auto result = real_owner_claim (host, std::move (owner), std::move (dispatch),
+                                    std::move (started), std::move (rejected));
+    if (current_owner_work) {
+        ++current_owner_work->claims;
+        if (result.await_ready () && result.result ()) {
+            ++current_owner_work->ready_claims;
+            if (!result.result ().value ())
+                ++current_owner_work->empty_claims;
+            current_owner_work->last_ready_count = fw::tests::tracked_allocation_count;
+            current_owner_work->last_ready_bytes = fw::tests::tracked_allocation_bytes;
+        }
+    }
+    return result;
+}
 
 // Count the complete typed adapter call, including its returned task state.
 // The surrounding hosted observer owns tracking; this scope only reads deltas.
@@ -412,4 +554,62 @@ TEST (MeshHandlerCost, PublicSyncHandlersDoNotOwnAnAdapterCoroutine)
     const auto reply = pending.result ();
     ASSERT_TRUE (reply) << (reply.error () ? reply.error ()->what () : "no error");
     EXPECT_EQ (reply.value (), "pending payload survives suspension");
+}
+
+TEST (MeshHandlerCost, PublicOwnerWorkDoesNotAllocateAnotherTaskOwner)
+{
+    auto app = fw::app_t::create ();
+    app.logging ().disable_record_capture ();
+    app.add_zlink_framework ([] (fw::zlink_framework_options_t &options) {
+        options.add_route_mesh ("owner-cost")
+          .set_object_role (fw::object_role_t::none)
+          .set_routing_id (zlink::routing_id_t::from ("owner-cost-node"))
+          .listen ("tcp://127.0.0.1:0")
+          .add_route_send_handler<owner_cost_send_t, std::string> ();
+    });
+    auto provider = app.advanced ().services ().build_provider ();
+    running_app_t running (app);
+    ASSERT_TRUE (running.ready ());
+    auto &routes = provider.get_required<fw::route_client_t> ();
+    const auto anchor = std::make_shared<int> (0);
+    std::function<void (const fw::result_t<void> &)> callback;
+    const auto callback_cost = fw::tests::count_allocations ([&] {
+        callback = [anchor] (const fw::result_t<void> &result) {
+            result.value ();
+            ++*anchor;
+        };
+    });
+    callback (fw::result_t<void>::success ());
+    EXPECT_EQ (*anchor, 1);
+    for (int round = 0; round != sample_rounds; ++round) {
+        auto observation = std::make_shared<owner_work_observation_t> ();
+        selected_owner_work.store (observation, std::memory_order_release);
+        const auto submitted =
+          routes
+            .send_to_node ("owner-cost", zlink::routing_id_t::from ("owner-cost-node"),
+                           std::string ("owner-cost"))
+            .async ()
+            .result ();
+        EXPECT_TRUE (submitted);
+        const auto deadline = std::chrono::steady_clock::now () + startup_timeout;
+        while (observation->completed.load (std::memory_order_acquire) == 0
+               && std::chrono::steady_clock::now () < deadline)
+            std::this_thread::yield ();
+        selected_owner_work.store (nullptr, std::memory_order_release);
+        ASSERT_EQ (observation->completed.load (std::memory_order_acquire), 1u);
+        EXPECT_EQ (observation->handlers, 1u);
+        EXPECT_GE (observation->claims, 1u);
+        EXPECT_LE (observation->claims, 2u);
+        EXPECT_EQ (observation->ready_claims, observation->claims);
+        EXPECT_EQ (observation->empty_claims, observation->claims - 1);
+        EXPECT_GT (observation->dispatch_to_idle.count, observation->suffix.count);
+        EXPECT_GT (observation->dispatch_to_idle.bytes, observation->suffix.bytes);
+        std::printf ("owner-work round=%d dispatch-to-idle=%zu/%zu suffix=%zu/%zu callback=%zu "
+                     "handlers=%u claims=%u empty=%u\n",
+                     round, observation->dispatch_to_idle.count,
+                     observation->dispatch_to_idle.bytes, observation->suffix.count,
+                     observation->suffix.bytes, callback_cost, observation->handlers,
+                     observation->claims, observation->empty_claims);
+        EXPECT_LE (observation->suffix.count, callback_cost) << "round=" << round;
+    }
 }

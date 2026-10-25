@@ -2595,6 +2595,10 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     target_include_directories(test_cpp_framework_mesh_handler_cost PRIVATE
       ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
     target_link_options(test_cpp_framework_mesh_handler_cost PRIVATE
+      "-Wl,--wrap=pthread_cond_wait"
+      "-Wl,--wrap=pthread_cond_timedwait"
+      "-Wl,--wrap=pthread_cond_clockwait"
+      "-Wl,--wrap=_ZN5zlink9framework7runtime4host21public_host_runtime_t26dispatch_application_ownerENSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEESt8functionIFvRKNS2_14ready_record_tERKNS2_16receive_record_tESt6vectorINS_9message_tESaISI_EEEESA_IFvvEESO_"
       "-Wl,--wrap=_ZNK5zlink9framework6detail24mesh_record_dispatcher_t8dispatchERKNS0_7runtime4host16receive_record_tESt6vectorINS_9message_tESaIS9_EENS3_9messaging17envelope_header_tE"
       "-Wl,--wrap=_ZNK5zlink9framework6detail24route_handler_registry_t12invoke_asyncESt17basic_string_viewIcSt11char_traitsIcEENS0_7runtime9messaging14message_kind_tES6_RNS0_18service_provider_tERNS0_21serializer_registry_tERKNS_9message_tERKNS0_23route_message_context_tE")
     add_zlink_framework_test(

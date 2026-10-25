@@ -1952,12 +1952,11 @@ auto mesh_node_host_service_t::make_application_owner_work (
        services = _services, serializers = _serializers, filters = _filters,
        failures = _runtime_failures, options = _dispatch_options] (bool reject_only) {
           detail::ambient_context_scope_t infrastructure (nullptr, nullptr, {}, false, true);
-          auto pending = std::make_shared<task_t<void>> (drain_application_owner (
-            node, registration, owner, reject_only, services, serializers, filters, options));
-          detail::observe_task_completion (*pending,
-                                           [pending, failures] (const result_t<void> &result) {
-                                               failures->capture ([&] { result.value (); });
-                                           });
+          auto pending = drain_application_owner (node, registration, owner, reject_only, services,
+                                                  serializers, filters, options);
+          detail::observe_task_completion (pending, [failures] (const result_t<void> &result) {
+              failures->capture ([&] { result.value (); });
+          });
       };
 }
 
