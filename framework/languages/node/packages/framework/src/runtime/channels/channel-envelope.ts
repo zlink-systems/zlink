@@ -3,13 +3,18 @@ import type { ZLinkBackendMessageLike as MessageLike } from '../backend/runtime-
 import { randomBytes } from 'node:crypto';
 import { isUtf8 } from 'node:buffer';
 import {
+  type Type,
   ZLinkFrameworkErrorKind,
   ZLinkFrameworkException,
   type ZLinkMessageSerializer,
   type ZLinkFlowOrigin
 } from '../../contracts';
 import { borrowEncodedPayload } from '../../contracts/Common/encoded-payload-storage';
-import { isZLinkMessage, readZLinkMessageDeclaredType } from '../../contracts/Common/ZLinkMessage';
+import {
+  isZLinkMessage,
+  materializeZLinkMessageValue,
+  readZLinkMessageDeclaredType
+} from '../../contracts/Common/ZLinkMessage';
 import { ZLinkConfigurationException } from '../configuration';
 import {
   ZLinkFrameworkInternalErrorKind,
@@ -407,7 +412,8 @@ export function decodeChannelEnvelope(
 
 export function decodeChannelPayload(
   envelope: ZLinkChannelEnvelope,
-  codecs?: ZLinkChannelEnvelopeCodecRegistry
+  codecs?: ZLinkChannelEnvelopeCodecRegistry,
+  messageType?: Type
 ): unknown {
   try {
     if (!isCanonicalCodecContentType(envelope.header.contentType)) {
@@ -415,7 +421,10 @@ export function decodeChannelPayload(
     }
     const serializer = codecs?.serializers.get(envelope.header.contentType);
     if (serializer !== undefined) {
-      return serializer.deserialize(encodedPayloadFromOwned(envelope.payload), Object as never);
+      return serializer.deserialize(
+        encodedPayloadFromOwned(envelope.payload),
+        (messageType ?? Object) as never
+      );
     }
     if (envelope.header.contentType === BINARY_CONTENT_TYPE) {
       // The receive loop owns the Message for the duration of dispatch, so
@@ -423,9 +432,12 @@ export function decodeChannelPayload(
       return envelope.payload;
     }
     if (envelope.header.contentType === JSON_CONTENT_TYPE) {
-      return parseWireJson(
-        envelope.payload.toString(),
-        schemaForInboundChannelEnvelope(envelope.header)
+      return materializeZLinkMessageValue(
+        parseWireJson(
+          envelope.payload.toString(),
+          schemaForInboundChannelEnvelope(envelope.header)
+        ),
+        messageType
       );
     }
     throw unsupportedChannelContentType(envelope.header.contentType);

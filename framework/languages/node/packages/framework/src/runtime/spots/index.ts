@@ -1741,7 +1741,8 @@ export class DefaultZLinkSpotManager {
       this.options.messageSerializers === undefined
         ? undefined
         : { serializers: this.options.messageSerializers };
-    const decodePayload = () => decodeChannelPayload(envelope, codecs);
+    const decodePayload = (messageType?: Type) =>
+      decodeChannelPayload(envelope, codecs, messageType);
     const context = {
       channelName: envelope.header.channelName,
       contentType: envelope.header.contentType,
@@ -1863,7 +1864,8 @@ export class DefaultZLinkSpotManager {
             this.options.messageSerializers === undefined
               ? undefined
               : { serializers: this.options.messageSerializers };
-          const decodePayload = () => decodeChannelPayload(envelope, codecs);
+          const decodePayload = (messageType?: Type) =>
+            decodeChannelPayload(envelope, codecs, messageType);
           const context = {
             channelName: envelope.header.channelName,
             contentType: envelope.header.contentType,
