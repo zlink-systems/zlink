@@ -10,6 +10,7 @@ namespace MyGame::E2E
 enum class Scenario
 {
     region,
+    movement,
     dungeon,
     reconnect,
     update
@@ -20,6 +21,7 @@ struct ScenarioDefinition
     const char *name;
 };
 inline constexpr std::array scenario_order{ScenarioDefinition{Scenario::region, "region"},
+                                           ScenarioDefinition{Scenario::movement, "movement"},
                                            ScenarioDefinition{Scenario::dungeon, "dungeon"},
                                            ScenarioDefinition{Scenario::reconnect, "reconnect"},
                                            ScenarioDefinition{Scenario::update, "update"}};

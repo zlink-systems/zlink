@@ -44,15 +44,17 @@ Linux:
 
 ```sh
 ./run-e2e.sh
-./run-e2e.sh --scenario region,dungeon,reconnect,update
+./run-e2e.sh --scenario region,movement,dungeon,reconnect,update
+./run-e2e.sh --check-domain
 ```
 
 Windows:
 
 ```powershell
 pwsh -NoProfile -File ./run-e2e.ps1
-pwsh -NoProfile -File ./run-e2e.ps1 -Scenario region,dungeon,reconnect,update
+pwsh -NoProfile -File ./run-e2e.ps1 -Scenario region,movement,dungeon,reconnect,update
 pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
+pwsh -NoProfile -File ./run-e2e.ps1 -CheckDomain
 ```
 
 The runner and nodes execute in containers. The script checks structure before Redis startup, then uses a unique Compose network, project, container names and Redis key prefixes. Nodes share the runner's network namespace, preserving loopback listeners and OS-assigned ports. Configuration is copied into each node before attaching stdin and stdout; `drain`, `shutdown` and lifecycle output retain their existing protocol.
@@ -63,12 +65,13 @@ The runner checks `zlink.structure.json` before starting Redis and the four node
 
 | Scenario | Assertions |
 | --- | --- |
-| `region` | p1 and p2 share forest-1; p3 enters forest-2. p2 receives p1's movement; p3 receives no Region update during a bounded connector observation. |
+| `region` | Two Region replicas reach capacity; the next player receives `RegionUnavailable(capacity-exhausted)` and stays connected. An unknown region receives `region-unknown`. Internal packets are rejected by Session. |
+| `movement` | Server validates delta and sequence, returns `ActionRejected` without changing state, then accepts after the server-provided retry delay. The requester receives one direct result; other members receive the Region broadcast. |
 | `dungeon` | Dungeon GetOrCreate resolves to the Instance node. |
 | `reconnect` | A new Session binds the same Actor generation and retains Region membership and position. |
 | `update` | Drain the actual Region owner, observe relocation and SafeToShutdown, retain player state and Session identity, stop and replace that owner, and verify movement and new Region work. |
 
-`./run-e2e.sh --check-structure` validates actual files without starting Redis or game nodes. The checker accepts valid added or reordered nodes, Spots and edges. It validates references, configuration paths, stable types and the canonical scenario order.
+`./run-e2e.sh --check-structure` validates actual files without starting Redis or game nodes. `./run-e2e.sh --check-domain` runs movement boundary checks without Redis or game nodes. The structure checker validates references, configuration paths, stable types and the canonical scenario order.
 
 ## Local debugging
 
@@ -112,6 +115,6 @@ Message Follow is explicitly set to 30 seconds. The `SAFE_TO_SHUTDOWN` observati
 
 ## 한국어 실행 안내
 
-Docker Compose v2와 Linux 컨테이너 데몬을 준비한다. 템플릿 디렉터리에서 Linux는 `./run-e2e.sh`, Windows는 `pwsh -NoProfile -File ./run-e2e.ps1`을 실행한다. 기본 실행은 이미지 빌드부터 runner·node 컨테이너 기동과 정리까지 수행한다. Framework 버전은 `bootstrap.cmake` 한 곳에서 정하며, 빌드는 그 버전의 GitHub Release prebuilt를 받아 함께 게시된 SHA-256 체크섬으로 확인한다.
+Docker Compose v2와 Linux 컨테이너 데몬을 준비한다. 템플릿 디렉터리에서 Linux는 `./run-e2e.sh`, Windows는 `pwsh -NoProfile -File ./run-e2e.ps1`을 실행한다. 기본 실행은 이미지 빌드부터 runner·node 컨테이너 기동과 정리까지 수행한다. `region`은 복제본 수용량 고갈과 알 수 없는 지역, Session 내부 패킷 거부 및 연결 유지를 확인한다. `movement`는 서버가 delta·순번·이동 예산을 판정하고 거부 뒤 상태가 유지되는지, 서버가 보낸 `RetryAfterMs` 뒤 요청을 수락하는지 확인한다. 도메인 경계 검사는 Linux의 `./run-e2e.sh --check-domain`, Windows의 `pwsh -NoProfile -File ./run-e2e.ps1 -CheckDomain`으로 실행한다. Framework 버전은 `bootstrap.cmake` 한 곳에서 정하며, 빌드는 그 버전의 GitHub Release prebuilt를 받아 함께 게시된 SHA-256 체크섬으로 확인한다.
 
 로컬 디버깅은 C++20 컴파일러, CMake, Ninja를 설치한 뒤 `./run-e2e.sh --local` 또는 `pwsh -NoProfile -File ./run-e2e.ps1 -Local`로 실행한다. node 로그와 설정은 `.logs/run-<id>/`, Docker 빌드·정리 로그는 `.logs/docker-<project>/`에 남는다. 공개 패키지에서 확인된 차단 사항은 Known issues를 따른다.

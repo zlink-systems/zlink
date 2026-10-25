@@ -1,3 +1,3 @@
 package MyGame;
 
-public record MoveRequest(int x, long sequence) {}
+public record MoveRequest(double delta, long sequence) {}

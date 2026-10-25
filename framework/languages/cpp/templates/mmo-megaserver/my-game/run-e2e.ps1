@@ -3,6 +3,7 @@ param(
     [switch]$NoBuild,
     [switch]$BuildOnly,
     [switch]$CheckStructure,
+    [switch]$CheckDomain,
     [string]$Scenario,
     [Parameter(ValueFromRemainingArguments = $true)][string[]]$RunnerArguments = @()
 )
@@ -12,6 +13,7 @@ if ($PSVersionTable.PSVersion.Major -lt 7) { throw 'PowerShell 7 or later is req
 $root = $PSScriptRoot
 New-Item -ItemType Directory -Force (Join-Path $root '.logs') | Out-Null
 if ($CheckStructure) { $RunnerArguments = @('--check-structure') + $RunnerArguments }
+elseif ($CheckDomain) { $RunnerArguments = @('--check-domain') + $RunnerArguments }
 elseif ($Scenario) { $RunnerArguments = @('--scenario', $Scenario) + $RunnerArguments }
 if ($Local) {
     if (-not $NoBuild) {
@@ -54,6 +56,10 @@ try {
         & docker @compose run --rm --no-deps -T --name "$project-check" runner @checkArguments
         if ($LASTEXITCODE -ne 0) { throw 'Structure check failed.' }
         if ($CheckStructure) { $result = 0 }
+        elseif ($CheckDomain) {
+            & docker @compose run --rm --no-deps -T --name "$project-domain" runner @RunnerArguments
+            $result = $LASTEXITCODE
+        }
         else {
             & docker @compose up -d --wait --wait-timeout 30 redis *> (Join-Path $logs 'redis-start.log')
             if ($LASTEXITCODE -ne 0) { throw 'Redis startup failed.' }

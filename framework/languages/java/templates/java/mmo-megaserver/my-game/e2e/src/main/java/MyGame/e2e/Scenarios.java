@@ -8,7 +8,7 @@ public final class Scenarios {
     private Scenarios() {}
 
     private static final String FOREST = "forest";
-    private static final int MOVED_X = 42;
+    private static final double MOVED_X = Names.MAX_STEP;
 
     private static void require(boolean condition, String message) {
         Structure.require(condition, message);
@@ -50,19 +50,28 @@ public final class Scenarios {
                             && together.players()
                                     .equals(
                                             List.of(
-                                                    new PlayerPosition("p1", 0),
-                                                    new PlayerPosition("p2", 0))),
+                                                    new PlayerPosition("p1", 0, 0),
+                                                    new PlayerPosition("p2", 0, 0))),
                     "Players are not together");
             sameState(together, p1.next(RegionView.class, v -> v.players().size() == 2));
             var p3 = create(nodes, clients, "p3");
             var isolated = p3.join(FOREST);
             require(
                     isolated.regionId().equals(Names.regionId(FOREST, 2))
-                            && isolated.players().equals(List.of(new PlayerPosition("p3", 0))),
+                            && isolated.players().equals(List.of(new PlayerPosition("p3", 0, 0))),
                     "Capacity did not isolate p3");
             var session = p1.sessionInfo();
             var session2 = p2.sessionInfo();
-            var moved = p1.move(MOVED_X, 1);
+            p1.send(new MoveRequest(MOVED_X, 1));
+            p1.send(new MoveRequest(MOVED_X, 2));
+            var moved = p1.next(RegionView.class, v -> v.players().stream().anyMatch(p -> p.playerId().equals("p1") && p.sequence() == 1));
+            var rejected = p1.next(ActionRejected.class, v -> v.reason().equals("move-budget"));
+            require(rejected.retryAfterMs() > 0, "Missing movement retry time");
+            sameState(moved, p1.view());
+            Thread.sleep(rejected.retryAfterMs());
+            moved = p1.move(MOVED_X, 2);
+            require(moved.players().stream().anyMatch(p -> p.playerId().equals("p1") && p.x() == MOVED_X * 2 && p.sequence() == 2), "Retry did not preserve sequence");
+            final var expected = moved;
             sameState(
                     moved,
                     p2.next(
@@ -72,7 +81,7 @@ public final class Scenarios {
                                             .anyMatch(
                                                     p ->
                                                             p.playerId().equals("p1")
-                                                                    && p.x() == MOVED_X)));
+                                                                    && p.x() == MOVED_X * 2)));
             sameState(isolated, p3.view());
             require(
                     p3.history.stream()
@@ -85,7 +94,23 @@ public final class Scenarios {
                     "p3 received another Region's movement");
             for (var scenario : selected) {
                 switch (scenario) {
-                    case REGION -> {}
+                    case REGION -> {
+                        var p4 = create(nodes, clients, "capacity-p4");
+                        var full = p4.join(FOREST);
+                        require(full.regionId().equals(Names.regionId(FOREST, 2)) && full.players().size() == 2, "Second replica not full");
+                        var p5 = create(nodes, clients, "capacity-p5");
+                        p5.send(new EnterRegionRequest(p5.playerId, FOREST));
+                        var unavailable = p5.next(RegionUnavailable.class, v -> true);
+                        require(unavailable.equals(new RegionUnavailable(FOREST, "capacity-exhausted")), "Capacity exhaustion response");
+                        require(p5.sessionInfo().actorId().equals(p5.playerId), "Capacity rejection lost Session");
+                        var unknown = create(nodes, clients, "unknown-p6");
+                        unknown.send(new EnterRegionRequest(unknown.playerId, "unknown"));
+                        require(unknown.next(RegionUnavailable.class, v -> true).equals(new RegionUnavailable("unknown", "region-unknown")), "Unknown region response");
+                        unknown.send(new RegionFull(Names.REGION_FULL, FOREST, 1));
+                        require(unknown.next(ActionRejected.class, v -> true).equals(new ActionRejected("packet-not-allowed", 0)), "Internal packet accepted");
+                        require(unknown.sessionInfo().actorId().equals(unknown.playerId), "Packet rejection lost Session");
+                    }
+                    case MOVEMENT -> {}
                     case DUNGEON -> {
                         var id = "dungeon-1";
                         var opened = p1.dungeon(id);
@@ -112,7 +137,7 @@ public final class Scenarios {
                     }
                     case UPDATE -> {
                         nodes.drain(moved.nodeId());
-                        var relocated = p1.view(v -> !v.nodeId().equals(moved.nodeId()));
+                        var relocated = p1.view(v -> !v.nodeId().equals(expected.nodeId()));
                         sameState(moved, relocated);
                         sameState(relocated, p2.view(v -> v.nodeId().equals(relocated.nodeId())));
                         require(
@@ -132,7 +157,7 @@ public final class Scenarios {
                         require(
                                 admitted.nodeId().equals(moved.nodeId())
                                         && admitted.players()
-                                                .equals(List.of(new PlayerPosition("p4", 0))),
+                                                .equals(List.of(new PlayerPosition("p4", 0, 0))),
                                 "New Region was not accepted by the replacement Region node");
                     }
                 }

@@ -91,44 +91,22 @@ Actor가 소속 Spot을 바꾸는 동작은 membership 변경이다. 대상 Spot
 5. `OpenDungeonRequest`는 `Region::dungeon`이 처리한다. Instance node의 Dungeon을 `get_or_create`하고 `request_to_spot`과 `DungeonInfoRequest`로 물은 뒤 `DungeonOpened` 응답을 binding된 Session으로 보낸다.
 6. node를 교체할 때 `NodeControl`의 `drain`이 relocation을 요청한다. Framework는 `RegionRelocation`의 `capture`로 게임 상태를 받아 다른 node에서 `restore`한다. `PlayerRelocation`은 상태를 옮기지 않는다.
 
-## 이 샘플을 보며 개발하기
+## MMO 도메인 확장
 
-이 샘플은 기능들이 함께 동작하는 방식을 보여 주므로, 자기 게임으로 바꾸지 않고 읽고 실행하는 용도로 쓴다. 자기 프로젝트는 C++ 기본 셋업에서 시작한다. [ZLink Start](https://zlink.systems/start)의 Initializer에서 C++를 고르거나 ZLink 저장소의 `framework/languages/cpp/templates/starter/my-game`을 사용한다. 그다음 필요한 기능을 이 샘플에서 하나씩 옮긴다. 구조 선택은 기본 셋업의 `AGENTS.md`가 설명하며, 이 절은 `mmo-megaserver`만 다룬다. 이 샘플은 바꾸지 않고 프로젝트 옆에 참고용으로 둔다.
+이 템플릿의 도메인을 확장하여 MMO 서버를 만든다. 각 판정은 해당 상태를 소유한 구성 요소 한 곳에 둔다.
 
-### 샘플 먼저 실행하기
+| 대상 | 소유자 | 확장 위치 |
+| --- | --- | --- |
+| 공통 패킷 필드와 범위 | 계약 | `server/shared/contracts.hpp` |
+| 위치, 순번, 이동 예산, 단조 시계, relocation 스냅샷 | Region 도메인 | `server/region/domain/positions.hpp` |
+| Region 입장, 복제본 선택, 이동 전달 | Region adapter | `server/region/infrastructure/zlink/region.hpp`, `server/region/infrastructure/zlink/player.hpp`의 `Entry` |
+| 클라이언트 패킷 중계 허용 목록 | Session | `server/session/session.hpp` |
+| 도메인 경계 검사와 클라이언트 관찰 시나리오 | E2E runner | `e2e/domain_checks.hpp`, `e2e/scenarios.hpp` |
+| 시나리오 등록과 사용자 안내 | 템플릿 descriptor·README | `e2e/structure.hpp`, `e2e/main.cpp`, `zlink.structure.json`, `README.md` |
 
-옮기기 전에 [개발 명령](#개발-명령)으로 빌드와 e2e를 한 번 실행해 받은 샘플이 동작하는지 확인하고 동작을 본다. 이 결과가 이후 비교의 기준이 된다. 실패하면 먼저 [README](README.md)의 Known issues와 대조한다.
+새 패킷 계약과 공통 상수는 `contracts.hpp`에 추가한다. 위치, 순번, 이동 예산과 시계 판정은 `Positions`에 둔다. 시험용 시계는 생성자로 주입하고 스냅샷에는 남은 시간만 저장한다. 새 클라이언트 패킷은 Session 허용 목록에도 추가한다. 경계 검사는 `domain_checks.hpp`, e2e 시나리오는 `scenarios.hpp`에 추가하고, 시나리오 ID를 `e2e/structure.hpp`, `e2e/main.cpp`, `zlink.structure.json`, README 표에 등록한다. `--check-domain`, 관련 시나리오, 전체 e2e runner 순으로 실행한다.
 
-### 옮길 기능
-
-기능 이름은 기본 셋업 `AGENTS.md`의 기능 표와 같다(Region 정원 초과 처리은 이 구조에만 있는 기능이다). 경로는 이 디렉터리를 기준으로 한다. 기본 셋업에는 Session node 하나와 `connect` 시나리오만 있으므로, 마지막 열은 기능마다 기본 셋업에서 함께 늘릴 것이다.
-
-| 기능 | 이 샘플의 파일 | 옮길 것 | 기본 셋업에서 함께 늘릴 것 |
-| --- | --- | --- | --- |
-| Typed 메시지 | `server/shared/contracts.hpp` | 사용할 기능의 struct: `EnterRegionRequest`, `JoinRegion`, `RegionFull`, `MoveRequest`, `PlayerPosition`, `RegionView`, `ViewRequest`, `DungeonInfoRequest`, `OpenDungeonRequest`, `DungeonOpened`. `SessionInfoRequest`·`SessionInfo`는 client가 필요로 할 때만 옮긴다 | 메시지가 가리키는 `Names` 상수 |
-| Actor | `server/region/infrastructure/zlink/player.hpp`의 `Player`, `PlayerFactory` | 상태 없는 플레이어 Actor. `RegionFull` 거부를 Actor 자신에게 전달하는 `Player::on_join_completed`와, Actor client를 주입해 만드는 `PlayerFactory` | 새 `server/region/` role과 그 `main.cpp`, `server/config/` 파일, `CMakeLists.txt` role 목록의 항목. `main.cpp`의 Actor factory 등록. `zlink.structure.json`의 `nodes` 선언과 `e2e/structure.hpp`의 구조 검사 |
-| Spot | `server/region/infrastructure/zlink/region.hpp`의 `Region`, `server/region/domain/positions.hpp`의 `Positions` | `Positions`의 구성원 위치와 정원 기반 참가 수락 규칙을 가진 `Region`과 `deliver` forwarder | `main.cpp`의 `RegionLimit`를 지정한 Spot factory 등록. 구조 검사가 node 설정과 대조하는 `zlink.structure.json`의 `spots` 선언 |
-| Entry·첫 입장 | `server/region/infrastructure/zlink/player.hpp`의 `Entry`, `server/region/infrastructure/zlink/region.hpp`의 `Region::enter` | `Entry::enter`(identity 확인과 첫 instance)와 `Region::enter`의 identity 확인과 view 재전송 | `add_entry_spot` 등록과 `entry` 선언. 첫 입장 시나리오(`region`)와 재접속 뒤 상태를 비교하는 `reconnect` 시나리오 |
-| Region 정원 초과 처리 | `server/region/infrastructure/zlink/region.hpp`의 `Region::on_actor_join`, `server/region/infrastructure/zlink/player.hpp`의 `Entry::select`·`Entry::next` | `RegionFull` 정원 거부, `Player::on_join_completed`의 전달, `Entry::next`의 다음 instance 선택 | `NodeConfig`와 `server/config/`의 `Capacity`·`RegionLimit` 설정. 세 번째 플레이어가 다음 instance로 입장하는지 판정하는 `region` 시나리오 |
-| Session binding | `server/session/session.hpp` | 첫 패킷 검사, Actor 조회·생성, `bind_or_get` binding과 원래 typed 패킷 relay | `Entry::enter`와 같은 첫 패킷 타입. 기본 셋업의 `server/session/session.hpp`에 옮긴다 |
-| Host relocation | `server/region/infrastructure/zlink/player.hpp`의 `PlayerRelocation`, `server/region/infrastructure/zlink/region.hpp`의 `RegionRelocation`, `server/shared/hosting.hpp`의 `NodeControl` | `Positions`의 `capture`·`restore`를 가진 adapter, 상태 없는 Actor를 위한 `PlayerRelocation`, `drain`·`shutdown` 제어 | `main.cpp`의 `preserve_state_with` 등록. 서버 교체 뒤에도 연결·상태가 유지되고 대체 node가 새 작업을 받는지 판정하는 `update` 시나리오 |
-| 동적 던전 | `server/instance/dungeon.hpp`, `server/instance/main.cpp`, `server/region/infrastructure/zlink/region.hpp`의 `Region::dungeon` | 동적 User Spot 생성 형태(`get_or_create` 뒤 `request_to_spot`)와 Dungeon 정보 | 새 `server/instance/` role과 그 설정, `CMakeLists.txt` 항목. `zlink.structure.json`의 동적 `dungeon` Spot. `dungeon` 시나리오 |
-
-`drain`과 `shutdown`은 `NodeControl`과 함께 옮긴다.
-
-### 옮기는 순서와 규칙
-
-기능은 표의 행 하나씩 옮기고, 하나를 옮길 때마다 빌드, 구조 검사, 관련 e2e 시나리오를 실행한다. 시나리오 ID는 `e2e/structure.hpp`의 `Scenario` enum과 `scenario_order`, `e2e/main.cpp`의 `switch`와 usage 메시지, `zlink.structure.json`의 `run.scenarios`, `run.commands`의 시나리오 선택 예시에 함께 추가한다. 판정은 실제로 받은 응답과 이벤트로 하고, 고정 대기나 기한 확대로 통과시키지 않는다.
-
-메시지 contract부터 옮긴다. `server/shared/contracts.hpp`에 packet struct를 `packet_name`과 JSON 변환을 갖춰 먼저 정의한 뒤, 컴파일 오류가 나는 handler를 하나씩 새 메시지로 옮긴다. 첫 입장 패킷을 바꾸면 `server/session/session.hpp`의 `Session::on_packet`에 있는 첫 패킷 검사와 `Entry::enter`, `Region::enter`가 같은 타입을 받도록 함께 고친다.
-
-상태는 그 상태를 결정하는 객체에 둔다. 위치와 sequence는 `Positions`를 통해 `Region`에 두며 `Player`는 application 상태를 갖지 않는다. 상태 필드를 바꿀 때는 같은 객체의 상태 struct와 JSON 변환, relocation adapter의 `capture`·`restore`를 함께 고친다. 빠뜨린 필드는 relocation 뒤 사라지고, `update` 시나리오가 그 손실을 잡는다.
-
-정원 판정은 Region에 둔다. `RegionFull` 거부는 `Region::on_actor_join`만 하고, 그 거부 뒤 다음 instance 선택은 `Entry`만 한다. 정원 수를 `Entry`나 Actor에 복사하지 않는다.
-
-Region·Dungeon 같은 역할 이름을 이 샘플과 다르게 정하려면 타입 이름, `Names`, `server/config/`, `zlink.structure.json`, `CMakeLists.txt`의 role 목록을 한 번에 바꾼다. 이름 변경은 기능을 옮기는 변경과 나눠서 진행하면 실패 원인을 찾기 쉽다.
-
-옮긴 뒤 `update`가 실패하면 snapshot에 빠진 상태가 있는지 먼저 확인한다. 그다음 [디버깅](#디버깅)의 message flow로 첫 실패 단계를 찾는다.
+동작은 typed 응답과 클라이언트가 관찰한 이벤트로 판정한다. 거부된 요청은 도메인 상태를 바꾸지 않아야 한다. 시나리오를 통과시키기 위해 고정 대기를 쓰거나 기한을 늘리지 않는다.
 
 ## 개발 시 주의점
 

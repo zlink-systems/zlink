@@ -7,7 +7,7 @@ private const val PLAYER_TWO = "p2"
 private const val PLAYER_THREE = "p3"
 private const val PLAYER_FOUR = "p4"
 private const val FOREST = "forest"
-private const val MOVED_X = 42
+private val MOVED_X = Names.MAX_STEP.toDouble()
 
 private fun sameState(before: RegionView, after: RegionView) {
     check(before.regionId == after.regionId && before.players == after.players) {
@@ -42,7 +42,7 @@ suspend fun scenarios(selected: List<String>, nodes: Nodes): Int {
         check(
             together.regionId == first.regionId &&
                 together.players ==
-                    listOf(PlayerPosition(PLAYER_ONE, 0), PlayerPosition(PLAYER_TWO, 0))
+                    listOf(PlayerPosition(PLAYER_ONE, 0.0, 0), PlayerPosition(PLAYER_TWO, 0.0, 0))
         ) {
             "Players are not together"
         }
@@ -51,17 +51,25 @@ suspend fun scenarios(selected: List<String>, nodes: Nodes): Int {
         val isolated = p3.join(FOREST)
         check(
             isolated.regionId == Names.regionId(FOREST, 2) &&
-                isolated.players == listOf(PlayerPosition(PLAYER_THREE, 0))
+                isolated.players == listOf(PlayerPosition(PLAYER_THREE, 0.0, 0))
         ) {
             "Capacity did not isolate p3"
         }
         var session = p1.sessionInfo()
         val session2 = p2.sessionInfo()
-        val moved = p1.move(MOVED_X, 1)
+        p1.send(MoveRequest(MOVED_X, 1))
+        p1.send(MoveRequest(MOVED_X, 2))
+        val firstMove = p1.next<RegionView> { v -> v.players.any { it.playerId == PLAYER_ONE && it.sequence == 1L } }
+        val rejected = p1.next<ActionRejected> { it.reason == "move-budget" }
+        check(rejected.retryAfterMs > 0) { "Missing movement retry time" }
+        sameState(firstMove, p1.view())
+        kotlinx.coroutines.delay(rejected.retryAfterMs.toLong())
+        val moved = p1.move(MOVED_X, 2)
+        check(moved.players.any { it.playerId == PLAYER_ONE && it.x == MOVED_X * 2 && it.sequence == 2L }) { "Retry did not preserve sequence" }
         sameState(
             moved,
             p2.next<RegionView> { v ->
-                v.players.any { it.playerId == PLAYER_ONE && it.x == MOVED_X }
+                v.players.any { it.playerId == PLAYER_ONE && it.x == MOVED_X * 2 }
             },
         )
         sameState(isolated, p3.view())
@@ -74,7 +82,22 @@ suspend fun scenarios(selected: List<String>, nodes: Nodes): Int {
         }
         for (scenario in selected) {
             when (scenario) {
-                Names.REGION_SCENARIO -> Unit
+                Names.REGION_SCENARIO -> {
+                    val p4 = create("capacity-p4")
+                    val full = p4.join(FOREST)
+                    check(full.regionId == Names.regionId(FOREST, 2) && full.players.size == 2)
+                    val p5 = create("capacity-p5")
+                    p5.send(EnterRegionRequest(p5.playerId, FOREST))
+                    check(p5.next<RegionUnavailable> { true } == RegionUnavailable(FOREST, "capacity-exhausted"))
+                    check(p5.sessionInfo().actorId == p5.playerId)
+                    val unknown = create("unknown-p6")
+                    unknown.send(EnterRegionRequest(unknown.playerId, "unknown"))
+                    check(unknown.next<RegionUnavailable> { true } == RegionUnavailable("unknown", "region-unknown"))
+                    unknown.send(RegionFull(Names.REGION_FULL, FOREST, 1))
+                    check(unknown.next<ActionRejected> { true } == ActionRejected("packet-not-allowed", 0))
+                    check(unknown.sessionInfo().actorId == unknown.playerId)
+                }
+                Names.MOVEMENT -> Unit
                 Names.DUNGEON_SCENARIO -> {
                     val id = "dungeon-1"
                     val opened = p1.dungeon(id)
@@ -114,7 +137,7 @@ suspend fun scenarios(selected: List<String>, nodes: Nodes): Int {
                     val admitted = fresh.join("desert")
                     check(
                         admitted.nodeId == moved.nodeId &&
-                            admitted.players == listOf(PlayerPosition(PLAYER_FOUR, 0))
+                            admitted.players == listOf(PlayerPosition(PLAYER_FOUR, 0.0, 0))
                     ) {
                         "New Region was not accepted by the replacement Region node"
                     }

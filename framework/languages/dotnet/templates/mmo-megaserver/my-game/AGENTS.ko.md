@@ -2,7 +2,7 @@
 
 ## 프로젝트 개요
 
-이 C#/.NET 8 프로젝트는 하나의 world를 정원이 있는 Region instance로 나누어, Region이 가득 차면 같은 지역의 다음 instance를 만드는 MMO server 예제다. 연결을 처리하는 Session gateway, Region host A·B, Dungeon을 담당하는 Instance host와 위치·이동 상태를 저장하는 Redis를 실행한다. `Directory.Packages.props`는 ZLink Framework와 connector package를 `0.30.2`으로 고정한다.
+이 C#/.NET 8 프로젝트는 하나의 world를 정원이 있는 Region instance로 나누어, Region이 가득 차면 같은 지역의 다음 instance를 만드는 MMO server다. 연결을 처리하는 Session gateway, Region host A·B, Dungeon을 담당하는 Instance host와 위치·relocation 정보를 관리하는 Redis를 실행한다. `Directory.Packages.props`는 ZLink Framework와 connector package를 `0.30.2`으로 고정한다.
 
 게임 기능은 아래의 프로젝트 구성과 확장 절차에 따라 추가한다. 실행 환경·배포·공개 package의 알려진 문제는 [README](README.md)가 설명한다. 초기 node 구성과 scenario 목록은 [zlink.structure.json](zlink.structure.json)에 있으며, 실행 중 객체의 위치는 Framework와 Redis가 관리한다.
 
@@ -15,8 +15,9 @@
 ```powershell
 pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
 pwsh -NoProfile -File ./run-e2e.ps1
-pwsh -NoProfile -File ./run-e2e.ps1 -Scenario region,dungeon,reconnect,update
+pwsh -NoProfile -File ./run-e2e.ps1 -Scenario region,movement,dungeon,reconnect,update
 pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
+pwsh -NoProfile -File ./run-e2e.ps1 -CheckDomain
 ```
 
 Bash도 같은 절차를 실행한다.
@@ -24,8 +25,9 @@ Bash도 같은 절차를 실행한다.
 ```bash
 ./run-e2e.sh --build-only
 ./run-e2e.sh
-./run-e2e.sh --scenario region,dungeon,reconnect,update
+./run-e2e.sh --scenario region,movement,dungeon,reconnect,update
 ./run-e2e.sh --check-structure
+./run-e2e.sh --check-domain
 ```
 
 로컬 process 디버깅은 .NET 8 SDK를 설치한 뒤 `--local` 또는 `-Local`로 실행한다. 로컬 Debug 빌드가 있으면 `--no-build` 또는 `-NoBuild`를 추가한다. 시나리오 순서와 assertion은 유지하며 최초 실패를 README의 Known issues와 대조한다.
@@ -34,11 +36,11 @@ Bash도 같은 절차를 실행한다.
 
 ### Session gateway
 
-`server/MyGame.Session/Program.cs`는 연결 처리를 등록하고 `server/MyGame.Session/Infrastructure/ZLink/PlayerSession.cs`는 연결 callback과 수신 packet 전달을 담당한다. 연결별 통신 객체가 Session이며, Framework는 Session을 플레이어 상태 객체와 연결하는 binding을 제공한다. 첫 패킷은 `EnterRegionRequest`여야 하며 예제는 그 안의 player ID를 그대로 신뢰한다. 인증은 binding 전에 추가하고 게임 packet은 기존 typed relay로 전달하여 플레이어에게 응답할 연결을 Framework가 확인하게 한다.
+`server/MyGame.Session/Program.cs`는 연결 처리를 등록하고 `server/MyGame.Session/Infrastructure/ZLink/PlayerSession.cs`는 `AllowedPackets`로 client packet 이름을 검사한 뒤 Player Actor를 binding하고 허용 패킷을 relay한다. 첫 패킷은 `EnterRegionRequest`이며 예제는 player ID를 신뢰하므로 binding 전에 인증을 추가한다. 내부 메시지는 client 허용 목록에 넣지 않는다.
 
 ### Region과 플레이어
 
-ID로 찾는 게임 상태 객체가 Actor이며, `server/MyGame.Shared/Infrastructure/ZLink/PlayerActor.cs`의 `PlayerActor`는 게임 상태 없이 Region의 거부 응답을 Entry에 전달한다. Actor를 받아 공통 게임 규칙을 실행하는 상태 객체가 Spot이며, `server/MyGame.Region/Infrastructure/ZLink/RegionSpot.cs`의 `RegionSpot`이 구성원과 그 위치, 구성원에게 보내는 broadcast를 관리하고 `Capacity`명이 들어 있으면 참가를 거부한다. 위치 규칙은 `server/MyGame.Region/Domain/PositionState.cs`의 작은 클래스 `PositionState`다.
+ID로 찾는 게임 상태 객체가 Actor이며, `server/MyGame.Shared/Infrastructure/ZLink/PlayerActor.cs`의 `PlayerActor`는 게임 상태 없이 Region의 거부 응답을 Entry에 전달한다. `server/MyGame.Region/Infrastructure/ZLink/RegionSpot.cs`의 `RegionSpot`은 구성원·정원 admission·broadcast를 소유한다. `server/MyGame.Region/Domain/Positions.cs`의 `Positions`는 위치·순번·이동 제한·시간 예산을 판정한다.
 
 `server/MyGame.Region/Program.cs`가 타입과 handler를 등록한다. `server/MyGame.Region/Infrastructure/ZLink/RegionEntry.cs`는 첫 패킷을 받아 참가할 instance를 고르고, `server/MyGame.Region/Infrastructure/ZLink/Handlers.cs`는 push를 client로 전달하는 delivery handler를 포함한 Region handler를 담고 있다. 플레이어별 규칙과 Region 공통 규칙을 연결하는 handler는 여기에 추가한다. node 구성을 바꾸면 실제 등록과 `server/config/`, descriptor를 함께 맞추어 구조 검사가 같은 구성을 검사하게 한다.
 
@@ -48,11 +50,11 @@ ID로 찾는 게임 상태 객체가 Actor이며, `server/MyGame.Shared/Infrastr
 
 ### 공통 계약과 hosting
 
-`server/MyGame.Shared/Contracts.cs`는 process 간 메시지와 게임 상수를, `server/MyGame.Shared/NodeSettings.cs`는 `Capacity`, `RegionLimit`를 포함한 process 설정을 정의한다. `server/MyGame.Shared/Infrastructure/ZLink/GameHosting.cs`는 hosting과 진단을 설정하고 `server/MyGame.Shared/Infrastructure/ZLink/NodeControl.cs`는 실행 중 제어 명령을 처리한다. 여러 process가 사용하는 계약은 여기에 추가하며, Region 상태는 `RegionSpot`에 유지하여 서로 다른 process가 같은 값을 따로 변경하지 않게 한다.
+`server/MyGame.Shared/Contracts.cs`는 메시지·허용 region·복제 및 이동 제한·거부 사유를 정의한다. `server/MyGame.Shared/NodeSettings.cs`는 `Capacity`와 Framework `RegionLimit`를 포함한 process 설정을 정의한다. 복제 선택은 `RegionEntry`, 이동 상태는 `Positions`가 소유한다. `GameHosting.cs`는 hosting과 진단을 설정하고 `NodeControl.cs`는 실행 중 제어 명령을 처리한다.
 
 ### E2E client
 
-`e2e/MyGame.E2E/GameClient.cs`는 공개 connector로 게임에 접속하고 `e2e/MyGame.E2E/Scenarios.cs`는 client가 관찰할 결과를 검사한다. `e2e/MyGame.E2E/WorldRun.cs`는 실행별 process와 기반 시설을 관리하고 `e2e/MyGame.E2E/StructureCheck.cs`는 구성을 검사한다. 새 게임 동작은 client가 받은 결과로 검증하며, 별도 unit-test 프로젝트와 formatter 설정은 포함되어 있지 않다.
+`e2e/MyGame.E2E/GameClient.cs`는 공개 connector로 접속한다. `Scenarios.cs`는 client가 관찰한 동작을 검사하고 `DomainChecks.cs`는 scenario node를 시작하기 전에 규칙 경계를 검사한다. `WorldRun.cs`는 실행별 process를 관리하고 `StructureCheck.cs`는 구성을 검사한다. `--check-domain`으로 domain 검사를 실행하며 별도 domain-test project는 두지 않는다.
 
 ## 프로젝트의 ZLink 개념
 
@@ -66,7 +68,7 @@ process 간 메시지를 전달할 node들을 연결하는 구성이 RouteMesh�
 
 ### STREAM과 Session
 
-client 연결의 packet을 처리하는 [STREAM](https://docs.zlink.systems/ko/dotnet/guide/server/23-stream/)에서 `PlayerSession`은 Player Actor를 구해 binding한 뒤 원래 typed packet을 전달한다. Actor handler는 binding된 Session을 통해 client에 메시지를 보낸다. 연결과 Actor 사이의 관계는 [Session and Actor](https://docs.zlink.systems/ko/dotnet/guide/server/24-actor-session/)가 설명한다.
+client 연결의 packet을 처리하는 [STREAM](https://docs.zlink.systems/ko/dotnet/guide/server/23-stream/)에서 `PlayerSession`은 `AllowedPackets`를 확인하고 Player Actor를 binding한 뒤 허용된 typed packet을 전달한다. 내부 메시지는 client 허용 목록에 넣지 않는다. Actor handler는 binding된 Session을 통해 client에 메시지를 보낸다. 연결과 Actor 사이의 관계는 [Session and Actor](https://docs.zlink.systems/ko/dotnet/guide/server/24-actor-session/)가 설명한다.
 
 ### Location Store
 
@@ -87,46 +89,37 @@ Actor가 소속 Spot을 바꾸는 동작은 membership 변경이다. 대상 Spot
 1. client가 Session node에 STREAM으로 연결하고 첫 패킷 `EnterRegionRequest`를 보낸다. `PlayerSession`은 첫 패킷 타입을 확인하고 `playerId`로 Player Actor를 `GetOrCreate`한 뒤 Session에 binding하고 원래 패킷을 relay한다.
 2. 새 Actor는 Entry Spot `RegionEntry`에서 시작한다. `EnterRegion`이 identity를 확인하고, `SelectAsync`가 첫 instance(`forest-1`)를 `GetOrCreate`한 뒤 `JoinSpot(...).Defer()`를 요청한다.
 3. `RegionSpot.OnActorJoinAsync`는 안에 있는 플레이어가 `Capacity`명 미만이면 참가를 수락한다. 이어서 `OnJoinedActorAsync`가 모든 구성원에게 player ID로 `RegionView`를 보내고 `DeliverRegion`이 각 Actor의 binding된 Session으로 전달한다.
-4. 가득 찬 Region은 `RegionFull` 응답과 함께 참가를 거부한다. `PlayerActor.OnJoinCompletedAsync`가 그 응답을 Entry로 되돌려 보내고 `NextRegion`이 다음 instance(`forest-2` 등)를 고른다. Actor는 대상을 스스로 고르지 않는다.
-5. `MoveRequest`는 `MovePlayer`가 받아 `RegionSpot.MoveAsync`를 호출하고 새 위치를 broadcast하며, sequence는 증가해야 한다. `OpenDungeonRequest`는 `OpenDungeon`이 받아 Instance node의 Dungeon을 `GetOrCreate`하고 typed request를 보낸 뒤 client에 `DungeonOpened`로 응답한다.
+4. 가득 찬 Region은 `RegionFull`과 함께 참가를 거부한다. `PlayerActor.OnJoinCompletedAsync`는 응답을 Entry에 전달하고 Entry가 다음 허용 replica를 고른다. `MaxReplicasPerRegion`이 모두 가득 차면 Entry는 `RegionUnavailable`을 보낸다. Actor는 대상을 고르지 않는다.
+5. `MoveRequest`는 `MovePlayer`가 받아 `Positions`에 전달한다. Domain은 Delta·Sequence, 영역 경계와 이동 예산을 검사하고 수락할 때만 상태를 바꾼다. 요청자에게는 binding된 Session으로 RegionView를 보내고 다른 구성원에게는 기존 Actor 경로로 한 번 broadcast한다. `OpenDungeonRequest`는 `OpenDungeon`이 받아 Instance node의 Dungeon을 `GetOrCreate`하고 typed request를 보낸 뒤 client에 `DungeonOpened`로 응답한다.
 6. 같은 플레이어가 재접속하면 `PlayerSession`이 기존 Actor를 새 Session에 binding하고, `ReconnectRegion`이 identity를 확인한 뒤 현재 `RegionView`를 다시 보낸다. 연결이 끊긴 Session도 membership과 위치를 유지한다.
-7. node를 교체할 때 `NodeControl`의 `drain`이 relocation을 요청한다. Framework는 `RegionRelocation`으로 위치를 받아 다른 node에서 복원하며, Dungeon은 다시 생성된다.
+7. node를 교체할 때 `NodeControl`의 `drain`이 relocation을 요청한다. Framework는 `RegionRelocation`에서 위치·순번·남은 이동 예산 ms를 받아 다른 node에서 복원하며, Dungeon은 다시 생성된다.
 
-## 이 샘플을 보며 개발하기
+## MMO 도메인 확장
 
-이 샘플은 기능들이 함께 동작하는 방식을 보여 주므로, 자기 게임으로 바꾸지 않고 읽고 실행하는 용도로 쓴다. 자기 프로젝트는 .NET 기본 셋업에서 시작한다. [ZLink Start](https://zlink.systems/start)의 Initializer에서 .NET을 고르거나 ZLink 저장소의 `framework/languages/dotnet/templates/starter/my-game`을 사용한다. 그다음 필요한 기능을 이 샘플에서 하나씩 옮긴다. 구조 선택은 기본 셋업의 `AGENTS.md`가 설명하며, 이 절은 `mmo-megaserver`만 다룬다. 이 샘플은 바꾸지 않고 프로젝트 옆에 참고용으로 둔다.
+이 프로젝트에 MMO 규칙과 서버 동작을 추가한다. 각 판정은 해당 상태의 소유 모듈에 두고, client가 관찰하는 동작마다 scenario를 추가한다.
 
-### 샘플 먼저 실행하기
+### 기능 위치
 
-옮기기 전에 [개발 명령](#개발-명령)으로 빌드와 e2e를 한 번 실행해 받은 샘플이 동작하는지 확인하고 동작을 본다. 이 결과가 이후 비교의 기준이 된다. 실패하면 먼저 [README](README.md)의 Known issues와 대조한다.
+| 대상 | 소유 위치 | 확장 절차 |
+| --- | --- | --- |
+| Typed 메시지와 공통 제한 | `server/MyGame.Shared/Contracts.cs` | Client·내부 record, 거부 사유 문자열, 허용 region 이름과 공통 수치를 여기에 추가한다. 결과마다 wire 형식을 하나만 둔다. |
+| Region 위치와 이동 | `server/MyGame.Region/Domain/Positions.cs` | 위치 상태와 이동 판정을 여기에 추가한다. `Positions`가 좌표·순번·이동 예산·단조 시각·경계 검사를 소유한다. `MaxStep`은 10, X 범위는 0..100, `MaxSpeed`는 초당 `MaxStep * 5`다. 시험용 `TimeProvider`는 domain 생성자로만 전달한다. |
+| Region 구성원과 전달 | `server/MyGame.Region/Infrastructure/ZLink/RegionSpot.cs` | 구성원과 Region broadcast를 여기에 둔다. Domain 상태 필드를 바꾸면 `Capture`와 `Restore`도 함께 갱신하고, process 시각 대신 남은 ms를 저장한다. 요청자에게는 binding된 Session으로 응답하고, 수락 결과는 기존 Actor 전달 경로로 나머지 구성원에게 보낸다. |
+| Region 선택과 입장 | `server/MyGame.Region/Infrastructure/ZLink/RegionEntry.cs` | 허용 region 검사, 복제 instance 선택, 마지막 이용 불가 응답을 Entry 한 곳에서 판정한다. `RegionSpot`은 자신의 구성원 정원만 판정한다. `PlayerActor`는 거부된 입장을 Entry로 전달하며 다음 대상을 고르지 않는다. |
+| Client 패킷 경계 | `server/MyGame.Session/Infrastructure/ZLink/PlayerSession.cs` | Client가 보내는 패킷 이름만 `AllowedPackets`에 추가한다. 내부 메시지는 허용 목록에서 제외하며, Session은 허용되지 않은 패킷에 `ActionRejected("packet-not-allowed", 0)`로 응답한다. |
+| Domain·client scenario | `e2e/MyGame.E2E/DomainChecks.cs`, `e2e/MyGame.E2E/Scenarios.cs` | 각 규칙 경계를 `DomainChecks`에, 공개 동작은 이름이 있는 scenario에 추가한다. Domain 검사는 scenario node를 시작하기 전에 실행하며 `--check-domain`으로 단독 실행할 수 있다. |
+| Topology와 사용자 안내 | `zlink.structure.json`, `README.md` | `run.scenarios`, scenario 선택 명령과 README scenario 표를 `Scenarios.All`과 같은 순서로 유지한다. Topology가 바뀌면 node 선언과 설정도 함께 갱신한다. |
 
-### 옮길 기능
+### 변경 절차
 
-기능 이름은 기본 셋업 `AGENTS.md`의 기능 표와 같다. 경로는 이 디렉터리를 기준으로 한다. 기본 셋업에는 Session node 하나와 `connect` 시나리오만 있으므로, 마지막 열은 기능마다 기본 셋업에서 함께 늘릴 것이다.
+1. Typed contract와 공통 상수를 `Contracts.cs`에 추가한다.
+2. 게임 규칙과 가변 상태를 판정하는 domain 객체에 둔다. Framework callback은 `Infrastructure/ZLink` 계층에 둔다.
+3. 허용 경계, 처음 거부되는 값, 거부 뒤 상태 불변을 domain 시험에 추가한다. 시간 경계는 domain 생성자로 시험 시계를 전달한다.
+4. Client 패킷 이름만 `PlayerSession.AllowedPackets`에 추가한다. 내부 패킷 거부와 연결 유지를 확인한다.
+5. `Scenarios.cs`에 client가 관찰하는 scenario를 추가하고 `zlink.structure.json`, README scenario 표, 두 실행 스크립트의 명령 예를 함께 갱신한다.
+6. `--check-domain`, 관련 scenario, build, 전체 e2e를 실행한다. 재실행 전에 첫 실패를 확인한다.
 
-| 기능 | 이 샘플의 파일 | 옮길 것 | 기본 셋업에서 함께 늘릴 것 |
-| --- | --- | --- | --- |
-| Typed 메시지 | `server/MyGame.Shared/Contracts.cs` | 사용할 기능의 record: `EnterRegionRequest`, `JoinRegion`, `RegionFull`, `MoveRequest`, `PlayerPosition`, `RegionView`, `ViewRequest`, `OpenDungeonRequest`, `DungeonInfoRequest`, `DungeonOpened`. `SessionInfoRequest`·`SessionInfo`는 client가 필요로 할 때만 옮긴다 | `GameNames`의 등록 이름과 `RegionId` helper, `Rejection` 사유. `NodeReady`와 `NodeProtocol`은 기본 셋업에 이미 있다 |
-| Spot | `server/MyGame.Region/Infrastructure/ZLink/RegionSpot.cs`, `server/MyGame.Region/Domain/PositionState.cs` | 정원이 있는 admission·위치·이동·broadcast를 가진 `RegionSpot`과 그 뒤의 위치 규칙 | 새 `server/MyGame.Region/` 프로젝트와 `server/config/` 파일, `Program.cs`의 `AddSpotFactory<RegionSpot>` 등록과 `RegionLimit`에서 오는 stable-type limit. `Capacity`·`RegionLimit` 설정. `zlink.structure.json`의 `spots`·`nodes` 선언과 이를 등록과 비교하는 구조 검사 |
-| Actor | `server/MyGame.Shared/Infrastructure/ZLink/PlayerActor.cs` | 거부 응답을 전달하는 `PlayerActor`와 `PlayerFactory` | `Program.cs`의 `AddActorFactory<PlayerActor, PlayerFactory>` 등록 |
-| Entry·첫 입장 | `server/MyGame.Region/Infrastructure/ZLink/RegionEntry.cs`, `server/MyGame.Region/Infrastructure/ZLink/Handlers.cs`의 `ReconnectRegion` | `EnterRegion`, `NextRegion`과 `RegionFull` 거부 뒤의 다음 instance 선택, `ReconnectRegion`의 identity 확인과 상태 재전송 | Entry Spot 등록과 `entry` 선언. 정원 초과를 확인하는 `region` 시나리오와 재접속 뒤 상태를 비교하는 `reconnect` 시나리오 |
-| Session binding | `server/MyGame.Session/Infrastructure/ZLink/PlayerSession.cs` | 첫 패킷 검사, Actor 조회·생성, binding과 원래 typed 패킷 relay | `EnterRegion`과 같은 첫 패킷 타입. 기본 셋업의 `PlayerSession.cs`에 옮긴다 |
-| Host relocation | `server/MyGame.Region/Infrastructure/ZLink/RegionSpot.cs`의 `RegionRelocation`, `server/MyGame.Shared/Infrastructure/ZLink/PlayerActor.cs`의 `PlayerRelocation`, `server/MyGame.Shared/Infrastructure/ZLink/NodeControl.cs` | `Capture`·`Restore`를 가진 relocation adapter와 `drain`·`shutdown` 제어 | `PreserveStateWith` relocation 등록. 서버 교체 뒤에도 연결·상태가 유지되고 대체 node가 새 Region을 받는지 판정하는 `update` 시나리오 |
-| 동적 던전 | `server/MyGame.Instance/Infrastructure/ZLink/DungeonSpot.cs`, `server/MyGame.Instance/Program.cs`, `server/MyGame.Region/Infrastructure/ZLink/Handlers.cs`의 `OpenDungeon` | 동적 User Spot 생성 형태, Dungeon에 보내는 typed request, `DungeonOpened` 응답 | 새 `server/MyGame.Instance/` 프로젝트와 설정. `zlink.structure.json`의 동적 `dungeon` Spot과 `GetOrCreate` edge. `dungeon` 시나리오 |
-
-### 옮기는 순서와 규칙
-
-기능은 표의 행 하나씩 옮기고, 하나를 옮길 때마다 빌드, 구조 검사, 관련 e2e 시나리오를 실행한다. 시나리오 ID는 `e2e/MyGame.E2E/Scenarios.cs`의 목록, `zlink.structure.json`의 `run.scenarios`, `run.commands`의 시나리오 선택 예시에 함께 추가한다. 판정은 실제로 받은 응답과 이벤트로 하고, 고정 대기나 기한 확대로 통과시키지 않는다.
-
-메시지 contract부터 옮긴다. `Contracts.cs`에 typed record를 먼저 정의한 뒤, 컴파일 오류가 나는 handler를 하나씩 새 메시지로 옮긴다. 첫 입장 패킷을 바꾸면 `PlayerSession`의 첫 패킷 검사, `EnterRegion`, `ReconnectRegion`이 같은 타입을 받도록 함께 고친다.
-
-상태는 그 상태를 결정하는 객체에 둔다. Region이 자신의 인원과 위치를 소유하고, Region이 참가를 거부한 뒤의 다음 instance는 Entry만 고르며 Actor는 대상을 고르지 않고 거부만 전달한다. 상태 필드를 바꿀 때는 `RegionSpot`의 `Capture`·`Restore`를 함께 고친다. 빠뜨린 상태는 relocation 뒤 사라지고 `update` 시나리오가 그 손실을 잡는다.
-
-규칙을 바꿀 때 `region` 시나리오의 검사를 유지한다. 정원 초과는 다음 instance를 만들고, 한 Region의 구성원은 서로의 위치를 보며, 다른 Region의 이동은 그들에게 전달되지 않는다. `Capacity`는 application 구성원 한도라서 모든 Region host에서 같아야 하고, `RegionLimit`은 Region node마다의 Framework stable-type limit이라서 남은 node가 drain된 node의 instance를 받을 수 있어야 한다.
-
-Region·Dungeon 같은 역할 이름을 이 샘플과 다르게 정하려면 타입 이름, `GameNames`, `server/config/`, `zlink.structure.json`을 한 번에 바꾼다. 이름 변경은 기능을 옮기는 변경과 나눠서 진행하면 실패 원인을 찾기 쉽다.
-
-옮긴 뒤 `update`가 실패하면 `RegionSpot.Capture`에 빠진 필드가 있는지 먼저 확인한다. 그다음 [디버깅](#디버깅)의 message flow로 첫 실패 단계를 찾는다.
+Domain 검사는 별도 시험 project를 만들지 않고 e2e 실행 파일에 둔다. 공개 Framework API와 기본 typed JSON serializer를 사용한다. NaN이나 Infinity를 허용하는 JSON number 옵션을 추가하지 않는다.
 
 ## 개발 시 주의점
 
@@ -134,7 +127,7 @@ Region·Dungeon 같은 역할 이름을 이 샘플과 다르게 정하려면 타
 
 의존성은 중앙에서 고정한 공개 NuGet package를 사용하며, project reference는 이 프로젝트의 모듈 사이에 둔다. typed 메시지는 기본 Framework JSON serializer로 처리하여 process마다 같은 계약을 사용한다. relocation adapter가 직접 직렬화하는 대상은 application 상태로 한정하여 Framework의 실행 상태와 게임 상태의 관리 책임을 분리한다.
 
-게임 사실은 그것을 변경하는 객체 한 곳에서 관리한다. 인원과 위치는 `RegionSpot`의 것이고 `PlayerActor`는 identity와 binding만 가진다. Spot 상태에는 Actor 참조 대신 player ID를 보관한다. request handler 안의 응답은 handler가 받은 Actor의 `BoundSession`으로 보내고, 그 밖의 push는 공개 Actor client로 player ID에 보내 delivery handler가 binding된 Session으로 전달하게 한다. Session은 인증과 binding 뒤 packet을 전달하고, 구성원 관리와 이동 판정은 Region이 수행한다.
+게임 사실은 변경을 결정하는 객체 한 곳에서 관리한다. 인원은 `RegionSpot`, 위치·순번·이동 예산은 `Positions`가 소유하고 `PlayerActor`는 identity와 binding만 가진다. Spot 상태에는 Actor 참조 대신 player ID를 보관한다. request handler 안의 응답은 handler가 받은 Actor의 `BoundSession`으로 보내고, 그 밖의 push는 공개 Actor client로 player ID에 보내 delivery handler가 binding된 Session으로 전달하게 한다. Session은 인증과 binding 뒤 허용 목록의 client packet만 전달한다. Region 배치는 Entry가, 이동 판정은 `Positions`가 수행한다.
 
 ### 비동기 실행과 lifecycle
 

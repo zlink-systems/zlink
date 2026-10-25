@@ -37,13 +37,13 @@ For local process debugging, run `./run-e2e.sh --local` or `pwsh -NoProfile -Fil
 
 ```sh
 ./run-e2e.sh
-./run-e2e.sh --scenario region,dungeon,reconnect,update
+./run-e2e.sh --scenario region,movement,dungeon,reconnect,update
 ./run-e2e.sh --check-structure
 ```
 
 ```powershell
 pwsh -NoProfile -File ./run-e2e.ps1
-pwsh -NoProfile -File ./run-e2e.ps1 -Scenario region,dungeon,reconnect,update
+pwsh -NoProfile -File ./run-e2e.ps1 -Scenario region,movement,dungeon,reconnect,update
 pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
 ```
 
@@ -51,12 +51,13 @@ The runner checks `zlink.structure.json`, creates its own Redis Compose project 
 
 | Scenario | Assertions |
 | --- | --- |
-| region | p1 and p2 share forest-1; p3 enters forest-2; movement reaches p2 and remains isolated from p3 |
+| region | Two replicas fill; the next player receives capacity-exhausted, unknown regions and internal packets are rejected, and Sessions stay connected |
+| movement | Server accepts Delta and Sequence, rejects budget exhaustion without state change, and accepts after RetryAfterMs; broadcasts remain isolated |
 | dungeon | A Dungeon User Spot opens on the instance node |
 | reconnect | A new physical Session binds the same Actor generation and retains Region and position |
 | update | Drain preserves both clients and Region state; shutdown reaches Stopped; the replacement accepts a new Region |
 
-`Capacity` defaults to 2 in the supplied configuration (`capacity` in Kotlin JSON). Scenarios share p1, p2, and p3 in forest-1 and forest-2. The supplied `regionLimit` is 2 per node; after draining a Region node the survivor hosts both instances, so a new desert Region is placed on the replacement. Movement requires a strictly increasing sequence. A disconnected Session retains Region membership until explicit leave.
+`Capacity` defaults to 2 in the supplied configuration (`capacity` in Kotlin JSON). Scenarios share p1, p2, and p3 in forest-1 and forest-2. The supplied `regionLimit` is 2 per node; after draining a Region node the survivor hosts both instances, so a new desert Region is placed on the replacement. Movement uses server-authoritative deltas (MaxStep 10, bounds 0..100, speed 50/s) and increasing 64-bit sequences bounded to 2^53-1. Allowed regions are forest and desert; each region has at most two replicas. Domain checks run before nodes and separately with `--check-domain` or `-CheckDomain`. A disconnected Session retains Region membership until explicit leave.
 
 ## Known issues
 
@@ -77,3 +78,5 @@ Message Follow is explicitly set to 30 seconds. The `SAFE_TO_SHUTDOWN` observati
 기본 e2e는 Docker에서 실행합니다. 로컬 process 디버깅은 JDK 25를 준비하고 `--local` 또는 `-Local`로 실행합니다. Docker Compose를 설치한 뒤 이 디렉터리에서 위 Build 명령을 실행합니다. Linux에서는 `./run-e2e.sh`, Windows에서는 `pwsh -NoProfile -File ./run-e2e.ps1`로 전체 시나리오를 검증합니다.
 
 실행별 설정과 node 로그는 `.logs/run-<id>/`에 보존됩니다. Region process에 `drain`을 보내고 `SAFE_TO_SHUTDOWN`을 확인한 뒤 `shutdown`을 보냅니다. process 종료 후 같은 설정으로 대체 process를 시작합니다.
+
+도메인 검사: `./run-e2e.sh --check-domain` 또는 PowerShell `-CheckDomain`. 시나리오는 `region, movement, dungeon, reconnect, update` 순서이며, 이동 거부 뒤 상태 불변과 서버가 준 RetryAfterMs 이후 수락을 확인합니다.

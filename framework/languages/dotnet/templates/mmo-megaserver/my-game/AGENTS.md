@@ -15,8 +15,9 @@ Default builds and e2e run nodes and the client in Docker without a host SDK. Ru
 ```powershell
 pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
 pwsh -NoProfile -File ./run-e2e.ps1
-pwsh -NoProfile -File ./run-e2e.ps1 -Scenario region,dungeon,reconnect,update
+pwsh -NoProfile -File ./run-e2e.ps1 -Scenario region,movement,dungeon,reconnect,update
 pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
+pwsh -NoProfile -File ./run-e2e.ps1 -CheckDomain
 ```
 
 Bash provides the same workflow:
@@ -24,8 +25,9 @@ Bash provides the same workflow:
 ```bash
 ./run-e2e.sh --build-only
 ./run-e2e.sh
-./run-e2e.sh --scenario region,dungeon,reconnect,update
+./run-e2e.sh --scenario region,movement,dungeon,reconnect,update
 ./run-e2e.sh --check-structure
+./run-e2e.sh --check-domain
 ```
 
 For host process debugging, install the .NET 8 SDK and add `--local` or `-Local`. Add `--no-build` or `-NoBuild` only with an existing local Debug build. Keep canonical scenario order and assertions; compare first failures with Known issues in the README.
@@ -34,11 +36,11 @@ For host process debugging, install the .NET 8 SDK and add `--local` or `-Local`
 
 ### Session gateway
 
-`server/MyGame.Session/Program.cs` registers connection handling, and `server/MyGame.Session/Infrastructure/ZLink/PlayerSession.cs` handles connection callbacks and forwards incoming packets. A Session is a communication object for a connection; Framework provides binding to associate it with a player state object. The first packet must be `EnterRegionRequest`, and the example trusts the player ID in it; add authentication before binding and retain the existing typed packet relay so Framework can identify the connection for replies to that player.
+`server/MyGame.Session/Program.cs` registers connection handling, and `server/MyGame.Session/Infrastructure/ZLink/PlayerSession.cs` checks client packet names against `AllowedPackets`, binds the Player Actor, and relays allowed packets. The first packet must be `EnterRegionRequest`, and the example trusts the player ID in it; add authentication before binding. Internal messages stay outside the client allowlist.
 
 ### Regions and players
 
-An Actor is a game state object addressed by ID; `PlayerActor` in `server/MyGame.Shared/Infrastructure/ZLink/PlayerActor.cs` holds no game state and forwards a Region's rejection reply to the Entry. A Spot is a state object that accepts Actors and executes shared game rules; `RegionSpot` in `server/MyGame.Region/Infrastructure/ZLink/RegionSpot.cs` owns its members, their positions, and the broadcast to them, and rejects a join once `Capacity` players are inside. The position rule is the small class `PositionState` in `server/MyGame.Region/Domain/PositionState.cs`.
+An Actor is a game state object addressed by ID; `PlayerActor` in `server/MyGame.Shared/Infrastructure/ZLink/PlayerActor.cs` holds no game state and forwards a Region's rejection reply to the Entry. A Spot accepts Actors and runs shared Region behavior; `RegionSpot` in `server/MyGame.Region/Infrastructure/ZLink/RegionSpot.cs` owns membership, capacity admission, and broadcasts. `Positions` in `server/MyGame.Region/Domain/Positions.cs` owns positions, sequences, movement limits, and time-based budgets.
 
 `server/MyGame.Region/Program.cs` registers types and handlers. `server/MyGame.Region/Infrastructure/ZLink/RegionEntry.cs` receives the first packet and chooses the instance to join, and `server/MyGame.Region/Infrastructure/ZLink/Handlers.cs` holds the Region handlers, including the delivery handler that forwards pushes to the client. Add handlers that combine player rules with shared Region rules there. When changing node composition, update registrations, `server/config/`, and the descriptor together so the structure check validates the same composition.
 
@@ -48,11 +50,11 @@ An Actor is a game state object addressed by ID; `PlayerActor` in `server/MyGame
 
 ### Shared contracts and hosting
 
-`server/MyGame.Shared/Contracts.cs` defines messages and game constants shared by processes, while `server/MyGame.Shared/NodeSettings.cs` defines process settings, including `Capacity` and `RegionLimit`. `server/MyGame.Shared/Infrastructure/ZLink/GameHosting.cs` configures hosting and diagnostics, and `server/MyGame.Shared/Infrastructure/ZLink/NodeControl.cs` handles runtime control commands. Add contracts used by several processes here, and keep Region state in `RegionSpot` so separate processes do not independently modify the same fact.
+`server/MyGame.Shared/Contracts.cs` defines messages, allowed region names, replica and movement limits, and rejection reasons. `server/MyGame.Shared/NodeSettings.cs` defines process settings, including `Capacity` and the Framework `RegionLimit`. `RegionEntry` owns replica selection; `Positions` owns movement state. `GameHosting.cs` configures hosting and diagnostics, and `NodeControl.cs` handles runtime control commands.
 
 ### E2E client
 
-`e2e/MyGame.E2E/GameClient.cs` connects through the public connector, and `e2e/MyGame.E2E/Scenarios.cs` checks results observable by the client. `e2e/MyGame.E2E/WorldRun.cs` manages processes and infrastructure for each run, while `e2e/MyGame.E2E/StructureCheck.cs` validates composition. Verify new gameplay through received client results; the project includes no separate unit-test project or formatter configuration.
+`e2e/MyGame.E2E/GameClient.cs` connects through the public connector. `Scenarios.cs` checks client-visible behavior, and `DomainChecks.cs` checks rule boundaries before scenario nodes start. `WorldRun.cs` manages each run, while `StructureCheck.cs` validates composition. Run domain checks with `--check-domain`; the project has no separate domain-test project.
 
 ## ZLink concepts in this project
 
@@ -66,7 +68,7 @@ A RouteMesh connects nodes that exchange messages between processes; this projec
 
 ### STREAM and Sessions
 
-With [STREAM](https://docs.zlink.systems/dotnet/guide/server/23-stream/), which processes packets on client connections, `PlayerSession` obtains the Player Actor, binds it, and forwards the original typed packet. Actor handlers send messages to the client through the bound Session. [Session and Actor](https://docs.zlink.systems/dotnet/guide/server/24-actor-session/) describes the relationship between connections and Actors.
+With [STREAM](https://docs.zlink.systems/dotnet/guide/server/23-stream/), which processes packets on client connections, `PlayerSession` checks `AllowedPackets`, obtains the Player Actor, binds it, and forwards allowed typed packets. Internal messages remain outside the client allowlist. Actor handlers send messages to the client through the bound Session. [Session and Actor](https://docs.zlink.systems/dotnet/guide/server/24-actor-session/) describes the relationship between connections and Actors.
 
 ### Location Store
 
@@ -87,46 +89,37 @@ Requests in the example game follow this path. Reading the code along this path 
 1. The client connects to the Session node over STREAM and sends the first packet, `EnterRegionRequest`. `PlayerSession` checks the first packet type, calls `GetOrCreate` for the Player Actor by `playerId`, binds it to the Session, and relays the original packet.
 2. A new Actor starts in the Entry Spot `RegionEntry`. `EnterRegion` checks the identity, and `SelectAsync` calls `GetOrCreate` for the first instance (`forest-1`) and requests `JoinSpot(...).Defer()`.
 3. `RegionSpot.OnActorJoinAsync` accepts the player while fewer than `Capacity` players are inside. `OnJoinedActorAsync` then sends `RegionView` to every member by player ID, and `DeliverRegion` forwards it through each Actor's bound Session.
-4. A full Region rejects the join with a `RegionFull` reply. `PlayerActor.OnJoinCompletedAsync` sends that reply back to the Entry, and `NextRegion` selects the next instance (`forest-2`, and so on). The Actor never chooses a target itself.
-5. `MoveRequest` reaches `MovePlayer`, which calls `RegionSpot.MoveAsync` and broadcasts the new positions; the sequence must increase. `OpenDungeonRequest` reaches `OpenDungeon`, which calls `GetOrCreate` for the Dungeon on the Instance node, sends a typed request to it, and replies to the client with `DungeonOpened`.
+4. A full Region rejects a join with `RegionFull`. `PlayerActor.OnJoinCompletedAsync` forwards that reply to the Entry, which selects the next allowed replica. The Entry returns `RegionUnavailable` after `MaxReplicasPerRegion` is full; the Actor never chooses a target.
+5. `MoveRequest` reaches `MovePlayer`, which delegates to `Positions`. The domain validates Delta and Sequence, checks region bounds and the movement budget, and changes state only after acceptance. The caller receives the accepted RegionView through its bound Session; other members receive one Actor broadcast. `OpenDungeonRequest` reaches `OpenDungeon`, which calls `GetOrCreate` for the Dungeon on the Instance node, sends a typed request to it, and replies to the client with `DungeonOpened`.
 6. When the same player reconnects, `PlayerSession` binds the existing Actor to the new Session, and `ReconnectRegion` checks the identity and resends the current `RegionView`. A disconnected Session keeps the membership and position.
-7. To replace a node, `drain` in `NodeControl` requests relocation. Framework takes the positions from `RegionRelocation` and restores them on another node; Dungeons are recreated.
+7. To replace a node, `drain` in `NodeControl` requests relocation. Framework takes the positions, sequences, and remaining movement-budget milliseconds from `RegionRelocation` and restores them on another node; Dungeons are recreated.
 
-## Developing from this sample
+## Extending the MMO domain
 
-This sample shows how the features work together, so read and run it rather than turning it into your game. Start your own project from the .NET starter: choose .NET in the Initializer at [ZLink Start](https://zlink.systems/start), or use `framework/languages/dotnet/templates/starter/my-game` in the ZLink repository. Then transfer the features you need from this sample one at a time. The starter's `AGENTS.md` owns the choice between structures; this section covers only `mmo-megaserver`. Keep this sample unchanged next to your project as a reference.
+Extend this project to add MMO rules and server behavior. Keep each decision with the module that owns its state, and add a client scenario for every observable change.
 
-### Run the sample first
+### Feature locations
 
-Before transferring anything, run the build and e2e once with the [Development commands](#development-commands) to confirm the downloaded sample works and to see its behavior. This result is the baseline for comparison. If it fails, compare the failure with Known issues in the [README](README.md) first.
+| Concern | Owner | Extension procedure |
+| --- | --- | --- |
+| Typed messages and shared limits | `server/MyGame.Shared/Contracts.cs` | Add client and internal records, rejection reason strings, allowed region names, and shared numeric limits here. Keep one wire shape for each result. |
+| Region positions and movement | `server/MyGame.Region/Domain/Positions.cs` | Add position state and movement decisions here. `Positions` owns coordinates, sequence numbers, movement budget, monotonic time, and boundary checks. `MaxStep` is 10, X is bounded to 0..100, and `MaxSpeed` is `MaxStep * 5` per second. Inject a test `TimeProvider` only through the domain constructor. |
+| Region membership and delivery | `server/MyGame.Region/Infrastructure/ZLink/RegionSpot.cs` | Keep membership and Region broadcasts here. Update `Capture` and `Restore` with every domain state field; persist remaining milliseconds instead of process timestamps. Reply to the caller through its bound Session and send the same accepted result to other members through the existing Actor delivery path. |
+| Region selection and admission | `server/MyGame.Region/Infrastructure/ZLink/RegionEntry.cs` | Keep allowed-region checks, replica selection, and the final unavailable result in the Entry. `RegionSpot` decides only whether its own membership capacity is available. `PlayerActor` forwards a rejected join to the Entry and does not choose another target. |
+| Client packet boundary | `server/MyGame.Session/Infrastructure/ZLink/PlayerSession.cs` | Add client-originated packet names to `AllowedPackets`. Keep internal messages out of the allowlist; the Session replies with `ActionRejected("packet-not-allowed", 0)` for a disallowed packet. |
+| Domain and client scenarios | `e2e/MyGame.E2E/DomainChecks.cs`, `e2e/MyGame.E2E/Scenarios.cs` | Add each rule boundary to `DomainChecks` and each public behavior to a named scenario. Domain checks run before scenario nodes and are available through `--check-domain`. |
+| Topology and user guidance | `zlink.structure.json`, `README.md` | Keep `run.scenarios`, scenario-selection commands, and the README scenario table in the same order as `Scenarios.All`. Update node declarations and configs together when the topology changes. |
 
-### Features to transfer
+### Change procedure
 
-Feature names match the feature table in the starter's `AGENTS.md`. Paths are relative to this directory. The starter has one Session node and the `connect` scenario only, so the last column lists what grows in the starter with each feature.
+1. Add typed contracts and shared constants in `Contracts.cs`.
+2. Put each game rule and its mutable state in the domain object that decides it. Keep Framework callbacks in the `Infrastructure/ZLink` layer.
+3. Add domain boundary checks for accepted limits, the first rejected value, and unchanged state after rejection. Use the domain constructor's test clock for time boundaries.
+4. Add only client packet names to `PlayerSession.AllowedPackets`. Verify an internal packet is rejected and the Session remains connected.
+5. Add a client-observable scenario in `Scenarios.cs`; then update `zlink.structure.json`, the README scenario table, and the command examples in both scripts.
+6. Run `--check-domain`, the related scenario, the build, and the complete e2e suite. Inspect the first failure before another run.
 
-| Feature | File in this sample | What to transfer | What to grow in the starter alongside |
-| --- | --- | --- | --- |
-| Typed messages | `server/MyGame.Shared/Contracts.cs` | The records of the features you adopt: `EnterRegionRequest`, `JoinRegion`, `RegionFull`, `MoveRequest`, `PlayerPosition`, `RegionView`, `ViewRequest`, `OpenDungeonRequest`, `DungeonInfoRequest`, `DungeonOpened`; `SessionInfoRequest` and `SessionInfo` only if your client needs them | The registration names and the `RegionId` helper in `GameNames`, and the `Rejection` reason; the starter already has `NodeReady` and `NodeProtocol` |
-| Spot | `server/MyGame.Region/Infrastructure/ZLink/RegionSpot.cs`, `server/MyGame.Region/Domain/PositionState.cs` | `RegionSpot` with capacity-limited admission, positions, movement, and the broadcast, and the position rule behind it | A new `server/MyGame.Region/` project, its `server/config/` files, and the `AddSpotFactory<RegionSpot>` registration in `Program.cs` with the stable-type limit from `RegionLimit`; the `Capacity` and `RegionLimit` settings; the `spots` and `nodes` declarations in `zlink.structure.json` and the structure check that compares them with the registrations |
-| Actor | `server/MyGame.Shared/Infrastructure/ZLink/PlayerActor.cs` | `PlayerActor` with the rejection-reply forwarding, and `PlayerFactory` | The `AddActorFactory<PlayerActor, PlayerFactory>` registration in `Program.cs` |
-| Entry and first admission | `server/MyGame.Region/Infrastructure/ZLink/RegionEntry.cs`, `ReconnectRegion` in `server/MyGame.Region/Infrastructure/ZLink/Handlers.cs` | `EnterRegion`, `NextRegion` and the next-instance selection after a `RegionFull` rejection, and the identity check and state resend of `ReconnectRegion` | The Entry Spot registration and its `entry` declarations; the `region` scenario for capacity overflow and a `reconnect` scenario that compares state after reconnection |
-| Session binding | `server/MyGame.Session/Infrastructure/ZLink/PlayerSession.cs` | The first-packet check, then find or create the Actor, bind, and relay the original typed packet | The same first-packet type as `EnterRegion`; transfer it into the starter's `PlayerSession.cs` |
-| Host relocation | `RegionRelocation` in `server/MyGame.Region/Infrastructure/ZLink/RegionSpot.cs`, `PlayerRelocation` in `server/MyGame.Shared/Infrastructure/ZLink/PlayerActor.cs`, `server/MyGame.Shared/Infrastructure/ZLink/NodeControl.cs` | The relocation adapters with `Capture` and `Restore`, and the `drain` and `shutdown` controls | The `PreserveStateWith` relocation registrations; the `update` scenario, which checks that connections and state survive a server replacement and that the replacement node accepts a new Region |
-| Dynamic dungeon | `server/MyGame.Instance/Infrastructure/ZLink/DungeonSpot.cs`, `server/MyGame.Instance/Program.cs`, `OpenDungeon` in `server/MyGame.Region/Infrastructure/ZLink/Handlers.cs` | The dynamic User Spot creation pattern, the typed request to the Dungeon, and the `DungeonOpened` reply | A new `server/MyGame.Instance/` project and its config; the dynamic `dungeon` Spot and the `GetOrCreate` edge in `zlink.structure.json`; a `dungeon` scenario |
-
-### Transfer order and rules
-
-Transfer one row at a time and run the build, the structure check, and the related e2e scenario after each. Add a scenario ID to the list in `e2e/MyGame.E2E/Scenarios.cs`, to `run.scenarios`, and to the selection examples in `run.commands` of `zlink.structure.json` together. Judge results by the replies and events actually received; do not make tests pass with fixed sleeps or longer deadlines.
-
-Start with the message contracts. Define the typed records in `Contracts.cs` first, then move each handler that fails to compile to the new messages. When you change the first-entry packet, update the first-packet check in `PlayerSession`, `EnterRegion`, and `ReconnectRegion` to receive the same type.
-
-Keep each piece of state in the object that decides it. A Region owns its population and positions, and the Entry alone chooses the next instance after a Region rejects a join; the Actor forwards the rejection without choosing another target. When you change state fields, update `Capture` and `Restore` in `RegionSpot` together; a state kept outside them disappears after relocation, and the `update` scenario detects the loss.
-
-Keep the checks of the `region` scenario when changing the rules: capacity overflow creates the next instance, members of one Region see each other's positions, and another Region's movement never reaches them. `Capacity` is the application membership limit and must be identical across Region hosts, while `RegionLimit` is the Framework stable-type limit per Region node and must allow the surviving node to receive the drained node's instances.
-
-To name roles such as Region or Dungeon differently from this sample, change the type names, `GameNames`, `server/config/`, and `zlink.structure.json` at once. Do the renaming in its own change, separate from transferring a feature, so failures are easier to trace.
-
-If `update` fails after a transfer, first check whether `RegionSpot.Capture` is missing a field, then use the message flow in [Debugging](#debugging) to find the first failing step.
+This template keeps domain checks in the e2e executable and does not add a separate domain-test project. Use the public Framework API and default typed JSON serializer. Do not add a JSON number option that accepts NaN or Infinity.
 
 ## Development considerations
 
@@ -134,7 +127,7 @@ If `update` fails after a transfer, first check whether `RegionSpot.Capture` is 
 
 Use public NuGet packages at the centrally pinned versions, and keep project references between this project's own modules. Process typed messages with the default Framework JSON serializer so processes use the same contract. Limit direct serialization in relocation adapters to application state, keeping management of Framework execution state separate from game state.
 
-Manage each game fact in the object responsible for changing it: population and positions in `RegionSpot`. `PlayerActor` holds only identity and the binding. Store player IDs in Spot state, not Actor references. Deliver replies inside a request handler through the `BoundSession` of the Actor the handler receives, and deliver other pushes by player ID through the public Actor client to a delivery handler that forwards them to the bound Session. Sessions forward packets after authentication and binding; the Region decides membership and movement.
+Manage each game fact in the object responsible for changing it: population in `RegionSpot`, and positions, sequence numbers, and movement budgets in `Positions`. `PlayerActor` holds only identity and the binding. Store player IDs in Spot state, not Actor references. Deliver replies inside a request handler through the `BoundSession` of the Actor the handler receives, and deliver other pushes by player ID through the public Actor client to a delivery handler that forwards them to the bound Session. Sessions forward only allowlisted client packets after authentication and binding; the Entry decides region placement, and `Positions` decides movement.
 
 ### Asynchronous execution and lifecycle
 

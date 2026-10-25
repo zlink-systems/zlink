@@ -1,6 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup><OutputType>Exe</OutputType></PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="../../server/MyGame.Region/MyGame.Region.csproj" />
     <ProjectReference Include="../../server/MyGame.Shared/MyGame.Shared.csproj" />
     <PackageReference Include="Zlink.Stream.Connector" />
   </ItemGroup>

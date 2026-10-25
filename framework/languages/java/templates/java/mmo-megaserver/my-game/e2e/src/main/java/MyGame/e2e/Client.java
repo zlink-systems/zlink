@@ -43,6 +43,8 @@ public final class Client implements AutoCloseable {
                                 d.reconnectBackoffFactor()));
         register(RegionView.class);
         register(DungeonOpened.class);
+        register(ActionRejected.class);
+        register(RegionUnavailable.class);
         registrations.add(
                 connector.onDisconnected(
                         event -> {
@@ -80,13 +82,13 @@ public final class Client implements AutoCloseable {
                 v -> v.players().stream().anyMatch(p -> p.playerId().equals(playerId)));
     }
 
-    RegionView move(int x, int sequence) throws Exception {
+    RegionView move(double x, long sequence) throws Exception {
         send(new MoveRequest(x, sequence));
         return next(
                 RegionView.class,
                 v ->
                         v.players().stream()
-                                .anyMatch(p -> p.playerId().equals(playerId) && p.x() == x));
+                                .anyMatch(p -> p.playerId().equals(playerId) && p.sequence() == sequence));
     }
 
     RegionView view() throws Exception {

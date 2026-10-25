@@ -28,15 +28,20 @@ public final class Entry implements ZLinkEntrySpot<Player> {
     }
 
     public CompletionStage<Void> select(Player actor, String region, int index) {
+        if (region == null || !Names.ALLOWED_REGIONS.contains(region))
+            return actor.context().boundSession().send(new RegionUnavailable(region, "region-unknown")).submit();
+        if (index > Names.MAX_REPLICAS_PER_REGION)
+            return actor.context().boundSession().send(new RegionUnavailable(region, "capacity-exhausted")).submit();
         var id = Names.regionId(region, index);
         return spots.getOrCreate(id, Names.REGION)
                 .inMesh(Names.MESH)
                 .submit()
-                .thenAccept(
+                .thenCompose(
                         created -> {
                             if (created.state() == ZLinkSpotCreateState.REJECTED)
-                                throw new IllegalStateException("Region creation rejected: " + id);
+                                return actor.context().boundSession().send(new RegionUnavailable(region, "capacity-exhausted")).submit();
                             actor.context().joinSpot(id, new JoinRegion(region, index)).defer();
+                            return CompletableFuture.completedFuture(null);
                         });
     }
 }

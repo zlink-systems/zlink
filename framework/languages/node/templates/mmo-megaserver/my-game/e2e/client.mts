@@ -1,3 +1,4 @@
+import '../.zlink-framework-json-schemas.cjs';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { appendFileSync } from 'node:fs';
@@ -15,7 +16,10 @@ import {
   SessionInfo,
   SessionInfoRequest,
   OpenDungeonRequest,
-  DungeonOpened
+  DungeonOpened,
+  ActionRejected,
+  RegionUnavailable,
+  RegionFull
 } from '../server/shared/messages.js';
 import { Limits, PacketNames, regionId } from '../server/shared/constants.js';
 interface Received {
@@ -26,7 +30,7 @@ function sameState(before: RegionView, after: RegionView): void {
   assert.equal(after.regionId, before.regionId);
   assert.deepEqual(after.players, before.players);
 }
-const Test = { region: 'forest', freshRegion: 'desert', movedX: 42, sequence: 1 } as const;
+const Test = { region: 'forest', freshRegion: 'desert', movedX: 10, sequence: 1n } as const;
 export async function scenario(
   name: string,
   endpoint: string,
@@ -67,7 +71,7 @@ export async function scenario(
     const separate = c ? await enter(c) : undefined;
     if (separate && c) {
       assert.equal(separate.regionId, regionId(Test.region, 2));
-      assert.deepEqual(separate.players, [{ playerId: c.playerId, x: 0 }]);
+      assert.deepEqual(separate.players, [{ playerId: c.playerId, x: 0, sequence: 0n }]);
     }
     const identity = await a.sessionInfo(),
       otherIdentity = await b.sessionInfo();
@@ -77,10 +81,13 @@ export async function scenario(
       mb = b.messages.length,
       mc = c?.messages.length ?? 0;
     await a.connector.send(new MoveRequest(Test.movedX, Test.sequence)).submit();
+    if (name === 'movement') await a.connector.send(new MoveRequest(Test.movedX, 2n)).submit();
     const moved = (v: RegionView): boolean =>
       v.players.some((p) => p.playerId === a.playerId && p.x === Test.movedX);
     const before = await a.wait<RegionView>(PacketNames.regionView, ma, moved);
     sameState(before, await b.wait<RegionView>(PacketNames.regionView, mb, moved));
+    assert.equal(a.messages.slice(ma).filter((m) => m.name === PacketNames.regionView).length, 1);
+    assert.equal(b.messages.slice(mb).filter((m) => m.name === PacketNames.regionView).length, 1);
     if (separate && c) {
       sameState(separate, await c.view());
       assert(
@@ -96,6 +103,38 @@ export async function scenario(
     }
     if (name === 'region') {
       assert.equal(before.players.length, 2);
+      assert(c);
+      const d = create('p4'), exhausted = create('p5'), unknown = create('p6');
+      await enter(d);
+      const exhaustedMark = exhausted.messages.length;
+      await exhausted.enter(Test.region);
+      const unavailable = await exhausted.wait<RegionUnavailable>(PacketNames.regionUnavailable, exhaustedMark);
+      assert.equal(unavailable.reason, 'capacity-exhausted');
+      assert.equal(unavailable.region, Test.region);
+      assert.equal((await exhausted.sessionInfo()).actorId, exhausted.playerId);
+      const unknownMark = unknown.messages.length;
+      await unknown.enter('unknown');
+      const unknownReply = await unknown.wait<RegionUnavailable>(PacketNames.regionUnavailable, unknownMark);
+      assert.equal(unknownReply.reason, 'region-unknown');
+      const deniedMark = unknown.messages.length;
+      await unknown.connector.send(new RegionFull('region-full', Test.region, 1)).submit();
+      const denied = await unknown.wait<ActionRejected>(PacketNames.actionRejected, deniedMark);
+      assert.equal(denied.reason, 'packet-not-allowed');
+      assert.equal(denied.retryAfterMs, 0);
+      assert.equal((await unknown.sessionInfo()).actorId, unknown.playerId);
+    } else if (name === 'movement') {
+      const rejectedMark = ma;
+      const rejected = await a.wait<ActionRejected>(PacketNames.actionRejected, rejectedMark);
+      assert.equal(rejected.reason, 'move-budget');
+      assert(rejected.retryAfterMs > 0);
+      sameState(before, await b.view());
+      await new Promise<void>((resolve) => setTimeout(resolve, rejected.retryAfterMs));
+      const acceptedMark = a.messages.length;
+      await a.connector.send(new MoveRequest(Test.movedX, 2n)).submit();
+      const accepted = await a.wait<RegionView>(PacketNames.regionView, acceptedMark, (v) =>
+        v.players.some((p) => p.playerId === a.playerId && p.x === Test.movedX * 2 && p.sequence === 2n)
+      );
+      assert.equal(accepted.players.find((p) => p.playerId === a.playerId)?.sequence, 2n);
     } else if (name === 'dungeon') {
       const mark = a.messages.length,
         id = `dungeon-${runId}`;
@@ -167,8 +206,9 @@ class PlayerClient {
       requestTimeoutMs: Limits.messageMs,
       reconnect: { enabled: false }
     });
-    for (const name of [PacketNames.regionView, PacketNames.dungeonOpened])
-      this.connector.on(name, (message) => {
+    for (const packetType of [RegionView, DungeonOpened, ActionRejected, RegionUnavailable])
+      this.connector.on(packetType, (message) => {
+        const name = packetType.name;
         this.messages.push({ name, payload: message.payload });
         appendFileSync(
           log,
@@ -230,7 +270,7 @@ class PlayerClient {
     await this.connector.send(new EnterRegionRequest(this.playerId, region)).submit();
   }
   async sessionInfo(): Promise<SessionInfo> {
-    return this.connector.request(new SessionInfoRequest()).submit<SessionInfo>();
+    return this.connector.request(new SessionInfoRequest()).submit(SessionInfo);
   }
   async view(): Promise<RegionView> {
     const index = this.messages.length;

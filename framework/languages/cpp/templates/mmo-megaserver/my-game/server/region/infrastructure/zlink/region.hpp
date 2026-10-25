@@ -13,11 +13,11 @@ class Region final : public fx::spot_t<Player>
     fx::task_t<void> broadcast (Player *requester = nullptr)
     {
         const auto update = view ();
-        for (const auto &[id, position] : positions.players ()) {
-            if (requester && requester->context ().actor_id ().value () == id)
+        for (const auto &player : update.Players) {
+            if (requester && requester->context ().actor_id ().value () == player.PlayerId)
                 co_await requester->context ().bound_session ().send (update).async ();
             else
-                co_await actors_.send (fx::actor_id_t (id), update).async ();
+                co_await actors_.send (fx::actor_id_t (player.PlayerId), update).async ();
         }
     }
 
@@ -45,12 +45,14 @@ class Region final : public fx::spot_t<Player>
                                                             const fx::message_t &payload) override
     {
         const auto join = payload.decode<JoinRegion> ();
-        if (Names::region_id (join.region, join.index) != context_.spot_id ())
+        if (Names::region_id (join.Region, join.Index) != context_.spot_id ())
             throw std::invalid_argument ("Region identity mismatch");
-        co_return positions.admit (std::string (id), config_.Capacity)
-          ? fx::spot_actor_join_result_t::accept ()
-          : fx::spot_actor_join_result_t::reject (
-              RegionFull{Names::region_full, join.region, join.index});
+        if (!positions.contains (std::string (id))
+            && positions.count () >= static_cast<std::size_t> (config_.Capacity))
+            co_return fx::spot_actor_join_result_t::reject (
+              RegionFull{Names::region_full, join.Region, join.Index});
+        positions.add (std::string (id));
+        co_return fx::spot_actor_join_result_t::accept ();
     }
     fx::task_t<void> on_actor_joined (Player &) override { co_await broadcast (); }
     fx::task_t<void> on_leave_actor (Player &actor) override
@@ -62,7 +64,7 @@ class Region final : public fx::spot_t<Player>
     fx::task_t<void>
     enter (Player &actor, fx::message_context_t &, const EnterRegionRequest &request)
     {
-        if (request.playerId != actor.context ().actor_id ().value ())
+        if (request.PlayerId != actor.context ().actor_id ().value ())
             throw std::invalid_argument ("Player identity mismatch");
         co_await actor.context ().bound_session ().send (view ()).async ();
     }
@@ -72,7 +74,12 @@ class Region final : public fx::spot_t<Player>
     }
     fx::task_t<void> move (Player &actor, fx::message_context_t &, const MoveRequest &request)
     {
-        positions.move (std::string (actor.context ().actor_id ().value ()), request);
+        const auto result = positions.move (std::string (actor.context ().actor_id ().value ()),
+                                            request);
+        if (result) {
+            co_await actor.context ().bound_session ().send (*result).async ();
+            co_return;
+        }
         co_await broadcast (&actor);
     }
     fx::task_t<void> deliver (Player &actor, fx::message_context_t &, const RegionView &update)
@@ -82,15 +89,15 @@ class Region final : public fx::spot_t<Player>
     fx::task_t<void>
     dungeon (Player &actor, fx::message_context_t &, const OpenDungeonRequest &request)
     {
-        if (request.dungeonId.find_first_not_of (" \t\r\n") == std::string::npos)
+        if (request.DungeonId.find_first_not_of (" \t\r\n") == std::string::npos)
             throw std::invalid_argument ("Dungeon ID required");
-        const auto created = co_await spots_.get_or_create (request.dungeonId, Names::dungeon)
+        const auto created = co_await spots_.get_or_create (request.DungeonId, Names::dungeon)
                                .in_mesh (Names::mesh)
                                .async ();
         if (created.state == fx::spot_create_state_t::rejected)
             throw std::runtime_error ("Dungeon creation rejected");
         const auto opened =
-          co_await context_.request_to_spot (request.dungeonId, DungeonInfoRequest{})
+            co_await context_.request_to_spot (request.DungeonId, DungeonInfoRequest{})
             .async<DungeonOpened> ();
         co_await actor.context ().bound_session ().send (opened).async ();
     }
@@ -100,14 +107,14 @@ class RegionRelocation final : public fx::spot_relocation_adapter_t<Region>
   public:
     fx::task_t<std::vector<std::byte>> capture (Region &region, std::stop_token) override
     {
-        const auto payload = zlink::message_t::from_json (region.positions);
+        const auto payload = zlink::message_t::from_json (region.positions.capture ());
         co_return std::vector<std::byte> (payload.bytes ().begin (), payload.bytes ().end ());
     }
     fx::task_t<void>
     restore (Region &region, std::vector<std::byte> payload, std::stop_token) override
     {
-        region.positions =
-          zlink::message_t::from (std::span<const std::byte> (payload)).parse_json<Positions> ();
+        region.positions.restore (zlink::message_t::from (std::span<const std::byte> (payload))
+                                    .parse_json<PositionsSnapshot> ());
         co_return;
     }
 };

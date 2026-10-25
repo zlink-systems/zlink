@@ -1,3 +1,3 @@
 package MyGame;
 
-public record PlayerPosition(String playerId, int x) {}
+public record PlayerPosition(String playerId, double x, long sequence) {}

@@ -39,19 +39,22 @@ Build and outer cleanup logs are in `.logs/docker-<project>/`; node configuratio
 
 ```sh
 ./run-e2e.sh
-./run-e2e.sh --scenario region,dungeon,reconnect,update
+./run-e2e.sh --scenario region,movement,dungeon,reconnect,update
 ./run-e2e.sh --check-structure
+./run-e2e.sh --check-domain
 ```
 
 ```powershell
 pwsh -NoProfile -File ./run-e2e.ps1
-pwsh -NoProfile -File ./run-e2e.ps1 -Scenario region,dungeon,reconnect,update
+pwsh -NoProfile -File ./run-e2e.ps1 -Scenario region,movement,dungeon,reconnect,update
 pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
+pwsh -NoProfile -File ./run-e2e.ps1 -CheckDomain
 ```
 
 | Scenario  | Assertions                                                                                                             |
 | --------- | ---------------------------------------------------------------------------------------------------------------------- |
-| region    | p1 and p2 share forest-1; p3 enters forest-2. Movement reaches the same instance only.                                 |
+| region    | Region replicas reach capacity, unknown regions are rejected, and the client remains connected after both replies. |
+| movement  | The server validates delta and sequence, keeps state after rejection, and accepts after its `RetryAfterMs`. |
 | dungeon   | Region creates a Dungeon and receives its identity from the instance process.                                          |
 | reconnect | A new connection preserves Actor identity, generation, instance and position.                                          |
 | update    | Region host relocation preserves connected Sessions and game state. The stopped host is replaced and accepts new work. |
@@ -76,6 +79,6 @@ Message Follow is explicitly set to 30 seconds. The `SAFE_TO_SHUTDOWN` observati
 
 ## 한국어 실행 안내
 
-기본 빌드와 e2e는 Docker에서 runner와 node를 실행한다. Bash는 `./run-e2e.sh`, PowerShell 7은 `pwsh -NoProfile -File ./run-e2e.ps1`을 사용한다. 로컬 프로세스 디버깅은 Node.js와 npm을 설치한 뒤 `--local` 또는 `-Local`로 실행한다. Docker 빌드·정리 로그는 `.logs/docker-<project>/`에 남는다.
+기본 빌드와 e2e는 Docker에서 runner와 node를 실행한다. Bash는 `./run-e2e.sh`, PowerShell 7은 `pwsh -NoProfile -File ./run-e2e.ps1`을 사용한다. `--check-domain` 또는 `-CheckDomain`은 Redis와 node 없이 이동 경계를 검사한다. `region`은 복제본 수용량·알 수 없는 지역·Session 허용 목록을, `movement`는 서버 권위 이동과 거부 뒤 상태 불변을 확인한다. 로컬 프로세스 디버깅은 Node.js와 npm을 설치한 뒤 `--local` 또는 `-Local`로 실행한다. Docker 빌드·정리 로그는 `.logs/docker-<project>/`에 남는다.
 
 Docker Compose v2를 준비한 뒤 이 디렉터리에서 위 Build 명령으로 이미지를 빌드한다. Bash에서는 `./run-e2e.sh`, PowerShell 7에서는 `pwsh -NoProfile -File ./run-e2e.ps1`로 지역 분리, 던전 생성, 재접속, host 교체 시나리오를 실행합니다. 개별 실행 방법은 위 Docker e2e 절에 있습니다. 각 실행은 고유 Redis prefix와 Compose project를 사용하며 로그를 `.logs/run-<id>/`에 보존합니다. 지역 host를 교체할 때는 `drain` 이후 relocation 완료와 `SAFE_TO_SHUTDOWN`을 확인하고 종료합니다. Framework 패키지 0.30.2의 공개 게시가 빌드 전제입니다.

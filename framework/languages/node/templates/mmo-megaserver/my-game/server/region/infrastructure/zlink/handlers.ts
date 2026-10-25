@@ -43,7 +43,7 @@ export class NextRegion {
     request: RegionFull
   ): Promise<void> {
     if (request.reason !== Rejection.regionFull) throw new Error('Unknown region rejection');
-    await entry.select(actor, request.region, request.index + 1);
+    await entry.select(actor, request.region, Math.min(Game.maxReplicasPerRegion + 1, request.index + 1));
   }
 }
 @Injectable()

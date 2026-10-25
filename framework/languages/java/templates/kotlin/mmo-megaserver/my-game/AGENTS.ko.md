@@ -92,43 +92,16 @@ Actor가 소속 Spot을 바꾸는 동작은 membership 변경이다. 대상 Spot
 6. 재접속한 client는 새 Session에서 `EnterRegionRequest`를 보낸다. 같은 Actor가 binding되고 `Actions.reconnect`가 Region view를 다시 보낸다. Session 연결이 끊겨도 Actor는 Region에 남는다(`onDisconnectActorSuspending`은 아무 일도 하지 않는다).
 7. node를 교체할 때 `runNode`의 `drain`이 relocation을 요청한다. Framework는 `RegionTransfer`·`PlayerTransfer`의 `capture`로 application 상태를 받아 다른 node에서 `restore`한다.
 
-## 이 샘플을 보며 개발하기
+## MMO 도메인 확장
 
-이 샘플은 기능들이 함께 동작하는 방식을 보여 주므로, 자기 게임으로 바꾸지 않고 읽고 실행하는 용도로 쓴다. 자기 프로젝트는 Kotlin 기본 셋업에서 시작한다. [ZLink Start](https://zlink.systems/start)의 Initializer에서 Kotlin을 고르거나 ZLink 저장소의 `framework/languages/java/templates/kotlin/starter/my-game`을 사용한다. 그다음 필요한 기능을 이 샘플에서 하나씩 옮긴다. 구조 선택은 기본 셋업의 `AGENTS.md`가 설명하며, 이 절은 `mmo-megaserver`만 다룬다. 이 샘플은 바꾸지 않고 프로젝트 옆에 참고용으로 둔다.
+이 템플릿의 도메인을 확장하여 MMO 서버를 만든다. 상태와 판정은 같은 도메인에 둔다.
 
-### 샘플 먼저 실행하기
-
-옮기기 전에 [개발 명령](#개발-명령)으로 빌드와 e2e를 한 번 실행해 받은 샘플이 동작하는지 확인하고 동작을 본다. 이 결과가 이후 비교의 기준이 된다. 실패하면 먼저 [README](README.md)의 Known issues와 대조한다.
-
-### 옮길 기능
-
-기능 이름은 기본 셋업 `AGENTS.md`의 기능 표와 같다. 경로는 이 디렉터리를 기준으로 한다. 기본 셋업에는 Session node 하나와 `connect` 시나리오만 있으므로, 마지막 열은 기능마다 기본 셋업에서 함께 늘릴 것이다.
-
-| 기능 | 이 샘플의 파일 | 옮길 것 | 기본 셋업에서 함께 늘릴 것 |
-| --- | --- | --- | --- |
-| Typed 메시지 | `server/shared/src/main/kotlin/MyGame/Contracts.kt` | 사용할 기능의 클래스: `EnterRegionRequest`, `JoinRegion`, `RegionFull`, `PlayerPosition`, `RegionView`, `MoveRequest`, `ViewRequest`, `OpenDungeonRequest`, `DungeonInfoRequest`, `DungeonOpened`. `SessionInfoRequest`·`SessionInfo`는 client가 필요로 할 때만 옮긴다 | `Names`의 mesh·타입 이름(`regionId` 포함). node `Roles`와 제어 문자열은 기본 셋업에 이미 있다 |
-| Actor | `server/region/src/main/kotlin/MyGame/region/infrastructure/zlink/Player.kt` | `onJoinCompletedSuspending`(`RegionFull` 거부를 Actor에게 되돌려 보냄)을 가진 `Player`, `PlayerFactory` | 새 `server/region/` Gradle 모듈(`settings.gradle.kts`에 포함)과 그 `Program.kt`, `server/config/regionA.json`, `server/config/regionB.json`, `e2e/.../Nodes.kt`의 시작 처리, `Roles` 항목. `Program.kt`의 `addActorFactory` 등록. `zlink.structure.json`의 node 선언과 이에 맞춘 `Structure.kt` 검사(기본 셋업의 검사는 `session` 역할만 받는다) |
-| Spot | `server/region/src/main/kotlin/MyGame/region/infrastructure/zlink/Region.kt`, `server/region/src/main/kotlin/MyGame/region/domain/Positions.kt` | `Positions`(정원에 따른 admission, 위치, 이동 sequence 규칙)를 가진 `Region` | `Program.kt`의 `addSpotFactory` 등록(`stableTypeLimit`, `SPOT_WIDE`)과 `NodeConfig`의 `capacity`·`regionLimit`. 규칙의 unit test. `zlink.structure.json`의 `spots` 선언과 이를 등록과 비교하는 `Structure.kt` 검사(기본 셋업의 검사는 Spot이 없다고 단정한다) |
-| Entry·첫 입장 | `server/region/src/main/kotlin/MyGame/region/infrastructure/zlink/Entry.kt`의 `Entry`·`Enter`, `server/region/src/main/kotlin/MyGame/region/infrastructure/zlink/Actions.kt`의 `Actions.reconnect` | `Enter.enter`와 `Entry.select`(`getOrCreate`로 instance 선택, deferred join), `Enter.next`(`RegionFull` 뒤 다음 instance), `Actions.reconnect`의 identity 확인과 view 재전송 | `addEntrySpot` 등록과 `entry` 선언. `zlink.structure.json`의 동적 `region` Spot. 정원 초과를 보는 `region` 시나리오와 재접속 뒤 상태를 비교하는 `reconnect` 시나리오 |
-| Session binding | `server/session/src/main/kotlin/MyGame/session/infrastructure/zlink/GameSession.kt`, `server/session/src/main/kotlin/MyGame/session/Program.kt` | `GameSession`의 첫 패킷 분기: Actor 조회·생성, `bindOrGet`, 원래 typed 패킷 relay | `Enter.enter`와 같은 첫 패킷 타입. 기본 셋업의 `PlayerSession.kt`에 옮긴다 |
-| Host relocation | `server/region/src/main/kotlin/MyGame/region/infrastructure/zlink/Region.kt`의 `RegionTransfer`, `server/region/src/main/kotlin/MyGame/region/infrastructure/zlink/Player.kt`의 `PlayerTransfer`, `server/shared/src/main/kotlin/MyGame/Transfer.kt` | JSON으로 저장하는 `Positions` snapshot과 `capture`·`restore`, 비어 있는 Player adapter, `ensureActive` | `preserveStateWith` 등록. 서버 교체 뒤에도 연결·Region 상태가 유지되고 대체 node가 새 Region을 받는지 판정하는 `update` 시나리오 |
-| 동적 던전 | `server/instance/src/main/kotlin/MyGame/instance/Program.kt`, `server/instance/src/main/kotlin/MyGame/instance/infrastructure/zlink/Dungeon.kt`, `server/region/src/main/kotlin/MyGame/region/infrastructure/zlink/Actions.kt`의 `Actions.dungeon` | 동적 User Spot 생성 형태(`recreateOnRelocation()`), `DungeonActions.open`, Dungeon 정보 | 새 `server/instance/` Gradle 모듈과 `instance.json`, 시작 처리, 역할. `zlink.structure.json`의 동적 `dungeon` Spot과 `GetOrCreate` edge. `dungeon` 시나리오 |
-
-### 옮기는 순서와 규칙
-
-기능은 표의 행 하나씩 옮기고, 하나를 옮길 때마다 빌드, 구조 검사, 관련 e2e 시나리오를 실행한다. 시나리오 ID는 `Contracts.kt`의 `Names.SCENARIOS`, `e2e/src/main/kotlin/MyGame/e2e/Scenarios.kt`의 `scenario` 함수, `zlink.structure.json`의 `run.scenarios`, `run.commands`의 시나리오 선택 예시에 함께 추가한다. 판정은 실제로 받은 응답과 이벤트로 하고, 고정 대기나 기한 확대로 통과시키지 않는다.
-
-메시지 contract부터 옮긴다. `Contracts.kt`에 typed 클래스를 먼저 정의한 뒤, 컴파일 오류가 나는 handler를 하나씩 새 메시지로 옮긴다. 첫 패킷(`EnterRegionRequest`)을 바꾸면 `GameSession`의 첫 패킷 분기, `Enter.enter`, `Actions.reconnect`가 같은 타입을 받도록 함께 고친다.
-
-상태는 그 상태를 결정하는 객체에 둔다. 멤버와 위치는 `Region`(`Positions`)에 두며 `Player`는 상태를 갖지 않는다. `Positions` 필드를 바꿀 때는 `RegionTransfer`를 함께 고친다. 빠뜨린 필드는 relocation 뒤 사라지고, `update` 시나리오가 그 손실을 잡는다.
-
-instance ID 규칙(`Names.regionId`), admission 한도(`capacity`를 쓰는 `Positions.admit`), 다음 index로 넘어가는 단계(`Enter.next`)는 함께 고친다. e2e fixture는 Region node마다 Region instance를 둘로 제한하고 `update` 전에 `forest-1`과 `forest-2`를 채운다. 시나리오를 추가할 때도 이 구성을 유지해야 drain 뒤에 대체 node만 새 Region을 받을 수 있다.
-
-role마다 별도 entry point(`MyGame.region.ProgramKt`, `MyGame.instance.ProgramKt`, `MyGame.session.ProgramKt`)를 유지하고, 구성이 바뀌면 structure 선언도 함께 고친다.
-
-역할 이름을 이 샘플과 다르게 정하려면 타입 이름, `Names`, `server/config/`, `zlink.structure.json`을 한 번에 바꾼다. 이름 변경은 기능을 옮기는 변경과 나눠서 진행하면 실패 원인을 찾기 쉽다.
-
-옮긴 뒤 `update`가 실패하면 snapshot에 빠진 상태가 있는지 먼저 확인한다. 그다음 [디버깅](#디버깅)의 message flow로 첫 실패 단계를 찾는다.
+1. `server/shared/src/main/kotlin/MyGame/Contracts.kt`의 공통 상수와 shared 계약에 새 요청·결과를 추가한다. 정수 상한은 `2^53-1`, `RetryAfterMs`는 32-bit 정수다.
+2. `server/region/src/main/kotlin/MyGame/region/domain/Positions.kt`에 상태와 판정을 추가한다. 이동은 변위와 순번을 받아 검사하며, 거부는 좌표·순번·예산을 변경하지 않는다. `MaxStep=10`, 지역 경계는 `0..100`, 속도는 초당 `MaxStep*5`다. 시험용 단조 시계는 생성자로만 전달한다. snapshot에는 남은 ms를 저장한다.
+3. `server/region/src/main/kotlin/MyGame/region/infrastructure/zlink/Entry.kt`에서 허용 지역과 최대 복제본 2개를 판정한다. 정원 초과·생성 거절은 `RegionUnavailable(region, "capacity-exhausted")`, 미등록 지역은 `region-unknown`으로 응답한다.
+4. `server/session/src/main/kotlin/MyGame/session/infrastructure/zlink/GameSession.kt`의 허용 목록에 클라이언트 패킷만 추가한다. 내부 패킷은 `ActionRejected("packet-not-allowed", 0)`으로 거부한다.
+5. `e2e/src/main/kotlin/MyGame/e2e/DomainChecks.kt`에 도메인 경계 검사를, `e2e/src/main/kotlin/MyGame/e2e/Scenarios.kt`에 공개 동작 검사를 추가한다. `./run-e2e.sh --check-domain` 또는 `-CheckDomain`으로 도메인만 검사한다. 시간 제한 거부 뒤에는 서버의 `RetryAfterMs`만 기다린다.
+6. 요청자에게 직접 이동 결과를 보내고 다른 참가자에게는 기존 Region broadcast 하나로 전달한다. README와 `zlink.structure.json`의 시나리오 목록을 함께 갱신한다.
 
 ## 개발 시 주의점
 

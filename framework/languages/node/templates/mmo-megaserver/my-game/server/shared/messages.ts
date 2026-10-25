@@ -17,16 +17,23 @@ export class RegionFull {
     readonly index: number
   ) {}
 }
+export class RegionUnavailable {
+  constructor(readonly region: string, readonly reason: string) {}
+}
 export class MoveRequest {
   constructor(
-    readonly x: number,
-    readonly sequence: number
+    readonly delta: number,
+    readonly sequence: bigint
   ) {}
+}
+export class ActionRejected {
+  constructor(readonly reason: string, readonly retryAfterMs: number = 0) {}
 }
 export class PlayerPosition {
   constructor(
     readonly playerId: string,
-    readonly x: number
+    readonly x: number,
+    readonly sequence: bigint
   ) {}
 }
 export class RegionView {

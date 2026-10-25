@@ -44,7 +44,7 @@ class Client(endpoint: String, val playerId: String) {
     @Volatile var disconnects = 0
 
     init {
-        listOf(RegionView::class.java, DungeonOpened::class.java).forEach { type ->
+        listOf(RegionView::class.java, DungeonOpened::class.java, ActionRejected::class.java, RegionUnavailable::class.java).forEach { type ->
             registrations +=
                 connector.on(type) { message ->
                     received.add(message.payload())
@@ -72,10 +72,10 @@ class Client(endpoint: String, val playerId: String) {
         return next<RegionView> { view -> view.players.any { it.playerId == playerId } }
     }
 
-    suspend fun move(x: Int, sequence: Long): RegionView {
+    suspend fun move(x: Double, sequence: Long): RegionView {
         send(MoveRequest(x, sequence))
         return next<RegionView> { view ->
-            view.players.any { it.playerId == playerId && it.x == x }
+            view.players.any { it.playerId == playerId && it.sequence == sequence }
         }
     }
 

@@ -29,16 +29,51 @@ public sealed class RegionEntry(IZLinkEntrySpotContext context, IZLinkSpotManage
         CancellationToken ct
     )
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(region);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(index);
+        if (!GameNames.IsAllowedRegion(region))
+        {
+            await actor
+                .Context.BoundSession.Send(new RegionUnavailable(region, Rejection.RegionUnknown))
+                .Async();
+            return;
+        }
+        if (index > GameNames.MaxReplicasPerRegion)
+        {
+            await actor
+                .Context.BoundSession.Send(
+                    new RegionUnavailable(region, Rejection.CapacityExhausted)
+                )
+                .Async();
+            return;
+        }
         var id = GameNames.RegionId(region, index);
         var created = await spots
             .GetOrCreate(id, GameNames.RegionType)
             .InMesh(GameNames.WorldMesh)
             .Async(ct);
         if (created.State == ZLinkSpotCreateState.Rejected)
-            throw new InvalidOperationException($"Region creation rejected: {id}.");
+        {
+            await actor
+                .Context.BoundSession.Send(
+                    new RegionUnavailable(region, Rejection.CapacityExhausted)
+                )
+                .Async();
+            return;
+        }
         actor.Context.JoinSpot(id, new JoinRegion(region, index)).Defer();
+    }
+
+    public ValueTask SelectNextAsync(
+        PlayerActor actor,
+        string region,
+        int index,
+        CancellationToken ct
+    )
+    {
+        var nextIndex = index >= GameNames.MaxReplicasPerRegion
+            ? GameNames.MaxReplicasPerRegion + 1
+            : index + 1;
+        return SelectAsync(actor, region, nextIndex, ct);
     }
 }
 
@@ -74,6 +109,6 @@ public sealed class NextRegion
     {
         if (request.Reason != Rejection.RegionFull)
             throw new InvalidDataException("Unknown region rejection.");
-        return entry.SelectAsync(actor, request.Region, checked(request.Index + 1), ct);
+        return entry.SelectNextAsync(actor, request.Region, request.Index, ct);
     }
 }

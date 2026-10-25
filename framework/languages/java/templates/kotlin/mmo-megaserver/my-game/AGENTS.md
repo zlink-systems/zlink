@@ -92,43 +92,16 @@ Requests in the example game follow this path. Reading the code along this path 
 6. A reconnecting client sends `EnterRegionRequest` on a new Session. The same Actor is bound, and `Actions.reconnect` resends the Region view. A Session disconnect does not remove the Actor from the Region (`onDisconnectActorSuspending` does nothing).
 7. To replace a node, `drain` in `runNode` requests relocation. Framework takes the application state from `capture` in `RegionTransfer` and `PlayerTransfer` and calls `restore` on another node.
 
-## Developing from this sample
+## Extending the MMO domain
 
-This sample shows how the features work together, so read and run it rather than turning it into your game. Start your own project from the Kotlin starter: choose Kotlin in the Initializer at [ZLink Start](https://zlink.systems/start), or use `framework/languages/java/templates/kotlin/starter/my-game` in the ZLink repository. Then transfer the features you need from this sample one at a time. The starter's `AGENTS.md` owns the choice between structures; this section covers only `mmo-megaserver`. Keep this sample unchanged next to your project as a reference.
+Extend this template's domain to build an MMO server. Keep each state and decision in its owning domain.
 
-### Run the sample first
-
-Before transferring anything, run the build and e2e once with the [Development commands](#development-commands) to confirm the downloaded sample works and to see its behavior. This result is the baseline for comparison. If it fails, compare the failure with Known issues in the [README](README.md) first.
-
-### Features to transfer
-
-Feature names match the feature table in the starter's `AGENTS.md`. Paths are relative to this directory. The starter has one Session node and the `connect` scenario only, so the last column lists what grows in the starter with each feature.
-
-| Feature | File in this sample | What to transfer | What to grow in the starter alongside |
-| --- | --- | --- | --- |
-| Typed messages | `server/shared/src/main/kotlin/MyGame/Contracts.kt` | The classes of the features you adopt: `EnterRegionRequest`, `JoinRegion`, `RegionFull`, `PlayerPosition`, `RegionView`, `MoveRequest`, `ViewRequest`, `OpenDungeonRequest`, `DungeonInfoRequest`, `DungeonOpened`; `SessionInfoRequest` and `SessionInfo` only if your client needs them | The mesh and type names in `Names` (including `regionId`); the starter already has the node `Roles` and the control strings |
-| Actor | `server/region/src/main/kotlin/MyGame/region/infrastructure/zlink/Player.kt` | `Player` with `onJoinCompletedSuspending` (the `RegionFull` rejection is sent back to the Actor) and `PlayerFactory` | A new `server/region/` Gradle module (included in `settings.gradle.kts`) with its `Program.kt` and the `server/config/regionA.json`, `server/config/regionB.json` files, its start-up in `e2e/.../Nodes.kt`, and a `Roles` entry; the `addActorFactory` registration in `Program.kt`; the node declarations in `zlink.structure.json` and the matching `Structure.kt` check (the starter's check accepts only the `session` role) |
-| Spot | `server/region/src/main/kotlin/MyGame/region/infrastructure/zlink/Region.kt`, `server/region/src/main/kotlin/MyGame/region/domain/Positions.kt` | `Region` with `Positions` (admission by capacity, positions, the move sequence rule) | The `addSpotFactory` registration in `Program.kt` (`stableTypeLimit`, `SPOT_WIDE`) and `capacity` and `regionLimit` in `NodeConfig`; the unit tests for the rules; the `spots` declarations in `zlink.structure.json` and the `Structure.kt` check that compares them with the registrations (the starter's check requires no Spots) |
-| Entry and first admission | `server/region/src/main/kotlin/MyGame/region/infrastructure/zlink/Entry.kt` (`Entry`, `Enter`), `Actions.reconnect` in `server/region/src/main/kotlin/MyGame/region/infrastructure/zlink/Actions.kt` | `Enter.enter` and `Entry.select` (the instance choice with `getOrCreate` and the deferred join), `Enter.next` (the next instance after `RegionFull`), and the identity check and view resend of `Actions.reconnect` | The `addEntrySpot` registration and its `entry` declaration; the dynamic `region` Spot in `zlink.structure.json`; the `region` scenario for capacity overflow and the `reconnect` scenario that compares state after reconnection |
-| Session binding | `server/session/src/main/kotlin/MyGame/session/infrastructure/zlink/GameSession.kt`, `server/session/src/main/kotlin/MyGame/session/Program.kt` | The first-packet branch of `GameSession`: find or create the Actor, `bindOrGet`, and relay the original typed packet | The same first-packet type as `Enter.enter`; transfer it into the starter's `PlayerSession.kt` |
-| Host relocation | `RegionTransfer` in `server/region/src/main/kotlin/MyGame/region/infrastructure/zlink/Region.kt`, `PlayerTransfer` in `server/region/src/main/kotlin/MyGame/region/infrastructure/zlink/Player.kt`, and `server/shared/src/main/kotlin/MyGame/Transfer.kt` | The `Positions` snapshot stored as JSON with `capture` and `restore`, the empty Player adapter, and `ensureActive` | The `preserveStateWith` registrations; the `update` scenario, which checks that connections and Region state survive a server replacement and that the replacement node hosts a new Region |
-| Dynamic dungeon | `server/instance/src/main/kotlin/MyGame/instance/Program.kt`, `server/instance/src/main/kotlin/MyGame/instance/infrastructure/zlink/Dungeon.kt`, `Actions.dungeon` in `server/region/src/main/kotlin/MyGame/region/infrastructure/zlink/Actions.kt` | The dynamic User Spot creation pattern (`recreateOnRelocation()`), `DungeonActions.open`, and the Dungeon information | A new `server/instance/` Gradle module with `instance.json`, its start-up, and role; the dynamic `dungeon` Spot and the `GetOrCreate` edge in `zlink.structure.json`; the `dungeon` scenario |
-
-### Transfer order and rules
-
-Transfer one row at a time and run the build, the structure check, and the related e2e scenario after each. Add a scenario ID to `Names.SCENARIOS` in `Contracts.kt`, to the `scenario` function in `e2e/src/main/kotlin/MyGame/e2e/Scenarios.kt`, to `run.scenarios`, and to the selection examples in `run.commands` of `zlink.structure.json` together. Judge results by the replies and events actually received; do not make tests pass with fixed sleeps or longer deadlines.
-
-Start with the message contracts. Define the typed classes in `Contracts.kt` first, then move each handler that fails to compile to the new messages. When you change the first packet (`EnterRegionRequest`), update the first-packet branch in `GameSession`, `Enter.enter`, and `Actions.reconnect` to receive the same type.
-
-Keep each piece of state in the object that decides it. Membership and positions belong in `Region` (`Positions`); `Player` keeps no state. When you change `Positions` fields, update `RegionTransfer` together. A missing field disappears after relocation, and the `update` scenario detects the loss.
-
-Change the instance ID rule (`Names.regionId`), the admission limit (`Positions.admit` with `capacity`), and the next-index step (`Enter.next`) together. The e2e fixture limits each Region node to two Region instances and fills `forest-1` and `forest-2` before `update`; keep that arrangement when you add a scenario so only the replacement node can host a new Region after the drain.
-
-Keep each role's own entry point (`MyGame.region.ProgramKt`, `MyGame.instance.ProgramKt`, and `MyGame.session.ProgramKt`) and update the structure declaration whenever the composition changes.
-
-To name roles differently from this sample, change the type names, `Names`, `server/config/`, and `zlink.structure.json` at once. Do the renaming in its own change, separate from transferring a feature, so failures are easier to trace.
-
-If `update` fails after a transfer, first check whether the snapshot is missing any state, then use the message flow in [Debugging](#debugging) to find the first failing step.
+1. Add requests and results to the shared contracts beside `server/shared/src/main/kotlin/MyGame/Contracts.kt`. Keep shared limits there: integers are bounded to `2^53-1`, and `RetryAfterMs` is a 32-bit integer.
+2. Add state and decisions in `server/region/src/main/kotlin/MyGame/region/domain/Positions.kt`. Movement accepts a delta and sequence; rejected inputs preserve position, sequence, and budget. `MaxStep=10`, region bounds are `0..100`, and speed is `MaxStep*5` per second. Inject a test monotonic clock only through the constructor. Persist remaining milliseconds in relocation snapshots.
+3. Keep allowed regions and the two-replica limit in `server/region/src/main/kotlin/MyGame/region/infrastructure/zlink/Entry.kt`. Return `RegionUnavailable(region, "capacity-exhausted")` on exhausted capacity or rejected creation, and `region-unknown` for unknown regions.
+4. Add only client packet names to the allowlist in `server/session/src/main/kotlin/MyGame/session/infrastructure/zlink/GameSession.kt`. Reject internal packets with `ActionRejected("packet-not-allowed", 0)`.
+5. Add rule boundaries in `e2e/src/main/kotlin/MyGame/e2e/DomainChecks.kt` and public observations in `e2e/src/main/kotlin/MyGame/e2e/Scenarios.kt`. Use `./run-e2e.sh --check-domain` or `-CheckDomain` for domain checks. After time-limited rejection, wait only for the server's `RetryAfterMs`.
+6. Reply directly to the requester and use the existing Region broadcast once for other members. Update README and `zlink.structure.json` scenarios together.
 
 ## Development considerations
 
