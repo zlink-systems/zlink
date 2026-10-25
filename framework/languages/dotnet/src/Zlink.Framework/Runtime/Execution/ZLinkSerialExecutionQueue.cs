@@ -244,7 +244,16 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
         lock (_admissionGate)
         {
             if (_sharedOwner is not null)
+            {
                 ImportSharedPublished();
+                // The old consumer owns this ready reservation even when the
+                // mailbox changes owner at terminal release rather than selection.
+                if (_readyItem is { } ready)
+                    _sharedOwner._applicationQueue.TryDequeueMatching(
+                        candidate => ReferenceEquals(candidate, ready),
+                        out _
+                    );
+            }
             _readyItem ??= new ZLinkSerialWorkItem(this);
             Volatile.Write(ref _sharedOwner, owner);
         }
@@ -288,14 +297,60 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
 
     internal async ValueTask ReleaseExecutionSourceAsync()
     {
-        ZLinkProcessExecutionPool.ApplicationSource? source;
+        if (DetachExecutionSource() is { } source)
+            await source.DisposeAsync().ConfigureAwait(false);
+    }
+
+    private ZLinkProcessExecutionPool.ApplicationSource? DetachExecutionSource()
+    {
         lock (_admissionGate)
         {
-            source = _drainSource;
+            var source = _drainSource;
             _drainSource = null;
+            return source;
         }
-        if (source is not null)
-            await source.DisposeAsync().ConfigureAwait(false);
+    }
+
+    internal async ValueTask ReleaseExecutionPlacementAsync()
+    {
+        // Capture only the ending placement's source. Refresh can schedule a
+        // successor on a different source while the old source finishes.
+        var source = DetachExecutionSource();
+        try
+        {
+            var pending = await RunOnSharedGateAsync(() =>
+                {
+                    Task? active;
+                    Task? lifecycle;
+                    bool redirected;
+                    lock (_admissionGate)
+                    {
+                        active = _active?.Completion;
+                        lifecycle = _activeLifecycle?.Completion;
+                        redirected = RedirectIdleMailbox();
+                    }
+                    if (redirected)
+                        SchedulePendingWork();
+                    return (Active: active, Lifecycle: lifecycle);
+                })
+                .ConfigureAwait(false);
+            // ExecuteHandoffTransitionAsync returns its finite Import claim before
+            // PrepareForTransferredActivationAsync observes the previous terminal.
+            // Successor handlers start after that observation. Join only these
+            // existing records' completion; their callers own their failures.
+            if (pending.Active is not null)
+                await Task.WhenAny(pending.Active).ConfigureAwait(false);
+            if (
+                pending.Lifecycle is not null
+                && !ReferenceEquals(pending.Active, pending.Lifecycle)
+            )
+                await Task.WhenAny(pending.Lifecycle).ConfigureAwait(false);
+        }
+        finally
+        {
+            if (source is not null)
+                await source.DisposeAsync().ConfigureAwait(false);
+        }
     }
 
     public void Complete()
@@ -1632,6 +1687,8 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
                         _activeClaimGeneration = 0;
                     }
                     CompleteSealRequestUnderLock();
+                    if (RedirectIdleMailbox())
+                        break;
                 }
                 if (Stopwatch.GetElapsedTime(sliceStartedAt) >= _policy.OwnerTimeBudget)
                     break;
@@ -2037,7 +2094,10 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
                     ReleaseReservedSlotUnderLock(item.Lane);
             CompleteSharedSealRequest();
             ImportSharedPublished();
-            RegisterSharedHead();
+            if (RedirectIdleMailbox())
+                SchedulePendingWork();
+            else
+                RegisterSharedHead();
             TrySignalDrained();
             return;
         }

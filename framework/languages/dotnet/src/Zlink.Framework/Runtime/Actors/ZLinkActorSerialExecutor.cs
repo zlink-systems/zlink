@@ -35,7 +35,7 @@ internal sealed class ZLinkActorSerialExecutor : IAsyncDisposable
 
     internal bool IsDisposed => _queue.IsDisposed;
 
-    internal ValueTask ReleaseExecutionSourceAsync() => _queue.ReleaseExecutionSourceAsync();
+    internal ValueTask ReleaseExecutionPlacementAsync() => _queue.ReleaseExecutionPlacementAsync();
 
     internal void BindExecutionOwner(Func<ZLinkSerialExecutionQueue?> provider) =>
         _queue.BindExecutionOwner(provider);
@@ -290,6 +290,7 @@ internal sealed class ZLinkActorSerialExecutor : IAsyncDisposable
 
     public sealed class BarrierReservation(Waiter waiter, CancellationTokenSource cancellation)
     {
+        internal Task Completion => waiter.Completion;
         private int _claimed;
 
         public async ValueTask<Turn> ClaimAsync()
@@ -389,6 +390,8 @@ internal sealed class ZLinkActorSerialExecutor : IAsyncDisposable
             == AcceptedWaiting;
 
         internal int FinishAccepted() => Interlocked.Exchange(ref _accepted, NotAccepted);
+
+        internal Task Completion => _item!.Completion;
 
         internal async ValueTask RunAsync(CancellationToken _)
         {

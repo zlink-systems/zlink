@@ -196,7 +196,14 @@ internal sealed class ZLinkActorRuntimeState(
         }
         finally
         {
-            await _dispatchMailbox.ReleaseExecutionSourceAsync().ConfigureAwait(false);
+            try
+            {
+                await barrier.Completion.ConfigureAwait(false);
+            }
+            finally
+            {
+                await _dispatchMailbox.ReleaseExecutionPlacementAsync().ConfigureAwait(false);
+            }
         }
     }
 
@@ -211,13 +218,14 @@ internal sealed class ZLinkActorRuntimeState(
         try
         {
             using (await barrier.ClaimAsync().ConfigureAwait(false)) { }
+            await barrier.Completion.ConfigureAwait(false);
             var result = await terminalTransition().ConfigureAwait(false);
             await DisposeHandlerActivationAsync().ConfigureAwait(false);
             return result;
         }
         finally
         {
-            await _dispatchMailbox.ReleaseExecutionSourceAsync().ConfigureAwait(false);
+            await _dispatchMailbox.ReleaseExecutionPlacementAsync().ConfigureAwait(false);
         }
     }
 

@@ -2979,6 +2979,49 @@ public sealed class SerialExecutorTests
     }
 
     [Fact]
+    public async Task TerminalConsumerReturnsRetiredParentBeforeThatParentCloses()
+    {
+        using var errors = new ZLinkRuntimeErrorSink();
+        var runner = new ZLinkRuntimeTaskRunner(errors, CancellationToken.None);
+        await using var parent = new ZLinkSerialExecutionQueue(
+            runner,
+            errors,
+            CancellationToken.None,
+            ZLinkExecutionLanePolicy.Default,
+            sharedGate: true
+        );
+        await using var mailbox = new ZLinkSerialExecutionQueue(
+            runner,
+            errors,
+            CancellationToken.None
+        );
+        ZLinkSerialExecutionQueue? owner = parent;
+        mailbox.BindExecutionOwner(() => owner);
+        try
+        {
+            var terminal = await mailbox.PostAsync(
+                _ =>
+                {
+                    owner = null;
+                    return ValueTask.CompletedTask;
+                },
+                CancellationToken.None
+            );
+            await terminal.Completion.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.False(mailbox.HasSharedConsumer);
+            await parent.DisposeAsync();
+            await mailbox.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        finally
+        {
+            // On a failed assertion the parent remains alive for the child's close control.
+            await mailbox.DisposeAsync();
+            await parent.DisposeAsync();
+            await runner.StopAsync();
+        }
+    }
+
+    [Fact]
     public async Task TerminalPlacementReleasePreservesReservedDrainAndIncomingQueueFifo()
     {
         using var errors = new ZLinkRuntimeErrorSink();
