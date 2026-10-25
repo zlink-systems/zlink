@@ -3,6 +3,7 @@
 #include <nlohmann/detail/exceptions.hpp>
 
 #include <array>
+#include <cfenv>
 #include <cstdint>
 #include <fstream>
 #include <iostream>
@@ -389,6 +390,57 @@ void verify_readable_samples ()
     require (!codec.decode_header (syntax, false), "flow Off must still validate JSON syntax");
     const auto utf8 = zlink::message_t::from (header (",\"flowId\":\"\xc0\x80\""));
     require (!codec.decode_header (utf8, false), "flow Off must still validate UTF-8");
+
+    struct rounding_environment_t
+    {
+        std::fenv_t saved;
+        rounding_environment_t ()
+        {
+            require (std::fegetenv (&saved) == 0, "cannot save floating-point environment");
+        }
+        ~rounding_environment_t () { std::fesetenv (&saved); }
+    } rounding_environment;
+    struct rounding_case_t
+    {
+        int mode;
+        const char *name;
+        std::array<bool, 3> accepted;
+    };
+    // Fixed results from the original SAX codec, including its strtod rounding behavior.
+    const std::array rounding_cases{
+      rounding_case_t{FE_TONEAREST, "nearest", {false, false, true}},
+      rounding_case_t{FE_TOWARDZERO, "towardzero", {true, true, true}},
+      rounding_case_t{FE_DOWNWARD, "downward", {true, false, true}},
+      rounding_case_t{FE_UPWARD, "upward", {false, true, false}}};
+    constexpr std::array<std::string_view, 3> numeric_tokens{
+      "1e9999", "-1e9999", "1.7976931348623158e308"};
+    unsigned observations = 0;
+    for (const auto &test : rounding_cases) {
+        if (std::fesetround (test.mode) != 0) {
+            std::cout << "Envelope rounding mode skipped: " << test.name << '\n';
+            continue;
+        }
+        for (std::size_t index = 0; index < numeric_tokens.size (); ++index) {
+            const auto wire = zlink::message_t::from (
+              header (",\"extra\":" + std::string (numeric_tokens[index])));
+            for (const bool capture_flow : {false, true}) {
+                rejected = msg::envelope_header_t{};
+                const auto result = codec.decode_header (wire, capture_flow, &rejected);
+                if (static_cast<bool> (result) != test.accepted[index])
+                    std::cerr << "rounding mode=" << test.name
+                              << " token=" << numeric_tokens[index]
+                              << " expected accepted=" << test.accepted[index]
+                              << " actual=" << static_cast<bool> (result) << '\n';
+                require (static_cast<bool> (result) == test.accepted[index],
+                         "numeric boundary must preserve the original SAX rounding result");
+                require (!rejected, "numeric boundary must clear stale rejection context");
+                require (result || result.error_kind () == fw::framework_error_kind_t::protocol_error,
+                         "numeric overflow must be a protocol error");
+                ++observations;
+            }
+        }
+    }
+    std::cout << "Envelope rounding boundaries: " << observations << " observations passed\n";
 }
 } // namespace
 

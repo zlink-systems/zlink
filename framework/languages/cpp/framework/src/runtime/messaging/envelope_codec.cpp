@@ -11,7 +11,9 @@
 #include <array>
 #include <bit>
 #include <charconv>
+#include <clocale>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <new>
@@ -772,54 +774,6 @@ class header_reader_t
 
     static bool digit (char value) noexcept { return value >= '0' && value <= '9'; }
 
-    // from_chars reports both finite underflow and non-finite overflow as
-    // out_of_range. For those values alone, decimal order distinguishes them
-    // without a locale-dependent conversion or another number parser.
-    static bool underflows (const char *first, const char *last) noexcept
-    {
-        if (*first == '-')
-            ++first;
-        const auto limit = static_cast<std::size_t> (last - first);
-        std::size_t digits_before_point = 0;
-        std::size_t leading_zeroes = 0;
-        bool point = false;
-        bool significant = false;
-        while (first != last && *first != 'e' && *first != 'E') {
-            if (*first == '.')
-                point = true;
-            else {
-                if (!point)
-                    ++digits_before_point;
-                if (!significant && *first == '0')
-                    ++leading_zeroes;
-                else
-                    significant = true;
-            }
-            ++first;
-        }
-        if (!significant)
-            return true;
-        const auto order = static_cast<std::ptrdiff_t> (digits_before_point)
-                           - static_cast<std::ptrdiff_t> (leading_zeroes) - 1;
-        bool negative = false;
-        std::size_t exponent = 0;
-        if (first != last) {
-            ++first;
-            if (first != last && (*first == '+' || *first == '-'))
-                negative = *first++ == '-';
-            while (first != last) {
-                const auto next = static_cast<std::size_t> (*first++ - '0');
-                if (next > limit || exponent > (limit - next) / 10)
-                    exponent = limit;
-                else
-                    exponent = exponent * 10 + next;
-            }
-        }
-        if (negative)
-            return order < 0 || exponent > static_cast<std::size_t> (order);
-        return order < 0 && exponent < static_cast<std::size_t> (-(order + 1)) + 1;
-    }
-
     header_value_t number (int *output)
     {
         const char *start = _position;
@@ -868,15 +822,13 @@ class header_reader_t
                     return header_value_t::other;
             }
         }
-        double value;
-        const auto converted = std::from_chars (start, _position, value);
-        if (converted.ec == std::errc::result_out_of_range) {
-            if (!underflows (start, _position))
-                syntax ("JSON number overflow");
-            value = 0;
-        } else if (converted.ec != std::errc{} || converted.ptr != _position) {
-            syntax ("invalid JSON number");
-        }
+        // After syntax validation, retain the lexer's locale and FP rounding conversion.
+        // Only this rare numeric path needs a temporary NUL-terminated token.
+        std::string token (start, _position);
+        const auto *locale = std::localeconv ();
+        const char decimal_point = locale->decimal_point == nullptr ? '.' : *locale->decimal_point;
+        std::replace (token.begin (), token.end (), '.', decimal_point);
+        const double value = std::strtod (token.c_str (), nullptr);
         if (!std::isfinite (value))
             syntax ("JSON number overflow");
         return header_value_t::other;
