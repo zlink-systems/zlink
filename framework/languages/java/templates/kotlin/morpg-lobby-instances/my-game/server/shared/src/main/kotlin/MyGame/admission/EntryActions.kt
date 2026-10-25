@@ -24,7 +24,7 @@ class EntryActions {
         actor: Player,
         context: ZLinkMessageContext,
         request: CreatePartyRequest,
-    ) = spot.join(actor, request.partyId, true)
+    ) = spot.join(actor, Names.newPartyId(), true)
 
     @ZLinkSpotActorSend
     suspend fun join(

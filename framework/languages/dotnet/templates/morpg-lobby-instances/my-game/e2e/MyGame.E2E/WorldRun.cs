@@ -73,7 +73,7 @@ internal sealed class WorldRun(string root) : IAsyncDisposable
         settings = settings with
         {
             RedisEndpoint = redisEndpoint,
-            KeyPrefix = (dockerProject ?? project) + ":",
+            KeyPrefix = project + ":",
             MeshEndpoint = "tcp://127.0.0.1:0",
             StreamEndpoint = settings.StreamEndpoint is null ? null : "ws://127.0.0.1:0",
         };

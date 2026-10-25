@@ -8,14 +8,10 @@ import type {
   ZLinkSpotRelocationAdapter
 } from '@zlink-systems/framework';
 import { NODE_CONFIG, type NodeConfig } from '../shared/config';
-import { Names, Game } from '../shared/constants';
-import { DungeonView, DungeonPrepared, JoinDungeon, type PrepareDungeon } from '../shared/messages';
+import { Names, Rejection } from '../shared/constants';
+import { DungeonView, DungeonPrepared, JoinDungeon, DungeonMemberEntered, RunStarted, RunCompleted, EnterPartyRun, RunPhase, ActionRejected, type PrepareDungeon } from '../shared/messages';
 import { Player } from '../shared/player';
-class DungeonState {
-  partyId = '';
-  members: string[] = [];
-  stage = 0;
-}
+import { DungeonState } from './domain';
 @Injectable({ scope: Scope.TRANSIENT })
 export class Dungeon implements ZLinkSpot<Player> {
   readonly context!: ZLinkSpotContext<Player, Dungeon>;
@@ -25,31 +21,17 @@ export class Dungeon implements ZLinkSpot<Player> {
     @Inject(ZLINK_ACTOR_CLIENT) private readonly actors: ZLinkActorClient
   ) {}
   prepare(request: PrepareDungeon): DungeonPrepared {
-    if (
-      this.state.partyId ||
-      !request.partyId.trim() ||
-      !request.members.length ||
-      request.members.length > Game.maximumPartyMembers ||
-      new Set(request.members).size !== request.members.length ||
-      request.members.some((id) => !id.trim()) ||
-      Names.dungeonPrefix + request.partyId !== String(this.context.spotId)
-    )
-      throw new Error('Invalid dungeon party preparation');
-    this.state.partyId = request.partyId;
-    this.state.members = request.members;
-    return new DungeonPrepared(String(this.context.spotId));
+    if (Names.dungeonPrefix + request.runId !== String(this.context.spotId) || this.state.prepare(request)) throw new Error(Rejection.runMismatch);
+    return new DungeonPrepared(String(this.context.spotId), request.runId);
   }
   async onActorJoin(id: string, payload: ZLinkMessage) {
-    const join = payload.decode(JoinDungeon);
-    return {
-      accepted:
-        join.dungeonId === String(this.context.spotId) &&
-        join.partyId === this.state.partyId &&
-        this.state.members.includes(id)
-    };
+    return { accepted: this.state.admit(id, payload.decode(JoinDungeon), String(this.context.spotId)) };
   }
   async onJoinedActor(actor: Player): Promise<void> {
-    await this.actors.sendToActor(actor.context.actorId, this.view()).submit();
+    const started = this.state.join(actor.context.actorId);
+    await this.context.outbound.sendToSpot(this.state.partyId, new DungeonMemberEntered(this.state.runId!, actor.context.actorId)).submit();
+    if (started) await this.context.outbound.sendToSpot(this.state.partyId, new RunStarted(this.state.runId!)).submit();
+    await this.broadcast();
   }
   async onLeaveActor(_actor: Player): Promise<void> {}
   private view(): DungeonView {
@@ -58,27 +40,25 @@ export class Dungeon implements ZLinkSpot<Player> {
       this.config.id,
       this.state.partyId,
       this.state.members,
-      this.state.stage
+      this.state.stage, this.state.runId, this.state.phase
     );
   }
   async show(actor: Player): Promise<void> {
     await actor.context.boundSession.send(this.view()).submit();
   }
-  async advance(): Promise<void> {
-    if (!Number.isSafeInteger(this.state.stage + 1)) throw new Error('Dungeon stage exhausted');
-    this.state.stage++;
-    const view = this.view();
-    for (const id of this.state.members) await this.actors.sendToActor(id, view).submit();
+  async advance(actor: Player): Promise<void> {
+    const reason = this.state.advance();
+    if (reason) { await actor.context.boundSession.send(new ActionRejected(reason)).submit(); return; }
+    if (this.state.phase === RunPhase.Completed) await this.context.outbound.sendToSpot(this.state.partyId, new RunCompleted(this.state.runId!)).submit();
+    await this.broadcast();
   }
-  capture(): Uint8Array {
-    return Buffer.from(JSON.stringify(this.state));
+  async enter(actor: Player): Promise<void> { await this.context.outbound.sendToSpot(this.state.partyId, new EnterPartyRun(actor.context.actorId)).submit(); }
+  private async broadcast(): Promise<void> {
+    const view = this.view(); for (const id of this.state.joined) await this.actors.sendToActor(id, view).submit();
   }
-  restore(payload: Uint8Array): void {
-    this.state = Object.assign(
-      new DungeonState(),
-      JSON.parse(Buffer.from(payload).toString('utf8'))
-    );
-  }
+  capture(): Uint8Array { return Buffer.from(this.state.capture()); }
+  restore(payload: Uint8Array): void { this.state = DungeonState.restore(Buffer.from(payload).toString('utf8')); }
+
 }
 @Injectable()
 export class DungeonRelocation implements ZLinkSpotRelocationAdapter<Dungeon> {

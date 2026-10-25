@@ -28,7 +28,7 @@ public final class Party implements ZLinkSpot<Player> {
     public CompletionStage<ZLinkSpotActorJoinResult> onActorJoin(String id, ZLinkMessage payload) {
         var join = payload.decode(PartyJoin.class);
         return CompletableFuture.completedFuture(
-                (Names.PARTY_PREFIX + join.partyId()).equals(context.spotId())
+                (join.partyId()).equals(context.spotId())
                                 && state.join(id, join)
                         ? ZLinkSpotActorJoinResult.accept()
                         : ZLinkSpotActorJoinResult.reject());
@@ -48,7 +48,7 @@ public final class Party implements ZLinkSpot<Player> {
     }
 
     public CompletionStage<Void> ready(Player actor) {
-        state.ready.add(actor.context().actorId());
+        state.markReady(actor.context().actorId());
         return broadcast();
     }
 
@@ -61,10 +61,15 @@ public final class Party implements ZLinkSpot<Player> {
     }
 
     public CompletionStage<Void> enter(Player actor) {
-        String reason = state.entryRejection(actor.context().actorId());
+        return enterPlayer(actor.context().actorId());
+    }
+    public CompletionStage<Void> enterPlayer(String playerId) {
+        String reason = state.enter(playerId);
         if (reason != null)
-            return actor.context().boundSession().send(new ActionRejected(reason)).submit();
-        String id = Names.DUNGEON_PREFIX + state.partyId;
+            return actors.sendToActor(playerId, new ActionRejected(reason)).submit();
+        if (state.phase == RunPhase.Active) return actors.sendToActor(playerId, state.view()).submit();
+        var runId = state.runId;
+        String id = Names.dungeonId(runId);
         var members = List.copyOf(state.members);
         var partyId = state.partyId;
         return spots.getOrCreate(id, Names.DUNGEON)
@@ -75,18 +80,18 @@ public final class Party implements ZLinkSpot<Player> {
                             if (result.state() == ZLinkSpotCreateState.REJECTED)
                                 throw new IllegalStateException("Dungeon creation rejected");
                             return context.outbound()
-                                    .requestToSpot(id, new PrepareDungeon(partyId, members))
+                                    .requestToSpot(id, new PrepareDungeon(runId, partyId, members))
                                     .submit(DungeonPrepared.class);
                         })
                 .thenCompose(
                         prepared -> {
-                            if (!id.equals(prepared.dungeonId()))
+                            if (!id.equals(prepared.dungeonId()) || state.prepared(prepared.runId()) != null)
                                 throw new IllegalStateException(
                                         "Dungeon preparation identity mismatch");
                             CompletionStage<Void> sent = CompletableFuture.completedFuture(null);
-                            var travel = new JoinDungeon(id, partyId);
+                            var travel = new JoinDungeon(id, runId);
                             for (var member : members)
-                                sent =
+                                if (!state.entered.contains(member)) sent =
                                         sent.thenCompose(
                                                 ignored ->
                                                         actors.sendToActor(member, travel)

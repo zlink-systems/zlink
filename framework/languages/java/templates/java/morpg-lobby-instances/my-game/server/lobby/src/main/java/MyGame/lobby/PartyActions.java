@@ -46,4 +46,6 @@ public final class PartyActions {
             Party spot, Player actor, ZLinkMessageContext context, PartyView request) {
         return actor.context().boundSession().send(request).submit();
     }
+    @ZLinkSpotActorSend
+    public CompletionStage<Void> reject(Party spot, Player actor, ZLinkMessageContext context, ActionRejected r) { return actor.context().boundSession().send(r).submit(); }
 }

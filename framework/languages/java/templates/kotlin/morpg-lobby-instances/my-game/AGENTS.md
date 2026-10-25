@@ -82,53 +82,23 @@ Relocation changes an object's execution host; drain moves a host's workload els
 
 ## Request flow
 
-Requests in the example game follow this path. Reading the code along this path before adding or transferring a feature locates the places to change.
+1. Session binds the Player Actor after JoinLobbyRequest and relays allowed client packets only.
+2. Entry issues `party-<32hex>` for CreatePartyRequest and creates its Party Spot. JoinPartyRequest resolves existing parties only; unknown IDs return `invalid-party`.
+3. Party domain checks leader and readiness. Forming or Completed issues a new `run-<32hex>` and moves to Preparing; repeated entry reuses that RunId.
+4. Party Spot gets or creates `dungeon-<RunId>` and prepares its roster. Identical preparation returns the same DungeonPrepared. It moves to Entering and sends JoinDungeon to members still in the party.
+5. When all members arrive, Dungeon moves to Active and sends RunStarted to Party Spot. Advance reaches FinalStage (3), moves to Completed and sends RunCompleted. Party Spot retains members during a run.
+6. Reconnect returns the current view. Relocation preserves domain snapshots; update observes relocation and safe shutdown before replacing the host.
 
-1. The client connects to the Session node over STREAM and sends the first packet, `JoinLobbyRequest`. `GameSession` calls `getOrCreate` for the Player Actor by `playerId`, binds it to the Session with `bindOrGet`, and relays the original packet.
-2. A new Actor starts in the Entry Spot `Entry`. `EntryActions.login` checks the identity and answers with `LobbyView` through the bound Session.
-3. `CreatePartyRequest` or `JoinPartyRequest` reaches `EntryActions.create` or `EntryActions.join`, and `Entry.join` creates the Spot `party-<partyId>` with `getOrCreate` and requests `joinSpot(...).defer()`. `Party.onActorJoinSuspending` admits the player with `PartyState.join` (at most `Rules.MAX_MEMBERS`), and `Party.onJoinedActorSuspending` broadcasts `PartyView`.
-4. `ReadyRequest` reaches `PartyActions.ready`, which marks the player ready and broadcasts `PartyView`. `EnterDungeonRequest` reaches `Party.enter`: `PartyState.entryRejection` answers `not-leader` or `not-ready` with `ActionRejected`; otherwise `Party.enter` creates `dungeon-<partyId>` with `getOrCreate`, sends `PrepareDungeon` with `requestToSpot` to `Prepare.prepare`, and pushes `JoinDungeon` to every member.
-5. `PartyActions.travel` receives `JoinDungeon` and requests `joinSpot(dungeonId, request).defer()`. `Dungeon.onActorJoinSuspending` admits the members, and `Dungeon.onJoinedActorSuspending` pushes `DungeonView`. `AdvanceRequest` reaches `DungeonActions.advance`, which raises the stage and pushes `DungeonView` to every member through the `DungeonActions.deliver` handler.
-6. A reconnecting client sends `JoinLobbyRequest` on a new Session. The same Actor is bound, and `login` in the Spot that holds the Actor (`PartyActions` or `DungeonActions`) resends the current view.
-7. To replace a node, `drain` in `runNode` requests relocation. Framework takes the application state from `capture` in `PartyTransfer`, `DungeonTransfer`, and `PlayerTransfer` and calls `restore` on another node.
+## Extending the MORPG domain
 
-## Developing from this sample
+Extend this template's domain to build a MORPG server. Run the build, domain tests and e2e before changing gameplay.
 
-This sample shows how the features work together, so read and run it rather than turning it into your game. Start your own project from the Kotlin starter: choose Kotlin in the Initializer at [ZLink Start](https://zlink.systems/start), or use `framework/languages/java/templates/kotlin/starter/my-game` in the ZLink repository. Then transfer the features you need from this sample one at a time. The starter's `AGENTS.md` owns the choice between structures; this section covers only `morpg-lobby-instances`. Keep this sample unchanged next to your project as a reference.
+- Extend party decisions in `server/lobby/src/main/kotlin/MyGame/lobby/domain/PartyState.kt` and dungeon decisions in `server/instance/src/main/kotlin/MyGame/instance/domain/DungeonState.kt`. Party Spot retains Members, Ready, Phase and RunId while Actors are in a dungeon. Dungeon state owns arrivals and Stage.
+- Add shared contracts and constants in `server/shared/src/main/kotlin/MyGame/Contracts.kt`. The server issues UUID party and run IDs. Use the default Framework serializer: enum values are names and absent RunId is JSON null. Integers are bounded by 9,007,199,254,740,991.
+- Add client packet names to the Session allowlist in `server/session/src/main/kotlin/MyGame/session/Program.kt` and register their destination handlers. Keep preparation, travel and run notifications outside this allowlist.
+- Add observations to `e2e/src/main/kotlin/MyGame/e2e/Scenarios.kt` and boundaries to `server/lobby/src/test/kotlin/MyGame/lobby/PartyStateTest.kt`. Run `./gradlew --no-daemon :server:lobby:test` for domain tests. Keep scenario IDs synchronized with README and `zlink.structure.json`.
 
-### Run the sample first
-
-Before transferring anything, run the build and e2e once with the [Development commands](#development-commands) to confirm the downloaded sample works and to see its behavior. This result is the baseline for comparison. If it fails, compare the failure with Known issues in the [README](README.md) first.
-
-### Features to transfer
-
-Feature names match the feature table in the starter's `AGENTS.md`. Paths are relative to this directory. The starter has one Session node and the `connect` scenario only, so the last column lists what grows in the starter with each feature.
-
-| Feature | File in this sample | What to transfer | What to grow in the starter alongside |
-| --- | --- | --- | --- |
-| Typed messages | `server/shared/src/main/kotlin/MyGame/Contracts.kt` | The classes of the features you adopt: `JoinLobbyRequest`, `CreatePartyRequest`, `JoinPartyRequest`, `PartyJoin`, `PartyView`, `ReadyRequest`, `EnterDungeonRequest`, `PrepareDungeon`, `DungeonPrepared`, `JoinDungeon`, `DungeonView`, `AdvanceRequest`, `ViewRequest`, `LobbyView`, `ActionRejected`; `SessionInfoRequest` and `SessionInfo` only if your client needs them | The names and ID prefixes in `Names` and the limits in `Rules`; the starter already has the node `Roles` and the control strings |
-| Actor | `server/shared/src/main/kotlin/MyGame/Player.kt` | `Player` with `checkIdentity` and `onJoinCompletedSuspending` (rejection reported as `ActionRejected`), `PlayerFactory`, and `PlayerTransfer` | A new `server/lobby/` Gradle module (included in `settings.gradle.kts`) with its `Program.kt` and the `server/config/lobby.json` file, its start-up in `e2e/.../Nodes.kt`, and a `Roles` entry; the `addActorFactory` registration in `Program.kt`; the node declarations in `zlink.structure.json` and the matching `Structure.kt` check (the starter's check accepts only the `session` role) |
-| Spot | `server/lobby/src/main/kotlin/MyGame/lobby/infrastructure/zlink/Spots.kt`, `server/lobby/src/main/kotlin/MyGame/lobby/domain/PartyState.kt` | `Party` with `PartyState` (roster, readiness, `entryRejection`) and the `PartyActions` handlers | The `addSpotFactory` registration in `Program.kt` (`SPOT_WIDE`); the unit tests for the party rules; the `spots` declarations in `zlink.structure.json` and the `Structure.kt` check that compares them with the registrations (the starter's check requires no Spots) |
-| Entry and first admission | `server/shared/src/main/kotlin/MyGame/admission/Entry.kt`, `server/shared/src/main/kotlin/MyGame/admission/EntryActions.kt` | `EntryActions.login`, `create`, and `join`, and `Entry.join` (the party creation with `getOrCreate` and the deferred join) | The `addEntrySpot` registration, `addHandlersFromPackageOf<EntryActions>()`, and the `entry` declaration; the `party` scenario for party formation and the `reconnect` scenario that compares state after reconnection |
-| Session binding | `server/session/src/main/kotlin/MyGame/session/Program.kt` (`GameSession`) | The first-packet branch: find or create the Actor, `bindOrGet`, and relay the original typed packet | The same first-packet type as `EntryActions.login`; transfer it into the starter's `PlayerSession.kt` |
-| Host relocation | `PartyTransfer` in `server/lobby/src/main/kotlin/MyGame/lobby/infrastructure/zlink/Spots.kt`, `DungeonTransfer` in `server/instance/src/main/kotlin/MyGame/instance/infrastructure/zlink/Dungeon.kt`, `PlayerTransfer` in `server/shared/src/main/kotlin/MyGame/Player.kt`, and `server/shared/src/main/kotlin/MyGame/Transfer.kt` | `PartyState` and `DungeonState` stored as JSON with `capture` and `restore`, the empty Player adapter, and `ensureActive` | The `preserveStateWith` registrations; the `update` scenario, which checks that connections and dungeon state survive a server replacement and that the replacement node hosts a new dungeon |
-| Dynamic dungeon | `Party.enter` in `server/lobby/src/main/kotlin/MyGame/lobby/infrastructure/zlink/Spots.kt`; `server/instance/src/main/kotlin/MyGame/instance/Program.kt`, `server/instance/src/main/kotlin/MyGame/instance/infrastructure/zlink/Dungeon.kt`, `Prepare` in `server/instance/src/main/kotlin/MyGame/instance/infrastructure/zlink/Handlers.kt` | The dynamic Dungeon creation with `getOrCreate` and `requestToSpot` preparation, the prepared-member admission, and the stage advance | A new `server/instance/` Gradle module with `instanceA.json` and `instanceB.json`, its start-up, and role; `dungeonCapacity` in `NodeConfig`; the dynamic `dungeon` Spot and the `GetOrCreate` edge in `zlink.structure.json` |
-
-### Transfer order and rules
-
-Transfer one row at a time and run the build, the structure check, and the related e2e scenario after each. Add a scenario ID to the `Scenario` enum in `Contracts.kt`, to the `scenario` function in `e2e/src/main/kotlin/MyGame/e2e/Scenarios.kt`, to `run.scenarios`, and to the selection examples in `run.commands` of `zlink.structure.json` together. Judge results by the replies and events actually received; do not make tests pass with fixed sleeps or longer deadlines.
-
-Start with the message contracts. Define the typed classes in `Contracts.kt` first, then move each handler that fails to compile to the new messages. When you change the first packet (`JoinLobbyRequest`), update the first-packet branch in `GameSession`, `EntryActions.login`, and the `login` handlers of `PartyActions` and `DungeonActions` to receive the same type.
-
-Keep each piece of state in the object that decides it. The roster and readiness belong in `Party`, the members and stage in `Dungeon`, and `Player` keeps no state. When you change `PartyState` or `DungeonState` fields, update `PartyTransfer` or `DungeonTransfer` together. A missing field disappears after relocation, and the `update` scenario detects the loss.
-
-Prepare the Dungeon before any member joins it: `Party.enter` waits for `Prepare.prepare` to answer and only then pushes `JoinDungeon`, because `Dungeon.onActorJoinSuspending` admits only the prepared members. Instance capacity is one Dungeon per process (`dungeonCapacity`) so that replacement placement is observable; keep that arrangement when you add a scenario that creates Dungeons.
-
-The Lobby and Instance nodes register the shared `Entry` and `EntryActions`. Declare exactly one Entry in the structure for each node with either role, and none for other roles; the Framework's own Entries are not part of the structure. The structure check rejects a missing Entry owner and a missing dynamic `Party` or `Dungeon` type, and it requires a positive `dungeonCapacity` (the supplied settings allow one Dungeon per Instance node).
-
-To name roles differently from this sample, change the type names, `Names`, `server/config/`, and `zlink.structure.json` at once. Do the renaming in its own change, separate from transferring a feature, so failures are easier to trace.
-
-If `update` fails after a transfer, first check whether the snapshot is missing any state, then use the message flow in [Debugging](#debugging) to find the first failing step.
+Clients request actions; domains decide outcomes. Rejections leave state unchanged and return `ActionRejected(Reason, RetryAfterMs)`. This structure has no time restrictions, so RetryAfterMs is a 32-bit zero. Relocation snapshots preserve Phase, RunId, Members, Ready, arrivals and Stage, with no timestamps. Keep Framework execution ownership and do not add a second lock or queue over serialized state.
 
 ## Development considerations
 

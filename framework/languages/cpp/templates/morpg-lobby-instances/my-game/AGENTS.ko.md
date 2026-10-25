@@ -82,55 +82,23 @@ Actor가 소속 Spot을 바꾸는 동작은 membership 변경이다. 대상 Spot
 
 ## 요청 흐름
 
-예시 게임의 요청은 다음 경로로 처리된다. 기능을 더하거나 옮기기 전에 이 경로를 따라 코드를 읽으면 바꿀 위치를 빠르게 찾을 수 있다.
+1. Session은 JoinLobbyRequest로 Player Actor를 바인딩하고 클라이언트 허용 패킷만 중계한다.
+2. Entry는 CreatePartyRequest에 `party-<32hex>`를 발급하여 Party Spot을 생성한다. JoinPartyRequest는 기존 파티만 찾으며 없는 ID는 `invalid-party`로 거부한다.
+3. 파티 도메인은 리더와 전원 준비를 검사한다. Forming 또는 Completed에서 새 `run-<32hex>`를 발급하고 Preparing으로 전이한다. 재요청은 같은 RunId를 사용한다.
+4. Party Spot은 `dungeon-<RunId>`를 생성·조회하고 명단을 준비한다. 같은 실행과 명단은 같은 DungeonPrepared를 반환한다. Entering으로 전이한 뒤 아직 파티에 있는 멤버에게 JoinDungeon을 보낸다.
+5. 전원이 도착하면 던전은 Active가 되고 Party Spot에 RunStarted를 보낸다. Advance가 FinalStage(3)에 도달하면 Completed가 되고 RunCompleted를 보낸다. Party Spot은 실행 중 떠난 멤버를 제거하지 않는다.
+6. 재접속은 현재 view를 반환한다. relocation은 도메인 snapshot을 보존하며 update는 relocation과 safe shutdown을 관찰한 뒤 호스트를 교체한다.
 
-1. client가 Session node에 STREAM으로 연결하고 첫 패킷 `JoinLobbyRequest`를 보낸다. `Session::on_packet`은 첫 패킷 이름을 확인하고 `playerId`로 Player Actor를 `get_or_create`한 뒤 `bind_or_get`으로 binding하고 원래 패킷을 relay한다.
-2. 새 Actor는 Entry Spot `Entry`에서 시작한다. `Entry::login`이 identity를 확인하고 `LobbyView`로 답한다.
-3. `CreatePartyRequest`와 `JoinPartyRequest`는 `Entry::create`와 `Entry::enter`가 처리한다. `Entry::join`은 빈 파티 ID를 `ActionRejected`로 거부하고, Party Spot `party-<id>`(`Names::party_prefix`)를 `get_or_create`한 뒤 `PartyJoin`으로 `join_spot(...).defer()`를 요청한다.
-4. `Party::on_actor_join`이 `PartyState::join`으로 플레이어를 수락하거나 거부하고, `Party::on_actor_joined`가 Actor client로 구성원에게 `PartyView`를 broadcast하며 `Party::deliver`가 이를 binding된 Session으로 전달한다. `Party::show`는 `ViewRequest`에 답하고 `Party::reconnect`는 재접속 때 다시 보낸 첫 패킷에 답하며, `Party::ready`는 `ReadyRequest`를 기록하고 새 view를 broadcast한다.
-5. `EnterDungeonRequest`는 `Party::enter`가 처리한다. `PartyState::entry_rejection`이 거부 사유를 찾지 못하면(요청자가 파티장이고 모든 구성원이 준비됨) Dungeon을 `get_or_create`하고 `request_to_spot`과 `PrepareDungeon`으로 준비시킨 뒤 Actor client로 모든 구성원에게 `JoinDungeon`을 보낸다. 그렇지 않으면 `not-leader`나 `not-ready`로 `ActionRejected`를 답한다.
-6. 각 구성원의 `Party::travel`이 Dungeon에 `join_spot(...).defer()`를 요청한다. `Dungeon::on_actor_join`이 파티 구성원을 수락하고 `Dungeon::on_actor_joined`가 `DungeonView`를 보내며, `Dungeon::advance`는 stage를 올리고 새 view를 모든 구성원에게 보낸다.
-7. node를 교체할 때 `NodeControl`의 `drain`이 relocation을 요청한다. Framework는 `PartyRelocation`·`DungeonRelocation`(둘 다 `StateRelocation` alias)의 `capture`로 게임 상태를 받아 다른 node에서 `restore`한다. `Player`는 상태가 없으므로 `Player` factory는 `recreate_on_relocation`으로 등록되어 있다.
+## MORPG 도메인 확장
 
-## 이 샘플을 보며 개발하기
+이 템플릿의 도메인을 확장하여 MORPG 서버를 만든다. 기능을 바꾸기 전에 빌드, 도메인 시험과 e2e를 실행한다.
 
-이 샘플은 기능들이 함께 동작하는 방식을 보여 주므로, 자기 게임으로 바꾸지 않고 읽고 실행하는 용도로 쓴다. 자기 프로젝트는 C++ 기본 셋업에서 시작한다. [ZLink Start](https://zlink.systems/start)의 Initializer에서 C++를 고르거나 ZLink 저장소의 `framework/languages/cpp/templates/starter/my-game`을 사용한다. 그다음 필요한 기능을 이 샘플에서 하나씩 옮긴다. 구조 선택은 기본 셋업의 `AGENTS.md`가 설명하며, 이 절은 `morpg-lobby-instances`만 다룬다. 이 샘플은 바꾸지 않고 프로젝트 옆에 참고용으로 둔다.
+- 파티 판정은 `server/lobby/domain.hpp`, 던전 판정은 `server/instance/domain.hpp`에서 확장한다. Party Spot은 Actor가 던전에 있는 동안에도 멤버·준비·Phase·RunId를 유지한다. 던전은 도착 멤버와 Stage를 소유한다.
+- 새 공통 계약과 상수는 `server/shared/contracts.hpp`에 추가한다. 서버가 UUID로 파티와 실행 ID를 발급한다. 기본 Framework serializer를 사용하며 enum은 이름 문자열, 없는 RunId는 JSON null로 표현한다. 정수 상한은 9,007,199,254,740,991이다.
+- 클라이언트 패킷은 `server/session/session.hpp`의 Session 허용 목록에 추가하고 대상 Spot에 handler를 등록한다. 준비·이동·실행 통지 등 내부 패킷은 허용하지 않는다.
+- 시나리오 관찰은 `e2e/scenarios.hpp`, 경계 시험은 `e2e/domain-checks.hpp`에 추가한다. `./run-e2e.sh --check-domain`로 도메인 시험을 실행한다. 시나리오 ID는 README와 `zlink.structure.json`에 함께 반영한다.
 
-### 샘플 먼저 실행하기
-
-옮기기 전에 [개발 명령](#개발-명령)으로 빌드와 e2e를 한 번 실행해 받은 샘플이 동작하는지 확인하고 동작을 본다. 이 결과가 이후 비교의 기준이 된다. 실패하면 먼저 [README](README.md)의 Known issues와 대조한다.
-
-### 옮길 기능
-
-기능 이름은 기본 셋업 `AGENTS.md`의 기능 표와 같다. 경로는 이 디렉터리를 기준으로 한다. 기본 셋업에는 Session node 하나와 `connect` 시나리오만 있으므로, 마지막 열은 기능마다 기본 셋업에서 함께 늘릴 것이다.
-
-| 기능 | 이 샘플의 파일 | 옮길 것 | 기본 셋업에서 함께 늘릴 것 |
-| --- | --- | --- | --- |
-| Typed 메시지 | `server/shared/contracts.hpp` | 사용할 기능의 struct: `JoinLobbyRequest`, `CreatePartyRequest`, `JoinPartyRequest`, `PartyJoin`, `LobbyView`, `PartyView`, `ReadyRequest`, `EnterDungeonRequest`, `PrepareDungeon`, `DungeonPrepared`, `JoinDungeon`, `AdvanceRequest`, `ViewRequest`, `DungeonView`, `ActionRejected`. `SessionInfoRequest`·`SessionInfo`는 client가 필요로 할 때만 옮긴다 | 메시지가 가리키는 `Names`·`Rejection` 상수 |
-| Actor | `server/shared/player.hpp`의 `Player`, `PlayerFactory` | 최소 플레이어 Actor. 거부되거나 실패한 참가를 알리는 `Player::on_join_completed`와 이를 만드는 `PlayerFactory` | 새 `server/lobby/` role과 그 `main.cpp`, `server/config/` 파일, `CMakeLists.txt` role 목록의 항목. `main.cpp`의 Actor factory 등록. `zlink.structure.json`의 `nodes` 선언과 `e2e/structure.hpp`의 구조 검사 |
-| Spot | `server/lobby/party.hpp`의 `Party`, `server/lobby/domain.hpp`의 `PartyState` | `PartyState`(구성원, 준비 상태, 파티장·준비 입장 규칙)를 가진 `Party`와 `show`·`ready`·`enter` handler, `deliver` forwarder | `main.cpp`의 Spot factory 등록. 구조 검사가 node 설정과 대조하는 `zlink.structure.json`의 `party` Spot 선언. `party` 시나리오 |
-| Entry·첫 입장 | `server/shared/entry.hpp`의 `Entry`, `server/lobby/party.hpp`의 `Party::reconnect` | `Entry::login`·`Entry::create`·`Entry::enter`와 `Entry::join`의 Party 생성, `Party::reconnect`·`Dungeon::reconnect`의 identity 확인과 view 재전송 | `add_entry_spot` 등록과 `entry` 선언. 첫 입장 시나리오(`party`)와 재접속 뒤 상태를 비교하는 `reconnect` 시나리오 |
-| Session binding | `server/session/session.hpp` | 첫 패킷 검사, Actor 조회·생성, `bind_or_get` binding과 원래 typed 패킷 relay | `Entry::login`와 같은 첫 패킷 타입. 기본 셋업의 `server/session/session.hpp`에 옮긴다 |
-| Host relocation | `server/lobby/party.hpp`의 `PartyRelocation`, `server/instance/dungeon.hpp`의 `DungeonRelocation`, `server/shared/relocation.hpp`의 `StateRelocation`, `server/shared/hosting.hpp`의 `NodeControl` | `PartyState`·`DungeonState`용 `StateRelocation` adapter, 상태 없는 Actor를 위한 `recreate_on_relocation`, `drain`·`shutdown` 제어 | `main.cpp`의 `preserve_state_with` 등록. 서버 교체 뒤에도 연결·상태가 유지되고 대체 node가 새 작업을 받는지 판정하는 `update` 시나리오 |
-| 동적 던전 | `server/lobby/party.hpp`의 `Party::enter`·`Party::travel`, `server/instance/dungeon.hpp`, `server/instance/main.cpp` | 동적 User Spot 생성 형태(`get_or_create` 뒤 `PrepareDungeon`으로 `request_to_spot`), 구성원만 수락하는 `Dungeon`, `DungeonState` | 새 `server/instance/` role과 그 설정(`DungeonCapacity`), `CMakeLists.txt` 항목. `zlink.structure.json`의 동적 `dungeon` Spot과 `GetOrCreate` edge |
-
-`drain`과 `shutdown`은 `NodeControl`과 함께 옮긴다.
-
-### 옮기는 순서와 규칙
-
-기능은 표의 행 하나씩 옮기고, 하나를 옮길 때마다 빌드, 구조 검사, 관련 e2e 시나리오를 실행한다. 시나리오 ID는 `e2e/structure.hpp`의 `Scenario` enum과 `scenario_order`, `e2e/main.cpp`의 `switch`와 usage 메시지, `zlink.structure.json`의 `run.scenarios`, `run.commands`의 시나리오 선택 예시에 함께 추가한다. 판정은 실제로 받은 응답과 이벤트로 하고, 고정 대기나 기한 확대로 통과시키지 않는다.
-
-메시지 contract부터 옮긴다. `server/shared/contracts.hpp`에 packet struct를 `packet_name`과 JSON 변환을 갖춰 먼저 정의한 뒤, 컴파일 오류가 나는 handler를 하나씩 새 메시지로 옮긴다. 첫 입장 패킷을 바꾸면 `server/session/session.hpp`의 `Session::on_packet`에 있는 첫 패킷 검사와 `Entry::login`, `Party::reconnect`, `Dungeon::reconnect`가 같은 타입을 받도록 함께 고친다.
-
-상태는 그 상태를 결정하는 객체에 둔다. 파티 구성원과 준비 상태는 `PartyState`를 통해 `Party`에, Dungeon의 파티 구성원과 stage는 `DungeonState`를 통해 `Dungeon`에 둔다. `Player`는 application 상태를 갖지 않는다. 상태 필드를 바꿀 때는 같은 객체의 상태 struct와 JSON 변환, relocation adapter의 `capture`·`restore`를 함께 고친다. 빠뜨린 필드는 relocation 뒤 사라지고, `update` 시나리오가 그 손실을 잡는다.
-
-`zlink.structure.json`에는 `Entry`를 등록하는 node(Lobby와 Instance node)마다 Entry를 정확히 하나 선언하고, 동적 Party와 Dungeon 타입 선언을 빠뜨리지 않는다. 구조 검사는 빠진 Entry 소유자와 빠진 동적 타입을 거부한다. Actor의 최초 배치는 `Player` factory를 등록한 모든 node가 대상이 될 수 있으므로, 그런 node는 모두 `Entry`도 등록한다.
-
-e2e 설정은 두 Instance node의 `DungeonCapacity`를 1로 두므로, 대체 node는 살아 있는 node가 relocation된 Dungeon을 가진 동안 새 Dungeon을 받아야 한다. 배치 자체는 Framework가 결정한다.
-
-Lobby·Party·Dungeon 같은 역할 이름을 이 샘플과 다르게 정하려면 타입 이름, `Names`, `server/config/`, `zlink.structure.json`, `CMakeLists.txt`의 role 목록을 한 번에 바꾼다. 이름 변경은 기능을 옮기는 변경과 나눠서 진행하면 실패 원인을 찾기 쉽다.
-
-옮긴 뒤 `update`가 실패하면 snapshot에 빠진 상태가 있는지 먼저 확인한다. 그다음 [디버깅](#디버깅)의 message flow로 첫 실패 단계를 찾는다.
+클라이언트는 행동을 요청하고 도메인이 결과를 결정한다. 거부는 상태를 바꾸지 않고 `ActionRejected(Reason, RetryAfterMs)`로 응답한다. 이 구조에는 시간 제한이 없으므로 RetryAfterMs는 32-bit 정수 0이다. relocation snapshot은 Phase·RunId·멤버·준비·도착 멤버·Stage를 보존하며 시각은 저장하지 않는다. Framework 실행 gate가 직렬화하는 상태에 별도 lock이나 queue를 추가하지 않는다.
 
 ## 개발 시 주의점
 

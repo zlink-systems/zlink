@@ -5,9 +5,19 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include <optional>
+#include <boost/uuid/random_generator.hpp>
+#include <boost/uuid/uuid_io.hpp>
+#include <algorithm>
 
 namespace MyGame
 {
+enum class RunPhase { Forming, Preparing, Entering, Active, Completed };
+NLOHMANN_JSON_SERIALIZE_ENUM(RunPhase, {{RunPhase::Forming, "Forming"}, {RunPhase::Preparing, "Preparing"}, {RunPhase::Entering, "Entering"}, {RunPhase::Active, "Active"}, {RunPhase::Completed, "Completed"}})
+inline std::string new_id(const std::string &prefix) {
+    auto value = boost::uuids::to_string(boost::uuids::random_generator()());
+    std::erase(value, '-'); return prefix + value;
+}
 struct Names
 {
     static constexpr auto mesh = "my-game-world";
@@ -18,6 +28,9 @@ struct Names
     static constexpr auto party_prefix = "party-";
     static constexpr auto dungeon_prefix = "dungeon-";
     static constexpr std::size_t maximum_members = 4;
+    static constexpr std::int64_t maximum_integer = 9007199254740991LL;
+    static constexpr std::int64_t final_stage = 3;
+    static std::string dungeon_id(const std::string &run) { return dungeon_prefix + run; }
 };
 struct Limits
 {
@@ -64,6 +77,10 @@ struct Rejection
     static constexpr auto not_leader = "not-leader";
     static constexpr auto not_ready = "not-ready";
     static constexpr auto join_rejected = "join-rejected";
+    static constexpr auto run_mismatch = "run-mismatch";
+    static constexpr auto run_not_active = "run-not-active";
+    static constexpr auto packet_not_allowed = "packet-not-allowed";
+    static constexpr auto integer_out_of_range = "integer-out-of-range";
 };
 inline bool nonblank (const std::string &value)
 {
@@ -133,9 +150,9 @@ struct JoinLobbyRequest
 struct CreatePartyRequest
 {
     static constexpr auto packet_name = "CreatePartyRequest";
-    std::string partyId;
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (CreatePartyRequest, partyId)
 };
+inline void to_json(nlohmann::json &j, const CreatePartyRequest&) { j = nlohmann::json::object(); }
+inline void from_json(const nlohmann::json&, CreatePartyRequest&) {}
 struct JoinPartyRequest
 {
     static constexpr auto packet_name = "JoinPartyRequest";
@@ -155,39 +172,81 @@ struct PartyView
     std::string partyId;
     std::vector<std::string> members;
     std::vector<bool> ready;
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (PartyView, partyId, members, ready)
+    RunPhase phase = RunPhase::Forming;
+    std::optional<std::string> runId;
 };
+inline void to_json(nlohmann::json &j, const PartyView& v) {
+    j["partyId"] = v.partyId;
+    j["members"] = v.members;
+    j["ready"] = v.ready;
+    j["phase"] = v.phase;
+    j["runId"] = v.runId ? nlohmann::json(*v.runId) : nlohmann::json(nullptr);
+}
+inline void from_json(const nlohmann::json &j, PartyView& v) {
+    j.at("partyId").get_to(v.partyId);
+    j.at("members").get_to(v.members);
+    j.at("ready").get_to(v.ready);
+    j.at("phase").get_to(v.phase);
+    if (j.at("runId").is_null()) v.runId.reset(); else v.runId = j.at("runId").get<std::string>();
+}
+
 struct DungeonView
 {
     static constexpr auto packet_name = "DungeonView";
     std::string dungeonId, nodeId, partyId;
     std::vector<std::string> members;
-    int stage = 0;
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (DungeonView, dungeonId, nodeId, partyId, members, stage)
+    std::int64_t stage = 0;
+    std::optional<std::string> runId;
+    RunPhase phase = RunPhase::Preparing;
 };
+inline void to_json(nlohmann::json &j, const DungeonView& v) {
+    j["dungeonId"] = v.dungeonId;
+    j["nodeId"] = v.nodeId;
+    j["partyId"] = v.partyId;
+    j["members"] = v.members;
+    j["stage"] = v.stage;
+    j["runId"] = v.runId ? nlohmann::json(*v.runId) : nlohmann::json(nullptr);
+    j["phase"] = v.phase;
+}
+inline void from_json(const nlohmann::json &j, DungeonView& v) {
+    j.at("dungeonId").get_to(v.dungeonId);
+    j.at("nodeId").get_to(v.nodeId);
+    j.at("partyId").get_to(v.partyId);
+    j.at("members").get_to(v.members);
+    j.at("stage").get_to(v.stage);
+    if (j.at("runId").is_null()) v.runId.reset(); else v.runId = j.at("runId").get<std::string>();
+    j.at("phase").get_to(v.phase);
+}
+
 struct PrepareDungeon
 {
     static constexpr auto packet_name = "PrepareDungeon";
     std::string partyId;
     std::vector<std::string> members;
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (PrepareDungeon, partyId, members)
+    std::string runId;
+    NLOHMANN_DEFINE_TYPE_INTRUSIVE (PrepareDungeon, partyId, members, runId)
 };
 struct DungeonPrepared
 {
     static constexpr auto packet_name = "DungeonPrepared";
-    std::string dungeonId;
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (DungeonPrepared, dungeonId)
+    std::string dungeonId, runId;
+    NLOHMANN_DEFINE_TYPE_INTRUSIVE (DungeonPrepared, dungeonId, runId)
 };
 struct JoinDungeon
 {
     static constexpr auto packet_name = "JoinDungeon";
-    std::string dungeonId, partyId;
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (JoinDungeon, dungeonId, partyId)
+    std::string dungeonId, runId;
+    NLOHMANN_DEFINE_TYPE_INTRUSIVE (JoinDungeon, dungeonId, runId)
 };
 struct ActionRejected
 {
     static constexpr auto packet_name = "ActionRejected";
     std::string reason;
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (ActionRejected, reason)
+    std::int32_t retryAfterMs = 0;
+    NLOHMANN_DEFINE_TYPE_INTRUSIVE (ActionRejected, reason, retryAfterMs)
 };
+struct DungeonMemberEntered { static constexpr auto packet_name = "DungeonMemberEntered"; std::string runId, playerId; NLOHMANN_DEFINE_TYPE_INTRUSIVE(DungeonMemberEntered, runId, playerId) };
+struct RunStarted { static constexpr auto packet_name = "RunStarted"; std::string runId; NLOHMANN_DEFINE_TYPE_INTRUSIVE(RunStarted, runId) };
+struct RunCompleted { static constexpr auto packet_name = "RunCompleted"; std::string runId; NLOHMANN_DEFINE_TYPE_INTRUSIVE(RunCompleted, runId) };
+struct EnterPartyRun { static constexpr auto packet_name = "EnterPartyRun"; std::string playerId; NLOHMANN_DEFINE_TYPE_INTRUSIVE(EnterPartyRun, playerId) };
 }

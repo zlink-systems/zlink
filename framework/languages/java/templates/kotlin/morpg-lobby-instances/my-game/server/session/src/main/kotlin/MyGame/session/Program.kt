@@ -10,6 +10,8 @@ import systems.zlink.framework.messaging.ZLinkMessage
 import systems.zlink.framework.spring.*
 import systems.zlink.framework.streams.*
 
+private val CLIENT_PACKETS = setOf("JoinLobbyRequest", "CreatePartyRequest", "JoinPartyRequest", "ReadyRequest", "EnterDungeonRequest", "AdvanceRequest", "ViewRequest", "SessionInfoRequest")
+
 @EnableZLinkFramework
 @SpringBootApplication(proxyBeanMethods = false)
 class Program {
@@ -44,6 +46,9 @@ class GameSession(private val session: ZLinkSessionContext, private val actors: 
         dispatch: ZLinkSessionDispatchContext,
         payload: ZLinkMessage,
     ) {
+        if (dispatch.packetName() !in CLIENT_PACKETS) {
+            session.client().kotlin().send(ActionRejected(Rules.PACKET_NOT_ALLOWED)).await(); return
+        }
         when (dispatch.packetName()) {
             SessionInfoRequest::class.java.simpleName -> {
                 val actor = session.actors().bound().single()

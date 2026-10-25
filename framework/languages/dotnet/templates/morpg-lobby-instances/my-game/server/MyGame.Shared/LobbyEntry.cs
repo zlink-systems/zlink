@@ -28,20 +28,20 @@ public sealed class LobbyEntry(IZLinkEntrySpotContext context, IZLinkSpotManager
         CancellationToken ct
     )
     {
-        if (string.IsNullOrWhiteSpace(partyId))
+        if (string.IsNullOrWhiteSpace(partyId) || (!create && await spots.FindAsync(partyId, ct) is null))
         {
             await actor
                 .Context.BoundSession.Send(new ActionRejected(Rejection.InvalidParty))
                 .Async();
             return;
         }
-        var id = GameNames.PartyId(partyId);
-        var result = await spots
-            .GetOrCreate(id, GameNames.PartyType)
-            .InMesh(GameNames.WorldMesh)
-            .Async(ct);
-        if (result.State == ZLinkSpotCreateState.Rejected)
-            throw new InvalidOperationException("Party creation rejected.");
+        var id = partyId;
+        if (create)
+        {
+            var result = await spots.GetOrCreate(id, GameNames.PartyType).InMesh(GameNames.WorldMesh).Async(ct);
+            if (result.State == ZLinkSpotCreateState.Rejected)
+                throw new InvalidOperationException("Party creation rejected.");
+        }
         actor.Context.JoinSpot(id, new PartyJoin(partyId, create)).Defer();
     }
 }
@@ -72,7 +72,7 @@ public sealed class CreateParty
         IZLinkMessageContext context,
         CreatePartyRequest request,
         CancellationToken ct
-    ) => spot.JoinAsync(actor, request.PartyId, true, ct);
+    ) => spot.JoinAsync(actor, GameNames.NewPartyId(), true, ct);
 }
 
 public sealed class JoinParty

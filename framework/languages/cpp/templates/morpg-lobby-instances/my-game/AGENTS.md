@@ -82,55 +82,23 @@ Relocation changes an object's execution host; drain moves a host's workload els
 
 ## Request flow
 
-Requests in the example game follow this path. Reading the code along this path before adding or transferring a feature locates the places to change.
+1. Session binds the Player Actor after JoinLobbyRequest and relays allowed client packets only.
+2. Entry issues `party-<32hex>` for CreatePartyRequest and creates its Party Spot. JoinPartyRequest resolves existing parties only; unknown IDs return `invalid-party`.
+3. Party domain checks leader and readiness. Forming or Completed issues a new `run-<32hex>` and moves to Preparing; repeated entry reuses that RunId.
+4. Party Spot gets or creates `dungeon-<RunId>` and prepares its roster. Identical preparation returns the same DungeonPrepared. It moves to Entering and sends JoinDungeon to members still in the party.
+5. When all members arrive, Dungeon moves to Active and sends RunStarted to Party Spot. Advance reaches FinalStage (3), moves to Completed and sends RunCompleted. Party Spot retains members during a run.
+6. Reconnect returns the current view. Relocation preserves domain snapshots; update observes relocation and safe shutdown before replacing the host.
 
-1. The client connects to the Session node over STREAM and sends the first packet, `JoinLobbyRequest`. `Session::on_packet` checks the first packet name, calls `get_or_create` for the Player Actor by `playerId`, binds it with `bind_or_get`, and relays the original packet.
-2. A new Actor starts in the Entry Spot `Entry`. `Entry::login` checks the identity and answers with `LobbyView`.
-3. `CreatePartyRequest` and `JoinPartyRequest` are handled by `Entry::create` and `Entry::enter`. `Entry::join` rejects a blank party ID with `ActionRejected`, calls `get_or_create` for the Party Spot `party-<id>` (`Names::party_prefix`), and requests `join_spot(...).defer()` with `PartyJoin`.
-4. `Party::on_actor_join` admits the player through `PartyState::join` or rejects it, and `Party::on_actor_joined` broadcasts a `PartyView` to the members through the Actor client; `Party::deliver` forwards it to the bound Session. `Party::show` answers `ViewRequest`, `Party::reconnect` answers the first packet replayed on reconnect, and `Party::ready` records `ReadyRequest` and broadcasts the new view.
-5. `EnterDungeonRequest` is handled by `Party::enter`. When `PartyState::entry_rejection` finds no reason to refuse (the requester leads the party and every member is ready), it calls `get_or_create` for the Dungeon, asks it with `request_to_spot` and `PrepareDungeon`, and sends `JoinDungeon` to every member through the Actor client. Otherwise it answers `ActionRejected` with `not-leader` or `not-ready`.
-6. Each member's `Party::travel` requests `join_spot(...).defer()` for the Dungeon. `Dungeon::on_actor_join` admits the party members and `Dungeon::on_actor_joined` sends the `DungeonView`; `Dungeon::advance` raises the stage and sends the new view to every member.
-7. To replace a node, `drain` in `NodeControl` requests relocation. Framework takes the game state from `capture` in `PartyRelocation` and `DungeonRelocation` (both `StateRelocation` aliases) and calls `restore` on another node. The `Player` factory is registered with `recreate_on_relocation`, because `Player` holds no state.
+## Extending the MORPG domain
 
-## Developing from this sample
+Extend this template's domain to build a MORPG server. Run the build, domain tests and e2e before changing gameplay.
 
-This sample shows how the features work together, so read and run it rather than turning it into your game. Start your own project from the C++ starter: choose C++ in the Initializer at [ZLink Start](https://zlink.systems/start), or use `framework/languages/cpp/templates/starter/my-game` in the ZLink repository. Then transfer the features you need from this sample one at a time. The starter's `AGENTS.md` owns the choice between structures; this section covers only `morpg-lobby-instances`. Keep this sample unchanged next to your project as a reference.
+- Extend party decisions in `server/lobby/domain.hpp` and dungeon decisions in `server/instance/domain.hpp`. Party Spot retains Members, Ready, Phase and RunId while Actors are in a dungeon. Dungeon state owns arrivals and Stage.
+- Add shared contracts and constants in `server/shared/contracts.hpp`. The server issues UUID party and run IDs. Use the default Framework serializer: enum values are names and absent RunId is JSON null. Integers are bounded by 9,007,199,254,740,991.
+- Add client packet names to the Session allowlist in `server/session/session.hpp` and register their destination handlers. Keep preparation, travel and run notifications outside this allowlist.
+- Add observations to `e2e/scenarios.hpp` and boundaries to `e2e/domain-checks.hpp`. Run `./run-e2e.sh --check-domain` for domain tests. Keep scenario IDs synchronized with README and `zlink.structure.json`.
 
-### Run the sample first
-
-Before transferring anything, run the build and e2e once with the [Development commands](#development-commands) to confirm the downloaded sample works and to see its behavior. This result is the baseline for comparison. If it fails, compare the failure with Known issues in the [README](README.md) first.
-
-### Features to transfer
-
-Feature names match the feature table in the starter's `AGENTS.md`. Paths are relative to this directory. The starter has one Session node and the `connect` scenario only, so the last column lists what grows in the starter with each feature.
-
-| Feature | File in this sample | What to transfer | What to grow in the starter alongside |
-| --- | --- | --- | --- |
-| Typed messages | `server/shared/contracts.hpp` | The structs of the features you adopt: `JoinLobbyRequest`, `CreatePartyRequest`, `JoinPartyRequest`, `PartyJoin`, `LobbyView`, `PartyView`, `ReadyRequest`, `EnterDungeonRequest`, `PrepareDungeon`, `DungeonPrepared`, `JoinDungeon`, `AdvanceRequest`, `ViewRequest`, `DungeonView`, `ActionRejected`; `SessionInfoRequest` and `SessionInfo` only if your client needs them | The `Names` and `Rejection` constants that the messages refer to |
-| Actor | `Player`, `PlayerFactory` in `server/shared/player.hpp` | The minimal player Actor: `Player::on_join_completed` reports a rejected or failed join, and `PlayerFactory` creates it | A new `server/lobby/` role with its `main.cpp`, `server/config/` files, and an entry in the `CMakeLists.txt` role list; the Actor factory registration in `main.cpp`; the `nodes` declaration in `zlink.structure.json` and the structure check in `e2e/structure.hpp` |
-| Spot | `Party` in `server/lobby/party.hpp`, `PartyState` in `server/lobby/domain.hpp` | `Party` with `PartyState` (members, readiness, the leader and readiness entry rule) and the handlers `show`, `ready`, `enter`, and the `deliver` forwarder | The Spot factory registration in `main.cpp`; the `party` Spot declaration in `zlink.structure.json` that the structure check compares with the node configuration; the `party` scenario |
-| Entry and first admission | `Entry` in `server/shared/entry.hpp`, `Party::reconnect` in `server/lobby/party.hpp` | `Entry::login`, `Entry::create`, and `Entry::enter` with the Party creation in `Entry::join`, and the identity check and view resend of `Party::reconnect` and `Dungeon::reconnect` | The `add_entry_spot` registration and the `entry` declarations; a first-entry scenario (`party`) and a `reconnect` scenario that compares state after reconnection |
-| Session binding | `server/session/session.hpp` | The first-packet check, then find or create the Actor, `bind_or_get`, and relay the original typed packet | The same first-packet type as `Entry::login`; transfer it into the starter's `server/session/session.hpp` |
-| Host relocation | `PartyRelocation` in `server/lobby/party.hpp`, `DungeonRelocation` in `server/instance/dungeon.hpp`, `StateRelocation` in `server/shared/relocation.hpp`, `NodeControl` in `server/shared/hosting.hpp` | The `StateRelocation` adapter for `PartyState` and `DungeonState`, `recreate_on_relocation` for the stateless Actor, and the `drain` and `shutdown` controls | The `preserve_state_with` registrations in `main.cpp`; the `update` scenario, which checks that connections and state survive a server replacement and that the replacement node accepts new work |
-| Dynamic dungeon | `Party::enter`, `Party::travel` in `server/lobby/party.hpp`, `server/instance/dungeon.hpp`, `server/instance/main.cpp` | The dynamic User Spot creation pattern (`get_or_create`, then `request_to_spot` with `PrepareDungeon`), the member-only admission of `Dungeon`, and `DungeonState` | A new `server/instance/` role with its config (`DungeonCapacity`) and `CMakeLists.txt` entry; the dynamic `dungeon` Spot and the `GetOrCreate` edge in `zlink.structure.json` |
-
-`drain` and `shutdown` are transferred together with `NodeControl`.
-
-### Transfer order and rules
-
-Transfer one row at a time and run the build, the structure check, and the related e2e scenario after each. Add a scenario ID to the `Scenario` enum and `scenario_order` in `e2e/structure.hpp`, to the `switch` and the usage message in `e2e/main.cpp`, to `run.scenarios`, and to the selection examples in `run.commands` of `zlink.structure.json` together. Judge results by the replies and events actually received; do not make tests pass with fixed sleeps or longer deadlines.
-
-Start with the message contracts. Define the packet structs in `server/shared/contracts.hpp` first, each with a `packet_name` and its JSON conversion, then move each handler that fails to compile to the new messages. When you change the first-entry packet, update the first-packet check in `Session::on_packet` in `server/session/session.hpp` and `Entry::login`, `Party::reconnect`, and `Dungeon::reconnect` to receive the same type.
-
-Keep each piece of state in the object that decides it. Party members and readiness belong in `Party` through `PartyState`; the party roster and stage of a Dungeon belong in `Dungeon` through `DungeonState`. `Player` holds no application state. When you change state fields, update that object's state struct with its JSON conversion and the `capture` and `restore` of its relocation adapter together. A missing field disappears after relocation, and the `update` scenario detects the loss.
-
-Declare exactly one Entry in `zlink.structure.json` for each node that registers `Entry` (the Lobby and Instance nodes), and keep the dynamic Party and Dungeon type declarations complete; the structure check rejects a missing Entry owner and a missing dynamic type. Initial Actor placement can use every node that registers the `Player` factory, which is why every such node also registers `Entry`.
-
-Both Instance nodes set `DungeonCapacity` to 1 in the e2e configuration, so a replacement must accept a fresh Dungeon while the surviving node holds the relocated one; placement itself remains a Framework decision.
-
-To name roles such as Lobby, Party, or Dungeon differently from this sample, change the type names, `Names`, `server/config/`, `zlink.structure.json`, and the role list in `CMakeLists.txt` at once. Do the renaming in its own change, separate from transferring a feature, so failures are easier to trace.
-
-If `update` fails after a transfer, first check whether the snapshot is missing any state, then use the message flow in [Debugging](#debugging) to find the first failing step.
+Clients request actions; domains decide outcomes. Rejections leave state unchanged and return `ActionRejected(Reason, RetryAfterMs)`. This structure has no time restrictions, so RetryAfterMs is a 32-bit zero. Relocation snapshots preserve Phase, RunId, Members, Ready, arrivals and Stage, with no timestamps. Keep Framework execution ownership and do not add a second lock or queue over serialized state.
 
 ## Development considerations
 

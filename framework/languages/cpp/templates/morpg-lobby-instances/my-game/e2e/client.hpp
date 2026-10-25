@@ -87,10 +87,10 @@ class Client
                         == ready;
         });
     }
-    DungeonView dungeon_view (const std::string &id, int stage)
+    DungeonView dungeon_view (const std::string &id, std::int64_t stage)
     {
         return receive<DungeonView> (
-          [=] (const auto &view) { return view.partyId == id && view.stage == stage; });
+          [=] (const auto &view) { return view.partyId == id && view.stage == stage && view.phase == (stage == Names::final_stage ? RunPhase::Completed : RunPhase::Active); });
     }
     void close ()
     {

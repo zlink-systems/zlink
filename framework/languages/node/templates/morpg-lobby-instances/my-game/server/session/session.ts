@@ -8,14 +8,20 @@ import type {
   ZLinkSessionDispatchContext,
   ZLinkSessionFactory
 } from '@zlink-systems/framework';
-import { Names, PacketNames } from '../shared/constants';
-import { JoinLobbyRequest, SessionInfo } from '../shared/messages';
+import { Names, PacketNames, Rejection } from '../shared/constants';
+import { JoinLobbyRequest, SessionInfo, ActionRejected } from '../shared/messages';
+const clientPackets: readonly string[] = [PacketNames.joinLobbyRequest, PacketNames.createPartyRequest,
+  PacketNames.joinPartyRequest, PacketNames.readyRequest, PacketNames.enterDungeonRequest,
+  PacketNames.advanceRequest, PacketNames.viewRequest, PacketNames.sessionInfoRequest];
 export class Session implements ZLinkSession {
   constructor(
     readonly context: ZLinkSessionContext,
     private readonly actors: ZLinkActorManager
   ) {}
   async onDispatch(dispatch: ZLinkSessionDispatchContext, payload: ZLinkMessage): Promise<void> {
+    if (!clientPackets.includes(dispatch.packetName)) {
+      await this.context.client.send(new ActionRejected(Rejection.packetNotAllowed)).submit(); return;
+    }
     if (!this.context.actors.bound.length) {
       if (dispatch.packetName !== PacketNames.joinLobbyRequest)
         throw new Error('JoinLobbyRequest must be first');

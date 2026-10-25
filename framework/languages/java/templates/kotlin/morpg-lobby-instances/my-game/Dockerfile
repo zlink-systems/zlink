@@ -4,7 +4,7 @@ ARG DOCKER_CLI_IMAGE=docker:28.5.1-cli
 FROM ${JDK_IMAGE} AS build
 WORKDIR /template
 COPY . .
-RUN chmod +x gradlew && ./gradlew --no-daemon installDist
+RUN chmod +x gradlew && ./gradlew --no-daemon installDist :server:lobby:test
 
 FROM ${JRE_IMAGE} AS node
 WORKDIR /template

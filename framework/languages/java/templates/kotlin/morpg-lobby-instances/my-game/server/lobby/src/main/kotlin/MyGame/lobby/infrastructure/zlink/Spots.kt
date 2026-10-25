@@ -22,7 +22,7 @@ class Party(
     ): ZLinkSpotActorJoinResult {
         val join = request.decode<PartyJoin>()
         return if (
-            Names.PARTY_PREFIX + join.partyId == context.spotId() && state.join(actorId, join)
+            join.partyId == context.spotId() && state.join(actorId, join)
         )
             ZLinkSpotActorJoinResult.accept()
         else ZLinkSpotActorJoinResult.reject()
@@ -39,7 +39,7 @@ class Party(
     }
 
     suspend fun ready(actor: Player) {
-        state.ready.add(actor.context.actorId())
+        state.markReady(actor.context.actorId())
         broadcast()
     }
 
@@ -49,11 +49,16 @@ class Party(
     }
 
     suspend fun enter(actor: Player) {
-        state.entryRejection(actor.context.actorId())?.let {
-            actor.context.boundSession().kotlin().send(ActionRejected(it)).await()
+        enterPlayer(actor.context.actorId())
+    }
+    suspend fun enterPlayer(playerId: String) {
+        state.enter(playerId)?.let {
+            actors.kotlin().sendToActor(playerId, ActionRejected(it)).await()
             return
         }
-        val id = Names.DUNGEON_PREFIX + state.partyId
+        if (state.phase == RunPhase.Active) { actors.kotlin().sendToActor(playerId, state.view()).await(); return }
+        val runId = requireNotNull(state.runId)
+        val id = Names.dungeonId(runId)
         val members = state.members.toList()
         val partyId = state.partyId
         val result = spots.kotlin().getOrCreate(id, Names.DUNGEON).inMesh(Names.MESH).await()
@@ -62,11 +67,11 @@ class Party(
             context
                 .outbound()
                 .kotlin()
-                .requestToSpot<DungeonPrepared>(id, PrepareDungeon(partyId, members))
+                .requestToSpot<DungeonPrepared>(id, PrepareDungeon(runId, partyId, members))
                 .await()
-        check(prepared.dungeonId == id) { "Dungeon preparation identity mismatch" }
-        val travel = JoinDungeon(id, partyId)
-        for (member in members) actors.kotlin().sendToActor(member, travel).await()
+        check(prepared.dungeonId == id && state.prepared(prepared.runId) == null) { "Dungeon preparation identity mismatch" }
+        val travel = JoinDungeon(id, runId)
+        for (member in members.filter { it !in state.entered }) actors.kotlin().sendToActor(member, travel).await()
     }
 }
 

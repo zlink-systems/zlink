@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { domainChecks } from './domain-checks';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createWriteStream, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
@@ -117,6 +118,8 @@ async function main(): Promise<void> {
     checkStructure(args[1]);
     return;
   }
+  domainChecks();
+  if (args[0] === "--check-domain") return;
   let selected: readonly string[] = Scenarios;
   if (args.length) {
     assert.equal(args.length, 2);

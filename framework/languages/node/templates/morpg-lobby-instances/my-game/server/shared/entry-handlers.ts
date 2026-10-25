@@ -3,7 +3,7 @@ import { zlinkEntrySpotActorSendHandler } from '@zlink-systems/nestjs';
 import type { ZLinkMessageContext } from '@zlink-systems/framework';
 import { PacketNames } from './constants';
 import {
-  LobbyView,
+  LobbyView, newPartyId,
   type JoinLobbyRequest,
   type CreatePartyRequest,
   type JoinPartyRequest
@@ -38,9 +38,9 @@ export class CreateParty {
     spot: Entry,
     actor: Player,
     _context: ZLinkMessageContext,
-    request: CreatePartyRequest
+    _request: CreatePartyRequest
   ): Promise<void> {
-    await spot.join(actor, request.partyId, true);
+    await spot.join(actor, newPartyId(), true);
   }
 }
 @Injectable()
