@@ -7923,10 +7923,11 @@ public sealed partial class EntrySpotActorDispatchTests
     {
         var node = new CapturingSpotNode();
         var (runtime, actorRef) = await CreateStartedRuntimeAsync(node);
+        ZLinkActorRuntimeState? acceptedState = null;
         try
         {
             _ = RegisterProbeActor(runtime, actorRef);
-            var acceptedState = runtime.GetOrCreateActorState(actorRef.ActorId);
+            acceptedState = runtime.GetOrCreateActorState(actorRef.ActorId);
             var parts = CreateActorRequestParts(
                 actorRef,
                 "request",
@@ -7970,7 +7971,15 @@ public sealed partial class EntrySpotActorDispatchTests
         }
         finally
         {
-            await runtime.StopAsync(CancellationToken.None);
+            try
+            {
+                if (acceptedState is not null)
+                    await acceptedState.InvalidateRuntimeGenerationAfterDispatchesAsync();
+            }
+            finally
+            {
+                await runtime.StopAsync(CancellationToken.None);
+            }
         }
     }
 
