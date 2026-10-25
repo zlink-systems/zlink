@@ -323,20 +323,33 @@ message operation's contract — tracing doesn't add retry or route
 re-selection. Tracing doesn't change routing, handler dispatch, or
 lifecycle decisions.
 
-A worker doesn't wait for a slow or failed telemetry provider. If a
-bounded telemetry queue fills up, it can drop a normal trace and
-increment `zlink.observability.events.overflow`. Provider failure isn't a
-message operation failure.
+**Message processing doesn't wait for a telemetry provider.** Each process
+has one telemetry delivery boundary. The processing point that builds a
+trace is done once it hands an immutable snapshot of one record to this
+boundary. Calls to a logger, span, observer, exporter, and telemetry
+provider, and provider-failure handling, run only on this boundary's
+execution resource. That execution resource isn't an application worker,
+completion processing, the deadline scheduler, or the resource that
+delivers runtime status. Without a provider, no allocation is made just for
+the trace.
 
-An implementation logging a provider failure limits how many times the
-same error is recorded. It doesn't call the same provider again to create
-a trace for this log. Without a provider, it avoids an allocation made
-just for the trace.
+| Situation | Rule |
+|---|---|
+| Retention | Apart from the one record in progress, at most 8192 records not yet delivered to a provider are kept. A record handed to the execution resource but not yet received by a provider counts toward this limit. The limit isn't a public setting. |
+| Saturation | When the limit is reached, the new record is dropped without distinguishing normal, error, and drop records, and the dropped count is added to `zlink.observability.events.overflow` (`source=message_flow`). The processing point that hands over the record doesn't wait, retry, or call a provider. |
+| Provider failure | It isn't a message operation failure. During the boundary's lifetime, only the first failure of each provider role (logger, trace, metric) is recorded through the fallback; later failures only add to the count. The fallback is the application's fallback logger or process stderr, not the failed provider. Failure of the fallback record also doesn't change the message operation result, dispatch, or lifecycle. |
+| Host shutdown | Record submission for that host closes and records not yet delivered are dropped. Records dropped at shutdown aren't counted as overflow. A provider call in progress isn't awaited or forcibly ended. That call references only the immutable snapshot and the provider, not the host runtime. |
 
-When the provider failure itself is recorded, the implementation uses the
-application's fallback logger or process stderr, not the failed provider.
-Failure of that fallback record also doesn't change the message-operation
-result, dispatch, or lifecycle.
+"Recorded exactly once" in this section and elsewhere means one record is
+handed to this boundary exactly once. That record can still be dropped
+under the saturation and host-shutdown rules.
+
+In Node, this boundary's execution resource is a worker thread. The
+standard telemetry bootstrap read at process start (a module preloaded with
+`--require` or `--import`) also runs in this worker, and the Framework
+delivers records only to the provider installed in that worker. The C++
+application logging async setting (capacity and the overflow policy,
+including `block`) doesn't apply to this boundary.
 
 A trace attribute only includes the identifier needed for diagnosis, and
 doesn't reference a caller buffer or runtime object after message
