@@ -106,12 +106,15 @@ internal sealed partial class ZLinkEntrySpotActivation
 
     private bool IsDisposed => Volatile.Read(ref _disposed) != 0;
 
+    // Cancel current operations while Actor terminal barriers still use the gate.
+    internal void CancelActiveOperations() => _stopSource.Cancel();
+
     internal void RequestStop()
     {
         if (IsDisposed)
             return;
         _serial?.Complete();
-        _stopSource.Cancel();
+        CancelActiveOperations();
     }
 
     internal void InitializeRuntimeResources()

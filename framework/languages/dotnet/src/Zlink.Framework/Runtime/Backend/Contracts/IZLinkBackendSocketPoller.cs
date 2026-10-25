@@ -13,7 +13,11 @@ internal enum ZLinkBackendSocketReadiness
 // Framework receive loops use this seam to wait for native socket readiness.
 // The .NET backend implementation owns the public Systems.Zlink poller and the
 // socket registration; callers only receive the readiness flags they need.
-internal interface IZLinkBackendSocketPoller : IDisposable
+internal interface IZLinkBackendSocketPoller : IAsyncDisposable
 {
-    ZLinkBackendSocketReadiness Wait(TimeSpan timeout);
+    ValueTask<ZLinkBackendSocketReadiness> WaitAsync(
+        TimeSpan timeout,
+        CancellationToken cancellationToken
+    );
+    ValueTask ResumeAsync();
 }

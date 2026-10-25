@@ -87,8 +87,7 @@ internal sealed class ZLinkBackendStreamReceive(
 
 internal interface IZLinkBackendSocketMonitor : IAsyncDisposable
 {
-    bool Wait(TimeSpan timeout) =>
-        throw new NotSupportedException("The backend socket monitor does not provide a poll wait.");
+    IZLinkBackendSocketPoller CreateReceivePoller();
 
     bool TryRecv(out ZLinkBackendSocketMonitorEvent monitorEvent);
 }

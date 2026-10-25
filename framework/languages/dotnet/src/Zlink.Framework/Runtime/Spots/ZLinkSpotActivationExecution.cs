@@ -159,8 +159,13 @@ internal abstract partial class ZLinkSpotActivation
     private async Task FinalizeAsync()
     {
         var failures = new List<Exception>();
-        Capture(RequestStop);
+        Capture(CancelActiveOperations);
         await CaptureAsync(DrainNativeRoutesAsync).ConfigureAwait(false);
+        // Closing callbacks have finished with membership intact. Actor terminal
+        // barriers still need this parent's gate before its executor can end.
+        await CaptureAsync(() => _runtime.InvalidateSpotActorRuntimeAsync(this))
+            .ConfigureAwait(false);
+        Capture(RequestStop);
         await CaptureAsync(_serial.DisposeAsync).ConfigureAwait(false);
         if (await ReleaseLocalResourcesAsync().ConfigureAwait(false) is { } releaseFailure)
             failures.AddRange(releaseFailure.InnerExceptions);

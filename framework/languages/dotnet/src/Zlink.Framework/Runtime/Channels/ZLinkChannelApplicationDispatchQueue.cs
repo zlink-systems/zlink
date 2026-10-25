@@ -21,6 +21,7 @@ internal sealed class ZLinkChannelApplicationDispatchQueue<TWork> : IAsyncDispos
     private readonly CancellationTokenSource _stop;
     private readonly string _name;
     private readonly Task _worker;
+    private readonly ZLinkProcessExecutionPool.ApplicationSource _applicationSource;
     private readonly Func<TWork, CancellationToken, ValueTask> _dispatch;
     private readonly Action<TWork> _reject;
     private readonly CancellationToken _disposeDeadline;
@@ -46,9 +47,11 @@ internal sealed class ZLinkChannelApplicationDispatchQueue<TWork> : IAsyncDispos
         // The queue is built inside state-lane turns (fanout subscriber registration). Its worker
         // runs application handlers, so it must not inherit that turn's lane ownership
         // (06-state-ownership-and-lanes §6 type 2).
-        _worker = ZLinkRuntimeTaskRunner.WithoutExecutionContextFlow(() =>
-            Task.Run(() => RunAsync(_stop.Token).AsTask(), CancellationToken.None)
+        _applicationSource = ZLinkProcessExecutionPool.CreateApplicationSource(
+            _ => RunTurnAsync(_stop.Token),
+            Report
         );
+        _worker = _applicationSource.Completion;
     }
 
     internal ValueTask<bool> PostAsync(TWork payload, CancellationToken cancellationToken)
@@ -66,6 +69,7 @@ internal sealed class ZLinkChannelApplicationDispatchQueue<TWork> : IAsyncDispos
             return ValueTask.FromResult(false);
         }
 
+        _applicationSource.Signal();
         return ValueTask.FromResult(true);
     }
 
@@ -76,6 +80,8 @@ internal sealed class ZLinkChannelApplicationDispatchQueue<TWork> : IAsyncDispos
 
         _queue.Writer.TryComplete();
         await _stop.CancelAsync().ConfigureAwait(false);
+
+        var disposal = _applicationSource.DisposeAsync().AsTask();
 
         // Accepted handlers deliver their replies until the host deadline; the reply path
         // closes after them (client-server channel section 6, steps 3 and 4).
@@ -89,59 +95,82 @@ internal sealed class ZLinkChannelApplicationDispatchQueue<TWork> : IAsyncDispos
             // The host deadline expired while a handler ignores cancellation. The worker is
             // observed late, and its stop source is released only after it completes.
             ZLinkUnawaitedSubmit.Observe(
-                new ValueTask(_worker),
+                new ValueTask(CompleteLateStopAsync(disposal)),
                 $"channel-application-dispatch-late-stop:{_name}",
                 _errorSink
             );
-            _ = _worker.ContinueWith(
-                static (_, state) => ((CancellationTokenSource)state!).Dispose(),
-                _stop,
-                CancellationToken.None,
-                TaskContinuationOptions.ExecuteSynchronously,
-                TaskScheduler.Default
-            );
             return;
         }
+        catch
+        {
+            await CompleteLateStopAsync(disposal).ConfigureAwait(false);
+            throw;
+        }
 
-        await ReplyGate.CloseAsync().ConfigureAwait(false);
-        _stop.Dispose();
+        await CompleteLateStopAsync(disposal).ConfigureAwait(false);
     }
 
-    private async ValueTask RunAsync(CancellationToken cancellationToken)
+    private ValueTask RunTurnAsync(CancellationToken cancellationToken)
+    {
+        for (
+            var count = 0;
+            count < ZLinkReceiveBatchBudget.MaximumRecords && _queue.Reader.TryRead(out var work);
+            count++
+        )
+        {
+            if (cancellationToken.IsCancellationRequested)
+            {
+                Reject(work);
+                continue;
+            }
+            try
+            {
+                var result = _dispatch(work.Payload, cancellationToken);
+                if (!result.IsCompleted)
+                    return CompleteDispatchAsync(result, cancellationToken);
+                result.GetAwaiter().GetResult();
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
+            catch (Exception exception)
+            {
+                Report(exception);
+            }
+        }
+        if (_queue.Reader.TryPeek(out _))
+            _applicationSource.Signal();
+        return ValueTask.CompletedTask;
+    }
+
+    private async ValueTask CompleteDispatchAsync(
+        ValueTask dispatch,
+        CancellationToken cancellationToken
+    )
     {
         try
         {
-            await foreach (
-                var work in _queue.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false)
-            )
-            {
-                if (cancellationToken.IsCancellationRequested)
-                {
-                    Reject(work);
-                    while (_queue.Reader.TryRead(out var pending))
-                        Reject(pending);
-                    break;
-                }
-                try
-                {
-                    await _dispatch(work.Payload, cancellationToken).ConfigureAwait(false);
-                }
-                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-                { }
-                catch (Exception exception)
-                {
-                    Report(exception);
-                }
-            }
+            await dispatch.ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
+        catch (Exception exception)
+        {
+            Report(exception);
+        }
         finally
         {
-            Interlocked.Exchange(ref _stopped, 1);
-            _queue.Writer.TryComplete();
-            while (_queue.Reader.TryRead(out var pending))
-                Reject(pending);
+            if (_queue.Reader.TryPeek(out _))
+                _applicationSource.Signal();
         }
+    }
+
+    private async Task CompleteLateStopAsync(Task disposal)
+    {
+        var failures = new ZLinkFailureCollector();
+        await failures.CaptureAsync(() => new ValueTask(disposal)).ConfigureAwait(false);
+        while (_queue.Reader.TryRead(out var pending))
+            failures.Capture(() => Reject(pending));
+        await failures.CaptureAsync(ReplyGate.CloseAsync).ConfigureAwait(false);
+        failures.Capture(_stop.Dispose);
+        failures.ThrowIfAny();
     }
 
     private void Reject(DispatchWork<TWork> work)
@@ -162,7 +191,12 @@ internal sealed class ZLinkChannelApplicationDispatchQueue<TWork> : IAsyncDispos
         {
             _errorSink.ReportRuntimeTaskException(_name, exception);
         }
-        catch { }
+        catch (Exception reportingFailure)
+        {
+            throw ReferenceEquals(exception, reportingFailure)
+                ? exception
+                : new AggregateException(exception, reportingFailure);
+        }
     }
 
     private readonly record struct DispatchWork<TPayload>(TPayload Payload);

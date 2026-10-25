@@ -68,18 +68,21 @@ public sealed partial class StatefulServiceRuntimeTests
         await ObserveAsync(() =>
             owner.Status().AdmittedPeerCount == 1 && peer.Status().AdmittedPeerCount == 1
         );
+        Assert.Equal(
+            SubmitResult.Ok,
+            owner.SendToNode(peer.RoutingId, [Message.From("before-disconnect"u8)])
+        );
+        await ObserveAsync(() => peer.Status().PendingApplicationMessages != 0);
         poller.Arm();
         owner.SignalReceiveOwner();
+        Task? peerStop = null;
         try
         {
             await poller.Held.Task.WaitAsync(TimeSpan.FromSeconds(5));
             Assert.False(poller.HeldRouteEvent);
-            Assert.Equal(
-                SubmitResult.Ok,
-                owner.SendToNode(peer.RoutingId, [Message.From("before-disconnect"u8)])
-            );
-            await ObserveAsync(() => peer.Status().PendingApplicationMessages != 0);
             captured.Router!.DisconnectRid(peer.RoutingId);
+            // Stop the peer's connection intent without waiting for source removal.
+            peer.DisconnectPeer(owner.RoutingId);
             await ObserveAsync(() =>
             {
                 try
@@ -93,7 +96,8 @@ public sealed partial class StatefulServiceRuntimeTests
                     return true;
                 }
             });
-            await peer.DisposeAsync();
+            // Removal also uses the shared receive role. Join after releasing it.
+            peerStop = peer.DisposeAsync().AsTask();
             Assert.Equal(1U, owner.Status().AdmittedPeerCount);
 
             // A native timer advances beyond the admitted peer's liveness deadline.
@@ -125,6 +129,8 @@ public sealed partial class StatefulServiceRuntimeTests
         finally
         {
             poller.ReleaseAll();
+            if (peerStop is not null)
+                await peerStop;
         }
 
         await using var sender = NewNode(context, "liveness-after-cleanup");

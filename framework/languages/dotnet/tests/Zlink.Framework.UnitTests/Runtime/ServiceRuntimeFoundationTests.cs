@@ -2779,8 +2779,11 @@ public sealed class ServiceRuntimeFoundationTests
                 EffectiveMaxQueuedApplicationJobs: 1
             )
         );
+        // The process owns this poller until both logical node sources leave it.
+        using var receivePoller = new PausedReceivePoller(
+            RoutingId.From("orders-pre-receive-target")
+        );
         await using var source = new ZLinkManagedMeshNode(context, "orders");
-        using var receivePoller = new PausedReceivePoller();
         await using var target = new ZLinkManagedMeshNode(
             context,
             "orders",
@@ -3983,7 +3986,7 @@ public sealed class ServiceRuntimeFoundationTests
         }
     }
 
-    private sealed class PausedReceivePoller : IPoller
+    private sealed class PausedReceivePoller(RoutingId targetRoutingId) : IPoller
     {
         private readonly IPoller _inner = Systems.Zlink.Zlink.CreatePoller();
         private readonly ManualResetEventSlim _resumeReceive = new(false);
@@ -4020,7 +4023,8 @@ public sealed class ServiceRuntimeFoundationTests
 
         public void Add(IZlinkSocket socket, PollEventFlags events, nuint slot)
         {
-            _socketSlot = slot;
+            if (socket is IRouterSocket router && router.GetRoutingId().Equals(targetRoutingId))
+                _socketSlot = slot;
             _inner.Add(socket, events, slot);
         }
 

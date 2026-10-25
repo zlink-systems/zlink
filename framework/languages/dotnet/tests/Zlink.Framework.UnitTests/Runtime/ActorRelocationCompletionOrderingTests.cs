@@ -4,15 +4,21 @@ using Zlink.Framework.Runtime.Dispatch;
 
 namespace Zlink.Framework.UnitTests.Runtime;
 
-public sealed class ActorRelocationCompletionOrderingTests
+public sealed class ActorRelocationCompletionOrderingTests : IAsyncLifetime
 {
+    private readonly ActorStateLifetime _states = new();
+
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public Task DisposeAsync() => _states.DisposeAsync().AsTask();
+
     private static TaskCompletionSource Signal() =>
         new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     [Fact]
     public async Task Active_durable_turn_cannot_bypass_the_actor_queue()
     {
-        var mailbox = new ZLinkActorSerialExecutor();
+        await using var mailbox = new ZLinkActorSerialExecutor();
         Task<ZLinkActorSerialExecutor.Turn>? next = null;
         var bypassed = true;
         var prefix = mailbox.AdmitDurablePrefix(
@@ -36,7 +42,7 @@ public sealed class ActorRelocationCompletionOrderingTests
     [InlineData(true)]
     public async Task Durable_failure_reaches_the_runtime_reporter_once(bool preparationFails)
     {
-        var mailbox = new ZLinkActorSerialExecutor();
+        await using var mailbox = new ZLinkActorSerialExecutor();
         var failure = new InvalidOperationException("durable record failed");
         var reported = new TaskCompletionSource<Exception>(
             TaskCreationOptions.RunContinuationsAsynchronously
@@ -70,7 +76,7 @@ public sealed class ActorRelocationCompletionOrderingTests
     [Fact]
     public async Task Completed_durable_turn_cannot_bypass_a_later_actor_turn()
     {
-        var mailbox = new ZLinkActorSerialExecutor();
+        await using var mailbox = new ZLinkActorSerialExecutor();
         ExecutionContext? captured = null;
         var prefix = mailbox.AdmitDurablePrefix(
             new[]
@@ -98,7 +104,7 @@ public sealed class ActorRelocationCompletionOrderingTests
         using var host = new ZLinkApplicationJobQueue(
             new(ZLinkApplicationJobQueueProfile.Balanced, 1, 1, 1)
         );
-        var mailbox = new ZLinkActorSerialExecutor();
+        await using var mailbox = new ZLinkActorSerialExecutor();
         var entered = Signal();
         var finish = Signal();
         var order = new List<string>();
@@ -144,7 +150,7 @@ public sealed class ActorRelocationCompletionOrderingTests
     [Fact]
     public async Task Join_completion_keeps_its_lifecycle_position_ahead_of_the_durable_prefix()
     {
-        var state = new ZLinkActorRuntimeState("actor-1");
+        var state = _states.Track(new ZLinkActorRuntimeState("actor-1"));
         state.BindNativeActorRef(new ZLinkBackendActorRef(RoutingId.From("target"), "actor-1", 7));
         state.BindActorInstance(new TestActor("actor-1"));
         var entered = Signal();
@@ -207,7 +213,7 @@ public sealed class ActorRelocationCompletionOrderingTests
         using var blocker = preparedPhase
             ? null
             : await host.AcquireAsync(default, ZLinkApplicationJobOrigin.Local);
-        var mailbox = new ZLinkActorSerialExecutor();
+        await using var mailbox = new ZLinkActorSerialExecutor();
         var atPhase = Signal();
         var preparationFinished = Signal();
         var releaseClaim = Signal();
@@ -395,7 +401,7 @@ public sealed class ActorRelocationCompletionOrderingTests
         using var host = new ZLinkApplicationJobQueue(
             new(ZLinkApplicationJobQueueProfile.Balanced, 1, 1, 1)
         );
-        var mailbox = new ZLinkActorSerialExecutor();
+        await using var mailbox = new ZLinkActorSerialExecutor();
         var events = new System.Collections.Concurrent.ConcurrentQueue<string>();
         var firstStarted = Signal();
         var finishFirst = Signal();
@@ -481,7 +487,7 @@ public sealed class ActorRelocationCompletionOrderingTests
     [Fact]
     public async Task Target_completion_waits_for_the_actor_mailbox_turn()
     {
-        var state = new ZLinkActorRuntimeState("actor-1");
+        var state = _states.Track(new ZLinkActorRuntimeState("actor-1"));
         state.BindNativeActorRef(
             new ZLinkBackendActorRef(RoutingId.From("node-target"), "actor-1", 7)
         );

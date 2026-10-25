@@ -1,48 +1,68 @@
+using System.Threading.Tasks.Sources;
 using Zlink.Framework.Runtime.Backend.Contracts;
+using Zlink.Framework.Runtime.Execution;
 
 namespace Zlink.Framework.Runtime.Backend.DotNet.Wrappers;
 
 // One Framework receive owner registers one native socket with one public ZLink
 // poller. Completion-capable sockets use that same poller as their sole async
 // completion owner.
-internal sealed class ZLinkBackendSocketPoller : IZLinkBackendSocketPoller
+internal sealed class ZLinkBackendSocketPoller
+    : IZLinkBackendSocketPoller,
+        IValueTaskSource<ZLinkBackendSocketReadiness>
 {
     private const nuint Slot = 1;
-    private readonly IPoller _poller;
-    private readonly PollEvent[] _events = new PollEvent[1];
+    private readonly ZLinkProcessExecutionPool.ReceiveSource _source;
+    private readonly ZLinkProcessExecutionPool.ReceiveEvent[] _events =
+        new ZLinkProcessExecutionPool.ReceiveEvent[1];
 
-    private ZLinkBackendSocketPoller(IPoller poller)
-    {
-        _poller = poller;
-    }
+    private ZLinkBackendSocketPoller(ZLinkProcessExecutionPool.ReceiveSource source) =>
+        _source = source;
 
     internal static IZLinkBackendSocketPoller Create(IZlinkSocket socket)
     {
-        ArgumentNullException.ThrowIfNull(socket);
-        var poller = Systems.Zlink.Zlink.CreatePoller();
-        try
-        {
-            var events = PollEventFlags.PollIn;
-            if (socket is IPairSocket or IDealerSocket or IRouterSocket or IStreamSocket)
-                events |= PollEventFlags.PollCompletion;
-            poller.Add(socket, events, Slot);
-            return new ZLinkBackendSocketPoller(poller);
-        }
-        catch
-        {
-            poller.Dispose();
-            throw;
-        }
+        var source = ZLinkProcessExecutionPool.CreateReceiveSource();
+        var events = PollEventFlags.PollIn;
+        if (socket is IPairSocket or IDealerSocket or IRouterSocket or IStreamSocket)
+            events |= PollEventFlags.PollCompletion;
+        source.Add(socket, events, Slot);
+        return new ZLinkBackendSocketPoller(source);
     }
 
-    public ZLinkBackendSocketReadiness Wait(TimeSpan timeout)
+    internal static IZLinkBackendSocketPoller Create(ISocketMonitor monitor)
     {
-        return _poller.Wait(_events, timeout) == 0
+        var source = ZLinkProcessExecutionPool.CreateReceiveSource();
+        source.Add(monitor, PollEventFlags.PollIn, Slot);
+        return new ZLinkBackendSocketPoller(source);
+    }
+
+    public ValueTask<ZLinkBackendSocketReadiness> WaitAsync(
+        TimeSpan timeout,
+        CancellationToken cancellationToken
+    )
+    {
+        _source.SetCancellationToken(cancellationToken);
+        _ = _source.WaitAsync(_events, timeout);
+        return new ValueTask<ZLinkBackendSocketReadiness>(this, 0);
+    }
+
+    public ValueTaskSourceStatus GetStatus(short token) => _source.GetStatus(token);
+
+    public void OnCompleted(
+        Action<object?> continuation,
+        object? state,
+        short token,
+        ValueTaskSourceOnCompletedFlags flags
+    ) => _source.OnCompleted(continuation, state, token, flags);
+
+    public ZLinkBackendSocketReadiness GetResult(short token) =>
+        _source.GetResult(token) == 0
             ? ZLinkBackendSocketReadiness.None
             : MapReadiness(_events[0].Revents);
-    }
 
-    public void Dispose() => _poller.Dispose();
+    public ValueTask ResumeAsync() => _source.ResumeAsync();
+
+    public ValueTask DisposeAsync() => _source.DisposeAsync();
 
     private static ZLinkBackendSocketReadiness MapReadiness(PollEventFlags flags)
     {

@@ -472,7 +472,7 @@ public sealed class StandaloneActorRelocationRuntimeTests
         using var queue = new ZLinkApplicationJobQueue(
             new(ZLinkApplicationJobQueueProfile.Balanced, 1, 8, 1)
         );
-        var mailbox = new ZLinkActorSerialExecutor();
+        await using var mailbox = new ZLinkActorSerialExecutor();
         var started = Enumerable
             .Range(0, 3)
             .Select(_ => new TaskCompletionSource(
@@ -535,7 +535,7 @@ public sealed class StandaloneActorRelocationRuntimeTests
         using var queue = new ZLinkApplicationJobQueue(
             new(ZLinkApplicationJobQueueProfile.Balanced, 1, 8, 1)
         );
-        var mailbox = new ZLinkActorSerialExecutor();
+        await using var mailbox = new ZLinkActorSerialExecutor();
         ZLinkApplicationJobQueueLease? permit = null;
         var terminals = mailbox.AdmitDurablePrefix(
             new[]

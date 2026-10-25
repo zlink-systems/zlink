@@ -18,6 +18,78 @@ namespace Zlink.Framework.UnitTests;
 public sealed class SharedAsyncDisposalTests
 {
     [Fact]
+    public async Task RelocationDrainFailureStillStopsAndJoinsReceiveResources()
+    {
+        await using var services = new ServiceCollection().BuildServiceProvider();
+        var context = DispatchProxy.Create<IZLinkBackendRuntimeContext, BlockingContextProxy>();
+        var proxy = (BlockingContextProxy)(object)context;
+        proxy.Release.TrySetResult();
+        using var errors = new ZLinkRuntimeErrorSink();
+        var failure = new InvalidOperationException("Injected relocation drain failure.");
+        var failDrain = true;
+        var state = new ZLinkFrameworkComponentState(
+            context,
+            new ZLinkFrameworkRegistration(),
+            services,
+            errors,
+            new object(),
+            ZLinkApplicationJobQueueCapacityResolver.Resolve(
+                ZLinkApplicationJobQueueProfile.Balanced,
+                8,
+                1
+            ),
+            new ZLinkListenerRecords(),
+            _ => failDrain ? ValueTask.FromException(failure) : ValueTask.CompletedTask
+        );
+        var source = ZLinkProcessExecutionPool.CreateReceiveSource();
+        source.SetCancellationToken(state.StopTokenSource.Token);
+        var receiving = new TaskCompletionSource<Thread>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var loop = state.TaskRunner.Run(
+            "relocation-drain-receiver",
+            async token =>
+            {
+                try
+                {
+                    await source.ResumeAsync();
+                    receiving.TrySetResult(Thread.CurrentThread);
+                    while (!token.IsCancellationRequested)
+                        await source.WaitAsync(
+                            Array.Empty<ZLinkProcessExecutionPool.ReceiveEvent>(),
+                            Timeout.InfiniteTimeSpan
+                        );
+                }
+                finally
+                {
+                    await source.DisposeAsync();
+                }
+            }
+        );
+        var worker = await receiving.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        try
+        {
+            Assert.Same(
+                failure,
+                await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                    state.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5))
+                )
+            );
+            Assert.True(state.StopTokenSource.IsCancellationRequested);
+            Assert.True(loop.IsCompleted);
+            Assert.False(worker.IsAlive);
+            Assert.False(proxy.Started.Task.IsCompleted);
+        }
+        finally
+        {
+            failDrain = false;
+            state.StopTokenSource.Cancel();
+            await loop.WaitAsync(TimeSpan.FromSeconds(5));
+            await state.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        }
+    }
+
+    [Fact]
     public async Task FrameworkRuntimeState_Joins_Listener_Before_Closing_Server_Socket()
     {
         await using var services = new ServiceCollection().BuildServiceProvider();

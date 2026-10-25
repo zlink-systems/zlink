@@ -9,12 +9,18 @@ using Zlink.Framework.Runtime.Identifiers;
 
 namespace Zlink.Framework.UnitTests.Runtime;
 
-public sealed class ActorHandlerActivationTests
+public sealed class ActorHandlerActivationTests : IAsyncLifetime
 {
+    private readonly ActorStateLifetime _states = new();
+
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public Task DisposeAsync() => _states.DisposeAsync().AsTask();
+
     [Fact]
     public async Task ActorLifecycle_UsesLifecycleLaneBeforeQueuedApplication()
     {
-        var state = new ZLinkActorRuntimeState("actor-lifecycle-lane");
+        var state = _states.Track(new ZLinkActorRuntimeState("actor-lifecycle-lane"));
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var order = new ConcurrentQueue<string>();
@@ -396,7 +402,7 @@ public sealed class ActorHandlerActivationTests
     [Fact]
     public async Task Terminal_Barrier_Runs_After_Already_Accepted_Turns_And_Closes_Admission()
     {
-        var mailbox = new ZLinkActorSerialExecutor();
+        await using var mailbox = new ZLinkActorSerialExecutor();
         var current = await mailbox.EnterAsync(CancellationToken.None);
         var accepted = mailbox.EnterAsync(CancellationToken.None).AsTask();
         var terminal = mailbox.CloseAdmissionAndReserveLifecycleBarrier();
@@ -581,5 +587,26 @@ public sealed class ActorHandlerActivationTests
 
         public ValueTask DisposeAsync() =>
             ValueTask.FromException(new InvalidOperationException("detached cleanup failed"));
+    }
+}
+
+internal sealed class ActorStateLifetime : IAsyncDisposable
+{
+    private readonly List<ZLinkActorRuntimeState> _states = [];
+
+    internal ZLinkActorRuntimeState Track(ZLinkActorRuntimeState state)
+    {
+        _states.Add(state);
+        return state;
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        var failures = new Zlink.Framework.Runtime.ZLinkFailureCollector();
+        foreach (var state in _states)
+            state.FenceRuntimeGeneration();
+        foreach (var state in _states)
+            await failures.CaptureAsync(state.InvalidateRuntimeGenerationAfterDispatchesAsync);
+        failures.ThrowIfAny();
     }
 }

@@ -44,6 +44,7 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
     private readonly ZLinkSerialWorkQueue _applicationQueue = new();
     private readonly ZLinkSerialWorkQueue _lifecycleQueue = new();
     private readonly ZLinkRuntimeTaskRunner _taskRunner;
+    private ZLinkProcessExecutionPool.ApplicationSource? _drainSource;
     private ZLinkSerialWorkItem? _active;
     private ZLinkSerialWorkItem? _activeLifecycle;
     private int _completed;
@@ -78,6 +79,9 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
                 return _applicationPendingCount;
         }
     }
+
+    // Existing permanent disposal state; used only to coalesce owner cleanup.
+    internal bool IsDisposed => Volatile.Read(ref _disposed) != 0;
 
     internal int LifecyclePendingCount
     {
@@ -278,7 +282,20 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
         catch (OperationCanceledException) { }
         catch (ObjectDisposedException) { }
 
+        await ReleaseExecutionSourceAsync().ConfigureAwait(false);
         _drainGate?.Dispose();
+    }
+
+    internal async ValueTask ReleaseExecutionSourceAsync()
+    {
+        ZLinkProcessExecutionPool.ApplicationSource? source;
+        lock (_admissionGate)
+        {
+            source = _drainSource;
+            _drainSource = null;
+        }
+        if (source is not null)
+            await source.DisposeAsync().ConfigureAwait(false);
     }
 
     public void Complete()
@@ -1281,15 +1298,8 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
             _ = drain(CancellationToken.None);
             return;
         }
-        if (!_taskRunner.TryRunDetached("serial-queue-drain", drain))
-            PublishFallbackDrain(drain);
+        ScheduleSharedDrain();
     }
-
-    private static void PublishFallbackDrain(Func<CancellationToken, ValueTask> drain) =>
-        _ = Task.Run(
-            async () => await drain(CancellationToken.None).ConfigureAwait(false),
-            CancellationToken.None
-        );
 
     internal void SchedulePendingWork()
     {
@@ -1354,12 +1364,42 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
         return ValueTask.CompletedTask;
     }
 
+    private ValueTask RunScheduledDrain(ZLinkProcessExecutionPool.ApplicationSource source)
+    {
+        var drain = _taskRunner.RunQueuedTurn(
+            static (self, token) =>
+                ReferenceEquals(self._sharedOwner, self)
+                    ? self.DrainSharedAsync(token)
+                    : self.DrainAsync(token),
+            this
+        );
+        if (drain.IsCompleted)
+            drain.GetAwaiter().GetResult();
+        else
+            source.Retain(drain);
+        return ValueTask.CompletedTask;
+    }
+
     private void ScheduleSharedDrain()
     {
-        if (!_taskRunner.TryRunDetached("serial-queue-drain", DrainSharedAsync))
-            _ = Task.Run(async () =>
-                await DrainSharedAsync(CancellationToken.None).ConfigureAwait(false)
-            );
+        ZLinkProcessExecutionPool.ApplicationSource source;
+        lock (_admissionGate)
+        {
+            if (_drained.Task.IsCompleted)
+                return;
+            if (_drainSource is null)
+            {
+                ZLinkProcessExecutionPool.ApplicationSource? created = null;
+                created = ZLinkProcessExecutionPool.CreateApplicationSource(
+                    _ => RunScheduledDrain(created!),
+                    error => _errorSink.ReportRuntimeTaskException("serial-queue-drain", error),
+                    maximumConcurrentTurns: ZLinkProcessExecutionPool.ApplicationWorkerCount
+                );
+                _drainSource = created;
+            }
+            source = _drainSource;
+            source.Signal();
+        }
     }
 
     private void ImportSharedApplication(ZLinkSerialWorkItem item)

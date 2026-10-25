@@ -184,11 +184,20 @@ internal sealed class ZLinkActorRuntimeState(
         Func<T> terminalTransition
     )
     {
-        using var turn = await barrier.ClaimAsync().ConfigureAwait(false);
-        var result = await ExecuteLockedAsync(terminalTransition, CancellationToken.None)
-            .ConfigureAwait(false);
-        await DisposeHandlerActivationAsync().ConfigureAwait(false);
-        return result;
+        try
+        {
+            using (await barrier.ClaimAsync().ConfigureAwait(false))
+            {
+                var result = await ExecuteLockedAsync(terminalTransition, CancellationToken.None)
+                    .ConfigureAwait(false);
+                await DisposeHandlerActivationAsync().ConfigureAwait(false);
+                return result;
+            }
+        }
+        finally
+        {
+            await _dispatchMailbox.ReleaseExecutionSourceAsync().ConfigureAwait(false);
+        }
     }
 
     private async Task<T> CompleteHandlerActivationAsyncCoreAsync<T>(
@@ -199,44 +208,81 @@ internal sealed class ZLinkActorRuntimeState(
         // The barrier is a drain fence for turns accepted before teardown.
         // Native terminal work may itself need Core lifecycle delivery, so it
         // must not run while the managed Actor mailbox turn remains claimed.
-        using (await barrier.ClaimAsync().ConfigureAwait(false)) { }
-        var result = await terminalTransition().ConfigureAwait(false);
-        await DisposeHandlerActivationAsync().ConfigureAwait(false);
-        return result;
+        try
+        {
+            using (await barrier.ClaimAsync().ConfigureAwait(false)) { }
+            var result = await terminalTransition().ConfigureAwait(false);
+            await DisposeHandlerActivationAsync().ConfigureAwait(false);
+            return result;
+        }
+        finally
+        {
+            await _dispatchMailbox.ReleaseExecutionSourceAsync().ConfigureAwait(false);
+        }
     }
 
-    internal async ValueTask InvalidateRuntimeGenerationAfterDispatchesAsync()
+    internal ValueTask InvalidateRuntimeGenerationAfterDispatchesAsync() =>
+        InvalidateRuntimeGenerationAfterDispatchesAsync(expectedActivation: null);
+
+    internal ValueTask InvalidateRuntimeGenerationAfterDispatchesAsync(
+        ZLinkSpotActivation? expectedActivation
+    )
     {
-        Task? terminalCompletion;
-        ZLinkActorSerialExecutor.BarrierReservation? barrier = null;
-        var terminal = RunState(() =>
+        var completion = RunState(() =>
         {
+            // The mailbox owns permanent disposal. Migration terminal completion
+            // alone does not mean that this reusable Actor mailbox has ended.
+            if (_dispatchMailbox.IsDisposed)
+                return _terminalLifecycleCompletion!;
+            if (expectedActivation is not null && !ReferenceEquals(Activation, expectedActivation))
+                return Task.CompletedTask;
+
+            FenceRuntimeGeneration();
             CloseHandlerActivationCore();
-            terminalCompletion = _terminalLifecycleCompletion;
-            if (terminalCompletion is null)
-                barrier = _dispatchMailbox.CloseAdmissionAndReserveLifecycleBarrier();
-            return (terminalCompletion, barrier);
+            var previousTerminal = _terminalLifecycleCompletion;
+            var barrier = previousTerminal is null
+                ? _dispatchMailbox.CloseAdmissionAndReserveLifecycleBarrier()
+                : null;
+            var mailboxDisposal = _dispatchMailbox.DisposeAsync().AsTask();
+            Task terminal;
+            using (ExecutionContext.SuppressFlow())
+                terminal = Task.Run(() =>
+                    CompleteRuntimeInvalidationAsync(previousTerminal, barrier, mailboxDisposal)
+                );
+            _terminalLifecycleCompletion = terminal;
+            return terminal;
         });
-        terminalCompletion = terminal.terminalCompletion;
-        barrier = terminal.barrier;
+        return new ValueTask(completion);
+    }
 
-        if (terminalCompletion is not null)
-        {
-            // A migration or teardown may have already closed admission and
-            // be waiting for the current dispatch to return. Reusing that
-            // completion keeps shutdown from reserving a second terminal
-            // barrier for the same actor.
-            await terminalCompletion.ConfigureAwait(false);
-            await ExecuteLockedAsync(InvalidateRuntimeGenerationCore, CancellationToken.None)
+    private async Task CompleteRuntimeInvalidationAsync(
+        Task? previousTerminal,
+        ZLinkActorSerialExecutor.BarrierReservation? barrier,
+        Task mailboxDisposal
+    )
+    {
+        var failures = new ZLinkFailureCollector();
+        if (previousTerminal is not null)
+            await failures
+                .CaptureAsync(() => new ValueTask(previousTerminal))
                 .ConfigureAwait(false);
-            await DisposeHandlerActivationAsync().ConfigureAwait(false);
-            return;
-        }
-
-        using var turn = await barrier!.ClaimAsync().ConfigureAwait(false);
-        await ExecuteLockedAsync(InvalidateRuntimeGenerationCore, CancellationToken.None)
+        await failures
+            .CaptureAsync(async () =>
+            {
+                using ZLinkActorSerialExecutor.Turn? turn = barrier is null
+                    ? null
+                    : await barrier.ClaimAsync().ConfigureAwait(false);
+                await failures
+                    .CaptureAsync(() =>
+                        ExecuteLockedAsync(InvalidateRuntimeGenerationCore, CancellationToken.None)
+                    )
+                    .ConfigureAwait(false);
+                await failures.CaptureAsync(DisposeHandlerActivationAsync).ConfigureAwait(false);
+            })
             .ConfigureAwait(false);
-        await DisposeHandlerActivationAsync().ConfigureAwait(false);
+        // Returning the barrier turn precedes joining the already closed mailbox.
+        await failures.CaptureAsync(() => new ValueTask(mailboxDisposal)).ConfigureAwait(false);
+        failures.ThrowIfAny();
     }
 
     private void CloseHandlerActivationCore()

@@ -419,7 +419,7 @@ public sealed class SharedSerialGateTests
             sharedGate: true
         );
         ZLinkSerialExecutionQueue? owner = source;
-        var mailbox = new ZLinkActorSerialExecutor();
+        await using var mailbox = new ZLinkActorSerialExecutor();
         mailbox.BindExecutionOwner(() => Volatile.Read(ref owner));
         var current = await mailbox.EnterAsync(CancellationToken.None);
         var next = mailbox.EnterAsync(CancellationToken.None).AsTask();

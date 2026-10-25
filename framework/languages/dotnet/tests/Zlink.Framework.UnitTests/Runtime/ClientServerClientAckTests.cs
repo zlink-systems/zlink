@@ -18,24 +18,10 @@ public sealed class ClientServerClientAckTests
         var checkpoint = new TaskCompletionSource<bool>(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
-        var poller = new TurnPoller(fixture.ReceiveStop, checkpoint);
-        fixture.Set("_receivePoller", poller);
         using var waits = new BlockingWaitListener(checkpoint);
-        var ended = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var thread = new Thread(() =>
-        {
-            waits.ReceiveThread = Environment.CurrentManagedThreadId;
-            try
-            {
-                fixture.Invoke("RunControlLoop");
-                ended.SetResult();
-            }
-            catch (Exception error)
-            {
-                ended.SetException(error);
-            }
-        });
-        thread.Start();
+        var poller = new TurnPoller(fixture.ReceiveStop, checkpoint, waits);
+        fixture.Set("_receivePoller", poller);
+        var ended = ((ValueTask)fixture.Invoke("RunControlLoop")!).AsTask();
         try
         {
             // The checkpoint is either the next receive turn or the actual synchronous
@@ -49,8 +35,35 @@ public sealed class ClientServerClientAckTests
         {
             await fixture.AdmissionStop.CancelAsync();
             await fixture.ReceiveStop.CancelAsync();
-            await ended.Task;
-            thread.Join();
+            await ended;
+        }
+    }
+
+    [Fact]
+    public async Task Blocking_wait_listener_detects_a_synchronous_wait_on_the_receive_role()
+    {
+        await using var source = ZLinkProcessExecutionPool.CreateReceiveSource();
+        var checkpoint = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var waits = new BlockingWaitListener(checkpoint);
+        var waiting = WaitOnReceiveRoleAsync();
+        try
+        {
+            Assert.False(await checkpoint.Task.WaitAsync(TimeSpan.FromSeconds(5)));
+        }
+        finally
+        {
+            release.TrySetResult();
+            await waiting.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+
+        async Task WaitOnReceiveRoleAsync()
+        {
+            await source.ResumeAsync();
+            waits.ReceiveThread = Environment.CurrentManagedThreadId;
+            release.Task.GetAwaiter().GetResult();
         }
     }
 
@@ -334,13 +347,22 @@ public sealed class ClientServerClientAckTests
 
     private sealed class TurnPoller(
         CancellationTokenSource stop,
-        TaskCompletionSource<bool> checkpoint
+        TaskCompletionSource<bool> checkpoint,
+        BlockingWaitListener waits
     ) : IZLinkBackendSocketPoller
     {
         private int _turn;
 
-        public ZLinkBackendSocketReadiness Wait(TimeSpan timeout)
+        private readonly ZLinkProcessExecutionPool.ReceiveSource _source =
+            ZLinkProcessExecutionPool.CreateReceiveSource();
+
+        public async ValueTask<ZLinkBackendSocketReadiness> WaitAsync(
+            TimeSpan timeout,
+            CancellationToken cancellationToken
+        )
         {
+            await _source.ResumeAsync().ConfigureAwait(false);
+            waits.ReceiveThread = Environment.CurrentManagedThreadId;
             if (++_turn == 2)
             {
                 stop.Cancel();
@@ -350,7 +372,9 @@ public sealed class ClientServerClientAckTests
             return ZLinkBackendSocketReadiness.Readable;
         }
 
-        public void Dispose() { }
+        public ValueTask ResumeAsync() => _source.ResumeAsync();
+
+        public ValueTask DisposeAsync() => _source.DisposeAsync();
     }
 
     private sealed class BlockingWaitListener : EventListener

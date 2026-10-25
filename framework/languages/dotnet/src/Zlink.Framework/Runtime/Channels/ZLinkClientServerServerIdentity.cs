@@ -154,15 +154,17 @@ internal sealed class ZLinkClientServerServerIdentity(
         Interlocked.Increment(ref _receivedLivenessProbeCount);
     }
 
-    internal async ValueTask TickLivenessAsync(
+    internal async ValueTask<TimeSpan> TickLivenessAsync(
         IRouterSocket router,
+        IZLinkBackendSocketPoller receiveOwner,
         CancellationToken cancellationToken
     )
     {
         var now = Stopwatch.GetTimestamp();
-        var (probes, expired) = await _lane
+        var (probes, expired, nextWait) = await _lane
             .RunAsync(() => PrepareLivenessTick(now))
             .ConfigureAwait(false);
+        await receiveOwner.ResumeAsync().ConfigureAwait(false);
         var failures = new ZLinkFailureCollector();
         foreach (var routingId in expired)
             failures.Capture(() => router.DisconnectRid(routingId));
@@ -173,6 +175,7 @@ internal sealed class ZLinkClientServerServerIdentity(
                 errorSink
             );
         failures.ThrowIfAny();
+        return nextWait;
     }
 
     private async ValueTask SendLivenessProbeAsync(
@@ -247,11 +250,13 @@ internal sealed class ZLinkClientServerServerIdentity(
 
     private (
         (RoutingId RoutingId, ulong ProbeId)[] Probes,
-        RoutingId[] Expired
+        RoutingId[] Expired,
+        TimeSpan NextWait
     ) PrepareLivenessTick(long now)
     {
         List<(RoutingId RoutingId, ulong ProbeId)> probes = [];
         List<RoutingId> expired = [];
+        var nextWait = Timeout.InfiniteTimeSpan;
         foreach (var (key, peer) in _peers.ToArray())
         {
             if (peer.Liveness.IsExpired(now))
@@ -262,8 +267,11 @@ internal sealed class ZLinkClientServerServerIdentity(
             }
             if (peer.Liveness.TryGetProbe(now, out var probeId))
                 probes.Add((peer.RoutingId, probeId));
+            var remaining = peer.Liveness.TimeUntilNextActivity(now);
+            if (nextWait == Timeout.InfiniteTimeSpan || remaining < nextWait)
+                nextWait = remaining;
         }
-        return ([.. probes], [.. expired]);
+        return ([.. probes], [.. expired], nextWait);
     }
 
     private (

@@ -163,6 +163,9 @@ public sealed class RawPortCloseFailureTests
         var proxy = (CloseFailureProxy)(object)subscriber;
         proxy.Inner = socket;
         proxy.FailClose = true;
+        await using var process = ZLinkProcessExecutionPool.CreateReceiveSource(() =>
+            new SubscriberPoller(subscriber, socket)
+        );
         var backend = DispatchProxy.Create<IZLinkBackendRuntimeContext, CloseFailureProxy>();
         ((CloseFailureProxy)(object)backend).Subscriber = subscriber;
         using var errors = new ZLinkRuntimeErrorSink();
@@ -213,12 +216,11 @@ public sealed class RawPortCloseFailureTests
             ],
             new ZLinkLocationRuntimeSnapshot("healthy", null, null)
         );
+        var firstDispose = runtime.DisposeAsync().AsTask();
         await proxy.CloseAttempted.Task.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Same(
             proxy.Failure,
-            await Assert.ThrowsAsync<InvalidOperationException>(async () =>
-                await runtime.DisposeAsync()
-            )
+            await Assert.ThrowsAsync<InvalidOperationException>(async () => await firstDispose)
         );
         await runtime.DisposeAsync();
         Assert.Equal(2, proxy.CloseAttempts);
@@ -233,6 +235,9 @@ public sealed class RawPortCloseFailureTests
         var proxy = (CloseFailureProxy)(object)subscriber;
         proxy.Inner = socket;
         proxy.BlockClose = true;
+        await using var process = ZLinkProcessExecutionPool.CreateReceiveSource(() =>
+            new SubscriberPoller(subscriber, socket)
+        );
         var backend = DispatchProxy.Create<IZLinkBackendRuntimeContext, CloseFailureProxy>();
         ((CloseFailureProxy)(object)backend).Subscriber = subscriber;
         using var errors = new ZLinkRuntimeErrorSink();
@@ -417,6 +422,53 @@ public sealed class RawPortCloseFailureTests
         Assert.Equal(2, socketProxy.CloseAttempts);
         port.Dispose();
         Assert.Equal(2, socketProxy.CloseAttempts);
+    }
+
+    private sealed class SubscriberPoller(ISubSocket proxySocket, ISubSocket nativeSocket) : IPoller
+    {
+        private readonly IPoller _inner = Systems.Zlink.Zlink.CreatePoller();
+
+        private IZlinkSocket Unwrap(IZlinkSocket socket) =>
+            ReferenceEquals(socket, proxySocket) ? nativeSocket : socket;
+
+        public int Size => _inner.Size;
+
+        public void Add(IZlinkSocket socket, PollEventFlags events, nuint slot) =>
+            _inner.Add(Unwrap(socket), events, slot);
+
+        public void Add(ISocketMonitor monitor, PollEventFlags events, nuint slot) =>
+            _inner.Add(monitor, events, slot);
+
+        public void Add(IZlinkTimer timer, nuint slot) => _inner.Add(timer, slot);
+
+        public void AddFd(int fd, PollEventFlags events, nuint slot) =>
+            _inner.AddFd(fd, events, slot);
+
+        public void Modify(IZlinkSocket socket, PollEventFlags events) =>
+            _inner.Modify(Unwrap(socket), events);
+
+        public void Modify(ISocketMonitor monitor, PollEventFlags events) =>
+            _inner.Modify(monitor, events);
+
+        public void ModifyFd(int fd, PollEventFlags events) => _inner.ModifyFd(fd, events);
+
+        public bool Remove(IZlinkSocket socket) => _inner.Remove(Unwrap(socket));
+
+        public bool Remove(ISocketMonitor monitor) => _inner.Remove(monitor);
+
+        public bool Remove(IZlinkTimer timer) => _inner.Remove(timer);
+
+        public bool Remove(int fd) => _inner.Remove(fd);
+
+        public void Clear() => _inner.Clear();
+
+        public void Close() => _inner.Close();
+
+        public int Wait(Span<PollEvent> events, TimeSpan timeout) => _inner.Wait(events, timeout);
+
+        public void Dispose() => _inner.Dispose();
+
+        public ValueTask DisposeAsync() => _inner.DisposeAsync();
     }
 
     public class CloseFailureProxy : DispatchProxy

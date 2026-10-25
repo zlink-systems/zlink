@@ -42,14 +42,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         | PollEventFlags.PollCompletion
         | PollEventFlags.PollRoute;
     private const nuint RawSocketPollerSlot = 1;
-    private const nuint ReceiveWakePollerSlot = 2;
     private const nuint NativeMonitorPollerSlot = 3;
-    private const int ReceivePollSourceCount = 3;
-    private const ulong WakeFireCount = 1;
+    private const int ReceivePollSourceCount = 2;
 
-    // TimeSpan's smallest positive unit. This one-shot notifies the owner;
-    // it does not schedule periodic receive polling.
-    private static readonly TimeSpan ReceiveWakeInterval = TimeSpan.FromTicks(1);
     private static readonly TimeSpan RelocationAckRetryInterval = TimeSpan.FromMilliseconds(100);
 
     private readonly IContext _context;
@@ -189,8 +184,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     private IRouterSocket? _socket;
     private IAsyncDisposable? _receiveFlowRegistration;
     private ISocketMonitor? _socketMonitor;
-    private IPoller? _poller;
-    internal IZlinkTimer? _receiveWakeTimer;
+    private ZLinkProcessExecutionPool.ReceiveSource? _poller;
     private CancellationTokenSource? _stop;
     private Task? _receiveLoop;
     private Task? _disposeTask;
@@ -394,7 +388,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
 
             var socket = _context.CreateRouterSocket();
             ISocketMonitor? socketMonitor = null;
-            IPoller? poller = null;
+            ZLinkProcessExecutionPool.ReceiveSource? poller = null;
             IAsyncDisposable? receiveFlowRegistration = null;
             try
             {
@@ -441,14 +435,12 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 );
                 socketMonitor = _decorateSocketMonitor?.Invoke(nativeMonitor) ?? nativeMonitor;
 
-                poller = _receivePollerFactory();
+                poller = ZLinkProcessExecutionPool.CreateReceiveSource(_receivePollerFactory);
                 poller.Add(
                     socket,
                     PollEventFlags.PollIn | InfrastructurePollEvents,
                     RawSocketPollerSlot
                 );
-                _receiveWakeTimer = Systems.Zlink.Zlink.CreateTimer();
-                poller.Add(_receiveWakeTimer, ReceiveWakePollerSlot);
                 poller.Add(nativeMonitor, PollEventFlags.PollIn, NativeMonitorPollerSlot);
                 _socket = socket;
                 _receiveFlowRegistration = receiveFlowRegistration;
@@ -466,10 +458,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 using (ExecutionContext.SuppressFlow())
                 {
                     var stopToken = _stop.Token;
-                    _receiveLoop = ZLinkRuntimeTaskRunner.StartDedicatedThread(
-                        _ => ReceiveLoop(stopToken),
-                        null
-                    );
+                    _receiveLoop = ReceiveLoopAsync(stopToken);
                 }
             }
             catch (Exception error)
@@ -483,8 +472,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 cleanupFailure = async () =>
                 {
                     var failures = new ZLinkFailureCollector(error);
-                    failures.Capture(DetachReceiveWake);
-                    failures.Capture(() => _poller?.Dispose());
+                    await failures
+                        .CaptureAsync(() => _poller?.DisposeAsync() ?? ValueTask.CompletedTask)
+                        .ConfigureAwait(false);
                     await failures
                         .CaptureAsync(() =>
                             ZLinkReceiveFlowController.DisposeRegistrationAsync(
@@ -3724,6 +3714,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
 
     private async Task DisposeCoreAsync(CancellationToken shutdownToken)
     {
+        var failures = new ZLinkFailureCollector();
         CloseSubmissions();
         var receiveLoop = RunState(() =>
         {
@@ -3737,14 +3728,14 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         // ZLINK_CLOSE_BUSY. The shutdown token bounds the inbound operations
         // below, not this wait.
         if (receiveLoop is not null)
-            await receiveLoop.ConfigureAwait(false);
+            await failures.CaptureAsync(() => new ValueTask(receiveLoop)).ConfigureAwait(false);
 
         await CloseInboundOperationAdmissionAsync(shutdownToken).ConfigureAwait(false);
 
         IRouterSocket? socket;
         IAsyncDisposable? receiveFlowRegistration;
         ISocketMonitor? socketMonitor;
-        IPoller? poller;
+        ZLinkProcessExecutionPool.ReceiveSource? poller;
         lock (_socketGate)
         {
             _activeSocketGeneration = 0;
@@ -3785,19 +3776,38 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             await spot.DisposeAsync().ConfigureAwait(false);
         _spots.Clear();
 
-        await ZLinkReceiveFlowController
-            .DisposeRegistrationAsync(receiveFlowRegistration)
+        await failures
+            .CaptureAsync(async () =>
+            {
+                await ZLinkReceiveFlowController
+                    .DisposeRegistrationAsync(receiveFlowRegistration)
+                    .ConfigureAwait(false);
+                lock (_socketGate)
+                    _receiveFlowRegistration = null;
+            })
             .ConfigureAwait(false);
-        poller?.Dispose();
-        socketMonitor?.Dispose();
-        socket?.Dispose();
-        lock (_socketGate)
+        if (poller is not null)
+            await failures
+                .CaptureAsync(async () =>
+                {
+                    await poller.DisposeAsync().ConfigureAwait(false);
+                    lock (_socketGate)
+                        _poller = null;
+                })
+                .ConfigureAwait(false);
+        failures.Capture(() =>
         {
-            _socket = null;
-            _receiveFlowRegistration = null;
-            _socketMonitor = null;
-            _poller = null;
-        }
+            socketMonitor?.Dispose();
+            lock (_socketGate)
+                _socketMonitor = null;
+        });
+        failures.Capture(() =>
+        {
+            socket?.Dispose();
+            lock (_socketGate)
+                _socket = null;
+        });
+        failures.ThrowIfAny();
         _stop?.Dispose();
         Publish(MeshMonitorEventKind.StateChanged);
         RunState(() =>
@@ -5828,16 +5838,12 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             part.Dispose();
     }
 
-    // The receive loop is the single consumer of the router's data records,
-    // the monitor's events and the selected-route snapshot (Core socket README
-    // §3, ROUTER §10.1, monitoring §4). DisposeCoreAsync closes the router,
-    // monitor and poller only after this loop has returned, so those calls
-    // need no gate. The wake timer is the exception: other threads start it,
-    // and Core forbids concurrent operations on one timer, so its Recv stays
-    // under _socketGate with SignalReceiveOwner.
-    private void ReceiveLoop(CancellationToken cancellationToken)
+    // One logical source consumes this node's router/monitor and owns its
+    // deadlines and permits. The process pool transfers the physical receive
+    // role only after all ready sources finish their finite turns.
+    private async Task ReceiveLoopAsync(CancellationToken cancellationToken)
     {
-        var events = new PollEvent[ReceivePollSourceCount];
+        var events = new ZLinkProcessExecutionPool.ReceiveEvent[ReceivePollSourceCount];
         // §4.2: each rotation's deadline turn also yields the next wait bound.
         // The first wait has no earlier turn and does not block.
         var waitBound = TimeSpan.Zero;
@@ -5847,8 +5853,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             {
                 try
                 {
-                    var count = _poller!.Wait(events, waitBound);
-                    var receiveReady = false;
+                    var count = await _poller!.WaitAsync(events, waitBound).ConfigureAwait(false);
+                    var receiveReady =
+                        Volatile.Read(ref _reservedRawApplicationAdmission) is not null;
                     var now = Stopwatch.GetTimestamp();
                     DrainSocketMonitorEvents();
                     // This loop is the socket's single route observer (Core ROUTER
@@ -5858,16 +5865,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     {
                         var ready = events[index];
                         if (
-                            ready.SourceKind == PollSourceKind.Timer
-                            && ready.Slot == ReceiveWakePollerSlot
-                        )
-                        {
-                            lock (_socketGate)
-                                _receiveWakeTimer!.Recv();
-                            receiveReady |=
-                                Volatile.Read(ref _reservedRawApplicationAdmission) is not null;
-                        }
-                        else if (
                             ready.SourceKind == PollSourceKind.Socket
                             && ready.Slot == RawSocketPollerSlot
                         )
@@ -5908,12 +5905,15 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 {
                     RunState(() => TryTransitionStateUnderLock(MeshNodeState.Error));
                     Publish(MeshMonitorEventKind.ProtocolError);
+                    if (_poller!.IsTerminated)
+                        return;
                 }
             }
         }
         finally
         {
-            DetachReceiveWake();
+            if (_poller is { } source)
+                await source.DisposeAsync().ConfigureAwait(false);
         }
     }
 
@@ -5923,33 +5923,12 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             SignalReceiveOwnerUnderLock();
     }
 
-    private void SignalReceiveOwnerUnderLock() =>
-        _receiveWakeTimer?.Start(ReceiveWakeInterval, WakeFireCount);
+    internal Action? ReceiveWakeObserver { get; set; }
 
-    private void DetachReceiveWake()
+    private void SignalReceiveOwnerUnderLock()
     {
-        lock (_socketGate)
-        {
-            var wake = _receiveWakeTimer;
-            if (wake is null)
-                return;
-            _receiveWakeTimer = null;
-            try
-            {
-                wake.Stop();
-            }
-            finally
-            {
-                try
-                {
-                    _poller?.Remove(wake);
-                }
-                finally
-                {
-                    wake.Dispose();
-                }
-            }
-        }
+        ReceiveWakeObserver?.Invoke();
+        _poller?.Wake();
     }
 
     internal void DrainRawSocket(CancellationToken cancellationToken)

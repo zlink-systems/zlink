@@ -26,6 +26,73 @@ namespace Zlink.Framework.UnitTests.Runtime;
 public sealed partial class RelocationBehaviorConformanceTests
 {
     [Fact]
+    public async Task ForceStop_preserves_bound_actor_membership_and_context_during_OnClosing()
+    {
+        var trace = new RelocationBehaviorTrace();
+        trace.ReleaseJoinHandler.TrySetResult();
+        trace.ReleaseTargetLifecycle.TrySetResult();
+        trace.ReleaseSourceLeave.TrySetResult();
+        var joined = new TaskCompletionSource<BehaviorActor>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        trace.OnPublicJoinCompleted = actor =>
+        {
+            joined.TrySetResult(actor);
+            return ValueTask.CompletedTask;
+        };
+        await using var host = await RelocationBehaviorHost.StartAsync(
+            "source",
+            trace,
+            new ZLinkInMemoryProviderLocationStore(),
+            new SynchronizedRelocationStore(),
+            registerTargetSpot: true
+        );
+        var actorId = $"closing-actor-{Guid.NewGuid():N}";
+        var spotId = $"closing-spot-{Guid.NewGuid():N}";
+        await host
+            .Services.GetRequiredService<IZLinkActorManager>()
+            .GetOrCreate(actorId, RelocationBehaviorHost.ActorType)
+            .InMesh(RelocationBehaviorHost.MeshName)
+            .Request(new BehaviorCreate(7))
+            .Async();
+        await host
+            .Services.GetRequiredService<IZLinkSpotManager>()
+            .GetOrCreate(spotId, RelocationBehaviorHost.SpotType)
+            .InMesh(RelocationBehaviorHost.MeshName)
+            .Async();
+        await host
+            .Services.GetRequiredService<IZLinkActorClient>()
+            .RequestToActor(actorId, new BeginBehaviorJoin(spotId))
+            .Async<BehaviorAck>();
+        var actor = await joined.Task.WaitAsync(TimeSpan.FromSeconds(15));
+        Assert.True(host.Runtime.TryGetActorState(actorId, out var state));
+        var activation = state.Activation!;
+        Assert.Equal(1, activation.JoinedActorCount);
+        var closing = new TaskCompletionSource<(int Members, bool SameActor, string? SpotId)>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        trace.OnTargetClosing = () =>
+        {
+            closing.TrySetResult(
+                (
+                    activation.JoinedActorCount,
+                    ReferenceEquals(actor, state.Actor),
+                    actor.Context.SpotId
+                )
+            );
+            return ValueTask.CompletedTask;
+        };
+
+        await host.Runtime.ForceStopAsync(CancellationToken.None);
+
+        var observed = await closing.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(1, observed.Members);
+        Assert.True(observed.SameActor);
+        Assert.Equal(spotId, observed.SpotId);
+        Assert.Null(state.Actor);
+    }
+
+    [Fact]
     public async Task Command_42_requests_target_reconcile_without_waiting_for_it()
     {
         var trace = new RelocationBehaviorTrace();
@@ -2480,6 +2547,7 @@ internal sealed class RelocationBehaviorTrace
     internal int OrdinarySendCount;
     internal int OrdinarySendBatchSize { get; init; }
     internal Func<BehaviorActor, ValueTask>? OnTargetJoined { get; set; }
+    internal Func<ValueTask>? OnTargetClosing { get; set; }
     internal Func<BehaviorActor, ValueTask>? OnPublicJoinCompleted { get; set; }
 
     // The source Actor state capture and the target Actor restore wait for
@@ -3094,6 +3162,11 @@ internal sealed class BehaviorTargetSpot(IZLinkSpotContext context, RelocationBe
     : IZLinkSpot<BehaviorActor>
 {
     public IZLinkSpotContext Context { get; } = context;
+
+    public ValueTask OnClosingAsync(
+        ZLinkSpotClosingContext context,
+        CancellationToken cancellationToken
+    ) => trace.OnTargetClosing?.Invoke() ?? ValueTask.CompletedTask;
 
     public ValueTask OnInitializeAsync(CancellationToken cancellationToken) =>
         trace.InitializeTarget?.Invoke(Context, cancellationToken) ?? ValueTask.CompletedTask;

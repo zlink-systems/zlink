@@ -2938,115 +2938,261 @@ public sealed class SerialExecutorTests
     }
 
     [Fact]
+    public async Task ReadinessAfterQueueTerminationDoesNotRecreateProcessResources()
+    {
+        using var errors = new ZLinkRuntimeErrorSink();
+        var runner = new ZLinkRuntimeTaskRunner(errors, CancellationToken.None);
+        await using var queue = new ZLinkSerialExecutionQueue(
+            runner,
+            errors,
+            CancellationToken.None,
+            ZLinkExecutionLanePolicy.Default,
+            sharedGate: true
+        );
+        var work = await queue.PostAsync(
+            static _ => ValueTask.CompletedTask,
+            CancellationToken.None
+        );
+        await work.Completion.WaitAsync(TimeSpan.FromSeconds(5));
+        await queue.DisposeAsync();
+        ZLinkProcessExecutionPool.ReceiveSource? receiver = null;
+        var factoryCalls = 0;
+        try
+        {
+            for (var index = 0; index < 16; index++)
+                queue.NotifyReadiness();
+            receiver = ZLinkProcessExecutionPool.CreateReceiveSource(() =>
+            {
+                Interlocked.Increment(ref factoryCalls);
+                return Systems.Zlink.Zlink.CreatePoller();
+            });
+            await receiver.ResumeAsync();
+            Assert.Equal(1, factoryCalls);
+        }
+        finally
+        {
+            if (receiver is not null)
+                await receiver.DisposeAsync();
+            await queue.ReleaseExecutionSourceAsync();
+            await runner.StopAsync();
+        }
+    }
+
+    [Fact]
+    public async Task TerminalPlacementReleasePreservesReservedDrainAndIncomingQueueFifo()
+    {
+        using var errors = new ZLinkRuntimeErrorSink();
+        var runner = new ZLinkRuntimeTaskRunner(errors, CancellationToken.None);
+        await using var queue = new ZLinkSerialExecutionQueue(
+            runner,
+            errors,
+            CancellationToken.None
+        );
+        await using var occupied = new MeshWorkerWaitCostTests.OccupiedApplicationWorkers();
+        var order = new List<string>();
+        try
+        {
+            occupied.Enter();
+            Assert.True(
+                queue.TryPost(
+                    _ =>
+                    {
+                        order.Add("before-release");
+                        return ValueTask.CompletedTask;
+                    },
+                    out var first
+                )
+            );
+            var releasing = queue.ReleaseExecutionSourceAsync().AsTask();
+            Assert.True(
+                queue.TryPost(
+                    _ =>
+                    {
+                        order.Add("incoming-handoff");
+                        return ValueTask.CompletedTask;
+                    },
+                    out var incoming
+                )
+            );
+            occupied.Release();
+            await Task.WhenAll(first.Completion, incoming.Completion, releasing)
+                .WaitAsync(TimeSpan.FromSeconds(5));
+            var next = await queue.PostAsync(
+                _ =>
+                {
+                    order.Add("next-placement");
+                    return ValueTask.CompletedTask;
+                },
+                CancellationToken.None
+            );
+            await next.Completion.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(new[] { "before-release", "incoming-handoff", "next-placement" }, order);
+        }
+        finally
+        {
+            occupied.Release();
+            await queue.DisposeAsync();
+            await runner.StopAsync();
+        }
+    }
+
+    [Fact]
     public async Task ActorDispatchCancellation_Does_Not_Stop_Current_Or_Later_Dispatch()
     {
         var state = new ZLinkActorRuntimeState("test-actor");
-        var firstStarted = new TaskCompletionSource(
-            TaskCreationOptions.RunContinuationsAsynchronously
-        );
         var releaseFirst = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
-        var secondRan = false;
-        var thirdRan = false;
+        var dispatches = new List<Task>();
+        try
+        {
+            var firstStarted = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously
+            );
+            var secondRan = false;
+            var thirdRan = false;
 
-        var first = state
-            .ExecuteDispatchAsync(
-                async _ =>
-                {
-                    firstStarted.SetResult();
-                    await releaseFirst.Task.ConfigureAwait(false);
-                },
-                CancellationToken.None
-            )
-            .AsTask();
-        await firstStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            var first = state
+                .ExecuteDispatchAsync(
+                    async _ =>
+                    {
+                        firstStarted.SetResult();
+                        await releaseFirst.Task.ConfigureAwait(false);
+                    },
+                    CancellationToken.None
+                )
+                .AsTask();
+            dispatches.Add(first);
+            await firstStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
-        using var secondCancellation = new CancellationTokenSource();
-        var second = state
-            .ExecuteDispatchAsync(
-                _ =>
-                {
-                    secondRan = true;
-                    return ValueTask.CompletedTask;
-                },
-                secondCancellation.Token
-            )
-            .AsTask();
-        await secondCancellation.CancelAsync();
+            using var secondCancellation = new CancellationTokenSource();
+            var second = state
+                .ExecuteDispatchAsync(
+                    _ =>
+                    {
+                        secondRan = true;
+                        return ValueTask.CompletedTask;
+                    },
+                    secondCancellation.Token
+                )
+                .AsTask();
+            dispatches.Add(second);
+            await secondCancellation.CancelAsync();
 
-        await Assert.ThrowsAsync<OperationCanceledException>(() =>
-            second.WaitAsync(TimeSpan.FromSeconds(5))
-        );
-        Assert.False(secondRan);
+            await Assert.ThrowsAsync<OperationCanceledException>(() =>
+                second.WaitAsync(TimeSpan.FromSeconds(5))
+            );
+            Assert.False(secondRan);
 
-        releaseFirst.SetResult();
-        await first.WaitAsync(TimeSpan.FromSeconds(5));
+            releaseFirst.SetResult();
+            await first.WaitAsync(TimeSpan.FromSeconds(5));
 
-        await state
-            .ExecuteDispatchAsync(
-                _ =>
-                {
-                    thirdRan = true;
-                    return ValueTask.CompletedTask;
-                },
-                CancellationToken.None
-            )
-            .AsTask()
-            .WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.True(thirdRan);
+            await state
+                .ExecuteDispatchAsync(
+                    _ =>
+                    {
+                        thirdRan = true;
+                        return ValueTask.CompletedTask;
+                    },
+                    CancellationToken.None
+                )
+                .AsTask()
+                .WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.True(thirdRan);
+        }
+        finally
+        {
+            releaseFirst.TrySetResult();
+            try
+            {
+                foreach (var dispatch in dispatches)
+                    try
+                    {
+                        await dispatch.WaitAsync(TimeSpan.FromSeconds(5));
+                    }
+                    catch (OperationCanceledException) { }
+            }
+            finally
+            {
+                await state.InvalidateRuntimeGenerationAfterDispatchesAsync();
+            }
+        }
     }
 
     [Fact]
     public async Task ActorDispatchMailbox_Runs_Waiters_In_Fifo_Order()
     {
         var state = new ZLinkActorRuntimeState("test-actor");
-        var firstStarted = new TaskCompletionSource(
-            TaskCreationOptions.RunContinuationsAsynchronously
-        );
         var releaseFirst = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
-        var order = new List<string>();
+        var dispatches = new List<Task>();
+        try
+        {
+            var firstStarted = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously
+            );
+            var order = new List<string>();
 
-        var first = state
-            .ExecuteDispatchAsync(
-                async _ =>
-                {
-                    order.Add("first");
-                    firstStarted.SetResult();
-                    await releaseFirst.Task.ConfigureAwait(false);
-                },
-                CancellationToken.None
-            )
-            .AsTask();
-        await firstStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            var first = state
+                .ExecuteDispatchAsync(
+                    async _ =>
+                    {
+                        order.Add("first");
+                        firstStarted.SetResult();
+                        await releaseFirst.Task.ConfigureAwait(false);
+                    },
+                    CancellationToken.None
+                )
+                .AsTask();
+            dispatches.Add(first);
+            await firstStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
-        var second = state
-            .ExecuteDispatchAsync(
-                _ =>
-                {
-                    order.Add("second");
-                    return ValueTask.CompletedTask;
-                },
-                CancellationToken.None
-            )
-            .AsTask();
-        var third = state
-            .ExecuteDispatchAsync(
-                _ =>
-                {
-                    order.Add("third");
-                    return ValueTask.CompletedTask;
-                },
-                CancellationToken.None
-            )
-            .AsTask();
+            var second = state
+                .ExecuteDispatchAsync(
+                    _ =>
+                    {
+                        order.Add("second");
+                        return ValueTask.CompletedTask;
+                    },
+                    CancellationToken.None
+                )
+                .AsTask();
+            dispatches.Add(second);
+            var third = state
+                .ExecuteDispatchAsync(
+                    _ =>
+                    {
+                        order.Add("third");
+                        return ValueTask.CompletedTask;
+                    },
+                    CancellationToken.None
+                )
+                .AsTask();
+            dispatches.Add(third);
 
-        releaseFirst.SetResult();
+            releaseFirst.SetResult();
 
-        await Task.WhenAll(first, second, third).WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.Equal(["first", "second", "third"], order);
+            await Task.WhenAll(first, second, third).WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(["first", "second", "third"], order);
+        }
+        finally
+        {
+            releaseFirst.TrySetResult();
+            try
+            {
+                foreach (var dispatch in dispatches)
+                    try
+                    {
+                        await dispatch.WaitAsync(TimeSpan.FromSeconds(5));
+                    }
+                    catch (OperationCanceledException) { }
+            }
+            finally
+            {
+                await state.InvalidateRuntimeGenerationAfterDispatchesAsync();
+            }
+        }
     }
 
     private static ZlinkStreamHeader CreateHeader(string name)

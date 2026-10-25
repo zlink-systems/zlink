@@ -14,12 +14,18 @@ using Zlink.Framework.Runtime.Locations;
 
 namespace Zlink.Framework.UnitTests.Runtime;
 
-public sealed class ActorHandoffTests
+public sealed class ActorHandoffTests : IAsyncLifetime
 {
+    private readonly ActorStateLifetime _states = new();
+
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public Task DisposeAsync() => _states.DisposeAsync().AsTask();
+
     [Fact]
     public async Task Restored_source_prefix_remains_owned_by_the_next_relocation_barrier()
     {
-        var state = new ZLinkActorRuntimeState("actor-1");
+        var state = _states.Track(new ZLinkActorRuntimeState("actor-1"));
         using var turn = await state.ReserveHandoffRestoreBarrier().ClaimAsync();
         using var dispatch = state.EnterDispatch();
         state.Handoff.BeginCapture();
@@ -53,7 +59,7 @@ public sealed class ActorHandoffTests
     [Fact]
     public async Task A_new_relocation_captures_the_unstarted_prefix_at_its_lifecycle_barrier()
     {
-        var state = new ZLinkActorRuntimeState("actor-1");
+        var state = _states.Track(new ZLinkActorRuntimeState("actor-1"));
         Assert.True(
             state.Handoff.Import(
                 CommitRequest("before-next-move", new[] { HandoffFrame(1, 0), HandoffFrame(2, 1) }),
@@ -105,7 +111,7 @@ public sealed class ActorHandoffTests
     [Fact]
     public async Task Deferred_join_in_completion_takes_the_whole_unstarted_prefix()
     {
-        var state = new ZLinkActorRuntimeState("actor-1");
+        var state = _states.Track(new ZLinkActorRuntimeState("actor-1"));
         state.BindNativeActorRef(ActorRef("node-b", 7));
         state.BindActorInstance(new TestActor("actor-1"));
         Assert.True(
@@ -173,7 +179,7 @@ public sealed class ActorHandoffTests
     [Fact]
     public async Task Discarded_deferred_join_restores_the_same_prefix_and_appends_captured_ingress_once()
     {
-        var state = new ZLinkActorRuntimeState("actor-1");
+        var state = _states.Track(new ZLinkActorRuntimeState("actor-1"));
         Assert.True(
             state.Handoff.Import(
                 CommitRequest("discard-prefix", new[] { HandoffFrame(1, 0), HandoffFrame(2, 1) }),
@@ -233,7 +239,7 @@ public sealed class ActorHandoffTests
     [Fact]
     public async Task Next_deferred_barrier_takes_the_unstarted_prefix_and_later_ingress()
     {
-        var state = new ZLinkActorRuntimeState("actor-1");
+        var state = _states.Track(new ZLinkActorRuntimeState("actor-1"));
         var initial = new[] { HandoffFrame(1, 0), HandoffFrame(2, 1) };
         Assert.True(state.Handoff.Import(CommitRequest("previous-move", initial), out _));
         _ = state.Handoff.PrepareImportedReplay([]);
@@ -1705,7 +1711,7 @@ public sealed class ActorHandoffTests
     [Fact]
     public async Task LocalDispatch_IsRejectedWhileHandoffOwnsTheActor()
     {
-        var state = new ZLinkActorRuntimeState("actor-1");
+        var state = _states.Track(new ZLinkActorRuntimeState("actor-1"));
         var invoked = false;
         state.Handoff.BeginCapture();
 
@@ -1728,7 +1734,7 @@ public sealed class ActorHandoffTests
     [Fact]
     public async Task DispatchOwnership_DoesNotEscapeIntoAChildTask()
     {
-        var state = new ZLinkActorRuntimeState("actor-1");
+        var state = _states.Track(new ZLinkActorRuntimeState("actor-1"));
         var childStarted = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously
         );

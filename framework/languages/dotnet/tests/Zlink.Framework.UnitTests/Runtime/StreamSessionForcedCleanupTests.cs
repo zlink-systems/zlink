@@ -11,6 +11,81 @@ namespace Zlink.Framework.UnitTests;
 
 public sealed class StreamSessionForcedCleanupTests
 {
+    [Fact]
+    public async Task Fatal_pool_failure_ends_stream_source_and_is_reported_once()
+    {
+        var registration = new ZLinkFrameworkRegistration();
+        ZLinkFrameworkRuntime runtime = null!;
+        await using var provider = new ServiceCollection()
+            .AddSingleton(registration)
+            .AddSingleton(_ => runtime)
+            .BuildServiceProvider();
+        runtime = CreateRuntime(provider, registration);
+        using var context = Systems.Zlink.Zlink.CreateContext();
+        using var nativeSocket = context.CreateStreamSocket();
+        var failure = new InvalidOperationException("fatal stream pool");
+        var poller = new MeshReceiveWakeTests.ControlledReceivePoller
+        {
+            BeforeWait = () => throw failure,
+        };
+        var source = ZLinkProcessExecutionPool.CreateReceiveSource(() => poller);
+        var socket = new TestStreamSocket
+        {
+            ReceivePollerOverride =
+                Zlink.Framework.Runtime.Backend.DotNet.Wrappers.ZLinkBackendSocketPoller.Create(
+                    nativeSocket
+                ),
+        };
+        using var stop = new CancellationTokenSource();
+        var taskReports = new NamedFailureReporter(runtime.ErrorSink);
+        var runner = new ZLinkRuntimeTaskRunner(taskReports, stop.Token, runtime.ExecutionOwner);
+        var node = new ZLinkStreamNodeRuntime(
+            "fatal-stream",
+            provider,
+            socket,
+            new TestSocketMonitor(),
+            null,
+            runner,
+            "test"
+        );
+        var callbackErrors = new System.Collections.Concurrent.ConcurrentQueue<Exception>();
+        runtime.ErrorSink.UnhandledCallbackException += exception =>
+        {
+            callbackErrors.Enqueue(exception);
+        };
+        node.Start();
+        // Observe the receive task itself before shutdown cancels unrelated node loops.
+        var ended = (Task)
+            typeof(ZLinkStreamNodeRuntime)
+                .GetField(
+                    "_receiveLoop",
+                    System.Reflection.BindingFlags.Instance
+                        | System.Reflection.BindingFlags.NonPublic
+                )!
+                .GetValue(node)!;
+        try
+        {
+            await poller.FirstWait.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            poller.AllowWait();
+            await ended.WaitAsync(TimeSpan.FromSeconds(5));
+            var receiveFailure = Assert.Single(
+                taskReports.Failures.Where(item => item.Name == "stream-recv:fatal-stream")
+            );
+            Assert.Same(failure, receiveFailure.Error);
+            Assert.All(taskReports.Failures, item => Assert.Same(failure, item.Error));
+            Assert.All(callbackErrors, error => Assert.Same(failure, error));
+        }
+        finally
+        {
+            await stop.CancelAsync();
+            poller.ReleaseWait();
+            await ended.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Same(failure, await Record.ExceptionAsync(() => node.DisposeAsync().AsTask()));
+            await runner.StopAsync();
+            Assert.Same(failure, await Record.ExceptionAsync(() => source.DisposeAsync().AsTask()));
+        }
+    }
+
     [Theory]
     [InlineData(MonitorEventFlags.None)]
     [InlineData(MonitorEventFlags.ConnectionReadyEdge)]
@@ -2863,6 +2938,27 @@ public sealed class StreamSessionForcedCleanupTests
         }
     }
 
+    private sealed class NamedFailureReporter(IZLinkRuntimeFailureReporter inner)
+        : IZLinkRuntimeFailureReporter
+    {
+        internal readonly System.Collections.Concurrent.ConcurrentQueue<(
+            string Name,
+            Exception Error
+        )> Failures = new();
+
+        public void ReportHandlerException(Exception exception) =>
+            inner.ReportHandlerException(exception);
+
+        public void ReportUnhandledCallbackException(Exception exception) =>
+            inner.ReportUnhandledCallbackException(exception);
+
+        public void ReportRuntimeTaskException(string taskName, Exception exception)
+        {
+            Failures.Enqueue((taskName, exception));
+            inner.ReportRuntimeTaskException(taskName, exception);
+        }
+    }
+
     private sealed class TestStreamSocket : IZLinkBackendStreamSocket
     {
         private readonly System.Collections.Concurrent.ConcurrentQueue<(
@@ -2870,7 +2966,7 @@ public sealed class StreamSessionForcedCleanupTests
             Message Header,
             Message Payload
         )> _receivedPackets = new();
-        private readonly AutoResetEvent _receiveSignal = new(false);
+        private TestStreamSocketPoller? _receivePoller;
         private int _recvPacketCount;
         private int _dequeuedPacketCount;
         private int _pullWithoutPermit;
@@ -2923,11 +3019,15 @@ public sealed class StreamSessionForcedCleanupTests
 
         public void SetTlsServer(string certPath, string keyPath, bool requireClientCert) { }
 
+        internal IZLinkBackendSocketPoller? ReceivePollerOverride { get; init; }
+
         public IZLinkBackendSocketPoller CreateReceivePoller() =>
-            new TestStreamSocketPoller(
-                () => !_receivedPackets.IsEmpty,
-                _receiveSignal,
-                () => BeforePoll?.Invoke()
+            ReceivePollerOverride
+            ?? (
+                _receivePoller = new TestStreamSocketPoller(
+                    () => !_receivedPackets.IsEmpty,
+                    () => BeforePoll?.Invoke()
+                )
             );
 
         public bool RecvPacket(
@@ -2941,8 +3041,6 @@ public sealed class StreamSessionForcedCleanupTests
             if (_receivedPackets.TryDequeue(out var packet))
             {
                 Interlocked.Increment(ref _dequeuedPacketCount);
-                if (_receivedPackets.IsEmpty)
-                    _receiveSignal.Reset();
                 if (packet.RoutingId is null)
                     UnidentifiedPacketConsumed.TrySetResult();
                 received = new ZLinkBackendStreamReceive(
@@ -2971,7 +3069,7 @@ public sealed class StreamSessionForcedCleanupTests
         private void EnqueuePacket(RoutingId? routingId, Message header, Message payload)
         {
             _receivedPackets.Enqueue((routingId, header, payload));
-            _receiveSignal.Set();
+            _receivePoller?.Wake();
         }
 
         public void Emit(RoutingId routingId, Message header, Message payload)
@@ -3052,7 +3150,7 @@ public sealed class StreamSessionForcedCleanupTests
                 received.Header.Dispose();
                 received.Payload.Dispose();
             }
-            _receiveSignal.Set();
+            _receivePoller?.Wake();
             if (DisposeFailure is not null)
                 System
                     .Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(DisposeFailure)
@@ -3069,30 +3167,39 @@ public sealed class StreamSessionForcedCleanupTests
         public void Dispose() => Interlocked.Increment(ref _disposeCount);
     }
 
-    private sealed class TestStreamSocketPoller(
-        Func<bool> isReadable,
-        AutoResetEvent signal,
-        Action beforePoll
-    ) : IZLinkBackendSocketPoller
+    private sealed class TestStreamSocketPoller(Func<bool> isReadable, Action beforePoll)
+        : IZLinkBackendSocketPoller
     {
-        public ZLinkBackendSocketReadiness Wait(TimeSpan timeout)
+        private readonly ZLinkProcessExecutionPool.ReceiveSource _source =
+            ZLinkProcessExecutionPool.CreateReceiveSource();
+
+        public async ValueTask<ZLinkBackendSocketReadiness> WaitAsync(
+            TimeSpan timeout,
+            CancellationToken cancellationToken
+        )
         {
+            _source.SetCancellationToken(cancellationToken);
+            await _source.ResumeAsync().ConfigureAwait(false);
             beforePoll();
-            if (!isReadable() && timeout > TimeSpan.Zero)
-                signal.WaitOne(timeout);
+            if (!isReadable() && !cancellationToken.IsCancellationRequested)
+                await _source.WaitAsync([], timeout).ConfigureAwait(false);
             return isReadable()
                 ? ZLinkBackendSocketReadiness.Readable
                 : ZLinkBackendSocketReadiness.None;
         }
 
-        public void Dispose() => signal.Set();
+        public ValueTask ResumeAsync() => _source.ResumeAsync();
+
+        internal void Wake() => _source.Wake();
+
+        public ValueTask DisposeAsync() => _source.DisposeAsync();
     }
 
     private sealed class TestSocketMonitor : IZLinkBackendSocketMonitor
     {
         private readonly System.Collections.Concurrent.ConcurrentQueue<ZLinkBackendSocketMonitorEvent> _events =
             new();
-        private readonly AutoResetEvent _eventSignal = new(false);
+        private TestStreamSocketPoller? _poller;
         private int _waitCount;
         private int _emptyPollCount;
         private int _receivedCount;
@@ -3101,18 +3208,16 @@ public sealed class StreamSessionForcedCleanupTests
 
         public int EmptyPollCount => Volatile.Read(ref _emptyPollCount);
 
-        public bool Wait(TimeSpan timeout)
-        {
-            Interlocked.Increment(ref _waitCount);
-            if (_events.IsEmpty && timeout > TimeSpan.Zero)
-                _eventSignal.WaitOne(timeout);
-            return !_events.IsEmpty;
-        }
+        public IZLinkBackendSocketPoller CreateReceivePoller() =>
+            _poller = new TestStreamSocketPoller(
+                () => !_events.IsEmpty,
+                () => Interlocked.Increment(ref _waitCount)
+            );
 
         public void Emit(ZLinkBackendSocketMonitorEvent monitorEvent)
         {
             _events.Enqueue(monitorEvent);
-            _eventSignal.Set();
+            _poller?.Wake();
         }
 
         public async Task WaitReceivedAsync(int count)
@@ -3130,8 +3235,6 @@ public sealed class StreamSessionForcedCleanupTests
             Interlocked.Increment(ref _waitCount);
             if (_events.TryDequeue(out monitorEvent))
             {
-                if (_events.IsEmpty)
-                    _eventSignal.Reset();
                 Interlocked.Increment(ref _receivedCount);
                 return true;
             }
@@ -3141,7 +3244,7 @@ public sealed class StreamSessionForcedCleanupTests
 
         public ValueTask DisposeAsync()
         {
-            _eventSignal.Set();
+            _poller?.Wake();
             return ValueTask.CompletedTask;
         }
     }

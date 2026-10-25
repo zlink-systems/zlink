@@ -139,7 +139,7 @@ public sealed class RuntimeConcurrencyBoundaryTests
     [InlineData(false)]
     [InlineData(true)]
     public async Task RunnerCompletion_PreservesContextWithoutSupervisorLaneOwnership(
-        bool longRunning
+        bool pooledSource
     )
     {
         var runner = new ZLinkRuntimeTaskRunner(
@@ -154,31 +154,44 @@ public sealed class RuntimeConcurrencyBoundaryTests
         );
         async ValueTask Callback(CancellationToken token)
         {
+            Assert.Equal(pooledSource ? null : "caller", ambient.Value);
+            ambient.Value = "application";
             entered.TrySetResult();
             await release.Task.ConfigureAwait(false);
             observed.TrySetResult(
                 (ambient.Value, runner.IsCurrentExecution, ZLinkStateLane.Current is null)
             );
         }
-        void Loop(CancellationToken token)
+        ZLinkProcessExecutionPool.ApplicationSource? source = null;
+        ZLinkRuntimeTaskRunner.ExecutionLease? lease = null;
+        Task execution;
+        if (pooledSource)
         {
-            entered.TrySetResult();
-            release.Task.GetAwaiter().GetResult();
-            observed.TrySetResult(
-                (ambient.Value, runner.IsCurrentExecution, ZLinkStateLane.Current is null)
+            source = ZLinkProcessExecutionPool.CreateApplicationSource(
+                _ =>
+                    runner.RunSourceTurn(
+                        lease!,
+                        static (callback, token) => callback(token),
+                        (Func<CancellationToken, ValueTask>)Callback
+                    ),
+                error => throw error
             );
+            lease = runner.RegisterSource("context-source", source.Completion);
+            execution = source.Completion;
+            source.Signal();
         }
-        var execution = longRunning
-            ? runner.RunLongRunning("context", Loop)
-            : runner.Run("context", Callback);
+        else
+            execution = runner.Run("context", Callback);
         await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
         var stop = runner.StopAsync().AsTask();
         Assert.False(stop.IsCompleted);
         release.TrySetResult();
         Assert.Equal(
-            ("caller", true, true),
+            ("application", true, true),
             await observed.Task.WaitAsync(TimeSpan.FromSeconds(5))
         );
+        if (source is not null)
+            await source.DisposeAsync();
         await execution.WaitAsync(TimeSpan.FromSeconds(5));
         await stop.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.False(runner.IsCurrentExecution);

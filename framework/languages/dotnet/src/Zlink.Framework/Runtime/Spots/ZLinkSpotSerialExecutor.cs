@@ -222,18 +222,25 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        await _queue.DisposeAsync().ConfigureAwait(false);
         var lanes = await _stateLane.RunAsync(CompleteChildLanesOnStateLane).ConfigureAwait(false);
         foreach (var lane in lanes)
             await lane.DisposeAsync().ConfigureAwait(false);
+        _queue.Complete();
+        await _queue.DisposeAsync().ConfigureAwait(false);
         await _stateLane.DisposeAsync().ConfigureAwait(false);
         await _taskRunner.StopAsync().ConfigureAwait(false);
     }
 
     public void RequestStop()
     {
-        _queue.Complete();
-        CompleteChildLanes();
+        _stateLane.ThrowIfReentrant();
+        AwaitStateLane(
+            _stateLane.RunAsync(() =>
+            {
+                _ = CompleteChildLanesOnStateLane();
+                _queue.Complete();
+            })
+        );
     }
 
     public async ValueTask ExecuteAsync(
@@ -1763,12 +1770,6 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
             lane.ConsumerSelected = _actorConsumerSelected;
         lanes.Add(key, lane);
         return lane;
-    }
-
-    private void CompleteChildLanes()
-    {
-        _stateLane.ThrowIfReentrant();
-        _ = AwaitStateLane(_stateLane.RunAsync(CompleteChildLanesOnStateLane));
     }
 
     private ZLinkSerialExecutionQueue[] CompleteChildLanesOnStateLane()

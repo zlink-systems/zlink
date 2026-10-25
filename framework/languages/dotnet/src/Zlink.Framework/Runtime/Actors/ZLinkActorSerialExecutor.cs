@@ -8,7 +8,7 @@ namespace Zlink.Framework.Runtime.Actors;
 // the lifecycle lane so it runs before already queued ordinary work, while a
 // terminal barrier closes admission and joins the application lane after all
 // work accepted before the close.
-internal sealed class ZLinkActorSerialExecutor
+internal sealed class ZLinkActorSerialExecutor : IAsyncDisposable
 {
     private readonly ZLinkStateLane _lane = new();
     private readonly ZLinkSerialExecutionQueue _queue;
@@ -26,6 +26,16 @@ internal sealed class ZLinkActorSerialExecutor
             lanePolicy ?? ZLinkExecutionLanePolicy.Default
         );
     }
+
+    public async ValueTask DisposeAsync()
+    {
+        await _queue.DisposeAsync().ConfigureAwait(false);
+        await _lane.DisposeAsync().ConfigureAwait(false);
+    }
+
+    internal bool IsDisposed => _queue.IsDisposed;
+
+    internal ValueTask ReleaseExecutionSourceAsync() => _queue.ReleaseExecutionSourceAsync();
 
     internal void BindExecutionOwner(Func<ZLinkSerialExecutionQueue?> provider) =>
         _queue.BindExecutionOwner(provider);

@@ -819,7 +819,7 @@ public sealed class RuntimeMetricsTests
     [Fact]
     public async Task Actor_Transfer_Pending_Count_Excludes_One_Way_Send()
     {
-        var mailbox = new ZLinkActorSerialExecutor();
+        await using var mailbox = new ZLinkActorSerialExecutor();
         var active = await mailbox.EnterAsync(CancellationToken.None);
         var pendingSend = mailbox.EnterAsync(CancellationToken.None).AsTask();
         var pendingRequest = mailbox

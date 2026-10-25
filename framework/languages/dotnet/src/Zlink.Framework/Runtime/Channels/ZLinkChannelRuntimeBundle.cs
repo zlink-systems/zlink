@@ -75,7 +75,7 @@ internal sealed class ZLinkChannelRuntimeBundle : IAsyncDisposable
     internal void StartReceiveLoop(
         ZLinkRuntimeTaskRunner runner,
         string name,
-        Action<CancellationToken> receive
+        Func<CancellationToken, ValueTask> receive
     ) => _socketOwner.Start(runner, name, receive);
 
     // ClientServer channel section 6, step 4: a listener's replies that were submitted but

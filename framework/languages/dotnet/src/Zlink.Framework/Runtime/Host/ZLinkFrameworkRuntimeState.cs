@@ -233,7 +233,7 @@ internal sealed class ZLinkFrameworkComponentState : IAsyncDisposable
         // Cancellation of observers is not target terminal completion. Drain
         // the attempt owners before cancelling their Store and transport work.
         if (_drainRelocationTargets is not null)
-            await _drainRelocationTargets(forceStopToken).ConfigureAwait(false);
+            await CaptureAsync(() => _drainRelocationTargets(forceStopToken)).ConfigureAwait(false);
         if (forceStopToken.CanBeCanceled)
             Capture(ForceStopTokenSource.Cancel);
         // Each listener loop closes its router when it returns; the deadline reaches it

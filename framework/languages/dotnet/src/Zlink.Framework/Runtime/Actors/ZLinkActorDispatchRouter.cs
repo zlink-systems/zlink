@@ -129,8 +129,8 @@ internal sealed class ZLinkActorDispatchRouter(
         }
         finally
         {
-            if (shouldPrune)
-                actorSessions.TryRemove(state.RuntimeActorId, state);
+            if (shouldPrune && actorSessions.TryRemove(state.RuntimeActorId, state))
+                await state.InvalidateRuntimeGenerationAfterDispatchesAsync().ConfigureAwait(false);
         }
     }
 
