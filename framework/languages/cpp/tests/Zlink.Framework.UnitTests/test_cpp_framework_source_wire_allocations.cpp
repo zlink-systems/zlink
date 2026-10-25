@@ -558,6 +558,7 @@ TEST (SourceWireAllocations, PublicRouteSubmissionHasNoPayloadSizedIntermediateC
         }
 #if !defined(_WIN32)
         EXPECT_EQ (channel_send_owners.serializations, 1u);
+        EXPECT_EQ (channel_send_owners.copies, 0u);
         EXPECT_EQ (channel_send_headers, 0u) << "Channel send payload=" << payload_size;
 #endif
         EXPECT_FALSE (channel_send_buffers.overflow);
@@ -589,6 +590,7 @@ TEST (SourceWireAllocations, PublicRouteSubmissionHasNoPayloadSizedIntermediateC
         }
 #if !defined(_WIN32)
         EXPECT_EQ (channel_request_owners.serializations, 1u);
+        EXPECT_EQ (channel_request_owners.copies, 0u);
         EXPECT_EQ (channel_request_headers, 0u) << "Channel request payload=" << payload_size;
 #endif
         EXPECT_FALSE (channel_request_buffers.overflow);

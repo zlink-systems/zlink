@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 
 #include "runtime/mesh/mesh_node_runtime.hpp"
+#include "runtime/backend/raw_binding_adapter.hpp"
 #include "runtime/mesh/service_channel_membership.hpp"
 #include "runtime/timers/async_delay.hpp"
 #include "runtime/actors/actor_gateway_runtime.hpp"
@@ -4409,14 +4410,14 @@ catch (...) {
 
 task_t<zlink::submit_result_t>
 mesh_node_runtime_t::send_to_channel (const std::string &channel_name,
-                                      const std::vector<zlink::message_t> &parts,
+                                      std::vector<zlink::message_t> parts,
                                       std::vector<std::uint8_t> metadata)
 {
     if (!_node) {
         throw configuration_error ("MeshNode has not started");
     }
     (void) metadata;
-    co_return co_await _node->send_to_channel (channel_name, parts);
+    co_return co_await _node->send_to_channel (channel_name, std::move (parts));
 }
 
 task_t<zlink::submit_result_t>
@@ -4425,12 +4426,14 @@ mesh_node_runtime_t::send_to_channel (const std::string &channel_name,
                                       const std::map<std::string, std::string> &metadata)
 {
     const auto encoded = mesh_metadata_codec_t::encode (metadata);
-    co_return co_await send_to_channel (channel_name, parts, std::vector<std::uint8_t> (encoded));
+    co_return co_await send_to_channel (channel_name,
+                                        detail::backend::copy_binding_messages (parts),
+                                        std::vector<std::uint8_t> (encoded));
 }
 
 task_t<zlink::submit_result_t>
 mesh_node_runtime_t::request_to_channel (const std::string &channel_name,
-                                         const std::vector<zlink::message_t> &parts,
+                                         std::vector<zlink::message_t> parts,
                                          host::pending_operation_t &operation_id,
                                          std::chrono::milliseconds timeout,
                                          std::vector<std::uint8_t> metadata)
@@ -4439,7 +4442,7 @@ try {
         throw configuration_error ("MeshNode has not started");
     }
     (void) metadata;
-    return _node->request_to_channel (channel_name, parts, operation_id, timeout);
+    return _node->request_to_channel (channel_name, std::move (parts), operation_id, timeout);
 }
 catch (...) {
     return task_t<zlink::submit_result_t> (
@@ -4454,8 +4457,8 @@ mesh_node_runtime_t::request_to_channel (const std::string &channel_name,
                                          const std::map<std::string, std::string> &metadata)
 try {
     const auto encoded = mesh_metadata_codec_t::encode (metadata);
-    return request_to_channel (channel_name, parts, operation_id, timeout,
-                               std::vector<std::uint8_t> (encoded));
+    return request_to_channel (channel_name, detail::backend::copy_binding_messages (parts),
+                               operation_id, timeout, std::vector<std::uint8_t> (encoded));
 }
 catch (...) {
     return task_t<zlink::submit_result_t> (

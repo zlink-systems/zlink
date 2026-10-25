@@ -2182,15 +2182,15 @@ void app_t::_apply_zlink_framework ()
               [mesh,
                channel_name] (runtime::messaging::message_parts_t parts) -> task_t<result_t<void>> {
                   const auto submitted =
-                    co_await mesh->send_to_channel (channel_name, parts.items ());
+                    co_await mesh->send_to_channel (channel_name, std::move (parts).take_items ());
                   co_return one_way_native_submit_result (submitted, "RouteMesh channel send");
               },
               [mesh, channel_name] (runtime::messaging::message_parts_t parts,
                                     std::chrono::milliseconds timeout)
                 -> request_task_t<result_t<runtime::messaging::message_parts_t>> {
                   detail::host::pending_operation_t operation;
-                  auto submission =
-                    mesh->request_to_channel (channel_name, parts.items (), operation, timeout);
+                  auto submission = mesh->request_to_channel (
+                    channel_name, std::move (parts).take_items (), operation, timeout);
                   auto admitted = co_await detail::request_admission_source_t{};
                   mesh->observe_request_failure (operation, admitted, "RouteMesh channel request");
                   const auto submitted = co_await submission;

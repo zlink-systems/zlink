@@ -279,14 +279,14 @@ class mesh_node_runtime_t
                      std::chrono::milliseconds timeout,
                      const std::map<std::string, std::string> &metadata);
     task_t<zlink::submit_result_t> send_to_channel (const std::string &channel_name,
-                                                    const std::vector<zlink::message_t> &parts,
+                                                    std::vector<zlink::message_t> parts,
                                                     std::vector<std::uint8_t> metadata = {});
     task_t<zlink::submit_result_t>
     send_to_channel (const std::string &channel_name,
                      const std::vector<zlink::message_t> &parts,
                      const std::map<std::string, std::string> &metadata);
     task_t<zlink::submit_result_t> request_to_channel (const std::string &channel_name,
-                                                       const std::vector<zlink::message_t> &parts,
+                                                       std::vector<zlink::message_t> parts,
                                                        host::pending_operation_t &operation_id,
                                                        std::chrono::milliseconds timeout,
                                                        std::vector<std::uint8_t> metadata = {});
