@@ -78,7 +78,7 @@ function fixture(request, disconnectOnFailure = true) {
       routes.set(target.nodeRoutingId, routeGeneration);
       await raw.observeSelectedRoutes();
       incoming.push({ sourceRid: target.nodeRoutingId, routeGeneration,
-        parts: [meshWire.encodeRouteMeshAdmission(meshWire.M6aServiceWireCommand.hello, target)], close() {} });
+        parts: [meshWire.encodeRouteMeshAdmission(meshWire.M6aServiceWireCommand.admit, target)], close() {} });
       assert.equal(await raw.pumpOne(), 'infrastructure');
     },
     async disconnectTransport() {
