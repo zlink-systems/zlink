@@ -233,6 +233,13 @@ public sealed class MeshWorkerWaitCostTests(ITestOutputHelper output)
     [Fact]
     public async Task PoolFailureTerminatesAClosingSourceWithAnAcceptedReadyReservation()
     {
+        if (
+            await IsolatedTestProcess.RunIsolatedAsync(
+                typeof(MeshWorkerWaitCostTests),
+                nameof(PoolFailureTerminatesAClosingSourceWithAnAcceptedReadyReservation)
+            )
+        )
+            return;
         var failure = new InvalidOperationException("Injected failure with a closing source.");
         var poller = new MeshReceiveWakeTests.ControlledReceivePoller();
         var receiver = ZLinkProcessExecutionPool.CreateReceiveSource(() => poller);
@@ -333,6 +340,13 @@ public sealed class MeshWorkerWaitCostTests(ITestOutputHelper output)
         bool applicationOnly
     )
     {
+        if (
+            await IsolatedTestProcess.RunIsolatedAsync(
+                typeof(MeshWorkerWaitCostTests),
+                nameof(FactoryFailureCompletesReceiveAndApplicationOnlySourceLifetimes)
+            )
+        )
+            return;
         var failure = new InvalidOperationException("Injected process factory failure.");
         Func<IPoller> factory = () => throw failure;
         if (applicationOnly)
