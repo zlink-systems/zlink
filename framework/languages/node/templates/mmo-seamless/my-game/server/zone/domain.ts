@@ -1,5 +1,5 @@
 import { Game, zoneId } from '../shared/constants';
-import { ActionRejected, type EnterZone, type MoveRequest, Position } from '../shared/messages';
+import { ActionRejected, type BorderPresenceKind, type EnterZone, type MoveRequest, Position } from '../shared/messages';
 
 export interface PlayerView {
   position: Position;
@@ -14,6 +14,7 @@ export interface Movement {
   remainingMs: number;
   zoneId: string;
   relocates: boolean;
+  borderKind: BorderPresenceKind | null;
   rejection?: ActionRejected;
 }
 interface PlayerState {
@@ -75,8 +76,8 @@ export class ZonePositionDomain {
   }
   move(id: string, request: MoveRequest): Movement {
     const state = this.players.get(id);
-    if (!state) return { accepted: false, position: new Position(0), sequence: 0n, remainingMs: 0, zoneId: this.zoneId, relocates: false, rejection: new ActionRejected('stale-sequence', 0) };
-    const reject = (reason: string, retryAfterMs = 0): Movement => ({ accepted: false, position: state.position, sequence: state.sequence, remainingMs: this.remainingMs(state), zoneId: this.zoneId, relocates: false, rejection: new ActionRejected(reason, retryAfterMs) });
+    if (!state) return { accepted: false, position: new Position(0), sequence: 0n, remainingMs: 0, zoneId: this.zoneId, relocates: false, borderKind: null, rejection: new ActionRejected('stale-sequence', 0) };
+    const reject = (reason: string, retryAfterMs = 0): Movement => ({ accepted: false, position: state.position, sequence: state.sequence, remainingMs: this.remainingMs(state), zoneId: this.zoneId, relocates: false, borderKind: null, rejection: new ActionRejected(reason, retryAfterMs) });
     if (!Number.isFinite(request.delta)) return reject('non-finite');
     if (Math.abs(request.delta) > this.maxStep) return reject('step-too-large');
     if (request.sequence > BigInt(Game.maxSafeInteger)) return reject('integer-out-of-range');
@@ -89,8 +90,17 @@ export class ZonePositionDomain {
     const distance = Math.abs(request.delta);
     if (distance > budget) return reject('move-budget', Math.max(1, Math.ceil(((distance - budget) * 1000) / this.maxSpeed)));
     const relocates = location !== this.zoneId;
+    const wasInBorder = this.isInBorder(state.position);
+    const isInBorderNow = this.isInBorder(position);
+    const borderKind: BorderPresenceKind | null = wasInBorder
+      ? isInBorderNow ? 'moved' : 'left'
+      : isInBorderNow ? 'appeared' : null;
     if (!relocates) this.players.set(id, { position, sequence: request.sequence, acceptedAt: now, connected: state.connected });
-    return { accepted: true, position, sequence: request.sequence, remainingMs: this.fullBudgetAfterMs, zoneId: location, relocates };
+    return { accepted: true, position, sequence: request.sequence, remainingMs: this.fullBudgetAfterMs, zoneId: location, relocates, borderKind };
+  }
+  isInBorder(position: Position): boolean {
+    const offset = position.x % Game.zoneWidth;
+    return offset < Game.borderRadius || offset >= Game.zoneWidth - Game.borderRadius;
   }
   state(id: string): PlayerView | undefined {
     const state = this.players.get(id);

@@ -62,7 +62,8 @@ public sealed class ZonePositionDomain(string zoneId, Func<long>? monotonicMilli
                 0,
                 new ActionRejected("stale-sequence", 0),
                 zoneId,
-                false
+                false,
+                null
             );
         if (!double.IsFinite(request.Delta))
             return Reject(actorId, "non-finite");
@@ -98,6 +99,15 @@ public sealed class ZonePositionDomain(string zoneId, Func<long>? monotonicMilli
         var position = new Position(nextX);
         var nextZoneId = location.ZoneId!;
         var relocates = nextZoneId != zoneId;
+        var wasInBorder = IsInBorder(player.Position);
+        var isInBorder = IsInBorder(position);
+        var borderKind = (wasInBorder, isInBorder) switch
+        {
+            (true, false) => BorderPresenceKind.Left,
+            (false, true) => BorderPresenceKind.Appeared,
+            (true, true) => BorderPresenceKind.Moved,
+            _ => (BorderPresenceKind?)null,
+        };
         if (!relocates)
         {
             players[actorId] = player with
@@ -114,8 +124,16 @@ public sealed class ZonePositionDomain(string zoneId, Func<long>? monotonicMilli
             FullBudgetAfterMs,
             null,
             nextZoneId,
-            relocates
+            relocates,
+            borderKind
         );
+    }
+
+    public bool IsInBorder(Position position)
+    {
+        var offset = position.X % GameNames.ZoneWidth;
+        return offset < GameNames.BorderRadius
+            || offset >= GameNames.ZoneWidth - GameNames.BorderRadius;
     }
 
     public PlayerStateView State(string actorId)
@@ -232,7 +250,8 @@ public sealed class ZonePositionDomain(string zoneId, Func<long>? monotonicMilli
             RemainingMs(player.LastAcceptedMilliseconds, clock()),
             new ActionRejected(reason, retryAfterMs),
             zoneId,
-            false
+            false,
+            null
         );
     }
 
@@ -259,7 +278,8 @@ public sealed record MovementResult(
     int RemainingMs,
     ActionRejected? Rejection,
     string ZoneId,
-    bool Relocates
+    bool Relocates,
+    BorderPresenceKind? BorderKind
 );
 
 public sealed record ZoneLocationResolution(string? ZoneId, ActionRejected? Rejection);

@@ -47,5 +47,25 @@ export function checkDomain(): void {
   );
   assert.equal(arrival?.reason, 'integer-out-of-range');
   assertions++;
-  console.log(`Domain checks: 9/9 passed; assertions: ${assertions}`);
+
+  const moveFrom = (x: number, delta: number) => {
+    const candidate = new ZonePositionDomain('zone-2', () => now);
+    candidate.addPlayer('player', new EnterZone(new Position(x), 0n, 0));
+    return candidate.move('player', new MoveRequest(delta, 1n));
+  };
+  const entered = moveFrom(181, 10);
+  assert.equal(entered.borderKind, 'appeared');
+  const remained = moveFrom(191, 1);
+  assert.equal(remained.borderKind, 'moved');
+  const left = moveFrom(191, -10);
+  assert.equal(left.borderKind, 'left');
+  const stayedOutside = moveFrom(181, 1);
+  assert.equal(stayedOutside.borderKind, null);
+  const boundaries = new ZonePositionDomain('zone-2', () => now);
+  assert.equal(boundaries.isInBorder(new Position(90)), true);
+  assert.equal(boundaries.isInBorder(new Position(89.9)), false);
+  assert.equal(boundaries.isInBorder(new Position(10)), false);
+  assert.equal(boundaries.isInBorder(new Position(9.9)), true);
+  assertions += 8;
+  console.log(`Domain checks: 10/10 passed; assertions: ${assertions}`);
 }

@@ -82,7 +82,7 @@ Relocation changes an object's execution host; drain moves a host's workload els
 
 ### Zone observations and border publications
 
-`ZonePositionDomain` owns the current player list and positions. `ZoneSpot` sends `PlayerAppeared`, `PlayerMoved`, and `PlayerLeft` to connected players in the same Zone. It publishes border updates on the existing `border` channel for adjacent-Zone observers, and `BorderHandler` forwards each typed event to the receiving Actor.
+`ZonePositionDomain` owns the current player list, positions, and border transitions. `ZoneSpot` sends `PlayerAppeared`, `PlayerMoved`, and `PlayerLeft` to connected players in the same Zone. `PlayerLeft` reasons are `left-zone`, `disconnected`, and `out-of-range`. It publishes border updates on the existing `border` channel for adjacent-Zone observers, and `BorderHandler` forwards each typed event to the receiving Actor.
 
 ## Request flow
 

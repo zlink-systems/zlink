@@ -58,6 +58,7 @@ public enum PlayerLeftReason
 {
     LeftZone,
     Disconnected,
+    OutOfRange,
 }
 
 public sealed class BorderPresenceKindConverter() : JsonStringEnumConverter<BorderPresenceKind>(

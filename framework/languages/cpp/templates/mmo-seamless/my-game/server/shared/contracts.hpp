@@ -132,10 +132,12 @@ enum class PlayerLeftReason
 {
     left_zone,
     disconnected,
+    out_of_range,
 };
 NLOHMANN_JSON_SERIALIZE_ENUM (PlayerLeftReason,
                               {{PlayerLeftReason::left_zone, "left-zone"},
-                               {PlayerLeftReason::disconnected, "disconnected"}})
+                               {PlayerLeftReason::disconnected, "disconnected"},
+                               {PlayerLeftReason::out_of_range, "out-of-range"}})
 enum class BorderPresenceKind
 {
     appeared,

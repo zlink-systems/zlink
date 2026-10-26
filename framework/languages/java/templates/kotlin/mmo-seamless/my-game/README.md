@@ -51,7 +51,7 @@ The runner validates the structure, starts an isolated Redis Compose project, st
 | Scenario | Assertion |
 | --- | --- |
 | cross | Step-size, move-budget, world-boundary, and internal-packet rejections preserve state; movement retries only after the server delay and crosses Zone while preserving Actor and Session identity. |
-| border | An observer across physical nodes receives appearance, movement, `left-zone`, and `disconnected` events as the player crosses and disconnects. |
+| border | An observer across physical nodes receives appearance, movement, `out-of-range` when a player moves into the Zone interior beyond the border band, `left-zone` when the player crosses a Zone boundary, and `disconnected` on connection loss. |
 | reconnect | A new physical Session rebinds the same Actor and preserves position, sequence and logical Zone. |
 | update | Movement continues during Zone A drain; relocation signals complete; Session and Actor identity persist after replacement; fresh work remains available. |
 

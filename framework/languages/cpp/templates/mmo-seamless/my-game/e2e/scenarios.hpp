@@ -117,6 +117,27 @@ inline void border (const std::string &endpoint)
                && local_move.position.x == settled.x && local_move.sequence == settled.sequence,
              "Same-Zone players did not observe the completed movement");
 
+    Client adjacent_observer (endpoint, "border-inner-observer-" + unique_id ());
+    const auto adjacent = adjacent_observer.join (299);
+    require (adjacent.nodeId == "zoneA",
+             "The out-of-range observer did not start in the adjacent Zone");
+    auto reentered_waiter = adjacent_observer.observe<PlayerMoved> ([&] (const auto &message) {
+        return message.playerId == source.player_id && message.sequence == 4;
+    });
+    const auto reentered = source.move (-1, 4);
+    const auto observed_border = reentered_waiter.wait ();
+    require (reentered.x == 300 && observed_border.position.x == 300,
+             "The adjacent Zone did not observe the player re-entering the border band");
+
+    auto out_of_range_waiter = adjacent_observer.observe<PlayerLeft> ([&] (const auto &message) {
+        return message.playerId == source.player_id
+               && message.reason == PlayerLeftReason::out_of_range;
+    });
+    const auto left_border = source.move (10, 5);
+    const auto out_of_range = out_of_range_waiter.wait ();
+    require (left_border.x == 310 && out_of_range.reason == PlayerLeftReason::out_of_range,
+             "The adjacent Zone did not observe PlayerLeft(out-of-range) after inward movement");
+
     auto disconnected_waiter = observer.observe<PlayerLeft> ([&] (const auto &message) {
         return message.playerId == source.player_id
                && message.reason == PlayerLeftReason::disconnected;

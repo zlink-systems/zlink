@@ -136,6 +136,10 @@ public final class DomainChecks {
     private void jsonContract() throws Exception {
         var left = Json.MAPPER.writeValueAsString(new PlayerLeft("player", PlayerLeftReason.LEFT_ZONE));
         require(left.contains("\"reason\":\"left-zone\""), "PlayerLeft enum was not serialized by name");
+        var outOfRange = Json.MAPPER.writeValueAsString(
+                new PlayerLeft("player", PlayerLeftReason.OUT_OF_RANGE));
+        require(outOfRange.contains("\"reason\":\"out-of-range\""),
+                "OutOfRange enum was not serialized by name");
         var border = Json.MAPPER.writeValueAsString(new BorderPresence(
                 "zone-2", "player", new Position(10), 1, BorderPresenceKind.MOVED, null));
         require(border.contains("\"kind\":\"moved\""), "Border event kind was not serialized by name");
@@ -147,6 +151,36 @@ public final class DomainChecks {
         require(rejected.contains("\"retryAfterMs\":0"), "ActionRejected retryAfterMs field changed");
         require(ActionRejected.class.getRecordComponents()[1].getType() == int.class,
                 "RetryAfterMs must be a 32-bit integer");
+    }
+
+    private ZonePositionDomain.MovementResult moveFrom(double x, double delta) {
+        var now = new AtomicLong();
+        var domain = new ZonePositionDomain("zone-2", now::get);
+        domain.addPlayer("player", new EnterZone(new Position(x), 0, 0));
+        return domain.move("player", new MoveRequest(delta, 1));
+    }
+
+    private void borderMovementTransitions() {
+        var entered = moveFrom(181, 10);
+        require(entered.accepted() && entered.position().x() == 191
+                        && entered.borderKind() == BorderPresenceKind.APPEARED,
+                "Movement into the border band did not produce Appeared");
+        var remained = moveFrom(191, 1);
+        require(remained.borderKind() == BorderPresenceKind.MOVED,
+                "Movement inside the border band did not produce Moved");
+        var left = moveFrom(191, -10);
+        require(left.accepted() && left.position().x() == 181
+                        && left.borderKind() == BorderPresenceKind.LEFT,
+                "Movement from the border band into the Zone did not produce Left");
+        var outside = moveFrom(181, 1);
+        require(outside.borderKind() == null,
+                "Movement outside the border band produced a border publication");
+        var boundaries = new ZonePositionDomain("zone-2", () -> 0);
+        require(boundaries.isInBorder(new Position(90))
+                        && !boundaries.isInBorder(new Position(89.9))
+                        && !boundaries.isInBorder(new Position(10))
+                        && boundaries.isInBorder(new Position(9.9)),
+                "The border boundaries were classified incorrectly");
     }
 
     private void check(String name, CheckedCheck test) throws Exception {
@@ -165,7 +199,8 @@ public final class DomainChecks {
         checks.check("remaining-time relocation snapshot", checks::remainingTimeSnapshot);
         checks.check("presence lifecycle", checks::presenceLifecycle);
         checks.check("enum and nullable JSON", checks::jsonContract);
-        System.out.println("Domain checks: 9/9 passed; assertions: " + checks.assertions);
+        checks.check("border movement transitions", checks::borderMovementTransitions);
+        System.out.println("Domain checks: 10/10 passed; assertions: " + checks.assertions);
     }
 
     @FunctionalInterface

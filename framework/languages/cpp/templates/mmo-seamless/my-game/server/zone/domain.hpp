@@ -41,6 +41,7 @@ class ZonePositionDomain
         std::optional<ActionRejected> rejection;
         std::string zoneId;
         bool relocates = false;
+        std::optional<BorderPresenceKind> borderKind;
     };
     struct PlayerSnapshot
     {
@@ -93,7 +94,8 @@ class ZonePositionDomain
                 remaining_ms (player.lastAcceptedMilliseconds, clock_ ()),
                 ActionRejected{std::move (reason), retry_after_ms},
                 zone_id_,
-                false};
+                false,
+                std::nullopt};
     }
 
   public:
@@ -157,7 +159,8 @@ class ZonePositionDomain
                     0,
                     ActionRejected{"stale-sequence", 0},
                     zone_id_,
-                    false};
+                    false,
+                    std::nullopt};
         auto &player = found->second;
         if (!std::isfinite (request.delta))
             return reject (player, "non-finite");
@@ -187,6 +190,15 @@ class ZonePositionDomain
         const Position position{next_x};
         const auto next_zone_id = *location.zoneId;
         const auto relocates = next_zone_id != zone_id_;
+        const auto was_in_border = is_in_border (player.position);
+        const auto is_in_border_now = is_in_border (position);
+        std::optional<BorderPresenceKind> border_kind;
+        if (was_in_border && !is_in_border_now)
+            border_kind = BorderPresenceKind::left;
+        else if (!was_in_border && is_in_border_now)
+            border_kind = BorderPresenceKind::appeared;
+        else if (was_in_border)
+            border_kind = BorderPresenceKind::moved;
         if (!relocates)
             player = {position, request.sequence, now, player.connected};
         return {true,
@@ -195,7 +207,15 @@ class ZonePositionDomain
                 FullBudgetAfterMs,
                 std::nullopt,
                 next_zone_id,
-                relocates};
+                relocates,
+                border_kind};
+    }
+
+    bool is_in_border (const Position &position) const
+    {
+        const auto offset = std::fmod (position.x, Names::zone_width);
+        return offset < Names::border_radius
+               || offset >= Names::zone_width - Names::border_radius;
     }
 
     PlayerView state (const std::string &actor_id) const

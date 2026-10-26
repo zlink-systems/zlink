@@ -22,7 +22,8 @@ internal static class DomainChecks
         Check("remaining-time relocation snapshot", RestoresRemainingBudget);
         Check("presence lifecycle", TracksPresenceLifecycle);
         Check("enum and nullable JSON", PreservesJsonContract);
-        Console.WriteLine($"Domain checks: {passed}/9 passed; assertions: {assertions}");
+        Check("border movement transitions", ClassifiesBorderMovement);
+        Console.WriteLine($"Domain checks: {passed}/10 passed; assertions: {assertions}");
     }
 
     private static void Check(string name, Action check)
@@ -187,6 +188,12 @@ internal static class DomainChecks
         );
         Require(left.Contains("\"reason\":\"left-zone\"", StringComparison.Ordinal),
             "PlayerLeft reason was not serialized as its kebab-case name.");
+        var outOfRange = JsonSerializer.Serialize(
+            new PlayerLeft("player", PlayerLeftReason.OutOfRange),
+            options
+        );
+        Require(outOfRange.Contains("\"reason\":\"out-of-range\"", StringComparison.Ordinal),
+            "OutOfRange reason was not serialized as its kebab-case name.");
         var border = JsonSerializer.Serialize(
             new BorderPresence(
                 "zone-2",
@@ -212,6 +219,49 @@ internal static class DomainChecks
                 == typeof(int),
             "ActionRejected RetryAfterMs must use a 32-bit integer."
         );
+    }
+
+    private static void ClassifiesBorderMovement()
+    {
+        var entering = CreateAt(181);
+        var entered = entering.Move("player", new MoveRequest(10, 1));
+        Require(entered.Accepted && entered.Position.X == 191,
+            "The move from outside into the border band was not accepted.");
+        Require(entered.BorderKind == BorderPresenceKind.Appeared,
+            "Entering the border band did not produce Appeared.");
+
+        var remaining = CreateAt(191);
+        var remained = remaining.Move("player", new MoveRequest(1, 1));
+        Require(remained.BorderKind == BorderPresenceKind.Moved,
+            "Movement inside the border band did not produce Moved.");
+
+        var leaving = CreateAt(191);
+        var left = leaving.Move("player", new MoveRequest(-10, 1));
+        Require(left.Accepted && left.Position.X == 181,
+            "The move from the border band to the Zone interior was not accepted.");
+        Require(left.BorderKind == BorderPresenceKind.Left,
+            "Leaving the border band did not produce Left.");
+
+        var outside = CreateAt(181);
+        var stayedOutside = outside.Move("player", new MoveRequest(1, 1));
+        Require(stayedOutside.BorderKind is null,
+            "Movement outside the border band produced a border publication.");
+
+        Require(outside.IsInBorder(new Position(90)),
+            "The upper border boundary was excluded from the border band.");
+        Require(!outside.IsInBorder(new Position(89.9)),
+            "The coordinate before the upper border boundary was included.");
+        Require(!outside.IsInBorder(new Position(10)),
+            "The lower interior boundary was included in the border band.");
+        Require(outside.IsInBorder(new Position(9.9)),
+            "The coordinate before the lower interior boundary was excluded.");
+    }
+
+    private static ZonePositionDomain CreateAt(double x)
+    {
+        var domain = new ZonePositionDomain("zone-2", () => 0);
+        domain.AddPlayer("player", new EnterZone(new Position(x), 0, 0));
+        return domain;
     }
 
     private static void RequireRejected(

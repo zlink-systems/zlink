@@ -75,6 +75,7 @@ data class ActionRejected(val reason: String = "", val retryAfterMs: Int = 0)
 object PlayerLeftReason {
     const val LEFT_ZONE = "left-zone"
     const val DISCONNECTED = "disconnected"
+    const val OUT_OF_RANGE = "out-of-range"
 }
 
 object BorderPresenceKind {

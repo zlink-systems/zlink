@@ -34,6 +34,7 @@ data class MovementResult(
     val rejection: ActionRejected? = null,
     val zoneId: String,
     val relocates: Boolean,
+    val borderKind: String? = null,
 )
 
 class ZonePositionDomain(
@@ -90,6 +91,7 @@ class ZonePositionDomain(
                 ActionRejected("stale-sequence"),
                 zoneId,
                 false,
+                null,
             )
         if (!request.delta.isFinite()) return reject(player, "non-finite")
         if (abs(request.delta) > Rules.MAX_STEP) return reject(player, "step-too-large")
@@ -117,6 +119,14 @@ class ZonePositionDomain(
 
         val nextZone = requireNotNull(location.zoneId)
         val relocates = nextZone != zoneId
+        val wasInBorder = isInBorder(player.position)
+        val isInBorderNow = isInBorder(position)
+        val borderKind = when {
+            wasInBorder && !isInBorderNow -> BorderPresenceKind.LEFT
+            !wasInBorder && isInBorderNow -> BorderPresenceKind.APPEARED
+            wasInBorder -> BorderPresenceKind.MOVED
+            else -> null
+        }
         if (!relocates)
             players[actorId] = player.copy(position = position, sequence = request.sequence, lastAcceptedMs = now)
         return MovementResult(
@@ -126,7 +136,13 @@ class ZonePositionDomain(
             Rules.FULL_BUDGET_AFTER_MS,
             zoneId = nextZone,
             relocates = relocates,
+            borderKind = borderKind,
         )
+    }
+
+    fun isInBorder(position: Position): Boolean {
+        val offset = position.x % Rules.ZONE_WIDTH
+        return offset < Rules.BORDER_RADIUS || offset >= Rules.ZONE_WIDTH - Rules.BORDER_RADIUS
     }
 
     fun state(actorId: String): PlayerStateView = players[actorId]?.view(clock())
@@ -180,6 +196,7 @@ class ZonePositionDomain(
             ActionRejected(reason, retryAfterMs),
             zoneId,
             false,
+            null,
         )
 
     private fun PlayerState.view(now: Long) =

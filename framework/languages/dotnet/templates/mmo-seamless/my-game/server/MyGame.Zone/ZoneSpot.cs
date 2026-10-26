@@ -64,14 +64,15 @@ public sealed class ZoneSpot(
             actor.Context.ActorId,
             new PlayerAppeared(actor.Context.ActorId, arrival.Position)
         );
-        await PublishBorderAsync(
-            actor.Context.ActorId,
-            arrival.Position,
-            arrival.Sequence,
-            BorderPresenceKind.Appeared,
-            null,
-            cancellationToken
-        );
+        if (positions.IsInBorder(arrival.Position))
+            await PublishBorderAsync(
+                actor.Context.ActorId,
+                arrival.Position,
+                arrival.Sequence,
+                BorderPresenceKind.Appeared,
+                null,
+                cancellationToken
+            );
     }
 
     public async ValueTask OnLeaveActorAsync(PlayerActor actor, CancellationToken cancellationToken)
@@ -121,14 +122,15 @@ public sealed class ZoneSpot(
                 actor.Context.ActorId,
                 new PlayerAppeared(actor.Context.ActorId, state.Position)
             );
-            await PublishBorderAsync(
-                actor.Context.ActorId,
-                state.Position,
-                state.Sequence,
-                BorderPresenceKind.Appeared,
-                null,
-                cancellationToken
-            );
+            if (positions.IsInBorder(state.Position))
+                await PublishBorderAsync(
+                    actor.Context.ActorId,
+                    state.Position,
+                    state.Sequence,
+                    BorderPresenceKind.Appeared,
+                    null,
+                    cancellationToken
+                );
         }
         await SendWorldStateAsync(actor);
     }
@@ -158,14 +160,15 @@ public sealed class ZoneSpot(
             actorId,
             new PlayerMoved(actorId, movement.Position, movement.Sequence)
         );
-        await PublishBorderAsync(
-            actorId,
-            movement.Position,
-            movement.Sequence,
-            BorderPresenceKind.Moved,
-            null,
-            cancellationToken
-        );
+        if (movement.BorderKind is { } borderKind)
+            await PublishBorderAsync(
+                actorId,
+                movement.Position,
+                movement.Sequence,
+                borderKind,
+                borderKind == BorderPresenceKind.Left ? PlayerLeftReason.OutOfRange : null,
+                cancellationToken
+            );
         await SendWorldStateAsync(actor);
     }
 
@@ -175,7 +178,8 @@ public sealed class ZoneSpot(
         {
             if (
                 observerId == presence.PlayerId
-                || Math.Abs(observer.Position.X - presence.Position.X) > GameNames.BorderRadius
+                || (presence.Kind != BorderPresenceKind.Left
+                    && Math.Abs(observer.Position.X - presence.Position.X) > GameNames.BorderRadius)
             )
                 continue;
             if (presence.Kind == BorderPresenceKind.Appeared)
@@ -231,14 +235,15 @@ public sealed class ZoneSpot(
     )
     {
         await PublishLocalAsync(playerId, new PlayerLeft(playerId, reason));
-        await PublishBorderAsync(
-            playerId,
-            position,
-            sequence,
-            BorderPresenceKind.Left,
-            reason,
-            cancellationToken
-        );
+        if (positions.IsInBorder(position))
+            await PublishBorderAsync(
+                playerId,
+                position,
+                sequence,
+                BorderPresenceKind.Left,
+                reason,
+                cancellationToken
+            );
     }
 
     private async ValueTask PublishBorderAsync(
@@ -250,9 +255,6 @@ public sealed class ZoneSpot(
         CancellationToken cancellationToken
     )
     {
-        var offset = position.X % GameNames.ZoneWidth;
-        if (offset >= GameNames.BorderRadius && offset < GameNames.ZoneWidth - GameNames.BorderRadius)
-            return;
         foreach (var adjacent in GameNames.AdjacentZones(Context.SpotId))
             await Context
                 .Outbound.Publish(

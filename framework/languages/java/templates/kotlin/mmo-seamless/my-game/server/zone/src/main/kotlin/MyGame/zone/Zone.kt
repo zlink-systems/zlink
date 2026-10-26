@@ -47,7 +47,8 @@ class Zone(
         }
         positions.addPlayer(actorId, arrival)
         publishLocal(actorId, PlayerAppeared(actorId, arrival.position))
-        publishBorder(actorId, arrival.position, arrival.sequence, BorderPresenceKind.APPEARED)
+        if (positions.isInBorder(arrival.position))
+            publishBorder(actorId, arrival.position, arrival.sequence, BorderPresenceKind.APPEARED)
     }
 
     override suspend fun onLeaveActorSuspending(actor: Player) {
@@ -72,7 +73,8 @@ class Zone(
         val current = requireNotNull(positions.setConnected(actorId, true))
         if (!previous.connected) {
             publishLocal(actorId, PlayerAppeared(actorId, current.position))
-            publishBorder(actorId, current.position, current.sequence, BorderPresenceKind.APPEARED)
+            if (positions.isInBorder(current.position))
+                publishBorder(actorId, current.position, current.sequence, BorderPresenceKind.APPEARED)
         }
         sendWorldState(actor)
     }
@@ -92,7 +94,15 @@ class Zone(
             return
         }
         publishLocal(actorId, PlayerMoved(actorId, movement.position, movement.sequence))
-        publishBorder(actorId, movement.position, movement.sequence, BorderPresenceKind.MOVED)
+        movement.borderKind?.let { kind ->
+            publishBorder(
+                actorId,
+                movement.position,
+                movement.sequence,
+                kind,
+                if (kind == BorderPresenceKind.LEFT) PlayerLeftReason.OUT_OF_RANGE else null,
+            )
+        }
         sendWorldState(actor)
     }
 
@@ -100,7 +110,8 @@ class Zone(
         for ((observerId, observer) in positions.connectedPlayers()) {
             if (
                 observerId == presence.playerId ||
-                    kotlin.math.abs(observer.position.x - presence.position.x) > Rules.BORDER_RADIUS
+                    (presence.kind != BorderPresenceKind.LEFT &&
+                        kotlin.math.abs(observer.position.x - presence.position.x) > Rules.BORDER_RADIUS)
             )
                 continue
             when (presence.kind) {
@@ -142,13 +153,14 @@ class Zone(
 
     private suspend fun publishLeft(playerId: String, state: PlayerStateView, reason: String) {
         publishLocal(playerId, PlayerLeft(playerId, reason))
-        publishBorder(
-            playerId,
-            state.position,
-            state.sequence,
-            BorderPresenceKind.LEFT,
-            reason,
-        )
+        if (positions.isInBorder(state.position))
+            publishBorder(
+                playerId,
+                state.position,
+                state.sequence,
+                BorderPresenceKind.LEFT,
+                reason,
+            )
     }
 
     private suspend fun publishBorder(
@@ -158,8 +170,6 @@ class Zone(
         kind: String,
         reason: String? = null,
     ) {
-        val offset = position.x % Rules.ZONE_WIDTH
-        if (offset >= Rules.BORDER_RADIUS && offset < Rules.ZONE_WIDTH - Rules.BORDER_RADIUS) return
         for (target in adjacent) {
             context
                 .outbound()

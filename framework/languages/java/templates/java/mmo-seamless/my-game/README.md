@@ -45,7 +45,7 @@ Docker builds a shared node image and a runner image. The containerized runner v
 | Scenario | Assertion |
 | --- | --- |
 | cross | Server-validated delta movement crosses the Zone boundary after rejecting an oversized step, an exhausted movement budget and a world-boundary move without changing state; Dungeon creation continues. |
-| border | Same-Zone observers receive appearance and movement pushes; observers receive `left-zone` when a player crosses a Zone boundary and `disconnected` when a player disconnects. |
+| border | Same-Zone observers receive appearance and movement pushes; adjacent observers receive `out-of-range` when a player moves into the Zone interior beyond the border band, `left-zone` when a player crosses a Zone boundary, and `disconnected` when a player disconnects. |
 | reconnect | A new physical Session rebinds the same Actor and preserves position, sequence and logical Zone. |
 | update | Movement continues during Zone A drain; relocation signals complete; Session and Actor identity persist after replacement; fresh work remains available. |
 

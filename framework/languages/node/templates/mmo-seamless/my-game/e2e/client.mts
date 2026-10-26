@@ -287,6 +287,25 @@ export async function scenario(
         movedMark,
         (v) => v.playerId === id && v.position.x === 301 && v.sequence === 3n
       );
+      const adjacentObserver = create('inner-observer');
+      const adjacent = await adjacentObserver.join(`border-inner-observer-${runId}`, 299);
+      assert.equal(adjacent.nodeId, 'zoneA');
+      const reenteredMark = adjacentObserver.messages.length;
+      await client.move(-1, 4n);
+      const reentered = await adjacentObserver.wait<PlayerMoved>(
+        PacketNames.playerMoved,
+        reenteredMark,
+        (v) => v.playerId === id && v.sequence === 4n
+      );
+      assert.equal(reentered.position.x, 300);
+      const outOfRangeMark = adjacentObserver.messages.length;
+      await client.move(10, 5n);
+      const outOfRange = await adjacentObserver.wait<PlayerLeft>(
+        PacketNames.playerLeft,
+        outOfRangeMark,
+        (v) => v.playerId === id && v.reason === 'out-of-range'
+      );
+      assert.equal(outOfRange.reason, 'out-of-range');
       const disconnectedMark = observer.messages.length;
       await client.close();
       const disconnected = await observer.wait<PlayerLeft>(
