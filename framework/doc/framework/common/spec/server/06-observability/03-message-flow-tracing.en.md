@@ -152,10 +152,13 @@ the following values.
 `reply_path_missing`, `unexpected_reply`, `backpressure`, `stale_target`,
 `shutdown`.
 
-`no_handler` is used only when the target Actor, Spot, or node exists in this runtime but no handler is
-registered for the packet. When the message could not be followed to the current owner and the target
-Actor or Spot does not exist in this runtime either, the reason is `stale_target`. The same distinction
-applies to `zlink.message_flow` and to the [runtime metrics message drop](02-runtime-metrics.en.md#5-one-way-message-drop).
+Use `no_handler` only when the existing admission and Message Follow rules have established the local
+dispatch target and only its packet-handler lookup fails. Use `stale_target` when those rules terminate
+delivery because the target Actor, Spot, or node, or a valid target route, is absent. Target presence is
+determined for the packet's dispatch target by the identity and fence rules of that path, and a missing
+target is not finalized as a terminal failure while Follow is still in progress. This distinction applies
+to `zlink.dispatch_error` and to the [runtime metrics message drop](02-runtime-metrics.en.md#5-one-way-message-drop).
+A `zlink.message_flow` reason follows its closed list above.
 
 | `action` | The result of the framework handling the failure |
 |---|---|
