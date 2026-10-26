@@ -117,7 +117,7 @@ test('an observed remote request registers its Framework deadline without a Prom
       replyParts = parts;
     }
   };
-  runtime.topology.admittedPeer = () => ({ descriptor: { nodeRoutingId: 'target' } });
+  runtime.topology.readyPeer = () => ({ descriptor: { nodeRoutingId: 'target' } });
   runtime.isPeerRouteReady = () => true;
   try {
     const observer = { operationCompleted() {}, operationFailed() {} };
@@ -257,7 +257,7 @@ function runtimeWithBinding(t, submit) {
   const runtime = createRuntime();
   const host = new ZLinkNodeRawBindingPort(context).createHost();
   runtime.router = host.createRouter();
-  runtime.topology.admittedPeer = () => ({ descriptor: { nodeRoutingId: 'target' } });
+  runtime.topology.readyPeer = () => ({ descriptor: { nodeRoutingId: 'target' } });
   t.after(() => {
     runtime.mailbox.close();
     host.close();
@@ -337,7 +337,7 @@ for (const failureAt of ['binding', 'protocol', 'submit', 'admission', 'receive'
       if (failureAt === 'submit') throw failure;
       return { result: zlink.SubmitResult.Ok, admitted: Promise.resolve(), reply };
     });
-    runtime.topology.admittedPeer = () => ({
+    runtime.topology.readyPeer = () => ({
       descriptor: { nodeRoutingId: 'target' },
       liveness: { recordReceived() { if (failureAt === 'receive') throw failure; } }
     });
