@@ -437,9 +437,9 @@ final class ZLinkJavaSubmissionTest {
     void onlyBackpressuredSendsRegisterAndRegisterBeforeObservingAdmission(Adapter adapter)
             throws Exception {
         try (var binding = new BindingProbe()) {
-            long before = registrations(binding.operations);
+            long before = binding.registrations.count.get();
             binding.send(adapter, List.of(Message.from("ok"))).toCompletableFuture().join();
-            assertEquals(before, registrations(binding.operations));
+            assertEquals(before, binding.registrations.count.get());
             binding.sendFailure = new ZlinkSubmitException(SubmitResult.BACKPRESSURED);
             try {
                 var rejected = binding.send(adapter, List.of(Message.from("rejected")));
@@ -448,7 +448,7 @@ final class ZLinkJavaSubmissionTest {
             } catch (ZlinkSubmitException expected) {
                 assertSame(binding.sendFailure, expected);
             }
-            assertEquals(before, registrations(binding.operations));
+            assertEquals(before, binding.registrations.count.get());
             assertEquals(0, binding.operations.pendingCount());
             binding.sendFailure = null;
             binding.result = SubmitResult.BACKPRESSURED;
@@ -457,7 +457,7 @@ final class ZLinkJavaSubmissionTest {
             binding.send(adapter, List.of(Message.from("already admitted")))
                     .toCompletableFuture()
                     .join();
-            assertEquals(before + 1, registrations(binding.operations));
+            assertEquals(before + 1, binding.registrations.count.get());
             assertEquals(0, binding.operations.pendingCount());
         }
     }
@@ -500,7 +500,7 @@ final class ZLinkJavaSubmissionTest {
                                     assertThrows(CompletionException.class, result::join)
                                             .getCause())
                             .kind());
-            assertEquals(1, registrations(binding.operations));
+            assertEquals(1, binding.registrations.count.get());
             assertEquals(0, binding.operations.pendingCount());
             binding.admission.completeExceptionally(new IllegalStateException("late failure"));
             assertEquals(
@@ -629,13 +629,14 @@ final class ZLinkJavaSubmissionTest {
             var operationsField = ZLinkJavaRawMeshNode.class.getDeclaredField("operations");
             operationsField.setAccessible(true);
             var registry = (ZLinkServiceOperationRegistry) operationsField.get(mesh);
+            var registrations = new RegistrationProbe(registry);
             var portOperations = ZLinkJavaRawServicePort.class.getDeclaredField("operations");
             portOperations.setAccessible(true);
             assertSame(registry, portOperations.get(meshPort));
             var socket = meshPort.openRouter(RoutingId.from("mesh-source"));
             var send = meshPort.sendMessages(socket, TARGET, List.of(Message.from("pending")));
             assertEquals(1, registry.pendingCount());
-            assertEquals(1, registrations(registry));
+            assertEquals(1, registrations.count.get());
             mesh.close();
             var failure =
                     assertThrows(CompletionException.class, () -> send.toCompletableFuture().join())
@@ -652,16 +653,33 @@ final class ZLinkJavaSubmissionTest {
         }
     }
 
-    private static long registrations(ZLinkServiceOperationRegistry registry) throws Exception {
-        var slotsField = ZLinkServiceOperationRegistry.class.getDeclaredField("slots");
-        slotsField.setAccessible(true);
-        long count = 0;
-        for (var entry : (Object[]) slotsField.get(registry)) {
-            var generation = entry.getClass().getDeclaredField("generation");
-            generation.setAccessible(true);
-            count += generation.getLong(entry);
+    /** Counts registrations at the current hash owner, including entries already completed. */
+    private static final class RegistrationProbe extends java.util.concurrent.ConcurrentHashMap<Object, Object> {
+        final java.util.concurrent.atomic.AtomicLong count = new java.util.concurrent.atomic.AtomicLong();
+
+        RegistrationProbe(ZLinkServiceOperationRegistry registry) {
+            try {
+                var pending = ZLinkServiceOperationRegistry.class.getDeclaredField("pending");
+                pending.setAccessible(true);
+                assertTrue(((java.util.Map<?, ?>) pending.get(registry)).isEmpty());
+                pending.set(registry, this);
+            } catch (ReflectiveOperationException failure) {
+                throw new AssertionError(failure);
+            }
         }
-        return count;
+
+        @Override
+        public Object put(Object key, Object entry) {
+            try {
+                var registered = entry.getClass().getSuperclass().getDeclaredField("registered");
+                registered.setAccessible(true);
+                assertTrue(registered.getBoolean(entry), "dispatcher registration must precede hash publication");
+            } catch (ReflectiveOperationException failure) {
+                throw new AssertionError(failure);
+            }
+            count.incrementAndGet();
+            return super.put(key, entry);
+        }
     }
 
     private static void await(CountDownLatch latch) {
@@ -693,7 +711,8 @@ final class ZLinkJavaSubmissionTest {
                 new systems.zlink.framework.runtime.internal.execution.ZLinkStateLane();
         private final ZLinkServiceOperationRegistry operations =
                 new ZLinkServiceOperationRegistry(
-                        ZLinkOneWayCalls.failureForStatus(ZLinkOneWayCalls.SHUTDOWN));
+                        lane, ZLinkOneWayCalls.failureForStatus(ZLinkOneWayCalls.SHUTDOWN));
+        private final RegistrationProbe registrations = new RegistrationProbe(operations);
         private final ZLinkJavaRawServicePort port;
         private final RouterSocket router;
         private final Context context;
