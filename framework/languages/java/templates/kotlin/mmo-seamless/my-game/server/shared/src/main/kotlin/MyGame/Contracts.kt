@@ -84,15 +84,20 @@ object BorderPresenceKind {
     const val LEFT = "left"
 }
 
-data class PlayerAppeared(val playerId: String = "", val position: Position = Position())
+data class PlayerAppeared(val playerId: String = "", val position: Position = Position(),
+    val sourceSpotId: String = "",
+)
 
 data class PlayerMoved(
     val playerId: String = "",
     val position: Position = Position(),
     val sequence: Long = 0,
+    val sourceSpotId: String = "",
 )
 
-data class PlayerLeft(val playerId: String = "", val reason: String = "")
+data class PlayerLeft(val playerId: String = "", val reason: String = "",
+    val sourceSpotId: String = "",
+)
 
 data class BorderPresence(
     val sourceZoneId: String = "",

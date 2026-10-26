@@ -107,6 +107,9 @@ suspend fun scenario(scenario: Scenario, nodes: Nodes) {
         equal(a.playerId, sa.actorId)
         equal(b.playerId, sb.actorId)
         val before = advance(a, b, 1L)
+        a.send(EnterDungeonRequest())
+        val activeParty = a.next<PartyView> { it.partyId == initial.partyId && it.runId == initial.runId && it.phase == RunPhase.Active }
+        equal(initial.members, activeParty.members)
         equal(initial.nodeId, before.nodeId)
         equal(sa, a.sessionInfo())
         equal(sb, b.sessionInfo())

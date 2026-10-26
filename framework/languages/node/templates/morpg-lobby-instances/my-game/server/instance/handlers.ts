@@ -3,7 +3,11 @@ import { zlinkSpotActorSendHandler, zlinkSpotPacketHandler } from '@zlink-system
 import type { ZLinkMessageContext, ZLinkSpotRequestHandler } from '@zlink-systems/framework';
 import { PacketNames } from '../shared/constants';
 import {
-  DungeonView, PartyView, JoinDungeon, ActionRejected, EnterDungeonRequest,
+  DungeonView,
+  PartyView,
+  JoinDungeon,
+  ActionRejected,
+  EnterDungeonRequest,
   type JoinLobbyRequest,
   type ViewRequest,
   type AdvanceRequest,
@@ -74,15 +78,9 @@ export class Delivery {
     context: ZLinkMessageContext,
     request: DungeonView
   ): Promise<void> {
-    // Restore the declared DTO class before forwarding (#1731).
-    const type = deliveryPackets.get(context.packetName);
-    if (!type) throw new Error('Unregistered dungeon push');
-    await actor.context.boundSession.send(Object.assign(new type(), request)).submit();
+    await actor.deliver(context.packetName, request);
   }
 }
-const deliveryPackets: ReadonlyMap<string, new () => object> = new Map([
-  [PacketNames.dungeonView, DungeonView]
-]);
 @Injectable()
 @zlinkSpotPacketHandler({ spot: () => Dungeon, packetName: PacketNames.prepareDungeon })
 export class Prepare implements ZLinkSpotRequestHandler<Dungeon, PrepareDungeon, DungeonPrepared> {
@@ -99,7 +97,7 @@ export class Enter { async handle(spot: Dungeon, actor: Player, _context: ZLinkM
 export class Travel { async handle(_spot: Dungeon, actor: Player, _context: ZLinkMessageContext, request: JoinDungeon): Promise<void> { actor.context.joinSpot(request.dungeonId, request).defer(); } }
 @Injectable()
 @zlinkSpotActorSendHandler({ spot: () => Dungeon, actor: () => Player, packetName: PacketNames.partyView })
-export class PartyDelivery { async handle(_spot: Dungeon, actor: Player, _context: ZLinkMessageContext, request: PartyView): Promise<void> { await actor.context.boundSession.send(Object.assign(new PartyView(), request)).submit(); } }
+export class PartyDelivery { async handle(_spot: Dungeon, actor: Player, context: ZLinkMessageContext, request: PartyView): Promise<void> { await actor.deliver(context.packetName, request); } }
 @Injectable()
 @zlinkSpotActorSendHandler({ spot: () => Dungeon, actor: () => Player, packetName: PacketNames.actionRejected })
-export class RejectDelivery { async handle(_spot: Dungeon, actor: Player, _context: ZLinkMessageContext, request: ActionRejected): Promise<void> { await actor.context.boundSession.send(new ActionRejected(request.reason, request.retryAfterMs)).submit(); } }
+export class RejectDelivery { async handle(_spot: Dungeon, actor: Player, context: ZLinkMessageContext, request: ActionRejected): Promise<void> { await actor.deliver(context.packetName, request); } }

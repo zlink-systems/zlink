@@ -1,4 +1,8 @@
 #pragma once
+#include <optional>
+#include <string_view>
+#include <type_traits>
+#pragma once
 #include "player-state.hpp"
 #include "server/shared/config.hpp"
 #include <zlink/framework.hpp>
@@ -12,6 +16,18 @@ class Player final : public fx::actor_t
     const NodeConfig &config_;
 
   public:
+    template <class Message> fx::task_t<void> deliver (const Message &message, bool visible = true)
+    {
+        std::optional<std::string_view> source;
+        if constexpr (std::is_same_v<Message, BorderVisible>)
+            source = message.observerFieldId;
+
+        else if constexpr (std::is_same_v<Message, DungeonView>)
+            source = message.dungeonId;
+        if (source && (context_.spot_id () != *source || !visible))
+            return fx::task_t<void> (fx::result_t<void>::success ());
+        return context_.bound_session ().send (message).async ();
+    }
     PlayerState state;
     Player (fx::actor_context_t context, const NodeConfig &config) :
         context_ (std::move (context)), config_ (config)

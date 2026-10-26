@@ -84,6 +84,11 @@ inline void party (const std::string &endpoint)
     const auto first = enter(p1, p2);
     p1.send(AdvanceRequest{});
     same_dungeon(p1.dungeon_view(first.partyId, 1), p2.dungeon_view(first.partyId, 1));
+    p1.send (EnterDungeonRequest{});
+    const auto active_party = p1.receive<PartyView> ([&] (const auto &view) {
+        return view.partyId == first.partyId && view.runId == first.runId && view.phase == RunPhase::Active;
+    });
+    require (active_party.members == first.members, "Dungeon member lost PartyView");
     Client p3(endpoint, "p3-" + id), p4(endpoint, "p4-" + id);
     const auto second = enter(p3, p4);
     require(first.dungeonId != second.dungeonId && first.runId != second.runId, "Two parties shared run");

@@ -33,6 +33,11 @@ class Entry final : public fx::entry_spot_t<Player>
     void configure () override
     {
         context_.handlers ()
+          .add_actor_send<&Entry::notification_PartyView> ();
+        context_.handlers ().add_actor_send<&Entry::notification_DungeonView> ();
+        context_.handlers ().add_actor_send<&Entry::notification_ActionRejected> ();
+
+        context_.handlers ()
           .add_actor_send<&Entry::login> ()
           .add_actor_send<&Entry::create> ()
           .add_actor_send<&Entry::enter> ();
@@ -54,5 +59,24 @@ class Entry final : public fx::entry_spot_t<Player>
     }
     fx::task_t<void> on_actor_joined (Player &) override { co_return; }
     fx::task_t<void> on_leave_actor (Player &) override { co_return; }
+
+    fx::task_t<void>
+    notification_PartyView (Player &actor, fx::message_context_t &, const PartyView &message)
+    {
+        return actor.deliver (message);
+    }
+
+    fx::task_t<void>
+    notification_DungeonView (Player &actor, fx::message_context_t &, const DungeonView &message)
+    {
+        return actor.deliver (message);
+    }
+
+    fx::task_t<void> notification_ActionRejected (Player &actor,
+                                                  fx::message_context_t &,
+                                                  const ActionRejected &message)
+    {
+        return actor.deliver (message);
+    }
 };
 }

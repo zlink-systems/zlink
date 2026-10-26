@@ -124,9 +124,6 @@ export class ViewChannel {
     await spot.showChannelView(actor);
   }
 }
-const deliveryPackets: ReadonlyMap<string, new () => PlayerView> = new Map([
-  [PacketNames.playerView, PlayerView]
-]);
 @Injectable()
 @zlinkSpotActorSendHandler({
   spot: () => Zone,
@@ -140,10 +137,7 @@ export class DeliverView {
     context: ZLinkMessageContext,
     message: PlayerView
   ): Promise<void> {
-    const type = deliveryPackets.get(context.packetName);
-    if (!type) throw new Error(`Unregistered player push: ${context.packetName}`);
-    // Restore the declared public DTO class before forwarding (#1731).
-    await actor.context.boundSession.send(Object.assign(new type(), message)).submit();
+    await actor.deliver(context.packetName, message);
   }
 }
 
@@ -157,9 +151,31 @@ export class DeliverChannelView {
   async handle(
     _spot: Zone,
     actor: Player,
-    _context: ZLinkMessageContext,
+    context: ZLinkMessageContext,
     message: ChannelView
   ): Promise<void> {
-    await actor.context.boundSession.send(Object.assign(new ChannelView(0n, []), message)).submit();
+    await actor.deliver(context.packetName, message);
+  }
+}
+
+@Injectable()
+@zlinkEntrySpotActorSendHandler({
+  entrySpot: () => Entry,
+  actor: () => Player,
+  packetName: PacketNames.playerView
+})
+@zlinkEntrySpotActorSendHandler({
+  entrySpot: () => Entry,
+  actor: () => Player,
+  packetName: PacketNames.channelView
+})
+export class EntryNotifications {
+  async handle(
+    _spot: Entry,
+    actor: Player,
+    context: ZLinkMessageContext,
+    message: PlayerView | ChannelView
+  ): Promise<void> {
+    await actor.deliver(context.packetName, message);
   }
 }

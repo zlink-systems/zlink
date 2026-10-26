@@ -1,4 +1,8 @@
 #pragma once
+#include <optional>
+#include <string_view>
+#include <type_traits>
+#pragma once
 #include "config.hpp"
 #include <zlink/framework.hpp>
 namespace MyGame
@@ -9,6 +13,15 @@ class Player final : public fx::actor_t
     fx::actor_context_t context_;
 
   public:
+    template <class Message> fx::task_t<void> deliver (const Message &message, bool visible = true)
+    {
+        std::optional<std::string_view> source;
+        if constexpr (std::is_same_v<Message, DungeonView>)
+            source = message.dungeonId;
+        if (source && (context_.spot_id () != *source || !visible))
+            return fx::task_t<void> (fx::result_t<void>::success ());
+        return context_.bound_session ().send (message).async ();
+    }
     explicit Player (fx::actor_context_t context) : context_ (std::move (context)) {}
     fx::actor_context_t &context () noexcept override { return context_; }
     const fx::actor_context_t &context () const noexcept override { return context_; }

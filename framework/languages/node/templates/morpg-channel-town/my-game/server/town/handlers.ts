@@ -3,6 +3,7 @@ import { zlinkSpotActorSendHandler, zlinkSpotPacketHandler } from '@zlink-system
 import type { ZLinkMessageContext } from '@zlink-systems/framework';
 import { PacketNames } from '../shared/constants';
 import {
+  DungeonView,
   JoinTownRequest,
   ChangeChannelRequest,
   JoinPartyRequest,
@@ -11,8 +12,7 @@ import {
   RunStarted,
   RunCompleted,
   ActionRejected,
-  TownView,
-  restorePush
+  TownView
 } from '../shared/messages';
 import { Player } from '../shared/player';
 import { Town } from './town';
@@ -133,7 +133,7 @@ export class TownDelivery {
     context: ZLinkMessageContext,
     view: TownView
   ): Promise<void> {
-    await actor.context.boundSession.send(restorePush(context.packetName, view)).submit();
+    await actor.deliver(context.packetName, view);
   }
 }
 
@@ -174,6 +174,23 @@ export class TownActionRejectedDelivery {
     context: ZLinkMessageContext,
     message: ActionRejected
   ): Promise<void> {
-    await actor.context.boundSession.send(restorePush(context.packetName, message)).submit();
+    await actor.deliver(context.packetName, message);
+  }
+}
+
+@Injectable()
+@zlinkSpotActorSendHandler({
+  spot: () => Town,
+  actor: () => Player,
+  packetName: PacketNames.dungeonView
+})
+export class TownNotifications {
+  async handle(
+    _spot: Town,
+    actor: Player,
+    context: ZLinkMessageContext,
+    message: DungeonView
+  ): Promise<void> {
+    await actor.deliver(context.packetName, message);
   }
 }

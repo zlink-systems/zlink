@@ -19,6 +19,7 @@ class Dungeon final : public fx::spot_t<Player>
     const fx::spot_context_t &context () const noexcept override { return context_; }
     void configure () override
     {
+        context_.handlers ().add_actor_send<&Dungeon::notification_BorderVisible> ();
         context_.handlers ()
           .add_handler<&Dungeon::prepare> ()
           .add_actor_send<&Dungeon::reconnect> ()
@@ -93,11 +94,11 @@ class Dungeon final : public fx::spot_t<Player>
     }
     fx::task_t<void> deliver (Player &actor, fx::message_context_t &, const DungeonView &event)
     {
-        co_await actor.context ().bound_session ().send (event).async ();
+        return actor.deliver (event);
     }
     fx::task_t<void> deliver_party (Player &actor, fx::message_context_t &, const PartyView &event)
     {
-        co_await actor.context ().bound_session ().send (event).async ();
+        return actor.deliver (event);
     }
     fx::task_t<void> enter (Player &actor, fx::message_context_t &, const EnterDungeonRequest &)
     {
@@ -144,6 +145,13 @@ class Dungeon final : public fx::spot_t<Player>
         for (const auto &id : state.members)
             if (id != requester)
                 co_await actors_.send (fx::actor_id_t (id), current).async ();
+    }
+
+    fx::task_t<void> notification_BorderVisible (Player &actor,
+                                                 fx::message_context_t &,
+                                                 const BorderVisible &message)
+    {
+        return actor.deliver (message);
     }
 };
 class DungeonRelocation final : public fx::spot_relocation_adapter_t<Dungeon>

@@ -59,13 +59,18 @@ class PartyActions {
         context: ZLinkMessageContext,
         request: PartyView,
     ) {
-        actor.context.boundSession().kotlin().send(request).await()
+        actor.deliver(request)
     }
     @ZLinkSpotActorSend
     suspend fun reject(spot: Party, actor: Player, context: ZLinkMessageContext, request: ActionRejected) {
-        actor.context.boundSession().kotlin().send(request).await()
+        actor.deliver(request)
     }
 
+
+    @ZLinkSpotActorSend
+    suspend fun notificationDungeonView(spot: Party, actor: Player, context: ZLinkMessageContext, message: DungeonView) {
+        actor.deliver(message)
+    }
 }
 
 class Started : ZLinkSuspendingSpotPacketHandler<Party, RunStarted> {

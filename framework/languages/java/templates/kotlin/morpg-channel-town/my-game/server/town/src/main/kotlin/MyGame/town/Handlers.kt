@@ -72,7 +72,17 @@ class Actions {
 
     @ZLinkSpotActorSend
     suspend fun push(spot: Town, actor: Player, dispatch: ZLinkMessageContext, message: TownView) {
-        actor.context.boundSession().kotlin().send(message).await()
+        actor.deliver(message)
+    }
+
+    @ZLinkSpotActorSend
+    suspend fun notificationDungeonView(spot: Town, actor: Player, context: ZLinkMessageContext, message: DungeonView) {
+        actor.deliver(message)
+    }
+
+    @ZLinkSpotActorSend
+    suspend fun notificationActionRejected(spot: Town, actor: Player, context: ZLinkMessageContext, message: ActionRejected) {
+        actor.deliver(message)
     }
 }
 

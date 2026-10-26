@@ -65,7 +65,7 @@ public sealed class DungeonDelivery
         CancellationToken ct
     )
     {
-        return actor.Context.BoundSession.Send(request).Async();
+        return actor.DeliverAsync(request);
     }
 }
 
@@ -78,7 +78,10 @@ public sealed class TownDelivery : IZLinkSpotActorSendHandler<DungeonSpot, Playe
         IZLinkMessageContext context,
         TownView request,
         CancellationToken ct
-    ) => actor.Context.BoundSession.Send(request).Async();
+    )
+    {
+        return actor.DeliverAsync(request);
+    }
 }
 
 [ZLinkSpotActorSendHandler(nameof(EnterDungeonRequest))]

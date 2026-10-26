@@ -6,9 +6,20 @@ import type {
   ZLinkActorJoinCompletion,
   ZLinkActorRelocationAdapter
 } from '@zlink-systems/framework';
-import { ActionRejected } from './messages';
+import { TownView, DungeonView, restoreNotification, type Notification, ActionRejected } from './messages';
 import { Rejection } from './constants';
 export class Player implements ZLinkActor {
+  async deliver(packetName: string, payload: Notification, visible = true): Promise<void> {
+    const message = restoreNotification(packetName, payload);
+    const sourceSpotId =
+      message instanceof TownView
+        ? message.townId
+        : message instanceof DungeonView
+          ? message.dungeonId
+          : null;
+    if (sourceSpotId !== null && (String(this.context.spotId) !== sourceSpotId || !visible)) return;
+    await this.context.boundSession.send(message).submit();
+  }
   constructor(readonly context: ZLinkActorContext) {}
   assertIdentity(playerId: string): void {
     if (playerId !== this.context.actorId) throw new Error('Player identity mismatch');

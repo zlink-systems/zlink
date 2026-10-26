@@ -161,6 +161,8 @@ internal static class Scenarios
                 current = selected.First(id => id != "channel");
                 await using var p1 = await GameClient.ConnectAsync(run.Outcome, endpoint, "p1", ct);
                 await p1.JoinAsync(2, ct);
+                await using var townObserver = await GameClient.ConnectAsync(run.Outcome, endpoint, "dungeon-town-observer", ct);
+                await townObserver.JoinAsync(2, ct);
                 var p2 = await GameClient.ConnectAsync(run.Outcome, endpoint, "p2", ct);
                 try
                 {
@@ -192,10 +194,10 @@ internal static class Scenarios
                         SameDungeon(advanced, await observed);
                     }
                     Require(advanced.Phase == RunPhase.Completed, "Final stage did not complete run.");
-                    var completedPartyResult = p1.ReceiveAsync<TownView>(
+                    var completedPartyResult = townObserver.ReceiveAsync<TownView>(
                         view => view.Parties.Any(item => item.PartyId == advanced.PartyId
                             && item.Phase == RunPhase.Completed && item.RunId == advanced.RunId), ct);
-                    await p1.Connector.Send(new ViewRequest()).Async(ct);
+                    await townObserver.Connector.Send(new ViewRequest()).Async(ct);
                     var completedParty = await completedPartyResult;
                     Require(completedParty.Parties.Single(item => item.PartyId == advanced.PartyId).Phase == RunPhase.Completed,
                         "Party owner did not complete the run.");

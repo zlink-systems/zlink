@@ -19,4 +19,19 @@ public final class EnterWorld {
         actor.move(location.zoneId(), new EnterZone(new Position(request.x()), 0, 0));
         return CompletableFuture.completedFuture(null);
     }
+
+    @ZLinkSpotActorSend
+    public CompletionStage<Void> notificationPlayerAppeared(Entry spot, Player actor, ZLinkMessageContext context, PlayerAppeared message) {
+        return actor.deliver(message);
+    }
+
+    @ZLinkSpotActorSend
+    public CompletionStage<Void> notificationPlayerMoved(Entry spot, Player actor, ZLinkMessageContext context, PlayerMoved message) {
+        return actor.deliver(message);
+    }
+
+    @ZLinkSpotActorSend
+    public CompletionStage<Void> notificationPlayerLeft(Entry spot, Player actor, ZLinkMessageContext context, PlayerLeft message) {
+        return actor.deliver(message);
+    }
 }

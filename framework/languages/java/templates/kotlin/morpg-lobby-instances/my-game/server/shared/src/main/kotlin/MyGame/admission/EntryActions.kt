@@ -33,4 +33,19 @@ class EntryActions {
         context: ZLinkMessageContext,
         request: JoinPartyRequest,
     ) = spot.join(actor, request.partyId, false)
+
+    @ZLinkSpotActorSend
+    suspend fun notificationPartyView(spot: Entry, actor: Player, context: ZLinkMessageContext, message: PartyView) {
+        actor.deliver(message)
+    }
+
+    @ZLinkSpotActorSend
+    suspend fun notificationDungeonView(spot: Entry, actor: Player, context: ZLinkMessageContext, message: DungeonView) {
+        actor.deliver(message)
+    }
+
+    @ZLinkSpotActorSend
+    suspend fun notificationActionRejected(spot: Entry, actor: Player, context: ZLinkMessageContext, message: ActionRejected) {
+        actor.deliver(message)
+    }
 }

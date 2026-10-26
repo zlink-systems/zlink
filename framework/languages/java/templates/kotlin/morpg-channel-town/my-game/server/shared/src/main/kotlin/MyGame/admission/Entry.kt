@@ -29,4 +29,19 @@ class EntryActions {
         }
         actor.context.joinSpot(Names.townId(request.channel), request).defer()
     }
+
+    @ZLinkSpotActorSend
+    suspend fun notificationTownView(spot: Entry, actor: Player, context: ZLinkMessageContext, message: TownView) {
+        actor.deliver(message)
+    }
+
+    @ZLinkSpotActorSend
+    suspend fun notificationDungeonView(spot: Entry, actor: Player, context: ZLinkMessageContext, message: DungeonView) {
+        actor.deliver(message)
+    }
+
+    @ZLinkSpotActorSend
+    suspend fun notificationActionRejected(spot: Entry, actor: Player, context: ZLinkMessageContext, message: ActionRejected) {
+        actor.deliver(message)
+    }
 }

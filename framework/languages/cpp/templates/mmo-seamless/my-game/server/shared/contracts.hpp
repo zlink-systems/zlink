@@ -153,7 +153,8 @@ struct PlayerAppeared
     static constexpr auto packet_name = "PlayerAppeared";
     std::string playerId;
     Position position;
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (PlayerAppeared, playerId, position)
+    std::string sourceSpotId;
+    NLOHMANN_DEFINE_TYPE_INTRUSIVE (PlayerAppeared, playerId, position, sourceSpotId)
 };
 struct PlayerMoved
 {
@@ -161,14 +162,16 @@ struct PlayerMoved
     std::string playerId;
     Position position;
     std::int64_t sequence = 0;
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (PlayerMoved, playerId, position, sequence)
+    std::string sourceSpotId;
+    NLOHMANN_DEFINE_TYPE_INTRUSIVE (PlayerMoved, playerId, position, sequence, sourceSpotId)
 };
 struct PlayerLeft
 {
     static constexpr auto packet_name = "PlayerLeft";
     std::string playerId;
     PlayerLeftReason reason = PlayerLeftReason::left_zone;
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (PlayerLeft, playerId, reason)
+    std::string sourceSpotId;
+    NLOHMANN_DEFINE_TYPE_INTRUSIVE (PlayerLeft, playerId, reason, sourceSpotId)
 };
 struct BorderPresence
 {

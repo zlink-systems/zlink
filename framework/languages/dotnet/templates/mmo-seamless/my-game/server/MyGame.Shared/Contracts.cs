@@ -74,11 +74,11 @@ public enum BorderPresenceKind
     Left,
 }
 
-public sealed record PlayerAppeared(string PlayerId, Position Position);
+public sealed record PlayerAppeared(string PlayerId, Position Position, string SourceSpotId = "");
 
-public sealed record PlayerMoved(string PlayerId, Position Position, long Sequence);
+public sealed record PlayerMoved(string PlayerId, Position Position, long Sequence, string SourceSpotId = "");
 
-public sealed record PlayerLeft(string PlayerId, PlayerLeftReason Reason);
+public sealed record PlayerLeft(string PlayerId, PlayerLeftReason Reason, string SourceSpotId = "");
 
 public sealed record BorderPresence(
     string SourceZoneId,

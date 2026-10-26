@@ -65,14 +65,14 @@ public sealed class DungeonDelivery
         CancellationToken ct
     )
     {
-        return actor.Context.BoundSession.Send(request).Async();
+        return actor.DeliverAsync(request);
     }
 }
 
 public sealed class RejectionDelivery : IZLinkSpotActorSendHandler<DungeonSpot, PlayerActor, ActionRejected>
 {
     public ValueTask HandleAsync(DungeonSpot spot, PlayerActor actor, IZLinkMessageContext context, ActionRejected request, CancellationToken ct)
-        => actor.Context.BoundSession.Send(request).Async();
+        => actor.DeliverAsync(request);
 }
 
 public sealed class DungeonEnter : IZLinkSpotActorSendHandler<DungeonSpot, PlayerActor, EnterDungeonRequest>
@@ -87,5 +87,5 @@ public sealed class DungeonTravel : IZLinkSpotActorSendHandler<DungeonSpot, Play
 public sealed class PartyDelivery : IZLinkSpotActorSendHandler<DungeonSpot, PlayerActor, PartyView>
 {
     public ValueTask HandleAsync(DungeonSpot spot, PlayerActor actor, IZLinkMessageContext context, PartyView request, CancellationToken ct)
-        => actor.Context.BoundSession.Send(request).Async();
+        => actor.DeliverAsync(request);
 }

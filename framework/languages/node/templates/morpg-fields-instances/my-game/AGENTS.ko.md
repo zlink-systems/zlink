@@ -95,7 +95,7 @@ Actor가 소속 Spot을 바꾸는 동작은 membership 변경이다. 대상 Spot
 1. client가 Session node에 STREAM으로 연결하고 첫 패킷 `JoinWorldRequest`를 보낸다. `Session`은 첫 패킷 이름을 확인하고 `playerId`로 Player Actor를 `getOrCreate`한 뒤 Session에 binding하고 원래 패킷을 relay한다.
 2. 새 Actor는 Entry Spot `Entry`에서 시작한다. `EnterWorld` handler가 identity를 확인하고 `Player.move`로 좌표에 해당하는 Field에 `joinSpot(...).defer()`를 요청한다. 참가가 끝나면 `Player.onJoinCompleted`가 binding된 Session으로 `WorldState`를 보낸다.
 3. 이후 같은 client의 패킷은 Actor가 속한 Field의 handler(`Move` 등)가 처리한다. 이동이 다른 Field의 좌표에 닿으면 `Move`가 다시 `Player.move`를 호출하며, 다른 node에 있는 Field여도 client 연결은 바뀌지 않는다. `Field.publishBorder`가 근처 위치를 publish하고 `BorderHandler`와 `Delivery`가 관찰자에게 결과를 push한다.
-4. `CreateParty`와 `JoinParty`는 `FieldState`의 파티를 바꾸고 필드의 멤버에게 `FieldView`를 push한다.
+4. `CreateParty`와 `JoinParty`는 독립 Party Spot에 명령을 보내고, Party Spot은 소속 멤버에게 `PartyView`를 push한다.
 5. 리더가 `EnterDungeon`을 보내면 `Field.enter`가 `Dungeon`을 `getOrCreate`하고, 여기에 `PrepareDungeon`을 request로 보낸 뒤 각 멤버의 Actor에 `JoinDungeon`을 보낸다. `DungeonTravel`이 참가를 요청하고 `Dungeon.onJoinedActor`가 `DungeonView`를 push하며 `Advance`가 stage를 올린다.
 6. node를 교체할 때 `runHost`의 `drain` 명령이 relocation을 요청한다. Framework는 `FieldRelocation`·`DungeonRelocation`·`PlayerRelocation`의 `capture`로 게임 상태를 받아 다른 node에서 `restore`한다.
 

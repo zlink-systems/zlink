@@ -7,6 +7,7 @@ import type {
 } from '@zlink-systems/framework';
 import { PacketNames } from '../shared/constants';
 import {
+  DungeonView,
   JoinWorldRequest,
   MoveRequest,
   BorderPresence,
@@ -15,7 +16,8 @@ import {
   JoinPartyRequest,
   EnterDungeonRequest,
   JoinDungeon,
-  PartyView, ViewRequest
+  PartyView,
+  ViewRequest
 } from '../shared/messages';
 import { Player } from '../shared/player';
 import { Field } from './spots';
@@ -135,16 +137,24 @@ export class BorderHandler {
     await spot.showBorder(message);
   }
 }
-const deliveryPackets: ReadonlyMap<string, new () => object> = new Map<string, new () => object>([
-  [PacketNames.partyView, PartyView],
-  [PacketNames.borderVisible, BorderVisible]
-]);
 @Injectable()
 @zlinkSpotActorSendHandler({
   spot: () => Field,
   actor: () => Player,
   packetName: PacketNames.partyView
 })
+export class PartyDelivery {
+  async handle(
+    _spot: Field,
+    actor: Player,
+    context: ZLinkMessageContext,
+    message: PartyView
+  ): Promise<void> {
+    await actor.deliver(context.packetName, message);
+  }
+}
+
+@Injectable()
 @zlinkSpotActorSendHandler({
   spot: () => Field,
   actor: () => Player,
@@ -152,15 +162,12 @@ const deliveryPackets: ReadonlyMap<string, new () => object> = new Map<string, n
 })
 export class Delivery {
   async handle(
-    _spot: Field,
+    spot: Field,
     actor: Player,
     context: ZLinkMessageContext,
-    message: PartyView | BorderVisible
+    message: BorderVisible
   ): Promise<void> {
-    const type = deliveryPackets.get(context.packetName);
-    if (!type) throw new Error(`Unregistered field push: ${context.packetName}`);
-    // Restore the declared public DTO class before forwarding (#1731).
-    await actor.context.boundSession.send(Object.assign(new type(), message)).submit();
+    await actor.deliver(context.packetName, message, spot.isVisible(actor));
   }
 }
 
@@ -169,5 +176,22 @@ export class Delivery {
 export class FieldQuery {
   async handle(spot: Field, actor: Player, _context: ZLinkMessageContext, _request: ViewRequest): Promise<void> {
     await spot.show(actor);
+  }
+}
+
+@Injectable()
+@zlinkSpotActorSendHandler({
+  spot: () => Field,
+  actor: () => Player,
+  packetName: PacketNames.dungeonView
+})
+export class FieldNotifications {
+  async handle(
+    spot: Field,
+    actor: Player,
+    context: ZLinkMessageContext,
+    message: DungeonView
+  ): Promise<void> {
+    await actor.deliver(context.packetName, message, spot.isVisible(actor));
   }
 }

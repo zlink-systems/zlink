@@ -58,12 +58,12 @@ public final class Actions {
     @ZLinkSpotActorSend
     public CompletionStage<Void> forward(
             Zone spot, Player actor, ZLinkMessageContext context, PlayerView message) {
-        return actor.context().boundSession().send(message).submit();
+        return actor.deliver(message);
     }
 
     @ZLinkSpotActorSend
     public CompletionStage<Void> forwardChannelView(
             Zone spot, Player actor, ZLinkMessageContext context, ChannelView message) {
-        return actor.context().boundSession().send(message).submit();
+        return actor.deliver(message);
     }
 }

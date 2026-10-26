@@ -95,6 +95,10 @@ public final class Scenarios {
             equal(a.playerId, sa.actorId());
             equal(b.playerId, sb.actorId());
             var before = advance(a, b, 1);
+            a.send(new EnterDungeonRequest());
+            var activeParty = a.next(PartyView.class, view -> view.partyId().equals(initial.partyId())
+                    && Objects.equals(view.runId(), initial.runId()) && view.phase() == RunPhase.Active);
+            equal(initial.members(), activeParty.members());
             equal(initial.nodeId(), before.nodeId());
             equal(sa, a.sessionInfo());
             equal(sb, b.sessionInfo());

@@ -1,11 +1,22 @@
 package MyGame
 
+import MyGame.*
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionStage
 import systems.zlink.framework.actors.*
 import systems.zlink.framework.kotlin.*
 
 class Player(override val context: ZLinkActorContext) : ZLinkSuspendingActor() {
+    suspend fun deliver(message: Any, visible: Boolean = true) {
+        val sourceSpotId: String? = when (message) {
+            is TownView -> message.townId
+            is DungeonView -> message.dungeonId
+            else -> null
+        }
+        if (sourceSpotId != null && (context.spotId().orElse(null) != sourceSpotId || !visible)) return
+        context.boundSession().kotlin().send(message).await()
+    }
+
     override suspend fun onJoinCompletedSuspending(completion: ZLinkActorJoinCompletion) {
         when (completion) {
             is ZLinkActorJoinCompletion.Accepted -> Unit

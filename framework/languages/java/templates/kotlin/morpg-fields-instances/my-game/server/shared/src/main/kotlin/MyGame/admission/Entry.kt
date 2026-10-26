@@ -24,4 +24,19 @@ class EnterWorld {
         actor.checkIdentity(request.playerId)
         actor.move(EnterField(request.x, 0))
     }
+
+    @ZLinkSpotActorSend
+    suspend fun notificationPartyView(spot: Entry, actor: Player, context: ZLinkMessageContext, message: PartyView) {
+        actor.deliver(message)
+    }
+
+    @ZLinkSpotActorSend
+    suspend fun notificationBorderVisible(spot: Entry, actor: Player, context: ZLinkMessageContext, message: BorderVisible) {
+        actor.deliver(message)
+    }
+
+    @ZLinkSpotActorSend
+    suspend fun notificationDungeonView(spot: Entry, actor: Player, context: ZLinkMessageContext, message: DungeonView) {
+        actor.deliver(message)
+    }
 }

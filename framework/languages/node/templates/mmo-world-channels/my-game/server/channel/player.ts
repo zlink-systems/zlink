@@ -8,11 +8,19 @@ import type {
   ZLinkActorRelocationAdapter
 } from '@zlink-systems/framework';
 import { NODE_CONFIG, type NodeConfig } from '../shared/config';
-import { Control } from '../shared/constants';
+import { zoneId, Control } from '../shared/constants';
 import { PlayerData } from './data';
 import { GoldBalance, type GoldSnapshot } from './domain';
-import { ActionRejected } from '../shared/messages';
+import { PlayerView, restoreNotification, type Notification, ActionRejected } from '../shared/messages';
 export class Player implements ZLinkActor {
+  async deliver(packetName: string, payload: Notification, visible = true): Promise<void> {
+    const message = restoreNotification(packetName, payload);
+    const sourceSpotId = zoneId(
+      message instanceof PlayerView ? message.channel : message.channelId
+    );
+    if (sourceSpotId !== null && (String(this.context.spotId) !== sourceSpotId || !visible)) return;
+    await this.context.boundSession.send(message).submit();
+  }
   readonly gold: GoldBalance;
   constructor(
     readonly context: ZLinkActorContext,

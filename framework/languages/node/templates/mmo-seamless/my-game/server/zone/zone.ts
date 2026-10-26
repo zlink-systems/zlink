@@ -48,7 +48,7 @@ export class Zone implements ZLinkSpot<Player> {
     const arrival = this.positions.takeArrival(actor.context.actorId);
     if (!arrival) throw new Error('Zone admission has no movement intent');
     this.positions.addPlayer(actor.context.actorId, arrival);
-    await this.publishLocal(actor.context.actorId, new PlayerAppeared(actor.context.actorId, arrival.position));
+    await this.publishLocal(actor.context.actorId, new PlayerAppeared(actor.context.actorId, arrival.position, String(this.context.spotId)));
     if (this.positions.isInBorder(arrival.position))
       await this.publishBorder(actor.context.actorId, arrival.position, arrival.sequence, 'appeared', null);
   }
@@ -88,14 +88,16 @@ export class Zone implements ZLinkSpot<Player> {
       await this.context.outbound.publish(Names.border, borderTopic(id, target), new BorderPresence(id, playerId, position, sequence, kind, reason)).submit();
   }
   async publishLeft(playerId: string, state: PlayerView, reason: PlayerLeftReason): Promise<void> {
-    await this.publishLocal(playerId, new PlayerLeft(playerId, reason));
+    await this.publishLocal(playerId, new PlayerLeft(playerId, reason, String(this.context.spotId)));
     if (this.positions.isInBorder(state.position))
       await this.publishBorder(playerId, state.position, state.sequence, 'left', reason);
   }
   async showBorder(presence: BorderPresence): Promise<void> {
     for (const [observerId, observer] of this.positions.connectedPlayers()) {
       if (observerId === presence.playerId || (presence.kind !== 'left' && Math.abs(observer.position.x - presence.position.x) > Game.borderRadius)) continue;
-      const event = presence.kind === 'appeared' ? new PlayerAppeared(presence.playerId, presence.position) : presence.kind === 'moved' ? new PlayerMoved(presence.playerId, presence.position, presence.sequence) : new PlayerLeft(presence.playerId, presence.reason ?? 'left-zone');
+      const event = presence.kind === 'appeared' ? new PlayerAppeared(presence.playerId, presence.position, String(this.context.spotId)) : presence.kind === 'moved' ? new PlayerMoved(presence.playerId, presence.position, presence.sequence,
+                String(this.context.spotId)) : new PlayerLeft(presence.playerId, presence.reason ?? 'left-zone',
+                String(this.context.spotId));
       await this.actors.sendToActor(observerId, event).submit();
     }
   }

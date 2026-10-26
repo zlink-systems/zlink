@@ -1,8 +1,14 @@
 import { Injectable } from '@nestjs/common';
 import type { ZLinkActor, ZLinkActorContext, ZLinkActorFactory, ZLinkActorJoinCompletion } from '@zlink-systems/framework';
 import { zoneId } from '../shared/constants';
-import { ActionRejected, type EnterZone, WorldState } from '../shared/messages';
+import { restoreNotification, type Notification, ActionRejected, type EnterZone, WorldState } from '../shared/messages';
 export class Player implements ZLinkActor {
+  async deliver(packetName: string, payload: Notification, visible = true): Promise<void> {
+    const message = restoreNotification(packetName, payload);
+    const sourceSpotId = message.sourceSpotId;
+    if (sourceSpotId !== null && (String(this.context.spotId) !== sourceSpotId || !visible)) return;
+    await this.context.boundSession.send(message).submit();
+  }
   constructor(readonly context: ZLinkActorContext) {}
   move(position: EnterZone): void {
     this.context.joinSpot(zoneId(position.position.x), position).defer();

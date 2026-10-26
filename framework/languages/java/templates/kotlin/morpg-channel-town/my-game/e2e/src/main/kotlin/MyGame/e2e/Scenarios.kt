@@ -161,15 +161,19 @@ suspend fun scenario(id: String, nodes: Nodes) {
                         stage++
                     }
                     check(advanced.phase == RunPhase.Completed) { "Final stage did not complete run" }
-                    val completedParty = leader.sendFor(TownView::class.java, ViewRequest()) { view ->
-                        view.parties.any {
-                            it.partyId == advanced.partyId &&
-                                it.phase == RunPhase.Completed &&
-                                it.runId == advanced.runId
+                    awaitUsingClient(nodes.endpoint, "${leader.playerId}-town-observer") { townObserver ->
+                        townObserver.join()
+                        townObserver.next<TownView> { it.townId == Names.townId(2) }
+                        val completedParty = townObserver.sendFor(TownView::class.java, ViewRequest()) { view ->
+                            view.parties.any {
+                                it.partyId == advanced.partyId &&
+                                    it.phase == RunPhase.Completed &&
+                                    it.runId == advanced.runId
+                            }
                         }
-                    }
-                    check(completedParty.parties.single { it.partyId == advanced.partyId }.phase == RunPhase.Completed) {
-                        "Party owner did not complete the run"
+                        check(completedParty.parties.single { it.partyId == advanced.partyId }.phase == RunPhase.Completed) {
+                            "Party owner did not complete the run"
+                        }
                     }
                     val completedRejection = leader.sendFor(ActionRejected::class.java, AdvanceRequest()) { true }
                     check(completedRejection == ActionRejected(Rejection.RUN_NOT_ACTIVE)) {

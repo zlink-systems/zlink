@@ -32,19 +32,19 @@ public final class Actions {
     @ZLinkSpotActorSend
     public CompletionStage<Void> deliverAppeared(
             Zone spot, Player actor, ZLinkMessageContext dispatch, PlayerAppeared message) {
-        return spot.deliverAppeared(actor, dispatch, message);
+        return actor.deliver(message, spot.isVisible(actor));
     }
 
     @ZLinkSpotActorSend
     public CompletionStage<Void> deliverMoved(
             Zone spot, Player actor, ZLinkMessageContext dispatch, PlayerMoved message) {
-        return spot.deliverMoved(actor, dispatch, message);
+        return actor.deliver(message, spot.isVisible(actor));
     }
 
     @ZLinkSpotActorSend
     public CompletionStage<Void> deliverLeft(
             Zone spot, Player actor, ZLinkMessageContext dispatch, PlayerLeft message) {
-        return spot.deliverLeft(actor, dispatch, message);
+        return actor.deliver(message, spot.isVisible(actor));
     }
 
     @ZLinkSpotActorSend

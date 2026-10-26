@@ -27,4 +27,19 @@ public final class EntryActions {
             Entry spot, Player actor, ZLinkMessageContext context, JoinPartyRequest request) {
         return spot.join(actor, request.partyId(), false);
     }
+
+    @ZLinkSpotActorSend
+    public CompletionStage<Void> notificationPartyView(Entry spot, Player actor, ZLinkMessageContext context, PartyView message) {
+        return actor.deliver(message);
+    }
+
+    @ZLinkSpotActorSend
+    public CompletionStage<Void> notificationDungeonView(Entry spot, Player actor, ZLinkMessageContext context, DungeonView message) {
+        return actor.deliver(message);
+    }
+
+    @ZLinkSpotActorSend
+    public CompletionStage<Void> notificationActionRejected(Entry spot, Player actor, ZLinkMessageContext context, ActionRejected message) {
+        return actor.deliver(message);
+    }
 }

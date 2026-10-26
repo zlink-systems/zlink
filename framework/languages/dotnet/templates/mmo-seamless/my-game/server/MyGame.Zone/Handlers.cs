@@ -58,7 +58,7 @@ public sealed class PlayerAppearedDelivery
         IZLinkMessageContext context,
         PlayerAppeared presence,
         CancellationToken cancellationToken
-    ) => actor.Context.BoundSession.Send(presence).Async();
+    ) => actor.DeliverAsync(presence, spot.IsVisible(actor));
 }
 
 [ZLinkSpotActorSendHandler(nameof(PlayerMoved))]
@@ -71,7 +71,7 @@ public sealed class PlayerMovedDelivery
         IZLinkMessageContext context,
         PlayerMoved presence,
         CancellationToken cancellationToken
-    ) => actor.Context.BoundSession.Send(presence).Async();
+    ) => actor.DeliverAsync(presence, spot.IsVisible(actor));
 }
 
 [ZLinkSpotActorSendHandler(nameof(PlayerLeft))]
@@ -84,7 +84,7 @@ public sealed class PlayerLeftDelivery
         IZLinkMessageContext context,
         PlayerLeft presence,
         CancellationToken cancellationToken
-    ) => actor.Context.BoundSession.Send(presence).Async();
+    ) => actor.DeliverAsync(presence, spot.IsVisible(actor));
 }
 
 [ZLinkSpotActorSendHandler(nameof(OpenDungeonRequest))]

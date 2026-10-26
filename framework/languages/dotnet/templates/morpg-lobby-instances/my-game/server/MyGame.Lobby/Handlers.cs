@@ -89,12 +89,12 @@ public sealed class PartyDelivery : IZLinkSpotActorSendHandler<PartySpot, Player
         CancellationToken ct
     )
     {
-        return actor.Context.BoundSession.Send(request).Async();
+        return actor.DeliverAsync(request);
     }
 }
 
 public sealed class RejectionDelivery : IZLinkSpotActorSendHandler<PartySpot, PlayerActor, ActionRejected>
 {
     public ValueTask HandleAsync(PartySpot spot, PlayerActor actor, IZLinkMessageContext context, ActionRejected request, CancellationToken ct)
-        => actor.Context.BoundSession.Send(request).Async();
+        => actor.DeliverAsync(request);
 }

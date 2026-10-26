@@ -43,6 +43,10 @@ class Field final : public fx::spot_t<Player>
     }
 
   public:
+    bool is_visible (const Player &actor) const
+    {
+        return visible_players_.contains (std::string (actor.context ().actor_id ().value ()));
+    }
     Field (fx::spot_context_t context,
            fx::actor_client_t &actors,
            fx::spot_manager_t &spots,
@@ -60,6 +64,7 @@ class Field final : public fx::spot_t<Player>
     const fx::spot_context_t &context () const noexcept override { return context_; }
     void configure () override
     {
+        context_.handlers ().add_actor_send<&Field::notification_DungeonView> ();
         context_.handlers ()
           .add_actor_send<&Field::reconnect> ()
           .add_actor_send<&Field::move> ()
@@ -146,11 +151,11 @@ class Field final : public fx::spot_t<Player>
     }
     fx::task_t<void> deliver (Player &actor, fx::message_context_t &, const BorderVisible &event)
     {
-        co_await actor.context ().bound_session ().send (event).async ();
+        return actor.deliver (event, is_visible (actor));
     }
     fx::task_t<void> deliver_field (Player &actor, fx::message_context_t &, const PartyView &event)
     {
-        co_await actor.context ().bound_session ().send (event).async ();
+        return actor.deliver (event);
     }
     fx::task_t<void> request_party_view (Player &actor, const std::string &party_id)
     {
@@ -266,6 +271,12 @@ class Field final : public fx::spot_t<Player>
     {
         positions_.restore (snapshot.positions);
         visible_players_ = snapshot.visiblePlayers;
+    }
+
+    fx::task_t<void>
+    notification_DungeonView (Player &actor, fx::message_context_t &, const DungeonView &message)
+    {
+        return actor.deliver (message, is_visible (actor));
     }
 };
 inline fx::task_t<void> BorderTick::handle (Field &field, const fx::timer_tick_t &)

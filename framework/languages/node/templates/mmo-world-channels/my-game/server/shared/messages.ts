@@ -1,3 +1,4 @@
+import { PacketNames } from './constants';
 export class EnterWorldRequest {
   constructor(readonly playerId: string) {}
 }
@@ -46,4 +47,18 @@ export interface WorldInfo {
   worldId: string;
   name: string;
   sessionEndpoint: string;
+}
+
+const notificationTypes: ReadonlyMap<string, () => Notification> = new Map<
+  string,
+  () => Notification
+>([
+  [PacketNames.playerView, () => new PlayerView()],
+  [PacketNames.channelView, () => new ChannelView(0n, [])]
+]);
+export type Notification = PlayerView | ChannelView;
+export function restoreNotification(packetName: string, payload: Notification): Notification {
+  const create = notificationTypes.get(packetName);
+  if (!create) throw new Error(`Unknown notification ${packetName}`);
+  return Object.assign(create(), payload);
 }

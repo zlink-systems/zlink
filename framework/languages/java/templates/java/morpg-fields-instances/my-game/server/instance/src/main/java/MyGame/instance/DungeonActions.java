@@ -31,13 +31,13 @@ public final class DungeonActions {
     @ZLinkSpotActorSend
     public CompletionStage<Void> deliver(
             Dungeon spot, Player actor, ZLinkMessageContext dispatch, DungeonView message) {
-        return actor.context().boundSession().send(message).submit();
+        return actor.deliver(message);
     }
 
     @ZLinkSpotActorSend
     public CompletionStage<Void> deliverParty(
             Dungeon spot, Player actor, ZLinkMessageContext dispatch, PartyView message) {
-        return actor.context().boundSession().send(message).submit();
+        return actor.deliver(message);
     }
 
     @ZLinkSpotActorSend
@@ -64,5 +64,10 @@ public final class DungeonActions {
         if (!request.dungeonId().equals(spot.context().spotId()))
             actor.context().joinSpot(request.dungeonId(), request).defer();
         return CompletableFuture.completedFuture(null);
+    }
+
+    @ZLinkSpotActorSend
+    public CompletionStage<Void> notificationBorderVisible(Dungeon spot, Player actor, ZLinkMessageContext context, BorderVisible message) {
+        return actor.deliver(message);
     }
 }

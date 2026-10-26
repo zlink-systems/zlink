@@ -19,6 +19,8 @@ class Field(
     private val spots: ZLinkSpotManager,
     private val config: NodeConfig,
 ) : ZLinkSuspendingSpot<Player>() {
+    fun isVisible(actor: Player): Boolean = state.visiblePlayers.containsKey(actor.context.actorId())
+
     var state = FieldState()
     private val positions = FieldPositionDomain(context.spotId())
     private val adjacent = Rules.adjacentFields(context.spotId())

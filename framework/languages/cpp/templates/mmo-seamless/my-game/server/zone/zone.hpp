@@ -60,13 +60,19 @@ class Zone final : public fx::spot_t<Player>
                                   const ZonePositionDomain::PlayerView &state,
                                   PlayerLeftReason reason)
     {
-        co_await publish_local (player_id, PlayerLeft{player_id, reason});
+        co_await publish_local (player_id, PlayerLeft{player_id, reason, context_.spot_id ()});
         if (positions_.is_in_border (state.position))
             co_await publish_border (
               player_id, state.position, state.sequence, BorderPresenceKind::left, reason);
     }
 
   public:
+    bool is_visible (const Player &actor) const
+    {
+        ZonePositionDomain::PlayerView observer;
+        return positions_.try_state (std::string (actor.context ().actor_id ().value ()), observer)
+               && observer.connected;
+    }
     ZonePositionDomain::Snapshot capture_state () const { return positions_.capture (); }
     void restore_state (const ZonePositionDomain::Snapshot &state) { positions_.restore (state); }
 
@@ -115,7 +121,7 @@ class Zone final : public fx::spot_t<Player>
         if (!positions_.take_arrival (id, arrival))
             throw std::runtime_error ("Zone admission has no movement intent");
         positions_.add_player (id, arrival);
-        co_await publish_local (id, PlayerAppeared{id, arrival.position});
+        co_await publish_local (id, PlayerAppeared{id, arrival.position, context_.spot_id ()});
         if (positions_.is_in_border (arrival.position))
             co_await publish_border (id, arrival.position, arrival.sequence,
                                      BorderPresenceKind::appeared, std::nullopt);
@@ -151,7 +157,7 @@ class Zone final : public fx::spot_t<Player>
         const auto id = std::string (actor.context ().actor_id ().value ());
         const auto state = positions_.set_connected (id, true).value ();
         if (!previous.connected) {
-            co_await publish_local (id, PlayerAppeared{id, state.position});
+            co_await publish_local (id, PlayerAppeared{id, state.position, context_.spot_id ()});
             if (positions_.is_in_border (state.position))
                 co_await publish_border (id, state.position, state.sequence,
                                          BorderPresenceKind::appeared, std::nullopt);
@@ -174,7 +180,7 @@ class Zone final : public fx::spot_t<Player>
             actor.move (destination);
             co_return;
         }
-        co_await publish_local (id, PlayerMoved{id, movement.position, movement.sequence});
+        co_await publish_local (id, PlayerMoved{id, movement.position, movement.sequence, context_.spot_id ()});
         if (movement.borderKind) {
             std::optional<PlayerLeftReason> reason;
             if (*movement.borderKind == BorderPresenceKind::left)
@@ -192,19 +198,19 @@ class Zone final : public fx::spot_t<Player>
                                        fx::message_context_t &,
                                        const PlayerAppeared &event)
     {
-        co_await actor.context ().bound_session ().send (event).async ();
+        return actor.deliver (event, is_visible (actor));
     }
     fx::task_t<void> deliver_moved (Player &actor,
                                     fx::message_context_t &,
                                     const PlayerMoved &event)
     {
-        co_await actor.context ().bound_session ().send (event).async ();
+        return actor.deliver (event, is_visible (actor));
     }
     fx::task_t<void> deliver_left (Player &actor,
                                    fx::message_context_t &,
                                    const PlayerLeft &event)
     {
-        co_await actor.context ().bound_session ().send (event).async ();
+        return actor.deliver (event, is_visible (actor));
     }
     fx::task_t<void> border (const BorderPresence &event)
     {
@@ -215,18 +221,19 @@ class Zone final : public fx::spot_t<Player>
                 continue;
             if (event.kind == BorderPresenceKind::appeared)
                 co_await actors_
-                  .send (fx::actor_id_t (id), PlayerAppeared{event.playerId, event.position})
+                  .send (fx::actor_id_t (id), PlayerAppeared{event.playerId, event.position, context_.spot_id ()})
                   .async ();
             else if (event.kind == BorderPresenceKind::moved)
                 co_await actors_
                   .send (fx::actor_id_t (id),
-                         PlayerMoved{event.playerId, event.position, event.sequence})
+                         PlayerMoved{event.playerId, event.position, event.sequence, context_.spot_id ()})
                   .async ();
             else if (event.kind == BorderPresenceKind::left)
                 co_await actors_
                   .send (fx::actor_id_t (id),
                          PlayerLeft{event.playerId, event.reason.value_or (
-                                                    PlayerLeftReason::left_zone)})
+                                                    PlayerLeftReason::left_zone),
+                                    context_.spot_id ()})
                   .async ();
             else
                 throw std::invalid_argument ("Unknown border presence kind");

@@ -56,6 +56,16 @@ public final class TownActions {
     @ZLinkSpotActorSend
     public CompletionStage<Void> deliver(
             Town spot, Player actor, ZLinkMessageContext context, TownView request) {
-        return actor.context().boundSession().send(request).submit();
+        return actor.deliver(request);
+    }
+
+    @ZLinkSpotActorSend
+    public CompletionStage<Void> notificationDungeonView(Town spot, Player actor, ZLinkMessageContext context, DungeonView message) {
+        return actor.deliver(message);
+    }
+
+    @ZLinkSpotActorSend
+    public CompletionStage<Void> notificationActionRejected(Town spot, Player actor, ZLinkMessageContext context, ActionRejected message) {
+        return actor.deliver(message);
     }
 }

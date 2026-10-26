@@ -7,8 +7,14 @@ import type {
   ZLinkActorRelocationAdapter
 } from '@zlink-systems/framework';
 import { Rejection } from './constants';
-import { ActionRejected } from './messages';
+import { DungeonView, restoreNotification, type Notification, ActionRejected } from './messages';
 export class Player implements ZLinkActor {
+  async deliver(packetName: string, payload: Notification, visible = true): Promise<void> {
+    const message = restoreNotification(packetName, payload);
+    const sourceSpotId = message instanceof DungeonView ? message.dungeonId : null;
+    if (sourceSpotId !== null && (String(this.context.spotId) !== sourceSpotId || !visible)) return;
+    await this.context.boundSession.send(message).submit();
+  }
   constructor(readonly context: ZLinkActorContext) {}
   async onJoinCompleted(completion: ZLinkActorJoinCompletion): Promise<void> {
     if (completion.status === 'rejected')

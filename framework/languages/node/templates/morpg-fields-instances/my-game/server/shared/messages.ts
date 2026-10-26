@@ -1,3 +1,4 @@
+import { PacketNames } from './constants';
 export class JoinWorldRequest {
   constructor(
     readonly playerId: string = '',
@@ -58,14 +59,6 @@ export class PartyView {
     readonly runId: string | null = null
   ) {}
 }
-export class FieldView {
-  constructor(
-    readonly fieldId: string = '',
-    readonly nodeId: string = '',
-    readonly players: string[] = [],
-    readonly parties: PartyView[] = []
-  ) {}
-}
 export class DungeonView {
   constructor(
     readonly dungeonId: string = '',
@@ -119,3 +112,19 @@ export class DungeonMemberEntered {
 }
 export class RunStarted { constructor(readonly runId = '') {} }
 export class RunCompleted { constructor(readonly runId = '') {} }
+
+const notificationTypes: ReadonlyMap<string, () => Notification> = new Map<
+  string,
+  () => Notification
+>([
+  [PacketNames.actionRejected, () => new ActionRejected()],
+  [PacketNames.partyView, () => new PartyView()],
+  [PacketNames.borderVisible, () => new BorderVisible()],
+  [PacketNames.dungeonView, () => new DungeonView()]
+]);
+export type Notification = PartyView | BorderVisible | DungeonView | ActionRejected;
+export function restoreNotification(packetName: string, payload: Notification): Notification {
+  const create = notificationTypes.get(packetName);
+  if (!create) throw new Error(`Unknown notification ${packetName}`);
+  return Object.assign(create(), payload);
+}

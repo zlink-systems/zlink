@@ -81,11 +81,11 @@ class Dungeon final : public fx::spot_t<Player>
     }
     fx::task_t<void> enter(Player &actor, fx::message_context_t &, const EnterDungeonRequest &) { co_await context_.send_to_spot(state.partyId, EnterPartyRun{std::string(actor.context().actor_id().value())}).async(); }
     fx::task_t<void> travel(Player &actor, fx::message_context_t &, const JoinDungeon &r) { actor.context().join_spot(r.dungeonId, r).defer(); co_return; }
-    fx::task_t<void> reject_delivery(Player &actor, fx::message_context_t &, const ActionRejected &r) { co_await actor.context().bound_session().send(r).async(); }
-    fx::task_t<void> party_delivery(Player &actor, fx::message_context_t &, const PartyView &r) { co_await actor.context().bound_session().send(r).async(); }
+    fx::task_t<void> reject_delivery(Player &actor, fx::message_context_t &, const ActionRejected &r) { return actor.deliver (r); }
+    fx::task_t<void> party_delivery(Player &actor, fx::message_context_t &, const PartyView &r) { return actor.deliver (r); }
     fx::task_t<void> deliver (Player &actor, fx::message_context_t &, const DungeonView &update)
     {
-        co_await actor.context ().bound_session ().send (update).async ();
+        return actor.deliver (update);
     }
 };
 using DungeonRelocation = StateRelocation<Dungeon, DungeonState>;

@@ -244,6 +244,17 @@ export async function scenario(
     assert.equal(sa.actorId, a.playerId);
     assert.equal(sb.actorId, b.playerId);
     const before = await advance(a, b, 1n);
+    const partyMark = a.messages.length;
+    await a.connector.send(new EnterDungeonRequest()).submit();
+    const activeParty = await a.wait<PartyView>(
+      PacketNames.partyView,
+      partyMark,
+      (view) =>
+        view.partyId === initial.partyId &&
+        view.runId === initial.runId &&
+        view.phase === RunPhase.Active
+    );
+    assert.deepEqual(activeParty.members, initial.members);
     assert.equal(before.nodeId, initial.nodeId);
     assert.deepEqual(await a.sessionInfo(), sa);
     assert.deepEqual(await b.sessionInfo(), sb);
