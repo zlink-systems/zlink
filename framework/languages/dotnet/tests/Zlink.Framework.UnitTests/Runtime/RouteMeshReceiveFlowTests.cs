@@ -209,6 +209,7 @@ internal sealed class PressureContext(IZLinkBackendRuntimeContext inner)
 internal abstract class PressureSocket<T>(T inner) : IReceivingMessageSocket, IConnectableSocket
     where T : IReceivingMessageSocket, IConnectableSocket
 {
+    protected T InnerSocket => inner;
     internal int FlowCalls { get; private set; }
     public CommonSocketOptions Options => inner.Options;
 

@@ -55,7 +55,7 @@ internal sealed class ZLinkSerialWorkItem
     // Next belongs exclusively to the execution gate's mutable prefix.
     internal ZLinkSerialWorkItem? PublicationNext;
     internal ZLinkSerialExecutionQueue? Mailbox { get; }
-    internal Func<Action, ValueTask>? DispatchTerminal { get; set; }
+    internal ZLinkSerialExecutionQueue? TerminalExecutionOwner { get; set; }
     internal Action? PreparePublication { get; set; }
     internal Action? RejectPublication { get; set; }
     internal ZLinkSerialWorkItem? LifecycleOwner { get; set; }
@@ -330,7 +330,9 @@ internal sealed class ZLinkSerialWorkItem
     }
 
     private ValueTask ReleaseSuspendedTerminalAsync() =>
-        DispatchTerminal is { } dispatch ? dispatch(ReleaseTerminal) : ReleaseTerminalInline();
+        TerminalExecutionOwner is { } owner
+            ? owner.DispatchTerminalAsync(ReleaseTerminal)
+            : ReleaseTerminalInline();
 
     private ValueTask ReleaseTerminalInline()
     {

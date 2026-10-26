@@ -444,19 +444,21 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime : IAsyncDisposable
 
         // The attempt's failure record keeps the receive loop's failure, as it keeps the
         // attempt's own.
-        private void Receive(ISubSocket socket, CancellationToken cancellationToken)
+        private async ValueTask Receive(ISubSocket socket, CancellationToken cancellationToken)
         {
             try
             {
-                owner._receiveLoop.RunFanoutConnectionLoop(
-                    owner._channelName.Value,
-                    socket,
-                    OnActivity,
-                    () => SetFailure("invalid fanout liveness beacon"),
-                    owner._applicationJobQueue,
-                    owner._applicationDispatch,
-                    cancellationToken
-                );
+                await owner
+                    ._receiveLoop.RunFanoutConnectionLoop(
+                        owner._channelName.Value,
+                        socket,
+                        OnActivity,
+                        () => SetFailure("invalid fanout liveness beacon"),
+                        owner._applicationJobQueue,
+                        owner._applicationDispatch,
+                        cancellationToken
+                    )
+                    .ConfigureAwait(false);
             }
             catch (OperationCanceledException) { }
             catch (Exception exception)

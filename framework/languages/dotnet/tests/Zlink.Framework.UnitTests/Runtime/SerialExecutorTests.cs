@@ -6,6 +6,176 @@ namespace Zlink.Framework.UnitTests;
 public sealed class SerialExecutorTests
 {
     [Fact]
+    public async Task SerialExecutionQueue_DrainsAcceptedWorkAfterRunnerStops()
+    {
+        using var errors = new ZLinkRuntimeErrorSink();
+        var runner = new ZLinkRuntimeTaskRunner(errors, CancellationToken.None);
+        var queue = new ZLinkSerialExecutionQueue(runner, errors, CancellationToken.None);
+        var ready = false;
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var order = new ConcurrentQueue<int>();
+        Assert.Equal(
+            ZLinkSerialPostAdmission.Accepted,
+            queue.TryPostApplicationWithAdmission(
+                async _ =>
+                {
+                    order.Enqueue(1);
+                    entered.TrySetResult();
+                    await release.Task.ConfigureAwait(false);
+                },
+                0,
+                0,
+                false,
+                out var first,
+                ready: () => Volatile.Read(ref ready)
+            )
+        );
+        Assert.True(
+            queue.TryPost(
+                _ =>
+                {
+                    order.Enqueue(2);
+                    return ValueTask.CompletedTask;
+                },
+                out var second
+            )
+        );
+        try
+        {
+            // Admission happened before Stop; readiness publishes the accepted drain afterward.
+            await runner.StopAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.False(runner.TryRunDetached("external", _ => ValueTask.CompletedTask));
+            queue.Complete();
+            Assert.False(queue.TryPost(_ => ValueTask.CompletedTask, out _));
+            Assert.Empty(order);
+            Volatile.Write(ref ready, true);
+            queue.NotifyReadiness();
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            var disposal = queue.DisposeAsync().AsTask();
+            Assert.False(disposal.IsCompleted);
+            release.TrySetResult();
+            await disposal.WaitAsync(TimeSpan.FromSeconds(5));
+            await Task.WhenAll(first.Completion, second.Completion)
+                .WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(new[] { 1, 2 }, order);
+        }
+        finally
+        {
+            release.TrySetResult();
+            Volatile.Write(ref ready, true);
+            queue.NotifyReadiness();
+            await queue.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        }
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task SharedChildTerminal_ParentDisposePreservesAcceptedClaim(
+        bool closeParentBeforeTerminal,
+        bool lifecycle
+    )
+    {
+        using var errors = new ZLinkRuntimeErrorSink();
+        var runner = new ZLinkRuntimeTaskRunner(errors, CancellationToken.None);
+        var parent = new ZLinkSerialExecutionQueue(
+            runner,
+            errors,
+            CancellationToken.None,
+            ZLinkExecutionLanePolicy.Default,
+            sharedGate: true
+        );
+        var child = new ZLinkSerialExecutionQueue(runner, errors, CancellationToken.None);
+        ZLinkSerialExecutionQueue? owner = parent;
+        child.BindExecutionOwner(() => owner);
+        using var selected = new ManualResetEventSlim();
+        using var acceptClaim = new ManualResetEventSlim();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseBody = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var closeDrain = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        child.ConsumerSelected = () =>
+        {
+            selected.Set();
+            Assert.True(acceptClaim.Wait(TimeSpan.FromSeconds(5)));
+        };
+        parent.GateOperation = operation =>
+        {
+            if (operation == ZLinkSerialGateOperation.Release && parent.IsDisposed)
+                closeDrain.TrySetResult();
+        };
+        Task? disposingParent = null;
+        Task? disposingChild = null;
+        ZLinkSerialWorkItem? item = null;
+        var parentEndedBeforeTerminal = false;
+        try
+        {
+            async ValueTask Callback(CancellationToken _)
+            {
+                // ActorSerialExecutor.Waiter.RunAsync uses this same finite
+                // gate return while retaining its accepted mailbox claim.
+                ZLinkSerialTurn.Current!.SignalSuspended();
+                entered.TrySetResult();
+                await releaseBody.Task.ConfigureAwait(false);
+            }
+            if (lifecycle)
+                Assert.True(child.TryPostNext(Callback, out item));
+            else
+                item = await child.PostAsync(Callback, CancellationToken.None);
+            Assert.True(selected.Wait(TimeSpan.FromSeconds(5)));
+            if (closeParentBeforeTerminal)
+                disposingParent = parent.DisposeAsync().AsTask();
+            acceptClaim.Set();
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Same(parent, item.TerminalExecutionOwner);
+            if (disposingParent is not null)
+            {
+                await closeDrain.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                try
+                {
+                    await disposingParent.WaitAsync(TimeSpan.FromSeconds(1));
+                    parentEndedBeforeTerminal = true;
+                }
+                catch (TimeoutException) { }
+            }
+            disposingChild = child.DisposeAsync().AsTask();
+            owner = null;
+            releaseBody.TrySetResult();
+            var childEnded = true;
+            try
+            {
+                await disposingChild.WaitAsync(TimeSpan.FromSeconds(2));
+            }
+            catch (TimeoutException)
+            {
+                childEnded = false;
+            }
+            Assert.True(
+                childEnded,
+                $"Child dispose did not finish after callback release; parentEndedBeforeTerminal={parentEndedBeforeTerminal}, callbackReleased={releaseBody.Task.IsCompleted}."
+            );
+            Assert.False(parentEndedBeforeTerminal);
+        }
+        finally
+        {
+            acceptClaim.Set();
+            owner = null;
+            releaseBody.TrySetResult();
+            if (item is not null)
+                await item.Completion.WaitAsync(TimeSpan.FromSeconds(5));
+            await child.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+            await parent.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+            await runner.StopAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        }
+    }
+
+    [Fact]
     public async Task CanceledActorAdmissionReturnsCanceledTaskAndAllowsLaterWork()
     {
         using var errors = new ZLinkRuntimeErrorSink();
@@ -2938,115 +3108,304 @@ public sealed class SerialExecutorTests
     }
 
     [Fact]
+    public async Task ReadinessAfterQueueTerminationDoesNotRecreateProcessResources()
+    {
+        using var errors = new ZLinkRuntimeErrorSink();
+        var runner = new ZLinkRuntimeTaskRunner(errors, CancellationToken.None);
+        await using var queue = new ZLinkSerialExecutionQueue(
+            runner,
+            errors,
+            CancellationToken.None,
+            ZLinkExecutionLanePolicy.Default,
+            sharedGate: true
+        );
+        var work = await queue.PostAsync(
+            static _ => ValueTask.CompletedTask,
+            CancellationToken.None
+        );
+        await work.Completion.WaitAsync(TimeSpan.FromSeconds(5));
+        await queue.DisposeAsync();
+        ZLinkProcessExecutionPool.ReceiveSource? receiver = null;
+        var factoryCalls = 0;
+        try
+        {
+            for (var index = 0; index < 16; index++)
+                queue.NotifyReadiness();
+            receiver = ZLinkProcessExecutionPool.CreateReceiveSource(() =>
+            {
+                Interlocked.Increment(ref factoryCalls);
+                return Systems.Zlink.Zlink.CreatePoller();
+            });
+            await receiver.ResumeAsync();
+            Assert.Equal(1, factoryCalls);
+        }
+        finally
+        {
+            if (receiver is not null)
+                await receiver.DisposeAsync();
+            await queue.ReleaseExecutionSourceAsync();
+            await runner.StopAsync();
+        }
+    }
+
+    [Fact]
+    public async Task TerminalConsumerReturnsRetiredParentBeforeThatParentCloses()
+    {
+        using var errors = new ZLinkRuntimeErrorSink();
+        var runner = new ZLinkRuntimeTaskRunner(errors, CancellationToken.None);
+        await using var parent = new ZLinkSerialExecutionQueue(
+            runner,
+            errors,
+            CancellationToken.None,
+            ZLinkExecutionLanePolicy.Default,
+            sharedGate: true
+        );
+        await using var mailbox = new ZLinkSerialExecutionQueue(
+            runner,
+            errors,
+            CancellationToken.None
+        );
+        ZLinkSerialExecutionQueue? owner = parent;
+        mailbox.BindExecutionOwner(() => owner);
+        try
+        {
+            var terminal = await mailbox.PostAsync(
+                _ =>
+                {
+                    owner = null;
+                    return ValueTask.CompletedTask;
+                },
+                CancellationToken.None
+            );
+            await terminal.Completion.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.False(mailbox.HasSharedConsumer);
+            await parent.DisposeAsync();
+            await mailbox.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        finally
+        {
+            // On a failed assertion the parent remains alive for the child's close control.
+            await mailbox.DisposeAsync();
+            await parent.DisposeAsync();
+            await runner.StopAsync();
+        }
+    }
+
+    [Fact]
+    public async Task TerminalPlacementReleasePreservesReservedDrainAndIncomingQueueFifo()
+    {
+        using var errors = new ZLinkRuntimeErrorSink();
+        var runner = new ZLinkRuntimeTaskRunner(errors, CancellationToken.None);
+        await using var queue = new ZLinkSerialExecutionQueue(
+            runner,
+            errors,
+            CancellationToken.None
+        );
+        await using var occupied = new MeshWorkerWaitCostTests.OccupiedApplicationWorkers();
+        var order = new List<string>();
+        try
+        {
+            occupied.Enter();
+            Assert.True(
+                queue.TryPost(
+                    _ =>
+                    {
+                        order.Add("before-release");
+                        return ValueTask.CompletedTask;
+                    },
+                    out var first
+                )
+            );
+            var releasing = queue.ReleaseExecutionSourceAsync().AsTask();
+            Assert.True(
+                queue.TryPost(
+                    _ =>
+                    {
+                        order.Add("incoming-handoff");
+                        return ValueTask.CompletedTask;
+                    },
+                    out var incoming
+                )
+            );
+            occupied.Release();
+            await Task.WhenAll(first.Completion, incoming.Completion, releasing)
+                .WaitAsync(TimeSpan.FromSeconds(5));
+            var next = await queue.PostAsync(
+                _ =>
+                {
+                    order.Add("next-placement");
+                    return ValueTask.CompletedTask;
+                },
+                CancellationToken.None
+            );
+            await next.Completion.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(new[] { "before-release", "incoming-handoff", "next-placement" }, order);
+        }
+        finally
+        {
+            occupied.Release();
+            await queue.DisposeAsync();
+            await runner.StopAsync();
+        }
+    }
+
+    [Fact]
     public async Task ActorDispatchCancellation_Does_Not_Stop_Current_Or_Later_Dispatch()
     {
         var state = new ZLinkActorRuntimeState("test-actor");
-        var firstStarted = new TaskCompletionSource(
-            TaskCreationOptions.RunContinuationsAsynchronously
-        );
         var releaseFirst = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
-        var secondRan = false;
-        var thirdRan = false;
+        var dispatches = new List<Task>();
+        try
+        {
+            var firstStarted = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously
+            );
+            var secondRan = false;
+            var thirdRan = false;
 
-        var first = state
-            .ExecuteDispatchAsync(
-                async _ =>
-                {
-                    firstStarted.SetResult();
-                    await releaseFirst.Task.ConfigureAwait(false);
-                },
-                CancellationToken.None
-            )
-            .AsTask();
-        await firstStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            var first = state
+                .ExecuteDispatchAsync(
+                    async _ =>
+                    {
+                        firstStarted.SetResult();
+                        await releaseFirst.Task.ConfigureAwait(false);
+                    },
+                    CancellationToken.None
+                )
+                .AsTask();
+            dispatches.Add(first);
+            await firstStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
-        using var secondCancellation = new CancellationTokenSource();
-        var second = state
-            .ExecuteDispatchAsync(
-                _ =>
-                {
-                    secondRan = true;
-                    return ValueTask.CompletedTask;
-                },
-                secondCancellation.Token
-            )
-            .AsTask();
-        await secondCancellation.CancelAsync();
+            using var secondCancellation = new CancellationTokenSource();
+            var second = state
+                .ExecuteDispatchAsync(
+                    _ =>
+                    {
+                        secondRan = true;
+                        return ValueTask.CompletedTask;
+                    },
+                    secondCancellation.Token
+                )
+                .AsTask();
+            dispatches.Add(second);
+            await secondCancellation.CancelAsync();
 
-        await Assert.ThrowsAsync<OperationCanceledException>(() =>
-            second.WaitAsync(TimeSpan.FromSeconds(5))
-        );
-        Assert.False(secondRan);
+            await Assert.ThrowsAsync<OperationCanceledException>(() =>
+                second.WaitAsync(TimeSpan.FromSeconds(5))
+            );
+            Assert.False(secondRan);
 
-        releaseFirst.SetResult();
-        await first.WaitAsync(TimeSpan.FromSeconds(5));
+            releaseFirst.SetResult();
+            await first.WaitAsync(TimeSpan.FromSeconds(5));
 
-        await state
-            .ExecuteDispatchAsync(
-                _ =>
-                {
-                    thirdRan = true;
-                    return ValueTask.CompletedTask;
-                },
-                CancellationToken.None
-            )
-            .AsTask()
-            .WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.True(thirdRan);
+            await state
+                .ExecuteDispatchAsync(
+                    _ =>
+                    {
+                        thirdRan = true;
+                        return ValueTask.CompletedTask;
+                    },
+                    CancellationToken.None
+                )
+                .AsTask()
+                .WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.True(thirdRan);
+        }
+        finally
+        {
+            releaseFirst.TrySetResult();
+            try
+            {
+                foreach (var dispatch in dispatches)
+                    try
+                    {
+                        await dispatch.WaitAsync(TimeSpan.FromSeconds(5));
+                    }
+                    catch (OperationCanceledException) { }
+            }
+            finally
+            {
+                await state.InvalidateRuntimeGenerationAfterDispatchesAsync();
+            }
+        }
     }
 
     [Fact]
     public async Task ActorDispatchMailbox_Runs_Waiters_In_Fifo_Order()
     {
         var state = new ZLinkActorRuntimeState("test-actor");
-        var firstStarted = new TaskCompletionSource(
-            TaskCreationOptions.RunContinuationsAsynchronously
-        );
         var releaseFirst = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
-        var order = new List<string>();
+        var dispatches = new List<Task>();
+        try
+        {
+            var firstStarted = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously
+            );
+            var order = new List<string>();
 
-        var first = state
-            .ExecuteDispatchAsync(
-                async _ =>
-                {
-                    order.Add("first");
-                    firstStarted.SetResult();
-                    await releaseFirst.Task.ConfigureAwait(false);
-                },
-                CancellationToken.None
-            )
-            .AsTask();
-        await firstStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            var first = state
+                .ExecuteDispatchAsync(
+                    async _ =>
+                    {
+                        order.Add("first");
+                        firstStarted.SetResult();
+                        await releaseFirst.Task.ConfigureAwait(false);
+                    },
+                    CancellationToken.None
+                )
+                .AsTask();
+            dispatches.Add(first);
+            await firstStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
-        var second = state
-            .ExecuteDispatchAsync(
-                _ =>
-                {
-                    order.Add("second");
-                    return ValueTask.CompletedTask;
-                },
-                CancellationToken.None
-            )
-            .AsTask();
-        var third = state
-            .ExecuteDispatchAsync(
-                _ =>
-                {
-                    order.Add("third");
-                    return ValueTask.CompletedTask;
-                },
-                CancellationToken.None
-            )
-            .AsTask();
+            var second = state
+                .ExecuteDispatchAsync(
+                    _ =>
+                    {
+                        order.Add("second");
+                        return ValueTask.CompletedTask;
+                    },
+                    CancellationToken.None
+                )
+                .AsTask();
+            dispatches.Add(second);
+            var third = state
+                .ExecuteDispatchAsync(
+                    _ =>
+                    {
+                        order.Add("third");
+                        return ValueTask.CompletedTask;
+                    },
+                    CancellationToken.None
+                )
+                .AsTask();
+            dispatches.Add(third);
 
-        releaseFirst.SetResult();
+            releaseFirst.SetResult();
 
-        await Task.WhenAll(first, second, third).WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.Equal(["first", "second", "third"], order);
+            await Task.WhenAll(first, second, third).WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(["first", "second", "third"], order);
+        }
+        finally
+        {
+            releaseFirst.TrySetResult();
+            try
+            {
+                foreach (var dispatch in dispatches)
+                    try
+                    {
+                        await dispatch.WaitAsync(TimeSpan.FromSeconds(5));
+                    }
+                    catch (OperationCanceledException) { }
+            }
+            finally
+            {
+                await state.InvalidateRuntimeGenerationAfterDispatchesAsync();
+            }
+        }
     }
 
     private static ZlinkStreamHeader CreateHeader(string name)

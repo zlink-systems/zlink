@@ -12,7 +12,6 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
     private const string LocalConnectionPrefix = "local:";
     private const string AutomaticConnectionPrefix = "auto:";
     private const string ProcessLocalOwnerId = "process-local";
-    private static readonly TimeSpan ControlReceivePollInterval = TimeSpan.FromMilliseconds(100);
     private readonly ZLinkChannelName _channelName;
     private readonly IZLinkMonitoringBackendAdapter _monitoring;
     private readonly IZLinkBackendRuntimeContext _context;
@@ -1148,11 +1147,14 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
 
         // The control loop's poller leaves before the DEALER closes. The lifecycle gate keeps
         // the close from overlapping Start's Connect.
-        private ValueTask CloseSocketAsync()
+        private async ValueTask CloseSocketAsync()
         {
-            _receivePoller?.Dispose();
+            if (_receivePoller is not null)
+                await _receivePoller.DisposeAsync().ConfigureAwait(false);
+            ValueTask closing;
             lock (_socketLifecycleGate)
-                return Socket.DisposeAsync();
+                closing = Socket.DisposeAsync();
+            await closing.ConfigureAwait(false);
         }
 
         private static async Task IgnoreCancellationAsync(Task task)
@@ -1215,18 +1217,28 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
             }
         }
 
-        // Runs on the monitor owner's dedicated thread until disposal stops it; that thread
-        // then closes the monitor.
-        private void RunMonitorLoop()
+        // The monitor owner closes only after this bounded source has left the poller.
+        private async ValueTask RunMonitorLoop()
         {
             var cancellationToken = _receiveStop.Token;
+            await using var poller = _monitor.CreateReceivePoller();
             while (!cancellationToken.IsCancellationRequested)
             {
                 try
                 {
-                    if (!_monitor.Wait(ControlReceivePollInterval))
+                    if (
+                        await poller
+                            .WaitAsync(Timeout.InfiniteTimeSpan, cancellationToken)
+                            .ConfigureAwait(false) == ZLinkBackendSocketReadiness.None
+                    )
                         continue;
-                    while (_monitor.TryRecv(out var monitorEvent))
+                    var startedAt = System.Diagnostics.Stopwatch.GetTimestamp();
+                    for (
+                        var count = 0;
+                        !ZLinkReceiveBatchBudget.IsExhausted(count, 0, startedAt)
+                            && _monitor.TryRecv(out var monitorEvent);
+                        count++
+                    )
                         OnMonitorEvent(monitorEvent);
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -1463,9 +1475,8 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
             return true;
         }
 
-        // Runs on the socket owner's dedicated thread until disposal stops it; that thread then
-        // closes the DEALER.
-        private void RunControlLoop()
+        // The socket owner closes only after the control source has left the poller.
+        private async ValueTask RunControlLoop()
         {
             var cancellationToken = _receiveStop.Token;
             using var received = Received.Create();
@@ -1475,7 +1486,9 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                 {
                     // ClientServer section 5: receive pushed DATA even before admission,
                     // so the Admit reply behind it can reach the binding completion owner.
-                    var readiness = _receivePoller.Wait(ControlReceivePollInterval);
+                    var readiness = await _receivePoller
+                        .WaitAsync(Timeout.InfiniteTimeSpan, cancellationToken)
+                        .ConfigureAwait(false);
                     if (
                         (
                             readiness
@@ -1487,51 +1500,74 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                         ) == 0
                     )
                         continue;
-                    if (!Socket.Recv(received, RecvFlags.DontWait))
-                        continue;
-                    _liveness?.RecordReceived(_time.GetTimestamp());
-                    if (
-                        ZLinkClientServerControlProtocol.TryDecodeLivenessProbe(
-                            received.Parts,
-                            out var probeId
+                    var batchStartedAt = System.Diagnostics.Stopwatch.GetTimestamp();
+                    long batchBytes = 0;
+                    for (
+                        var recordCount = 0;
+                        recordCount < ZLinkReceiveBatchBudget.MaximumRecords
+                            && !cancellationToken.IsCancellationRequested;
+                        recordCount++
+                    )
+                    {
+                        if (
+                            ZLinkReceiveBatchBudget.IsExhausted(
+                                recordCount,
+                                batchBytes,
+                                batchStartedAt
+                            )
                         )
-                    )
-                    {
-                        Interlocked.Increment(ref _receivedLivenessProbeCount);
-                        var ack = ZLinkClientServerControlProtocol.EncodeLivenessAck(probeId);
-                        if (received.ReplyToken is not null)
-                            ReplyOwned(received, ack);
-                        else
-                            StartControlAck(ack);
-                        continue;
-                    }
-                    if (
-                        ZLinkClientServerControlProtocol.TryDecodeUpdate(
-                            received.Parts,
-                            out var update
-                        ) && update is not null
-                    )
-                    {
-                        ApplyUpdate(update);
-                        continue;
-                    }
-                    if (
-                        ZLinkClientServerControlProtocol.TryDecodeLivenessAck(
-                            received.Parts,
-                            out var ackId
+                            break;
+                        if (!Socket.Recv(received, RecvFlags.DontWait))
+                            break;
+                        batchBytes = checked(
+                            batchBytes + ZLinkReceiveBatchBudget.MeasureParts(received.Parts)
+                        );
+                        _liveness?.RecordReceived(_time.GetTimestamp());
+                        if (
+                            ZLinkClientServerControlProtocol.TryDecodeLivenessProbe(
+                                received.Parts,
+                                out var probeId
+                            )
                         )
-                    )
-                    {
-                        AcceptLivenessAck(ackId);
-                        continue;
+                        {
+                            Interlocked.Increment(ref _receivedLivenessProbeCount);
+                            var ack = ZLinkClientServerControlProtocol.EncodeLivenessAck(probeId);
+                            if (received.ReplyToken is not null)
+                                ReplyOwned(received, ack);
+                            else
+                                StartControlAck(ack);
+                            continue;
+                        }
+                        if (
+                            ZLinkClientServerControlProtocol.TryDecodeUpdate(
+                                received.Parts,
+                                out var update
+                            ) && update is not null
+                        )
+                        {
+                            ApplyUpdate(update);
+                            continue;
+                        }
+                        if (
+                            ZLinkClientServerControlProtocol.TryDecodeLivenessAck(
+                                received.Parts,
+                                out var ackId
+                            )
+                        )
+                        {
+                            AcceptLivenessAck(ackId);
+                            continue;
+                        }
+                        var restartReason = ZLinkClientServerControlProtocol.IsControl(
+                            received.Parts
+                        )
+                            ? "protocol:pushed-control"
+                            : "protocol:unsolicited-application";
+                        // Release the native receive parts before restarting the
+                        // admission on the same socket.
+                        received.Dispose();
+                        RestartAdmission(restartReason);
                     }
-                    var restartReason = ZLinkClientServerControlProtocol.IsControl(received.Parts)
-                        ? "protocol:pushed-control"
-                        : "protocol:unsolicited-application";
-                    // Release the native receive parts before restarting the
-                    // admission on the same socket.
-                    received.Dispose();
-                    RestartAdmission(restartReason);
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
