@@ -124,6 +124,7 @@
         <Compile Include="Runtime/MeshApplicationWorkerTests.cs"/>
         <Compile Include="Runtime/MeshReceiveHandoffTests.cs"/>
         <Compile Include="Runtime/MeshWorkerWaitCostTests.cs"/>
+        <Compile Include="Runtime/ReceiveBatchRearmTests.cs"/>
         <Compile Include="Runtime/SmallStateOwnershipMechanismTests.cs"/>
         <Compile Include="Runtime/ActorBoundSessionRelayTests.cs"/>
         <Compile Include="Runtime/ApplicationJobQueueTests.cs"/>
