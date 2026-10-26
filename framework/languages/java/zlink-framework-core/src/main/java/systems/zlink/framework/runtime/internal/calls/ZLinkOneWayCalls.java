@@ -137,7 +137,8 @@ public final class ZLinkOneWayCalls {
                                 !initialSubmission && submit.getResult() == SubmitResult.NOT_FOUND
                                         ? RequestResult.NOT_CONNECTED
                                         : toRequestResult(submit.getResult());
-                        cause = ZLinkFrameworkErrorOrigin.framework(
+                        cause =
+                                ZLinkFrameworkErrorOrigin.framework(
                                         ZLinkBackendRequestResult.fromWireTerminal(terminal.value())
                                                 .toFrameworkErrorKind(),
                                         submit.getMessage(),

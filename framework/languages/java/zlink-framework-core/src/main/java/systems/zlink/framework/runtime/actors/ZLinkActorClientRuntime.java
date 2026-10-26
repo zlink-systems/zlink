@@ -161,31 +161,47 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
         long requestStarted = System.nanoTime();
         Duration requestTimeout = timeout == null ? defaultTimeout : timeout;
         CompletableFuture<TReply> result = new CompletableFuture<>();
-        result.whenComplete((ignored, error) -> {
-            if (error != null && isStaleActorError(error)) locations.invalidateActorRoute(actorId);
-            ZLinkRequestMetrics.complete(metric,
-                    started == ZLinkRequestMetrics.NO_START ? -1L
-                            : ZLinkRequestMetrics.elapsed(started, System.nanoTime()), error);
-        });
+        result.whenComplete(
+                (ignored, error) -> {
+                    if (error != null && isStaleActorError(error))
+                        locations.invalidateActorRoute(actorId);
+                    ZLinkRequestMetrics.complete(
+                            metric,
+                            started == ZLinkRequestMetrics.NO_START
+                                    ? -1L
+                                    : ZLinkRequestMetrics.elapsed(started, System.nanoTime()),
+                            error);
+                });
         CompletionStage<ActorRoute> route = resolveActorAddress(actorId, requestTimeout);
         systems.zlink.framework.runtime.internal.ZLinkCompletionBridge.forwardCancellation(
                 result, route);
-        route.whenComplete((row, error) -> {
-            if (result.isDone()) return;
-            if (error != null) {
-                result.completeExceptionally(unwrap(error));
-                return;
-            }
-            try {
-                ZLinkFlowContext.call(operationFlow, () -> {
-                    submitRequest(actorRouteFence(row, actorId), packetName, request, metadata,
-                            requestTimeout, requestStarted, replyType, requestAdmission, result);
-                    return null;
+        route.whenComplete(
+                (row, error) -> {
+                    if (result.isDone()) return;
+                    if (error != null) {
+                        result.completeExceptionally(unwrap(error));
+                        return;
+                    }
+                    try {
+                        ZLinkFlowContext.call(
+                                operationFlow,
+                                () -> {
+                                    submitRequest(
+                                            actorRouteFence(row, actorId),
+                                            packetName,
+                                            request,
+                                            metadata,
+                                            requestTimeout,
+                                            requestStarted,
+                                            replyType,
+                                            requestAdmission,
+                                            result);
+                                    return null;
+                                });
+                    } catch (RuntimeException | Error failure) {
+                        result.completeExceptionally(failure);
+                    }
                 });
-            } catch (RuntimeException | Error failure) {
-                result.completeExceptionally(failure);
-            }
-        });
         return result;
     }
 
@@ -195,24 +211,27 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
         CompletableFuture<ActorRoute> route = new CompletableFuture<>();
         systems.zlink.framework.runtime.internal.ZLinkCompletionBridge.forwardCancellation(
                 route, readiness);
-        readiness.whenComplete((ignored, error) -> {
-            if (route.isDone()) return;
-            if (error != null) {
-                route.completeExceptionally(unwrap(error));
-                return;
-            }
-            try {
-                CompletionStage<ActorRoute> resolved = locations.resolveActor(actorId);
-                systems.zlink.framework.runtime.internal.ZLinkCompletionBridge.forwardCancellation(
-                        route, resolved);
-                resolved.whenComplete((row, failure) -> {
-                    if (failure != null) route.completeExceptionally(unwrap(failure));
-                    else route.complete(row);
+        readiness.whenComplete(
+                (ignored, error) -> {
+                    if (route.isDone()) return;
+                    if (error != null) {
+                        route.completeExceptionally(unwrap(error));
+                        return;
+                    }
+                    try {
+                        CompletionStage<ActorRoute> resolved = locations.resolveActor(actorId);
+                        systems.zlink.framework.runtime.internal.ZLinkCompletionBridge
+                                .forwardCancellation(route, resolved);
+                        resolved.whenComplete(
+                                (row, failure) -> {
+                                    if (failure != null)
+                                        route.completeExceptionally(unwrap(failure));
+                                    else route.complete(row);
+                                });
+                    } catch (RuntimeException | Error failure) {
+                        route.completeExceptionally(failure);
+                    }
                 });
-            } catch (RuntimeException | Error failure) {
-                route.completeExceptionally(failure);
-            }
-        });
         return route;
     }
 
@@ -233,32 +252,35 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
     private CompletionStage<Void> submitSendResult(
             String actorId, String packetName, Object message, Map<String, String> metadata) {
         ZLinkFlowContext.State operationFlow = ZLinkFlowContext.current();
-        return ZLinkOneWayCalls.adaptOneWay(resolveActorAddress(actorId, null)
-                .thenCompose(
-                        row ->
-                                ZLinkFlowContext.call(
-                                        operationFlow,
-                                        () -> {
-                                            ZLinkServiceM6BWireCodec.ActorRouteFence actor =
-                                                    actorRouteFence(row, actorId);
-                                            List<Message> parts =
-                                                    createPacketParts(
-                                                            ZLinkStreamMessageKind.SEND,
-                                                            Optional.empty(),
-                                                            packetName,
-                                                            message,
-                                                            metadata);
-                                            ZLinkInternalSpotNode node = spotNode.get();
-                                            CompletionStage<Void> submission;
-                                            try {
-                                                submission = node.sendToActorAsync(actor, parts);
-                                            } catch (RuntimeException failure) {
-                                                closeAll(parts);
-                                                return CompletableFuture.failedFuture(failure);
-                                            }
-                                            return ZLinkOneWayCalls.closeAfterAdmission(
-                                                    submission, parts);
-                                        })),
+        return ZLinkOneWayCalls.adaptOneWay(
+                resolveActorAddress(actorId, null)
+                        .thenCompose(
+                                row ->
+                                        ZLinkFlowContext.call(
+                                                operationFlow,
+                                                () -> {
+                                                    ZLinkServiceM6BWireCodec.ActorRouteFence actor =
+                                                            actorRouteFence(row, actorId);
+                                                    List<Message> parts =
+                                                            createPacketParts(
+                                                                    ZLinkStreamMessageKind.SEND,
+                                                                    Optional.empty(),
+                                                                    packetName,
+                                                                    message,
+                                                                    metadata);
+                                                    ZLinkInternalSpotNode node = spotNode.get();
+                                                    CompletionStage<Void> submission;
+                                                    try {
+                                                        submission =
+                                                                node.sendToActorAsync(actor, parts);
+                                                    } catch (RuntimeException failure) {
+                                                        closeAll(parts);
+                                                        return CompletableFuture.failedFuture(
+                                                                failure);
+                                                    }
+                                                    return ZLinkOneWayCalls.closeAfterAdmission(
+                                                            submission, parts);
+                                                })),
                 false,
                 error -> {
                     if (isStaleActorError(error)) locations.invalidateActorRoute(actorId);
@@ -326,18 +348,25 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
                         request,
                         metadata);
         try {
-            spotNode.get().requestToActor(actor, parts, SendFlags.NONE,
-                    systems.zlink.framework.runtime.internal.calls.ZLinkRequestCalls
-                            .remainingTimeout(timeout, requestStarted, System.nanoTime()),
-                    requestAdmission,
-                    replyParts -> {
-                        try {
-                            return ZLinkActorReplyDecoder.decode(replyParts, serializer, replyType);
-                        } finally {
-                            closeAll(replyParts);
-                        }
-                    }, ignored -> {}, failure -> mapBackendException(failure, "Actor request"),
-                    completion);
+            spotNode.get()
+                    .requestToActor(
+                            actor,
+                            parts,
+                            SendFlags.NONE,
+                            systems.zlink.framework.runtime.internal.calls.ZLinkRequestCalls
+                                    .remainingTimeout(timeout, requestStarted, System.nanoTime()),
+                            requestAdmission,
+                            replyParts -> {
+                                try {
+                                    return ZLinkActorReplyDecoder.decode(
+                                            replyParts, serializer, replyType);
+                                } finally {
+                                    closeAll(replyParts);
+                                }
+                            },
+                            ignored -> {},
+                            failure -> mapBackendException(failure, "Actor request"),
+                            completion);
         } catch (RuntimeException error) {
             completion.completeExceptionally(mapBackendException(error, "Actor request"));
         } finally {

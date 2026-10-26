@@ -96,20 +96,33 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
     }
 
     public ZLinkServiceOperationRegistry(ZLinkStateLane owner, Throwable closeFailure) {
-        this(owner, Thread.ofVirtual().name("zlink-jvm-operation-maintenance").factory(),
-                closeFailure, () -> new TimeoutException("service operation timed out"), System::nanoTime);
+        this(
+                owner,
+                Thread.ofVirtual().name("zlink-jvm-operation-maintenance").factory(),
+                closeFailure,
+                () -> new TimeoutException("service operation timed out"),
+                System::nanoTime);
     }
 
     public ZLinkServiceOperationRegistry(
-            ZLinkStateLane owner, Throwable closeFailure,
-            Supplier<? extends Throwable> timeoutFailure, LongSupplier nanoTime) {
-        this(owner, Thread.ofVirtual().name("zlink-jvm-operation-maintenance").factory(),
-                closeFailure, timeoutFailure, nanoTime);
+            ZLinkStateLane owner,
+            Throwable closeFailure,
+            Supplier<? extends Throwable> timeoutFailure,
+            LongSupplier nanoTime) {
+        this(
+                owner,
+                Thread.ofVirtual().name("zlink-jvm-operation-maintenance").factory(),
+                closeFailure,
+                timeoutFailure,
+                nanoTime);
     }
 
     private ZLinkServiceOperationRegistry(
-            ZLinkStateLane owner, ThreadFactory maintenanceFactory, Throwable closeFailure,
-            Supplier<? extends Throwable> timeoutFailure, LongSupplier nanoTime) {
+            ZLinkStateLane owner,
+            ThreadFactory maintenanceFactory,
+            Throwable closeFailure,
+            Supplier<? extends Throwable> timeoutFailure,
+            LongSupplier nanoTime) {
         this.owner = Objects.requireNonNull(owner, "owner");
         this.maintenanceFactory = Objects.requireNonNull(maintenanceFactory, "maintenanceFactory");
         this.closeFailure = Objects.requireNonNull(closeFailure, "closeFailure");
@@ -134,7 +147,8 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
 
     /** Direct registration for a submission already executing on this registry's owner. */
     public <T> Operation<T> registerOnOwner(Duration timeout) {
-        if (!owner.isOnLane()) throw new IllegalStateException("registration requires its owner turn");
+        if (!owner.isOnLane())
+            throw new IllegalStateException("registration requires its owner turn");
         return registerOnOwner(timeoutNanos(timeout), null, Kind.REQUEST);
     }
 
@@ -142,27 +156,35 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
     public CompletionStage<Void> submitSend(Supplier<CompletionStage<Void>> admitted) {
         Objects.requireNonNull(admitted, "admitted");
         var completion = new CompletableFuture<Void>();
-        submitOwnerTurn(() -> {
-            if (closed) {
-                ZLinkServiceCompletionDispatcher.deliver(CompletableFuture.failedStage(closeFailure), completion);
-                return false;
-            }
-            UUID id = ZLinkServiceOperationIds.next();
-            registerEntry(0, id, Kind.SEND, completion, null);
-            try {
-                Objects.requireNonNull(admitted.get(), "binding admission")
-                        .whenComplete((ignored, failure) -> {
-                            if (failure != null) completeExceptionally(id, failure);
-                            else complete(id, null);
+        submitOwnerTurn(
+                        () -> {
+                            if (closed) {
+                                ZLinkServiceCompletionDispatcher.deliver(
+                                        CompletableFuture.failedStage(closeFailure), completion);
+                                return false;
+                            }
+                            UUID id = ZLinkServiceOperationIds.next();
+                            registerEntry(0, id, Kind.SEND, completion, null);
+                            try {
+                                Objects.requireNonNull(admitted.get(), "binding admission")
+                                        .whenComplete(
+                                                (ignored, failure) -> {
+                                                    if (failure != null)
+                                                        completeExceptionally(id, failure);
+                                                    else complete(id, null);
+                                                });
+                            } catch (RuntimeException | Error failure) {
+                                completeExceptionally(id, failure);
+                            }
+                            return true;
+                        },
+                        true)
+                .whenComplete(
+                        (accepted, failure) -> {
+                            if (failure != null)
+                                ZLinkServiceCompletionDispatcher.deliver(
+                                        CompletableFuture.failedStage(failure), completion);
                         });
-            } catch (RuntimeException | Error failure) {
-                completeExceptionally(id, failure);
-            }
-            return true;
-        }, true).whenComplete((accepted, failure) -> {
-            if (failure != null) ZLinkServiceCompletionDispatcher.deliver(
-                    CompletableFuture.failedStage(failure), completion);
-        });
         // Cancellation ends only this caller's view, never physical send admission.
         return completion.minimalCompletionStage();
     }
@@ -230,48 +252,61 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
 
     /** Uses the caller's pre-created typed receiver as the registered completion destination. */
     public <T> CompletionStage<Boolean> submitTerminal(
-            UUID id, Duration timeout,
+            UUID id,
+            Duration timeout,
             Function<BiConsumer<T, Throwable>, CompletionStage<?>> submission,
-            Consumer<? super T> discardValue, CompletableFuture<T> completion) {
+            Consumer<? super T> discardValue,
+            CompletableFuture<T> completion) {
         Objects.requireNonNull(id, "id");
         Objects.requireNonNull(submission, "submission");
         Objects.requireNonNull(discardValue, "discardValue");
         Objects.requireNonNull(completion, "completion");
         long nanos = timeoutNanos(timeout);
         long submittedAt = nanoTime.getAsLong();
-        var registration = submitOwnerTurn(() -> {
-            if (completion.isCancelled()) return false;
-            if (closed) {
-                ZLinkServiceCompletionDispatcher.deliver(CompletableFuture.failedStage(closeFailure), completion);
-                return false;
-            }
-            long remaining = nanos - (nanoTime.getAsLong() - submittedAt);
-            if (remaining <= 0) {
-                ZLinkServiceCompletionDispatcher.deliver(
-                        CompletableFuture.failedStage(timeoutFailure.get()), completion);
-                return false;
-            }
-            registerEntry(remaining, id, Kind.REQUEST, completion, discardValue);
-            completion.whenComplete((value, failure) -> {
-                if (completion.isCancelled()) cancel(id, completion);
-            });
-            submitOnOwner(id, submission, discardValue, completion);
-            return true;
-        }, true);
-        registration.whenComplete((accepted, failure) -> {
-            if (failure != null) ZLinkServiceCompletionDispatcher.deliver(
-                    CompletableFuture.failedStage(failure), completion);
-        });
+        var registration =
+                submitOwnerTurn(
+                        () -> {
+                            if (completion.isCancelled()) return false;
+                            if (closed) {
+                                ZLinkServiceCompletionDispatcher.deliver(
+                                        CompletableFuture.failedStage(closeFailure), completion);
+                                return false;
+                            }
+                            long remaining = nanos - (nanoTime.getAsLong() - submittedAt);
+                            if (remaining <= 0) {
+                                ZLinkServiceCompletionDispatcher.deliver(
+                                        CompletableFuture.failedStage(timeoutFailure.get()),
+                                        completion);
+                                return false;
+                            }
+                            registerEntry(remaining, id, Kind.REQUEST, completion, discardValue);
+                            completion.whenComplete(
+                                    (value, failure) -> {
+                                        if (completion.isCancelled()) cancel(id, completion);
+                                    });
+                            submitOnOwner(id, submission, discardValue, completion);
+                            return true;
+                        },
+                        true);
+        registration.whenComplete(
+                (accepted, failure) -> {
+                    if (failure != null)
+                        ZLinkServiceCompletionDispatcher.deliver(
+                                CompletableFuture.failedStage(failure), completion);
+                });
         return registration;
     }
 
     private <T> void submitOnOwner(
-            UUID id, Function<BiConsumer<T, Throwable>, CompletionStage<?>> submission,
-            Consumer<? super T> discardValue, CompletableFuture<T> completion) {
-        BiConsumer<T, Throwable> terminal = (value, failure) -> {
-            if (failure != null) completeExceptionally(id, failure);
-            else if (!complete(id, value) && value != null) discardValue.accept(value);
-        };
+            UUID id,
+            Function<BiConsumer<T, Throwable>, CompletionStage<?>> submission,
+            Consumer<? super T> discardValue,
+            CompletableFuture<T> completion) {
+        BiConsumer<T, Throwable> terminal =
+                (value, failure) -> {
+                    if (failure != null) completeExceptionally(id, failure);
+                    else if (!complete(id, value) && value != null) discardValue.accept(value);
+                };
         try {
             CompletionStage<?> target = submission.apply(terminal);
             if (target != null) {
@@ -346,10 +381,11 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
     }
 
     public CompletionStage<Void> closeAsync() {
-        return submitOwnerTurn(() -> {
-            closeOnOwner();
-            return null;
-        });
+        return submitOwnerTurn(
+                () -> {
+                    closeOnOwner();
+                    return null;
+                });
     }
 
     private Thread closeOnOwner() {
@@ -361,7 +397,11 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
     }
 
     public CompletionStage<Void> cancelPendingOperations() {
-        return submitOwnerTurn(() -> { cancelPendingOnOwner(); return null; });
+        return submitOwnerTurn(
+                () -> {
+                    cancelPendingOnOwner();
+                    return null;
+                });
     }
 
     private void cancelPendingOnOwner() {
@@ -462,7 +502,8 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
             unindexDeadline(current);
             // E5 already removed completed entries; wheel cleanup does not claim them again.
             if (take(current) == null) continue;
-            current.completeWithFailure(Objects.requireNonNull(timeoutFailure.get(), "timeout failure"));
+            current.completeWithFailure(
+                    Objects.requireNonNull(timeoutFailure.get(), "timeout failure"));
             current.dispatchNext(null);
             if (expiredTail == null) expiredHead = current;
             else expiredTail.dispatchNext(current);
@@ -486,17 +527,19 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
             long tick = maintenanceTick;
             if (tick < 0) LockSupport.park(this);
             else {
-                long remaining = tick * DEADLINE_TICK_NANOS - (nanoTime.getAsLong() - deadlineOrigin);
+                long remaining =
+                        tick * DEADLINE_TICK_NANOS - (nanoTime.getAsLong() - deadlineOrigin);
                 if (remaining > 0) LockSupport.parkNanos(this, remaining);
                 else {
-                    owner.tryPost(() -> {
-                        if (!closed) {
-                            expireOnOwner(nanoTime.getAsLong());
-                            maintenanceTick = nextOccupiedTick();
-                        }
-                        LockSupport.unpark(maintenance);
-                        return CompletableFuture.completedFuture(null);
-                    });
+                    owner.tryPost(
+                            () -> {
+                                if (!closed) {
+                                    expireOnOwner(nanoTime.getAsLong());
+                                    maintenanceTick = nextOccupiedTick();
+                                }
+                                LockSupport.unpark(maintenance);
+                                return CompletableFuture.completedFuture(null);
+                            });
                     LockSupport.park(this);
                 }
             }
@@ -512,7 +555,10 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
     }
 
     private <T> void registerEntry(
-            long timeoutNanos, UUID id, Kind kind, CompletableFuture<T> completion,
+            long timeoutNanos,
+            UUID id,
+            Kind kind,
+            CompletableFuture<T> completion,
             Consumer<? super T> discardValue) {
         if (closed) {
             throw new IllegalStateException("operation registry is closed");
@@ -592,8 +638,6 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
         void completeCancellation() {
             super.cancel(false);
         }
-
-
     }
 
     private enum Kind {
@@ -654,12 +698,14 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
             try {
                 switch (terminalKind) {
                     case VALUE -> {
-                        if (!completion.complete((T) terminalValue) && terminalValue != null
+                        if (!completion.complete((T) terminalValue)
+                                && terminalValue != null
                                 && discardValue != null) discardValue.accept((T) terminalValue);
                     }
                     case FAILURE -> completion.completeExceptionally(terminalFailure);
                     case CANCELLATION -> {
-                        if (completion instanceof Operation<?> operation) operation.completeCancellation();
+                        if (completion instanceof Operation<?> operation)
+                            operation.completeCancellation();
                         else completion.cancel(false);
                     }
                     default ->

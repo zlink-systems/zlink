@@ -288,8 +288,16 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
             systems.zlink.framework.runtime.internal.service.ZLinkServiceLivenessRegistry.PeerState
                     receivedAdmission,
             CompletableFuture<Void> requestAdmission) {
-        return requestMessages(router, target, messages, timeout, decodeReply, discardReply,
-                receivedAdmission, requestAdmission, new CompletableFuture<>());
+        return requestMessages(
+                router,
+                target,
+                messages,
+                timeout,
+                decodeReply,
+                discardReply,
+                receivedAdmission,
+                requestAdmission,
+                new CompletableFuture<>());
     }
 
     <T> CompletionStage<T> requestMessages(
@@ -314,9 +322,7 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
                 null,
                 (value, failure) -> {
                     if (failure != null) completion.completeExceptionally(failure);
-                    else
-                        ZLinkCompletionBridge.completeOrDiscard(
-                                completion, value, discardReply);
+                    else ZLinkCompletionBridge.completeOrDiscard(completion, value, discardReply);
                 },
                 receivedAdmission,
                 requestAdmission,

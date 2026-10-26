@@ -105,9 +105,11 @@ final class ZLinkJavaMeshNodeIsolationTest {
                             CompletableFuture.runAsync(
                                     () -> {
                                         submissionStarted.complete(null);
-                                        var admitted = source.route()
-                                                .sendToNode(MESH_A, TARGET, new Probe("load"))
-                                                .submit();
+                                        var admitted =
+                                                source.route()
+                                                        .sendToNode(
+                                                                MESH_A, TARGET, new Probe("load"))
+                                                        .submit();
                                         admitted.toCompletableFuture().join();
                                     },
                                     callers);

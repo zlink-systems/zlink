@@ -1,9 +1,8 @@
 package systems.zlink.framework.runtime.internal.service;
 
-import systems.zlink.framework.runtime.internal.ZLinkCompletionBridge;
-
-
 import org.junit.jupiter.api.Test;
+
+import systems.zlink.framework.runtime.internal.ZLinkCompletionBridge;
 
 import java.io.IOException;
 import java.lang.classfile.ClassFile;
@@ -52,7 +51,10 @@ public final class ZLinkServiceOperationRegistryWakeTest {
                                                         file.parse(bytes),
                                                         ClassTransform.transformingMethodBodies(
                                                                 method ->
-                                                                        method.methodName().stringValue().contains("maintainDeadlines"),
+                                                                        method.methodName()
+                                                                                .stringValue()
+                                                                                .contains(
+                                                                                        "maintainDeadlines"),
                                                                 (builder, element) -> {
                                                                     if (element
                                                                                     instanceof
@@ -168,11 +170,14 @@ public final class ZLinkServiceOperationRegistryWakeTest {
         blocker = registry;
         int serialReturns;
         try (registry) {
-            var operation = ZLinkCompletionBridge.await(registry.<Integer>register(Duration.ofMillis(100)));
+            var operation =
+                    ZLinkCompletionBridge.await(registry.<Integer>register(Duration.ofMillis(100)));
             parked();
             int before = returns.get();
             for (int request = 0; request < 1_000; request++) {
-                if (request != 0) operation = ZLinkCompletionBridge.await(registry.register(Duration.ofMillis(100)));
+                if (request != 0)
+                    operation =
+                            ZLinkCompletionBridge.await(registry.register(Duration.ofMillis(100)));
                 if (!registry.complete(operation.id(), request))
                     throw new AssertionError("reply lost");
                 if (operation.get(5, TimeUnit.SECONDS) != request)
@@ -216,13 +221,18 @@ public final class ZLinkServiceOperationRegistryWakeTest {
             if (!registry.discard(later.id())) throw new AssertionError("discard failed");
             var ownerField = ZLinkServiceOperationRegistry.class.getDeclaredField("owner");
             ownerField.setAccessible(true);
-            var lane = (systems.zlink.framework.runtime.internal.execution.ZLinkStateLane)
-                    ownerField.get(registry);
-            var earlier = lane.awaitTurn(() -> {
-                var request = ZLinkCompletionBridge.await(registry.register(Duration.ofNanos(1)));
-                clock.addAndGet(TimeUnit.MILLISECONDS.toNanos(2));
-                return request;
-            });
+            var lane =
+                    (systems.zlink.framework.runtime.internal.execution.ZLinkStateLane)
+                            ownerField.get(registry);
+            var earlier =
+                    lane.awaitTurn(
+                            () -> {
+                                var request =
+                                        ZLinkCompletionBridge.await(
+                                                registry.register(Duration.ofNanos(1)));
+                                clock.addAndGet(TimeUnit.MILLISECONDS.toNanos(2));
+                                return request;
+                            });
             try {
                 earlier.get(5, TimeUnit.SECONDS);
                 throw new AssertionError("deadline did not expire");

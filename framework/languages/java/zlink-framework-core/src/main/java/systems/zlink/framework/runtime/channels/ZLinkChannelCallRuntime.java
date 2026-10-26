@@ -97,7 +97,8 @@ final class ZLinkChannelCallRuntime {
         this.flow = flow;
         this.operations =
                 new ZLinkServiceOperationRegistry(
-                        owner, closedFailure(),
+                        owner,
+                        closedFailure(),
                         () -> requestFailure(new TimeoutException("service operation timed out")),
                         nanoTime);
         this.nanoTime = nanoTime;

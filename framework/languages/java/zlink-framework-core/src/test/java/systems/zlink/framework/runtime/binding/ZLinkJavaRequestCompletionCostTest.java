@@ -62,60 +62,102 @@ public final class ZLinkJavaRequestCompletionCostTest {
                 setField(mesh, "router", fixture.router);
                 var local = RoutingId.from("actor-source");
                 var remote = RoutingId.from("actor-target");
-                var topology = new systems.zlink.framework.runtime.internal.service
-                        .ZLinkServiceTopologyRegistry(actorDescriptor(local));
+                var topology =
+                        new systems.zlink.framework.runtime.internal.service
+                                .ZLinkServiceTopologyRegistry(actorDescriptor(local));
                 topology.admit(actorDescriptor(remote), "actor-route", 1);
                 setField(mesh, "topology", topology);
                 var reply = new CompletableFuture<List<Message>>();
                 fixture.pending.set(new Pending(CompletableFuture.completedFuture(null), reply));
-                var target = new systems.zlink.framework.runtime.internal.service
-                        .ZLinkServiceM6BWireCodec.ActorRouteFence(
-                        new systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef(
-                                remote, "actor", 1), 1, 1, 1);
+                var target =
+                        new systems.zlink.framework.runtime.internal.service
+                                .ZLinkServiceM6BWireCodec.ActorRouteFence(
+                                new systems.zlink.framework.runtime.internal.backend
+                                        .ZLinkBackendActorRef(remote, "actor", 1),
+                                1,
+                                1,
+                                1);
                 var result = new CompletableFuture<List<Message>>();
-                fixture.beforeSubmit = () -> {
-                    assertEquals(1, meshOperations.pendingCount(),
-                            "Framework entry and dispatcher slot must precede binding submit");
-                    try {
-                        var entries = (java.util.Map<?, ?>) field(meshOperations, "pending");
-                        var entry = entries.values().iterator().next();
-                        var registered = entry.getClass().getSuperclass().getDeclaredField("registered");
-                        registered.setAccessible(true);
-                        assertTrue(registered.getBoolean(entry), "dispatcher slot must precede submit");
-                        assertSame(result, field(entry, "completion"),
-                                "registry must dispatch straight to the final typed receiver");
-                    } catch (Exception failure) {
-                        throw new AssertionError(failure);
-                    }
-                };
+                fixture.beforeSubmit =
+                        () -> {
+                            assertEquals(
+                                    1,
+                                    meshOperations.pendingCount(),
+                                    "Framework entry and dispatcher slot must precede binding submit");
+                            try {
+                                var entries =
+                                        (java.util.Map<?, ?>) field(meshOperations, "pending");
+                                var entry = entries.values().iterator().next();
+                                var registered =
+                                        entry.getClass()
+                                                .getSuperclass()
+                                                .getDeclaredField("registered");
+                                registered.setAccessible(true);
+                                assertTrue(
+                                        registered.getBoolean(entry),
+                                        "dispatcher slot must precede submit");
+                                assertSame(
+                                        result,
+                                        field(entry, "completion"),
+                                        "registry must dispatch straight to the final typed receiver");
+                            } catch (Exception failure) {
+                                throw new AssertionError(failure);
+                            }
+                        };
                 var requestPart = Message.from(new byte[] {1});
                 try {
                     var admission = new CompletableFuture<Void>();
-                    mesh.requestActor(target, List.of(requestPart), TIMEOUT,
-                            admission, java.util.function.Function.identity(),
-                            Message::closeAll, result);
+                    mesh.requestActor(
+                            target,
+                            List.of(requestPart),
+                            TIMEOUT,
+                            admission,
+                            java.util.function.Function.identity(),
+                            Message::closeAll,
+                            result);
                     admission.get(1, TimeUnit.SECONDS);
                     assertEquals(1, fixture.submits.get());
-                    assertEquals(1, meshOperations.pendingCount(),
+                    assertEquals(
+                            1,
+                            meshOperations.pendingCount(),
                             "Framework completion must remain registered while the binding reply is pending");
                     // The binding submission captures the original wire correlation.
-                    var wire = new systems.zlink.framework.runtime.internal.service
-                            .ZLinkServiceM6AWireCodec();
-                    var stateful = new systems.zlink.framework.runtime.internal.service
-                            .ZLinkServiceM6BWireCodec();
-                    long correlation = stateful.decodeActorHeader(
-                            fixture.submittedMessages.get().getFirst().toByteArray()).correlation();
+                    var wire =
+                            new systems.zlink.framework.runtime.internal.service
+                                    .ZLinkServiceM6AWireCodec();
+                    var stateful =
+                            new systems.zlink.framework.runtime.internal.service
+                                    .ZLinkServiceM6BWireCodec();
+                    long correlation =
+                            stateful.decodeActorHeader(
+                                            fixture.submittedMessages
+                                                    .get()
+                                                    .getFirst()
+                                                    .toByteArray())
+                                    .correlation();
                     var body = Message.from(new byte[] {42});
                     byte[] encoded;
-                    try { encoded = wire.encodeFrameworkMultipartFrame(List.of(body)); }
-                    finally { body.close(); }
-                    reply.complete(List.of(Message.from(wire.encodeReplyHeader(correlation, 0, 0)),
-                            Message.from(encoded)));
+                    try {
+                        encoded = wire.encodeFrameworkMultipartFrame(List.of(body));
+                    } finally {
+                        body.close();
+                    }
+                    reply.complete(
+                            List.of(
+                                    Message.from(wire.encodeReplyHeader(correlation, 0, 0)),
+                                    Message.from(encoded)));
                     var received = result.toCompletableFuture().get(1, TimeUnit.SECONDS);
-                    try { assertArrayEquals(new byte[] {42}, received.getFirst().toByteArray()); }
-                    finally { received.forEach(Message::close); }
-                } finally { requestPart.close(); }
-            } finally { meshOperations.close(); }
+                    try {
+                        assertArrayEquals(new byte[] {42}, received.getFirst().toByteArray());
+                    } finally {
+                        received.forEach(Message::close);
+                    }
+                } finally {
+                    requestPart.close();
+                }
+            } finally {
+                meshOperations.close();
+            }
         }
     }
 
@@ -133,16 +175,29 @@ public final class ZLinkJavaRequestCompletionCostTest {
 
     private static systems.zlink.framework.runtime.internal.service.ZLinkServiceNodeDescriptor
             actorDescriptor(RoutingId rid) {
-        var capability = systems.zlink.framework.runtime.internal.service
-                .ZLinkServiceNodeDescriptor.REQUIRED_CAPABILITY;
+        var capability =
+                systems.zlink.framework.runtime.internal.service.ZLinkServiceNodeDescriptor
+                        .REQUIRED_CAPABILITY;
         return new systems.zlink.framework.runtime.internal.service.ZLinkServiceNodeDescriptor(
-                "actor-completion", rid, 1, 1, "inproc://" + rid, List.of(),
-                systems.zlink.framework.runtime.internal.service.ZLinkServiceNodeDescriptor.State.SERVING,
+                "actor-completion",
+                rid,
+                1,
+                1,
+                "inproc://" + rid,
+                List.of(),
+                systems.zlink.framework.runtime.internal.service.ZLinkServiceNodeDescriptor.State
+                        .SERVING,
                 systems.zlink.framework.runtime.internal.service.ZLinkServiceNodeDescriptor
                         .PLAINTEXT_SECURITY_IDENTITY,
-                1, List.of(capability),
-                systems.zlink.framework.runtime.internal.service.ZLinkServiceNodeDescriptor.ObjectRole.NONE,
-                1, 1, 0, 0, 0);
+                1,
+                List.of(capability),
+                systems.zlink.framework.runtime.internal.service.ZLinkServiceNodeDescriptor
+                        .ObjectRole.NONE,
+                1,
+                1,
+                0,
+                0,
+                0);
     }
 
     /** Runs allocation assertions with TLAB disabled, including under the normal Gradle JVM. */
@@ -235,16 +290,20 @@ public final class ZLinkJavaRequestCompletionCostTest {
             long preparedReceivers = 0;
             long submitted = 0;
             var events = RecordingFile.readAllEvents(recordingPath);
-            events.sort(java.util.Comparator.comparing(jdk.jfr.consumer.RecordedEvent::getStartTime));
+            events.sort(
+                    java.util.Comparator.comparing(jdk.jfr.consumer.RecordedEvent::getStartTime));
             for (var event : events) {
                 assertNotEquals("jdk.DataLoss", event.getEventType().getName());
                 if (event.getEventType().getName().equals("zlink.test.BindingSubmit")) {
-                    assertEquals(++submitted, preparedReceivers,
+                    assertEquals(
+                            ++submitted,
+                            preparedReceivers,
                             "the final receiver must exist before binding submission");
                     continue;
                 }
                 if (!event.getEventType().getName().equals("jdk.ObjectAllocationOutsideTLAB")
-                        || !event.getClass("objectClass").getName()
+                        || !event.getClass("objectClass")
+                                .getName()
                                 .equals(CompletableFuture.class.getName())) continue;
                 var stack = event.getStackTrace();
                 assertNotNull(stack);
@@ -436,7 +495,8 @@ public final class ZLinkJavaRequestCompletionCostTest {
     }
 
     @Test
-    void standaloneAdmissionDeadlineRetainsThePreparedReceiverForThePhysicalReply() throws Exception {
+    void standaloneAdmissionDeadlineRetainsThePreparedReceiverForThePhysicalReply()
+            throws Exception {
         try (var fixture = new Fixture(true)) {
             var request = fixture.submitStandalone(Duration.ofMillis(20));
             var failure =
@@ -515,6 +575,7 @@ public final class ZLinkJavaRequestCompletionCostTest {
         private RequestOperation operation() {
             class Operation implements RequestOperation, RequestSubmitOperation {
                 private final java.util.ArrayList<Message> messages = new java.util.ArrayList<>();
+
                 @Override
                 public RequestSubmitOperation message(Message message) {
                     messages.add(message);
@@ -600,8 +661,10 @@ public final class ZLinkJavaRequestCompletionCostTest {
                                             null,
                                             admission),
                             ignored -> discards.incrementAndGet());
-            ((ZLinkStateLane) field(operations, "owner")).runAsync(() -> {})
-                    .toCompletableFuture().get(1, TimeUnit.SECONDS);
+            ((ZLinkStateLane) field(operations, "owner"))
+                    .runAsync(() -> {})
+                    .toCompletableFuture()
+                    .get(1, TimeUnit.SECONDS);
             var observed = ZLinkRequestStages.observe(completion, admission);
             return new Submitted(pending.get(), admission, observed.toCompletableFuture());
         }

@@ -654,8 +654,10 @@ final class ZLinkJavaSubmissionTest {
     }
 
     /** Counts registrations at the current hash owner, including entries already completed. */
-    private static final class RegistrationProbe extends java.util.concurrent.ConcurrentHashMap<Object, Object> {
-        final java.util.concurrent.atomic.AtomicLong count = new java.util.concurrent.atomic.AtomicLong();
+    private static final class RegistrationProbe
+            extends java.util.concurrent.ConcurrentHashMap<Object, Object> {
+        final java.util.concurrent.atomic.AtomicLong count =
+                new java.util.concurrent.atomic.AtomicLong();
 
         RegistrationProbe(ZLinkServiceOperationRegistry registry) {
             try {
@@ -673,7 +675,9 @@ final class ZLinkJavaSubmissionTest {
             try {
                 var registered = entry.getClass().getSuperclass().getDeclaredField("registered");
                 registered.setAccessible(true);
-                assertTrue(registered.getBoolean(entry), "dispatcher registration must precede hash publication");
+                assertTrue(
+                        registered.getBoolean(entry),
+                        "dispatcher registration must precede hash publication");
             } catch (ReflectiveOperationException failure) {
                 throw new AssertionError(failure);
             }

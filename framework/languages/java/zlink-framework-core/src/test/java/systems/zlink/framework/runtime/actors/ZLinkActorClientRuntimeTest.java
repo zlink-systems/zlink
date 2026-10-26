@@ -179,23 +179,29 @@ final class ZLinkActorClientRuntimeTest {
 
     private void verifyActorTypedReceiver() throws Exception {
         var bindingReply = new CompletableFuture<List<Message>>();
-        var client = new ZLinkActorClientRuntime(
-                () -> new RecordingSpotNode() {
-                    @Override
-                    public CompletionStage<List<Message>> requestToActor(
-                            ZLinkServiceM6BWireCodec.ActorRouteFence target,
-                            List<Message> parts, SendFlags flags, Duration timeout,
-                            CompletableFuture<Void> admission) {
-                        new ActorBackendSubmit().commit();
-                        admission.complete(null);
-                        return bindingReply;
-                    }
-                },
-                new ZLinkStoreLocationResolvers(
-                        ZLinkRegisteredLocationStores.fromUnified(storeWithActor("actor-1")),
-                        new ZLinkLocationOptions()),
-                new ZLinkJsonMessageSerializer(), Duration.ofSeconds(5),
-                ZLinkTestAdmissionFactory.create());
+        var client =
+                new ZLinkActorClientRuntime(
+                        () ->
+                                new RecordingSpotNode() {
+                                    @Override
+                                    public CompletionStage<List<Message>> requestToActor(
+                                            ZLinkServiceM6BWireCodec.ActorRouteFence target,
+                                            List<Message> parts,
+                                            SendFlags flags,
+                                            Duration timeout,
+                                            CompletableFuture<Void> admission) {
+                                        new ActorBackendSubmit().commit();
+                                        admission.complete(null);
+                                        return bindingReply;
+                                    }
+                                },
+                        new ZLinkStoreLocationResolvers(
+                                ZLinkRegisteredLocationStores.fromUnified(
+                                        storeWithActor("actor-1")),
+                                new ZLinkLocationOptions()),
+                        new ZLinkJsonMessageSerializer(),
+                        Duration.ofSeconds(5),
+                        ZLinkTestAdmissionFactory.create());
         var file = java.nio.file.Files.createTempFile("actor-receiver-", ".jfr");
         try {
             try (var recording = new jdk.jfr.Recording()) {
@@ -208,21 +214,44 @@ final class ZLinkActorClientRuntimeTest {
                 recording.dump(file);
             }
             var events = jdk.jfr.consumer.RecordingFile.readAllEvents(file);
-            assertFalse(events.stream().anyMatch(e -> e.getEventType().getName().equals("jdk.DataLoss")));
-            var submit = events.stream().filter(e -> e.getEventType().getName()
-                    .equals("zlink.ActorBackendSubmit")).findFirst().orElseThrow();
-            long prepared = events.stream().filter(e -> {
-                if (!e.getEventType().getName().equals("jdk.ObjectAllocationOutsideTLAB")
-                        || !e.getClass("objectClass").getName()
-                                .equals("java.util.concurrent.CompletableFuture")) return false;
-                var stack = e.getStackTrace();
-                assertFalse(stack.isTruncated());
-                var top = stack.getFrames().getFirst().getMethod();
-                return top.getType().getName().equals(ZLinkActorClientRuntime.class.getName())
-                        && top.getName().equals("requestAsync")
-                        && e.getStartTime().isBefore(submit.getStartTime());
-            }).count();
-            assertEquals(1, prepared, "one final typed receiver must exist before backend submission");
+            assertFalse(
+                    events.stream()
+                            .anyMatch(e -> e.getEventType().getName().equals("jdk.DataLoss")));
+            var submit =
+                    events.stream()
+                            .filter(
+                                    e ->
+                                            e.getEventType()
+                                                    .getName()
+                                                    .equals("zlink.ActorBackendSubmit"))
+                            .findFirst()
+                            .orElseThrow();
+            long prepared =
+                    events.stream()
+                            .filter(
+                                    e -> {
+                                        if (!e.getEventType()
+                                                        .getName()
+                                                        .equals("jdk.ObjectAllocationOutsideTLAB")
+                                                || !e.getClass("objectClass")
+                                                        .getName()
+                                                        .equals(
+                                                                "java.util.concurrent.CompletableFuture"))
+                                            return false;
+                                        var stack = e.getStackTrace();
+                                        assertFalse(stack.isTruncated());
+                                        var top = stack.getFrames().getFirst().getMethod();
+                                        return top.getType()
+                                                        .getName()
+                                                        .equals(
+                                                                ZLinkActorClientRuntime.class
+                                                                        .getName())
+                                                && top.getName().equals("requestAsync")
+                                                && e.getStartTime().isBefore(submit.getStartTime());
+                                    })
+                            .count();
+            assertEquals(
+                    1, prepared, "one final typed receiver must exist before backend submission");
         } finally {
             bindingReply.completeExceptionally(new IllegalStateException("test cleanup"));
             java.nio.file.Files.deleteIfExists(file);
@@ -233,52 +262,70 @@ final class ZLinkActorClientRuntimeTest {
     void callerCancellationReachesTheSubmittedActorRequest() throws Exception {
         var bindingReply = new CompletableFuture<List<Message>>();
         var submitted = new CompletableFuture<Void>();
-        var client = new ZLinkActorClientRuntime(
-                () -> new RecordingSpotNode() {
-                    @Override
-                    public CompletionStage<List<Message>> requestToActor(
-                            ZLinkServiceM6BWireCodec.ActorRouteFence target,
-                            List<Message> parts, SendFlags flags, Duration timeout,
-                            CompletableFuture<Void> admission) {
-                        admission.complete(null);
-                        submitted.complete(null);
-                        return bindingReply;
-                    }
-                },
-                new ZLinkStoreLocationResolvers(
-                        ZLinkRegisteredLocationStores.fromUnified(storeWithActor("actor-1")),
-                        new ZLinkLocationOptions()),
-                new ZLinkJsonMessageSerializer(), Duration.ofSeconds(5),
-                ZLinkTestAdmissionFactory.create());
-        var caller = client.requestToActor("actor-1", new Ping("hello"))
-                .submit(Pong.class).toCompletableFuture();
+        var client =
+                new ZLinkActorClientRuntime(
+                        () ->
+                                new RecordingSpotNode() {
+                                    @Override
+                                    public CompletionStage<List<Message>> requestToActor(
+                                            ZLinkServiceM6BWireCodec.ActorRouteFence target,
+                                            List<Message> parts,
+                                            SendFlags flags,
+                                            Duration timeout,
+                                            CompletableFuture<Void> admission) {
+                                        admission.complete(null);
+                                        submitted.complete(null);
+                                        return bindingReply;
+                                    }
+                                },
+                        new ZLinkStoreLocationResolvers(
+                                ZLinkRegisteredLocationStores.fromUnified(
+                                        storeWithActor("actor-1")),
+                                new ZLinkLocationOptions()),
+                        new ZLinkJsonMessageSerializer(),
+                        Duration.ofSeconds(5),
+                        ZLinkTestAdmissionFactory.create());
+        var caller =
+                client.requestToActor("actor-1", new Ping("hello"))
+                        .submit(Pong.class)
+                        .toCompletableFuture();
         submitted.get(1, java.util.concurrent.TimeUnit.SECONDS);
         assertTrue(caller.cancel(false));
-        assertTrue(bindingReply.isCancelled(), "caller cancellation did not reach binding operation");
+        assertTrue(
+                bindingReply.isCancelled(), "caller cancellation did not reach binding operation");
     }
 
     @Test
     void cancellingReadinessWaitPreventsActorSubmissionAndKeepsSharedReadiness() throws Exception {
         var ready = new CompletableFuture<Void>();
         var attempts = new java.util.concurrent.atomic.AtomicInteger();
-        var client = new ZLinkActorClientRuntime(
-                () -> new RecordingSpotNode() {
-                    @Override
-                    public CompletionStage<List<Message>> requestToActor(
-                            ZLinkServiceM6BWireCodec.ActorRouteFence target,
-                            List<Message> parts, SendFlags flags, Duration timeout,
-                            CompletableFuture<Void> admission) {
-                        attempts.incrementAndGet();
-                        return CompletableFuture.completedFuture(List.of());
-                    }
-                },
-                new ZLinkStoreLocationResolvers(
-                        ZLinkRegisteredLocationStores.fromUnified(storeWithActor("actor-1")),
-                        new ZLinkLocationOptions()),
-                new ZLinkJsonMessageSerializer(), Duration.ofSeconds(5),
-                ZLinkTestAdmissionFactory.create(), ready);
-        var caller = client.requestToActor("actor-1", new Ping("hello"))
-                .submit(Pong.class).toCompletableFuture();
+        var client =
+                new ZLinkActorClientRuntime(
+                        () ->
+                                new RecordingSpotNode() {
+                                    @Override
+                                    public CompletionStage<List<Message>> requestToActor(
+                                            ZLinkServiceM6BWireCodec.ActorRouteFence target,
+                                            List<Message> parts,
+                                            SendFlags flags,
+                                            Duration timeout,
+                                            CompletableFuture<Void> admission) {
+                                        attempts.incrementAndGet();
+                                        return CompletableFuture.completedFuture(List.of());
+                                    }
+                                },
+                        new ZLinkStoreLocationResolvers(
+                                ZLinkRegisteredLocationStores.fromUnified(
+                                        storeWithActor("actor-1")),
+                                new ZLinkLocationOptions()),
+                        new ZLinkJsonMessageSerializer(),
+                        Duration.ofSeconds(5),
+                        ZLinkTestAdmissionFactory.create(),
+                        ready);
+        var caller =
+                client.requestToActor("actor-1", new Ping("hello"))
+                        .submit(Pong.class)
+                        .toCompletableFuture();
         assertTrue(caller.cancel(false));
         assertFalse(ready.isDone(), "shared runtime readiness belongs to the runtime");
         ready.complete(null);

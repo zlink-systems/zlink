@@ -787,12 +787,26 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
             java.util.function.Function<Throwable, Throwable> mapFailure,
             CompletableFuture<T> completion) {
         if (!routingId().equals(target.actor().nodeRid())) {
-            owner.requestActor(target, parts, timeout, requestAdmission,
-                    decodeReply, discardReply, completion);
+            owner.requestActor(
+                    target,
+                    parts,
+                    timeout,
+                    requestAdmission,
+                    decodeReply,
+                    discardReply,
+                    completion);
             return;
         }
-        ZLinkInternalSpotNode.super.requestToActor(target, parts, flags, timeout,
-                requestAdmission, decodeReply, discardReply, mapFailure, completion);
+        ZLinkInternalSpotNode.super.requestToActor(
+                target,
+                parts,
+                flags,
+                timeout,
+                requestAdmission,
+                decodeReply,
+                discardReply,
+                mapFailure,
+                completion);
     }
 
     CompletionStage<List<Message>> requestExactActor(
@@ -3578,13 +3592,21 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                 };
         if (operations != null) {
             var registered = new CompletableFuture<ZLinkBackendReceived>();
-            operations.submitTerminal(operationId, timeout, terminalResult -> {
-                var submitted = enqueue.get();
-                submitted.whenComplete(terminalResult);
-                return submitted;
-            }, ZLinkBackendReceived::close, registered).whenComplete((accepted, failure) -> {
-                if (failure != null || !accepted) request.close();
-            });
+            operations
+                    .submitTerminal(
+                            operationId,
+                            timeout,
+                            terminalResult -> {
+                                var submitted = enqueue.get();
+                                submitted.whenComplete(terminalResult);
+                                return submitted;
+                            },
+                            ZLinkBackendReceived::close,
+                            registered)
+                    .whenComplete(
+                            (accepted, failure) -> {
+                                if (failure != null || !accepted) request.close();
+                            });
             return registered.whenComplete((reply, failure) -> completion.cancel(false));
         }
         if (timeout != null && !timeout.isNegative() && !timeout.isZero()) {
