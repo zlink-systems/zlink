@@ -15,8 +15,13 @@ namespace zlink::framework::detail
 bool dispatch_completion_receive_handoff (const std::function<bool ()> &handoff,
                                           const completion_dispatcher_borrow_t &dispatcher = {});
 
+// Runs terminal cleanup in the same scope used by accepted completion turns.
+void run_completion_turn (std::function<void ()> work, const void *owner,
+                          completion_dispatcher_t *dispatcher);
+
 // Internal occupancy query for deterministic dispatcher resource tests.
 std::size_t completion_dispatcher_worker_count () noexcept;
-std::weak_ptr<completion_dispatcher_t> observe_completion_dispatcher ();
+// Observes completion-owner lifetime, independently of retained dispatcher storage.
+std::weak_ptr<void> observe_completion_dispatcher ();
 
 } // namespace zlink::framework::detail

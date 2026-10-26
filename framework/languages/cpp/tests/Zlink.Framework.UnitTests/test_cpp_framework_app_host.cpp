@@ -1088,7 +1088,7 @@ int verify_completion_dispatcher_hosts ()
     class ready_service_t final : public hosted_service_t
     {
       public:
-        std::promise<std::weak_ptr<detail::completion_dispatcher_t>> started;
+        std::promise<std::weak_ptr<void>> started;
         task_t<void> start (service_provider_t &) override
         {
             started.set_value (detail::observe_completion_dispatcher ());

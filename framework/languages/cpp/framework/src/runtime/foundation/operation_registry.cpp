@@ -3,6 +3,7 @@
 #include "runtime/foundation/operation_registry.hpp"
 #include "runtime/diagnostics/mesh_request_metrics.hpp"
 #include "runtime/dispatch/dispatch_limits.hpp"
+#include "runtime/dispatch/completion_turn.hpp"
 #include "runtime/execution/task_result.hpp"
 
 #include <zlink/framework/contracts/dispatch/task.hpp>
@@ -105,19 +106,33 @@ void post_completions (operation_completion_chain_t completions) noexcept
         const auto *owner = completion->drain_state.get ();
         // The existing reservation owns the callback and drain lifetime.
         // Capture one raw pointer; the independent turn immediately reclaims it.
-        detail::dispatch_completion (
-          [item = completion.get ()] {
-              // Keep the TLS drain identity valid through callback-capture destruction.
-              const auto drain_lifetime = item->drain_state;
-              const std::unique_ptr<operation_completion_item_t> completion (item);
-              try {
-                  completion->callback (completion->terminal, std::move (completion->payload));
-              }
-              catch (...) {
-                  // A consumer failure must still release its drain reservation.
-              }
-          },
-          false, owner, std::move (completion->dispatcher));
+        std::function<void ()> deliver = [item = completion.get ()] {
+            // Keep the TLS drain identity valid through callback-capture destruction.
+            const auto drain_lifetime = item->drain_state;
+            const std::unique_ptr<operation_completion_item_t> completion (item);
+            try {
+                completion->callback (completion->terminal, std::move (completion->payload));
+            }
+            catch (...) {
+                // A consumer failure must still release its drain reservation.
+            }
+        };
+        try {
+            detail::dispatch_completion (std::move (deliver), false, owner, completion->dispatcher);
+        }
+        catch (const framework_exception_t &error) {
+            if (error.kind () != framework_error_kind_t::shutting_down)
+                std::terminate ();
+            // Admission preserves deliver. End the registered wait and release
+            // its reservation even when the completion owner has already closed.
+            completion->terminal = operation_terminal_t::shutdown;
+            completion->payload = {};
+            (void) completion.release ();
+            // A terminal cleanup scope carries the drain identity, not admission
+            // authority to the dispatcher whose workers have already stopped.
+            detail::run_completion_turn (std::move (deliver), owner, nullptr);
+            continue;
+        }
         (void) completion.release ();
     }
 }

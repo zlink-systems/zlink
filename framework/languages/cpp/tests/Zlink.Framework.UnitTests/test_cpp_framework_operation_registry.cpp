@@ -301,6 +301,43 @@ void verify_registry_borrows_dispatcher_until_delivery ()
     assert (zlink::framework::detail::completion_dispatcher_worker_count () == 0);
 }
 
+void verify_closed_dispatcher_settles_registry ()
+{
+    using namespace zlink::framework;
+    for (const bool complete : {false, true}) {
+        completion_owner_t owner;
+        foundation::operation_registry_t registry;
+        unsigned delivered = 0;
+        task_completion_source_t<int> source;
+        auto pending = source.task ();
+        bool wait_shutdown = false;
+        detail::observe_task_completion (pending, [&] (const result_t<int> &result) {
+            assert (!result && result.error_kind () == framework_error_kind_t::shutting_down);
+            wait_shutdown = true;
+        });
+        assert (registry.register_operation (
+          id (1), foundation::operation_registry_t::clock_t::time_point::max (),
+          [&] (auto terminal, auto payload) {
+              assert (terminal == foundation::operation_terminal_t::shutdown);
+              assert (payload.size () == 0);
+              ++delivered;
+              // Terminal cleanup retains the drain identity, so this cannot
+              // wait for its own reservation.
+              assert (registry.shutdown () == 0);
+              assert (source.complete (result_t<int>::success (1639)));
+          }));
+        owner.close ();
+        if (complete)
+            assert (registry.complete (id (1), {}));
+        else
+            assert (registry.shutdown () == 1);
+        assert (registry.shutdown () == 0);
+        assert (delivered == 1 && wait_shutdown);
+        assert (pending.result ().value () == 1639);
+    }
+    std::cout << "closed_dispatcher_registry_terminal=shutdown complete_and_shutdown=pass\n";
+}
+
 void verify_dispatcher_shutdown_drains ()
 {
     namespace detail = zlink::framework::detail;
@@ -485,6 +522,7 @@ int main (int argc, char **argv)
         verify_provider_completion_releases_dispatcher ();
         verify_worker_lifecycle_is_rejected ();
         verify_registry_borrows_dispatcher_until_delivery ();
+        verify_closed_dispatcher_settles_registry ();
         return 0;
     }
     if (argc == 2 && std::string_view (argv[1]) == "--dispatcher-shutdown") {

@@ -52,11 +52,12 @@ using task_scheduler_t = std::function<void (std::function<void ()> &&)>;
 inline constexpr char registered_execution_context_shutting_down_message[] =
   "registered execution context is shutting down";
 
+class completion_dispatcher_t;
+// Retains context storage, but does not keep its completion owner accepting work.
+using completion_dispatcher_borrow_t = std::shared_ptr<completion_dispatcher_t>;
 // Returns a late-bound handoff to the host-owned coroutine executor. Pending
 // binding operations own no executor lifetime; invocation and post admission
 // are serialized with host shutdown.
-class completion_dispatcher_t;
-using completion_dispatcher_borrow_t = completion_dispatcher_t *;
 task_scheduler_t capture_runtime_native_continuation_scheduler (
   completion_dispatcher_borrow_t *dispatcher = nullptr);
 task_scheduler_t capture_runtime_scope_exit_scheduler ();
@@ -67,18 +68,18 @@ bool can_reuse_completion_turn (bool known_runtime_worker = false,
                                 const void *caller_job = nullptr,
                                 bool caller_owned_turn = false) noexcept;
 completion_dispatcher_borrow_t borrow_completion_dispatcher ();
-void dispatch_completion (std::function<void ()> work,
+void dispatch_completion (std::function<void ()> &&work,
                           bool inline_allowed = false,
                           const void *owner = nullptr,
-                          completion_dispatcher_borrow_t dispatcher = {});
+                          const completion_dispatcher_borrow_t &dispatcher = {});
 inline bool dispatch_shutdown_fallback (std::function<void ()> &work,
                                         const std::stop_token &wait_owner,
                                         bool inline_allowed,
-                                        completion_dispatcher_borrow_t dispatcher = {})
+                                        const completion_dispatcher_borrow_t &dispatcher = {})
 {
     if (wait_owner.stop_possible ())
         return false;
-    dispatch_completion (std::move (work), inline_allowed, nullptr, std::move (dispatcher));
+    dispatch_completion (std::move (work), inline_allowed, nullptr, dispatcher);
     return true;
 }
 void ensure_blocking_submit_allowed ();
@@ -434,10 +435,22 @@ class task_wait_registration_t : public std::enable_shared_from_this<task_wait_r
             /* Cancellation §5.1: the owner ends this wait, even when its stop
              * is already requested and its callback has not run yet. The
              * registration stays owned until that callback settles it. */
-            if (!dispatch_shutdown_fallback (resume, _ambient.wait_owner, inline_allowed,
-                                             _completion_dispatcher))
+            if (_ambient.wait_owner.stop_possible ())
                 return false;
-            return true;
+            if (_scheduler) {
+                try {
+                    dispatch_completion (std::move (resume), inline_allowed, nullptr,
+                                         _completion_dispatcher);
+                    return true;
+                }
+                catch (const framework_exception_t &fallback_error) {
+                    if (fallback_error.kind () != framework_error_kind_t::shutting_down)
+                        std::terminate ();
+                }
+            }
+            // No execution owner remains to cancel this registration. Settle
+            // this wait through its existing cancellation path, retaining its turn.
+            return cancel ();
         }
         return true;
     }
