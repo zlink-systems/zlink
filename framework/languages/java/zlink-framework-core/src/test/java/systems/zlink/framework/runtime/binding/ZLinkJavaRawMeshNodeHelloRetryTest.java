@@ -31,6 +31,80 @@ final class ZLinkJavaRawMeshNodeHelloRetryTest {
     private static final Duration IO_DEADLINE = Duration.ofSeconds(2);
 
     @Test
+    void selectedHelloBeforeSnapshotReadiesBothPeersOnFirstExchange() throws Exception {
+        var now = new AtomicLong();
+        var localRid = RoutingId.from("snapshot-local");
+        var remoteRid = RoutingId.from("snapshot-remote");
+        try (var context = Zlink.createContext();
+                var local =
+                        new ZLinkJavaRawMeshNode(
+                                context,
+                                "hello-retry",
+                                () -> 0L,
+                                now::get,
+                                Duration.ofSeconds(5),
+                                Duration.ofSeconds(15));
+                var remote =
+                        new ZLinkJavaRawMeshNode(
+                                context,
+                                "hello-retry",
+                                () -> 0L,
+                                now::get,
+                                Duration.ofSeconds(5),
+                                Duration.ofSeconds(15))) {
+            var localPort = (ZLinkJavaRawServicePort) field(local, "port");
+            var remotePort = (ZLinkJavaRawServicePort) field(remote, "port");
+            var localRouter = localPort.openRouter(localRid);
+            var remoteRouter = remotePort.openRouter(remoteRid);
+            var localTopology = new ZLinkServiceTopologyRegistry(descriptor(localRid, 2));
+            var remoteTopology = new ZLinkServiceTopologyRegistry(descriptor(remoteRid, 2));
+            set(local, "router", localRouter);
+            set(remote, "router", remoteRouter);
+            set(local, "localDescriptor", descriptor(localRid, 2));
+            set(remote, "localDescriptor", descriptor(remoteRid, 2));
+            set(local, "topology", localTopology);
+            set(remote, "topology", remoteTopology);
+            var endpoint = "inproc://snapshot-" + java.util.UUID.randomUUID();
+            localRouter.bind(endpoint);
+            remoteRouter.connect(endpoint);
+            remotePort.ensureReceivePollerRegistered(remoteRouter);
+            long deadline = System.nanoTime() + IO_DEADLINE.toNanos();
+            do {
+                assertTrue(System.nanoTime() < deadline, "Core must select the remote route");
+                remotePort.waitForReady(remoteRouter, IO_DEADLINE);
+                invoke(remote, "observeSelectedRoutes");
+            } while (((java.util.Map<?, ?>) field(remote, "selectedRoutes")).isEmpty());
+            tick(remote, now.get());
+            remote.helloExchanges
+                    .get(localRid)
+                    .submission()
+                    .get(2, java.util.concurrent.TimeUnit.SECONDS);
+            // Background pumping is disabled; receive a real HELLO before the next observation.
+            assertTrue(((java.util.Map<?, ?>) field(local, "selectedRoutes")).isEmpty());
+            long delivered = dispatchNext(local, localPort, localRouter);
+            assertNotEquals(0L, delivered);
+            assertTrue(
+                    localTopology.peer(remoteRid).isPresent(),
+                    "a selected route HELLO must establish admission on the first exchange");
+            assertEquals(
+                    delivered,
+                    ((java.util.Map<?, ?>) field(local, "selectedRoutes")).get(remoteRid));
+            tick(local, now.get());
+            local.helloExchanges
+                    .get(remoteRid)
+                    .submission()
+                    .get(2, java.util.concurrent.TimeUnit.SECONDS);
+            dispatchNext(remote, remotePort, remoteRouter);
+            dispatchNext(remote, remotePort, remoteRouter);
+            while (!localTopology.isReady(remoteRid)) {
+                dispatchNext(local, localPort, localRouter);
+            }
+            assertTrue(localTopology.isReady(remoteRid));
+            assertTrue(remoteTopology.isReady(localRid));
+        }
+    }
+
+    @Test
     void helloAwaitingAdmitUsesLivenessPeriodsRatherThanReceiveRotations() throws Exception {
         var now = new AtomicLong();
         var interval = Duration.ofSeconds(5);
@@ -369,7 +443,7 @@ final class ZLinkJavaRawMeshNodeHelloRetryTest {
         }
     }
 
-    private static void dispatchNext(
+    private static long dispatchNext(
             ZLinkJavaRawMeshNode node, ZLinkJavaRawServicePort port, RouterSocket router)
             throws Exception {
         while (true) {
@@ -379,12 +453,13 @@ final class ZLinkJavaRawMeshNodeHelloRetryTest {
                 inbound.close();
                 continue;
             }
+            long generation = inbound.routeGeneration();
             var dispatch =
                     ZLinkJavaRawMeshNode.class.getDeclaredMethod(
                             "dispatch", ZLinkJavaRawServicePort.Inbound.class);
             dispatch.setAccessible(true);
             dispatch.invoke(node, inbound);
-            return;
+            return generation;
         }
     }
 

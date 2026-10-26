@@ -7379,13 +7379,14 @@ final class ZLinkJavaRawMeshNode
     }
 
     private void dispatchAdmission(ZLinkJavaRawServicePort.Inbound inbound, int command) {
-        // Core can deliver buffered records from an ended pipe (ROUTER §10.1).
-        // Only the route observer's current selection can establish admission.
-        if ((command == ServiceWireConstants.COMMAND_HELLO
-                        || command == ServiceWireConstants.COMMAND_ADMIT)
-                && !Objects.equals(
-                        selectedRoutes.get(inbound.source()), inbound.routeGeneration())) {
-            return;
+        if (command == ServiceWireConstants.COMMAND_HELLO
+                || command == ServiceWireConstants.COMMAND_ADMIT) {
+            // A selected route can deliver HELLO before the pump's previous snapshot includes it.
+            // Core can also deliver buffered records from an ended pipe (ROUTER §10.1).
+            observeSelectedRoutes();
+            if (!Objects.equals(selectedRoutes.get(inbound.source()), inbound.routeGeneration())) {
+                return;
+            }
         }
         if (command == ServiceWireConstants.COMMAND_HELLO && peerAdmissionSealed.getAsBoolean()) {
             return;
