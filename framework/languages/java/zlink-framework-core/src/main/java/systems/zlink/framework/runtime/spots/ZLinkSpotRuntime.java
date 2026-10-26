@@ -138,6 +138,11 @@ import java.util.stream.Collectors;
 
 public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         implements ZLinkSpotManager, AutoCloseable {
+    public static Set<Class<?>> prepareConstruction(
+            ZLinkFrameworkRegistration registration, ZLinkHandlerActivator handlerFactory) {
+        return ZLinkSpotActivationFactory.prepareConstruction(registration, handlerFactory);
+    }
+
     private static final int ACTOR_RECV_INFO_NO_BIND = 1;
     private static final long ACTOR_JOURNAL_SIZE_HINT_OVERHEAD_BYTES = 512L;
 
