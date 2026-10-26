@@ -1590,7 +1590,9 @@ export class DefaultZLinkSpotManager {
     parts: readonly Message[],
     returnResponse = false,
     remoteBoundSessionTarget?: ZLinkRemoteBoundSessionTarget,
-    fallbackActorRef?: ActorRef
+    fallbackActorRef?: ActorRef,
+    requestTerminal?: (response: unknown) => Promise<void> | void,
+    messageFollowOrigin?: ZLinkMessageFollowOrigin
   ): Promise<unknown> {
     const activation = this.activations.resolveUnique(spotId);
     if (activation === undefined) {
@@ -1603,7 +1605,9 @@ export class DefaultZLinkSpotManager {
       parts,
       returnResponse,
       remoteBoundSessionTarget,
-      fallbackActorRef
+      fallbackActorRef,
+      requestTerminal,
+      messageFollowOrigin
     );
   }
 

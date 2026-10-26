@@ -1,12 +1,16 @@
-import { actorMessageFollowContext } from '../actors/actor-message-follow-context';
+import {
+  resolveActorIngress,
+  type ZLinkRouteToActorJoinPrewarm,
+  type ZLinkActorIngressRoute
+} from './spot-actor-ingress-admission';
+import type { ZLinkSpotActorHandoffRuntime } from './spot-runtime-ports';
 import { DefaultZLinkActorContext } from '../actors/actor-context';
 import { decodeSessionDisconnected } from '../actors/session-disconnected-wire';
 import { routingIdsEqual } from '../routing-id';
 import type { ApplicationJobOrigin } from '../application-jobs/contracts';
 import {
   ZLinkFrameworkInternalErrorKind,
-  createInternalFrameworkException,
-  internalFrameworkErrorKind
+  createInternalFrameworkException
 } from '../framework-errors-internal';
 import type {
   ActorRef,
@@ -32,6 +36,7 @@ import {
   ZLinkDispatchMessageKind
 } from '../../contracts/Dispatch/ZLinkDispatchOptions';
 import { flowIfEnabled } from '../diagnostics';
+import { dispatchReasonFromError } from '../diagnostics/dispatch-error-details';
 import { createInboundFlow, currentFlowContext, runWithFlow } from '../diagnostics/flow-context';
 import { streamSessionIdFromRoutingId } from '../streams/managed-stream';
 import type { ZLinkRemoteBoundSessionTarget } from '../actors';
@@ -84,30 +89,7 @@ export interface ZLinkActorPacketDelivery {
   readonly sourceSessionRid?: RoutingId;
 }
 
-/**
- * Spec 15 §4.2 relocation temporary queue: consulted when {@code
- * resolveActor} finds nothing for an arrival that carries an exact object
- * identity. Parks the arrival if an Actor Join admission attempt is in
- * flight for {@code (actorId, objectGeneration)}, or reports not-found so
- * the caller falls through to its existing missing-actor handling
- * unchanged.
- */
-export type ZLinkRouteToActorJoinPrewarm = (
-  actorId: string,
-  objectGeneration: bigint,
-  arrival: {
-    readonly origin: ApplicationJobOrigin;
-    readonly header: Buffer;
-    readonly payload: Buffer;
-    readonly returnResponse: boolean;
-    readonly remoteBoundSessionTarget?: ZLinkRemoteBoundSessionTarget;
-    readonly fallbackActorRef?: ActorRef;
-    readonly requestTerminal?: ZLinkActorRequestTerminal;
-    readonly resolve: (value: unknown) => void;
-    readonly reject: (reason: unknown) => void;
-  }
-) => 'parked' | 'not-found';
-
+export type { ZLinkRouteToActorJoinPrewarm } from './spot-actor-ingress-admission';
 interface ZLinkSpotActorPacketDispatchOptions {
   readonly admission?: import('../admission').ZLinkRuntimeAdmissionGate;
   readonly spot: ZLinkSpot | (() => ZLinkSpot);
@@ -115,13 +97,8 @@ interface ZLinkSpotActorPacketDispatchOptions {
   readonly registry: ZLinkSpotActorHandlerRegistryRuntime;
   readonly serial?: ZLinkSpotSerialTurnExecutor;
   readonly resolveActor: (actorId: string) => ZLinkActor | undefined;
-  readonly actorLeft?: (actorId: string) => boolean;
-  readonly routeBeforeLocal?: (
-    delivery: ZLinkActorPacketDelivery
-  ) =>
-    | Promise<{ readonly handled: boolean; readonly response?: unknown } | undefined>
-    | { readonly handled: boolean; readonly response?: unknown }
-    | undefined;
+  readonly hasDepartedActor?: (actorId: string) => boolean;
+  readonly routeBeforeLocal?: ZLinkActorIngressRoute;
   readonly onDisconnectActor: (actor: ZLinkActor) => Promise<void>;
   readonly actorResponseSender?: (
     actor: ZLinkActor,
@@ -148,6 +125,9 @@ interface ZLinkSpotActorPacketDispatchOptions {
   readonly routeToActorJoinPrewarm?: ZLinkRouteToActorJoinPrewarm;
 }
 
+export type ZLinkActorPacketExecution =
+  { readonly terminal: Promise<unknown> } | { readonly response: unknown };
+
 export class ZLinkSpotActorPacketDispatch {
   constructor(private readonly options: ZLinkSpotActorPacketDispatchOptions) {}
 
@@ -172,6 +152,14 @@ export class ZLinkSpotActorPacketDispatch {
   }
 
   async dispatchDelivery(delivery: ZLinkActorPacketDelivery): Promise<unknown> {
+    const result = await this.admitDelivery(delivery);
+    return 'terminal' in result ? await result.terminal : result.response;
+  }
+
+  async admitDelivery(
+    delivery: ZLinkActorPacketDelivery,
+    handoffRuntime?: ZLinkSpotActorHandoffRuntime
+  ): Promise<ZLinkActorPacketExecution> {
     const {
       actorId,
       parts,
@@ -182,7 +170,7 @@ export class ZLinkSpotActorPacketDispatch {
     } = delivery;
     if (parts.length < 2) {
       this.reportInvalidFrame(actorId, ZLinkDispatchMessageKind.ActorSend);
-      return undefined;
+      return { response: undefined };
     }
     //  Spec 26 §4.1: one level read per processing point — the same gate value
     //  drives both the decode and the flow-context install.
@@ -225,28 +213,32 @@ export class ZLinkSpotActorPacketDispatch {
           disconnected && header.kind === ZLinkStreamMessageKind.Request
             ? emptyDisconnectedReply
             : undefined;
-        if (this.options.actorLeft?.(actorId) === true && disconnected) {
-          return disconnectedReply;
-        }
-        const routed = await this.options.routeBeforeLocal?.(delivery);
-        if (routed?.handled === true) {
-          return routed.response;
-        }
-        const actor = this.options.resolveActor(actorId);
-        if (actor === undefined) {
-          return this.handleMissingActor(
-            delivery.origin,
-            actorId,
-            parts,
-            header,
-            messageKind,
-            action,
-            returnResponse,
-            remoteBoundSessionTarget,
-            fallbackActorRef,
-            requestTerminal
-          );
-        }
+        const admitted = resolveActorIngress(
+          delivery,
+          messageKind === ZLinkDispatchMessageKind.ActorRequest,
+          {
+            handoffRuntime,
+            routeBeforeLocal: this.options.routeBeforeLocal,
+            resolveActor: this.options.resolveActor,
+            hasDepartedActor: this.options.hasDepartedActor,
+            routeToActorJoinPrewarm: this.options.routeToActorJoinPrewarm
+          }
+        );
+        if ('terminal' in admitted) return { terminal: admitted.terminal };
+        if (admitted.kind === 'stale')
+          return {
+            response: await this.dispatchUnavailableActor(
+              admitted.error,
+              actorId,
+              header,
+              messageKind,
+              action,
+              returnResponse,
+              remoteBoundSessionTarget,
+              fallbackActorRef
+            )
+          };
+        const actor = admitted.actor;
         if (disconnected) {
           const identity = decodeSessionDisconnected(messageToBytes(parts[1]));
           if (identity === undefined) {
@@ -260,7 +252,7 @@ export class ZLinkSpotActorPacketDispatch {
                 ),
                 'warning'
               );
-            return disconnectedReply;
+            return { response: disconnectedReply };
           }
           const current =
             actor.context instanceof DefaultZLinkActorContext
@@ -272,85 +264,66 @@ export class ZLinkSpotActorPacketDispatch {
               current.sessionOwnerNodeGeneration !== identity.sessionOwnerNodeGeneration ||
               current.bindingGeneration !== identity.bindingGeneration)
           )
-            return disconnectedReply;
+            return { response: disconnectedReply };
           await this.options.onDisconnectActor(actor);
-          return disconnectedReply;
+          this.trace(
+            messageKind === ZLinkDispatchMessageKind.ActorRequest
+              ? ZLinkMessageFlowOutcome.Replied
+              : ZLinkMessageFlowOutcome.Completed,
+            actorId,
+            header,
+            messageKind
+          );
+          return { response: disconnectedReply };
         }
         const decodePayload = this.createPayloadDecoder(parts[1], header);
-        return this.dispatchActorPacket(
-          actor,
-          actorId,
-          decodePayload,
-          header,
-          messageKind,
-          action,
-          returnResponse,
-          remoteBoundSessionTarget,
-          fallbackActorRef,
-          requestTerminal,
-          requestDeadlineUnixMs,
-          zlinkSerialWorkOptions(
-            parts[1].data().byteLength,
-            zlinkMetadataByteLength(header.metadata)
+        return {
+          response: await this.dispatchActorPacket(
+            actor,
+            actorId,
+            decodePayload,
+            header,
+            messageKind,
+            action,
+            returnResponse,
+            remoteBoundSessionTarget,
+            fallbackActorRef,
+            requestTerminal,
+            requestDeadlineUnixMs,
+            zlinkSerialWorkOptions(
+              parts[1].data().byteLength,
+              zlinkMetadataByteLength(header.metadata)
+            )
           )
-        );
+        };
       }
     );
   }
 
-  private async handleMissingActor(
-    origin: ApplicationJobOrigin,
+  private async dispatchUnavailableActor(
+    missingActorError: unknown,
     actorId: string,
-    parts: readonly Message[],
     header: ReturnType<typeof decodeStreamHeader>,
     messageKind: ZLinkDispatchMessageKind,
     action: ZLinkDispatchErrorAction,
     returnResponse: boolean,
     fallbackBoundSessionTarget: ZLinkRemoteBoundSessionTarget | undefined,
-    fallbackActorRef: ActorRef | undefined,
-    requestTerminal: ZLinkActorRequestTerminal | undefined
+    fallbackActorRef: ActorRef | undefined
   ): Promise<unknown> {
-    if (
-      this.options.routeToActorJoinPrewarm !== undefined &&
-      fallbackActorRef !== undefined &&
-      parts.length >= 2 &&
-      //  A Request without a terminal has no way to complete once
-      //  migrated later — parking it would leave the caller hanging
-      //  forever with no reply route. Fall through to the existing
-      //  missing-actor handling for that shape instead.
-      (messageKind !== ZLinkDispatchMessageKind.ActorRequest || requestTerminal !== undefined)
-    ) {
-      const parked = this.parkForActorJoinPrewarm(
-        origin,
-        actorId,
-        parts,
-        messageKind,
-        returnResponse,
-        fallbackBoundSessionTarget,
-        fallbackActorRef,
-        requestTerminal
-      );
-      if (parked !== undefined) return parked;
-    }
     this.options.dispatchErrors?.report({
       surface: ZLinkDispatchErrorSurface.SpotActor,
       messageKind,
-      reason: ZLinkDispatchErrorReason.HandlerMissing,
+      reason: dispatchReasonFromError(missingActorError),
       action,
       packetName: header.name,
       spotId: this.options.spotId(),
       actorId,
-      correlationId: header.correlationId ?? header.requestSeq?.toString()
+      correlationId: header.correlationId ?? header.requestSeq?.toString(),
+      error: missingActorError
     });
     if (messageKind !== ZLinkDispatchMessageKind.ActorRequest) {
       return undefined;
     }
-    const missingActorError = createInternalFrameworkException(
-      actorMessageFollowContext(fallbackActorRef) === undefined
-        ? ZLinkFrameworkInternalErrorKind.ActorDispatchHandlerNotFound
-        : ZLinkFrameworkInternalErrorKind.ActorLocationStale,
-      `SPOT actor is not registered locally: ${actorId}`
-    );
     if (
       header.requestSeq !== undefined &&
       !returnResponse &&
@@ -368,78 +341,6 @@ export class ZLinkSpotActorPacketDispatch {
       return undefined;
     }
     throw missingActorError;
-  }
-
-  /**
-   * Spec 15 §4.2 relocation temporary queue: parks one arrival for a
-   * missing Actor that carries an exact object identity, instead of
-   * dropping it (Send) or replying HandlerNotFound (Request). Returns
-   * {@code undefined} when no admission attempt owns this object — the
-   * caller falls through to its existing missing-actor handling unchanged.
-   * Header/payload are copied to owned buffers before parking so the
-   * arrival survives independently of the original {@link Message}
-   * lifetime.
-   */
-  private parkForActorJoinPrewarm(
-    origin: ApplicationJobOrigin,
-    actorId: string,
-    parts: readonly Message[],
-    messageKind: ZLinkDispatchMessageKind,
-    returnResponse: boolean,
-    remoteBoundSessionTarget: ZLinkRemoteBoundSessionTarget | undefined,
-    fallbackActorRef: ActorRef,
-    requestTerminal: ZLinkActorRequestTerminal | undefined
-  ): Promise<unknown> | undefined {
-    const isRequest = messageKind === ZLinkDispatchMessageKind.ActorRequest;
-    let resolve: (value: unknown) => void = () => undefined;
-    let reject: (reason: unknown) => void = () => undefined;
-    const result = new Promise<unknown>((res, rej) => {
-      resolve = res;
-      reject = rej;
-    });
-    //  A Request's real reply must still travel through the exact mailbox
-    //  correlation the original caller captured in `requestTerminal` — not
-    //  through this method's own return value, which the caller only uses
-    //  to decide whether it still owes a reply itself. Wrapping keeps that
-    //  reply route intact across the (possibly much later) redelivery at
-    //  migration time while also releasing the original caller once the
-    //  real reply has gone out, so it never sends a premature empty one.
-    const wrappedRequestTerminal: ZLinkActorRequestTerminal | undefined =
-      requestTerminal === undefined
-        ? undefined
-        : Object.assign(
-            async (response: unknown, preparedReply?: unknown) => {
-              try {
-                await requestTerminal(response, preparedReply);
-                resolve(undefined);
-              } catch (error) {
-                reject(error);
-                throw error;
-              }
-            },
-            { prepare: requestTerminal.prepare }
-          );
-    const route = this.options.routeToActorJoinPrewarm!(
-      actorId,
-      fallbackActorRef.objectGeneration,
-      {
-        origin,
-        header: Buffer.from(parts[0].data()),
-        payload: Buffer.from(parts[1].data()),
-        returnResponse,
-        remoteBoundSessionTarget,
-        fallbackActorRef,
-        requestTerminal: wrappedRequestTerminal,
-        resolve,
-        reject
-      }
-    );
-    if (route !== 'parked') return undefined;
-    //  A Send has no reply to wait for: the migrated redelivery still runs
-    //  in order later, but this caller's own await is done once parking is
-    //  confirmed.
-    if (!isRequest) resolve(undefined);
-    return result;
   }
 
   private createPayloadDecoder(
@@ -613,16 +514,7 @@ export class ZLinkSpotActorPacketDispatch {
       this.options.dispatchErrors?.report({
         surface: ZLinkDispatchErrorSurface.SpotActor,
         messageKind,
-        reason:
-          error instanceof ZLinkFrameworkException &&
-          internalFrameworkErrorKind(error) ===
-            ZLinkFrameworkInternalErrorKind.ActorDispatchHandlerNotFound
-            ? ZLinkDispatchErrorReason.HandlerMissing
-            : error instanceof ZLinkFrameworkException &&
-                internalFrameworkErrorKind(error) ===
-                  ZLinkFrameworkInternalErrorKind.PayloadDecodeFailed
-              ? ZLinkDispatchErrorReason.PayloadDecodeFailed
-              : ZLinkDispatchErrorReason.HandlerException,
+        reason: dispatchReasonFromError(error),
         action,
         packetName: header.name,
         spotId: this.options.spotId(),

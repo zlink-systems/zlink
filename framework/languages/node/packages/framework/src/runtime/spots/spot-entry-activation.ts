@@ -1,3 +1,4 @@
+import { dispatchActorPacketInMailbox } from './spot-actor-admission-coordinator';
 import { currentApplicationJobOrigin } from '../application-jobs/application-job-queue-scope';
 import type {
   ActorRef,
@@ -198,13 +199,16 @@ export class ZLinkEntrySpotActivation {
       spotId: () => String(this.options.nativeSpot.routingId),
       registry: this.actorHandlers,
       resolveActor: (targetActorId) => this.options.entryActorRuntime?.resolveActor(targetActorId),
-      routeBeforeLocal: (target) =>
+      routeBeforeLocal: (delivery) =>
         this.options.entryActorRuntime?.routePacket(
-          target.actorId,
-          target.parts,
-          target.returnResponse,
-          target.remoteBoundSessionTarget,
-          target.fallbackActorRef
+          delivery.actorId,
+          delivery.parts,
+          delivery.returnResponse,
+          delivery.remoteBoundSessionTarget,
+          delivery.fallbackActorRef,
+          delivery.origin,
+          delivery.requestTerminal,
+          delivery.messageFollowOrigin
         ),
       onDisconnectActor: (actor) => this.notifyDisconnectActor(actor),
       actorResponseSender: this.options.boundSessionRuntime?.sendActorResponse.bind(
@@ -466,27 +470,9 @@ export class ZLinkEntrySpotActivation {
   }
 
   async dispatchActorPacket(delivery: ZLinkActorPacketDelivery): Promise<unknown> {
-    const {
-      actorId,
-      parts,
-      returnResponse,
-      remoteBoundSessionTarget,
-      fallbackActorRef,
-      messageFollowOrigin
-    } = delivery;
-    const handoff = this.options.actorHandoffRuntime?.capture(
-      delivery.origin,
-      actorId,
-      parts,
-      returnResponse,
-      remoteBoundSessionTarget,
-      fallbackActorRef,
-      undefined,
-      messageFollowOrigin
-    );
-    if (handoff !== undefined) return await handoff;
-    return this.spotSerialExecutor.executeActor(actorId, () =>
-      this.dispatchActorPacketInsideMailbox(delivery)
+    return dispatchActorPacketInMailbox(
+      (operation) => this.spotSerialExecutor.executeActor(delivery.actorId, operation),
+      () => this.actorPacketDispatch.admitDelivery(delivery, this.options.actorHandoffRuntime)
     );
   }
 

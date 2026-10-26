@@ -16,6 +16,7 @@ import { routingIdsEqual } from '../routing-id';
 import type { ZLinkSpotActivationLifecycleOptions } from './spot-activation';
 import { ZLinkSpotActivation } from './spot-activation-state';
 import { ZLinkSpotActorJoinDispatch } from './spot-actor-join-dispatch';
+import type { ZLinkActorPacketExecution } from './spot-actor-packet-dispatch';
 import { ZLinkSpotActorPacketDispatch } from './spot-actor-packet-dispatch';
 import type { ZLinkSpotSerialTurnExecutor } from './spot-serial-turn-executor';
 
@@ -51,26 +52,22 @@ export class ZLinkSpotActorAdmissionCoordinator {
     requestTerminal?: (response: unknown) => Promise<void> | void,
     messageFollowOrigin?: ZLinkMessageFollowOrigin
   ): Promise<unknown> {
-    const handoff = this.options.actorHandoffRuntime?.capture(
-      origin,
-      actorId,
-      parts,
-      returnResponse,
-      remoteBoundSessionTarget,
-      fallbackActorRef,
-      undefined,
-      messageFollowOrigin
-    );
-    if (handoff !== undefined) return await handoff;
-    return await this.dispatchActorPacketDirect(
-      origin,
-      activation,
-      actorId,
-      parts,
-      returnResponse,
-      remoteBoundSessionTarget,
-      fallbackActorRef,
-      requestTerminal
+    return dispatchActorPacketInMailbox<ZLinkSpotSerialTurnExecutor>(
+      (operation) => activation.executeActor(actorId, operation),
+      (serial) =>
+        this.createActorPacketDispatch(activation, serial).admitDelivery(
+          {
+            origin,
+            actorId,
+            parts,
+            returnResponse,
+            remoteBoundSessionTarget,
+            fallbackActorRef,
+            requestTerminal,
+            messageFollowOrigin
+          },
+          this.options.actorHandoffRuntime
+        )
     );
   }
 
@@ -87,7 +84,7 @@ export class ZLinkSpotActorAdmissionCoordinator {
       ),
       serial: activation.serial,
       actors: {
-        resolveActor: (actorId) => this.resolveActor(activation, actorId),
+        resolveActor: (actorId) => this.resolveLifecycleActor(activation, actorId),
         getTarget: () => activation.spot,
         defaultAccept: false,
         transfer:
@@ -110,7 +107,9 @@ export class ZLinkSpotActorAdmissionCoordinator {
             delivery.parts,
             delivery.returnResponse,
             delivery.remoteBoundSessionTarget,
-            delivery.fallbackActorRef
+            delivery.fallbackActorRef,
+            delivery.requestTerminal,
+            delivery.messageFollowOrigin
           ),
         bindRemoteSession: (actor, sourceNodeRid, sourceSessionRid) => {
           const node = this.options.nativeSpotNodeProvider?.(activation.meshName);
@@ -202,14 +201,32 @@ export class ZLinkSpotActorAdmissionCoordinator {
     fallbackActorRef?: ActorRef,
     requestTerminal?: (response: unknown) => Promise<void> | void
   ): Promise<unknown> {
+    return this.createActorPacketDispatch(activation, actorSerial).dispatch(
+      origin,
+      actorId,
+      parts,
+      returnResponse,
+      remoteBoundSessionTarget,
+      fallbackActorRef,
+      requestTerminal
+    );
+  }
+
+  private createActorPacketDispatch(
+    activation: ZLinkSpotActivation,
+    actorSerial: ZLinkSpotSerialTurnExecutor
+  ): ZLinkSpotActorPacketDispatch {
     return new ZLinkSpotActorPacketDispatch({
       admission: this.options.admission,
       spot: activation.spot,
       spotId: () => String(activation.spotId),
       registry: activation.actorHandlers,
       serial: actorSerial,
-      resolveActor: (targetActorId) => this.resolveActor(activation, targetActorId),
-      actorLeft: (targetActorId) => activation.hasDepartedActor(targetActorId),
+      resolveActor: (targetActorId) =>
+        this.options.actorResolver === undefined
+          ? activation.resolveJoinedActor(targetActorId)
+          : this.options.actorResolver(targetActorId),
+      hasDepartedActor: (targetActorId) => activation.hasDepartedActor(targetActorId),
       onDisconnectActor: (actor) =>
         activation.serial.execute(() => activation.spot.onDisconnectActor?.(actor)),
       actorResponseSender: this.options.boundSessionRuntime?.sendActorResponse.bind(
@@ -222,18 +239,14 @@ export class ZLinkSpotActorAdmissionCoordinator {
       messageSerializers: this.options.messageSerializers,
       dispatchErrors: this.options.dispatchErrors,
       routeToActorJoinPrewarm: this.options.routeToActorJoinPrewarm
-    }).dispatch(
-      origin,
-      actorId,
-      parts,
-      returnResponse,
-      remoteBoundSessionTarget,
-      fallbackActorRef,
-      requestTerminal
-    );
+    });
   }
 
-  private resolveActor(activation: ZLinkSpotActivation, actorId: string): ZLinkActor | undefined {
+  /** Resolves native lifecycle records; messages use resolveActorIngress. */
+  private resolveLifecycleActor(
+    activation: ZLinkSpotActivation,
+    actorId: string
+  ): ZLinkActor | undefined {
     if (activation.hasDepartedActor(actorId)) return undefined;
     // The manager owns relocation visibility. Membership alone cannot publish
     // a staged Actor; resolver absence supports standalone Spot runtimes.
@@ -315,4 +328,15 @@ function requireBackendValueFactory<T>(factory: (() => T) | undefined, valueName
     }
     return factory();
   };
+}
+
+/** Releases the Actor FIFO before awaiting a transferred admission terminal. */
+export async function dispatchActorPacketInMailbox<TSerial>(
+  enqueue: (
+    operation: (serial: TSerial) => Promise<ZLinkActorPacketExecution>
+  ) => Promise<ZLinkActorPacketExecution>,
+  dispatch: (serial: TSerial) => Promise<ZLinkActorPacketExecution>
+): Promise<unknown> {
+  const result = await enqueue(dispatch);
+  return 'terminal' in result ? await result.terminal : result.response;
 }

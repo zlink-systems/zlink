@@ -66,7 +66,7 @@ const fixtures = JSON.parse(
 );
 
 for (const transport of ['mesh', 'no-bind']) {
-  for (const scenario of ['current', 'stale', 'malformed', 'left', 'callback-error']) {
+  for (const scenario of ['current', 'stale', 'malformed', 'followed', 'callback-error']) {
     test(`native disconnect terminal wire body (${transport}): ${scenario}`, async () => {
       const framework = require('../../packages/framework/dist/internal');
       const {
@@ -89,12 +89,16 @@ for (const transport of ['mesh', 'no-bind']) {
         bindingGeneration: scenario === 'stale' ? 8n : 7n
       });
       let callbacks = 0;
+      let forwarded = 0;
       const dispatch = new ZLinkSpotActorPacketDispatch({
         spot: {},
         spotId: () => 'entry',
         registry: {},
         resolveActor: () => ({ context: new DefaultZLinkActorContext(state) }),
-        actorLeft: () => scenario === 'left',
+        routeBeforeLocal: scenario === 'followed' ? () => {
+          forwarded++;
+          return { handled: true, response: framework.ZLinkMessage.fromEncoded(framework.ZLinkEncodedPayload.fromOwned(Buffer.alloc(0))) };
+        } : undefined,
         onDisconnectActor: async () => {
           callbacks++;
           if (scenario === 'callback-error') throw new Error('disconnect callback failed');
@@ -171,6 +175,7 @@ for (const transport of ['mesh', 'no-bind']) {
           );
         }
         assert.equal(callbacks, ['current', 'callback-error'].includes(scenario) ? 1 : 0);
+        assert.equal(forwarded, scenario === 'followed' ? 1 : 0);
         assert.equal(replies.length, 1);
         const [header, body] = transport === 'mesh'
           ? (() => {
