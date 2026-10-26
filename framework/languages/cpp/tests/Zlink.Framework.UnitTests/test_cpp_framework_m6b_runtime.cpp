@@ -3934,7 +3934,7 @@ void verify_public_host_dispatches_one_owner_claim_as_a_batch ()
     std::vector<std::string> dispatched;
     std::size_t started = 0;
     std::size_t rejected = 0;
-    assert (target
+    assert (std::get<bool> (target
               ->dispatch_application_owner (
                 owner,
                 [&] (const host::ready_record_t &, const host::receive_record_t &record,
@@ -3946,9 +3946,7 @@ void verify_public_host_dispatches_one_owner_claim_as_a_batch ()
                     dispatched.push_back (parts.front ().to_string ());
                     record.release_mailbox_reservation ();
                 },
-                [&] { ++started; }, [&] { ++rejected; })
-              .result ()
-              .value ());
+                [&] { ++started; }, [&] { ++rejected; })));
     mailbox.end_application_drain (owner);
 
     assert ((dispatched == std::vector<std::string>{"first", "second", "third"}));

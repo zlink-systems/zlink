@@ -1952,12 +1952,11 @@ auto mesh_node_host_service_t::make_application_owner_work (
        services = _services, serializers = _serializers, filters = _filters,
        failures = _runtime_failures, options = _dispatch_options] (bool reject_only) {
           detail::ambient_context_scope_t infrastructure (nullptr, nullptr, {}, false, true);
-          auto pending = std::make_shared<task_t<void>> (drain_application_owner (
-            node, registration, owner, reject_only, services, serializers, filters, options));
-          detail::observe_task_completion (*pending,
-                                           [pending, failures] (const result_t<void> &result) {
-                                               failures->capture ([&] { result.value (); });
-                                           });
+          auto pending = drain_application_owner (
+            node, registration, owner, reject_only, services, serializers, filters, options);
+          detail::observe_task_terminal (pending, [failures] (const result_t<void> &result) {
+              failures->capture ([&] { result.value (); });
+          });
       };
 }
 
@@ -3558,8 +3557,18 @@ task_t<void> mesh_node_host_service_t::drain_application_owner (
           };
         const std::function<void ()> started = [&node] { node->application_work_started (); };
         const std::function<void ()> rejected = [&node] { node->application_work_finished (); };
-        while (co_await node->native_node ().dispatch_application_owner (owner, dispatch, started,
-                                                                         rejected)) {
+        for (;;) {
+            auto result = node->native_node ().dispatch_application_owner (
+              owner, dispatch, started, rejected);
+            if (const auto ready = std::get_if<bool> (&result)) {
+                if (!*ready)
+                    break;
+            } else {
+                // The task belongs to an accepted claim even when every record
+                // is rejected. Its count does not decide whether to keep draining.
+                // task_t consumes a ready result inline; only pending registers a wait.
+                (void) co_await std::get<task_t<std::size_t>> (result);
+            }
             if (!reject_only && std::chrono::steady_clock::now () >= deadline)
                 break;
         }

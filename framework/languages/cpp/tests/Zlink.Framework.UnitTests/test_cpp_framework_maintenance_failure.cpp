@@ -138,7 +138,7 @@ TEST (MaintenanceFailure, ApplicationClaimAllocationFailureReturnsWorkAccounting
       "node", [&] (const auto &, const auto &, auto) { ++dispatched; }, [&] { ++started; },
       [&] { ++rejected; });
     fail_size = 0;
-    const auto &result = pending.result ();
+    const auto &result = std::get<task_t<std::size_t>> (pending).result ();
     ASSERT_EQ (injected.load (), 1);
     ASSERT_FALSE (result);
     EXPECT_THROW (result.value (), std::bad_alloc);
@@ -150,7 +150,7 @@ TEST (MaintenanceFailure, ApplicationClaimAllocationFailureReturnsWorkAccounting
     auto next = owner->dispatch_application_owner (
       "node", [&] (const auto &, const auto &, auto) { ++dispatched; }, [&] { ++started; },
       [&] { ++rejected; });
-    EXPECT_TRUE (next.result ().value ());
+    EXPECT_TRUE (std::get<bool> (next));
     EXPECT_EQ (dispatched, 1u);
     EXPECT_EQ (started, count + 1);
     EXPECT_EQ (rejected, count);

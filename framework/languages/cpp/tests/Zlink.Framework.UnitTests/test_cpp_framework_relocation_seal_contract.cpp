@@ -1695,7 +1695,7 @@ TEST (FrameworkRelocationSealContract, ordinary_dispatch_failure_returns_transfe
       "node",
       [] (const auto &, const auto &, auto) { throw std::runtime_error ("dispatch failed"); },
       [&] { ++started; }, [&] { ++rejected; });
-    const auto &failure = failed.result ();
+    const auto &failure = std::get<task_t<std::size_t>> (failed).result ();
     EXPECT_FALSE (failure);
     EXPECT_THROW (failure.value (), std::runtime_error);
     EXPECT_EQ (failure.error (), nullptr);
@@ -1706,7 +1706,7 @@ TEST (FrameworkRelocationSealContract, ordinary_dispatch_failure_returns_transfe
     unsigned dispatched = 0;
     auto next = host->dispatch_application_owner (
       "node", [&] (const auto &, const auto &, auto) { ++dispatched; }, [] {}, [] {});
-    EXPECT_TRUE (next.result ().value ());
+    EXPECT_TRUE (std::get<bool> (next));
     EXPECT_EQ (dispatched, 1u);
     host->close ();
 }

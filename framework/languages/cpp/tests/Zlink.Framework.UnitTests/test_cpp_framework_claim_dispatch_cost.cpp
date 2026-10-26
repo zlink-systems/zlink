@@ -38,7 +38,7 @@ void require (bool value, const char *message)
         throw std::runtime_error (message);
 }
 
-std::shared_ptr<host::public_host_runtime_t> make_host ()
+std::shared_ptr<host::public_host_runtime_t> make_host (bool start = true)
 {
     auto options = test::runtime_failure_options (
       mesh::raw_mesh_node_options_t{.descriptor = {"claim-cost",
@@ -50,7 +50,8 @@ std::shared_ptr<host::public_host_runtime_t> make_host ()
                                                    mesh::service_node_state_t::preparing}});
     auto result =
       std::make_shared<host::public_host_runtime_t> (host::host_options_t{std::move (options)});
-    result->start ();
+    if (start)
+        result->start ();
     return result;
 }
 
@@ -85,9 +86,37 @@ bool dispatch (host::public_host_runtime_t &target,
                const dispatch_t &callback,
                bool channel = false)
 {
-    return target.dispatch_application_owner (claim_owner (channel), callback, noop, noop)
-      .result ()
-      .value ();
+    auto result = target.dispatch_application_owner (claim_owner (channel), callback, noop, noop);
+    if (const auto ready = std::get_if<bool> (&result))
+        return *ready;
+    std::get<task_t<std::size_t>> (result).result ().value ();
+    return true;
+}
+
+// Empty claims have no result storage owner. Compare against the value itself,
+// and reject equal-cost comparisons so the guard cannot claim a reduction by
+// measuring the same implementation twice.
+bool verify_empty_cost (host::public_host_runtime_t &target)
+{
+    const dispatch_t callback = [] (const auto &, const auto &, auto) {
+        throw std::runtime_error ("empty claim reached handler");
+    };
+    const auto measure = [&] {
+        return tests::measure_allocations ([&] {
+            require (!dispatch (target, callback), "empty claim returned work");
+        });
+    };
+    (void) measure ();
+    const auto actual = measure ();
+    const auto same = measure ();
+    const auto reduced = [] (const auto &before, const auto &after) {
+        return after.count < before.count && after.bytes < before.bytes;
+    };
+    require (!reduced (actual, same), "equal implementation accepted as a reduction");
+    std::cout << "empty-owner count=" << actual.count << " bytes=" << actual.bytes
+              << " same-count=" << same.count << " same-bytes=" << same.bytes
+              << " equal-reduction-rejected=true expected-count=0 expected-bytes=0" << std::endl;
+    return actual.count == 0 && actual.bytes == 0;
 }
 
 // Calibrate the canonical batch: originals and retain marks share one buffer,
@@ -119,8 +148,7 @@ auto ownership_baseline ()
         };
         retain ();
         finish ();
-        const task_t<bool> completed (result_t<bool>::success (true));
-        require (completed.result ().value (), "result calibration failed");
+
     });
 }
 bool verify_cost (host::public_host_runtime_t &target, bool channel, bool owning_callback = false)
@@ -183,8 +211,9 @@ bool verify_cost (host::public_host_runtime_t &target, bool channel, bool owning
         return tests::measure_allocations ([&] {
             auto pending = target.dispatch_application_owner (claim_owner (channel), callback,
                                                               started, rejected);
-            require (pending.await_ready (), "ordinary claim did not complete synchronously");
-            require (pending.result ().value (), "dispatch failed");
+            require (std::holds_alternative<bool> (pending),
+                     "ordinary claim did not return its ready value");
+            require (std::get<bool> (pending), "dispatch failed");
         });
     };
     const auto actual = measure ();
@@ -243,7 +272,7 @@ void verify_exception (host::public_host_runtime_t &target)
       },
       [&] { ++starts; }, [&] { ++rejects; });
     try {
-        pending.result ().value ();
+        std::get<task_t<std::size_t>> (pending).result ().value ();
     }
     catch (const std::runtime_error &error) {
         caught = std::string_view (error.what ()) == "handler fixture";
@@ -283,10 +312,8 @@ void verify_prestart_terminal (host::public_host_runtime_t &target)
         throw std::runtime_error ("malformed request reached handler");
     };
     require (
-      target.dispatch_application_owner (
-              owner, callback, [&] { ++started; }, [&] { ++rejected; })
-        .result ()
-        .value (),
+      std::get<bool> (target.dispatch_application_owner (
+        owner, callback, [&] { ++started; }, [&] { ++rejected; })),
       "malformed request was not claimed");
     require (started == 1 && rejected == 1 && mailbox.pending_messages (domain) == 0,
              "decode rejection did not terminalize the unstarted record");
@@ -338,7 +365,10 @@ void verify_late_release ()
     release ();
     release ();
 }
-void verify_suspended_actor (bool local)
+enum class terminal_case_t { retained_success, failed, cancelled, shutdown, dropped_success };
+
+void verify_suspended_actor (
+  bool local, terminal_case_t terminal = terminal_case_t::retained_success)
 {
     namespace stateful = runtime::stateful;
     using authority_t = std::optional<stateful::accepted_record_authority_t>;
@@ -400,9 +430,7 @@ void verify_suspended_actor (bool local)
     suffix.application->record.kind = host::record_kind_t::node_send;
     require (mailbox.try_enqueue (std::move (suffix)), "suspended suffix enqueue failed");
     std::size_t starts = 0, rejects = 0, calls = 0;
-    auto pending = target->dispatch_application_owner (
-      actor_owner,
-      [&] (const auto &, const auto &record, auto parts) {
+    const dispatch_t callback = [&] (const auto &, const auto &record, auto parts) {
           ++calls;
           require (calls == 1 ? record.kind == host::record_kind_t::actor_send
                               : record.kind == host::record_kind_t::node_send,
@@ -412,10 +440,91 @@ void verify_suspended_actor (bool local)
                        "suspended Actor lost its payload");
               record.complete_stateful_dispatch ();
           }
-      },
-      [&] { ++starts; }, [&] { ++rejects; });
+      };
+    using owner_result_t = decltype (target->dispatch_application_owner (
+      actor_owner, callback, noop, noop));
+    std::optional<owner_result_t> measured;
+    const auto cost = tests::measure_allocations ([&] {
+        measured.emplace (target->dispatch_application_owner (
+          actor_owner, callback, [&] { ++starts; }, [&] { ++rejects; }));
+    });
+    require (std::holds_alternative<task_t<std::size_t>> (*measured),
+             "authority preparation returned a ready value");
+    auto pending = std::get<task_t<std::size_t>> (std::move (*measured));
+    std::cout << "suspended-owner-allocation local=" << local << " terminal=" << static_cast<int> (terminal)
+              << " count=" << cost.count << " bytes=" << cost.bytes << std::endl;
     require (!pending.await_ready () && starts == 2 && calls == 0 && rejects == 0,
              "authority preparation did not suspend the claim");
+    if (terminal != terminal_case_t::retained_success) {
+        auto failures = std::make_shared<runtime::runtime_failure_collector_t> ();
+        std::atomic_size_t reports{0};
+        std::atomic_bool report_has_error{false};
+        auto observed = std::make_shared<task_completion_source_t<void>> ();
+        auto released = std::make_shared<task_completion_source_t<void>> ();
+        failures->bind_runtime_reporter ([&] (std::exception_ptr error) {
+            report_has_error = static_cast<bool> (error);
+            ++reports;
+        });
+        std::weak_ptr<int> observer_lifetime;
+        {
+            auto lifetime = std::shared_ptr<int> (new int (0), [released] (int *value) mutable {
+                delete value;
+                released->complete (result_t<void>::success ());
+            });
+            observer_lifetime = lifetime;
+            // The infrastructure observer owns no task. Discarding the returned
+            // task must leave its coroutine promise and this observer alive.
+            detail::observe_task_terminal (pending,
+              [failures, observed, lifetime] (const auto &result) mutable {
+                  failures->capture ([&] { result.value (); });
+                  observed->complete (result_t<void>::success ());
+              });
+        }
+        { auto discarded = std::move (pending); }
+        require (!observer_lifetime.expired (), "pending terminal observer died early");
+        if (terminal == terminal_case_t::shutdown)
+            target->close ();
+        const auto error = terminal == terminal_case_t::cancelled ? detail::make_cancellation_exception ("claim cancelled")
+                                        : std::make_exception_ptr (
+                                            std::runtime_error ("claim authority failed"));
+        if (terminal == terminal_case_t::dropped_success) {
+            authority.complete (result_t<authority_t>::success (
+              stateful::accepted_record_authority_t{
+                {"claim-source", 1, {'c', 'l', 'a', 'i', 'm'}, 1}, 1}));
+            admission_entered->task ().result ().value ();
+            admission.complete (result_t<bool>::success (false));
+        } else
+            authority.complete (detail::result_access_t::failure<authority_t> (error));
+        observed->task ().result ().value ();
+        released->task ().result ().value ();
+        require (observer_lifetime.expired (), "terminal observer retained its capture");
+        target->close ();
+        require (reports == (terminal == terminal_case_t::dropped_success ? 0u : 1u)
+                   && report_has_error == (terminal != terminal_case_t::dropped_success) && starts == 2
+                   && calls == (terminal == terminal_case_t::dropped_success ? 2u : 0u)
+                   && rejects == (terminal == terminal_case_t::dropped_success ? 0u : 2u),
+                 ("suspended claim terminal accounting changed: local="
+                  + std::to_string (local) + " terminal="
+                  + std::to_string (static_cast<int> (terminal))
+                  + " reports=" + std::to_string (reports.load ())
+                  + " expected_reports="
+                  + std::to_string (terminal == terminal_case_t::dropped_success ? 0u : 1u)
+                  + " report_has_error=" + std::to_string (report_has_error.load ())
+                  + " expected_report_has_error="
+                  + std::to_string (terminal != terminal_case_t::dropped_success)
+                  + " starts=" + std::to_string (starts) + " expected_starts=2"
+                  + " calls=" + std::to_string (calls) + " expected_calls="
+                  + std::to_string (terminal == terminal_case_t::dropped_success ? 2u : 0u)
+                  + " rejects=" + std::to_string (rejects) + " expected_rejects="
+                  + std::to_string (terminal == terminal_case_t::dropped_success ? 0u : 2u))
+                   .c_str ());
+        require (mailbox.pending_messages (domain) == 0,
+                 "failed/cancelled/shutdown claim leaked reservations");
+        std::cout << "suspended-owner local=" << local << " terminal=" << static_cast<int> (terminal)
+                  << " failure-reports=" << reports << " starts=" << starts
+                  << " rejects=" << rejects << std::endl;
+        return;
+    }
     detail::observe_task_completion (pending, [admission_entered] (const auto &) {
         admission_entered->complete (result_t<void>::failure (
           framework_error_kind_t::invalid_operation, "claim terminated before Actor admission"));
@@ -426,31 +535,41 @@ void verify_suspended_actor (bool local)
     require (!pending.await_ready () && calls == 0 && rejects == 0,
              "claim bypassed pending Actor admission");
     admission.complete (result_t<bool>::success (false));
-    require (pending.result ().value () && calls == 2 && starts == 2 && rejects == 0,
+    pending.result ().value ();
+    require (calls == 2 && starts == 2 && rejects == 0,
              "suspended claim did not resume and account its suffix exactly once");
     require (mailbox.pending_messages (domain) == 0, "suspended claim was not returned");
     target->close ();
 }
 
 } // namespace
-int main ()
+int main (int argc, char **argv)
 {
     try {
-        auto target = make_host ();
+        const bool ready_only = argc == 2 && std::string_view (argv[1]) == "--ready-only";
+        auto target = make_host (!ready_only);
+        const auto empty_cost = verify_empty_cost (*target);
         verify_retained_batch (*target);
         verify_exception (*target);
-        verify_prestart_terminal (*target);
-        verify_reply_alias (false);
-        verify_reply_alias (true);
-        verify_late_release ();
-        verify_standalone (*target);
-        verify_suspended_actor (false);
-        verify_suspended_actor (true);
+        if (!ready_only) {
+            verify_prestart_terminal (*target);
+            verify_reply_alias (false);
+            verify_reply_alias (true);
+            verify_late_release ();
+            verify_standalone (*target);
+            verify_suspended_actor (false);
+            verify_suspended_actor (true);
+            for (const auto terminal : {terminal_case_t::failed, terminal_case_t::cancelled,
+                                        terminal_case_t::shutdown, terminal_case_t::dropped_success}) {
+                verify_suspended_actor (false, terminal);
+                verify_suspended_actor (true, terminal);
+            }
+        }
         const auto node_cost = verify_cost (*target, false);
         const auto channel_cost = verify_cost (*target, true);
         const auto owning_node_cost = verify_cost (*target, false, true);
         const auto owning_channel_cost = verify_cost (*target, true, true);
-        require (node_cost && channel_cost && owning_node_cost && owning_channel_cost,
+        require (empty_cost && node_cost && channel_cost && owning_node_cost && owning_channel_cost,
                  "ordinary claim exceeded synchronous ownership count/byte bounds");
         target->close ();
         return 0;

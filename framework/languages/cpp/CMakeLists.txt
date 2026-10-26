@@ -2504,6 +2504,11 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     tests/Zlink.Framework.UnitTests/test_cpp_framework_claim_dispatch_cost.cpp
     "framework-unit;framework-contract;framework-regression;messaging"
     "unit")
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_owner_ready_cost
+    COMMAND test_cpp_framework_claim_dispatch_cost --ready-only
+    LABELS "framework-unit;framework-regression;messaging;claim"
+    TIMEOUT 30)
   target_sources(test_cpp_framework_claim_dispatch_cost PRIVATE tests/support/allocation_counter.cpp)
   target_include_directories(test_cpp_framework_claim_dispatch_cost PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)

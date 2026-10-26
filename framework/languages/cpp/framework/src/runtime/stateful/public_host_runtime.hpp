@@ -851,7 +851,7 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
         const ready_record_t &, const receive_record_t &, std::vector<zlink::message_t>)> dispatch,
       bool accept_application_receive = true,
       std::function<bool ()> next_application_receive = {});
-    task_t<bool> dispatch_application_owner (
+    std::variant<bool, task_t<std::size_t>> dispatch_application_owner (
       std::string owner,
       const std::function<void (
         const ready_record_t &, const receive_record_t &, std::vector<zlink::message_t>)> dispatch,

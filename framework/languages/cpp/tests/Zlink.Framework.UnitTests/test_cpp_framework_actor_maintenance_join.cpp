@@ -3324,13 +3324,13 @@ TEST (NativeIntake, TypedControlMalformedWireAndKernelMetadata)
     };
     const auto drain = [&] {
         EXPECT_TRUE (mailbox.begin_application_drain (owner));
-        const auto result =
-          host->dispatch_application_owner (
-                owner, callback, [&] { ++started; }, [&] { ++rejected; })
-            .result ();
-        EXPECT_TRUE (result);
-        if (result)
-            EXPECT_TRUE (result.value ());
+        auto result = host->dispatch_application_owner (
+          owner, callback, [&] { ++started; }, [&] { ++rejected; });
+        const auto claimed = std::holds_alternative<bool> (result)
+                               ? std::get<bool> (result)
+                               : static_cast<bool> (
+                                   std::get<fw::task_t<std::size_t>> (result).result ());
+        EXPECT_TRUE (claimed);
         mailbox.end_application_drain (owner);
         EXPECT_EQ (mailbox.pending_messages (mesh::service_mailbox_domain_t::application), 0u);
         EXPECT_EQ (mailbox.pending_bytes (mesh::service_mailbox_domain_t::application), 0u);
@@ -3545,13 +3545,15 @@ TEST (NativeIntake, NativeMailboxTransferKeepsActualPrivateMClaim)
         const auto drain = [&] {
             if (!mailbox.begin_application_drain (owner))
                 return false;
-            const auto result = host
-                                  ->dispatch_application_owner (
-                                    owner, dispatch, [&] { ++started; }, [&] { ++rejected; })
-                                  .result ();
+            auto result = host->dispatch_application_owner (
+              owner, dispatch, [&] { ++started; }, [&] { ++rejected; });
+            const auto claimed = std::holds_alternative<bool> (result)
+                                   ? std::get<bool> (result)
+                                   : static_cast<bool> (
+                                       std::get<fw::task_t<std::size_t>> (result).result ());
             mailbox.end_application_drain (owner);
-            EXPECT_TRUE (result);
-            return result && result.value ();
+            EXPECT_TRUE (claimed);
+            return claimed;
         };
         EXPECT_TRUE (mailbox.try_enqueue (fixture.actor_record (1)));
         EXPECT_TRUE (drain ());

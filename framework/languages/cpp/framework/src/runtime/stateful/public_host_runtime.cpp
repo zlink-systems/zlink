@@ -8304,7 +8304,7 @@ public_host_runtime_t::continue_application_claim (std::shared_ptr<application_c
     }
 }
 
-task_t<bool> public_host_runtime_t::dispatch_application_owner (
+std::variant<bool, task_t<std::size_t>> public_host_runtime_t::dispatch_application_owner (
   std::string owner,
   std::function<void (
     const ready_record_t &, const receive_record_t &, std::vector<zlink::message_t>)> dispatch,
@@ -8330,14 +8330,11 @@ task_t<bool> public_host_runtime_t::dispatch_application_owner (
           dispatch_limits::receive_batch_messages, dispatch_limits::receive_batch_bytes,
           std::ref (transfer));
         if (!claim)
-            return task_t<bool> (result_t<bool>::success (false));
+            return false;
         auto result = dispatch_application_claim (batch);
         if (std::holds_alternative<std::size_t> (result))
-            return task_t<bool> (result_t<bool>::success (true));
-        return [] (task_t<std::size_t> pending) -> task_t<bool> {
-            (void) co_await pending;
-            co_return true;
-        }(std::get<task_t<std::size_t>> (std::move (result)));
+            return true;
+        return std::get<task_t<std::size_t>> (std::move (result));
     }
     catch (...) {
         if (batch)
@@ -8345,7 +8342,7 @@ task_t<bool> public_host_runtime_t::dispatch_application_owner (
         else
             for (std::size_t index = 0; index < claimed; ++index)
                 rejected ();
-        return task_t<bool> (detail::current_exception_result<bool> ());
+        return task_t<std::size_t> (detail::current_exception_result<std::size_t> ());
     }
 }
 
