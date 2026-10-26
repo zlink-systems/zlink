@@ -234,13 +234,13 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
     // Accepted records retain FIFO and their terminal owner during a turn.
     private bool RedirectIdleMailbox()
     {
+        // A standalone queue never gains an owner provider back to null, so its
+        // per-message drain skips the admission lock here.
+        if (Volatile.Read(ref _executionOwnerProvider) is null)
+            return false;
         lock (_admissionGate)
         {
-            if (
-                _executionOwnerProvider is null
-                || _active is not null
-                || _activeLifecycle is not null
-            )
+            if (_active is not null || _activeLifecycle is not null)
                 return false;
             var owner = _executionOwnerProvider();
             if (ReferenceEquals(owner, _sharedOwner))
@@ -1572,9 +1572,12 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
 
     internal async ValueTask<T> RunOnSharedGateAsync<T>(Func<T> operation)
     {
+        bool insideSharedGate;
         lock (_admissionGate)
-            if (IsInsideSharedGate)
-                return operation();
+            insideSharedGate = IsInsideSharedGate;
+        // Decide under admission, run the operation outside it.
+        if (insideSharedGate)
+            return operation();
         T result = default!;
         var item = PostControl(() => result = operation());
         await item.Completion.ConfigureAwait(false);
