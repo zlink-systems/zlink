@@ -551,7 +551,7 @@ int main ()
     gate.require (framework_json_header.find ("<zlink/json_profile.hpp>") != std::string::npos,
                   "CPP-WIRE-003", "server JSON codec does not use the shared profile");
     for (const std::string required :
-         {"zlink::detail::json_profile::dump", "zlink::detail::json_profile::parse"}) {
+         {"zlink::detail::json_profile::encode", "zlink::detail::json_profile::decode"}) {
         gate.require (serializer_header.find (required) != std::string::npos, "CPP-WIRE-003",
                       "default typed serializer bypasses the JSON profile: " + required);
     }

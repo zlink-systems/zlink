@@ -959,7 +959,7 @@ endif()
 
 if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
   get_target_property(_typed_json_include nlohmann_json::nlohmann_json INTERFACE_INCLUDE_DIRECTORIES)
-  foreach(_case RANGE 0 9)
+  foreach(_case RANGE 0 11)
     add_test(NAME test_cpp_framework_typed_json_compile_fail_${_case}
       COMMAND ${CMAKE_COMMAND}
         -DCOMPILER=${CMAKE_CXX_COMPILER} -DCASE=${_case}
@@ -969,7 +969,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
         -DLOG=${CMAKE_CURRENT_BINARY_DIR}/typed-json-compile-fail-${_case}.log
         -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/typed-json-compile-fail.cmake)
     set_tests_properties(test_cpp_framework_typed_json_compile_fail_${_case}
-      PROPERTIES LABELS "framework-unit;protocol;compile-fail" TIMEOUT 30)
+      PROPERTIES LABELS "framework-unit;protocol;unit" TIMEOUT 30)
   endforeach()
 
   if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
@@ -979,7 +979,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     target_include_directories(test_cpp_framework_typed_json_noexception PRIVATE framework/include)
     target_compile_options(test_cpp_framework_typed_json_noexception PRIVATE -fno-exceptions -UNDEBUG)
     add_test(NAME test_cpp_framework_typed_json_noexception COMMAND test_cpp_framework_typed_json_noexception)
-    set_tests_properties(test_cpp_framework_typed_json_noexception PROPERTIES LABELS "framework-unit;protocol" TIMEOUT 30)
+    set_tests_properties(test_cpp_framework_typed_json_noexception PROPERTIES LABELS "framework-unit;protocol;unit" TIMEOUT 30)
   endif()
 
   foreach(_json_connector_variant core extension)
@@ -992,10 +992,22 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
       target_compile_definitions(${_json_connector_test} PRIVATE WITH_EXTENSION)
     endif()
     add_test(NAME ${_json_connector_test} COMMAND ${_json_connector_test})
-    set_tests_properties(${_json_connector_test} PROPERTIES LABELS "framework-unit;protocol" TIMEOUT 30)
+    set_tests_properties(${_json_connector_test} PROPERTIES LABELS "framework-unit;protocol;unit" TIMEOUT 30)
   endforeach()
 
   include(cmake/typed-json-allocations.cmake)
+
+  add_executable(test_cpp_framework_typed_json_message_pack
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_typed_json_message_pack.cpp)
+  target_link_libraries(test_cpp_framework_typed_json_message_pack PRIVATE zlink::stream_connector)
+  target_include_directories(test_cpp_framework_typed_json_message_pack PRIVATE framework/include)
+  if(MSVC)
+    target_compile_options(test_cpp_framework_typed_json_message_pack PRIVATE /UNDEBUG)
+  else()
+    target_compile_options(test_cpp_framework_typed_json_message_pack PRIVATE -UNDEBUG)
+  endif()
+  add_test(NAME test_cpp_framework_typed_json_message_pack COMMAND test_cpp_framework_typed_json_message_pack)
+  set_tests_properties(test_cpp_framework_typed_json_message_pack PROPERTIES LABELS "framework-unit;protocol;unit" TIMEOUT 30)
 
   add_executable(test_cpp_framework_typed_json
     tests/Zlink.Framework.UnitTests/test_cpp_framework_typed_json.cpp)
@@ -1003,7 +1015,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
   target_compile_definitions(test_cpp_framework_typed_json PRIVATE
     ZLINK_TYPED_JSON_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/golden/framework-json-v1.json")
   add_test(NAME test_cpp_framework_typed_json COMMAND test_cpp_framework_typed_json)
-  set_tests_properties(test_cpp_framework_typed_json PROPERTIES LABELS "framework-unit;protocol" TIMEOUT 30)
+  set_tests_properties(test_cpp_framework_typed_json PROPERTIES LABELS "framework-unit;protocol;unit" TIMEOUT 30)
 
   add_executable(test_cpp_framework_result_lifetime
     tests/Zlink.Framework.UnitTests/test_cpp_framework_result_lifetime.cpp)

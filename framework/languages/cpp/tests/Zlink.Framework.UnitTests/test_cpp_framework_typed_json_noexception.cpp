@@ -34,6 +34,19 @@ int main ()
     assert (!detail::to_packet_payload (std::numeric_limits<double>::infinity (), 0));
     auto raw = detail::decode_typed_message<payload> (codec_t::raw, {'o', 'k'});
     assert (raw && raw.value ().number == 7);
+    const auto packed = nlohmann::json::to_msgpack (
+      nlohmann::json{{"number", "-9223372036854775808"}, {"status", "Ready"}});
+    const auto unpacked = detail::decode_typed_message<payload> (codec_t::message_pack, packed);
+    assert (unpacked && unpacked.value ().number == std::numeric_limits<std::int64_t>::min ()
+            && unpacked.value ().status == state::Ready);
+    for (const auto &invalid : {nlohmann::json{{"number", 7}, {"status", "Ready"}},
+                                nlohmann::json{{"number", "01"}, {"status", "Ready"}},
+                                nlohmann::json{{"number", "7"}, {"status", 1}},
+                                nlohmann::json{{"number", "7"}, {"status", "1"}},
+                                nlohmann::json{{"number", "7"}, {"status", "Unknown"}}})
+        assert (!detail::decode_typed_message<payload> (codec_t::message_pack,
+                                                        nlohmann::json::to_msgpack (invalid)));
+    assert (!detail::decode_typed_message<payload> (codec_t::message_pack, {0xc1}));
     payload value;
     value.status = static_cast<state> (9);
     assert (!detail::to_packet_payload (value, 0));

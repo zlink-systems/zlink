@@ -1959,10 +1959,10 @@ int main (int argc, char **argv)
     ok &= file_contains (root / "connector/engines/axmol/tests/test_app.cpp", "if (argc != 2)");
     ok &= file_contains (
       root / "connector/core/include/zlink/stream_connector/contracts/stream_payload.hpp",
-      "zlink::detail::json_profile::dump (");
+      "zlink::detail::json_profile::try_encode (");
     ok &= file_contains (
       root / "connector/core/include/zlink/stream_connector/contracts/stream_payload.hpp",
-      "zlink::detail::json_profile::parse (");
+      "zlink::detail::json_profile::try_decode<");
     ok &= require_exists (root / "connector/core/packaging/vcpkg/vcpkg.json");
     ok &= require_exists (root / "connector/core/packaging/vcpkg/portfile.cmake");
     ok &= require_exists (root / "connector/core/packaging/conan/conanfile.py");

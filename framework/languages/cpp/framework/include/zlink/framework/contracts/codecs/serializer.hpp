@@ -42,14 +42,6 @@ template <typename T, typename = void> struct extension_serializer_traits_t
 {
     static constexpr bool available = false;
 };
-
-template <typename T>
-inline constexpr bool is_json_serializer_compatible_v =
-  zlink::detail::json_profile::has_dto<T> || zlink::detail::json_profile::has_enum<T>
-  || std::is_arithmetic_v<T> || std::is_same_v<T, std::string> || std::is_same_v<T, nlohmann::json>
-  || std::is_enum_v<T> || zlink::detail::json_profile::optional_type<T>::value
-  || zlink::detail::json_profile::vector_type<T>::value
-  || zlink::detail::json_profile::map_type<T>::value;
 } // namespace detail
 
 class encoded_payload_t
@@ -306,8 +298,7 @@ class serializer_registry_t
                             return traits_t::make_serializer ();
                         }
                     }
-                    if constexpr (detail::is_json_serializer_compatible_v<T>
-                                  || !detail::extension_serializer_traits_t<T>::available) {
+                    if constexpr (zlink::detail::json_profile::is_json_candidate<T> ()) {
                         static_assert (zlink::detail::json_profile::validate_type<T> ());
                         return serializer_t<T> (
                           [] (const T &value) {

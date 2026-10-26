@@ -67,12 +67,22 @@ template <> struct zlink::json::enum_traits<state>
 {
     static constexpr auto values = std::array{zlink::json::enum_value (state::Ready, "")};
 };
+#elif CASE == 10
+template <> struct zlink::json::dto_traits<dto>
+{
+};
+#elif CASE == 11
+template <> struct zlink::json::enum_traits<state>
+{
+};
 #endif
 int main ()
 {
-#if CASE < 5
+#if CASE < 5 || CASE == 10
+    static_assert (zlink::detail::json_profile::is_json_candidate<dto> () == (CASE != 0));
     return zlink::detail::json_profile::try_encode (dto{}).has_value ();
 #else
+    static_assert (zlink::detail::json_profile::is_json_candidate<state> () == (CASE != 5));
     return zlink::detail::json_profile::try_encode (state::Ready).has_value ();
 #endif
 }

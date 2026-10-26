@@ -87,26 +87,39 @@ struct http_request_t
 
 namespace detail
 {
-template <typename T> bool normalize_http_uri_value (const std::string &text, nlohmann::json &out)
+template <typename T> bool normalize_http_uri_value (const std::string &text, std::string &out)
 {
     if constexpr (zlink::detail::json_profile::optional_type<T>::value) {
         return normalize_http_uri_value<
           typename zlink::detail::json_profile::optional_type<T>::value_type> (text, out);
-    } else if constexpr ((std::is_integral_v<T> && !std::is_same_v<T, bool> && sizeof (T) < 8)
-                         || std::is_floating_point_v<T>) {
+    } else if constexpr (std::is_same_v<T, bool>) {
+        if (text != "true" && text != "false")
+            return false;
+        out = text;
+        return true;
+    } else if constexpr (std::is_integral_v<T>) {
         T value{};
         const auto parsed = std::from_chars (text.data (), text.data () + text.size (), value);
         if (parsed.ec != std::errc{} || parsed.ptr != text.data () + text.size ())
             return false;
-        return zlink::detail::json_profile::to_value (value, out);
-    } else if constexpr (std::is_same_v<T, bool>) {
-        if (text != "true" && text != "false")
+        auto encoded = zlink::detail::json_profile::try_encode (value);
+        if (!encoded)
             return false;
-        out = text == "true";
+        out = std::move (*encoded);
+        return true;
+    } else if constexpr (std::is_floating_point_v<T>) {
+        T value{};
+        const auto parsed = std::from_chars (text.data (), text.data () + text.size (), value,
+                                             std::chars_format::general);
+        if (parsed.ec != std::errc{} || parsed.ptr != text.data () + text.size ())
+            return false;
+        auto encoded = zlink::detail::json_profile::try_encode (value);
+        if (!encoded)
+            return false;
+        out = std::move (*encoded);
         return true;
     } else {
-        out = text;
-        return true;
+        return zlink::detail::json_profile::write_string (text, out, nullptr);
     }
 }
 
@@ -114,7 +127,11 @@ template <typename T>
 std::string bind_typed_http_uri (const http_request_t &http, const std::string &body)
 {
     if constexpr (zlink::detail::json_profile::has_dto<T>) {
-        auto binding = zlink::detail::json_profile::parse (body.begin (), body.end ());
+        std::string error;
+        auto binding = zlink::detail::json_profile::try_parse (body.begin (), body.end (), &error);
+        if (!binding)
+            throw framework_exception_t (framework_error_kind_t::protocol_error,
+                                         error.empty () ? "invalid HTTP JSON body" : error);
         std::apply (
           [&] (auto... field) {
               (
@@ -129,17 +146,31 @@ std::string bind_typed_http_uri (const http_request_t &http, const std::string &
                         return;
                     using member =
                       zlink::detail::json_profile::member_type<decltype (field.member)>;
-                    if (!normalize_http_uri_value<typename member::value> (*text, binding[name]))
+                    std::string value_text;
+                    if (!normalize_http_uri_value<typename member::value> (*text, value_text))
                         throw framework_exception_t (framework_error_kind_t::protocol_error,
                                                      std::string (route != http.route_values.end ()
                                                                     ? "invalid route "
                                                                     : "invalid query ")
                                                        + name);
+                    error.clear ();
+                    auto value = zlink::detail::json_profile::try_parse (value_text.begin (),
+                                                                         value_text.end (), &error);
+                    if (!value)
+                        throw framework_exception_t (framework_error_kind_t::protocol_error,
+                                                     error.empty () ? "invalid HTTP URI value"
+                                                                    : error);
+                    (*binding)[name] = std::move (*value);
                 }(),
                 ...);
           },
           zlink::json::dto_traits<T>::fields);
-        return zlink::detail::json_profile::dump (binding);
+        error.clear ();
+        auto encoded = zlink::detail::json_profile::try_encode (*binding, &error);
+        if (!encoded)
+            throw framework_exception_t (framework_error_kind_t::protocol_error,
+                                         error.empty () ? "invalid HTTP JSON body" : error);
+        return std::move (*encoded);
     } else {
         return body;
     }
@@ -720,7 +751,7 @@ class http_options_builder_t
         if (_serializers->contains (std::type_index (typeid (T)))) {
             return;
         }
-        if constexpr (detail::is_json_serializer_compatible_v<T>) {
+        if constexpr (zlink::detail::json_profile::is_json_candidate<T> ()) {
             _serializers->template add<T> (
               [] (const T &value) {
                   //  from_raw only borrows the message buffer, and the

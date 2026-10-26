@@ -8,6 +8,9 @@
 #include <cassert>
 #include <fstream>
 #include <limits>
+#include <bit>
+#include <random>
+#include <iostream>
 enum class state
 {
     Ready,
@@ -180,21 +183,72 @@ void verify_sax_boundaries ()
     assert (!p::try_decode<tree> (bom.begin (), bom.end ()));
 }
 
+void verify_float_round_trips ()
+{
+    namespace p = zlink::detail::json_profile;
+    std::size_t checked = 0;
+    const auto verify = [&] (double value) {
+        assert (std::isfinite (value));
+        const auto wire = p::encode (value);
+        const auto decoded = p::try_decode<double> (wire.begin (), wire.end ());
+        assert (decoded);
+        assert (std::bit_cast<std::uint64_t> (*decoded) == std::bit_cast<std::uint64_t> (value));
+        // Message model §5 fixes only a finite JSON number, not its text form.
+        assert (nlohmann::json::parse (wire).is_number ());
+        ++checked;
+    };
+    for (double value :
+         {0.0, -0.0, std::numeric_limits<double>::denorm_min (),
+          std::numeric_limits<double>::min (), std::numeric_limits<double>::max (), 0.0001, 0.00001,
+          1e15, 1e16, 61700135196713504.0, 4.6198674636351205e304, -666672776458465.75}) {
+        verify (value);
+        verify (-value);
+        for (double direction : {-std::numeric_limits<double>::infinity (),
+                                 std::numeric_limits<double>::infinity ()}) {
+            const auto adjacent = std::nextafter (value, direction);
+            if (std::isfinite (adjacent))
+                verify (adjacent);
+        }
+    }
+    for (std::uint64_t exponent = 0; exponent < 2047; ++exponent)
+        for (std::uint64_t mantissa : {std::uint64_t (0), std::uint64_t (1),
+                                       (std::uint64_t (1) << 51), (std::uint64_t (1) << 52) - 1})
+            for (std::uint64_t sign : {std::uint64_t (0), std::uint64_t (1) << 63})
+                verify (std::bit_cast<double> (sign | (exponent << 52) | mantissa));
+    std::mt19937_64 random (1713);
+    std::size_t random_checked = 0;
+    while (random_checked != 200000) {
+        const double value = std::bit_cast<double> (random ());
+        if (!std::isfinite (value))
+            continue;
+        verify (value);
+        ++random_checked;
+    }
+    std::cout << "double_round_trips=" << checked << " random=" << random_checked << '\n';
+}
+
 void verify_float_bytes ()
 {
     namespace p = zlink::detail::json_profile;
+    // Integral doubles within the safe range use the integer form.
     for (const auto &[value, expected] :
-         std::array{std::pair{0.0001, "0.0001"}, std::pair{0.00001, "1e-05"},
-                    std::pair{1e16, "1e+16"}, std::pair{1000000.25, "1000000.25"},
-                    std::pair{61700135196713504.0, "6.1700135196713504e+16"},
-                    std::pair{4.6198674636351205e304, "4.6198674636351205e+304"},
-                    std::pair{-666672776458465.75, "-666672776458465.7"}}) {
+         std::array{std::pair{0.0, "0"}, std::pair{120.0, "120"}, std::pair{60.0, "60"},
+                    std::pair{9007199254740991.0, "9007199254740991"}})
         assert (p::encode (value) == expected);
+    // Every other value is a JSON number that reads back to the same bits.
+    for (const auto value :
+         std::array{-0.0, 0.0001, 0.00001, 1e16, 1000000.25, 61700135196713504.0,
+                    4.6198674636351205e304, -666672776458465.75, 9007199254740994.0}) {
+        const auto text = p::encode (value);
+        assert (nlohmann::json::parse (text).is_number ());
+        const auto decoded = p::decode<double> (text.begin (), text.end ());
+        assert (std::bit_cast<std::uint64_t> (decoded) == std::bit_cast<std::uint64_t> (value));
     }
 }
 
 int main ()
 {
+    verify_float_round_trips ();
     verify_goldens ();
     verify_boundaries ();
     namespace p = zlink::detail::json_profile;

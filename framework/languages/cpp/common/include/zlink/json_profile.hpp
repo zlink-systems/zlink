@@ -125,6 +125,24 @@ template <typename T>
 inline constexpr bool has_dto = requires { zlink::json::dto_traits<T>::fields; };
 template <typename T>
 inline constexpr bool has_enum = requires { zlink::json::enum_traits<T>::values; };
+template <typename T> consteval bool is_json_candidate ()
+{
+    if constexpr (std::is_same_v<T, nlohmann::json> || std::is_same_v<T, bool>
+                  || std::is_same_v<T, std::string> || std::is_same_v<T, float>
+                  || std::is_same_v<T, double> || std::is_same_v<T, std::vector<std::byte>>
+                  || (std::is_integral_v<T> && sizeof (T) <= 8))
+        return true;
+    else if constexpr (optional_type<T>::value)
+        return is_json_candidate<typename optional_type<T>::value_type> ();
+    else if constexpr (vector_type<T>::value)
+        return is_json_candidate<typename vector_type<T>::value_type> ();
+    else if constexpr (map_type<T>::value)
+        return is_json_candidate<typename map_type<T>::value_type> ();
+    else if constexpr (std::is_enum_v<T>)
+        return requires { sizeof (zlink::json::enum_traits<T>); };
+    else
+        return requires { sizeof (zlink::json::dto_traits<T>); };
+}
 template <typename T> inline constexpr bool dependent_false = false;
 template <typename T> struct member_type;
 template <typename C, typename M> struct member_type<M C::*>
@@ -397,62 +415,20 @@ template <typename T, typename Visit> bool visit_fields (T &value, Visit visit)
 
 inline void write_float (double value, std::string &out)
 {
+    // Message model §5 fixes only "finite JSON number"; the text is the shortest
+    // round-trip form. Negative zero keeps a fraction so a reader sees a float.
+    if (value == 0 && std::signbit (value)) {
+        out += "-0.0";
+        return;
+    }
+    if (std::trunc (value) == value && value >= -9007199254740991.0
+        && value <= 9007199254740991.0) {
+        write_integer (static_cast<std::int64_t> (value), out);
+        return;
+    }
     char buffer[64];
-    const auto converted =
-      std::to_chars (buffer, buffer + sizeof buffer, value, std::chars_format::scientific);
-    auto first = buffer;
-    if (*first == '-') {
-        out += '-';
-        ++first;
-    }
-    const auto exponent_at = std::find (first, converted.ptr, 'e');
-    int exponent = 0;
-    if (exponent_at != converted.ptr) {
-        const auto digits = exponent_at + 1 + (exponent_at[1] == '+' ? 1 : 0);
-        std::from_chars (digits, converted.ptr, exponent);
-    }
-    const auto point = std::find (first, exponent_at, '.');
-    int position = static_cast<int> (point - first) + exponent;
-    char digits[32];
-    std::size_t count = 0;
-    for (auto cursor = first; cursor != exponent_at; ++cursor)
-        if (*cursor != '.')
-            digits[count++] = *cursor;
-    std::size_t leading = 0;
-    while (leading + 1 < count && digits[leading] == '0') {
-        ++leading;
-        --position;
-    }
-    while (count > leading + 1 && digits[count - 1] == '0')
-        --count;
-    const auto start = digits + leading;
-    const auto length = count - leading;
-    if (static_cast<int> (length) <= position && position <= 15) {
-        out.append (start, length);
-        out.append (position - length, '0');
-        out += ".0";
-    } else if (position > 0 && position <= 15) {
-        out.append (start, position);
-        out += '.';
-        out.append (start + position, length - position);
-    } else if (position > -4 && position <= 0) {
-        out += "0.";
-        out.append (-position, '0');
-        out.append (start, length);
-    } else {
-        out += *start;
-        if (length > 1) {
-            out += '.';
-            out.append (start + 1, length - 1);
-        }
-        out += 'e';
-        const auto power = position - 1;
-        out += power < 0 ? '-' : '+';
-        const auto magnitude = power < 0 ? -power : power;
-        if (magnitude < 10)
-            out += '0';
-        write_integer (magnitude, out);
-    }
+    const auto converted = std::to_chars (buffer, buffer + sizeof buffer, value);
+    out.append (buffer, converted.ptr);
 }
 template <typename T> bool write_value (const T &value, std::string &out, std::string *error)
 {
@@ -478,11 +454,7 @@ template <typename T> bool write_value (const T &value, std::string &out, std::s
     } else if constexpr (std::is_floating_point_v<T>) {
         if (!valid_float (value))
             return fail (error, "non-finite number");
-        if (std::trunc (value) == value && value >= -9007199254740991.0
-            && value <= 9007199254740991.0)
-            write_integer (static_cast<std::int64_t> (value), out);
-        else
-            write_float (static_cast<double> (value), out);
+        write_float (static_cast<double> (value), out);
     } else if constexpr (std::is_enum_v<T>) {
         bool written = false;
         const auto found = visit_enum_entry<T> (
@@ -839,7 +811,7 @@ class typed_sax final : public nlohmann::json_sax<nlohmann::json>
             return reject ("unexpected property name");
         auto &parent = frames.back ();
         if (std::find (parent.keys.begin (), parent.keys.end (), value) != parent.keys.end ())
-            return reject ("duplicate properties");
+            return reject ("framework-json-v1 rejects duplicate properties");
         parent.keys.push_back (value);
         parent.pending_key = true;
         return true;

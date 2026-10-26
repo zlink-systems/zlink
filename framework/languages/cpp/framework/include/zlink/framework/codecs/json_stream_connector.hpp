@@ -20,6 +20,16 @@ template <typename T> struct codec_traits
     static constexpr codec_t codec = codec_t::json;
     static constexpr bool default_json_profile = true;
 
+    static bool try_decode_message_pack (const std::vector<std::uint8_t> &payload,
+                                         T &value,
+                                         std::string *error = nullptr)
+    {
+        const auto json = nlohmann::json::from_msgpack (payload, true, false);
+        if (json.is_discarded ())
+            return zlink::detail::json_profile::fail (error, "Invalid MessagePack payload");
+        return zlink::detail::json_profile::from_value (json, value, error);
+    }
+
 #if ZLINK_HAS_EXCEPTIONS
 
     static std::vector<std::uint8_t> encode (const T &value)
@@ -35,11 +45,11 @@ template <typename T> struct codec_traits
 
     static T decode_message_pack (const std::vector<std::uint8_t> &payload)
     {
-        if constexpr (requires (const nlohmann::json &json) { json.template get<T> (); }) {
-            return nlohmann::json::from_msgpack (payload).template get<T> ();
-        } else {
-            throw std::invalid_argument ("MessagePack requires a matching codec specialization");
-        }
+        T value{};
+        std::string error;
+        if (!try_decode_message_pack (payload, value, &error))
+            throw std::invalid_argument (error);
+        return value;
     }
 #endif
 };
@@ -110,14 +120,8 @@ bool from_stream_payload (codec_t codec, const std::vector<std::uint8_t> &payloa
 {
     if (codec == codec_t::raw)
         return true;
-    if (codec == codec_t::message_pack) {
-#if ZLINK_HAS_EXCEPTIONS
-        value = codecs::codec_traits<T>::decode_message_pack (payload);
-        return true;
-#else
-        return false;
-#endif
-    }
+    if (codec == codec_t::message_pack)
+        return codecs::codec_traits<T>::try_decode_message_pack (payload, value);
     auto decoded = zlink::detail::json_profile::try_decode<T> (payload.begin (), payload.end ());
     if (!decoded)
         return false;
