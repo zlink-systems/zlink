@@ -1,4 +1,3 @@
-import { AsyncLocalStorage } from 'node:async_hooks';
 import { awaitWithAbort } from '../abort';
 import { availableParallelism } from 'node:os';
 import {
@@ -10,7 +9,7 @@ import type {
   ApplicationJobPermitPort,
   ApplicationJobQueuePort
 } from '../application-jobs/contracts';
-import { runZLinkExecutionArea } from '../execution';
+import { detachedMeshDispatchScope, runZLinkExecutionArea } from '../execution';
 import {
   ReadyDomain,
   type Claim,
@@ -39,11 +38,6 @@ const MESH_DISPATCH_YIELD_INTERVAL_MS = 2;
 const MESH_DISPATCH_LIFECYCLE_CLAIM_BUDGET = 4;
 const MESH_DISPATCH_RECEIVE_CAPACITY = 64;
 const MESH_DISPATCH_MAX_APPLICATION_WORKERS = Math.max(2, availableParallelism());
-// Captured while the runtime module is loaded, before any application owner
-// exists. A ready callback may run inside a Spot turn; the shared Mesh pump
-// must enter like an independent receive-loop task, without inheriting that
-// owner's AsyncLocalStorage identity.
-const detachedMeshDispatchScope = AsyncLocalStorage.snapshot();
 
 export interface ZLinkMeshDispatchPumpOptions {
   readonly readyCapacity?: number;

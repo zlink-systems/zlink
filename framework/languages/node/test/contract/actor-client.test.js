@@ -1,4 +1,4 @@
-const { prepareZLinkRequestReply, identityRequestReply } = require('../../packages/framework/dist/runtime/messaging/request-result');
+const { observeZLinkRequestReply, ZLinkRequestResult, identityRequestReply } = require('../../packages/framework/dist/runtime/messaging/request-result');
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const framework = require('../../packages/framework/dist/internal');
@@ -237,8 +237,9 @@ function createActorClient(options) {
 
 function completionTable(terminalResult, parts = []) {
   return {
-    async submit(operation) {
-      const actualOperationId = operation();
+     submit(operation, _signal, resultOwner = new ZLinkRequestResult()) {
+return resultOwner.observe((async () => {
+      const actualOperationId = operation(resultOwner);
       assert.deepEqual(actualOperationId, operationId);
       return {
         terminalResult,
@@ -247,7 +248,9 @@ function completionTable(terminalResult, parts = []) {
         kindData: null,
         parts
       };
-    }
+
+})());
+}
   };
 }
 
@@ -405,8 +408,9 @@ test('actor client selects the MeshNode and completion table from the current Ac
   ]);
   const completions = new Map([
     ['mesh-a', {
-      async submit(operation) {
-        assert.deepEqual(operation(), operationId);
+       submit(operation, _signal, resultOwner = new ZLinkRequestResult()) {
+return resultOwner.observe((async () => {
+        assert.deepEqual(operation(resultOwner), operationId);
         selected.push('completion:mesh-a');
         return {
           terminalResult: RequestResult.Ok,
@@ -415,11 +419,14 @@ test('actor client selects the MeshNode and completion table from the current Ac
           kindData: null,
           parts: createReplyFrame({ mesh: 'mesh-a' })
         };
-      }
+
+})());
+}
     }],
     ['mesh-b', {
-      async submit(operation) {
-        assert.deepEqual(operation(), operationId);
+       submit(operation, _signal, resultOwner = new ZLinkRequestResult()) {
+return resultOwner.observe((async () => {
+        assert.deepEqual(operation(resultOwner), operationId);
         selected.push('completion:mesh-b');
         return {
           terminalResult: RequestResult.Ok,
@@ -428,7 +435,9 @@ test('actor client selects the MeshNode and completion table from the current Ac
           kindData: null,
           parts: createReplyFrame({ mesh: 'mesh-b' })
         };
-      }
+
+})());
+}
     }]
   ]);
   const client = createActorClient({
@@ -806,11 +815,11 @@ test('actor client deadline ends its pending request while a Message Follow rela
   const coordinator = new framework.ZLinkActorHandoffCoordinator({
     routedTransport: {
       async sendToSpot() {},
-      requestToSpot() { return prepareZLinkRequestReply((async () => {
+      requestToSpot() { return observeZLinkRequestReply((async () => {
         const reply = new Promise(resolve => { completeRelay = resolve; });
         entered();
         return await reply;
-      })(), identityRequestReply); }
+      })(), identityRequestReply, identityRequestReply, new ZLinkRequestResult()); }
     },
     requestSource: () => ({
       meshName: route.meshName, objectGeneration: route.actorRef.objectGeneration,
@@ -1175,10 +1184,13 @@ test('Actor route infrastructure admission cannot complete the user request admi
       }), [], undefined, undefined, options.onAdmitted);
       return operationId;
     } }),
-    completionTableProvider: () => ({ async submit(start) {
-      start();
+    completionTableProvider: () => ({  submit(start, _signal, resultOwner = new ZLinkRequestResult()) {
+return resultOwner.observe((async () => {
+      start(resultOwner);
       return { terminalResult: RequestResult.Ok, failureErrno: 0, parts: await userBinding };
-    } })
+
+})());
+} })
   });
   const pending = client.requestToActor('actor-1', new ActorAsk('ping')).submit();
   let admitted = false;
