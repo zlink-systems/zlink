@@ -20,6 +20,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -41,11 +42,30 @@ thread_counts_t thread_counts ()
         if (std::getline (comm, name)) {
             ++counts.threads;
             if (name.find ("core-ct") != std::string::npos) {
-                ++counts.contexts;
                 std::ifstream stat (thread.path () / "stat");
                 std::string state = "<exited before stat>";
-                std::getline (stat, state);
-                counts.core_threads.push_back (thread.path ().filename ().string () + " " + state);
+                bool exiting = false;
+                if (std::getline (stat, state)) {
+                    // Field 2 is parenthesized and may contain spaces or ')'.
+                    // Flags are field 9; count fields only after the final ')'.
+                    const auto comm_end = state.rfind (')');
+                    if (comm_end != std::string::npos) {
+                        std::istringstream fields (state.substr (comm_end + 1));
+                        std::string ignored;
+                        for (int field = 3; field < 9; ++field)
+                            fields >> ignored;
+                        unsigned long flags = 0;
+                        if (fields >> flags) {
+                            // Linux PF_EXITING can remain visible in /proc after join.
+                            constexpr unsigned long task_exiting_flag = 0x4;
+                            exiting = (flags & task_exiting_flag) != 0;
+                            if (!exiting)
+                                ++counts.contexts;
+                        }
+                    }
+                }
+                counts.core_threads.push_back (thread.path ().filename ().string ()
+                                               + (exiting ? " exiting " : " ") + state);
             }
         }
     }
@@ -68,10 +88,8 @@ class core_context_listener_t final : public testing::EmptyTestEventListener
         std::cout << "[ CONTEXTS ] " << test.test_suite_name () << '.' << test.name ()
                   << " before=" << _before << " after=" << counts.contexts
                   << " threads=" << counts.threads << std::endl;
-        if (counts.contexts != _baseline) {
-            for (const auto &thread : counts.core_threads)
-                std::cout << "[ CORE THREAD ] " << thread << std::endl;
-        }
+        for (const auto &thread : counts.core_threads)
+            std::cout << "[ CORE THREAD ] " << thread << std::endl;
         EXPECT_EQ (counts.contexts, _baseline) << "Core contexts survived test teardown";
     }
 
