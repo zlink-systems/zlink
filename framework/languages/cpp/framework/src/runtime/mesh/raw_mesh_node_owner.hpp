@@ -468,20 +468,20 @@ class raw_mesh_node_owner_t
         std::shared_ptr<task_t<zlink::submit_result_t>> pending_completion;
     };
     struct send_completion_state_t;
-    send_start_result_t start_send (std::vector<std::uint8_t> target_routing_id,
+    send_start_result_t start_send (const std::vector<std::uint8_t> &target_routing_id,
                                     detail::backend::raw_message_t parts,
                                     bool needs_public_completion,
                                     detail::backend::raw_send_stage_trace_t trace = {});
-    send_start_result_t start_send_on_lane (std::vector<std::uint8_t> target_routing_id,
+    send_start_result_t start_send_on_lane (const std::vector<std::uint8_t> &target_routing_id,
                                             detail::backend::raw_message_t parts,
                                             bool needs_public_completion,
                                             detail::backend::raw_send_stage_trace_t trace);
     task_t<zlink::submit_result_t>
-    submit_owned_send_result (std::vector<std::uint8_t> target_routing_id,
+    submit_owned_send_result (const std::vector<std::uint8_t> &target_routing_id,
                               detail::backend::raw_message_t parts,
                               detail::backend::raw_send_stage_trace_t trace);
     task_t<zlink::submit_result_t>
-    send_with_header_result (std::vector<std::uint8_t> target_routing_id,
+    send_with_header_result (const std::vector<std::uint8_t> &target_routing_id,
                              std::vector<std::uint8_t> header,
                              protocol::application_payload_t application_payload,
                              detail::backend::raw_send_stage_trace_t trace = {},
@@ -502,7 +502,7 @@ class raw_mesh_node_owner_t
     void send_descriptor_update_on_lane (const service_node_descriptor_t &descriptor,
                                          const std::vector<admitted_peer_t> &peers);
     task_t<bool> request_with_header (
-      std::vector<std::uint8_t> target_routing_id,
+      const std::vector<std::uint8_t> &target_routing_id,
       const std::function<std::vector<std::uint8_t> (std::uint64_t)> &header,
       const protocol::application_payload_t &application_payload,
       std::chrono::milliseconds timeout,
