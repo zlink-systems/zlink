@@ -63,7 +63,7 @@ int main (int argc, char **argv)
                  ? 0
                  : 1;
     }
-    if (mode == "close_connect") {
+    if (mode == "close_connect" || mode == "immediate_close_connect") {
         boost::asio::io_context io;
         boost::asio::ip::tcp::acceptor acceptor (io, {boost::asio::ip::address_v4::loopback (), 0});
         std::promise<void> release;
@@ -75,7 +75,8 @@ int main (int argc, char **argv)
         });
         sc::connector_options_t options;
         options.endpoint = "tcp://127.0.0.1:" + std::to_string (acceptor.local_endpoint ().port ());
-        options.dispatch_mode = sc::dispatch_mode_t::manual;
+        options.dispatch_mode =
+          mode == "close_connect" ? sc::dispatch_mode_t::manual : sc::dispatch_mode_t::immediate;
         options.heartbeat.enabled = false;
         options.reconnect.enabled = false;
         auto connector = sc::connector_factory_t::create (options);
@@ -92,7 +93,8 @@ int main (int argc, char **argv)
               }
           });
         const auto result = connector.connect ();
-        connector.dispatch ();
+        connector.dispatch (); // Run the Connecting callback.
+        connector.dispatch (); // Verify close from the Connected callback.
         connector.close ();
         release.set_value ();
         server.join ();
