@@ -1463,6 +1463,14 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     zlink::framework
     zlink::stream_connector
     Threads::Threads)
+  get_target_property(_zlink_connect_count_binding_type zlink::cpp TYPE)
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND
+      _zlink_connect_count_binding_type STREQUAL "STATIC_LIBRARY")
+    target_compile_definitions(zlink_cpp_framework_mesh_node_vertical_test PRIVATE
+      ZLINK_TEST_CONNECT_COUNT)
+    target_link_options(zlink_cpp_framework_mesh_node_vertical_test PRIVATE
+      -Wl,--wrap=zlink_connect -Wl,--wrap=zlink_disconnect)
+  endif()
   zlink_framework_cpp_add_boost_headers(
     zlink_cpp_framework_mesh_node_vertical_test)
   zlink_framework_cpp_add_test(
@@ -1470,6 +1478,11 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     COMMAND zlink_cpp_framework_mesh_node_vertical_test
     LABELS "framework-unit;framework-zlink;framework-zlink-channel;framework-zlink-spot;framework-zlink-actor-gateway"
     TIMEOUT 30)
+  zlink_framework_cpp_add_test(
+    NAME zlink_cpp_framework_connect_intent_test
+    COMMAND zlink_cpp_framework_mesh_node_vertical_test --connect-intent
+    LABELS "framework-contract"
+    TIMEOUT 10)
 
   find_package(GTest QUIET)
   if(NOT GTest_FOUND)
