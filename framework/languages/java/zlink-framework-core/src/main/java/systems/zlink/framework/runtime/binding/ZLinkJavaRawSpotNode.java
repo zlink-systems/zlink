@@ -52,7 +52,9 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BiFunction;
 import java.util.function.Consumer;
+import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -89,7 +91,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                     this.stateLane.runNowOrQueue(
                             () -> transition.apply(RemoteSessionBindingTransition.NONE));
     private final ZLinkJavaInstanceSpotRegistry instanceSpots;
-    private volatile java.util.function.Function<
+    private volatile Function<
                     ZLinkInstanceActivationRecoveryCodec.RecoveryEnvelope,
                     CompletionStage<ZLinkAuthorityReadResult>>
             instanceActivationValidator = envelope -> CompletableFuture.completedFuture(null);
@@ -782,9 +784,9 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
             SendFlags flags,
             Duration timeout,
             CompletableFuture<Void> requestAdmission,
-            java.util.function.Function<List<Message>, T> decodeReply,
-            java.util.function.Consumer<T> discardReply,
-            java.util.function.Function<Throwable, Throwable> mapFailure,
+            Function<List<Message>, T> decodeReply,
+            Consumer<T> discardReply,
+            Function<Throwable, Throwable> mapFailure,
             CompletableFuture<T> completion) {
         if (!routingId().equals(target.actor().nodeRid())) {
             owner.requestActor(
@@ -828,8 +830,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
     }
 
     private CompletionStage<List<Message>> requestLocalActor(
-            java.util.function.BiFunction<Long, CompletableFuture<Void>, CompletionStage<Void>>
-                    dispatch,
+            BiFunction<Long, CompletableFuture<Void>, CompletionStage<Void>> dispatch,
             Duration timeout,
             CompletableFuture<Void> requestAdmission) {
         Long requestId = nextActorRequestSequence.getAndIncrement();
@@ -2564,7 +2565,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
     }
 
     void setInstanceSpotActivationValidator(
-            java.util.function.Function<
+            Function<
                             ZLinkInstanceActivationRecoveryCodec.RecoveryEnvelope,
                             CompletionStage<ZLinkAuthorityReadResult>>
                     validator) {
@@ -2970,7 +2971,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                                                                                         .<Void>
                                                                                                 failedFuture(
                                                                                                         handlerFailure))))
-                .thenCompose(java.util.function.Function.identity());
+                .thenCompose(Function.identity());
     }
 
     private static void closeRemoteInstancePayload(List<Message> parts) {

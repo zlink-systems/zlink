@@ -3052,9 +3052,8 @@ final class ZLinkJavaRawMeshNode
                                         //  via the authoritative ownership-aware translator
                                         //  instead of collapsing to a generic rejection
                                         //  (spec 32-framework-error-model:81-118, 99-108).
-                                        //  spotMoving is a Framework admission control result. Its
-                                        // failed
-                                        //  reply has no ownedMetadata frame, so preserve that
+                                        // spotMoving is a Framework admission control result. Its
+                                        // failed reply has no metadata frame, so preserve that
                                         // origin locally.
                                         throw ZLinkRequestFailureMapping.receivedFailure(
                                                 ZLinkBackendRequestResult.fromWireTerminal(
@@ -3317,7 +3316,7 @@ final class ZLinkJavaRawMeshNode
                 parts,
                 timeout,
                 requestAdmission,
-                java.util.function.Function.identity(),
+                Function.identity(),
                 reply -> reply.forEach(Message::close),
                 completion);
         return completion;
@@ -3328,8 +3327,8 @@ final class ZLinkJavaRawMeshNode
             List<Message> parts,
             Duration timeout,
             CompletableFuture<Void> requestAdmission,
-            java.util.function.Function<List<Message>, T> decodeReply,
-            java.util.function.Consumer<T> discardReply,
+            Function<List<Message>, T> decodeReply,
+            Consumer<T> discardReply,
             CompletableFuture<T> completion) {
         long startedAt = System.nanoTime();
         ZLinkBackendActorRef actor = target.actor();
@@ -5687,9 +5686,7 @@ final class ZLinkJavaRawMeshNode
         ZLinkTerminalWinner terminal = new ZLinkTerminalWinner();
         completion.whenComplete(
                 (reply, failure) -> {
-                    if (!terminal.tryWin(
-                            systems.zlink.framework.runtime.internal.completion.ZLinkTerminalWinner
-                                    .Cause.RESPONSE)) {
+                    if (!terminal.tryWin(ZLinkTerminalWinner.Cause.RESPONSE)) {
                         return;
                     }
                     if (failure != null || reply == null || reply.length == 0) {
@@ -6115,11 +6112,8 @@ final class ZLinkJavaRawMeshNode
                                                             contentType,
                                                             replyParts -> {
                                                                 if (!terminal.tryWin(
-                                                                        systems.zlink.framework
-                                                                                .runtime.internal
-                                                                                .completion
-                                                                                .ZLinkTerminalWinner
-                                                                                .Cause.RESPONSE)) {
+                                                                        ZLinkTerminalWinner.Cause
+                                                                                .RESPONSE)) {
                                                                     replyParts.forEach(
                                                                             Message::close);
                                                                     return;
@@ -6146,17 +6140,13 @@ final class ZLinkJavaRawMeshNode
                                                             },
                                                             relayFailure -> {
                                                                 if (!terminal.tryWin(
-                                                                        systems.zlink.framework
-                                                                                .runtime.internal
-                                                                                .completion
-                                                                                .ZLinkTerminalWinner
-                                                                                .Cause.FAILURE)) {
+                                                                        ZLinkTerminalWinner.Cause
+                                                                                .FAILURE)) {
                                                                     return;
                                                                 }
-                                                                //  Relay the real
-                                                                // received/classified pair instead
-                                                                // of a
-                                                                //  fixed 102+1 (spec
+                                                                // Relay the received/classified
+                                                                // pair instead of a fixed
+                                                                // 102+1 (spec
                                                                 // 32-framework-error-model:83-92).
                                                                 int[] pair =
                                                                         relayedFailurePair(
@@ -6374,9 +6364,7 @@ final class ZLinkJavaRawMeshNode
                                 messages,
                                 contentType,
                                 replyParts -> {
-                                    if (!terminal.tryWin(
-                                            systems.zlink.framework.runtime.internal.completion
-                                                    .ZLinkTerminalWinner.Cause.RESPONSE)) {
+                                    if (!terminal.tryWin(ZLinkTerminalWinner.Cause.RESPONSE)) {
                                         replyParts.forEach(Message::close);
                                         return;
                                     }
@@ -6395,9 +6383,7 @@ final class ZLinkJavaRawMeshNode
                                     }
                                 },
                                 failure -> {
-                                    if (terminal.tryWin(
-                                            systems.zlink.framework.runtime.internal.completion
-                                                    .ZLinkTerminalWinner.Cause.FAILURE)) {
+                                    if (terminal.tryWin(ZLinkTerminalWinner.Cause.FAILURE)) {
                                         int[] pair =
                                                 recordInstanceActivationFailure(
                                                         header.route().targetSpotId(),
@@ -6417,9 +6403,7 @@ final class ZLinkJavaRawMeshNode
                                 });
         if (!accepted) {
             messages.forEach(Message::close);
-            if (terminal.tryWin(
-                    systems.zlink.framework.runtime.internal.completion.ZLinkTerminalWinner.Cause
-                            .FAILURE)) {
+            if (terminal.tryWin(ZLinkTerminalWinner.Cause.FAILURE)) {
                 var failure =
                         ZLinkFrameworkErrorOrigin.framework(
                                 ZLinkFrameworkErrorKind.NOT_FOUND,
@@ -7147,9 +7131,7 @@ final class ZLinkJavaRawMeshNode
                                                     contentType,
                                                     replyParts -> {
                                                         if (!terminal.tryWin(
-                                                                systems.zlink.framework.runtime
-                                                                        .internal.completion
-                                                                        .ZLinkTerminalWinner.Cause
+                                                                ZLinkTerminalWinner.Cause
                                                                         .RESPONSE)) {
                                                             replyParts.forEach(Message::close);
                                                             return;
@@ -7173,16 +7155,13 @@ final class ZLinkJavaRawMeshNode
                                                     },
                                                     relayFailure -> {
                                                         if (!terminal.tryWin(
-                                                                systems.zlink.framework.runtime
-                                                                        .internal.completion
-                                                                        .ZLinkTerminalWinner.Cause
+                                                                ZLinkTerminalWinner.Cause
                                                                         .FAILURE)) {
                                                             return;
                                                         }
-                                                        //  Relay the real
-                                                        // received/classified pair instead
-                                                        // of a
-                                                        //  fixed 102+1 (spec
+                                                        // Relay the received/classified pair
+                                                        // instead of a fixed
+                                                        // 102+1 (spec
                                                         // 32-framework-error-model:83-92).
                                                         int[] pair =
                                                                 relayedFailurePair(relayFailure);

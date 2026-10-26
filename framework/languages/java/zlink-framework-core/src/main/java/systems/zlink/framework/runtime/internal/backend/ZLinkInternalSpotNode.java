@@ -5,6 +5,7 @@ import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.contracts.sockets.SubmitResult;
+import systems.zlink.framework.runtime.internal.ZLinkCompletionBridge;
 import systems.zlink.framework.runtime.internal.binding.spot.ActorTransferPrepare;
 import systems.zlink.framework.runtime.internal.binding.spot.ActorTransferToken;
 import systems.zlink.framework.runtime.internal.binding.spot.PrepareActorTransferResult;
@@ -23,12 +24,12 @@ import java.util.function.Consumer;
 import java.util.function.Supplier;
 
 public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
-    /** Node-owned JVM source turn; backends without a separate owner use the selector turn. */
     /** The source node owns registration, submission and close in its transport turn. */
     default ZLinkServiceOperationRegistry operationRegistry() {
         return null;
     }
 
+    /** Node-owned JVM source turn; backends without a separate owner use the selector turn. */
     default ZLinkStateLane sourceTransportLane() {
         return null;
     }
@@ -591,8 +592,7 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
             CompletableFuture<T> completion) {
         CompletionStage<List<Message>> reply =
                 requestToActor(actor, parts, flags, timeout, requestAdmission);
-        systems.zlink.framework.runtime.internal.ZLinkCompletionBridge.forwardCancellation(
-                completion, reply);
+        ZLinkCompletionBridge.forwardCancellation(completion, reply);
         reply.whenComplete(
                 (messages, failure) -> {
                     if (failure != null) {
@@ -600,9 +600,8 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
                         return;
                     }
                     try {
-                        systems.zlink.framework.runtime.internal.ZLinkCompletionBridge
-                                .completeOrDiscard(
-                                        completion, decodeReply.apply(messages), discardReply);
+                        ZLinkCompletionBridge.completeOrDiscard(
+                                completion, decodeReply.apply(messages), discardReply);
                     } catch (RuntimeException | Error error) {
                         completion.completeExceptionally(error);
                     }
