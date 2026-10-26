@@ -30,7 +30,8 @@ const {
 } = require('../../packages/framework/dist/runtime/backend/node/node-raw-mesh-backend');
 const { createHook } = require('node:async_hooks');
 const {
-  SERVICE_WIRE_REQUIRED_CAPABILITY
+  SERVICE_WIRE_REQUIRED_CAPABILITY,
+  ServiceWireCommand
 } = require('../../packages/framework/dist/runtime/foundation/service-wire-constants.generated');
 const {
   ApplicationJobQueue,
@@ -346,6 +347,10 @@ test('immediately admitted node send submits once without allocating a Promise',
       return Promise.resolve();
     }
   };
+  runtime.topology.admit(
+    { ...runtime.topology.localDescriptor(), nodeRoutingId: 'peer', advertisedEndpoint: 'tcp://127.0.0.1:2' },
+    'peer-route', undefined, undefined, ServiceWireCommand.admit
+  );
   const backend = new ZLinkNodeRawMeshBackend('mesh', 'source', {});
   backend.runtime = runtime;
   let promises = 0;
