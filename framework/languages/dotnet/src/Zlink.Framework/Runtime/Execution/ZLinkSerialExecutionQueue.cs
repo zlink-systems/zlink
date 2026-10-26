@@ -234,13 +234,17 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
     // Accepted records retain FIFO and their terminal owner during a turn.
     private bool RedirectIdleMailbox()
     {
-        if (_executionOwnerProvider is null || _active is not null || _activeLifecycle is not null)
-            return false;
-        var owner = _executionOwnerProvider();
-        if (ReferenceEquals(owner, _sharedOwner))
-            return false;
         lock (_admissionGate)
         {
+            if (
+                _executionOwnerProvider is null
+                || _active is not null
+                || _activeLifecycle is not null
+            )
+                return false;
+            var owner = _executionOwnerProvider();
+            if (ReferenceEquals(owner, _sharedOwner))
+                return false;
             if (_sharedOwner is not null)
             {
                 ImportSharedPublished();
@@ -254,8 +258,8 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
             }
             _readyItem ??= new ZLinkSerialWorkItem(this);
             Volatile.Write(ref _sharedOwner, owner);
+            return true;
         }
-        return true;
     }
 
     public ValueTask DisposeAsync()
@@ -353,54 +357,34 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
 
     public void Complete()
     {
-        if (_sharedOwner is not null)
-        {
-            lock (_admissionGate)
-            {
-                if (Interlocked.Exchange(ref _completed, 1) != 0)
-                    return;
-            }
-            _ = PostSharedControl(() =>
-            {
-                TaskCompletionSource<ZLinkSerialRelocationSeal>? pending;
-                lock (_admissionGate)
-                {
-                    pending = _sealRequest;
-                    _sealRequest = null;
-                    _sealRequestReservation = null;
-                    AbortRelocationUnderLock();
-                }
-                pending?.TrySetException(
-                    new InvalidOperationException(
-                        "ZLink serial execution queue closed before relocation seal completed."
-                    )
-                );
-                ImportSharedPublished();
-                RegisterSharedHead();
-                TrySignalDrained();
-            });
-            return;
-        }
-        TaskCompletionSource<ZLinkSerialRelocationSeal>? pendingSeal;
-        Func<CancellationToken, ValueTask>? drain = null;
+        Func<CancellationToken, ValueTask>? drain;
         lock (_admissionGate)
         {
             if (Interlocked.Exchange(ref _completed, 1) != 0)
                 return;
+            // Close follows the mailbox across placement changes, just like
+            // terminal controls. Its terminal release participates in drain.
+            CommitControlUnderLock(CloseOnGate);
+            drain = ReserveDrainUnderLock();
+        }
+        PublishDrain(drain);
+    }
+
+    private void CloseOnGate()
+    {
+        TaskCompletionSource<ZLinkSerialRelocationSeal>? pendingSeal;
+        lock (_admissionGate)
+        {
             pendingSeal = _sealRequest;
             _sealRequest = null;
             _sealRequestReservation = null;
             AbortRelocationUnderLock();
-            if (_applicationQueue.Count > 0 || _lifecycleQueue.Count > 0)
-                drain = ReserveDrainUnderLock();
         }
-        PublishDrain(drain);
         pendingSeal?.TrySetException(
             new InvalidOperationException(
                 "ZLink serial execution queue closed before relocation seal completed."
             )
         );
-        TrySignalDrained();
     }
 
     internal void CloseApplicationAdmission()
@@ -1163,17 +1147,12 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
         ZLinkSerialWorkLane lane
     )
     {
-        if (!item.ReservationHeld)
-        {
-            item.BindTerminalRelease(this);
-            PublishWorkUnderLock(destination, item);
-            return;
-        }
         // This queue owns ordering only. The queued callback retains the
         // actual Core receive owner until its terminal path disposes it.
         item.BindTerminalRelease(this);
         PublishWorkUnderLock(destination, item);
-        CommitReservationUnderLock(lane);
+        if (item.ReservationHeld)
+            CommitReservationUnderLock(lane);
     }
 
     private void PublishWorkUnderLock(ZLinkSerialWorkQueue destination, ZLinkSerialWorkItem item)
@@ -1235,14 +1214,12 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
         if (lane == ZLinkSerialWorkLane.Application && pendingCount == 0)
             _applicationDrained = null;
         pendingCount++;
-        _pendingCount++;
     }
 
     private void ReleaseReservedSlotUnderLock(ZLinkSerialWorkLane lane)
     {
         ref var pendingCount = ref PendingCount(lane);
         pendingCount--;
-        _pendingCount--;
         if (lane == ZLinkSerialWorkLane.Application && pendingCount == 0)
             _applicationDrained?.TrySetResult();
     }
@@ -1551,10 +1528,13 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
                         turn
                     )
                     .ConfigureAwait(false);
-                if (mailbox._readyItem is null)
-                    mailbox._active = null;
-                mailbox.CompleteSharedSealRequest();
-                mailbox.RegisterSharedHead();
+                if (ReferenceEquals(mailbox._sharedOwner, this))
+                {
+                    if (mailbox._readyItem is null)
+                        mailbox._active = null;
+                    mailbox.CompleteSharedSealRequest();
+                    mailbox.RegisterSharedHead();
+                }
                 if (Stopwatch.GetElapsedTime(sliceStartedAt) >= _policy.OwnerTimeBudget)
                 {
                     ScheduleSharedDrain();
@@ -1592,17 +1572,30 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
 
     internal async ValueTask<T> RunOnSharedGateAsync<T>(Func<T> operation)
     {
-        if (IsInsideSharedGate)
-            return operation();
+        lock (_admissionGate)
+            if (IsInsideSharedGate)
+                return operation();
         T result = default!;
-        var item = PostSharedControl(() => result = operation());
+        var item = PostControl(() => result = operation());
         await item.Completion.ConfigureAwait(false);
         return result;
     }
 
-    private ZLinkSerialWorkItem PostSharedControl(Action operation)
+    private ZLinkSerialWorkItem PostControl(Action operation)
     {
-        var owner = _sharedOwner!;
+        ZLinkSerialWorkItem item;
+        Func<CancellationToken, ValueTask>? drain;
+        lock (_admissionGate)
+        {
+            item = CommitControlUnderLock(operation);
+            drain = ReserveDrainUnderLock();
+        }
+        PublishDrain(drain);
+        return item;
+    }
+
+    private ZLinkSerialWorkItem CommitControlUnderLock(Action operation)
+    {
         var item = new ZLinkSerialWorkItem(
             _ =>
             {
@@ -1611,18 +1604,12 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
             },
             reservationHeld: false
         );
-        lock (owner._admissionGate)
-            owner.CommitWorkItemUnderLock(
-                owner._applicationQueue,
-                item,
-                ZLinkSerialWorkLane.Application
-            );
-        _ = owner.NotifySharedAsync(CancellationToken.None);
+        CommitWorkItemUnderLock(_applicationQueue, item, ZLinkSerialWorkLane.Application);
         return item;
     }
 
     internal ValueTask DispatchTerminalAsync(Action operation) =>
-        new(PostSharedControl(operation).Completion);
+        new(PostControl(operation).Completion);
 
     private void CompleteSharedSealRequest()
     {
@@ -1747,7 +1734,7 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
         if (_sharedOwner is { } owner)
         {
             item.TerminalExecutionOwner = owner;
-            if (item.ReservationHeld && !ReferenceEquals(owner, this))
+            if (!ReferenceEquals(owner, this))
                 lock (owner._admissionGate)
                     owner._pendingCount++;
             if (item.ReservationHeld)
@@ -2080,6 +2067,9 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
         }
     }
 
+    // Admission owns registration until the record is published to a consumer.
+    internal void RegisterPendingItemUnderLock() => _pendingCount++;
+
     internal void CompletePendingItem(ZLinkSerialWorkItem item)
     {
         try
@@ -2092,9 +2082,12 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
                     _activeLifecycle = null;
                 if (item.IsAccepted)
                     _acceptedOperations--;
-                if (item.ReservationHeld)
-                    lock (_admissionGate)
+                lock (_admissionGate)
+                {
+                    _pendingCount--;
+                    if (item.ReservationHeld)
                         ReleaseReservedSlotUnderLock(item.Lane);
+                }
                 CompleteSharedSealRequest();
                 ImportSharedPublished();
                 if (RedirectIdleMailbox())
@@ -2116,6 +2109,7 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
                     }
                     if (item.IsAccepted)
                         _acceptedOperations--;
+                    _pendingCount--;
                     if (item.ReservationHeld)
                         ReleaseReservedSlotUnderLock(item.Lane);
                     CompleteSealRequestUnderLock();
@@ -2126,11 +2120,7 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
         }
         finally
         {
-            if (
-                item.ReservationHeld
-                && item.TerminalExecutionOwner is { } owner
-                && !ReferenceEquals(owner, this)
-            )
+            if (item.TerminalExecutionOwner is { } owner && !ReferenceEquals(owner, this))
             {
                 lock (owner._admissionGate)
                     owner._pendingCount--;
