@@ -92,6 +92,7 @@ internal sealed class ZLinkSerialWorkItem
             throw new InvalidOperationException(
                 "ZLink serial work already has a terminal release callback."
             );
+        release.RegisterPendingItemUnderLock();
     }
 
     internal void AddTerminalRelease(Action release)

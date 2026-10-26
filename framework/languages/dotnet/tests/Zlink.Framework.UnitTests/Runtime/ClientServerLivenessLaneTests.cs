@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Reflection;
 using Zlink.Framework.Runtime.Backend.Contracts;
 using Zlink.Framework.Runtime.Dispatch;
@@ -12,6 +13,33 @@ public sealed class ClientServerLivenessLaneTests
     [Fact]
     public async Task Fatal_pool_failure_ends_server_source_and_is_reported_once()
     {
+        const string isolatedTest = "ZLINK_TEST_FATAL_SERVER_POOL_PROCESS";
+        if (Environment.GetEnvironmentVariable(isolatedTest) != "1")
+        {
+            // The injected poller must own a fresh process pool. Other tests
+            // may still retain sources in the current process generation.
+            var start = new ProcessStartInfo("dotnet")
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            };
+            start.ArgumentList.Add("vstest");
+            start.ArgumentList.Add(typeof(ClientServerLivenessLaneTests).Assembly.Location);
+            start.ArgumentList.Add(
+                $"--TestCaseFilter:FullyQualifiedName={typeof(ClientServerLivenessLaneTests).FullName}.{nameof(Fatal_pool_failure_ends_server_source_and_is_reported_once)}"
+            );
+            start.ArgumentList.Add("--");
+            start.ArgumentList.Add("RunConfiguration.TreatNoTestsAsError=true");
+            start.Environment[isolatedTest] = "1";
+            using var process = Process.Start(start)!;
+            var output = process.StandardOutput.ReadToEndAsync();
+            var error = process.StandardError.ReadToEndAsync();
+            await process.WaitForExitAsync();
+            Assert.True(process.ExitCode == 0, $"{await output}\n{await error}");
+            return;
+        }
         using var context = Systems.Zlink.Zlink.CreateContext();
         using var router = context.CreateRouterSocket();
         var failure = new InvalidOperationException("fatal server pool");
