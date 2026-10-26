@@ -79,6 +79,7 @@
 | WSL 시험이 실패를 종료 코드로 알렸나 | PowerShell에서 띄운 inline `bash -c`의 `$?`·`$code`가 0 | PowerShell이 변수를 먼저 펼쳐 gtest 실패에도 바깥 명령이 0으로 보였다. `.sh` 파일이나 subprocess의 returncode로 판정하고 로그의 실제 시험 수를 함께 확인한다 | #2119 |
 | 생성 codec이 올바른 frame을 받나 | GCC 빌드의 golden 시험 통과 | 함수 인자 평가 순서에 기대는 코드(`batch_end(b, at, batch_r16(b, at))`)는 GCC에서만 통과하고 Clang에서는 정상 frame을 거부했다. 생성 코드는 GCC와 Clang으로 함께 빌드해 시험한다 | #2119 |
 | Revision 비교가 그 revision의 binary를 실행했나 | tracked source hash 일치와 일부 TU 재compile 뒤 반복 통과 | tar가 과거 수정 시각을 복원하면 다른 revision의 object가 남는다. 각 revision을 clean build하고 전체 compile·link 기록과 실행 binary hash를 함께 확인한다 | #2507 |
+| Node byte 비교에서 할당이 늘지 않았나 | `Buffer.from` spy 호출 수가 기준선과 같은 0 | `Buffer.indexOf(string, offset, 'latin1')`의 native `IndexOfString`은 별도로 malloc/free한다. JavaScript API 계수와 native 할당을 구분하고, 새 native 경로의 소유 stack과 같은 프로세스 교대 시간을 함께 확인한다 | #1675 |
 
 ## 4. 무엇이 실제로 답을 줬나
 

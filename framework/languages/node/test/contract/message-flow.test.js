@@ -1,3 +1,4 @@
+const { ZLinkRequestResult } = require('../../packages/framework/dist/runtime/messaging/request-result');
 'use strict';
 
 const { mapZLinkRequestReply, createZLinkRequest } = require('../../packages/framework/dist/runtime/messaging/request-result');
@@ -366,8 +367,8 @@ test('request failure terminals remain visible at Errors level', () => {
   assert.equal(telemetryRecords[0].attributes.outcome, 'failed');
 });
 
-for (const deliver of [mapZLinkRequestReply, (result) => createZLinkRequest(() => result)]) {
-test(`node direct request records one source flow with sent and reply terminal (${deliver === mapZLinkRequestReply ? 'yield' : 'submit'})`, async () => {
+for (const deliver of [(start) => mapZLinkRequestReply(start(new ZLinkRequestResult())), createZLinkRequest]) {
+test(`node direct request records one source flow with sent and reply terminal (${deliver === createZLinkRequest ? 'submit' : 'yield'})`, async () => {
   const { tracer } = makeTracer(diagnostics('normal'));
   let requestParts;
   let failure = false;
@@ -376,14 +377,17 @@ test(`node direct request records one source flow with sent and reply terminal (
     isObjectClientNodeDirectTarget() { return false; }
   };
   const table = {
-    submit(operation) {
-      operation();
+    submit(operation, _signal, resultOwner = new ZLinkRequestResult()) {
+return resultOwner.observe((async () => {
+      operation(resultOwner);
       const header = channelEnvelope.decodeChannelHeader(requestParts.map(part => ZLinkBufferMessage.from(part)));
       const parts = failure
         ? []
         : channelEnvelope.encodeChannelReplyParts(header, { ok: true }).map(part => ZLinkBufferMessage.from(part));
       return Promise.resolve({ terminalResult: failure ? 101 : 0, failureErrno: 0, parts });
-    }
+
+})());
+}
   };
   const transport = new ZLinkRuntimeRouteTransport(
     () => undefined, undefined,
@@ -391,7 +395,7 @@ test(`node direct request records one source flow with sent and reply terminal (
     undefined, undefined, undefined, undefined, () => true, () => tracer
   );
 
-  assert.deepEqual(await deliver(transport.request('mesh', 'target', 'Probe', { value: 1 }, 1000)), { ok: true });
+  assert.deepEqual(await deliver((entry) => transport.request(entry, 'mesh', 'target', 'Probe', { value: 1 }, 1000)), { ok: true });
   assert.deepEqual(telemetryRecords.map(record => record.attributes.phase), ['sent', 'reply_received']);
   assert.match(telemetryRecords[0].attributes.flow_id, /^[0-9a-f-]{36}$/i);
   assert.match(telemetryRecords[0].attributes.correlation_id, /^[0-9a-f]{32}$/i);
@@ -402,7 +406,7 @@ test(`node direct request records one source flow with sent and reply terminal (
 
   telemetryRecords.length = 0;
   failure = true;
-  await assert.rejects(() => deliver(transport.request('mesh', 'target', 'Probe', { value: 2 }, 1000)));
+  await assert.rejects(() => deliver((entry) => transport.request(entry, 'mesh', 'target', 'Probe', { value: 2 }, 1000)));
   assert.deepEqual(telemetryRecords.map(record => record.attributes.phase), ['sent', 'reply_received']);
   assert.equal(telemetryRecords[1].attributes.outcome, 'failed');
   assert.equal(telemetryRecords[0].attributes.flow_id, telemetryRecords[1].attributes.flow_id);

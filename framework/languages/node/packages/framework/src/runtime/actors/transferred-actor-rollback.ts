@@ -54,7 +54,7 @@ export class ZLinkTransferredActorRollbackCoordinator {
           generation: actorRef.generation
         }),
       signal
-    );
+    ).pending;
     try {
       if (completion.terminalResult !== RequestResult.Ok) {
         throw new Error(
