@@ -124,20 +124,28 @@ test('deadline maintenance yields its live iterator and resumes through deletion
   registry.close();
 });
 
-test('shared deadline maintenance completes a native request while its handler is suspended', async (t) => {
+async function sharedDeadlineWhileSuspended(t, native) {
   const backend = require('../../packages/framework/dist/runtime/backend');
   const { RequestResult, ZLinkBackendResultError } = require('../../packages/framework/dist/runtime/backend/runtime-values');
   const factory = new backend.ZLinkNodeBackendAdapterFactory();
-  const context = factory.createChannelAdapter().createContext();
+  const context = native ? factory.createChannelAdapter().createContext() : { async dispose() {} };
   const suffix = `node-dispatch-deadline-${process.pid}`;
   const {
     ApplicationJobQueue,
     resolveApplicationJobQueueConfiguration
   } = require('../../packages/framework/dist/runtime/host/application-job-queue');
   const queue = new ApplicationJobQueue(resolveApplicationJobQueueConfiguration({}, () => 2n));
-  const node = factory
-    .createMeshAdapter()
-    .createMeshNode(context, { meshName: suffix, routingId: suffix, applicationJobQueue: queue });
+  const node = native
+    ? factory.createMeshAdapter().createMeshNode(context, { meshName: suffix, routingId: suffix, applicationJobQueue: queue })
+    : new (require('../../packages/framework/dist/runtime/backend/node/node-raw-mesh-backend').ZLinkNodeRawMeshBackend)(suffix, suffix, {
+      createHost: () => ({
+        createRouter: () => ({
+          setRoutingId() {}, setReceiveFlowState() {}, bind() {},
+          localEndpoint: () => `inproc://${suffix}`,
+          setReadableHandler() {}, routesSnapshot: () => [], receive: () => undefined
+        }), close() {}
+      })
+    }, queue);
   node.setBind(`inproc://${suffix}`);
   node.start();
   const diagnostics = [];
@@ -201,7 +209,12 @@ test('shared deadline maintenance completes a native request while its handler i
     await node.close();
     await context.dispose();
   }
-});
+}
+
+for (const native of [true, false]) {
+  test(`shared deadline maintenance completes a ${native ? 'native request' : 'handle-free adapter request'} while its handler is suspended`,
+    (t) => sharedDeadlineWhileSuspended(t, native));
+}
 
 test('shared maintenance budget advances both registries while raw work carries over', async () => {
   let now = 0;
@@ -232,6 +245,7 @@ test('shared maintenance budget advances both registries while raw work carries 
 });
 
 test('backend shared maintenance gives raw and stateful registries one divided budget', async (t) => {
+  const { RequestResult } = require('../../packages/framework/dist/runtime/backend/runtime-values');
   // Subtracting this fractional origin from its deadline does not recover the exact budget.
   t.mock.method(performance, 'now', () => 0.3);
   const backend = require('../../packages/framework/dist/runtime/backend');
@@ -270,9 +284,12 @@ test('backend shared maintenance gives raw and stateful registries one divided b
     // Maintenance runs at the nearest management deadline (spec 08 §4.2); a
     // pending request gives this idle node one.
     const pending = table.submit((entry) =>
-      node.requestToNode(node.status().routingId, [Buffer.from('budget')], { timeoutMs: 5, requestEntry: entry })
+      node.requestToNode('budget-missing-peer', [Buffer.from('budget')], { timeoutMs: 5, requestEntry: entry })
     ).pending;
-    cleanup = assert.rejects(pending, (error) => error === cleanupReason);
+    cleanup = pending.then((completion) => {
+      assert.equal(completion.terminalResult, RequestResult.NotFound);
+      backend.closeMeshCompletion(completion);
+    });
     await observed;
     await new Promise(setImmediate);
     assert.equal(observations[0].now, observations[1].now);

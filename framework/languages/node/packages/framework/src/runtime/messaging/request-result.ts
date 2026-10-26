@@ -28,7 +28,6 @@ export class ZLinkRequestResult<TReply> {
   private admitted?: Promise<void>;
   declare private resolveAdmission?: () => void;
   declare private rejectAdmission?: (error: unknown) => void;
-  declare deadlineMs?: number;
   declare capacityStop?: AbortController;
 
   readonly confirm = (): void => {

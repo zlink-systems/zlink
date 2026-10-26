@@ -188,19 +188,6 @@ export class ZLinkMeshCompletionTable {
     return entry;
   }
 
-  expire(nowMs: number): number {
-    let expired = 0;
-    for (let index = 0; index < this.slots.length; index++) {
-      const slot = this.slots[index]!;
-      if (slot.entry?.deadlineMs === undefined || slot.entry.deadlineMs > nowMs) continue;
-      const entry = slot.entry;
-      this.releaseSlot(index);
-      entry.fail(new ZLinkBackendResultError('request', RequestResult.TimedOut));
-      expired++;
-    }
-    return expired;
-  }
-
   private isDisposed(): boolean {
     return this.disposed;
   }
@@ -224,6 +211,10 @@ export class ZLinkMeshCompletionTable {
       const completion = retainCompletion(
         materialize === undefined ? (record as ReceiveRecord) : materialize()
       );
+      if (completion.terminalResult === RequestResult.TimedOut) {
+        closeMeshCompletion(completion);
+        throw new ZLinkBackendResultError('request', RequestResult.TimedOut);
+      }
       entry.complete(completion);
     } catch (error) {
       entry.fail(error);

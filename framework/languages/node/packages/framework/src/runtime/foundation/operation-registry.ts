@@ -100,14 +100,13 @@ export class OperationRegistry<T, Context = unknown> {
     }
     const id = this.nextId++;
     const deadlineMs = this.clock.now() + timeoutMs;
-    this.entries.set(id, { context, deadlineMs, observer });
+    // Initialize the mutable field as tagged before storing the number. A
+    // double field in the object literal makes V8 clone the deadline box.
+    const entry: Entry<T, Context> = { context, deadlineMs: undefined, observer };
+    entry.deadlineMs = deadlineMs;
+    this.entries.set(id, entry);
     this.notePending(deadlineMs);
     return id;
-  }
-
-  allocateId(): bigint {
-    if (this.closed) throw new Error('Operation registry is closed.');
-    return this.nextId++;
   }
 
   /** The time the next expiry pass has work, as a lower bound (spec 08 §4.2). */

@@ -75,18 +75,22 @@ export interface RawServiceRequestResult {
 }
 
 /** Receives observed request terminals; the context is the caller's operation kind. */
-export type RawServiceRequestObserver = OperationObserver<RawServiceRequestResult, number>;
+export interface RawServiceRequestObserver extends OperationObserver<RawServiceRequestResult, number> {
+  /** Observes a late reply for diagnostics without delivering a second terminal. */
+  operationDiscarded?(
+    id: bigint,
+    result: RawServiceRequestResult,
+    operationKind: number | undefined
+  ): void;
+}
 
 /**
- * A registered request. An observed remote request has no Promise; its
- * terminal reaches the observer. Local and Promise-contract requests carry
- * the Promise.
+ * A registered request. Observed requests share the deadline registry and
+ * receive their terminal without a Promise.
  */
 export interface RawServiceObservedRequest {
   readonly id: bigint;
   readonly promise?: Promise<RawServiceRequestResult>;
-  readonly observer?: RawServiceRequestObserver;
-  readonly operationKind?: number;
 }
 
 type RawServiceChannelTargetSelection =
@@ -706,7 +710,7 @@ export class RawServiceMeshRuntime {
   ): RawServiceObservedRequest {
     return observer === undefined
       ? this.operations.register(timeoutMs)
-      : { id: this.operations.allocateId(), observer, operationKind };
+      : { id: this.operations.registerObserved(timeoutMs, observer, operationKind) };
   }
 
   /**
@@ -715,17 +719,16 @@ export class RawServiceMeshRuntime {
    */
   private completeRequest(
     pending: RawServiceObservedRequest,
-    result: RawServiceRequestResult
+    result: RawServiceRequestResult,
+    observer?: RawServiceRequestObserver,
+    operationKind?: number
   ): void {
-    if (pending.observer !== undefined)
-      pending.observer.operationCompleted(pending.id, result, pending.operationKind);
-    else this.operations.complete(pending.id, result);
+    if (!this.operations.complete(pending.id, result))
+      observer?.operationDiscarded?.(pending.id, result, operationKind);
   }
 
   private failRequest(pending: RawServiceObservedRequest, error: unknown): void {
-    if (pending.observer !== undefined)
-      pending.observer.operationFailed(pending.id, error, pending.operationKind);
-    else this.operations.fail(pending.id, error);
+    this.operations.fail(pending.id, error);
   }
 
   private selectChannelTarget(channelName: string): RawServiceChannelTargetSelection {
@@ -1575,16 +1578,12 @@ export class RawServiceMeshRuntime {
       }
     }
     if (selectedTargetNodeRoutingId === this.descriptor.nodeRoutingId) {
-      // The same stable completion entry owns local expiry and cancels the
-      // capacity wait when its terminal is taken.
-      const pending =
-        entry === undefined
-          ? this.operations.register(timeoutMs)
-          : this.registerRequest(timeoutMs, observer, operationKind);
+      // The registry owns local and remote expiry. The completion entry
+      // cancels the capacity wait when its terminal is taken.
+      const pending = this.registerRequest(timeoutMs, observer, operationKind);
       const parts = [header, encodedPayload];
       const capacityStop = new AbortController();
       if (entry !== undefined) {
-        entry.deadlineMs = performance.now() + timeoutMs;
         entry.capacityStop = capacityStop;
       } else {
         void pending.promise!.finally(() => capacityStop.abort()).catch(() => undefined);
@@ -1609,11 +1608,12 @@ export class RawServiceMeshRuntime {
             sourceRoutingId: this.descriptor.nodeRoutingId,
             correlation,
             localReply: (terminalResult, failureCode, reply) =>
-              this.completeRequest(pending, {
-                terminalResult,
-                failureCode,
-                ...(reply === undefined ? {} : { payload: reply })
-              }),
+              this.completeRequest(
+                pending,
+                { terminalResult, failureCode, ...(reply === undefined ? {} : { payload: reply }) },
+                observer,
+                operationKind
+              ),
             applicationJob
           });
           if (!accepted) {
@@ -1678,7 +1678,9 @@ export class RawServiceMeshRuntime {
               pending,
               reply.terminalResult === 0
                 ? { ...result, payload: decodeApplicationPayloadView(replyParts[1]!) }
-                : result
+                : result,
+              observer,
+              operationKind
             );
           } catch (error) {
             this.failRequest(pending, error);

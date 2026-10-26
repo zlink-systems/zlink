@@ -1,7 +1,7 @@
 'use strict';
 const assert = require('node:assert/strict');
 const { Session } = require('node:inspector');
-const { frameworkPair } = require('../../../perf/request-backpressure.cjs');
+const { OperationRegistry } = require('../../../packages/framework/dist/runtime/foundation/operation-registry');
 
 // A function allocated for each completed request verifies that tracking records
 // allocations even when the returned object is no longer reachable at snapshot.
@@ -15,9 +15,26 @@ const OWNER_MODULES = [
   '/runtime/messaging/request-result.js',
   '/runtime/foundation/operation-registry.js'
 ];
-async function trace() {
+async function trace({ registryOnly = false } = {}) {
   const count = 100;
-  const pair = await frameworkPair();
+  const registrationRegistry = new OperationRegistry();
+  const observer = { operationCompleted() {}, operationFailed() {} };
+  function requiredRegistrationControl() {
+    const id = registrationRegistry.registerObserved(30000, observer, 1);
+    registrationRegistry.complete(id, undefined);
+  }
+  let nextControlId = 1n;
+  function identityControl() { return nextControlId++; }
+  const requestRegistry = new OperationRegistry();
+  const pair = registryOnly ? {
+    submit() {
+      const id = requestRegistry.registerObserved(30000, observer, 1);
+      requestRegistry.complete(id, undefined);
+      return { reply: Promise.resolve() };
+    },
+    validate() {},
+    async close() { requestRegistry.close(); }
+  } : await require('../../../perf/request-backpressure.cjs').frameworkPair();
   const session = new Session();
   session.connect();
   const post = (method, params = {}) =>
@@ -30,13 +47,17 @@ async function trace() {
       const request = pair.submit();
       pair.validate(await request.reply);
       allocationControl();
+      requiredRegistrationControl();
+      identityControl();
     }
-    global.gc();
+    global.gc?.();
     await post('HeapProfiler.startTrackingHeapObjects', { trackAllocations: true });
     for (let i = 0; i < count; i++) {
       const request = pair.submit();
       pair.validate(await request.reply);
       allocationControl();
+      requiredRegistrationControl();
+      identityControl();
     }
     session.on('HeapProfiler.addHeapSnapshotChunk', ({ params }) => chunks.push(params.chunk));
     await post('HeapProfiler.stopTrackingHeapObjects', { reportProgress: false });
@@ -49,7 +70,10 @@ async function trace() {
     );
     const control = { objects: 0, bytes: 0 };
     const maintenance = { objects: 0, bytes: 0 };
-    function visit(nodes) {
+    const requiredRegistration = { objects: 0, bytes: 0 };
+    const identity = { objects: 0, bytes: 0 };
+    const sites = [];
+    function visit(nodes, registrationControl = false) {
       for (let index = 0; index < nodes.length; index += fields.length) {
         const infoIndex = nodes[index + fields.indexOf('function_info_index')] * infoFields.length;
         const script = snapshot.strings[infos[infoIndex + infoFields.indexOf('script_name')]];
@@ -57,11 +81,23 @@ async function trace() {
         const objects = nodes[index + fields.indexOf('count')];
         const bytes = nodes[index + fields.indexOf('size')];
         const owner = OWNER_MODULES.find((module) => script.replaceAll('\\', '/').endsWith(module));
+        const inRegistrationControl = registrationControl ||
+          (script === __filename && name === 'requiredRegistrationControl');
+        if (owner && objects) sites.push({
+          module: owner, name,
+          line: infos[infoIndex + infoFields.indexOf('line')],
+          column: infos[infoIndex + infoFields.indexOf('column')],
+          objects, bytes, registrationControl: inRegistrationControl
+        });
         // Periodic deadline traversal runs independently of the request count.
         // Keep its actual allocations visible, outside the remote request budget.
         const periodic = owner === '/runtime/foundation/operation-registry.js' &&
           (name === 'expire' || name === 'nextDeadlineMs');
-        if (periodic) { maintenance.objects += objects; maintenance.bytes += bytes; }
+        if (inRegistrationControl && owner === '/runtime/foundation/operation-registry.js') {
+          requiredRegistration.objects += objects;
+          requiredRegistration.bytes += bytes;
+        }
+        else if (periodic) { maintenance.objects += objects; maintenance.bytes += bytes; }
         else if (owner) {
           modules[owner].objects += objects;
           modules[owner].bytes += bytes;
@@ -70,7 +106,10 @@ async function trace() {
           control.objects += objects;
           control.bytes += bytes;
         }
-        visit(nodes[index + fields.indexOf('children')]);
+        if (script === __filename && name === 'identityControl') {
+          identity.objects += objects; identity.bytes += bytes;
+        }
+        visit(nodes[index + fields.indexOf('children')], inRegistrationControl);
       }
     }
     visit(snapshot.trace_tree);
@@ -84,13 +123,15 @@ async function trace() {
       { objects: 0, bytes: 0 }
     );
     assert.ok(total.objects > count, 'request owner modules have real allocations');
-    return { node: process.version, count, control, maintenance, modules, total };
+    return { node: process.version, count, control, maintenance, modules, total, requiredRegistration, identity, sites };
   } finally {
     session.disconnect();
+    registrationRegistry.close();
     await pair.close();
   }
 }
-trace().then(
+module.exports = { trace };
+if (require.main === module) trace({ registryOnly: process.env.ZLINK_TRACE_REGISTRY_ONLY === '1' }).then(
   (result) => process.stdout.write(`${JSON.stringify(result)}\n`),
   (error) => {
     console.error(error);

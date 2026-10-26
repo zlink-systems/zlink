@@ -213,7 +213,6 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       nowMs + RAW_MESH_RECEIVE_TIME_BUDGET_MS * MESH_BACKEND_RAW_MAINTENANCE_SHARE
     );
     this.stateful?.expireOperations(nowMs, turnDeadlineMs);
-    this.completionTable?.expire(nowMs);
     this.scheduleMaintenance();
     this.pump();
   };
@@ -777,11 +776,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       OperationKind.NodeRequest,
       options.requestEntry
     );
-    const id = { high: 1n, low: pending.id };
-    if (options.requestEntry.deadlineMs !== undefined) {
-      this.scheduleMaintenance();
-    }
-    return id;
+    return { high: 1n, low: pending.id };
   }
 
   sendToChannel(
@@ -815,11 +810,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       OperationKind.ChannelRequest,
       options.requestEntry
     );
-    const id = { high: 1n, low: pending.id };
-    if (options.requestEntry.deadlineMs !== undefined) {
-      this.scheduleMaintenance();
-    }
-    return id;
+    return { high: 1n, low: pending.id };
   }
 
   status() {
@@ -1796,9 +1787,16 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
    * The raw registry takes a remote request's terminal and hands it here,
    * where the Framework completion owner receives it in the same turn.
    */
+  private readonly onRequestCompleted = (
+    id: bigint,
+    result: RawServiceRequestResult,
+    operationKind: number | undefined
+  ): void =>
+    this.deliverCompletion({ high: 1n, low: id }, operationKind ?? 0, result);
+
   private readonly requestObserver: RawServiceRequestObserver = {
-    operationCompleted: (id, result, operationKind) =>
-      this.deliverCompletion({ high: 1n, low: id }, operationKind ?? 0, result),
+    operationCompleted: this.onRequestCompleted,
+    operationDiscarded: this.onRequestCompleted,
     operationFailed: (id, error, operationKind) =>
       this.deliverCompletion({ high: 1n, low: id }, operationKind ?? 0, requestFailureResult(error))
   };

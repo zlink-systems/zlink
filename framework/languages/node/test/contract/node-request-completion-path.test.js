@@ -97,7 +97,7 @@ test('an observed request decided inside the call reaches the completion slot af
   runtime.mailbox.close();
 });
 
-test('an observed remote request leaves terminal ownership in the completion entry', async () => {
+test('an observed remote request registers its Framework deadline without a Promise', async () => {
   const runtime = createRuntime();
   let promiseRegistrations = 0;
   let observedRegistrations = 0;
@@ -124,8 +124,8 @@ test('an observed remote request leaves terminal ownership in the completion ent
     const pending = runtime.requestToNode('target', payload(), 1000, undefined, observer, 1, new ZLinkRequestResult());
     assert.equal(pending.promise, undefined);
     assert.equal(promiseRegistrations, 0);
-    assert.equal(observedRegistrations, 0);
-    assert.equal(runtime.pendingOperationCount, 0);
+    assert.equal(observedRegistrations, 1);
+    assert.equal(runtime.pendingOperationCount, 1);
     assert.equal(replyParts.length, 2);
     // The Promise contract stays for callers that do not observe.
     const plain = runtime.requestToNode('target', payload(), 1000);
@@ -137,6 +137,50 @@ test('an observed remote request leaves terminal ownership in the completion ent
     runtime.mailbox.close();
   }
 });
+
+for (const method of ['requestToNode', 'requestToChannel']) {
+  test(`observed remote ${method} expires through Framework maintenance exactly once`, (t) => {
+    t.mock.method(performance, 'now', () => 100);
+    const runtime = createRuntime();
+    const events = [];
+    let failBinding;
+    let submissions = 0;
+    runtime.router = {
+      request(_target, _parts, _timeout, _reply, fail) {
+        submissions++;
+        failBinding = fail;
+      }
+    };
+    const peer = { descriptor: { nodeRoutingId: 'target' } };
+    runtime.topology.admittedPeer = () => peer;
+    runtime.topology.selectChannel = () => peer;
+    runtime.isPeerRouteReady = () => true;
+    const observer = {
+      operationCompleted: (id, value, kind) => events.push({ id, value, kind }),
+      operationFailed: (id, error, kind) => events.push({ id, error, kind })
+    };
+    try {
+      const pending = runtime[method]('target', payload(), 10, undefined, observer, 7, new ZLinkRequestResult());
+      assert.equal(submissions, 1);
+      assert.equal(runtime.pendingOperationCount, 1);
+      assert.equal(runtime.operations.nextDeadlineMs(), 110);
+      assert.equal(runtime.expireOperations(109, Infinity), 0);
+      assert.equal(events.length, 0);
+      assert.equal(runtime.expireOperations(110, Infinity), 1);
+      assert.equal(runtime.pendingOperationCount, 0);
+      assert.equal(events.length, 1);
+      assert.equal(events[0].id, pending.id);
+      assert.equal(events[0].kind, 7);
+      assert.equal(events[0].error.name, 'OperationTimeoutError');
+      failBinding(new Error('late binding failure'));
+      assert.equal(runtime.expireOperations(120, Infinity), 0);
+      assert.equal(events.length, 1);
+    } finally {
+      runtime.operations.close();
+      runtime.mailbox.close();
+    }
+  });
+}
 
 test('observed registry terminals reach the observer exactly once on reply, timeout and close', () => {
   const now = { value: 0 };
@@ -362,17 +406,10 @@ for (const terminal of ['deadline', 'cancel', 'shutdown']) {
     const occupied = [];
     for (let i = 0; i < 16; i++) occupied.push(await runtime.applicationJobQueue.acquire(undefined, 'remote'));
     const controller = new AbortController();
-    const observer = {
-      operationCompleted(id, value, operationKind) {
-        table.complete({ operationId: { high: 1n, low: id }, terminalResult: value.terminalResult,
-          failureErrno: value.failureCode, operationKind, kindData: null, parts: [] });
-      },
-      operationFailed(id, error) {
-        // A cancelled capacity acquisition is already terminal in this owner.
-        table.complete({ operationId: { high: 1n, low: id }, terminalResult: 1,
-          failureErrno: 0, operationKind: 1, kindData: null, parts: [] });
-      }
-    };
+    const { ZLinkNodeRawMeshBackend } = require('../../packages/framework/dist/runtime/backend/node/node-raw-mesh-backend');
+    const backend = new ZLinkNodeRawMeshBackend('mesh', 'source', {});
+    backend.setCompletionTable(table);
+    const observer = backend.requestObserver;
     try {
       const framework = require('../../packages/framework/dist/internal');
       const { ZLinkBackendResultError, RequestResult } = require('../../packages/framework/dist/runtime/backend/runtime-values');
@@ -392,10 +429,10 @@ for (const terminal of ['deadline', 'cancel', 'shutdown']) {
       class LocalQuery {}
       const reply = client.requestToNode('mesh', 'source', new LocalQuery()).submit(controller.signal);
       const failure = Promise.allSettled([reply, reply.admitted]);
-      assert.equal(runtime.pendingOperationCount, 0);
+      assert.equal(runtime.pendingOperationCount, 1);
       assert.equal(table.pendingCount, 1, table.pendingCount === 0 ? String((await failure)[0].reason) : 'pending terminal');
       assert.equal(runtime.applicationJobQueue.snapshot().capacityWaiters, 1n);
-      if (terminal === 'deadline') assert.equal(table.expire(entry.deadlineMs), 1);
+      if (terminal === 'deadline') assert.equal(runtime.expireOperations(runtime.operations.nextDeadlineMs(), Infinity), 1);
       else if (terminal === 'cancel') controller.abort(new DOMException('cancel local capacity wait', 'AbortError'));
       else table.dispose(new ZLinkBackendResultError('request', RequestResult.Terminated));
       const stages = await failure;
@@ -407,6 +444,7 @@ for (const terminal of ['deadline', 'cancel', 'shutdown']) {
       else assert.equal(stages[0].reason.name, 'AbortError');
       await new Promise(resolve => setImmediate(resolve));
       assert.equal(table.pendingCount, 0);
+      assert.equal(runtime.pendingOperationCount, 0);
       assert.equal(runtime.applicationJobQueue.snapshot().capacityWaiters, 0n);
       assert.equal(runtime.mailbox.pendingMessages('application'), 0);
     } finally {
