@@ -3445,17 +3445,24 @@ public sealed class SerialExecutorTests
         // Keep exact byte assertions, but exclude GC accounting changes from both intervals.
         // UnitTests disables parallel test execution; setup and warmup precede this region.
         // This reserves heap space, not an allowance in the allocation assertion.
-        Assert.True(GC.TryStartNoGCRegion(16 * 1024 * 1024));
+        Assert.True(GC.TryStartNoGCRegion(NoGcMeasurementReservationBytes));
         try
         {
             measurement();
         }
-        finally
+        catch
         {
-            // A collection or an exhausted reservation must fail the test, not discard a sample.
-            GC.EndNoGCRegion();
+            // Keep the measurement failure; end the region only while it is still active.
+            if (System.Runtime.GCSettings.LatencyMode == System.Runtime.GCLatencyMode.NoGCRegion)
+                GC.EndNoGCRegion();
+            throw;
         }
+        // A collection or an exhausted reservation must fail the test, not discard a sample.
+        GC.EndNoGCRegion();
     }
+
+    // Larger than every measured loop (1,000 iterations, a few hundred KB).
+    private const long NoGcMeasurementReservationBytes = 16 * 1024 * 1024;
 
     private static ZlinkStreamHeader CreateHeader(string name)
     {
