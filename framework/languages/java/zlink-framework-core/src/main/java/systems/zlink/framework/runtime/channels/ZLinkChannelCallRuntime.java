@@ -160,6 +160,12 @@ final class ZLinkChannelCallRuntime {
                         ZLinkBackendReceived::close));
     }
 
+    static ZLinkServiceOperationRegistry operationOwner(
+            ZLinkInternalSpotNode node, ZLinkServiceOperationRegistry fallback) {
+        var owner = node.operationRegistry();
+        return owner == null ? fallback : owner;
+    }
+
     CompletionStage<ZLinkBackendReceived> requestChannel(
             UUID operationId,
             ZLinkInternalSpotNode node,
@@ -178,7 +184,7 @@ final class ZLinkChannelCallRuntime {
                             metadata,
                             requestParts,
                             timeout,
-                            operations,
+                            operationOwner(node, operations),
                             operationId,
                             requestAdmission));
         } catch (RuntimeException failure) {
@@ -204,7 +210,7 @@ final class ZLinkChannelCallRuntime {
                             metadata,
                             requestParts,
                             timeout,
-                            operations,
+                            operationOwner(node, operations),
                             operationId,
                             requestAdmission));
         } catch (RuntimeException failure) {

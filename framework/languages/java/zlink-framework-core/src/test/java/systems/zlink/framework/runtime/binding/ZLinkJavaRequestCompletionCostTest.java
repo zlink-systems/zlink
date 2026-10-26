@@ -540,7 +540,7 @@ public final class ZLinkJavaRequestCompletionCostTest {
             return new Operation();
         }
 
-        private Submitted submit() {
+        private Submitted submit() throws Exception {
             var admission = new CompletableFuture<Void>();
             var next =
                     new Pending(
@@ -579,6 +579,8 @@ public final class ZLinkJavaRequestCompletionCostTest {
                                             null,
                                             admission),
                             ignored -> discards.incrementAndGet());
+            ((ZLinkStateLane) field(operations, "owner")).runAsync(() -> {})
+                    .toCompletableFuture().get(1, TimeUnit.SECONDS);
             var observed = ZLinkRequestStages.observe(completion, admission);
             return new Submitted(pending.get(), admission, observed.toCompletableFuture());
         }

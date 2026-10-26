@@ -16,13 +16,11 @@ import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.mesh.ZLinkMeshNodesRuntime;
 
 import java.time.Duration;
-import java.util.Arrays;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 
 final class ZLinkJavaMeshNodeIsolationTest {
@@ -98,7 +96,7 @@ final class ZLinkJavaMeshNodeIsolationTest {
                                             return null;
                                         })
                                 .toCompletableFuture();
-                var sendingThread = new AtomicReference<Thread>();
+                var submissionReturned = new CompletableFuture<Void>();
                 CompletableFuture<Void> sending = null;
                 try {
                     if (!entered.await(GUARD.toMillis(), TimeUnit.MILLISECONDS))
@@ -106,15 +104,14 @@ final class ZLinkJavaMeshNodeIsolationTest {
                     sending =
                             CompletableFuture.runAsync(
                                     () -> {
-                                        sendingThread.set(Thread.currentThread());
-                                        source.route()
+                                        var admitted = source.route()
                                                 .sendToNode(MESH_A, TARGET, new Probe("load"))
-                                                .submit()
-                                                .toCompletableFuture()
-                                                .join();
+                                                .submit();
+                                        submissionReturned.complete(null);
+                                        admitted.toCompletableFuture().join();
                                     },
                                     callers);
-                    awaitSourceTurnWait(sendingThread);
+                    submissionReturned.get(GUARD.toMillis(), TimeUnit.MILLISECONDS);
                     var forward =
                             CompletableFuture.supplyAsync(
                                     () -> request(source, TARGET, "forward").join(), callers);
@@ -144,23 +141,6 @@ final class ZLinkJavaMeshNodeIsolationTest {
                 .requestToNode(MESH_B, target, new Probe(value))
                 .submit(String.class)
                 .toCompletableFuture();
-    }
-
-    private static void awaitSourceTurnWait(AtomicReference<Thread> caller) throws Exception {
-        await(
-                () -> {
-                    Thread thread = caller.get();
-                    return thread != null
-                            && Arrays.stream(thread.getStackTrace())
-                                    .anyMatch(
-                                            frame ->
-                                                    frame.getClassName()
-                                                                    .equals(
-                                                                            ZLinkStateLane.class
-                                                                                    .getName())
-                                                            && frame.getMethodName()
-                                                                    .equals("awaitTurn"));
-                });
     }
 
     private static void await(BooleanSupplier ready) throws Exception {

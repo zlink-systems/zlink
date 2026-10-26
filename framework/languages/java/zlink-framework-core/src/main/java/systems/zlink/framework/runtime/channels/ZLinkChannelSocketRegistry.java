@@ -127,11 +127,14 @@ final class ZLinkChannelSocketRegistry {
             new java.util.concurrent.CopyOnWriteArrayList<>();
 
     void rejectPendingAdmission() {
-        inStateLane(
-                () -> {
-                    topologySignals.forEach(signal -> signal.shutdown().run());
-                    return null;
-                });
+        var nodes = inStateLane(() -> {
+            topologySignals.forEach(signal -> signal.shutdown().run());
+            return List.copyOf(spotRouterNodes.values());
+        });
+        for (var node : nodes) {
+            var operations = node.operationRegistry();
+            if (operations != null) operations.closeAsync();
+        }
     }
 
     void onTopologyChanged(Runnable signal) {
@@ -595,7 +598,12 @@ final class ZLinkChannelSocketRegistry {
             var submitted = submission.get();
             return () -> submitted;
         }
-        return () -> owner.isOnLane() ? submission.get() : owner.awaitTurn(submission);
+        return () -> {
+            if (owner.isOnLane()) return submission.get();
+            var flow = ZLinkFlowContext.current();
+            return owner.runAsync(() -> ZLinkFlowContext.call(flow, submission))
+                    .thenCompose(stage -> stage);
+        };
     }
 
     private <T> CompletionStage<T> selectAndSubmit(

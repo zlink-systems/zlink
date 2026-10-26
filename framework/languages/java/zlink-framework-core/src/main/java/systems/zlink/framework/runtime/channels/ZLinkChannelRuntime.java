@@ -1473,7 +1473,7 @@ public final class ZLinkChannelRuntime
                             ownerLeaseGeneration,
                             spotParts,
                             effectiveTimeout,
-                            operations,
+                            ZLinkChannelCallRuntime.operationOwner(node, operations),
                             operationId,
                             requestAdmission);
                 });

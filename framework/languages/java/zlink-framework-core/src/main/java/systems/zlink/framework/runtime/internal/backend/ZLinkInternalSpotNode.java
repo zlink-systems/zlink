@@ -24,6 +24,11 @@ import java.util.function.Supplier;
 
 public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
     /** Node-owned JVM source turn; backends without a separate owner use the selector turn. */
+    /** The source node owns registration, submission and close in its transport turn. */
+    default ZLinkServiceOperationRegistry operationRegistry() {
+        return null;
+    }
+
     default ZLinkStateLane sourceTransportLane() {
         return null;
     }

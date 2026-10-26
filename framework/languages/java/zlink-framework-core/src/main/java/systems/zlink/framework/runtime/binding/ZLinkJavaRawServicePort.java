@@ -95,7 +95,7 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
                 ownsContext,
                 stateLane,
                 new ZLinkServiceOperationRegistry(
-                        ZLinkOneWayCalls.failureForStatus(ZLinkOneWayCalls.SHUTDOWN)));
+                        stateLane, ZLinkOneWayCalls.failureForStatus(ZLinkOneWayCalls.SHUTDOWN)));
     }
 
     ZLinkJavaRawServicePort(
@@ -611,12 +611,12 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
                         () -> {
                             if (closeCompletion == null) {
                                 closeCompletion = attempt;
-                                operations.close();
                             }
                             return closeCompletion;
                         });
         if (completion == attempt) {
             try {
+                operations.close();
                 // Claim close after every started native submission has left the state turn.
                 // Pending operation completion and resource disposal remain outside the turn.
                 var remaining =

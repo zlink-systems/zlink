@@ -302,6 +302,11 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
     }
 
     @Override
+    public ZLinkServiceOperationRegistry operationRegistry() {
+        return owner.operationRegistry();
+    }
+
+    @Override
     public ZLinkStateLane sourceTransportLane() {
         return owner.sourceTransportLane();
     }
@@ -3554,10 +3559,8 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                         ZLinkChannelContentTypeFrame.decode(parts));
         // The local ingress takes the prepared record; rejected registration
         // leaves that ownership here. Payload preparation stays outside E3.
-        boolean[] handedOff = {false};
         Supplier<CompletionStage<ZLinkBackendReceived>> enqueue =
                 () -> {
-                    handedOff[0] = true;
                     var dispatched = enqueueLocalSpot(target, true, request, requestAdmission);
                     dispatched.whenComplete(
                             (ignored, failure) -> {
@@ -3574,16 +3577,15 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                             });
                 };
         if (operations != null) {
-            try {
-                var registered =
-                        operations.submit(
-                                operationId, timeout, enqueue, ZLinkBackendReceived::close);
-                return registered.whenComplete((reply, failure) -> completion.cancel(false));
-            } finally {
-                if (!handedOff[0]) {
-                    request.close();
-                }
-            }
+            var registered = new CompletableFuture<ZLinkBackendReceived>();
+            operations.submitTerminal(operationId, timeout, terminalResult -> {
+                var submitted = enqueue.get();
+                submitted.whenComplete(terminalResult);
+                return submitted;
+            }, ZLinkBackendReceived::close, registered).whenComplete((accepted, failure) -> {
+                if (failure != null || !accepted) request.close();
+            });
+            return registered.whenComplete((reply, failure) -> completion.cancel(false));
         }
         if (timeout != null && !timeout.isNegative() && !timeout.isZero()) {
             CompletableFuture.delayedExecutor(timeout.toNanos(), TimeUnit.NANOSECONDS)

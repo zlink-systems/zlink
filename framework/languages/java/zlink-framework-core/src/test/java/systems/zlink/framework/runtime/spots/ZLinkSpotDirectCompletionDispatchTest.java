@@ -1,5 +1,8 @@
 package systems.zlink.framework.runtime.spots;
 
+import systems.zlink.framework.runtime.internal.ZLinkCompletionBridge;
+
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
@@ -44,7 +47,7 @@ final class ZLinkSpotDirectCompletionDispatchTest {
     @Test
     void remoteReplyReusesTheRegisteredCompletionTurn() throws Exception {
         try (var registry = new ZLinkServiceOperationRegistry()) {
-            var operation = registry.<ZLinkBackendReceived>register(REGISTRY_TIMEOUT);
+            var operation = ZLinkCompletionBridge.await(registry.<ZLinkBackendReceived>register(REGISTRY_TIMEOUT));
             var outbound = outbound();
             var observed = new CountDownLatch(1);
             var closed = new CountDownLatch(1);
