@@ -133,7 +133,8 @@ public final class ZLinkRequestFailureMapping {
         }
         return failure instanceof systems.zlink.framework.errors.ZLinkFrameworkException framework
                 ? outgoing(framework.kind(), causeCode(framework))
-                : outgoing(INTERNAL_FAILURE);
+                : outgoing(failure instanceof java.util.concurrent.CancellationException
+                        ? SHUTTING_DOWN : INTERNAL_FAILURE);
     }
 
     public static int[] outgoing(ZLinkFrameworkErrorKind kind, int causeCode) {

@@ -48,8 +48,8 @@ final class ZLinkJavaActorAuthorityFailureTest {
         verifyFailure(new IllegalStateException("authority provider failed"), pair[0], pair[1]);
     }
 
-    @Test void cancellationRetainsExceptionalFailureAndNextMessageIsChecked() throws Exception {
-        int[] pair = ZLinkRequestFailureMapping.outgoing(ZLinkFrameworkErrorKind.INTERNAL_FAILURE);
+    @Test void cancellationUsesTerminatedAndNextMessageIsChecked() throws Exception {
+        int[] pair = ZLinkRequestFailureMapping.outgoing(ZLinkFrameworkErrorKind.SHUTTING_DOWN);
         verifyFailure(new CancellationException("authority provider cancelled"), pair[0], pair[1]);
     }
 
@@ -65,7 +65,7 @@ final class ZLinkJavaActorAuthorityFailureTest {
     }
 
     @Test void synchronousCancellationUsesTheSameMessageTerminal() throws Exception {
-        int[] pair = ZLinkRequestFailureMapping.outgoing(ZLinkFrameworkErrorKind.INTERNAL_FAILURE);
+        int[] pair = ZLinkRequestFailureMapping.outgoing(ZLinkFrameworkErrorKind.SHUTTING_DOWN);
         verifyFailure(new CancellationException("synchronous authority cancelled"), pair[0], pair[1], true);
     }
 
