@@ -198,11 +198,11 @@ void application_dispatch_terminal_owner_t::settle () noexcept
 
     invoke (_complete_stateful_dispatch);
     invoke (_release_mailbox_reservation);
-    if (const auto node = _node.lock ())
-        node->application_work_finished ();
-
+    const auto node = _node.lock ();
     _complete_stateful_dispatch = {};
     _release_mailbox_reservation = {};
+    if (node)
+        node->application_work_finished ();
     _node.reset ();
 }
 
@@ -1931,8 +1931,8 @@ auto mesh_node_host_service_t::make_application_owner_work (
        services = _services, serializers = _serializers, filters = _filters,
        failures = _runtime_failures, options = _dispatch_options] (bool reject_only) {
           detail::ambient_context_scope_t infrastructure (nullptr, nullptr, {}, false, true);
-          auto pending = drain_application_owner (
-            node, registration, owner, reject_only, services, serializers, filters, options);
+          auto pending = drain_application_owner (node, registration, owner, reject_only, services,
+                                                  serializers, filters, options);
           detail::observe_task_terminal (pending, [failures] (const result_t<void> &result) {
               failures->capture ([&] { result.value (); });
           });
@@ -3528,19 +3528,20 @@ task_t<void> mesh_node_host_service_t::drain_application_owner (
         co_return;
     const auto deadline = std::chrono::steady_clock::now () + dispatch_limits::owner_time_budget;
     try {
-        const std::function<std::optional<task_t<result_t<void>>> (
-          const host::ready_record_t &, const host::receive_record_t &,
-          std::vector<zlink::message_t>)>
+        const std::function<std::optional<task_t<result_t<void>>> (const host::ready_record_t &,
+                                                                   const host::receive_record_t &,
+                                                                   std::vector<zlink::message_t>)>
           dispatch = [&] (const host::ready_record_t &ready, const host::receive_record_t &record,
                           std::vector<zlink::message_t> parts) {
               return dispatch_application (node, registration, ready, record, std::move (parts),
-                                    reject_only, services, serializers, filters, dispatch_options);
+                                           reject_only, services, serializers, filters,
+                                           dispatch_options);
           };
         const std::function<void ()> started = [&node] { node->application_work_started (); };
         const std::function<void ()> rejected = [&node] { node->application_work_finished (); };
         for (;;) {
-            auto result = node->native_node ().dispatch_application_owner (
-              owner, dispatch, started, rejected);
+            auto result =
+              node->native_node ().dispatch_application_owner (owner, dispatch, started, rejected);
             if (const auto ready = std::get_if<bool> (&result)) {
                 if (!*ready)
                     break;
