@@ -33,6 +33,43 @@ import java.util.function.BiFunction;
 import java.util.function.Function;
 
 final class ZLinkSpotActivationFactory {
+    private static final java.util.Set<Class<?>> SPOT_SERVICES = java.util.Set.of(ZLinkSpotContext.class);
+    private static final java.util.Set<Class<?>> ENTRY_SERVICES = java.util.Set.of(ZLinkEntrySpotContext.class);
+    private static final java.util.Set<Class<?>> INSTANCE_SERVICES = java.util.Set.of(ZLinkInstanceSpotContext.class);
+
+    static java.util.Set<Class<?>> prepareConstruction(
+            systems.zlink.framework.runtime.configuration.ZLinkFrameworkRegistration registration,
+            ZLinkHandlerActivator handlerFactory) {
+        java.util.Set<Class<?>> prepared = new java.util.HashSet<>();
+        for (var node : registration.spotNodes()) {
+            prepareTypes(node.spotFactories(), SPOT_SERVICES, handlerFactory, prepared);
+            prepareTypes(node.entrySpots(), ENTRY_SERVICES, handlerFactory, prepared);
+        }
+        for (var node : registration.meshNodes()) {
+            prepareTypes(node.spotFactories(), SPOT_SERVICES, handlerFactory, prepared);
+            prepareTypes(node.entrySpots(), ENTRY_SERVICES, handlerFactory, prepared);
+            for (var factory : node.relocatableInstanceSpotFactories().values()) {
+                prepareTypes(java.util.List.of(factory.spotType()), INSTANCE_SERVICES, handlerFactory, prepared);
+            }
+        }
+        return java.util.Set.copyOf(prepared);
+    }
+
+    private static void prepareTypes(Iterable<? extends Class<?>> types, java.util.Set<Class<?>> services,
+            ZLinkHandlerActivator handlerFactory, java.util.Set<Class<?>> prepared) {
+        for (Class<?> type : types) {
+            handlerFactory.prepareConstruction(type, services);
+            prepared.add(type);
+        }
+    }
+
+    private ZLinkHandlerActivator.MutableServices activationServices(
+            java.util.Set<Class<?>> keys, Object context) {
+        var services = ZLinkHandlerActivator.services(handlerFactory);
+        keys.forEach(key -> services.add(key, context));
+        return services;
+    }
+
     private final ZLinkSpotRuntime host;
     private final ZLinkWorkerPool workerPool;
     private final ZLinkSpotHandlerLoader handlerLoader;
@@ -346,8 +383,7 @@ final class ZLinkSpotActivationFactory {
                     try {
                         spot =
                                 (ZLinkInstanceSpot)
-                                        ZLinkHandlerActivator.services(handlerFactory)
-                                                .add(ZLinkInstanceSpotContext.class, context)
+                                        activationServices(INSTANCE_SERVICES, context)
                                                 .create(spotType);
                     } catch (RuntimeException error) {
                         throw new ZLinkConfigurationException(
@@ -522,8 +558,7 @@ final class ZLinkSpotActivationFactory {
             Class<? extends ZLinkSpot<?>> spotType, ZLinkSpotContext context) {
         try {
             return (ZLinkSpot<?>)
-                    ZLinkHandlerActivator.services(handlerFactory)
-                            .add(ZLinkSpotContext.class, context)
+                    activationServices(SPOT_SERVICES, context)
                             .create(spotType);
         } catch (RuntimeException error) {
             throw new ZLinkConfigurationException(
@@ -535,8 +570,7 @@ final class ZLinkSpotActivationFactory {
             Class<? extends ZLinkEntrySpot<?>> entrySpotType, ZLinkEntrySpotContext context) {
         try {
             return (ZLinkEntrySpot<?>)
-                    ZLinkHandlerActivator.services(handlerFactory)
-                            .add(ZLinkEntrySpotContext.class, context)
+                    activationServices(ENTRY_SERVICES, context)
                             .create(entrySpotType);
         } catch (RuntimeException error) {
             throw new ZLinkConfigurationException(

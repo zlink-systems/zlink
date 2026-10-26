@@ -18,14 +18,385 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Scope;
 
+import systems.zlink.framework.ZLinkHandlerFilter;
+import systems.zlink.framework.ZLinkHandlerFilterContext;
+import systems.zlink.framework.ZLinkHandlerFilterNext;
+import systems.zlink.framework.ZLinkMessageContext;
+import systems.zlink.framework.channels.ZLinkClient;
+import systems.zlink.framework.channels.ZLinkRequestHandler;
+import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
+import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerInstanceOwner;
 
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicInteger;
 
 final class ZLinkSpringHandlerFactoryTest {
+    @Test
+    void explicitActorFactoryResultRemainsASpringBeanWithoutConstructorValidation() {
+        var options = new systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions();
+        var node = options.addRouteMesh("factory.mesh");
+        node.objects().server().addActorFactory("factory.actor",
+                ZLinkFrameworkAutoConfigurationTest.InjectedPlayerActor.class,
+                ZLinkFrameworkAutoConfigurationTest.InjectedPlayerActorFactory.class,
+                factory -> factory.disableRelocation());
+        var resultType = ZLinkFrameworkAutoConfigurationTest.InjectedPlayerActor.class;
+        assertTrue(options.registration().applicationTypes().contains(resultType));
+        org.junit.jupiter.api.Assertions.assertFalse(options.registration().constructionTypes().contains(resultType));
+        assertTrue(options.registration().constructionTypes().contains(
+                ZLinkFrameworkAutoConfigurationTest.InjectedPlayerActorFactory.class));
+        var beans = new DefaultListableBeanFactory();
+        ZLinkApplicationBeanRegistrar.register(beans, beans, options);
+        assertEquals(1, beans.getBeanNamesForType(resultType, true, false).length);
+    }
+
+    @Test
+    void preparedSpringConstructionAcceptsAnotherActivationImplementation() {
+        var factory = new ZLinkSpringHandlerFactory(new DefaultListableBeanFactory());
+        var plan = factory.prepareConstruction(SpringCatalogHandler.class, java.util.Set.of(FieldDependency.class));
+        var dependency = new FieldDependency("external");
+        try (var activation = ZLinkHandlerActivator.reflection().openActivation()) {
+            var handler = (SpringCatalogHandler) plan.create(activation, type -> dependency);
+            assertSame(dependency, handler.dependency);
+        }
+    }
+
+    @Test
+    void packetHandlerReceivesRuntimeSessionContextAndProcessesPacket() throws Exception {
+        var backend = new systems.zlink.framework.testkit.FakeZLinkBackendAdapterFactory();
+        ContextPacketHandler.handled = new CompletableFuture<>();
+        try (var context = new AnnotationConfigApplicationContext()) {
+            context.registerBean(systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdapterProvider.class,
+                    () -> backend);
+            context.registerBean(ZLinkFrameworkConfigurer.class, () -> options -> {
+                var stream = options.addStreamNode("context.stream");
+                stream.bind("inproc://context-stream");
+                stream.registerSession(ContextSession.class);
+                stream.addSessionPacketHandler(ContextPacketHandler.class);
+            });
+            context.register(ChannelConfig.class, ZLinkFrameworkAutoConfiguration.class);
+            context.refresh();
+            backend.dispatchStreamPacket("context.packet", systems.zlink.contracts.messaging.Message.from(
+                    "{\"value\":\"payload\"}".getBytes(java.nio.charset.StandardCharsets.UTF_8)),
+                    systems.zlink.framework.streams.ZLinkStreamCodec.JSON);
+            assertEquals("payload", ContextPacketHandler.handled.get(2, java.util.concurrent.TimeUnit.SECONDS));
+        }
+    }
+
+    public static final class ContextPacketHandler {
+        static CompletableFuture<String> handled;
+        private final systems.zlink.framework.streams.ZLinkSessionContext context;
+        public ContextPacketHandler(systems.zlink.framework.streams.ZLinkSessionContext context) {
+            this.context = context;
+        }
+        public Class<ContextPacket> messageType() { return ContextPacket.class; }
+        public String packetName() { return "context.packet"; }
+        @systems.zlink.framework.handlers.ZLinkStreamPacket
+        public CompletionStage<Void> handle(systems.zlink.framework.streams.ZLinkSessionContext context,
+                systems.zlink.framework.streams.ZLinkSessionDispatchContext dispatch, ContextPacket packet) {
+            assertSame(this.context, context);
+            handled.complete(packet.value());
+            return CompletableFuture.completedFuture(null);
+        }
+    }
+
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    public static final class ContextSession implements systems.zlink.framework.streams.ZLinkSession {
+        private final systems.zlink.framework.streams.ZLinkSessionContext context;
+        private final systems.zlink.framework.streams.ZLinkSessionPacketDispatcher dispatcher;
+        public ContextSession(systems.zlink.framework.streams.ZLinkSessionContext context,
+                systems.zlink.framework.streams.ZLinkSessionPacketDispatcher dispatcher) {
+            this.context = context;
+            this.dispatcher = dispatcher;
+        }
+        public systems.zlink.framework.streams.ZLinkSessionContext context() { return context; }
+        public CompletionStage<Void> onConnected() { return CompletableFuture.completedFuture(null); }
+        public CompletionStage<Void> onDisconnected() { return CompletableFuture.completedFuture(null); }
+        public CompletionStage<Void> onError(systems.zlink.framework.streams.ZLinkStreamError error) {
+            return CompletableFuture.completedFuture(null);
+        }
+        public CompletionStage<Void> onDispatch(systems.zlink.framework.streams.ZLinkSessionDispatchContext dispatch,
+                systems.zlink.framework.messaging.ZLinkMessage payload) {
+            return dispatcher.tryHandle(context, dispatch, payload).thenApply(ignored -> null);
+        }
+    }
+
+    @systems.zlink.framework.handlers.ZLinkPacket("context.packet")
+    public record ContextPacket(String value) {}
+
+    @Test
+    void spotReceivesRuntimeContextAndActivatesInSpring() throws Exception {
+        ContextSpot.activated = new CompletableFuture<>();
+        try (var context = new AnnotationConfigApplicationContext()) {
+            context.registerBean(systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdapterProvider.class,
+                    systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory::new);
+            context.registerBean(ZLinkFrameworkConfigurer.class, () -> options -> {
+                options.addLocationStore(new systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore());
+                var mesh = options.addRouteMesh("context.mesh");
+                mesh.listen("inproc://context-spot");
+                mesh.channelName("context.mesh").server();
+                mesh.objects().server().addSpotFactory("context.spot", ContextSpot.class,
+                        factory -> factory.disableRelocation());
+            });
+            context.register(ChannelConfig.class, ZLinkFrameworkAutoConfiguration.class);
+            context.refresh();
+            context.getBean(systems.zlink.framework.spots.ZLinkSpotManager.class)
+                    .create("context.spot").inMesh("context.mesh").submit().toCompletableFuture().join();
+            org.junit.jupiter.api.Assertions.assertNotNull(
+                    ContextSpot.activated.get(2, java.util.concurrent.TimeUnit.SECONDS));
+        }
+    }
+
+    public static final class ContextSpot implements
+            systems.zlink.framework.spots.ZLinkSpot<systems.zlink.framework.actors.ZLinkActor> {
+        static CompletableFuture<systems.zlink.framework.spots.ZLinkSpotContext> activated;
+        private final systems.zlink.framework.spots.ZLinkSpotContext context;
+        public ContextSpot(systems.zlink.framework.spots.ZLinkSpotContext context) { this.context = context; }
+        public systems.zlink.framework.spots.ZLinkSpotContext context() { return context; }
+        public CompletionStage<Void> onInitialize() {
+            activated.complete(context);
+            return CompletableFuture.completedFuture(null);
+        }
+        public CompletionStage<Void> onJoinedActor(systems.zlink.framework.actors.ZLinkActor actor) {
+            return CompletableFuture.completedFuture(null);
+        }
+        public CompletionStage<Void> onLeaveActor(systems.zlink.framework.actors.ZLinkActor actor) {
+            return CompletableFuture.completedFuture(null);
+        }
+    }
+
+    @Test
+    void aSharedSpringFactoryKeepsRegistrationCatalogPlansSeparate() {
+        var factory = new ZLinkSpringHandlerFactory(new DefaultListableBeanFactory());
+        var first = ZLinkHandlerActivator.services(factory);
+        var second = ZLinkHandlerActivator.services(factory);
+        var dependency = new FieldDependency("runtime");
+        first.add(FieldDependency.class, dependency);
+        first.prepare(SpringCatalogHandler.class);
+        second.prepare(SpringCatalogHandler.class);
+        try (var activation = first.openActivation()) {
+            assertSame(dependency, ((SpringCatalogHandler) activation.create(SpringCatalogHandler.class)).dependency);
+        }
+        try (var activation = second.openActivation()) {
+            org.junit.jupiter.api.Assertions.assertNull(
+                    ((SpringCatalogHandler) activation.create(SpringCatalogHandler.class)).dependency);
+        }
+    }
+
+    public static final class SpringCatalogHandler {
+        final FieldDependency dependency;
+        public SpringCatalogHandler(FieldDependency dependency) { this.dependency = dependency; }
+        public SpringCatalogHandler() { dependency = null; }
+    }
+
+    @Test
+    void frameworkServicesAreAvailableWhenCompilingTheStartupPlan() {
+        try (var context = channelContext(new CountingBeanFactory(), RuntimeHandler.class, null)) {
+            assertEquals("reply", reply(context));
+        }
+    }
+
+    public static final class RuntimeHandler
+            implements ZLinkRequestHandler<String, String> {
+        public RuntimeHandler(ZLinkFrameworkRuntime runtime) {
+            org.junit.jupiter.api.Assertions.assertNotNull(runtime);
+        }
+        public CompletionStage<String> handle(
+                String request, ZLinkMessageContext context) {
+            return CompletableFuture.completedFuture("reply");
+        }
+    }
+
+    @Test
+    void preparedChannelConstructionNeverQueriesRejectedDependencies() {
+        var beans = new CountingBeanFactory();
+        try (var context = channelContext(beans, PlannedHandler.class, PlannedFilter.class)) {
+            PlannedHandler.calls.set(0);
+            PlannedFilter.calls.set(0);
+            beans.missingSearches.set(0);
+            ScopedDependency previous = null;
+            for (int index = 0; index < 3; index++) {
+                assertEquals("reply", reply(context));
+                assertSame(PlannedHandler.dependency, PlannedFilter.dependency);
+                if (previous != null) assertNotSame(previous, PlannedHandler.dependency);
+                previous = PlannedHandler.dependency;
+            }
+            assertEquals(3, PlannedHandler.calls.get());
+            assertEquals(3, PlannedFilter.calls.get());
+            assertEquals(0, beans.missingSearches.get());
+        }
+    }
+
+    @Test
+    void constructorBodyFailureDoesNotExecuteAnAlternativeConstructor() {
+        ThrowingHandler.alternatives.set(0);
+        try (var context = channelContext(new CountingBeanFactory(), ThrowingHandler.class, null)) {
+            org.junit.jupiter.api.Assertions.assertThrows(
+                    CompletionException.class, () -> reply(context));
+            assertEquals(0, ThrowingHandler.alternatives.get());
+        }
+    }
+
+    @Test
+    void filterConstructorFailureDoesNotExecuteAnAlternativeConstructor() {
+        ThrowingFilter.alternatives.set(0);
+        try (var context = channelContext(new CountingBeanFactory(), PlannedHandler.class, ThrowingFilter.class)) {
+            org.junit.jupiter.api.Assertions.assertThrows(
+                    CompletionException.class, () -> reply(context));
+            assertEquals(0, ThrowingFilter.alternatives.get());
+        }
+    }
+
+    @Test
+    void ambiguousConstructorFailsHostStartupWithoutCreatingPrototypeDependencies() {
+        ScopedDependency.instances.set(0);
+        org.junit.jupiter.api.Assertions.assertThrows(
+                org.springframework.context.ApplicationContextException.class,
+                () -> {
+                    try (var ignored = channelContext(
+                            new CountingBeanFactory(), AmbiguousHandler.class, null)) {}
+                });
+        assertEquals(0, ScopedDependency.instances.get());
+    }
+
+    public static final class ThrowingFilter implements ZLinkHandlerFilter {
+        static final AtomicInteger alternatives = new AtomicInteger();
+        public ThrowingFilter(@Qualifier("selected") ScopedDependency dependency) {
+            throw new IllegalStateException("filter constructor body failed");
+        }
+        public ThrowingFilter() { alternatives.incrementAndGet(); }
+        public <T> CompletionStage<T> invoke(
+                ZLinkHandlerFilterContext context,
+                ZLinkHandlerFilterNext<T> next) {
+            return next.invoke();
+        }
+    }
+
+    public static final class AmbiguousHandler
+            implements ZLinkRequestHandler<String, String> {
+        public AmbiguousHandler(ScopedDependency dependency) {
+            throw new AssertionError("Ambiguous handler constructor executed");
+        }
+        public CompletionStage<String> handle(
+                String request, ZLinkMessageContext context) {
+            return CompletableFuture.completedFuture("reply");
+        }
+    }
+
+    @Test
+    void unavailableConstructorFailsHostStartupWithoutConstructingAnything() {
+        UnavailableHandler.calls.set(0);
+        ScopedDependency.instances.set(0);
+        org.junit.jupiter.api.Assertions.assertThrows(
+                org.springframework.context.ApplicationContextException.class,
+                () -> {
+                    try (var ignored = channelContext(
+                            new CountingBeanFactory(), UnavailableHandler.class, null)) {}
+                });
+        assertEquals(0, UnavailableHandler.calls.get());
+        assertEquals(0, ScopedDependency.instances.get());
+    }
+
+    private static AnnotationConfigApplicationContext channelContext(
+            CountingBeanFactory beans,
+            Class<? extends ZLinkRequestHandler<String, String>> handler,
+            Class<?> filter) {
+        var context = new AnnotationConfigApplicationContext(beans);
+        context.register(ShortcutConfig.class, ChannelConfig.class);
+        context.registerBean(ZLinkFrameworkConfigurer.class, () -> options -> {
+            if (filter != null) options.useFilter(filter.asSubclass(
+                    ZLinkHandlerFilter.class));
+            var channel = options.addClientServerChannel("construction");
+            channel.client();
+            channel.server().listen().addRequestHandler(handler, String.class, String.class);
+        });
+        context.register(ZLinkFrameworkAutoConfiguration.class);
+        try {
+            context.refresh();
+            return context;
+        } catch (RuntimeException failure) {
+            context.close();
+            throw failure;
+        }
+    }
+
+    @Configuration
+    @EnableZLinkFramework
+    static class ChannelConfig {}
+
+    private static String reply(AnnotationConfigApplicationContext context) {
+        return context.getBean(ZLinkClient.class)
+                .requestToChannel("construction", "request").submit(String.class)
+                .toCompletableFuture().join();
+    }
+
+    public static final class PlannedHandler
+            implements ZLinkRequestHandler<String, String> {
+        static final AtomicInteger calls = new AtomicInteger();
+        static ScopedDependency dependency;
+        public PlannedHandler(MissingDependency missing,
+                @Qualifier("selected") ScopedDependency value) {
+            throw new AssertionError("Rejected constructor executed");
+        }
+        public PlannedHandler(@Qualifier("selected") ScopedDependency value) {
+            calls.incrementAndGet();
+            dependency = value;
+        }
+        public CompletionStage<String> handle(
+                String request, ZLinkMessageContext context) {
+            return CompletableFuture.completedFuture("reply");
+        }
+    }
+
+    public static final class PlannedFilter implements ZLinkHandlerFilter {
+        static final AtomicInteger calls = new AtomicInteger();
+        static ScopedDependency dependency;
+        public PlannedFilter(MissingDependency missing,
+                @Qualifier("selected") ScopedDependency value) {
+            throw new AssertionError("Rejected constructor executed");
+        }
+        public PlannedFilter(@Qualifier("selected") ScopedDependency value) {
+            calls.incrementAndGet();
+            dependency = value;
+        }
+        public <T> CompletionStage<T> invoke(
+                ZLinkHandlerFilterContext context,
+                ZLinkHandlerFilterNext<T> next) {
+            return next.invoke();
+        }
+    }
+
+    public static final class ThrowingHandler
+            implements ZLinkRequestHandler<String, String> {
+        static final AtomicInteger alternatives = new AtomicInteger();
+        public ThrowingHandler(@Qualifier("selected") ScopedDependency dependency) {
+            throw new IllegalStateException("constructor body failed");
+        }
+        public ThrowingHandler() { alternatives.incrementAndGet(); }
+        public CompletionStage<String> handle(
+                String request, ZLinkMessageContext context) {
+            return CompletableFuture.completedFuture("reply");
+        }
+    }
+
+    public static final class UnavailableHandler
+            implements ZLinkRequestHandler<String, String> {
+        static final AtomicInteger calls = new AtomicInteger();
+        public UnavailableHandler(
+                @Qualifier("selected") ScopedDependency dependency, MissingDependency missing) {
+            calls.incrementAndGet();
+        }
+        public CompletionStage<String> handle(
+                String request, ZLinkMessageContext context) {
+            return CompletableFuture.completedFuture("reply");
+        }
+    }
+
     @Test
     void optionalServiceLookupPreservesCreationFailureAndReturnsNullOnlyForAbsence() {
         var beans = new DefaultListableBeanFactory();
@@ -275,11 +646,13 @@ final class ZLinkSpringHandlerFactoryTest {
 
     static final class CountingBeanFactory extends DefaultListableBeanFactory {
         private final AtomicInteger candidateSearches = new AtomicInteger();
+        private final AtomicInteger missingSearches = new AtomicInteger();
 
         @Override
         protected Map<String, Object> findAutowireCandidates(
                 String beanName, Class<?> requiredType, DependencyDescriptor descriptor) {
             candidateSearches.incrementAndGet();
+            if (requiredType == MissingDependency.class) missingSearches.incrementAndGet();
             return super.findAutowireCandidates(beanName, requiredType, descriptor);
         }
 

@@ -23,7 +23,7 @@ final class SpringStartupDependencyMetadataTest {
                     NoSuchBeanDefinitionException.class,
                     () ->
                             new ZLinkSpringHandlerFactory(context.getBeanFactory())
-                                    .prepare(RequiredSpot.class));
+                                    .prepareConstruction(RequiredSpot.class, java.util.Set.of(ZLinkSpotContext.class)));
         }
     }
 
@@ -34,7 +34,7 @@ final class SpringStartupDependencyMetadataTest {
             assertDoesNotThrow(
                     () ->
                             new ZLinkSpringHandlerFactory(context.getBeanFactory())
-                                    .prepare(OptionalSpot.class));
+                                    .prepareConstruction(OptionalSpot.class, java.util.Set.of(ZLinkSpotContext.class)));
         }
     }
 
@@ -56,9 +56,9 @@ final class SpringStartupDependencyMetadataTest {
             var factory = new ZLinkSpringHandlerFactory(context.getBeanFactory());
             assertThrows(
                     NoUniqueBeanDefinitionException.class,
-                    () -> factory.prepare(RequiredSpot.class));
-            assertDoesNotThrow(() -> factory.prepare(QualifiedSpot.class));
-            assertDoesNotThrow(() -> factory.prepare(NamedSpot.class));
+                    () -> factory.prepareConstruction(RequiredSpot.class, java.util.Set.of(ZLinkSpotContext.class)));
+            assertDoesNotThrow(() -> factory.prepareConstruction(QualifiedSpot.class, java.util.Set.of(ZLinkSpotContext.class)));
+            assertDoesNotThrow(() -> factory.prepareConstruction(NamedSpot.class, java.util.Set.of(ZLinkSpotContext.class)));
             assertEquals(0, created.get());
         }
     }
