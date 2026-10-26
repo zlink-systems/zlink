@@ -33,10 +33,19 @@ final class ZLinkSessionPacketDispatcherRuntime<TSessionContext extends ZLinkSes
             ZLinkMessageSerializer serializer,
             Executor handlerExecutor,
             List<ZLinkSuspendInvocationAdapter> suspendHandlerInvokers) {
-        Objects.requireNonNull(serializer, "serializer");
-        this.handlers =
-                buildHandlerMap(handlerTypes, handlerFactory, serializer, suspendHandlerInvokers);
+        this(handlerExecutor);
+        initializeHandlers(handlerTypes, handlerFactory, serializer, suspendHandlerInvokers);
+    }
+
+    ZLinkSessionPacketDispatcherRuntime(Executor handlerExecutor) {
+        this.handlers = new HashMap<>();
         this.handlerExecutor = Objects.requireNonNull(handlerExecutor, "handlerExecutor");
+    }
+
+    void initializeHandlers(List<Class<?>> handlerTypes, ZLinkHandlerActivator handlerFactory,
+            ZLinkMessageSerializer serializer, List<ZLinkSuspendInvocationAdapter> suspendHandlerInvokers) {
+        Objects.requireNonNull(serializer, "serializer");
+        buildHandlerMap(handlers, handlerTypes, handlerFactory, serializer, suspendHandlerInvokers);
     }
 
     @Override
@@ -94,13 +103,12 @@ final class ZLinkSessionPacketDispatcherRuntime<TSessionContext extends ZLinkSes
         return result;
     }
 
-    private static <TSessionContext extends ZLinkSessionContext>
-            Map<String, Handler> buildHandlerMap(
+    private static void buildHandlerMap(
+                    Map<String, Handler> map,
                     List<Class<?>> handlerTypes,
                     ZLinkHandlerActivator handlerFactory,
                     ZLinkMessageSerializer serializer,
                     List<ZLinkSuspendInvocationAdapter> suspendInvokers) {
-        Map<String, Handler> map = new HashMap<>();
         for (Class<?> handlerType : handlerTypes) {
             Object handler = handlerFactory.create(handlerType);
             Class<?> messageType =
@@ -133,7 +141,6 @@ final class ZLinkSessionPacketDispatcherRuntime<TSessionContext extends ZLinkSes
                         "duplicate session packet handler '" + packetName + "' for stream node");
             }
         }
-        return Map.copyOf(map);
     }
 
     private static String packetName(Object handler) {
