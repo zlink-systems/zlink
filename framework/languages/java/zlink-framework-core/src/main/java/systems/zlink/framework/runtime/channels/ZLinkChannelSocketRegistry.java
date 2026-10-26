@@ -13,6 +13,7 @@ import systems.zlink.framework.locations.ZLinkLocationRole;
 import systems.zlink.framework.monitoring.ZLinkListenerKind;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
 import systems.zlink.framework.runtime.internal.ZLinkCompletionBridge;
+import systems.zlink.framework.runtime.internal.calls.ZLinkBlockingCalls;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendDealerSocket;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendObject;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendPublisherSocket;
@@ -68,6 +69,7 @@ final class ZLinkChannelSocketRegistry {
     private final ZLinkApplicationJobQueue applicationJobQueue;
 
     private final ZLinkStateLane stateLane = new ZLinkStateLane();
+
     private final Map<ZLinkBackendObject, ZLinkApplicationJobReceiveFlowController.Registration>
             receiveFlowRegistrations = new IdentityHashMap<>();
     private final Map<String, ZLinkBackendDealerSocket> clients = new HashMap<>();
@@ -100,6 +102,11 @@ final class ZLinkChannelSocketRegistry {
     // reason as the .NET ClientServer client ControlReceivePollInterval.
     private static final Duration CLIENT_SERVER_CONTROL_RECEIVE_WAIT = Duration.ofMillis(100);
     private volatile BiConsumer<String, Throwable> clientServerReceiveFailures = (channel, f) -> {};
+
+
+    ZLinkStateLane operationLane() {
+        return stateLane;
+    }
 
     ZLinkChannelSocketRegistry() {
         this(null);
@@ -554,13 +561,11 @@ final class ZLinkChannelSocketRegistry {
                     ChannelRegistration registration = registrations.get(channelName);
                     if (registration != null && registration.kind() == ChannelKind.ROUTE_MESH) {
                         var bridge = requireSpotRouteBridgeCore(channelName, bridgeOwner);
-                        var submitted =
-                                bridgeSubmit.apply(
-                                        bridge,
-                                        systems.zlink.framework.runtime.internal.calls
-                                                .ZLinkRequestCalls.remainingTimeout(
-                                                timeout, started, requestNanoTime.getAsLong()));
-                        return () -> submitted;
+                        return () -> bridgeSubmit.apply(
+                                bridge,
+                                systems.zlink.framework.runtime.internal.calls
+                                        .ZLinkRequestCalls.remainingTimeout(
+                                        timeout, started, requestNanoTime.getAsLong()));
                     }
                     ZLinkInternalSpotNode node = spotRouterNodes.get(channelName);
                     if (node != null) {
@@ -601,6 +606,9 @@ final class ZLinkChannelSocketRegistry {
         return () -> {
             if (owner.isOnLane()) return submission.get();
             var flow = ZLinkFlowContext.current();
+            if (!ZLinkBlockingCalls.isRuntimeExecutionContext()) {
+                return owner.awaitTurn(() -> ZLinkFlowContext.call(flow, submission));
+            }
             return owner.runAsync(() -> ZLinkFlowContext.call(flow, submission))
                     .thenCompose(stage -> stage);
         };

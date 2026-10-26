@@ -39,8 +39,10 @@ final class ZLinkNodeOperationOwnerTest {
                 assertTrue(entered.await(1, TimeUnit.SECONDS));
                 var nodeA = node(registryA, a, () -> CompletableFuture.completedFuture(reply()));
                 var nodeB = node(registryB, b, () -> CompletableFuture.completedFuture(reply()));
-                var pendingA = calls.requestNode(UUID.randomUUID(), nodeA, TARGET, new byte[0],
-                        List.of(), TIMEOUT, new CompletableFuture<>());
+                var pendingA = new ZLinkStateLane().runAsync(() ->
+                        calls.requestNode(UUID.randomUUID(), nodeA, TARGET, new byte[0],
+                                List.of(), TIMEOUT, new CompletableFuture<>()))
+                        .toCompletableFuture().get(1, TimeUnit.SECONDS);
                 var completedB = calls.requestNode(UUID.randomUUID(), nodeB, TARGET, new byte[0],
                         List.of(), TIMEOUT, new CompletableFuture<>());
                 completedB.toCompletableFuture().get(1, TimeUnit.SECONDS).close();

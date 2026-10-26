@@ -96,7 +96,7 @@ final class ZLinkJavaMeshNodeIsolationTest {
                                             return null;
                                         })
                                 .toCompletableFuture();
-                var submissionReturned = new CompletableFuture<Void>();
+                var submissionStarted = new CompletableFuture<Void>();
                 CompletableFuture<Void> sending = null;
                 try {
                     if (!entered.await(GUARD.toMillis(), TimeUnit.MILLISECONDS))
@@ -104,14 +104,14 @@ final class ZLinkJavaMeshNodeIsolationTest {
                     sending =
                             CompletableFuture.runAsync(
                                     () -> {
+                                        submissionStarted.complete(null);
                                         var admitted = source.route()
                                                 .sendToNode(MESH_A, TARGET, new Probe("load"))
                                                 .submit();
-                                        submissionReturned.complete(null);
                                         admitted.toCompletableFuture().join();
                                     },
                                     callers);
-                    submissionReturned.get(GUARD.toMillis(), TimeUnit.MILLISECONDS);
+                    submissionStarted.get(GUARD.toMillis(), TimeUnit.MILLISECONDS);
                     var forward =
                             CompletableFuture.supplyAsync(
                                     () -> request(source, TARGET, "forward").join(), callers);

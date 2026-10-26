@@ -1,6 +1,7 @@
 package systems.zlink.framework.runtime.internal.service;
 
 import systems.zlink.framework.runtime.internal.ZLinkCompletionBridge;
+import systems.zlink.framework.runtime.internal.calls.ZLinkBlockingCalls;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkReceiveBatchBudget;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
@@ -99,6 +100,13 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
                 closeFailure, () -> new TimeoutException("service operation timed out"), System::nanoTime);
     }
 
+    public ZLinkServiceOperationRegistry(
+            ZLinkStateLane owner, Throwable closeFailure,
+            Supplier<? extends Throwable> timeoutFailure, LongSupplier nanoTime) {
+        this(owner, Thread.ofVirtual().name("zlink-jvm-operation-maintenance").factory(),
+                closeFailure, timeoutFailure, nanoTime);
+    }
+
     private ZLinkServiceOperationRegistry(
             ZLinkStateLane owner, ThreadFactory maintenanceFactory, Throwable closeFailure,
             Supplier<? extends Throwable> timeoutFailure, LongSupplier nanoTime) {
@@ -151,7 +159,7 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
                 completeExceptionally(id, failure);
             }
             return true;
-        }).whenComplete((accepted, failure) -> {
+        }, true).whenComplete((accepted, failure) -> {
             if (failure != null) ZLinkServiceCompletionDispatcher.deliver(
                     CompletableFuture.failedStage(failure), completion);
         });
@@ -160,6 +168,10 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
     }
 
     private <T> CompletionStage<T> submitOwnerTurn(Supplier<T> work) {
+        return submitOwnerTurn(work, false);
+    }
+
+    private <T> CompletionStage<T> submitOwnerTurn(Supplier<T> work, boolean submission) {
         if (owner.isOnLane()) {
             try {
                 return CompletableFuture.completedFuture(work.get());
@@ -168,6 +180,14 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
             }
         }
         var flow = ZLinkFlowContext.current();
+        if (submission && !ZLinkBlockingCalls.isRuntimeExecutionContext()) {
+            try {
+                return CompletableFuture.completedFuture(
+                        owner.awaitTurn(() -> ZLinkFlowContext.call(flow, work)));
+            } catch (RuntimeException | Error failure) {
+                return CompletableFuture.failedStage(failure);
+            }
+        }
         return owner.runAsync(() -> ZLinkFlowContext.call(flow, work));
     }
 
@@ -237,7 +257,7 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
             });
             submitOnOwner(id, submission, discardValue, completion);
             return true;
-        });
+        }, true);
         registration.whenComplete((accepted, failure) -> {
             if (failure != null) ZLinkServiceCompletionDispatcher.deliver(
                     CompletableFuture.failedStage(failure), completion);

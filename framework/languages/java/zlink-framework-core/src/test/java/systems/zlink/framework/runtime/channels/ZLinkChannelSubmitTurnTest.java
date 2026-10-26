@@ -198,9 +198,9 @@ final class ZLinkChannelSubmitTurnTest {
                     // Hot-path §3 separates selector and operation turns. Replacing
                     // the registration must progress while the selected owner is busy.
                     replacement.get(5, TimeUnit.SECONDS);
-                    CompletionStage<?> completion = submission.get(5, TimeUnit.SECONDS);
-                    assertFalse(completion.toCompletableFuture().isDone());
+                    assertFalse(submission.isDone(), "application caller waits for E4 to return");
                     releaseBinding.countDown();
+                    CompletionStage<?> completion = submission.get(5, TimeUnit.SECONDS);
                     if (request) assertTerminal(completion);
                     else completion.toCompletableFuture().join();
                     assertTerminal(f.request().submit(String.class));

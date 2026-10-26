@@ -16,6 +16,7 @@ import systems.zlink.framework.locations.ZLinkMeshNodeObjectRole;
 import systems.zlink.framework.runtime.channels.ZLinkChannelContentTypeFrame;
 import systems.zlink.framework.runtime.diagnostics.ZLinkDispatchErrorReporter;
 import systems.zlink.framework.runtime.internal.ZLinkCompletionBridge;
+import systems.zlink.framework.runtime.internal.calls.ZLinkBlockingCalls;
 import systems.zlink.framework.runtime.internal.calls.ZLinkRequestCalls;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
@@ -365,6 +366,9 @@ final class ZLinkJavaRawMeshNode
             java.util.function.Supplier<CompletionStage<T>> submission) {
         if (transportStateLane.isOnLane()) return submission.get();
         var flow = ZLinkFlowContext.current();
+        if (!ZLinkBlockingCalls.isRuntimeExecutionContext()) {
+            return transportStateLane.awaitTurn(() -> ZLinkFlowContext.call(flow, submission));
+        }
         return transportStateLane.runAsync(() -> ZLinkFlowContext.call(flow, submission))
                 .thenCompose(stage -> stage);
     }
