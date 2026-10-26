@@ -3276,16 +3276,8 @@ final class ZLinkJavaRawMeshNode
             java.util.function.Function<List<Message>, T> decodeReply,
             java.util.function.Consumer<T> discardReply,
             CompletableFuture<T> completion) {
+        long startedAt = System.nanoTime();
         ZLinkBackendActorRef actor = target.actor();
-        Optional<ZLinkServiceTopologyRegistry.Peer> peer =
-                topology == null ? Optional.empty() : topology.peerFromOwner(actor.nodeRid());
-        if (peer.isEmpty()) {
-            completion.completeExceptionally(
-                    new ZLinkFrameworkException(
-                            ZLinkFrameworkErrorKind.UNAVAILABLE,
-                            "remote Actor route is not connected"));
-            return;
-        }
         long correlation = allocateCorrelation();
         UUID operationId = UUID.randomUUID();
         RouterSocket current = requireStarted();
@@ -3300,9 +3292,37 @@ final class ZLinkJavaRawMeshNode
                                 0,
                                 null,
                                 target), null, parts);
-        port.requestMessages(current, actor.nodeRid(), frames, timeout,
-                replyFrames -> decodeReply.apply(decodeActorReply(correlation, replyFrames)),
-                discardReply, null, requestAdmission, completion);
+        try {
+            inSourceTurn(() -> {
+                Optional<ZLinkServiceTopologyRegistry.Peer> peer =
+                        topology == null ? Optional.empty() : topology.peerFromOwner(actor.nodeRid());
+                if (peer.isEmpty()) {
+                    completion.completeExceptionally(
+                            new ZLinkFrameworkException(
+                                    ZLinkFrameworkErrorKind.UNAVAILABLE,
+                                    "remote Actor route is not connected"));
+                    Message.closeAll(frames);
+                    return CompletableFuture.completedFuture(null);
+                }
+                Duration remaining = ZLinkRequestCalls.remainingTimeout(timeout, startedAt, System.nanoTime());
+                operations.submitTerminal(operationId, remaining,
+                        terminal -> port.requestMessagesTo(current, actor.nodeRid(), frames, remaining,
+                                replyFrames -> decodeReply.apply(decodeActorReply(correlation, replyFrames)),
+                                null, terminal, null, requestAdmission),
+                        discardReply, completion).whenComplete((accepted, failure) -> {
+                            if (failure != null || !accepted) Message.closeAll(frames);
+                        });
+                return CompletableFuture.<Void>completedFuture(null);
+            }).whenComplete((ignored, failure) -> {
+                if (failure != null) {
+                    Message.closeAll(frames);
+                    completion.completeExceptionally(failure);
+                }
+            });
+        } catch (RuntimeException | Error failure) {
+            Message.closeAll(frames);
+            throw failure;
+        }
     }
 
     CompletionStage<ZLinkServiceM6BWireCodec.BoundSessionBindReply> bindRemoteStreamSession(

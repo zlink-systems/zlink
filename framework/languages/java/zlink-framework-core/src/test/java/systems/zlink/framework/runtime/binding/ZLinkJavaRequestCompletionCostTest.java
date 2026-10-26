@@ -53,7 +53,7 @@ public final class ZLinkJavaRequestCompletionCostTest {
     }
 
     @Test
-    void actorRequestsLeavePhysicalRegistrationToBinding() throws Exception {
+    void actorRequestsRegisterFrameworkCompletionBeforeBindingSubmit() throws Exception {
         try (var fixture = new Fixture(false)) {
             var mesh = new ZLinkJavaRawMeshNode(fixture.context, "actor-completion");
             var meshOperations = (ZLinkServiceOperationRegistry) field(mesh, "operations");
@@ -72,13 +72,32 @@ public final class ZLinkJavaRequestCompletionCostTest {
                         .ZLinkServiceM6BWireCodec.ActorRouteFence(
                         new systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef(
                                 remote, "actor", 1), 1, 1, 1);
+                var result = new CompletableFuture<List<Message>>();
+                fixture.beforeSubmit = () -> {
+                    assertEquals(1, meshOperations.pendingCount(),
+                            "Framework entry and dispatcher slot must precede binding submit");
+                    try {
+                        var entries = (java.util.Map<?, ?>) field(meshOperations, "pending");
+                        var entry = entries.values().iterator().next();
+                        var registered = entry.getClass().getSuperclass().getDeclaredField("registered");
+                        registered.setAccessible(true);
+                        assertTrue(registered.getBoolean(entry), "dispatcher slot must precede submit");
+                        assertSame(result, field(entry, "completion"),
+                                "registry must dispatch straight to the final typed receiver");
+                    } catch (Exception failure) {
+                        throw new AssertionError(failure);
+                    }
+                };
                 var requestPart = Message.from(new byte[] {1});
                 try {
-                    var result = mesh.requestActor(target, List.of(requestPart), TIMEOUT,
-                            new CompletableFuture<>());
+                    var admission = new CompletableFuture<Void>();
+                    mesh.requestActor(target, List.of(requestPart), TIMEOUT,
+                            admission, java.util.function.Function.identity(),
+                            Message::closeAll, result);
+                    admission.get(1, TimeUnit.SECONDS);
                     assertEquals(1, fixture.submits.get());
-                    assertEquals(0, meshOperations.pendingCount(),
-                            "physical request must not register a second Framework operation");
+                    assertEquals(1, meshOperations.pendingCount(),
+                            "Framework completion must remain registered while the binding reply is pending");
                     // The binding submission captures the original wire correlation.
                     var wire = new systems.zlink.framework.runtime.internal.service
                             .ZLinkServiceM6AWireCodec();
@@ -462,6 +481,7 @@ public final class ZLinkJavaRequestCompletionCostTest {
         private final Context context;
         private final AtomicReference<List<Message>> submittedMessages = new AtomicReference<>();
         private final boolean backpressured;
+        private Runnable beforeSubmit = () -> {};
 
         private Fixture(boolean backpressured) {
             this.backpressured = backpressured;
@@ -508,6 +528,7 @@ public final class ZLinkJavaRequestCompletionCostTest {
 
                 @Override
                 public RequestSubmission submit() {
+                    beforeSubmit.run();
                     submittedMessages.set(List.copyOf(messages));
                     new BindingSubmitEvent().commit();
                     submits.incrementAndGet();
