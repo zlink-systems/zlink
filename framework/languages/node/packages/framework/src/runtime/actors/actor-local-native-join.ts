@@ -273,7 +273,11 @@ export class ZLinkLocalNativeActorJoin {
     // The operation ID identifies one Core request. Once it is submitted, a
     // NotConnected completion is terminal for that request; resubmitting it
     // could execute the target lifecycle twice after a delayed reply.
-    return submitJoinWhenConnected(() => completions.submit(submit, signal), timeoutMs, signal);
+    return submitJoinWhenConnected(
+      () => completions.submit(submit, signal).pending,
+      timeoutMs,
+      signal
+    );
   }
 
   private async relocateRemoteActorJoin(
