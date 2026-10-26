@@ -1002,7 +1002,9 @@ ZLINK_EXPORT zlink_config_result_t zlink_socket_connection_attempts_snapshot (
 **Core keeps the connection state and the latest failure result for each successful `zlink_connect()`
 registration (intent), and this function is the authoritative source of that fact.** One row is one
 successful `zlink_connect()` call (intent). Connecting to the same endpoint more than once gives more than
-one row, told apart by `intent_id`. Address resolution results and physical pipes or lanes don't split rows. Automatic reconnection of the same intent
+one row, told apart by `intent_id`. For an endpoint other than inproc, when a connection registration for the
+same endpoint string already exists, Core doesn't create a new physical connection; the new row shares that
+connection, and both rows follow its state and failures. Address resolution results and physical pipes or lanes don't split rows. Automatic reconnection of the same intent
 belongs to the same row's lifetime.
 
 - **State.** The row appears as `CONNECTING` before `zlink_connect()` returns success. When address
@@ -1029,7 +1031,8 @@ belongs to the same row's lifetime.
   `TIMED_OUT`/`CORE_HANDSHAKE`, and the end of a ready connection is `CONNECTION_LOST`/`ESTABLISHED`.
   `normalized_errno` and `disconnect_reason` are diagnostic, and bindings and upper layers don't reclassify
   the cause. IPC's `ENDPOINT_MISSING` differs from `ZLINK_CONNECT_NOT_FOUND`, which means there's no intent.
-- **Removal.** A successful `zlink_disconnect()` and a socket close remove the row. Removal isn't turned into a
+- **Removal.** A successful `zlink_disconnect()` and a socket close remove the row. `zlink_disconnect(endpoint)`
+  removes every row for that endpoint string and closes every connection those rows own. Removal isn't turned into a
   failure, and a late attempt result for a removed intent doesn't change a new intent's row. If
   `zlink_connect()` itself fails, no row is left.
 - **Query.** A snapshot returns every row as one consistent point-in-time value, independent of monitor

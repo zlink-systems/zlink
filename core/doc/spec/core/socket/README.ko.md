@@ -946,7 +946,9 @@ ZLINK_EXPORT zlink_config_result_t zlink_socket_connection_attempts_snapshot (
 
 **Core는 성공한 `zlink_connect()` 등록(intent)마다 연결 상태와 최근 실패 결과를 보존하고, 이 함수가
 그 사실의 정본이다.** 행 하나는 성공한 `zlink_connect()` 호출 하나(intent)다. 같은 endpoint로 여러 번
-connect하면 행도 여럿이며 `intent_id`로 구분한다. 주소 해석 결과나 physical pipe·lane은 행을 나누지 않는다. 같은 intent의 자동 재연결은 같은 행의
+connect하면 행도 여럿이며 `intent_id`로 구분한다. inproc가 아닌 endpoint는 같은 endpoint 문자열의 연결 등록이 이미
+있으면 새 physical 연결을 만들지 않고 새 행이 그 연결을 함께 쓴다. 두 행의 상태와 실패는 같은 연결을 따른다.
+주소 해석 결과나 physical pipe·lane은 행을 나누지 않는다. 같은 intent의 자동 재연결은 같은 행의
 수명에 속한다.
 
 - **상태.** 행은 `zlink_connect()`가 성공을 반환하기 전에 `CONNECTING`으로 생긴다. 주소 해석, transport
@@ -969,7 +971,8 @@ connect하면 행도 여럿이며 `intent_id`로 구분한다. 주소 해석 결
   `CONNECTION_LOST`·`ESTABLISHED`다. `normalized_errno`와 `disconnect_reason`은 진단용이며 binding과
   상위 계층은 원인을 다시 분류하지 않는다. IPC의 `ENDPOINT_MISSING`은 intent가 없다는 뜻의
   `ZLINK_CONNECT_NOT_FOUND`와 다르다.
-- **제거.** 성공한 `zlink_disconnect()`와 socket close는 행을 제거한다. 행 제거를 실패로 바꾸지 않으며,
+- **제거.** 성공한 `zlink_disconnect()`와 socket close는 행을 제거한다. `zlink_disconnect(endpoint)`는 그 endpoint
+  문자열의 행을 모두 제거하고 그 행들에 속한 연결을 모두 닫는다. 행 제거를 실패로 바꾸지 않으며,
   제거된 intent의 늦은 시도 결과는 새 intent의 행을 바꾸지 않는다. `zlink_connect()` 자체가 실패하면 행을
   남기지 않는다.
 - **조회.** Snapshot은 행 전체를 한 시점의 일관된 값으로 반환하며 monitor 생성·event 소비·monitor queue
