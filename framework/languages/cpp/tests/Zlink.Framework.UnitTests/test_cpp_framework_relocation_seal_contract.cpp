@@ -1964,6 +1964,94 @@ TEST (FrameworkRelocationSealContract, cut_local_exception_reports_original_caus
     host->close ();
 }
 
+void verify_cut_wire_authority_credit (std::exception_ptr error)
+{
+    using authority_t = std::optional<stateful::accepted_record_authority_t>;
+    task_completion_source_t<authority_t> authority;
+    auto host = std::make_shared<host::public_host_runtime_t> (
+      host::host_options_t{mesh::raw_mesh_node_options_t{
+        .descriptor = test_descriptor ("cut-wire-error"),
+        .runtime_failures = std::make_shared<runtime::runtime_failure_collector_t> ()}});
+    host->configure_stateful_dispatch ([&] (const auto &) { return authority.task (); });
+    const stateful::object_ref_t actor{
+      stateful::object_kind_t::actor, "cut-actor", 1, 1, "mesh", "source"};
+    const auto created = host->objects ().begin_reserved_object (actor, "actor", {});
+    ASSERT_EQ (host->objects ().commit_create (created.attempt), stateful::stateful_error_t::none);
+    mesh::service_mailbox_t mailbox;
+    mesh::service_mailbox_record_t original;
+    original.owner = "actor:cut-actor";
+    original.domain = mesh::service_mailbox_domain_t::application;
+    original.source_routing_id = {1};
+    original.source_node_generation = 1;
+    original.parts = detail::backend::materialize_binding_parts ({
+      protocol::encode_actor_message_header (
+        protocol::command::actorSend, std::nullopt,
+        protocol::actor_route_fence_t{actor.key, 1, {1}, 1, 1, 1}, {1, 1}),
+      protocol::encode_application_payload ({"cut", "application/json", {1}})});
+    ASSERT_TRUE (mailbox.try_enqueue (std::move (original)));
+    const auto claim = mailbox.try_claim_owner (
+      mesh::service_mailbox_domain_t::application, "actor:cut-actor", 1, 4096);
+    ASSERT_TRUE (claim);
+    auto taken = mailbox.take ({claim, 0});
+    ASSERT_TRUE (taken);
+    const auto credit = taken->transferred;
+    ASSERT_EQ (claim->outstanding (), 1u);
+    auto pending = host::public_host_runtime_test_access_t::ingest_cut (
+      *host, actor, std::move (*taken));
+    ASSERT_FALSE (pending.await_ready ());
+    EXPECT_EQ (claim->outstanding (), 1u);
+    std::exception_ptr observed;
+    task_completion_source_t<void> observation_completed;
+    detail::observe_task_terminal (pending, [&] (const auto &result) {
+        try { result.value (); }
+        catch (...) { observed = std::current_exception (); }
+        observation_completed.complete (result_t<void>::success ());
+    });
+    if (error)
+        authority.complete (detail::result_access_t::failure<authority_t> (error));
+    else
+        authority.complete (result_t<authority_t>::success (
+          stateful::accepted_record_authority_t{{"source", 1, {1}, 1}, 1}));
+    const auto terminal = pending.result ();
+    observation_completed.task ().result ().value ();
+    if (error) {
+        EXPECT_FALSE (terminal.has_value ());
+        EXPECT_EQ (observed, error);
+    } else {
+        ASSERT_TRUE (terminal.has_value ());
+        EXPECT_FALSE (observed);
+        EXPECT_EQ (claim->outstanding (), 1u);
+        auto &dispatch = host::public_host_runtime_test_access_t::dispatch (*host);
+        auto delivery = dispatch.try_claim (actor);
+        ASSERT_EQ (delivery.first, stateful::stateful_error_t::none);
+        ASSERT_TRUE (delivery.second);
+        EXPECT_EQ (claim->outstanding (), 1u);
+        EXPECT_EQ (dispatch.complete (*delivery.second, std::nullopt),
+                   stateful::stateful_error_t::none);
+    }
+    EXPECT_EQ (claim->outstanding (), 0u);
+    EXPECT_FALSE (credit ());
+    EXPECT_EQ (mailbox.pending_messages (mesh::service_mailbox_domain_t::application), 0u);
+    host->close ();
+}
+
+TEST (FrameworkRelocationSealContract, cut_wire_authority_exception_preserves_cause_and_credit)
+{
+    verify_cut_wire_authority_credit (
+      std::make_exception_ptr (std::runtime_error ("cut authority failed")));
+}
+
+TEST (FrameworkRelocationSealContract, cut_wire_authority_cancellation_returns_credit)
+{
+    verify_cut_wire_authority_credit (
+      detail::make_cancellation_exception ("cut authority cancelled"));
+}
+
+TEST (FrameworkRelocationSealContract, cut_wire_acceptance_retains_credit_until_completion)
+{
+    verify_cut_wire_authority_credit ({});
+}
+
 // Relocation flow §4.2 cut S: an accepted, unstarted original is saved exactly once wherever it
 // waits — the source FIFO (B), a claim suspended on its source authority (C) or the mailbox
 // (D). The started turn (A) reaches its terminal on the source first, and a record published

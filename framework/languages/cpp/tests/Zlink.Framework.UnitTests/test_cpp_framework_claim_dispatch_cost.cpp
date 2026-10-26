@@ -6,6 +6,7 @@
 #include "runtime/mesh/raw_mesh_node_owner.hpp"
 #include "runtime_failure_fixture.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <array>
 #include <cstdint>
@@ -430,14 +431,13 @@ void verify_suspended_actor (
     suffix.application->record.kind = host::record_kind_t::node_send;
     require (mailbox.try_enqueue (std::move (suffix)), "suspended suffix enqueue failed");
     std::size_t starts = 0, rejects = 0, calls = 0;
+    std::vector<host::record_kind_t> kinds;
+    std::vector<std::string> payloads;
     const dispatch_t callback = [&] (const auto &, const auto &record, auto parts) {
           ++calls;
-          require (calls == 1 ? record.kind == host::record_kind_t::actor_send
-                              : record.kind == host::record_kind_t::node_send,
-                   "claim suffix overtook suspended Actor");
+          kinds.push_back (record.kind);
           if (record.complete_stateful_dispatch) {
-              require (parts.size () == 1 && parts.front ().to_string () == "ok",
-                       "suspended Actor lost its payload");
+              payloads.push_back (parts.size () == 1 ? parts.front ().to_string () : "invalid");
               record.complete_stateful_dispatch ();
           }
       };
@@ -458,11 +458,11 @@ void verify_suspended_actor (
     if (terminal != terminal_case_t::retained_success) {
         auto failures = std::make_shared<runtime::runtime_failure_collector_t> ();
         std::atomic_size_t reports{0};
-        std::atomic_bool report_has_error{false};
+        std::exception_ptr reported_error;
         auto observed = std::make_shared<task_completion_source_t<void>> ();
         auto released = std::make_shared<task_completion_source_t<void>> ();
         failures->bind_runtime_reporter ([&] (std::exception_ptr error) {
-            report_has_error = static_cast<bool> (error);
+            reported_error = error;
             ++reports;
         });
         std::weak_ptr<int> observer_lifetime;
@@ -499,25 +499,38 @@ void verify_suspended_actor (
         released->task ().result ().value ();
         require (observer_lifetime.expired (), "terminal observer retained its capture");
         target->close ();
-        require (reports == (terminal == terminal_case_t::dropped_success ? 0u : 1u)
-                   && report_has_error == (terminal != terminal_case_t::dropped_success) && starts == 2
-                   && calls == (terminal == terminal_case_t::dropped_success ? 2u : 0u)
-                   && rejects == (terminal == terminal_case_t::dropped_success ? 0u : 2u),
-                 ("suspended claim terminal accounting changed: local="
-                  + std::to_string (local) + " terminal="
-                  + std::to_string (static_cast<int> (terminal))
-                  + " reports=" + std::to_string (reports.load ())
-                  + " expected_reports="
-                  + std::to_string (terminal == terminal_case_t::dropped_success ? 0u : 1u)
-                  + " report_has_error=" + std::to_string (report_has_error.load ())
-                  + " expected_report_has_error="
-                  + std::to_string (terminal != terminal_case_t::dropped_success)
-                  + " starts=" + std::to_string (starts) + " expected_starts=2"
-                  + " calls=" + std::to_string (calls) + " expected_calls="
-                  + std::to_string (terminal == terminal_case_t::dropped_success ? 2u : 0u)
-                  + " rejects=" + std::to_string (rejects) + " expected_rejects="
-                  + std::to_string (terminal == terminal_case_t::dropped_success ? 0u : 2u))
-                   .c_str ());
+        const bool success = terminal == terminal_case_t::dropped_success;
+        if (success)
+            require (starts == 2 && calls == 2 && rejects == 0,
+                     "successful claim accounting changed");
+        else
+            require (std::find (kinds.begin (), kinds.end (), host::record_kind_t::actor_send)
+                       == kinds.end (),
+                     "failed authority entered its Actor handler");
+        if (terminal != terminal_case_t::shutdown) {
+            require (reports == (success ? 0u : 1u), "claim terminal report count changed");
+            if (!success) {
+                require (reported_error == error, "claim terminal replaced the authority exception");
+                try { std::rethrow_exception (reported_error); }
+                catch (const std::system_error &cause) {
+                    require (terminal == terminal_case_t::cancelled
+                               && cause.code () == std::errc::operation_canceled,
+                             "claim cancellation lost operation_canceled");
+                }
+                catch (const std::runtime_error &cause) {
+                    require (terminal == terminal_case_t::failed
+                               && std::string_view (cause.what ()) == "claim authority failed",
+                             "claim authority error type or message changed");
+                }
+            }
+        } else if (reported_error) {
+            require (reported_error == error, "shutdown replaced the authority exception");
+        }
+        if (success)
+            require (kinds == std::vector{host::record_kind_t::actor_send,
+                                          host::record_kind_t::node_send}
+                       && payloads == std::vector<std::string>{"ok"},
+                     "successful claim changed record order or payload");
         require (mailbox.pending_messages (domain) == 0,
                  "failed/cancelled/shutdown claim leaked reservations");
         std::cout << "suspended-owner local=" << local << " terminal=" << static_cast<int> (terminal)
@@ -536,6 +549,9 @@ void verify_suspended_actor (
              "claim bypassed pending Actor admission");
     admission.complete (result_t<bool>::success (false));
     pending.result ().value ();
+    require (kinds == std::vector{host::record_kind_t::actor_send, host::record_kind_t::node_send}
+               && payloads == std::vector<std::string>{"ok"},
+             "successful claim changed record order or payload");
     require (calls == 2 && starts == 2 && rejects == 0,
              "suspended claim did not resume and account its suffix exactly once");
     require (mailbox.pending_messages (domain) == 0, "suspended claim was not returned");
@@ -546,6 +562,22 @@ void verify_suspended_actor (
 int main (int argc, char **argv)
 {
     try {
+        if (argc == 4 && std::string_view (argv[1]) == "--suspended-actor") {
+            require (std::string_view (argv[2]) == "local"
+                       || std::string_view (argv[2]) == "wire", "unknown claim transport");
+            const bool local = std::string_view (argv[2]) == "local";
+            const std::string_view name = argv[3];
+            require (name == "failed" || name == "cancelled" || name == "shutdown"
+                       || name == "dropped-success" || name == "success",
+                     "unknown claim terminal");
+            const auto terminal = name == "failed" ? terminal_case_t::failed
+              : name == "cancelled" ? terminal_case_t::cancelled
+              : name == "shutdown" ? terminal_case_t::shutdown
+              : name == "dropped-success" ? terminal_case_t::dropped_success
+              : terminal_case_t::retained_success;
+            verify_suspended_actor (local, terminal);
+            return 0;
+        }
         const bool ready_only = argc == 2 && std::string_view (argv[1]) == "--ready-only";
         auto target = make_host (!ready_only);
         const auto empty_cost = verify_empty_cost (*target);

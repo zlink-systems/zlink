@@ -2509,6 +2509,34 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     COMMAND test_cpp_framework_claim_dispatch_cost --ready-only
     LABELS "framework-unit;framework-regression;messaging;claim"
     TIMEOUT 30)
+  foreach(path IN ITEMS local wire)
+    foreach(terminal IN ITEMS failed cancelled shutdown success dropped-success)
+      zlink_framework_cpp_add_test(
+        NAME test_cpp_framework_claim_authority_${path}_${terminal}
+        COMMAND test_cpp_framework_claim_dispatch_cost --suspended-actor ${path} ${terminal}
+        LABELS "framework-unit;framework-regression;messaging;claim"
+        TIMEOUT 30)
+    endforeach()
+  endforeach()
+  add_zlink_framework_test(
+    test_cpp_framework_authority_validation
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_authority_validation.cpp
+    "framework-unit;framework-regression;location;claim")
+  target_include_directories(test_cpp_framework_authority_validation PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  add_zlink_framework_test(
+    test_cpp_framework_store_authority_terminal
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_store_authority_terminal.cpp
+    "framework-unit;framework-regression;location;claim")
+  target_include_directories(test_cpp_framework_store_authority_terminal PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  foreach(terminal IN ITEMS failed cancelled missing)
+    zlink_framework_cpp_add_test(
+      NAME test_cpp_framework_store_authority_${terminal}
+      COMMAND test_cpp_framework_store_authority_terminal ${terminal}
+      LABELS "framework-unit;framework-regression;location;claim"
+      TIMEOUT 30)
+  endforeach()
   target_sources(test_cpp_framework_claim_dispatch_cost PRIVATE tests/support/allocation_counter.cpp)
   target_include_directories(test_cpp_framework_claim_dispatch_cost PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
