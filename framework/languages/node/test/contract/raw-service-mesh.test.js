@@ -43,7 +43,7 @@ function sessionFixture(disconnectFailure, nativeSocket, routingId = zlink.Routi
   const backend = new ZLinkNodeRawMeshBackend('play', 'session-node', {});
   backend.stateful = stateful;
   const completions = new ZLinkMeshCompletionTable();
-  backend.setCompletionHandler((terminal, materialize) => completions.complete(terminal, materialize));
+  backend.setCompletionTable(completions);
   let dropped = false;
   let disconnectCalls = 0;
   const delivered = [];

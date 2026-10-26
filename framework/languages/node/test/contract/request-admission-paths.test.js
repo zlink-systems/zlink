@@ -1,4 +1,4 @@
-const { prepareZLinkRequestReply } = require('../../packages/framework/dist/runtime/messaging/request-result');
+const { observeZLinkRequestReply, ZLinkRequestResult, identityRequestReply } = require('../../packages/framework/dist/runtime/messaging/request-result');
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const { setImmediate } = require('node:timers/promises');
@@ -59,12 +59,12 @@ for (const path of [
     };
     const transport = {
       async sendToSpot() {},
-      request: (_mesh, _rid, _packet, _request, _timeout, _signal, _metadata, onAdmitted) =>
-        prepareZLinkRequestReply(start(onAdmitted), () => 'reply'),
-      requestToChannel: (_mesh, _channel, _packet, _request, _timeout, _signal, _metadata, onAdmitted) =>
-        prepareZLinkRequestReply(start(onAdmitted), () => 'reply'),
+      request: (entry, _mesh, _rid, _packet, _request, _timeout, _signal, _metadata, onAdmitted) =>
+        observeZLinkRequestReply(start(onAdmitted), () => 'reply', identityRequestReply, entry),
+      requestToChannel: (entry, _mesh, _channel, _packet, _request, _timeout, _signal, _metadata, onAdmitted) =>
+        observeZLinkRequestReply(start(onAdmitted), () => 'reply', identityRequestReply, entry),
       requestToSpot: (_target, _request, options) =>
-        prepareZLinkRequestReply(start(options.onAdmitted), () => 'reply'),
+        observeZLinkRequestReply(start(options.onAdmitted), () => 'reply', identityRequestReply, new ZLinkRequestResult()),
       requestRawToSpot: (_target, _request, options) => start(options.onAdmitted)
     };
     const registration = framework.createFrameworkRegistration({
@@ -209,7 +209,7 @@ test('Instance activation public request observes existing remote submission adm
     completions: () => ({
       submit(start) {
         start();
-        return operation.promise;
+        return new ZLinkRequestResult().observe(operation.promise);
       }
     }),
     defaultRequestTimeoutMs: 1000
@@ -263,7 +263,7 @@ test('public routed local Spot request observes serial queue acceptance before h
   const client = new framework.DefaultZLinkRouteClient(
     framework.createFrameworkRegistration({ spotNodes: { mesh: { router: { bind: 'inproc://local-stage' } } } }),
     { async sendToSpot() {}, requestToSpot(_target, request, options) {
-      return prepareZLinkRequestReply(dispatcher.request('room', 'Query', request, { channelName: 'mesh', onAdmitted: options.onAdmitted }), (reply) => reply);
+      return observeZLinkRequestReply(dispatcher.request('room', 'Query', request, { channelName: 'mesh', onAdmitted: options.onAdmitted }), (reply) => reply, identityRequestReply, new ZLinkRequestResult());
     } }
   );
   const handle = framework.createSpotHandle('room', async () => ({

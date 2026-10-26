@@ -17,19 +17,25 @@ export function stringifyFrameworkJsonV1(
   if (value === undefined || typeof value === 'function' || typeof value === 'symbol') {
     throw new TypeError('framework-json-v1 payload is not a JSON value.');
   }
-  const encoded = JSON.stringify(
-    value,
+  const encoded =
     replacer === undefined
-      ? frameworkJsonV1Replacer
-      : function (key, item) {
-          const transformed = replacer.call(this, key, item);
-          return frameworkJsonV1Replacer.call({ [key]: transformed }, key, transformed);
-        }
-  );
+      ? JSON.stringify(value, frameworkJsonV1Replacer)
+      : stringifyWithReplacer(value, replacer);
   if (schema !== undefined) {
     validateFrameworkJsonV1Value(JSON.parse(encoded), schema, '$', false);
   }
   return encoded;
+}
+
+// Keep custom callback captures off the default encoding path.
+function stringifyWithReplacer(
+  value: unknown,
+  replacer: (this: unknown, key: string, value: unknown) => unknown
+): string {
+  return JSON.stringify(value, function (key, item) {
+    const transformed = replacer.call(this, key, item);
+    return frameworkJsonV1Value(transformed, transformed);
+  });
 }
 
 //  Module-level so JSON.stringify does not allocate a fresh closure per
@@ -40,7 +46,10 @@ function frameworkJsonV1Replacer(
   key: string,
   item: unknown
 ): unknown {
-  const source = this[key];
+  return frameworkJsonV1Value(this[key], item);
+}
+
+function frameworkJsonV1Value(source: unknown, item: unknown): unknown {
   if (typeof source === 'number' && !Number.isFinite(source)) {
     throw new TypeError('framework-json-v1 only accepts finite JSON numbers.');
   }
