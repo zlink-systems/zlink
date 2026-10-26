@@ -184,60 +184,55 @@ accepted_record_authority_resolver_t make_store_authority_resolver (location_rep
     auto reader = std::make_shared<live_location_reader_t> (store);
     return [&store, reader] (const accepted_record_authority_query_t &query)
              -> task_t<std::optional<accepted_record_authority_t>> {
-        try {
-            std::uint64_t target_lease = 0;
-            {
-                const auto authority =
-                  co_await store.read_authority (query.target.kind == object_kind_t::actor
-                                                   ? actor_authority_key (query.target.key)
-                                                   : spot_authority_key (query.target.key));
-                const auto *snapshot = std::get_if<authority_snapshot_t> (&authority);
-                const auto target_rid = node_rid_t::from_string (
-                  zlink::routing_id_t::from (query.target_node_routing_id).to_string ());
-                // A Spot wire address covers both User and Instance Spots. The
-                // native facade is a mailbox owner; Store owns the placement kind.
-                const bool matches_kind =
-                  snapshot
-                  && (query.target.kind == object_kind_t::actor
-                        ? snapshot->allocation.object_kind == placement_object_kind_t::actor
-                        : snapshot->allocation.object_kind == placement_object_kind_t::user_spot
-                            || snapshot->allocation.object_kind
-                                 == placement_object_kind_t::instance_spot);
-                if (!matches_kind || snapshot->object_generation != query.target.object_generation
-                    || (query.target.kind == object_kind_t::actor
-                        && snapshot->authority_owner_generation
-                             != query.target.authority_owner_generation)
-                    || snapshot->authority_owner_generation
-                         != query.requested_authority_owner_generation
-                    || snapshot->allocation.target.mesh_name != query.target.mesh_name
-                    || snapshot->allocation.target.node_rid.value () != target_rid.value ()
-                    || snapshot->allocation.target.node_lifecycle_generation
-                         != query.target_node_generation) {
-                    co_return std::nullopt;
-                }
-
-                target_lease =
-                  static_cast<std::uint64_t> (snapshot->allocation.target.owner.lease_generation);
-            }
-            const auto cached = reader->cached_request_source (
-              query.target.mesh_name, query.source_node_routing_id, query.source_node_generation);
-            std::shared_ptr<const mesh_node_descriptor_t> source;
-            if (cached)
-                source = *cached;
-            else
-                source = co_await reader->request_source (query.target.mesh_name,
-                                                          query.source_node_routing_id,
-                                                          query.source_node_generation);
-            if (!source)
+        std::uint64_t target_lease = 0;
+        {
+            const auto authority =
+              co_await store.read_authority (query.target.kind == object_kind_t::actor
+                                               ? actor_authority_key (query.target.key)
+                                               : spot_authority_key (query.target.key));
+            const auto *snapshot = std::get_if<authority_snapshot_t> (&authority);
+            const auto target_rid = node_rid_t::from_string (
+              zlink::routing_id_t::from (query.target_node_routing_id).to_string ());
+            // A Spot wire address covers both User and Instance Spots. The
+            // native facade is a mailbox owner; Store owns the placement kind.
+            const bool matches_kind =
+              snapshot
+              && (query.target.kind == object_kind_t::actor
+                    ? snapshot->allocation.object_kind == placement_object_kind_t::actor
+                    : snapshot->allocation.object_kind == placement_object_kind_t::user_spot
+                        || snapshot->allocation.object_kind
+                             == placement_object_kind_t::instance_spot);
+            if (!matches_kind || snapshot->object_generation != query.target.object_generation
+                || (query.target.kind == object_kind_t::actor
+                    && snapshot->authority_owner_generation
+                         != query.target.authority_owner_generation)
+                || snapshot->authority_owner_generation
+                     != query.requested_authority_owner_generation
+                || snapshot->allocation.target.mesh_name != query.target.mesh_name
+                || snapshot->allocation.target.node_rid.value () != target_rid.value ()
+                || snapshot->allocation.target.node_lifecycle_generation
+                     != query.target_node_generation) {
                 co_return std::nullopt;
-            co_return accepted_record_authority_t{
-              {source->owner_id, static_cast<std::uint64_t> (source->lease_generation),
-               query.source_node_routing_id, query.source_node_generation},
-              target_lease};
+            }
+
+            target_lease =
+              static_cast<std::uint64_t> (snapshot->allocation.target.owner.lease_generation);
         }
-        catch (...) {
+        const auto cached = reader->cached_request_source (
+          query.target.mesh_name, query.source_node_routing_id, query.source_node_generation);
+        std::shared_ptr<const mesh_node_descriptor_t> source;
+        if (cached)
+            source = *cached;
+        else
+            source = co_await reader->request_source (query.target.mesh_name,
+                                                      query.source_node_routing_id,
+                                                      query.source_node_generation);
+        if (!source)
             co_return std::nullopt;
-        }
+        co_return accepted_record_authority_t{
+          {source->owner_id, static_cast<std::uint64_t> (source->lease_generation),
+           query.source_node_routing_id, query.source_node_generation},
+          target_lease};
     };
 }
 } // namespace
@@ -655,57 +650,44 @@ raw_stateful_dispatch_t::ingest_claimed (object_ref_t owner,
             std::rethrow_exception (prepared->error);
         if (!prepared->header || !_authority_resolver || prepared->source_routing_id.empty ()
             || !prepared->source_node_generation)
-            validation = stateful_error_t::invalid;
-        else {
-            application_payload_bytes = prepared->body_bytes;
-        }
-
-        if (validation != stateful_error_t::none)
             throw protocol::service_wire_error_t ("invalid application wire record");
+        application_payload_bytes = prepared->body_bytes;
         const auto header_bytes = protocol::message_bytes (*prepared->header);
         const auto header = protocol::decode_header (header_bytes);
-
-        if (validation == stateful_error_t::none && owner.kind == object_kind_t::actor) {
+        application_command = header.kind;
+        if (owner.kind == object_kind_t::actor) {
             if (header.kind != protocol::command::actorSend
-                && header.kind != protocol::command::actorRequest) {
+                && header.kind != protocol::command::actorRequest)
                 validation = stateful_error_t::invalid;
-            } else {
-                auto actor = protocol::decode_actor_message_header (header_bytes, header.kind);
-                auto [error, authority] = co_await accepted_actor_authority (
-                  owner, actor, std::move (prepared->source_routing_id),
-                  prepared->source_node_generation, std::move (prepared->source_original),
-                  prepared->bound_session, std::move (retained));
-                validation = error;
-                if (validation == stateful_error_t::none) {
-                    application_command = header.kind;
-                    actor_header = std::move (actor);
-                    accepted_authority = *authority;
-                }
-            }
-        } else if (validation == stateful_error_t::none) {
+            else
+                actor_header = protocol::decode_actor_message_header (header_bytes, header.kind);
+        } else {
             if (header.kind != protocol::command::spotSend
-                && header.kind != protocol::command::spotRequest) {
+                && header.kind != protocol::command::spotRequest)
                 validation = stateful_error_t::invalid;
-            } else {
-                auto spot = protocol::decode_spot_message_header (header_bytes, header.kind);
-                auto [error, authority] = co_await accepted_spot_authority (
-                  owner, spot, std::move (prepared->source_routing_id),
-                  prepared->source_node_generation, std::move (prepared->source_original),
-                  std::move (retained));
-                validation = error;
-                if (validation == stateful_error_t::none) {
-                    application_command = header.kind;
-                    spot_header = std::move (spot);
-                    accepted_authority = *authority;
-                }
-            }
+            else
+                spot_header = protocol::decode_spot_message_header (header_bytes, header.kind);
         }
     }
     catch (const protocol::service_wire_error_t &) {
         validation = stateful_error_t::invalid;
     }
-    catch (...) {
-        validation = stateful_error_t::conflict;
+    if (validation == stateful_error_t::none) {
+        if (actor_header) {
+            auto [error, authority] = co_await accepted_actor_authority (
+              owner, *actor_header, std::move (prepared->source_routing_id),
+              prepared->source_node_generation, std::move (prepared->source_original),
+              prepared->bound_session, std::move (retained));
+            validation = error;
+            accepted_authority = std::move (authority);
+        } else {
+            auto [error, authority] = co_await accepted_spot_authority (
+              owner, *spot_header, std::move (prepared->source_routing_id),
+              prepared->source_node_generation, std::move (prepared->source_original),
+              std::move (retained));
+            validation = error;
+            accepted_authority = std::move (authority);
+        }
     }
 
     // The accepted record reads the shared body; the original is not taken for it.
