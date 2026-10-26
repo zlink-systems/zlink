@@ -3135,117 +3135,133 @@ final class ZLinkJavaRawMeshNode
             for (Message part : parts) messages.add(Message.from(part.toByteArray()));
             contentType = applicationContentType(messages);
             activationFlow = request ? null : captureInstanceActivationFlow(messages);
+            byte[] ownedMetadata = metadata == null ? null : metadata.clone();
+            return this.<CompletionStage<List<Message>>>inSourceTurn(
+                            () -> {
+                                long remainingNanos = deadlineNanos - System.nanoTime();
+                                if (request && remainingNanos <= 0) {
+                                    return CompletableFuture.failedFuture(
+                                            new TimeoutException(
+                                                    "Instance Spot request deadline expired"));
+                                }
+                                ZLinkServiceOperationRegistry.Operation<List<Message>> operation =
+                                        request
+                                                ? operations.registerOnOwner(
+                                                        Duration.ofNanos(remainingNanos))
+                                                : null;
+                                java.util.UUID identity =
+                                        operation != null
+                                                ? operation.id()
+                                                : route
+                                                                instanceof
+                                                                ZLinkServiceM6BWireCodec
+                                                                        .InstanceColdActivation
+                                                        ? java.util.UUID.randomUUID()
+                                                        : null;
+                                var header =
+                                        new ZLinkServiceM6BWireCodec.InstanceSpotMessage(
+                                                flags,
+                                                route,
+                                                true,
+                                                localDescriptor.lifecycleGeneration(),
+                                                routingId,
+                                                sourceSpotId,
+                                                request,
+                                                identity == null
+                                                        ? 0
+                                                        : identity.getMostSignificantBits(),
+                                                identity == null
+                                                        ? 0
+                                                        : identity.getLeastSignificantBits(),
+                                                request ? correlation : null);
+                                CompletionStage<CompletionStage<List<Message>>> acceptedSubmission =
+                                        CompletableFuture.completedFuture(
+                                                request
+                                                        ? operation.completion()
+                                                        : CompletableFuture.completedFuture(
+                                                                List.of()));
+                                boolean accepted;
+                                try {
+                                    accepted =
+                                            ((ZLinkJavaRawSpotNode) spotNode())
+                                                    .enqueueRemoteInstanceSpot(
+                                                            routingId,
+                                                            header,
+                                                            flags == 0
+                                                                    ? new byte[0]
+                                                                    : ownedMetadata,
+                                                            messages,
+                                                            contentType,
+                                                            replyParts -> {
+                                                                boolean completed =
+                                                                        operation != null
+                                                                                && operations
+                                                                                        .complete(
+                                                                                                operation
+                                                                                                        .id(),
+                                                                                                replyParts);
+                                                                if (!completed) {
+                                                                    replyParts.forEach(
+                                                                            Message::close);
+                                                                }
+                                                            },
+                                                            failure -> {
+                                                                recordInstanceActivationFailure(
+                                                                        header.route()
+                                                                                .targetSpotId(),
+                                                                        header.sourceNodeRid(),
+                                                                        failure,
+                                                                        request,
+                                                                        header.replyRouteId(),
+                                                                        request
+                                                                                ? ZLinkDispatchErrorAction
+                                                                                        .FAIL_CALLER
+                                                                                : ZLinkDispatchErrorAction
+                                                                                        .DROP,
+                                                                        activationFlow);
+                                                                if (operation != null)
+                                                                    operations
+                                                                            .completeExceptionally(
+                                                                                    operation.id(),
+                                                                                    unwrap(
+                                                                                            failure));
+                                                            });
+                                } catch (RuntimeException failure) {
+                                    if (operation != null)
+                                        operations.completeExceptionally(operation.id(), failure);
+                                    return CompletableFuture.failedFuture(failure);
+                                }
+                                if (!accepted) {
+                                    var failure =
+                                            ZLinkFrameworkErrorOrigin.framework(
+                                                    ZLinkFrameworkErrorKind.NOT_FOUND,
+                                                    "local Instance Spot target is not materialized");
+                                    recordInstanceActivationFailure(
+                                            header.route().targetSpotId(),
+                                            header.sourceNodeRid(),
+                                            failure,
+                                            request,
+                                            header.replyRouteId(),
+                                            request
+                                                    ? ZLinkDispatchErrorAction.FAIL_CALLER
+                                                    : ZLinkDispatchErrorAction.DROP,
+                                            activationFlow);
+                                    if (operation != null)
+                                        operations.completeExceptionally(operation.id(), failure);
+                                    return CompletableFuture.failedFuture(failure);
+                                }
+                                if (requestAdmission != null) requestAdmission.complete(null);
+                                return acceptedSubmission;
+                            })
+                    .whenComplete(
+                            (ignored, failure) -> {
+                                if (failure != null) Message.closeAll(messages);
+                            })
+                    .thenCompose(completion -> completion);
         } catch (RuntimeException | Error failure) {
-            messages.forEach(Message::close);
+            Message.closeAll(messages);
             throw failure;
         }
-        byte[] ownedMetadata = metadata == null ? null : metadata.clone();
-        return inSourceTurn(
-                () -> {
-                    ZLinkServiceOperationRegistry.Operation<List<Message>> operation;
-                    try {
-                        long remainingNanos = deadlineNanos - System.nanoTime();
-                        if (request && remainingNanos <= 0) {
-                            messages.forEach(Message::close);
-                            return CompletableFuture.failedFuture(
-                                    new TimeoutException("Instance Spot request deadline expired"));
-                        }
-                        operation =
-                                request
-                                        ? operations.registerOnOwner(
-                                                Duration.ofNanos(remainingNanos))
-                                        : null;
-                    } catch (RuntimeException | Error failure) {
-                        messages.forEach(Message::close);
-                        throw failure;
-                    }
-                    java.util.UUID identity =
-                            operation != null
-                                    ? operation.id()
-                                    : route
-                                                    instanceof
-                                                    ZLinkServiceM6BWireCodec.InstanceColdActivation
-                                            ? java.util.UUID.randomUUID()
-                                            : null;
-                    var header =
-                            new ZLinkServiceM6BWireCodec.InstanceSpotMessage(
-                                    flags,
-                                    route,
-                                    true,
-                                    localDescriptor.lifecycleGeneration(),
-                                    routingId,
-                                    sourceSpotId,
-                                    request,
-                                    identity == null ? 0 : identity.getMostSignificantBits(),
-                                    identity == null ? 0 : identity.getLeastSignificantBits(),
-                                    request ? correlation : null);
-                    boolean accepted;
-                    try {
-                        accepted =
-                                ((ZLinkJavaRawSpotNode) spotNode())
-                                        .enqueueRemoteInstanceSpot(
-                                                routingId,
-                                                header,
-                                                flags == 0 ? new byte[0] : ownedMetadata,
-                                                messages,
-                                                contentType,
-                                                replyParts -> {
-                                                    boolean completed =
-                                                            operation != null
-                                                                    && operations.complete(
-                                                                            operation.id(),
-                                                                            replyParts);
-                                                    if (!completed) {
-                                                        replyParts.forEach(Message::close);
-                                                    }
-                                                },
-                                                failure -> {
-                                                    recordInstanceActivationFailure(
-                                                            header.route().targetSpotId(),
-                                                            header.sourceNodeRid(),
-                                                            failure,
-                                                            request,
-                                                            header.replyRouteId(),
-                                                            request
-                                                                    ? ZLinkDispatchErrorAction
-                                                                            .FAIL_CALLER
-                                                                    : ZLinkDispatchErrorAction.DROP,
-                                                            activationFlow);
-                                                    if (operation != null)
-                                                        operations.completeExceptionally(
-                                                                operation.id(), unwrap(failure));
-                                                });
-                    } catch (RuntimeException failure) {
-                        messages.forEach(Message::close);
-                        if (operation != null)
-                            operations.completeExceptionally(operation.id(), failure);
-                        return CompletableFuture.failedFuture(failure);
-                    }
-                    if (!accepted) {
-                        messages.forEach(Message::close);
-                        var failure =
-                                ZLinkFrameworkErrorOrigin.framework(
-                                        ZLinkFrameworkErrorKind.NOT_FOUND,
-                                        "local Instance Spot target is not materialized");
-                        recordInstanceActivationFailure(
-                                header.route().targetSpotId(),
-                                header.sourceNodeRid(),
-                                failure,
-                                request,
-                                header.replyRouteId(),
-                                request
-                                        ? ZLinkDispatchErrorAction.FAIL_CALLER
-                                        : ZLinkDispatchErrorAction.DROP,
-                                activationFlow);
-                        if (operation != null)
-                            operations.completeExceptionally(operation.id(), failure);
-                        return CompletableFuture.failedFuture(failure);
-                    }
-                    if (requestAdmission != null) requestAdmission.complete(null);
-                    return request
-                            ? operation.completion()
-                            : CompletableFuture.completedFuture(List.of());
-                });
     }
 
     private long addDeadlineNanos(Duration timeout) {
