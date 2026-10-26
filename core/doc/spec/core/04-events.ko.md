@@ -61,6 +61,9 @@ Raw socket monitor는 endpoint bind/listen, outgoing connect, accept, handshake
 success/failure, disconnect, protocol error와 close를 기록한다. Disconnect reason은
 transport error, handshake failure, [Context](glossary.ko.md#context) 종료와 unknown을
 구분한다. Event는 service topology나 application payload를 포함하지 않는다.
+Connect 등록의 현재 연결 상태와 최근 실패는 monitor event로 재구성하지 않고
+[`zlink_socket_connection_attempts_snapshot`](socket/README.ko.md#zlink_socket_connection_attempts_snapshot)이
+정한다. `CONNECTED`·`CONNECT_DELAYED`·`CONNECT_RETRIED`·`CLOSED`는 그 결과가 아니다.
 
 Event 식별자는 `ZLINK_EVENT_` 접두사를 쓰며 `ZLINK_SOCKET_MONITOR_EVENT_` alias와 같은
 값이다. `value`, disconnect reason, protocol error, lane과 event flag의 값은

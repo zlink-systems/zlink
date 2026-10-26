@@ -30,14 +30,14 @@ function endpoint(label) {
         request.reply().message('ignored').submit();
         let completion = null;
         for (let attempt = 0; attempt < 100 && !completion; attempt += 1) {
-            completion = native.socketCompletionRecv(dealer._native, zlink.RecvFlags.DontWait);
+            completion = native.socketCompletionRecv(dealer._native, zlink.RecvFlags.DontWait, Buffer.allocUnsafe);
             if (!completion)
                 await new Promise((resolve) => setImmediate(resolve));
         }
         strict_1.default.ok(completion);
         strict_1.default.equal(completion.userContext, 999n);
         strict_1.default.equal(native.testCompletionCloseCount(false), 1n);
-        strict_1.default.equal(native.socketCompletionRecv(dealer._native, zlink.RecvFlags.DontWait), null);
+        strict_1.default.equal(native.socketCompletionRecv(dealer._native, zlink.RecvFlags.DontWait, Buffer.allocUnsafe), null);
         strict_1.default.equal(native.testCompletionCloseCount(false), 1n);
         request.close();
     }
@@ -107,7 +107,7 @@ function endpoint(label) {
         }
         strict_1.default.ok(accepted > 0 && accepted < 512, 'routed DONTWAIT send must reach physical HWM');
         strict_1.default.ok(blockedPayload);
-        strict_1.default.equal(native.socketCompletionRecv(router._native, zlink.RecvFlags.DontWait), null);
+        strict_1.default.equal(native.socketCompletionRecv(router._native, zlink.RecvFlags.DontWait, Buffer.allocUnsafe), null);
         strict_1.default.equal(poller.wait(events, 0), 0, 'the HWM-full socket must not remain writable');
         for (let index = 0; index < accepted; index += 1) {
             const received = new zlink.Received();
@@ -117,7 +117,7 @@ function endpoint(label) {
         strict_1.default.equal(poller.wait(events, 5_000), 1);
         strict_1.default.equal(events.slot(0), 79);
         strict_1.default.equal(events.hasEvent(0, zlink.PollEventFlag.PollOut), true);
-        const writable = native.socketCompletionRecv(router._native, zlink.RecvFlags.DontWait);
+        const writable = native.socketCompletionRecv(router._native, zlink.RecvFlags.DontWait, Buffer.allocUnsafe);
         strict_1.default.ok(writable);
         strict_1.default.equal(writable.kind, zlink.CompletionKind.Writable);
         strict_1.default.equal(writable.completionId, waitToken);
@@ -125,7 +125,7 @@ function endpoint(label) {
         strict_1.default.deepEqual(writable.peerRoutingId, peerBytes);
         strict_1.default.equal(writable.sendResult, zlink.SubmitResult.Ok);
         strict_1.default.equal(writable.terminalErrno, 0);
-        strict_1.default.equal(native.socketCompletionRecv(router._native, zlink.RecvFlags.DontWait), null);
+        strict_1.default.equal(native.socketCompletionRecv(router._native, zlink.RecvFlags.DontWait, Buffer.allocUnsafe), null);
         const retried = native.socketSubmitSend(router._native, blockedPayload, peerBytes, zlink.SendFlags.DontWait, userContext);
         strict_1.default.equal(retried.result, zlink.SubmitResult.Ok);
         strict_1.default.equal(retried.nativeErrno, 0);
@@ -137,7 +137,7 @@ function endpoint(label) {
         const duplicate = new zlink.Received();
         strict_1.default.equal(dealer.recv(duplicate, zlink.RecvFlags.DontWait), false, 'the rejected attempt must not have retained or delivered the payload');
         duplicate.close();
-        strict_1.default.equal(native.socketCompletionRecv(router._native, zlink.RecvFlags.DontWait), null, 'ordinary successful SEND must not publish a completion');
+        strict_1.default.equal(native.socketCompletionRecv(router._native, zlink.RecvFlags.DontWait, Buffer.allocUnsafe), null, 'ordinary successful SEND must not publish a completion');
     }
     finally {
         events.close();

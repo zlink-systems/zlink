@@ -27,7 +27,7 @@ namespace Zlink.Framework.UnitTests.Runtime;
 /// (framework/runtime/conformance/spot-close-v1.json) against a started .NET
 /// runtime with an in-memory Location Store.
 /// </summary>
-public sealed class SpotCloseConformanceTests(Xunit.Abstractions.ITestOutputHelper output)
+public sealed partial class SpotCloseConformanceTests(Xunit.Abstractions.ITestOutputHelper output)
 {
     private static readonly TimeSpan Wait = TimeSpan.FromSeconds(10);
 
@@ -124,6 +124,11 @@ public sealed class SpotCloseConformanceTests(Xunit.Abstractions.ITestOutputHelp
         await host.JoinActorAsync(original.SpotId);
         await host.State.Joined.Task.WaitAsync(Wait);
         Assert.False(await host.Manager.CloseAsync(original));
+        host.State.JoinCompletion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        await host.JoinActorAsync(original.SpotId);
+        Assert.IsType<ZLinkActorJoinCompletion.Accepted>(
+            await host.State.JoinCompletion.Task.WaitAsync(Wait)
+        );
         var existing = await host
             .Manager.GetOrCreate(original.SpotId, SpotCloseHost.SpotType)
             .InMesh(SpotCloseHost.MeshName)
@@ -2254,7 +2259,8 @@ internal sealed class SpotCloseHost : IAsyncDisposable
 
     internal static async Task<SpotCloseHost> StartAsync(
         SpotCloseFaultStore? sharedStore = null,
-        bool registerInstanceFactory = true
+        bool registerInstanceFactory = true,
+        bool registerUserSpotFactory = true
     )
     {
         var store =
@@ -2284,15 +2290,17 @@ internal sealed class SpotCloseHost : IAsyncDisposable
                 .AddActorFactory<SpotCloseActor, SpotCloseActorFactory>(
                     ActorType,
                     static factory => factory.DisableRelocation()
-                )
-                .AddSpotFactory<SpotCloseProbeSpot>(
-                    SpotType,
-                    static factory => factory.DisableRelocation()
-                )
-                .AddSpotFactory<SpotCloseOtherProbeSpot>(
-                    OtherSpotType,
-                    static factory => factory.DisableRelocation()
                 );
+            if (registerUserSpotFactory)
+                server
+                    .AddSpotFactory<SpotCloseProbeSpot>(
+                        SpotType,
+                        static factory => factory.DisableRelocation()
+                    )
+                    .AddSpotFactory<SpotCloseOtherProbeSpot>(
+                        OtherSpotType,
+                        static factory => factory.DisableRelocation()
+                    );
             if (registerInstanceFactory)
                 server.AddInstanceSpotFactory<SpotCloseInstance>(
                     InstanceType,
@@ -2379,7 +2387,7 @@ internal sealed class SpotCloseHost : IAsyncDisposable
     internal async Task<string> AdmissionAsync(string spotId) =>
         await RequestAsync(spotId) is "handlerReply" ? "open" : "sealed";
 
-    internal async Task JoinActorAsync(string spotId)
+    internal async Task<string> CreateActorAsync()
     {
         var actorId = $"spot-close-actor-{Guid.NewGuid():N}";
         _ = Assert.IsType<ZLinkActorCreateResult.Created>(
@@ -2391,6 +2399,12 @@ internal sealed class SpotCloseHost : IAsyncDisposable
                 .Timeout(TimeSpan.FromSeconds(10))
                 .Async()
         );
+        return actorId;
+    }
+
+    internal async Task JoinActorAsync(string spotId, string? actorId = null)
+    {
+        actorId ??= await CreateActorAsync();
         _ = await _provider
             .GetRequiredService<IZLinkActorClient>()
             .RequestToActor(actorId, new SpotCloseJoin(spotId))
@@ -2418,6 +2432,8 @@ internal sealed class SpotCloseHost : IAsyncDisposable
         return instance.State.ToString();
     }
 
+    internal Task StopAsync() => _hosted.StopAsync(CancellationToken.None);
+
     public async ValueTask DisposeAsync()
     {
         State.ReleaseOnClosing.TrySetResult();
@@ -2438,6 +2454,8 @@ internal sealed class SpotCloseProbeState
     internal ConcurrentQueue<string> Order { get; } = new();
     internal string? HandlerMode { get; set; }
     internal Func<CancellationToken, Task>? OnPendingHandler { get; set; }
+    internal TaskCompletionSource<ZLinkActorJoinCompletion> JoinCompletion { get; set; } =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
     internal Task<bool>? ContextCloseTask { get; set; }
     internal bool ThrowOnClosing { get; set; }
     internal bool HoldOnClosing { get; set; }
@@ -2560,18 +2578,29 @@ internal sealed class SpotCloseInstanceSignalHandler
 
 internal sealed record SpotCloseJoin(string SpotId);
 
-internal sealed class SpotCloseActor(IZLinkActorContext context) : IZLinkActor
+internal sealed class SpotCloseActor(IZLinkActorContext context, SpotCloseProbeState state)
+    : IZLinkActor
 {
+    public ValueTask OnJoinCompletedAsync(
+        ZLinkActorJoinCompletion completion,
+        CancellationToken cancellationToken
+    )
+    {
+        state.JoinCompletion.TrySetResult(completion);
+        return ValueTask.CompletedTask;
+    }
+
     public string ActorId { get; } = context.ActorId;
     public IZLinkActorContext Context { get; } = context;
 }
 
-internal sealed class SpotCloseActorFactory : IZLinkActorFactory<SpotCloseActor>
+internal sealed class SpotCloseActorFactory(SpotCloseProbeState state)
+    : IZLinkActorFactory<SpotCloseActor>
 {
     public ValueTask<SpotCloseActor> CreateAsync(
         IZLinkActorContext context,
         CancellationToken cancellationToken = default
-    ) => ValueTask.FromResult(new SpotCloseActor(context));
+    ) => ValueTask.FromResult(new SpotCloseActor(context, state));
 }
 
 internal sealed class SpotCloseEntrySpot(IZLinkEntrySpotContext context)
@@ -2722,7 +2751,14 @@ internal sealed class SpotCloseProbeHandler
 // Provider-level Location Store that injects a lost Closing CAS.
 internal sealed class SpotCloseFaultStore(IZLinkLocationStore inner) : IZLinkLocationStore
 {
+    internal string? HoldNextPutFor { get; set; }
+    internal TaskCompletionSource PutHeld { get; } =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+    internal TaskCompletionSource ReleasePut { get; } =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
     internal string? ConflictPutsFor { get; set; }
+    internal string? ThrowAuthorityMutationFor { get; set; }
+    internal bool ThrowAuthorityDelete { get; set; }
     internal string? ObserveMissingPlacementFor { get; set; }
     internal string? ObserveAuthorityReleaseFor { get; set; }
     internal Action? OnAuthorityReleased { get; set; }
@@ -2755,6 +2791,40 @@ internal sealed class SpotCloseFaultStore(IZLinkLocationStore inner) : IZLinkLoc
         CancellationToken cancellationToken = default
     )
     {
+        if (
+            ThrowAuthorityMutationFor is { } failedSpot
+            && request.Mutations.Any(mutation =>
+                (
+                    mutation is ZLinkStoreMutation.Put put
+                    && !ThrowAuthorityDelete
+                    && put.Key.Value.StartsWith("authority\0", StringComparison.Ordinal)
+                    && put.Key.Value.EndsWith("\0" + failedSpot, StringComparison.Ordinal)
+                )
+                || (
+                    mutation is ZLinkStoreMutation.Delete delete
+                    && ThrowAuthorityDelete
+                    && delete.Key.Value.StartsWith("authority\0", StringComparison.Ordinal)
+                    && delete.Key.Value.EndsWith("\0" + failedSpot, StringComparison.Ordinal)
+                )
+            )
+        )
+        {
+            ThrowAuthorityMutationFor = null;
+            throw new InvalidOperationException("Injected authority mutation failure.");
+        }
+        if (
+            HoldNextPutFor is { } target
+            && request.Mutations.Any(mutation =>
+                mutation is ZLinkStoreMutation.Put put
+                && put.Key.Value.StartsWith("authority\0", StringComparison.Ordinal)
+                && put.Key.Value.EndsWith("\0" + target, StringComparison.Ordinal)
+            )
+        )
+        {
+            HoldNextPutFor = null;
+            PutHeld.TrySetResult();
+            await ReleasePut.Task.WaitAsync(cancellationToken);
+        }
         if (
             HoldReplayCursorFor is { } heldSpot
             && request.Mutations.Any(mutation =>

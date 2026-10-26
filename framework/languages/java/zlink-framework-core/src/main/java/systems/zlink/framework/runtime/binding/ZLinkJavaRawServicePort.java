@@ -199,13 +199,7 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
                                     return CompletableFuture.failedFuture(failure);
                                 }
                             });
-            if (ZLinkOneWayCalls.isImmediateAdmission(completion)) {
-                Message.closeAll(ownedMessages);
-            } else {
-                completion =
-                        completion.whenComplete(
-                                (ignored, failure) -> Message.closeAll(ownedMessages));
-            }
+            completion = ZLinkOneWayCalls.closeAfterAdmission(completion, ownedMessages);
             completionOwns = true;
             return completion;
         } finally {

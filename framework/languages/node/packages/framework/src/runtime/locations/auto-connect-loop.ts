@@ -32,6 +32,8 @@ export class ZLinkAutoConnectLoop {
   private lastStamp?: bigint;
   private lastLiveOwnerSetVersion?: number;
   private lastTickFailed = false;
+  // This settled tail orders whole operations. The tick fields below are touched only inside it.
+  private inFlightTick: Promise<void> = Promise.resolve();
 
   constructor(options: ZLinkAutoConnectLoopOptions) {
     this.reconciler = options.reconciler;
@@ -59,7 +61,7 @@ export class ZLinkAutoConnectLoop {
     const controller = this.controller;
     if (meshName !== this.meshName || controller === undefined) return;
     // A fresh descriptor scan uses the same RID ordering and connection owner as a periodic tick.
-    await this.lane.run(async () => {
+    await this.enqueueTick(async () => {
       if (!controller.signal.aborted) await this.runReconcile(controller.signal);
     });
   }
@@ -79,6 +81,7 @@ export class ZLinkAutoConnectLoop {
       this.clearTimer(this.timer);
       this.timer = undefined;
     }
+    await this.inFlightTick;
     this.reconciler.disconnectPeers();
   }
 
@@ -87,7 +90,20 @@ export class ZLinkAutoConnectLoop {
   }
 
   async tick(signal?: AbortSignal): Promise<void> {
-    await this.lane.run(() => this.tickCore(signal));
+    const controller = this.controller;
+    await this.enqueueTick(async () => {
+      if (controller?.signal.aborted !== true) await this.tickCore(signal ?? controller?.signal);
+    });
+  }
+
+  private enqueueTick(operation: () => Promise<void>): Promise<void> {
+    const completion = this.inFlightTick.then(operation);
+    // The caller receives the failure; the successor still owns its place in the order.
+    this.inFlightTick = completion.then(
+      () => undefined,
+      () => undefined
+    );
+    return completion;
   }
 
   private async tickCore(signal?: AbortSignal): Promise<void> {

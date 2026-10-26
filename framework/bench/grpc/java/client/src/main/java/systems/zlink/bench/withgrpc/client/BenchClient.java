@@ -7,6 +7,7 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 import systems.zlink.bench.withgrpc.shared.BenchHttpApplication;
 import systems.zlink.bench.withgrpc.shared.RawWire;
+import systems.zlink.bench.withgrpc.shared.MeasurementTiming;
 import systems.zlink.contracts.core.Context;
 import systems.zlink.contracts.core.Zlink;
 
@@ -16,6 +17,7 @@ public final class BenchClient {
     }
 
     public static void main(String[] args) throws Exception {
+        MeasurementTiming.initialize();
         BenchOptions options = new BenchOptions(args);
         if (!java.util.List.of("grpc-java", "zlink-java", "zlink-framework-java")
             .contains(options.implementation)) {
@@ -34,42 +36,49 @@ public final class BenchClient {
             ready::get,
             drivers::counters,
             trigger -> {
-                if ("warmup".equals(trigger.phase())) {
-                    drivers.runWarmup(trigger, transport[0].operation());
-                    return;
-                }
-                Map<String, Object> result = drivers.runActive(trigger, transport[0].operation());
+                Map<String, Object> result = "warmup".equals(trigger.phase())
+                    ? drivers.runWarmup(trigger, transport[0].operation())
+                    : drivers.runActive(trigger, transport[0].operation());
                 BenchResultWriter.write(options, holder[0].lastTrigger(), result, "java",
                     streamImplementation(options), javaMetadata(options));
+                return ((Number) result.get("active_started_at_ns")).longValue();
             });
         holder[0] = controller;
         BenchHttpApplication http = BenchHttpApplication.start(
             options.triggerUrl, options.statsUrl, controller);
-        try {
-            transport[0] = createTransport(options);
-            drivers.waitForRouteReady(
-                transport[0].operation(), options.payloadSizes.get(0));
-            ready.set(true);
-        } catch (Throwable error) {
-            http.close();
-            throw error;
-        }
-
-        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-            ready.set(false);
-            http.close();
+        Thread shutdown = new Thread(() -> {
             try {
-                if (transport[0] != null) {
-                    transport[0].close();
-                }
+                closeSource(ready, http, transport[0]);
             } catch (Exception error) {
                 System.err.println("[source] close failed: " + error);
             }
-        }, "bench-source-shutdown"));
-        System.err.println("[source] implementation=" + options.implementation
-            + " trigger=" + options.triggerUrl + " stats=" + options.statsUrl
-            + " target=" + options.targetEndpoint);
-        Thread.currentThread().join();
+        }, "bench-source-shutdown");
+        Runtime.getRuntime().addShutdownHook(shutdown);
+        try {
+            transport[0] = createTransport(options);
+            drivers.waitForRouteReady(transport[0].operation(), options.payloadSizes.get(0));
+            ready.set(true);
+            System.err.println("[source] implementation=" + options.implementation
+                + " trigger=" + options.triggerUrl + " stats=" + options.statsUrl
+                + " target=" + options.targetEndpoint);
+            // A byte on piped stdin requests normal cleanup. Background runners may have EOF.
+            if (System.in.read() < 0) {
+                Thread.currentThread().join();
+            }
+        } finally {
+            Runtime.getRuntime().removeShutdownHook(shutdown);
+            closeSource(ready, http, transport[0]);
+        }
+    }
+
+    private static void closeSource(AtomicBoolean ready, BenchHttpApplication http,
+                                   SourceTransport transport) throws Exception {
+        ready.set(false);
+        try {
+            http.close();
+        } finally {
+            if (transport != null) transport.close();
+        }
     }
 
     private static SourceTransport createTransport(BenchOptions options) throws Exception {

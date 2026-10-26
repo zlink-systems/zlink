@@ -7,6 +7,8 @@ import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.runtime.internal.configuration.ZLinkCodecRegistration;
 import systems.zlink.framework.runtime.internal.messaging.ZLinkOwnedMessageSerializer;
 
+import java.nio.ByteBuffer;
+
 public final class ZLinkMessagePayloads {
     private ZLinkMessagePayloads() {}
 
@@ -30,11 +32,15 @@ public final class ZLinkMessagePayloads {
         return message(message.toEncodedPayload(serializer));
     }
 
+    /** Decodes bytes the caller keeps alive for the duration of this call. */
     public static <T> T deserialize(
-            ZLinkMessageSerializer serializer, Message message, Class<T> type) {
+            ZLinkMessageSerializer serializer, ByteBuffer payload, Class<T> type) {
         var selected = ZLinkCodecRegistration.serializerForPayloadType(serializer, type);
-        return selected instanceof ZLinkOwnedMessageSerializer owned
-                ? owned.deserializeBorrowed(message, type)
-                : selected.deserialize(encoded(message), type);
+        if (selected instanceof ZLinkOwnedMessageSerializer owned) {
+            return owned.deserializeBorrowed(payload, type);
+        }
+        byte[] bytes = new byte[payload.remaining()];
+        payload.duplicate().get(bytes);
+        return selected.deserialize(ZLinkEncodedPayload.from(bytes), type);
     }
 }

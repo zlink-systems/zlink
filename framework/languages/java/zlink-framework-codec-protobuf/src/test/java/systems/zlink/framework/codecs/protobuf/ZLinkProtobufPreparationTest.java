@@ -77,7 +77,7 @@ final class ZLinkProtobufPreparationTest {
         var serializer = ZLinkProtobufMessageSerializer.INSTANCE;
         BytesValue decoded;
         try (var payload = serializer.serializeOwned(original)) {
-            decoded = serializer.deserializeBorrowed(payload, BytesValue.class);
+            decoded = serializer.deserializeBorrowed(payload.dataBuffer(), BytesValue.class);
             payload.fill((byte) 0);
             assertEquals(original, decoded);
         }
@@ -93,7 +93,7 @@ final class ZLinkProtobufPreparationTest {
         try (var payload = serializer.serializeOwned(new CountingMessage(original))) {
             assertEquals(0, CountingMessage.byteArrayEncodes);
             assertEquals(original.getSerializedSize(), payload.size());
-            decoded = serializer.deserializeBorrowed(payload, StringValue.class);
+            decoded = serializer.deserializeBorrowed(payload.dataBuffer(), StringValue.class);
         }
         assertEquals(original, decoded);
     }

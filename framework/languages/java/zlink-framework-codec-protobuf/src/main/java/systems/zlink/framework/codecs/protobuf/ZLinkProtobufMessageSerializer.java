@@ -72,8 +72,8 @@ final class ZLinkProtobufMessageSerializer
     }
 
     @Override
-    public <T> T deserializeBorrowed(Message message, Class<T> type) {
-        return parseProtobuf(message.dataBuffer(), type);
+    public <T> T deserializeBorrowed(ByteBuffer payload, Class<T> type) {
+        return parseProtobuf(payload, type);
     }
 
     @Override

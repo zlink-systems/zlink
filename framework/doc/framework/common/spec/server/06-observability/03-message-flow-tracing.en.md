@@ -105,8 +105,9 @@ The framework applies §2.1's stages at the following boundaries.
 - Request timeout, cancellation, runtime termination, and handler
   dispatch error
 
-A wrapper and a transport don't duplicate the same terminal trace. A
-request has exactly one terminal record per surface. Actor payload isn't
+A wrapper and a transport don't submit duplicate terminal traces. For
+each request surface, one terminal record is submitted exactly once to the
+delivery boundary in [§6](#6-completion-failure-and-lifetime). Actor payload isn't
 recorded as a Spot's handler dispatch stage.
 
 ## 3. Common Attributes
@@ -323,20 +324,33 @@ message operation's contract — tracing doesn't add retry or route
 re-selection. Tracing doesn't change routing, handler dispatch, or
 lifecycle decisions.
 
-A worker doesn't wait for a slow or failed telemetry provider. If a
-bounded telemetry queue fills up, it can drop a normal trace and
-increment `zlink.observability.events.overflow`. Provider failure isn't a
-message operation failure.
+**Message processing doesn't wait for a telemetry provider.** Each process
+has one telemetry delivery boundary. The processing point that builds a
+trace is done once it hands an immutable snapshot of one record to this
+boundary. Calls to a logger, span, observer, exporter, and telemetry
+provider, and provider-failure handling, run only on this boundary's
+execution resource. That execution resource isn't an application worker,
+completion processing, the deadline scheduler, or the resource that
+delivers runtime status. Without a provider, no allocation is made just for
+the trace.
 
-An implementation logging a provider failure limits how many times the
-same error is recorded. It doesn't call the same provider again to create
-a trace for this log. Without a provider, it avoids an allocation made
-just for the trace.
+| Situation | Rule |
+|---|---|
+| Retention | Apart from the one record in progress, at most 8192 records not yet delivered to a provider are kept. A record handed to the execution resource but not yet received by a provider counts toward this limit. The limit isn't a public setting. While records are already waiting for delivery, the processing point that hands over a record doesn't wake the execution resource again. |
+| Saturation | When the limit is reached, the new record is dropped without distinguishing normal, error, and drop records, and the dropped count is added to `zlink.observability.events.overflow` (`source=message_flow`). The processing point that hands over the record doesn't wait, retry, or call a provider. |
+| Provider failure | It isn't a message operation failure. During the boundary's lifetime, only the first failure of each role (logger, trace, fallback) is recorded, using the application's fallback logger or process stderr rather than the failed provider; later failures only add to the count. A failed fallback isn't called again. Failure of the fallback record also doesn't change the message operation result, dispatch, or lifecycle. |
+| Host shutdown | Record submission for that host closes and records not yet delivered are dropped. Records dropped at shutdown aren't counted as overflow. A provider call in progress isn't awaited or forcibly ended. That call references only the immutable snapshot and the provider, not the host runtime. |
 
-When the provider failure itself is recorded, the implementation uses the
-application's fallback logger or process stderr, not the failed provider.
-Failure of that fallback record also doesn't change the message-operation
-result, dispatch, or lifecycle.
+In this document, recording a trace or dispatch error exactly once means
+submitting one record to this boundary exactly once. That record can still be dropped
+under the saturation and host-shutdown rules.
+
+In Node, this boundary's execution resource is a worker thread, and the boundary may hand several records to the worker at once. When
+creating this worker, the Framework preserves the inherited preload
+settings (`--require` and `--import`) for the standard telemetry bootstrap
+and delivers records only to the provider installed in that worker. The C++
+application logging async setting (capacity and the overflow policy,
+including `block`) doesn't apply to this boundary.
 
 A trace attribute only includes the identifier needed for diagnosis, and
 doesn't reference a caller buffer or runtime object after message

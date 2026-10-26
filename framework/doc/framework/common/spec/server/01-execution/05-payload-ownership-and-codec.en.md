@@ -105,6 +105,8 @@ the same logical release point at which the queue and handler stop retaining the
 **The handler is handed a deserialized owned object. It is not handed native storage or
 release responsibility.**
 
+When a handler registration declares the received message type as a class, the Framework hands over an instance of that class. If the application passes that value unchanged to another typed messaging API, the packet type information is kept. The Framework owns class materialization and codec selection and doesn't require the application to convert the value or register a per-message codec. Each language interface defines how the type is declared.
+
 Because of this rule, one deserialization copy is unavoidable. As long as a typed handler is
 offered, the wire representation must be turned into that language's object.
 
@@ -135,9 +137,9 @@ violation.
 
 ## 6. When Deserialization Happens
 
-**The header is read first, and payload deserialization happens only right before the
-handler, after execution authority is acquired.** See §4's diagram for the owner transition
-across the full path.
+**The header of an incoming application message is read first, and payload deserialization happens only right before the handler, after execution authority is acquired.** See §4's diagram for the owner transition across the full path.
+
+A requester may decode a reply on the completion execution resource. Each codec owner interprets the reply only once. The final consumer's structure and lifetime follow [Submit and Completion §9](01-submit-and-completion.en.md#9-request-completion--the-completion-race-and-timeout-budget).
 
 Reading the header first isn't a choice — it's needed to decide which owner to send it to. The
 payload, on the other hand, is seen by no one until the handler runs.

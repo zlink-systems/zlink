@@ -81,8 +81,8 @@ public final class ZLinkJsonMessageSerializer
     }
 
     @Override
-    public <T> T deserializeBorrowed(Message message, Class<T> type) {
-        return decodeJson(message.dataBuffer(), type);
+    public <T> T deserializeBorrowed(ByteBuffer payload, Class<T> type) {
+        return decodeJson(payload, type);
     }
 
     // Package-private for the heap-range regression test.

@@ -157,8 +157,8 @@ internal abstract partial class ZLinkSpotActivation
             return state.Result;
         }
 
-        await ExecuteSerializedAsync(
-            static async (activation, state, ct) =>
+        await _serial.ExecuteLifecycleAsync(
+            async (activation, ct) =>
             {
                 state.Result = await activation.HandlerInvoker.InvokeActorJoinAsync(
                     state.Descriptor,
@@ -167,7 +167,6 @@ internal abstract partial class ZLinkSpotActivation
                     ct
                 );
             },
-            state,
             cancellationToken
         );
 

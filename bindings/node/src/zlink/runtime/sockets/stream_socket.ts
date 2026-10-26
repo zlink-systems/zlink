@@ -47,8 +47,8 @@ export class StreamSocket extends SocketBase {
     let raw;
     try {
       raw = ((flags | 0) & (RecvFlags.DontWait | 0))
-        ? native.socketRecvMessageNoWait(this.receiveHandle())
-        : native.socketRecvMessage(this.receiveHandle(), flags | 0);
+        ? native.socketRecvMessageNoWait(this.receiveHandle(), Buffer.allocUnsafe)
+        : native.socketRecvMessage(this.receiveHandle(), flags | 0, Buffer.allocUnsafe);
     } catch (error) {
       throw recvNativeError(error, 'recv failed');
     }
@@ -75,7 +75,7 @@ export class StreamSocket extends SocketBase {
     result.close();
     state._receiving = true;
     try {
-      const raw = native.socketStreamRecvPacket(this.receiveHandle(), flags | 0);
+      const raw = native.socketStreamRecvPacket(this.receiveHandle(), flags | 0, Buffer.allocUnsafe);
       if (raw == null) return false;
       state._routingId = RoutingId.from(raw.routingId);
       state._header = messageFromNativeBuffer(raw.header);

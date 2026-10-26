@@ -2,7 +2,7 @@
 
 Serialized, machine-local gates used to close a Core/framework change. Logs go to `zlink-work/gates/<tag>/`.
 
-A new tree needs no manual preparation: `rebuild-dev.sh <tag>` then the gate. Machine prerequisites are checked once at start by `check-env.sh` (run it directly to see `ok`/`missing <install command>` per item); the procedure and its rationale live in `doc/principal/dev/worktree-setup.ko.md`.
+A new tree needs no manual preparation: `rebuild-dev.sh <tag>` then the gate. Machine prerequisites are checked once at start by `check-env.sh` (run it directly to see `ok`/`missing <install command>` per item); Playwright Chromium is checked only by `framework-gate.sh`, because its manifest exists after `rebuild-dev.sh` reinstalls node; the procedure and its rationale live in `doc/principal/dev/worktree-setup.ko.md`.
 
 | Script | What it does |
 |---|---|

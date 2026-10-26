@@ -12,6 +12,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
 import java.util.function.BooleanSupplier;
 import java.util.function.Supplier;
@@ -49,7 +50,7 @@ public final class BenchHttpApplication implements AutoCloseable {
                 if (bytes.length > 65_536) {
                     throw new IllegalArgumentException("trigger body is too large");
                 }
-                Outcome outcome = controller.start(parse(new String(bytes, StandardCharsets.UTF_8)));
+                Outcome outcome = controller.start(parse(new String(bytes, StandardCharsets.UTF_8))).join();
                 respond(exchange, outcome.status(), outcome.body());
             } catch (IllegalArgumentException error) {
                 respond(exchange, 400, "{\"reason\":" + quote(error.getMessage()) + "}");
@@ -85,7 +86,7 @@ public final class BenchHttpApplication implements AutoCloseable {
         private final BooleanSupplier ready;
         private final Supplier<Counters> counters;
         private final Workload workload;
-        private final Map<String, String> acknowledgements = new HashMap<>();
+        private final Map<String, CompletableFuture<Outcome>> acknowledgements = new HashMap<>();
         private volatile String phase = "idle";
         private volatile String failure;
         private volatile ObservedTrigger lastTrigger;
@@ -97,38 +98,41 @@ public final class BenchHttpApplication implements AutoCloseable {
             this.workload = workload;
         }
 
-        private synchronized Outcome start(Trigger request) {
+        private synchronized CompletableFuture<Outcome> start(Trigger request) {
             String key = request.runId() + "/" + request.cellId() + "/" + request.phase();
-            String previous = acknowledgements.get(key);
+            CompletableFuture<Outcome> previous = acknowledgements.get(key);
             if (previous != null) {
-                return new Outcome(200, previous);
+                return previous;
             }
             if (!ready.getAsBoolean()) {
-                return reject(request, "source is not ready");
+                return CompletableFuture.completedFuture(reject(request, "source is not ready"));
             }
             if (!"idle".equals(phase)) {
-                return reject(request, "phase " + phase + " has not completed");
+                return CompletableFuture.completedFuture(
+                    reject(request, "phase " + phase + " has not completed"));
             }
-            long receivedAt = System.currentTimeMillis();
-            long startedAt = BenchMetricHeader.nowNs();
-            lastTrigger = new ObservedTrigger(request, receivedAt);
+            lastTrigger = new ObservedTrigger(request, System.currentTimeMillis());
             phase = request.phase();
             failure = null;
-            String reply = "{\"accepted\":true,\"runId\":" + quote(request.runId())
-                + ",\"cellId\":" + quote(request.cellId()) + ",\"phase\":"
-                + quote(request.phase()) + ",\"startedAt\":" + startedAt + "}";
-            acknowledgements.put(key, reply);
+            CompletableFuture<Outcome> completed = new CompletableFuture<>();
+            acknowledgements.put(key, completed);
             Thread.ofPlatform().daemon(true).name("bench-phase-" + request.phase()).start(() -> {
                 try {
-                    workload.run(request);
+                    long startedAt = workload.run(request);
+                    String reply = "{\"accepted\":true,\"runId\":" + quote(request.runId())
+                        + ",\"cellId\":" + quote(request.cellId()) + ",\"phase\":"
+                        + quote(request.phase()) + ",\"startedAt\":" + startedAt + "}";
                     phase = "idle";
+                    completed.complete(new Outcome(200, reply));
                 } catch (Throwable error) {
                     failure = describe(error);
                     phase = "failed";
+                    completed.complete(new Outcome(500,
+                        "{\"accepted\":false,\"reason\":" + quote(failure) + "}"));
                     error.printStackTrace(System.err);
                 }
             });
-            return new Outcome(200, reply);
+            return completed;
         }
 
         private Outcome reject(Trigger request, String reason) {
@@ -261,7 +265,7 @@ public final class BenchHttpApplication implements AutoCloseable {
 
     @FunctionalInterface
     public interface Workload {
-        void run(Trigger request) throws Exception;
+        long run(Trigger request) throws Exception;
     }
 
     private record Outcome(int status, String body) {

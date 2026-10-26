@@ -151,6 +151,8 @@ specified in the
 
 ## 4. Common Result, Coroutine, And Message
 
+Completion delivery follows [Submit and Completion §11](../../../01-execution/01-submit-and-completion.en.md#11-the-execution-turn-of-the-completion-callback-implementation). The declarations below define the public signatures, move-only semantics, and result-reference semantics of `result()`. Layout, `sizeof`, and eager state allocation are not contractual guarantees.
+
 ```cpp
 namespace zlink::framework {
 

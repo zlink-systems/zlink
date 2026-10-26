@@ -6212,26 +6212,36 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         }
     }
 
-    // One node-lane turn decides the record's source authority and records
-    // its liveness (mesh-node/transport-liveness). The state travels as a
+    // One node-lane turn reads the source peer for the whole record: whether
+    // its route is current, its liveness (mesh-node/transport-liveness) and
+    // the lifecycle generation the record carries. The state travels as a
     // value, so the per-record check creates no closure or delegate.
-    private bool HasCurrentSource(RoutingId sourceRid, ulong routeGeneration) =>
-        AwaitStateLane(
+    private bool HasCurrentSource(
+        RoutingId sourceRid,
+        ulong routeGeneration,
+        out ulong sourceGeneration
+    )
+    {
+        (bool Admitted, ulong Generation) source = AwaitStateLane(
             _lane.RunAsync(
                 static state =>
                 {
+                    if (!state.Node._peersByRid.TryGetValue(state.SourceRid, out var peer))
+                        return (false, 0UL);
                     var admitted =
-                        state.Node._peersByRid.TryGetValue(state.SourceRid, out var peer)
-                        && peer.Admission is not null
+                        peer.Admission is not null
                         && peer.State != MeshPeerState.NotRequired
                         && peer.RouteGeneration == state.RouteGeneration;
                     if (admitted)
-                        peer!.Liveness?.RecordReceived(Stopwatch.GetTimestamp());
-                    return admitted;
+                        peer.Liveness?.RecordReceived(Stopwatch.GetTimestamp());
+                    return (admitted, peer.LifecycleGeneration);
                 },
                 (Node: this, SourceRid: sourceRid, RouteGeneration: routeGeneration)
             )
         );
+        sourceGeneration = source.Generation;
+        return source.Admitted;
+    }
 
     internal static bool IsAllowedInfrastructureControl(
         IReadOnlyList<Message> parts,
@@ -6725,7 +6735,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             && head[2] == ServiceWireConstants.WireMajor
             && IsAllowedInfrastructureControlCommand((ServiceWireConstants.Command)head[3]);
         if (
-            !HasCurrentSource(sourceRid, received.RouteGeneration)
+            !HasCurrentSource(sourceRid, received.RouteGeneration, out var sourceGeneration)
             // Core's record identifies the route; HELLO may precede the
             // Framework snapshot observation (Core ROUTER §10.1).
             && !(
@@ -6785,7 +6795,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     )
                 )
                     break;
-                return ProcessStateful(sourceRid, stateful, ref ownership);
+                return ProcessStateful(sourceRid, sourceGeneration, stateful, ref ownership);
             }
             case ServiceWireConstants.Command.ActorJoin:
             {
@@ -6833,13 +6843,11 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     )
                 )
                 {
-                    if (
-                        readySource != sourceRid
-                        || ready.SourceNodeGeneration != ResolvePeerGeneration(sourceRid)
-                    )
+                    if (readySource != sourceRid || ready.SourceNodeGeneration != sourceGeneration)
                         break;
                     return ProcessStateful(
                         sourceRid,
+                        sourceGeneration,
                         ready,
                         ref ownership,
                         instanceReadyRoute: true
@@ -6975,7 +6983,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                         MeshReadyDomains.Application,
                         sourceRid,
                         logicalMulticast.SourceSpotId,
-                        ResolvePeerGeneration(sourceRid),
+                        sourceGeneration,
                         default,
                         default,
                         default,
@@ -7055,7 +7063,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 MeshReadyDomains.Application,
                 sourceRid,
                 string.Empty,
-                ResolvePeerGeneration(sourceRid),
+                sourceGeneration,
                 default,
                 request ? new MeshOperationId(0, application.Correlation) : default,
                 application.Command == ServiceWireConstants.Command.NodeRequest
@@ -8249,6 +8257,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
 
     private bool ProcessStateful(
         RoutingId sourceRid,
+        ulong sourceGeneration,
         ZLinkServiceWireCodec.StatefulRecord stateful,
         ref RawIngressOwnership ownership,
         bool instanceReadyRoute = false
@@ -8462,7 +8471,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 var followed = messageFollowTarget?.TryFollow(
                     new ActorMessageFollowIngress(
                         sourceRid,
-                        ResolvePeerGeneration(sourceRid),
+                        sourceGeneration,
                         sourceSpotId,
                         stateful.TargetActor,
                         stateful.OperationId,
@@ -8548,7 +8557,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 MeshReadyDomains.Application,
                 sourceRid,
                 sourceSpotId,
-                ResolvePeerGeneration(sourceRid),
+                sourceGeneration,
                 sourceActor,
                 stateful.OperationId,
                 request ? operationKind : default,
@@ -10033,23 +10042,24 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             }
         }
 
-        foreach (var activity in activities ?? [])
-        {
-            if (activity.Closed is { } closedRid)
-                Publish(MeshMonitorEventKind.PeerClosed, peerRid: closedRid);
-            if (activity.ProbeId != 0)
+        if (activities is not null)
+            foreach (var activity in activities)
             {
-                SendControl(
-                    activity.Target,
-                    activity.Generation,
-                    ServiceWireConstants.Command.LivenessProbe,
-                    ZLinkServiceWireCodec.EncodeLiveness(
+                if (activity.Closed is { } closedRid)
+                    Publish(MeshMonitorEventKind.PeerClosed, peerRid: closedRid);
+                if (activity.ProbeId != 0)
+                {
+                    SendControl(
+                        activity.Target,
+                        activity.Generation,
                         ServiceWireConstants.Command.LivenessProbe,
-                        activity.ProbeId
-                    )
-                );
+                        ZLinkServiceWireCodec.EncodeLiveness(
+                            ServiceWireConstants.Command.LivenessProbe,
+                            activity.ProbeId
+                        )
+                    );
+                }
             }
-        }
         return nextLiveness == Timeout.InfiniteTimeSpan
             ? TimeSpan.MaxValue
             : Stopwatch.GetElapsedTime(0, now) + nextLiveness;
@@ -10093,20 +10103,21 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     nextLiveness = remaining;
             }
         }
-        foreach (var peer in expired ?? [])
-        {
-            if (
-                !_peersByRid.TryGetValue(peer.RoutingId, out var current)
-                || !ReferenceEquals(current, peer)
-            )
-                continue;
-            var physicalRid = peer.PhysicalRoutingId;
-            var closed = EndRouteAdmissionUnderLock(
-                new RouterRoute(peer.RoutingId, peer.RouteGeneration)
-            );
-            DisconnectTransport(peer, physicalRid);
-            (activities ??= []).Add((closed, default, 0, 0));
-        }
+        if (expired is not null)
+            foreach (var peer in expired)
+            {
+                if (
+                    !_peersByRid.TryGetValue(peer.RoutingId, out var current)
+                    || !ReferenceEquals(current, peer)
+                )
+                    continue;
+                var physicalRid = peer.PhysicalRoutingId;
+                var closed = EndRouteAdmissionUnderLock(
+                    new RouterRoute(peer.RoutingId, peer.RouteGeneration)
+                );
+                DisconnectTransport(peer, physicalRid);
+                (activities ??= []).Add((closed, default, 0, 0));
+            }
         return (intents, activities, nextLiveness);
     }
 
@@ -10871,7 +10882,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         }
     }
 
-    private static ZLinkBackendRouteReceived DecodeDirectApplicationReply(
+    internal static ZLinkBackendRouteReceived DecodeDirectApplicationReply(
         ulong correlation,
         IReadOnlyList<Message> replyParts
     )
@@ -10881,7 +10892,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             if (
                 replyParts.Count == 0
                 || !ZLinkServiceWireCodec.TryDecodeReply(
-                    replyParts[0].ToArray(),
+                    replyParts[0].AsReadOnlySpan(),
                     out var reply,
                     out _
                 )

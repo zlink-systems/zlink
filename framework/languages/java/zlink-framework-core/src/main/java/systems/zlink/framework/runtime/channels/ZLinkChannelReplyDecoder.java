@@ -7,6 +7,7 @@ import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.ZLinkMessageSerializer;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.runtime.internal.service.ZLinkFrameworkMultipartView;
 import systems.zlink.framework.runtime.messaging.ZLinkMessagePayloads;
 
 import java.util.List;
@@ -43,18 +44,18 @@ final class ZLinkChannelReplyDecoder {
                         null,
                         header.metadata());
             }
-            return ZLinkMessagePayloads.deserialize(serializer, replies.get(1), replyType);
+            return ZLinkMessagePayloads.deserialize(
+                    serializer, ZLinkFrameworkMultipartView.buffer(replies, 1), replyType);
         }
         if (replies.isEmpty()) {
-            try (Message emptyReply = Message.from(new byte[0])) {
-                return ZLinkMessagePayloads.deserialize(serializer, emptyReply, replyType);
-            }
+            return ZLinkMessagePayloads.deserialize(
+                    serializer, java.nio.ByteBuffer.allocate(0), replyType);
         }
         RuntimeException lastError = null;
         for (int index = replies.size() - 1; index >= 0; index--) {
             Message reply = replies.get(index);
             try {
-                return ZLinkMessagePayloads.deserialize(serializer, reply, replyType);
+                return ZLinkMessagePayloads.deserialize(serializer, reply.dataBuffer(), replyType);
             } catch (RuntimeException directError) {
                 lastError = directError;
                 try {
@@ -64,10 +65,10 @@ final class ZLinkChannelReplyDecoder {
                     if (ok == null || !ok.asBoolean(false) || response == null) {
                         continue;
                     }
-                    try (Message responseMessage = Message.from(JSON.writeValueAsBytes(response))) {
-                        return ZLinkMessagePayloads.deserialize(
-                                serializer, responseMessage, replyType);
-                    }
+                    return ZLinkMessagePayloads.deserialize(
+                            serializer,
+                            java.nio.ByteBuffer.wrap(JSON.writeValueAsBytes(response)),
+                            replyType);
                 } catch (Exception envelopeError) {
                     directError.addSuppressed(envelopeError);
                 }

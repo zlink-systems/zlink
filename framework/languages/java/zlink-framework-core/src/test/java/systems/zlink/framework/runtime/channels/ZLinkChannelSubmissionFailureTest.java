@@ -261,7 +261,7 @@ final class ZLinkChannelSubmissionFailureTest {
                                                         sockets(node),
                                                         TARGET,
                                                         payload,
-                                                        Optional.of("command"),
+                                                        "command",
                                                         ZLinkChannelContentTypeFrame
                                                                 .DEFAULT_CONTENT_TYPE,
                                                         ZLinkApplicationMetadata.empty())
@@ -303,7 +303,7 @@ final class ZLinkChannelSubmissionFailureTest {
                                                                 registry,
                                                                 TARGET,
                                                                 payload,
-                                                                Optional.of("command"),
+                                                                "command",
                                                                 ZLinkChannelContentTypeFrame
                                                                         .DEFAULT_CONTENT_TYPE,
                                                                 ZLinkApplicationMetadata.empty())
@@ -338,9 +338,8 @@ final class ZLinkChannelSubmissionFailureTest {
                                                         runtime,
                                                         "orders",
                                                         sockets(node),
-                                                        TIMEOUT,
                                                         payload,
-                                                        Optional.of("command"))
+                                                        "command")
                                                 .submit());
 
                 assertEquals(rejection, failure);

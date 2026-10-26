@@ -59,7 +59,8 @@ scripts/format/format.sh --check         # 바꿀 파일이 있으면 exit 1, �
   실행을 거부한다. Windows에서는 WSL에서 실행한다.
 - Prettier는 `node_modules/.bin/prettier`가 있으면 그것을, 없으면 `package.json`의 버전으로
   `npx`를 쓴다.
-- `--check`는 `scripts/gate/framework-gate.sh`가 첫 단계로 실행한다. 포맷 커밋은
+- `--check`는 `scripts/gate/framework-gate.sh`가 첫 단계로 실행하고, merge queue에서는
+  `.github/workflows/framework-format.yml`의 `Framework source format` check가 실행한다. 포맷 커밋은
   `.git-blame-ignore-revs`에 등록한다.
 
 ## 4. 이 규칙을 고른 근거
