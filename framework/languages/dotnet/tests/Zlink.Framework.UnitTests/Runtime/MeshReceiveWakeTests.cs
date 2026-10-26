@@ -31,6 +31,33 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
     }
 
     [Fact]
+    public async Task IdleWaitObservationPreservesFiniteDeadlinesAndSkipsNonblockingTurns()
+    {
+        using var poller = new ControlledReceivePoller { CaptureIdleWait = true };
+        var events = new PollEvent[1];
+        Assert.Equal(0, poller.Wait(events, TimeSpan.Zero));
+        Assert.False(poller.IdleWait.Task.IsCompleted);
+        var nonblocking = Task.Run(() => poller.Wait(events, TimeSpan.Zero));
+        try
+        {
+            await Task.WhenAny(nonblocking, poller.IdleWait.Task).WaitAsync(CompletionBound);
+            Assert.False(poller.IdleWait.Task.IsCompleted);
+            Assert.Equal(0, await nonblocking.WaitAsync(CompletionBound));
+        }
+        finally
+        {
+            if (!nonblocking.IsCompleted)
+            {
+                poller.ReleaseWait();
+                await nonblocking.WaitAsync(CompletionBound);
+            }
+        }
+        var finite = TimeSpan.FromMilliseconds(1);
+        Assert.Equal(0, poller.Wait(events, finite));
+        Assert.Equal(finite, await poller.IdleWait.Task.WaitAsync(CompletionBound));
+    }
+
+    [Fact]
     public async Task LongManagedDeadlineWakesAnOtherwiseUnboundedWait()
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();
@@ -708,10 +735,11 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
         {
             if (CaptureIdleWait)
             {
-                if (++_waitCount == 1)
-                    return 0;
-                IdleWait.TrySetResult(timeout);
-                return _inner.Wait(destination, Timeout.InfiniteTimeSpan);
+                // Zero-time turns apply startup registrations and pending wakes.
+                // Observe the first blocking wait, preserving even a finite deadline.
+                if (timeout != TimeSpan.Zero)
+                    IdleWait.TrySetResult(timeout);
+                return _inner.Wait(destination, timeout);
             }
             if (++_waitCount == 1)
             {
