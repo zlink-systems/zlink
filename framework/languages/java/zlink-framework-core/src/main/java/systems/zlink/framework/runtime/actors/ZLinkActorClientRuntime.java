@@ -167,7 +167,11 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
                     started == ZLinkRequestMetrics.NO_START ? -1L
                             : ZLinkRequestMetrics.elapsed(started, System.nanoTime()), error);
         });
-        resolveActorAddress(actorId, requestTimeout).whenComplete((row, error) -> {
+        CompletionStage<ActorRoute> route = resolveActorAddress(actorId, requestTimeout);
+        systems.zlink.framework.runtime.internal.ZLinkCompletionBridge.forwardCancellation(
+                result, route);
+        route.whenComplete((row, error) -> {
+            if (result.isDone()) return;
             if (error != null) {
                 result.completeExceptionally(unwrap(error));
                 return;
@@ -187,8 +191,29 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
 
     private CompletionStage<ActorRoute> resolveActorAddress(
             String actorId, Duration readinessTimeout) {
-        return awaitRuntimeReady(readinessTimeout)
-                .thenCompose(ignored -> locations.resolveActor(actorId));
+        CompletionStage<Void> readiness = awaitRuntimeReady(readinessTimeout);
+        CompletableFuture<ActorRoute> route = new CompletableFuture<>();
+        systems.zlink.framework.runtime.internal.ZLinkCompletionBridge.forwardCancellation(
+                route, readiness);
+        readiness.whenComplete((ignored, error) -> {
+            if (route.isDone()) return;
+            if (error != null) {
+                route.completeExceptionally(unwrap(error));
+                return;
+            }
+            try {
+                CompletionStage<ActorRoute> resolved = locations.resolveActor(actorId);
+                systems.zlink.framework.runtime.internal.ZLinkCompletionBridge.forwardCancellation(
+                        route, resolved);
+                resolved.whenComplete((row, failure) -> {
+                    if (failure != null) route.completeExceptionally(unwrap(failure));
+                    else route.complete(row);
+                });
+            } catch (RuntimeException | Error failure) {
+                route.completeExceptionally(failure);
+            }
+        });
+        return route;
     }
 
     private ZLinkServiceM6BWireCodec.ActorRouteFence actorRouteFence(
@@ -259,6 +284,8 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
                         runtimeReadyWaiters.decrementAndGet();
                     }
                 };
+        systems.zlink.framework.runtime.internal.ZLinkCompletionBridge.forwardCancellation(
+                result, release);
         runtimeReady.whenComplete(
                 (ignored, failure) -> {
                     release.run();

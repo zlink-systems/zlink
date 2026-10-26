@@ -230,6 +230,65 @@ final class ZLinkActorClientRuntimeTest {
     }
 
     @Test
+    void callerCancellationReachesTheSubmittedActorRequest() throws Exception {
+        var bindingReply = new CompletableFuture<List<Message>>();
+        var submitted = new CompletableFuture<Void>();
+        var client = new ZLinkActorClientRuntime(
+                () -> new RecordingSpotNode() {
+                    @Override
+                    public CompletionStage<List<Message>> requestToActor(
+                            ZLinkServiceM6BWireCodec.ActorRouteFence target,
+                            List<Message> parts, SendFlags flags, Duration timeout,
+                            CompletableFuture<Void> admission) {
+                        admission.complete(null);
+                        submitted.complete(null);
+                        return bindingReply;
+                    }
+                },
+                new ZLinkStoreLocationResolvers(
+                        ZLinkRegisteredLocationStores.fromUnified(storeWithActor("actor-1")),
+                        new ZLinkLocationOptions()),
+                new ZLinkJsonMessageSerializer(), Duration.ofSeconds(5),
+                ZLinkTestAdmissionFactory.create());
+        var caller = client.requestToActor("actor-1", new Ping("hello"))
+                .submit(Pong.class).toCompletableFuture();
+        submitted.get(1, java.util.concurrent.TimeUnit.SECONDS);
+        assertTrue(caller.cancel(false));
+        assertTrue(bindingReply.isCancelled(), "caller cancellation did not reach binding operation");
+    }
+
+    @Test
+    void cancellingReadinessWaitPreventsActorSubmissionAndKeepsSharedReadiness() throws Exception {
+        var ready = new CompletableFuture<Void>();
+        var attempts = new java.util.concurrent.atomic.AtomicInteger();
+        var client = new ZLinkActorClientRuntime(
+                () -> new RecordingSpotNode() {
+                    @Override
+                    public CompletionStage<List<Message>> requestToActor(
+                            ZLinkServiceM6BWireCodec.ActorRouteFence target,
+                            List<Message> parts, SendFlags flags, Duration timeout,
+                            CompletableFuture<Void> admission) {
+                        attempts.incrementAndGet();
+                        return CompletableFuture.completedFuture(List.of());
+                    }
+                },
+                new ZLinkStoreLocationResolvers(
+                        ZLinkRegisteredLocationStores.fromUnified(storeWithActor("actor-1")),
+                        new ZLinkLocationOptions()),
+                new ZLinkJsonMessageSerializer(), Duration.ofSeconds(5),
+                ZLinkTestAdmissionFactory.create(), ready);
+        var caller = client.requestToActor("actor-1", new Ping("hello"))
+                .submit(Pong.class).toCompletableFuture();
+        assertTrue(caller.cancel(false));
+        assertFalse(ready.isDone(), "shared runtime readiness belongs to the runtime");
+        ready.complete(null);
+        assertEquals(0, attempts.get());
+        var field = ZLinkActorClientRuntime.class.getDeclaredField("runtimeReadyWaiters");
+        field.setAccessible(true);
+        assertEquals(0, ((java.util.concurrent.atomic.AtomicInteger) field.get(client)).get());
+    }
+
+    @Test
     void disconnectedApplicationRequestPreservesTerminalWithoutResubmission() {
         RequestFailingSpotNode node = new RequestFailingSpotNode(RequestResult.NOT_CONNECTED);
         ZLinkActorClientRuntime client =

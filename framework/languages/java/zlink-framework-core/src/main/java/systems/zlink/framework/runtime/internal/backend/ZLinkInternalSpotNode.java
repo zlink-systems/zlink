@@ -585,6 +585,8 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
             CompletableFuture<T> completion) {
         CompletionStage<List<Message>> reply =
                 requestToActor(actor, parts, flags, timeout, requestAdmission);
+        systems.zlink.framework.runtime.internal.ZLinkCompletionBridge.forwardCancellation(
+                completion, reply);
         reply.whenComplete((messages, failure) -> {
             if (failure != null) {
                 completion.completeExceptionally(mapFailure.apply(failure));
