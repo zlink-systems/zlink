@@ -3244,19 +3244,36 @@ final class ZLinkJavaRawMeshNode
             List<Message> parts,
             Duration timeout,
             CompletableFuture<Void> requestAdmission) {
+        CompletableFuture<List<Message>> completion = new CompletableFuture<>();
+        requestActor(target, parts, timeout, requestAdmission,
+                java.util.function.Function.identity(), reply -> reply.forEach(Message::close),
+                completion);
+        return completion;
+    }
+
+    <T> void requestActor(
+            ZLinkServiceM6BWireCodec.ActorRouteFence target,
+            List<Message> parts,
+            Duration timeout,
+            CompletableFuture<Void> requestAdmission,
+            java.util.function.Function<List<Message>, T> decodeReply,
+            java.util.function.Consumer<T> discardReply,
+            CompletableFuture<T> completion) {
         ZLinkBackendActorRef actor = target.actor();
         Optional<ZLinkServiceTopologyRegistry.Peer> peer =
                 topology == null ? Optional.empty() : topology.peerFromOwner(actor.nodeRid());
         if (peer.isEmpty()) {
-            return CompletableFuture.failedFuture(
+            completion.completeExceptionally(
                     new ZLinkFrameworkException(
                             ZLinkFrameworkErrorKind.UNAVAILABLE,
                             "remote Actor route is not connected"));
+            return;
         }
         long correlation = allocateCorrelation();
         UUID operationId = UUID.randomUUID();
-        List<byte[]> frames =
-                List.of(
+        RouterSocket current = requireStarted();
+        List<Message> frames =
+                encodeApplicationFrames(
                         statefulWire.encodeActorHeader(
                                 true,
                                 0,
@@ -3265,40 +3282,10 @@ final class ZLinkJavaRawMeshNode
                                 operationId.getLeastSignificantBits(),
                                 0,
                                 null,
-                                target),
-                        wire.encodeFrameworkMultipartFrame(parts));
-        ZLinkServiceOperationRegistry.Operation<ZLinkBackendReceived> operation =
-                operations.register(operationId, timeout);
-        port.request(requireStarted(), actor.nodeRid(), frames, timeout, requestAdmission)
-                .whenComplete(
-                        (replyFrames, failure) ->
-                                completeActorRequest(
-                                        operation.id(),
-                                        actor,
-                                        correlation,
-                                        requestTerminal(failure),
-                                        replyFrames == null ? List.of() : replyFrames));
-        return operation
-                .completion()
-                .thenCompose(
-                        received -> {
-                            if (received.result() != ZLinkBackendRequestResult.OK) {
-                                //  Ownership-aware translator: the coarse remote terminal
-                                //  refined by the fine failure code (spec 32:81-118, 99-103),
-                                //  replacing the divergent hand-rolled switch.
-                                ZLinkFrameworkErrorKind errorKind =
-                                        received.result()
-                                                .toFrameworkErrorKind(received.failureCode());
-                                received.close();
-                                return CompletableFuture.failedFuture(
-                                        ZLinkRequestFailureMapping.receivedFailure(
-                                                errorKind,
-                                                "Actor request failed: " + received.result(),
-                                                received.failureCode(),
-                                                java.util.Map.of()));
-                            }
-                            return CompletableFuture.completedFuture(received.parts());
-                        });
+                                target), null, parts);
+        port.requestMessages(current, actor.nodeRid(), frames, timeout,
+                replyFrames -> decodeReply.apply(decodeActorReply(correlation, replyFrames)),
+                discardReply, null, requestAdmission, completion);
     }
 
     CompletionStage<ZLinkServiceM6BWireCodec.BoundSessionBindReply> bindRemoteStreamSession(
@@ -4594,23 +4581,8 @@ final class ZLinkJavaRawMeshNode
         peerReconcileRequester = Objects.requireNonNull(requester, "requester");
     }
 
-    private void completeActorRequest(
-            UUID operationId,
-            ZLinkBackendActorRef actor,
-            long correlation,
-            RequestResult result,
-            List<byte[]> frames) {
-        if (result != RequestResult.OK) {
-            operations.complete(
-                    operationId,
-                    new ZLinkBackendReceived(
-                            backendResult(result),
-                            Optional.of(actor.nodeRid()),
-                            Optional.empty(),
-                            Optional.of(correlation),
-                            List.of()));
-            return;
-        }
+    private List<Message> decodeActorReply(long correlation, List<Message> frames) {
+        ZLinkServiceM6AWireCodec.Reply header;
         try {
             if (frames.isEmpty() || frames.size() > 2) {
                 throw new IllegalArgumentException("invalid Actor reply frame count");
@@ -4619,42 +4591,29 @@ final class ZLinkJavaRawMeshNode
             //  of request-specific-tail's tail-bearing originalOperationKind
             //  cases, so the tail MUST be empty (schema "otherwise" branch).
             //  See decodeRequestReply() below for the full rationale.
-            if (frames.getFirst().length != 21) {
+            if (frames.getFirst().size()
+                    != PREFIX_BYTES + Long.BYTES + 2 * Integer.BYTES) {
                 throw new IllegalArgumentException(
                         "generic Actor reply carries an operation-specific tail");
             }
-            ZLinkServiceM6AWireCodec.Reply header = wire.decodeReplyHeader(frames.getFirst());
+            header = wire.decodeReplyHeader(frames.getFirst().toByteArray());
             if (header.correlation() != correlation
                     || (header.terminalResult() == 0) != (frames.size() == 2)) {
                 throw new IllegalArgumentException("Actor reply terminal mismatch");
             }
-            List<Message> replyParts =
-                    header.terminalResult() == 0
-                            ? decodeApplicationMessages(frames.get(1))
-                            : List.of();
-            ZLinkBackendReceived received =
-                    new ZLinkBackendReceived(
-                            header.terminalResult() == 0
-                                    ? ZLinkBackendRequestResult.OK
-                                    : backendResult(header.terminalResult()),
-                            header.failureCode(),
-                            Optional.of(actor.nodeRid()),
-                            Optional.empty(),
-                            Optional.of(correlation),
-                            replyParts);
-            if (!operations.complete(operationId, received)) {
-                received.close();
+            if (header.terminalResult() == 0) {
+                return ZLinkServiceM6AWireCodec.decodeFrameworkMultipartFrame(
+                        frames.get(1).dataBuffer());
             }
         } catch (RuntimeException failure) {
-            operations.complete(
-                    operationId,
-                    new ZLinkBackendReceived(
-                            ZLinkBackendRequestResult.PROTOCOL_ERROR,
-                            Optional.of(actor.nodeRid()),
-                            Optional.empty(),
-                            Optional.of(correlation),
-                            List.of()));
+            throw ZLinkRequestFailureMapping.receivedFailure(
+                    ZLinkFrameworkErrorKind.PROTOCOL_ERROR, "Invalid Actor reply.",
+                    0, java.util.Map.of());
         }
+        ZLinkBackendRequestResult result = backendResult(header.terminalResult());
+        throw ZLinkRequestFailureMapping.receivedFailure(
+                result.toFrameworkErrorKind(header.failureCode()),
+                "Actor request failed: " + result, header.failureCode(), java.util.Map.of());
     }
 
     private CompletionStage<ZLinkBackendReceived> request(

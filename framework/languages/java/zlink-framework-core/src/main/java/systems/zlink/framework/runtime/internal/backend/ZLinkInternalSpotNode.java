@@ -572,4 +572,31 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
             SendFlags flags,
             Duration timeout,
             CompletableFuture<Void> requestAdmission);
+    /** Delivers to the prepared receiver; the decoder consumes the reply messages. */
+    default <T> void requestToActor(
+            ZLinkServiceM6BWireCodec.ActorRouteFence actor,
+            List<Message> parts,
+            SendFlags flags,
+            Duration timeout,
+            CompletableFuture<Void> requestAdmission,
+            java.util.function.Function<List<Message>, T> decodeReply,
+            java.util.function.Consumer<T> discardReply,
+            java.util.function.Function<Throwable, Throwable> mapFailure,
+            CompletableFuture<T> completion) {
+        CompletionStage<List<Message>> reply =
+                requestToActor(actor, parts, flags, timeout, requestAdmission);
+        reply.whenComplete((messages, failure) -> {
+            if (failure != null) {
+                completion.completeExceptionally(mapFailure.apply(failure));
+                return;
+            }
+            try {
+                systems.zlink.framework.runtime.internal.ZLinkCompletionBridge.completeOrDiscard(
+                        completion, decodeReply.apply(messages), discardReply);
+            } catch (RuntimeException | Error error) {
+                completion.completeExceptionally(error);
+            }
+        });
+    }
+
 }

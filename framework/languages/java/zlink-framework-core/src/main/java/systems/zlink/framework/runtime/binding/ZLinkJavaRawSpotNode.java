@@ -770,6 +770,26 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                 requestAdmission);
     }
 
+    @Override
+    public <T> void requestToActor(
+            ZLinkServiceM6BWireCodec.ActorRouteFence target,
+            List<Message> parts,
+            SendFlags flags,
+            Duration timeout,
+            CompletableFuture<Void> requestAdmission,
+            java.util.function.Function<List<Message>, T> decodeReply,
+            java.util.function.Consumer<T> discardReply,
+            java.util.function.Function<Throwable, Throwable> mapFailure,
+            CompletableFuture<T> completion) {
+        if (!routingId().equals(target.actor().nodeRid())) {
+            owner.requestActor(target, parts, timeout, requestAdmission,
+                    decodeReply, discardReply, completion);
+            return;
+        }
+        ZLinkInternalSpotNode.super.requestToActor(target, parts, flags, timeout,
+                requestAdmission, decodeReply, discardReply, mapFailure, completion);
+    }
+
     CompletionStage<List<Message>> requestExactActor(
             ZLinkBackendActorRef actor,
             List<Message> parts,
