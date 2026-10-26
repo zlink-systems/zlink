@@ -188,15 +188,6 @@ export class ZLinkMeshCompletionTable {
     return entry;
   }
 
-  nextDeadlineMs(): number {
-    let deadline = Number.POSITIVE_INFINITY;
-    for (let index = 0; index < this.slots.length; index++) {
-      const candidate = this.slots[index]!.entry?.deadlineMs;
-      if (candidate !== undefined && candidate < deadline) deadline = candidate;
-    }
-    return deadline;
-  }
-
   expire(nowMs: number): number {
     let expired = 0;
     for (let index = 0; index < this.slots.length; index++) {

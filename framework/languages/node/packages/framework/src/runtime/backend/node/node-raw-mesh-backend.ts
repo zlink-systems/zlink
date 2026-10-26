@@ -1659,8 +1659,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       nowMs + MESH_BACKEND_MAINTENANCE_INTERVAL_MS,
       Math.min(
         this.runtime?.nextMaintenanceDeadlineMs(nowMs) ?? Number.POSITIVE_INFINITY,
-        this.stateful?.nextMaintenanceDeadlineMs() ?? Number.POSITIVE_INFINITY,
-        this.completionTable?.nextDeadlineMs() ?? Number.POSITIVE_INFINITY
+        this.stateful?.nextMaintenanceDeadlineMs() ?? Number.POSITIVE_INFINITY
       )
     );
     if (dueMs === Number.POSITIVE_INFINITY) {
