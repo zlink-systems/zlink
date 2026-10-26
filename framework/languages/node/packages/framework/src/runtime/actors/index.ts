@@ -217,10 +217,8 @@ export class DefaultZLinkActorManager implements ZLinkActorManager {
     const destroyTask = state.getOrStartDestroy(entryNodeRid, (nativeRef) =>
       this.terminateActor(state, async () => {
         if (nativeRef !== undefined) {
-          const completion = await completions.submit(
-            () => node.destroyActor(nativeRef, 0),
-            signal
-          );
+          const completion = await completions.submit(() => node.destroyActor(nativeRef, 0), signal)
+            .pending;
           try {
             if (completion.terminalResult !== 0 || completion.failureErrno !== 0) {
               //  Classify the (terminal, fine) pair via the shared translator
