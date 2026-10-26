@@ -138,7 +138,7 @@ import java.util.stream.Collectors;
 
 public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         implements ZLinkSpotManager, AutoCloseable {
-    public static java.util.Set<Class<?>> prepareConstruction(
+    public static Set<Class<?>> prepareConstruction(
             ZLinkFrameworkRegistration registration, ZLinkHandlerActivator handlerFactory) {
         return ZLinkSpotActivationFactory.prepareConstruction(registration, handlerFactory);
     }

@@ -8,21 +8,79 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import org.junit.jupiter.api.Test;
 
+import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.channels.ZLinkRouteMessageContext;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
+import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerInstanceOwner;
+import systems.zlink.framework.spots.ZLinkSpot;
+import systems.zlink.framework.spots.ZLinkSpotContext;
 
+import java.lang.reflect.Array;
 import java.lang.reflect.Constructor;
+import java.util.AbstractMap;
+import java.util.AbstractSet;
 import java.util.Arrays;
+import java.util.Iterator;
+import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicInteger;
 
 final class ZLinkHandlerPreparationTest {
     @Test
+    @SuppressWarnings("unchecked")
+    void dispatchConstructionDoesNotHashTheCatalogServiceKeys() throws Exception {
+        var services = ZLinkHandlerActivator.services();
+        var known = new Known();
+        services.add(Known.class, known);
+        for (int dimensions = 1; dimensions <= 64; dimensions++) {
+            Object extra = Array.newInstance(Known.class, new int[dimensions]);
+            services.add(extra.getClass(), extra);
+        }
+        var field = ZLinkHandlerActivator.MutableServices.class.getDeclaredField("serviceIndex");
+        field.setAccessible(true);
+        var index = (Map<Class<?>, Object>) field.get(services);
+        var hashes = new AtomicInteger();
+        var keys = new AbstractSet<Class<?>>() {
+            public Iterator<Class<?>> iterator() { return index.keySet().iterator(); }
+            public int size() { return index.size(); }
+            public boolean contains(Object key) { return index.containsKey(key); }
+            public int hashCode() {
+                hashes.incrementAndGet();
+                return super.hashCode();
+            }
+        };
+        field.set(services, new AbstractMap<Class<?>, Object>() {
+            public Set<Map.Entry<Class<?>, Object>> entrySet() {
+                return index.entrySet();
+            }
+            public Object get(Object key) { return index.get(key); }
+            public Set<Class<?>> keySet() { return keys; }
+        });
+        keys.hashCode();
+        assertEquals(1, hashes.get());
+        services.prepare(CatalogHandler.class);
+        hashes.set(0);
+        for (int dispatch = 0; dispatch < 8; dispatch++) {
+            assertSame(known, ((CatalogHandler) services.create(CatalogHandler.class)).known);
+            try (var activation = services.openActivation()) {
+                assertSame(known, ((CatalogHandler) activation.create(CatalogHandler.class)).known);
+                assertSame(known, ((CatalogHandler) activation.create(
+                        CatalogHandler.class, ignored -> null)).known);
+            }
+            try (var owner = new ZLinkHandlerInstanceOwner(services)) {
+                assertSame(known, ((CatalogHandler) owner.instance(CatalogHandler.class)).known);
+            }
+        }
+        assertEquals(0, hashes.get(), "dispatch must look up construction plans by handler type only");
+    }
+
+    @Test
     void preparedServicesConstructionAcceptsAnotherActivationImplementation() {
         var services = ZLinkHandlerActivator.services();
-        var plan = services.prepareConstruction(CatalogHandler.class, java.util.Set.of(Known.class));
+        var plan = services.prepareConstruction(CatalogHandler.class, Set.of(Known.class));
         var dependency = new Known();
         try (var activation = ZLinkHandlerActivator.reflection().openActivation()) {
             assertSame(dependency, ((CatalogHandler) plan.create(activation, type -> dependency)).known);
@@ -35,7 +93,7 @@ final class ZLinkHandlerPreparationTest {
         var reflection = ZLinkHandlerActivator.reflection();
         var adapter = new ZLinkHandlerActivator() {
             public Object create(Class<?> type) { return reflection.create(type); }
-            public PreparedConstruction prepareConstruction(Class<?> type, java.util.Set<Class<?>> keys) {
+            public PreparedConstruction prepareConstruction(Class<?> type, Set<Class<?>> keys) {
                 compilations.incrementAndGet();
                 return reflection.prepareConstruction(type, keys);
             }
@@ -65,16 +123,16 @@ final class ZLinkHandlerPreparationTest {
     }
 
     public static final class DualConstructorSpot
-            implements systems.zlink.framework.spots.ZLinkSpot<systems.zlink.framework.actors.ZLinkActor> {
+            implements ZLinkSpot<ZLinkActor> {
         public DualConstructorSpot() {}
-        public DualConstructorSpot(systems.zlink.framework.spots.ZLinkSpotContext context) {
+        public DualConstructorSpot(ZLinkSpotContext context) {
             throw new AssertionError("Standalone reflection must use the no-arg constructor");
         }
-        public systems.zlink.framework.spots.ZLinkSpotContext context() { return null; }
-        public CompletionStage<Void> onJoinedActor(systems.zlink.framework.actors.ZLinkActor actor) {
+        public ZLinkSpotContext context() { return null; }
+        public CompletionStage<Void> onJoinedActor(ZLinkActor actor) {
             return CompletableFuture.completedFuture(null);
         }
-        public CompletionStage<Void> onLeaveActor(systems.zlink.framework.actors.ZLinkActor actor) {
+        public CompletionStage<Void> onLeaveActor(ZLinkActor actor) {
             return CompletableFuture.completedFuture(null);
         }
     }
@@ -143,7 +201,9 @@ final class ZLinkHandlerPreparationTest {
             }
             public Object create(Class<?> type) { return reflection.create(type); }
             public Object findService(Class<?> type) {
-                if (type == Missing.class) missingLookups.incrementAndGet();
+                if (type == Missing.class) {
+                    missingLookups.incrementAndGet();
+                }
                 return reflection.findService(type);
             }
         };

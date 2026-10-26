@@ -3,6 +3,7 @@ package systems.zlink.framework.runtime.internal.handlers;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
 
 import java.lang.reflect.Constructor;
+import java.lang.reflect.Modifier;
 import java.util.ArrayDeque;
 import java.util.Arrays;
 import java.util.Comparator;
@@ -117,8 +118,11 @@ public interface ZLinkHandlerActivator {
             return create(PublicConstructorPlan.parameterType(constructor, index));
         }
 
-        default Object createPrepared(PreparedConstruction construction, DependencyResolver resolver) {
-            return construction.create(this, resolver);
+        default Object createPrepared(Object construction, DependencyResolver resolver) {
+            if (construction instanceof PreparedConstruction procedure) {
+                return procedure.create(this, resolver);
+            }
+            throw new ZLinkConfigurationException("activation does not support prepared construction metadata");
         }
 
         void destroy(Object instance);
@@ -136,7 +140,8 @@ public interface ZLinkHandlerActivator {
         private final Map<Class<?>, Object> services = new LinkedHashMap<>();
         private volatile Map<Class<?>, Object> serviceIndex = Map.of();
         private final ZLinkHandlerActivator fallback;
-        private final Map<Class<?>, Map<Set<Class<?>>, PreparedConstruction>> constructionPlans =
+        private final Map<Class<?>, PreparedConstruction> constructionPlans = new ConcurrentHashMap<>();
+        private final Map<Class<?>, Map<Set<Class<?>>, PreparedConstruction>> runtimeConstructionPlans =
                 new ConcurrentHashMap<>();
 
         private MutableServices(ZLinkHandlerActivator fallback) {
@@ -149,35 +154,46 @@ public interface ZLinkHandlerActivator {
                     Objects.requireNonNull(service, "service"));
             serviceIndex = buildServiceIndex(services);
             constructionPlans.clear();
+            runtimeConstructionPlans.clear();
             return this;
         }
 
         @Override
         public void prepare(Class<?> handlerType) {
-            if (findRuntimeService(handlerType) == null) constructionPlan(handlerType);
+            if (findRuntimeService(handlerType) == null) {
+                constructionPlan(handlerType);
+            }
         }
 
         @Override
         public PreparedConstruction prepareConstruction(Class<?> handlerType, Set<Class<?>> runtimeServices) {
-            Set<Class<?>> available = new HashSet<>(runtimeServices);
-            available.addAll(serviceIndex.keySet());
-            PreparedConstruction plan = constructionPlan(handlerType, Set.copyOf(available));
+            PreparedConstruction plan;
+            if (serviceIndex.keySet().containsAll(runtimeServices)) {
+                plan = constructionPlan(handlerType);
+            } else {
+                Set<Class<?>> available = new HashSet<>(runtimeServices);
+                available.addAll(serviceIndex.keySet());
+                plan = runtimeConstructionPlan(handlerType, Set.copyOf(available));
+            }
             return (activation, resolver) -> activation.createPrepared(plan, resolver);
         }
 
         private PreparedConstruction constructionPlan(Class<?> handlerType) {
-            return constructionPlan(handlerType, serviceIndex.keySet());
+            return constructionPlans.computeIfAbsent(handlerType,
+                    type -> fallback.prepareConstruction(type, serviceIndex.keySet()));
         }
 
-        private PreparedConstruction constructionPlan(Class<?> handlerType, Set<Class<?>> available) {
-            return constructionPlans.computeIfAbsent(handlerType, ignored -> new ConcurrentHashMap<>())
+        private PreparedConstruction runtimeConstructionPlan(Class<?> handlerType, Set<Class<?>> available) {
+            return runtimeConstructionPlans.computeIfAbsent(handlerType, ignored -> new ConcurrentHashMap<>())
                     .computeIfAbsent(available, keys -> fallback.prepareConstruction(handlerType, keys));
         }
 
         @Override
         public Object create(Class<?> handlerType) {
             Object registered = findRuntimeService(handlerType);
-            if (registered != null) return registered;
+            if (registered != null) {
+                return registered;
+            }
             return constructionPlan(handlerType).create(
                     fallback.openActivation(), this::findRuntimeService);
         }
@@ -209,7 +225,7 @@ public interface ZLinkHandlerActivator {
             }
 
             @Override
-            public Object createPrepared(PreparedConstruction plan, DependencyResolver resolver) {
+            public Object createPrepared(Object plan, DependencyResolver resolver) {
                 return fallbackActivation.createPrepared(plan, resolver);
             }
 
@@ -316,8 +332,10 @@ final class ReflectionActivator implements ZLinkHandlerActivator {
     public PreparedConstruction prepareConstruction(Class<?> type, Set<Class<?>> runtimeServices) {
         ConstructionPlan plan = PublicConstructorPlan.forType(type)
                 .compile(runtimeServices, this::isServiceAvailable, true);
-        if (plan == null) throw new ZLinkConfigurationException(
-                "No available public constructor: " + type.getName());
+        if (plan == null) {
+            throw new ZLinkConfigurationException(
+                    "No available public constructor: " + type.getName());
+        }
         return plan.bind();
     }
 
@@ -339,8 +357,10 @@ final class ReflectionActivator implements ZLinkHandlerActivator {
 
     private ConstructionPlan requiredPlan(Class<?> type) {
         ConstructionPlan plan = PLANS.get(type);
-        if (plan == null) throw new ZLinkConfigurationException(
-                "No available public constructor: " + type.getName());
+        if (plan == null) {
+            throw new ZLinkConfigurationException(
+                    "No available public constructor: " + type.getName());
+        }
         return plan;
     }
 }
@@ -370,7 +390,9 @@ record PublicConstructorPlan(Class<?> handlerType, Map<Constructor<?>, Class<?>[
 
     ConstructionPlan compile(Set<Class<?>> runtimeServices,
             BiPredicate<Constructor<?>, Integer> available, boolean allowNoArg) {
-        if (java.lang.reflect.Modifier.isAbstract(handlerType.getModifiers())) return null;
+        if (Modifier.isAbstract(handlerType.getModifiers())) {
+            return null;
+        }
         ConstructionPlan selected = null;
         for (Map.Entry<Constructor<?>, Class<?>[]> candidate : constructors.entrySet()) {
             Constructor<?> constructor = candidate.getKey();
@@ -381,7 +403,9 @@ record PublicConstructorPlan(Class<?> handlerType, Map<Constructor<?>, Class<?>[
                 runtimeArguments[index] = runtimeServices.contains(types[index]);
                 hasRuntimeArgument |= runtimeArguments[index];
             }
-            if (!hasRuntimeArgument && !(allowNoArg && types.length == 0)) continue;
+            if (!hasRuntimeArgument && !(allowNoArg && types.length == 0)) {
+                continue;
+            }
             boolean supplied = true;
             for (int index = 0; index < types.length; index++) {
                 if (!runtimeArguments[index] && !available.test(constructor, index)) {
@@ -389,7 +413,9 @@ record PublicConstructorPlan(Class<?> handlerType, Map<Constructor<?>, Class<?>[
                     break;
                 }
             }
-            if (!supplied) continue;
+            if (!supplied) {
+                continue;
+            }
             if (selected != null) {
                 if (selected.parameterTypes().length == types.length) {
                     throw new ZLinkConfigurationException(
@@ -411,10 +437,14 @@ record ConstructionPlan(
 
     ZLinkHandlerActivator.PreparedConstruction bind() {
         return (activation, resolver) -> create((selected, index, type) -> {
-            if (!runtimeArguments[index]) return activation.findService(selected, index);
+            if (!runtimeArguments[index]) {
+                return activation.findService(selected, index);
+            }
             Object dependency = resolver.resolve(type);
-            if (dependency == null) throw new ZLinkConfigurationException(
-                    "Runtime dependency is unavailable: " + type.getName());
+            if (dependency == null) {
+                throw new ZLinkConfigurationException(
+                        "Runtime dependency is unavailable: " + type.getName());
+            }
             return dependency;
         });
     }

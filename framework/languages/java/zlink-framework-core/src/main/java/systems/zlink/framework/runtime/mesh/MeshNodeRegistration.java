@@ -322,7 +322,9 @@ public final class MeshNodeRegistration implements ZLinkMeshNodeBuilder {
                 .values()
                 .forEach(
                         factory -> {
-                            if (!constructionOnly) types.add(factory.actorType());
+                            if (!constructionOnly) {
+                                types.add(factory.actorType());
+                            }
                             types.add(factory.factoryType());
                             addRelocationAdapterType(types, factory.relocationPolicy());
                         });

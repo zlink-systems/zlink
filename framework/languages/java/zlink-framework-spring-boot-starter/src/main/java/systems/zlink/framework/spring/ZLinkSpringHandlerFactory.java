@@ -64,6 +64,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 final class ZLinkSpringHandlerFactory implements ZLinkHandlerActivator {
@@ -93,7 +94,7 @@ final class ZLinkSpringHandlerFactory implements ZLinkHandlerActivator {
     }
 
     @Override
-    public PreparedConstruction prepareConstruction(Class<?> type, java.util.Set<Class<?>> runtimeServices) {
+    public PreparedConstruction prepareConstruction(Class<?> type, Set<Class<?>> runtimeServices) {
         HandlerPlan plan = createHandlerPlan(type, runtimeServices);
         return (activation, resolver) -> activation.createPrepared(plan, resolver);
     }
@@ -272,19 +273,23 @@ final class ZLinkSpringHandlerFactory implements ZLinkHandlerActivator {
         }
 
         @Override
-        public Object createPrepared(PreparedConstruction construction, DependencyResolver resolver) {
+        public Object createPrepared(Object construction, DependencyResolver resolver) {
             if (construction instanceof HandlerPlan plan) {
                 return create(plan.constructor().constructor().getDeclaringClass(), plan, resolver);
             }
-            return construction.create(this, resolver);
+            return Activation.super.createPrepared(construction, resolver);
         }
 
         private Object create(Class<?> handlerType, HandlerPlan plan, DependencyResolver dependencyResolver) {
-            if (closed) throw new IllegalStateException("Spring handler activation is closed");
+            if (closed) {
+                throw new IllegalStateException("Spring handler activation is closed");
+            }
             ConstructorPlan constructor = plan.constructor();
             try {
                 Object[] arguments = resolveArguments(constructor, dependencyResolver);
-                return plan.initialize(constructor.constructor().newInstance(arguments));
+                Object instance = constructor.constructor().newInstance(arguments);
+                beanFactory.autowireBean(instance);
+                return beanFactory.initializeBean(instance, plan.metadata().beanName());
             } catch (ReflectiveOperationException failure) {
                 throw new IllegalStateException(
                         "failed to construct Framework-owned handler: " + handlerType.getName(),
@@ -428,10 +433,10 @@ final class ZLinkSpringHandlerFactory implements ZLinkHandlerActivator {
     }
 
     private HandlerPlan createHandlerPlan(Class<?> handlerType) {
-        return createHandlerPlan(handlerType, java.util.Set.of());
+        return createHandlerPlan(handlerType, Set.of());
     }
 
-    private HandlerPlan createHandlerPlan(Class<?> handlerType, java.util.Set<Class<?>> runtimeServices) {
+    private HandlerPlan createHandlerPlan(Class<?> handlerType, Set<Class<?>> runtimeServices) {
         RuntimeException failure = null;
         HandlerMetadata metadata = HANDLER_METADATA.get(handlerType);
         for (Constructor<?> constructor : metadata.constructors()) {
@@ -457,51 +462,16 @@ final class ZLinkSpringHandlerFactory implements ZLinkHandlerActivator {
                 failure = unavailable;
             }
         }
-        if (failure != null) throw failure;
+        if (failure != null) {
+            throw failure;
+        }
         throw new IllegalStateException("No public constructor: " + handlerType.getName());
     }
 
     private record HandlerMetadata(
             List<Constructor<?>> constructors, String beanName, boolean springInvokesClose) {}
 
-    private final class HandlerPlan implements PreparedConstruction {
-        private final ConstructorPlan constructor;
-        private final HandlerMetadata metadata;
-
-        private HandlerPlan(ConstructorPlan constructor, HandlerMetadata metadata) {
-            this.constructor = constructor;
-            this.metadata = metadata;
-        }
-
-        ConstructorPlan constructor() { return constructor; }
-        HandlerMetadata metadata() { return metadata; }
-
-        Object initialize(Object instance) {
-            beanFactory.autowireBean(instance);
-            return beanFactory.initializeBean(instance, metadata.beanName());
-        }
-
-        @Override
-        public Object create(Activation activation, DependencyResolver resolver) {
-            ParameterPlan[] parameters = constructor.parameters();
-            Object[] arguments = new Object[parameters.length];
-            for (int index = 0; index < parameters.length; index++) {
-                ParameterPlan parameter = parameters[index];
-                arguments[index] = parameter.descriptor() == null
-                        ? resolver.resolve(parameter.type())
-                        : activation.findService(constructor.constructor(), index);
-                if (arguments[index] == null && parameter.descriptor() == null) {
-                    throw new IllegalStateException("Runtime dependency is unavailable: " + parameter.typeName());
-                }
-            }
-            try {
-                return initialize(constructor.constructor().newInstance(arguments));
-            } catch (ReflectiveOperationException failure) {
-                throw new IllegalStateException("failed to construct Framework-owned handler: "
-                        + constructor.constructor().getDeclaringClass().getName(), unwrap(failure));
-            }
-        }
-    }
+    private record HandlerPlan(ConstructorPlan constructor, HandlerMetadata metadata) {}
 
     private record ConstructorPlan(Constructor<?> constructor, ParameterPlan[] parameters) {}
 

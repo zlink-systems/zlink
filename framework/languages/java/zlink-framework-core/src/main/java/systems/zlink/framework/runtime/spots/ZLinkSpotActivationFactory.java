@@ -11,6 +11,7 @@ import systems.zlink.framework.execution.ZLinkExecutionLanePolicy;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.execution.ZLinkWorkerPool;
 import systems.zlink.framework.messaging.ZLinkMessage;
+import systems.zlink.framework.runtime.configuration.ZLinkFrameworkRegistration;
 import systems.zlink.framework.runtime.handlers.ZLinkHandlerStages;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot;
@@ -26,21 +27,24 @@ import systems.zlink.framework.spots.ZLinkSpot;
 import systems.zlink.framework.spots.ZLinkSpotContext;
 import systems.zlink.framework.spots.ZLinkSpotCreateResponse;
 
+import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.function.BiFunction;
 import java.util.function.Function;
 
 final class ZLinkSpotActivationFactory {
-    private static final java.util.Set<Class<?>> SPOT_SERVICES = java.util.Set.of(ZLinkSpotContext.class);
-    private static final java.util.Set<Class<?>> ENTRY_SERVICES = java.util.Set.of(ZLinkEntrySpotContext.class);
-    private static final java.util.Set<Class<?>> INSTANCE_SERVICES = java.util.Set.of(ZLinkInstanceSpotContext.class);
+    private static final Set<Class<?>> SPOT_SERVICES = Set.of(ZLinkSpotContext.class);
+    private static final Set<Class<?>> ENTRY_SERVICES = Set.of(ZLinkEntrySpotContext.class);
+    private static final Set<Class<?>> INSTANCE_SERVICES = Set.of(ZLinkInstanceSpotContext.class);
 
-    static java.util.Set<Class<?>> prepareConstruction(
-            systems.zlink.framework.runtime.configuration.ZLinkFrameworkRegistration registration,
+    static Set<Class<?>> prepareConstruction(
+            ZLinkFrameworkRegistration registration,
             ZLinkHandlerActivator handlerFactory) {
-        java.util.Set<Class<?>> prepared = new java.util.HashSet<>();
+        Set<Class<?>> prepared = new HashSet<>();
         for (var node : registration.spotNodes()) {
             prepareTypes(node.spotFactories(), SPOT_SERVICES, handlerFactory, prepared);
             prepareTypes(node.entrySpots(), ENTRY_SERVICES, handlerFactory, prepared);
@@ -49,14 +53,14 @@ final class ZLinkSpotActivationFactory {
             prepareTypes(node.spotFactories(), SPOT_SERVICES, handlerFactory, prepared);
             prepareTypes(node.entrySpots(), ENTRY_SERVICES, handlerFactory, prepared);
             for (var factory : node.relocatableInstanceSpotFactories().values()) {
-                prepareTypes(java.util.List.of(factory.spotType()), INSTANCE_SERVICES, handlerFactory, prepared);
+                prepareTypes(List.of(factory.spotType()), INSTANCE_SERVICES, handlerFactory, prepared);
             }
         }
-        return java.util.Set.copyOf(prepared);
+        return Set.copyOf(prepared);
     }
 
-    private static void prepareTypes(Iterable<? extends Class<?>> types, java.util.Set<Class<?>> services,
-            ZLinkHandlerActivator handlerFactory, java.util.Set<Class<?>> prepared) {
+    private static void prepareTypes(Iterable<? extends Class<?>> types, Set<Class<?>> services,
+            ZLinkHandlerActivator handlerFactory, Set<Class<?>> prepared) {
         for (Class<?> type : types) {
             handlerFactory.prepareConstruction(type, services);
             prepared.add(type);
@@ -64,7 +68,7 @@ final class ZLinkSpotActivationFactory {
     }
 
     private ZLinkHandlerActivator.MutableServices activationServices(
-            java.util.Set<Class<?>> keys, Object context) {
+            Set<Class<?>> keys, Object context) {
         var services = ZLinkHandlerActivator.services(handlerFactory);
         keys.forEach(key -> services.add(key, context));
         return services;

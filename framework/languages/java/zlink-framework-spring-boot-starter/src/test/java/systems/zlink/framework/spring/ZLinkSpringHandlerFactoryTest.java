@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -13,33 +14,56 @@ import org.springframework.beans.factory.config.BeanPostProcessor;
 import org.springframework.beans.factory.config.ConfigurableBeanFactory;
 import org.springframework.beans.factory.config.DependencyDescriptor;
 import org.springframework.beans.factory.support.DefaultListableBeanFactory;
+import org.springframework.context.ApplicationContextException;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Scope;
 
+import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.ZLinkHandlerFilter;
 import systems.zlink.framework.ZLinkHandlerFilterContext;
 import systems.zlink.framework.ZLinkHandlerFilterNext;
 import systems.zlink.framework.ZLinkMessageContext;
+import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.channels.ZLinkClient;
 import systems.zlink.framework.channels.ZLinkRequestHandler;
+import systems.zlink.framework.handlers.ZLinkPacket;
+import systems.zlink.framework.handlers.ZLinkStreamPacket;
+import systems.zlink.framework.messaging.ZLinkMessage;
+import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
+import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdapterProvider;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerInstanceOwner;
+import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
+import systems.zlink.framework.spots.ZLinkSpot;
+import systems.zlink.framework.spots.ZLinkSpotContext;
+import systems.zlink.framework.spots.ZLinkSpotManager;
+import systems.zlink.framework.streams.ZLinkSession;
+import systems.zlink.framework.streams.ZLinkSessionContext;
+import systems.zlink.framework.streams.ZLinkSessionDispatchContext;
+import systems.zlink.framework.streams.ZLinkSessionPacketDispatcher;
+import systems.zlink.framework.streams.ZLinkStreamCodec;
+import systems.zlink.framework.streams.ZLinkStreamError;
+import systems.zlink.framework.testkit.FakeZLinkBackendAdapterFactory;
 
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 final class ZLinkSpringHandlerFactoryTest {
     @Test
     void explicitActorFactoryResultRemainsASpringBeanWithoutConstructorValidation() {
-        var options = new systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions();
+        var options = new DefaultZLinkFrameworkOptions();
         var node = options.addRouteMesh("factory.mesh");
         node.objects().server().addActorFactory("factory.actor",
                 ZLinkFrameworkAutoConfigurationTest.InjectedPlayerActor.class,
@@ -47,7 +71,7 @@ final class ZLinkSpringHandlerFactoryTest {
                 factory -> factory.disableRelocation());
         var resultType = ZLinkFrameworkAutoConfigurationTest.InjectedPlayerActor.class;
         assertTrue(options.registration().applicationTypes().contains(resultType));
-        org.junit.jupiter.api.Assertions.assertFalse(options.registration().constructionTypes().contains(resultType));
+        Assertions.assertFalse(options.registration().constructionTypes().contains(resultType));
         assertTrue(options.registration().constructionTypes().contains(
                 ZLinkFrameworkAutoConfigurationTest.InjectedPlayerActorFactory.class));
         var beans = new DefaultListableBeanFactory();
@@ -56,11 +80,12 @@ final class ZLinkSpringHandlerFactoryTest {
     }
 
     @Test
-    void preparedSpringConstructionAcceptsAnotherActivationImplementation() {
+    void preparedSpringConstructionUsesTheSpringActivation() {
         var factory = new ZLinkSpringHandlerFactory(new DefaultListableBeanFactory());
-        var plan = factory.prepareConstruction(SpringCatalogHandler.class, java.util.Set.of(FieldDependency.class));
-        var dependency = new FieldDependency("external");
-        try (var activation = ZLinkHandlerActivator.reflection().openActivation()) {
+        var services = ZLinkHandlerActivator.services(factory);
+        var plan = services.prepareConstruction(SpringCatalogHandler.class, Set.of(FieldDependency.class));
+        var dependency = new FieldDependency("runtime");
+        try (var activation = services.openActivation()) {
             var handler = (SpringCatalogHandler) plan.create(activation, type -> dependency);
             assertSame(dependency, handler.dependency);
         }
@@ -68,10 +93,10 @@ final class ZLinkSpringHandlerFactoryTest {
 
     @Test
     void packetHandlerReceivesRuntimeSessionContextAndProcessesPacket() throws Exception {
-        var backend = new systems.zlink.framework.testkit.FakeZLinkBackendAdapterFactory();
+        var backend = new FakeZLinkBackendAdapterFactory();
         ContextPacketHandler.handled = new CompletableFuture<>();
         try (var context = new AnnotationConfigApplicationContext()) {
-            context.registerBean(systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdapterProvider.class,
+            context.registerBean(ZLinkBackendAdapterProvider.class,
                     () -> backend);
             context.registerBean(ZLinkFrameworkConfigurer.class, () -> options -> {
                 var stream = options.addStreamNode("context.stream");
@@ -81,24 +106,24 @@ final class ZLinkSpringHandlerFactoryTest {
             });
             context.register(ChannelConfig.class, ZLinkFrameworkAutoConfiguration.class);
             context.refresh();
-            backend.dispatchStreamPacket("context.packet", systems.zlink.contracts.messaging.Message.from(
-                    "{\"value\":\"payload\"}".getBytes(java.nio.charset.StandardCharsets.UTF_8)),
-                    systems.zlink.framework.streams.ZLinkStreamCodec.JSON);
-            assertEquals("payload", ContextPacketHandler.handled.get(2, java.util.concurrent.TimeUnit.SECONDS));
+            backend.dispatchStreamPacket("context.packet", Message.from(
+                    "{\"value\":\"payload\"}".getBytes(StandardCharsets.UTF_8)),
+                    ZLinkStreamCodec.JSON);
+            assertEquals("payload", ContextPacketHandler.handled.get(2, TimeUnit.SECONDS));
         }
     }
 
     public static final class ContextPacketHandler {
         static CompletableFuture<String> handled;
-        private final systems.zlink.framework.streams.ZLinkSessionContext context;
-        public ContextPacketHandler(systems.zlink.framework.streams.ZLinkSessionContext context) {
+        private final ZLinkSessionContext context;
+        public ContextPacketHandler(ZLinkSessionContext context) {
             this.context = context;
         }
         public Class<ContextPacket> messageType() { return ContextPacket.class; }
         public String packetName() { return "context.packet"; }
-        @systems.zlink.framework.handlers.ZLinkStreamPacket
-        public CompletionStage<Void> handle(systems.zlink.framework.streams.ZLinkSessionContext context,
-                systems.zlink.framework.streams.ZLinkSessionDispatchContext dispatch, ContextPacket packet) {
+        @ZLinkStreamPacket
+        public CompletionStage<Void> handle(ZLinkSessionContext context,
+                ZLinkSessionDispatchContext dispatch, ContextPacket packet) {
             assertSame(this.context, context);
             handled.complete(packet.value());
             return CompletableFuture.completedFuture(null);
@@ -106,37 +131,37 @@ final class ZLinkSpringHandlerFactoryTest {
     }
 
     @SuppressWarnings({"rawtypes", "unchecked"})
-    public static final class ContextSession implements systems.zlink.framework.streams.ZLinkSession {
-        private final systems.zlink.framework.streams.ZLinkSessionContext context;
-        private final systems.zlink.framework.streams.ZLinkSessionPacketDispatcher dispatcher;
-        public ContextSession(systems.zlink.framework.streams.ZLinkSessionContext context,
-                systems.zlink.framework.streams.ZLinkSessionPacketDispatcher dispatcher) {
+    public static final class ContextSession implements ZLinkSession {
+        private final ZLinkSessionContext context;
+        private final ZLinkSessionPacketDispatcher dispatcher;
+        public ContextSession(ZLinkSessionContext context,
+                ZLinkSessionPacketDispatcher dispatcher) {
             this.context = context;
             this.dispatcher = dispatcher;
         }
-        public systems.zlink.framework.streams.ZLinkSessionContext context() { return context; }
+        public ZLinkSessionContext context() { return context; }
         public CompletionStage<Void> onConnected() { return CompletableFuture.completedFuture(null); }
         public CompletionStage<Void> onDisconnected() { return CompletableFuture.completedFuture(null); }
-        public CompletionStage<Void> onError(systems.zlink.framework.streams.ZLinkStreamError error) {
+        public CompletionStage<Void> onError(ZLinkStreamError error) {
             return CompletableFuture.completedFuture(null);
         }
-        public CompletionStage<Void> onDispatch(systems.zlink.framework.streams.ZLinkSessionDispatchContext dispatch,
-                systems.zlink.framework.messaging.ZLinkMessage payload) {
+        public CompletionStage<Void> onDispatch(ZLinkSessionDispatchContext dispatch,
+                ZLinkMessage payload) {
             return dispatcher.tryHandle(context, dispatch, payload).thenApply(ignored -> null);
         }
     }
 
-    @systems.zlink.framework.handlers.ZLinkPacket("context.packet")
+    @ZLinkPacket("context.packet")
     public record ContextPacket(String value) {}
 
     @Test
     void spotReceivesRuntimeContextAndActivatesInSpring() throws Exception {
         ContextSpot.activated = new CompletableFuture<>();
         try (var context = new AnnotationConfigApplicationContext()) {
-            context.registerBean(systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdapterProvider.class,
-                    systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory::new);
+            context.registerBean(ZLinkBackendAdapterProvider.class,
+                    ZLinkJavaBackendAdapterFactory::new);
             context.registerBean(ZLinkFrameworkConfigurer.class, () -> options -> {
-                options.addLocationStore(new systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore());
+                options.addLocationStore(new ZLinkInMemoryLocationStore());
                 var mesh = options.addRouteMesh("context.mesh");
                 mesh.listen("inproc://context-spot");
                 mesh.channelName("context.mesh").server();
@@ -145,27 +170,27 @@ final class ZLinkSpringHandlerFactoryTest {
             });
             context.register(ChannelConfig.class, ZLinkFrameworkAutoConfiguration.class);
             context.refresh();
-            context.getBean(systems.zlink.framework.spots.ZLinkSpotManager.class)
+            context.getBean(ZLinkSpotManager.class)
                     .create("context.spot").inMesh("context.mesh").submit().toCompletableFuture().join();
-            org.junit.jupiter.api.Assertions.assertNotNull(
-                    ContextSpot.activated.get(2, java.util.concurrent.TimeUnit.SECONDS));
+            Assertions.assertNotNull(
+                    ContextSpot.activated.get(2, TimeUnit.SECONDS));
         }
     }
 
     public static final class ContextSpot implements
-            systems.zlink.framework.spots.ZLinkSpot<systems.zlink.framework.actors.ZLinkActor> {
-        static CompletableFuture<systems.zlink.framework.spots.ZLinkSpotContext> activated;
-        private final systems.zlink.framework.spots.ZLinkSpotContext context;
-        public ContextSpot(systems.zlink.framework.spots.ZLinkSpotContext context) { this.context = context; }
-        public systems.zlink.framework.spots.ZLinkSpotContext context() { return context; }
+            ZLinkSpot<ZLinkActor> {
+        static CompletableFuture<ZLinkSpotContext> activated;
+        private final ZLinkSpotContext context;
+        public ContextSpot(ZLinkSpotContext context) { this.context = context; }
+        public ZLinkSpotContext context() { return context; }
         public CompletionStage<Void> onInitialize() {
             activated.complete(context);
             return CompletableFuture.completedFuture(null);
         }
-        public CompletionStage<Void> onJoinedActor(systems.zlink.framework.actors.ZLinkActor actor) {
+        public CompletionStage<Void> onJoinedActor(ZLinkActor actor) {
             return CompletableFuture.completedFuture(null);
         }
-        public CompletionStage<Void> onLeaveActor(systems.zlink.framework.actors.ZLinkActor actor) {
+        public CompletionStage<Void> onLeaveActor(ZLinkActor actor) {
             return CompletableFuture.completedFuture(null);
         }
     }
@@ -183,7 +208,7 @@ final class ZLinkSpringHandlerFactoryTest {
             assertSame(dependency, ((SpringCatalogHandler) activation.create(SpringCatalogHandler.class)).dependency);
         }
         try (var activation = second.openActivation()) {
-            org.junit.jupiter.api.Assertions.assertNull(
+            Assertions.assertNull(
                     ((SpringCatalogHandler) activation.create(SpringCatalogHandler.class)).dependency);
         }
     }
@@ -204,7 +229,7 @@ final class ZLinkSpringHandlerFactoryTest {
     public static final class RuntimeHandler
             implements ZLinkRequestHandler<String, String> {
         public RuntimeHandler(ZLinkFrameworkRuntime runtime) {
-            org.junit.jupiter.api.Assertions.assertNotNull(runtime);
+            Assertions.assertNotNull(runtime);
         }
         public CompletionStage<String> handle(
                 String request, ZLinkMessageContext context) {
@@ -223,7 +248,9 @@ final class ZLinkSpringHandlerFactoryTest {
             for (int index = 0; index < 3; index++) {
                 assertEquals("reply", reply(context));
                 assertSame(PlannedHandler.dependency, PlannedFilter.dependency);
-                if (previous != null) assertNotSame(previous, PlannedHandler.dependency);
+                if (previous != null) {
+                    assertNotSame(previous, PlannedHandler.dependency);
+                }
                 previous = PlannedHandler.dependency;
             }
             assertEquals(3, PlannedHandler.calls.get());
@@ -236,7 +263,7 @@ final class ZLinkSpringHandlerFactoryTest {
     void constructorBodyFailureDoesNotExecuteAnAlternativeConstructor() {
         ThrowingHandler.alternatives.set(0);
         try (var context = channelContext(new CountingBeanFactory(), ThrowingHandler.class, null)) {
-            org.junit.jupiter.api.Assertions.assertThrows(
+            Assertions.assertThrows(
                     CompletionException.class, () -> reply(context));
             assertEquals(0, ThrowingHandler.alternatives.get());
         }
@@ -246,7 +273,7 @@ final class ZLinkSpringHandlerFactoryTest {
     void filterConstructorFailureDoesNotExecuteAnAlternativeConstructor() {
         ThrowingFilter.alternatives.set(0);
         try (var context = channelContext(new CountingBeanFactory(), PlannedHandler.class, ThrowingFilter.class)) {
-            org.junit.jupiter.api.Assertions.assertThrows(
+            Assertions.assertThrows(
                     CompletionException.class, () -> reply(context));
             assertEquals(0, ThrowingFilter.alternatives.get());
         }
@@ -255,8 +282,8 @@ final class ZLinkSpringHandlerFactoryTest {
     @Test
     void ambiguousConstructorFailsHostStartupWithoutCreatingPrototypeDependencies() {
         ScopedDependency.instances.set(0);
-        org.junit.jupiter.api.Assertions.assertThrows(
-                org.springframework.context.ApplicationContextException.class,
+        Assertions.assertThrows(
+                ApplicationContextException.class,
                 () -> {
                     try (var ignored = channelContext(
                             new CountingBeanFactory(), AmbiguousHandler.class, null)) {}
@@ -292,8 +319,8 @@ final class ZLinkSpringHandlerFactoryTest {
     void unavailableConstructorFailsHostStartupWithoutConstructingAnything() {
         UnavailableHandler.calls.set(0);
         ScopedDependency.instances.set(0);
-        org.junit.jupiter.api.Assertions.assertThrows(
-                org.springframework.context.ApplicationContextException.class,
+        Assertions.assertThrows(
+                ApplicationContextException.class,
                 () -> {
                     try (var ignored = channelContext(
                             new CountingBeanFactory(), UnavailableHandler.class, null)) {}
@@ -309,8 +336,10 @@ final class ZLinkSpringHandlerFactoryTest {
         var context = new AnnotationConfigApplicationContext(beans);
         context.register(ShortcutConfig.class, ChannelConfig.class);
         context.registerBean(ZLinkFrameworkConfigurer.class, () -> options -> {
-            if (filter != null) options.useFilter(filter.asSubclass(
-                    ZLinkHandlerFilter.class));
+            if (filter != null) {
+                options.useFilter(filter.asSubclass(
+                        ZLinkHandlerFilter.class));
+            }
             var channel = options.addClientServerChannel("construction");
             channel.client();
             channel.server().listen().addRequestHandler(handler, String.class, String.class);
@@ -652,7 +681,9 @@ final class ZLinkSpringHandlerFactoryTest {
         protected Map<String, Object> findAutowireCandidates(
                 String beanName, Class<?> requiredType, DependencyDescriptor descriptor) {
             candidateSearches.incrementAndGet();
-            if (requiredType == MissingDependency.class) missingSearches.incrementAndGet();
+            if (requiredType == MissingDependency.class) {
+                missingSearches.incrementAndGet();
+            }
             return super.findAutowireCandidates(beanName, requiredType, descriptor);
         }
 

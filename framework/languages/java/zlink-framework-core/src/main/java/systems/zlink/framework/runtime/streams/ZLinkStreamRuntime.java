@@ -53,6 +53,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -77,19 +78,19 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 public final class ZLinkStreamRuntime implements AutoCloseable {
-    private static final java.util.Set<Class<?>> SESSION_SERVICES = java.util.Set.of(
+    private static final Set<Class<?>> SESSION_SERVICES = Set.of(
             ZLinkSessionContext.class, ZLinkSessionPacketDispatcher.class);
 
-    public static java.util.Set<Class<?>> prepareConstruction(
+    public static Set<Class<?>> prepareConstruction(
             ZLinkFrameworkRegistration registration, ZLinkHandlerActivator handlerFactory) {
-        java.util.Set<Class<?>> prepared = new java.util.HashSet<>();
+        Set<Class<?>> prepared = new HashSet<>();
         for (var node : registration.streamNodes()) {
             for (Class<?> type : node.applicationTypes()) {
                 handlerFactory.prepareConstruction(type, SESSION_SERVICES);
                 prepared.add(type);
             }
         }
-        return java.util.Set.copyOf(prepared);
+        return Set.copyOf(prepared);
     }
 
     private static final int EXECUTOR_TERMINATION_ATTEMPTS = 2;

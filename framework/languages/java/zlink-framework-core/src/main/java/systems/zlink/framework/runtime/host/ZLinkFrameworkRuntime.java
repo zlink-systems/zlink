@@ -429,6 +429,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                         this.backendContext,
                         this.spots,
                         this.actors);
+        // Spot·Actor service 등록이 plan 캐시를 비우므로 STREAM 시작 전에 최종 catalog를 준비한다.
         prepareConstruction(runtimeHandlers);
         this.streams = streamSubsystem.streams();
         if (this.streams != null) {
@@ -825,7 +826,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
     }
 
     private void prepareConstruction(ZLinkHandlerActivator.MutableServices runtimeHandlers) {
-        var constructionTypes = new java.util.HashSet<>(registration.constructionTypes());
+        var constructionTypes = new HashSet<>(registration.constructionTypes());
         constructionTypes.removeAll(ZLinkSpotRuntime.prepareConstruction(registration, runtimeHandlers));
         constructionTypes.removeAll(ZLinkStreamRuntime.prepareConstruction(registration, runtimeHandlers));
         runtimeHandlers.prepare(constructionTypes);
