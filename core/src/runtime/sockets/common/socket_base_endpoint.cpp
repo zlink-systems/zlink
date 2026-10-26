@@ -225,8 +225,6 @@ int zlink::socket_base_t::connect (const char *endpoint_uri_)
         errno = ETERM;
         return -1;
     }
-    if (process_commands (0, false) != 0)
-        return -1;
     std::lock_guard<std::recursive_mutex> lock (endpoint_runtime ().attempts_sync);
     std::shared_ptr<connection_attempt_result_t> result (new connection_attempt_result_t);
     result->endpoint = endpoint_uri_ ? endpoint_uri_ : "";
@@ -1396,7 +1394,7 @@ int zlink::socket_base_t::connection_attempts_snapshot (zlink_connection_attempt
     return 0;
 }
 
-void zlink::socket_base_t::report_connection_attempt (const options_t &options_,
+void zlink::socket_base_t::report_connection_attempt (const connection_attempt_context_t &context_,
                                                       bool ready_,
                                                       int error_,
                                                       uint32_t stage_,
@@ -1404,29 +1402,29 @@ void zlink::socket_base_t::report_connection_attempt (const options_t &options_,
                                                       uint32_t disconnect_reason_,
                                                       uint64_t connection_id_)
 {
-    const auto &result = options_.connection_attempt;
+    const auto &result = context_.connection_attempt;
     if (!result)
         return;
     std::lock_guard<std::recursive_mutex> lock (endpoint_runtime ().attempts_sync);
     if (result->registration == connection_attempt_result_t::removed)
         return;
-    const auto &pair = options_.transport_pair_state;
+    const auto &pair = context_.transport_pair_state;
     const bool matches_ready =
-      result->ready_pair_id == options_.transport_pair_id
-      && result->ready_generation == options_.transport_pair_generation
-      && (options_.transport_pair_id != 0 || !connection_id_ || !result->ready_connection_id
+      result->ready_pair_id == context_.transport_pair_id
+      && result->ready_generation == context_.transport_pair_generation
+      && (context_.transport_pair_id != 0 || !connection_id_ || !result->ready_connection_id
           || result->ready_connection_id == connection_id_);
-    if (pair && options_.transport_pair_generation != pair->current_generation ()
+    if (pair && context_.transport_pair_generation != pair->current_generation ()
         && !(!ready_ && stage_ == ZLINK_CONNECTION_STAGE_ESTABLISHED && matches_ready
              && result->row.state == ZLINK_CONNECTION_CONNECTED))
         return;
     if (pair && result->row.state != ZLINK_CONNECTION_CONNECTED) {
-        if (result->outcome_generation != options_.transport_pair_generation) {
-            result->outcome_generation = options_.transport_pair_generation;
+        if (result->outcome_generation != context_.transport_pair_generation) {
+            result->outcome_generation = context_.transport_pair_generation;
             result->failed_lanes = 0;
             result->pending_failure = {};
         }
-        const unsigned lane_bit = options_.transport_lane == transport_lane_completion ? 2u : 1u;
+        const unsigned lane_bit = context_.transport_lane == transport_lane_completion ? 2u : 1u;
         if (ready_)
             result->failed_lanes &= ~lane_bit;
         else {
@@ -1449,15 +1447,15 @@ void zlink::socket_base_t::report_connection_attempt (const options_t &options_,
         }
     }
     if (ready_) {
-        if (options_.transport_pair_state) {
-            const auto &pair = options_.transport_pair_state;
+        if (context_.transport_pair_state) {
+            const auto &pair = context_.transport_pair_state;
             const unsigned mask = pair->expected_ready_mask ();
             if (!mask || (pair->ready_lanes.load (std::memory_order_acquire) & mask) != mask)
                 return;
         }
         result->ready_connection_id = connection_id_;
-        result->ready_pair_id = options_.transport_pair_id;
-        result->ready_generation = options_.transport_pair_generation;
+        result->ready_pair_id = context_.transport_pair_id;
+        result->ready_generation = context_.transport_pair_generation;
         if (result->row.state == ZLINK_CONNECTION_CONNECTED)
             return;
         result->row.state = ZLINK_CONNECTION_CONNECTED;
@@ -1527,18 +1525,17 @@ void zlink::socket_base_t::update_inproc_connection_attempt (pipe_t *pipe_, bool
 {
     if (!pipe_ || pipe_->is_session_pipe ())
         return;
-    options_t report_options = options;
-    report_options.connection_attempt = endpoint_runtime ().inprocs.attempt_for_pipe (pipe_);
-    report_options.transport_pair_id = pipe_->get_transport_pair_id ();
-    report_options.transport_pair_generation = pipe_->get_transport_pair_generation ();
-    if (!report_options.connection_attempt)
+    const connection_attempt_context_t context = {
+      endpoint_runtime ().inprocs.attempt_for_pipe (pipe_), options.transport_pair_state,
+      pipe_->get_transport_pair_id (), pipe_->get_transport_pair_generation (),
+      options.transport_lane};
+    if (!context.connection_attempt)
         return;
     if (ready_ && pipe_->get_transport_pair_id () != 0
         && !pipe_->transport_pair_application_ready_cached ())
         return;
     report_connection_attempt (
-      report_options, ready_, 0,
-      ready_ ? ZLINK_CONNECTION_STAGE_NONE : ZLINK_CONNECTION_STAGE_ESTABLISHED,
+      context, ready_, 0, ready_ ? ZLINK_CONNECTION_STAGE_NONE : ZLINK_CONNECTION_STAGE_ESTABLISHED,
       ready_ ? 0 : ZLINK_CONNECTION_FAILURE_CONNECTION_LOST,
       ready_ ? 0 : ZLINK_DISCONNECT_REASON_UNKNOWN, pipe_->get_endpoint_pair ().connection_id);
 }

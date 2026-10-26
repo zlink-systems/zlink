@@ -303,7 +303,7 @@ class socket_base_t : public own_t,
     bool has_connection_attempt_change () const;
     int connection_attempts_snapshot (
       zlink_connection_attempt_t *, size_t, size_t *, char *, size_t, size_t *);
-    void report_connection_attempt (const options_t &options_,
+    void report_connection_attempt (const connection_attempt_context_t &context_,
                                     bool ready_,
                                     int error_,
                                     uint32_t stage_,

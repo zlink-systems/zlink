@@ -615,7 +615,8 @@ void zlink::session_base_t::engine_ready ()
         _transport_pair_reconnect_in_progress = false;
     }
     if (_active && !is_terminating ())
-        _socket->report_connection_attempt (options, true, 0, ZLINK_CONNECTION_STAGE_NONE, 0, 0,
+        _socket->report_connection_attempt (options.connection_attempt_context (), true, 0,
+                                            ZLINK_CONNECTION_STAGE_NONE, 0, 0,
                                             _engine->get_endpoint ().connection_id);
     // The bind command was queued before this release. The socket mailbox
     // therefore admits the READY pipe and synchronizes its current control

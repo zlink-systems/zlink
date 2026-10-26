@@ -364,33 +364,37 @@ void test_attempt_owner_aggregates_lanes_and_rejects_retired_results ()
     TEST_ASSERT_TRUE (application.transport_pair_state->set_expected_lane_count (2));
     zlink::options_t completion = application;
     completion.transport_lane = zlink::transport_lane_completion;
-    core->report_connection_attempt (application, false, ECONNREFUSED,
+    core->report_connection_attempt (application.connection_attempt_context (), false, ECONNREFUSED,
                                      ZLINK_CONNECTION_STAGE_TRANSPORT);
     TEST_ASSERT_EQUAL_INT (ZLINK_CONNECTION_CONNECTING, attempt_snapshot (socket).state);
     completion.transport_pair_state->mark_ready (completion.transport_lane,
                                                  completion.transport_pair_generation);
-    core->report_connection_attempt (completion, true, 0, ZLINK_CONNECTION_STAGE_NONE);
+    core->report_connection_attempt (completion.connection_attempt_context (), true, 0,
+                                     ZLINK_CONNECTION_STAGE_NONE);
     const auto failure = attempt_snapshot (socket);
     TEST_ASSERT_EQUAL_INT (ZLINK_CONNECTION_ATTEMPT_FAILED, failure.state);
     TEST_ASSERT_EQUAL_INT (ZLINK_CONNECTION_FAILURE_REFUSED, failure.last_failure.kind);
-    core->report_connection_attempt (completion, true, 0, ZLINK_CONNECTION_STAGE_NONE);
+    core->report_connection_attempt (completion.connection_attempt_context (), true, 0,
+                                     ZLINK_CONNECTION_STAGE_NONE);
     TEST_ASSERT_EQUAL_UINT64 (failure.last_failure_id, attempt_snapshot (socket).last_failure_id);
     application.transport_pair_state->mark_ready (application.transport_lane,
                                                   application.transport_pair_generation);
-    core->report_connection_attempt (application, true, 0, ZLINK_CONNECTION_STAGE_NONE);
+    core->report_connection_attempt (application.connection_attempt_context (), true, 0,
+                                     ZLINK_CONNECTION_STAGE_NONE);
     const auto success = attempt_snapshot (socket);
     TEST_ASSERT_EQUAL_INT (ZLINK_CONNECTION_CONNECTED, success.state);
     TEST_ASSERT_EQUAL_UINT64 (failure.last_failure_id, success.last_failure_id);
     TEST_ASSERT_NOT_EQUAL (failure.revision, success.revision);
     // A replacement's failure cannot revoke an existing usable connection.
-    core->report_connection_attempt (completion, false, ECONNREFUSED,
+    core->report_connection_attempt (completion.connection_attempt_context (), false, ECONNREFUSED,
                                      ZLINK_CONNECTION_STAGE_TRANSPORT);
     TEST_ASSERT_EQUAL_UINT64 (success.revision, attempt_snapshot (socket).revision);
     TEST_ASSERT_EQUAL_INT (ZLINK_CONNECT_OK, zlink_disconnect (socket, endpoint));
     TEST_ASSERT_EQUAL_INT (ZLINK_CONNECT_OK, zlink_connect (socket, endpoint));
     const auto replacement = attempt_snapshot (socket);
-    core->report_connection_attempt (application, true, 0, ZLINK_CONNECTION_STAGE_NONE);
-    core->report_connection_attempt (completion, false, ECONNREFUSED,
+    core->report_connection_attempt (application.connection_attempt_context (), true, 0,
+                                     ZLINK_CONNECTION_STAGE_NONE);
+    core->report_connection_attempt (completion.connection_attempt_context (), false, ECONNREFUSED,
                                      ZLINK_CONNECTION_STAGE_TRANSPORT);
     // A delayed physical retirement command is fenced by the old intent too.
     zlink::command_t retired = {};

@@ -396,20 +396,72 @@ void assert_no_attempts (void *socket_)
     TEST_ASSERT_EQUAL_UINT64 (0, count);
     TEST_ASSERT_EQUAL_UINT64 (0, bytes);
 }
-void test_same_endpoint_tcp_calls ()
+uint64_t wait_connection_event (void *monitor_, uint64_t kind_, uint64_t excluded_)
+{
+    for (;;) {
+        zlink_monitor_event_t event = {};
+        const auto rc = zlink_socket_monitor_recv (monitor_, &event, ZLINK_RECV_FLAGS_DONTWAIT);
+        if (rc == ZLINK_RECV_OK) {
+            if (event.event == kind_ && event.connection_id != excluded_
+                && event.transport_lane == ZLINK_MONITOR_TRANSPORT_LANE_APPLICATION
+                && (kind_ != ZLINK_EVENT_CONNECTION_READY
+                    || (event.flags & ZLINK_MONITOR_EVENT_FLAG_CONNECTION_READY_EDGE))) {
+                TEST_ASSERT_NOT_EQUAL (0, event.connection_id);
+                return event.connection_id;
+            }
+            continue;
+        }
+        TEST_ASSERT_EQUAL_INT (ZLINK_RECV_NO_DATA, rc);
+        zlink_pollitem_t item = {monitor_, 0, ZLINK_POLLIN, 0};
+        zlink_config_result_t error = ZLINK_CONFIG_OK;
+        TEST_ASSERT_EQUAL_INT (1, zlink_poll (&item, 1, 3000, &error));
+        TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, error);
+    }
+}
+
+void verify_two_physical_connections (bool tcp_)
 {
     void *server = test_context_socket (ZLINK_SOCKET_PUB);
     void *client = test_context_socket (ZLINK_SOCKET_SUB);
+    zlink_socket_monitor_open_options_t options = {};
+    options.events = ZLINK_EVENT_CONNECTION_READY | ZLINK_EVENT_DISCONNECTED;
+    void *monitor = zlink_socket_monitor_open (server, &options);
+    TEST_ASSERT_NOT_NULL (monitor);
     char endpoint[256];
-    test_bind (server, "tcp://127.0.0.1:*", endpoint, sizeof endpoint);
+    if (tcp_)
+        test_bind (server, "tcp://127.0.0.1:*", endpoint, sizeof endpoint);
+    else {
+        strcpy (endpoint, "inproc://two-physical-intents");
+        TEST_ASSERT_EQUAL_INT (ZLINK_BIND_OK, zlink_bind (server, endpoint));
+    }
     TEST_ASSERT_EQUAL_INT (ZLINK_CONNECT_OK, zlink_connect (client, endpoint));
+    const auto first = wait_connection_event (monitor, ZLINK_EVENT_CONNECTION_READY, 0);
     TEST_ASSERT_EQUAL_INT (ZLINK_CONNECT_OK, zlink_connect (client, endpoint));
+    const auto second = wait_connection_event (monitor, ZLINK_EVENT_CONNECTION_READY, first);
+    TEST_ASSERT_NOT_EQUAL (first, second);
     uint64_t ids[2];
     rows_for_endpoint (client, endpoint, ZLINK_CONNECTION_CONNECTED, ids);
     TEST_ASSERT_EQUAL_INT (ZLINK_CONNECT_OK, zlink_disconnect (client, endpoint));
     assert_no_attempts (client);
+    const auto closed_first = wait_connection_event (monitor, ZLINK_EVENT_DISCONNECTED, 0);
+    const auto closed_second =
+      wait_connection_event (monitor, ZLINK_EVENT_DISCONNECTED, closed_first);
+    TEST_ASSERT_TRUE (closed_first == first || closed_first == second);
+    TEST_ASSERT_TRUE (closed_second == first || closed_second == second);
+    assert_no_attempts (client);
+    TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, zlink_monitor_close (&monitor));
     test_context_socket_close_zero_linger (client);
     test_context_socket_close_zero_linger (server);
+}
+
+void test_same_endpoint_inproc_physical_connections ()
+{
+    verify_two_physical_connections (false);
+}
+
+void test_same_endpoint_tcp_calls ()
+{
+    verify_two_physical_connections (true);
 }
 void test_same_endpoint_inproc_reconnects ()
 {
@@ -487,6 +539,7 @@ int main ()
     RUN_TEST (test_closed_handle);
     RUN_TEST (test_context_shutdown);
     RUN_TEST (test_same_endpoint_tcp_calls);
+    RUN_TEST (test_same_endpoint_inproc_physical_connections);
     RUN_TEST (test_same_endpoint_inproc_reconnects);
     RUN_TEST (test_arena_and_registration_after_change);
     return UNITY_END ();

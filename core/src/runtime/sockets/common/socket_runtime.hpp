@@ -189,7 +189,7 @@ struct socket_endpoint_runtime_t
 {
     typedef array_t<pipe_t, 3> attached_pipes_t;
 
-    // The endpoint owner serializes result publication and snapshot acknowledgement.
+    // connect -> attach_pipe -> update_inproc_connection_attempt re-enters report publication.
     mutable std::recursive_mutex attempts_sync;
     uint64_t next_attempt_token = 1;
     uint64_t allocate_attempt_token ()

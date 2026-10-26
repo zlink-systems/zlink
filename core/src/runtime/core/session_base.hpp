@@ -45,8 +45,8 @@ class session_base_t : public own_t, public io_object_t, public i_pipe_events
       int error_, uint32_t stage_, uint32_t kind_, uint32_t reason_, uint64_t connection_id_)
     {
         if (_active)
-            _socket->report_connection_attempt (options, false, error_, stage_, kind_, reason_,
-                                                connection_id_);
+            _socket->report_connection_attempt (options.connection_attempt_context (), false,
+                                                error_, stage_, kind_, reason_, connection_id_);
     }
 
     //  i_pipe_events interface implementation.

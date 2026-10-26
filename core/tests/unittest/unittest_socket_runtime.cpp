@@ -14,6 +14,30 @@ namespace zlink
 class session_termination_test_access_t
 {
   public:
+    static std::shared_ptr<connection_attempt_result_t> attempt_for (socket_base_t *socket_)
+    {
+        return socket_->endpoint_runtime ().endpoints.begin ()->second.connection_attempt;
+    }
+
+    static bool has_child (socket_base_t *socket_, uint64_t intent_id_)
+    {
+        for (const auto &entry : socket_->endpoint_runtime ().endpoints)
+            if (entry.second.connection_attempt
+                && entry.second.connection_attempt->row.intent_id == intent_id_)
+                return entry.second.endpoint != NULL;
+        return false;
+    }
+
+    static std::recursive_mutex &attempts_sync_for (socket_base_t *socket_)
+    {
+        return socket_->endpoint_runtime ().attempts_sync;
+    }
+
+    static pipe_t *first_pipe (socket_base_t *socket_)
+    {
+        return socket_->endpoint_runtime ().attached_pipe (0);
+    }
+
     static socket_monitor_runtime_t &monitor_for (socket_base_t *socket_)
     {
         return socket_->monitor_runtime ();
@@ -31,6 +55,134 @@ void tearDown ()
 
 namespace
 {
+void queue_term_endpoint (zlink::socket_base_t *socket_, const char *endpoint_, uint64_t intent_id_)
+{
+    zlink::command_t command = {};
+    command.destination = socket_;
+    command.type = zlink::command_t::term_endpoint;
+    command.args.term_endpoint.endpoint = new std::string (endpoint_);
+    command.args.term_endpoint.intent_id = intent_id_;
+    static_cast<zlink::mailbox_t *> (socket_->get_mailbox ())->send (command);
+}
+
+zlink_connection_attempt_t only_attempt (zlink::socket_base_t *socket_)
+{
+    zlink_connection_attempt_t row = {};
+    char bytes[256];
+    size_t count = 0, required = 0;
+    TEST_ASSERT_EQUAL_INT (
+      0, socket_->connection_attempts_snapshot (&row, 1, &count, bytes, sizeof bytes, &required));
+    TEST_ASSERT_EQUAL_UINT64 (1, count);
+    return row;
+}
+
+void test_queued_term_endpoint_does_not_retire_new_connect_intent ()
+{
+    zlink::ctx_t *ctx = new zlink::ctx_t;
+    zlink::socket_base_t *server = ctx->create_socket (ZLINK_CORE_SOCKET_ROUTER);
+    zlink::socket_base_t *client = ctx->create_socket (ZLINK_CORE_SOCKET_DEALER);
+    TEST_ASSERT_EQUAL_INT (0, server->bind ("tcp://127.0.0.1:*"));
+    char endpoint[256];
+    size_t size = sizeof endpoint;
+    TEST_ASSERT_EQUAL_INT (0,
+                           server->getsockopt (ZLINK_INTERNAL_OPT_LAST_ENDPOINT, endpoint, &size));
+    TEST_ASSERT_EQUAL_INT (0, client->connect (endpoint));
+    const auto old = zlink::session_termination_test_access_t::attempt_for (client);
+    const uint64_t old_id = old->row.intent_id;
+
+    // Queue the old physical failure before admitting another intent for the same URI.
+    queue_term_endpoint (client, endpoint, old_id);
+    TEST_ASSERT_TRUE (
+      static_cast<zlink::mailbox_t *> (client->get_mailbox ())->has_command_pending_hint ());
+    TEST_ASSERT_EQUAL_INT (0, client->connect (endpoint));
+    TEST_ASSERT_EQUAL_INT (0, client->test_process_commands_only ());
+    zlink_connection_attempt_t rows[2] = {};
+    char bytes[512];
+    size_t count = 0, required = 0;
+    TEST_ASSERT_EQUAL_INT (
+      0, client->connection_attempts_snapshot (rows, 2, &count, bytes, sizeof bytes, &required));
+    TEST_ASSERT_EQUAL_UINT64 (2, count);
+    TEST_ASSERT_FALSE (zlink::session_termination_test_access_t::has_child (client, old_id));
+    for (const auto &row : rows)
+        if (row.intent_id != old_id)
+            TEST_ASSERT_TRUE (
+              zlink::session_termination_test_access_t::has_child (client, row.intent_id));
+
+    TEST_ASSERT_EQUAL_INT (0, client->term_endpoint (endpoint));
+    TEST_ASSERT_EQUAL_INT (zlink::connection_attempt_result_t::removed, old->registration);
+    queue_term_endpoint (client, endpoint, old_id);
+    TEST_ASSERT_EQUAL_INT (0, client->connect (endpoint));
+    TEST_ASSERT_EQUAL_INT (0, client->test_process_commands_only ());
+    {
+        std::lock_guard<std::recursive_mutex> lock (
+          zlink::session_termination_test_access_t::attempts_sync_for (client));
+        const auto current = only_attempt (client);
+        TEST_ASSERT_NOT_EQUAL (old_id, current.intent_id);
+        TEST_ASSERT_TRUE (
+          zlink::session_termination_test_access_t::has_child (client, current.intent_id));
+
+        // A late result retains the removed attempt, so it cannot modify the replacement row.
+        client->report_connection_attempt ({old, {}, 0, 0, zlink::transport_lane_application},
+                                           false, ECONNREFUSED, ZLINK_CONNECTION_STAGE_TRANSPORT);
+        const auto after_late_failure = only_attempt (client);
+        TEST_ASSERT_EQUAL_UINT64 (current.intent_id, after_late_failure.intent_id);
+        TEST_ASSERT_EQUAL_UINT64 (current.revision, after_late_failure.revision);
+        TEST_ASSERT_EQUAL_INT (current.state, after_late_failure.state);
+    }
+    TEST_ASSERT_EQUAL_INT (0, ctx->close_socket_and_wait (client, 1000));
+    TEST_ASSERT_EQUAL_INT (0, ctx->close_socket_and_wait (server, 1000));
+    ctx->terminate ();
+}
+
+void test_queued_inproc_pipe_term_does_not_overwrite_new_connect_intent ()
+{
+    zlink::ctx_t *ctx = new zlink::ctx_t;
+    zlink::socket_base_t *server = ctx->create_socket (ZLINK_CORE_SOCKET_PUB);
+    zlink::socket_base_t *client = ctx->create_socket (ZLINK_CORE_SOCKET_SUB);
+    const int no_reconnect = 0;
+    TEST_ASSERT_EQUAL_INT (
+      0, client->setsockopt (ZLINK_INTERNAL_OPT_RECONNECT_IVL, &no_reconnect, sizeof no_reconnect));
+    const char *endpoint = "inproc://queued-pipe-term-new-intent";
+    TEST_ASSERT_EQUAL_INT (0, server->bind (endpoint));
+    TEST_ASSERT_EQUAL_INT (0, client->connect (endpoint));
+    TEST_ASSERT_EQUAL_INT (0, server->test_process_commands_only ());
+    TEST_ASSERT_EQUAL_INT (0, client->test_process_commands_only ());
+    const auto old = only_attempt (client);
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONNECTION_CONNECTED, old.state);
+
+    // Terminate the peer pipe without applying its queued command on the connecting socket.
+    zlink::session_termination_test_access_t::first_pipe (server)->terminate (false);
+    TEST_ASSERT_TRUE (
+      static_cast<zlink::mailbox_t *> (client->get_mailbox ())->has_command_pending_hint ());
+    TEST_ASSERT_EQUAL_INT (0, client->connect (endpoint));
+    TEST_ASSERT_EQUAL_INT (0, client->test_process_commands_only ());
+    TEST_ASSERT_EQUAL_INT (0, server->test_process_commands_only ());
+    TEST_ASSERT_EQUAL_INT (0, client->test_process_commands_only ());
+    zlink_connection_attempt_t rows[2] = {};
+    char bytes[256];
+    size_t count = 0, required = 0;
+    TEST_ASSERT_EQUAL_INT (
+      0, client->connection_attempts_snapshot (rows, 2, &count, bytes, sizeof bytes, &required));
+    TEST_ASSERT_EQUAL_UINT64 (2, count);
+    TEST_ASSERT_NOT_EQUAL (rows[0].intent_id, rows[1].intent_id);
+    bool found_old = false;
+    for (const auto &row : rows) {
+        if (row.intent_id == old.intent_id) {
+            found_old = true;
+            TEST_ASSERT_EQUAL_INT (ZLINK_CONNECTION_ATTEMPT_FAILED, row.state);
+            TEST_ASSERT_EQUAL_INT (ZLINK_CONNECTION_FAILURE_CONNECTION_LOST, row.last_failure.kind);
+        } else
+            TEST_ASSERT_EQUAL_INT (ZLINK_CONNECTION_CONNECTED, row.state);
+    }
+    TEST_ASSERT_TRUE (found_old);
+    const int zero = 0;
+    TEST_ASSERT_EQUAL_INT (0, client->setsockopt (ZLINK_INTERNAL_OPT_LINGER, &zero, sizeof zero));
+    TEST_ASSERT_EQUAL_INT (0, server->setsockopt (ZLINK_INTERNAL_OPT_LINGER, &zero, sizeof zero));
+    TEST_ASSERT_EQUAL_INT (0, client->close ());
+    TEST_ASSERT_EQUAL_INT (0, server->close ());
+    ctx->terminate ();
+}
+
 void test_transport_pair_expected_lane_masks ()
 {
     zlink::transport_pair_pipes_t pair;
@@ -693,6 +845,8 @@ void test_socket_public_send_scope_without_sync_keeps_inflight_admission ()
 int main (int, char **)
 {
     UNITY_BEGIN ();
+    RUN_TEST (test_queued_term_endpoint_does_not_retire_new_connect_intent);
+    RUN_TEST (test_queued_inproc_pipe_term_does_not_overwrite_new_connect_intent);
     RUN_TEST (test_transport_pair_expected_lane_masks);
     RUN_TEST (test_socket_monitor_runtime_tracks_ready_connections_once);
     RUN_TEST (test_socket_monitor_runtime_unknown_connection_keeps_ready_peers);

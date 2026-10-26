@@ -153,10 +153,25 @@ struct transport_pair_state_t
 
 struct connection_attempt_result_t;
 
+struct connection_attempt_context_t
+{
+    std::shared_ptr<connection_attempt_result_t> connection_attempt;
+    std::shared_ptr<transport_pair_state_t> transport_pair_state;
+    uint64_t transport_pair_id;
+    uint64_t transport_pair_generation;
+    transport_lane_t transport_lane;
+};
+
 struct options_t
 {
     std::shared_ptr<connection_attempt_result_t> connection_attempt;
     options_t ();
+
+    connection_attempt_context_t connection_attempt_context () const
+    {
+        return {connection_attempt, transport_pair_state, transport_pair_id,
+                transport_pair_generation, transport_lane};
+    }
 
     int setsockopt (int option_, const void *optval_, size_t optvallen_);
     int getsockopt (int option_, void *optval_, size_t *optvallen_) const;
