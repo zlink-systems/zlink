@@ -1,4 +1,6 @@
 using System.Reflection;
+using Zlink.Framework.Runtime.Backend.Contracts;
+using Zlink.Framework.Runtime.Dispatch;
 using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Service;
 using Zlink.Framework.UnitTests.Runtime;
@@ -7,6 +9,82 @@ namespace Zlink.Framework.UnitTests;
 
 public sealed class ClientServerLivenessLaneTests
 {
+    [Fact]
+    public async Task Fatal_pool_failure_ends_server_source_and_is_reported_once()
+    {
+        using var context = Systems.Zlink.Zlink.CreateContext();
+        using var router = context.CreateRouterSocket();
+        var failure = new InvalidOperationException("fatal server pool");
+        var poller = new MeshReceiveWakeTests.ControlledReceivePoller
+        {
+            BeforeWait = () => throw failure,
+        };
+        var source = ZLinkProcessExecutionPool.CreateReceiveSource(() => poller);
+        using var stop = new CancellationTokenSource();
+        using var errors = new ZLinkRuntimeErrorSink();
+        var reports = 0;
+        Exception? reported = null;
+        errors.UnhandledCallbackException += exception =>
+        {
+            reported = exception;
+            Interlocked.Increment(ref reports);
+        };
+        var runner = new ZLinkRuntimeTaskRunner(errors, stop.Token);
+        using var queue = new ZLinkApplicationJobQueue(
+            ZLinkApplicationJobQueueCapacityResolver.Resolve(
+                ZLinkApplicationJobQueueProfile.Balanced,
+                int.MaxValue,
+                1
+            )
+        );
+        var identity = new ZLinkClientServerServerIdentity(
+            "work",
+            RoutingId.From("fatal-server"),
+            1,
+            "plaintext",
+            1,
+            4096,
+            "inproc://fatal-server",
+            errors
+        );
+        var loop = new ZLinkChannelReceiveLoop(null!, null!);
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var ended = runner.Run(
+            "server-fatal-test",
+            token =>
+            {
+                var receiving = loop.RunClientServerLoop(
+                    "work",
+                    router,
+                    identity,
+                    queue,
+                    errors,
+                    token,
+                    token
+                );
+                started.TrySetResult();
+                return receiving;
+            }
+        );
+        try
+        {
+            await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await poller.FirstWait.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            poller.AllowWait();
+            await ended.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(1, Volatile.Read(ref reports));
+            Assert.Same(failure, reported);
+        }
+        finally
+        {
+            await stop.CancelAsync();
+            poller.ReleaseWait();
+            await ended.WaitAsync(TimeSpan.FromSeconds(5));
+            await runner.StopAsync();
+            Assert.Same(failure, await Record.ExceptionAsync(() => source.DisposeAsync().AsTask()));
+        }
+    }
+
     [Fact]
     public async Task Server_probe_admission_does_not_hold_the_receive_turn()
     {
@@ -58,7 +136,7 @@ public sealed class ClientServerLivenessLaneTests
             failures
         );
         await identity.AdmitPeerAsync(rid, 4096, 1);
-        var tick = identity.TickLivenessAsync(router, cancellation.Token);
+        var tick = identity.TickLivenessAsync(router, new CurrentReceiveTurn(), cancellation.Token);
         try
         {
             // No peer read can release HWM until the receive-turn assertion finishes.
@@ -113,7 +191,7 @@ public sealed class ClientServerLivenessLaneTests
         );
         await identity.AdmitPeerAsync(RoutingId.From("missing-probe-client"), 4096, 1);
 
-        await identity.TickLivenessAsync(router, CancellationToken.None);
+        await identity.TickLivenessAsync(router, new CurrentReceiveTurn(), CancellationToken.None);
 
         Assert.IsType<ZlinkSubmitException>(Assert.Single(failures.Failures));
         Assert.Equal(0, identity.LivenessProbeCount);
@@ -362,5 +440,19 @@ public sealed class ClientServerLivenessLaneTests
                 return result;
             }
         }
+    }
+
+    // These unit calls already own the synthetic receive turn; the existing
+    // completion driver remains the router's only native poller.
+    private sealed class CurrentReceiveTurn : IZLinkBackendSocketPoller
+    {
+        public ValueTask ResumeAsync() => ValueTask.CompletedTask;
+
+        public ValueTask<ZLinkBackendSocketReadiness> WaitAsync(
+            TimeSpan timeout,
+            CancellationToken cancellationToken
+        ) => throw new NotSupportedException();
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 }

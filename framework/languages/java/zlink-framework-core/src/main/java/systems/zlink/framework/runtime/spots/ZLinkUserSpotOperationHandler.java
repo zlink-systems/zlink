@@ -23,6 +23,7 @@ import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
 import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
 import systems.zlink.framework.runtime.locations.ZLinkServiceAuthorityPayloadCodec;
 import systems.zlink.framework.runtime.mesh.ZLinkActivationAdmission;
+import systems.zlink.framework.runtime.messaging.ZLinkMessagePayloads;
 import systems.zlink.framework.spots.ZLinkSpot;
 import systems.zlink.framework.spots.ZLinkSpotCloseReason;
 
@@ -781,7 +782,7 @@ final class ZLinkUserSpotOperationHandler
         List<Message> parts =
                 reply == null
                         ? List.of()
-                        : List.of(Message.from(reply.toEncodedPayload(serializer).bytes()));
+                        : List.of(ZLinkMessagePayloads.message(reply, serializer));
         return new ZLinkInternalMeshNode.UserSpotCreateResponse(
                 result, request.intent().spotId(), generation, parts);
     }
