@@ -157,10 +157,12 @@ route_packet_dispatcher_t::dispatch_send (const route_received_packet_t &receive
                     header);
         return result_t<std::optional<route_dispatch_reply_t>>::success (std::nullopt);
     }
-    if (_handlers == nullptr || _services == nullptr || _serializers == nullptr
-        || _handlers->find (_router_channel_id, runtime::messaging::message_kind_t::command,
-                            header.message_name)
-             == nullptr) {
+    const auto *handler =
+      _handlers != nullptr
+        ? _handlers->resolve (_router_channel_id, runtime::messaging::message_kind_t::command,
+                              header.message_name)
+        : nullptr;
+    if (handler == nullptr || _services == nullptr || _serializers == nullptr) {
         dispatch_error_reporter_t (_dispatch_options).report_lazy ([&] {
             auto event =
               message_dispatch_error_event_t{dispatch_error_surface_t::route_mesh_channel,
@@ -224,9 +226,8 @@ route_packet_dispatcher_t::dispatch_send (const route_received_packet_t &receive
     }
 
     auto dispatched = _invoker
-                        .invoke_send (*_handlers, filters, _send_dispatch_kind, _router_channel_id,
-                                      header.message_name, *_services, *_serializers, body.value (),
-                                      context, std::move (before))
+                        .invoke_send (*handler, filters, _send_dispatch_kind, *_services,
+                                      *_serializers, body.value (), context, std::move (before))
                         .result ();
     if (!dispatched) {
         dispatch_error_reporter_t (_dispatch_options).report_lazy ([&] {
@@ -281,10 +282,12 @@ route_packet_dispatcher_t::dispatch_request (const route_received_packet_t &rece
             reply.value ())});
     }
 
-    if (_handlers == nullptr || _services == nullptr || _serializers == nullptr
-        || _handlers->find (_router_channel_id, runtime::messaging::message_kind_t::request,
-                            header.message_name)
-             == nullptr) {
+    const auto *handler =
+      _handlers != nullptr
+        ? _handlers->resolve (_router_channel_id, runtime::messaging::message_kind_t::request,
+                              header.message_name)
+        : nullptr;
+    if (handler == nullptr || _services == nullptr || _serializers == nullptr) {
         framework_exception_t error (framework_error_kind_t::not_found,
                                      "No routed request handler is registered for '"
                                        + _router_channel_id + ":" + header.message_name + "'.");
@@ -313,9 +316,8 @@ route_packet_dispatcher_t::dispatch_request (const route_received_packet_t &rece
     }
 
     auto reply = _invoker
-                   .invoke_request (*_handlers, filters, _request_dispatch_kind, _router_channel_id,
-                                    header.message_name, *_services, *_serializers, body.value (),
-                                    context, std::move (before))
+                   .invoke_request (*handler, filters, _request_dispatch_kind, *_services,
+                                    *_serializers, body.value (), context, std::move (before))
                    .result ();
     if (!reply) {
         framework_exception_t error (reply.error_kind (), reply.error ()

@@ -5,10 +5,24 @@
 #include <zlink/framework/contracts/dispatch/task.hpp>
 #include <zlink/framework/contracts/errors/result.hpp>
 
+#include <functional>
 #include <type_traits>
+#include <utility>
 
 namespace zlink::framework::detail
 {
+
+// Arguments and typed payload are prepared before the target callback starts.
+template <typename TMethod, typename TOwner, typename... TArgs>
+decltype (auto) invoke_prepared_handler (const std::function<void ()> &before_application_handler,
+                                         TMethod method,
+                                         TOwner &owner,
+                                         TArgs &&...args)
+{
+    if (before_application_handler)
+        before_application_handler ();
+    return std::invoke (method, owner, std::forward<TArgs> (args)...);
+}
 
 template <typename T> struct task_value_type_t
 {

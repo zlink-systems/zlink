@@ -7,11 +7,9 @@ namespace zlink::framework::detail
 {
 
 task_t<void>
-route_handler_invoker_t::invoke_send (const route_handler_registry_t &handlers,
+route_handler_invoker_t::invoke_send (const route_handler_registry_t::entry_t &handler,
                                       const handler_registry_t &filters,
                                       handler_dispatch_kind_t dispatch_kind,
-                                      std::string_view router_channel_id,
-                                      std::string_view packet_name,
                                       service_provider_t &services,
                                       serializer_registry_t &serializers,
                                       const zlink::message_t &message,
@@ -23,24 +21,18 @@ route_handler_invoker_t::invoke_send (const route_handler_registry_t &handlers,
     auto &invocation_services = invocation_scope.provider ();
     co_await filters.invoke_filters_async (
       dispatch_kind, invocation_services, serializers, context,
-      [&handlers, router_channel_id, packet_name, &invocation_services, &serializers, &message,
-       &context, before_application_handler = std::move (before_application_handler)] () mutable {
-          if (before_application_handler) {
-              before_application_handler ();
-          }
-          return handlers.invoke_async (router_channel_id,
-                                        runtime::messaging::message_kind_t::command, packet_name,
-                                        invocation_services, serializers, message, context);
+      [&handler, &invocation_services, &serializers, &message, &context,
+       before_application_handler = std::move (before_application_handler)] () mutable {
+          return handler.invoker (invocation_services, serializers, message, context,
+                                  std::move (before_application_handler));
       });
     co_return;
 }
 
 task_t<zlink::message_t>
-route_handler_invoker_t::invoke_request (const route_handler_registry_t &handlers,
+route_handler_invoker_t::invoke_request (const route_handler_registry_t::entry_t &handler,
                                          const handler_registry_t &filters,
                                          handler_dispatch_kind_t dispatch_kind,
-                                         std::string_view router_channel_id,
-                                         std::string_view packet_name,
                                          service_provider_t &services,
                                          serializer_registry_t &serializers,
                                          const zlink::message_t &message,
@@ -53,15 +45,10 @@ route_handler_invoker_t::invoke_request (const route_handler_registry_t &handler
         auto &invocation_services = invocation_scope.provider ();
         co_return co_await filters.invoke_filters_async (
           dispatch_kind, invocation_services, serializers, context,
-          [&handlers, router_channel_id, packet_name, &invocation_services, &serializers, &message,
-           &context,
+          [&handler, &invocation_services, &serializers, &message, &context,
            before_application_handler = std::move (before_application_handler)] () mutable {
-              if (before_application_handler) {
-                  before_application_handler ();
-              }
-              return handlers.invoke_async (
-                router_channel_id, runtime::messaging::message_kind_t::request, packet_name,
-                invocation_services, serializers, message, context);
+              return handler.invoker (invocation_services, serializers, message, context,
+                                      std::move (before_application_handler));
           });
     }
     catch (const framework_exception_t &error) {
