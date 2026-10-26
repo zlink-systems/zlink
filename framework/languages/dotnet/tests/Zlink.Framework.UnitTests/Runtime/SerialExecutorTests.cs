@@ -5,6 +5,70 @@ namespace Zlink.Framework.UnitTests;
 
 public sealed class SerialExecutorTests
 {
+    [Fact]
+    public async Task SerialExecutionQueue_DrainsAcceptedWorkAfterRunnerStops()
+    {
+        using var errors = new ZLinkRuntimeErrorSink();
+        var runner = new ZLinkRuntimeTaskRunner(errors, CancellationToken.None);
+        var queue = new ZLinkSerialExecutionQueue(runner, errors, CancellationToken.None);
+        var ready = false;
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var order = new ConcurrentQueue<int>();
+        Assert.Equal(
+            ZLinkSerialPostAdmission.Accepted,
+            queue.TryPostApplicationWithAdmission(
+                async _ =>
+                {
+                    order.Enqueue(1);
+                    entered.TrySetResult();
+                    await release.Task.ConfigureAwait(false);
+                },
+                0,
+                0,
+                false,
+                out var first,
+                ready: () => Volatile.Read(ref ready)
+            )
+        );
+        Assert.True(
+            queue.TryPost(
+                _ =>
+                {
+                    order.Enqueue(2);
+                    return ValueTask.CompletedTask;
+                },
+                out var second
+            )
+        );
+        try
+        {
+            // Admission happened before Stop; readiness publishes the accepted drain afterward.
+            await runner.StopAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.False(runner.TryRunDetached("external", _ => ValueTask.CompletedTask));
+            queue.Complete();
+            Assert.False(queue.TryPost(_ => ValueTask.CompletedTask, out _));
+            Assert.Empty(order);
+            Volatile.Write(ref ready, true);
+            queue.NotifyReadiness();
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            var disposal = queue.DisposeAsync().AsTask();
+            Assert.False(disposal.IsCompleted);
+            release.TrySetResult();
+            await disposal.WaitAsync(TimeSpan.FromSeconds(5));
+            await Task.WhenAll(first.Completion, second.Completion)
+                .WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(new[] { 1, 2 }, order);
+        }
+        finally
+        {
+            release.TrySetResult();
+            Volatile.Write(ref ready, true);
+            queue.NotifyReadiness();
+            await queue.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        }
+    }
+
     [Theory]
     [InlineData(false, false)]
     [InlineData(true, false)]
