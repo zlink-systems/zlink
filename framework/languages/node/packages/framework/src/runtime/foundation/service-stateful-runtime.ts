@@ -4708,7 +4708,7 @@ export class ServiceStatefulRuntime {
       const timer = setTimeout(() => {
         fail(new Error('Local infrastructure request timed out.'));
       }, timeoutMs);
-      const finish = (parts: readonly Uint8Array[]) => {
+      const finish = (parts: readonly (Uint8Array | string)[]) => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);

@@ -20,7 +20,8 @@ import {
   type SubmitResult as SubmitResultValue
 } from '@zlink-systems/zlink';
 import { randomBytes } from 'node:crypto';
-import type { ZLinkMeshCompletionHandler } from '../mesh-completion-table';
+import type { ZLinkMeshCompletionTable } from '../mesh-completion-table';
+import type { ZLinkRequestResult } from '../../messaging/request-result';
 import { setImmediate as yieldToIO } from 'node:timers/promises';
 import {
   type RoutingId,
@@ -50,7 +51,6 @@ import {
 import {
   RawServiceMeshRuntime,
   RAW_MESH_RECEIVE_TIME_BUDGET_MS,
-  type RawServiceObservedRequest,
   type RawServiceRequestObserver,
   type RawServiceRequestResult
 } from '../../foundation/raw-service-mesh-runtime';
@@ -126,6 +126,7 @@ import {
   decodeMultipartApplicationParts,
   decodeMultipartParts,
   encodeMultipartApplicationPayload,
+  encodeMultipartPayload,
   ServiceWireProtocolError,
   type ServiceApplicationPayload
 } from '../../foundation/service-wire-m6a-codec';
@@ -184,7 +185,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       readonly lifecycleGeneration?: bigint;
     }
   >();
-  private completionHandler?: ZLinkMeshCompletionHandler;
+  private completionTable?: ZLinkMeshCompletionTable;
   readonly routingId: string;
   private readonly lifecycleGeneration: bigint;
   private bindEndpoint?: string;
@@ -510,6 +511,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     this.stateful?.close();
     this.stateful = undefined;
     this.runtime?.close();
+    this.completionTable?.dispose(new ZLinkBackendResultError('request', RequestResult.Terminated));
     this.runtime = undefined;
   }
 
@@ -759,17 +761,22 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   requestToNode(
     targetRid: unknown,
     parts: MessageLike | readonly MessageLike[],
-    options?: { readonly timeoutMs?: number; readonly onAdmitted?: () => void }
+    options: {
+      readonly timeoutMs?: number;
+      readonly onAdmitted?: () => void;
+      readonly requestEntry: ZLinkRequestResult<any>;
+    }
   ): MeshOperationId {
     const pending = this.requireRuntime().requestToNode(
       String(targetRid),
       encodeMultipartApplicationFrame(parts),
-      options?.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
-      options?.onAdmitted,
+      options.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+      options.onAdmitted,
       this.requestObserver,
-      OperationKind.NodeRequest
+      OperationKind.NodeRequest,
+      options.requestEntry
     );
-    return this.observedOperation(pending, OperationKind.NodeRequest);
+    return { high: 1n, low: pending.id };
   }
 
   sendToChannel(
@@ -788,17 +795,22 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   requestToChannel(
     channelName: string,
     parts: MessageLike | readonly MessageLike[],
-    options?: { readonly timeoutMs?: number; readonly onAdmitted?: () => void }
+    options: {
+      readonly timeoutMs?: number;
+      readonly onAdmitted?: () => void;
+      readonly requestEntry: ZLinkRequestResult<any>;
+    }
   ): MeshOperationId {
     const pending = this.requireRuntime().requestToChannel(
       channelName,
       encodeMultipartApplicationFrame(parts),
-      options?.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
-      options?.onAdmitted,
+      options.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+      options.onAdmitted,
       this.requestObserver,
-      OperationKind.ChannelRequest
+      OperationKind.ChannelRequest,
+      options.requestEntry
     );
-    return this.observedOperation(pending, OperationKind.ChannelRequest);
+    return { high: 1n, low: pending.id };
   }
 
   status() {
@@ -933,8 +945,8 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     };
   }
 
-  setCompletionHandler(handler: ZLinkMeshCompletionHandler): void {
-    this.completionHandler = handler;
+  setCompletionTable(table: ZLinkMeshCompletionTable): void {
+    this.completionTable = table;
   }
 
   setReadyHandler(handler: (readyDomains: number) => number): void {
@@ -1656,7 +1668,10 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       this.maintenanceDueMs = dueMs;
     }
     const pending =
-      (this.runtime?.pendingOperationCount ?? 0) + (this.stateful?.pendingOperationCount ?? 0) > 0;
+      (this.runtime?.pendingOperationCount ?? 0) +
+        (this.stateful?.pendingOperationCount ?? 0) +
+        (this.completionTable?.pendingCount ?? 0) >
+      0;
     if (pending === this.maintenanceTimer.hasRef()) return;
     if (pending) {
       this.maintenanceTimer.ref();
@@ -1772,34 +1787,19 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
    * The raw registry takes a remote request's terminal and hands it here,
    * where the Framework completion owner receives it in the same turn.
    */
+  private readonly onRequestCompleted = (
+    id: bigint,
+    result: RawServiceRequestResult,
+    operationKind: number | undefined
+  ): void =>
+    this.deliverCompletion({ high: 1n, low: id }, operationKind ?? 0, result);
+
   private readonly requestObserver: RawServiceRequestObserver = {
-    operationCompleted: (id, result, operationKind) =>
-      this.deliverCompletion({ high: 1n, low: id }, operationKind ?? 0, result),
+    operationCompleted: this.onRequestCompleted,
+    operationDiscarded: this.onRequestCompleted,
     operationFailed: (id, error, operationKind) =>
       this.deliverCompletion({ high: 1n, low: id }, operationKind ?? 0, requestFailureResult(error))
   };
-
-  private observedOperation(
-    pending: RawServiceObservedRequest,
-    operationKind: number
-  ): MeshOperationId {
-    return pending.promise === undefined
-      ? { high: 1n, low: pending.id }
-      : this.observeCompletion(pending.id, operationKind, pending.promise);
-  }
-
-  private observeCompletion(
-    low: bigint,
-    operationKind: number,
-    promise: Promise<RawServiceRequestResult>
-  ): MeshOperationId {
-    const id = { high: 1n, low };
-    void promise.then(
-      (result) => this.deliverCompletion(id, operationKind, result),
-      (error) => this.deliverCompletion(id, operationKind, requestFailureResult(error))
-    );
-    return id;
-  }
 
   private observeStateful(
     operationKind: number,
@@ -1818,8 +1818,8 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     operationKind: number,
     result: RawServiceRequestResult | ServiceStatefulResult
   ): void {
-    if (this.completionHandler !== undefined) {
-      this.completionHandler({ operationId, terminalResult: result.terminalResult }, () =>
+    if (this.completionTable !== undefined) {
+      this.completionTable.complete({ operationId, terminalResult: result.terminalResult }, () =>
         completionRecord(operationId, operationKind, result)
       );
       return;
@@ -1930,10 +1930,11 @@ class RawServiceSpot implements ServiceSpot {
   requestToChannel(
     channelName: string,
     parts: MessageLike | readonly MessageLike[],
-    options?: {
+    options: {
       readonly flags?: number;
       readonly timeoutMs?: number;
       readonly onAdmitted?: () => void;
+      readonly requestEntry: ZLinkRequestResult<any>;
     }
   ): MeshOperationId {
     this.requireOpen();
@@ -2401,8 +2402,8 @@ function completionRecord(
         : payload.contentType === MULTIPART_CONTENT_TYPE
           ? decodeMultipart(payload.payload)
           : [ZLinkBufferMessage.from(payload.payload)],
-    reply: () => SubmitResult.InvalidState,
-    replyActorJoin: () => SubmitResult.NotSupported
+    reply: replyInvalidState,
+    replyActorJoin: replyActorJoinNotSupported
   };
 }
 
@@ -2454,11 +2455,11 @@ function decodeMultipartRecord(
         if (values.length === 0) return SubmitResult.InvalidState;
         runtime.replyService(
           record as Parameters<RawServiceMeshRuntime['replyService']>[0],
-          values.map(messageBytesView)
+          values.map(messagePartView)
         );
         return SubmitResult.Ok;
       },
-      replyActorJoin: () => SubmitResult.NotSupported
+      replyActorJoin: replyActorJoinNotSupported
     };
   }
   const header = record.parts[0]!;
@@ -2529,6 +2530,10 @@ function releaseRecordApplicationJob(this: {
       | import('../../application-jobs/application-ingress-record-owner').ApplicationJobRecordLease
       | undefined
   )?.close();
+}
+
+function replyInvalidState(): SubmitResultValue {
+  return SubmitResult.InvalidState;
 }
 
 function replyActorJoinNotSupported(): SubmitResultValue {
@@ -2764,20 +2769,7 @@ export function requestFailureResult(error: unknown): RawServiceRequestResult {
 function encodeMultipart(parts: MessageLike | readonly MessageLike[]) {
   const values = Array.isArray(parts) ? parts : [parts];
   if (values.length === 0) throw new TypeError('Multipart payload must contain at least one part.');
-  //  messageBytesView aliases the caller's buffer; the parts are consumed
-  //  synchronously by the copy loop below and never retained.
-  const bytes = values.map(messageBytesView);
-  let size = 4;
-  for (const part of bytes) size += 4 + part.byteLength;
-  const payload = Buffer.alloc(size);
-  payload.writeUInt32BE(bytes.length, 0);
-  let offset = 4;
-  for (const part of bytes) {
-    payload.writeUInt32BE(part.byteLength, offset);
-    offset += 4;
-    payload.set(part, offset);
-    offset += part.byteLength;
-  }
+  const payload = encodeMultipartPayload(values.map(messagePartView));
   return {
     packetName: MULTIPART_PACKET_NAME,
     contentType: MULTIPART_CONTENT_TYPE,
@@ -2789,7 +2781,7 @@ function encodeMultipartApplicationFrame(parts: MessageLike | readonly MessageLi
   const values = Array.isArray(parts) ? parts : [parts];
   if (values.length === 0) throw new TypeError('Multipart payload must contain at least one part.');
   return encodeMultipartApplicationPayload(
-    values.map(messageBytesView),
+    values.map(messagePartView),
     MULTIPART_PACKET_NAME,
     MULTIPART_CONTENT_TYPE
   );
@@ -2807,11 +2799,10 @@ function borrowMultipartPart(part: Buffer): Buffer {
   return part;
 }
 
-function messageBytesView(value: MessageLike): Uint8Array {
+function messagePartView(value: MessageLike): Uint8Array | string {
   if (typeof value === 'object' && 'data' in value) {
     return value.data();
   }
-  if (typeof value === 'string') return Buffer.from(value);
   return value;
 }
 
