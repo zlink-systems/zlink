@@ -1084,41 +1084,53 @@ void public_host_runtime_t::configure_stateful_dispatch (
             [this, resolver = std::move (resolver)] (
               const stateful::accepted_record_authority_query_t &query)
               -> task_t<std::optional<stateful::accepted_record_authority_t>> {
-                auto accepted = co_await _relocation_session_terminal_lane.run_task (
-                  [&] () -> std::optional<stateful::accepted_record_authority_t> {
-                      for (const auto &[key, attempt] : _relocation_target_attempts) {
-                          const auto &prepare = attempt.prepare;
-                          if (prepare.source_node_routing_id != query.source_node_routing_id
-                              || prepare.source_node_generation != query.source_node_generation
-                              || prepare.target.target_node_routing_id
-                                   != query.target_node_routing_id
-                              || prepare.target.target_node_generation
-                                   != query.target_node_generation)
-                              continue;
-                          const auto target = std::find (attempt.targets.begin (),
-                                                         attempt.targets.end (), query.target);
-                          if (target == attempt.targets.end ())
-                              continue;
-                          const auto index = static_cast<std::size_t> (
-                            std::distance (attempt.targets.begin (), target));
-                          // A post-boundary relay can cross target CAS in flight (§4.4).
-                          // Its exact source attempt remains valid alongside the committed fence.
-                          if (query.requested_authority_owner_generation
-                                != target->authority_owner_generation
-                              && (index >= attempt.sources.size ()
-                                  || query.requested_authority_owner_generation
-                                       != attempt.sources[index].authority_owner_generation))
-                              continue;
-                          return stateful::accepted_record_authority_t{
-                            {prepare.coordinator.owner_id, prepare.coordinator.lease_generation,
-                             prepare.source_node_routing_id, prepare.source_node_generation},
-                            prepare.target.target_owner_lease_generation};
-                      }
-                      return std::nullopt;
-                  });
-                if (accepted)
-                    co_return accepted;
-                co_return co_await resolver (query);
+                using authority_t = std::optional<stateful::accepted_record_authority_t>;
+                try {
+                    auto accepted = _relocation_session_terminal_lane.run_task ([&] ()
+                                                                                  -> authority_t {
+                        for (const auto &[key, attempt] : _relocation_target_attempts) {
+                            const auto &prepare = attempt.prepare;
+                            if (prepare.source_node_routing_id != query.source_node_routing_id
+                                || prepare.source_node_generation != query.source_node_generation
+                                || prepare.target.target_node_routing_id
+                                     != query.target_node_routing_id
+                                || prepare.target.target_node_generation
+                                     != query.target_node_generation)
+                                continue;
+                            const auto target = std::find (attempt.targets.begin (),
+                                                           attempt.targets.end (), query.target);
+                            if (target == attempt.targets.end ())
+                                continue;
+                            const auto index = static_cast<std::size_t> (
+                              std::distance (attempt.targets.begin (), target));
+                            // A post-boundary relay can cross target CAS in flight (§4.4).
+                            // Its exact source attempt remains valid alongside the committed fence.
+                            if (query.requested_authority_owner_generation
+                                  != target->authority_owner_generation
+                                && (index >= attempt.sources.size ()
+                                    || query.requested_authority_owner_generation
+                                         != attempt.sources[index].authority_owner_generation))
+                                continue;
+                            return stateful::accepted_record_authority_t{
+                              {prepare.coordinator.owner_id, prepare.coordinator.lease_generation,
+                               prepare.source_node_routing_id, prepare.source_node_generation},
+                              prepare.target.target_owner_lease_generation};
+                        }
+                        return std::nullopt;
+                    });
+                    // resolve_accepted_authority owns query until this task completes;
+                    // the configured dispatch owns resolver for the same lifetime.
+                    return continue_task<authority_t> (
+                      std::move (accepted), [&resolver, &query] (authority_t authority) {
+                          if (authority)
+                              return task_t<authority_t> (
+                                result_t<authority_t>::success (std::move (authority)));
+                          return resolver (query);
+                      });
+                }
+                catch (...) {
+                    return task_t<authority_t> (detail::current_exception_result<authority_t> ());
+                }
             });
           /* flow-correlation §4: the ingest path gates flow capture on the host's
            * provider; the host outlives the dispatch it owns. */
@@ -1167,58 +1179,77 @@ public_host_runtime_t::accepted_record_authority (
   std::shared_ptr<const location_owner_token_t> owner,
   live_location_reader_t *sources) const
 {
-    const auto &local = _options.mesh.descriptor;
-    // The execution owner checks a Spot's current incarnation. Actor admission
-    // validates the native object fence here, independently of sender availability.
-    if ((query.target.kind == stateful::object_kind_t::actor
-         && query.requested_authority_owner_generation != query.target.authority_owner_generation)
-        || query.target_node_routing_id != local.node_routing_id
-        || query.target_node_generation != local.lifecycle_generation)
-        throw detail_make_boundary_exception (detail::boundary_error_t::stale_generation,
-                                              "accepted target fence is stale");
-    if (query.source_original)
-        if (const auto *lookup =
-              std::get_if<mesh::request_source_lookup_t> (&*query.source_original)) {
-            _transport->mailbox ().start_source_lookup (*lookup);
-            auto descriptor = co_await (*lookup)->completion.task ();
-            query.source_original = mesh::request_source_t{std::move (descriptor)};
-        }
     using authority_t = std::optional<stateful::accepted_record_authority_t>;
-    authority_t accepted;
-    // Location §9.3: the first accepting owner resolves once; forwarded records keep it.
-    if (!query.source_original && sources) {
-        auto cached = sources->cached_request_source (local.mesh_name, query.source_node_routing_id,
-                                                      query.source_node_generation);
-        std::shared_ptr<const mesh_node_descriptor_t> descriptor;
-        if (cached)
-            descriptor = std::move (*cached);
-        else
-            descriptor = co_await sources->request_source (
+    using descriptor_t = std::shared_ptr<const mesh_node_descriptor_t>;
+    try {
+        const auto &local = _options.mesh.descriptor;
+        // The execution owner checks a Spot's current incarnation. Actor admission
+        // validates the native object fence here, independently of sender availability.
+        if ((query.target.kind == stateful::object_kind_t::actor
+             && query.requested_authority_owner_generation
+                  != query.target.authority_owner_generation)
+            || query.target_node_routing_id != local.node_routing_id
+            || query.target_node_generation != local.lifecycle_generation)
+            throw detail_make_boundary_exception (detail::boundary_error_t::stale_generation,
+                                                  "accepted target fence is stale");
+        const auto finish =
+          [owner = std::move (owner)] (stateful::accepted_record_authority_query_t query) {
+              authority_t accepted;
+              if (owner && !owner->owner_id.empty () && owner->lease_generation > 0
+                  && query.source_original) {
+                  protocol::request_source_fence_t source;
+                  if (const auto *reference =
+                        std::get_if<mesh::local_request_source_t> (&*query.source_original)) {
+                      source = {reference->lease->owner_id,
+                                static_cast<std::uint64_t> (reference->lease->lease_generation),
+                                query.source_node_routing_id, query.source_node_generation};
+                  } else {
+                      const auto &descriptor = std::get<descriptor_t> (*query.source_original);
+                      if (!descriptor)
+                          return task_t<authority_t> (
+                            result_t<authority_t>::success (std::move (accepted)));
+                      source = {descriptor->owner_id,
+                                static_cast<std::uint64_t> (descriptor->lease_generation),
+                                query.source_node_routing_id, query.source_node_generation};
+                  }
+                  accepted = stateful::accepted_record_authority_t{
+                    std::move (source), static_cast<std::uint64_t> (owner->lease_generation)};
+              }
+              return task_t<authority_t> (result_t<authority_t>::success (std::move (accepted)));
+          };
+        if (query.source_original)
+            if (const auto *lookup =
+                  std::get_if<mesh::request_source_lookup_t> (&*query.source_original)) {
+                _transport->mailbox ().start_source_lookup (*lookup);
+                auto pending = (*lookup)->completion.task ();
+                return continue_task<authority_t> (
+                  std::move (pending),
+                  [query = std::move (query), finish] (descriptor_t descriptor) mutable {
+                      query.source_original = mesh::request_source_t{std::move (descriptor)};
+                      return finish (std::move (query));
+                  });
+            }
+        // Location §9.3: the first accepting owner resolves once; forwarded records keep it.
+        if (!query.source_original && sources) {
+            auto cached = sources->cached_request_source (
               local.mesh_name, query.source_node_routing_id, query.source_node_generation);
-        if (descriptor)
-            query.source_original = mesh::request_source_t{std::move (descriptor)};
-    }
-    if (owner && !owner->owner_id.empty () && owner->lease_generation > 0
-        && query.source_original) {
-        protocol::request_source_fence_t source;
-        if (const auto *reference =
-              std::get_if<mesh::local_request_source_t> (&*query.source_original)) {
-            source = {reference->lease->owner_id,
-                      static_cast<std::uint64_t> (reference->lease->lease_generation),
-                      query.source_node_routing_id, query.source_node_generation};
-        } else {
-            const auto &descriptor =
-              std::get<std::shared_ptr<const mesh_node_descriptor_t>> (*query.source_original);
-            if (!descriptor)
-                co_return accepted;
-            source = {descriptor->owner_id,
-                      static_cast<std::uint64_t> (descriptor->lease_generation),
-                      query.source_node_routing_id, query.source_node_generation};
+            if (!cached) {
+                auto pending = sources->request_source (
+                  local.mesh_name, query.source_node_routing_id, query.source_node_generation);
+                return continue_task<authority_t> (
+                  std::move (pending),
+                  [query = std::move (query), finish] (descriptor_t descriptor) mutable {
+                      query.source_original = mesh::request_source_t{std::move (descriptor)};
+                      return finish (std::move (query));
+                  });
+            }
+            query.source_original = mesh::request_source_t{std::move (*cached)};
         }
-        accepted = stateful::accepted_record_authority_t{
-          std::move (source), static_cast<std::uint64_t> (owner->lease_generation)};
+        return finish (std::move (query));
     }
-    co_return accepted;
+    catch (...) {
+        return task_t<authority_t> (detail::current_exception_result<authority_t> ());
+    }
 }
 
 void public_host_runtime_t::forward_relocation_application (
@@ -2919,52 +2950,57 @@ actor_handle_t public_host_runtime_t::create_actor (std::string actor_type, std:
     return actor_handle_t (shared_from_this (), framework_actor_ref (*object, actor_type), *object);
 }
 
-actor_handle_t public_host_runtime_t::create_reserved_actor (std::string actor_type,
-                                                             stateful::object_ref_t reserved)
+task_t<actor_handle_t>
+public_host_runtime_t::create_reserved_actor_async (std::string actor_type,
+                                                    stateful::object_ref_t reserved)
 {
     if (reserved.kind != stateful::object_kind_t::actor)
         throw std::invalid_argument ("reserved Actor reference has an invalid object kind");
+    //  State lanes §blocking boundary (06:211-226): an internal caller has no public sync
+    //  signature to keep, so every lane result here is awaited.
     const auto existing =
-      _spot_actor_index_lane
-        .run ([&] () -> std::optional<actor_handle_t> {
-            const auto found = _actors.find (reserved.key);
-            if (found != _actors.end ()) {
-                if (found->second.second.object_generation != reserved.object_generation
-                    || found->second.second.authority_owner_generation
-                         != reserved.authority_owner_generation) {
-                    const auto adopted = _objects.adopt_reserved_actor_owner (reserved, actor_type);
-                    if (adopted == stateful::stateful_error_t::none) {
-                        found->second.second = reserved;
-                        return actor_handle_t (shared_from_this (),
-                                               framework_actor_ref (reserved, found->second.first),
-                                               reserved);
-                    }
-                    throw std::runtime_error (
-                      "reserved Actor generation does not match the local Actor");
-                }
-                return actor_handle_t (
-                  shared_from_this (),
-                  framework_actor_ref (found->second.second, found->second.first),
-                  found->second.second);
-            }
-            return std::nullopt;
-        })
-        .get ();
+      co_await _spot_actor_index_lane.run_task ([&] () -> std::optional<actor_handle_t> {
+          const auto found = _actors.find (reserved.key);
+          if (found != _actors.end ()) {
+              if (found->second.second.object_generation != reserved.object_generation
+                  || found->second.second.authority_owner_generation
+                       != reserved.authority_owner_generation) {
+                  const auto adopted = _objects.adopt_reserved_actor_owner (reserved, actor_type);
+                  if (adopted == stateful::stateful_error_t::none) {
+                      found->second.second = reserved;
+                      return actor_handle_t (shared_from_this (),
+                                             framework_actor_ref (reserved, found->second.first),
+                                             reserved);
+                  }
+                  throw std::runtime_error (
+                    "reserved Actor generation does not match the local Actor");
+              }
+              return actor_handle_t (
+                shared_from_this (),
+                framework_actor_ref (found->second.second, found->second.first),
+                found->second.second);
+          }
+          return std::nullopt;
+      });
     if (existing)
-        return std::move (*existing);
-    auto created = _objects.begin_reserved_object (reserved, actor_type, {});
+        co_return std::move (*existing);
+    auto created = co_await _objects.begin_reserved_object_async (reserved, actor_type, {});
     if (created.error != stateful::stateful_error_t::none)
         throw std::runtime_error ("reserved framework Actor authority creation failed");
-    if (created.factory_owner
-        && _objects.commit_create (created.attempt) != stateful::stateful_error_t::none)
-        throw std::runtime_error ("reserved framework Actor Ready commit failed");
-    auto object = _objects.find (stateful::object_kind_t::actor, reserved.key);
+    //  Blocking on the object lane would hold a completion worker until that same dispatcher
+    //  delivered its result.
+    if (created.factory_owner) {
+        const auto committed = co_await _objects.commit_create_async (created.attempt);
+        if (committed != stateful::stateful_error_t::none)
+            throw std::runtime_error ("reserved framework Actor Ready commit failed");
+    }
+    auto object = co_await _objects.find_async (stateful::object_kind_t::actor, reserved.key);
     if (!object)
         throw std::runtime_error ("reserved framework Actor authority is unavailable");
-    _spot_actor_index_lane
-      .run ([&] { _actors.insert_or_assign (reserved.key, std::make_pair (actor_type, *object)); })
-      .get ();
-    return actor_handle_t (shared_from_this (), framework_actor_ref (*object, actor_type), *object);
+    co_await _spot_actor_index_lane.run_task (
+      [&] { _actors.insert_or_assign (reserved.key, std::make_pair (actor_type, *object)); });
+    co_return actor_handle_t (shared_from_this (), framework_actor_ref (*object, actor_type),
+                              *object);
 }
 
 task_t<std::optional<route_fence_t>>
@@ -5965,10 +6001,9 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
     }
     std::size_t count = 0;
     receive_batch_budget_t infrastructure_budget;
-    while (auto claim = _transport->mailbox ().try_claim (
-             mesh::service_mailbox_domain_t::infrastructure,
-             dispatch_limits::receive_batch_messages, dispatch_limits::receive_batch_bytes)) {
-        load_configuration ();
+    // Record-processing storage belongs to a claimed infrastructure batch.
+    const auto dispatch_batch =
+      [&] (const std::shared_ptr<mesh::service_mailbox_claim_t> &claim) -> task_t<void> {
         for (std::size_t index = 0; index < claim->claimed_messages; ++index) {
             auto original = _transport->mailbox ().take ({claim, index});
             if (!original)
@@ -6862,8 +6897,8 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                           exact_ref.object_generation);
                         continue;
                     }
-                    auto local =
-                      _objects.begin_reserved_object (exact_ref, request.stable_type, [&] {
+                    auto local = co_await _objects.begin_reserved_object_async (
+                      exact_ref, request.stable_type, [&] {
                           std::vector<std::uint8_t> bytes;
                           bytes.reserve (creation_payload->size ());
                           for (const auto value : *creation_payload)
@@ -6949,7 +6984,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                         creation_bytes.reserve (creation_payload->size ());
                         for (const auto value : *creation_payload)
                             creation_bytes.push_back (std::to_integer<std::uint8_t> (value));
-                        const auto reconciled = _objects.begin_reserved_object (
+                        const auto reconciled = co_await _objects.begin_reserved_object_async (
                           exact_ref, request.stable_type, std::move (creation_bytes));
                         if (reconciled.status == stateful::create_status_t::existing
                             && reconciled.object == exact_ref)
@@ -7093,7 +7128,8 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                 // when the Close cannot be scheduled.
                 try {
                     if (user_spot_closer)
-                        user_spot_closer (request.target.spot_id, begin, done);
+                        user_spot_closer (request.target.spot_id, request.target.object_generation,
+                                          begin, done);
                     else
                         run_authority_close (begin, done, {});
                 }
@@ -7137,6 +7173,13 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                                                       dispatch_failure->second);
             }
         }
+        co_return;
+    };
+    while (auto claim = _transport->mailbox ().try_claim (
+             mesh::service_mailbox_domain_t::infrastructure,
+             dispatch_limits::receive_batch_messages, dispatch_limits::receive_batch_bytes)) {
+        load_configuration ();
+        co_await dispatch_batch (claim);
         (void) _transport->mailbox ().release (*claim);
         if (infrastructure_budget.exhausted ())
             break;
@@ -7201,18 +7244,13 @@ task_t<std::size_t> public_host_runtime_t::dispatch_ready (
     (void) _transport->expire_requests (foundation::operation_registry_t::clock_t::now ());
     count += co_await dispatch_user_spot_operations ();
 
-    std::vector<stateful::object_inventory_t> stateful_owners;
+    std::vector<stateful::object_ref_t> stateful_owners;
     if (accept_application_receive && _stateful_dispatch && standalone) {
-        const auto local_node_id =
+        auto local_node_id =
           zlink::routing_id_t::from (_transport->topology ().local_descriptor ().node_routing_id)
             .to_string ();
-        stateful_owners = co_await _objects.inventory_async ();
-        std::erase_if (stateful_owners, [&] (const auto &item) {
-            return item.owner.node_id != local_node_id
-                   || (item.state != stateful::object_state_t::ready
-                       && item.state != stateful::object_state_t::moving
-                       && item.state != stateful::object_state_t::recovering);
-        });
+        stateful_owners =
+          co_await _objects.application_owner_refs_async (std::move (local_node_id));
     }
     auto next_stateful_owner = stateful_owners.begin ();
     receive_batch_budget_t budget;
@@ -7282,9 +7320,8 @@ task_t<std::size_t> public_host_runtime_t::dispatch_ready (
 
         if (accept_application_receive && !application_dispatch_started && _stateful_dispatch) {
             while (!application_dispatch_started && next_stateful_owner != stateful_owners.end ()) {
-                const auto &item = *next_stateful_owner++;
-                application_dispatch_started =
-                  co_await dispatch_stateful_owner (item.owner, dispatch);
+                const auto &owner = *next_stateful_owner++;
+                application_dispatch_started = co_await dispatch_stateful_owner (owner, dispatch);
                 if (application_dispatch_started)
                     ++count;
             }
@@ -7332,13 +7369,18 @@ task_t<std::size_t> public_host_runtime_t::dispatch_ready (
 
 task_t<bool> public_host_runtime_t::notify_stateful_owner (const stateful::object_ref_t &object)
 {
-    if (object.kind != stateful::object_kind_t::actor)
-        co_return false;
-    co_return co_await _transport->mailbox ().notify_stateful_ready (
-      object.key, [weak = weak_from_this (), object] (const auto &dispatch) {
-          const auto host = weak.lock ();
-          return host && host->claim_stateful_owner (object, dispatch);
-      });
+    try {
+        if (object.kind != stateful::object_kind_t::actor)
+            return task_t<bool> (result_t<bool>::success (false));
+        return _transport->mailbox ().notify_stateful_ready (
+          object.key, [weak = weak_from_this (), object] (const auto &dispatch) {
+              const auto host = weak.lock ();
+              return host && host->claim_stateful_owner (object, dispatch);
+          });
+    }
+    catch (...) {
+        return task_t<bool> (detail::current_exception_result<bool> ());
+    }
 }
 
 task_t<bool> public_host_runtime_t::dispatch_stateful_owner (
@@ -7620,7 +7662,7 @@ task_t<bool> public_host_runtime_t::dispatch_native_spot (
         const auto bytes = protocol::message_bytes (*query.header);
         header = protocol::decode_spot_message_header (bytes, protocol::decode_header (bytes).kind);
     }
-    const auto [error, authority] = co_await _stateful_dispatch->accepted_spot_authority (
+    auto [error, authority] = co_await _stateful_dispatch->accepted_spot_authority (
       object, header, std::move (query.source_routing_id), query.source_node_generation,
       std::move (query.source_original), std::move (retained));
     if (error != stateful::stateful_error_t::none)
@@ -7678,8 +7720,8 @@ task_t<bool> public_host_runtime_t::dispatch_native_spot (
         receive_record_t record;
         if (application) {
             parts = std::move (original->application->parts);
-            owner = application->owner;
-            record = application->record;
+            owner = std::move (original->application->owner);
+            record = std::move (original->application->record);
         } else {
             owner.owner_kind = owner_kind_t::spot;
             owner.domain = ready_domain_t::application;
@@ -7703,7 +7745,6 @@ task_t<bool> public_host_runtime_t::dispatch_native_spot (
         auto accepted = std::make_shared<runtime::serial_application_record_t> ();
         accepted->target = std::move (target);
         accepted->admission.jobs = _options.mesh.application_jobs;
-        accepted->set_spot_identity ({header, authority->source}, parts.front ().copy ());
         record.application_record = accepted;
         // The FIFO owns the original reply capability through capture and source abort.
         if (header.correlation) {
@@ -7731,6 +7772,8 @@ task_t<bool> public_host_runtime_t::dispatch_native_spot (
                   protocol::application_payload_t::from_parts (reply));
             };
         }
+        accepted->set_spot_identity ({std::move (header), std::move (authority->source)},
+                                     parts.front ().copy ());
         record.retain_mailbox_reservation = [] {};
         accepted->transferred = std::exchange (credit, {});
         record.release_mailbox_reservation = [accepted] { accepted->release_native_claim (); };

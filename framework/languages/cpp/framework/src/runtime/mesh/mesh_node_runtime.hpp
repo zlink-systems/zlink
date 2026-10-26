@@ -333,13 +333,10 @@ class mesh_node_runtime_t
                               std::string actor_id,
                               const std::optional<zlink::message_t> &creation_payload,
                               std::chrono::milliseconds timeout);
-    result_t<actor_ref_t>
-    create_application_actor (std::string actor_type,
-                              std::string actor_id,
-                              const std::optional<zlink::message_t> &creation_payload,
-                              std::uint64_t object_generation,
-                              std::uint64_t authority_owner_generation,
-                              std::chrono::milliseconds timeout);
+    task_t<actor_ref_t> create_application_actor_async (std::string actor_type,
+                                                        std::string actor_id,
+                                                        std::uint64_t object_generation,
+                                                        std::uint64_t authority_owner_generation);
     task_t<actor_join_reply_t>
     join_application_actor_to_entry_spot (actor_ref_t actor,
                                           node_rid_t target_node,

@@ -222,8 +222,12 @@ template <typename T> struct result_bridge_t<T, true>
 // Single-owner execution lane for one component's mutable state.  This is
 // deliberately separate from serial_execution_queue_t: a state owner needs
 // FIFO single-turn execution, not handler admission or lifecycle policy.
+struct state_lane_test_access_t;
+
 class state_lane_t
 {
+    friend struct state_lane_test_access_t;
+
   public:
     explicit state_lane_t (offload_executor_t &executor) noexcept;
     ~state_lane_t ();
@@ -329,31 +333,31 @@ class state_lane_t
         }
         auto completion = std::make_shared<task_completion_source_t<value_t>> ();
         auto task = completion->task ();
+        // A dependent may wait for another turn on this lane. Result delivery
+        // must therefore leave its executor, as well as its lane-current scope.
+        auto deliver = [dispatcher = detail::borrow_completion_dispatcher (),
+                        completion] (result_t<value_t> terminal) {
+            detail::dispatch_completion (
+              [completion, result = std::move (terminal)] () mutable {
+                  completion->complete (std::move (result));
+              },
+              false, completion.get (), dispatcher);
+        };
         if (!enqueue (
-              [this, completion, invoke_work = std::move (invoke_work)] () mutable {
+              [deliver, invoke_work = std::move (invoke_work)] () mutable {
                   auto result = invoke_work ();
-                  auto deliver = [executor = &_executor, completion] (result_t<value_t> terminal) {
-                      if (!executor->try_submit_internal (
-                            [completion, result = std::move (terminal)] () mutable {
-                                completion->complete (std::move (result));
-                            })) {
-                          completion->complete (result_t<value_t>::failure (
-                            framework_error_kind_t::shutting_down, "state lane is closed"));
-                      }
-                  };
                   if constexpr (traits_t::asynchronous)
                       detail::observe_task_completion (result, std::move (deliver));
                   else
                       deliver (std::move (result));
               },
-              [completion] (std::exception_ptr) {
-                  completion->complete (result_t<value_t>::failure (
-                    framework_error_kind_t::shutting_down, "state lane is closed"));
+              [deliver] (std::exception_ptr) {
+                  deliver (result_t<value_t>::failure (framework_error_kind_t::shutting_down,
+                                                       "state lane is closed"));
               }))
             throw std::runtime_error ("state lane is closed");
         schedule_drain (true);
-        // A pending lane result needs its caller's scope-exit handoff even
-        // when executor shutdown rejects the physical result delivery.
+        // Preserve the caller's scope-exit handoff for pending lane results.
         return detail::with_task_resume_scheduler (std::move (task),
                                                    detail::capture_runtime_scope_exit_scheduler ());
     }

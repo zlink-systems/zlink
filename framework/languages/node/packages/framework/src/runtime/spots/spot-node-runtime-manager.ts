@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto';
 import {
   type ActorRef,
   type RoutingId,
+  type Type,
   type ZLinkActor,
   type ZLinkChannelClient,
   type ZLinkFanoutClient,
@@ -1025,7 +1026,8 @@ export class ZLinkSpotNodeRuntimeManager {
       this.options.dispatchErrors?.flow.flowCreationEnabled() ?? true
     );
     const codecs = { serializers: this.options.registration.messageSerializers };
-    const decodePayload = () => decodeChannelPayload(envelope, codecs);
+    const decodePayload = (messageType?: Type) =>
+      decodeChannelPayload(envelope, codecs, messageType);
     const context = {
       channelName: envelope.header.channelName,
       contentType: envelope.header.contentType

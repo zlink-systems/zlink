@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #include <zlink/json.hpp>
+#include "../support/stateful_object_sync.hpp"
 #include "runtime/mesh/mesh_node_host_service.hpp"
 #include "../support/runtime_failure_fixture.hpp"
 #include "../support/manual_internal_scheduler.hpp"
@@ -68,6 +69,8 @@
 #include <thread>
 #include <type_traits>
 #include <vector>
+
+using zlink::framework::test::begin_reserved_object;
 
 namespace
 {
@@ -5387,7 +5390,7 @@ bool verify_wire_actor_join_admission_is_approval_only_and_later_attempt_wins ()
             admit_wire_actor_join (node, local_rid, second_actor, std::nullopt, &serializers));
           co_return;
       },
-      [second_promise] { second_promise->set_value ({}); });
+      [second_promise] (result_t<void>) { second_promise->set_value ({}); });
     node->actor_transfer_coordinator->fail_commit (transfer_id_for (4213), false);
     const bool second_completed =
       second_future.wait_for (std::chrono::seconds (2)) == std::future_status::ready
@@ -5455,7 +5458,7 @@ bool verify_wire_join_requires_active_local_target ()
               ++accepted;
               co_return;
           },
-          [&] { ++unavailable; });
+          [&] (result_t<void>) { ++unavailable; });
     };
     receive ("cold-target");
     receive ("inactive-target");
@@ -5504,7 +5507,7 @@ bool verify_relocation_abort_does_not_hold_receive_worker ()
           {{.kind = runtime::stateful::object_kind_t::user_spot, .key = "abort-target"}});
         owner.dispatch_wire_actor_join_admission (
           spot_id_t ("following-target"), std::string_view{}, [] () -> task_t<void> { co_return; },
-          [&] { following_frame.set_value (); });
+          [&] (result_t<void>) { following_frame.set_value (); });
     });
     const bool entered = started.wait_for (std::chrono::seconds (2)) == std::future_status::ready;
     const bool progressed =
@@ -6090,7 +6093,7 @@ bool verify_join_commit_does_not_wait_for_joined_callback (bool lifecycle_failur
         committed.store (owner.commit_relocation_materialization ({target}));
         owner.dispatch_wire_actor_join_admission (
           spot_id_t ("following-target"), std::string_view{}, [] () -> task_t<void> { co_return; },
-          [&] { following_frame.set_value (); });
+          [&] (result_t<void>) { following_frame.set_value (); });
     });
     const bool entered = started.wait_for (std::chrono::seconds (2)) == std::future_status::ready;
     const bool progressed =
@@ -7795,9 +7798,11 @@ bool verify_remote_actor_cutover_completion_is_target_owned (bool cancel_source_
         return false;
     }
     const auto created_actor =
-      source.create_application_actor ("actor.cutover.probe", "actor-cutover-probe", std::nullopt,
-                                       actor_reserved->fence.object_generation,
-                                       actor_reserved->fence.authority_owner_generation, 1s);
+      source
+        .create_application_actor_async ("actor.cutover.probe", "actor-cutover-probe",
+                                         actor_reserved->fence.object_generation,
+                                         actor_reserved->fence.authority_owner_generation)
+        .result ();
     if (source_spot.state != spot_create_state_t::created
         || target_spot.state != spot_create_state_t::created || !created_actor) {
         std::cerr << "cutover production setup: application materialization failed\n";
@@ -8878,7 +8883,7 @@ bool verify_aggregate_capture_waits_for_participant_terminal ()
           membership_ran.store (true);
           co_return;
       },
-      [] {});
+      [] (fw::result_t<void>) {});
     std::thread capture ([&] {
         error = objects.try_seal_relocation_aggregate ({source, participant, other})
                   .result ()
@@ -10931,7 +10936,7 @@ bool verify_async_capture_releases_state_owner ()
     using namespace zlink::framework::runtime::stateful;
     stateful_object_runtime_t objects;
     const object_ref_t object{object_kind_t::user_spot, "async-capture", 1, 1, "mesh", "node"};
-    const auto created = objects.begin_reserved_object (object, "spot", {});
+    const auto created = begin_reserved_object (objects, object, "spot", {});
     if (created.error != stateful_error_t::none
         || objects.commit_create (created.attempt) != stateful_error_t::none)
         return false;

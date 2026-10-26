@@ -84,6 +84,9 @@ class core_context_listener_t final : public testing::EmptyTestEventListener
 
 int main (int argc, char **argv)
 {
+    // The completion owner starts workers. Death-test children need a fresh
+    // runtime instead of inheriting a dispatcher whose threads did not survive fork.
+    ::testing::FLAGS_gtest_death_test_style = "threadsafe";
     zlink::framework::completion_owner_t completion_owner;
     testing::InitGoogleTest (&argc, argv);
 #if defined(ZLINK_TEST_CHECK_CORE_CONTEXTS) && defined(__linux__)

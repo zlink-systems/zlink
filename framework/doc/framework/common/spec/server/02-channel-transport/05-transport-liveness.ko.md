@@ -249,7 +249,7 @@ Remote endpoint와 identity를 찾도록 Store에 게시하는 정보를
 
 | 연결 방식 | Ready가 되기 위한 조건 |
 |---|---|
-| RouteMesh·ClientServer | Transport 연결, service handshake, identity·generation 검증과 handler 준비를 모두 끝낸다. Server membership 없는 RouteMesh Object Client pair는 ready 대상에서 제외한다. |
+| RouteMesh·ClientServer | Transport 연결, service handshake, identity·generation 검증과 handler 준비를 모두 끝낸다. RouteMesh의 service handshake는 현재 Core 선택 route에서 상대의 ADMIT를 받아 그 route와 기대 identity·generation이 일치함을 확인했을 때 끝나며, HELLO 수신·local 등록·ADMIT 송신만으로는 끝나지 않는다. ClientServer handshake의 방향과 완료는 [wire protocol의 ClientServer 방향](06-wire-protocol.ko.md#clientserver-방향)을 따른다. Server membership 없는 RouteMesh Object Client pair는 ready 대상에서 제외한다. |
 | Classic fanout | Publisher별 SUB socket이 연결되고 descriptor 또는 manual endpoint 관계가 유효하며, 첫 정상 application record나 beacon을 받는다. |
 
 다음 조건을 확인하면 해당 connection을 ready target 목록에서 즉시 제거한다.
@@ -292,7 +292,7 @@ Request와 reply를 같은 호출로 연결하는 식별 정보를
 
 | Connection을 잃은 시점 | Request 처리 |
 |---|---|
-| Transport가 request를 수락하기 전 | Route-not-connected로 끝낸다. |
+| Binding operation을 시작하기 전 | [Submit과 완료 §5](../01-execution/01-submit-and-completion.ko.md#5-backpressure와-오류-분류)의 연결 준비 규칙을 따른다. |
 | Transport 수락 여부를 알 수 없음 | [Submit과 완료 §5](../01-execution/01-submit-and-completion.ko.md#5-backpressure와-오류-분류)의 재제출 경계를 따른다. |
 | 이미 수락됨 | Reply, request timeout, cancellation, `Shutdown` 또는 route failure 중 하나로 한 번만 끝낸다. |
 

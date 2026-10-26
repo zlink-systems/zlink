@@ -1,3 +1,4 @@
+import type { ZLinkHandlerMessageType } from './framework-integration-contracts';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import type {
@@ -41,6 +42,7 @@ interface HandlerResolver {
 }
 
 interface FrameworkIntegrationModule {
+  resolveHandlerMessageType(handlerType: Type): ZLinkHandlerMessageType | undefined;
   ZLinkSpotActorSend(packetName?: string): MethodDecorator;
   ZLinkSpotActorRequest(packetName?: string): MethodDecorator;
   disposeIntegrationHandler(instance: unknown): Promise<void>;

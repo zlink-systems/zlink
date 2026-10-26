@@ -218,7 +218,7 @@ create a separate readiness callback, retry waiter, or separate binding adapter,
 | No Spot authority | `NotFound` |
 | No Mesh | `NotFound` |
 | ChannelName target selection fails | Follows [the Framework API channel selection result](../00-foundation/06-framework-api.en.md#channel-selection-result) |
-| No route available | `Unavailable` |
+| No route available | `Unavailable`. A remote request first follows "Requests before the connection is ready" below |
 | The route is lost while waiting | Follows [§7](#7-one-way-send-wait-termination-and-classic-fanout-send-timeout) |
 | Runtime not accepting new admission | `ShuttingDown` |
 | Same call's terminal invoked twice | `InvalidOperation` |
@@ -236,6 +236,47 @@ eligibility or source-local admission before any binding operation has started.
 Starting the binding operation fixes the selected target. The binding owns resubmission and
 completion after an HWM wait; the Framework does not reselect for capacity or resubmit the binding operation.
 There is no automatic resubmission after completion. Termination of a send wait follows [§7](#7-one-way-send-wait-termination-and-classic-fanout-send-timeout). A new select-one operation may choose members eligible when it starts.
+
+**Requests before the connection is ready.** After a remote request fixes a valid target and owner
+descriptor under the existing rules, it checks the connection to that owner and
+[service admission](../02-channel-transport/05-transport-liveness.en.md#5-ready-and-failure-determination) before
+starting a binding operation. Lifecycle requests that the Framework starts (Actor create and Join, session bind,
+relocation PREPARE) do the same. Each language decides this in one logical request admission point.
+
+- HELLO, ADMIT, and REJECT are control records that drive the handshake and aren't subject to this wait. ClientServer
+  uses the existing ClientServer ready (completion of the directional handshake) as connection readiness, and the
+  selected-route conditions below apply to RouteMesh.
+- When a request first starts waiting, it keeps the target intent's `intent_id` and `last_failure_id` as baselines.
+  The socket's single observer handles the snapshot that read the baselines and the change subscription in the same
+  turn, so no change between them is missed. If, while waiting, the target intent disappears, its `intent_id`
+  changes, or its `last_failure_id` changes, the request ends with `Unavailable`, even if the current snapshot shows
+  the connection and service admission already recovered. This check is made before deciding whether to submit a
+  waiting request. A request that started waiting because there was no Core row yet makes no baseline, and the
+  first row's appearance isn't an intent replacement. If the first row already has a failure history
+  (`last_failure_id` isn't 0), the request ends with `Unavailable` even if the current state recovered; otherwise it
+  keeps waiting with that row's identifiers as baselines. Before the first row is seen, removal of the target,
+  descriptor, or logical intent, and the deadline and shutdown, are handled by notifications from their existing
+  owners, and the Framework doesn't make up Core identifiers or keep a separate physical intent list.
+- If the target RID has a Core selected route and that route's service admission has finished, the binding request
+  starts once with the remaining timeout. A failure of another physical connection unrelated to that route doesn't
+  invalidate it, and a new request using an already ready route isn't rejected for a past failure alone. This
+  readiness check only reads the state the observer has already applied; the connection state snapshot is read
+  only when `ZLINK_POLLCONNECT` is ready. The wait and baseline handling below applies only to requests that
+  aren't ready.
+- If there's no selected route and the target endpoint's [connection state](../../../../../../../core/doc/spec/core/socket/README.en.md#zlink_socket_connection_attempts_snapshot) is
+  `ATTEMPT_FAILED`, the request ends at once with `Unavailable`. It doesn't wait even while Core is reconnecting.
+- If the connection state is `CONNECTING`, or a valid descriptor exists but there's no Core connection row yet, or a
+  Core connection exists but the selected route or service admission isn't ready yet, the request waits within the
+  remaining request timeout of [§9](#9-request-completion--the-completion-race-and-timeout-budget). While it waits,
+  invalidation of the target, descriptor, or authority fence, or an explicit service rejection ends it with
+  `Unavailable`. If the runtime no longer takes new admission, it's `ShuttingDown`. A synchronous failure of the
+  connect call itself isn't rewritten as a failure in the connection state row.
+- Once a binding operation starts, neither an application request nor a lifecycle request resubmits the same
+  operation. Connection loss, handover, a selected-route change, and a lost reply end with the binding's typed
+  result. Relocation relay and cutover batches and Store authority settlement follow their own transaction
+  contracts and aren't implemented as request restarts.
+- The wait of a one-way send is defined by [§7](#7-one-way-send-wait-termination-and-classic-fanout-send-timeout), and
+  this rule doesn't apply to it.
 
 ## 6. Logical Multicast and Classic Fanout
 
@@ -351,7 +392,9 @@ outbound admission is the remaining request timeout, and it is not combined with
 timeout. When a timeout or cancellation ends the caller's wait, that does not mean the request was
 not sent — a request that ended before admission can still be sent later by a resubmission the
 binding already started, and its reply is discarded because the correlation is closed. The resubmission boundary for a request after timeout or connection failure is defined by
-[§5](#5-backpressure-and-error-classification).
+[§5](#5-backpressure-and-error-classification). The wait for connection readiness in §5 is part of outbound admission
+and uses the same request timeout. If the deadline is reached before any binding operation starts, the result is
+still `DeadlineExceeded`.
 
 How a request sent within the same handler turn releases and reacquires the gate while
 waiting is defined by

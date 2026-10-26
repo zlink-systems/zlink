@@ -93,3 +93,24 @@ requestBackpressureMains.forEach { (taskName, entryPoint) ->
         }
     }
 }
+
+val phasePathTest by tasks.registering(JavaExec::class) {
+    classpath = sourceSets.test.get().runtimeClasspath
+    mainClass.set("systems.zlink.bench.withgrpc.client.PhasePathTest")
+    dependsOn(tasks.testClasses)
+}
+tasks.check { dependsOn(phasePathTest) }
+
+val warmupResultIsolationTest by tasks.registering(JavaExec::class) {
+    classpath = sourceSets.test.get().runtimeClasspath
+    mainClass.set("systems.zlink.bench.withgrpc.client.WarmupResultIsolationTest")
+    dependsOn(tasks.testClasses)
+}
+tasks.check { dependsOn(warmupResultIsolationTest) }
+
+val sourceLifecycleTest by tasks.registering(JavaExec::class) {
+    classpath = sourceSets.test.get().runtimeClasspath
+    mainClass.set("systems.zlink.bench.withgrpc.client.SourceLifecycleTest")
+    dependsOn(tasks.testClasses)
+}
+tasks.check { dependsOn(sourceLifecycleTest) }

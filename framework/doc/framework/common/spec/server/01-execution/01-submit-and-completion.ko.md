@@ -201,7 +201,7 @@ admission을 받지 않을 때까지 기다린다. Core HWM으로 binding operat
 | Spot authority 없음 | `NotFound` |
 | Mesh 없음 | `NotFound` |
 | ChannelName target 선택 실패 | [Framework API의 Channel 선택 결과](../00-foundation/06-framework-api.ko.md#channel-selection-result)를 따른다 |
-| 사용할 route가 없음 | `Unavailable` |
+| 사용할 route가 없음 | `Unavailable`. Remote request는 먼저 아래 「연결 준비 전 request」를 따른다 |
 | 대기 중 route가 없어짐 | [§7](#7-one-way-send의-대기-종료와-classic-fanout-send-timeout)을 따른다 |
 | runtime이 새 admission을 받지 않음 | `ShuttingDown` |
 | 같은 call의 terminal을 두 번 실행 | `InvalidOperation` |
@@ -217,6 +217,41 @@ source-local admission 확인 단계에서만 다른 eligible member를 선택�
 Binding operation이 시작되면 선택한 target이 확정된다. HWM 대기 뒤의 재제출과
 완료는 binding이 소유하며 Framework는 용량을 이유로 target을 다시 선택하거나 binding operation을
 다시 제출하지 않는다. 완료 뒤에는 자동 재제출하지 않는다. Send 대기의 종료는 [§7](#7-one-way-send의-대기-종료와-classic-fanout-send-timeout)을 따른다. 새 select-one operation은 시작할 때 그 시점의 eligible member를 선택할 수 있다.
+
+**연결 준비 전 request.** Remote request는 기존 규칙으로 유효한 target과 owner descriptor를 확정한 뒤, binding
+operation을 시작하기 전에 그 owner로 가는 연결과
+[service admission](../02-channel-transport/05-transport-liveness.ko.md#5-ready와-장애-판정)을 확인한다. Framework가 시작하는
+lifecycle request(Actor create·Join, session bind, relocation PREPARE)도 같다. 판정은 언어마다 logical request
+admission 한 곳에서 한다.
+
+- HELLO·ADMIT·REJECT는 handshake를 진행하는 제어 record이며 이 대기의 대상이 아니다. ClientServer는 기존
+  ClientServer ready(방향별 handshake 완료)를 연결 준비로 쓰고, 아래 선택 route 조건은 RouteMesh에 적용한다.
+- 처음 대기에 들어갈 때 대상 intent의 `intent_id`와 `last_failure_id`를 기준값으로 보존한다. 기준값을 읽은 snapshot과
+  변화 구독은 socket의 단일 관찰자가 같은 차례에 처리해 그 사이의 변경을 놓치지 않는다. 대기 중 대상 intent가
+  없어지거나 `intent_id`가 바뀌거나 `last_failure_id`가 바뀌면 `Unavailable`로 끝낸다. 현재 snapshot에서 연결과
+  service admission이 이미 회복됐어도 같다. 이 판정은 대기 중인 request를 제출할지 정하기 전에 한다. Core 행이
+  아직 없어 대기를 시작한 request는 기준값을 만들지 않고, 최초 행의 출현을 intent 교체로 보지 않는다. 최초 행에
+  이미 실패 이력(`last_failure_id`가 0이 아님)이 있으면 현재 상태가 회복됐어도 `Unavailable`로 끝내고, 없으면 그
+  행의 식별자를 기준값으로 삼아 대기를 계속한다. 최초 행을 보기 전에는 target·descriptor·logical intent 제거와
+  deadline·shutdown을 기존 소유자의 통지로 처리하며, Framework가 가짜 Core 식별자나 별도 physical intent 목록을
+  만들지 않는다.
+- 대상 RID의 Core 선택 route가 있고 그 route의 service admission이 끝났으면 남은 timeout으로 binding request를
+  한 번 시작한다. 그 route와 무관한 다른 physical 연결의 실패는 이 route를 무효로 만들지 않으며, 이미 준비된
+  route를 쓰는 새 request를 과거 실패만으로 거부하지 않는다. 이 준비 판정은 관찰자가 이미 반영한 상태를 읽는 것으로
+  끝나며, 연결 상태 snapshot은 `ZLINK_POLLCONNECT`가 준비됐을 때만 읽는다. 아래 대기·기준값 처리는 준비되지 않은
+  request에만 적용한다.
+- 선택 route가 없고 대상 endpoint의 [연결 상태](../../../../../../../core/doc/spec/core/socket/README.ko.md#zlink_socket_connection_attempts_snapshot)가 `ATTEMPT_FAILED`이면
+  즉시 `Unavailable`로 끝낸다. Core가 재연결하는 중이어도 기다리지 않는다.
+- 연결 상태가 `CONNECTING`이거나, 유효 descriptor는 있으나 Core 연결 행이 아직 없거나, Core 연결은 있으나 선택
+  route·service admission이 아직 준비 중이면 [§9](#9-request-completion--완료-경쟁과-timeout-budget)의 남은
+  request timeout 안에서 기다린다. 기다리는 동안 target·descriptor·authority fence가 무효가 되거나 service가
+  명시적으로 거부하면 `Unavailable`로 끝낸다. Runtime이 새 admission을 받지 않으면 `ShuttingDown`이다. Connect
+  호출 자체의 동기 실패를 연결 상태 행의 실패로 바꿔 쓰지 않는다.
+- Binding operation을 시작한 뒤에는 application request와 lifecycle request 모두 같은 operation을 다시
+  제출하지 않는다. 연결 손실, handover, 선택 route 변경과 reply 유실은 binding의 typed 결과로 끝난다.
+  Relocation relay·cutover batch와 Store authority settlement는 각 transaction 계약을 따르며 request 재시작으로
+  구현하지 않는다.
+- One-way send의 대기는 [§7](#7-one-way-send의-대기-종료와-classic-fanout-send-timeout)이 정하며 이 규칙을 적용하지 않는다.
 
 ## 6. Logical Multicast와 Classic fanout
 
@@ -323,7 +358,9 @@ current Ready authority resolve와 handler 시간도 포함한다. Source는 앞
 잔여 시간만 다음 단계에 전달한다. Outbound admission의 시간 상한은 남은 request timeout이며
 socket send timeout과 결합하지 않는다. Timeout이나 cancellation으로 caller의 대기가 끝나도 request가
 전송되지 않았다는 뜻은 아니다 — admission 전에 끝난 request도 binding이 이미 시작한 재제출로 나중에
-전송될 수 있고, 그 reply는 닫힌 correlation이므로 폐기한다. Timeout·연결 실패 뒤 request의 재제출 경계는 [§5](#5-backpressure와-오류-분류)가 정의한다.
+전송될 수 있고, 그 reply는 닫힌 correlation이므로 폐기한다. Timeout·연결 실패 뒤 request의 재제출 경계는 [§5](#5-backpressure와-오류-분류)가 정의한다. §5의 연결 준비 대기는
+outbound admission의 일부이며 같은 request timeout을 쓴다. Binding operation을 시작하지 않은 채 deadline이 먼저
+확정되어도 `DeadlineExceeded`다.
 
 같은 handler turn에서 보낸 request를 기다릴 때 gate를 어떻게 반납하고 재개하는지는
 [Handler turn과 execution gate 「4. 같은 turn에서의 대기와 반납」](02-handler-turn-and-execution-gate.ko.md#4-같은-turn에서의-대기와-반납)이

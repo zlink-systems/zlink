@@ -218,7 +218,7 @@ public sealed partial class EntrySpotActorDispatchTests
             );
 
             Assert.NotNull(sent);
-            var fence = sent.Actor;
+            var fence = sent.Value.Actor;
             Assert.Equal(newOwner, RoutingId.From(fence.TargetNodeRid.Value));
             Assert.Equal(current.ObjectGeneration, fence.Actor.ObjectGeneration.Value);
             Assert.Equal(newOwnerNodeGeneration, fence.TargetNodeGeneration.Value);
@@ -314,7 +314,7 @@ public sealed partial class EntrySpotActorDispatchTests
             Assert.NotNull(sent);
             Assert.Equal(
                 current.AuthorityOwnerGeneration,
-                sent.Actor.ExpectedAuthorityOwnerGeneration.Value
+                sent.Value.Actor.ExpectedAuthorityOwnerGeneration.Value
             );
         }
         finally

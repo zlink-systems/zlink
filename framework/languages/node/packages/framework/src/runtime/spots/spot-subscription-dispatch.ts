@@ -25,6 +25,7 @@ import {
 import { createInboundFlow, runWithFlow } from '../diagnostics/flow-context';
 import { resolveLifecycleHandler } from '../handlers/handler-instance-scope';
 import type { ZLinkSpotHandlerRegistration } from './spot-handler-registry';
+import { resolveMessageTypeForDecode } from '../../contracts/Common/HandlerMessageType';
 import { ZLINK_RECV_DONT_WAIT } from './spot-native-flags';
 import type { ZLinkSpotSerialTurnExecutor } from './spot-serial-turn-executor';
 import { zlinkMetadataByteLength, zlinkSerialWorkOptions } from '../execution/serial-work-size';
@@ -193,8 +194,12 @@ export class ZLinkSpotSubscriptionDispatch {
           runWithFlow(inboundFlow, async () => {
             // Payload deserialization belongs to the Spot serial turn. Queue
             // admission and execution authority therefore precede this work.
-            const event = decodeChannelPayload(envelope, this.channelCodecs());
             for (const registration of registrations) {
+              const event = decodeChannelPayload(
+                envelope,
+                this.channelCodecs(),
+                resolveMessageTypeForDecode(registration.messageType)
+              );
               const handler = await resolveLifecycleHandler(
                 spot,
                 registration.handlerType as Type<ZLinkSpotSubscriptionHandler<ZLinkSpot, unknown>>,

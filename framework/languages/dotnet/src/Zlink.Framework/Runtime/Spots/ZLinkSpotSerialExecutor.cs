@@ -442,18 +442,33 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
     // relocation or quiescent seal keeps it.
     private ZLinkAcceptedWorkAdmission PostLifecycle(
         Func<CancellationToken, ValueTask> callback,
-        out ZLinkSerialWorkItem item
+        out ZLinkSerialWorkItem item,
+        Action? onSkipped = null
     )
     {
         var transferred = ZLinkApplicationJobQueueInvocation.HasTransferableOwnerReservation();
         var result = RunBarrierState(() =>
         {
-            if (_relocationBarrier is { Kind: ZLinkExecutionSealKind.Close })
-                return (ZLinkAcceptedWorkAdmission.Closing, (ZLinkSerialWorkItem?)null);
-            if (_queue.IsRelocated)
-                return (ZLinkAcceptedWorkAdmission.RelocationMoving, null);
+            var admission = LifecycleAdmission;
+            if (admission != ZLinkAcceptedWorkAdmission.Accepted)
+                return (admission, (ZLinkSerialWorkItem?)null);
             var posted = _queue.TryPostNextWithAdmission(
-                callback,
+                ct =>
+                {
+                    if (LifecycleAdmission != ZLinkAcceptedWorkAdmission.Closing)
+                        return callback(ct);
+                    if (onSkipped is not null)
+                    {
+                        onSkipped();
+                        return ValueTask.CompletedTask;
+                    }
+                    return ValueTask.FromException(
+                        new ZLinkFrameworkException(
+                            ZLinkAcceptedWorkAdmission.Closing.ErrorKind(),
+                            "SPOT lifecycle admission is sealed."
+                        )
+                    );
+                },
                 payloadBytes: 0,
                 metadataBytes: 0,
                 transferred,
@@ -466,6 +481,11 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
         item = result.Item2!;
         return result.Item1;
     }
+
+    private ZLinkAcceptedWorkAdmission LifecycleAdmission =>
+        _activation?.HasCommittedClose == true ? ZLinkAcceptedWorkAdmission.Closing
+        : _queue.IsRelocated ? ZLinkAcceptedWorkAdmission.RelocationMoving
+        : ZLinkAcceptedWorkAdmission.Accepted;
 
     internal async ValueTask ExecuteApplicationCallbackAsync<TState>(
         Func<ZLinkSpotActivation, TState, CancellationToken, ValueTask> operation,
@@ -798,7 +818,11 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
             return false;
         }
 
-        var admission = PostLifecycle(ct => ExecuteLifecycleOperationAsync(operation, ct), out _);
+        var admission = PostLifecycle(
+            ct => ExecuteLifecycleOperationAsync(operation, ct),
+            out _,
+            onSkipped
+        );
         if (admission == ZLinkAcceptedWorkAdmission.Accepted)
             return true;
 
