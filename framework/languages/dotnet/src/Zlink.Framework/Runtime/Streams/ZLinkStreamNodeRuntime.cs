@@ -9,7 +9,6 @@ namespace Zlink.Framework.Runtime.Streams;
 
 internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
 {
-    private static readonly TimeSpan ReceivePollInterval = TimeSpan.FromMilliseconds(100);
     private readonly ZLinkStreamSessionTable _sessions;
     private readonly ZLinkSessionSerialExecutor _sessionIngress;
     private readonly ZLinkSessionSerialExecutor _controlIngress;
@@ -176,7 +175,8 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
                 failures.Add(exception);
             }
 
-        Capture(() => _receivePoller?.Dispose());
+        await CaptureAsync(() => _receivePoller?.DisposeAsync() ?? ValueTask.CompletedTask)
+            .ConfigureAwait(false);
 
         var socketDisposed = false;
         try
@@ -205,18 +205,6 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
             try
             {
                 await cleanup().ConfigureAwait(false);
-            }
-            catch (Exception exception)
-            {
-                failures.Add(exception);
-            }
-        }
-
-        void Capture(Action cleanup)
-        {
-            try
-            {
-                cleanup();
             }
             catch (Exception exception)
             {
@@ -258,10 +246,7 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
     public void Start()
     {
         _receivePoller ??= Socket.CreateReceivePoller();
-        _receiveLoop = _taskRunner.RunLongRunning(
-            $"stream-recv:{NodeName}",
-            RunReceiveLoopUntilStopped
-        );
+        _receiveLoop = _taskRunner.Run($"stream-recv:{NodeName}", RunReceiveLoopUntilStopped);
         _monitorOwner.Start(_taskRunner, $"stream-monitor:{NodeName}", RunMonitorLoopUntilStopped);
         _livenessLoop = _taskRunner.Run(
             $"stream-liveness:{NodeName}",
@@ -269,13 +254,13 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
         );
     }
 
-    private void RunMonitorLoopUntilStopped(CancellationToken runtimeToken)
+    private async ValueTask RunMonitorLoopUntilStopped(CancellationToken runtimeToken)
     {
         using var stop = CancellationTokenSource.CreateLinkedTokenSource(
             _stopSource.Token,
             runtimeToken
         );
-        RunMonitorLoop(stop.Token);
+        await RunMonitorLoop(stop.Token).ConfigureAwait(false);
     }
 
     private ValueTask CloseMonitorAsync() =>
@@ -304,18 +289,22 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
         }
     }
 
-    private void RunReceiveLoopUntilStopped(CancellationToken runtimeToken)
+    private async ValueTask RunReceiveLoopUntilStopped(CancellationToken runtimeToken)
     {
         using var stop = CancellationTokenSource.CreateLinkedTokenSource(
             _stopSource.Token,
             runtimeToken
         );
         var failureBackoff = new ZLinkPollingBackoff();
-        while (!stop.IsCancellationRequested)
+        try
         {
-            try
+            while (!stop.IsCancellationRequested)
             {
-                var readiness = _receivePoller!.Wait(ReceivePollInterval);
+                // A failed wait or resume ends this logical source. Recovery
+                // below applies only after admission, while processing a record.
+                var readiness = await _receivePoller!
+                    .WaitAsync(Timeout.InfiniteTimeSpan, stop.Token)
+                    .ConfigureAwait(false);
                 if (
                     (
                         readiness
@@ -327,36 +316,41 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
                     ) == 0
                 )
                     continue;
+                if (!await ReceivePacketsAsync(stop.Token, failureBackoff).ConfigureAwait(false))
+                    return;
+            }
+        }
+        catch (Exception) when (stop.IsCancellationRequested) { }
+    }
 
-                var batchStartedAt = Stopwatch.GetTimestamp();
-                long batchBytes = 0;
-                for (
-                    var receivedCount = 0;
-                    receivedCount < ZLinkReceiveBatchBudget.MaximumRecords
-                        && !stop.IsCancellationRequested;
-                    receivedCount++
-                )
+    private async ValueTask<bool> ReceivePacketsAsync(
+        CancellationToken stopToken,
+        ZLinkPollingBackoff failureBackoff
+    )
+    {
+        var batchStartedAt = Stopwatch.GetTimestamp();
+        long batchBytes = 0;
+        for (
+            var receivedCount = 0;
+            receivedCount < ZLinkReceiveBatchBudget.MaximumRecords
+                && !stopToken.IsCancellationRequested;
+            receivedCount++
+        )
+        {
+            if (ZLinkReceiveBatchBudget.IsExhausted(receivedCount, batchBytes, batchStartedAt))
+                break;
+            RoutingId? routingId = null;
+            ZLinkBackendStreamReceive? received = null;
+            ZLinkApplicationJobQueueLease? admission = await _applicationJobQueue
+                .AcquireAsync(stopToken, ZLinkApplicationJobOrigin.Remote)
+                .ConfigureAwait(false);
+            try
+            {
+                await _receivePoller!.ResumeAsync().ConfigureAwait(false);
+                try
                 {
-                    if (
-                        ZLinkReceiveBatchBudget.IsExhausted(
-                            receivedCount,
-                            batchBytes,
-                            batchStartedAt
-                        )
-                    )
-                        break;
-                    RoutingId? routingId = null;
-                    ZLinkBackendStreamReceive? received = null;
-                    ZLinkApplicationJobQueueLease? admission = null;
                     try
                     {
-                        // This blocking poll owner stays on the existing dedicated
-                        // receive thread. Admission must not resume the poll loop
-                        // on an application ThreadPool worker.
-                        admission = _applicationJobQueue
-                            .AcquireAsync(stop.Token, ZLinkApplicationJobOrigin.Remote)
-                            .GetAwaiter()
-                            .GetResult();
                         if (!Socket.RecvPacket(out received, RecvFlags.DontWait))
                         {
                             admission.Dispose();
@@ -396,7 +390,7 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
                             ApplicationJobAdmission = admission,
                         };
                         admission = null;
-                        if (!TryAdmitFrameAsync(sourceRoutingId, frame).GetAwaiter().GetResult())
+                        if (!await TryAdmitFrameAsync(sourceRoutingId, frame).ConfigureAwait(false))
                             throw new ZLinkStreamPeerAdmissionException(
                                 "STREAM packet could not enter the session queue."
                             );
@@ -405,53 +399,47 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
                     catch (Exception exception)
                     {
                         received?.Dispose();
+                        received = null;
                         admission?.Dispose();
+                        admission = null;
                         if (routingId is { } sourceRoutingId)
-                        {
-                            HandlePeerReceiveFailureAsync(sourceRoutingId, exception)
-                                .GetAwaiter()
-                                .GetResult();
-                        }
+                            await HandlePeerReceiveFailureAsync(sourceRoutingId, exception)
+                                .ConfigureAwait(false);
                         else
                             throw;
                     }
                 }
-                failureBackoff.Reset();
-            }
-            catch (OperationCanceledException) when (stop.IsCancellationRequested)
-            {
-                return;
-            }
-            catch (ObjectDisposedException)
-            {
-                return;
-            }
-            catch (ZlinkRecvException exception)
-                when (stop.IsCancellationRequested
-                    || exception.Result
-                        is ZlinkRecvException.ErrorCode.InternalError
-                            or ZlinkRecvException.ErrorCode.InvalidHandle
-                )
-            {
-                return;
-            }
-            catch (ZlinkException) when (stop.IsCancellationRequested)
-            {
-                return;
-            }
-            catch (Exception exception)
-            {
-                _errorSink.ReportRuntimeTaskException($"stream-recv:{NodeName}", exception);
-                try
+                catch (Exception) when (stopToken.IsCancellationRequested)
                 {
-                    failureBackoff.NoDataAsync(stop.Token).GetAwaiter().GetResult();
+                    throw;
                 }
-                catch (OperationCanceledException) when (stop.IsCancellationRequested)
+                catch (ObjectDisposedException)
                 {
-                    return;
+                    return false;
                 }
+                catch (ZlinkRecvException exception)
+                    when (exception.Result
+                            is ZlinkRecvException.ErrorCode.InternalError
+                                or ZlinkRecvException.ErrorCode.InvalidHandle
+                    )
+                {
+                    return false;
+                }
+                catch (Exception exception)
+                {
+                    _errorSink.ReportRuntimeTaskException($"stream-recv:{NodeName}", exception);
+                    await failureBackoff.NoDataAsync(stopToken).ConfigureAwait(false);
+                    return true;
+                }
+            }
+            finally
+            {
+                received?.Dispose();
+                admission?.Dispose();
             }
         }
+        failureBackoff.Reset();
+        return true;
     }
 
     private async Task HandlePeerReceiveFailureAsync(RoutingId routingId, Exception exception)
@@ -768,17 +756,32 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
     private sealed class ZLinkStreamPeerAdmissionException(string message)
         : InvalidOperationException(message);
 
-    private void RunMonitorLoop(CancellationToken cancellationToken)
+    private async ValueTask RunMonitorLoop(CancellationToken cancellationToken)
     {
         var monitor = Monitor!;
+        await using var poller = monitor.CreateReceivePoller();
         while (!cancellationToken.IsCancellationRequested)
         {
             try
             {
-                if (!monitor.Wait(ReceivePollInterval))
+                if (
+                    await poller
+                        .WaitAsync(Timeout.InfiniteTimeSpan, cancellationToken)
+                        .ConfigureAwait(false) == ZLinkBackendSocketReadiness.None
+                )
                     continue;
-                while (monitor.TryRecv(out var monitorEvent))
-                    OnMonitorEventAsync(monitorEvent).GetAwaiter().GetResult();
+                var startedAt = Stopwatch.GetTimestamp();
+                for (
+                    var count = 0;
+                    !ZLinkReceiveBatchBudget.IsExhausted(count, 0, startedAt);
+                    count++
+                )
+                {
+                    await poller.ResumeAsync().ConfigureAwait(false);
+                    if (!monitor.TryRecv(out var monitorEvent))
+                        break;
+                    await OnMonitorEventAsync(monitorEvent).ConfigureAwait(false);
+                }
             }
             catch (Exception) when (cancellationToken.IsCancellationRequested)
             {
