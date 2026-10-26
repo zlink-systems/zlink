@@ -233,7 +233,7 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
     private CompletionStage<Void> submitSendResult(
             String actorId, String packetName, Object message, Map<String, String> metadata) {
         ZLinkFlowContext.State operationFlow = ZLinkFlowContext.current();
-        return resolveActorAddress(actorId, null)
+        return ZLinkOneWayCalls.adaptOneWay(resolveActorAddress(actorId, null)
                 .thenCompose(
                         row ->
                                 ZLinkFlowContext.call(
@@ -256,18 +256,13 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
                                                 closeAll(parts);
                                                 return CompletableFuture.failedFuture(failure);
                                             }
-                                            return ZLinkOneWayCalls.adaptOneWay(submission)
-                                                    .whenComplete(
-                                                            (ignored, error) -> {
-                                                                closeAll(parts);
-                                                                if (error != null
-                                                                        && isStaleActorError(
-                                                                                error)) {
-                                                                    locations.invalidateActorRoute(
-                                                                            actorId);
-                                                                }
-                                                            });
-                                        }));
+                                            return ZLinkOneWayCalls.closeAfterAdmission(
+                                                    submission, parts);
+                                        })),
+                false,
+                error -> {
+                    if (isStaleActorError(error)) locations.invalidateActorRoute(actorId);
+                });
     }
 
     private CompletionStage<Void> awaitRuntimeReady(Duration timeout) {
@@ -461,8 +456,7 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
                 return duplicate;
             }
             try (var flowScope = enterApplicationFlow()) {
-                return ZLinkOneWayCalls.adaptOneWay(
-                        submitSendResult(actorId, packetName, message, metadata));
+                return submitSendResult(actorId, packetName, message, metadata);
             }
         }
     }

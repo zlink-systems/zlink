@@ -15,6 +15,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Consumer;
 
 /** Shared one-way admission and error mapping for all runtime families. */
 public final class ZLinkOneWayCalls {
@@ -112,6 +113,14 @@ public final class ZLinkOneWayCalls {
 
     public static CompletionStage<Void> adaptOneWay(
             CompletionStage<Void> submission, boolean initialSubmission) {
+        return adaptOneWay(submission, initialSubmission, ignored -> {});
+    }
+
+    /** Observes the mapped physical failure even after the caller ends its own wait. */
+    public static CompletionStage<Void> adaptOneWay(
+            CompletionStage<Void> submission,
+            boolean initialSubmission,
+            Consumer<Throwable> failureObserver) {
         if (isImmediateAdmission(submission)) {
             return submission;
         }
@@ -128,15 +137,17 @@ public final class ZLinkOneWayCalls {
                                 !initialSubmission && submit.getResult() == SubmitResult.NOT_FOUND
                                         ? RequestResult.NOT_CONNECTED
                                         : toRequestResult(submit.getResult());
-                        result.completeExceptionally(
-                                ZLinkFrameworkErrorOrigin.framework(
+                        cause = ZLinkFrameworkErrorOrigin.framework(
                                         ZLinkBackendRequestResult.fromWireTerminal(terminal.value())
                                                 .toFrameworkErrorKind(),
                                         submit.getMessage(),
-                                        submit));
-                        return;
+                                        submit);
                     }
-                    result.completeExceptionally(cause);
+                    try {
+                        failureObserver.accept(cause);
+                    } finally {
+                        result.completeExceptionally(cause);
+                    }
                 });
         return result;
     }
