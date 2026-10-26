@@ -1,3 +1,4 @@
+const { ZLinkRequestResult } = require('../../packages/framework/dist/runtime/messaging/request-result');
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const framework = require('../../packages/framework/dist');
@@ -91,7 +92,10 @@ for (const instanceIntent of [false, true]) {
         return 2n;
       }
     };
-    const completion = { async submit(submit) { submit(); return { terminalResult: 0, failureErrno: 0, parts: replyParts }; } };
+    const completion = {  submit(submit, _signal, resultOwner = new ZLinkRequestResult()) {
+return resultOwner.observe((async () => { submit(resultOwner); return { terminalResult: 0, failureErrno: 0, parts: replyParts };
+})());
+} };
     const routed = new ZLinkRuntimeRouteTransport(() => undefined, undefined,
       () => ({ meshNode: () => node, meshCompletionTable: () => completion }));
     const address = new internal.ZLinkHostSpotAddressTransport({ resolver: () => ({ resolve: async () => target }),
