@@ -2021,6 +2021,24 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_compile_definitions(test_cpp_framework_execution PRIVATE
     ZLINK_SERIAL_EXECUTION_CONFORMANCE_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/conformance/serial-execution-v1.json"
     ZLINK_RUNTIME_OBSERVATION_CONFORMANCE_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/conformance/runtime-observation-v1.json")
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_session_control_priority
+    COMMAND test_cpp_framework_execution --session-control-priority
+    LABELS "framework-unit;framework-contract;execution;stream"
+    TIER unit
+    TIMEOUT 30)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_fanout_state_owner
+    COMMAND test_cpp_framework_execution --fanout-state-owner
+    LABELS "framework-unit;framework-contract;execution;topology"
+    TIER unit
+    TIMEOUT 30)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_binding_state_owner
+    COMMAND test_cpp_framework_actor_gateway --binding-state-owner
+    LABELS "framework-unit;framework-contract;execution;stream"
+    TIER unit
+    TIMEOUT 30)
   add_executable(test_cpp_framework_state_lane
     tests/Zlink.Framework.UnitTests/test_cpp_framework_state_lane.cpp)
   target_use_zlink_gtest_main(test_cpp_framework_state_lane)
