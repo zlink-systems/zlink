@@ -3751,6 +3751,7 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
       });
       try {
         return await dispatch.dispatch(
+          undefined,
           'remote',
           actorId,
           parts,

@@ -472,7 +472,12 @@ export class ZLinkEntrySpotActivation {
   async dispatchActorPacket(delivery: ZLinkActorPacketDelivery): Promise<unknown> {
     return dispatchActorPacketInMailbox(
       (operation) => this.spotSerialExecutor.executeActor(delivery.actorId, operation),
-      () => this.actorPacketDispatch.admitDelivery(delivery, this.options.actorHandoffRuntime)
+      () =>
+        this.actorPacketDispatch.admitDelivery(
+          undefined,
+          delivery,
+          this.options.actorHandoffRuntime
+        )
     );
   }
 
@@ -527,7 +532,7 @@ export class ZLinkEntrySpotActivation {
   private async dispatchActorPacketInsideMailbox(
     delivery: ZLinkActorPacketDelivery
   ): Promise<unknown> {
-    return this.actorPacketDispatch.dispatchDelivery(delivery);
+    return this.actorPacketDispatch.dispatchDelivery(undefined, delivery);
   }
 
   private replyActorNoBind(

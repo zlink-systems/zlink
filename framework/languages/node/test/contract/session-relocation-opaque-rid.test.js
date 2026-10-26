@@ -956,7 +956,7 @@ for (const binding of ['absent', 'same', 'successor']) {
             onDisconnectActor: async () => {
               callbacks++;
             }
-          }).dispatch(origin, actorId, parts);
+          }).dispatch(undefined, origin, actorId, parts);
         }
       })
     });

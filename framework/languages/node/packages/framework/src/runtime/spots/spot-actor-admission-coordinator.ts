@@ -55,7 +55,8 @@ export class ZLinkSpotActorAdmissionCoordinator {
     return dispatchActorPacketInMailbox<ZLinkSpotSerialTurnExecutor>(
       (operation) => activation.executeActor(actorId, operation),
       (serial) =>
-        this.createActorPacketDispatch(activation, serial).admitDelivery(
+        this.actorPacketDispatch(activation).admitDelivery(
+          serial,
           {
             origin,
             actorId,
@@ -201,7 +202,8 @@ export class ZLinkSpotActorAdmissionCoordinator {
     fallbackActorRef?: ActorRef,
     requestTerminal?: (response: unknown) => Promise<void> | void
   ): Promise<unknown> {
-    return this.createActorPacketDispatch(activation, actorSerial).dispatch(
+    return this.actorPacketDispatch(activation).dispatch(
+      actorSerial,
       origin,
       actorId,
       parts,
@@ -212,16 +214,13 @@ export class ZLinkSpotActorAdmissionCoordinator {
     );
   }
 
-  private createActorPacketDispatch(
-    activation: ZLinkSpotActivation,
-    actorSerial: ZLinkSpotSerialTurnExecutor
-  ): ZLinkSpotActorPacketDispatch {
-    return new ZLinkSpotActorPacketDispatch({
+  private actorPacketDispatch(activation: ZLinkSpotActivation): ZLinkSpotActorPacketDispatch {
+    if (activation.actorPacketDispatch !== undefined) return activation.actorPacketDispatch;
+    activation.actorPacketDispatch = new ZLinkSpotActorPacketDispatch({
       admission: this.options.admission,
       spot: activation.spot,
       spotId: () => String(activation.spotId),
       registry: activation.actorHandlers,
-      serial: actorSerial,
       resolveActor: (targetActorId) =>
         this.options.actorResolver === undefined
           ? activation.resolveJoinedActor(targetActorId)
@@ -240,6 +239,7 @@ export class ZLinkSpotActorAdmissionCoordinator {
       dispatchErrors: this.options.dispatchErrors,
       routeToActorJoinPrewarm: this.options.routeToActorJoinPrewarm
     });
+    return activation.actorPacketDispatch;
   }
 
   /** Resolves native lifecycle records; messages use resolveActorIngress. */

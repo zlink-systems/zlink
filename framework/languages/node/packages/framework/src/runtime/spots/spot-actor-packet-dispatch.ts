@@ -95,7 +95,6 @@ interface ZLinkSpotActorPacketDispatchOptions {
   readonly spot: ZLinkSpot | (() => ZLinkSpot);
   readonly spotId: () => string;
   readonly registry: ZLinkSpotActorHandlerRegistryRuntime;
-  readonly serial?: ZLinkSpotSerialTurnExecutor;
   readonly resolveActor: (actorId: string) => ZLinkActor | undefined;
   readonly hasDepartedActor?: (actorId: string) => boolean;
   readonly routeBeforeLocal?: ZLinkActorIngressRoute;
@@ -132,6 +131,7 @@ export class ZLinkSpotActorPacketDispatch {
   constructor(private readonly options: ZLinkSpotActorPacketDispatchOptions) {}
 
   dispatch(
+    serial: ZLinkSpotSerialTurnExecutor | undefined,
     origin: ApplicationJobOrigin,
     actorId: string,
     parts: readonly Message[],
@@ -140,7 +140,7 @@ export class ZLinkSpotActorPacketDispatch {
     fallbackActorRef?: ActorRef,
     requestTerminal?: ZLinkActorRequestTerminal
   ): Promise<unknown> {
-    return this.dispatchDelivery({
+    return this.dispatchDelivery(serial, {
       origin,
       actorId,
       parts,
@@ -151,12 +151,16 @@ export class ZLinkSpotActorPacketDispatch {
     });
   }
 
-  async dispatchDelivery(delivery: ZLinkActorPacketDelivery): Promise<unknown> {
-    const result = await this.admitDelivery(delivery);
+  async dispatchDelivery(
+    serial: ZLinkSpotSerialTurnExecutor | undefined,
+    delivery: ZLinkActorPacketDelivery
+  ): Promise<unknown> {
+    const result = await this.admitDelivery(serial, delivery);
     return 'terminal' in result ? await result.terminal : result.response;
   }
 
   async admitDelivery(
+    serial: ZLinkSpotSerialTurnExecutor | undefined,
     delivery: ZLinkActorPacketDelivery,
     handoffRuntime?: ZLinkSpotActorHandoffRuntime
   ): Promise<ZLinkActorPacketExecution> {
@@ -290,6 +294,7 @@ export class ZLinkSpotActorPacketDispatch {
             fallbackActorRef,
             requestTerminal,
             requestDeadlineUnixMs,
+            serial,
             zlinkSerialWorkOptions(
               parts[1].data().byteLength,
               zlinkMetadataByteLength(header.metadata)
@@ -369,6 +374,7 @@ export class ZLinkSpotActorPacketDispatch {
     fallbackActorRef: ActorRef | undefined,
     requestTerminal: ZLinkActorRequestTerminal | undefined,
     requestDeadlineUnixMs: number | undefined,
+    serial: ZLinkSpotSerialTurnExecutor | undefined,
     workOptions: ZLinkSerialWorkOptions
   ): Promise<unknown> {
     const spot = typeof this.options.spot === 'function' ? this.options.spot() : this.options.spot;
@@ -376,7 +382,7 @@ export class ZLinkSpotActorPacketDispatch {
       registry: this.options.registry,
       spot,
       providerResolver: this.options.providerResolver,
-      serial: this.options.serial,
+      serial,
       serialWorkOptions: workOptions,
       messageSerializers: this.options.messageSerializers,
       onAdmitted: () => this.trace(ZLinkMessageFlowOutcome.Admitted, actorId, header, messageKind),

@@ -281,6 +281,37 @@ function fixture() {
   };
 }
 
+test('Actor packet dispatch is reused for messages in one activation', async () => {
+  const f = fixture();
+  let actorPacketDispatch;
+
+  for (const value of ['first', 'second']) {
+    const parts = [
+      Message.from(
+        protocol.encodeStreamHeader({
+          kind: protocol.ZLinkStreamMessageKind.Send,
+          codec: protocol.ZLinkStreamCodec.Json,
+          flags: 0,
+          name: 'Ping',
+          metadata: new Map()
+        })
+      ),
+      Message.from(JSON.stringify({ value }))
+    ];
+    try {
+      await f.admission.dispatchActorPacket('remote', f.source, 'alice', parts);
+    } finally {
+      parts.forEach((part) => part.close());
+    }
+
+    assert.ok(f.source.actorPacketDispatch);
+    if (actorPacketDispatch === undefined) actorPacketDispatch = f.source.actorPacketDispatch;
+    else assert.strictEqual(f.source.actorPacketDispatch, actorPacketDispatch);
+  }
+
+  assert.deepEqual(f.calls.map((call) => call[1]), ['first', 'second']);
+});
+
 for (const updated of [false, true]) {
   test(`physical disconnect after relocation reaches the current Spot once (binding route updated=${updated})`, async () => {
     telemetry.reset();
@@ -551,7 +582,7 @@ for (const returnResponse of [false, true]) {
       Message.from('{}')
     ];
     try {
-      const response = dispatch.dispatch('remote', 'alice', parts, returnResponse, undefined, {
+      const response = dispatch.dispatch(undefined, 'remote', 'alice', parts, returnResponse, undefined, {
         actorId: 'alice',
         objectGeneration: 1n,
         nodeRid: 'target',

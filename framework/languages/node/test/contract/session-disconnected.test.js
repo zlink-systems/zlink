@@ -35,7 +35,7 @@ test('malformed disconnect is dropped with ProtocolError diagnostics', async () 
     name: 'zlink.framework.actor.session_disconnected',
     metadata: new Map()
   });
-  await dispatch.dispatch('remote', 'actor', [
+  await dispatch.dispatch(undefined, 'remote', 'actor', [
     new ZLinkBufferMessage(header),
     new ZLinkBufferMessage(Buffer.alloc(0))
   ]);
@@ -110,7 +110,7 @@ for (const transport of ['mesh', 'no-bind']) {
           new ZLinkRuntimeTaskErrorSink(),
           new AbortController().signal
         ),
-        dispatchEntryActorPacket: (...args) => dispatch.dispatch(...args)
+        dispatchEntryActorPacket: (...args) => dispatch.dispatch(undefined, ...args)
       });
       const parts = [
         new ZLinkBufferMessage(
@@ -134,7 +134,7 @@ for (const transport of ['mesh', 'no-bind']) {
             ZLinkSpotActorPacketDrain
           } = require('../../packages/framework/dist/runtime/spots/spot-actor-packet-drain');
           const drain = new ZLinkSpotActorPacketDrain({
-            actorPacketHandler: (delivery) => dispatch.dispatchDelivery(delivery),
+            actorPacketHandler: (delivery) => dispatch.dispatchDelivery(undefined, delivery),
             waitIdle: async () => undefined,
             replyActorNoBind: (_info, reply) => {
               const frame = protocol.decodeStreamFrame(reply[0].data());
@@ -269,7 +269,7 @@ for (const [name, node, ownerGeneration, bindingGeneration, expected] of [
       metadata: new Map()
     });
     // The delivery's transport coordinates deliberately name a forwarding node.
-    const response = await dispatch.dispatchDelivery({
+    const response = await dispatch.dispatchDelivery(undefined, {
       origin: 'remote',
       actorId: 'actor',
       sourceSessionRid: 'follow-hop-session',
@@ -337,7 +337,7 @@ test('host relay compares the body inside the Actor turn and awaits disconnect t
     meshRouters: {},
     actorManager: () => ({ getState: () => state }),
     spotNodeRuntime: () => ({
-      dispatchEntryActorPacket: (...args) => mailbox.execute(() => dispatch.dispatch(...args))
+      dispatchEntryActorPacket: (...args) => mailbox.execute(() => dispatch.dispatch(undefined, ...args))
     })
   });
   const header = protocol.encodeStreamHeader({
@@ -451,7 +451,7 @@ test('local Session disconnect uses the same Actor-turn identity comparison', as
     meshRouters: {},
     actorManager: () => ({ getState: () => state }),
     spotNodeRuntime: () => ({
-      dispatchEntryActorPacket: (...args) => mailbox.execute(() => dispatch.dispatch(...args))
+      dispatchEntryActorPacket: (...args) => mailbox.execute(() => dispatch.dispatch(undefined, ...args))
     })
   });
   await relay.notifyLocalActorDisconnectedById('actor', undefined, {
@@ -550,7 +550,7 @@ test('malformed disconnect records a ProtocolError Warning at Errors level', asy
     metadata: new Map()
   });
   for (const vector of fixtures.rejected) {
-    await dispatch.dispatch('remote', 'actor', [
+    await dispatch.dispatch(undefined, 'remote', 'actor', [
       new ZLinkBufferMessage(header),
       new ZLinkBufferMessage(Buffer.from(vector.hex, 'hex'))
     ]);
