@@ -2,6 +2,7 @@
 // Runs framework/runtime/conformance/spot-close-v1.json against an in-process
 // app with a Location Store (Spot address messaging §7, §9; gate §7).
 
+#include "../support/manual_internal_scheduler.hpp"
 #include "../support/committed_authority_fixture.hpp"
 #include "runtime/diagnostics/dispatch_options_access.hpp"
 #include "runtime/locations/actor_authority_payload.hpp"
@@ -43,6 +44,7 @@ TEST (ActorEntryPlacementRegression, ReadyContinuationAwaitsBusySpotInventory)
     namespace fw = zlink::framework;
     auto node = fw::test::runtime_failure_fixture<fw::detail::spot_node_builder_state_t> (
       "inventory-continuation");
+    auto release_workers = fw::test::reserve_single_infrastructure_worker (*node->lane_executor);
     fw::detail::spot_node_runtime_t runtime (node);
     std::promise<void> ready, occupied, release, yielded;
     auto ready_seen = ready.get_future ();
@@ -54,10 +56,10 @@ TEST (ActorEntryPlacementRegression, ReadyContinuationAwaitsBusySpotInventory)
         (void) co_await runtime.relocation_ready_async ();
         ready.set_value ();
         occupied_seen.wait ();
-        node->lane_executor.submit ([&] { yielded.set_value (); });
+        node->lane_executor->submit ([&] { yielded.set_value (); });
         co_return co_await runtime.active_user_spot_count_async ();
     };
-    node->lane_executor.submit ([&] { query.emplace (count_after_ready ()); });
+    node->lane_executor->submit ([&] { query.emplace (count_after_ready ()); });
     ready_seen.get ();
     std::jthread holder ([&] {
         node->lane

@@ -272,8 +272,8 @@ class actor_gateway_state_t
         }
     };
 
-    runtime::offload_executor_t lane_executor;
-    mutable runtime::state_lane_t lane{lane_executor};
+    std::shared_ptr<runtime::offload_executor_t> lane_executor{runtime::infrastructure_executor ()};
+    mutable runtime::state_lane_t lane{*lane_executor};
     std::map<std::string, actor_record_t> actors_by_id;
     std::map<std::string, std::shared_ptr<bound_session_sink_t>> bound_session_sinks;
     std::map<std::string, std::vector<std::shared_ptr<bound_session_replacement_handler_t>>>

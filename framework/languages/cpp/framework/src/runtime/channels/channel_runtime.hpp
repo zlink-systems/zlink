@@ -195,8 +195,8 @@ class channel_runtime_state_t
         std::chrono::milliseconds)>;
 
     std::map<std::string, channel_snapshot_t> channels;
-    runtime::offload_executor_t lane_executor{1, "zlink-channel-state"};
-    mutable runtime::state_lane_t lane{lane_executor};
+    std::shared_ptr<runtime::offload_executor_t> lane_executor{runtime::infrastructure_executor ()};
+    mutable runtime::state_lane_t lane{*lane_executor};
     std::chrono::milliseconds default_request_timeout{
       runtime::configuration::default_request_timeout};
     std::size_t pending = 0;

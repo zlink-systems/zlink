@@ -471,8 +471,9 @@ class actor_transfer_coordinator_t
     result_t<void> try_claim_source_on_lane (const std::string &actor_key, move_state_t move);
     // Existing source claims keep their native admission until terminal.
     bool _source_claims_sealed = false;
-    runtime::offload_executor_t _lane_executor;
-    mutable runtime::state_lane_t _lane{_lane_executor};
+    std::shared_ptr<runtime::offload_executor_t> _lane_executor{
+      runtime::infrastructure_executor ()};
+    mutable runtime::state_lane_t _lane{*_lane_executor};
     // Earliest due instant, written on the lane. A lane turn that adds a
     // deadline resets it to due_now; the next scan publishes the bound again.
     static constexpr std::chrono::steady_clock::rep due_now =

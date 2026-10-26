@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 
 #include "runtime/dispatch/coroutine_executor.hpp"
+#include "runtime/dispatch/offload_executor.hpp"
 #include "runtime/diagnostics/flow_context.hpp"
 #include "runtime/execution/state_lane.hpp"
 
@@ -26,6 +27,12 @@ std::mutex &executor_mutex ()
 std::unique_ptr<coroutine_executor_t> &executor_instance ()
 {
     static std::unique_ptr<coroutine_executor_t> executor;
+    return executor;
+}
+
+std::shared_ptr<offload_executor_t> &infrastructure_instance ()
+{
+    static std::shared_ptr<offload_executor_t> executor;
     return executor;
 }
 
@@ -72,6 +79,16 @@ coroutine_executor_t &ensure_executor_locked ()
 }
 
 } // namespace
+
+std::shared_ptr<offload_executor_t> infrastructure_executor ()
+{
+    std::lock_guard lock (executor_mutex ());
+    auto &executor = infrastructure_instance ();
+    if (!executor) {
+        executor = std::make_shared<offload_executor_t> (default_worker_count (), "zlink-infra");
+    }
+    return executor;
+}
 
 coroutine_executor_t::coroutine_executor_t (std::size_t worker_count) :
     _pool (worker_count == 0 ? 1 : worker_count)

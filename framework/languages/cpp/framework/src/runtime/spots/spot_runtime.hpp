@@ -83,7 +83,7 @@ class spot_node_builder_state_t
 {
   public:
     explicit spot_node_builder_state_t (std::string name) :
-        lane_executor (), lane (lane_executor), snapshot{.name = std::move (name)}
+        lane (*lane_executor), snapshot{.name = std::move (name)}
     {
     }
     ~spot_node_builder_state_t ();
@@ -93,7 +93,7 @@ class spot_node_builder_state_t
     // MeshNode start path takes its configuration projection only after those
     // turns have completed, so a caller observes registration before the
     // configuring API returns (discovery 9).
-    runtime::offload_executor_t lane_executor;
+    std::shared_ptr<runtime::offload_executor_t> lane_executor{runtime::infrastructure_executor ()};
     runtime::state_lane_t lane;
     spot_node_snapshot_t snapshot;
     std::map<std::string, std::type_index> spot_factories;
@@ -379,10 +379,6 @@ class spot_node_builder_state_t
     std::vector<queued_actor_packet_t> queued_actor_packets;
     std::map<std::string, std::function<std::optional<spot_route_t> (spot_id_t)>> resolvers;
     std::shared_ptr<runtime::offload_executor_t> worker_executor;
-    /* Deadline callbacks leave the native timer scheduler before they settle
-     * an Actor transfer. Keeping that handoff separate from the Actor worker
-     * prevents a single occupied Actor worker from delaying cancellation. */
-    std::shared_ptr<runtime::offload_executor_t> deadline_executor;
     worker_options_t worker_options;
     std::stop_source worker_cancellation;
     std::uint64_t next_spot_id = 1;

@@ -437,8 +437,7 @@ std::uint64_t next_connection_intent_id ()
 } // namespace
 
 mesh_node_builder_state_t::mesh_node_builder_state_t (std::string name) :
-    lane_executor (),
-    lane (lane_executor),
+    lane (*lane_executor),
     mesh_name (name),
     spot_state (std::make_shared<spot_node_builder_state_t> (name)),
     spot_builder (spot_state)

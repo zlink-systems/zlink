@@ -110,4 +110,7 @@ class offload_executor_t
     std::size_t _idle_workers = 0;
 };
 
+// Process ownership outlives host borrows and drains the workers at process exit.
+std::shared_ptr<offload_executor_t> infrastructure_executor ();
+
 } // namespace zlink::framework::runtime

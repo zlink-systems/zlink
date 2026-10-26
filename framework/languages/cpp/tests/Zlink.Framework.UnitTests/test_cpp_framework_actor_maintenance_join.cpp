@@ -4306,6 +4306,8 @@ TEST (ActorMaintenanceJoinDeathTest, LocalHandoffSnapshotDoesNotWaitOnItsLaneExe
           fw::runtime::install_host_context_hooks ();
           fw::runtime::configure_handler_coroutine_executor (1);
           join_claim_fixture_t fixture;
+          auto release_workers =
+            fw::test::reserve_single_infrastructure_worker (*fixture.node->lane_executor);
           const auto claimed =
             fixture.node->actor_transfer_coordinator->try_begin_local ("player:claim-actor");
           if (!claimed)
@@ -4328,7 +4330,7 @@ TEST (ActorMaintenanceJoinDeathTest, LocalHandoffSnapshotDoesNotWaitOnItsLaneExe
             });
           // The snapshot queues its completion behind this executor turn. This
           // turn claims the next node drain behind that already queued completion.
-          fixture.node->lane_executor.submit (
+          fixture.node->lane_executor->submit (
             [state = fixture.node] { state->lane.try_post ([] {}); });
           release.set_value ();
           if (terminal.wait_for (wait_budget) != std::future_status::ready)
@@ -4364,7 +4366,7 @@ TEST (ActorMaintenanceJoin, LocalHandoffCancellationRetainsQueuedLaneInputs)
     owner.reset ();
     release.set_value ();
     lane_drained.get ();
-    fixture.node->lane_executor.drain ();
+    fixture.node->lane.run ([] {}).get ();
     fixture.drain ();
     ASSERT_TRUE (stopped);
     EXPECT_FALSE (*stopped);
@@ -7296,7 +7298,7 @@ void restore_probe (replay_case_t test_case, bool multiple_packets = false)
     node->monitoring = fw::test::runtime_failure_monitoring ();
     auto scheduler = std::make_shared<fw::test::manual_internal_scheduler_t> ();
     scheduler->publication_fence (
-      fw::test::state_lane_publication_fence (node->lane, node->lane_executor));
+      fw::test::state_lane_publication_fence (node->lane, *node->lane_executor));
     node->worker_executor = scheduler;
     fw::serializer_registry_t serializers;
     fw::service_collection_t services;
@@ -7632,7 +7634,7 @@ void capacity_probe (bool handler_failure = false, bool extra_supply = false)
     auto scheduler = std::make_shared<fw::test::manual_internal_scheduler_t> ();
     node->worker_executor = scheduler;
     scheduler->publication_fence (
-      fw::test::state_lane_publication_fence (node->lane, node->lane_executor));
+      fw::test::state_lane_publication_fence (node->lane, *node->lane_executor));
     fw::serializer_registry_t serializers;
     fw::service_collection_t services;
     node->root_services = services.build_provider ();

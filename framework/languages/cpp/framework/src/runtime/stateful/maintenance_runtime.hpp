@@ -759,7 +759,7 @@ class host_maintenance_runtime_t
     stateful_object_runtime_t &_objects;
     stream_session_registry_t &_sessions;
     std::function<task_t<void> ()> _seal_targets;
-    offload_executor_t _lane_executor;
+    std::shared_ptr<offload_executor_t> _lane_executor{infrastructure_executor ()};
     mutable state_lane_t _lane;
     std::shared_ptr<task_completion_source_t<termination_result_t>> _active_completion;
     std::optional<termination_result_t> _terminal;
