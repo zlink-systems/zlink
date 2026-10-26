@@ -3,9 +3,11 @@
 
 #include "runtime/dispatch/offload_executor.hpp"
 #include "runtime/execution/state_lane.hpp"
+#include "scope_exit.hpp"
 #include <zlink/framework/contracts/dispatch/task.hpp>
 #include <condition_variable>
 #include <future>
+#include <latch>
 
 #include <functional>
 #include <mutex>
@@ -105,6 +107,33 @@ class manual_internal_scheduler_t final : public runtime::offload_executor_t
     std::queue<std::function<void ()>> _ready;
     bool _accepting = true;
 };
+// Keep the original single available worker condition on the process pool.
+// The scoped release also runs when an assertion returns from the test.
+inline scope_exit_t reserve_single_infrastructure_worker (runtime::offload_executor_t &executor)
+{
+    struct blockers_t
+    {
+        explicit blockers_t (std::ptrdiff_t count) : entered (count), returned (count) {}
+        std::promise<void> release;
+        std::shared_future<void> released{release.get_future ().share ()};
+        std::latch entered;
+        std::latch returned;
+    };
+    const auto count = executor.live_worker_count () - 1;
+    auto blockers = std::make_shared<blockers_t> (static_cast<std::ptrdiff_t> (count));
+    for (std::size_t index = 0; index != count; ++index)
+        executor.submit ([blockers] {
+            blockers->entered.count_down ();
+            blockers->released.wait ();
+            blockers->returned.count_down ();
+        });
+    blockers->entered.wait ();
+    return scope_exit_t ([blockers] {
+        blockers->release.set_value ();
+        blockers->returned.wait ();
+    });
+}
+
 // A lane result is delivered after its lane scope ends. The executor FIFO
 // sentinel also fences that delivery, before the fixture observes runnable work.
 inline auto state_lane_publication_fence (runtime::state_lane_t &lane,

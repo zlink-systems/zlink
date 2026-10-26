@@ -16,6 +16,9 @@
 
 namespace
 {
+using dispatch_completion_t =
+  std::optional<zlink::framework::task_t<zlink::framework::result_t<void>>>;
+
 using namespace zlink::framework;
 namespace host = runtime::host;
 namespace mesh = runtime::mesh;
@@ -87,7 +90,11 @@ bool dispatch (host::public_host_runtime_t &target,
                const dispatch_t &callback,
                bool channel = false)
 {
-    auto result = target.dispatch_application_owner (claim_owner (channel), callback, noop, noop);
+    auto result = target.dispatch_application_owner (claim_owner (channel),
+      [&] (const auto &ready, const auto &record, auto parts) -> dispatch_completion_t {
+          callback (ready, record, std::move (parts));
+          return std::nullopt;
+      }, noop, noop);
     if (const auto ready = std::get_if<bool> (&result))
         return *ready;
     std::get<task_t<std::size_t>> (result).result ().value ();
@@ -210,7 +217,11 @@ bool verify_cost (host::public_host_runtime_t &target, bool channel, bool owning
     const auto measure = [&] {
         enqueue (target.transport ().mailbox (), false, channel);
         return tests::measure_allocations ([&] {
-            auto pending = target.dispatch_application_owner (claim_owner (channel), callback,
+            auto pending = target.dispatch_application_owner (claim_owner (channel),
+      [&] (const auto &ready, const auto &record, auto parts) -> dispatch_completion_t {
+          callback (ready, record, std::move (parts));
+          return std::nullopt;
+      },
                                                               started, rejected);
             require (std::holds_alternative<bool> (pending),
                      "ordinary claim did not return its ready value");
@@ -229,7 +240,9 @@ bool verify_cost (host::public_host_runtime_t &target, bool channel, bool owning
     const auto bad = measure ();
     std::cout << "injected-claim channel=" << channel << " owning=" << owning_callback
               << " count=" << bad.count << " bytes=" << bad.bytes << std::endl;
-    require (bad.count > limit_count && bad.bytes > limit_bytes,
+    // The budget is an upper bound; the guard must see one injected allocation
+    // above the measured claim, even when the claim costs less than the budget.
+    require (bad.count > actual.count && bad.bytes > actual.bytes,
              "allocation guard accepted injected ownership cost");
     std::cout << "allocation-guard channel=" << channel << " owning=" << owning_callback
               << " injected-rejected=true" << std::endl;
@@ -267,9 +280,11 @@ void verify_exception (host::public_host_runtime_t &target)
     bool caught = false;
     auto pending = target.dispatch_application_owner (
       owner,
-      [&] (const auto &, const auto &, auto) {
+      [&] (const auto &, const auto &, auto) -> dispatch_completion_t {
           if (++calls == 2)
               throw std::runtime_error ("handler fixture");
+
+          return std::nullopt;
       },
       [&] { ++starts; }, [&] { ++rejects; });
     try {
@@ -314,7 +329,11 @@ void verify_prestart_terminal (host::public_host_runtime_t &target)
     };
     require (
       std::get<bool> (target.dispatch_application_owner (
-        owner, callback, [&] { ++started; }, [&] { ++rejected; })),
+        owner,
+      [&] (const auto &ready, const auto &record, auto parts) -> dispatch_completion_t {
+          callback (ready, record, std::move (parts));
+          return std::nullopt;
+      }, [&] { ++started; }, [&] { ++rejected; })),
       "malformed request was not claimed");
     require (started == 1 && rejected == 1 && mailbox.pending_messages (domain) == 0,
              "decode rejection did not terminalize the unstarted record");
@@ -442,11 +461,19 @@ void verify_suspended_actor (
           }
       };
     using owner_result_t = decltype (target->dispatch_application_owner (
-      actor_owner, callback, noop, noop));
+      actor_owner,
+      [&] (const auto &ready, const auto &record, auto parts) -> dispatch_completion_t {
+          callback (ready, record, std::move (parts));
+          return std::nullopt;
+      }, noop, noop));
     std::optional<owner_result_t> measured;
     const auto cost = tests::measure_allocations ([&] {
         measured.emplace (target->dispatch_application_owner (
-          actor_owner, callback, [&] { ++starts; }, [&] { ++rejects; }));
+          actor_owner,
+      [&] (const auto &ready, const auto &record, auto parts) -> dispatch_completion_t {
+          callback (ready, record, std::move (parts));
+          return std::nullopt;
+      }, [&] { ++starts; }, [&] { ++rejects; }));
     });
     require (std::holds_alternative<task_t<std::size_t>> (*measured),
              "authority preparation returned a ready value");

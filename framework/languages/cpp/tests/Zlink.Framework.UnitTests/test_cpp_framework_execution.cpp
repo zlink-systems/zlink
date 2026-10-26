@@ -9391,7 +9391,7 @@ bool verify_public_local_member_defer (
     auto scheduler = std::make_shared<fw::test::manual_internal_scheduler_t> ();
     node->worker_executor = scheduler;
     scheduler->publication_fence (
-      fw::test::state_lane_publication_fence (node->lane, node->lane_executor));
+      fw::test::state_lane_publication_fence (node->lane, *node->lane_executor));
     fw::service_collection_t services;
     node->root_services = services.build_provider ();
     auto spot = std::make_shared<detail::spot_context_state_t> ();
@@ -10022,7 +10022,7 @@ bool verify_real_join_completion_callback_owner (int policy,
     auto scheduler = std::make_shared<fw::test::manual_internal_scheduler_t> ();
     node->worker_executor = scheduler;
     scheduler->publication_fence (
-      fw::test::state_lane_publication_fence (node->lane, node->lane_executor));
+      fw::test::state_lane_publication_fence (node->lane, *node->lane_executor));
     auto spot = std::make_shared<detail::spot_context_state_t> ();
     spot->node = node;
     spot->node_rid = fw::node_rid_t::from_string ("join-completion-owner-node");

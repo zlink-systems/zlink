@@ -644,8 +644,9 @@ class stateful_object_runtime_t
       std::make_shared<detail::actor_transfer_coordinator_t> ();
     std::vector<object_inventory_t> inventory_on_lane (bool actors_only) const;
 
-    runtime::offload_executor_t _lane_executor;
-    mutable runtime::state_lane_t _lane{_lane_executor};
+    std::shared_ptr<runtime::offload_executor_t> _lane_executor{
+      runtime::infrastructure_executor ()};
+    mutable runtime::state_lane_t _lane{*_lane_executor};
     // Lane-owned waiters of a seal; empty unless a seal waits for active turns.
     std::vector<std::shared_ptr<task_completion_source_t<void>>> _quiescence_waiters;
     std::vector<placement_candidate_t> _candidates;

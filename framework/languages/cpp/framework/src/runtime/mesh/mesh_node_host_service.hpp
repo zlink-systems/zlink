@@ -155,7 +155,7 @@ class mesh_node_host_service_t final : public hosted_service_t, public hosted_se
     task_t<result_t<void>> finalize_local_actor_destroy (actor_ref_t actor);
     task_t<bool> destroy_actor (actor_ref_t actor);
 
-    static void
+    static std::optional<task_t<result_t<void>>>
     dispatch_application (const std::shared_ptr<detail::mesh_node_runtime_t> &node,
                           const std::shared_ptr<detail::mesh_node_builder_state_t> &registration,
                           const host::ready_record_t &owner,

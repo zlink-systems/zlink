@@ -955,23 +955,6 @@ framework_worker_executor (const std::shared_ptr<detail::spot_node_builder_state
     return node->lane.run ([&] { return framework_worker_executor_core (node); }).get ();
 }
 
-std::shared_ptr<runtime::offload_executor_t>
-framework_deadline_executor_core (const std::shared_ptr<detail::spot_node_builder_state_t> &node)
-{
-    if (node && node->deadline_executor)
-        return node->deadline_executor;
-    auto executor = std::make_shared<runtime::offload_executor_t> (1, "zlink-spot-deadline");
-    if (node)
-        node->deadline_executor = executor;
-    return executor;
-}
-
-std::shared_ptr<runtime::offload_executor_t>
-framework_deadline_executor (const std::shared_ptr<detail::spot_node_builder_state_t> &node)
-{
-    return node->lane.run ([&] { return framework_deadline_executor_core (node); }).get ();
-}
-
 void configure_spot_execution (
   const std::shared_ptr<detail::spot_context_state_t> &state,
   const std::shared_ptr<runtime::offload_executor_t> &worker_executor,
@@ -1047,7 +1030,6 @@ void drain_spot_node_executors (spot_node_builder_state_t &node)
             std::shared_ptr<runtime::serial_execution_queue_t> serial_queue;
         };
         std::vector<context_t> contexts;
-        std::shared_ptr<runtime::offload_executor_t> deadline_executor;
         std::shared_ptr<runtime::offload_executor_t> worker_executor;
     };
     const auto plan =
@@ -1069,7 +1051,6 @@ void drain_spot_node_executors (spot_node_builder_state_t &node)
                             context_plan.retained_queues.push_back (actor->queue ());
                 }
             }
-            result.deadline_executor = node.deadline_executor;
             result.worker_executor = node.worker_executor;
             return result;
         })
@@ -1091,8 +1072,6 @@ void drain_spot_node_executors (spot_node_builder_state_t &node)
             context.serial_queue->drain ();
         }
     }
-    if (plan.deadline_executor)
-        plan.deadline_executor->drain ();
     if (plan.worker_executor)
         plan.worker_executor->drain ();
 
@@ -1105,7 +1084,6 @@ void drain_spot_node_executors (spot_node_builder_state_t &node)
               context.state->spot_serial_executor.reset ();
               context.state->worker_scheduler.reset ();
           }
-          node.deadline_executor.reset ();
           node.worker_executor.reset ();
       })
       .get ();
@@ -11168,7 +11146,6 @@ void spot_node_runtime_t::finalize_remote_actor_to_spot_async (
         std::shared_ptr<void> actor_instance;
         std::shared_ptr<spot_serial_executor_t> executor;
         const void *actor_queue_identity = nullptr;
-        std::shared_ptr<runtime::offload_executor_t> deadline_executor;
         std::function<task_t<void> (void *, void *)> joined_callback;
         std::string node_rid;
         std::chrono::milliseconds request_timeout{
@@ -11210,7 +11187,6 @@ void spot_node_runtime_t::finalize_remote_actor_to_spot_async (
             result.actor_queue_identity = result.executor->actor_queue_identity (key);
             if (!result.actor_queue_identity)
                 return result;
-            result.deadline_executor = framework_deadline_executor_core (_state);
             result.dependencies_available = true;
             return result;
         })
@@ -11328,7 +11304,7 @@ void spot_node_runtime_t::finalize_remote_actor_to_spot_async (
               (void) queue->cancel_submission (id);
       };
     auto deadline_state = std::make_shared<deadline_state_t> ();
-    auto deadline_executor = plan.deadline_executor;
+    auto deadline_executor = _state->lane_executor;
     std::weak_ptr<spot_node_builder_state_t> terminal_node = _state;
     auto finish_terminal =
       [terminal_node, transfer_id, committed, deadline_state,
@@ -14103,18 +14079,15 @@ void spot_node_runtime_t::release_native_handles () noexcept
 void spot_node_runtime_t::request_stop () noexcept
 {
     _state->stopping.store (true, std::memory_order_release);
-    auto [cancellation, worker, deadline] =
+    auto [cancellation, worker] =
       _state->lane
         .run ([&] {
-            return std::make_tuple (_state->worker_cancellation, _state->worker_executor,
-                                    _state->deadline_executor);
+            return std::make_pair (_state->worker_cancellation, _state->worker_executor);
         })
         .get ();
     cancellation.request_stop ();
     if (worker)
         worker->request_stop ();
-    if (deadline)
-        deadline->request_stop ();
 }
 
 void spot_node_runtime_t::bind_service_provider (service_provider_t &services)

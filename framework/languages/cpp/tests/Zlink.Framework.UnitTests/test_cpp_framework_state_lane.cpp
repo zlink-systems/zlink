@@ -19,8 +19,10 @@
 #include <atomic>
 #include <array>
 #include <cstdio>
+#include <filesystem>
 #include <cstdlib>
 #include <map>
+#include <latch>
 #include <memory>
 #include <numeric>
 #include <stdexcept>
@@ -63,6 +65,7 @@ struct reference_work_t
 };
 
 using zlink::framework::test::scope_exit_t;
+using zlink::framework::test::reserve_single_infrastructure_worker;
 
 static_assert (
   std::is_same_v<decltype (std::declval<state_lane_t &> ().run (int_work_t{})), std::future<int>>);
@@ -369,6 +372,7 @@ TEST (ZLinkStateLaneDeathTest, CleanupContinuationReleasesWorkerForPendingLaneAn
           using namespace zlink::framework::detail;
           constexpr auto completion_timeout = std::chrono::seconds (2);
           auto node = test::runtime_failure_fixture<spot_node_builder_state_t> ("cleanup-lane");
+          auto release_workers = reserve_single_infrastructure_worker (*node->lane_executor);
           spot_node_runtime_t spots (node);
           node->spot_factories.emplace ("attachment", std::type_index (typeid (void)));
           std::atomic<int> settled{0};
@@ -387,7 +391,7 @@ TEST (ZLinkStateLaneDeathTest, CleanupContinuationReleasesWorkerForPendingLaneAn
           auto attaching = attachment_started.get_future ();
           std::promise<std::size_t> cleaned;
           auto cleanup = cleaned.get_future ();
-          node->lane_executor.submit ([&] {
+          node->lane_executor->submit ([&] {
               auto pending = spots.cleanup_expired_actor_admissions_at_async (
                 std::chrono::steady_clock::now (), [&] {
                     // The drain is queued behind this sole worker's continuation.
@@ -417,7 +421,7 @@ TEST (ZLinkStateLaneDeathTest, CleanupContinuationReleasesWorkerForPendingLaneAn
               std::_Exit (6);
           if (attachment.get ().state != spot_create_state_t::created)
               std::_Exit (7);
-          node->lane_executor.drain ();
+          node->lane.close ();
           std::_Exit (0);
       }()),
       ::testing::ExitedWithCode (0), "");
@@ -428,13 +432,14 @@ TEST (ZLinkStateLane, ActorMailboxLookupAndReadyReleaseTheOnlyLaneWorker)
     using namespace zlink::framework;
     using namespace zlink::framework::detail;
     auto node = test::runtime_failure_fixture<spot_node_builder_state_t> ("actor-ready-lane");
+    auto release_workers = reserve_single_infrastructure_worker (*node->lane_executor);
     spot_node_runtime_t spots (node);
     std::promise<bool> lookup_completed;
     std::promise<bool> ready_completed;
     auto lookup_result = lookup_completed.get_future ();
     auto ready_result = ready_completed.get_future ();
     auto takes = std::make_shared<std::atomic<int>> (0);
-    node->lane_executor.submit ([&] {
+    node->lane_executor->submit ([&] {
         // The only lane worker still owns this callback. Its posted predecessor
         // cannot drain until both asynchronous lookups have returned to it.
         if (!node->lane.try_post ([] {})) {
@@ -462,7 +467,7 @@ TEST (ZLinkStateLane, ActorMailboxLookupAndReadyReleaseTheOnlyLaneWorker)
     });
     EXPECT_TRUE (lookup_result.get ());
     EXPECT_TRUE (ready_result.get ());
-    node->lane_executor.drain ();
+    node->lane.close ();
     EXPECT_EQ (0, takes->load ());
 }
 
@@ -473,9 +478,10 @@ TEST (ZLinkStateLane, ActorMailboxTasksRetainSubmittedHandleStateAndActorId)
     auto node = test::runtime_failure_fixture<spot_node_builder_state_t> ("mailbox-lifetime");
     auto replacement =
       test::runtime_failure_fixture<spot_node_builder_state_t> ("replacement-lifetime");
+    auto release_workers = reserve_single_infrastructure_worker (*node->lane_executor);
     auto scheduler = std::make_shared<test::manual_internal_scheduler_t> ();
     scheduler->publication_fence (
-      test::state_lane_publication_fence (node->lane, node->lane_executor));
+      test::state_lane_publication_fence (node->lane, *node->lane_executor));
     node->worker_executor = scheduler;
     auto spot = std::make_shared<spot_context_state_t> ();
     spot->lane_owner = node;
@@ -499,7 +505,7 @@ TEST (ZLinkStateLane, ActorMailboxTasksRetainSubmittedHandleStateAndActorId)
     auto lookup_result = lookup_completed.get_future ();
     auto ready_result = ready_completed.get_future ();
     auto takes = std::make_shared<std::atomic<int>> (0);
-    node->lane_executor.submit ([&] {
+    node->lane_executor->submit ([&] {
         if (!node->lane.try_post ([] {})) {
             lookup_completed.set_value (false);
             ready_completed.set_value (false);
@@ -537,7 +543,7 @@ TEST (ZLinkStateLane, ActorMailboxTasksRetainSubmittedHandleStateAndActorId)
     node->lane.run ([&] { node->spot_contexts_by_id.clear (); }).get ();
     spot.reset ();
     scheduler->retire ();
-    node->lane_executor.drain ();
+    node->lane.close ();
 }
 
 TEST (ZLinkStateLane, ActorReadyRevalidationFailureReachesRuntimeCollector)
@@ -595,7 +601,7 @@ TEST (ZLinkStateLane, ActorReadyRevalidationFailureReachesRuntimeCollector)
     spot.reset ();
     serial.reset ();
     scheduler->retire ();
-    node->lane_executor.drain ();
+    node->lane.close ();
 }
 
 TEST (ZLinkStateLane, CallerDrainedTaskDoesNotWaitForUnrelatedExecutorWork)
@@ -1468,3 +1474,77 @@ TEST (ZLinkStateLane, CloseIsIdempotent)
 }
 
 } // namespace
+
+#ifdef __linux__
+TEST (ZLinkStateLane, ComponentCountDoesNotIncreaseInfrastructureThreads)
+{
+    using zlink::framework::runtime::stateful::stateful_object_runtime_t;
+    const auto thread_count = [] {
+        return std::distance (std::filesystem::directory_iterator ("/proc/self/task"),
+                              std::filesystem::directory_iterator{});
+    };
+    stateful_object_runtime_t first;
+    const auto warmed = thread_count ();
+    std::vector<std::unique_ptr<stateful_object_runtime_t>> components;
+    for (int index = 0; index != 8; ++index)
+        components.push_back (std::make_unique<stateful_object_runtime_t> ());
+    EXPECT_EQ (warmed, thread_count ());
+}
+#endif
+
+TEST (ZLinkStateLane, InfrastructureProgressesWhileEveryApplicationWorkerWaits)
+{
+    auto infrastructure = zlink::framework::runtime::infrastructure_executor ();
+    offload_executor_t application (2);
+    std::latch blocked (2);
+    std::promise<void> release;
+    auto released = release.get_future ().share ();
+    std::promise<void> progressed;
+    auto done = progressed.get_future ();
+    scope_exit_t unblock ([&] { release.set_value (); });
+    for (int index = 0; index != 2; ++index)
+        application.submit ([&] { blocked.count_down (); released.wait (); });
+    blocked.wait ();
+    state_lane_t lane (*infrastructure);
+    ASSERT_TRUE (lane.try_post ([&] { progressed.set_value (); }));
+    EXPECT_EQ (std::future_status::ready, done.wait_for (std::chrono::seconds (2)));
+}
+
+TEST (ZLinkStateLane, SharedInfrastructureSurvivesIndependentBorrowsAndDrainsLane)
+{
+    auto standalone = zlink::framework::runtime::infrastructure_executor ();
+    const auto identity = standalone.get ();
+    std::weak_ptr<offload_executor_t> retained = standalone;
+    auto first_borrow = zlink::framework::runtime::infrastructure_executor ();
+    auto second_borrow = zlink::framework::runtime::infrastructure_executor ();
+    EXPECT_EQ (standalone.get (), first_borrow.get ());
+    EXPECT_EQ (standalone.get (), second_borrow.get ());
+    first_borrow.reset ();
+    second_borrow.reset ();
+    std::atomic_int completed{0};
+    {
+        state_lane_t lane (*standalone);
+        for (int index = 0; index != 32; ++index)
+            ASSERT_TRUE (lane.try_post ([&] { ++completed; }));
+    }
+    EXPECT_EQ (32, completed.load ());
+    standalone.reset ();
+    EXPECT_FALSE (retained.expired ());
+    auto next = zlink::framework::runtime::infrastructure_executor ();
+    EXPECT_EQ (identity, next.get ());
+    EXPECT_GT (next->live_worker_count (), 0u);
+}
+
+TEST (ZLinkStateLane, SharedInfrastructureCanEnterAnIdleNeighbourLaneInline)
+{
+    auto infrastructure = zlink::framework::runtime::infrastructure_executor ();
+    std::promise<int> value;
+    auto result = value.get_future ();
+    state_lane_t second (*infrastructure);
+    state_lane_t first (*infrastructure);
+    ASSERT_TRUE (first.try_post ([&] {
+        value.set_value (second.run_sync ([] { return 42; }));
+    }));
+    ASSERT_EQ (std::future_status::ready, result.wait_for (std::chrono::seconds (2)));
+    EXPECT_EQ (42, result.get ());
+}

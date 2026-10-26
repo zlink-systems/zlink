@@ -562,8 +562,9 @@ class raw_mesh_node_owner_t
     raw_mesh_pump_result_t enqueue_received (service_mailbox_record_t record,
                                              raw_mesh_pump_result_t accepted_result);
     raw_mesh_node_options_t _options;
-    runtime::offload_executor_t _lane_executor;
-    mutable runtime::state_lane_t _lane{_lane_executor};
+    std::shared_ptr<runtime::offload_executor_t> _lane_executor{
+      runtime::infrastructure_executor ()};
+    mutable runtime::state_lane_t _lane{*_lane_executor};
     // These gates serialize native socket and lifecycle work whose critical
     // section extends beyond a state turn (discovery 7).  Mutable owner state
     // itself is admitted through _lane.

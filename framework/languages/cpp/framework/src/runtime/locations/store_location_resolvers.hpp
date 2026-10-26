@@ -50,8 +50,8 @@ class actor_location_observer_t
     }
 
   private:
-    offload_executor_t _lane_executor;
-    state_lane_t _lane{_lane_executor};
+    std::shared_ptr<offload_executor_t> _lane_executor{infrastructure_executor ()};
+    state_lane_t _lane{*_lane_executor};
     std::map<std::string, std::pair<std::uint64_t, std::uint64_t>> _generations;
 };
 
@@ -458,8 +458,8 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
     location_options_t _options;
     std::shared_ptr<actor_location_observer_t> _actor_locations;
     std::string _actor_mesh_name;
-    offload_executor_t _lane_executor;
-    mutable state_lane_t _lane{_lane_executor};
+    std::shared_ptr<offload_executor_t> _lane_executor{infrastructure_executor ()};
+    mutable state_lane_t _lane{*_lane_executor};
     std::map<std::string, cached_address_t> _spot_routes;
     std::map<std::string, cached_address_t> _actor_routes;
     std::uint64_t _store_recovery_generation = 0;

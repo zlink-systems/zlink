@@ -1880,8 +1880,7 @@ host_maintenance_runtime_t::host_maintenance_runtime_t (
     _objects (objects),
     _sessions (sessions),
     _seal_targets (std::move (seal_targets)),
-    _lane_executor (),
-    _lane (_lane_executor)
+    _lane (*_lane_executor)
 {
 }
 

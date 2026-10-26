@@ -148,6 +148,9 @@ struct stateful_object_runtime_test_access_t
 
 namespace
 {
+using dispatch_completion_t =
+  std::optional<zlink::framework::task_t<zlink::framework::result_t<void>>>;
+
 
 using namespace zlink::framework;
 using namespace zlink::framework::detail;
@@ -1693,7 +1696,9 @@ TEST (FrameworkRelocationSealContract, ordinary_dispatch_failure_returns_transfe
     unsigned started = 0, rejected = 0;
     auto failed = host->dispatch_application_owner (
       "node",
-      [] (const auto &, const auto &, auto) { throw std::runtime_error ("dispatch failed"); },
+      [] (const auto &, const auto &, auto) -> dispatch_completion_t { throw std::runtime_error ("dispatch failed");
+          return std::nullopt;
+      },
       [&] { ++started; }, [&] { ++rejected; });
     const auto &failure = std::get<task_t<std::size_t>> (failed).result ();
     EXPECT_FALSE (failure);
@@ -1705,7 +1710,10 @@ TEST (FrameworkRelocationSealContract, ordinary_dispatch_failure_returns_transfe
     enqueue ();
     unsigned dispatched = 0;
     auto next = host->dispatch_application_owner (
-      "node", [&] (const auto &, const auto &, auto) { ++dispatched; }, [] {}, [] {});
+      "node",
+      [&] (const auto &, const auto &, auto) -> dispatch_completion_t { ++dispatched;
+          return std::nullopt;
+      }, [] {}, [] {});
     EXPECT_TRUE (std::get<bool> (next));
     EXPECT_EQ (dispatched, 1u);
     host->close ();

@@ -224,8 +224,8 @@ class location_lifecycle_t
 
     struct state_t
     {
-        offload_executor_t lane_executor;
-        state_lane_t lane{lane_executor};
+        std::shared_ptr<offload_executor_t> lane_executor{infrastructure_executor ()};
+        state_lane_t lane{*lane_executor};
         bool active = true;
         std::map<std::string, actor_claim_t> actors;
         std::map<std::string, spot_location_t> spots;

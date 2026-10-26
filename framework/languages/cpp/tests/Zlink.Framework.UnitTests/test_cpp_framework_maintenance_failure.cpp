@@ -12,6 +12,9 @@
 
 namespace
 {
+using dispatch_completion_t =
+  std::optional<zlink::framework::task_t<zlink::framework::result_t<void>>>;
+
 std::atomic<std::size_t> fail_size{0};
 std::atomic<int> injected{0};
 constexpr std::size_t inventory_count = 257;
@@ -135,7 +138,10 @@ TEST (MaintenanceFailure, ApplicationClaimAllocationFailureReturnsWorkAccounting
     // The batch's record storage is larger than its pointer/byte claim vectors.
     fail_size = count * sizeof (mesh::service_mailbox_record_t);
     auto pending = owner->dispatch_application_owner (
-      "node", [&] (const auto &, const auto &, auto) { ++dispatched; }, [&] { ++started; },
+      "node",
+      [&] (const auto &, const auto &, auto) -> dispatch_completion_t { ++dispatched;
+          return std::nullopt;
+      }, [&] { ++started; },
       [&] { ++rejected; });
     fail_size = 0;
     const auto &result = std::get<task_t<std::size_t>> (pending).result ();
@@ -148,7 +154,10 @@ TEST (MaintenanceFailure, ApplicationClaimAllocationFailureReturnsWorkAccounting
     EXPECT_EQ (mailbox.pending_messages (mesh::service_mailbox_domain_t::application), 0u);
     enqueue ();
     auto next = owner->dispatch_application_owner (
-      "node", [&] (const auto &, const auto &, auto) { ++dispatched; }, [&] { ++started; },
+      "node",
+      [&] (const auto &, const auto &, auto) -> dispatch_completion_t { ++dispatched;
+          return std::nullopt;
+      }, [&] { ++started; },
       [&] { ++rejected; });
     EXPECT_TRUE (std::get<bool> (next));
     EXPECT_EQ (dispatched, 1u);

@@ -52,8 +52,7 @@ stream_session_registry_t::stream_session_registry_t (authority_resolver_t resol
                                                       std::function<void ()> activity_handler) :
     _resolver (std::move (resolver)),
     _activity_handler (std::move (activity_handler)),
-    _lane_executor (),
-    _lane (_lane_executor)
+    _lane (*_lane_executor)
 {
     if (!_resolver) {
         throw std::invalid_argument ("stream session authority resolver is empty");

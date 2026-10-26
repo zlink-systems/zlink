@@ -257,8 +257,8 @@ class in_memory_location_store_t final : public location_store_t
                ^ static_cast<std::uint64_t> (source ());
     }
 
-    offload_executor_t _lane_executor;
-    state_lane_t _lane{_lane_executor};
+    std::shared_ptr<offload_executor_t> _lane_executor{infrastructure_executor ()};
+    state_lane_t _lane{*_lane_executor};
     std::map<std::string, store_value_t> _values;
     std::map<std::uint64_t, std::vector<store_scan_item_t>> _snapshots;
     static constexpr std::size_t max_scan_snapshots = 128;
@@ -372,8 +372,8 @@ class in_memory_relocation_store_t final : public relocation_store_t
             _values.erase (found);
     }
 
-    offload_executor_t _lane_executor;
-    state_lane_t _lane{_lane_executor};
+    std::shared_ptr<offload_executor_t> _lane_executor{infrastructure_executor ()};
+    state_lane_t _lane{*_lane_executor};
     std::map<std::string, entry_t> _values;
 };
 

@@ -3633,8 +3633,9 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
     std::shared_ptr<detail::mesh_node_runtime_t> _mesh_node;
     std::shared_ptr<application_job_queue_t> _application_jobs;
     std::chrono::milliseconds _session_replacement_callback_timeout;
-    runtime::offload_executor_t _active_streams_lane_executor;
-    runtime::state_lane_t _active_streams_lane{_active_streams_lane_executor};
+    std::shared_ptr<runtime::offload_executor_t> _active_streams_lane_executor{
+      runtime::infrastructure_executor ()};
+    runtime::state_lane_t _active_streams_lane{*_active_streams_lane_executor};
     std::vector<active_session_t> _active_streams;
     std::function<void ()> _deadline_changed;
     asio::io_context _io;

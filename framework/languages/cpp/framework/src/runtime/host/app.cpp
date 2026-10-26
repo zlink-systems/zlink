@@ -268,6 +268,9 @@ runtime::hosted_service_lifecycle_t *lifecycle_of (hosted_service_t *service) no
 class app_state_t
 {
   public:
+    // Declared first so provider, builder and service lanes close before this borrow returns.
+    std::shared_ptr<runtime::offload_executor_t> infrastructure_execution{
+      runtime::infrastructure_executor ()};
     app_state_t () :
         status_access (std::make_shared<app_state_access_t> ()),
         monitoring (std::make_shared<monitoring_runtime_state_t> ()),

@@ -78,8 +78,9 @@ class listener_status_registry_t final
     }
 
   private:
-    runtime::offload_executor_t _lane_executor;
-    mutable runtime::state_lane_t _lane{_lane_executor};
+    std::shared_ptr<runtime::offload_executor_t> _lane_executor{
+      runtime::infrastructure_executor ()};
+    mutable runtime::state_lane_t _lane{*_lane_executor};
     std::map<listener_kind_t, std::map<std::string, listener_status_t>> _listeners;
     std::vector<http_listener_status_t> _http_listeners;
 };

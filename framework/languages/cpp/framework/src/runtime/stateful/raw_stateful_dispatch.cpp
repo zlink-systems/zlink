@@ -1455,8 +1455,7 @@ raw_relocation_replay_coordinator_t::raw_relocation_replay_coordinator_t (
   std::chrono::milliseconds relay_retry_interval,
   std::chrono::milliseconds terminal_tombstone_retention) :
     _transport (&transport),
-    _lane_executor (),
-    _lane (_lane_executor),
+    _lane (*_lane_executor),
     _relay_retry_interval (relay_retry_interval),
     _terminal_tombstone_retention (terminal_tombstone_retention)
 {

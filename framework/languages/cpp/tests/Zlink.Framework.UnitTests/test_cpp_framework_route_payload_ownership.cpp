@@ -4,6 +4,7 @@
 #include "runtime/mesh/mesh_node_host_service.hpp"
 #include <zlink/framework.hpp>
 #include "runtime/channels/route_handler_invoker.hpp"
+#include "runtime/channels/route_packet_dispatcher.hpp"
 #include "runtime/mesh/mesh_record_dispatcher.hpp"
 #include "runtime/diagnostics/dispatch_options_access.hpp"
 #include "runtime/spots/spot_runtime.hpp"
@@ -16,6 +17,7 @@
 #include "runtime/spots/spot_route_packets.hpp"
 #include "../support/allocation_counter.hpp"
 #include "../support/runtime_failure_fixture.hpp"
+#include "../support/dispatch_result_fixture.hpp"
 
 #include <array>
 #include <chrono>
@@ -45,6 +47,265 @@ struct payload_handler_t
         co_return value;
     }
 };
+
+struct suspended_route_handler_t
+{
+    task_completion_source_t<void> resumed;
+    std::promise<void> entered;
+    std::thread::id completed_on;
+    std::string channel_after_await;
+
+    task_t<int> request (const int &value, const route_message_context_t &context)
+    {
+        entered.set_value ();
+        co_await resumed.task ();
+        channel_after_await = context.mesh_name.value ();
+        completed_on = std::this_thread::get_id ();
+        co_return value;
+    }
+};
+
+
+TEST (RoutePayloadOwnership, SuspendedRouteRequestReleasesWorkerAndRepliesOnCompletionTurn)
+{
+    service_collection_t services;
+    services.add_singleton<suspended_route_handler_t> ();
+    auto provider = services.build_provider ();
+    serializer_registry_t serializers;
+    detail::route_handler_registry_t handlers;
+    handlers.on_request<suspended_route_handler_t, int, int> (
+      "mesh", "suspend", &suspended_route_handler_t::request);
+    detail::no_route_internal_packet_dispatcher_t internal;
+    handler_registry_t filters;
+    dispatch_options_t options;
+    options.message_flow (message_flow_log_mode_t::normal);
+    std::thread::id replied_on;
+    detail::dispatch_options_access_t::set_observer_for_tests (
+      options, [&] (const message_flow_event_t &event) {
+          if (event.outcome == message_flow_outcome_t::replied)
+              replied_on = std::this_thread::get_id ();
+      });
+    detail::route_packet_dispatcher_t dispatcher (
+      "mesh", provider, serializers, handlers, internal, options, &filters);
+    auto &handler = provider.get_required<suspended_route_handler_t> ();
+    auto entered = handler.entered.get_future ();
+    std::promise<void> worker_released;
+    auto released = worker_released.get_future ();
+    std::promise<bool> completed;
+    auto finished = completed.get_future ();
+    using reply_result_t = result_t<std::optional<detail::route_dispatch_reply_t>>;
+    using reply_task_t = task_t<reply_result_t>;
+    std::thread worker ([&] {
+        // Same entry context as mesh_node_host_service_t::make_application_owner_work.
+        const detail::ambient_context_scope_t owner_context (nullptr, nullptr, {}, false, true);
+        runtime::messaging::envelope_header_t header;
+        header.kind = runtime::messaging::message_kind_t::request;
+        header.message_name = "suspend";
+        header.channel_name = "mesh";
+        header.flow_id = "01890a5d-ac96-774b-bcce-b302099a8057";
+        header.flow_origin = flow_origin_t::inbound;
+        auto parts = runtime::messaging::envelope_codec_t{}.encode_raw_body_parts (
+          header, zlink::message_t::from ("42"));
+        auto result = dispatcher.dispatch (
+          {zlink::routing_id_t::from ("source"), 7, std::move (parts), {}}, std::move (header));
+        if (auto pending = std::get_if<reply_task_t> (&result)) {
+            detail::observe_task_terminal (*pending, [&] (const auto &reply) {
+                completed.set_value (reply && reply.value () && reply.value ().value ().has_value ());
+            });
+        } else {
+            const auto &reply = std::get<reply_result_t> (result);
+            completed.set_value (reply && reply.value ().has_value ());
+        }
+        worker_released.set_value ();
+    });
+    const auto began = entered.wait_for (std::chrono::seconds (2));
+    const auto released_while_suspended = released.wait_for (std::chrono::milliseconds (200));
+    // Always unblock the old implementation before reporting its assertion failure.
+    handler.resumed.complete (result_t<void>::success ());
+    worker.join ();
+    ASSERT_EQ (began, std::future_status::ready);
+    ASSERT_EQ (released_while_suspended, std::future_status::ready);
+    ASSERT_EQ (finished.wait_for (std::chrono::seconds (2)), std::future_status::ready);
+    EXPECT_TRUE (finished.get ());
+    EXPECT_EQ (handler.channel_after_await, "mesh");
+    EXPECT_EQ (replied_on, handler.completed_on);
+}
+
+TEST (RoutePayloadOwnership, SuspendedOwnerKeepsTheClaimCursorBeforeItsNextRecord)
+{
+    auto options = test::runtime_failure_options (runtime::mesh::raw_mesh_node_options_t{
+      .descriptor = {"cursor", {'c'}, 1, 1, "tcp://127.0.0.1:0", {},
+                     runtime::mesh::service_node_state_t::preparing}});
+    auto host = std::make_shared<runtime::host::public_host_runtime_t> (
+      runtime::host::host_options_t{std::move (options)});
+    auto &mailbox = host->transport ().mailbox ();
+    const auto owner = runtime::mesh::service_mailbox_t::application_owner (
+      runtime::host::owner_kind_t::node);
+    for (int i = 0; i != 2; ++i) {
+        runtime::mesh::service_mailbox_record_t record;
+        record.owner = owner;
+        record.domain = runtime::mesh::service_mailbox_domain_t::application;
+        record.application = std::make_shared<runtime::host::local_application_dispatch_t> ();
+        record.application->owner.owner_kind = runtime::host::owner_kind_t::node;
+        record.application->owner.domain = runtime::host::ready_domain_t::application;
+        record.application->record.kind = runtime::host::record_kind_t::node_send;
+        record.application->record.domain = runtime::host::ready_domain_t::application;
+        ASSERT_TRUE (mailbox.try_enqueue (std::move (record)));
+    }
+    task_completion_source_t<result_t<void>> resume;
+    int calls = 0;
+    auto pending = host->dispatch_application_owner (
+      owner,
+      [&] (const auto &, const auto &record, auto) -> std::optional<task_t<result_t<void>>> {
+          if (++calls != 1)
+              return std::nullopt;
+          record.retain_mailbox_reservation ();
+          auto task = resume.task ();
+          detail::observe_task_terminal (task, [release = record.release_mailbox_reservation] (
+                                                const result_t<result_t<void>> &) { release (); });
+          return task;
+      }, [] {}, [] {});
+    const auto calls_before_resume = calls;
+    resume.complete (result_t<result_t<void>>::success (result_t<void>::success ()));
+    if (auto task = std::get_if<task_t<std::size_t>> (&pending))
+        ASSERT_TRUE (task->result ());
+    EXPECT_EQ (calls_before_resume, 1);
+    EXPECT_EQ (calls, 2);
+}
+
+struct ready_route_handler_t
+{
+    void send (const int &, const route_message_context_t &) {}
+    task_t<int> request (const int &value, const route_message_context_t &) { co_return value; }
+};
+
+TEST (RoutePayloadOwnership, ReadyRouteHandlersReturnWithoutAPendingDispatchTask)
+{
+    service_collection_t services;
+    services.add_singleton<ready_route_handler_t> ();
+    auto provider = services.build_provider ();
+    serializer_registry_t serializers;
+    detail::route_handler_registry_t handlers;
+    handlers.on_send<ready_route_handler_t, int> ("mesh", "ready", &ready_route_handler_t::send);
+    handlers.on_request<ready_route_handler_t, int, int> (
+      "mesh", "ready", &ready_route_handler_t::request);
+    detail::no_route_internal_packet_dispatcher_t internal;
+    detail::route_packet_dispatcher_t dispatcher (
+      "mesh", provider, serializers, handlers, internal);
+    using ready_t = result_t<std::optional<detail::route_dispatch_reply_t>>;
+    for (const bool request : {false, true}) {
+        runtime::messaging::envelope_header_t header;
+        header.kind = request ? runtime::messaging::message_kind_t::request
+                              : runtime::messaging::message_kind_t::command;
+        header.message_name = "ready";
+        header.channel_name = "mesh";
+        auto parts = runtime::messaging::envelope_codec_t{}.encode_raw_body_parts (
+          header, zlink::message_t::from ("42"));
+        auto dispatched = dispatcher.dispatch (
+          {zlink::routing_id_t::from ("source"), 7, std::move (parts), {}}, std::move (header));
+        ASSERT_TRUE (std::holds_alternative<ready_t> (dispatched));
+        const auto &result = std::get<ready_t> (dispatched);
+        ASSERT_TRUE (result);
+        EXPECT_EQ (result.value ().has_value (), request);
+    }
+}
+
+TEST (RoutePayloadOwnership, AsyncReplySubmissionReportsOnceAndContinuesTheOwner)
+{
+    auto options = test::runtime_failure_options (runtime::mesh::raw_mesh_node_options_t{
+      .descriptor = {"reply-turn", {'r'}, 1, 1, "tcp://127.0.0.1:0", {},
+                     runtime::mesh::service_node_state_t::preparing}});
+    auto host = std::make_shared<runtime::host::public_host_runtime_t> (
+      runtime::host::host_options_t{std::move (options)});
+    service_collection_t services;
+    services.add_singleton<suspended_route_handler_t> ();
+    services.add_singleton<ready_route_handler_t> ();
+    auto provider = services.build_provider ();
+    serializer_registry_t serializers;
+    handler_registry_t filters;
+    detail::route_handler_registry_t handlers;
+    handlers.on_request<suspended_route_handler_t, int, int> (
+      "mesh", "suspend", &suspended_route_handler_t::request);
+    handlers.on_send<ready_route_handler_t, int> ("mesh", "ready", &ready_route_handler_t::send);
+    dispatch_options_t diagnostics;
+    diagnostics.message_flow (message_flow_log_mode_t::errors);
+    int reported = 0;
+    bool correct_error = false;
+    detail::dispatch_options_access_t::set_dispatch_error_observer_for_tests (
+      diagnostics, [&] (const message_dispatch_error_event_t &event) {
+          ++reported;
+          correct_error = event.surface == dispatch_error_surface_t::node
+                          && event.message_kind == dispatch_message_kind_t::request
+                          && event.reason == dispatch_error_reason_t::handler_exception
+                          && event.action == dispatch_error_action_t::drop
+                          && event.source_rid == "source";
+      });
+    detail::mesh_record_dispatcher_t dispatcher (
+      provider, serializers, handlers, filters, diagnostics);
+    auto &mailbox = host->transport ().mailbox ();
+    const auto owner = runtime::mesh::service_mailbox_t::application_owner (
+      runtime::host::owner_kind_t::node);
+    std::thread::id submitted_on;
+    for (const bool request : {true, false}) {
+        runtime::mesh::service_mailbox_record_t queued;
+        queued.owner = owner;
+        queued.domain = runtime::mesh::service_mailbox_domain_t::application;
+        queued.application = std::make_shared<runtime::host::local_application_dispatch_t> ();
+        auto &application = *queued.application;
+        application.owner.owner_kind = runtime::host::owner_kind_t::node;
+        application.owner.domain = runtime::host::ready_domain_t::application;
+        application.record.kind = request ? runtime::host::record_kind_t::node_request
+                                          : runtime::host::record_kind_t::node_send;
+        application.record.domain = runtime::host::ready_domain_t::application;
+        application.record.source_node_rid = zlink::routing_id_t::from ("source");
+        application.record.reply_token.host = host;
+        application.record.reply_token.local_reply = [&] (const auto &) -> bool {
+            submitted_on = std::this_thread::get_id ();
+            throw std::runtime_error ("reply submission fixture");
+        };
+        runtime::messaging::envelope_header_t header;
+        header.kind = request ? runtime::messaging::message_kind_t::request
+                              : runtime::messaging::message_kind_t::command;
+        header.channel_name = "mesh";
+        header.message_name = request ? "suspend" : "ready";
+        application.parts = runtime::messaging::envelope_codec_t{}
+                              .encode_raw_body_parts (header, zlink::message_t::from ("42"))
+                              .take_items ();
+        ASSERT_TRUE (mailbox.try_enqueue (std::move (queued)));
+    }
+    int calls = 0;
+    auto pending = [&] {
+        // Same entry context as mesh_node_host_service_t::make_application_owner_work.
+        const detail::ambient_context_scope_t owner_context (nullptr, nullptr, {}, false, true);
+        return host->dispatch_application_owner (
+          owner,
+          [&] (const auto &, const auto &record, auto parts)
+            -> std::optional<task_t<result_t<void>>> {
+              ++calls;
+              runtime::messaging::message_parts_t borrowed (parts);
+              auto header = runtime::messaging::envelope_codec_t{}.decode_header (borrowed).value ();
+              auto result = dispatcher.dispatch (record, std::move (parts), std::move (header));
+              if (auto ready = std::get_if<result_t<void>> (&result)) {
+                  EXPECT_TRUE (*ready);
+                  return std::nullopt;
+              }
+              record.retain_mailbox_reservation ();
+              auto task = std::get<task_t<result_t<void>>> (std::move (result));
+              detail::observe_task_terminal (
+                task, [release = record.release_mailbox_reservation] (const auto &) { release (); });
+              return task;
+          }, [] {}, [] {});
+    }();
+    EXPECT_EQ (calls, 1);
+    auto &handler = provider.get_required<suspended_route_handler_t> ();
+    handler.resumed.complete (result_t<void>::success ());
+    ASSERT_TRUE (std::holds_alternative<task_t<std::size_t>> (pending));
+    ASSERT_TRUE (std::get<task_t<std::size_t>> (pending).result ());
+    EXPECT_EQ (submitted_on, handler.completed_on);
+    EXPECT_EQ (reported, 1);
+    EXPECT_TRUE (correct_error);
+    EXPECT_EQ (calls, 2);
+}
 
 struct send_payload_t
 {
@@ -217,7 +478,7 @@ TEST (RoutePayloadOwnership, NodeSendProjectsDeferredTransportFailures)
     EXPECT_EQ (framework_error_kind_t::protocol_error, duplicate.result ().error_kind ());
 }
 
-TEST (RoutePayloadOwnership, SendBorrowsPayloadForTheAwaitedHandler)
+TEST (RoutePayloadOwnership, SendTransfersPayloadIntoTheExistingInvocationFrame)
 {
     service_collection_t services;
     services.add_singleton<payload_handler_t> ();
@@ -228,20 +489,23 @@ TEST (RoutePayloadOwnership, SendBorrowsPayloadForTheAwaitedHandler)
     handler_registry_t filters;
     auto payload = zlink::message_t::from (std::string (128, ' ') + "42");
     auto &handler = provider.get_required<payload_handler_t> ();
-    handler.payload = &payload;
-    const auto references = payload.ref_count ();
+    auto observer = payload;
+    handler.payload = &observer;
+    const auto references = observer.ref_count ();
     detail::route_handler_invoker_t invoker;
     route_message_context_t context{{}, zlink::routing_id_t::from ("source")};
+    context.mesh_name = "mesh";
+    context.packet_name = "payload";
     auto invoked = invoker
                      .invoke_send (handlers, filters, handler_dispatch_kind_t::node_direct_send,
-                                   "mesh", "payload", provider, serializers, payload, context)
+                                   provider, serializers, std::move (payload), std::move (context))
                      .result ();
     ASSERT_TRUE (invoked);
     EXPECT_EQ (handler.references, references);
-    EXPECT_EQ (payload.ref_count (), references);
+    EXPECT_EQ (observer.ref_count (), references - 1);
 }
 
-TEST (RoutePayloadOwnership, RequestBorrowsPayloadForTheAwaitedHandler)
+TEST (RoutePayloadOwnership, RequestTransfersPayloadIntoTheExistingInvocationFrame)
 {
     service_collection_t services;
     services.add_singleton<payload_handler_t> ();
@@ -253,18 +517,21 @@ TEST (RoutePayloadOwnership, RequestBorrowsPayloadForTheAwaitedHandler)
     handler_registry_t filters;
     auto payload = zlink::message_t::from (std::string (128, ' ') + "42");
     auto &handler = provider.get_required<payload_handler_t> ();
-    handler.payload = &payload;
-    const auto references = payload.ref_count ();
+    auto observer = payload;
+    handler.payload = &observer;
+    const auto references = observer.ref_count ();
     detail::route_handler_invoker_t invoker;
     route_message_context_t context{{}, zlink::routing_id_t::from ("source")};
+    context.mesh_name = "mesh";
+    context.packet_name = "payload";
     auto invoked =
       invoker
-        .invoke_request (handlers, filters, handler_dispatch_kind_t::node_direct_request, "mesh",
-                         "payload", provider, serializers, payload, context)
+        .invoke_request (handlers, filters, handler_dispatch_kind_t::node_direct_request,
+                         provider, serializers, std::move (payload), std::move (context))
         .result ();
     ASSERT_TRUE (invoked);
     EXPECT_EQ (handler.references, references);
-    EXPECT_EQ (payload.ref_count (), references);
+    EXPECT_EQ (observer.ref_count (), references - 1);
 }
 
 TEST (RoutePayloadOwnership, ApplicationDispatcherConsumesTheDecodedHeader)
@@ -302,7 +569,7 @@ TEST (RoutePayloadOwnership, ApplicationDispatcherConsumesTheDecodedHeader)
     // A consumer of the parsed header must never consult its wire frame again.
     parts[0] = zlink::message_t::from (std::string ("invalid header"));
     detail::mesh_record_dispatcher_t dispatcher (provider, serializers, handlers, filters);
-    ASSERT_TRUE (dispatcher.dispatch (record, std::move (parts), std::move (*decoded.value ())));
+    ASSERT_TRUE (zlink::framework::test::await_dispatch_result (dispatcher.dispatch (record, std::move (parts), std::move (*decoded.value ()))));
     EXPECT_GT (handler.references, 0);
 }
 
