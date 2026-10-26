@@ -1,4 +1,4 @@
-const { prepareZLinkRequestReply, identityRequestReply } = require('../../packages/framework/dist/runtime/messaging/request-result');
+const { observeZLinkRequestReply, ZLinkRequestResult, identityRequestReply } = require('../../packages/framework/dist/runtime/messaging/request-result');
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const {
@@ -78,12 +78,12 @@ for (const physical of [false, true]) {
         }
       }),
       routeTransport: {
-        request(_channel, node) { return prepareZLinkRequestReply((async () => {
+        request(entry, _channel, node) { return observeZLinkRequestReply((async () => {
           sent.push(node);
-        })(), identityRequestReply); },
-        requestToSpot(target) { return prepareZLinkRequestReply((async () => {
+        })(), identityRequestReply, identityRequestReply, entry); },
+        requestToSpot(target) { return observeZLinkRequestReply((async () => {
           sent.push(String(target.targetNodeRid));
-        })(), identityRequestReply); }
+        })(), identityRequestReply, identityRequestReply, new ZLinkRequestResult()); }
       }
     });
     const sender = new ZLinkBoundActorRelaySender(

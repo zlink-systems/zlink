@@ -14,7 +14,7 @@ export interface ZLinkRawReceivedRecord {
    * record (Core ROUTER §10.1); 0n for a non-ROUTER receive. Equality only.
    */
   readonly routeGeneration: bigint;
-  readonly reply?: (parts: readonly Uint8Array[]) => void;
+  readonly reply?: (parts: readonly (Uint8Array | string)[]) => void;
   readonly parts: readonly Buffer[];
   /** Releases the ordinary Framework-owned receive record exactly once. */
   close(): void;
