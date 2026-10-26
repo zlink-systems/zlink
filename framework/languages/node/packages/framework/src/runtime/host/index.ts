@@ -2984,28 +2984,54 @@ export class ZLinkFrameworkRuntimeHost
           meshName,
           record,
           signal,
-          (dispatch, onRejected) =>
+          (dispatch, onRejected, receiver, context) =>
             this.admitMeshDispatch(
               meshName,
               record,
               'RouteMesh channel dispatch',
               dispatch,
-              onRejected
+              onRejected,
+              receiver,
+              context
             )
         );
       }
       case ReceiveKind.NodeSend:
       case ReceiveKind.NodeRequest: {
-        return this.dispatchMeshNodeRecord(meshName, record, signal, (dispatch, onRejected) =>
-          this.admitMeshDispatch(meshName, record, 'RouteMesh node dispatch', dispatch, onRejected)
+        return this.dispatchMeshNodeRecord(
+          meshName,
+          record,
+          signal,
+          (dispatch, onRejected, receiver, context) =>
+            this.admitMeshDispatch(
+              meshName,
+              record,
+              'RouteMesh node dispatch',
+              dispatch,
+              onRejected,
+              receiver,
+              context
+            )
         );
       }
 
       case ReceiveKind.SpotSend:
       case ReceiveKind.SpotRequest:
       case ReceiveKind.SpotMulticast:
-        return this.dispatchMeshSpotRecord(meshName, owner, record, (dispatch, onRejected) =>
-          this.admitMeshDispatch(meshName, record, 'RouteMesh Spot dispatch', dispatch, onRejected)
+        return this.dispatchMeshSpotRecord(
+          meshName,
+          owner,
+          record,
+          (dispatch, onRejected, receiver, context) =>
+            this.admitMeshDispatch(
+              meshName,
+              record,
+              'RouteMesh Spot dispatch',
+              dispatch,
+              onRejected,
+              receiver,
+              context
+            )
         );
       case ReceiveKind.InstanceSpotActivation:
         if (this.spotManager === undefined) {
@@ -3017,13 +3043,15 @@ export class ZLinkFrameworkRuntimeHost
           meshName,
           owner,
           record,
-          (dispatch, onRejected) =>
+          (dispatch, onRejected, receiver, context) =>
             this.admitMeshDispatch(
               meshName,
               record,
               'RouteMesh Instance Spot dispatch',
               dispatch,
-              onRejected
+              onRejected,
+              receiver,
+              context
             )
         );
       case ReceiveKind.SpotControl:
@@ -3045,13 +3073,15 @@ export class ZLinkFrameworkRuntimeHost
           meshName,
           owner,
           record,
-          (dispatch, onRejected) =>
+          (dispatch, onRejected, receiver, context) =>
             this.admitMeshDispatch(
               meshName,
               record,
               'RouteMesh Actor dispatch',
               dispatch,
-              onRejected
+              onRejected,
+              receiver,
+              context
             )
         );
       case ReceiveKind.SendReady:
@@ -3063,16 +3093,19 @@ export class ZLinkFrameworkRuntimeHost
     }
   }
 
-  private admitMeshDispatch(
+  private admitMeshDispatch<TReceiver = void, TContext = void>(
     meshName: string,
     record: ReceiveRecord,
     operation: string,
-    dispatch: () => void | Promise<void>,
-    onRejected?: (error: unknown) => void | Promise<void>
+    dispatch: (this: TReceiver, context: TContext) => void | Promise<void>,
+    onRejected?: (this: TReceiver, error: unknown, context: TContext) => void | Promise<void>,
+    receiver?: TReceiver,
+    context?: TContext
   ): void | Promise<void> {
     // Execution gate §13 and host relocation §14 keep control progress independent
     // of new application admission. Disconnect callbacks still use their owner gate.
-    if (record.domain === ReadyDomain.Infrastructure) return dispatch();
+    if (record.domain === ReadyDomain.Infrastructure)
+      return dispatch.call(receiver as TReceiver, context as TContext);
     if (
       !this.admission.accepts(meshName, record.kind) &&
       (record.kind === ReceiveKind.NodeSend ||
@@ -3090,10 +3123,18 @@ export class ZLinkFrameworkRuntimeHost
         decodeStreamHeader(Buffer.from(relay.header, 'base64'), this.flowCreationEnabled()).name ===
           ZLINK_REMOTE_ACTOR_SESSION_DISCONNECTED_PACKET
       ) {
-        return dispatch();
+        return dispatch.call(receiver as TReceiver, context as TContext);
       }
     }
-    return this.admission.run(meshName, operation, dispatch, record.kind, onRejected);
+    return this.admission.run(
+      meshName,
+      operation,
+      dispatch,
+      record.kind,
+      onRejected,
+      receiver,
+      context
+    );
   }
 
   private async dispatchMeshActorBinding(

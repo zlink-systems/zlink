@@ -67,7 +67,7 @@ async function until(ready) {
   }
 }
 
-async function frameworkPair() {
+async function frameworkPair(messageFlow) {
   class BenchPayload {
     constructor(body) {
       this.body = body;
@@ -89,6 +89,7 @@ async function frameworkPair() {
           inject: [],
           useFactory: () => {
             const builder = nest.zlinkFramework();
+            if (messageFlow !== undefined) builder.configureDispatch().messageFlow(messageFlow);
             const meter = pressureMetrics();
             meters.push(meter);
             builder.options({ metrics: { meterProvider: meter.provider } });

@@ -133,7 +133,7 @@ test('completion transfers an already managed part array without rebuilding it',
   const table = new ZLinkMeshCompletionTable();
   const id = { high: 1n, low: 7n };
   const parts = [ZLinkBufferMessage.fromOwned(Buffer.from('reply'))];
-  const pending = table.submit(() => id);
+  const pending = table.submit(() => id).pending;
   table.complete({
     operationId: id,
     terminalResult: 0,

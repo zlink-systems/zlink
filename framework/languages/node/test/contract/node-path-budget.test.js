@@ -392,7 +392,7 @@ test('completion registration reuses abort delivery storage across sequential op
       return add(type, listener, options);
     };
     const operationId = { high: 1n, low: BigInt(index) };
-    const pending = table.submit(() => operationId, controller.signal);
+    const pending = table.submit(() => operationId, controller.signal).pending;
     assert.equal(table.pendingCount, 1);
     table.complete(terminal(operationId));
     await pending;
@@ -412,9 +412,9 @@ test('an aborted submission cannot bind a slot reused by a reentrant submission'
   let inner;
   const outer = table.submit(() => {
     controller.abort(failure);
-    inner = table.submit(() => innerId);
+    inner = table.submit(() => innerId).pending;
     return { high: 2n, low: 2n };
-  }, controller.signal);
+  }, controller.signal).pending;
   await assert.rejects(outer, (error) => error === failure);
   assert.equal(table.pendingCount, 1);
   table.complete(terminal(innerId));
@@ -431,7 +431,7 @@ test('completion storage grows without dropping pending identities or aliasing c
     // Both words exceed the precise Number range; bucket collisions cannot define identity.
     const operationId = { high: (1n << 63n) + BigInt(index), low: (1n << 63n) + BigInt(index * 2) };
     ids.push(operationId);
-    pending.push(table.submit(() => operationId));
+    pending.push(table.submit(() => operationId).pending);
   }
   assert.equal(table.pendingCount, ids.length);
   for (let index = ids.length - 1; index >= 0; index--) {

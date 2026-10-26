@@ -89,7 +89,7 @@ test('zero permits waits once without claiming; independent completion and stop 
   assert.equal(f.claims.length, 0);
   const completions = new ZLinkMeshCompletionTable();
   const operationId = { high: 1n, low: 1n };
-  const completion = completions.submit(() => operationId);
+  const completion = completions.submit(() => operationId).pending;
   completions.complete({ operationId, terminalResult: 0, parts: [] });
   assert.equal((await completion).terminalResult, 0);
   assert.equal(completions.pendingCount, 0);
