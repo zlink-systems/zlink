@@ -1002,9 +1002,9 @@ ZLINK_EXPORT zlink_config_result_t zlink_socket_connection_attempts_snapshot (
 **Core keeps the connection state and the latest failure result for each successful `zlink_connect()`
 registration (intent), and this function is the authoritative source of that fact.** One row is one
 successful `zlink_connect()` call (intent). Connecting to the same endpoint more than once gives more than
-one row, told apart by `intent_id`. For an endpoint other than inproc, when a connection registration for the
-same endpoint string already exists, Core doesn't create a new physical connection; the new row shares that
-connection, and both rows follow its state and failures. Address resolution results and physical pipes or lanes don't split rows. Automatic reconnection of the same intent
+one row, told apart by `intent_id`. Each intent has its own physical connection regardless of
+transport. Connecting again to the same endpoint string doesn't share the existing connection. When the
+connected peers have the same routing id, `ZLINK_OPT_RID_DUPLICATE_POLICY` decides what happens. Address resolution results and physical pipes or lanes don't split rows. Automatic reconnection of the same intent
 belongs to the same row's lifetime.
 
 - **State.** The row appears as `CONNECTING` before `zlink_connect()` returns success. When address

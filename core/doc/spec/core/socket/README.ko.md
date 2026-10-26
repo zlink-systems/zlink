@@ -946,8 +946,9 @@ ZLINK_EXPORT zlink_config_result_t zlink_socket_connection_attempts_snapshot (
 
 **Core는 성공한 `zlink_connect()` 등록(intent)마다 연결 상태와 최근 실패 결과를 보존하고, 이 함수가
 그 사실의 정본이다.** 행 하나는 성공한 `zlink_connect()` 호출 하나(intent)다. 같은 endpoint로 여러 번
-connect하면 행도 여럿이며 `intent_id`로 구분한다. inproc가 아닌 endpoint는 같은 endpoint 문자열의 연결 등록이 이미
-있으면 새 physical 연결을 만들지 않고 새 행이 그 연결을 함께 쓴다. 두 행의 상태와 실패는 같은 연결을 따른다.
+connect하면 행도 여럿이며 `intent_id`로 구분한다. 각 intent는 transport와 관계없이 자기 physical 연결을 따로 가진다.
+같은 endpoint 문자열로 다시 connect해도 기존 연결을 함께 쓰지 않는다. 연결된 peer의 routing id가 같으면
+`ZLINK_OPT_RID_DUPLICATE_POLICY`가 정한 대로 처리한다.
 주소 해석 결과나 physical pipe·lane은 행을 나누지 않는다. 같은 intent의 자동 재연결은 같은 행의
 수명에 속한다.
 
