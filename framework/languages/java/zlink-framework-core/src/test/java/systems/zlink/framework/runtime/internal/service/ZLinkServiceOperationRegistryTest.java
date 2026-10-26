@@ -13,6 +13,7 @@ import org.junit.jupiter.api.Test;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.internal.ZLinkCompletionBridge;
+import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -30,6 +31,7 @@ import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.LockSupport;
 
 final class ZLinkServiceOperationRegistryTest {
     @Test
@@ -537,6 +539,34 @@ final class ZLinkServiceOperationRegistryTest {
             assertNull(cursor.get(registry));
         } finally {
             registry.close();
+        }
+    }
+
+    @Test
+    void maintenanceTerminatesWhenItsOwnerLaneRejectsTheVisit() throws Exception {
+        AtomicLong clock = new AtomicLong();
+        var owner = new ZLinkStateLane();
+        var registry =
+                new ZLinkServiceOperationRegistry(
+                        owner,
+                        new IllegalStateException("closed"),
+                        () -> new TimeoutException("expired"),
+                        clock::get);
+        var operation = ZLinkCompletionBridge.await(registry.register(Duration.ofSeconds(30)));
+        var field = ZLinkServiceOperationRegistry.class.getDeclaredField("maintenance");
+        field.setAccessible(true);
+        Thread worker = (Thread) field.get(registry);
+        try {
+            ZLinkCompletionBridge.await(owner.closeAsync());
+            clock.set(TimeUnit.SECONDS.toNanos(30));
+            LockSupport.unpark(worker);
+            worker.join(TimeUnit.SECONDS.toMillis(1));
+            assertFalse(worker.isAlive(), "rejected maintenance must terminate");
+        } finally {
+            // The RED revision parks forever after rejection; release this test's worker.
+            worker.interrupt();
+            worker.join(TimeUnit.SECONDS.toMillis(1));
+            registry.discard(operation.id());
         }
     }
 

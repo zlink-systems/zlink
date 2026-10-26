@@ -536,7 +536,7 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
                         tick * DEADLINE_TICK_NANOS - (nanoTime.getAsLong() - deadlineOrigin);
                 if (remaining > 0) LockSupport.parkNanos(this, remaining);
                 else {
-                    owner.tryPost(
+                    if (!owner.tryPost(
                             () -> {
                                 if (!closed) {
                                     expireOnOwner(nanoTime.getAsLong());
@@ -544,7 +544,7 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
                                 }
                                 LockSupport.unpark(maintenance);
                                 return CompletableFuture.completedFuture(null);
-                            });
+                            })) return;
                     LockSupport.park(this);
                 }
             }
