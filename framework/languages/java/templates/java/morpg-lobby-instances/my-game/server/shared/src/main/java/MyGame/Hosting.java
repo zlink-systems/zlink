@@ -27,7 +27,10 @@ public final class Hosting {
         options.addRelocationStore(relocations);
     }
 
-    public static <T> Flow.Subscription observe(Flow.Publisher<T> publisher, Consumer<T> action) {
+    public static <T> Flow.Subscription observe(
+            Flow.Publisher<T> publisher,
+            CompletableFuture<Void> ready,
+            Consumer<T> action) {
         var subscribed = new CompletableFuture<Flow.Subscription>();
         publisher.subscribe(
                 new Flow.Subscriber<>() {
@@ -41,10 +44,14 @@ public final class Hosting {
                     }
 
                     public void onError(Throwable error) {
+                        ready.completeExceptionally(error);
                         error.printStackTrace(System.err);
                     }
 
-                    public void onComplete() {}
+                    public void onComplete() {
+                        ready.completeExceptionally(
+                                new IllegalStateException("Runtime observation ended before Serving"));
+                    }
                 });
         return subscribed.join();
     }
@@ -65,6 +72,7 @@ public final class Hosting {
             var subscription =
                     observe(
                             runtime.observe(),
+                            ready,
                             observed -> {
                                 var status = observed.status();
                                 if (runtime.messageFlowMode() != ZLinkMessageFlowLogMode.OFF) {
@@ -80,7 +88,13 @@ public final class Hosting {
                                                     + " termination="
                                                     + status.terminationResult());
                                 }
-                                if (status.isReady()) ready.complete(null);
+                                if (observed.loss().discardedTerminalCount() != 0)
+                                    ready.completeExceptionally(new IllegalStateException("Startup observation lost"));
+                                else if (status.state() == ZLinkFrameworkRuntimeState.SERVING)
+                                    ready.complete(null);
+                                else if (status.state() != ZLinkFrameworkRuntimeState.PREPARING)
+                                    ready.completeExceptionally(
+                                            new IllegalStateException("Runtime startup failed: " + status.state()));
                                 if (status.state() == ZLinkFrameworkRuntimeState.RELOCATED
                                         && status.safeToShutdown()) safe.complete(null);
                             });
