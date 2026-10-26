@@ -30,7 +30,7 @@ public sealed class DeferredActorJoinContractTests
     [Fact]
     public async Task Reserved_barrier_runs_before_already_queued_actor_work()
     {
-        var mailbox = new ZLinkActorSerialExecutor();
+        await using var mailbox = new ZLinkActorSerialExecutor();
         var current = await mailbox.EnterAsync(CancellationToken.None);
         var queued = mailbox.EnterAsync(CancellationToken.None).AsTask();
         var barrier = mailbox.ReserveBarrier();

@@ -790,6 +790,8 @@ API에 노출하지 않는다.
 
 ## 4. Messaging API
 
+최종 typed 결과 전달 구조는 [Submit과 완료 §9](../../../01-execution/01-submit-and-completion.ko.md#9-request-completion--완료-경쟁과-timeout-budget)를 따른다.
+
 사용자 코드에서 raw socket 대신 주입받아 사용하는 messaging 표면은 아래와 같다.
 
 ```cpp

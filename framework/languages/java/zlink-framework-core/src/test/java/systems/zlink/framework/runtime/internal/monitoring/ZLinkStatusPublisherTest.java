@@ -19,6 +19,37 @@ import java.util.function.IntConsumer;
 
 final class ZLinkStatusPublisherTest {
     @Test
+    void subscriptionAddedAfterSnapshotCaptureStartsWithCurrentStatus() {
+        var current = new AtomicInteger(1);
+        var duringSnapshot = new AtomicReference<Runnable>();
+        var publisher =
+                ZLinkStatusPublisher.create(
+                        () -> {
+                            int captured = current.get();
+                            var registration = duringSnapshot.getAndSet(null);
+                            if (registration != null) registration.run();
+                            return captured;
+                        },
+                        value -> value,
+                        1,
+                        ignored -> false,
+                        ignored -> false,
+                        Runnable::run);
+        var received = new CopyOnWriteArrayList<Integer>();
+        var failure = new CompletableFuture<Void>();
+        duringSnapshot.set(
+                () -> {
+                    current.set(2);
+                    publisher.subscribe(subscriber(received::add, failure));
+                });
+
+        publisher.subscribe(subscriber(ignored -> {}, failure));
+
+        assertEquals(List.of(2), received);
+        assertTrue(!failure.isCompletedExceptionally());
+    }
+
+    @Test
     void subscriptionAcceptedDuringFailureDetachRechecksSourceRetention() throws Exception {
         var publisher =
                 ZLinkStatusPublisher.create(

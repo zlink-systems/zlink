@@ -18,6 +18,91 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 final class ZLinkSpotSerialExecutorAsyncTest {
     @Test
+    @org.junit.jupiter.api.Timeout(5)
+    void activationTerminalKeepsQueuedReadinessAheadOfHeldJob() throws Exception {
+        var workers = new java.util.concurrent.LinkedBlockingQueue<Runnable>();
+        var queue =
+                new ZLinkSerialExecutionQueue(
+                        workers::add, ZLinkExecutionLanePolicy.spotReturningGate());
+        var serials =
+                new ZLinkSpotSerialExecutor(
+                        queue,
+                        Runnable::run,
+                        workers::add,
+                        ZLinkUserSpotExecutionMode.SPOT_WIDE,
+                        false);
+        var prepared = queue.prepareActivation(() -> CompletableFuture.completedFuture(null));
+        workers.take().run();
+        var finishing = queue.finishActivationPreparation();
+        var events = new java.util.ArrayList<String>();
+        var boundary =
+                serials.enqueueSpotBarrierNext(
+                        () -> {
+                            events.add("continued");
+                            return CompletableFuture.completedFuture(null);
+                        });
+        var held =
+                serials.executeAcceptedSpot(
+                        new byte[] {1},
+                        ignored -> {
+                            events.add("held");
+                            return CompletableFuture.completedFuture(null);
+                        },
+                        () -> {});
+        workers.take().run();
+        CompletableFuture.allOf(
+                        prepared.toCompletableFuture(),
+                        finishing.toCompletableFuture(),
+                        boundary.toCompletableFuture(),
+                        held.toCompletableFuture())
+                .get(5, TimeUnit.SECONDS);
+        serials.closeAsync().toCompletableFuture().get(5, TimeUnit.SECONDS);
+        assertEquals(java.util.List.of("continued", "held"), events);
+    }
+
+    @Test
+    @org.junit.jupiter.api.Timeout(5)
+    void readinessBarrierHoldsApplicationJobsWhileSealPreparationYields() throws Exception {
+        var workers = new java.util.concurrent.LinkedBlockingQueue<Runnable>();
+        var serials =
+                new ZLinkSpotSerialExecutor(
+                        new ZLinkSerialExecutionQueue(
+                                workers::add, ZLinkExecutionLanePolicy.spot()),
+                        Runnable::run,
+                        workers::add,
+                        ZLinkUserSpotExecutionMode.SPOT_WIDE,
+                        false);
+        var sealPrepared = new CompletableFuture<Void>();
+        var events = new java.util.ArrayList<String>();
+        var boundary =
+                serials.enqueueSpotBarrierNext(
+                        () -> {
+                            events.add("boundary");
+                            return ZLinkSerialExecutionQueue.yieldCurrent(sealPrepared)
+                                    .thenRun(() -> events.add("continued"));
+                        });
+        workers.take().run();
+        var held =
+                serials.executeAcceptedSpot(
+                        new byte[] {1},
+                        ignored -> {
+                            events.add("held");
+                            return CompletableFuture.completedFuture(null);
+                        },
+                        () -> {});
+        // Run the scheduled gate turn while the seal is still being prepared.
+        workers.take().run();
+        boolean ranBeforeSeal = held.toCompletableFuture().isDone();
+        sealPrepared.complete(null);
+        workers.take().run();
+        CompletableFuture.allOf(boundary.toCompletableFuture(), held.toCompletableFuture())
+                .get(5, TimeUnit.SECONDS);
+        serials.closeAsync().toCompletableFuture().get(5, TimeUnit.SECONDS);
+        assertFalse(ranBeforeSeal);
+        assertEquals(java.util.List.of("boundary", "continued", "held"), events);
+    }
+
+    @Test
     void namedSharedSpotSubmissionWithInlineOwnerYieldsOnce() throws Exception {
         sharedSpotSubmission(false, false);
     }

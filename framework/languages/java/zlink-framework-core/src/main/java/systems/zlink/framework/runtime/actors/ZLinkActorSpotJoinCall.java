@@ -840,8 +840,12 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
                 .thenCompose(services.remoteAddressResolver()::resolve)
                 .thenApply(
                         address -> {
-                            if (address.isEmpty()
-                                    || address.get().targetNodeRid() == null
+                            if (address.isEmpty()) {
+                                throw new ZLinkFrameworkException(
+                                        ZLinkFrameworkErrorKind.NOT_FOUND,
+                                        "SPOT owner was not found: " + spotId);
+                            }
+                            if (address.get().targetNodeRid() == null
                                     || address.get().spotGeneration() <= 0) {
                                 throw new ZLinkConfigurationException(
                                         "SPOT remote address resolver returned an incomplete owner"

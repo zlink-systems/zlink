@@ -150,7 +150,10 @@ profile in every language. This profile is the public codec contract that lets a
 application payload cross a language boundary and decode to the same value.
 
 - A UTF-8 BOM is not allowed.
-- Property names and enum names are case-sensitive.
+- Property names are case-sensitive.
+- An enum is represented as a JSON string holding a name declared in the contract (case-sensitive). A JSON
+  number, an undeclared name, and a string holding a numeric ordinal are rejected. A value with no declared
+  name isn't encoded; encoding fails.
 - Property order and insignificant whitespace carry no meaning.
 - Duplicate properties and missing required properties are rejected.
 - Unknown properties are ignored.

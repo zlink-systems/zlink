@@ -12,7 +12,7 @@ gate_java_major() { # <java executable> -> major, or nothing
 }
 
 check_env() {
-  local missing=0 java java_major node_major cmake_version browser_root browser_manifest java_candidate
+  local missing=0 java java_major node_major cmake_version java_candidate
 
   export VCPKG_OVERLAY_PORTS="${VCPKG_OVERLAY_PORTS:-$gate_env_root/vcpkg/ports}"
 
@@ -35,46 +35,6 @@ check_env() {
     echo "ok VCPKG_ROOT"
   else
     echo "missing VCPKG_ROOT (bootstrapped Linux tree, not under /mnt): git clone https://github.com/microsoft/vcpkg \"$HOME/.cache/zlink/vcpkg\" && \"$HOME/.cache/zlink/vcpkg/bootstrap-vcpkg.sh\" && export VCPKG_ROOT=\"$HOME/.cache/zlink/vcpkg\""
-    ((missing++))
-  fi
-
-  if [[ -n "${PLAYWRIGHT_BROWSERS_PATH:-}" ]]; then
-    case "$PLAYWRIGHT_BROWSERS_PATH" in
-      0) browser_root="$gate_env_root/framework/languages/node/node_modules/playwright-core/.local-browsers" ;;
-      /*) browser_root="$PLAYWRIGHT_BROWSERS_PATH" ;;
-      *) browser_root="$(pwd -P)/$PLAYWRIGHT_BROWSERS_PATH" ;;
-    esac
-  else
-    case "$(uname -s)" in
-      Darwin) browser_root="$HOME/Library/Caches/ms-playwright" ;;
-      MINGW*|MSYS*|CYGWIN*) browser_root="${LOCALAPPDATA:-}/ms-playwright" ;;
-      *) browser_root="${XDG_CACHE_HOME:-$HOME/.cache}/ms-playwright" ;;
-    esac
-  fi
-  browser_manifest="$gate_env_root/framework/languages/node/node_modules/playwright-core/browsers.json"
-  # shellcheck disable=SC2016 # Pass the JavaScript source to node unchanged.
-  if [[ -r "$browser_manifest" ]] && command -v node >/dev/null 2>&1 && node -e '
-    const fs = require("fs");
-    const path = require("path");
-    const browsers = require(process.argv[1]).browsers;
-    const browserRoot = process.argv[2];
-    for (const name of ["chromium", "chromium-headless-shell"]) {
-      const browser = browsers.find((entry) => entry.name === name);
-      if (!browser) {
-        console.error(`missing Playwright browser definition: ${name}`);
-        process.exitCode = 1;
-        continue;
-      }
-      const directory = `${name.replace(/-/g, "_")}-${browser.revision}`;
-      if (!fs.existsSync(path.join(browserRoot, directory))) {
-        console.error(`missing Playwright browser revision directory: ${directory}`);
-        process.exitCode = 1;
-      }
-    }
-  ' "$browser_manifest" "$browser_root"; then
-    echo "ok Playwright Chromium"
-  else
-    echo "missing Playwright Chromium: cd \"$gate_env_root/framework/languages/node\" && npm run browser:install"
     ((missing++))
   fi
 
@@ -133,6 +93,56 @@ check_env() {
   ((missing == 0))
 }
 
+# Browser samples (Bingo.Ts, .NET ZoneWorld) need Chromium, and the manifest that names its
+# revision exists only after rebuild-dev reinstalls node, so only framework-gate.sh checks it.
+check_playwright() {
+  local missing=0 browser_root browser_manifest
+
+  if [[ -n "${PLAYWRIGHT_BROWSERS_PATH:-}" ]]; then
+    case "$PLAYWRIGHT_BROWSERS_PATH" in
+      0) browser_root="$gate_env_root/framework/languages/node/node_modules/playwright-core/.local-browsers" ;;
+      /*) browser_root="$PLAYWRIGHT_BROWSERS_PATH" ;;
+      *) browser_root="$(pwd -P)/$PLAYWRIGHT_BROWSERS_PATH" ;;
+    esac
+  else
+    case "$(uname -s)" in
+      Darwin) browser_root="$HOME/Library/Caches/ms-playwright" ;;
+      MINGW*|MSYS*|CYGWIN*) browser_root="${LOCALAPPDATA:-}/ms-playwright" ;;
+      *) browser_root="${XDG_CACHE_HOME:-$HOME/.cache}/ms-playwright" ;;
+    esac
+  fi
+  browser_manifest="$gate_env_root/framework/languages/node/node_modules/playwright-core/browsers.json"
+  # shellcheck disable=SC2016 # Pass the JavaScript source to node unchanged.
+  if [[ -r "$browser_manifest" ]] && command -v node >/dev/null 2>&1 && node -e '
+    const fs = require("fs");
+    const path = require("path");
+    const browsers = require(process.argv[1]).browsers;
+    const browserRoot = process.argv[2];
+    for (const name of ["chromium", "chromium-headless-shell"]) {
+      const browser = browsers.find((entry) => entry.name === name);
+      if (!browser) {
+        console.error(`missing Playwright browser definition: ${name}`);
+        process.exitCode = 1;
+        continue;
+      }
+      const directory = `${name.replace(/-/g, "_")}-${browser.revision}`;
+      if (!fs.existsSync(path.join(browserRoot, directory))) {
+        console.error(`missing Playwright browser revision directory: ${directory}`);
+        process.exitCode = 1;
+      }
+    }
+  ' "$browser_manifest" "$browser_root"; then
+    echo "ok Playwright Chromium"
+  else
+    echo "missing Playwright Chromium: cd \"$gate_env_root/framework/languages/node\" && npm run browser:install"
+    ((missing++))
+  fi
+
+  ((missing == 0))
+}
+
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
-  check_env "$@"
+  check_env "$@"; env_rc=$?
+  check_playwright || exit 1
+  exit "$env_rc"
 fi

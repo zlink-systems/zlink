@@ -68,6 +68,10 @@ handshake success or failure, disconnect, protocol error, and close. Disconnect
 reasons distinguish transport error, handshake failure,
 [Context](glossary.en.md#context) termination, and unknown. Events contain no
 service topology or application payload.
+The current connection state and latest failure of a connect registration aren't
+reconstructed from monitor events;
+[`zlink_socket_connection_attempts_snapshot`](socket/README.en.md#zlink_socket_connection_attempts_snapshot)
+defines them. `CONNECTED`, `CONNECT_DELAYED`, `CONNECT_RETRIED`, and `CLOSED` aren't that result.
 
 Event identifiers use the `ZLINK_EVENT_` prefix and have the same values as their
 `ZLINK_SOCKET_MONITOR_EVENT_` aliases. [Monitoring §3.2](06-monitoring.en.md#32-value-and-flags)

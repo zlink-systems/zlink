@@ -558,7 +558,13 @@ public final class ZLinkSpotSerialExecutor implements ZLinkActorDispatchTarget {
     }
 
     CompletionStage<Void> enqueueSpotBarrierNext(Supplier<CompletionStage<Void>> operation) {
-        return spotQueue.enqueueBarrierNext(operation, null);
+        // Readiness keeps application admission held while seal preparation yields the gate
+        // (Spot model §5.1). The queue's existing transition owns that admission decision.
+        return spotQueue.enqueueLifecycleTransition(
+                operation,
+                ignored -> CompletableFuture.completedFuture(null),
+                () -> false,
+                ignored -> false);
     }
 
     CompletionStage<Void> enqueueSpotLifecycleAdmission(Supplier<CompletionStage<Void>> operation) {
