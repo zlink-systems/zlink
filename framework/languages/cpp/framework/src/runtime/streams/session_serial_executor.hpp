@@ -37,27 +37,28 @@ class session_serial_executor_t
                               async_work_t work,
                               std::function<bool ()> cancelled = {}) const
     {
-        return execute_preserved_lane (std::move (name), std::move (work), std::move (cancelled));
+        return execute_lane (std::move (name), std::move (work), std::move (cancelled));
     }
 
     bool execute_control (std::string name,
                           async_work_t work,
                           std::function<bool ()> cancelled = {}) const
     {
-        return execute_preserved_lane (std::move (name), std::move (work), std::move (cancelled));
+        return execute_lane (std::move (name), std::move (work), std::move (cancelled),
+                             serial_work_lane_t::lifecycle);
     }
 
     bool execute_infrastructure (std::string name,
                                  async_work_t work,
                                  std::function<bool ()> cancelled = {}) const
     {
-        return execute_preserved_lane (std::move (name), std::move (work), std::move (cancelled));
+        return execute_lane (std::move (name), std::move (work), std::move (cancelled));
     }
 
     bool
     execute_final (std::string name, async_work_t work, std::function<bool ()> cancelled = {}) const
     {
-        return execute_preserved_lane (std::move (name), std::move (work), std::move (cancelled));
+        return execute_lane (std::move (name), std::move (work), std::move (cancelled));
     }
 
     void drain () const
@@ -67,14 +68,14 @@ class session_serial_executor_t
     }
 
   private:
-    bool execute_preserved_lane (std::string name,
-                                 async_work_t work,
-                                 std::function<bool ()> cancelled) const
+    bool execute_lane (std::string name,
+                       async_work_t work,
+                       std::function<bool ()> cancelled,
+                       serial_work_lane_t lane = serial_work_lane_t::application) const
     {
         return _queue
                && _queue->post_async_wait (std::move (name), std::move (work),
-                                           serial_work_options_t{serial_work_lane_t::application},
-                                           std::move (cancelled));
+                                           serial_work_options_t{lane}, std::move (cancelled));
     }
 
     std::shared_ptr<offload_executor_t> _worker_executor;
