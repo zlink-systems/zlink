@@ -632,16 +632,19 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
 
     private Action? RetirePeerConnectionIntent(RoutingId target)
     {
-        var targets = RunInboundOperationState(() =>
+        // A removed unresolved endpoint can own a HELLO before any descriptor
+        // identifies its RID. Registered inbound peers retain their own exchange.
+        var unregisteredTargets = RunInboundOperationState(() =>
             _controlSends
                 .Keys.Where(key => key.Command == ServiceWireConstants.Command.Hello)
                 .Select(key => key.Target)
                 .Distinct()
                 .ToArray()
         );
-        foreach (var routingId in targets)
+        foreach (var routingId in unregisteredTargets)
             if (
-                !_peerExpectations.ContainsKey(routingId)
+                !_peersByRid.ContainsKey(routingId)
+                && !_peerExpectations.ContainsKey(routingId)
                 && !_peersByIntent.Values.Any(intent =>
                     IsHelloOwnedByIntentUnderLock(intent, routingId)
                 )
@@ -654,6 +657,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             );
         if (hasOwner || target.IsEmpty)
             return null;
+        RetireHelloSubmissions(target);
         // The logical owner retires the admitted route in the same decision
         // as its last intent. Physical route loss never calls this method.
         if (_peersByRid.TryGetValue(target, out var disconnected))
@@ -9762,28 +9766,23 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 peer.LastChangedMs = checked((ulong)Environment.TickCount64);
                 _peersByRid[sourceRid] = peer;
             }
-            // MeshNode §7.1: accepting a Hello records the peer as admitted, then submits
-            // the Admit, then publishes the peer to senders. Direct sends read that
-            // publication without a lane turn, so a record selected for the peer is
-            // submitted after the Admit.
+            // Local registration permits inbound records (MeshNode §7.1). Only
+            // the remote ADMIT makes this selected route ready for senders.
             if (
-                command == ServiceWireConstants.Command.Hello
-                || command == ServiceWireConstants.Command.Admit
-                || command == ServiceWireConstants.Command.Update && peer.Admitted
+                command == ServiceWireConstants.Command.Admit
+                || peer.Admitted
+                    && command
+                        is ServiceWireConstants.Command.Hello
+                            or ServiceWireConstants.Command.Update
             )
             {
-                if (
-                    decision == ZLinkServiceAdmissionDecision.Accept
-                    || peer.State == MeshPeerState.Connecting
-                )
-                {
-                    CompletePeerAdmissionUnderLock(
-                        peer,
-                        command == ServiceWireConstants.Command.Hello ? admissionResponse : null
-                    );
-                    if (command == ServiceWireConstants.Command.Hello)
-                        admissionResponse = null;
-                }
+                if (decision == ZLinkServiceAdmissionDecision.Accept || !peer.Admitted)
+                    CompletePeerAdmissionUnderLock(peer);
+            }
+            else if (!peer.Admitted)
+            {
+                peer.State = MeshPeerState.Connecting;
+                RebuildChannelSelectionPlansUnderLock();
             }
             admissionCompleted = peer.Admitted;
         }
@@ -9829,7 +9828,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         RebuildChannelSelectionPlansUnderLock();
     }
 
-    private void CompletePeerAdmissionUnderLock(Peer peer, SendOperation? admissionResponse)
+    private void CompletePeerAdmissionUnderLock(Peer peer)
     {
         // A draining descriptor remains admitted but is excluded from route
         // selection.
@@ -9844,7 +9843,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             SignalReceiveOwner();
         }
         peer.LastChangedMs = checked((ulong)Environment.TickCount64);
-        SubmitAdmissionResponseUnderLock(peer, admissionResponse);
         TryTransitionStateUnderLock(MeshNodeState.Ready);
         RebuildChannelSelectionPlansUnderLock();
         Publish(MeshMonitorEventKind.PeerAdmitted, peerRid: peer.RoutingId);
@@ -9973,52 +9971,24 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         }
         var retries = CollectDueHelloRetries();
         // Spec 08 §4.2: the management work of a receive rotation reads the
-        // node state in one node turn — the intents that still need a Hello and
+        // node state in one node turn — the routes that still need a Hello and
         // the liveness activity of every admitted peer.
-        var (intents, activities, nextLiveness) = AwaitStateLane(
+        var (helloRoutes, activities, nextLiveness) = AwaitStateLane(
             _lane.RunAsync(
                 static state => state.Node.CollectInfrastructureUnderLock(state.Now),
                 (Node: this, Now: now)
             )
         );
         if (
-            (retries.Length != 0 || intents is { Count: > 0 })
+            (retries.Length != 0 || helloRoutes is { Count: > 0 })
             && _peerAdmissionSealed?.Invoke() != true
         )
         {
             foreach (var (key, head) in retries)
                 SendControl(key.Target, key.RouteGeneration, key.Command, head);
 
-            foreach (var intent in intents ?? [])
-            {
-                var (target, routeGeneration, unboundRoutes) = RunState(() =>
-                {
-                    if (
-                        !_peersByIntent.TryGetValue(intent.Id, out var current)
-                        || !ReferenceEquals(current, intent)
-                    )
-                        return (default(RoutingId), 0UL, Array.Empty<RoutingId>());
-                    var rid =
-                        current.ExpectedRid
-                        ?? (
-                            NeedsUnboundHelloRouteUnderLock(current) ? default : current.ResolvedRid
-                        );
-                    if (!rid.IsEmpty)
-                    {
-                        return (rid, _selectedRoutes.GenerationOf(rid), Array.Empty<RoutingId>());
-                    }
-                    return (default(RoutingId), 0UL, UnboundSelectedRoutesUnderLock(current));
-                });
-                if (!target.IsEmpty && routeGeneration != 0)
-                    SendControl(target, routeGeneration, ServiceWireConstants.Command.Hello, null);
-                foreach (var routingId in unboundRoutes)
-                    SendControl(
-                        routingId,
-                        RunState(() => _selectedRoutes.GenerationOf(routingId)),
-                        ServiceWireConstants.Command.Hello,
-                        null
-                    );
-            }
+            foreach (var (target, generation) in helloRoutes ?? [])
+                SendControl(target, generation, ServiceWireConstants.Command.Hello, null);
         }
 
         if (activities is not null)
@@ -10045,20 +10015,17 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     }
 
     private (
-        List<ZLinkMeshConnectionIntent>? Intents,
+        List<(RoutingId Target, ulong Generation)>? HelloRoutes,
         List<(RoutingId? Closed, RoutingId Target, ulong Generation, ulong ProbeId)>? Activities,
         TimeSpan NextLiveness
     ) CollectInfrastructureUnderLock(long now)
     {
-        List<ZLinkMeshConnectionIntent>? intents = null;
-        foreach (var intent in _peersByIntent.Values)
+        List<(RoutingId Target, ulong Generation)>? helloRoutes = null;
+        foreach (var target in _selectedRoutes.RoutingIds)
         {
-            var knownRid = intent.ResolvedRid.IsEmpty
-                ? intent.ExpectedRid ?? default
-                : intent.ResolvedRid;
-            if (!knownRid.IsEmpty && HasIntentPeerUnderLock(intent))
-                continue;
-            (intents ??= []).Add(intent);
+            var generation = _selectedRoutes.GenerationOf(target);
+            if (NeedsHelloUnderLock(target, generation))
+                (helloRoutes ??= []).Add((target, generation));
         }
 
         List<(RoutingId? Closed, RoutingId Target, ulong Generation, ulong ProbeId)>? activities =
@@ -10097,18 +10064,19 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 DisconnectTransport(peer, physicalRid);
                 (activities ??= []).Add((closed, default, 0, 0));
             }
-        return (intents, activities, nextLiveness);
+        return (helloRoutes, activities, nextLiveness);
     }
 
-    private bool HasIntentPeerUnderLock(ZLinkMeshConnectionIntent intent)
+    private bool NeedsHelloUnderLock(RoutingId target, ulong routeGeneration)
     {
-        foreach (var peer in _peersByRid.Values)
-            if (
-                intent.IsAdmitted(peer)
-                || peer.State == MeshPeerState.NotRequired && intent.IsBoundTo(peer)
-            )
-                return true;
-        return false;
+        if (routeGeneration == 0 || _selectedRoutes.GenerationOf(target) != routeGeneration)
+            return false;
+        if (
+            _peersByRid.TryGetValue(target, out var peer)
+            && peer.RouteGeneration == routeGeneration
+        )
+            return !peer.Admitted && peer.State != MeshPeerState.NotRequired;
+        return _peersByIntent.Values.Any(intent => IsHelloOwnedByIntentUnderLock(intent, target));
     }
 
     // Monitor events are transport observations, not the selected route
@@ -12876,26 +12844,14 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             ZLinkServiceSecurityIdentity.Plaintext
         );
 
-    private RoutingId[] UnboundSelectedRoutesUnderLock(ZLinkMeshConnectionIntent intent) =>
-        _selectedRoutes
-            .RoutingIds.Where(routingId =>
-                IsHelloOwnedByIntentUnderLock(intent, routingId)
-                && !_peersByIntent.Values.Any(intent =>
-                    intent.ResolvedRid == routingId || intent.ExpectedRid == routingId
-                )
-            )
-            .ToArray();
-
-    private bool NeedsUnboundHelloRouteUnderLock(ZLinkMeshConnectionIntent intent) =>
-        intent.ExpectedRid is null && _selectedRoutes.GenerationOf(intent.ResolvedRid) == 0;
-
     private bool IsHelloOwnedByIntentUnderLock(
         ZLinkMeshConnectionIntent intent,
         RoutingId target
     ) =>
         intent.ExpectedRid == target
         || intent.ResolvedRid == target
-        || NeedsUnboundHelloRouteUnderLock(intent)
+        || intent.ExpectedRid is null
+            && _selectedRoutes.GenerationOf(intent.ResolvedRid) == 0
             && _selectedRoutes.GenerationOf(target) != 0
             && !_peersByRid.ContainsKey(target);
 
@@ -12993,14 +12949,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 command == ServiceWireConstants.Command.Hello && head is null
                     ? RunState(() =>
                     {
-                        // Admission and creating the first HELLO share the node turn.
-                        // A collected intent may already have received its ADMIT.
-                        if (
-                            !_peersByIntent.Values.Any(intent =>
-                                IsHelloOwnedByIntentUnderLock(intent, target)
-                                && !HasIntentPeerUnderLock(intent)
-                            )
-                        )
+                        // The first HELLO and remote admission share the node turn.
+                        if (!NeedsHelloUnderLock(target, routeGeneration))
                             return ((ControlSendState?)null, false);
                         return PrepareSubmission();
                     })
@@ -13174,10 +13124,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     ) =>
         RunState(() =>
             command == ServiceWireConstants.Command.Hello
-                ? _selectedRoutes.GenerationOf(target) == routeGeneration
-                    && _peersByIntent.Values.Any(intent =>
-                        IsHelloOwnedByIntentUnderLock(intent, target)
-                    )
+                ? NeedsHelloUnderLock(target, routeGeneration)
                 : _peersByRid.TryGetValue(target, out var peer)
                     && peer.RouteGeneration == routeGeneration
         );

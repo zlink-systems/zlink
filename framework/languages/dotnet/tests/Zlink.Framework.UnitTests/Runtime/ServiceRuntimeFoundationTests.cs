@@ -3270,6 +3270,11 @@ public sealed class ServiceRuntimeFoundationTests
         )
             await source.Send().Message(hello).Async(CancellationToken.None).Admitted;
 
+        using var admission = await RawMeshPeerAdmission.CompleteAsync(
+            source,
+            "orders",
+            sourceEndpoint
+        );
         await WaitUntilAsync(() => target.Status().AdmittedPeerCount == 1);
         await WaitUntilAsync(() => applicationJobQueue.GetStatus().PermitsInUse == 0);
         var controlStatus = applicationJobQueue.GetStatus();
