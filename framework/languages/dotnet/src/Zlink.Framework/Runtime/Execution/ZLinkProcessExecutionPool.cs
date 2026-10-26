@@ -754,8 +754,14 @@ internal sealed class ZLinkProcessExecutionPool
                 Deadline =
                     timeout == Timeout.InfiniteTimeSpan
                         ? long.MaxValue
-                        : Stopwatch.GetTimestamp()
-                            + (long)(timeout.TotalSeconds * Stopwatch.Frequency);
+                        : (long)
+                            Int128.Min(
+                                long.MaxValue,
+                                Stopwatch.GetTimestamp()
+                                    + (Int128)timeout.Ticks
+                                        * Stopwatch.Frequency
+                                        / TimeSpan.TicksPerSecond
+                            );
                 // Inline continuations belong to the receive role, never the CLR pool.
                 Waiting = true;
                 return new ValueTask<int>(this, 0);
