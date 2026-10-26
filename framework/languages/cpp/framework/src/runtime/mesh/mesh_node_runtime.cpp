@@ -832,8 +832,10 @@ void mesh_node_runtime_t::start (
                   admit_wire_actor_join (spot_state, routing_id, request, payload, serializers));
                 co_return;
             },
-            [completion] {
-                completion (actor_join_typed_terminal (framework_error_kind_t::unavailable));
+            [completion] (result_t<void> rejected) {
+                completion (actor_join_typed_terminal (
+                  rejected.error_kind (),
+                  rejected.error () ? detail::failure_code (*rejected.error ()) : 0));
             });
       });
     node->configure_actor_join_relocation (
@@ -2263,43 +2265,39 @@ mesh_node_runtime_t::create_application_actor (std::string actor_type,
     }
 }
 
-result_t<actor_ref_t>
-mesh_node_runtime_t::create_application_actor (std::string actor_type,
-                                               std::string actor_id,
-                                               const std::optional<zlink::message_t> &,
-                                               std::uint64_t object_generation,
-                                               std::uint64_t authority_owner_generation,
-                                               std::chrono::milliseconds timeout)
+task_t<actor_ref_t>
+mesh_node_runtime_t::create_application_actor_async (std::string actor_type,
+                                                     std::string actor_id,
+                                                     std::uint64_t object_generation,
+                                                     std::uint64_t authority_owner_generation)
 {
-    _state->spot_state->lane
-      .run ([&] {
-          _state->spot_state->actor_types_by_id[actor_id] = actor_type;
-          _state->spot_state->mesh_runtime_owned_native_actor_ids.insert (actor_id);
-      })
-      .get ();
+    // State lanes §blocking boundary (06:211-226): this internal coroutine awaits its lane turns.
+    co_await _state->spot_state->lane.run_task ([&] {
+        _state->spot_state->actor_types_by_id[actor_id] = actor_type;
+        _state->spot_state->mesh_runtime_owned_native_actor_ids.insert (actor_id);
+    });
+    std::string failure;
     try {
         if (!_node)
             throw configuration_error ("MeshNode has not started");
-        auto native = _node->create_reserved_actor (
+        auto native = co_await _node->create_reserved_actor_async (
           actor_type,
           runtime::stateful::object_ref_t{runtime::stateful::object_kind_t::actor, actor_id,
                                           object_generation, authority_owner_generation,
                                           _state->mesh_name, _state->routing_id->to_string ()});
-        _state->spot_state->lane
-          .run ([&] { _state->spot_state->core_actor_membership_epochs.try_emplace (actor_id, 1); })
-          .get ();
-        return result_t<actor_ref_t>::success (native.ref ());
+        co_await _state->spot_state->lane.run_task (
+          [&] { _state->spot_state->core_actor_membership_epochs.try_emplace (actor_id, 1); });
+        co_return native.ref ();
     }
     catch (const std::exception &error) {
-        _state->spot_state->lane
-          .run ([&] {
-              _state->spot_state->actor_types_by_id.erase (actor_id);
-              _state->spot_state->mesh_runtime_owned_native_actor_ids.erase (actor_id);
-          })
-          .get ();
-        return result_t<actor_ref_t>::failure (framework_error_kind_t::internal_failure,
-                                               error.what ());
+        failure = error.what ();
     }
+    // A handler cannot co_await; the registration is withdrawn after it.
+    co_await _state->spot_state->lane.run_task ([&] {
+        _state->spot_state->actor_types_by_id.erase (actor_id);
+        _state->spot_state->mesh_runtime_owned_native_actor_ids.erase (actor_id);
+    });
+    co_return result_t<actor_ref_t>::failure (framework_error_kind_t::internal_failure, failure);
 }
 
 task_t<actor_join_reply_t>

@@ -1,5 +1,6 @@
-const { ZLinkRequestResult } = require('../../packages/framework/dist/runtime/messaging/request-result');
 'use strict';
+
+const { ZLinkRequestResult } = require('../../packages/framework/dist/runtime/messaging/request-result');
 
 const assert = require('node:assert/strict');
 const test = require('node:test');

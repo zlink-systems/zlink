@@ -369,7 +369,8 @@ final class ZLinkChannelRouteDispatcher {
                                                                                                                             channelName,
                                                                                                                             registration,
                                                                                                                             source,
-                                                                                                                            payload,
+                                                                                                                            payload
+                                                                                                                                    .dataBuffer(),
                                                                                                                             packet
                                                                                                                                                     .header()
                                                                                                                                             != null
@@ -537,7 +538,8 @@ final class ZLinkChannelRouteDispatcher {
                                                                                             channelName,
                                                                                             registration,
                                                                                             source,
-                                                                                            payload,
+                                                                                            payload
+                                                                                                    .dataBuffer(),
                                                                                             packet
                                                                                                                     .header()
                                                                                                             != null

@@ -9,6 +9,7 @@ import type { ZLinkRequest } from '../../contracts/Handlers/Attributes';
 const completedAdmission = Promise.resolve();
 const ignoreAdmissionFailure = (): void => {};
 const REQUEST_ENTRY = Symbol('zlink.requestEntry');
+// Every public request shares this getter; its stable entry owns admission.
 const ADMITTED_PROPERTY: PropertyDescriptor = {
   get(this: { readonly [REQUEST_ENTRY]: ZLinkRequestResult<unknown> }): Promise<void> {
     return this[REQUEST_ENTRY].observeAdmission();

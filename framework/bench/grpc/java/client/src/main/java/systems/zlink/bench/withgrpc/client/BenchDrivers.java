@@ -4,6 +4,7 @@ package systems.zlink.bench.withgrpc.client;
 
 import systems.zlink.bench.withgrpc.shared.BenchHttpApplication;
 import systems.zlink.bench.withgrpc.shared.BenchMetricHeader;
+import systems.zlink.bench.withgrpc.shared.MeasurementTiming;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -66,38 +67,31 @@ public final class BenchDrivers {
                 "route not ready within " + options.routeReadyMs + "ms: " + last, last);
     }
 
-    public void runWarmup(BenchHttpApplication.Trigger trigger, BenchOperation operation)
-            throws Exception {
-        validateTrigger(trigger);
-        long deadline = BenchMetricHeader.nowNs() + trigger.durationMs() * 1_000_000L;
-        SourceMetrics warmupMetrics = new SourceMetrics(options.latencySampleLimit, deadline);
-        metrics = warmupMetrics;
-        runPattern(
-                trigger,
-                operation,
-                BenchMetricHeader.PHASE_WARMUP,
-                warmupMetrics,
-                new ClientResources());
-        // Operations still open when the warmup drain bound expires are a recorded observation
-        // (spec 5.2: abandoned; the cell is excluded from the throughput judgement), not a phase
-        // failure. The .NET and C++ sources record the same way; grpc-java's unbounded
-        // request-backpressure warmup reaches this with about a million open calls.
-        warmupMetrics.freezeTerminal();
-        warmupAbandoned = warmupMetrics.abandoned();
+    public Map<String, Object> runWarmup(
+            BenchHttpApplication.Trigger trigger, BenchOperation operation) throws Exception {
+        Map<String, Object> result = runPhase(trigger, operation);
+        warmupAbandoned = ((Number) result.get("abandoned")).longValue();
         if (warmupAbandoned != 0) {
             System.err.println(
                     "warmup left " + warmupAbandoned + " operations abandoned (recorded)");
         }
+        return result;
     }
 
     public Map<String, Object> runActive(
             BenchHttpApplication.Trigger trigger, BenchOperation operation) throws Exception {
+        return runPhase(trigger, operation);
+    }
+
+    private Map<String, Object> runPhase(
+            BenchHttpApplication.Trigger trigger, BenchOperation operation) throws Exception {
         validateTrigger(trigger);
         stats.reset(options.targetStatsUrl);
-        long deadline = BenchMetricHeader.nowNs() + trigger.durationMs() * 1_000_000L;
+        ClientResources resources = new ClientResources();
+        long startedAt = BenchMetricHeader.nowNs();
+        long deadline = startedAt + trigger.durationMs() * 1_000_000L;
         SourceMetrics activeMetrics = new SourceMetrics(options.latencySampleLimit, deadline);
         metrics = activeMetrics;
-        ClientResources resources = new ClientResources();
         boolean send = "send-saturation".equals(trigger.pattern());
         CompletableFuture<ActiveSnapshot> activeAtClose = new CompletableFuture<>();
         Thread.ofVirtual()
@@ -108,7 +102,7 @@ public final class BenchDrivers {
                                 while ((remaining = deadline - BenchMetricHeader.nowNs()) > 0) {
                                     LockSupport.parkNanos(remaining);
                                 }
-                                ClientResources.Usage usage = resources.finish();
+                                ClientResources.Usage usage = resources.finish(deadline - startedAt);
                                 activeAtClose.complete(
                                         new ActiveSnapshot(
                                                 usage, stats.stats(options.targetStatsUrl)));
@@ -120,17 +114,20 @@ public final class BenchDrivers {
                 runPattern(
                         trigger,
                         operation,
-                        BenchMetricHeader.PHASE_ACTIVE,
+                        "warmup".equals(trigger.phase())
+                                ? BenchMetricHeader.PHASE_WARMUP
+                                : BenchMetricHeader.PHASE_ACTIVE,
                         activeMetrics,
                         resources);
         activeMetrics.freezeTerminal();
         ActiveSnapshot active = activeAtClose.get();
+        MeasurementTiming.window(trigger, startedAt, deadline);
         ClientResources.Usage usage = active.usage();
         StatsClient.ServerSnapshot boundary = active.target();
         StatsClient.ServerSnapshot target = stats.stats(options.targetStatsUrl);
         Latencies.Summary latency = activeMetrics.latencySummary();
         long rateCount = send ? boundary.received() : activeMetrics.activeCompleted.get();
-        double seconds = Math.max(0.001, trigger.durationMs() / 1000.0);
+        double seconds = (deadline - startedAt) / 1_000_000_000.0;
         double throughput = rateCount / seconds;
 
         Map<String, Object> result = new LinkedHashMap<>();
@@ -166,7 +163,9 @@ public final class BenchDrivers {
         result.put("warmup_abandoned", warmupAbandoned);
         result.put("latency_samples", latency.count());
         result.put("completed_at_close", activeMetrics.activeCompleted.get());
-        result.put("active_elapsed_ms", trigger.durationMs());
+        result.put("active_started_at_ns", startedAt);
+        result.put("active_ended_at_ns", deadline);
+        result.put("active_elapsed_ms", (deadline - startedAt) / 1_000_000L);
         result.put("server_received_at_close", boundary.received());
         return result;
     }
@@ -440,7 +439,6 @@ public final class BenchDrivers {
 
     private void validateTrigger(BenchHttpApplication.Trigger trigger) {
         if (!options.runIdText.equals(trigger.runId())
-                || !options.cellId.equals(trigger.cellId())
                 || !options.scenario.equals(trigger.pattern())
                 || options.payloadSizes.get(0) != trigger.payloadBytes()
                 || trigger.requestWindow() != options.requestWindow

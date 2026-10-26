@@ -21,6 +21,7 @@ import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerState;
 import systems.zlink.framework.runtime.internal.configuration.ZLinkObjectFactoryRegistration.RelocationPolicy;
 import systems.zlink.framework.runtime.internal.locations.*;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
+import systems.zlink.framework.runtime.internal.messaging.ZLinkEncodedPayloadAccess;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6AWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.locations.ZLinkActorAuthorityPayloadCodec;
@@ -773,7 +774,8 @@ public final class ZLinkActorCreationCoordinator
                                 new ZLinkServiceM6AWireCodec.ApplicationPayload(
                                         "zlink.actor-create-reply",
                                         "application/zlink-framework-json-v1",
-                                        reply.toEncodedPayload(serializer).bytes()));
+                                        ZLinkEncodedPayloadAccess.borrow(
+                                                reply.toEncodedPayload(serializer))));
         return wire.encodeCreationOperationTerminal(
                 new ZLinkServiceM6BWireCodec.ActorCreationTerminal(
                         terminalResult, failureCode, creation, applicationFrame));
@@ -1064,7 +1066,7 @@ public final class ZLinkActorCreationCoordinator
     }
 
     private byte[] encodeCreateRequest(ZLinkMessage request) {
-        byte[] encoded = request.toEncodedPayload(serializer).bytes();
+        byte[] encoded = ZLinkEncodedPayloadAccess.borrow(request.toEncodedPayload(serializer));
         return payloads.encodeApplicationPayload(
                 new ZLinkServiceM6AWireCodec.ApplicationPayload(
                         "zlink.actor-create", "application/zlink-framework-json-v1", encoded));

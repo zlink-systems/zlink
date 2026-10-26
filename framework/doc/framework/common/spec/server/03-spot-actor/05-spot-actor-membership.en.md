@@ -209,12 +209,13 @@ A `Created` terminal publish also performs the Ready authority and active
 capacity transition together. A `Rejected` terminal publish doesn't create
 Ready authority or active capacity — it cleans up Creating authority and
 reserved capacity. A terminal record is identified only when the source Node
-RID/lifecycle generation/`OperationId` all match, and is only used for resends of the
-same operation. The `creation-operation-terminal-v1` semantic envelope —
+RID/lifecycle generation/`OperationId` all match, and is used only when the same
+operation arrives again. The `creation-operation-terminal-v1` semantic envelope —
 with no request correlation or reply route — and its SHA-256 are preserved
-up to 5 minutes after the original deadline. On resend, the framework
-encodes a new command reply using the current request's correlation and
-reply route.
+up to 5 minutes after the original deadline. When the same operation arrives
+again, the framework encodes a new command reply using that request's
+correlation and reply route. The sender doesn't send the operation again
+([Submit and completion §5](../01-execution/01-submit-and-completion.en.md#5-backpressure-and-error-classification)).
 
 An Entry Spot isn't published to descriptor and resolver before finishing
 startup initialization. Actor creation completes initial Entry Spot

@@ -1,3 +1,4 @@
+import type { ZLinkHandlerMessageType } from './framework-integration-contracts';
 import type {
   ZLinkEntrySpotActorRequestHandlerRegistration,
   ZLinkEntrySpotActorSendHandlerRegistration,
@@ -95,7 +96,10 @@ export class SpotNodeHandlerRegistry {
         (existing.packetName ?? existing.handlerType.name) === packetName,
       `Duplicate Entry Spot packet handler '${registration.entrySpotType.name}:${packetName}'.`
     );
-    node.entrySpotPacketHandlers = [...(node.entrySpotPacketHandlers ?? []), registration];
+    node.entrySpotPacketHandlers = [
+      ...(node.entrySpotPacketHandlers ?? []),
+      ensureSpotRegistrationMessageType(registration)
+    ];
   }
 
   addEntrySpotSubscription(
@@ -112,7 +116,7 @@ export class SpotNodeHandlerRegistry {
     );
     node.entrySpotSubscriptionHandlers = [
       ...(node.entrySpotSubscriptionHandlers ?? []),
-      registration
+      ensureSpotRegistrationMessageType(registration)
     ];
   }
 
@@ -125,7 +129,10 @@ export class SpotNodeHandlerRegistry {
         (existing.packetName ?? existing.handlerType.name) === packetName,
       `Duplicate SPOT packet handler '${registration.spotType.name}:${packetName}'.`
     );
-    node.spotPacketHandlers = [...(node.spotPacketHandlers ?? []), registration];
+    node.spotPacketHandlers = [
+      ...(node.spotPacketHandlers ?? []),
+      ensureSpotRegistrationMessageType(registration)
+    ];
   }
 
   addSpotSubscription(
@@ -140,7 +147,10 @@ export class SpotNodeHandlerRegistry {
         existing.topic === registration.topic,
       `Duplicate SPOT subscription handler '${registration.spotType.name}:${registration.channelName}:${registration.topic}'.`
     );
-    node.spotSubscriptionHandlers = [...(node.spotSubscriptionHandlers ?? []), registration];
+    node.spotSubscriptionHandlers = [
+      ...(node.spotSubscriptionHandlers ?? []),
+      ensureSpotRegistrationMessageType(registration)
+    ];
   }
 
   addEntrySpotActor(
@@ -159,12 +169,16 @@ export class SpotNodeHandlerRegistry {
         handler.packetName === registration.packetName,
       `Duplicate Entry Spot actor handler '${registration.entrySpotType.name}:${registration.actorType.name}:${registration.packetName}'.`
     );
+    const typedRegistration = ensureSpotRegistrationMessageType(registration);
     if (kind === 'send') {
-      node.entrySpotActorSendHandlers = [...(node.entrySpotActorSendHandlers ?? []), registration];
+      node.entrySpotActorSendHandlers = [
+        ...(node.entrySpotActorSendHandlers ?? []),
+        typedRegistration
+      ];
     } else {
       node.entrySpotActorRequestHandlers = [
         ...(node.entrySpotActorRequestHandlers ?? []),
-        registration
+        typedRegistration
       ];
     }
   }
@@ -183,10 +197,11 @@ export class SpotNodeHandlerRegistry {
         handler.packetName === registration.packetName,
       `Duplicate SPOT actor handler '${registration.spotType.name}:${registration.actorType.name}:${registration.packetName}'.`
     );
+    const typedRegistration = ensureSpotRegistrationMessageType(registration);
     if (kind === 'send') {
-      node.spotActorSendHandlers = [...(node.spotActorSendHandlers ?? []), registration];
+      node.spotActorSendHandlers = [...(node.spotActorSendHandlers ?? []), typedRegistration];
     } else {
-      node.spotActorRequestHandlers = [...(node.spotActorRequestHandlers ?? []), registration];
+      node.spotActorRequestHandlers = [...(node.spotActorRequestHandlers ?? []), typedRegistration];
     }
   }
 
@@ -210,4 +225,14 @@ export class SpotNodeHandlerRegistry {
       throw new framework.ZLinkConfigurationException(duplicateMessage);
     }
   }
+}
+
+function ensureSpotRegistrationMessageType<
+  T extends { readonly handlerType: Type; readonly messageType?: ZLinkHandlerMessageType }
+>(registration: T): T {
+  const messageType = framework.resolveHandlerMessageType(registration.handlerType);
+  return {
+    ...registration,
+    ...(messageType === undefined ? {} : { messageType })
+  };
 }

@@ -463,14 +463,7 @@ final class ZLinkChannelBlockingSubmissionTest {
                                                 "unexpected backend call: " + method);
                                     });
             sockets.registerSpotRouterNode("orders", node);
-            send =
-                    new ChannelSendCall(
-                            runtime,
-                            "orders",
-                            sockets,
-                            Duration.ofSeconds(5),
-                            sendPayload,
-                            Optional.of("packet"));
+            send = new ChannelSendCall(runtime, "orders", sockets, sendPayload, "packet");
             request =
                     new ChannelRequestCall(
                             runtime,

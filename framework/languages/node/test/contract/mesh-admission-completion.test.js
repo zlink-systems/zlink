@@ -120,8 +120,8 @@ for (const surface of ['instance', 'user', 'entry', 'actor', 'node', 'channel'])
                 meshName: mesh,
                 channelName: mesh,
                 dispatchErrors: reporter,
-                handlers: new Map([['Ping', handler]]),
-                sendHandlers: new Map([['Ping', handler]])
+                handlers: new Map([['Ping', { handler: handler }]]),
+                sendHandlers: new Map([['Ping', { handler: handler }]])
               })
             : new ZLinkRoutePacketDispatcher({
                 routerChannelId: mesh,

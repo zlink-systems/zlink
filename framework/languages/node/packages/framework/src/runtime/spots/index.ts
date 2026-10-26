@@ -1521,12 +1521,6 @@ export class DefaultZLinkSpotManager {
   ): Promise<ZLinkSpotActorJoinResult> {
     const meshName = this.activations.resolveUnique(spotId)?.meshName;
     this.options.admission?.requireRequest('Actor join admission', meshName);
-    if (meshName !== undefined && this.isSpotClosing(meshName, spotId)) {
-      throw createInternalFrameworkException(
-        ZLinkFrameworkInternalErrorKind.RequestRejected,
-        `Spot '${String(spotId)}' is closing.`
-      );
-    }
     return await this.actorMembership.admitActorJoin(
       spotId,
       actor,
@@ -1741,7 +1735,8 @@ export class DefaultZLinkSpotManager {
       this.options.messageSerializers === undefined
         ? undefined
         : { serializers: this.options.messageSerializers };
-    const decodePayload = () => decodeChannelPayload(envelope, codecs);
+    const decodePayload = (messageType?: Type) =>
+      decodeChannelPayload(envelope, codecs, messageType);
     const context = {
       channelName: envelope.header.channelName,
       contentType: envelope.header.contentType,
@@ -1863,7 +1858,8 @@ export class DefaultZLinkSpotManager {
             this.options.messageSerializers === undefined
               ? undefined
               : { serializers: this.options.messageSerializers };
-          const decodePayload = () => decodeChannelPayload(envelope, codecs);
+          const decodePayload = (messageType?: Type) =>
+            decodeChannelPayload(envelope, codecs, messageType);
           const context = {
             channelName: envelope.header.channelName,
             contentType: envelope.header.contentType,

@@ -138,7 +138,7 @@ final class ZLinkSpotRouteMessages {
                                     ? (emptyReply = Message.from(new byte[0]))
                                     : replyParts.get(replyParts.size() - 1);
             try {
-                return ZLinkMessagePayloads.deserialize(serializer, body, replyType);
+                return ZLinkMessagePayloads.deserialize(serializer, body.dataBuffer(), replyType);
             } catch (IllegalArgumentException ex) {
                 throw new IllegalArgumentException(
                         ex.getMessage() + " (spot route reply parts=" + describe(replyParts) + ")",

@@ -270,7 +270,7 @@ leave 또는 destroy한 뒤 다시 close한다. Manager에서 Spot이 missing인
 Manager의 `find`와 `close`도 User Spot만 대상으로 한다. Instance Spot이 자신의 lifecycle을 끝내는 public 표면은
 `ZLinkInstanceSpotContext.close()`이며 이 context 내부 close 계약은 유지한다.
 
-다음 예제에서 `spotClient`는 `ZLinkSpotOutbound`이고 `cartId`는 호출할 global SpotId다. Instance
+다음 예제에서 `spotClient`는 DI로 받은 [`ZLinkRouteClient`](channel-messaging.ko.md)(공통 [interaction model](../../../00-foundation/04-interaction-model.ko.md)의 `IZLinkSpotClient`에 해당)이고 `cartId`는 호출할 global SpotId다. Spot callback 안에서는 같은 호출을 context의 `ZLinkSpotOutbound`로 한다. `ZLinkSpotOutbound`는 active Spot callback 밖에서 쓸 수 없다. Instance
 intent를 명시했으므로 Spot이 없을 때만 cold activation에 필요한 stable type과 최초 Mesh를 사용한다.
 
 ```java

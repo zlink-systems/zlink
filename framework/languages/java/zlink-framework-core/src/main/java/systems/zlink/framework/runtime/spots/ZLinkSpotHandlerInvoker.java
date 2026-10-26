@@ -326,7 +326,7 @@ final class ZLinkSpotHandlerInvoker {
                         ? serializer
                         : ZLinkCodecRegistration.serializerForReceivedContentType(
                                 serializer, contentType);
-        return ZLinkMessagePayloads.deserialize(selected, payload, messageType);
+        return ZLinkMessagePayloads.deserialize(selected, payload.dataBuffer(), messageType);
     }
 
     private static <T> CompletionStage<T> failed(String message, RuntimeException error) {

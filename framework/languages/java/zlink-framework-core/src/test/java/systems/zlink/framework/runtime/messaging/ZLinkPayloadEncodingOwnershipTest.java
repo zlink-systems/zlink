@@ -37,7 +37,9 @@ final class ZLinkPayloadEncodingOwnershipTest {
         var serializer = registration.serializerWithFallback(new ZLinkJsonMessageSerializer());
         try (Message message = Message.from("reply")) {
             assertEquals(
-                    "reply", ZLinkMessagePayloads.deserialize(serializer, message, String.class));
+                    "reply",
+                    ZLinkMessagePayloads.deserialize(
+                            serializer, message.dataBuffer(), String.class));
             assertEquals("reply", message.toUtf8String());
         }
     }
@@ -74,8 +76,8 @@ final class ZLinkPayloadEncodingOwnershipTest {
         }
 
         @Override
-        public <T> T deserializeBorrowed(Message payload, Class<T> type) {
-            return type.cast(payload.toUtf8String());
+        public <T> T deserializeBorrowed(java.nio.ByteBuffer payload, Class<T> type) {
+            return type.cast(java.nio.charset.StandardCharsets.UTF_8.decode(payload).toString());
         }
     }
 }

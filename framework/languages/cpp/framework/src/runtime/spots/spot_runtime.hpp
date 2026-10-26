@@ -1116,7 +1116,10 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
       std::stop_token cleanup_cancellation = {})
     {
         auto lifetime_guard = shared_from_this ();
-        state_sync ([this] { admission_sealed = true; });
+        state_sync ([this, close_reason] {
+            admission_sealed = true;
+            closed = close_reason;
+        });
 
         auto owner = state_lane_owner ();
         if (!owner) {
@@ -1211,7 +1214,6 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
     bool admit (bool claim = false,
                 const instance_spot_retained_message_t *retained_record = nullptr);
     framework_exception_t admission_error () const;
-    static framework_exception_t sealed_admission_error ();
     // Admits a timer callback claim; payload is selected in its execution turn.
     bool admit_timer_fire ();
     // Counts a lifecycle callback that its lane admitted earlier.
@@ -1312,7 +1314,8 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
     // Idle 정리와 운영 teardown이 이 admission seal을 소유한다.
     // Explicit Close는 lifecycle FIFO 작업으로 application 실행 순서를 정한다.
     bool admission_sealed = false;
-    bool closed = false;
+    // 확정된 local Close의 사유가 기존 closed 상태를 함께 나타냅니다.
+    std::optional<spot_close_reason_t> closed;
     std::size_t actor_count = 0;
     // Node-lane ownership claim spanning an external close/store callback.
     // Actor membership publication is refused while it is non-zero
@@ -1486,7 +1489,7 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
                 if (close_reservation != reservation
                     || close_reservation_kind != close_reservation_kind_t::idle || closed)
                     return false;
-                closed = true;
+                closed = spot_close_reason_t::idle_evicted;
                 return true;
             })
             .get ();
@@ -1499,7 +1502,6 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
     enum class close_path_t
     {
         not_executed, // not the current activation or has Actor membership: `false`
-        merged,       // joins the Close that is already running
         start,        // steps 1-4
         failed        // a prior Close sealed this activation but failed
     };
@@ -1830,6 +1832,7 @@ class spot_node_runtime_t
                              spot_close_reason_t reason = spot_close_reason_t::explicit_close);
     // Runs a remote User Spot Close (command 48) for the local owner activation.
     void close_user_spot_owner (const std::string &spot_id,
+                                std::uint64_t object_generation,
                                 service::spot_close_begin_t begin,
                                 service::spot_close_done_t done);
     bool close_all_user_spots (std::chrono::steady_clock::time_point deadline_at);
@@ -2016,7 +2019,7 @@ class spot_node_runtime_t
     void dispatch_wire_actor_join_admission (const spot_id_t &target_spot_id,
                                              std::string_view actor_id,
                                              std::function<task_t<void> ()> admission,
-                                             std::function<void ()> rejected,
+                                             std::function<void (result_t<void>)> rejected,
                                              std::function<void ()> completed = {});
     std::optional<bool> validate_actor_join_relocation_prepare (
       const runtime::protocol::relocation_prepare_t &prepare) const;
@@ -2394,7 +2397,7 @@ class spot_node_runtime_t
         return _state->lane.run ([&] { return find_context_core (spot_id); }).get ();
     }
 
-    std::shared_ptr<spot_context_state_t>
+    result_t<std::shared_ptr<spot_context_state_t>>
     find_active_remote_actor_join_target (const spot_id_t &target_spot_id) const;
     task_t<actor_join_reply_t> run_actor_join_control (
       const actor_ref_t &actor,

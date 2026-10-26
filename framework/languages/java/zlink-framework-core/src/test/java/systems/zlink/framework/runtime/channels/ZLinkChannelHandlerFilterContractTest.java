@@ -59,7 +59,7 @@ final class ZLinkChannelHandlerFilterContractTest {
                                                 BaseReply.class,
                                                 "request",
                                                 List.of()),
-                                        request)
+                                        request.dataBuffer())
                                 .toCompletableFuture()
                                 .join()) {
             assertEquals("owned", reply.toUtf8String());
@@ -96,7 +96,7 @@ final class ZLinkChannelHandlerFilterContractTest {
                                         BaseReply.class,
                                         "request",
                                         java.util.List.of()),
-                                request)
+                                request.dataBuffer())
                         .toCompletableFuture()
                         .join();
         try {
@@ -119,7 +119,7 @@ final class ZLinkChannelHandlerFilterContractTest {
                         "channel-a",
                         new ChannelSendHandlerRegistration(
                                 SendHandler.class, String.class, "send", java.util.List.of()),
-                        payload)
+                        payload.dataBuffer())
                 .toCompletableFuture()
                 .join();
         routeMesh
@@ -131,7 +131,7 @@ final class ZLinkChannelHandlerFilterContractTest {
                                 String.class,
                                 "request",
                                 java.util.List.of()),
-                        payload)
+                        payload.dataBuffer())
                 .toCompletableFuture()
                 .join()
                 .close();
@@ -144,7 +144,7 @@ final class ZLinkChannelHandlerFilterContractTest {
                                 "node-send",
                                 java.util.List.of()),
                         RoutingId.from("source"),
-                        payload)
+                        payload.dataBuffer())
                 .toCompletableFuture()
                 .join();
         routeMesh
@@ -157,7 +157,7 @@ final class ZLinkChannelHandlerFilterContractTest {
                                 "node-request",
                                 java.util.List.of()),
                         RoutingId.from("source"),
-                        payload)
+                        payload.dataBuffer())
                 .toCompletableFuture()
                 .join()
                 .close();
@@ -167,7 +167,7 @@ final class ZLinkChannelHandlerFilterContractTest {
                         new ChannelPublishHandlerRegistration(
                                 PublishHandler.class, String.class, "publish", java.util.List.of()),
                         "topic-a",
-                        payload)
+                        payload.dataBuffer())
                 .toCompletableFuture()
                 .join();
         clientServer
@@ -179,7 +179,7 @@ final class ZLinkChannelHandlerFilterContractTest {
                                 String.class,
                                 "request",
                                 java.util.List.of()),
-                        payload)
+                        payload.dataBuffer())
                 .toCompletableFuture()
                 .join()
                 .close();
@@ -214,7 +214,7 @@ final class ZLinkChannelHandlerFilterContractTest {
                                                         String.class,
                                                         "request",
                                                         java.util.List.of()),
-                                                text("request"))
+                                                text("request").dataBuffer())
                                         .toCompletableFuture()
                                         .join());
 
@@ -238,7 +238,7 @@ final class ZLinkChannelHandlerFilterContractTest {
                                 "node-request",
                                 java.util.List.of()),
                         RoutingId.from("source"),
-                        payload)
+                        payload.dataBuffer())
                 .toCompletableFuture()
                 .join()
                 .close();
@@ -257,10 +257,10 @@ final class ZLinkChannelHandlerFilterContractTest {
                 new ChannelPublishHandlerRegistration(
                         PublishHandler.class, String.class, "publish", java.util.List.of());
 
-        invoker.invokePublishHandler("fanout-a", registration, "topic-a", payload)
+        invoker.invokePublishHandler("fanout-a", registration, "topic-a", payload.dataBuffer())
                 .toCompletableFuture()
                 .join();
-        invoker.invokePublishHandler("fanout-a", registration, "topic-a", payload)
+        invoker.invokePublishHandler("fanout-a", registration, "topic-a", payload.dataBuffer())
                 .toCompletableFuture()
                 .join();
         payload.close();
@@ -406,7 +406,7 @@ final class ZLinkChannelHandlerFilterContractTest {
         }
 
         @Override
-        public <T> T deserializeBorrowed(Message payload, Class<T> type) {
+        public <T> T deserializeBorrowed(java.nio.ByteBuffer payload, Class<T> type) {
             throw new UnsupportedOperationException();
         }
     }
