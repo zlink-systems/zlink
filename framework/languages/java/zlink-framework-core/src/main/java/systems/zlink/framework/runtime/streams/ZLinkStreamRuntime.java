@@ -53,6 +53,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -77,6 +78,21 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 public final class ZLinkStreamRuntime implements AutoCloseable {
+    private static final Set<Class<?>> SESSION_SERVICES = Set.of(
+            ZLinkSessionContext.class, ZLinkSessionPacketDispatcher.class);
+
+    public static Set<Class<?>> prepareConstruction(
+            ZLinkFrameworkRegistration registration, ZLinkHandlerActivator handlerFactory) {
+        Set<Class<?>> prepared = new HashSet<>();
+        for (var node : registration.streamNodes()) {
+            for (Class<?> type : node.applicationTypes()) {
+                handlerFactory.prepareConstruction(type, SESSION_SERVICES);
+                prepared.add(type);
+            }
+        }
+        return Set.copyOf(prepared);
+    }
+
     private static final int EXECUTOR_TERMINATION_ATTEMPTS = 2;
     private static final long EXECUTOR_TERMINATION_WAIT_SECONDS = 5;
     private static final Duration PHYSICAL_DISCONNECT_TIMEOUT = Duration.ofSeconds(5);
@@ -1591,20 +1607,16 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                         replyRetryExecutor);
         sessionContexts.add(context);
         try {
-            ZLinkSessionPacketDispatcher<ZLinkSessionContext> dispatcher =
-                    new ZLinkSessionPacketDispatcherRuntime<>(
-                            streamNode.sessionPacketHandlers(),
-                            handlerFactory,
-                            serializer,
-                            handlerExecutor,
-                            suspendHandlerInvokers);
-            ZLinkHandlerActivator.MutableServices sessionFactory =
-                    ZLinkHandlerActivator.services(handlerFactory)
-                            .add(ZLinkSessionContext.class, context)
-                            .add(ZLinkSessionPacketDispatcher.class, dispatcher);
+            ZLinkHandlerActivator.MutableServices sessionFactory = ZLinkHandlerActivator.services(handlerFactory);
+            var dispatcher =
+                    new ZLinkSessionPacketDispatcherRuntime<ZLinkSessionContext>(handlerExecutor);
+            SESSION_SERVICES.forEach(key -> sessionFactory.add(key,
+                    key == ZLinkSessionContext.class ? context : dispatcher));
             if (actors != null) {
                 sessionFactory.add(ZLinkActorManager.class, actors);
             }
+            dispatcher.initializeHandlers(streamNode.sessionPacketHandlers(), sessionFactory,
+                    serializer, suspendHandlerInvokers);
             Object createdSession = sessionFactory.create(streamNode.sessionType());
             if (!(createdSession instanceof ZLinkSession session)) {
                 throw new ZLinkConfigurationException(
