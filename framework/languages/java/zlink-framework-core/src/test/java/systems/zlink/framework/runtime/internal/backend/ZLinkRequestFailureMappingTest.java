@@ -105,6 +105,10 @@ final class ZLinkRequestFailureMappingTest {
             assertArrayEquals(
                     new int[] {row.get("terminalResult").asInt(), code},
                     ZLinkRequestFailureMapping.outgoing(
+                            new java.util.concurrent.CompletionException(failure)));
+            assertArrayEquals(
+                    new int[] {row.get("terminalResult").asInt(), code},
+                    ZLinkRequestFailureMapping.outgoing(
                             failure.kind(), ZLinkRequestFailureMapping.causeCode(failure)));
         }
     }

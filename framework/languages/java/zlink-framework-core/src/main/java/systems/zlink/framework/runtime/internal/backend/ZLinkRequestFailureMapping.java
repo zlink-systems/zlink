@@ -124,6 +124,18 @@ public final class ZLinkRequestFailureMapping {
         return outgoing(kind, (int) FRAMEWORK_ERROR_NONE);
     }
 
+    /** Preserves typed execution failures; unexpected provider errors are internal failures. */
+    public static int[] outgoing(Throwable failure) {
+        while ((failure instanceof java.util.concurrent.CompletionException
+                        || failure instanceof java.util.concurrent.ExecutionException)
+                && failure.getCause() != null) {
+            failure = failure.getCause();
+        }
+        return failure instanceof systems.zlink.framework.errors.ZLinkFrameworkException framework
+                ? outgoing(framework.kind(), causeCode(framework))
+                : outgoing(INTERNAL_FAILURE);
+    }
+
     public static int[] outgoing(ZLinkFrameworkErrorKind kind, int causeCode) {
         Row row = outgoingRow(kind, causeCode);
         return new int[] {row.terminal(), row.code()};

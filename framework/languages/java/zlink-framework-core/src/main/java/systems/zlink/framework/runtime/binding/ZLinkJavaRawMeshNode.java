@@ -2608,10 +2608,6 @@ final class ZLinkJavaRawMeshNode
         if (relayFailure instanceof ZLinkRelayedReplyTerminalException relayed) {
             return new int[] {relayed.terminalResult, relayed.failureCode};
         }
-        if (relayFailure instanceof ZLinkFrameworkException framework) {
-            return ZLinkRequestFailureMapping.outgoing(
-                    framework.kind(), ZLinkRequestFailureMapping.causeCode(framework));
-        }
         if (relayFailure instanceof ZlinkRequestException transport
                 && ServiceWireConstants.validTerminalFailure(transport.getResult().value(), 0)) {
             return new int[] {
@@ -2624,10 +2620,7 @@ final class ZLinkJavaRawMeshNode
                 (int) ServiceWireConstants.FRAMEWORK_ERROR_REQUEST_PROTOCOL_ERROR
             };
         }
-        return new int[] {
-            RequestResult.INTERNAL_ERROR.value(),
-            (int) ServiceWireConstants.FRAMEWORK_ERROR_REQUEST_FAILED
-        };
+        return ZLinkRequestFailureMapping.outgoing(relayFailure);
     }
 
     private void forwardRelocationReply(
@@ -3596,7 +3589,7 @@ final class ZLinkJavaRawMeshNode
                             (ignored, failure) -> {
                                 if (failure != null) {
                                     var result =
-                                            canonicalActorJoinFailurePair(
+                                            relayedFailurePair(
                                                     unwrapCompletionFailure(failure));
                                     throw ZLinkRequestFailureMapping.receivedFailure(
                                             ZLinkBackendRequestResult.fromWireTerminal(result[0])
@@ -3678,7 +3671,7 @@ final class ZLinkJavaRawMeshNode
                                                 RequestResult.OK.value(),
                                                 (int) ServiceWireConstants.FRAMEWORK_ERROR_NONE
                                             }
-                                            : canonicalActorJoinFailurePair(
+                                            : relayedFailurePair(
                                                     unwrapCompletionFailure(failure));
                             port.reply(
                                     requireStarted(),
@@ -6780,7 +6773,7 @@ final class ZLinkJavaRawMeshNode
                     .whenComplete(
                             (response, failure) -> {
                                 if (failure != null || response == null) {
-                                    int[] terminal = canonicalActorJoinFailurePair(unwrap(failure));
+                                    int[] terminal = relayedFailurePair(unwrap(failure));
                                     replyCanonicalActorJoinFailure(
                                             inbound, join.correlation(), terminal[0], terminal[1]);
                                     return;
@@ -6836,7 +6829,7 @@ final class ZLinkJavaRawMeshNode
                                 }
                             });
         } catch (RuntimeException failure) {
-            int[] terminal = canonicalActorJoinFailurePair(failure);
+            int[] terminal = relayedFailurePair(failure);
             replyCanonicalActorJoinFailure(inbound, join.correlation(), terminal[0], terminal[1]);
         }
     }
@@ -6852,19 +6845,6 @@ final class ZLinkJavaRawMeshNode
         if (correlation != 0) {
             replyCanonicalActorJoinFailure(inbound, correlation, 104, 16);
         }
-    }
-
-    /**
-     * The Store admission owner reports framework kinds, which must retain their command-20
-     * terminal rather than being collapsed into a generic transport failure. These pairs are the
-     * schema's exact typed-terminal mappings used by the other service-wire receivers.
-     */
-    static int[] canonicalActorJoinFailurePair(Throwable failure) {
-        if (failure instanceof ZLinkFrameworkException framework) {
-            return ZLinkRequestFailureMapping.outgoing(
-                    framework.kind(), ZLinkRequestFailureMapping.causeCode(framework));
-        }
-        return relayedFailurePair(failure);
     }
 
     private void replyCanonicalActorJoinFailure(
@@ -6940,18 +6920,52 @@ final class ZLinkJavaRawMeshNode
         ZLinkApplicationJobContext.QueuedOwnership applicationJob =
                 ZLinkApplicationJobContext.transferToQueuedJob();
         try {
-            resolveAcceptedAuthorities(inbound)
+            CompletionStage<Optional<AcceptedAuthorities>> acceptance;
+            try {
+                acceptance = resolveAcceptedAuthorities(inbound);
+            } catch (RuntimeException failure) {
+                acceptance = CompletableFuture.failedFuture(failure);
+            }
+            acceptance
                     .whenCompleteAsync(
                             (authorities, failure) -> {
                                 try (ZLinkApplicationJobContext.Scope ignored =
                                         ZLinkApplicationJobContext.enterQueued(applicationJob)) {
                                     if (failure != null || authorities.isEmpty()) {
                                         receivedMessages.forEach(Message::close);
+                                        int[] pair =
+                                                failure == null
+                                                        ? SOURCE_OWNER_UNAVAILABLE
+                                                        : ZLinkRequestFailureMapping.outgoing(failure);
+                                        ZLinkDispatchErrorReporter reporter = dispatchErrorReporter;
+                                        if (failure != null
+                                                && reporter != null
+                                                && reporter.errorsEnabled()) {
+                                            Throwable cause = unwrap(failure);
+                                            reporter.report(
+                                                    ZLinkDispatchErrorSurface.SPOT_ACTOR,
+                                                    header.request()
+                                                            ? ZLinkDispatchMessageKind.REQUEST
+                                                            : ZLinkDispatchMessageKind.SEND,
+                                                    ZLinkDispatchErrorReporter.reasonFrom(
+                                                            cause, pair[1]),
+                                                    header.request()
+                                                            ? ZLinkDispatchErrorAction.REPLY_ERROR
+                                                            : ZLinkDispatchErrorAction.DROP,
+                                                    payload.packetName(),
+                                                    null,
+                                                    null,
+                                                    null,
+                                                    header.target().actor().actorId(),
+                                                    inbound.source(),
+                                                    header.correlation(),
+                                                    cause);
+                                        }
                                         replyActorFailure(
                                                 inbound,
                                                 header,
-                                                SOURCE_OWNER_UNAVAILABLE[0],
-                                                SOURCE_OWNER_UNAVAILABLE[1]);
+                                                pair[0],
+                                                pair[1]);
                                         inbound.close();
                                         return;
                                     }
