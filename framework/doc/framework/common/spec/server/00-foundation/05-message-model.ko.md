@@ -133,7 +133,9 @@ Framework의 기본 typed application payload는 모든 언어에서 `framework-
 public codec 계약이다.
 
 - UTF-8 BOM은 허용하지 않는다.
-- Property 이름과 enum 이름은 대소문자를 구분한다.
+- Property 이름은 대소문자를 구분한다.
+- Enum은 계약에 선언한 이름(대소문자 구분)의 JSON string으로 표현한다. JSON number, 선언되지 않은 이름과
+  숫자 ordinal을 담은 문자열은 거부한다. 선언된 이름이 없는 값은 encode하지 않고 실패한다.
 - Property 순서와 의미 없는 whitespace는 의미가 없다.
 - 중복 property와 누락된 required property는 거부한다.
 - 알 수 없는 property는 무시한다.
