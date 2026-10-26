@@ -7,7 +7,6 @@ import systems.zlink.contracts.errors.ZlinkRecvException;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.messaging.Received;
 import systems.zlink.contracts.messaging.ReplyToken;
-import systems.zlink.contracts.messaging.RequestSubmission;
 import systems.zlink.contracts.messaging.RequestSubmitOperation;
 import systems.zlink.contracts.sockets.RecvFlags;
 import systems.zlink.contracts.sockets.RecvResult;
@@ -96,7 +95,7 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
                 ownsContext,
                 stateLane,
                 new ZLinkServiceOperationRegistry(
-                        ZLinkOneWayCalls.failureForStatus(ZLinkOneWayCalls.SHUTDOWN)));
+                        stateLane, ZLinkOneWayCalls.failureForStatus(ZLinkOneWayCalls.SHUTDOWN)));
     }
 
     ZLinkJavaRawServicePort(
@@ -289,34 +288,45 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
             systems.zlink.framework.runtime.internal.service.ZLinkServiceLivenessRegistry.PeerState
                     receivedAdmission,
             CompletableFuture<Void> requestAdmission) {
+        return requestMessages(
+                router,
+                target,
+                messages,
+                timeout,
+                decodeReply,
+                discardReply,
+                receivedAdmission,
+                requestAdmission,
+                new CompletableFuture<>());
+    }
+
+    <T> CompletionStage<T> requestMessages(
+            RouterSocket router,
+            RoutingId target,
+            List<Message> messages,
+            Duration timeout,
+            Function<List<Message>, T> decodeReply,
+            Consumer<T> discardReply,
+            systems.zlink.framework.runtime.internal.service.ZLinkServiceLivenessRegistry.PeerState
+                    receivedAdmission,
+            CompletableFuture<Void> requestAdmission,
+            CompletableFuture<T> completion) {
         Objects.requireNonNull(discardReply, "discardReply");
-        CompletableFuture<T> completion = new CompletableFuture<>();
-        CompletionStage<?> bindingReply =
-                requestMessagesTo(
-                        router,
-                        target,
-                        messages,
-                        timeout,
-                        decodeReply,
-                        null,
-                        (value, failure) -> {
-                            if (failure != null) completion.completeExceptionally(failure);
-                            else
-                                ZLinkCompletionBridge.completeOrDiscard(
-                                        completion, value, discardReply);
-                        },
-                        receivedAdmission,
-                        requestAdmission,
-                        (submission, deadline, admission, admitted, terminal) -> {
-                            var reply =
-                                    ZLinkJavaSocketSupport.reply(
-                                            submission, deadline, admission, admitted);
-                            reply.whenComplete(terminal);
-                            return reply;
-                        });
-        if (bindingReply != null) {
-            ZLinkCompletionBridge.forwardCancellation(completion, bindingReply);
-        }
+        Objects.requireNonNull(completion, "completion");
+        requestMessagesTo(
+                router,
+                target,
+                messages,
+                timeout,
+                decodeReply,
+                null,
+                (value, failure) -> {
+                    if (failure != null) completion.completeExceptionally(failure);
+                    else ZLinkCompletionBridge.completeOrDiscard(completion, value, discardReply);
+                },
+                receivedAdmission,
+                requestAdmission,
+                completion);
         return completion;
     }
 
@@ -348,17 +358,7 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
                 terminal,
                 receivedAdmission,
                 requestAdmission,
-                ZLinkJavaSocketSupport::observeReply);
-    }
-
-    @FunctionalInterface
-    private interface ReplyObserver {
-        CompletionStage<List<Message>> observe(
-                RequestSubmission submission,
-                long deadlineNanos,
-                Runnable admission,
-                CompletableFuture<Void> requestAdmission,
-                BiConsumer<List<Message>, Throwable> terminal);
+                null);
     }
 
     private <T> CompletionStage<?> requestMessagesTo(
@@ -372,7 +372,7 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
             systems.zlink.framework.runtime.internal.service.ZLinkServiceLivenessRegistry.PeerState
                     receivedAdmission,
             CompletableFuture<Void> requestAdmission,
-            ReplyObserver replyObserver) {
+            CompletableFuture<?> completion) {
         long startedAt = System.nanoTime();
         List<Message> ownedMessages = claimMessages(messages);
         boolean replyOwns = false;
@@ -402,7 +402,7 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
                                 return submit.timeout(timeout).submit();
                             });
             CompletionStage<List<Message>> bindingReply =
-                    replyObserver.observe(
+                    ZLinkJavaSocketSupport.observeReply(
                             submission,
                             deadlineNanos,
                             admission,
@@ -415,7 +415,9 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
                                     if (reply != null) Message.closeAll(reply);
                                     Message.closeAll(ownedMessages);
                                 }
-                            });
+                            },
+                            completion,
+                            ZLinkJavaRawMeshNode::requestFailure);
             replyOwns = true;
             return bindingReply;
         } catch (RuntimeException failure) {
@@ -615,12 +617,12 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
                         () -> {
                             if (closeCompletion == null) {
                                 closeCompletion = attempt;
-                                operations.close();
                             }
                             return closeCompletion;
                         });
         if (completion == attempt) {
             try {
+                operations.close();
                 // Claim close after every started native submission has left the state turn.
                 // Pending operation completion and resource disposal remain outside the turn.
                 var remaining =
