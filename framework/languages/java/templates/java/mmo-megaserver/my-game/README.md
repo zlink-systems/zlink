@@ -13,7 +13,7 @@ flowchart LR
 
 ## Prerequisites
 
-Docker with Compose v2, and PowerShell 7 on Windows. Gradle is included. Maven Central supplies Framework 0.30.2 and binding 1.20.0, pinned centrally in `build.gradle.kts`.
+Docker with Compose v2, and PowerShell 7 on Windows. Gradle is included. Maven Central supplies Framework 0.30.3 and binding 1.20.0, pinned centrally in `build.gradle.kts`.
 
 ## Build
 
@@ -63,7 +63,7 @@ The runner checks `zlink.structure.json`, creates its own Redis Compose project 
 
 ## Known issues
 
-Validated against the published Framework 0.30.2 packages.
+Validated against the published Framework 0.30.3 packages.
 
 ## Deployment sequence
 

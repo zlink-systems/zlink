@@ -20,7 +20,7 @@ Default execution requires Docker Linux containers; no host .NET SDK is needed.
 - Bash on Linux or WSL, or PowerShell 7 on Windows.
 - An operating system and architecture supported by the published Zlink native package.
 
-`Directory.Packages.props` pins the Zlink.Framework package family and the STREAM connector to `0.30.2`. `nuget.config` uses nuget.org only. This directory can be copied and built independently.
+`Directory.Packages.props` pins the Zlink.Framework package family and the STREAM connector to `0.30.3`. `nuget.config` uses nuget.org only. This directory can be copied and built independently.
 
 ## Build
 
@@ -136,7 +136,7 @@ Node stderr records the message flow from the dispatch diagnostics `Normal` logg
 
 ## Known issues in the public package
 
-Validated against the published Framework 0.30.2 packages.
+Validated against the published Framework 0.30.3 packages.
 
 The e2e runner sets each node's optional `TableCapacity` to the number of selected scenarios through the public Table stable-type limit. Each scenario retains one table. After update drains the source, the surviving node is at capacity, so only the replacement can host the new table. Both new players must observe the replacement node ID. Omitted or zero capacity leaves deployment capacity unlimited. Entry declarations describe the application Entry on Table nodes only; there are no fixed User Spots in this template.
 
@@ -148,4 +148,4 @@ e2e는 `./run-e2e.sh` 또는 `pwsh -NoProfile -File ./run-e2e.ps1`로 실행합�
 
 게임 규칙의 판정 위치는 `server/MyGame.Table/TableSpot.cs`, 계약과 정수 상한은 `server/MyGame.Shared/Contracts.cs`, client 패킷 허용 목록은 `server/MyGame.Session/PlayerSession.cs`, 시나리오 검사는 `e2e/MyGame.E2E/Scenarios.cs`입니다. 정수 상한 또는 계산 결과를 넘긴 거부 사유는 `integer-out-of-range`입니다. `ActionRejected.RetryAfterMs`는 32-bit integer이며 기본 typed JSON serializer에서 `retryAfterMs`로 직렬화합니다. 칩·pot·handNumber는 64-bit 정수입니다. 현재 시간 제한 거부가 없어 `RetryAfterMs`는 0입니다. 확장한 시간 규칙은 단조 시계로 판정하고 relocation에는 남은 ms만 저장합니다.
 
-설정과 로그는 `.logs/run-<id>/`에 남습니다. 실패하면 첫 실행의 `<node>.err.log`에서 message flow의 마지막 transition을 먼저 확인하십시오. 공개 Framework 0.30.2 패키지로 검증했습니다.
+설정과 로그는 `.logs/run-<id>/`에 남습니다. 실패하면 첫 실행의 `<node>.err.log`에서 message flow의 마지막 transition을 먼저 확인하십시오. 공개 Framework 0.30.3 패키지로 검증했습니다.

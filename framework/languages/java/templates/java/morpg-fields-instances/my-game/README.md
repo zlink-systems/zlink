@@ -1,6 +1,6 @@
 # my-game
 
-A Java MORPG template using public ZLink Framework 0.30.2 packages. Field nodes host four fixed Field User Spots; each server-issued Party ID also identifies a dynamic Party User Spot, and each Run ID identifies a dynamic Dungeon User Spot. `FieldPositionDomain` owns movement authority, `PartySpot` owns party membership and run phases, and `DungeonRun` owns the active run and stage.
+A Java MORPG template using public ZLink Framework 0.30.3 packages. Field nodes host four fixed Field User Spots; each server-issued Party ID also identifies a dynamic Party User Spot, and each Run ID identifies a dynamic Dungeon User Spot. `FieldPositionDomain` owns movement authority, `PartySpot` owns party membership and run phases, and `DungeonRun` owns the active run and stage.
 
 ```mermaid
 flowchart LR
@@ -59,8 +59,8 @@ The domain check covers movement rejection order, sequence bounds, relative-time
 
 ## Known issues
 
-Validated against the published Framework 0.30.2 packages.
-Border subscriptions use Framework 0.30.2 `addSubscribe(handlerType, channelName, topic)` at Field activation. One handler serves all adjacent-field topics.
+Validated against the published Framework 0.30.3 packages.
+Border subscriptions use Framework 0.30.3 `addSubscribe(handlerType, channelName, topic)` at Field activation. One handler serves all adjacent-field topics.
 
 ## Deployment sequence
 

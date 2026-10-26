@@ -19,7 +19,7 @@ flowchart LR
 ## Prerequisites
 
 Use Docker Compose v2 and PowerShell 7 on Windows.
-Install the public ZLink Framework 0.30.2 packages specified in `package.json`.
+Install the public ZLink Framework 0.30.3 packages specified in `package.json`.
 Redis ports and node listeners use OS-assigned ports in the e2e runner.
 
 ## Build
@@ -82,7 +82,7 @@ It stops after the first failure to preserve its evidence.
 
 ## Known issues
 
-Validated against the published Framework 0.30.2 packages.
+Validated against the published Framework 0.30.3 packages.
 
 ## Deployment sequence
 

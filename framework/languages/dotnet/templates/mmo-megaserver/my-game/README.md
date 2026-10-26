@@ -89,9 +89,7 @@ The runner validates `zlink.structure.json`, starts a uniquely named Redis Compo
 
 ## Known issues
 
-Validated against the published Framework 0.30.2 packages.
-
-With Framework 0.30.2, `update` fails when it runs after `region` in the same run. The `region` scenario fills both forest replicas, so a Region rejects one Actor Join. Framework 0.30.2 counts the stored rejection reply as an unfinished handoff, and the drain preflight waits until that reply expires. Relocation then exceeds its deadline (`Host relocation blocked: DeadlineExceeded`) and the Region process exits. `update` passes when it runs alone. Framework 0.30.3 fixes the drain check (zlink-systems/zlink#2682).
+Validated against the published Framework 0.30.3 packages.
 
 ## Deployment sequence
 

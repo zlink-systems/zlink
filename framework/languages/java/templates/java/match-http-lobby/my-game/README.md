@@ -14,7 +14,7 @@ flowchart LR
 
 ## Prerequisites
 
-Docker with Compose v2, and PowerShell 7 for Windows. The included Gradle wrapper downloads Gradle. Maven Central supplies Framework 0.30.2 and binding 1.20.0; versions are declared once in `build.gradle.kts`.
+Docker with Compose v2, and PowerShell 7 for Windows. The included Gradle wrapper downloads Gradle. Maven Central supplies Framework 0.30.3 and binding 1.20.0; versions are declared once in `build.gradle.kts`.
 
 ## Build
 
@@ -69,7 +69,7 @@ The runner validates `zlink.structure.json`, runs game and wire checks during th
 
 ## Known issues
 
-Validated against the published Framework 0.30.2 packages.
+Validated against the published Framework 0.30.3 packages.
 
 ## Deployment sequence
 

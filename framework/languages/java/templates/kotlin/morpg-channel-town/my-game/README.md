@@ -60,7 +60,7 @@ The runner checks the structure, starts a unique Compose project with Redis on a
 
 ## Known issues
 
-Validated against the published Framework 0.30.2 packages.
+Validated against the published Framework 0.30.3 packages.
 
 ## Deployment sequence
 

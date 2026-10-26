@@ -2,7 +2,7 @@
 
 ## 프로젝트와 개발
 
-이 Node.js 22 프로젝트는 TypeScript와 NestJS로 Session gateway, Match host A·B, Redis Location Store를 실행합니다. Entry Spot은 고정 Matchmaking User Spot으로 플레이어를 보내며, 같은 모드 플레이어는 동적 Room User Spot에 입장합니다. 공개 Framework·connector package는 `package.json`에서 `0.30.2`로 고정합니다. 실행·배포·알려진 문제는 [README](README.md)가, 초기 구성과 시나리오 순서는 [zlink.structure.json](zlink.structure.json)이 소유합니다.
+이 Node.js 22 프로젝트는 TypeScript와 NestJS로 Session gateway, Match host A·B, Redis Location Store를 실행합니다. Entry Spot은 고정 Matchmaking User Spot으로 플레이어를 보내며, 같은 모드 플레이어는 동적 Room User Spot에 입장합니다. 공개 Framework·connector package는 `package.json`에서 `0.30.3`로 고정합니다. 실행·배포·알려진 문제는 [README](README.md)가, 초기 구성과 시나리오 순서는 [zlink.structure.json](zlink.structure.json)이 소유합니다.
 
 프로젝트 루트에서 Docker Compose v2와 Linux container로 실행합니다.
 
