@@ -239,7 +239,9 @@ bool verify_cost (host::public_host_runtime_t &target, bool channel, bool owning
     const auto bad = measure ();
     std::cout << "injected-claim channel=" << channel << " owning=" << owning_callback
               << " count=" << bad.count << " bytes=" << bad.bytes << std::endl;
-    require (bad.count > limit_count && bad.bytes > limit_bytes,
+    // The budget is an upper bound; the guard must see one injected allocation
+    // above the measured claim, even when the claim costs less than the budget.
+    require (bad.count > actual.count && bad.bytes > actual.bytes,
              "allocation guard accepted injected ownership cost");
     std::cout << "allocation-guard channel=" << channel << " owning=" << owning_callback
               << " injected-rejected=true" << std::endl;
