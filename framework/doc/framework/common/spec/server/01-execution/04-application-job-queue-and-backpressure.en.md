@@ -248,6 +248,15 @@ Handle the following as one commit inside that span.
   reservation or enqueue also leaves the item/byte usage and accepted sequence
   unchanged. A failed attempt does not change the ordering or admission result of the
   next valid work item.
+- **When a check itself ends with an unexpected error or a cancellation, only that
+  message fails.** It does not enter the queue, and a call waiting for a response
+  receives that error as its result with its classification from
+  [error model §5](../00-foundation/07-framework-error-model.en.md#5-request-completion-and-failure)
+  unchanged. A one-way that has already completed is only recorded, as in
+  [error model §4](../00-foundation/07-framework-error-model.en.md#4-send-completion-and-failure).
+  The error is not turned into another failure such as a missing owner. The other
+  messages of the same claim continue with their own checks. When step 1 fails because
+  host or unit admission has closed, the remaining messages end with the same decision.
 
 **Per-language discretion.** Implementations are free to use a lock or another method
 for this span. The criterion is that only the check and the enqueue are inside this span,
