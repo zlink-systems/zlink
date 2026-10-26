@@ -3,14 +3,15 @@ const test = require('node:test');
 const { createHook } = require('node:async_hooks');
 const {
   createZLinkRequest: createMappedRequest,
-  prepareZLinkRequestReply,
+  observeZLinkRequestReply,
+  ZLinkRequestResult,
   identityRequestReply
 } = require('../../packages/framework/dist/runtime/messaging/request-result');
 
 // The source owns its result mapping; the public helper owns admission state.
 function createZLinkRequest(start, deliverReply) {
-  return createMappedRequest((admitted) =>
-    prepareZLinkRequestReply(start(admitted), identityRequestReply), deliverReply);
+  return createMappedRequest((entry) =>
+    observeZLinkRequestReply(start(entry.confirm), identityRequestReply, identityRequestReply, entry), deliverReply);
 }
 
 function deferred() {
@@ -100,9 +101,9 @@ test('admission notification and reply mapping use the same admission owner', as
   const pending = deferred();
   const failure = new Error('late decode failure');
   let markAdmitted;
-  const request = createMappedRequest((admitted) => {
-    markAdmitted = admitted;
-    return prepareZLinkRequestReply(pending.promise, () => { throw failure; });
+  const request = createMappedRequest((entry) => {
+    markAdmitted = entry.confirm;
+    return observeZLinkRequestReply(pending.promise, () => { throw failure; }, identityRequestReply, entry);
   });
   const admitted = request.admitted;
   markAdmitted();
@@ -181,4 +182,52 @@ test('a synchronous failure after admission preserves the completed admission', 
   const admitted = request.admitted;
   await admitted;
   assert.equal(request.admitted, admitted);
+});
+
+for (const failed of [false, true]) {
+  test(`prepared reply retains its captured flow in a later completion turn (failure=${failed})`, async () => {
+    const { currentFlowContext, runWithFlow } = require('../../packages/framework/dist/runtime/diagnostics/flow-context');
+    const flow = { flowId: 'captured', flowOrigin: 'Application' };
+    const pending = deferred();
+    const cause = new Error('reply failure');
+    let observed = false;
+    const entry = new ZLinkRequestResult();
+    const result = runWithFlow(flow, () => observeZLinkRequestReply(
+      pending.promise,
+      value => { observed = true; assert.equal(currentFlowContext(), flow); return value; },
+      error => { observed = true; assert.equal(currentFlowContext(), flow); return error; }, entry
+    ));
+    assert.equal(currentFlowContext(), undefined);
+    const reply = result.pending;
+    const settled = failed ? assert.rejects(reply, error => error === cause) : reply;
+    if (failed) pending.reject(cause); else pending.resolve(7);
+    assert.equal(observed, false, 'mapping must not run in the terminal publication stack');
+    await settled;
+    assert.equal(observed, true);
+    assert.equal(currentFlowContext(), undefined);
+  });
+}
+
+// One terminal per request (spec 01-submit-and-completion §10). A terminal that
+// arrives after the entry settled is ignored and raises no uncaught error.
+test('a later terminal after settlement is ignored', async () => {
+  const uncaught = [];
+  const onUncaught = (error) => uncaught.push(error);
+  process.on('uncaughtException', onUncaught);
+  try {
+    for (const first of ['complete', 'fail']) {
+      const entry = new ZLinkRequestResult();
+      const pending = entry.pending;
+      if (first === 'complete') entry.complete('reply');
+      else entry.fail(new Error('first'));
+      entry.fail(new Error('late failure'));
+      entry.complete('late reply');
+      if (first === 'complete') assert.equal(await pending, 'reply');
+      else await assert.rejects(pending, /first/);
+      await new Promise(setImmediate);
+    }
+    assert.deepEqual(uncaught, []);
+  } finally {
+    process.off('uncaughtException', onUncaught);
+  }
 });

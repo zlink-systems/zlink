@@ -1,3 +1,4 @@
+import type { ZLinkRequestResult } from '../../messaging/request-result';
 import type {
   RequestResult,
   SubmitResult,
@@ -27,7 +28,6 @@ import type {
 import type { RoutingId } from '../../../contracts';
 import type { ZLinkCoreHwmOptions } from '../../../contracts/Configuration';
 import type { ZLinkSubmitResult } from '../../messaging/submission-result';
-import type { ZLinkMeshCompletionHandler } from '../mesh-completion-table';
 import type { Message } from '../../../contracts/Common/Message';
 import type {
   ServiceSpotMessageFollowSeal,
@@ -254,11 +254,12 @@ export interface ZLinkBackendMeshNode {
   requestToNode(
     targetRid: unknown,
     parts: MessageLike | readonly MessageLike[],
-    options?: {
+    options: {
       flags?: number;
       timeoutMs?: number;
       applicationMetadata?: Buffer;
       onAdmitted?: () => void;
+      requestEntry: ZLinkRequestResult<any>;
     }
   ): MeshOperationId;
   sendToChannel(
@@ -269,11 +270,12 @@ export interface ZLinkBackendMeshNode {
   requestToChannel(
     channelName: string,
     parts: MessageLike | readonly MessageLike[],
-    options?: {
+    options: {
       flags?: number;
       timeoutMs?: number;
       applicationMetadata?: Buffer;
       onAdmitted?: () => void;
+      requestEntry: ZLinkRequestResult<any>;
     }
   ): MeshOperationId;
   status(): MeshNodeStatus;
@@ -446,7 +448,7 @@ export interface ZLinkBackendMeshNode {
     timeoutMs?: number
   ): MeshOperationId;
   setReadyHandler(handler: (readyDomains: number) => number): void;
-  setCompletionHandler(handler: ZLinkMeshCompletionHandler): void;
+  setCompletionTable(table: import('../mesh-completion-table').ZLinkMeshCompletionTable): void;
   createReadyBatch(capacity: number): ReadyBatch;
   createReceiveBatch(messageCapacity: number, partCapacity: number): ReceiveBatch;
   drainReady(
