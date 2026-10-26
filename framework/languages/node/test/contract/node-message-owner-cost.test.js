@@ -45,9 +45,9 @@ function descriptor(rid, overrides = {}) {
 
 test('node-direct role and readiness read topology ownership without snapshots', () => {
   const topology = new ServiceTopologyRegistry(descriptor('source'));
-  assert.equal(topology.admit(descriptor('target'), 'route'), 'admitted');
+  assert.equal(topology.admit(descriptor('target'), 'route', undefined, undefined, constants.ServiceWireCommand.admit), 'admitted');
   assert.equal(
-    topology.admit(descriptor('client', { objectRole: 'client' }), 'client-route'),
+    topology.admit(descriptor('client', { objectRole: 'client' }), 'client-route', undefined, undefined, constants.ServiceWireCommand.admit),
     'admitted'
   );
   const runtime = Object.create(RawServiceMeshRuntime.prototype);
