@@ -14,7 +14,7 @@ const deadline = Date.parse('2026-09-10T00:00:00.000Z');
 const requestHeader = '{"formatMarker":242,"kind":1,"channelName":"echo","messageName":"Echo","contentType":"application/octet-stream","correlationId":"00112233445566778899aabbccddeeff","deadline":"2026-09-10T00:00:00.000Z","topic":null,"errorCode":null,"errorMessage":null,"metadata":{}}';
 
 function bytes(part) {
-  return Buffer.isBuffer(part) ? part : part.data();
+  return typeof part === 'string' ? Buffer.from(part) : Buffer.isBuffer(part) ? part : part.data();
 }
 
 function messageParts(parts) {
