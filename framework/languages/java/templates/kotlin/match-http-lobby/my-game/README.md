@@ -65,7 +65,7 @@ The runner validates `zlink.structure.json`, runs game and wire checks during th
 
 ## Known issues
 
-Validated against the published Framework 0.30.2 packages.
+Validated against the published Framework 0.30.3 packages.
 
 ## Deployment sequence
 

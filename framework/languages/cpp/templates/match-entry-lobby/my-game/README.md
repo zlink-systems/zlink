@@ -16,7 +16,7 @@ This source serves both `action-entry-lobby` and `fps-entry-lobby`. The structur
 
 Docker with Compose v2 and a running Linux-container daemon is required. Use Bash on Linux or PowerShell 7 on Windows. The Docker build installs the C++ toolchain and CMake; the host does not need them for the default run.
 
-Public Framework 0.30.2 is pinned in `bootstrap.cmake`, the only file that names the version. `cmake -P bootstrap.cmake` downloads this platform's prebuilt from the `framework-cpp/v0.30.2` GitHub Release, checks it against the SHA-256 checksum published with it and extracts it into `.zlink/install`. The prebuilt carries Core, the C++ binding, the Framework libraries, Boost headers and nlohmann_json, so no package manager runs. The Docker build and local mode run the same script. Follow the public package licensing requirements.
+Public Framework 0.30.3 is pinned in `bootstrap.cmake`, the only file that names the version. `cmake -P bootstrap.cmake` downloads this platform's prebuilt from the `framework-cpp/v0.30.3` GitHub Release, checks it against the SHA-256 checksum published with it and extracts it into `.zlink/install`. The prebuilt carries Core, the C++ binding, the Framework libraries, Boost headers and nlohmann_json, so no package manager runs. The Docker build and local mode run the same script. Follow the public package licensing requirements.
 
 ## Build
 
@@ -68,7 +68,7 @@ The scripts and runner check `zlink.structure.json`, start a uniquely named Redi
 | `reconnect` | A new connection rebinds the same Actor generation and Room, preserving HP, position, phase, winner and sequence; active and finished Rooms remain observable after reconnect. |
 | `update` | Drain the current Room host through `RELOCATION_REQUESTED`, `RELOCATED`, `SAFE_TO_SHUTDOWN`; preserve both Sessions and Room state; stop and replace the host; the replacement accepts a new Room. |
 
-The wire contracts are in `server/shared/contracts.hpp`. This template answers `SessionInfoRequest` with a typed `SessionInfo` push; Framework 0.30.2 adds a typed Session reply API (#1785), and the template has not switched to it. `RoomViewRequest` asks the authoritative Room for its current view. Requests and pushes use the Framework default typed JSON serializer. The Framework message model carries only finite JSON numbers, so nonfinite input reaches only the domain checks. The runner never retries a failed scenario.
+The wire contracts are in `server/shared/contracts.hpp`. This template answers `SessionInfoRequest` with a typed `SessionInfo` push; Framework 0.30.3 adds a typed Session reply API (#1785), and the template has not switched to it. `RoomViewRequest` asks the authoritative Room for its current view. Requests and pushes use the Framework default typed JSON serializer. The Framework message model carries only finite JSON numbers, so nonfinite input reaches only the domain checks. The runner never retries a failed scenario.
 
 Each scenario uses isolated Redis key prefixes and node containers, with Room capacity set to one per match host. After relocation fills the surviving host, only the replacement has capacity for a new Room. Deployment capacity is configured independently.
 
@@ -96,9 +96,9 @@ Use `--no-build` or `-NoBuild` with local mode to reuse a debugger build. Scenar
 
 ## Known issues
 
-Validated against the published Framework 0.30.2 packages.
+Validated against the published Framework 0.30.3 packages.
 
-- [#1786](https://github.com/zlink-systems/zlink/issues/1786) (open, planned for 0.31.0): the first push sent from `on_actor_joined` after a deferred join can be lost without an error; it was not observed in 0.30.2 validation.
+- [#1786](https://github.com/zlink-systems/zlink/issues/1786) (open, planned for 0.31.0): the first push sent from `on_actor_joined` after a deferred join can be lost without an error; it was not observed in 0.30.3 validation.
 
 ## Deployment sequence
 

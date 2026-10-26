@@ -2,7 +2,7 @@
 
 ## 프로젝트와 개발
 
-이 Node.js 22 프로젝트는 TypeScript와 NestJS로 HTTP Lobby, Session gateway, Match host A·B, Redis Location Store를 실행합니다. Lobby는 `POST /match` 요청을 모드별로 매칭하고 UUID Room ID를 발급하며, 동적 Room의 `RoomPrepared` 응답을 받은 뒤 Session endpoint와 함께 HTTP 응답을 보냅니다. 공개 Framework·connector package는 `package.json`에서 `0.30.2`로 고정합니다. 실행·배포·알려진 문제는 [README](README.md)가, 초기 구성과 시나리오 순서는 [zlink.structure.json](zlink.structure.json)이 소유합니다.
+이 Node.js 22 프로젝트는 TypeScript와 NestJS로 HTTP Lobby, Session gateway, Match host A·B, Redis Location Store를 실행합니다. Lobby는 `POST /match` 요청을 모드별로 매칭하고 UUID Room ID를 발급하며, 동적 Room의 `RoomPrepared` 응답을 받은 뒤 Session endpoint와 함께 HTTP 응답을 보냅니다. 공개 Framework·connector package는 `package.json`에서 `0.30.3`로 고정합니다. 실행·배포·알려진 문제는 [README](README.md)가, 초기 구성과 시나리오 순서는 [zlink.structure.json](zlink.structure.json)이 소유합니다.
 
 프로젝트 루트에서 Docker Compose v2와 Linux container로 실행합니다.
 

@@ -2,7 +2,7 @@
 
 ## 프로젝트 개요
 
-이 Java 25 프로젝트는 플레이어가 Zone 경계를 넘어 이동하는 MMO server 예제다. 연결을 처리하는 Session gateway, Zone host A·B(Zone 6개, host마다 3개), Dungeon을 만드는 Instance host와 위치·이동 상태를 저장하는 Redis를 실행한다. `build.gradle.kts`는 ZLink Framework를 `0.30.2`, binding을 `1.20.0`으로 고정한다.
+이 Java 25 프로젝트는 플레이어가 Zone 경계를 넘어 이동하는 MMO server 예제다. 연결을 처리하는 Session gateway, Zone host A·B(Zone 6개, host마다 3개), Dungeon을 만드는 Instance host와 위치·이동 상태를 저장하는 Redis를 실행한다. `build.gradle.kts`는 ZLink Framework를 `0.30.3`, binding을 `1.20.0`으로 고정한다.
 
 이 템플릿의 도메인을 확장하여 MMO server를 만든다. 실행 환경·배포·공개 package의 알려진 문제는 [README](README.md)가 설명한다. 초기 node 구성과 scenario 목록은 [zlink.structure.json](zlink.structure.json)에 있으며, 실행 중 객체의 위치는 Framework와 Redis가 관리한다.
 

@@ -12,7 +12,7 @@ flowchart LR
 
 Install Docker with Compose v2 and access to a Linux container daemon. Bash or PowerShell 7 runs the scripts. Docker builds use Node.js `22.20.0` and Docker CLI `28.5.1`; the image references are at the top of `Dockerfile`. Host debugging also requires Node.js 22 or later and npm.
 
-`package.json` pins Framework and the STREAM connector to `0.30.2`. npm restores public packages. Do not add repository source references or a private feed.
+`package.json` pins Framework and the STREAM connector to `0.30.3`. npm restores public packages. Do not add repository source references or a private feed.
 
 ## Build
 

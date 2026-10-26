@@ -14,7 +14,7 @@ flowchart LR
 
 Docker with Compose v2 and a running Linux-container daemon is required. Use Bash on Linux or PowerShell 7 on Windows. The Docker build installs the C++ toolchain and CMake; the host does not need them for the default run.
 
-Public Framework 0.30.2 is pinned in `bootstrap.cmake`, the only file that names the version. `cmake -P bootstrap.cmake` downloads this platform's prebuilt from the `framework-cpp/v0.30.2` GitHub Release, checks it against the SHA-256 checksum published with it and extracts it into `.zlink/install`. The prebuilt carries Core, the C++ binding, the Framework libraries, Boost headers and nlohmann_json, so no package manager runs. The Docker build and local mode run the same script. Follow the public package licensing requirements.
+Public Framework 0.30.3 is pinned in `bootstrap.cmake`, the only file that names the version. `cmake -P bootstrap.cmake` downloads this platform's prebuilt from the `framework-cpp/v0.30.3` GitHub Release, checks it against the SHA-256 checksum published with it and extracts it into `.zlink/install`. The prebuilt carries Core, the C++ binding, the Framework libraries, Boost headers and nlohmann_json, so no package manager runs. The Docker build and local mode run the same script. Follow the public package licensing requirements.
 
 ## Build
 
@@ -97,9 +97,9 @@ Use `--no-build` or `-NoBuild` with local mode to reuse a debugger build. Scenar
 
 ## Known issues
 
-Validated against the published Framework 0.30.2 packages.
+Validated against the published Framework 0.30.3 packages.
 
-- [#1786](https://github.com/zlink-systems/zlink/issues/1786) (open, planned for 0.31.0): the first push sent from `on_actor_joined` after a deferred join can be lost without an error; it was not observed in 0.30.2 validation.
+- [#1786](https://github.com/zlink-systems/zlink/issues/1786) (open, planned for 0.31.0): the first push sent from `on_actor_joined` after a deferred join can be lost without an error; it was not observed in 0.30.3 validation.
 ## Deployment sequence
 
 Wait for the bootstrap owner to report `READY` before starting another match host. Its public GetOrCreate completes while it is the only placement candidate, so the fixed Matchmaking Spot starts on its declared owner.
@@ -123,6 +123,6 @@ Hit detection uses the current server state. There is no lag compensation, proje
 
 ## 한국어 실행 안내
 
-Docker Compose v2와 Linux 컨테이너 데몬을 준비한다. 템플릿 디렉터리에서 Linux는 `./run-e2e.sh`, Windows는 `pwsh -NoProfile -File ./run-e2e.ps1`을 실행한다. 기본 실행은 이미지 빌드부터 runner·node 컨테이너 기동과 정리까지 수행한다. 시나리오는 matchmaking, hit, wall, input, reconnect, update 순서로 실행한다. Framework 0.30.2는 `bootstrap.cmake`에서 고정한다.
+Docker Compose v2와 Linux 컨테이너 데몬을 준비한다. 템플릿 디렉터리에서 Linux는 `./run-e2e.sh`, Windows는 `pwsh -NoProfile -File ./run-e2e.ps1`을 실행한다. 기본 실행은 이미지 빌드부터 runner·node 컨테이너 기동과 정리까지 수행한다. 시나리오는 matchmaking, hit, wall, input, reconnect, update 순서로 실행한다. Framework 0.30.3는 `bootstrap.cmake`에서 고정한다.
 
 로컬 디버깅은 C++20 컴파일러, CMake, Ninja를 설치한 뒤 `./run-e2e.sh --local` 또는 `pwsh -NoProfile -File ./run-e2e.ps1 -Local`로 실행한다. 노드 로그와 설정은 `.logs/run-<id>/`, Docker 빌드·정리 로그는 `.logs/docker-<project>/`에 남는다. `RoomState`가 이동 예산·발사 간격·명중 판정·체력·공유 순번·승자를 소유한다. 발은 Y=0이고 수직 이동은 `vertical-move`로 거부한다. 공개 패키지의 알려진 문제는 Known issues를 따른다.

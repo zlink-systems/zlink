@@ -2,7 +2,7 @@
 
 ## Project and development
 
-Extend this C++20 FPS template with the game rules in this project. It runs an HTTP Lobby, a Session gateway, Match hosts A and B, and a Redis Location Store. The Lobby pairs `POST /match` requests by mode, creates a Room ID from the configured prefix and a UUID, and waits for `RoomPrepared` before returning the Room ID and Session endpoint. Session accepts `JoinRoomRequest` as the first game packet; `RoomRoster` owns admission. Public Framework and connector packages are pinned to 0.30.2 in `bootstrap.cmake`. The [README](README.md) owns execution, deployment and known issues; [zlink.structure.json](zlink.structure.json) describes topology and scenario order.
+Extend this C++20 FPS template with the game rules in this project. It runs an HTTP Lobby, a Session gateway, Match hosts A and B, and a Redis Location Store. The Lobby pairs `POST /match` requests by mode, creates a Room ID from the configured prefix and a UUID, and waits for `RoomPrepared` before returning the Room ID and Session endpoint. Session accepts `JoinRoomRequest` as the first game packet; `RoomRoster` owns admission. Public Framework and connector packages are pinned to 0.30.3 in `bootstrap.cmake`. The [README](README.md) owns execution, deployment and known issues; [zlink.structure.json](zlink.structure.json) describes topology and scenario order.
 
 Run from this project root with Docker Compose v2 and Linux containers:
 
@@ -48,7 +48,7 @@ Keep game state in the Spot domain and use public Actor, Spot and RouteMesh APIs
 
 Use the [ZLink documentation](https://docs.zlink.systems/), [C++ server guide](https://docs.zlink.systems/cpp/guide/server/), [API reference](https://docs.zlink.systems/cpp/reference/) and [agent index](https://docs.zlink.systems/llms.txt). Check documentation against the package pinned by `bootstrap.cmake`. Entry, Spot, Actor, Session, Location and relocation operations use public Framework APIs and default typed serialization. Do not add a private API, raw-frame parser, manual JSON conversion or application routing workaround.
 
-The pinned 0.30.2 C++ public headers currently do not match the documented typed `SessionInfoRequest` reply example: STREAM write/reply calls accept `zlink::message_t`, `fx::message_t::from(T)` returns a typed wrapper, and `submit()` returns `void`. Preserve request/reply semantics and record this as a build blocker until the public contract is aligned; do not turn the reply into a push or add a serializer workaround.
+The pinned 0.30.3 C++ public headers currently do not match the documented typed `SessionInfoRequest` reply example: STREAM write/reply calls accept `zlink::message_t`, `fx::message_t::from(T)` returns a typed wrapper, and `submit()` returns `void`. Preserve request/reply semantics and record this as a build blocker until the public contract is aligned; do not turn the reply into a push or add a serializer workaround.
 
 ## Diagnostics and defects
 

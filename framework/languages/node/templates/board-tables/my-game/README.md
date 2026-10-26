@@ -16,7 +16,7 @@ flowchart LR
 - PowerShell 7 on Windows; Bash on Linux and WSL.
 - A Windows x64 or Linux x64 environment supported by the published native binding.
 
-The Framework package is pinned to `0.30.2` and the binding to `1.20.0`. Copy only this directory and install from the public npm registry.
+The Framework package is pinned to `0.30.3` and the binding to `1.20.0`. Copy only this directory and install from the public npm registry.
 
 ## Build
 
@@ -72,7 +72,7 @@ To check only the structure, run `./run-e2e.sh --check-structure` or `pwsh -NoPr
 
 ## Known issues
 
-Validated against the published Framework 0.30.2 packages.
+Validated against the published Framework 0.30.3 packages.
 
 Message Follow is explicitly configured for 30 seconds. The `SAFE_TO_SHUTDOWN` observation budget is that period plus the existing relocation budget. Update waits for replacement `READY`, then asserts that the replacement hosts the new table and completes a hand.
 
@@ -118,4 +118,4 @@ Node 계약의 `handNumber`, 베팅 `amount`, `chips`, `pot`은 `bigint`로 표�
 
 도메인 시험의 일곱 검사가 모두 통과하면 `Domain checks: 7/7`을 출력한다.
 
-전체 시나리오 또는 `--scenario table,reconnect`로 선택하여 실행한다. 실패하면 종료 코드 1을 반환하고 첫 실패의 node stderr와 client JSONL을 `.logs/run-<id>/` 아래에 남긴다. 공개 Framework 0.30.2 패키지로 검증했다. 게임 규칙을 추가할 위치와 공개 API 사용 규칙은 `AGENTS.md`를 따른다.
+전체 시나리오 또는 `--scenario table,reconnect`로 선택하여 실행한다. 실패하면 종료 코드 1을 반환하고 첫 실패의 node stderr와 client JSONL을 `.logs/run-<id>/` 아래에 남긴다. 공개 Framework 0.30.3 패키지로 검증했다. 게임 규칙을 추가할 위치와 공개 API 사용 규칙은 `AGENTS.md`를 따른다.

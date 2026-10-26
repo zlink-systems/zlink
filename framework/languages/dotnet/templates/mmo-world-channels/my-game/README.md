@@ -18,7 +18,7 @@ flowchart LR
 
 Default execution requires Docker Linux containers; no host .NET SDK is needed.
 
-Docker with Compose v2 (Linux containers), and PowerShell 7 on Windows or Bash on Linux are required. Framework and connector packages are pinned to 0.30.2 in `Directory.Packages.props`. Binding 1.20.0 and Redis client 2.8.31 are pinned there as well. NuGet restore uses nuget.org. The template is independent of the ZLink source repository.
+Docker with Compose v2 (Linux containers), and PowerShell 7 on Windows or Bash on Linux are required. Framework and connector packages are pinned to 0.30.3 in `Directory.Packages.props`. Binding 1.20.0 and Redis client 2.8.31 are pinned there as well. NuGet restore uses nuget.org. The template is independent of the ZLink source repository.
 
 ## Build
 
@@ -89,7 +89,7 @@ Use `--check-structure` through the default script to validate without starting 
 
 ## Known issues
 
-Validated against the published Framework 0.30.2 packages.
+Validated against the published Framework 0.30.3 packages.
 
 ## Deployment sequence
 
@@ -119,4 +119,4 @@ derived from that duration and the existing operation budget.
 
 기본 실행은 Docker에서 node와 e2e runner를 함께 실행하므로 호스트 .NET SDK가 필요하지 않습니다. Docker Compose v2와 Linux container 환경을 준비하십시오. 로컬 process 디버깅은 .NET 8 SDK를 설치한 뒤 `./run-e2e.sh --local` 또는 `pwsh -NoProfile -File ./run-e2e.ps1 -Local`로 실행합니다. 이미지 빌드·정리 로그는 `.logs/docker-<project>/`, node 로그는 `.logs/run-<id>/`에 남습니다. 이 디렉터리에서 `./run-e2e.sh --build-only`으로 빌드합니다. Windows에서는 `pwsh -NoProfile -File ./run-e2e.ps1`, Linux에서는 `./run-e2e.sh`로 전체 시나리오를 실행합니다. 실행에 사용하는 Redis와 node는 매번 별도로 생성되며 로그는 `.logs/run-<id>/`에 보존됩니다.
 
-월드 A와 B는 Redis와 mesh를 분리합니다. `GoldBalance`가 요청마다 10 gold를 지급하고 단조 시계로 1000 ms 간격과 `9,007,199,254,740,991` 상한을 판정합니다. 거부한 요청은 gold와 cooldown을 바꾸지 않으며 `ActionRejected(Reason, RetryAfterMs)`를 반환합니다. `RetryAfterMs`가 있는 거부는 응답값만큼 지난 뒤 다시 요청합니다. 상한을 넘는 채널 요청은 `integer-out-of-range`로 거부하고 membership을 바꾸지 않습니다. Zone은 현재 접속 중인 player ID를 보유하고 채널 이동·연결 종료 때 목록에서 제거합니다. 채널 이동 때 client Session은 유지되고 Player Actor의 Zone이 바뀌므로 목록은 Zone membership callback에서 갱신합니다. relocation snapshot은 목록과 남은 cooldown ms를 저장합니다. 채널 변경과 재접속은 같은 Actor 상태를 유지합니다. 유지보수에서는 drain 완료와 SafeToShutdown을 확인한 뒤 원본 node를 종료하고 같은 설정으로 대체 node를 시작합니다. 공개 Framework 0.30.2 패키지로 검증했습니다.
+월드 A와 B는 Redis와 mesh를 분리합니다. `GoldBalance`가 요청마다 10 gold를 지급하고 단조 시계로 1000 ms 간격과 `9,007,199,254,740,991` 상한을 판정합니다. 거부한 요청은 gold와 cooldown을 바꾸지 않으며 `ActionRejected(Reason, RetryAfterMs)`를 반환합니다. `RetryAfterMs`가 있는 거부는 응답값만큼 지난 뒤 다시 요청합니다. 상한을 넘는 채널 요청은 `integer-out-of-range`로 거부하고 membership을 바꾸지 않습니다. Zone은 현재 접속 중인 player ID를 보유하고 채널 이동·연결 종료 때 목록에서 제거합니다. 채널 이동 때 client Session은 유지되고 Player Actor의 Zone이 바뀌므로 목록은 Zone membership callback에서 갱신합니다. relocation snapshot은 목록과 남은 cooldown ms를 저장합니다. 채널 변경과 재접속은 같은 Actor 상태를 유지합니다. 유지보수에서는 drain 완료와 SafeToShutdown을 확인한 뒤 원본 node를 종료하고 같은 설정으로 대체 node를 시작합니다. 공개 Framework 0.30.3 패키지로 검증했습니다.

@@ -14,7 +14,7 @@ flowchart LR
 
 ## Prerequisites
 
-Docker with Compose v2, and PowerShell 7 on Windows. Gradle Wrapper is included. Public Framework packages are pinned to 0.30.2 and the binding to 1.20.0 in `build.gradle.kts`.
+Docker with Compose v2, and PowerShell 7 on Windows. Gradle Wrapper is included. Public Framework packages are pinned to 0.30.3 and the binding to 1.20.0 in `build.gradle.kts`.
 
 ## Build
 
@@ -65,7 +65,7 @@ For structure checks only, pass `--check-structure` to the shell runner or `-Che
 
 ## Known issues
 
-Validated against the published Framework 0.30.2 packages.
+Validated against the published Framework 0.30.3 packages.
 
 ## Deployment sequence
 

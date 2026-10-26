@@ -14,7 +14,7 @@ flowchart LR
 
 ## Prerequisites
 
-Docker Compose v2, and PowerShell 7 for the PowerShell runner are required. The project pins public Framework packages to 0.30.2 and the binding to 1.20.0 in `package.json`. A license, when required by the deployment, is provided externally and is never committed.
+Docker Compose v2, and PowerShell 7 for the PowerShell runner are required. The project pins public Framework packages to 0.30.3 and the binding to 1.20.0 in `package.json`. A license, when required by the deployment, is provided externally and is never committed.
 
 ## Build
 
@@ -65,7 +65,7 @@ Movement uses Delta and a bigint Sequence bounded by 9,007,199,254,740,991. MaxS
 
 ## Known issues
 
-Validated against the published Framework 0.30.2 packages.
+Validated against the published Framework 0.30.3 packages.
 
 ## Deployment sequence
 

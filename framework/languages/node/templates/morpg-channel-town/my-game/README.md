@@ -13,7 +13,7 @@ flowchart LR
 
 ## Prerequisites
 
-Docker with Compose v2 and PowerShell 7 on Windows. Local process debugging requires Node.js 22 or later and npm. Framework packages are pinned to 0.30.2; the native binding is pinned in `package.json`. Copy this directory to build independently. No repository source or local feed is required. Application configuration is in `server/config/`.
+Docker with Compose v2 and PowerShell 7 on Windows. Local process debugging requires Node.js 22 or later and npm. Framework packages are pinned to 0.30.3; the native binding is pinned in `package.json`. Copy this directory to build independently. No repository source or local feed is required. Application configuration is in `server/config/`.
 
 ## Build
 
@@ -58,7 +58,7 @@ pwsh -NoProfile -File ./run-e2e.ps1 -CheckDomain
 
 ## Known issues
 
-Validated against the published Framework 0.30.2 packages.
+Validated against the published Framework 0.30.3 packages.
 
 Node typed pushes are restored through one packet-name-to-class table for #1731; no custom message codec is used.
 

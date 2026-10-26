@@ -2,7 +2,7 @@
 
 ## Project and commands
 
-This Java 25 project runs an HTTP Lobby, a Session gateway, Match hosts A and B, and a Redis Location Store. The Lobby pairs `POST /match` requests by mode, assigns a GUID Room ID and prepares the member list for a dynamic Room User Spot. Players connect to Session over STREAM and join the assigned Room. Public Framework and connector versions are pinned to 0.30.2 in `gradle/libs.versions.toml`. The [README](README.md) owns execution and deployment instructions. [zlink.structure.json](zlink.structure.json) describes the topology and scenario order.
+This Java 25 project runs an HTTP Lobby, a Session gateway, Match hosts A and B, and a Redis Location Store. The Lobby pairs `POST /match` requests by mode, assigns a GUID Room ID and prepares the member list for a dynamic Room User Spot. Players connect to Session over STREAM and join the assigned Room. Public Framework and connector versions are pinned to 0.30.3 in `gradle/libs.versions.toml`. The [README](README.md) owns execution and deployment instructions. [zlink.structure.json](zlink.structure.json) describes the topology and scenario order.
 
 Run commands from this project root with Docker Compose v2 and Linux containers:
 
