@@ -7,9 +7,11 @@ import { ReceiveKind, type ReceiveRecord } from './foundation/service-runtime-co
 const BACKING_ARRAY_COMPACTION_MIN_HEAD = 1024;
 
 /** Runs host admission inside the domain's request completion boundary. */
-export type ZLinkMeshDispatchAdmission = (
-  dispatch: () => void | Promise<void>,
-  onRejected?: (error: unknown) => void | Promise<void>
+export type ZLinkMeshDispatchAdmission = <TReceiver = void, TContext = void>(
+  dispatch: (this: TReceiver, context: TContext) => void | Promise<void>,
+  onRejected?: (this: TReceiver, error: unknown, context: TContext) => void | Promise<void>,
+  receiver?: TReceiver,
+  context?: TContext
 ) => void | Promise<void>;
 
 /** 소비한 배열 prefix가 정리 조건에 도달했는지 판정합니다. */
@@ -92,12 +94,14 @@ export class ZLinkRuntimeAdmissionGate {
    * admission in the same turn; asynchronous work leaves it from the single
    * continuation on its result.
    */
-  run<T>(
+  run<T, TReceiver = void, TContext = void>(
     meshName: string,
     operation: string,
-    work: () => T | Promise<T>,
+    work: (this: TReceiver, context: TContext) => T | Promise<T>,
     kind?: ReceiveRecord['kind'],
-    onRejected?: (error: unknown) => T | Promise<T>
+    onRejected?: (this: TReceiver, error: unknown, context: TContext) => T | Promise<T>,
+    receiver?: TReceiver,
+    context?: TContext
   ): T | Promise<T> {
     let state: ZLinkMeshAdmissionState;
     let result: T | Promise<T>;
@@ -105,10 +109,12 @@ export class ZLinkRuntimeAdmissionGate {
       state = this.enter(meshName, operation, kind);
     } catch (error) {
       // The domain owns admission rejection completion, just as it owns handler failure.
-      return onRejected === undefined ? Promise.reject(error) : onRejected(error);
+      return onRejected === undefined
+        ? Promise.reject(error)
+        : onRejected.call(receiver as TReceiver, error, context as TContext);
     }
     try {
-      result = work();
+      result = work.call(receiver as TReceiver, context as TContext);
     } catch (error) {
       exitAdmission(state);
       return Promise.reject(error);
