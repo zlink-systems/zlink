@@ -183,6 +183,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       readonly endpoint: string;
       readonly nodeRoutingId?: string;
       readonly lifecycleGeneration?: bigint;
+      readonly securityIdentity?: string;
     }
   >();
   private completionTable?: ZLinkMeshCompletionTable;
@@ -552,19 +553,34 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     const runtime = this.requireRuntime();
     const nodeRoutingId =
       options.expectedRid === undefined ? undefined : String(options.expectedRid);
+    const securityIdentity =
+      options.expectedSecurityIdentity ?? runtime.topology.localDescriptor().securityIdentity;
+    for (const [id, existing] of this.peerIntents) {
+      if (existing.endpoint !== options.endpoint) continue;
+      if (
+        existing.nodeRoutingId === nodeRoutingId &&
+        existing.securityIdentity === securityIdentity &&
+        existing.lifecycleGeneration === options.expectedLifecycleGeneration
+      ) {
+        return id;
+      }
+      runtime.disconnectPeerEndpoint(existing.endpoint);
+      this.peerIntents.delete(id);
+    }
     if (nodeRoutingId === undefined) {
       runtime.connectPeerEndpoint(options.endpoint);
     } else {
       runtime.connectPeerByRoutingId(
         options.endpoint,
         nodeRoutingId,
-        options.expectedSecurityIdentity ?? runtime.topology.localDescriptor().securityIdentity,
+        securityIdentity,
         options.expectedLifecycleGeneration
       );
     }
     const intent = this.nextPeerIntent++;
     this.peerIntents.set(intent, {
       endpoint: options.endpoint,
+      securityIdentity,
       ...(nodeRoutingId === undefined
         ? {}
         : {
