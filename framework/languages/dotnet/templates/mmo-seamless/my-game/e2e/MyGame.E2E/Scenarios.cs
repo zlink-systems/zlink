@@ -247,6 +247,38 @@ internal static class Scenarios
             "Same-Zone players did not observe the completed movement."
         );
 
+        await using var adjacentObserver = await GameClient.ConnectAsync(
+            run.Outcome,
+            endpoint,
+            "border-inner-observer-" + Guid.NewGuid().ToString("N"),
+            ct
+        );
+        var adjacentState = await adjacentObserver.JoinAsync(299, ct);
+        Require(adjacentState.NodeId == "zoneA",
+            "The out-of-range observer did not start in the adjacent Zone.");
+        var reenteredBorderTask = adjacentObserver
+            .Connector.WaitFor<PlayerMoved>()
+            .Where(message => message.Payload.PlayerId == source.PlayerId && message.Payload.Sequence == 4)
+            .Timeout(TimeSpan.FromSeconds(10))
+            .Async(ct);
+        var reenteredBorder = await source.MoveWithBudgetRetryAsync(-1, 4, ct);
+        var observedBorder = (await reenteredBorderTask).Payload;
+        Require(reenteredBorder.X == 300 && observedBorder.Position.X == 300,
+            "The adjacent Zone did not observe the player re-entering the border band.");
+
+        var outOfRangeTask = adjacentObserver
+            .Connector.WaitFor<PlayerLeft>()
+            .Where(message =>
+                message.Payload.PlayerId == source.PlayerId
+                && message.Payload.Reason == PlayerLeftReason.OutOfRange
+            )
+            .Timeout(TimeSpan.FromSeconds(10))
+            .Async(ct);
+        var leftBorder = await source.MoveWithBudgetRetryAsync(10, 5, ct);
+        var outOfRange = (await outOfRangeTask).Payload;
+        Require(leftBorder.X == 310 && outOfRange.Reason == PlayerLeftReason.OutOfRange,
+            "The adjacent Zone did not observe PlayerLeft(out-of-range) after inward movement.");
+
         var disconnectedTask = observer
             .Connector.WaitFor<PlayerLeft>()
             .Where(message =>

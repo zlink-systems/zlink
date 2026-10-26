@@ -82,7 +82,7 @@ Actor가 소속 Spot을 바꾸는 동작은 membership 변경이다. 대상 Spot
 
 ### Zone 관찰과 경계 발행
 
-현재 플레이어 목록과 위치는 `ZonePositionDomain`이 소유한다. `Zone`은 같은 Zone의 접속 중인 플레이어에게 `PlayerAppeared`, `PlayerMoved`, `PlayerLeft`를 보내고 기존 `border` channel로 인접 Zone 관찰자에게 경계 변경을 발행한다. `Zone::border`는 typed event를 수신 Actor의 binding된 Session으로 전달한다.
+현재 플레이어 목록·위치·경계 전이는 `ZonePositionDomain`이 소유한다. `Zone`은 같은 Zone의 접속 중인 플레이어에게 `PlayerAppeared`, `PlayerMoved`, `PlayerLeft`를 보내며, `PlayerLeft` 이유는 `left-zone`, `disconnected`, `out-of-range`다. 기존 `border` channel로 인접 Zone 관찰자에게 경계 변경을 발행하고 `Zone::border`는 typed event를 수신 Actor의 binding된 Session으로 전달한다.
 
 ## 요청 흐름
 
@@ -92,7 +92,7 @@ Actor가 소속 Spot을 바꾸는 동작은 membership 변경이다. 대상 Spot
 2. 새 Actor는 Entry Spot `WorldEntry`에서 시작한다. `WorldEntry::enter`가 identity를 확인하고 초기 위치를 `ZonePositionDomain`으로 판정한 뒤 Zone membership을 요청한다.
 3. 대상 `Zone::on_actor_join`이 `ZonePositionDomain`에서 도착을 검증하고 대기 상태에 둔 뒤 typed `WorldState` reply를 반환한다. Join 완료 뒤 `Player::on_join_completed`가 reply를 binding된 Session으로 보내고 Zone은 관찰자에게 `PlayerAppeared`를 발행한다.
 4. `Zone::move`는 `Delta`와 `Sequence`를 `ZonePositionDomain`에 전달한다. 도메인이 변위, 월드 경계, 순번, 이동 예산을 검사한다. Zone이 바뀌면 계산된 위치와 이동 예산의 남은 ms를 Actor membership 요청에 담는다.
-5. 같은 Zone 관찰자는 Actor messaging으로 typed event를 받고 인접 Zone은 `border` channel로 경계 변경을 받는다. Zone 이탈은 `left-zone`, 연결 종료는 `disconnected`로 발행한다.
+5. 같은 Zone 관찰자는 Actor messaging으로 typed event를 받고 인접 Zone은 `border` channel로 경계 변경을 받는다. Zone 이탈은 `left-zone`, 연결 종료는 `disconnected`, 경계 띠를 벗어나 Zone 안쪽으로 이동하면 `out-of-range`로 발행한다.
 6. node를 교체할 때 `NodeControl`의 `drain`이 relocation을 요청한다. `ZoneRelocation`은 위치, 순번, 가시성, 이동 예산의 남은 ms를 저장하며 process 절대 시각은 저장하지 않는다. Actor ID와 generation은 `SessionInfo`로 전달한다.
 
 ## 이 템플릿 도메인 확장

@@ -180,6 +180,10 @@ class DomainChecks
         const auto left = nlohmann::json (PlayerLeft{"player", PlayerLeftReason::left_zone}).dump ();
         require (left.find ("\"reason\":\"left-zone\"") != std::string::npos,
                  "PlayerLeft reason was not serialized as its kebab-case name");
+        const auto out_of_range =
+          nlohmann::json (PlayerLeft{"player", PlayerLeftReason::out_of_range}).dump ();
+        require (out_of_range.find ("\"reason\":\"out-of-range\"") != std::string::npos,
+                 "OutOfRange reason was not serialized as its kebab-case name");
         const auto border = nlohmann::json (BorderPresence{
                                "zone-2", "player", Position{10}, 1,
                                BorderPresenceKind::moved, std::nullopt}).dump ();
@@ -197,6 +201,35 @@ class DomainChecks
         require ((std::is_same_v<decltype (ActionRejected::retryAfterMs), std::int32_t>),
                  "ActionRejected RetryAfterMs must use a 32-bit integer");
     }
+    void classifies_border_movement ()
+    {
+        const auto move_from = [] (double x, double delta) {
+            std::int64_t now = 0;
+            ZonePositionDomain domain ("zone-2", [&now] { return now; });
+            domain.add_player ("player", EnterZone{Position{x}, 0, 0});
+            return domain.move ("player", MoveRequest{delta, 1});
+        };
+        const auto entered = move_from (181, 10);
+        require (entered.accepted && entered.position.x == 191
+                   && entered.borderKind == BorderPresenceKind::appeared,
+                 "Movement from outside into the border band did not produce Appeared");
+        const auto remained = move_from (191, 1);
+        require (remained.borderKind == BorderPresenceKind::moved,
+                 "Movement inside the border band did not produce Moved");
+        const auto left = move_from (191, -10);
+        require (left.accepted && left.position.x == 181
+                   && left.borderKind == BorderPresenceKind::left,
+                 "Movement from the border band into the Zone did not produce Left");
+        const auto outside = move_from (181, 1);
+        require (!outside.borderKind,
+                 "Movement outside the border band produced a border publication");
+        ZonePositionDomain boundaries ("zone-2", [] { return 0; });
+        require (boundaries.is_in_border (Position{90})
+                   && !boundaries.is_in_border (Position{89.9})
+                   && !boundaries.is_in_border (Position{10})
+                   && boundaries.is_in_border (Position{9.9}),
+                 "The border boundaries were classified incorrectly");
+    }
 
   public:
     void run ()
@@ -210,7 +243,8 @@ class DomainChecks
         check ("remaining-time relocation snapshot", [&] { restores_remaining_budget (); });
         check ("presence lifecycle", [&] { tracks_presence_lifecycle (); });
         check ("enum and nullable JSON", [&] { preserves_json_contract (); });
-        std::cout << "Domain checks: " << passed_ << "/9 passed; assertions: " << assertions_
+        check ("border movement transitions", [&] { classifies_border_movement (); });
+        std::cout << "Domain checks: " << passed_ << "/10 passed; assertions: " << assertions_
                   << std::endl;
     }
 };

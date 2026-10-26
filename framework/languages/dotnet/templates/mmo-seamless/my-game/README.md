@@ -90,7 +90,7 @@ pwsh -NoProfile -File ./run-e2e.ps1 -Local -NoBuild
 | Scenario | Observable behavior |
 | --- | --- |
 | cross | Server-checked Delta movement rejects an oversized step, an exhausted movement budget, and an outside-world result without changing state. After the server-provided retry delay, the player crosses from Zone 3 on A to Zone 4 on B; Actor identity and STREAM Session remain unchanged. |
-| border | Same-Zone and adjacent-Zone players observe appearance and movement. Zone departure and connection loss produce `left-zone` and `disconnected` events. |
+| border | Same-Zone and adjacent-Zone players observe appearance and movement. Leaving the border band while moving into the Zone produces `out-of-range`; Zone departure and connection loss produce `left-zone` and `disconnected` events. |
 | reconnect | The client reconnects to the same Actor identity and authoritative coordinate and sequence through a new Session. |
 | update | A drains while a player continues sending movements. Zone snapshots preserve positions, sequences, and remaining movement-budget milliseconds. The Session remains connected and acknowledged movement continues after A is replaced. |
 

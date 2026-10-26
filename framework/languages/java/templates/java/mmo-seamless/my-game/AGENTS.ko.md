@@ -40,7 +40,7 @@ Bash도 같은 절차를 실행한다.
 
 ### Zone과 플레이어
 
-ID로 찾는 게임 상태 객체가 Actor이며, 공통 게임 규칙을 실행하는 상태 객체가 Spot이다. `server/zone/src/main/java/MyGame/zone/ZonePositionDomain.java`의 `ZonePositionDomain`이 좌표·sequence·이동 예산·admission·가시성 상태를 소유하고 `Zone`이 도메인 상태와 event 전달을 관리한다.
+ID로 찾는 게임 상태 객체가 Actor이며, 공통 게임 규칙을 실행하는 상태 객체가 Spot이다. `server/zone/src/main/java/MyGame/zone/ZonePositionDomain.java`의 `ZonePositionDomain`이 좌표·sequence·이동 예산·admission·가시성·경계 전이를 소유하고 `Zone`이 도메인 상태와 event 전달을 관리한다. `PlayerLeft` 이유는 `left-zone`, `disconnected`, `out-of-range`다.
 
 `server/zone/src/main/java/MyGame/zone/Program.java`가 Entry Spot, Zone·Player factory와 `border` channel을 등록하고 `server/zone/src/main/java/MyGame/zone/Entry.java`와 `server/zone/src/main/java/MyGame/zone/EnterWorld.java`가 플레이어의 월드 첫 진입을 처리한다. 플레이어별 규칙과 Zone 공통 규칙을 연결하는 handler는 `server/zone/src/main/java/MyGame/zone/Actions.java`에 추가한다. node 구성을 바꾸면 실제 등록과 `server/config/`, descriptor를 함께 맞추어 구조 검사가 같은 구성을 검사하게 한다.
 

@@ -82,7 +82,7 @@ Relocation changes an object's execution host; drain moves a host's workload els
 
 ### Zone observations and border publications
 
-`ZonePositionDomain` owns the current player list and positions. `Zone` sends `PlayerAppeared`, `PlayerMoved`, and `PlayerLeft` to connected players in the same Zone and publishes border changes through the existing `border` channel for adjacent-Zone observers. `Zone::border` forwards the typed event through the receiving Actor's bound Session.
+`ZonePositionDomain` owns the current player list, positions, and border transitions. `Zone` sends `PlayerAppeared`, `PlayerMoved`, and `PlayerLeft` to connected players in the same Zone and publishes border changes through the existing `border` channel for adjacent-Zone observers. `PlayerLeft` reasons are `left-zone`, `disconnected`, and `out-of-range`. `Zone::border` forwards the typed event through the receiving Actor's bound Session.
 
 ## Request flow
 
@@ -92,7 +92,7 @@ Requests follow this path. Read the code along it before extending the domain to
 2. A new Actor starts in the Entry Spot `WorldEntry`. `WorldEntry::enter` checks identity and resolves the initial location through `ZonePositionDomain` before requesting Zone membership.
 3. The target `Zone::on_actor_join` validates and queues admission in `ZonePositionDomain`, then returns a typed `WorldState` reply. After Join completion, `Player::on_join_completed` sends that reply through the bound Session and the Zone publishes `PlayerAppeared` to observers.
 4. `Zone::move` passes `Delta` and `Sequence` to `ZonePositionDomain`. The domain checks the step, world boundary, sequence, and movement budget. A Zone change carries the calculated position and remaining budget milliseconds through Actor membership.
-5. Same-Zone observers receive typed events through Actor messaging; adjacent Zones receive border changes through `border`. A Zone leave publishes `left-zone`, and a connection loss publishes `disconnected`.
+5. Same-Zone observers receive typed events through Actor messaging; adjacent Zones receive border changes through `border`. A Zone leave publishes `left-zone`, a connection loss publishes `disconnected`, and moving into the Zone interior beyond the border band publishes `out-of-range`.
 6. To replace a node, `drain` in `NodeControl` requests relocation. `ZoneRelocation` snapshots positions, sequences, visibility, and remaining budget milliseconds without process timestamps; `SessionInfo` carries Actor ID and generation separately.
 
 ## Extend this template's domain

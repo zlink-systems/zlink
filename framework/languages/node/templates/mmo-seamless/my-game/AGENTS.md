@@ -82,7 +82,7 @@ Relocation changes an object's execution host; drain moves a host's workload els
 
 ### Border notifications
 
-Zone state publishes appearance, movement, and departure when each fact changes. In this pub/sub exchange, border delivery forwards the typed event through the receiving Actor's bound Session without a duplicate local route.
+`ZonePositionDomain` owns border-band classification and movement transitions. Zone state publishes appearance, movement, and departure when each fact changes. `PlayerLeft` reasons are `left-zone`, `disconnected`, and `out-of-range`. In this pub/sub exchange, border delivery forwards the typed event through the receiving Actor's bound Session without a duplicate local route.
 
 ## Request flow
 

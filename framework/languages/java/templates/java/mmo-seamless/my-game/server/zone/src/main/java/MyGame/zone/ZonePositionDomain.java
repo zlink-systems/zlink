@@ -58,7 +58,7 @@ public final class ZonePositionDomain {
         var player = players.get(playerId);
         if (player == null)
             return new MovementResult(false, new Position(0), 0, 0,
-                    new ActionRejected("stale-sequence", 0), zoneId, false);
+                    new ActionRejected("stale-sequence", 0), zoneId, false, null);
         if (!Double.isFinite(request.delta())) return reject(playerId, "non-finite");
         if (Math.abs(request.delta()) > Rules.MAX_STEP) return reject(playerId, "step-too-large");
         if (request.sequence() > Rules.MAX_SAFE_INTEGER) return reject(playerId, "integer-out-of-range");
@@ -79,10 +79,20 @@ public final class ZonePositionDomain {
         }
 
         boolean relocates = !zoneId.equals(location.zoneId());
+        boolean wasInBorder = isInBorder(player.position());
+        boolean isInBorderNow = isInBorder(position);
+        BorderPresenceKind borderKind = wasInBorder
+                ? isInBorderNow ? BorderPresenceKind.MOVED : BorderPresenceKind.LEFT
+                : isInBorderNow ? BorderPresenceKind.APPEARED : null;
         if (!relocates)
             players.put(playerId, new PlayerState(position, request.sequence(), now, player.connected()));
         return new MovementResult(true, position, request.sequence(), Rules.FULL_BUDGET_AFTER_MS,
-                null, location.zoneId(), relocates);
+                null, location.zoneId(), relocates, borderKind);
+    }
+
+    public boolean isInBorder(Position position) {
+        double offset = position.x() % Rules.ZONE_WIDTH;
+        return offset < Rules.BORDER_RADIUS || offset >= Rules.ZONE_WIDTH - Rules.BORDER_RADIUS;
     }
 
     public PlayerStateView state(String playerId) {
@@ -141,7 +151,7 @@ public final class ZonePositionDomain {
         var player = players.get(playerId);
         return new MovementResult(false, player.position(), player.sequence(),
                 remainingMs(player.lastAcceptedMilliseconds(), now()),
-                new ActionRejected(reason, retryAfterMs), zoneId, false);
+                new ActionRejected(reason, retryAfterMs), zoneId, false, null);
     }
 
     private PlayerStateView view(PlayerState player, long now) {
@@ -162,7 +172,7 @@ public final class ZonePositionDomain {
             boolean connected) {}
 
     public record MovementResult(boolean accepted, Position position, long sequence, int remainingMs,
-            ActionRejected rejection, String zoneId, boolean relocates) {}
+            ActionRejected rejection, String zoneId, boolean relocates, BorderPresenceKind borderKind) {}
 
     public record ZoneLocationResolution(String zoneId, ActionRejected rejection) {}
 

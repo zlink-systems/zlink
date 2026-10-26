@@ -40,7 +40,7 @@ For host process debugging, install JDK 25 and add `--local` or `-Local`. Add `-
 
 ### Zones and players
 
-An Actor is a game state object addressed by ID. `ZonePositionDomain` in `server/zone/src/main/java/MyGame/zone/ZonePositionDomain.java` owns coordinates, sequence, movement budget, admission and visibility state. `Zone` owns the domain instance and delivers its typed events through local Actor messages and adjacent Zone subscriptions.
+An Actor is a game state object addressed by ID. `ZonePositionDomain` in `server/zone/src/main/java/MyGame/zone/ZonePositionDomain.java` owns coordinates, sequence, movement budget, admission, visibility, and border transitions. `Zone` owns the domain instance and delivers its typed events through local Actor messages and adjacent Zone subscriptions. `PlayerLeft` reasons are `left-zone`, `disconnected`, and `out-of-range`.
 
 `server/zone/src/main/java/MyGame/zone/Program.java` registers the Entry Spot, the Zone and Player factories, and the `border` channel. `server/zone/src/main/java/MyGame/zone/Entry.java` and `server/zone/src/main/java/MyGame/zone/EnterWorld.java` handle a player's first entry into the world. Add handlers that combine player rules with shared Zone rules in `server/zone/src/main/java/MyGame/zone/Actions.java`. When changing node composition, update registrations, `server/config/`, and the descriptor together so the structure check validates the same composition.
 

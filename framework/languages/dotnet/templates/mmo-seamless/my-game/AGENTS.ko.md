@@ -82,7 +82,7 @@ Actor가 소속 Spot을 바꾸는 동작은 membership 변경이다. 대상 Spot
 
 ### Zone 관찰과 경계 발행
 
-현재 플레이어 목록과 위치는 `ZonePositionDomain`이 소유한다. `ZoneSpot`은 같은 Zone의 접속 중인 플레이어에게 `PlayerAppeared`, `PlayerMoved`, `PlayerLeft`를 보내고, 기존 `border` channel로 인접 Zone 관찰자에게 경계 변경을 발행한다. `BorderHandler`가 typed event를 수신 Actor에게 전달한다.
+현재 플레이어 목록·위치·경계 전이는 `ZonePositionDomain`이 소유한다. `ZoneSpot`은 같은 Zone의 접속 중인 플레이어에게 `PlayerAppeared`, `PlayerMoved`, `PlayerLeft`를 보내며, `PlayerLeft` 이유는 `left-zone`, `disconnected`, `out-of-range`다. 기존 `border` channel로 인접 Zone 관찰자에게 경계 변경을 발행하고 `BorderHandler`가 typed event를 수신 Actor에게 전달한다.
 
 ## 요청 흐름
 

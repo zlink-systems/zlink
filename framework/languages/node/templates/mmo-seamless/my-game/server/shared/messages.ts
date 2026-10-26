@@ -42,7 +42,8 @@ export class ActionRejected {
     readonly retryAfterMs: number
   ) {}
 }
-export type PlayerLeftReason = 'left-zone' | 'disconnected';
+export type PlayerLeftReason = 'left-zone' | 'disconnected' | 'out-of-range';
+export type BorderPresenceKind = 'appeared' | 'moved' | 'left';
 export class PlayerAppeared {
   constructor(
     readonly playerId: string,
@@ -68,7 +69,7 @@ export class BorderPresence {
     readonly playerId: string,
     readonly position: Position,
     readonly sequence: bigint,
-    readonly kind: 'appeared' | 'moved' | 'left',
+    readonly kind: BorderPresenceKind,
     readonly reason: PlayerLeftReason | null
   ) {}
 }

@@ -91,6 +91,25 @@ suspend fun scenario(name: String, nodes: Nodes) = coroutineScope {
                     it.playerId == client.playerId && it.sequence == 3L
                 }
                 check(movedAfterJoin.position.x == 301.0)
+                val adjacentObserver = create()
+                val adjacent = adjacentObserver.join(299.0)
+                check(adjacent.nodeId == "zoneA") {
+                    "The out-of-range observer did not start in the adjacent Zone"
+                }
+                client.move(-1.0, 4L)
+                val reentered = adjacentObserver.next<PlayerMoved> {
+                    it.playerId == client.playerId && it.sequence == 4L
+                }
+                check(reentered.position.x == 300.0) {
+                    "The adjacent Zone did not observe the player re-entering the border band"
+                }
+                client.move(10.0, 5L)
+                val outOfRange = adjacentObserver.next<PlayerLeft> {
+                    it.playerId == client.playerId && it.reason == PlayerLeftReason.OUT_OF_RANGE
+                }
+                check(outOfRange.reason == PlayerLeftReason.OUT_OF_RANGE) {
+                    "The adjacent Zone did not observe PlayerLeft(out-of-range) after inward movement"
+                }
                 client.close()
                 clients.remove(client)
                 val disconnected = observer.next<PlayerLeft> {

@@ -82,7 +82,7 @@ Actor가 소속 Spot을 바꾸는 동작은 membership 변경이다. 대상 Spot
 
 ### 경계 알림과 timer
 
-Zone 상태는 사실이 바뀔 때 appearance·movement·departure를 publish한다. 이 pub/sub 방식에서는 경계 전달자가 수신 Actor의 binding된 Session으로 typed event를 전달하며, 같은 사실을 local 경로로 중복 전달하지 않는다.
+경계 띠 분류와 이동 전이는 `ZonePositionDomain`이 소유한다. Zone 상태는 사실이 바뀔 때 appearance·movement·departure를 publish하며, `PlayerLeft` 이유는 `left-zone`, `disconnected`, `out-of-range`다. 이 pub/sub 방식에서는 경계 전달자가 수신 Actor의 binding된 Session으로 typed event를 전달하며, 같은 사실을 local 경로로 중복 전달하지 않는다.
 
 ## 요청 흐름
 

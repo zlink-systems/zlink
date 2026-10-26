@@ -102,6 +102,23 @@ public final class Scenarios {
                             PlayerMoved.class,
                             v -> v.playerId().equals(client.playerId) && v.sequence() == 3);
                     require(continued.position().x() == 301, "Target Zone movement mismatch");
+                    var adjacentObserver = create(nodes, clients, "border-inner-observer-" + UUID.randomUUID());
+                    var adjacent = adjacentObserver.join(299);
+                    require(adjacent.nodeId().equals("zoneA"),
+                            "The out-of-range observer did not start in the adjacent Zone");
+                    client.move(-1, 4);
+                    var reentered = adjacentObserver.next(
+                            PlayerMoved.class,
+                            v -> v.playerId().equals(client.playerId) && v.sequence() == 4);
+                    require(reentered.position().x() == 300,
+                            "The adjacent Zone did not observe the player re-entering the border band");
+                    client.move(10, 5);
+                    var outOfRange = adjacentObserver.next(
+                            PlayerLeft.class,
+                            v -> v.playerId().equals(client.playerId)
+                                    && v.reason() == PlayerLeftReason.OUT_OF_RANGE);
+                    require(outOfRange.reason() == PlayerLeftReason.OUT_OF_RANGE,
+                            "The adjacent Zone did not observe PlayerLeft(out-of-range) after inward movement");
                     client.close();
                     clients.remove(client);
                     var disconnected = observer.next(

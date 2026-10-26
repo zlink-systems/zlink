@@ -96,7 +96,14 @@ export class Move {
       return;
     }
     await spot.publishLocal(actor.context.actorId, new PlayerMoved(actor.context.actorId, movement.position, movement.sequence));
-    await spot.publishBorder(actor.context.actorId, movement.position, movement.sequence, 'moved', null);
+    if (movement.borderKind)
+      await spot.publishBorder(
+        actor.context.actorId,
+        movement.position,
+        movement.sequence,
+        movement.borderKind,
+        movement.borderKind === 'left' ? 'out-of-range' : null
+      );
     await actor.context.boundSession
       .send(new WorldState(String(spot.context.spotId), spot.nodeId, movement.position.x, movement.sequence))
       .submit();

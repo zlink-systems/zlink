@@ -1,6 +1,7 @@
 package MyGame.e2e
 
 import MyGame.*
+import MyGame.zone.MovementResult
 import MyGame.zone.ZonePositionDomain
 
 private object DomainChecks {
@@ -19,7 +20,8 @@ private object DomainChecks {
         check("remaining-time relocation snapshot", ::restoresRemainingBudget)
         check("presence lifecycle", ::tracksPresenceLifecycle)
         check("enum and nullable JSON", ::preservesJsonContract)
-        println("Domain checks: $passed/9 passed; assertions: $assertions")
+        check("border movement transitions", ::classifiesBorderMovement)
+        println("Domain checks: $passed/10 passed; assertions: $assertions")
     }
 
     private fun check(name: String, action: () -> Unit) {
@@ -147,6 +149,8 @@ private object DomainChecks {
     private fun preservesJsonContract() {
         val left = Json.mapper.writeValueAsString(PlayerLeft("player", PlayerLeftReason.LEFT_ZONE))
         require(left.contains("\"reason\":\"left-zone\""), "PlayerLeft reason JSON changed")
+        val outOfRange = Json.mapper.writeValueAsString(PlayerLeft("player", PlayerLeftReason.OUT_OF_RANGE))
+        require(outOfRange.contains("\"reason\":\"out-of-range\""), "OutOfRange reason JSON changed")
         val border =
             Json.mapper.writeValueAsString(
                 BorderPresence("zone-2", "player", Position(10.0), 1, BorderPresenceKind.MOVED, null)
@@ -159,6 +163,36 @@ private object DomainChecks {
         require(
             ActionRejected::class.java.getDeclaredField("retryAfterMs").type == Int::class.javaPrimitiveType,
             "RetryAfterMs must use a 32-bit integer",
+        )
+    }
+
+    private fun moveFrom(x: Double, delta: Double): MovementResult {
+        val domain = ZonePositionDomain("zone-2") { 0L }
+        domain.addPlayer("player", EnterZone(Position(x), 0, 0))
+        return domain.move("player", MoveRequest(delta, 1))
+    }
+
+    private fun classifiesBorderMovement() {
+        val entered = moveFrom(181.0, 10.0)
+        require(
+            entered.accepted && entered.position.x == 191.0 &&
+                entered.borderKind == BorderPresenceKind.APPEARED,
+            "Movement into the border band did not produce Appeared",
+        )
+        val remained = moveFrom(191.0, 1.0)
+        require(remained.borderKind == BorderPresenceKind.MOVED, "Movement inside the border band did not produce Moved")
+        val left = moveFrom(191.0, -10.0)
+        require(
+            left.accepted && left.position.x == 181.0 && left.borderKind == BorderPresenceKind.LEFT,
+            "Movement from the border band into the Zone did not produce Left",
+        )
+        val outside = moveFrom(181.0, 1.0)
+        require(outside.borderKind == null, "Movement outside the border band produced a border publication")
+        val boundaries = ZonePositionDomain("zone-2") { 0L }
+        require(
+            boundaries.isInBorder(Position(90.0)) && !boundaries.isInBorder(Position(89.9)) &&
+                !boundaries.isInBorder(Position(10.0)) && boundaries.isInBorder(Position(9.9)),
+            "The border boundaries were classified incorrectly",
         )
     }
 

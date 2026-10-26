@@ -67,7 +67,7 @@ The scripts and C++ runner check `zlink.structure.json`, run domain boundary che
 | Scenario | Assertion |
 | --- | --- |
 | `cross` | Delta movement rejects an oversized step, exhausted movement budget, and an outside-world result without changing state. After the server-provided retry delay, the player crosses from Zone 3 on A to Zone 4 on B; Actor and Session identity remain unchanged. |
-| `border` | Same-Zone and adjacent-Zone players observe appearance and movement. Zone departure and connection loss produce `left-zone` and `disconnected` events. |
+| `border` | Same-Zone and adjacent-Zone players observe appearance and movement. Leaving the border band while moving into the Zone produces `out-of-range`; Zone departure and connection loss produce `left-zone` and `disconnected` events. |
 | `reconnect` | A new physical Session binds the same Actor generation and retains the authoritative position and movement sequence. |
 | `update` | Drain Zone A while moving, observe relocation and SafeToShutdown, preserve position, sequence, and remaining movement-budget milliseconds, replace Zone A, and verify fresh Actor creation and movement. |
 

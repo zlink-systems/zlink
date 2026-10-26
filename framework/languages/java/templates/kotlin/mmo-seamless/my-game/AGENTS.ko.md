@@ -120,7 +120,7 @@ typed 계약을 추가하고, 판정을 도메인 소유자 한 곳에 두고, S
 | 영역 | 소유자 | 확장할 규칙 또는 코드 | 연관 등록 또는 시나리오 |
 | --- | --- | --- | --- |
 | Typed 메시지 | `server/shared/src/main/kotlin/MyGame/Contracts.kt` | 공통 request·response·event·거부 계약. `SessionInfo`는 binding identity를 `WorldState`와 분리한다 | JSON property 이름과 event 문자열을 다섯 언어에서 맞춘다 |
-| 이동·가시성 도메인 | `server/zone/src/main/kotlin/MyGame/zone/ZonePositionDomain.kt` | `ZonePositionDomain`이 위치·순번·예산·도착·연결 플레이어·경계 판정을 소유한다 | 도메인 검사와 `cross`·`border` 관찰을 추가한다 |
+| 이동·가시성 도메인 | `server/zone/src/main/kotlin/MyGame/zone/ZonePositionDomain.kt` | `ZonePositionDomain`이 위치·순번·예산·도착·연결 플레이어·경계 전이를 소유한다. `PlayerLeft` 이유는 `left-zone`, `disconnected`, `out-of-range`다 | 도메인 검사와 `cross`·`border` 관찰을 추가한다 |
 | Actor·Zone lifecycle | `server/zone/src/main/kotlin/MyGame/zone/Player.kt`; `Zone.kt` | Player에는 중복 위치 상태가 없고 Zone admission·이탈 callback은 도메인을 갱신하고 typed event를 발행한다 | `Program.kt`의 `addActorFactory`·`addSpotFactory` 등록을 유지한다 |
 | Entry·첫 입장 | `server/zone/src/main/kotlin/MyGame/zone/Player.kt`의 `Entry`·`EnterWorld`, `server/zone/src/main/kotlin/MyGame/zone/Handlers.kt`의 `Actions.reconnect` | `EnterWorld.join`, 첫 입장 경로, `Actions.reconnect`의 identity 확인과 상태 재전송 | `addEntrySpot` 등록과 `entry` 선언. 첫 입장을 보는 `cross` 시나리오와 재접속 뒤 상태를 비교하는 `reconnect` 시나리오 |
 | Session binding | `server/session/src/main/kotlin/MyGame/session/Program.kt` (`GameSession`) | 첫 패킷 분기: Actor 조회·생성, `bindOrGet`, 원래 typed 패킷 relay | `EnterWorld.join`과 같은 첫 패킷 타입. 기본 셋업의 `PlayerSession.kt`에 옮긴다 |
