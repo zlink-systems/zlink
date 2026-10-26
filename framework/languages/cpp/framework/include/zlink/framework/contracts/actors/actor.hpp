@@ -27,6 +27,11 @@
 #include <type_traits>
 #include <vector>
 
+namespace zlink::framework::detail
+{
+class stream_allocation_test_access_t;
+}
+
 namespace zlink::framework
 {
 
@@ -806,6 +811,7 @@ class session_actor_t
     task_t<void> notify_disconnected ();
 
   private:
+    friend class detail::stream_allocation_test_access_t;
     friend class session_actor_manager_t;
     friend class detail::actor_gateway_runtime_t;
     friend class detail::session_actor_manager_access_t;

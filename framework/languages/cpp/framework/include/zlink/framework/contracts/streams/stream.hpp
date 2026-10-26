@@ -21,6 +21,11 @@
 #include <string_view>
 #include <utility>
 
+namespace zlink::framework::detail
+{
+class stream_allocation_test_access_t;
+}
+
 namespace zlink::framework
 {
 
@@ -224,6 +229,7 @@ class stream_t
   private:
     friend class detail::actor_gateway_runtime_t;
     friend class detail::session_actor_manager_access_t;
+    friend class detail::stream_allocation_test_access_t;
     friend class detail::stream_runtime_t;
     friend class session_actor_manager_t;
     explicit stream_t (std::shared_ptr<detail::stream_state_t> state);

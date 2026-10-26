@@ -478,27 +478,35 @@ message_flow_event_t stream_packet_flow_event (message_flow_outcome_t outcome,
                                     : std::nullopt};
 }
 
+// One owner retains the callback arguments until its coroutine settles. Keeping
+// metadata in place also avoids allocating map sentinels when MSVC moves a map.
+struct packet_dispatch_state_t
+{
+    explicit packet_dispatch_state_t (const stream_header_t &value) : header (value) {}
+    stream_header_t header;
+    session_message_context_t context;
+    message_t payload;
+};
+
 task_t<void> dispatch_packet_session_callback (packet_stream_session_t *session,
                                                stream_t stream,
-                                               stream_header_t header,
-                                               session_message_context_t context,
-                                               message_t payload)
+                                               std::shared_ptr<packet_dispatch_state_t> packet)
 {
     auto task = [&] {
-        const stream_relay_dispatch_scope_t relay_scope (header);
-        return session->on_packet (stream, context, payload);
+        const stream_relay_dispatch_scope_t relay_scope (packet->header);
+        return session->on_packet (stream, packet->context, packet->payload);
     }();
     co_return co_await task;
 }
 
 task_t<void> dispatch_packet_session (packet_stream_session_t *session,
                                       stream_t stream,
-                                      stream_header_t header,
-                                      session_message_context_t context,
-                                      message_t payload,
+                                      std::shared_ptr<packet_dispatch_state_t> packet,
                                       session_actor_manager_t *actors,
                                       detail::message_flow_tracer_t flow_tracer)
 {
+    auto &header = packet->header;
+    auto &context = packet->context;
     if (auto actor_slot = header.actor_slot ()) {
         auto actor = actors
                        ? detail::session_actor_manager_access_t::find_slot (*actors, *actor_slot)
@@ -522,8 +530,7 @@ task_t<void> dispatch_packet_session (packet_stream_session_t *session,
     flow_tracer.trace (message_flow_outcome_t::dispatched, [&] {
         return stream_packet_flow_event (message_flow_outcome_t::dispatched, header);
     });
-    return dispatch_packet_session_callback (session, std::move (stream), std::move (header),
-                                             std::move (context), std::move (payload));
+    return dispatch_packet_session_callback (session, std::move (stream), std::move (packet));
 }
 
 void configure_stream_dispatch_executor ()
@@ -2011,24 +2018,20 @@ result_t<void> stream_runtime_t::dispatch_packet (packet_stream_session_t &sessi
     auto dispatch_stream = stream;
     dispatch_stream._reply_header = header;
     dispatch_stream._reply_submission = std::make_shared<submit_once_t> ();
-    auto dispatch_header = header;
-    auto dispatch_context = session_message_context_t{};
-    dispatch_context.packet_name = std::string (header.packet_name ());
-    dispatch_context.metadata = message_metadata_t (header.metadata ().values ());
-    dispatch_context.can_reply = header.request_seq ().has_value ();
-    auto dispatch_payload = message_t::from_raw (std::move (handler_payload), _state->serializers);
+    auto packet = std::make_shared<packet_dispatch_state_t> (header);
+    packet->context.packet_name = std::string (header.packet_name ());
+    packet->context.metadata = message_metadata_t (header.metadata ().values ());
+    packet->context.can_reply = header.request_seq ().has_value ();
+    packet->payload = message_t::from_raw (std::move (handler_payload), _state->serializers);
     return dispatch_application (
       stream, "packet:" + std::string (header.packet_name ()),
       [session = &session, dispatch_stream = std::move (dispatch_stream),
-       dispatch_header = std::move (dispatch_header),
-       dispatch_context = std::move (dispatch_context),
-       dispatch_payload = std::move (dispatch_payload), current_flow = std::move (current_flow),
+       packet = std::move (packet), current_flow = std::move (current_flow),
        flow_tracer] () mutable {
           runtime::flow_context_t::scope_t callback_flow (std::move (current_flow));
           auto *actors = dispatch_stream._state->actors.load (std::memory_order_acquire);
-          return dispatch_packet_session (session, std::move (dispatch_stream),
-                                          std::move (dispatch_header), std::move (dispatch_context),
-                                          std::move (dispatch_payload), actors, flow_tracer);
+          return dispatch_packet_session (session, std::move (dispatch_stream), std::move (packet),
+                                          actors, flow_tracer);
       });
 }
 
@@ -2082,24 +2085,20 @@ result_t<void> stream_runtime_t::dispatch_packet_async (packet_stream_session_t 
     auto dispatch_stream = stream;
     dispatch_stream._reply_header = header;
     dispatch_stream._reply_submission = std::make_shared<submit_once_t> ();
-    auto dispatch_header = header;
-    auto dispatch_context = session_message_context_t{};
-    dispatch_context.packet_name = std::string (header.packet_name ());
-    dispatch_context.metadata = message_metadata_t (header.metadata ().values ());
-    dispatch_context.can_reply = header.request_seq ().has_value ();
-    auto dispatch_payload = message_t::from_raw (std::move (handler_payload), _state->serializers);
+    auto packet = std::make_shared<packet_dispatch_state_t> (header);
+    packet->context.packet_name = std::string (header.packet_name ());
+    packet->context.metadata = message_metadata_t (header.metadata ().values ());
+    packet->context.can_reply = header.request_seq ().has_value ();
+    packet->payload = message_t::from_raw (std::move (handler_payload), _state->serializers);
     return dispatch_application_async (
       stream, "packet:" + std::string (header.packet_name ()),
       [session = &session, dispatch_stream = std::move (dispatch_stream),
-       dispatch_header = std::move (dispatch_header),
-       dispatch_context = std::move (dispatch_context),
-       dispatch_payload = std::move (dispatch_payload), current_flow = std::move (current_flow),
+       packet = std::move (packet), current_flow = std::move (current_flow),
        flow_tracer] () mutable {
           runtime::flow_context_t::scope_t callback_flow (std::move (current_flow));
           auto *actors = dispatch_stream._state->actors.load (std::memory_order_acquire);
-          return dispatch_packet_session (session, std::move (dispatch_stream),
-                                          std::move (dispatch_header), std::move (dispatch_context),
-                                          std::move (dispatch_payload), actors, flow_tracer);
+          return dispatch_packet_session (session, std::move (dispatch_stream), std::move (packet),
+                                          actors, flow_tracer);
       },
       std::move (completion), std::move (started), std::move (cancelled));
 }

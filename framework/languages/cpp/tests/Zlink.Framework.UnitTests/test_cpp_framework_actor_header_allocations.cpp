@@ -318,16 +318,13 @@ TEST (ActorHeaderAllocations, AlternatingBenchmark)
 } // namespace
 
 #include "../support/runtime_failure_fixture.hpp"
+#include "../support/stream_allocation_baseline.hpp"
 #include <future>
 #include <thread>
 
 namespace
 {
-#ifdef ZLINK_STREAM_RAW_BASELINE
-using allocation_packet_t = zlink::message_t;
-#else
-using allocation_packet_t = fw::message_t;
-#endif
+using raw_baseline_t = fw::detail::stream_allocation_test_access_t;
 
 enum class allocation_path_t
 {
@@ -336,9 +333,13 @@ enum class allocation_path_t
     relay_reply
 };
 
-class allocation_session_t final : public fw::packet_stream_session_t
+template <bool Raw>
+class allocation_session_t final
+    : public std::conditional_t<Raw, raw_baseline_t::session_t, fw::packet_stream_session_t>
 {
   public:
+    using packet_t = std::conditional_t<Raw, zlink::message_t, fw::message_t>;
+    using stream_type = std::conditional_t<Raw, raw_baseline_t::stream_t, fw::stream_t>;
     allocation_session_t (allocation_path_t path, fw::session_actor_t actor) :
         _path (path), _actor (std::move (actor))
     {
@@ -346,21 +347,21 @@ class allocation_session_t final : public fw::packet_stream_session_t
     fw::task_t<void> on_connected (fw::stream_t &) override { co_return; }
     fw::task_t<void> on_disconnected (fw::stream_t &) override { co_return; }
     fw::task_t<void> on_error (fw::stream_t &, const fw::stream_error_t &) override { co_return; }
-    fw::task_t<void> on_packet (fw::stream_t &stream,
+    fw::task_t<void> on_packet (stream_type &stream,
                                 const fw::session_message_context_t &,
-                                const allocation_packet_t &payload) override
+                                const packet_t &payload) override
     {
-#ifndef ZLINK_STREAM_RAW_BASELINE
-        if (!payload.encoded ())
-            throw std::runtime_error ("received packet must remain encoded");
-        std::optional<zlink::message_t> first, second;
-        const auto copies = count_allocations ([&] {
-            first.emplace (detail::message_to_raw (payload, _serializers));
-            second.emplace (detail::message_to_raw (payload, _serializers));
-        });
-        if (copies != 0 || first->data () != second->data ())
-            throw std::runtime_error ("encoded forwarding must share native payload storage");
-#endif
+        if constexpr (!Raw) {
+            if (!payload.encoded ())
+                throw std::runtime_error ("received packet must remain encoded");
+            std::optional<zlink::message_t> first, second;
+            const auto copies = count_allocations ([&] {
+                first.emplace (detail::message_to_raw (payload, _serializers));
+                second.emplace (detail::message_to_raw (payload, _serializers));
+            });
+            if (copies != 0 || first->data () != second->data ())
+                throw std::runtime_error ("encoded forwarding must share native payload storage");
+        }
         if (_path == allocation_path_t::reply) {
             co_await stream.reply_packet (payload).async ();
         } else if (_path == allocation_path_t::relay) {
@@ -374,7 +375,7 @@ class allocation_session_t final : public fw::packet_stream_session_t
   private:
     fw::serializer_registry_t _serializers;
     allocation_path_t _path;
-    fw::session_actor_t _actor;
+    std::conditional_t<Raw, raw_baseline_t::actor_t, fw::session_actor_t> _actor;
 };
 
 TEST (ActorHeaderAllocations, StreamEncodedForwardingDoesNotExceedRawMain)
@@ -425,14 +426,16 @@ TEST (ActorHeaderAllocations, StreamEncodedForwardingDoesNotExceedRawMain)
       detail::stream_message_kind_t::request, fw::stream_codec_t::raw,
       detail::stream_header_flags_t::has_request_seq, 1, "p", {});
     // Include every continuation thread of the same packet in the existing allocation counter.
-    const auto measure = [&] (allocation_session_t &session) {
+    raw_baseline_t::runtime_t raw_runtime (runtime);
+    raw_baseline_t::stream_t raw_stream (stream);
+    const auto measure = [&] (auto &session, auto &dispatch_runtime, auto &dispatch_stream) {
         std::promise<void> done;
         auto ready = done.get_future ();
         fw::result_t<void> result = fw::result_t<void>::success ();
         fw::tests::process_allocation_count.store (0);
         fw::tests::tracking_process_allocations.store (true);
-        const auto submitted = runtime.dispatch_packet_async (
-          session, stream, header, body, [&] (const fw::result_t<void> &completed) {
+        const auto submitted = dispatch_runtime.dispatch_packet_async (
+          session, dispatch_stream, header, body, [&] (const fw::result_t<void> &completed) {
               result = completed;
               done.set_value ();
           });
@@ -463,25 +466,30 @@ TEST (ActorHeaderAllocations, StreamEncodedForwardingDoesNotExceedRawMain)
     EXPECT_EQ (fw::tests::process_allocation_count.load (), 0u);
     const char *names[] = {"receive_reply", "receive_relay", "relay_reply"};
     for (int path = 0; path != 3; ++path) {
-        allocation_session_t session (static_cast<allocation_path_t> (path), actor);
-        for (int warm = 0; warm != 8; ++warm)
-            (void) measure (session);
-        auto measured = measure (session);
-        auto minimum = measured;
-        for (int packet = 0; packet != 31; ++packet) {
-            const auto observed = measure (session);
-            measured = std::max (measured, observed);
-            minimum = std::min (minimum, observed);
+        allocation_session_t<false> session (static_cast<allocation_path_t> (path), actor);
+        allocation_session_t<true> raw_session (static_cast<allocation_path_t> (path), actor);
+        for (int warm = 0; warm != 8; ++warm) {
+            (void) measure (session, runtime, stream);
+            (void) measure (raw_session, raw_runtime, raw_stream);
         }
-        std::printf ("STREAM allocations %s=%zu min=%zu packets=32\n", names[path], measured,
-                     minimum);
-#ifndef ZLINK_STREAM_RAW_BASELINE
-        // GCC 13/libstdc++ Release, origin/main 3841c24541, the same 32-packet probe.
-        constexpr std::size_t raw_main_maximum[] = {30, 78, 81};
-        EXPECT_LE (measured, raw_main_maximum[path]) << names[path];
-#endif
+        std::size_t encoded_maximum = 0, raw_maximum = 0;
+        for (int packet = 0; packet != 32; ++packet) {
+            std::size_t encoded, raw;
+            if (packet % 2 == 0) {
+                raw = measure (raw_session, raw_runtime, raw_stream);
+                encoded = measure (session, runtime, stream);
+            } else {
+                encoded = measure (session, runtime, stream);
+                raw = measure (raw_session, raw_runtime, raw_stream);
+            }
+            encoded_maximum = std::max (encoded_maximum, encoded);
+            raw_maximum = std::max (raw_maximum, raw);
+        }
+        std::printf ("STREAM allocations %s raw=%zu encoded=%zu packets=32\n", names[path],
+                     raw_maximum, encoded_maximum);
+        EXPECT_LE (encoded_maximum, raw_maximum) << names[path];
     }
-    EXPECT_EQ (writes, 80u);
-    EXPECT_EQ (relays, 80u);
+    EXPECT_EQ (writes, 160u);
+    EXPECT_EQ (relays, 160u);
 }
 } // namespace
