@@ -353,7 +353,8 @@ TEST (SendAllocations, ReceiveTurnRetainsCallbacksAcrossNativeSuspension)
           1,
           descriptor.mesh_name,
           zlink::routing_id_t::from (descriptor.node_routing_id).to_string ()};
-        const auto created = fw::test::begin_reserved_object (runtime.objects (), actor, "actor", {});
+        const auto created =
+          fw::test::begin_reserved_object (runtime.objects (), actor, "actor", {});
         ASSERT_EQ (created.error, stateful::stateful_error_t::none);
         ASSERT_EQ (runtime.objects ().commit_create (created.attempt),
                    stateful::stateful_error_t::none);
