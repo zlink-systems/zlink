@@ -133,6 +133,10 @@ lease fencing은 `target_closed`로 기록한다.
 `reply_path_missing`, `unexpected_reply`, `backpressure`, `stale_target`,
 `shutdown`.
 
+`no_handler`는 대상 Actor·Spot·node가 이 runtime에 있는데 그 packet의 handler가 등록되지 않았을 때만 쓴다.
+현재 owner로 Message Follow 하지 못했고 이 runtime에도 대상 Actor·Spot이 없으면 `stale_target`이다.
+이 구분은 `zlink.message_flow`와 [runtime metrics의 message drop](02-runtime-metrics.ko.md#5-one-way-message-drop)에도 그대로 쓴다.
+
 | `action` | Framework가 실패를 처리한 결과 |
 |---|---|
 | `reply_error` | Reply 전달 경로가 있는 request에 error reply를 보냈다. |
