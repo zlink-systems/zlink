@@ -198,6 +198,80 @@ public sealed class WorkerPoolTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    public async Task WorkerTerminal_BusyStateLane_DoesNotBlockCancellation(bool runtimeStop)
+    {
+        using var pool = CreatePool(1);
+        using var stop = new CancellationTokenSource();
+        using var releaseWork = new ManualResetEventSlim();
+        var workerLane = new TaskCompletionSource<ZLinkStateLane>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var laneEntered = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var releaseLane = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var pending = new ZLinkWorkerCall<int>(
+            pool,
+            _ =>
+            {
+                workerLane.SetResult(ZLinkStateLane.Current!);
+                releaseWork.Wait();
+                return 42;
+            }
+        ).Async(stop.Token).AsTask();
+        // A cold worker inherits the lane scope in which it was submitted.
+        var lane = await workerLane.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.NotNull(lane);
+        var held = lane.RunAsync(async () =>
+        {
+            laneEntered.SetResult();
+            await releaseLane.Task;
+        });
+        await laneEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var cancellation = Task.Run(() =>
+        {
+            if (runtimeStop)
+                pool.RequestStop();
+            else
+                stop.Cancel();
+        });
+        try
+        {
+            await cancellation.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.False(pending.IsCompleted);
+        }
+        finally
+        {
+            releaseLane.TrySetResult();
+            try
+            {
+                await held;
+                await cancellation.WaitAsync(TimeSpan.FromSeconds(5));
+                await lane.RunAsync(() => { });
+            }
+            finally
+            {
+                releaseWork.Set();
+            }
+        }
+        if (runtimeStop)
+        {
+            var failure = await Assert.ThrowsAsync<ZLinkFrameworkException>(() => pending);
+            Assert.Equal(ZLinkFrameworkErrorKind.ShuttingDown, failure.Kind);
+        }
+        else
+        {
+            var failure = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pending);
+            Assert.Equal(stop.Token, failure.CancellationToken);
+            Assert.True(pending.IsCanceled);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     public async Task WorkerTerminal_StateLaneSubmit_IsRejectedBeforeAdmission(bool io)
     {
         using var pool = CreatePool(1);

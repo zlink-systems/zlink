@@ -135,7 +135,7 @@ internal sealed class ZLinkWorkerCall<TResult>(
                 static state =>
                 {
                     var execution = (Execution)state!;
-                    execution.SettleCancellationOrShutdown(execution._callerToken);
+                    execution.SettleCancellationOrShutdown();
                 },
                 this
             );
@@ -182,7 +182,7 @@ internal sealed class ZLinkWorkerCall<TResult>(
             }
             catch (OperationCanceledException) when (_workTokenSource!.IsCancellationRequested)
             {
-                SettleCancellationOrShutdown(_callerToken);
+                SettleCancellationOrShutdown();
             }
             catch (Exception ex)
             {
@@ -222,19 +222,17 @@ internal sealed class ZLinkWorkerCall<TResult>(
 
         private void FailTimedOut()
         {
-            AwaitStateLane(
-                _lane.RunAsync(() =>
-                    TrySettle(
-                        static (self, _) =>
-                            self._fail(
-                                new ZLinkFrameworkException(
-                                    ZLinkFrameworkErrorKind.DeadlineExceeded,
-                                    "Worker call timed out.",
-                                    ZLinkRetryAdvice.DoNotRetry
-                                )
-                            ),
-                        this
-                    )
+            _lane.TryPost(() =>
+                TrySettle(
+                    static (self, _) =>
+                        self._fail(
+                            new ZLinkFrameworkException(
+                                ZLinkFrameworkErrorKind.DeadlineExceeded,
+                                "Worker call timed out.",
+                                ZLinkRetryAdvice.DoNotRetry
+                            )
+                        ),
+                    this
                 )
             );
         }
@@ -260,21 +258,19 @@ internal sealed class ZLinkWorkerCall<TResult>(
             _workTokenSource?.Dispose();
         }
 
-        private void SettleCancellationOrShutdown(CancellationToken cancellationToken)
+        private void SettleCancellationOrShutdown()
         {
-            AwaitStateLane(
-                _lane.RunAsync(() =>
-                {
-                    if (cancellationToken.IsCancellationRequested)
-                        TrySettle(
-                            static (self, state) => self._cancel((CancellationToken)state!),
-                            this,
-                            cancellationToken
-                        );
-                    else
-                        FailStopped();
-                })
-            );
+            _lane.TryPost(() =>
+            {
+                if (_callerToken.IsCancellationRequested)
+                    TrySettle(
+                        static (self, state) => self._cancel((CancellationToken)state!),
+                        this,
+                        _callerToken
+                    );
+                else
+                    FailStopped();
+            });
         }
     }
 }
