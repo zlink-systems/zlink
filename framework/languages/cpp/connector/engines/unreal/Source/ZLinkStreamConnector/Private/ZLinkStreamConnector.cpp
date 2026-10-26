@@ -19,6 +19,9 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <deque>
+#include <variant>
+#include <type_traits>
 #if !__has_include("CoreMinimal.h")
 #include <iostream>
 #endif
@@ -182,10 +185,7 @@ class FZLinkStreamConnectorRuntime
         Pending->Owner = nullptr;
 #endif
         Pending->CancelCallbacks = true;
-        Pending->Packets.clear ();
-        Pending->Requests.clear ();
-        Pending->Replies.clear ();
-        Pending->States.clear ();
+        Pending->Callbacks.clear ();
     }
 
     void Connect (const FString &Endpoint)
@@ -208,8 +208,10 @@ class FZLinkStreamConnectorRuntime
         {
             std::lock_guard<std::mutex> lock (Pending->Mutex);
             Pending->CancelCallbacks = false;
-            Pending->Packets.clear ();
-            Pending->States.clear ();
+            std::erase_if (Pending->Callbacks, [] (const auto &callback) {
+                return std::holds_alternative<pending_packet_t> (callback)
+                       || std::holds_alternative<EZLinkStreamConnectionState> (callback);
+            });
         }
         zlink::stream_connector::connector_options_t options;
         options.endpoint = to_utf8 (Endpoint);
@@ -242,7 +244,9 @@ class FZLinkStreamConnectorRuntime
         {
             std::lock_guard<std::mutex> lock (Pending->Mutex);
             Pending->CancelCallbacks = true;
-            Pending->Packets.clear ();
+            std::erase_if (Pending->Callbacks, [] (const auto &callback) {
+                return std::holds_alternative<pending_packet_t> (callback);
+            });
         }
     }
 
@@ -288,7 +292,7 @@ class FZLinkStreamConnectorRuntime
 #endif
               std::lock_guard<std::mutex> lock (pending->Mutex);
               if (!pending->CancelCallbacks) {
-                  pending->Packets.emplace_back (id, std::move (packet));
+                  pending->Callbacks.emplace_back (pending_packet_t{id, std::move (packet)});
               }
           });
     }
@@ -350,66 +354,61 @@ class FZLinkStreamConnectorRuntime
 #endif
               }
               std::lock_guard<std::mutex> lock (pending->Mutex);
-              pending->Requests.emplace_back (std::move (completion), std::move (completed));
+              pending->Callbacks.emplace_back (
+                pending_request_t{std::move (completion), std::move (completed)});
           });
     }
 
     void Dispatch ()
     {
         Connector.dispatch ();
-        std::vector<EZLinkStreamConnectionState> pending_states;
-        std::vector<std::pair<int32, FZLinkStreamPacket>> pending_packets;
-        std::vector<std::pair<std::shared_ptr<request_callback_t>, FZLinkStreamRequestResult>>
-          pending_requests;
-        std::vector<std::pair<int32, FZLinkStreamReplyReceivedContext>> pending_replies;
+        std::deque<pending_callback_t> callbacks;
         bool cancel_callbacks = false;
         UZLinkStreamConnector *owner = nullptr;
         {
             std::lock_guard<std::mutex> lock (Pending->Mutex);
             owner = Owner ();
             cancel_callbacks = Pending->CancelCallbacks;
-            pending_states.swap (Pending->States);
-            pending_replies.swap (Pending->Replies);
-            if (!cancel_callbacks) {
-                pending_packets.swap (Pending->Packets);
-            } else {
-                Pending->Packets.clear ();
-            }
-            pending_requests.swap (Pending->Requests);
+            callbacks.swap (Pending->Callbacks);
         }
         if (!owner) {
             return;
         }
-
-        for (const auto state : pending_states) {
-            InvokeCallback ([&] { owner->OnConnectionStateChanged.Broadcast (state); });
-        }
-        for (const auto &[id, context] : pending_replies) {
-            std::shared_ptr<TFunction<void (const FZLinkStreamReplyReceivedContext &)>> callback;
-            {
-                std::lock_guard<std::mutex> lock (Hooks->Mutex);
-                const auto entry = Hooks->Reply.find (id);
-                if (entry != Hooks->Reply.end ()) {
-                    callback = entry->second.Callback;
-                }
-            }
-            if (callback) {
-                InvokeCallback ([&] { (*callback) (context); });
-            }
-        }
-        for (auto &packet : pending_packets) {
-            const auto found = PacketSubscriptions.find (packet.first);
-            if (found != PacketSubscriptions.end ()) {
-                auto callback = found->second.Callback;
-                if (callback && *callback) {
-                    InvokeCallback ([&] { (*callback) (packet.second); });
-                }
-            }
-        }
-        for (auto &request : pending_requests) {
-            if (*request.first) {
-                InvokeCallback ([&] { (*request.first) (request.second); });
-            }
+        // Preserve core callback registration order through main thread delivery.
+        for (auto &callback : callbacks) {
+            std::visit (
+              [&] (auto &event) {
+                  using event_t = std::decay_t<decltype (event)>;
+                  if constexpr (std::is_same_v<event_t, EZLinkStreamConnectionState>) {
+                      InvokeCallback ([&] { owner->OnConnectionStateChanged.Broadcast (event); });
+                  } else if constexpr (std::is_same_v<event_t, pending_reply_t>) {
+                      std::shared_ptr<TFunction<void (const FZLinkStreamReplyReceivedContext &)>>
+                        hook;
+                      {
+                          std::lock_guard<std::mutex> lock (Hooks->Mutex);
+                          const auto entry = Hooks->Reply.find (event.first);
+                          if (entry != Hooks->Reply.end ()) {
+                              hook = entry->second.Callback;
+                          }
+                      }
+                      if (hook) {
+                          InvokeCallback ([&] { (*hook) (event.second); });
+                      }
+                  } else if constexpr (std::is_same_v<event_t, pending_packet_t>) {
+                      const auto found = PacketSubscriptions.find (event.first);
+                      if (!cancel_callbacks && found != PacketSubscriptions.end ()) {
+                          auto handler = found->second.Callback;
+                          if (handler && *handler) {
+                              InvokeCallback ([&] { (*handler) (event.second); });
+                          }
+                      }
+                  } else {
+                      if (*event.first) {
+                          InvokeCallback ([&] { (*event.first) (event.second); });
+                      }
+                  }
+              },
+              callback);
         }
     }
 
@@ -420,8 +419,7 @@ class FZLinkStreamConnectorRuntime
         std::size_t local_count = 0;
         {
             std::lock_guard<std::mutex> lock (Pending->Mutex);
-            local_count = Pending->States.size () + Pending->Packets.size ()
-                          + Pending->Requests.size () + Pending->Replies.size ();
+            local_count = Pending->Callbacks.size ();
         }
         return static_cast<int> (local_count + Connector.pending_dispatch_count ());
     }
@@ -521,7 +519,7 @@ class FZLinkStreamConnectorRuntime
 #else
               if (pending->Owner) {
 #endif
-                  pending->Replies.emplace_back (id, std::move (context));
+                  pending->Callbacks.emplace_back (pending_reply_t{id, std::move (context)});
               }
           });
     }
@@ -581,6 +579,13 @@ class FZLinkStreamConnectorRuntime
         return converted;
     }
 
+    using pending_packet_t = std::pair<int32, FZLinkStreamPacket>;
+    using pending_request_t =
+      std::pair<std::shared_ptr<request_callback_t>, FZLinkStreamRequestResult>;
+    using pending_reply_t = std::pair<int32, FZLinkStreamReplyReceivedContext>;
+    using pending_callback_t = std::
+      variant<EZLinkStreamConnectionState, pending_packet_t, pending_request_t, pending_reply_t>;
+
     struct pending_state_t
     {
 #if __has_include("CoreMinimal.h")
@@ -592,18 +597,14 @@ class FZLinkStreamConnectorRuntime
 #endif
         mutable std::mutex Mutex;
         bool CancelCallbacks = false;
-        std::vector<EZLinkStreamConnectionState> States;
-        std::vector<std::pair<int32, FZLinkStreamPacket>> Packets;
-        std::vector<std::pair<std::shared_ptr<request_callback_t>, FZLinkStreamRequestResult>>
-          Requests;
-        std::vector<std::pair<int32, FZLinkStreamReplyReceivedContext>> Replies;
+        std::deque<pending_callback_t> Callbacks;
     };
 
     static void EnqueueState (const std::shared_ptr<pending_state_t> &PendingState,
                               EZLinkStreamConnectionState State)
     {
         std::lock_guard<std::mutex> lock (PendingState->Mutex);
-        PendingState->States.push_back (State);
+        PendingState->Callbacks.emplace_back (State);
     }
 
     UZLinkStreamConnector *Owner () const
