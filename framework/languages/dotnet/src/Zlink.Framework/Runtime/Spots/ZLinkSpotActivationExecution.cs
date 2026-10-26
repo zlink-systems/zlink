@@ -231,7 +231,7 @@ internal abstract partial class ZLinkSpotActivation
     {
         EnsureContextOperationAllowed();
         ArgumentNullException.ThrowIfNull(work);
-        return new ZLinkWorkerCall<TResult>(_runtime.WorkerPool, work, _runtime.ErrorSink);
+        return new ZLinkWorkerCall<TResult>(_runtime.WorkerPool, work);
     }
 
     public IZLinkWorkerCall<TResult> RunIoWorker<TResult>(
@@ -240,11 +240,7 @@ internal abstract partial class ZLinkSpotActivation
     {
         EnsureContextOperationAllowed();
         ArgumentNullException.ThrowIfNull(work);
-        return new ZLinkIoWorkerCall<TResult>(
-            _runtime.WorkerPool.ShutdownToken,
-            work,
-            _runtime.ErrorSink
-        );
+        return new ZLinkIoWorkerCall<TResult>(_runtime.WorkerPool.ShutdownToken, work);
     }
 
     internal Task<ZLinkSpotRelocationSeal> WaitForRelocationReadyTurnAsync(
