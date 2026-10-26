@@ -7,7 +7,8 @@ const {
   ZLinkNodeRawMeshBackend
 } = require('../../packages/framework/dist/runtime/backend/node/node-raw-mesh-backend');
 const {
-  SERVICE_WIRE_REQUIRED_CAPABILITY
+  SERVICE_WIRE_REQUIRED_CAPABILITY,
+  ServiceWireCommand
 } = require('../../packages/framework/dist/runtime/foundation/service-wire-constants.generated');
 
 function descriptor(rid, type, overrides = {}) {
@@ -45,7 +46,7 @@ function fixture(targets) {
     descriptor('source', [], { objectRole: 'client' })
   );
   for (const target of targets)
-    assert.equal(topology.admit(target, `connection-${target.nodeRoutingId}`), 'admitted');
+    assert.equal(topology.admit(target, `connection-${target.nodeRoutingId}`, undefined, undefined, ServiceWireCommand.admit), 'admitted');
   const backend = new ZLinkNodeRawMeshBackend('play', 'source', {});
   backend.runtime = { topology, isPeerRouteReady: () => true };
   let submissions = 0;

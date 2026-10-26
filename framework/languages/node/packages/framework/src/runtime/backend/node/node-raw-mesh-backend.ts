@@ -815,7 +815,9 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
 
   status() {
     const descriptor = this.runtime?.topology.localDescriptor() ?? this.createDescriptor();
-    const peers = this.runtime?.topology.peers() ?? [];
+    const peers = (this.runtime?.topology.peers() ?? []).filter(
+      (peer) => this.runtime?.isPeerRouteReady(peer.descriptor.nodeRoutingId) === true
+    );
     return {
       state: stateCode(descriptor.state),
       routingId: descriptor.nodeRoutingId as RoutingId,
