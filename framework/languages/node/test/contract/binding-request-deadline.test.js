@@ -1,6 +1,6 @@
 'use strict';
 
-const { prepareZLinkRequestReply, identityRequestReply } = require('../../packages/framework/dist/runtime/messaging/request-result');
+const { observeZLinkRequestReply, ZLinkRequestResult, identityRequestReply } = require('../../packages/framework/dist/runtime/messaging/request-result');
 
 const assert = require('node:assert/strict');
 const test = require('node:test');
@@ -106,7 +106,7 @@ for (const backpressured of [false, true]) {
     const registration = framework.createFrameworkRegistration({
       spotNodes: { mesh: { router: { bind: 'inproc://binding-admission' } } }
     });
-    const client = new framework.DefaultZLinkRouteClient(registration, { request(_mesh, _rid, _packet, _request, _timeout, _signal, _metadata, onAdmitted) { return prepareZLinkRequestReply(fixture.adapter(onAdmitted), identityRequestReply); } });
+    const client = new framework.DefaultZLinkRouteClient(registration, { request(entry, _mesh, _rid, _packet, _request, _timeout, _signal, _metadata, onAdmitted) { return observeZLinkRequestReply(fixture.adapter(onAdmitted), identityRequestReply, identityRequestReply, entry); } });
     const pending = client.requestToNode('mesh', 'peer', {}).submit();
     assert.ok(pending.admitted instanceof Promise);
     let accepted = false;
@@ -139,8 +139,8 @@ for (const terminal of ['timeout', 'cancellation']) {
     });
     const controller = new AbortController();
     const client = new framework.DefaultZLinkRouteClient(registration, {
-      request(_mesh, _rid, _packet, _request, _timeout, signal, _metadata, onAdmitted) {
-        return prepareZLinkRequestReply(awaitWithAbort(fixture.adapter(onAdmitted), signal), identityRequestReply);
+      request(entry, _mesh, _rid, _packet, _request, _timeout, signal, _metadata, onAdmitted) {
+        return observeZLinkRequestReply(awaitWithAbort(fixture.adapter(onAdmitted), signal), identityRequestReply, identityRequestReply, entry);
       }
     });
     t.mock.timers.enable({ apis: ['setTimeout'] });
@@ -162,3 +162,47 @@ for (const terminal of ['timeout', 'cancellation']) {
     reply.resolve([]);
   });
 }
+
+for (const failReading of [false, true]) {
+  test(`binding reply retention closes indexed parts without iterators (read failure=${failReading})`, async t => {
+    let iterations = 0;
+    const closed = [];
+    const failure = new Error('payload read failed');
+    const bytes = [Buffer.from('header'), Buffer.alloc(1024, 7)];
+    const messages = bytes.map((body, index) => ({
+      data() { if (failReading && index === 0) throw failure; return body; },
+      close() { closed.push(index); }
+    }));
+    messages[Symbol.iterator] = function () {
+      iterations++;
+      return Array.prototype[Symbol.iterator].call(this);
+    };
+    const fixture = requestFixture(t, {
+      result: zlink.SubmitResult.Ok,
+      admitted: Promise.resolve(),
+      reply: Promise.resolve(messages)
+    });
+    if (failReading) await assert.rejects(fixture.router(), error => error === failure);
+    else {
+      const retained = await fixture.router();
+      assert.equal(retained[0], bytes[0]);
+      assert.equal(retained[1], bytes[1]);
+    }
+    assert.deepEqual(closed, [0, 1]);
+    assert.equal(iterations, 0, 'indexed message storage needs no iterator to release its parts');
+  });
+}
+
+test('completion cleanup closes each indexed part without allocating an iterator', () => {
+  const { closeMeshCompletion } = require('../../packages/framework/dist/runtime/backend/mesh-completion-table');
+  const closed = [];
+  let iterations = 0;
+  const parts = [0, 1].map(index => ({ close() { closed.push(index); } }));
+  parts[Symbol.iterator] = function () {
+    iterations++;
+    return Array.prototype[Symbol.iterator].call(this);
+  };
+  closeMeshCompletion({ parts });
+  assert.deepEqual(closed, [0, 1]);
+  assert.equal(iterations, 0);
+});

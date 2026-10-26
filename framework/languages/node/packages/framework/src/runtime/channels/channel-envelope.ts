@@ -314,7 +314,7 @@ export function encodeChannelErrorReplyParts(
       request.flowId,
       request.flowOrigin
     ),
-    encodeJsonBytes(null)
+    encodeJsonText(null)
   ];
 }
 
@@ -536,7 +536,7 @@ function toMessageLike(value: unknown, schema?: ZLinkJsonSchema): MessageLike {
   if (Buffer.isBuffer(value) || value instanceof Uint8Array || isMessage(value)) {
     return value;
   }
-  return encodeJsonBytes(value, schema);
+  return encodeJsonText(value, schema);
 }
 
 function contentTypeOf(value: unknown): string {
@@ -553,8 +553,8 @@ function isMessage(value: unknown): value is Message {
   );
 }
 
-function encodeJsonBytes(value: unknown, schema?: ZLinkJsonSchema): Buffer {
-  return Buffer.from(stringifyFrameworkJsonV1(value, schema));
+function encodeJsonText(value: unknown, schema?: ZLinkJsonSchema): string {
+  return stringifyFrameworkJsonV1(value, schema);
 }
 
 function encodeChannelHeader(
