@@ -7,6 +7,7 @@ import systems.zlink.framework.runtime.internal.dispatch.ZLinkReceiveBatchBudget
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 
 import java.time.Duration;
+import java.util.Arrays;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -393,6 +394,10 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
         closed = true;
         LockSupport.unpark(maintenance);
         cancelPendingOnOwner();
+        Arrays.fill(deadlineHeads, null);
+        Arrays.fill(deadlineTails, null);
+        Arrays.fill(deadlineOccupied, 0);
+        deadlineCursor = null;
         return maintenance;
     }
 

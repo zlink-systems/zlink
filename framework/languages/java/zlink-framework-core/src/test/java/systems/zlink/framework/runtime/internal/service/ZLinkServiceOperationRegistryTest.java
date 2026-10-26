@@ -496,6 +496,79 @@ final class ZLinkServiceOperationRegistryTest {
     }
 
     @Test
+    void completedDeadlinesAreReleasedWithinOneWheelRotation() throws Exception {
+        AtomicLong clock = new AtomicLong();
+        int completedRequests = 32;
+        try (var registry =
+                new ZLinkServiceOperationRegistry(
+                        new ManualMaintenance(), new IllegalStateException("closed"), clock::get)) {
+            for (int index = 0; index < completedRequests; index++) {
+                var operation =
+                        ZLinkCompletionBridge.await(registry.register(Duration.ofSeconds(30)));
+                assertTrue(registry.complete(operation.id(), null));
+            }
+            assertEquals(0, registry.pendingCount());
+            assertEquals(0, ZLinkCompletionBridge.await(registry.expire(clock.get())));
+            clock.set(TimeUnit.MILLISECONDS.toNanos(256));
+            assertEquals(0, ZLinkCompletionBridge.await(registry.expire(clock.get())));
+            assertEquals(0, wheelEntryCount(registry));
+        }
+    }
+
+    @Test
+    void closeReleasesCompletedDeadlineReferences() throws Exception {
+        var registry = new ZLinkServiceOperationRegistry(new ManualMaintenance());
+        try {
+            var completed = ZLinkCompletionBridge.await(registry.register(Duration.ofSeconds(30)));
+            ZLinkCompletionBridge.await(registry.register(Duration.ofSeconds(30)));
+            assertEquals(2, registry.pendingCount());
+            assertEquals(2, wheelEntryCount(registry));
+            assertTrue(registry.complete(completed.id(), null));
+            assertEquals(1, registry.pendingCount());
+            registry.close();
+            assertTrue(registry.isClosed());
+            assertEquals(0, registry.pendingCount());
+            assertEquals(0, wheelEntryCount(registry));
+            var tails = ZLinkServiceOperationRegistry.class.getDeclaredField("deadlineTails");
+            tails.setAccessible(true);
+            for (Object tail : (Object[]) tails.get(registry)) assertNull(tail);
+            var cursor = ZLinkServiceOperationRegistry.class.getDeclaredField("deadlineCursor");
+            cursor.setAccessible(true);
+            assertNull(cursor.get(registry));
+        } finally {
+            registry.close();
+        }
+    }
+
+    private static int wheelEntryCount(ZLinkServiceOperationRegistry registry) throws Exception {
+        return ZLinkCompletionBridge.await(
+                ownerLane(registry)
+                        .runAsync(
+                                () -> {
+                                    try {
+                                        var heads =
+                                                ZLinkServiceOperationRegistry.class
+                                                        .getDeclaredField("deadlineHeads");
+                                        heads.setAccessible(true);
+                                        int count = 0;
+                                        for (Object entry : (Object[]) heads.get(registry)) {
+                                            while (entry != null) {
+                                                count++;
+                                                var next =
+                                                        entry.getClass()
+                                                                .getDeclaredField("deadlineNext");
+                                                next.setAccessible(true);
+                                                entry = next.get(entry);
+                                            }
+                                        }
+                                        return count;
+                                    } catch (ReflectiveOperationException failure) {
+                                        throw new AssertionError(failure);
+                                    }
+                                }));
+    }
+
+    @Test
     void wheelHandlesMixedDeadlinesAndIdentities() {
         AtomicLong clock = new AtomicLong();
         var maintenance = new ManualMaintenance();
