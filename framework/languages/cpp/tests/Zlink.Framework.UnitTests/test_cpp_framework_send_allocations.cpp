@@ -4,6 +4,7 @@
 #include "runtime/mesh/mesh_node_runtime.hpp"
 #include "runtime/locations/in_memory_location_store.hpp"
 #include "runtime_failure_fixture.hpp"
+#include "stateful_object_sync.hpp"
 #include "runtime/channels/channel_runtime.hpp"
 #include "runtime/messaging/client_call_codec.hpp"
 
@@ -352,7 +353,7 @@ TEST (SendAllocations, ReceiveTurnRetainsCallbacksAcrossNativeSuspension)
           1,
           descriptor.mesh_name,
           zlink::routing_id_t::from (descriptor.node_routing_id).to_string ()};
-        const auto created = runtime.objects ().begin_reserved_object (actor, "actor", {});
+        const auto created = fw::test::begin_reserved_object (runtime.objects (), actor, "actor", {});
         ASSERT_EQ (created.error, stateful::stateful_error_t::none);
         ASSERT_EQ (runtime.objects ().commit_create (created.attempt),
                    stateful::stateful_error_t::none);
