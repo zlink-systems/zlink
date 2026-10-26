@@ -15,6 +15,13 @@ const {
 const {
   ApplicationIngressRecordOwner
 } = require('../../packages/framework/dist/runtime/application-jobs/application-ingress-record-owner');
+const {
+  ZLinkChannelDispatchPipeline
+} = require('../../packages/framework/dist/runtime/channels/channel-dispatch-pipeline');
+const {
+  ZLinkDispatchErrorSurface,
+  ZLinkDispatchMessageKind
+} = require('../../packages/framework/dist/contracts/Dispatch/ZLinkDispatchOptions');
 
 test('local job backlog warns once until every local waiter leaves', async () => {
   telemetry.reset();
@@ -594,6 +601,178 @@ test('application job permit stays queued until the first user callback instruct
   });
 
   assert.equal(queue.snapshot().permitsInUse, 0n);
+});
+
+test('channel dispatch retains its permit through decode and filters until handler entry', async () => {
+  for (const filtered of [false, true]) {
+    const queue = new ApplicationJobQueue(
+      resolveApplicationJobQueueConfiguration({ maxQueuedApplicationJobs: 1n }, () => 8n)
+    );
+    const permit = await queue.acquire(undefined, 'remote');
+    permit.markApplicationQueued();
+    const observations = [];
+    const failures = [];
+
+    const pipeline = new ZLinkChannelDispatchPipeline({
+      dispatchErrors: {
+        flow: {
+          flowCreationEnabled: () => false,
+          begin: () => undefined
+        },
+        report(record) {
+          failures.push(record);
+        }
+      },
+      surface: ZLinkDispatchErrorSurface.Channel,
+      channelName: 'permit-channel',
+      ...(filtered
+        ? {
+            filters: [
+              {
+                async invoke(_context, next) {
+                  observations.push('filter');
+                  assert.equal(queue.snapshot().queuedApplicationJobs, 1n);
+                  await next();
+                }
+              }
+            ]
+          }
+        : {})
+    });
+
+    await runWithApplicationJobPermit(permit, () =>
+      pipeline.dispatchOneWay({
+        fields: {
+          messageKind: ZLinkDispatchMessageKind.Send,
+          packetName: 'permit.packet'
+        },
+        envelope: {
+          header: {
+            contentType: 'application/x-test',
+            channelName: 'permit-channel',
+            messageName: 'permit.packet'
+          },
+          payload: Buffer.from('{"value":"decoded"}')
+        },
+        codecs: {
+          serializers: new Map([
+            [
+              'application/x-test',
+              {
+                deserialize() {
+                  observations.push('decode');
+                  assert.equal(queue.snapshot().queuedApplicationJobs, 1n);
+                  return { value: 'decoded' };
+                }
+              }
+            ]
+          ])
+        },
+        handler: {
+          handle(message) {
+            assert.equal(queue.snapshot().queuedApplicationJobs, 0n);
+            observations.push('handler');
+            assert.equal(message.value, 'decoded');
+          }
+        },
+        context: {
+          channelName: 'permit-channel',
+          contentType: 'application/x-test',
+          packetName: 'permit.packet',
+          metadata: new Map()
+        }
+      })
+    );
+
+    assert.deepEqual(failures, []);
+    assert.deepEqual(
+      observations,
+      filtered ? ['filter', 'decode', 'handler'] : ['decode', 'handler']
+    );
+    assert.equal(queue.snapshot().permitsInUse, 0n);
+  }
+});
+
+test('channel decode and filter rejection retain the permit until dispatch cleanup', async () => {
+  const createQueue = () =>
+    new ApplicationJobQueue(
+      resolveApplicationJobQueueConfiguration({ maxQueuedApplicationJobs: 1n }, () => 8n)
+    );
+  const dispatchErrors = (report) => ({
+    flow: {
+      flowCreationEnabled: () => false,
+      begin: () => undefined
+    },
+    report
+  });
+  const dispatch = (payload, handle) => ({
+    fields: {
+      messageKind: ZLinkDispatchMessageKind.Send,
+      packetName: 'permit.packet'
+    },
+    envelope: {
+      header: {
+        contentType: 'application/json',
+        channelName: 'permit-channel',
+        messageName: 'permit.packet'
+      },
+      payload: Buffer.from(payload)
+    },
+    handler: { handle },
+    context: {
+      channelName: 'permit-channel',
+      contentType: 'application/json',
+      packetName: 'permit.packet',
+      metadata: new Map()
+    }
+  });
+
+  const decodeQueue = createQueue();
+  const decodePermit = await decodeQueue.acquire(undefined, 'remote');
+  decodePermit.markApplicationQueued();
+  const queuedAtDecodeFailure = [];
+  const decodePipeline = new ZLinkChannelDispatchPipeline({
+    dispatchErrors: dispatchErrors((record) => {
+      queuedAtDecodeFailure.push(decodeQueue.snapshot().queuedApplicationJobs);
+      assert.equal(record.action, 'drop');
+    }),
+    surface: ZLinkDispatchErrorSurface.Channel,
+    channelName: 'permit-channel'
+  });
+  await runWithApplicationJobPermit(decodePermit, () =>
+    decodePipeline.dispatchOneWay(
+      dispatch('{broken', () => assert.fail('decode failure invoked the handler'))
+    )
+  );
+  assert.deepEqual(queuedAtDecodeFailure, [1n]);
+  assert.equal(decodeQueue.snapshot().permitsInUse, 0n);
+
+  const filterQueue = createQueue();
+  const filterPermit = await filterQueue.acquire(undefined, 'remote');
+  filterPermit.markApplicationQueued();
+  let handlerCalls = 0;
+  const filterPipeline = new ZLinkChannelDispatchPipeline({
+    dispatchErrors: dispatchErrors(() => assert.fail('filter rejection reported a dispatch error')),
+    surface: ZLinkDispatchErrorSurface.Channel,
+    channelName: 'permit-channel',
+    filters: [
+      {
+        async invoke() {
+          assert.equal(filterQueue.snapshot().queuedApplicationJobs, 1n);
+        }
+      }
+    ]
+  });
+  await runWithApplicationJobPermit(filterPermit, async () => {
+    await filterPipeline.dispatchOneWay(
+      dispatch('{"value":"filtered"}', () => {
+        handlerCalls += 1;
+      })
+    );
+    assert.equal(filterQueue.snapshot().queuedApplicationJobs, 1n);
+  });
+  assert.equal(handlerCalls, 0);
+  assert.equal(filterQueue.snapshot().permitsInUse, 0n);
 });
 
 test('detached exact-target turn retains its ingress permit until callback start', async () => {

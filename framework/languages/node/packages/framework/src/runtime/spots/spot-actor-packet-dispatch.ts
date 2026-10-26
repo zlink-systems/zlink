@@ -499,8 +499,8 @@ export class ZLinkSpotActorPacketDispatch {
             `Actor request '${actorId}' expired before handler admission.`
           );
         }
-        releaseApplicationJobPermitBeforeHandler();
         this.trace(ZLinkMessageFlowOutcome.Dispatched, actorId, header, messageKind);
+        releaseApplicationJobPermitBeforeHandler();
       }
     });
     try {

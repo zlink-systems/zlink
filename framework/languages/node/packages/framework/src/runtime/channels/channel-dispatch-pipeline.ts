@@ -343,7 +343,6 @@ export class ZLinkChannelDispatchPipeline {
     const context = dispatch.context;
     const fields = dispatch.fields;
     const signal = dispatch.signal;
-    releaseApplicationJobPermitBeforeHandler();
     if (this.filters.length === 0) {
       //  Fast path for the dominant unfiltered dispatch: skip the filter
       //  context object and chain machinery entirely.
@@ -353,6 +352,7 @@ export class ZLinkChannelDispatchPipeline {
         resolveMessageTypeForDecode(dispatch.messageType)
       );
       this.trace(ZLinkMessageFlowOutcome.Dispatched, fields);
+      releaseApplicationJobPermitBeforeHandler();
       return handler.handle(payload, context);
     }
     return this.invokeFiltered(
@@ -388,6 +388,7 @@ export class ZLinkChannelDispatchPipeline {
           resolveMessageTypeForDecode(messageType)
         );
         this.trace(ZLinkMessageFlowOutcome.Dispatched, fields);
+        releaseApplicationJobPermitBeforeHandler();
         value = await handler.handle(payload, context);
       },
       signal

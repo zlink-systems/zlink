@@ -292,13 +292,14 @@ export class ZLinkSpotRoutePacketDispatch {
               >,
               this.options.providerResolver
             );
-            releaseApplicationJobPermitBeforeHandler();
-            response = await handler.handle(spot, envelope.payload, {
+            const handlerContext = {
               channelName: envelope.channelName,
               packetName: envelope.packetName!,
               metadata: zlinkMessageMetadata(envelope.metadata),
               correlationId: undefined
-            });
+            };
+            releaseApplicationJobPermitBeforeHandler();
+            response = await handler.handle(spot, envelope.payload, handlerContext);
           }
         },
         zlinkSerialWorkOptions(
