@@ -946,7 +946,10 @@ ZLINK_EXPORT zlink_config_result_t zlink_socket_connection_attempts_snapshot (
 
 **Core는 성공한 `zlink_connect()` 등록(intent)마다 연결 상태와 최근 실패 결과를 보존하고, 이 함수가
 그 사실의 정본이다.** 행 하나는 성공한 `zlink_connect()` 호출 하나(intent)다. 같은 endpoint로 여러 번
-connect하면 행도 여럿이며 `intent_id`로 구분한다. 주소 해석 결과나 physical pipe·lane은 행을 나누지 않는다. 같은 intent의 자동 재연결은 같은 행의
+connect하면 행도 여럿이며 `intent_id`로 구분한다. 각 intent는 transport와 관계없이 자기 physical 연결을 따로 가진다.
+같은 endpoint 문자열로 다시 connect해도 기존 연결을 함께 쓰지 않는다. 연결된 peer의 routing id가 같으면
+`ZLINK_OPT_RID_DUPLICATE_POLICY`가 정한 대로 처리한다.
+주소 해석 결과나 physical pipe·lane은 행을 나누지 않는다. 같은 intent의 자동 재연결은 같은 행의
 수명에 속한다.
 
 - **상태.** 행은 `zlink_connect()`가 성공을 반환하기 전에 `CONNECTING`으로 생긴다. 주소 해석, transport
@@ -969,7 +972,7 @@ connect하면 행도 여럿이며 `intent_id`로 구분한다. 주소 해석 결
   `CONNECTION_LOST`·`ESTABLISHED`다. `normalized_errno`와 `disconnect_reason`은 진단용이며 binding과
   상위 계층은 원인을 다시 분류하지 않는다. IPC의 `ENDPOINT_MISSING`은 intent가 없다는 뜻의
   `ZLINK_CONNECT_NOT_FOUND`와 다르다.
-- **제거.** 성공한 `zlink_disconnect()`와 socket close는 행을 제거한다. 행 제거를 실패로 바꾸지 않으며,
+- **제거.** 성공한 [`zlink_disconnect()`](#zlink_disconnect)와 socket close는 행을 제거한다. 행 제거를 실패로 바꾸지 않으며,
   제거된 intent의 늦은 시도 결과는 새 intent의 행을 바꾸지 않는다. `zlink_connect()` 자체가 실패하면 행을
   남기지 않는다.
 - **조회.** Snapshot은 행 전체를 한 시점의 일관된 값으로 반환하며 monitor 생성·event 소비·monitor queue
@@ -1021,7 +1024,8 @@ ZLINK_EXPORT zlink_connect_result_t zlink_disconnect (void *s_, const char *addr
 
 이전에 설정된 연결을 제거한다.
 
-성공한 `zlink_disconnect(endpoint)`는 해당 local 연결 등록과 자동 재연결 intent를 제거한다. 그 intent의 [연결 상태 행](#zlink_socket_connection_attempts_snapshot)도 함께 없어진다. 이후의 새 submit은
+성공한 `zlink_disconnect(endpoint)`는 그 endpoint 문자열로 등록된 local 연결 등록과 자동 재연결 intent를 모두 제거하고,
+그 intent들의 연결을 모두 닫는다. 그 intent들의 [연결 상태 행](#zlink_socket_connection_attempts_snapshot)도 함께 없어진다. 이후의 새 submit은
 제거된 연결을 admission 대상으로 다시 선택하지 않는다. 제거된 연결의 physical 자원 정리(비동기)와 뒤이은
 `zlink_connect(endpoint)`가 시작하는 새 연결 시도는 겹칠 수 있으며, 새 시도의 진행은 monitor event 소비나 이전
 연결의 terminal edge 관찰을 조건으로 하지 않는다(05-polling §3 command progress). 원격 ROUTER에 남아 있는 같은
