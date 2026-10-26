@@ -10,6 +10,7 @@ import {
   type ZLinkSpotRelocationAdapter
 } from '@zlink-systems/framework';
 import {
+  PacketNames,
   Names,
   Game,
   adjacentFields,
@@ -17,11 +18,14 @@ import {
   fieldId
 } from '../shared/constants';
 import {
+  restoreNotification,
   ActionRejected,
   BorderPresence,
   BorderVisible,
   EnterField,
-  MoveRequest, PartyCommand, PartyCommandResult, PartyView
+  MoveRequest,
+  PartyCommand,
+  PartyCommandResult
 } from '../shared/messages';
 import { Player } from '../shared/player';
 import { FieldState } from './domain';
@@ -60,6 +64,9 @@ export class Field implements ZLinkSpot<Player> {
   }
   async onDisconnectActor(actor: Player): Promise<void> {
     this.state.connected(actor.context.actorId, false);
+  }
+  isVisible(actor: Player): boolean {
+    return Object.hasOwn(this.state.visible, actor.context.actorId);
   }
   remember(actor: Player): void {
     this.state.connected(actor.context.actorId, true);
@@ -115,7 +122,7 @@ export class Field implements ZLinkSpot<Player> {
     }
     const response = await this.context.outbound.requestToSpot(partyId,
       new PartyCommand(actor.context.actorId, true)).submit<PartyCommandResult>();
-    if (response.rejection) await actor.context.boundSession.send(Object.assign(new ActionRejected(), response.rejection)).submit();
+    if (response.rejection) await actor.context.boundSession.send(restoreNotification(PacketNames.actionRejected, response.rejection)).submit();
     else actor.partyId = partyId;
   }
   async enter(actor: Player): Promise<void> {
@@ -124,14 +131,14 @@ export class Field implements ZLinkSpot<Player> {
     }
     const result = await this.context.outbound.requestToSpot(actor.partyId,
       new PartyCommand(actor.context.actorId, false, true)).submit<PartyCommandResult>();
-    if (result.rejection) await actor.context.boundSession.send(Object.assign(new ActionRejected(), result.rejection)).submit();
+    if (result.rejection) await actor.context.boundSession.send(restoreNotification(PacketNames.actionRejected, result.rejection)).submit();
   }
   async show(actor: Player): Promise<void> {
     await actor.sendState();
     if (!actor.partyId) return;
     const result = await this.context.outbound.requestToSpot(actor.partyId,
       new PartyCommand(actor.context.actorId)).submit<PartyCommandResult>();
-    if (result.view) await actor.context.boundSession.send(Object.assign(new PartyView(), result.view)).submit();
+    if (result.view) await actor.context.boundSession.send(restoreNotification(PacketNames.partyView, result.view)).submit();
   }
   capture(): Uint8Array {
     return Buffer.from(JSON.stringify(this.state.capture(), (_, value) => typeof value === 'bigint' ? value.toString() : value));

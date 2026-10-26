@@ -8,8 +8,9 @@ import { runHost, failHost } from '../shared/hosting';
 import { Names } from '../shared/constants';
 import { PlayerFactory, PlayerRelocation } from '../shared/player';
 import { Town, TownRelocation } from './town';
-import { Entry, EnterTown } from '../shared/entry';
+import { EntryNotifications, Entry, EnterTown } from '../shared/entry';
 import {
+  TownNotifications,
   TownQuery,
   TownReconnect,
   ChangeChannel,
@@ -36,6 +37,8 @@ runHost((_builder, config, mesh) => {
   });
   return {
     providers: [
+      EntryNotifications,
+      TownNotifications,
       Entry,
       Town,
       TownRelocation,

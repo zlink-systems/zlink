@@ -19,6 +19,7 @@ public sealed class PartySpot(
 
     public void Configure()
     {
+        Context.Handlers.AddActorPacket<PartySpotDungeonViewNotification, PlayerActor>(nameof(DungeonView));
         Context.Handlers.AddActorPacket<RejectionDelivery, PlayerActor>(nameof(ActionRejected));
         Context.Handlers.AddActorPacket<PartyReconnect, PlayerActor>(nameof(JoinLobbyRequest));
         Context.Handlers.AddActorPacket<PartyQuery, PlayerActor>(nameof(ViewRequest));
@@ -165,4 +166,11 @@ public sealed class Arrived : IZLinkSpotPacketHandler<PartySpot, DungeonMemberEn
 {
     public ValueTask HandleAsync(PartySpot spot, DungeonMemberEntered request, CancellationToken ct)
     { spot.Arrived(request); return ValueTask.CompletedTask; }
+}
+
+[ZLinkSpotActorSendHandler(nameof(DungeonView))]
+public sealed class PartySpotDungeonViewNotification : IZLinkSpotActorSendHandler<PartySpot, PlayerActor, DungeonView>
+{
+    public ValueTask HandleAsync(PartySpot spot, PlayerActor actor, IZLinkMessageContext context,
+        DungeonView message, CancellationToken ct) => actor.DeliverAsync(message);
 }

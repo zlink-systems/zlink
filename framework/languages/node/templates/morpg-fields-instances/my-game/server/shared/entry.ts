@@ -6,7 +6,7 @@ import type {
   ZLinkMessageContext
 } from '@zlink-systems/framework';
 import { PacketNames } from './constants';
-import { JoinWorldRequest, EnterField } from './messages';
+import { PartyView, BorderVisible, DungeonView, JoinWorldRequest, EnterField } from './messages';
 import { Player } from './player';
 @Injectable({ scope: Scope.TRANSIENT })
 export class Entry implements ZLinkEntrySpot<Player> {
@@ -29,5 +29,32 @@ export class EnterWorld {
   ): Promise<void> {
     if (request.playerId !== actor.context.actorId) throw new Error('Player identity mismatch');
     actor.move(new EnterField(request.x, 0n));
+  }
+}
+
+@Injectable()
+@zlinkEntrySpotActorSendHandler({
+  entrySpot: () => Entry,
+  actor: () => Player,
+  packetName: PacketNames.partyView
+})
+@zlinkEntrySpotActorSendHandler({
+  entrySpot: () => Entry,
+  actor: () => Player,
+  packetName: PacketNames.borderVisible
+})
+@zlinkEntrySpotActorSendHandler({
+  entrySpot: () => Entry,
+  actor: () => Player,
+  packetName: PacketNames.dungeonView
+})
+export class EntryNotifications {
+  async handle(
+    _spot: Entry,
+    actor: Player,
+    context: ZLinkMessageContext,
+    message: PartyView | BorderVisible | DungeonView
+  ): Promise<void> {
+    await actor.deliver(context.packetName, message);
   }
 }

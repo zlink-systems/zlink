@@ -3,12 +3,16 @@ import { zlinkSpotActorSendHandler, zlinkSpotPacketHandler } from '@zlink-system
 import type { ZLinkMessageContext } from '@zlink-systems/framework';
 import { PacketNames } from '../shared/constants';
 import {
+  BorderVisible,
   JoinWorldRequest,
   ViewRequest,
   AdvanceRequest,
   DungeonView,
   PrepareDungeon,
-  DungeonPrepared, PartyView, EnterDungeonRequest, JoinDungeon
+  DungeonPrepared,
+  PartyView,
+  EnterDungeonRequest,
+  JoinDungeon
 } from '../shared/messages';
 import { Player } from '../shared/player';
 import { Dungeon } from './spots';
@@ -72,10 +76,6 @@ export class Prepare {
     return spot.prepare(request);
   }
 }
-const deliveryPackets: ReadonlyMap<string, new () => object> = new Map<string, new () => object>([
-  [PacketNames.partyView, PartyView],
-  [PacketNames.dungeonView, DungeonView]
-]);
 @Injectable()
 @zlinkSpotActorSendHandler({ spot: () => Dungeon, actor: () => Player, packetName: PacketNames.partyView })
 @zlinkSpotActorSendHandler({
@@ -90,10 +90,7 @@ export class Delivery {
     context: ZLinkMessageContext,
     message: DungeonView | PartyView
   ): Promise<void> {
-    const type = deliveryPackets.get(context.packetName);
-    if (!type) throw new Error(`Unregistered dungeon push: ${context.packetName}`);
-    // Restore the declared public DTO class before forwarding (#1731).
-    await actor.context.boundSession.send(Object.assign(new type(), message)).submit();
+    await actor.deliver(context.packetName, message);
   }
 }
 
@@ -109,5 +106,22 @@ export class EnterAgain {
 export class TravelAgain {
   async handle(spot: Dungeon, actor: Player, _context: ZLinkMessageContext, request: JoinDungeon): Promise<void> {
     if (request.dungeonId !== String(spot.context.spotId)) actor.context.joinSpot(request.dungeonId, request).defer();
+  }
+}
+
+@Injectable()
+@zlinkSpotActorSendHandler({
+  spot: () => Dungeon,
+  actor: () => Player,
+  packetName: PacketNames.borderVisible
+})
+export class DungeonNotifications {
+  async handle(
+    _spot: Dungeon,
+    actor: Player,
+    context: ZLinkMessageContext,
+    message: BorderVisible
+  ): Promise<void> {
+    await actor.deliver(context.packetName, message);
   }
 }

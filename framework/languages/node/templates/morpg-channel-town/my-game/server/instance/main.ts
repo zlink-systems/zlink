@@ -2,7 +2,7 @@ import { ZLinkUserSpotExecutionMode } from '@zlink-systems/framework';
 import { runHost, failHost } from '../shared/hosting';
 import { Names } from '../shared/constants';
 import { PlayerFactory, PlayerRelocation } from '../shared/player';
-import { Entry, EnterTown } from '../shared/entry';
+import { EntryNotifications, Entry, EnterTown } from '../shared/entry';
 import { Dungeon, DungeonRelocation } from './dungeon';
 import {
   Prepare,
@@ -29,6 +29,7 @@ runHost((_builder, config, mesh) => {
   });
   return {
     providers: [
+      EntryNotifications,
       Entry,
       EnterTown,
       PlayerFactory,

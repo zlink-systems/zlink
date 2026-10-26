@@ -1,4 +1,7 @@
 #pragma once
+#include <optional>
+#include <type_traits>
+#pragma once
 #include "domain.hpp"
 #include "data.hpp"
 #include <zlink/framework.hpp>
@@ -12,6 +15,17 @@ class Player final : public fx::actor_t
     PlayerData &data_;
 
   public:
+    template <class Message> fx::task_t<void> deliver (const Message &message, bool visible = true)
+    {
+        std::optional<std::string> source;
+        if constexpr (std::is_same_v<Message, PlayerView>)
+            source = Names::zone_id (message.channel);
+        else if constexpr (std::is_same_v<Message, ChannelView>)
+            source = Names::zone_id (message.channelId);
+        if (source && (context_.spot_id () != *source || !visible))
+            return fx::task_t<void> (fx::result_t<void>::success ());
+        return context_.bound_session ().send (message).async ();
+    }
     GoldBalance gold;
     Player (fx::actor_context_t context, PlayerData &data, std::int64_t initial) :
         context_ (std::move (context)), data_ (data), gold (initial)
@@ -89,7 +103,12 @@ class WorldEntry final : public fx::entry_spot_t<Player>
     explicit WorldEntry (fx::entry_spot_context_t context) : context_ (std::move (context)) {}
     fx::entry_spot_context_t &context () noexcept override { return context_; }
     const fx::entry_spot_context_t &context () const noexcept override { return context_; }
-    void configure () override { context_.handlers ().add_actor_send<&WorldEntry::enter> (); }
+    void configure () override
+    {
+        context_.handlers ().add_actor_send<&WorldEntry::notification_PlayerView> ();
+        context_.handlers ().add_actor_send<&WorldEntry::notification_ChannelView> ();
+        context_.handlers ().add_actor_send<&WorldEntry::enter> ();
+    }
     fx::task_t<void>
     enter (Player &actor, fx::message_context_t &, const EnterWorldRequest &request)
     {
@@ -100,5 +119,17 @@ class WorldEntry final : public fx::entry_spot_t<Player>
     }
     fx::task_t<void> on_actor_joined (Player &) override { co_return; }
     fx::task_t<void> on_leave_actor (Player &) override { co_return; }
+
+    fx::task_t<void>
+    notification_PlayerView (Player &actor, fx::message_context_t &, const PlayerView &message)
+    {
+        return actor.deliver (message);
+    }
+
+    fx::task_t<void>
+    notification_ChannelView (Player &actor, fx::message_context_t &, const ChannelView &message)
+    {
+        return actor.deliver (message);
+    }
 };
 }

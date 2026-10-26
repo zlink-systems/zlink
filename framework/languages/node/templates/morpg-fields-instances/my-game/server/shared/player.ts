@@ -8,8 +8,19 @@ import type {
 } from '@zlink-systems/framework';
 import { NODE_CONFIG, type NodeConfig } from './config';
 import { fieldId } from './constants';
-import { EnterField, WorldState } from './messages';
+import { BorderVisible, DungeonView, restoreNotification, type Notification, EnterField, WorldState } from './messages';
 export class Player implements ZLinkActor {
+  async deliver(packetName: string, payload: Notification, visible = true): Promise<void> {
+    const message = restoreNotification(packetName, payload);
+    const sourceSpotId =
+      message instanceof BorderVisible
+        ? message.observerFieldId
+        : message instanceof DungeonView
+          ? message.dungeonId
+          : null;
+    if (sourceSpotId !== null && (String(this.context.spotId) !== sourceSpotId || !visible)) return;
+    await this.context.boundSession.send(message).submit();
+  }
   x = 0;
   sequence = 0n;
   partyId: string | null = null;

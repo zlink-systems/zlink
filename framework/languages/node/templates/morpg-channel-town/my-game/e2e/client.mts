@@ -312,6 +312,8 @@ export async function scenarios(
         : ((await p1.join(id1, 2n)) as TownView);
       assert.equal(initial.townId, 'town-2');
       assert.equal(initial.nodeId, 'townB');
+      const townObserver = create('dungeon-town-observer');
+      await townObserver.join(`town-observer-${runId}`, 2n);
       let p2 = create('p2');
       await p2.join(id2, 2n);
       const session1 = await p1.sessionInfo(),
@@ -354,9 +356,9 @@ export async function scenarios(
         sameDungeon(advanced, await arrival);
       }
       assert.equal(advanced.phase, RunPhase.Completed);
-      const partyCompleted = p1.wait<TownView>(
+      const partyCompleted = townObserver.wait<TownView>(
         PacketNames.townView,
-        p1.messages.length,
+        townObserver.messages.length,
         (view) =>
           view.parties.some(
             (party) =>
@@ -365,11 +367,17 @@ export async function scenarios(
               party.phase === RunPhase.Completed
           )
       );
+      const afterArrival = p1.messages.length;
       sameDungeon(advanced, await p1.dungeon());
+      await townObserver.send<TownView>(new ViewRequest(), PacketNames.townView);
       const completedPartyView = await partyCompleted;
       assert.equal(
         completedPartyView.parties.find((party) => party.partyId === advanced.partyId)?.phase,
         RunPhase.Completed
+      );
+      assert(
+        p1.messages.slice(afterArrival).every((message) => message.name !== PacketNames.townView),
+        'Dungeon member received a departed Town notification'
       );
       const completedAdvance = await p1.send<ActionRejected>(
         new AdvanceRequest(),

@@ -9,6 +9,7 @@ import { Names } from '../shared/constants';
 import { Entry, Zone, ZoneRelocation } from './zone';
 import { PlayerFactory } from './player';
 import {
+  EntryNotifications,
   EnterWorld,
   Reconnect,
   Move,
@@ -32,6 +33,7 @@ runHost((_builder, config, mesh) => {
   mesh.channel(Names.border).server();
   return {
     providers: [
+      EntryNotifications,
       Entry,
       Zone,
       ZoneRelocation,

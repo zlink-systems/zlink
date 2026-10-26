@@ -10,6 +10,17 @@ import systems.zlink.framework.kotlin.*
 import systems.zlink.framework.spots.*
 
 class Player(override val context: ZLinkActorContext) : ZLinkSuspendingActor() {
+    suspend fun deliver(message: Any, visible: Boolean = true) {
+        val sourceSpotId: String? = when (message) {
+            is PlayerAppeared -> message.sourceSpotId
+            is PlayerMoved -> message.sourceSpotId
+            is PlayerLeft -> message.sourceSpotId
+            else -> null
+        }
+        if (sourceSpotId != null && (context.spotId().orElse(null) != sourceSpotId || !visible)) return
+        context.boundSession().kotlin().send(message).await()
+    }
+
     fun move(zoneId: String, destination: EnterZone) {
         context.joinSpot(zoneId, destination).defer()
     }
@@ -85,5 +96,20 @@ class EnterWorld {
             requireNotNull(location.zoneId),
             EnterZone(Position(request.x), 0, 0),
         )
+    }
+
+    @ZLinkSpotActorSend
+    suspend fun notificationPlayerAppeared(spot: Entry, actor: Player, context: ZLinkMessageContext, message: PlayerAppeared) {
+        actor.deliver(message)
+    }
+
+    @ZLinkSpotActorSend
+    suspend fun notificationPlayerMoved(spot: Entry, actor: Player, context: ZLinkMessageContext, message: PlayerMoved) {
+        actor.deliver(message)
+    }
+
+    @ZLinkSpotActorSend
+    suspend fun notificationPlayerLeft(spot: Entry, actor: Player, context: ZLinkMessageContext, message: PlayerLeft) {
+        actor.deliver(message)
     }
 }

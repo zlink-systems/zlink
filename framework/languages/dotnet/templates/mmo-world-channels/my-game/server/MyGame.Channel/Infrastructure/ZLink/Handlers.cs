@@ -103,7 +103,7 @@ public sealed class DeliverView : IZLinkSpotActorSendHandler<ZoneSpot, PlayerAct
         IZLinkMessageContext context,
         PlayerView request,
         CancellationToken ct
-    ) => actor.Context.BoundSession.Send(request).Async();
+    ) => actor.DeliverAsync(request);
 }
 
 [ZLinkSpotActorSendHandler(nameof(ChannelView))]
@@ -116,15 +116,19 @@ public sealed class DeliverChannelView
         IZLinkMessageContext context,
         ChannelView request,
         CancellationToken ct
-    ) => actor.Context.BoundSession.Send(request).Async();
+    ) => actor.DeliverAsync(request);
 }
 
 public sealed class ZoneEntry(IZLinkEntrySpotContext context) : IZLinkEntrySpot<PlayerActor>
 {
     public IZLinkEntrySpotContext Context { get; } = context;
 
-    public void Configure() =>
+    public void Configure()
+    {
         Context.Handlers.AddActorPacket<EnterPlayer, PlayerActor>(nameof(EnterWorldRequest));
+        Context.Handlers.AddActorPacket<ZoneEntryPlayerViewNotification, PlayerActor>(nameof(PlayerView));
+        Context.Handlers.AddActorPacket<ZoneEntryChannelViewNotification, PlayerActor>(nameof(ChannelView));
+    }
 
     public ValueTask OnJoinedActorAsync(PlayerActor actor, CancellationToken ct) =>
         ValueTask.CompletedTask;
@@ -150,4 +154,18 @@ public sealed class EnterPlayer
         actor.Context.JoinSpot(GameNames.ZoneId(GameNames.FirstChannel), request).Defer();
         return ValueTask.CompletedTask;
     }
+}
+
+[ZLinkSpotActorSendHandler(nameof(PlayerView))]
+public sealed class ZoneEntryPlayerViewNotification : IZLinkEntrySpotActorSendHandler<ZoneEntry, PlayerActor, PlayerView>
+{
+    public ValueTask HandleAsync(ZoneEntry spot, PlayerActor actor, IZLinkMessageContext context,
+        PlayerView message, CancellationToken ct) => actor.DeliverAsync(message);
+}
+
+[ZLinkSpotActorSendHandler(nameof(ChannelView))]
+public sealed class ZoneEntryChannelViewNotification : IZLinkEntrySpotActorSendHandler<ZoneEntry, PlayerActor, ChannelView>
+{
+    public ValueTask HandleAsync(ZoneEntry spot, PlayerActor actor, IZLinkMessageContext context,
+        ChannelView message, CancellationToken ct) => actor.DeliverAsync(message);
 }

@@ -1,3 +1,4 @@
+using Zlink.Framework.Contracts.Handlers;
 using System.Text.Json;
 using MyGame.Shared;
 using Zlink.Framework.Contracts.Actors;
@@ -12,6 +13,7 @@ public sealed class FieldSpot(
     IZLinkSpotManager spots
 ) : IZLinkSpot<PlayerActor>
 {
+    public bool IsVisible(PlayerActor actor) => _visiblePlayers.ContainsKey(actor.Context.ActorId);
     public IZLinkSpotContext Context { get; } = context;
 
     // This projection supports visibility. The Actor remains the owner of player state.
@@ -20,6 +22,7 @@ public sealed class FieldSpot(
 
     public void Configure()
     {
+        Context.Handlers.AddActorPacket<FieldSpotDungeonViewNotification, PlayerActor>(nameof(DungeonView));
         Context.Handlers.AddActorPacket<ReconnectHandler, PlayerActor>(nameof(JoinWorldRequest));
         Context.Handlers.AddActorPacket<MoveHandler, PlayerActor>(nameof(MoveRequest));
         Context.Handlers.AddActorPacket<BorderDelivery, PlayerActor>(nameof(BorderVisible));
@@ -230,4 +233,11 @@ public sealed class FieldRelocation : IZLinkSpotRelocationAdapter<FieldSpot>
         );
         return ValueTask.CompletedTask;
     }
+}
+
+[ZLinkSpotActorSendHandler(nameof(DungeonView))]
+public sealed class FieldSpotDungeonViewNotification : IZLinkSpotActorSendHandler<FieldSpot, PlayerActor, DungeonView>
+{
+    public ValueTask HandleAsync(FieldSpot spot, PlayerActor actor, IZLinkMessageContext context,
+        DungeonView message, CancellationToken ct) => actor.DeliverAsync(message, spot.IsVisible(actor));
 }

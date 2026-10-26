@@ -177,8 +177,11 @@ class PartyRun
               member_from, [stage] (const auto &view) { return view.stage == stage; });
             same_dungeon (advanced_, other);
         }
+        Client town_observer (endpoint_, "dungeon-town-observer");
+        town_observer.join (2);
         require (advanced_.phase == RunPhase::Completed, "Final stage did not complete run");
-        const auto completed_party = leader_->exchange<TownView> (
+        const auto completed_party =
+          town_observer.exchange<TownView> (
           ViewRequest{}, [&] (const auto &view) {
               return std::any_of (view.parties.begin (), view.parties.end (), [&] (const auto &item) {
                   return item.partyId == advanced_.partyId && item.phase == RunPhase::Completed

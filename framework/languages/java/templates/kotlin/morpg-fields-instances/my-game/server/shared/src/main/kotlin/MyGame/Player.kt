@@ -1,5 +1,6 @@
 package MyGame
 
+import MyGame.*
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionStage
 import systems.zlink.framework.actors.*
@@ -7,6 +8,17 @@ import systems.zlink.framework.kotlin.*
 
 class Player(override val context: ZLinkActorContext, private val config: NodeConfig) :
     ZLinkSuspendingActor() {
+    suspend fun deliver(message: Any, visible: Boolean = true) {
+        val sourceSpotId: String? = when (message) {
+            is BorderVisible -> message.observerFieldId
+
+            is DungeonView -> message.dungeonId
+            else -> null
+        }
+        if (sourceSpotId != null && (context.spotId().orElse(null) != sourceSpotId || !visible)) return
+        context.boundSession().kotlin().send(message).await()
+    }
+
     var position = EnterField()
         private set
     var partyId: String? = null

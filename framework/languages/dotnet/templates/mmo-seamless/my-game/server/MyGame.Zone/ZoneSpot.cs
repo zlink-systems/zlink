@@ -12,6 +12,7 @@ public sealed class ZoneSpot(
     NodeSettings settings
 ) : IZLinkSpot<PlayerActor>
 {
+    public bool IsVisible(PlayerActor actor) => positions.TryState(actor.Context.ActorId, out var observer) && observer.Connected;
     public IZLinkSpotContext Context { get; } = context;
 
     private readonly ZonePositionDomain positions = new(context.SpotId);
@@ -62,7 +63,7 @@ public sealed class ZoneSpot(
         positions.AddPlayer(actor.Context.ActorId, arrival);
         await PublishLocalAsync(
             actor.Context.ActorId,
-            new PlayerAppeared(actor.Context.ActorId, arrival.Position)
+            new PlayerAppeared(actor.Context.ActorId, arrival.Position, Context.SpotId)
         );
         if (positions.IsInBorder(arrival.Position))
             await PublishBorderAsync(
@@ -120,7 +121,7 @@ public sealed class ZoneSpot(
         {
             await PublishLocalAsync(
                 actor.Context.ActorId,
-                new PlayerAppeared(actor.Context.ActorId, state.Position)
+                new PlayerAppeared(actor.Context.ActorId, state.Position, Context.SpotId)
             );
             if (positions.IsInBorder(state.Position))
                 await PublishBorderAsync(
@@ -158,7 +159,7 @@ public sealed class ZoneSpot(
         }
         await PublishLocalAsync(
             actorId,
-            new PlayerMoved(actorId, movement.Position, movement.Sequence)
+            new PlayerMoved(actorId, movement.Position, movement.Sequence, Context.SpotId)
         );
         if (movement.BorderKind is { } borderKind)
             await PublishBorderAsync(
@@ -186,14 +187,14 @@ public sealed class ZoneSpot(
             {
                 await actors.SendToActor(
                     observerId,
-                    new PlayerAppeared(presence.PlayerId, presence.Position)
+                    new PlayerAppeared(presence.PlayerId, presence.Position, Context.SpotId)
                 ).Async();
             }
             else if (presence.Kind == BorderPresenceKind.Moved)
             {
                 await actors.SendToActor(
                     observerId,
-                    new PlayerMoved(presence.PlayerId, presence.Position, presence.Sequence)
+                    new PlayerMoved(presence.PlayerId, presence.Position, presence.Sequence, Context.SpotId)
                 ).Async();
             }
             else if (presence.Kind == BorderPresenceKind.Left)
@@ -203,6 +204,7 @@ public sealed class ZoneSpot(
                     new PlayerLeft(
                         presence.PlayerId,
                         presence.Reason ?? PlayerLeftReason.LeftZone
+                    , Context.SpotId
                     )
                 ).Async();
             }
@@ -234,7 +236,7 @@ public sealed class ZoneSpot(
         CancellationToken cancellationToken
     )
     {
-        await PublishLocalAsync(playerId, new PlayerLeft(playerId, reason));
+        await PublishLocalAsync(playerId, new PlayerLeft(playerId, reason, Context.SpotId));
         if (positions.IsInBorder(position))
             await PublishBorderAsync(
                 playerId,

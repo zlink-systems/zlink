@@ -190,6 +190,10 @@ internal static class Scenarios
                 );
                 SameDungeon(advanced, await secondStage);
                 Require(advanced.NodeId == dungeon.NodeId, "Advance changed the dungeon host.");
+                var activeParty = await p1.SendAsync<PartyView, EnterDungeonRequest>(new(),
+                    view => view.PartyId == dungeon.PartyId && view.RunId == dungeon.RunId
+                        && view.Phase == RunPhase.Active, ct);
+                Require(activeParty.Members.SequenceEqual(dungeon.Members), "Dungeon member lost PartyView.");
                 Require(
                     before1 == await p1.SessionAsync(ct) && before2 == await p2.SessionAsync(ct),
                     "Session identity changed while entering dungeon."

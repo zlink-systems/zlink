@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { Names } from './constants';
+import { PacketNames, Names } from './constants';
 export class JoinLobbyRequest {
   constructor(readonly playerId: string) {}
 }
@@ -55,7 +55,7 @@ export class JoinDungeon {
   ) {}
 }
 export class ActionRejected {
-  constructor(readonly reason: string = "", readonly retryAfterMs: number = 0) {}
+  constructor(readonly reason: string = '', readonly retryAfterMs: number = 0) {}
 }
 export class SessionInfoRequest {}
 export class SessionInfo {
@@ -77,3 +77,18 @@ export class DungeonMemberEntered { constructor(readonly runId: string, readonly
 
 export function newPartyId(): string { return Names.partyPrefix + randomUUID().replaceAll('-', ''); }
 export function newRunId(): string { return 'run-' + randomUUID().replaceAll('-', ''); }
+
+const notificationTypes: ReadonlyMap<string, () => Notification> = new Map<
+  string,
+  () => Notification
+>([
+  [PacketNames.partyView, () => new PartyView()],
+  [PacketNames.dungeonView, () => new DungeonView()],
+  [PacketNames.actionRejected, () => new ActionRejected('')]
+]);
+export type Notification = PartyView | DungeonView | ActionRejected;
+export function restoreNotification(packetName: string, payload: Notification): Notification {
+  const create = notificationTypes.get(packetName);
+  if (!create) throw new Error(`Unknown notification ${packetName}`);
+  return Object.assign(create(), payload);
+}

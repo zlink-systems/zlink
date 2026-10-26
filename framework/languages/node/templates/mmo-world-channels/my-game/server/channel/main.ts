@@ -10,6 +10,7 @@ import { PlayerData } from './data';
 import { PlayerFactory, PlayerRelocation } from './player';
 import { Entry, Zone, ZoneRelocation } from './spots';
 import {
+  EntryNotifications,
   EnterPlayer,
   EnterZone,
   ChangeChannel,
@@ -30,6 +31,7 @@ runHost((_builder, config, mesh) => {
   });
   return {
     providers: [
+      EntryNotifications,
       PlayerData,
       PlayerFactory,
       PlayerRelocation,

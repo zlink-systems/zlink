@@ -94,23 +94,23 @@ export class PartyViewRequest {
   constructor(readonly playerId: string) {}
 }
 
-const pushTypes: ReadonlyMap<
+const notificationTypes: ReadonlyMap<
   string,
-  () => TownView | DungeonView | ActionRejected
+  () => Notification
 > = new Map<
   string,
-  () => TownView | DungeonView | ActionRejected
+  () => Notification
 >([
   [PacketNames.townView, () => new TownView()],
   [PacketNames.dungeonView, () => new DungeonView()],
   [PacketNames.actionRejected, () => new ActionRejected('')]
 ]);
-export function restorePush(
+export type Notification = TownView | DungeonView | ActionRejected;
+export function restoreNotification(
   packetName: string,
-  payload: TownView | DungeonView | ActionRejected
-): TownView | DungeonView | ActionRejected {
-  const create = pushTypes.get(packetName);
-  if (!create) throw new Error(`Unknown push ${packetName}`);
-  // Restore the declared DTO class before forwarding (#1731).
+  payload: Notification
+): Notification {
+  const create = notificationTypes.get(packetName);
+  if (!create) throw new Error(`Unknown notification ${packetName}`);
   return Object.assign(create(), payload);
 }

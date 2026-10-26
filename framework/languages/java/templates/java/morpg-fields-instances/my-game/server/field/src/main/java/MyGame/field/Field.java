@@ -13,6 +13,8 @@ import java.util.UUID;
 import java.util.concurrent.*;
 
 public final class Field implements ZLinkSpot<Player> {
+    public boolean isVisible(Player actor) { return state.visiblePlayers.containsKey(actor.context().actorId()); }
+
     private final ZLinkSpotContext context;
     private final ZLinkActorClient actors;
     private final List<String> borderTopics;

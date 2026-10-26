@@ -1,3 +1,4 @@
+import { PacketNames } from './constants';
 export class SessionInfoRequest {}
 export class SessionInfo {
   constructor(
@@ -47,20 +48,23 @@ export type BorderPresenceKind = 'appeared' | 'moved' | 'left';
 export class PlayerAppeared {
   constructor(
     readonly playerId: string,
-    readonly position: Position
+    readonly position: Position,
+    readonly sourceSpotId: string = ''
   ) {}
 }
 export class PlayerMoved {
   constructor(
     readonly playerId: string,
     readonly position: Position,
-    readonly sequence: bigint
+    readonly sequence: bigint,
+    readonly sourceSpotId: string = ''
   ) {}
 }
 export class PlayerLeft {
   constructor(
     readonly playerId: string,
-    readonly reason: PlayerLeftReason
+    readonly reason: PlayerLeftReason,
+    readonly sourceSpotId: string = ''
   ) {}
 }
 export class BorderPresence {
@@ -81,4 +85,19 @@ export class DungeonOpened {
     readonly dungeonId: string,
     readonly nodeId: string
   ) {}
+}
+
+const notificationTypes: ReadonlyMap<string, () => Notification> = new Map<
+  string,
+  () => Notification
+>([
+  [PacketNames.playerAppeared, () => new PlayerAppeared('', new Position(0))],
+  [PacketNames.playerMoved, () => new PlayerMoved('', new Position(0), 0n)],
+  [PacketNames.playerLeft, () => new PlayerLeft('', 'left-zone')]
+]);
+export type Notification = PlayerAppeared | PlayerMoved | PlayerLeft;
+export function restoreNotification(packetName: string, payload: Notification): Notification {
+  const create = notificationTypes.get(packetName);
+  if (!create) throw new Error(`Unknown notification ${packetName}`);
+  return Object.assign(create(), payload);
 }

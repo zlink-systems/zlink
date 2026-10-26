@@ -190,7 +190,8 @@ public final class Scenarios {
     public static void run(Scenario scenario, Nodes nodes) throws Exception {
         String id = UUID.randomUUID().toString();
         try (var a = new Client(nodes.endpoint, id + "-p1");
-                var b = new Client(nodes.endpoint, id + "-p2")) {
+                var b = new Client(nodes.endpoint, id + "-p2");
+                var townObserver = new Client(nodes.endpoint, id + "-town-observer")) {
             if (scenario == Scenario.CHANNEL) {
                 channel(a, nodes.endpoint);
                 return;
@@ -229,7 +230,9 @@ public final class Scenarios {
                     var completedDungeon = a.next(
                             DungeonView.class,
                             view -> Client.sameDungeonState(completedState, view));
-                    var completedParty = a.next(
+                    townObserver.connect(2);
+                    townObserver.send(new ViewRequest());
+                    var completedParty = townObserver.next(
                             TownView.class,
                             view -> view.parties().stream()
                                     .anyMatch(item -> item.partyId().equals(completedState.partyId())

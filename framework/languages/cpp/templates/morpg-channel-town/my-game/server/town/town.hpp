@@ -48,6 +48,7 @@ class Town final : public fx::spot_t<Player>
     const fx::spot_context_t &context () const noexcept override { return context_; }
     void configure () override
     {
+        context_.handlers ().add_actor_send<&Town::notification_DungeonView> ();
         context_.handlers ()
           .add_actor_send<&Town::reconnect> ()
           .add_actor_send<&Town::change> ()
@@ -220,12 +221,18 @@ class Town final : public fx::spot_t<Player>
     }
     fx::task_t<void> deliver (Player &actor, fx::message_context_t &, const TownView &message)
     {
-        co_await actor.context ().bound_session ().send (message).async ();
+        return actor.deliver (message);
     }
     fx::task_t<void> deliver_rejection (Player &actor, fx::message_context_t &,
                                         const ActionRejected &message)
     {
-        co_await actor.context ().bound_session ().send (message).async ();
+        return actor.deliver (message);
+    }
+
+    fx::task_t<void>
+    notification_DungeonView (Player &actor, fx::message_context_t &, const DungeonView &message)
+    {
+        return actor.deliver (message);
     }
 };
 class TownRelocation final : public fx::spot_relocation_adapter_t<Town>

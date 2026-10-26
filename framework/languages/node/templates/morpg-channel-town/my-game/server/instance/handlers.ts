@@ -10,7 +10,6 @@ import {
   JoinDungeon,
   ChangeChannelRequest,
   TownView,
-  restorePush,
   JoinTownRequest
 } from '../shared/messages';
 import { Player } from '../shared/player';
@@ -74,7 +73,7 @@ export class DungeonDelivery {
     context: ZLinkMessageContext,
     view: DungeonView
   ): Promise<void> {
-    await actor.context.boundSession.send(restorePush(context.packetName, view)).submit();
+    await actor.deliver(context.packetName, view);
   }
 }
 
@@ -91,7 +90,7 @@ export class DungeonActionRejectedDelivery {
     context: ZLinkMessageContext,
     message: ActionRejected
   ): Promise<void> {
-    await actor.context.boundSession.send(restorePush(context.packetName, message)).submit();
+    await actor.deliver(context.packetName, message);
   }
 }
 
@@ -108,7 +107,7 @@ export class TownDelivery {
     context: ZLinkMessageContext,
     view: TownView
   ): Promise<void> {
-    await actor.context.boundSession.send(restorePush(context.packetName, view)).submit();
+    await actor.deliver(context.packetName, view);
   }
 }
 

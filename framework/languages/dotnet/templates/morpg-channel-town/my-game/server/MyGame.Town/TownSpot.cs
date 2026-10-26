@@ -1,3 +1,4 @@
+using Zlink.Framework.Contracts.Handlers;
 using System.Text.Json;
 using MyGame.Shared;
 using Zlink.Framework.Contracts.Actors;
@@ -18,6 +19,8 @@ public sealed class TownSpot(
 
     public void Configure()
     {
+        Context.Handlers.AddActorPacket<TownSpotDungeonViewNotification, PlayerActor>(nameof(DungeonView));
+        Context.Handlers.AddActorPacket<TownSpotActionRejectedNotification, PlayerActor>(nameof(ActionRejected));
         Context.Handlers.AddActorPacket<TownReconnect, PlayerActor>(nameof(JoinTownRequest));
         Context.Handlers.AddActorPacket<ChangeChannel, PlayerActor>(nameof(ChangeChannelRequest));
         Context.Handlers.AddActorPacket<CreateParty, PlayerActor>(nameof(CreatePartyRequest));
@@ -200,4 +203,18 @@ public sealed class TownRelocation : IZLinkSpotRelocationAdapter<TownSpot>
         spot.Restore(payload);
         return ValueTask.CompletedTask;
     }
+}
+
+[ZLinkSpotActorSendHandler(nameof(DungeonView))]
+public sealed class TownSpotDungeonViewNotification : IZLinkSpotActorSendHandler<TownSpot, PlayerActor, DungeonView>
+{
+    public ValueTask HandleAsync(TownSpot spot, PlayerActor actor, IZLinkMessageContext context,
+        DungeonView message, CancellationToken ct) => actor.DeliverAsync(message);
+}
+
+[ZLinkSpotActorSendHandler(nameof(ActionRejected))]
+public sealed class TownSpotActionRejectedNotification : IZLinkSpotActorSendHandler<TownSpot, PlayerActor, ActionRejected>
+{
+    public ValueTask HandleAsync(TownSpot spot, PlayerActor actor, IZLinkMessageContext context,
+        ActionRejected message, CancellationToken ct) => actor.DeliverAsync(message);
 }

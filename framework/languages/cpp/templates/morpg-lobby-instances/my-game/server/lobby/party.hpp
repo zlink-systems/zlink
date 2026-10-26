@@ -25,6 +25,7 @@ class Party final : public fx::spot_t<Player>
     const fx::spot_context_t &context () const noexcept override { return context_; }
     void configure () override
     {
+        context_.handlers ().add_actor_send<&Party::notification_DungeonView> ();
         context_.handlers ()
           .add_actor_send<&Party::reconnect> ()
           .add_actor_send<&Party::show> ()
@@ -99,7 +100,7 @@ class Party final : public fx::spot_t<Player>
     fx::task_t<void> started(const RunStarted &r) { const auto reason = state.started(r.runId); if (!reason.empty()) throw std::runtime_error(reason); co_return; }
     fx::task_t<void> completed(const RunCompleted &r) { const auto reason = state.completed(r.runId); if (!reason.empty()) throw std::runtime_error(reason); co_return; }
     fx::task_t<void> enter_run(const EnterPartyRun &r) { co_await enter_player(r.playerId); }
-    fx::task_t<void> reject_delivery(Player &actor, fx::message_context_t &, const ActionRejected &r) { co_await actor.context().bound_session().send(r).async(); }
+    fx::task_t<void> reject_delivery(Player &actor, fx::message_context_t &, const ActionRejected &r) { return actor.deliver (r); }
     fx::task_t<void> travel (Player &actor, fx::message_context_t &, const JoinDungeon &request)
     {
         actor.context ().join_spot (request.dungeonId, request).defer ();
@@ -107,7 +108,11 @@ class Party final : public fx::spot_t<Player>
     }
     fx::task_t<void> deliver (Player &actor, fx::message_context_t &, const PartyView &view)
     {
-        co_await actor.context ().bound_session ().send (view).async ();
+        return actor.deliver (view);
+    }
+    fx::task_t<void> notification_DungeonView (Player &actor, fx::message_context_t &, const DungeonView &message)
+    {
+        return actor.deliver (message);
     }
 };
 using PartyRelocation = StateRelocation<Party, PartyState>;

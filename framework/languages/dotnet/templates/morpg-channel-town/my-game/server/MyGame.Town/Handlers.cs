@@ -128,7 +128,7 @@ public sealed class TownDelivery : IZLinkSpotActorSendHandler<TownSpot, PlayerAc
         CancellationToken ct
     )
     {
-        return actor.Context.BoundSession.Send(request).Async();
+        return actor.DeliverAsync(request);
     }
 }
 

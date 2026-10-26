@@ -10,6 +10,9 @@ public sealed class LobbyEntry(IZLinkEntrySpotContext context, IZLinkSpotManager
 
     public void Configure()
     {
+        Context.Handlers.AddActorPacket<LobbyEntryPartyViewNotification, PlayerActor>(nameof(PartyView));
+        Context.Handlers.AddActorPacket<LobbyEntryDungeonViewNotification, PlayerActor>(nameof(DungeonView));
+        Context.Handlers.AddActorPacket<LobbyEntryActionRejectedNotification, PlayerActor>(nameof(ActionRejected));
         Context.Handlers.AddActorPacket<LobbyLogin, PlayerActor>(nameof(JoinLobbyRequest));
         Context.Handlers.AddActorPacket<CreateParty, PlayerActor>(nameof(CreatePartyRequest));
         Context.Handlers.AddActorPacket<JoinParty, PlayerActor>(nameof(JoinPartyRequest));
@@ -85,4 +88,25 @@ public sealed class JoinParty
         JoinPartyRequest request,
         CancellationToken ct
     ) => spot.JoinAsync(actor, request.PartyId, false, ct);
+}
+
+[ZLinkSpotActorSendHandler(nameof(PartyView))]
+public sealed class LobbyEntryPartyViewNotification : IZLinkEntrySpotActorSendHandler<LobbyEntry, PlayerActor, PartyView>
+{
+    public ValueTask HandleAsync(LobbyEntry spot, PlayerActor actor, IZLinkMessageContext context,
+        PartyView message, CancellationToken ct) => actor.DeliverAsync(message);
+}
+
+[ZLinkSpotActorSendHandler(nameof(DungeonView))]
+public sealed class LobbyEntryDungeonViewNotification : IZLinkEntrySpotActorSendHandler<LobbyEntry, PlayerActor, DungeonView>
+{
+    public ValueTask HandleAsync(LobbyEntry spot, PlayerActor actor, IZLinkMessageContext context,
+        DungeonView message, CancellationToken ct) => actor.DeliverAsync(message);
+}
+
+[ZLinkSpotActorSendHandler(nameof(ActionRejected))]
+public sealed class LobbyEntryActionRejectedNotification : IZLinkEntrySpotActorSendHandler<LobbyEntry, PlayerActor, ActionRejected>
+{
+    public ValueTask HandleAsync(LobbyEntry spot, PlayerActor actor, IZLinkMessageContext context,
+        ActionRejected message, CancellationToken ct) => actor.DeliverAsync(message);
 }

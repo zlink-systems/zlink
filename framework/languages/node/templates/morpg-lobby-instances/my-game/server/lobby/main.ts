@@ -4,8 +4,8 @@ import { Names } from '../shared/constants';
 import { PlayerFactory, PlayerRelocation } from '../shared/player';
 import { Party, PartyRelocation } from './spots';
 import { Entry } from '../shared/entry';
-import { Login, CreateParty, JoinParty } from '../shared/entry-handlers';
-import { Reconnect, View, Ready, EnterDungeon, Travel, Delivery, Arrived, Started, Completed, EnterRun, RejectDelivery } from './handlers';
+import { EntryNotifications, Login, CreateParty, JoinParty } from '../shared/entry-handlers';
+import { PartyNotifications, Reconnect, View, Ready, EnterDungeon, Travel, Delivery, Arrived, Started, Completed, EnterRun, RejectDelivery } from './handlers';
 runHost((_builder, _config, mesh) => {
   const objects = mesh.objects().server();
   objects.addEntrySpot(Entry, Names.actor);
@@ -16,6 +16,8 @@ runHost((_builder, _config, mesh) => {
   });
   return {
     providers: [
+      EntryNotifications,
+      PartyNotifications,
       Entry,
       Party,
       PartyRelocation,

@@ -18,6 +18,7 @@ public sealed class DungeonSpot(
 
     public void Configure()
     {
+        Context.Handlers.AddActorPacket<DungeonSpotActionRejectedNotification, PlayerActor>(nameof(ActionRejected));
         Context.Handlers.AddActorPacket<DungeonReconnect, PlayerActor>(nameof(JoinTownRequest));
         Context.Handlers.AddActorPacket<DungeonEnter, PlayerActor>(nameof(EnterDungeonRequest));
         Context.Handlers.AddActorPacket<DungeonTravelRepeat, PlayerActor>(nameof(JoinDungeon));
@@ -135,4 +136,11 @@ public sealed class DungeonRelocation : IZLinkSpotRelocationAdapter<DungeonSpot>
         spot.Restore(payload);
         return ValueTask.CompletedTask;
     }
+}
+
+[ZLinkSpotActorSendHandler(nameof(ActionRejected))]
+public sealed class DungeonSpotActionRejectedNotification : IZLinkSpotActorSendHandler<DungeonSpot, PlayerActor, ActionRejected>
+{
+    public ValueTask HandleAsync(DungeonSpot spot, PlayerActor actor, IZLinkMessageContext context,
+        ActionRejected message, CancellationToken ct) => actor.DeliverAsync(message);
 }

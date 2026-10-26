@@ -46,7 +46,7 @@ class DungeonActions {
         dispatch: ZLinkMessageContext,
         message: DungeonView,
     ) {
-        actor.context.boundSession().kotlin().send(message).await()
+        actor.deliver(message)
     }
 
     @ZLinkSpotActorSend
@@ -56,7 +56,7 @@ class DungeonActions {
         dispatch: ZLinkMessageContext,
         message: PartyView,
     ) {
-        actor.context.boundSession().kotlin().send(message).await()
+        actor.deliver(message)
     }
 
     @ZLinkSpotActorSend
@@ -92,5 +92,10 @@ class DungeonActions {
     ) {
         if (request.dungeonId != spot.context.spotId())
             actor.context.joinSpot(request.dungeonId, request).defer()
+    }
+
+    @ZLinkSpotActorSend
+    suspend fun notificationBorderVisible(spot: Dungeon, actor: Player, context: ZLinkMessageContext, message: BorderVisible) {
+        actor.deliver(message)
     }
 }

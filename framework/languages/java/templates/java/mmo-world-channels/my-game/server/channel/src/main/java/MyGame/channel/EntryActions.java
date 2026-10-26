@@ -16,4 +16,14 @@ public final class EntryActions {
         actor.context().joinSpot(Names.zone(Names.FIRST_CHANNEL), request).defer();
         return CompletableFuture.completedFuture(null);
     }
+
+    @ZLinkSpotActorSend
+    public CompletionStage<Void> notificationPlayerView(Entry spot, Player actor, ZLinkMessageContext context, PlayerView message) {
+        return actor.deliver(message);
+    }
+
+    @ZLinkSpotActorSend
+    public CompletionStage<Void> notificationChannelView(Entry spot, Player actor, ZLinkMessageContext context, ChannelView message) {
+        return actor.deliver(message);
+    }
 }

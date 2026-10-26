@@ -1,4 +1,8 @@
 #pragma once
+#include <optional>
+#include <string_view>
+#include <type_traits>
+#pragma once
 #include "config.hpp"
 #include "domain.hpp"
 #include <zlink/framework.hpp>
@@ -11,6 +15,17 @@ class Player final : public fx::actor_t
     fx::actor_context_t context_;
 
   public:
+    template <class Message> fx::task_t<void> deliver (const Message &message, bool visible = true)
+    {
+        std::optional<std::string_view> source;
+        if constexpr (std::is_same_v<Message, TownView>)
+            source = message.townId;
+        else if constexpr (std::is_same_v<Message, DungeonView>)
+            source = message.dungeonId;
+        if (source && (context_.spot_id () != *source || !visible))
+            return fx::task_t<void> (fx::result_t<void>::success ());
+        return context_.bound_session ().send (message).async ();
+    }
     explicit Player (fx::actor_context_t context) : context_ (std::move (context)) {}
     fx::actor_context_t &context () noexcept override { return context_; }
     const fx::actor_context_t &context () const noexcept override { return context_; }
@@ -57,7 +72,13 @@ class TownEntry final : public fx::entry_spot_t<Player>
     explicit TownEntry (fx::entry_spot_context_t context) : context_ (std::move (context)) {}
     fx::entry_spot_context_t &context () noexcept override { return context_; }
     const fx::entry_spot_context_t &context () const noexcept override { return context_; }
-    void configure () override { context_.handlers ().add_actor_send<&TownEntry::enter> (); }
+    void configure () override
+    {
+        context_.handlers ().add_actor_send<&TownEntry::notification_TownView> ();
+        context_.handlers ().add_actor_send<&TownEntry::notification_DungeonView> ();
+        context_.handlers ().add_actor_send<&TownEntry::notification_ActionRejected> ();
+        context_.handlers ().add_actor_send<&TownEntry::enter> ();
+    }
     fx::task_t<void> enter (Player &actor, fx::message_context_t &, const JoinTownRequest &request)
     {
         if (request.playerId != actor.context ().actor_id ().value ())
@@ -71,5 +92,24 @@ class TownEntry final : public fx::entry_spot_t<Player>
     }
     fx::task_t<void> on_actor_joined (Player &) override { co_return; }
     fx::task_t<void> on_leave_actor (Player &) override { co_return; }
+
+    fx::task_t<void>
+    notification_TownView (Player &actor, fx::message_context_t &, const TownView &message)
+    {
+        return actor.deliver (message);
+    }
+
+    fx::task_t<void>
+    notification_DungeonView (Player &actor, fx::message_context_t &, const DungeonView &message)
+    {
+        return actor.deliver (message);
+    }
+
+    fx::task_t<void> notification_ActionRejected (Player &actor,
+                                                  fx::message_context_t &,
+                                                  const ActionRejected &message)
+    {
+        return actor.deliver (message);
+    }
 };
 }

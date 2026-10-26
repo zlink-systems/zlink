@@ -72,7 +72,6 @@ export const PacketNames = {
   enterDungeonRequest: 'EnterDungeonRequest',
   advanceRequest: 'AdvanceRequest',
   viewRequest: 'ViewRequest',
-  fieldView: 'FieldView',
   partyView: 'PartyView',
   dungeonView: 'DungeonView',
   prepareDungeon: 'PrepareDungeon',

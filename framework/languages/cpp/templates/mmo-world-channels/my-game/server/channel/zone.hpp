@@ -131,12 +131,12 @@ class Zone final : public fx::spot_t<Player>
     }
     fx::task_t<void> deliver (Player &actor, fx::message_context_t &, const PlayerView &event)
     {
-        co_await actor.context ().bound_session ().send (event).async ();
+        return actor.deliver (event);
     }
     fx::task_t<void>
     deliver_channel_view (Player &actor, fx::message_context_t &, const ChannelView &event)
     {
-        co_await actor.context ().bound_session ().send (event).async ();
+        return actor.deliver (event);
     }
 };
 class ZoneRelocation final : public fx::spot_relocation_adapter_t<Zone>

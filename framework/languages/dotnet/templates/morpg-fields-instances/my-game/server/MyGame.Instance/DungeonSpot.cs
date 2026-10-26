@@ -18,6 +18,7 @@ public sealed class DungeonSpot(
 
     public void Configure()
     {
+        Context.Handlers.AddActorPacket<DungeonSpotBorderVisibleNotification, PlayerActor>(nameof(BorderVisible));
         Context.Handlers.AddActorPacket<DungeonReconnect, PlayerActor>(nameof(JoinWorldRequest));
         Context.Handlers.AddActorPacket<DungeonQuery, PlayerActor>(nameof(ViewRequest));
         Context.Handlers.AddActorPacket<Advance, PlayerActor>(nameof(AdvanceRequest));
@@ -144,4 +145,11 @@ public sealed class DungeonRelocation : IZLinkSpotRelocationAdapter<DungeonSpot>
         spot.Restore(payload);
         return ValueTask.CompletedTask;
     }
+}
+
+[ZLinkSpotActorSendHandler(nameof(BorderVisible))]
+public sealed class DungeonSpotBorderVisibleNotification : IZLinkSpotActorSendHandler<DungeonSpot, PlayerActor, BorderVisible>
+{
+    public ValueTask HandleAsync(DungeonSpot spot, PlayerActor actor, IZLinkMessageContext context,
+        BorderVisible message, CancellationToken ct) => actor.DeliverAsync(message);
 }

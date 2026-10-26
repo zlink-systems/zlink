@@ -115,16 +115,16 @@ class Dungeon final : public fx::spot_t<Player>
     }
     fx::task_t<void> deliver (Player &actor, fx::message_context_t &, const DungeonView &message)
     {
-        co_await actor.context ().bound_session ().send (message).async ();
+        return actor.deliver (message);
     }
     fx::task_t<void> deliver_town (Player &actor, fx::message_context_t &, const TownView &message)
     {
-        co_await actor.context ().bound_session ().send (message).async ();
+        return actor.deliver (message);
     }
     fx::task_t<void> deliver_rejection (Player &actor, fx::message_context_t &,
                                         const ActionRejected &message)
     {
-        co_await actor.context ().bound_session ().send (message).async ();
+        return actor.deliver (message);
     }
 };
 class DungeonRelocation final : public fx::spot_relocation_adapter_t<Dungeon>

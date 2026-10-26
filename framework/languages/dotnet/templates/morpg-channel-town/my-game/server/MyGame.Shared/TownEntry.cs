@@ -8,8 +8,13 @@ public sealed class TownEntry(IZLinkEntrySpotContext context) : IZLinkEntrySpot<
 {
     public IZLinkEntrySpotContext Context { get; } = context;
 
-    public void Configure() =>
+    public void Configure()
+    {
         Context.Handlers.AddActorPacket<EnterTownHandler, PlayerActor>(nameof(JoinTownRequest));
+        Context.Handlers.AddActorPacket<TownEntryTownViewNotification, PlayerActor>(nameof(TownView));
+        Context.Handlers.AddActorPacket<TownEntryDungeonViewNotification, PlayerActor>(nameof(DungeonView));
+        Context.Handlers.AddActorPacket<TownEntryActionRejectedNotification, PlayerActor>(nameof(ActionRejected));
+    }
 
     public ValueTask OnJoinedActorAsync(PlayerActor actor, CancellationToken ct) =>
         ValueTask.CompletedTask;
@@ -37,4 +42,25 @@ public sealed class EnterTownHandler
         actor.Context.JoinSpot(GameNames.TownId(request.Channel), request).Defer();
         return ValueTask.CompletedTask;
     }
+}
+
+[ZLinkSpotActorSendHandler(nameof(TownView))]
+public sealed class TownEntryTownViewNotification : IZLinkEntrySpotActorSendHandler<TownEntry, PlayerActor, TownView>
+{
+    public ValueTask HandleAsync(TownEntry spot, PlayerActor actor, IZLinkMessageContext context,
+        TownView message, CancellationToken ct) => actor.DeliverAsync(message);
+}
+
+[ZLinkSpotActorSendHandler(nameof(DungeonView))]
+public sealed class TownEntryDungeonViewNotification : IZLinkEntrySpotActorSendHandler<TownEntry, PlayerActor, DungeonView>
+{
+    public ValueTask HandleAsync(TownEntry spot, PlayerActor actor, IZLinkMessageContext context,
+        DungeonView message, CancellationToken ct) => actor.DeliverAsync(message);
+}
+
+[ZLinkSpotActorSendHandler(nameof(ActionRejected))]
+public sealed class TownEntryActionRejectedNotification : IZLinkEntrySpotActorSendHandler<TownEntry, PlayerActor, ActionRejected>
+{
+    public ValueTask HandleAsync(TownEntry spot, PlayerActor actor, IZLinkMessageContext context,
+        ActionRejected message, CancellationToken ct) => actor.DeliverAsync(message);
 }

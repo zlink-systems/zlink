@@ -36,7 +36,7 @@ class Actions(private val spots: ZLinkSpotManager) {
         dispatch: ZLinkMessageContext,
         event: PlayerAppeared,
     ) {
-        actor.context.boundSession().kotlin().send(event).await()
+        actor.deliver(event, spot.isVisible(actor))
     }
 
     @ZLinkSpotActorSend
@@ -46,7 +46,7 @@ class Actions(private val spots: ZLinkSpotManager) {
         dispatch: ZLinkMessageContext,
         event: PlayerMoved,
     ) {
-        actor.context.boundSession().kotlin().send(event).await()
+        actor.deliver(event, spot.isVisible(actor))
     }
 
     @ZLinkSpotActorSend
@@ -56,7 +56,7 @@ class Actions(private val spots: ZLinkSpotManager) {
         dispatch: ZLinkMessageContext,
         event: PlayerLeft,
     ) {
-        actor.context.boundSession().kotlin().send(event).await()
+        actor.deliver(event, spot.isVisible(actor))
     }
 
     @ZLinkSpotActorSend

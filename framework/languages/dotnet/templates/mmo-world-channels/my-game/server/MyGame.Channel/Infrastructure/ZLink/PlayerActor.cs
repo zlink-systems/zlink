@@ -1,3 +1,4 @@
+using MyGame.Shared;
 using System.Text.Json;
 using MyGame.Channel.Domain;
 using MyGame.Channel.Infrastructure.Redis;
@@ -8,6 +9,18 @@ namespace MyGame.Channel.Infrastructure.ZLink;
 public sealed class PlayerActor(IZLinkActorContext context, PlayerData data, long gold)
     : IZLinkActor
 {
+    public ValueTask DeliverAsync<TMessage>(TMessage message, bool visible = true)
+    {
+        string? sourceSpotId = message switch
+        {
+            PlayerView value => GameNames.ZoneId(value.Channel),
+            ChannelView value => GameNames.ZoneId(value.ChannelId),
+            _ => throw new InvalidOperationException("Unknown notification type."),
+        };
+        if (sourceSpotId is not null && (Context.SpotId != sourceSpotId || !visible))
+            return ValueTask.CompletedTask;
+        return Context.BoundSession.Send(message).Async();
+    }
     public IZLinkActorContext Context { get; } = context;
     public GoldBalance Gold { get; } = new(gold, TimeProvider.System);
 

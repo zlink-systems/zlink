@@ -11,6 +11,16 @@ class Player(
     private val data: PlayerRepository,
     gold: Long,
 ) : ZLinkSuspendingActor() {
+    suspend fun deliver(message: Any, visible: Boolean = true) {
+        val sourceSpotId: String? = when (message) {
+            is PlayerView -> Names.zone(message.channel)
+            is ChannelView -> Names.zone(message.channelId)
+            else -> null
+        }
+        if (sourceSpotId != null && (context.spotId().orElse(null) != sourceSpotId || !visible)) return
+        context.boundSession().kotlin().send(message).await()
+    }
+
     private val balance = GoldBalance(gold)
     val gold: Long get() = balance.gold
 

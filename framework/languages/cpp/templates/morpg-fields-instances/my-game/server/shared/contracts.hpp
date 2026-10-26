@@ -279,14 +279,6 @@ struct RunCompleted
     std::string runId;
     NLOHMANN_DEFINE_TYPE_INTRUSIVE (RunCompleted, runId)
 };
-struct FieldView
-{
-    static constexpr auto packet_name = "FieldView";
-    std::string fieldId, nodeId;
-    std::vector<std::string> players;
-    std::vector<PartyView> parties;
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (FieldView, fieldId, nodeId, players, parties)
-};
 struct DungeonView
 {
     static constexpr auto packet_name = "DungeonView";

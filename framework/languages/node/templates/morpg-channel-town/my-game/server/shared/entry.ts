@@ -7,7 +7,7 @@ import type {
 } from '@zlink-systems/framework';
 import { PacketNames, townId } from './constants';
 import { ChannelRules } from './channel-rules';
-import { ActionRejected, JoinTownRequest } from './messages';
+import { TownView, DungeonView, ActionRejected, JoinTownRequest } from './messages';
 import { Player } from './player';
 @Injectable({ scope: Scope.TRANSIENT })
 export class Entry implements ZLinkEntrySpot<Player> {
@@ -37,5 +37,32 @@ export class EnterTown {
     actor.context
       .joinSpot(townId(request.channel), new JoinTownRequest(request.playerId, request.channel))
       .defer();
+  }
+}
+
+@Injectable()
+@zlinkEntrySpotActorSendHandler({
+  entrySpot: () => Entry,
+  actor: () => Player,
+  packetName: PacketNames.townView
+})
+@zlinkEntrySpotActorSendHandler({
+  entrySpot: () => Entry,
+  actor: () => Player,
+  packetName: PacketNames.dungeonView
+})
+@zlinkEntrySpotActorSendHandler({
+  entrySpot: () => Entry,
+  actor: () => Player,
+  packetName: PacketNames.actionRejected
+})
+export class EntryNotifications {
+  async handle(
+    _spot: Entry,
+    actor: Player,
+    context: ZLinkMessageContext,
+    message: TownView | DungeonView | ActionRejected
+  ): Promise<void> {
+    await actor.deliver(context.packetName, message);
   }
 }

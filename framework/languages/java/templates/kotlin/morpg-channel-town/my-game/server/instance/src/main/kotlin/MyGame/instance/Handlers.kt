@@ -10,6 +10,11 @@ class Preparation {
     @ZLinkSpotRequest
     suspend fun prepare(spot: Dungeon, request: PrepareDungeon): DungeonPrepared =
         spot.prepare(request)
+
+    @ZLinkSpotActorSend
+    suspend fun notificationActionRejected(spot: Dungeon, actor: Player, context: ZLinkMessageContext, message: ActionRejected) {
+        actor.deliver(message)
+    }
 }
 
 @ZLinkHandlerGroup(Names.PLAYER)
@@ -72,7 +77,7 @@ class Actions {
         dispatch: ZLinkMessageContext,
         message: DungeonView,
     ) {
-        actor.context.boundSession().kotlin().send(message).await()
+        actor.deliver(message)
     }
 
     @ZLinkSpotActorSend
@@ -82,6 +87,6 @@ class Actions {
         dispatch: ZLinkMessageContext,
         message: TownView,
     ) {
-        actor.context.boundSession().kotlin().send(message).await()
+        actor.deliver(message)
     }
 }

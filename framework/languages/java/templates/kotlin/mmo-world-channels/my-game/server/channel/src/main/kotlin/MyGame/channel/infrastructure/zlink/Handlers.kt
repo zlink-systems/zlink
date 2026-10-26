@@ -80,7 +80,7 @@ class Actions {
         context: ZLinkMessageContext,
         message: PlayerView,
     ) {
-        actor.context.boundSession().kotlin().send(message).await()
+        actor.deliver(message)
     }
 
     @ZLinkSpotActorSend
@@ -90,7 +90,17 @@ class Actions {
         context: ZLinkMessageContext,
         message: ChannelView,
     ) {
-        actor.context.boundSession().kotlin().send(message).await()
+        actor.deliver(message)
+    }
+
+    @ZLinkSpotActorSend
+    suspend fun notificationPlayerView(spot: Entry, actor: Player, context: ZLinkMessageContext, message: PlayerView) {
+        actor.deliver(message)
+    }
+
+    @ZLinkSpotActorSend
+    suspend fun notificationChannelView(spot: Entry, actor: Player, context: ZLinkMessageContext, message: ChannelView) {
+        actor.deliver(message)
     }
 }
 

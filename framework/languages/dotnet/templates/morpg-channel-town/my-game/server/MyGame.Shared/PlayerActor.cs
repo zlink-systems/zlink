@@ -4,6 +4,19 @@ namespace MyGame.Shared;
 
 public sealed class PlayerActor(IZLinkActorContext context) : IZLinkActor
 {
+    public ValueTask DeliverAsync<TMessage>(TMessage message, bool visible = true)
+    {
+        string? sourceSpotId = message switch
+        {
+            TownView value => value.TownId,
+            DungeonView value => value.DungeonId,
+            ActionRejected => null,
+            _ => throw new InvalidOperationException("Unknown notification type."),
+        };
+        if (sourceSpotId is not null && (Context.SpotId != sourceSpotId || !visible))
+            return ValueTask.CompletedTask;
+        return Context.BoundSession.Send(message).Async();
+    }
     public IZLinkActorContext Context { get; } = context;
 
     public async ValueTask OnJoinCompletedAsync(

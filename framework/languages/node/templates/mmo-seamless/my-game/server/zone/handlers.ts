@@ -65,7 +65,7 @@ export class Reconnect {
     }
     spot.setConnected(actor.context.actorId, true);
     if (!previous.connected)
-      await spot.publishLocal(actor.context.actorId, new PlayerAppeared(actor.context.actorId, previous.position));
+      await spot.publishLocal(actor.context.actorId, new PlayerAppeared(actor.context.actorId, previous.position, String(spot.context.spotId)));
     await actor.context.boundSession
       .send(new WorldState(String(spot.context.spotId), spot.nodeId, previous.position.x, previous.sequence))
       .submit();
@@ -95,7 +95,8 @@ export class Move {
       actor.move(destination);
       return;
     }
-    await spot.publishLocal(actor.context.actorId, new PlayerMoved(actor.context.actorId, movement.position, movement.sequence));
+    await spot.publishLocal(actor.context.actorId, new PlayerMoved(actor.context.actorId, movement.position, movement.sequence,
+        String(spot.context.spotId)));
     if (movement.borderKind)
       await spot.publishBorder(
         actor.context.actorId,
@@ -122,22 +123,31 @@ export class BorderHandler {
 @Injectable()
 @zlinkSpotActorSendHandler({ spot: () => Zone, actor: () => Player, packetName: PacketNames.playerAppeared })
 export class PlayerAppearedDelivery {
-  async handle(_spot: Zone, actor: Player, _context: ZLinkMessageContext, event: PlayerAppeared): Promise<void> {
-    await actor.context.boundSession.send(new PlayerAppeared(event.playerId, event.position)).submit();
+  async handle(_spot: Zone, actor: Player, context: ZLinkMessageContext, event: PlayerAppeared): Promise<void> {
+    await actor.deliver(
+      context.packetName,
+      event,
+      _spot.state(actor.context.actorId)?.connected === true);
   }
 }
 @Injectable()
 @zlinkSpotActorSendHandler({ spot: () => Zone, actor: () => Player, packetName: PacketNames.playerMoved })
 export class PlayerMovedDelivery {
-  async handle(_spot: Zone, actor: Player, _context: ZLinkMessageContext, event: PlayerMoved): Promise<void> {
-    await actor.context.boundSession.send(new PlayerMoved(event.playerId, event.position, event.sequence)).submit();
+  async handle(_spot: Zone, actor: Player, context: ZLinkMessageContext, event: PlayerMoved): Promise<void> {
+    await actor.deliver(
+      context.packetName,
+      event,
+      _spot.state(actor.context.actorId)?.connected === true);
   }
 }
 @Injectable()
 @zlinkSpotActorSendHandler({ spot: () => Zone, actor: () => Player, packetName: PacketNames.playerLeft })
 export class PlayerLeftDelivery {
-  async handle(_spot: Zone, actor: Player, _context: ZLinkMessageContext, event: PlayerLeft): Promise<void> {
-    await actor.context.boundSession.send(new PlayerLeft(event.playerId, event.reason)).submit();
+  async handle(_spot: Zone, actor: Player, context: ZLinkMessageContext, event: PlayerLeft): Promise<void> {
+    await actor.deliver(
+      context.packetName,
+      event,
+      _spot.state(actor.context.actorId)?.connected === true);
   }
 }
 @Injectable()
@@ -166,5 +176,32 @@ export class OpenDungeon {
     await actor.context.boundSession
       .send(new DungeonOpened(opened.dungeonId, opened.nodeId))
       .submit();
+  }
+}
+
+@Injectable()
+@zlinkEntrySpotActorSendHandler({
+  entrySpot: () => Entry,
+  actor: () => Player,
+  packetName: PacketNames.playerAppeared
+})
+@zlinkEntrySpotActorSendHandler({
+  entrySpot: () => Entry,
+  actor: () => Player,
+  packetName: PacketNames.playerMoved
+})
+@zlinkEntrySpotActorSendHandler({
+  entrySpot: () => Entry,
+  actor: () => Player,
+  packetName: PacketNames.playerLeft
+})
+export class EntryNotifications {
+  async handle(
+    _spot: Entry,
+    actor: Player,
+    context: ZLinkMessageContext,
+    message: PlayerAppeared | PlayerMoved | PlayerLeft
+  ): Promise<void> {
+    await actor.deliver(context.packetName, message);
   }
 }

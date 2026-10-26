@@ -93,13 +93,6 @@ public sealed record DungeonMemberEntered(string RunId, string ActorId);
 public sealed record RunStarted(string RunId);
 public sealed record RunCompleted(string RunId);
 
-public sealed record FieldView(
-    string FieldId,
-    string NodeId,
-    string[] Players,
-    PartyView[] Parties
-);
-
 public sealed record DungeonView(
     string DungeonId,
     string NodeId,

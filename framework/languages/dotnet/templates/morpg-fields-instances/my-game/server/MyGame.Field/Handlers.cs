@@ -69,7 +69,7 @@ public sealed class BorderDelivery
         IZLinkMessageContext context,
         BorderVisible presence,
         CancellationToken cancellationToken
-    ) => actor.Context.BoundSession.Send(presence).Async();
+    ) => actor.DeliverAsync(presence, spot.IsVisible(actor));
 }
 
 [ZLinkSpotActorSendHandler(nameof(CreatePartyRequest))]
@@ -146,7 +146,7 @@ public sealed class PartyDelivery : IZLinkSpotActorSendHandler<FieldSpot, Player
         CancellationToken ct
     )
     {
-        return actor.Context.BoundSession.Send(request).Async();
+        return actor.DeliverAsync(request);
     }
 }
 

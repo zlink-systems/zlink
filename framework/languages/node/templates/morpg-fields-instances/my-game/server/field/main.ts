@@ -6,12 +6,14 @@ import {
 import { ZLINK_SPOT_MANAGER } from '@zlink-systems/nestjs';
 import { runHost, failHost } from '../shared/hosting';
 import { Names } from '../shared/constants';
-import { Entry, EnterWorld } from '../shared/entry';
+import { EntryNotifications, Entry, EnterWorld } from '../shared/entry';
 import { PlayerFactory, PlayerRelocation } from '../shared/player';
 import { Party, PartyRelocation, Command, MemberEntered, Started, Completed } from './party';
 import { Field, FieldRelocation } from './spots';
 import {
-  FieldQuery, Reconnect,
+  FieldNotifications,
+  FieldQuery,
+  Reconnect,
   Move,
   CreateParty,
   JoinParty,
@@ -19,7 +21,8 @@ import {
   DungeonTravel,
   BorderTick,
   BorderHandler,
-  Delivery
+  Delivery,
+  PartyDelivery
 } from './handlers';
 runHost((_builder, config, mesh) => {
   const objects = mesh.objects().server();
@@ -36,7 +39,9 @@ runHost((_builder, config, mesh) => {
   });
   mesh.channel(Names.border).server();
   return {
-    providers: [Party, PartyRelocation, Command, MemberEntered, Started, Completed, FieldQuery,
+    providers: [
+      EntryNotifications,
+      FieldNotifications, Party, PartyRelocation, Command, MemberEntered, Started, Completed, FieldQuery,
       Entry,
       EnterWorld,
       Field,
@@ -51,7 +56,8 @@ runHost((_builder, config, mesh) => {
       DungeonTravel,
       BorderTick,
       BorderHandler,
-      Delivery
+      Delivery,
+      PartyDelivery
     ],
     listener: { kind: 'routeMesh', name: Names.mesh },
     ready: (status) => status.placement.isAvailable,

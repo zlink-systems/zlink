@@ -8,8 +8,19 @@ import type {
   ZLinkSpotRelocationAdapter
 } from '@zlink-systems/framework';
 import { NODE_CONFIG, type NodeConfig } from '../shared/config';
-import { DungeonView, DungeonPrepared, JoinDungeon, PrepareDungeon, PartyCommand, PartyCommandResult,
-  DungeonMemberEntered, RunStarted, RunCompleted, ActionRejected } from '../shared/messages';
+import { PacketNames } from '../shared/constants';
+import {
+ restoreNotification,
+ DungeonView,
+ DungeonPrepared,
+ JoinDungeon,
+ PrepareDungeon,
+ PartyCommand,
+ PartyCommandResult,
+ DungeonMemberEntered,
+ RunStarted,
+ RunCompleted
+} from '../shared/messages';
 import { Player } from '../shared/player';
 import { DungeonState } from './domain';
 @Injectable({ scope: Scope.TRANSIENT })
@@ -71,7 +82,7 @@ export class Dungeon implements ZLinkSpot<Player> {
   async enter(actor: Player): Promise<void> {
     const result = await this.context.outbound.requestToSpot(this.state.partyId,
       new PartyCommand(actor.context.actorId, false, true)).submit<PartyCommandResult>();
-    if (result.rejection) await actor.context.boundSession.send(Object.assign(new ActionRejected(), result.rejection)).submit();
+    if (result.rejection) await actor.context.boundSession.send(restoreNotification(PacketNames.actionRejected, result.rejection)).submit();
   }
   capture(): Uint8Array {
     return Buffer.from(JSON.stringify(this.state));

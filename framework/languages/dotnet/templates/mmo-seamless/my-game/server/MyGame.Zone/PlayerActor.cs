@@ -6,6 +6,19 @@ namespace MyGame.Zone;
 
 public sealed class PlayerActor(IZLinkActorContext context) : IZLinkActor
 {
+    public ValueTask DeliverAsync<TMessage>(TMessage message, bool visible = true)
+    {
+        string? sourceSpotId = message switch
+        {
+            PlayerAppeared value => value.SourceSpotId,
+            PlayerMoved value => value.SourceSpotId,
+            PlayerLeft value => value.SourceSpotId,
+            _ => throw new InvalidOperationException("Unknown notification type."),
+        };
+        if (sourceSpotId is not null && (Context.SpotId != sourceSpotId || !visible))
+            return ValueTask.CompletedTask;
+        return Context.BoundSession.Send(message).Async();
+    }
     public IZLinkActorContext Context { get; } = context;
 
     public void Move(string zoneId, EnterZone destination) =>
