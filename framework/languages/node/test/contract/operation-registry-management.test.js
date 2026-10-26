@@ -126,7 +126,7 @@ test('deadline maintenance yields its live iterator and resumes through deletion
 
 async function sharedDeadlineWhileSuspended(t, native) {
   const backend = require('../../packages/framework/dist/runtime/backend');
-  const { RequestResult, ZLinkBackendResultError } = require('../../packages/framework/dist/runtime/backend/runtime-values');
+  const { RequestResult } = require('../../packages/framework/dist/runtime/backend/runtime-values');
   const factory = new backend.ZLinkNodeBackendAdapterFactory();
   const context = native ? factory.createChannelAdapter().createContext() : { async dispose() {} };
   const suffix = `node-dispatch-deadline-${process.pid}`;
@@ -185,19 +185,22 @@ async function sharedDeadlineWhileSuspended(t, native) {
     const entry = table.submit((entry) =>
       node.requestToNode(node.status().routingId, Buffer.from('request'), { timeoutMs: 20, requestEntry: entry })
     );
+    const completed = t.mock.method(entry, 'complete');
     const failed = t.mock.method(entry, 'fail');
-    const pending = assert.rejects(entry.pending, (error) =>
-      error instanceof ZLinkBackendResultError && error.result === RequestResult.TimedOut
-    );
+    const pending = entry.pending;
     await started;
-    await pending;
+    const completion = await pending;
+    assert.equal(completion.terminalResult, RequestResult.TimedOut);
+    backend.closeMeshCompletion(completion);
     assert.equal(table.pendingCount, 0);
-    assert.equal(failed.mock.callCount(), 1);
+    assert.equal(completed.mock.callCount(), 1);
+    assert.equal(failed.mock.callCount(), 0);
     assert.equal(diagnostics.length, 0);
     release();
     await replied;
     await new Promise(setImmediate);
-    assert.equal(failed.mock.callCount(), 1, 'late native reply cannot establish another terminal');
+    assert.equal(completed.mock.callCount(), 1, 'late native reply cannot establish another terminal');
+    assert.equal(failed.mock.callCount(), 0);
     assert.equal(table.pendingCount, 0);
     assert.equal(diagnostics.length, 1);
     assert.equal(diagnostics[0].kind, 'unknownOrLate');

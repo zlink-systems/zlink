@@ -1,5 +1,4 @@
 import { ZLinkRequestResult } from '../messaging/request-result';
-import { ZLinkBackendResultError, RequestResult } from './runtime-values';
 import { ZLinkBufferMessage as Message } from './runtime-message';
 import type { Message as ZLinkMessage } from '../../contracts/Common/Message';
 import type {
@@ -211,10 +210,6 @@ export class ZLinkMeshCompletionTable {
       const completion = retainCompletion(
         materialize === undefined ? (record as ReceiveRecord) : materialize()
       );
-      if (completion.terminalResult === RequestResult.TimedOut) {
-        closeMeshCompletion(completion);
-        throw new ZLinkBackendResultError('request', RequestResult.TimedOut);
-      }
       entry.complete(completion);
     } catch (error) {
       entry.fail(error);
