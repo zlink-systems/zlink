@@ -622,6 +622,12 @@ raw_stateful_dispatch_t::ingest_claimed (object_ref_t owner,
     // The original stays in the canonical mailbox slot until the handoff wins its take.
     auto *const slot = std::get_if<mesh::service_mailbox_t::claim_handle_t> (&original);
     auto *const owned = std::get_if<mesh::service_mailbox_record_t> (&original);
+    const auto settle_untaken = [] (mesh::service_mailbox_record_t *record) noexcept {
+        mailbox_claim_release_guard_t release (std::exchange (record->transferred, {}));
+    };
+    // This guard settles only the cut original left here; a take moves its credit onward.
+    const std::unique_ptr<mesh::service_mailbox_record_t, decltype (settle_untaken)>
+      untaken_credit (owned, settle_untaken);
     if (!prepared) {
         const auto prepare = [this, &owner] (mesh::service_mailbox_record_t &record) {
             return claimed_ingress_t::prepare (record, _transport->request_sources (),
