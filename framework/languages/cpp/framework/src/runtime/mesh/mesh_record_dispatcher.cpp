@@ -3,6 +3,7 @@
 #include "runtime/mesh/mesh_record_dispatcher.hpp"
 
 #include "runtime/channels/route_packet_dispatcher.hpp"
+#include "runtime/diagnostics/dispatch_error_reporter.hpp"
 
 #include <utility>
 
@@ -25,7 +26,7 @@ mesh_record_dispatcher_t::mesh_record_dispatcher_t (
 {
 }
 
-result_t<void>
+mesh_record_dispatcher_t::dispatch_result_t
 mesh_record_dispatcher_t::dispatch (const runtime::host::receive_record_t &record,
                                     std::vector<zlink::message_t> parts,
                                     runtime::messaging::envelope_header_t header) const
@@ -54,6 +55,18 @@ mesh_record_dispatcher_t::dispatch (const runtime::host::receive_record_t &recor
     auto dispatched = dispatcher.dispatch (
       route_received_packet_t{record.source_node_rid, {}, std::move (message_parts), {}},
       std::move (header));
+    if (auto ready = std::get_if<result_t<std::optional<route_dispatch_reply_t>>> (&dispatched))
+        return complete (record, *ready);
+    return continue_dispatch (
+      record, std::get<task_t<result_t<std::optional<route_dispatch_reply_t>>>> (std::move (dispatched)),
+      _dispatch_options);
+}
+
+result_t<void> mesh_record_dispatcher_t::complete (
+  const runtime::host::receive_record_t &record,
+  const result_t<std::optional<route_dispatch_reply_t>> &dispatched)
+{
+    using record_kind_t = runtime::host::record_kind_t;
     if (!dispatched) {
         return detail::propagate_failure<void> (dispatched, "MeshNode handler dispatch failed");
     }
@@ -71,6 +84,22 @@ mesh_record_dispatcher_t::dispatch (const runtime::host::receive_record_t &recor
                                         "MeshNode reply submit failed");
     }
     return result_t<void>::success ();
+}
+
+task_t<result_t<void>> mesh_record_dispatcher_t::continue_dispatch (
+  runtime::host::receive_record_t record,
+  task_t<result_t<std::optional<route_dispatch_reply_t>>> pending,
+  dispatch_options_t dispatch_options)
+{
+    try {
+        auto result = co_await pending;
+        co_return complete (record, result);
+    }
+    catch (...) {
+        const auto error = std::current_exception ();
+        dispatch_error_reporter_t (dispatch_options).report_application_exception (record, error);
+        co_return detail::current_exception_result<void> ();
+    }
 }
 
 } // namespace zlink::framework::detail

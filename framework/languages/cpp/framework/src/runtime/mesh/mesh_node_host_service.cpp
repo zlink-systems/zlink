@@ -56,27 +56,6 @@
 namespace zlink::framework::runtime
 {
 
-namespace
-{
-bool is_application_request (host::record_kind_t kind)
-{
-    using kind_t = host::record_kind_t;
-    return kind == kind_t::node_request || kind == kind_t::channel_request
-           || kind == kind_t::spot_request || kind == kind_t::actor_request;
-}
-
-dispatch_error_surface_t application_dispatch_surface (host::record_kind_t kind)
-{
-    using kind_t = host::record_kind_t;
-    return kind == kind_t::actor_send || kind == kind_t::actor_request
-             ? dispatch_error_surface_t::spot_actor
-           : kind == kind_t::spot_send || kind == kind_t::spot_request
-             ? dispatch_error_surface_t::spot_route
-           : kind == kind_t::node_send || kind == kind_t::node_request
-             ? dispatch_error_surface_t::node
-             : dispatch_error_surface_t::route_mesh_channel;
-}
-}
 
 result_t<std::optional<messaging::envelope_header_t>>
 decode_mesh_record_header (const host::receive_record_t &record,
@@ -113,7 +92,7 @@ decode_mesh_record_header (const host::receive_record_t &record,
     if (decoded)
         return header_result_t::success (std::move (decoded.value ()));
 
-    const bool request = is_application_request (record.kind);
+    const bool request = detail::dispatch_error_reporter_t::is_application_request (record.kind);
     const bool can_correlate = rejected_header && rejected_header->can_correlate_reply ();
     auto submitted = zlink::submit_result_t::terminated;
     if (record.kind == kind_t::actor_request) {
@@ -132,7 +111,7 @@ decode_mesh_record_header (const host::receive_record_t &record,
     }
     detail::dispatch_error_reporter_t (dispatch_options).report_lazy ([&] {
         message_dispatch_error_event_t event{
-          application_dispatch_surface (record.kind),
+          detail::dispatch_error_reporter_t::application_surface (record.kind),
           request ? dispatch_message_kind_t::request : dispatch_message_kind_t::send,
           dispatch_error_reason_t::invalid_frame,
           submitted == zlink::submit_result_t::ok ? dispatch_error_action_t::reply_error
@@ -667,7 +646,7 @@ void reject_application_request (const host::receive_record_t &record,
                                  framework_error_kind_t error_kind,
                                  std::string message)
 {
-    if (!is_application_request (record.kind))
+    if (!detail::dispatch_error_reporter_t::is_application_request (record.kind))
         return;
     if (record.kind == host::record_kind_t::actor_request) {
         detail::channel_reply_writer_t replies;
@@ -2145,11 +2124,6 @@ struct mesh_node_host_service_t::node_receive_role_t final
                           || !decoded_header.value ()) {
                           return;
                       }
-                      detail::mesh_record_dispatcher_t dispatcher (
-                        *host._services, *host._serializers, registration->handlers, *host._filters,
-                        host._dispatch_options);
-                      (void) dispatcher.dispatch (record, std::move (parts),
-                                                  std::move (*decoded_header.value ()));
                   });
               },
               accept_application_receive, next_application_receive))
@@ -3446,7 +3420,7 @@ std::vector<std::shared_ptr<detail::mesh_node_runtime_t>> mesh_node_host_service
     return _nodes;
 }
 
-void mesh_node_host_service_t::dispatch_application (
+std::optional<task_t<result_t<void>>> mesh_node_host_service_t::dispatch_application (
   const std::shared_ptr<detail::mesh_node_runtime_t> &node,
   const std::shared_ptr<detail::mesh_node_builder_state_t> &registration,
   const host::ready_record_t &owner,
@@ -3475,7 +3449,7 @@ void mesh_node_host_service_t::dispatch_application (
                                         "MeshNode is draining and rejects new application work");
             if (application_completed)
                 application_completed ([] {});
-            return;
+            return std::nullopt;
         }
         deferred_terminal =
           std::make_shared<application_dispatch_terminal_owner_t> (std::move (terminal));
@@ -3488,7 +3462,7 @@ void mesh_node_host_service_t::dispatch_application (
             deferred_terminal->settle ();
             if (application_completed)
                 application_completed ([] {});
-            return;
+            return std::nullopt;
         }
         const auto handled = application_spot_runtime.dispatch_mesh_record (
           owner, record, parts, decoded_header.value (), *services, *serializers,
@@ -3502,10 +3476,24 @@ void mesh_node_host_service_t::dispatch_application (
             detail::mesh_record_dispatcher_t dispatcher (
               *services, *serializers, registration->handlers, *filters, dispatch_options,
               record.before_application_handler);
-            const auto dispatched =
+            auto dispatched =
               dispatcher.dispatch (record, std::move (parts), std::move (*decoded_header.value ()));
-            trace_mesh_application ("route-dispatch", record, 0,
-                                    dispatched ? "success" : "failure");
+            if (auto ready = std::get_if<result_t<void>> (&dispatched)) {
+                trace_mesh_application ("route-dispatch", record, 0,
+                                        *ready ? "success" : "failure");
+            } else {
+                auto pending = std::get<task_t<result_t<void>>> (std::move (dispatched));
+                detail::observe_task_terminal (
+                  pending, [node, registration, deferred_terminal, application_completed,
+                            record] (const result_t<result_t<void>> &result) {
+                      trace_mesh_application ("route-dispatch", record, 0,
+                                              result && result.value () ? "success" : "failure");
+                      deferred_terminal->settle ();
+                      if (application_completed)
+                          application_completed ([] {});
+                  });
+                return pending;
+            }
         }
         if (!terminal_deferred) {
             deferred_terminal->settle ();
@@ -3515,22 +3503,14 @@ void mesh_node_host_service_t::dispatch_application (
     }
     catch (...) {
         const auto error = std::current_exception ();
-        detail::dispatch_error_reporter_t (dispatch_options).report_lazy ([&] {
-            return message_dispatch_error_event_t{
-              .surface = application_dispatch_surface (record.kind),
-              .message_kind = is_application_request (record.kind)
-                                ? dispatch_message_kind_t::request
-                                : dispatch_message_kind_t::send,
-              .reason = dispatch_error_reason_t::handler_exception,
-              .action = dispatch_error_action_t::drop,
-              .source_rid = record.source_node_rid.to_string (),
-              .exception = error};
-        });
+        detail::dispatch_error_reporter_t (dispatch_options)
+          .report_application_exception (record, error);
         if (deferred_terminal)
             deferred_terminal->settle ();
         if (application_completed)
             application_completed ([] {});
     }
+    return std::nullopt;
 }
 
 task_t<void> mesh_node_host_service_t::drain_application_owner (
@@ -3548,11 +3528,12 @@ task_t<void> mesh_node_host_service_t::drain_application_owner (
         co_return;
     const auto deadline = std::chrono::steady_clock::now () + dispatch_limits::owner_time_budget;
     try {
-        const std::function<void (const host::ready_record_t &, const host::receive_record_t &,
-                                  std::vector<zlink::message_t>)>
+        const std::function<std::optional<task_t<result_t<void>>> (
+          const host::ready_record_t &, const host::receive_record_t &,
+          std::vector<zlink::message_t>)>
           dispatch = [&] (const host::ready_record_t &ready, const host::receive_record_t &record,
                           std::vector<zlink::message_t> parts) {
-              dispatch_application (node, registration, ready, record, std::move (parts),
+              return dispatch_application (node, registration, ready, record, std::move (parts),
                                     reject_only, services, serializers, filters, dispatch_options);
           };
         const std::function<void ()> started = [&node] { node->application_work_started (); };

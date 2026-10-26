@@ -72,8 +72,8 @@ route_packet_dispatcher_t::route_packet_dispatcher_t (
 {
 }
 
-result_t<std::optional<route_dispatch_reply_t>>
-route_packet_dispatcher_t::dispatch (const route_received_packet_t &received) const
+route_packet_dispatcher_t::dispatch_result_t
+route_packet_dispatcher_t::dispatch (route_received_packet_t received) const
 {
     runtime::messaging::envelope_codec_t codec;
     auto header = codec.decode_header (received.parts,
@@ -83,11 +83,11 @@ route_packet_dispatcher_t::dispatch (const route_received_packet_t &received) co
           header, "route envelope header decode failed");
     }
 
-    return dispatch (received, std::move (header.value ()));
+    return dispatch (std::move (received), std::move (header.value ()));
 }
 
-result_t<std::optional<route_dispatch_reply_t>>
-route_packet_dispatcher_t::dispatch (const route_received_packet_t &received,
+route_packet_dispatcher_t::dispatch_result_t
+route_packet_dispatcher_t::dispatch (route_received_packet_t received,
                                      runtime::messaging::envelope_header_t header) const
 {
     auto flow_scope = runtime::flow_context_t::enter (
@@ -104,9 +104,9 @@ route_packet_dispatcher_t::dispatch (const route_received_packet_t &received,
 
     switch (header.kind) {
         case runtime::messaging::message_kind_t::command:
-            return dispatch_send (received, std::move (header));
+            return dispatch_send (std::move (received), std::move (header));
         case runtime::messaging::message_kind_t::request:
-            return dispatch_request (received, std::move (header));
+            return dispatch_request (std::move (received), std::move (header));
         default:
             return result_t<std::optional<route_dispatch_reply_t>>::failure (
               framework_error_kind_t::protocol_error, "unsupported route message kind");
@@ -141,8 +141,8 @@ void route_packet_dispatcher_t::trace_flow (
               });
 }
 
-result_t<std::optional<route_dispatch_reply_t>>
-route_packet_dispatcher_t::dispatch_send (const route_received_packet_t &received,
+route_packet_dispatcher_t::dispatch_result_t
+route_packet_dispatcher_t::dispatch_send (route_received_packet_t received,
                                           runtime::messaging::envelope_header_t header) const
 {
     if (_internal_packets != nullptr && _internal_packets->can_handle_send (header.message_name)) {
@@ -215,19 +215,30 @@ route_packet_dispatcher_t::dispatch_send (const route_received_packet_t &receive
     auto before = _before_application_handler;
     if (message_flow_tracer_t (_dispatch_options)
           .enabled_for (message_flow_outcome_t::dispatched)) {
-        before = [this, &received, &header] {
-            if (_before_application_handler)
-                _before_application_handler ();
-            trace_flow (message_flow_outcome_t::dispatched, dispatch_message_kind_t::send, received,
+        before = [self = *this, source = received.source_node_rid, header] {
+            route_received_packet_t received{source, {}, {}, {}};
+            if (self._before_application_handler)
+                self._before_application_handler ();
+            self.trace_flow (message_flow_outcome_t::dispatched, dispatch_message_kind_t::send, received,
                         header);
         };
     }
 
-    auto dispatched = _invoker
-                        .invoke_send (*_handlers, filters, _send_dispatch_kind, _router_channel_id,
-                                      header.message_name, *_services, *_serializers, body.value (),
-                                      context, std::move (before))
-                        .result ();
+    auto pending = route_handler_invoker_t::invoke_send (
+      *_handlers, filters, _send_dispatch_kind, *_services, *_serializers,
+      std::move (body.value ()), std::move (context), std::move (before));
+    if (!pending.await_ready ())
+        return continue_send (*this, std::move (received), std::move (header),
+                               std::move (pending));
+    return complete_send (received, header, pending.result ());
+}
+
+result_t<std::optional<route_dispatch_reply_t>>
+route_packet_dispatcher_t::complete_send (
+  const route_received_packet_t &received,
+  const runtime::messaging::envelope_header_t &header,
+  const result_t<void> &dispatched) const
+{
     if (!dispatched) {
         dispatch_error_reporter_t (_dispatch_options).report_lazy ([&] {
             auto event = message_dispatch_error_event_t{
@@ -257,8 +268,8 @@ route_packet_dispatcher_t::dispatch_send (const route_received_packet_t &receive
     return result_t<std::optional<route_dispatch_reply_t>>::success (std::nullopt);
 }
 
-result_t<std::optional<route_dispatch_reply_t>>
-route_packet_dispatcher_t::dispatch_request (const route_received_packet_t &received,
+route_packet_dispatcher_t::dispatch_result_t
+route_packet_dispatcher_t::dispatch_request (route_received_packet_t received,
                                              runtime::messaging::envelope_header_t header) const
 {
     if (_internal_packets != nullptr
@@ -304,19 +315,30 @@ route_packet_dispatcher_t::dispatch_request (const route_received_packet_t &rece
     auto before = _before_application_handler;
     if (message_flow_tracer_t (_dispatch_options)
           .enabled_for (message_flow_outcome_t::dispatched)) {
-        before = [this, &received, &header] {
-            if (_before_application_handler)
-                _before_application_handler ();
-            trace_flow (message_flow_outcome_t::dispatched, dispatch_message_kind_t::request,
+        before = [self = *this, source = received.source_node_rid, header] {
+            route_received_packet_t received{source, {}, {}, {}};
+            if (self._before_application_handler)
+                self._before_application_handler ();
+            self.trace_flow (message_flow_outcome_t::dispatched, dispatch_message_kind_t::request,
                         received, header);
         };
     }
 
-    auto reply = _invoker
-                   .invoke_request (*_handlers, filters, _request_dispatch_kind, _router_channel_id,
-                                    header.message_name, *_services, *_serializers, body.value (),
-                                    context, std::move (before))
-                   .result ();
+    auto pending = route_handler_invoker_t::invoke_request (
+      *_handlers, filters, _request_dispatch_kind, *_services, *_serializers,
+      std::move (body.value ()), std::move (context), std::move (before));
+    if (!pending.await_ready ())
+        return continue_request (*this, std::move (received), std::move (header),
+                                  std::move (pending));
+    return complete_request (received, header, pending.result ());
+}
+
+result_t<std::optional<route_dispatch_reply_t>>
+route_packet_dispatcher_t::complete_request (
+  const route_received_packet_t &received,
+  const runtime::messaging::envelope_header_t &header,
+  const result_t<zlink::message_t> &reply) const
+{
     if (!reply) {
         framework_exception_t error (reply.error_kind (), reply.error ()
                                                             ? reply.error ()->what ()
@@ -332,6 +354,34 @@ route_packet_dispatcher_t::dispatch_request (const route_received_packet_t &rece
         writer.create_reply_header (runtime::messaging::message_kind_t::response,
                                     _router_channel_id, header),
         reply.value ())});
+}
+
+task_t<result_t<std::optional<route_dispatch_reply_t>>> route_packet_dispatcher_t::continue_send (
+  route_packet_dispatcher_t self, route_received_packet_t received,
+  runtime::messaging::envelope_header_t header, task_t<void> pending)
+{
+    auto result = result_t<void>::success ();
+    try {
+        co_await pending;
+    }
+    catch (...) {
+        result = detail::current_exception_result<void> ();
+    }
+    co_return self.complete_send (received, header, result);
+}
+
+task_t<result_t<std::optional<route_dispatch_reply_t>>> route_packet_dispatcher_t::continue_request (
+  route_packet_dispatcher_t self, route_received_packet_t received,
+  runtime::messaging::envelope_header_t header, task_t<zlink::message_t> pending)
+{
+    std::optional<result_t<zlink::message_t>> result;
+    try {
+        result.emplace (result_t<zlink::message_t>::success (co_await pending));
+    }
+    catch (...) {
+        result.emplace (detail::current_exception_result<zlink::message_t> ());
+    }
+    co_return self.complete_request (received, header, *result);
 }
 
 result_t<std::optional<route_dispatch_reply_t>>

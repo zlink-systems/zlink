@@ -25,6 +25,39 @@ namespace zlink::framework::detail
 class dispatch_error_reporter_t
 {
   public:
+    template <typename TKind> static bool is_application_request (TKind kind)
+    {
+        return kind == TKind::node_request || kind == TKind::channel_request
+               || kind == TKind::spot_request || kind == TKind::actor_request;
+    }
+
+    template <typename TKind> static dispatch_error_surface_t application_surface (TKind kind)
+    {
+        return kind == TKind::actor_send || kind == TKind::actor_request
+                 ? dispatch_error_surface_t::spot_actor
+               : kind == TKind::spot_send || kind == TKind::spot_request
+                 ? dispatch_error_surface_t::spot_route
+               : kind == TKind::node_send || kind == TKind::node_request
+                 ? dispatch_error_surface_t::node
+                 : dispatch_error_surface_t::route_mesh_channel;
+    }
+
+    template <typename TRecord>
+    void report_application_exception (const TRecord &record, std::exception_ptr error) const noexcept
+    {
+        report_lazy ([&] {
+            return message_dispatch_error_event_t{
+              .surface = application_surface (record.kind),
+              .message_kind = is_application_request (record.kind)
+                                ? dispatch_message_kind_t::request
+                                : dispatch_message_kind_t::send,
+              .reason = dispatch_error_reason_t::handler_exception,
+              .action = dispatch_error_action_t::drop,
+              .source_rid = record.source_node_rid.to_string (),
+              .exception = error};
+        });
+    }
+
     explicit dispatch_error_reporter_t (const dispatch_options_t &options) : _options (&options) {}
 
     bool enabled () const noexcept

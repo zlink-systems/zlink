@@ -12,6 +12,7 @@
 #include <functional>
 #include <optional>
 #include <string>
+#include <variant>
 
 namespace zlink::framework::detail
 {
@@ -19,6 +20,9 @@ namespace zlink::framework::detail
 class route_packet_dispatcher_t
 {
   public:
+    using dispatch_result_t = std::variant<result_t<std::optional<route_dispatch_reply_t>>,
+                                           task_t<result_t<std::optional<route_dispatch_reply_t>>>>;
+
     explicit route_packet_dispatcher_t (std::string router_channel_id);
     route_packet_dispatcher_t (
       std::string router_channel_id,
@@ -32,21 +36,37 @@ class route_packet_dispatcher_t
       handler_dispatch_kind_t request_dispatch_kind = handler_dispatch_kind_t::node_direct_request,
       std::function<void ()> before_application_handler = {});
 
-    result_t<std::optional<route_dispatch_reply_t>>
-    dispatch (const route_received_packet_t &received) const;
+    dispatch_result_t
+    dispatch (route_received_packet_t received) const;
 
-    result_t<std::optional<route_dispatch_reply_t>>
-    dispatch (const route_received_packet_t &received,
+    dispatch_result_t
+    dispatch (route_received_packet_t received,
               runtime::messaging::envelope_header_t header) const;
 
   private:
-    result_t<std::optional<route_dispatch_reply_t>>
-    dispatch_send (const route_received_packet_t &received,
+    dispatch_result_t
+    dispatch_send (route_received_packet_t received,
                    runtime::messaging::envelope_header_t header) const;
 
-    result_t<std::optional<route_dispatch_reply_t>>
-    dispatch_request (const route_received_packet_t &received,
+    dispatch_result_t
+    dispatch_request (route_received_packet_t received,
                       runtime::messaging::envelope_header_t header) const;
+
+    result_t<std::optional<route_dispatch_reply_t>>
+    complete_send (const route_received_packet_t &received,
+                    const runtime::messaging::envelope_header_t &header,
+                    const result_t<void> &result) const;
+    result_t<std::optional<route_dispatch_reply_t>>
+    complete_request (const route_received_packet_t &received,
+                       const runtime::messaging::envelope_header_t &header,
+                       const result_t<zlink::message_t> &result) const;
+    static task_t<result_t<std::optional<route_dispatch_reply_t>>>
+    continue_send (route_packet_dispatcher_t self, route_received_packet_t received,
+                    runtime::messaging::envelope_header_t header, task_t<void> pending);
+    static task_t<result_t<std::optional<route_dispatch_reply_t>>>
+    continue_request (route_packet_dispatcher_t self, route_received_packet_t received,
+                       runtime::messaging::envelope_header_t header,
+                       task_t<zlink::message_t> pending);
 
     result_t<std::optional<route_dispatch_reply_t>>
     reply_error (const route_received_packet_t &received,
@@ -64,7 +84,6 @@ class route_packet_dispatcher_t
     const route_handler_registry_t *_handlers = nullptr;
     const handler_registry_t *_filters = nullptr;
     const route_internal_packet_dispatcher_t *_internal_packets = nullptr;
-    route_handler_invoker_t _invoker;
     dispatch_options_t _dispatch_options;
     handler_dispatch_kind_t _send_dispatch_kind = handler_dispatch_kind_t::node_direct_send;
     handler_dispatch_kind_t _request_dispatch_kind = handler_dispatch_kind_t::node_direct_request;

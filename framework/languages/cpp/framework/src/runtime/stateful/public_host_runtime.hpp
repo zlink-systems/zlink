@@ -853,7 +853,7 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
       std::function<bool ()> next_application_receive = {});
     std::variant<bool, task_t<std::size_t>> dispatch_application_owner (
       std::string owner,
-      const std::function<void (
+      std::function<std::optional<task_t<result_t<void>>> (
         const ready_record_t &, const receive_record_t &, std::vector<zlink::message_t>)> dispatch,
       std::function<void ()> started,
       std::function<void ()> rejected);
@@ -1020,6 +1020,9 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     task_t<std::size_t>
     continue_application_claim (std::shared_ptr<application_claim_batch_t> batch,
                                 std::exception_ptr failure);
+    task_t<std::size_t>
+    await_application_claim (std::shared_ptr<application_claim_batch_t> batch,
+                              task_t<result_t<void>> pending);
     void
     fail_application_claim (const std::shared_ptr<application_claim_batch_t> &batch,
                             std::exception_ptr error,

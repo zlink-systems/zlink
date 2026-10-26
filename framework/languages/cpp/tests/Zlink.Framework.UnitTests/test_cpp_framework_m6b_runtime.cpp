@@ -218,6 +218,9 @@ using namespace std::chrono_literals;
 
 namespace
 {
+using dispatch_completion_t =
+  std::optional<zlink::framework::task_t<zlink::framework::result_t<void>>>;
+
 
 bool ready_peer (const mesh::service_topology_registry_t &topology,
                  const std::vector<std::uint8_t> &routing_id)
@@ -3937,15 +3940,17 @@ void verify_public_host_dispatches_one_owner_claim_as_a_batch ()
     assert (std::get<bool> (target
               ->dispatch_application_owner (
                 owner,
-                [&] (const host::ready_record_t &, const host::receive_record_t &record,
-                     std::vector<zlink::message_t> parts) {
+      [&] (const host::ready_record_t &, const host::receive_record_t &record,
+                     std::vector<zlink::message_t> parts) -> dispatch_completion_t {
                     assert (record.retain_mailbox_reservation);
                     assert (record.release_mailbox_reservation);
                     record.retain_mailbox_reservation ();
                     assert (parts.size () == 1);
                     dispatched.push_back (parts.front ().to_string ());
                     record.release_mailbox_reservation ();
-                },
+
+          return std::nullopt;
+      },
                 [&] { ++started; }, [&] { ++rejected; })));
     mailbox.end_application_drain (owner);
 

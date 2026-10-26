@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #include "../support/runtime_failure_fixture.hpp"
+#include "../support/dispatch_result_fixture.hpp"
 
 #include "runtime/foundation/operation_registry.hpp"
 #include "runtime/channels/route_packet_dispatcher.hpp"
@@ -505,9 +506,9 @@ TEST_P (ChannelMessageFlow, RouteMeshRequestAndSendRecordAllReceiverStages)
                           : runtime::messaging::message_kind_t::command;
     header.channel_name = "X";
 
-    auto result = dispatcher.dispatch (
+    auto result = zlink::framework::test::await_dispatch_result (dispatcher.dispatch (
       {zlink::routing_id_t::from ("flow-source"), received.correlation, std::move (encoded), {}},
-      std::move (header));
+      std::move (header)));
     ASSERT_TRUE (result);
     ASSERT_EQ (4u, events.size ());
     EXPECT_EQ (message_flow_outcome_t::received, events[0].outcome);

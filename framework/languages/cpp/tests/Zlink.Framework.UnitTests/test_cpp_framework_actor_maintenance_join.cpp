@@ -303,6 +303,9 @@ struct public_host_runtime_test_access_t
 
 namespace
 {
+using dispatch_completion_t =
+  std::optional<zlink::framework::task_t<zlink::framework::result_t<void>>>;
+
 namespace fw = zlink::framework;
 using namespace std::chrono_literals;
 constexpr auto wait_budget = 5s;
@@ -3325,7 +3328,11 @@ TEST (NativeIntake, TypedControlMalformedWireAndKernelMetadata)
     const auto drain = [&] {
         EXPECT_TRUE (mailbox.begin_application_drain (owner));
         auto result = host->dispatch_application_owner (
-          owner, callback, [&] { ++started; }, [&] { ++rejected; });
+          owner,
+      [&] (const auto &ready, const auto &record, auto parts) -> dispatch_completion_t {
+          callback (ready, record, std::move (parts));
+          return std::nullopt;
+      }, [&] { ++started; }, [&] { ++rejected; });
         const auto claimed = std::holds_alternative<bool> (result)
                                ? std::get<bool> (result)
                                : static_cast<bool> (
@@ -3546,7 +3553,11 @@ TEST (NativeIntake, NativeMailboxTransferKeepsActualPrivateMClaim)
             if (!mailbox.begin_application_drain (owner))
                 return false;
             auto result = host->dispatch_application_owner (
-              owner, dispatch, [&] { ++started; }, [&] { ++rejected; });
+              owner,
+      [&] (const auto &ready, const auto &record, auto parts) -> dispatch_completion_t {
+          dispatch (ready, record, std::move (parts));
+          return std::nullopt;
+      }, [&] { ++started; }, [&] { ++rejected; });
             const auto claimed = std::holds_alternative<bool> (result)
                                    ? std::get<bool> (result)
                                    : static_cast<bool> (
