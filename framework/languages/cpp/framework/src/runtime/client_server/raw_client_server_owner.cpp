@@ -458,8 +458,11 @@ task_t<client_server_pump_result_t> raw_client_server_server_t::pump_one (
                   received->reply_token};
                 if (rejection_context)
                     rejected.envelope_header = std::move (*rejection_context);
-                else
+                else {
                     rejected.envelope_header.channel_name = channel_name;
+                    rejected.envelope_header.content_type =
+                      messaging::envelope_codec_t::default_content_type;
+                }
                 (void) co_await reply (rejected, *application_header->error ());
             }
         }
