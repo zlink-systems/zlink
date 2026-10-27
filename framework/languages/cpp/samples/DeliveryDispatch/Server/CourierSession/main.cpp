@@ -32,7 +32,7 @@ class courier_session_t final : public packet_stream_session_t
 
     task_t<void> on_packet (stream_t &stream,
                             const session_message_context_t &dispatch,
-                            const zlink::message_t &payload) override
+                            const zlink::framework::message_t &payload) override
     {
         const std::string line = std::format (
           "deliverydispatch courier-session: dispatch packet={}\n", dispatch.packet_name);
@@ -40,7 +40,7 @@ class courier_session_t final : public packet_stream_session_t
         auto &actors = stream.actors ();
         if (dispatch.packet_name == bind_courier_session_req_t::packet_name) {
             // --8<-- [start:doc-dd-session-bind]
-            const auto request = payload.parse_json<bind_courier_session_req_t> ();
+            const auto request = payload.decode<bind_courier_session_req_t> ();
             /* Global ActorId로 current owner를 찾거나 eligible node에 생성한다. Application은
              * courier id에서 physical NodeRid를 계산하지 않는다. */
             auto located = actors.get_or_create (sample_names_t::courier_actor_type,
@@ -59,7 +59,7 @@ class courier_session_t final : public packet_stream_session_t
             _bound_actors.insert (actor_id);
             auto reply = co_await actor
                            .relay_request (bind_courier_session_req_t::packet_name,
-                                           zlink::message_t::from_json (
+                                           framework::message_t::from (
                                              bind_courier_session_req_t{request.courier_id}))
                            .async ();
             stream.reply_packet (reply).async ();
@@ -70,8 +70,8 @@ class courier_session_t final : public packet_stream_session_t
             co_return;
         }
         if (dispatch.packet_name == courier_decision_msg_t::packet_name) {
-            auto actor = require_bound_actor (
-              stream, payload.parse_json<courier_decision_msg_t> ().courier_id);
+            auto actor = require_bound_actor (stream,
+                                              payload.decode<courier_decision_msg_t> ().courier_id);
             co_await actor.relay (payload);
             co_return;
         }

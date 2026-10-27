@@ -138,7 +138,7 @@ Framework
 
 > 이 세 값만 **읽는 분량**(`C#/.NET` 탭만 센 값)이다. 상한 300·500과 비교할 값이므로
 > §1의 셈법과 다르다. 진행 상태의 정본은
-> [재작성 계획](../plan/guide-rewrite.ko.md) §6.1이 소유한다.
+> 내부 문서(비공개 저장소 zlink-systems/docs의 `zlink/plan/guide-rewrite.ko.md`) §6.1이 소유한다.
 
 목차의 `메시지 filter` · `직렬화 codec`은 `31-handler-dispatch`가, `연결 제어` ·
 `Channel 수평 확장`은 `30-channel-patterns`가 흡수했다. 그래서 목차 §2의 동작 원리 항목
@@ -147,7 +147,7 @@ Framework
 **05장은 아직 삭제하지 않았다.** 세 장이 그 내용을 모두 받았는지 확인한 뒤 지운다.
 
 남은 작업 목록 — tutorial 확장, `.en.md`, nav 재배치, 착수 순서 — 은
-[재작성 계획](../plan/guide-rewrite.ko.md) §5.1·§6.4가 소유한다.
+내부 문서(비공개 저장소 zlink-systems/docs의 `zlink/plan/guide-rewrite.ko.md`) §5.1·§6.4가 소유한다.
 
 ## 7. 장을 추가할 때
 
@@ -155,5 +155,5 @@ Framework
 2. 나머지 절차는
    [사용자 가이드 문서 작성 가이드](../principal/documentation/guide-writing-guide.ko.md) §6과
    §7이 소유한다 — 공통 소스 작성, 다섯 언어 README 행, 생성기 실행, mkdocs nav, 완료 점검표.
-   이 재작성 작업에서의 단계별 순서와 주의는 [재작성 계획](../plan/guide-rewrite.ko.md) §5.4에
+   이 재작성 작업에서의 단계별 순서와 주의는 내부 문서(비공개 저장소 zlink-systems/docs의 `zlink/plan/guide-rewrite.ko.md`) §5.4에
    있다.
