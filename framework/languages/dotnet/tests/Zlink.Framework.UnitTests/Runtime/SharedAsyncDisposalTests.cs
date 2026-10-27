@@ -370,20 +370,28 @@ public sealed class SharedAsyncDisposalTests
         const int iterations = 128;
         var empty = new ZLinkScopedHandlerInstanceOwner[iterations];
         var resolved = new ZLinkScopedHandlerInstanceOwner[iterations];
-        for (var i = 0; i < iterations; i++)
-        {
-            empty[i] = new ZLinkScopedHandlerInstanceOwner(services);
-            resolved[i] = new ZLinkScopedHandlerInstanceOwner(services);
-            resolved[i].Resolve<NonDisposableCleanupHandler>();
-        }
-        var start = GC.GetAllocatedBytesForCurrentThread();
-        foreach (var owner in empty)
-            owner.DisposeAsync().GetAwaiter().GetResult();
-        var emptyBytes = GC.GetAllocatedBytesForCurrentThread() - start;
-        start = GC.GetAllocatedBytesForCurrentThread();
-        foreach (var owner in resolved)
-            owner.DisposeAsync().GetAwaiter().GetResult();
-        var resolvedBytes = GC.GetAllocatedBytesForCurrentThread() - start;
+        // Every window disposes freshly created owners, created outside the window.
+        var emptyBytes = PerCallAllocation.MinWindow(
+            index => empty[index].DisposeAsync().GetAwaiter().GetResult(),
+            iterations,
+            beforeWindow: _ =>
+            {
+                for (var i = 0; i < iterations; i++)
+                    empty[i] = new ZLinkScopedHandlerInstanceOwner(services);
+            }
+        );
+        var resolvedBytes = PerCallAllocation.MinWindow(
+            index => resolved[index].DisposeAsync().GetAwaiter().GetResult(),
+            iterations,
+            beforeWindow: _ =>
+            {
+                for (var i = 0; i < iterations; i++)
+                {
+                    resolved[i] = new ZLinkScopedHandlerInstanceOwner(services);
+                    resolved[i].Resolve<NonDisposableCleanupHandler>();
+                }
+            }
+        );
         Assert.True(
             resolvedBytes <= emptyBytes,
             $"Empty owner cleanup {emptyBytes / iterations} B; non-disposable cleanup {resolvedBytes / iterations} B."
