@@ -89,7 +89,7 @@ for (const injectBindingFailure of [false, true]) {
         // Inject the binding result at the disconnect boundary. The logical
         // admission remains until that call succeeds or reports NOT_FOUND.
         const bindingFailure = new zlink.ConnectError(zlink.ConnectResult.InternalError, 156);
-        const disconnect = t.mock.method(source.raw.router, 'disconnectRid', () => {
+        const disconnect = t.mock.method(source.router, 'disconnectRid', () => {
           throw bindingFailure;
         });
         assert.throws(
