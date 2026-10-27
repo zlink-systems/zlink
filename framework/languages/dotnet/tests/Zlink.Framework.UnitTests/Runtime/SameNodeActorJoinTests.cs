@@ -201,7 +201,7 @@ public sealed partial class EntrySpotActorDispatchTests
             var first = RegisterProbeActor(runtime, actorRef);
             var secondRef = actorRef with { ActorId = "actor-b" };
             var locations = runtime.Services.GetRequiredService<ZLinkLocationRuntime>();
-            await CreateTrackedLocalActorOwnershipAsync(
+            secondRef = await CreateTrackedLocalActorOwnershipAsync(
                 locations.Store,
                 locations.OwnerToken,
                 runtime.Services.GetRequiredService<ZLinkLocationLifecycle>().ActorOwnership,
