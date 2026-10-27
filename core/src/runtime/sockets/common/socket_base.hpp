@@ -980,7 +980,6 @@ class socket_base_t : public own_t,
     virtual void xlocal_peer_weight_changed ();
     virtual int apply_peer_weight (zlink::pipe_t *pipe_, uint32_t weight_);
     void apply_recorded_peer_weight (zlink::pipe_t *pipe_);
-    virtual uint32_t monitor_ready_count () const;
 
     //  Reclassifies the next queued record on a ready count-1 Application
     //  pipe. The caller already owns the receive runtime (public lease or
@@ -1077,7 +1076,6 @@ class socket_base_t : public own_t,
     void emit_peer_weight_changed (pipe_t *pipe_, uint32_t weight_,
                                    const blob_t *public_routing_id_ = NULL);
     void snapshot_attached_pipes (std::vector<pipe_t *> *out_);
-    bool has_attached_pipes () const;
 
   private:
     friend class ctx_t;
