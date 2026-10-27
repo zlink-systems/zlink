@@ -154,7 +154,10 @@ internal abstract record ZLinkAuthorityCompareExchangeResult
         : ZLinkAuthorityCompareExchangeResult;
 
     public sealed record Conflict(ZLinkAuthorityReadResult Current)
-        : ZLinkAuthorityCompareExchangeResult;
+        : ZLinkAuthorityCompareExchangeResult
+    {
+        public ZLinkFrameworkErrorKind? MembershipFailure { get; init; }
+    }
 
     public sealed record GenerationExhausted : ZLinkAuthorityCompareExchangeResult;
 }
