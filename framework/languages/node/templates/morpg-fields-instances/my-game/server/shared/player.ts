@@ -1,0 +1,66 @@
+import { Inject, Injectable } from '@nestjs/common';
+import type {
+  ZLinkActor,
+  ZLinkActorContext,
+  ZLinkActorFactory,
+  ZLinkActorJoinCompletion,
+  ZLinkActorRelocationAdapter
+} from '@zlink-systems/framework';
+import { NODE_CONFIG, type NodeConfig } from './config';
+import { fieldId } from './constants';
+import { BorderVisible, DungeonView, restoreNotification, type Notification, EnterField, WorldState } from './messages';
+export class Player implements ZLinkActor {
+  async deliver(packetName: string, payload: Notification, visible = true): Promise<void> {
+    const message = restoreNotification(packetName, payload);
+    const sourceSpotId =
+      message instanceof BorderVisible
+        ? message.observerFieldId
+        : message instanceof DungeonView
+          ? message.dungeonId
+          : null;
+    if (sourceSpotId !== null && (String(this.context.spotId) !== sourceSpotId || !visible)) return;
+    await this.context.boundSession.send(message).submit();
+  }
+  x = 0;
+  sequence = 0n;
+  partyId: string | null = null;
+  constructor(
+    readonly context: ZLinkActorContext,
+    private readonly config: NodeConfig
+  ) {}
+  apply(position: EnterField): void {
+    this.x = position.x;
+    this.sequence = position.sequence;
+  }
+  move(position: EnterField): void {
+    this.context.joinSpot(fieldId(position.x), position).defer();
+  }
+  async sendState(): Promise<void> {
+    await this.context.boundSession
+      .send(new WorldState(fieldId(this.x), this.config.id, this.x, this.sequence))
+      .submit();
+  }
+  async onJoinCompleted(completion: ZLinkActorJoinCompletion): Promise<void> {
+    if (completion.status !== 'accepted') throw new Error(`Spot join failed: ${completion.status}`);
+    if (String(this.context.spotId) === fieldId(this.x)) await this.sendState();
+  }
+}
+@Injectable()
+export class PlayerFactory implements ZLinkActorFactory<Player> {
+  constructor(@Inject(NODE_CONFIG) private readonly config: NodeConfig) {}
+  async create(context: ZLinkActorContext): Promise<Player> {
+    return new Player(context, this.config);
+  }
+}
+// Serialize application state only; Framework owns identity, binding and membership.
+@Injectable()
+export class PlayerRelocation implements ZLinkActorRelocationAdapter<Player> {
+  async capture(actor: Player): Promise<Uint8Array> {
+    return Buffer.from(JSON.stringify({ x: actor.x, sequence: actor.sequence.toString(), partyId: actor.partyId }));
+  }
+  async restore(actor: Player, payload: Uint8Array): Promise<void> {
+    const state = JSON.parse(Buffer.from(payload).toString('utf8'));
+    actor.apply(new EnterField(state.x, BigInt(state.sequence)));
+    actor.partyId = state.partyId;
+  }
+}

@@ -12,6 +12,13 @@ public sealed class ClientServerLivenessLaneTests
     [Fact]
     public async Task Fatal_pool_failure_ends_server_source_and_is_reported_once()
     {
+        if (
+            await IsolatedTestProcess.RunIsolatedAsync(
+                typeof(ClientServerLivenessLaneTests),
+                nameof(Fatal_pool_failure_ends_server_source_and_is_reported_once)
+            )
+        )
+            return;
         using var context = Systems.Zlink.Zlink.CreateContext();
         using var router = context.CreateRouterSocket();
         var failure = new InvalidOperationException("fatal server pool");
