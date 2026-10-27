@@ -1,4 +1,5 @@
 #pragma once
+#include <zlink/json.hpp>
 #include <nlohmann/json.hpp>
 #include <algorithm>
 #include <chrono>
@@ -78,103 +79,47 @@ struct SessionInfoRequest
 {
     static constexpr auto packet_name = "SessionInfoRequest";
 };
-inline void to_json (nlohmann::json &j, const SessionInfoRequest &)
-{
-    j = nlohmann::json::object ();
-}
-inline void from_json (const nlohmann::json &, SessionInfoRequest &)
-{
-}
+
 struct SessionInfo
 {
     static constexpr auto packet_name = "SessionInfo";
     std::string SessionId, ActorId;
     std::uint64_t ObjectGeneration = 0;
     bool operator== (const SessionInfo &) const = default;
-    friend void to_json (nlohmann::json &j, const SessionInfo &value)
-    {
-        j = nlohmann::json{{"sessionId", value.SessionId}, {"actorId", value.ActorId}, {"objectGeneration", value.ObjectGeneration}};
-    }
-    friend void from_json (const nlohmann::json &j, SessionInfo &value)
-    {
-        j.at ("sessionId").get_to (value.SessionId);
-        j.at ("actorId").get_to (value.ActorId);
-        j.at ("objectGeneration").get_to (value.ObjectGeneration);
-    }
+
 };
 struct EnterRegionRequest
 {
     static constexpr auto packet_name = "EnterRegionRequest";
     std::string PlayerId, Region;
-    friend void to_json (nlohmann::json &j, const EnterRegionRequest &value)
-    {
-        j = nlohmann::json{{"playerId", value.PlayerId}, {"region", value.Region}};
-    }
-    friend void from_json (const nlohmann::json &j, EnterRegionRequest &value)
-    {
-        j.at ("playerId").get_to (value.PlayerId);
-        j.at ("region").get_to (value.Region);
-    }
+
 };
 struct JoinRegion
 {
     static constexpr auto packet_name = "JoinRegion";
     std::string Region;
     int Index = Names::first_index;
-    friend void to_json (nlohmann::json &j, const JoinRegion &value)
-    {
-        j = nlohmann::json{{"region", value.Region}, {"index", value.Index}};
-    }
-    friend void from_json (const nlohmann::json &j, JoinRegion &value)
-    {
-        j.at ("region").get_to (value.Region);
-        j.at ("index").get_to (value.Index);
-    }
+
 };
 struct RegionFull
 {
     static constexpr auto packet_name = "RegionFull";
     std::string Reason, Region;
     int Index = Names::first_index;
-    friend void to_json (nlohmann::json &j, const RegionFull &value)
-    {
-        j = nlohmann::json{{"reason", value.Reason}, {"region", value.Region}, {"index", value.Index}};
-    }
-    friend void from_json (const nlohmann::json &j, RegionFull &value)
-    {
-        j.at ("reason").get_to (value.Reason);
-        j.at ("region").get_to (value.Region);
-        j.at ("index").get_to (value.Index);
-    }
+
 };
 struct RegionUnavailable
 {
     static constexpr auto packet_name = "RegionUnavailable";
     std::string Region, Reason;
-    friend void to_json (nlohmann::json &j, const RegionUnavailable &value)
-    {
-        j = nlohmann::json{{"region", value.Region}, {"reason", value.Reason}};
-    }
-    friend void from_json (const nlohmann::json &j, RegionUnavailable &value)
-    {
-        j.at ("region").get_to (value.Region);
-        j.at ("reason").get_to (value.Reason);
-    }
+
 };
 struct MoveRequest
 {
     static constexpr auto packet_name = "MoveRequest";
     double Delta = 0;
     std::int64_t Sequence = 0;
-    friend void to_json (nlohmann::json &j, const MoveRequest &value)
-    {
-        j = nlohmann::json{{"delta", value.Delta}, {"sequence", value.Sequence}};
-    }
-    friend void from_json (const nlohmann::json &j, MoveRequest &value)
-    {
-        j.at ("delta").get_to (value.Delta);
-        j.at ("sequence").get_to (value.Sequence);
-    }
+
 };
 struct ActionRejected
 {
@@ -182,15 +127,7 @@ struct ActionRejected
     std::string Reason;
     std::int32_t RetryAfterMs = 0;
     bool operator== (const ActionRejected &) const = default;
-    friend void to_json (nlohmann::json &j, const ActionRejected &value)
-    {
-        j = nlohmann::json{{"reason", value.Reason}, {"retryAfterMs", value.RetryAfterMs}};
-    }
-    friend void from_json (const nlohmann::json &j, ActionRejected &value)
-    {
-        j.at ("reason").get_to (value.Reason);
-        j.at ("retryAfterMs").get_to (value.RetryAfterMs);
-    }
+
 };
 struct PlayerPosition
 {
@@ -198,80 +135,144 @@ struct PlayerPosition
     double X = 0;
     std::int64_t Sequence = 0;
     bool operator== (const PlayerPosition &) const = default;
-    friend void to_json (nlohmann::json &j, const PlayerPosition &value)
-    {
-        j = nlohmann::json{{"playerId", value.PlayerId}, {"x", value.X}, {"sequence", value.Sequence}};
-    }
-    friend void from_json (const nlohmann::json &j, PlayerPosition &value)
-    {
-        j.at ("playerId").get_to (value.PlayerId);
-        j.at ("x").get_to (value.X);
-        j.at ("sequence").get_to (value.Sequence);
-    }
+
 };
 struct RegionView
 {
     static constexpr auto packet_name = "RegionView";
     std::string RegionId, NodeId;
     std::vector<PlayerPosition> Players;
-    friend void to_json (nlohmann::json &j, const RegionView &value)
-    {
-        j = nlohmann::json{{"regionId", value.RegionId}, {"nodeId", value.NodeId}, {"players", value.Players}};
-    }
-    friend void from_json (const nlohmann::json &j, RegionView &value)
-    {
-        j.at ("regionId").get_to (value.RegionId);
-        j.at ("nodeId").get_to (value.NodeId);
-        j.at ("players").get_to (value.Players);
-    }
+
 };
 struct ViewRequest
 {
     static constexpr auto packet_name = "ViewRequest";
 };
-inline void to_json (nlohmann::json &j, const ViewRequest &)
-{
-    j = nlohmann::json::object ();
-}
-inline void from_json (const nlohmann::json &, ViewRequest &)
-{
-}
+
 struct DungeonInfoRequest
 {
     static constexpr auto packet_name = "DungeonInfoRequest";
 };
-inline void to_json (nlohmann::json &j, const DungeonInfoRequest &)
-{
-    j = nlohmann::json::object ();
-}
-inline void from_json (const nlohmann::json &, DungeonInfoRequest &)
-{
-}
+
 struct OpenDungeonRequest
 {
     static constexpr auto packet_name = "OpenDungeonRequest";
     std::string DungeonId;
-    friend void to_json (nlohmann::json &j, const OpenDungeonRequest &value)
-    {
-        j = nlohmann::json{{"dungeonId", value.DungeonId}};
-    }
-    friend void from_json (const nlohmann::json &j, OpenDungeonRequest &value)
-    {
-        j.at ("dungeonId").get_to (value.DungeonId);
-    }
+
 };
 struct DungeonOpened
 {
     static constexpr auto packet_name = "DungeonOpened";
     std::string DungeonId, NodeId;
-    friend void to_json (nlohmann::json &j, const DungeonOpened &value)
-    {
-        j = nlohmann::json{{"dungeonId", value.DungeonId}, {"nodeId", value.NodeId}};
-    }
-    friend void from_json (const nlohmann::json &j, DungeonOpened &value)
-    {
-        j.at ("dungeonId").get_to (value.DungeonId);
-        j.at ("nodeId").get_to (value.NodeId);
-    }
+
 };
 }
+
+namespace zlink::json
+{
+template <> struct dto_traits<::MyGame::SessionInfoRequest>
+{
+    static constexpr auto fields = std::tuple{};
+};
+
+template <> struct dto_traits<::MyGame::SessionInfo>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("sessionId", &::MyGame::SessionInfo::SessionId),
+      zlink::json::field ("actorId", &::MyGame::SessionInfo::ActorId),
+      zlink::json::field ("objectGeneration", &::MyGame::SessionInfo::ObjectGeneration)
+    };
+};
+
+template <> struct dto_traits<::MyGame::EnterRegionRequest>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("playerId", &::MyGame::EnterRegionRequest::PlayerId),
+      zlink::json::field ("region", &::MyGame::EnterRegionRequest::Region)
+    };
+};
+
+template <> struct dto_traits<::MyGame::JoinRegion>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("region", &::MyGame::JoinRegion::Region),
+      zlink::json::field ("index", &::MyGame::JoinRegion::Index)
+    };
+};
+
+template <> struct dto_traits<::MyGame::RegionFull>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("reason", &::MyGame::RegionFull::Reason),
+      zlink::json::field ("region", &::MyGame::RegionFull::Region),
+      zlink::json::field ("index", &::MyGame::RegionFull::Index)
+    };
+};
+
+template <> struct dto_traits<::MyGame::RegionUnavailable>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("region", &::MyGame::RegionUnavailable::Region),
+      zlink::json::field ("reason", &::MyGame::RegionUnavailable::Reason)
+    };
+};
+
+template <> struct dto_traits<::MyGame::MoveRequest>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("delta", &::MyGame::MoveRequest::Delta),
+      zlink::json::field ("sequence", &::MyGame::MoveRequest::Sequence)
+    };
+};
+
+template <> struct dto_traits<::MyGame::ActionRejected>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("reason", &::MyGame::ActionRejected::Reason),
+      zlink::json::field ("retryAfterMs", &::MyGame::ActionRejected::RetryAfterMs)
+    };
+};
+
+template <> struct dto_traits<::MyGame::PlayerPosition>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("playerId", &::MyGame::PlayerPosition::PlayerId),
+      zlink::json::field ("x", &::MyGame::PlayerPosition::X),
+      zlink::json::field ("sequence", &::MyGame::PlayerPosition::Sequence)
+    };
+};
+
+template <> struct dto_traits<::MyGame::RegionView>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("regionId", &::MyGame::RegionView::RegionId),
+      zlink::json::field ("nodeId", &::MyGame::RegionView::NodeId),
+      zlink::json::field ("players", &::MyGame::RegionView::Players)
+    };
+};
+
+template <> struct dto_traits<::MyGame::ViewRequest>
+{
+    static constexpr auto fields = std::tuple{};
+};
+
+template <> struct dto_traits<::MyGame::DungeonInfoRequest>
+{
+    static constexpr auto fields = std::tuple{};
+};
+
+template <> struct dto_traits<::MyGame::OpenDungeonRequest>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("dungeonId", &::MyGame::OpenDungeonRequest::DungeonId)
+    };
+};
+
+template <> struct dto_traits<::MyGame::DungeonOpened>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("dungeonId", &::MyGame::DungeonOpened::DungeonId),
+      zlink::json::field ("nodeId", &::MyGame::DungeonOpened::NodeId)
+    };
+};
+} // namespace zlink::json

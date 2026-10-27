@@ -1,6 +1,7 @@
 #pragma once
 #include "server/shared/contracts.hpp"
 #include "server/shared/domain.hpp"
+#include <zlink/json.hpp>
 #include <algorithm>
 #include <set>
 #include <string_view>
@@ -13,10 +14,9 @@ struct DungeonState
     std::string runId;
     std::string ownerSpotId;
     std::vector<std::string> members;
-    std::set<std::string> joined;
+    std::vector<std::string> joined;
     RunPhase phase = RunPhase::Forming;
     std::int64_t stage = 0;
-
     std::optional<std::string> prepare (const std::string &dungeon_id,
                                         const PrepareDungeon &request)
     {
@@ -56,7 +56,7 @@ struct DungeonState
     {
         if (std::find (members.begin (), members.end (), actor) == members.end ())
             return false;
-        joined.insert (actor);
+        insert_sorted_unique (joined, actor);
         if (phase != RunPhase::Entering || joined.size () != members.size ())
             return false;
         phase = RunPhase::Active;
@@ -73,7 +73,23 @@ struct DungeonState
             phase = RunPhase::Completed;
         return std::nullopt;
     }
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (DungeonState, partyId, runId, ownerSpotId, members, joined,
-                                   phase, stage)
+    void after_relocation () { normalize_sorted_unique (joined); }
+
 };
 }
+
+namespace zlink::json
+{
+template <> struct dto_traits<::MyGame::DungeonState>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("partyId", &::MyGame::DungeonState::partyId),
+      zlink::json::field ("runId", &::MyGame::DungeonState::runId),
+      zlink::json::field ("ownerSpotId", &::MyGame::DungeonState::ownerSpotId),
+      zlink::json::field ("members", &::MyGame::DungeonState::members),
+      zlink::json::field ("joined", &::MyGame::DungeonState::joined),
+      zlink::json::field ("phase", &::MyGame::DungeonState::phase),
+      zlink::json::field ("stage", &::MyGame::DungeonState::stage)
+    };
+};
+} // namespace zlink::json

@@ -1,9 +1,9 @@
 #pragma once
 #include "server/shared/contracts.hpp"
 #include "server/shared/domain.hpp"
+#include <zlink/json.hpp>
 #include <algorithm>
 #include <map>
-#include <set>
 
 namespace MyGame
 {
@@ -59,17 +59,16 @@ struct PartyRun
                                           : std::optional<std::string> ("run-in-progress");
     }
     PartyView view () const { return {partyId, members, phase, runId}; }
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (PartyRun, partyId, members, phase, runId)
 };
 
 struct TownState
 {
-    std::set<std::string> players;
+    std::vector<std::string> players;
     std::map<std::string, PartyRun> parties;
     bool party (const std::string &id, const std::optional<std::string> &party_id, bool create)
     {
         const auto existing = party_id ? parties.find (*party_id) : parties.end ();
-        if (!players.contains (id)
+        if (!std::binary_search (players.begin (), players.end (), id)
             || std::any_of (parties.begin (), parties.end (),
                             [&] (const auto &item) {
                                 return std::find (item.second.members.begin (),
@@ -91,7 +90,7 @@ struct TownState
     }
     void leave (const std::string &id)
     {
-        players.erase (id);
+        std::erase (players, id);
         for (auto it = parties.begin (); it != parties.end ();) {
             it->second.leave (id);
             if (it->second.members.empty ())
@@ -100,6 +99,28 @@ struct TownState
                 ++it;
         }
     }
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (TownState, players, parties)
+
+    void after_relocation () { normalize_sorted_unique (players); }
 };
 }
+
+namespace zlink::json
+{
+template <> struct dto_traits<::MyGame::PartyRun>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("partyId", &::MyGame::PartyRun::partyId),
+      zlink::json::field ("members", &::MyGame::PartyRun::members),
+      zlink::json::field ("phase", &::MyGame::PartyRun::phase),
+      zlink::json::field ("runId", &::MyGame::PartyRun::runId)
+    };
+};
+
+template <> struct dto_traits<::MyGame::TownState>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("players", &::MyGame::TownState::players),
+      zlink::json::field ("parties", &::MyGame::TownState::parties)
+    };
+};
+} // namespace zlink::json

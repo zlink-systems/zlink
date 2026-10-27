@@ -1,11 +1,13 @@
 #pragma once
 #include "server/shared/contracts.hpp"
+#include <zlink/json.hpp>
+#include <algorithm>
 #include <set>
 namespace MyGame {
 struct DungeonState {
     std::string partyId;
     std::vector<std::string> members;
-    std::set<std::string> joined;
+    std::vector<std::string> joined;
     std::int64_t stage = 0;
     std::optional<std::string> runId;
     RunPhase phase = RunPhase::Preparing;
@@ -20,7 +22,7 @@ struct DungeonState {
     }
     bool join(const std::string &id) {
         if (std::ranges::find(members, id) == members.end()) return false;
-        joined.insert(id);
+        insert_sorted_unique(joined, id);
         if (phase != RunPhase::Entering || joined.size() != members.size()) return false;
         phase = RunPhase::Active; return true;
     }
@@ -29,22 +31,21 @@ struct DungeonState {
         if (phase != RunPhase::Active) return Rejection::run_not_active;
         ++stage; if (stage == Names::final_stage) phase = RunPhase::Completed; return {};
     }
+    void after_relocation () { normalize_sorted_unique (joined); }
 };
+}
 
-inline void to_json(nlohmann::json &j, const DungeonState& v) {
-    j["partyId"] = v.partyId;
-    j["members"] = v.members;
-    j["joined"] = v.joined;
-    j["stage"] = v.stage;
-    j["runId"] = v.runId ? nlohmann::json(*v.runId) : nlohmann::json(nullptr);
-    j["phase"] = v.phase;
-}
-inline void from_json(const nlohmann::json &j, DungeonState& v) {
-    j.at("partyId").get_to(v.partyId);
-    j.at("members").get_to(v.members);
-    j.at("joined").get_to(v.joined);
-    j.at("stage").get_to(v.stage);
-    if (j.at("runId").is_null()) v.runId.reset(); else v.runId = j.at("runId").get<std::string>();
-    j.at("phase").get_to(v.phase);
-}
-}
+namespace zlink::json
+{
+template <> struct dto_traits<::MyGame::DungeonState>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("partyId", &::MyGame::DungeonState::partyId),
+      zlink::json::field ("members", &::MyGame::DungeonState::members),
+      zlink::json::field ("joined", &::MyGame::DungeonState::joined),
+      zlink::json::field ("stage", &::MyGame::DungeonState::stage),
+      zlink::json::field ("runId", &::MyGame::DungeonState::runId),
+      zlink::json::field ("phase", &::MyGame::DungeonState::phase)
+    };
+};
+} // namespace zlink::json

@@ -1,10 +1,27 @@
 #pragma once
 #include "contracts.hpp"
+#include <algorithm>
 #include <random>
 #include <string>
 #include <string_view>
+#include <vector>
 namespace MyGame
 {
+inline bool insert_sorted_unique (std::vector<std::string> &values, std::string_view value)
+{
+    const auto position = std::lower_bound (values.begin (), values.end (), value);
+    if (position != values.end () && *position == value)
+        return false;
+    values.insert (position, std::string (value));
+    return true;
+}
+
+inline void normalize_sorted_unique (std::vector<std::string> &values)
+{
+    std::sort (values.begin (), values.end ());
+    values.erase (std::unique (values.begin (), values.end ()), values.end ());
+}
+
 inline std::string server_id (std::string_view prefix)
 {
     static constexpr char digits[] = "0123456789abcdef";
