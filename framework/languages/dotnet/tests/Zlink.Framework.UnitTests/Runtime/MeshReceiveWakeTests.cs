@@ -14,6 +14,13 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
     [Fact]
     public async Task IdleReceiveOwnerWaitsForReadinessWithoutAPeriodicDeadline()
     {
+        if (
+            await IsolatedTestProcess.RunIsolatedAsync(
+                typeof(MeshReceiveWakeTests),
+                nameof(IdleReceiveOwnerWaitsForReadinessWithoutAPeriodicDeadline)
+            )
+        )
+            return;
         await using var context = Systems.Zlink.Zlink.CreateContext();
         var poller = new ControlledReceivePoller { CaptureIdleWait = true };
         await using var node = new ZLinkManagedMeshNode(
@@ -23,11 +30,11 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
         );
         node.SetRoutingId(RoutingId.From("idle-wait"));
         node.Start();
+        await poller.MonitorRegistered.Task.WaitAsync(CompletionBound);
         Assert.Equal(
             Timeout.InfiniteTimeSpan,
             await poller.IdleWait.Task.WaitAsync(CompletionBound)
         );
-        Assert.True(poller.MonitorRegistered);
     }
 
     [Fact]
@@ -158,6 +165,14 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
     [InlineData(true)]
     public async Task PermitGrantResumesReceiveOwnerWithoutAPollTick(bool failRearm)
     {
+        if (
+            failRearm
+            && await IsolatedTestProcess.RunIsolatedAsync(
+                typeof(MeshReceiveWakeTests),
+                nameof(PermitGrantResumesReceiveOwnerWithoutAPollTick)
+            )
+        )
+            return;
         await using var context = Systems.Zlink.Zlink.CreateContext();
         using var queue = new ZLinkApplicationJobQueue(
             new(ZLinkApplicationJobQueueProfile.Balanced, 1, 1, 1)
@@ -539,6 +554,13 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
     [Fact]
     public async Task PoolWaitFailureTerminatesNodeAndJoinsTheReceiveWorker()
     {
+        if (
+            await IsolatedTestProcess.RunIsolatedAsync(
+                typeof(MeshReceiveWakeTests),
+                nameof(PoolWaitFailureTerminatesNodeAndJoinsTheReceiveWorker)
+            )
+        )
+            return;
         await using var context = Systems.Zlink.Zlink.CreateContext();
         var poller = new ControlledReceivePoller();
         var failure = new InvalidOperationException("Injected process wait failure.");
@@ -706,7 +728,9 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
         internal bool FailRearm { get; init; }
         internal bool RespectTimeoutAfterWake { get; init; }
         internal bool CaptureIdleWait { get; init; }
-        internal bool MonitorRegistered { get; private set; }
+        internal readonly TaskCompletionSource MonitorRegistered = new(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         internal readonly TaskCompletionSource<TimeSpan> IdleWait = new(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
@@ -793,8 +817,8 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
 
         public void Add(ISocketMonitor monitor, PollEventFlags events, nuint slot)
         {
-            MonitorRegistered = true;
             _inner.Add(monitor, events, slot);
+            MonitorRegistered.TrySetResult();
         }
 
         public void Add(IZlinkTimer timer, nuint slot) => _inner.Add(timer, slot);
