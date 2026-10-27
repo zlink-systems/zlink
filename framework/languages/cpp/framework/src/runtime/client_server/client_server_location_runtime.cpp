@@ -1412,7 +1412,7 @@ boost::asio::awaitable<result_t<void>> client_server_location_runtime_t::drain_s
                 }
                 if (record.parts.size () != 2)
                     continue;
-                std::optional<protocol::application_payload_t> pending_reply;
+                std::optional<zlink::message_t> pending_reply;
                 std::optional<framework_exception_t> pending_failure_reply;
                 try {
                     /* Ingress validates the envelope and captures flow fields.
@@ -1473,11 +1473,7 @@ boost::asio::awaitable<result_t<void>> client_server_location_runtime_t::drain_s
                             record.owner, {}, request_envelope.message_name, scope.provider (),
                             *_serializers, *_handlers, message, inbound);
                         if (reply) {
-                            pending_reply.emplace (protocol::application_payload_t{
-                              request_envelope.message_name,
-                              std::string (
-                                runtime::messaging::envelope_codec_t::default_content_type),
-                              reply.value ().to_bytes ()});
+                            pending_reply.emplace (std::move (reply.value ()));
                         } else {
                             const framework_exception_t error (
                               reply.error_kind (), reply.error () != nullptr
@@ -1601,8 +1597,9 @@ boost::asio::awaitable<result_t<void>> client_server_location_runtime_t::drain_s
                 }
                 try {
                     if (pending_reply)
-                        (void) co_await runtime::await_task_result (
-                          owner->reply (record, *pending_reply));
+                        (void) co_await runtime::await_task_result (owner->reply (
+                          record, std::move (*pending_reply),
+                          runtime::messaging::envelope_codec_t::default_content_type));
                     else if (pending_failure_reply)
                         (void) co_await runtime::await_task_result (
                           owner->reply (record, *pending_failure_reply));
@@ -1650,9 +1647,7 @@ task_t<void> client_server_location_runtime_t::send (const std::string &channel_
 {
     auto selected = co_await select_ready (channel_name);
     const auto submitted = co_await selected->send (
-      protocol::application_payload_t{std::move (packet_name), std::move (content_type),
-                                      message.to_bytes ()},
-      std::move (metadata));
+      std::move (packet_name), std::move (content_type), std::move (message), std::move (metadata));
     if (submitted != zlink::submit_result_t::ok) {
         throw runtime::messaging::map_submit_result_exception (submitted,
                                                                "ClientServer send failed");
@@ -1683,10 +1678,9 @@ client_server_location_runtime_t::request (const std::string &channel_name,
     if (remaining <= std::chrono::milliseconds::zero ())
         co_return result_t<zlink::message_t>::failure (framework_error_kind_t::deadline_exceeded,
                                                        "ClientServer request deadline expired");
-    const auto completion = co_await detail::request_submission (selected->request (
-      protocol::application_payload_t{std::move (packet_name), std::move (content_type),
-                                      message.to_bytes ()},
-      remaining, std::move (metadata)));
+    auto completion = co_await detail::request_submission (
+      selected->request (std::move (packet_name), std::move (content_type), std::move (message),
+                         remaining, std::move (metadata)));
     if (completion.terminal != foundation::operation_terminal_t::completed) {
         co_return detail::result_access_t::failure<zlink::message_t> (
           client_server_operation_exception (completion.terminal, "ClientServer request"));
@@ -1698,7 +1692,7 @@ client_server_location_runtime_t::request (const std::string &channel_name,
         co_return detail::result_access_t::failure<zlink::message_t> (error);
     }
     /* The response envelope body is the reply payload as-is. */
-    co_return zlink::message_t::from (completion.payload);
+    co_return std::move (completion.payload);
 }
 
 task_t<std::shared_ptr<raw_client_server_client_t>> client_server_location_runtime_t::select_ready (

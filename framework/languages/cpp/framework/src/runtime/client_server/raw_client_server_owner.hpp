@@ -53,7 +53,7 @@ struct client_server_request_completion_t
     std::optional<std::string> error_code;
     std::optional<std::string> error_message;
     std::string content_type;
-    std::vector<std::uint8_t> payload;
+    zlink::message_t payload;
 };
 
 enum class client_server_pump_result_t
@@ -122,6 +122,9 @@ class raw_client_server_server_t
     next_liveness_activity_task () const;
     task_t<bool> reply (const mesh::service_mailbox_record_t &request,
                         const protocol::application_payload_t &payload);
+    task_t<bool> reply (const mesh::service_mailbox_record_t &request,
+                        zlink::message_t body,
+                        std::string content_type);
     task_t<bool> reply (const mesh::service_mailbox_record_t &request,
                         const framework_exception_t &error);
 
@@ -213,6 +216,16 @@ class raw_client_server_client_t
                                          std::map<std::string, std::string> metadata = {});
     request_task_t<client_server_request_completion_t>
     request (const protocol::application_payload_t &payload,
+             std::chrono::milliseconds timeout,
+             std::map<std::string, std::string> metadata = {});
+    task_t<zlink::submit_result_t> send (std::string packet_name,
+                                         std::string content_type,
+                                         zlink::message_t body,
+                                         std::map<std::string, std::string> metadata = {});
+    request_task_t<client_server_request_completion_t>
+    request (std::string packet_name,
+             std::string content_type,
+             zlink::message_t body,
              std::chrono::milliseconds timeout,
              std::map<std::string, std::string> metadata = {});
     std::size_t pending_request_count () const noexcept;

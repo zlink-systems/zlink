@@ -435,13 +435,17 @@ std::optional<raw_received_t> raw_route_port_t::try_receive ()
 
 bool raw_route_port_t::reply (const raw_received_t &request, raw_message_t parts)
 {
-    if (request.source_routing_id.empty () || !request.reply_token || parts.empty ()) {
+    return reply (request, materialize_binding_parts (std::move (parts)));
+}
+
+bool raw_route_port_t::reply (const raw_received_t &request, std::vector<zlink::message_t> messages)
+{
+    if (request.source_routing_id.empty () || !request.reply_token || messages.empty ()) {
         throw std::invalid_argument ("raw route reply requires request context and message parts");
     }
     std::lock_guard lock (*_socket_mutex);
     if (_socket == nullptr)
         return false;
-    auto messages = materialize_binding_parts (std::move (parts));
     auto operation =
       std::move (_socket->reply (zlink::routing_id_t::from (request.source_routing_id),
                                  *request.reply_token))

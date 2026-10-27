@@ -107,7 +107,7 @@ std::string routing_id_label (const std::vector<std::uint8_t> &routing_id)
     return zlink::routing_id_t::from (routing_id).to_string ();
 }
 
-std::size_t raw_message_bytes (const detail::backend::raw_message_t &parts) noexcept
+template <typename Parts> std::size_t raw_message_bytes (const Parts &parts) noexcept
 {
     std::size_t result = 0;
     for (const auto &part : parts)
@@ -765,6 +765,13 @@ raw_client_server_server_t::next_liveness_activity_task () const
 task_t<bool> raw_client_server_server_t::reply (const mesh::service_mailbox_record_t &request,
                                                 const protocol::application_payload_t &payload)
 {
+    return reply (request, zlink::message_t::from (payload.payload_bytes ()), payload.content_type);
+}
+
+task_t<bool> raw_client_server_server_t::reply (const mesh::service_mailbox_record_t &request,
+                                                zlink::message_t body,
+                                                std::string content_type)
+{
     if (request.source_routing_id.empty () || !request.reply_token)
         co_return false;
     if (request.parts.empty ()) {
@@ -777,11 +784,10 @@ task_t<bool> raw_client_server_server_t::reply (const mesh::service_mailbox_reco
     zlink::framework::detail::channel_reply_writer_t writer;
     auto header = writer.create_reply_header (messaging::message_kind_t::response,
                                               request_header.channel_name, request_header);
-    header.content_type = payload.content_type;
-    auto parts = envelope_wire_parts (
-      writer.reply_raw_envelope (header, zlink::message_t::from (payload.payload_bytes ())));
+    header.content_type = std::move (content_type);
+    auto parts = std::move (writer.reply_raw_envelope (header, std::move (body))).take_items ();
     const auto delivered =
-      port->reply ({request.source_routing_id, request.reply_token, {}}, parts);
+      port->reply ({request.source_routing_id, request.reply_token, {}}, std::move (parts));
     trace_client_server_lazy ("server-reply", [&] {
         return "channel=" + request_header.channel_name + " packet=" + request_header.message_name
                + " client=" + routing_id_label (request.source_routing_id) + " reply_token="
@@ -1424,6 +1430,16 @@ task_t<zlink::submit_result_t>
 raw_client_server_client_t::send (const protocol::application_payload_t &payload,
                                   std::map<std::string, std::string> metadata)
 {
+    return send (payload.packet_name, payload.content_type,
+                 zlink::message_t::from (payload.payload_bytes ()), std::move (metadata));
+}
+
+task_t<zlink::submit_result_t>
+raw_client_server_client_t::send (std::string packet_name,
+                                  std::string content_type,
+                                  zlink::message_t body,
+                                  std::map<std::string, std::string> metadata)
+{
     const auto state = co_await _lane.run_task ([this] {
         struct state_t
         {
@@ -1448,21 +1464,22 @@ raw_client_server_client_t::send (const protocol::application_payload_t &payload
     messaging::envelope_header_t header;
     header.kind = messaging::message_kind_t::command;
     header.channel_name = channel;
-    header.message_name = payload.packet_name;
-    header.content_type = payload.content_type;
+    header.message_name = packet_name;
+    header.content_type = content_type;
     header.metadata = std::move (metadata);
-    const auto wire = envelope_wire_parts (messaging::envelope_codec_t{}.encode_raw_body_parts (
-      header, zlink::message_t::from (payload.payload_bytes ())));
+    auto wire =
+      std::move (messaging::envelope_codec_t{}.encode_raw_body_parts (header, std::move (body)))
+        .take_items ();
     trace_client_server_lazy ("client-send-wire", [&] {
-        return "channel=" + channel + " packet=" + payload.packet_name
+        return "channel=" + channel + " packet=" + packet_name
                + " payload_bytes=" + std::to_string (wire[1].size ())
                + " wire_bytes=" + std::to_string (raw_message_bytes (wire));
     });
     if (!port)
         co_return zlink::submit_result_t::terminated;
-    const auto submitted = co_await port->send_result (wire);
+    const auto submitted = co_await port->send_result (std::move (wire));
     trace_client_server_lazy ("client-send-result", [&] {
-        return "channel=" + channel + " packet=" + payload.packet_name
+        return "channel=" + channel + " packet=" + packet_name
                + " submitted=" + std::to_string (static_cast<int> (submitted));
     });
     co_return submitted;
@@ -1470,6 +1487,18 @@ raw_client_server_client_t::send (const protocol::application_payload_t &payload
 
 request_task_t<client_server_request_completion_t>
 raw_client_server_client_t::request (const protocol::application_payload_t &payload,
+                                     std::chrono::milliseconds timeout,
+                                     std::map<std::string, std::string> metadata)
+{
+    return request (payload.packet_name, payload.content_type,
+                    zlink::message_t::from (payload.payload_bytes ()), timeout,
+                    std::move (metadata));
+}
+
+request_task_t<client_server_request_completion_t>
+raw_client_server_client_t::request (std::string packet_name,
+                                     std::string content_type,
+                                     zlink::message_t body,
                                      std::chrono::milliseconds timeout,
                                      std::map<std::string, std::string> metadata)
 {
@@ -1503,19 +1532,20 @@ raw_client_server_client_t::request (const protocol::application_payload_t &payl
     //  record with a required correlation id; the deadline mirrors the
     //  caller timeout like the other language runtimes.
     messaging::client_call_codec_t codec;
-    auto header = codec.create_envelope (messaging::message_kind_t::request, channel,
-                                         payload.packet_name, timeout);
-    header.content_type = payload.content_type;
+    auto header =
+      codec.create_envelope (messaging::message_kind_t::request, channel, packet_name, timeout);
+    header.content_type = content_type;
     header.metadata = std::move (metadata);
     const auto correlation_id = header.correlation_id;
     trace_client_server_lazy ("client-request-submit", [&] {
         return "channel=" + channel + " correlation=" + correlation_id;
     });
-    const auto wire = envelope_wire_parts (messaging::envelope_codec_t{}.encode_raw_body_parts (
-      header, zlink::message_t::from (payload.payload_bytes ())));
+    auto wire =
+      std::move (messaging::envelope_codec_t{}.encode_raw_body_parts (header, std::move (body)))
+        .take_items ();
     trace_client_server_lazy ("client-request-wire", [&] {
-        return "channel=" + channel + " correlation=" + correlation_id + " packet="
-               + payload.packet_name + " payload_bytes=" + std::to_string (wire[1].size ())
+        return "channel=" + channel + " correlation=" + correlation_id + " packet=" + packet_name
+               + " payload_bytes=" + std::to_string (wire[1].size ())
                + " wire_bytes=" + std::to_string (raw_message_bytes (wire));
     });
     pending_request_guard_t pending_request (_pending_requests);
@@ -1524,7 +1554,8 @@ raw_client_server_client_t::request (const protocol::application_payload_t &payl
     if (remaining <= std::chrono::milliseconds::zero ())
         co_return request_failed_before_admission (foundation::operation_terminal_t::timed_out);
     auto admitted = co_await detail::request_admission_source_t{};
-    auto completion = co_await port->request (wire, remaining, state.admission, admitted);
+    auto completion =
+      co_await port->request (std::move (wire), remaining, state.admission, admitted);
     trace_client_server_lazy ("client-request-complete", [&] {
         return "channel=" + channel + " correlation=" + correlation_id
                + " result=" + std::to_string (static_cast<int> (completion.terminal))
@@ -1569,7 +1600,7 @@ raw_client_server_client_t::request (const protocol::application_payload_t &payl
     }
     client_server_request_completion_t success{foundation::operation_terminal_t::completed};
     success.content_type = reply.content_type;
-    success.payload = parts[1].to_bytes ();
+    success.payload = std::move (parts[1]);
     co_return success;
 }
 

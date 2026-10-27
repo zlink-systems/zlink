@@ -142,6 +142,7 @@ class raw_route_port_t
     std::optional<raw_received_t> receive_if_ready (zlink::poll_event_flag_t revents);
     std::optional<raw_received_t> try_receive ();
     bool reply (const raw_received_t &request, raw_message_t parts);
+    bool reply (const raw_received_t &request, std::vector<zlink::message_t> messages);
     void close ();
 
   private:
