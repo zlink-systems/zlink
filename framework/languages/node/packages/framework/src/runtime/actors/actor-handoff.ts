@@ -1,3 +1,5 @@
+import { RequestRuntime } from '../foundation/request-runtime';
+import type { PendingOperation } from '../foundation/operation-registry';
 import { mapZLinkRequestReply } from '../messaging/request-result';
 import { type ActorRef, type RoutingId, ZLinkFrameworkException } from '../../contracts';
 
@@ -58,6 +60,7 @@ export const DEFAULT_MESSAGE_FOLLOW_DURATION_MS =
 export const RELOCATED_REQUEST_OWNED_BY_REQUESTER = Symbol('relocated request owned by requester');
 
 export interface ZLinkActorHandoffPacket {
+  requestOperation?: PendingOperation<unknown>;
   readonly index: number;
   readonly header: string;
   readonly payload: string;
@@ -248,6 +251,7 @@ interface MessageFollowRoute {
 }
 
 export interface ZLinkActorHandoffCoordinatorOptions {
+  readonly requests?: RequestRuntime;
   readonly routedTransport: ZLinkActorRoutedJoinTransport;
   readonly messageFollowDurationMs?: number;
   readonly requestTimeoutMs?: number;
@@ -304,6 +308,7 @@ function requireExactTargetOwnerFence(
 
 /** Owns packet ordering from relocation start through Message Follow removal. */
 export class ZLinkActorHandoffCoordinator {
+  private readonly requests: RequestRuntime;
   private readonly active = new Map<string, ActiveHandoff>();
   // Each route is stored once: Actor -> native fence -> location owner id.
   // Native ingress has the complete fence except the location owner's text id.
@@ -325,6 +330,7 @@ export class ZLinkActorHandoffCoordinator {
   private readonly replyRoutes = new Map<string, ReplyRoute>();
 
   constructor(private readonly options: ZLinkActorHandoffCoordinatorOptions) {
+    this.requests = options.requests ?? new RequestRuntime();
     this.messageFollowDurationMs =
       options.messageFollowDurationMs ?? DEFAULT_MESSAGE_FOLLOW_DURATION_MS;
   }
@@ -856,7 +862,8 @@ export class ZLinkActorHandoffCoordinator {
     deadlineUnixMs?: number,
     messageFollowOrigin?: ZLinkMessageFollowOrigin,
     provisionalReplay?: ZLinkActorHandoffDispatch,
-    onAdmitted?: () => void
+    onAdmitted?: () => void,
+    requestOperation?: PendingOperation<unknown>
   ): Promise<unknown> | undefined {
     let incomingContext = actorMessageFollowContext(fallbackActorRef);
     const originalDeadlineUnixMs =
@@ -933,6 +940,11 @@ export class ZLinkActorHandoffCoordinator {
         context,
         messageFollowOrigin
       );
+      if (requestOperation !== undefined)
+        Object.defineProperty(packet, 'requestOperation', {
+          value: requestOperation,
+          configurable: true
+        });
       handoff.pendingBytes += packetBytes(packet);
       this.options.onMarker?.('handoff_backlog', actorId, packet.index);
       if (returnResponse) {
@@ -1045,6 +1057,8 @@ export class ZLinkActorHandoffCoordinator {
               incomingContext,
               messageFollowOrigin
             );
+            if (requestOperation !== undefined)
+              Object.defineProperty(packet, 'requestOperation', { value: requestOperation });
             return this.enqueueMessageFollow(followRoute, actorId, packet, onAdmitted);
           }
           this.options.onMarker?.('message_follow_rejected', actorId);
@@ -1102,6 +1116,8 @@ export class ZLinkActorHandoffCoordinator {
       context,
       messageFollowOrigin
     );
+    if (requestOperation !== undefined)
+      Object.defineProperty(packet, 'requestOperation', { value: requestOperation });
     return this.enqueueMessageFollow(followRoute, actorId, packet, onAdmitted);
   }
 
@@ -1727,52 +1743,67 @@ export class ZLinkActorHandoffCoordinator {
       return undefined;
     }
     const timeoutMs = this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
-    const relayDeadlineMs = performance.now() + timeoutMs;
-    if (this.options.routedTransport.requestRawToSpot === undefined) {
-      const reply = await waitRequestReply(
-        mapZLinkRequestReply(
-          this.options.routedTransport.requestToSpot<Record<string, unknown>>(target, payload, {
-            packetName: ZLINK_REMOTE_ACTOR_PACKET_RELAY_PACKET,
-            timeoutMs
-          })
-        ),
-        actorId,
-        relayDeadlineMs
-      );
-      if (reply.ok === false) {
-        throw actorRelayError(actorId, reply.errorKind, reply.error);
-      }
-      await this.messageFollowRelayed(actorId, entry, packet, advanced);
-      return reply.response;
-    }
-    const response = await waitRequestReply(
-      requestRoutedJsonReply(
-        this.options.routedTransport,
-        target,
-        payload,
-        { timeoutMs },
-        `Actor Message Follow raw request is not available for '${actorId}'.`,
-        (parts) => {
-          if (parts.length === 0) {
-            throw new Error(`Actor Message Follow reply was empty for '${actorId}'.`);
+    return this.requests
+      .request(
+        timeoutMs,
+        undefined,
+        async (requestOperation) => {
+          if (this.options.routedTransport.requestRawToSpot === undefined) {
+            const reply = await waitRequestReply(
+              mapZLinkRequestReply(
+                this.options.routedTransport.requestToSpot<Record<string, unknown>>(
+                  target,
+                  payload,
+                  {
+                    packetName: ZLINK_REMOTE_ACTOR_PACKET_RELAY_PACKET,
+                    timeoutMs,
+                    requestOperation
+                  }
+                )
+              ),
+              actorId,
+              requestOperation
+            );
+            if (reply.ok === false) {
+              throw actorRelayError(actorId, reply.errorKind, reply.error);
+            }
+            await this.messageFollowRelayed(actorId, entry, packet, advanced);
+            return reply.response;
           }
-          const reply = JSON.parse(parts[0].getString('utf8')) as {
-            readonly ok?: boolean;
-            readonly response?: unknown;
-            readonly error?: unknown;
-            readonly errorKind?: unknown;
-          };
-          if (reply.ok === false) {
-            throw actorRelayError(actorId, reply.errorKind, reply.error);
-          }
-          return reply.response;
-        }
-      ),
-      actorId,
-      relayDeadlineMs
-    );
-    await this.messageFollowRelayed(actorId, entry, packet, advanced);
-    return response;
+          const response = await waitRequestReply(
+            requestRoutedJsonReply(
+              this.options.routedTransport,
+              target,
+              payload,
+              { timeoutMs, requestOperation },
+              `Actor Message Follow raw request is not available for '${actorId}'.`,
+              (parts) => {
+                if (parts.length === 0) {
+                  throw new Error(`Actor Message Follow reply was empty for '${actorId}'.`);
+                }
+                const reply = JSON.parse(parts[0].getString('utf8')) as {
+                  readonly ok?: boolean;
+                  readonly response?: unknown;
+                  readonly error?: unknown;
+                  readonly errorKind?: unknown;
+                };
+                if (reply.ok === false) {
+                  throw actorRelayError(actorId, reply.errorKind, reply.error);
+                }
+                return reply.response;
+              }
+            ),
+            actorId,
+            requestOperation
+          );
+          await this.messageFollowRelayed(actorId, entry, packet, advanced);
+          return response;
+        },
+        packet.requestOperation
+      )
+      .finally(() => {
+        delete packet.requestOperation;
+      });
   }
 
   private async messageFollowRelayed(
