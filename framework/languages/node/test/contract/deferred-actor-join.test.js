@@ -703,6 +703,7 @@ test('Core-routed Actor request submits its reply before deferred Join completio
   let replies = 0;
 
   const result = await dispatch.dispatch(
+    undefined,
     'remote',
     'alice',
     parts,
@@ -841,7 +842,7 @@ test('deferred Actor Join is discarded when request reply encoding fails', async
   ];
 
   await assert.rejects(
-    dispatch.dispatch('remote', 'alice', parts, true, undefined, undefined, () => {
+    dispatch.dispatch(undefined, 'remote', 'alice', parts, true, undefined, undefined, () => {
       throw new Error('reply encoding failed');
     }),
     /reply encoding failed/
