@@ -2158,8 +2158,8 @@ void joined_first_view_reaches_client (bool remote)
     configure (source, evidence, first_rid, store, relocations);
     source.app.advanced ().services ().add_factory<relay_session_t> (
       [evidence] (fw::service_provider_t &provider) {
-          return std::make_unique<relay_session_t> (
-            provider.get_required<fw::actor_manager_t> (), evidence);
+          return std::make_unique<relay_session_t> (provider.get_required<fw::actor_manager_t> (),
+                                                    evidence);
       },
       fw::service_lifetime_t::scoped);
     source.app.add_zlink_framework ()
@@ -2231,8 +2231,8 @@ void joined_first_view_reaches_client (bool remote)
     {
         std::lock_guard lock (evidence->mutex);
         ASSERT_EQ (evidence->completions.size (), 1u);
-        EXPECT_TRUE (std::holds_alternative<fw::actor_join_accepted_t> (
-          evidence->completions.front ()));
+        EXPECT_TRUE (
+          std::holds_alternative<fw::actor_join_accepted_t> (evidence->completions.front ()));
         EXPECT_EQ (evidence->completion_owners.front (), remote ? second_rid : first_rid);
         EXPECT_EQ (evidence->completion_spots.front (), fw::spot_id_t (local_spot));
     }
