@@ -122,7 +122,7 @@ class fanout_location_runtime_t final : public fanout_runtime_t
     mutable std::mutex _gate;
     std::mutex _descriptor_publish_mutex;
     std::map<std::string, std::unique_ptr<publisher_entry_t>> _publishers;
-    std::map<std::string, std::unique_ptr<subscriber_entry_t>> _subscribers;
+    std::map<std::string, std::shared_ptr<subscriber_entry_t>> _subscribers;
     mutable std::map<std::string, std::uint64_t> _snapshot_sequences;
     mutable std::map<std::string, fanout_channel_snapshot_t> _last_snapshots;
     mutable std::map<std::string, std::vector<std::weak_ptr<observer_t>>> _observers;

@@ -63,11 +63,22 @@ struct fanout_location_runtime_t::publisher_entry_t
 
 struct fanout_location_runtime_t::subscriber_entry_t
 {
-    explicit subscriber_entry_t (offload_executor_t &executor) : dispatch_queue (executor) {}
+    subscriber_entry_t (offload_executor_t &executor,
+                        std::shared_ptr<runtime_failure_collector_t> failures) :
+        dispatch_queue (
+          executor,
+          {},
+          [failures = std::move (failures)] (const std::string &, const std::exception_ptr &error) {
+              failures->report (error);
+          })
+    {
+    }
 
     std::string channel_name;
     std::unique_ptr<raw_fanout_subscriber_t> owner;
     serial_execution_queue_t dispatch_queue;
+    // The FIFO owns pipeline starts; its subscriber owns outstanding terminals.
+    std::atomic_size_t active_dispatches{0};
     std::vector<fanout_publisher_intent_t> desired;
 };
 
@@ -254,7 +265,8 @@ void fanout_location_runtime_t::start_publisher (const channel_snapshot_t &chann
 
 void fanout_location_runtime_t::start_subscriber (const channel_snapshot_t &channel)
 {
-    auto entry = std::make_unique<subscriber_entry_t> (*_dispatch_executor);
+    auto entry = std::make_shared<subscriber_entry_t> (*_dispatch_executor,
+                                                       _channel_runtime.runtime_failures ());
     entry->channel_name = channel.name;
     entry->owner = std::make_unique<raw_fanout_subscriber_t> (
       _channel_runtime.core_context (), _subscriber_poller.get (),
@@ -541,10 +553,10 @@ void fanout_location_runtime_t::pump ()
     const auto now = std::chrono::steady_clock::now ();
     for (auto &[_, publisher] : _publishers)
         (void) publisher->owner->tick (now);
-    std::vector<subscriber_entry_t *> subscribers;
+    std::vector<std::shared_ptr<subscriber_entry_t>> subscribers;
     subscribers.reserve (_subscribers.size ());
     for (auto &[_, subscriber] : _subscribers)
-        subscribers.push_back (subscriber.get ());
+        subscribers.push_back (subscriber);
     if (subscribers.empty ())
         return;
     const auto start = _subscriber_pump_cursor % subscribers.size ();
@@ -588,7 +600,8 @@ void fanout_location_runtime_t::pump ()
                 auto topic = received->topic;
                 subscriber.dispatch_queue.post_async (
                   subscriber.channel_name,
-                  [this, message = std::move (message), inbound = std::move (inbound),
+                  [this, subscriber_owner = subscribers[(start + offset) % subscribers.size ()],
+                   message = std::move (message), inbound = std::move (inbound),
                    retained = std::move (retained), runtime = std::move (runtime),
                    packet_name = std::move (packet_name), channel_name = std::move (channel_name),
                    topic = std::move (topic)] (auto complete) mutable {
@@ -596,15 +609,19 @@ void fanout_location_runtime_t::pump ()
                         zlink::framework::detail::service_scope_t::create (
                           _services,
                           zlink::framework::detail::service_scope_kind_t::handler_invocation));
-                      auto dispatched = runtime.dispatch_send_async (
+                      // A ChannelName pipeline does not inherit the FIFO's serial turn.
+                      // The hot task enters before this start turn advances to the next record.
+                      detail::serial_turn_scope_t pipeline_turn ({});
+                      auto dispatched = runtime.dispatch_send_on_handler_executor (
                         channel_name, topic, packet_name, scope->provider (), *_serializers,
                         *_handlers, std::move (message), std::move (inbound));
-                      detail::observe_task_completion (
+                      subscriber_owner->active_dispatches.fetch_add (1, std::memory_order_acq_rel);
+                      detail::observe_task_terminal (
                         dispatched,
                         [scope = std::move (scope), retained = std::move (retained),
                          runtime = std::move (runtime), packet_name = std::move (packet_name),
                          channel_name = std::move (channel_name), topic = std::move (topic),
-                         complete = std::move (complete)] (const result_t<void> &result) mutable {
+                         subscriber_owner] (const result_t<void> &result) mutable {
                             static_cast<void> (scope);
                             static_cast<void> (retained);
                             if (!result) {
@@ -626,11 +643,18 @@ void fanout_location_runtime_t::pump ()
                                                        : std::exception_ptr{}};
                                   });
                             }
-                            complete ([] {});
+                            scope.reset ();
+                            retained.reset ();
+                            if (subscriber_owner->active_dispatches.fetch_sub (
+                                  1, std::memory_order_acq_rel)
+                                == 1)
+                                subscriber_owner->active_dispatches.notify_all ();
                         });
+                      complete ([] {});
                   });
             }
             catch (...) {
+                _channel_runtime.runtime_failures ()->report (std::current_exception ());
             }
             if (budget.exhausted ())
                 break;
@@ -711,16 +735,23 @@ void fanout_location_runtime_t::stop ()
 void fanout_location_runtime_t::stop_subscribers ()
 {
     runtime_failure_collector_t failures;
-    std::map<std::string, subscriber_entry_t *> subscribers;
+    std::map<std::string, std::shared_ptr<subscriber_entry_t>> subscribers;
     {
         std::lock_guard lock (_gate);
         for (auto &[name, subscriber] : _subscribers)
-            subscribers.emplace (name, subscriber.get ());
+            subscribers.emplace (name, subscriber);
     }
     for (auto &[_, subscriber] : subscribers)
         subscriber->dispatch_queue.close ();
     for (auto &[_, subscriber] : subscribers)
         failures.capture ([&] { subscriber->dispatch_queue.drain (); });
+    for (auto &[_, subscriber] : subscribers) {
+        auto active = subscriber->active_dispatches.load (std::memory_order_acquire);
+        while (active != 0) {
+            subscriber->active_dispatches.wait (active, std::memory_order_acquire);
+            active = subscriber->active_dispatches.load (std::memory_order_acquire);
+        }
+    }
     for (auto &[_, subscriber] : subscribers)
         failures.capture ([&] { subscriber->owner->close (); });
     failures.rethrow_if_failed ();

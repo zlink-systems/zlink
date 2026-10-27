@@ -517,8 +517,7 @@ channel_runtime_t::dispatch_request_async (std::string channel_name,
     }
 }
 
-boost::asio::awaitable<result_t<zlink::message_t>>
-channel_runtime_t::dispatch_request_on_handler_executor (
+task_t<result_t<zlink::message_t>> channel_runtime_t::dispatch_request_on_handler_executor (
   std::string channel_name,
   std::string topic,
   std::string packet_name,
@@ -531,10 +530,10 @@ channel_runtime_t::dispatch_request_on_handler_executor (
     if (auto failure = request_capability_failure (*_state, channel_name))
         co_return std::move (*failure);
     try {
-        auto reply = co_await runtime::await_task_result (handlers.invoke_on_handler_executor (
+        auto reply = co_await handlers.invoke_on_handler_executor (
           std::move (channel_name), std::move (topic), std::move (packet_name), services,
-          serializers, std::move (message), std::move (inbound)));
-        co_return reply;
+          serializers, std::move (message), std::move (inbound));
+        co_return result_t<zlink::message_t>::success (std::move (reply));
     }
     catch (const framework_exception_t &error) {
         co_return detail::result_access_t::failure<zlink::message_t> (error);
@@ -576,7 +575,7 @@ channel_runtime_t::dispatch_send_async (std::string channel_name,
     co_return;
 }
 
-boost::asio::awaitable<void> channel_runtime_t::dispatch_send_on_handler_executor (
+task_t<void> channel_runtime_t::dispatch_send_on_handler_executor (
   std::string channel_name,
   std::string topic,
   std::string packet_name,
@@ -586,11 +585,9 @@ boost::asio::awaitable<void> channel_runtime_t::dispatch_send_on_handler_executo
   zlink::message_t message,
   detail::inbound_message_context_t inbound) const
 {
-    auto result = co_await runtime::await_task_result (handlers.invoke_on_handler_executor (
+    (void) co_await handlers.invoke_on_handler_executor (
       std::move (channel_name), std::move (topic), std::move (packet_name), services, serializers,
-      std::move (message), std::move (inbound)));
-    if (!result)
-        result.value ();
+      std::move (message), std::move (inbound));
     co_return;
 }
 
