@@ -364,8 +364,12 @@ public sealed class CanonicalActorJoinWireAdmissionNegativeTests
                 source.SetRoutingId(sourceRid);
                 source.Connect(endpoint);
                 await SendHelloAsync(source, MeshName, $"inproc://{sourceOwner}");
+                using var admission = await RawMeshPeerAdmission.CompleteAsync(
+                    source,
+                    MeshName,
+                    $"inproc://{sourceOwner}"
+                );
                 await WaitUntilAsync(() => targetNode.MeshStatus().AdmittedPeerCount == 1);
-                using var admission = await ReceiveAsync(source);
                 // Transport liveness §3: a raw admitted peer answers the first probe.
                 using var probe = await ReceiveAsync(source);
                 Assert.True(
@@ -471,17 +475,16 @@ public sealed class CanonicalActorJoinWireAdmissionNegativeTests
             {
                 try
                 {
-                    using var hello = Message.From(
-                        ZLinkServiceWireCodec.EncodeRouteAdmission(
-                            ServiceWireConstants.Command.Hello,
-                            meshName,
-                            sourceEndpoint,
-                            lifecycleGeneration: 1,
-                            descriptorRevision: 1,
-                            new Dictionary<string, uint>(StringComparer.Ordinal),
-                            objectRole: (byte)ZLinkMeshNodeObjectRole.Server
-                        )
+                    var helloBytes = ZLinkServiceWireCodec.EncodeRouteAdmission(
+                        ServiceWireConstants.Command.Hello,
+                        meshName,
+                        sourceEndpoint,
+                        lifecycleGeneration: 1,
+                        descriptorRevision: 1,
+                        new Dictionary<string, uint>(StringComparer.Ordinal),
+                        objectRole: (byte)ZLinkMeshNodeObjectRole.Server
                     );
+                    using var hello = Message.From(helloBytes);
                     await source.Send().Message(hello).Async(CancellationToken.None).Admitted;
                     return;
                 }
