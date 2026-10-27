@@ -1934,8 +1934,9 @@ void test_completion_pipe_budget_is_fair_and_stale_requeue_is_fenced ()
       (owner_event.events & ZLINK_POLLCOMPLETION) != 0);
 
     //  The in-flight owner may publish exactly the 64 records it completed
-    //  before the barrier. The detached source's remaining records must never
-    //  be consumed by a stale tail requeue.
+    //  before the barrier. Pair termination then resolves the remaining
+    //  complete replies already in the source FIFO, each exactly once; a stale
+    //  tail requeue must not deliver any of them again.
     const size_t after_barrier_completion = next_a_completion + budget;
     for (size_t i = next_a_completion; i != after_barrier_completion; ++i) {
         zlink_completion_t completion;
@@ -1966,10 +1967,9 @@ void test_completion_pipe_budget_is_fair_and_stale_requeue_is_fenced ()
         TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK, detached_result);
         TEST_ASSERT_EQUAL_INT (ZLINK_COMPLETION_REQUEST,
                                detached_completion.kind);
-        TEST_ASSERT_EQUAL_INT (ZLINK_REQUEST_NOT_CONNECTED,
+        TEST_ASSERT_EQUAL_INT (ZLINK_REQUEST_OK,
                                detached_completion.request_result);
-        TEST_ASSERT_EQUAL_UINT64 (0,
-                                  detached_completion.reply_part_count);
+        TEST_ASSERT_EQUAL_UINT64 (2, detached_completion.reply_part_count);
         size_t matched = a_record_count;
         for (size_t i = after_barrier_completion; i != a_record_count; ++i) {
             if (completion_ids_a[i] == detached_completion.completion_id) {
@@ -1984,6 +1984,8 @@ void test_completion_pipe_budget_is_fair_and_stale_requeue_is_fenced ()
         detached_request_seen[matched] = true;
         zlink_completion_close (&detached_completion);
     }
+    for (size_t i = after_barrier_completion; i != a_record_count; ++i)
+        TEST_ASSERT_TRUE (detached_request_seen[i]);
     TEST_ASSERT_FALSE (as_socket (requester)->test_completion_pair_queued (
       pair_a_id, pair_a_generation));
 

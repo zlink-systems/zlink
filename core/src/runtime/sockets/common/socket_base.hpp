@@ -622,6 +622,7 @@ class socket_base_t : public own_t,
 
     // True when the calling thread owns completion-lane command processing.
     bool completion_drain_permitted () const;
+    bool completion_blocked_by_public_delivery (pipe_t *pipe_);
 
     //  Delivers replies from every ready Completion pipe. Called from the
     //  owned drain points, because a pipe that was made readable while no
@@ -680,6 +681,7 @@ class socket_base_t : public own_t,
     void write_activated (pipe_t *pipe_) ZLINK_FINAL;
     void request_correlation_released (pipe_t *pipe_) ZLINK_FINAL;
     void hiccuped (pipe_t *pipe_) ZLINK_FINAL;
+    void pipe_peer_terminating (pipe_t *pipe_) ZLINK_FINAL;
     void pipe_peer_terminated (pipe_t *pipe_, bool drain_complete_ = true) ZLINK_FINAL;
     void pipe_terminated (pipe_t *pipe_) ZLINK_FINAL;
     //  Releases the gauge slot and closes the pause duration for a pair that
