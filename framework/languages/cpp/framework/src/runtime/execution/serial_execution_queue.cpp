@@ -1377,6 +1377,7 @@ task_t<bool> serial_execution_queue_t::adopt_application_prefix (
                 item.application_record = std::move (it->options.application_record);
                 item.turn = create_turn (item.name, item.lane, {},
                                          it->options.holds_application_while_waiting);
+                bind_completion (item, std::move (it->options.completion));
                 auto &lane = lane_locked (item.lane);
                 ++lane.messages;
                 lane.bytes += item.byte_cost;
@@ -1432,8 +1433,7 @@ serial_execution_queue_t::take_application_suffix (
                           continue;
                       }
                       suffix.push_back (std::move (it->application_record));
-                      --_application.messages;
-                      _application.bytes -= it->byte_cost;
+                      retire_work_locked (_application, 1, it->byte_cost);
                       it = _application.queue.erase (it);
                   }
               });
@@ -1448,8 +1448,7 @@ serial_execution_queue_t::take_application_suffix (
                       || !item->application_record)
                       continue;
                   suffix.push_back (std::move (item->application_record));
-                  --_application.messages;
-                  _application.bytes -= item->byte_cost;
+                  retire_work_locked (_application, 1, item->byte_cost);
                   item.reset ();
               }
           };
@@ -1704,14 +1703,7 @@ serial_execution_queue_t::cancel_submission_owned (serial_submission_id_t submis
               });
             if (item == lane.queue.end ())
                 return false;
-            if (lane.messages > 0)
-                --lane.messages;
-            if (owns_shared_gate ())
-                lane.bytes.fetch_sub (item->byte_cost, std::memory_order_acq_rel);
-            else if (item->byte_cost <= lane.bytes)
-                lane.bytes -= item->byte_cost;
-            else
-                lane.bytes = 0;
+            retire_work_locked (lane, 1, item->byte_cost);
             mutate_fifo_locked (
               lane,
               [&] {
@@ -1719,8 +1711,6 @@ serial_execution_queue_t::cancel_submission_owned (serial_submission_id_t submis
                   lane.queue.erase (item);
               },
               &*item);
-            if (owns_shared_gate ())
-                lane.messages.notify_all ();
             return true;
         };
 
@@ -1752,10 +1742,10 @@ serial_execution_queue_t::cancel_submission_owned (serial_submission_id_t submis
         }
     }
 
-    if (cancelled_item && cancelled_item->application_record)
-        cancelled_item->application_record->admission.discard ();
-    if (cancelled_item && cancelled_item->cancel)
-        cancelled_item->cancel ();
+    if (cancelled_item)
+        if (auto complete = std::move (cancelled_item->completion))
+            complete (result_t<void>::failure (framework_error_kind_t::shutting_down,
+                                               "serial submission was cancelled"));
     if (active_cancel)
         active_cancel ();
     if (shared_spot_gate () && outcome == serial_cancel_submission_outcome_t::queued_cancelled)
@@ -2289,13 +2279,7 @@ void serial_execution_queue_t::cancel_pending_owned () noexcept
                   });
                 lane.queue.erase (end, lane.queue.end ());
             });
-            lane.messages -= removed;
-            if (owns_shared_gate ())
-                lane.bytes.fetch_sub (queued_bytes, std::memory_order_acq_rel);
-            else
-                lane.bytes = queued_bytes <= lane.bytes ? lane.bytes - queued_bytes : 0;
-            if (owns_shared_gate ())
-                lane.messages.notify_all ();
+            retire_work_locked (lane, removed, queued_bytes);
         };
         clear_queued (_application);
         clear_queued (_lifecycle);
@@ -2314,16 +2298,10 @@ void serial_execution_queue_t::cancel_pending_owned () noexcept
         }
     }
     cancel_waits ();
-    for (auto &item : cancelled_items) {
-        if (item.application_record) {
-            item.application_record->admission.discard ();
-            if (auto retire = std::exchange (item.application_record->retire_invocation, {}))
-                retire (result_t<void>::failure (framework_error_kind_t::shutting_down,
-                                                 "Actor application queue is stopping"));
-        }
-        if (item.cancel)
-            item.cancel ();
-    }
+    for (auto &item : cancelled_items)
+        if (auto complete = std::move (item.completion))
+            complete (result_t<void>::failure (framework_error_kind_t::shutting_down,
+                                               "serial execution queue is stopping"));
     for (auto &cancel : active_cancellations)
         cancel ();
     if (shared_spot_gate ())
@@ -2568,14 +2546,15 @@ bool serial_execution_queue_t::enqueue_locked (std::string name,
     work_item_t item{std::move (name),
                      std::move (work),
                      options.lane,
+                     false,
                      bytes,
                      submission_id,
                      std::move (cancel),
                      std::move (turn),
-                     false,
                      {},
                      std::move (options.retained_message),
                      std::move (options.application_record)};
+    bind_completion (item, std::move (options.completion));
     if (owns_shared_gate ()) {
         auto node = std::make_unique<publication_node_t> ();
         node->item.emplace (std::move (item));
@@ -2583,8 +2562,7 @@ bool serial_execution_queue_t::enqueue_locked (std::string name,
         lane.bytes += bytes;
         if (publish_locked (std::move (node)))
             return true;
-        --lane.messages;
-        lane.bytes -= bytes;
+        retire_work_locked (lane, 1, bytes);
         return false;
     }
     mutate_fifo_locked (
@@ -2598,9 +2576,46 @@ bool serial_execution_queue_t::enqueue_locked (std::string name,
     if (schedule_drain_locked ())
         return true;
     mutate_fifo_locked (lane, [&] { lane.queue.pop_back (); }, &lane.queue.back ());
-    --lane.messages;
-    lane.bytes -= bytes;
+    retire_work_locked (lane, 1, bytes);
     return false;
+}
+
+void serial_execution_queue_t::bind_completion (work_item_t &item,
+                                                std::function<void (result_t<void>)> completion)
+{
+    if (!item.application_record && !item.cancel) {
+        item.completion = std::move (completion);
+        return;
+    }
+    item.completion = [record = item.application_record, cancel = item.cancel,
+                       complete = std::move (completion)] (result_t<void> terminal) mutable {
+        if (record)
+            record->admission.discard ();
+        if (cancel)
+            cancel ();
+        else if (record)
+            if (auto retire = std::exchange (record->retire_invocation, {}))
+                retire (terminal);
+        if (complete)
+            complete (terminal);
+    };
+}
+
+void serial_execution_queue_t::retire_work_locked (lane_state_t &lane,
+                                                   std::size_t messages,
+                                                   std::size_t bytes)
+{
+    // Retire bytes before publishing quiescence to a shared-gate drain waiter.
+    if (owns_shared_gate ()) {
+        lane.bytes.fetch_sub (bytes, std::memory_order_acq_rel);
+        const auto previous = lane.messages.fetch_sub (messages, std::memory_order_acq_rel);
+        assert (previous >= messages);
+        if (messages != 0 && previous == messages)
+            lane.messages.notify_all ();
+    } else {
+        lane.bytes = bytes <= lane.bytes ? lane.bytes - bytes : 0;
+        lane.messages -= messages;
+    }
 }
 
 bool serial_execution_queue_t::has_queued_locked () const noexcept
@@ -2784,6 +2799,7 @@ serial_execution_queue_t::take_next_locked (std::optional<serial_work_lane_t> fo
           },
           &*next);
     }
+    item.completion = {};
     activate_turn_locked (item);
     if (selected_lane == serial_work_lane_t::lifecycle) {
         ++_lifecycle_streak;
@@ -2843,9 +2859,7 @@ void serial_execution_queue_t::disconnect_actor_head (
         if (found == lane->queue.end ())
             continue;
         mutate_fifo_locked (*lane, [&] { lane->queue.erase (found); }, &*found);
-        --lane->messages;
-        lane->bytes.fetch_sub (fixed_work_byte_cost, std::memory_order_acq_rel);
-        lane->messages.notify_all ();
+        retire_work_locked (*lane, 1, fixed_work_byte_cost);
     }
 }
 
@@ -3104,10 +3118,7 @@ void serial_execution_queue_t::complete_one (std::string name,
             _handler_turns.pop_back ();
         if (_active_lane) {
             auto &lane = lane_locked (*_active_lane);
-            if (lane.messages > 0)
-                --lane.messages;
-            lane.bytes.fetch_sub (_active_bytes, std::memory_order_acq_rel);
-            lane.messages.notify_all ();
+            retire_work_locked (lane, 1, _active_bytes);
         }
         _active_lane.reset ();
         _active_bytes = 0;
@@ -3129,12 +3140,7 @@ void serial_execution_queue_t::complete_one (std::string name,
         }
         if (_active_lane) {
             auto &lane = lane_locked (*_active_lane);
-            if (lane.messages > 0)
-                --lane.messages;
-            if (_active_bytes <= lane.bytes)
-                lane.bytes -= _active_bytes;
-            else
-                lane.bytes = 0;
+            retire_work_locked (lane, 1, _active_bytes);
         }
         _active_lane.reset ();
         _active_bytes = 0;
