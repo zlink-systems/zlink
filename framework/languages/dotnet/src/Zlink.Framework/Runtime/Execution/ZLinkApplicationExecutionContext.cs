@@ -37,6 +37,7 @@ internal static class ZLinkApplicationExecutionContext
             ZLinkApplicationJobQueueInvocation.IsActive
             || ZLinkSpotAmbientContext.CurrentOrDefault is not null
             || ZLinkStateLane.Current is not null
+            || Zlink.Framework.Runtime.Backend.DotNet.ZLinkCompletionDispatcher.IsCurrentExecution
         )
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.InvalidOperation,
