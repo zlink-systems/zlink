@@ -3243,7 +3243,6 @@ internal sealed partial class ZLinkFrameworkRuntime
                 || node is not IZLinkBackendLocalActorAuthorityReader reader
                 || !reader.TryGetLocalActorAuthority(actorRef, out var authority, out _)
                 || authority != request.Actor.ExpectedAuthorityOwnerGeneration.Value
-                || !HasExactAdmittedNodeLifecycle(node, sourceNodeRid, sourceNodeGeneration)
             )
                 throw new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.Unavailable,
@@ -3254,8 +3253,8 @@ internal sealed partial class ZLinkFrameworkRuntime
 
     /// <summary>
     /// Session-Actor binding §4: the Session owner identity is the owner host's MeshNode
-    /// descriptor value. It is this node's own descriptor, or the admitted peer descriptor
-    /// of that exact lifecycle that passed the Location runtime §4.1 owner lease check.
+    /// descriptor value. Ingress has authenticated the remote source lifecycle; the live
+    /// descriptor must match it and pass the Location runtime §4.1 owner lease check.
     /// </summary>
     private async ValueTask<ZLinkServiceWireCodec.RequestSourceFence> ResolveSessionOwnerAsync(
         ZLinkSpotNodeRuntime nodeRuntime,
@@ -3272,9 +3271,8 @@ internal sealed partial class ZLinkFrameworkRuntime
                 ? local
                 : throw SessionOwnerUnavailable(sessionNodeRid);
         if (
-            !HasExactAdmittedNodeLifecycle(nodeRuntime.Node, sessionNodeRid, sessionNodeGeneration)
-            || Services.GetService(typeof(IZLinkMeshNodeLocationResolver))
-                is not IZLinkMeshNodeLocationResolver resolver
+            Services.GetService(typeof(IZLinkMeshNodeLocationResolver))
+            is not IZLinkMeshNodeLocationResolver resolver
         )
             throw SessionOwnerUnavailable(sessionNodeRid);
         var descriptor =
