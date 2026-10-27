@@ -1,3 +1,4 @@
+import type { PendingOperation } from './operation-registry';
 import type { RoutingId } from '../../contracts';
 import type { Message } from '../../contracts/Common/Message';
 import type { ApplicationJobPermitPort } from '../application-jobs/contracts';
@@ -436,6 +437,7 @@ export interface ServiceSpot {
     options?: {
       flags?: number;
       timeoutMs?: number;
+      readonly requestOperation?: PendingOperation<unknown>;
       applicationMetadata?: Buffer;
       onAdmitted?: () => void;
     }
@@ -459,6 +461,7 @@ export interface ServiceSpot {
     options?: {
       flags?: number;
       timeoutMs?: number;
+      readonly requestOperation?: PendingOperation<unknown>;
       applicationMetadata?: Buffer;
       routeFence?: ServiceDirectSpotRouteFence;
       onAdmitted?: () => void;
