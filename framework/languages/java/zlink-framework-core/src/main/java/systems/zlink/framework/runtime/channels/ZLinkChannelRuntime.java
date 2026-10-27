@@ -500,7 +500,8 @@ public final class ZLinkChannelRuntime
                         replyDecoder,
                         this::sendToSpotViaRouterChannel,
                         this::requestToSpotViaRouterChannel,
-                        nanoTime);
+                        nanoTime,
+                        sockets.operationLane());
         this.dispatchReporter = new ZLinkChannelDispatchReporter(dispatchErrors);
         this.messageDispatcher =
                 new ZLinkChannelMessageDispatcher(
@@ -1473,7 +1474,7 @@ public final class ZLinkChannelRuntime
                             ownerLeaseGeneration,
                             spotParts,
                             effectiveTimeout,
-                            operations,
+                            ZLinkChannelCallRuntime.operationOwner(node, operations),
                             operationId,
                             requestAdmission);
                 });
