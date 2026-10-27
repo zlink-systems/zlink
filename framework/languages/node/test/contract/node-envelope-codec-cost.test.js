@@ -210,7 +210,7 @@ async function trackedCodecAllocations(filename, action) {
       const offset = nodes[index + 1] * fields.length;
       const name = snapshot.strings[infos[offset + fields.indexOf('name')]];
       const script = snapshot.strings[infos[offset + fields.indexOf('script_name')]];
-      if (script.endsWith(filename)) {
+      if (script.replaceAll('\\', '/').endsWith(filename)) {
         const entry = allocations.get(name) ?? { objects: 0, bytes: 0 };
         entry.objects += nodes[index + 2];
         entry.bytes += nodes[index + 3];
