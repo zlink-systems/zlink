@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+#include <zlink/json.hpp>
 
 #include <zlink/framework.hpp>
 #include "../support/relocation_unit_fixture.hpp"
@@ -51,6 +52,16 @@ constexpr auto host_relocation_mesh_name = "host-relocation-mesh";
 struct degraded_channel_message_t
 {
 };
+}
+
+template <> struct zlink::json::dto_traits<degraded_channel_message_t>
+{
+    static constexpr auto fields = std::tuple{};
+};
+
+namespace
+{
+
 
 struct degraded_channel_handler_t
 {
@@ -65,15 +76,16 @@ struct degraded_object_message_t
     int value = 0;
 };
 
-void to_json (nlohmann::json &json, const degraded_object_message_t &message)
-{
-    json = nlohmann::json{{"value", message.value}};
 }
 
-void from_json (const nlohmann::json &json, degraded_object_message_t &message)
+template <> struct zlink::json::dto_traits<degraded_object_message_t>
 {
-    message.value = json.at ("value").get<int> ();
-}
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("value", &degraded_object_message_t::value)};
+};
+
+namespace
+{
 
 class degraded_object_spot_t;
 
@@ -150,7 +162,16 @@ struct relocation_ready_message_t
     int value = 0;
 };
 
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE (relocation_ready_message_t, value)
+}
+
+template <> struct zlink::json::dto_traits<relocation_ready_message_t>
+{
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("value", &relocation_ready_message_t::value)};
+};
+
+namespace
+{
 
 class relocation_ready_spot_t final : public zlink::framework::spot_t<zlink::framework::actor_t>
 {

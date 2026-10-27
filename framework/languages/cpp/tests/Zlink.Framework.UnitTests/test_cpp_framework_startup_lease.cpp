@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+#include <zlink/json.hpp>
 
 #include <zlink/framework.hpp>
 #include "../support/manual_deadlines.hpp"
@@ -22,6 +23,16 @@ using namespace zlink::framework;
 struct startup_message_t
 {
 };
+}
+
+template <> struct zlink::json::dto_traits<startup_message_t>
+{
+    static constexpr auto fields = std::tuple{};
+};
+
+namespace
+{
+
 struct startup_handler_t
 {
     using message_type = startup_message_t;
