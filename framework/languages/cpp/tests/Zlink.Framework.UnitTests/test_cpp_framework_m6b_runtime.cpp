@@ -2748,7 +2748,7 @@ void verify_host_send_forwarding_allocations ()
     }
 }
 
-void verify_actor_create_replays_after_reciprocal_handover ()
+void verify_actor_create_does_not_replay_after_reciprocal_handover ()
 {
     using completion_t = std::pair<foundation::operation_terminal_t, std::vector<std::uint8_t>>;
     mesh::raw_mesh_node_owner_t source (zlink::framework::test::runtime_failure_options (
@@ -2808,6 +2808,7 @@ void verify_actor_create_replays_after_reciprocal_handover ()
         return claim;
     };
     auto losing = receive ();
+    const auto first_record = *losing->records.front ();
     const auto first = protocol::decode_actor_create_header (
       protocol::message_bytes (losing->records.front ()->parts.front ()));
     assert (first.operation == request.operation);
@@ -2816,34 +2817,34 @@ void verify_actor_create_replays_after_reciprocal_handover ()
     assert (completion.wait_for (0ms) == std::future_status::timeout);
     assert (target.mailbox ().release (*losing));
 
-    // Receipt proves admission on Z -> A. Withhold its reply, then let Core
-    // select A -> Z; only the durable owner resubmits the operation.
-    const auto handover_started = std::chrono::steady_clock::now ();
+    // Submit §5: handover ends the binding request with its typed result.
+    // A selected-route change cannot submit this operation a second time.
     assert (target.connect_peer (source.endpoint (), source_descriptor));
-    auto survivor = receive ();
-    const auto replay = protocol::decode_actor_create_header (
-      protocol::message_bytes (survivor->records.front ()->parts.front ()));
-    assert (replay == first);
-    assert (survivor->records.front ()->correlation == first.correlation);
-    assert (completion.wait_for (0ms) == std::future_status::timeout);
-    assert (target.reply_actor_create ((*survivor->records.front ()),
-                                       {{replay.correlation, 0, 0},
-                                        protocol::actor_create_result_t::created,
-                                        target_descriptor.node_routing_id,
-                                        replay.actor_id,
-                                        1}));
-    assert (target.mailbox ().release (*survivor));
+    const auto no_replay = [&] {
+        assert (
+          !target.mailbox ().try_claim (mesh::service_mailbox_domain_t::infrastructure, 1, 4096));
+    };
     while (completion.wait_for (0ms) != std::future_status::ready
-           && std::chrono::steady_clock::now () < deadline)
+           && std::chrono::steady_clock::now () < deadline) {
         pump ();
+        (void) source.expire_requests (std::chrono::steady_clock::now ());
+        no_replay ();
+    }
     assert (completion.wait_for (0ms) == std::future_status::ready);
-    assert (std::chrono::steady_clock::now () < deadline);
-    assert (completion.get ().first == foundation::operation_terminal_t::completed);
-    std::cout << "handover durable_replay_us="
-              << std::chrono::duration_cast<std::chrono::microseconds> (
-                   std::chrono::steady_clock::now () - handover_started)
-                   .count ()
-              << " same_operation=1 same_correlation=1 same_deadline=1 result=completed\n";
+    const auto ended = completion.get ();
+    assert (ended.first == foundation::operation_terminal_t::transport_failed);
+    assert (ended.second.empty ());
+    assert (source.pending_operation_count () == 0);
+    (void) target.reply_actor_create (first_record, {{first.correlation, 0, 0},
+                                                     protocol::actor_create_result_t::created,
+                                                     target_descriptor.node_routing_id,
+                                                     first.actor_id,
+                                                     1});
+    for (int turn = 0; turn < 32; ++turn) {
+        pump ();
+        no_replay ();
+    }
+    assert (source.pending_operation_count () == 0);
     source.close ();
     target.close ();
 }
@@ -9557,7 +9558,7 @@ int main (int argc, char **argv)
     }
     if (!verify_remote_user_spot_create_close_terminal_once (true))
         return 1;
-    verify_actor_create_replays_after_reciprocal_handover ();
+    verify_actor_create_does_not_replay_after_reciprocal_handover ();
     verify_message_follow_invalidation_subscriptions_are_lifetime_safe ();
     verify_actor_calls_keep_selected_route_until_follow_notice ();
     verify_session_relocation_gateway_commit_is_atomic ();

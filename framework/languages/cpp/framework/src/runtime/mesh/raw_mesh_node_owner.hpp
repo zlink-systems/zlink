@@ -506,7 +506,7 @@ class raw_mesh_node_owner_t
       const std::vector<std::uint8_t> &target_routing_id,
       const std::function<std::vector<std::uint8_t> (std::uint64_t)> &header,
       const protocol::application_payload_t &application_payload,
-      std::chrono::milliseconds timeout,
+      foundation::operation_registry_t::clock_t::time_point deadline,
       foundation::operation_registry_t::callback_t callback,
       std::optional<std::uint64_t> correlation = std::nullopt,
       bool target_claimed = false,
@@ -518,7 +518,7 @@ class raw_mesh_node_owner_t
       const std::function<std::vector<std::uint8_t> (std::uint64_t)> &header,
       const std::function<std::vector<std::uint8_t> (const detail::backend::raw_message_t &)>
         &decode_reply,
-      std::chrono::milliseconds timeout,
+      foundation::operation_registry_t::clock_t::time_point deadline,
       foundation::operation_registry_t::callback_t callback);
     bool
     observe_request (foundation::call_id_t operation,
