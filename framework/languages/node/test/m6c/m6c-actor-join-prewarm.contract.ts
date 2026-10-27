@@ -590,6 +590,7 @@ test('an arrival parked between Accepted and cutover delivers in order once relo
   // source's ingress hold) after Accepted but before cutover — exactly the
   // window spec 15 §4.2 requires a relocation temporary queue for.
   const first = dispatch.dispatch(
+    undefined,
     'remote',
     ACTOR_ID,
     [Message.from(sendHeaderBytes('early-1')), Message.from('EARLY-1')],
@@ -598,6 +599,7 @@ test('an arrival parked between Accepted and cutover delivers in order once relo
     fallbackRef()
   );
   const second = dispatch.dispatch(
+    undefined,
     'remote',
     ACTOR_ID,
     [Message.from(sendHeaderBytes('early-2')), Message.from('EARLY-2')],
@@ -615,6 +617,7 @@ test('an arrival parked between Accepted and cutover delivers in order once relo
   assert.equal(drained.length, 2);
   for (const arrival of drained) {
     await dispatch.dispatch(
+      undefined,
       'remote',
       ACTOR_ID,
       [Message.from(arrival.header), Message.from(arrival.payload)],
@@ -633,6 +636,7 @@ test('an arrival parked between Accepted and cutover delivers in order once relo
   // A further arrival after migration reaches the Actor directly — the
   // attempt no longer parks anything for this object.
   await dispatch.dispatch(
+    undefined,
     'remote',
     ACTOR_ID,
     [Message.from(sendHeaderBytes('after')), Message.from('AFTER')],
@@ -666,6 +670,7 @@ test('command 28 registers prewarm before Store validation so early Send and Req
   });
 
   await dispatch.dispatch(
+    undefined,
     'remote',
     ACTOR_ID,
     [Message.from(sendHeaderBytes('early-send')), Message.from('EARLY-SEND')],
@@ -674,6 +679,7 @@ test('command 28 registers prewarm before Store validation so early Send and Req
     fallbackRef()
   );
   const request = dispatch.dispatch(
+    undefined,
     'remote',
     ACTOR_ID,
     [Message.from(requestHeaderBytes('early-request', 2n)), Message.from('EARLY-REQUEST')],
@@ -698,6 +704,7 @@ test('command 28 registers prewarm before Store validation so early Send and Req
   );
   actorReady = true;
   await dispatch.dispatch(
+    undefined,
     'remote',
     ACTOR_ID,
     [Message.from(drained[0]!.header), Message.from(drained[0]!.payload)],
@@ -779,6 +786,7 @@ test('a parked Request replies through the original mailbox correlation once mig
   };
 
   const originalAwait = dispatch.dispatch(
+    undefined,
     'remote',
     ACTOR_ID,
     [Message.from(requestHeaderBytes('ping', 1n)), Message.from('PING')],
@@ -837,6 +845,7 @@ test('atomic migration admits no arrival racing the drain to be lost or delivere
   });
 
   await dispatch.dispatch(
+    undefined,
     'remote',
     ACTOR_ID,
     [Message.from(sendHeaderBytes('before')), Message.from('BEFORE')],
@@ -868,6 +877,7 @@ test('atomic migration admits no arrival racing the drain to be lost or delivere
 
   for (const arrival of drained) {
     await dispatch.dispatch(
+      undefined,
       'remote',
       ACTOR_ID,
       [Message.from(arrival.header), Message.from(arrival.payload)],
@@ -878,6 +888,7 @@ test('atomic migration admits no arrival racing the drain to be lost or delivere
     );
   }
   await dispatch.dispatch(
+    undefined,
     'remote',
     ACTOR_ID,
     [Message.from(sendHeaderBytes('racing')), Message.from('RACING')],
@@ -1027,6 +1038,7 @@ test('disabling the ingress prewarm consult reproduces the pre-fix silent drop',
   });
 
   await dispatch.dispatch(
+    undefined,
     'remote',
     ACTOR_ID,
     [Message.from(sendHeaderBytes('early')), Message.from('EARLY')],
