@@ -802,20 +802,22 @@ var ZlinkStreamConnectorBundle = (() => {
     if (value === void 0 || typeof value === "function" || typeof value === "symbol") {
       throw new TypeError("framework-json-v1 payload is not a JSON value.");
     }
-    const encoded = JSON.stringify(
-      value,
-      replacer === void 0 ? frameworkJsonV1Replacer : function(key, item) {
-        const transformed = replacer.call(this, key, item);
-        return frameworkJsonV1Replacer.call({ [key]: transformed }, key, transformed);
-      }
-    );
+    const encoded = replacer === void 0 ? JSON.stringify(value, frameworkJsonV1Replacer) : stringifyWithReplacer(value, replacer);
     if (schema !== void 0) {
       validateFrameworkJsonV1Value(JSON.parse(encoded), schema, "$", false);
     }
     return encoded;
   }
+  function stringifyWithReplacer(value, replacer) {
+    return JSON.stringify(value, function(key, item) {
+      const transformed = replacer.call(this, key, item);
+      return frameworkJsonV1Value(transformed, transformed);
+    });
+  }
   function frameworkJsonV1Replacer(key, item) {
-    const source = this[key];
+    return frameworkJsonV1Value(this[key], item);
+  }
+  function frameworkJsonV1Value(source, item) {
     if (typeof source === "number" && !Number.isFinite(source)) {
       throw new TypeError("framework-json-v1 only accepts finite JSON numbers.");
     }

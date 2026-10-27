@@ -23,7 +23,8 @@ const {
   ZLinkBufferMessage: Message
 } = require('../../packages/framework/dist/runtime/backend/runtime-message');
 const {
-  prepareZLinkRequestReply,
+  observeZLinkRequestReply,
+  ZLinkRequestResult,
   identityRequestReply
 } = require('../../packages/framework/dist/runtime/messaging/request-result');
 const protocol = require('../../packages/framework/dist/runtime/streams/protocol');
@@ -142,9 +143,11 @@ function fixture() {
     routedTransport: {
       sendToSpot: (_route, payload) => deliver(payload),
       requestToSpot: (_route, payload) =>
-        prepareZLinkRequestReply(
+        observeZLinkRequestReply(
           deliver(payload).then((response) => ({ ok: true, response })),
-          identityRequestReply
+          identityRequestReply,
+          identityRequestReply,
+          new ZLinkRequestResult()
         )
     }
   });
@@ -243,27 +246,31 @@ function fixture() {
       invalidateActorRoute() {}
     }),
     completionTableProvider: () => ({
-      async submit(submit) {
-        submit();
-        const response = await terminal;
-        return {
-          terminalResult: 0,
-          failureErrno: 0,
-          parts: [
-            Message.from(
-              protocol.encodeStreamFrame(
-                {
-                  kind: protocol.ZLinkStreamMessageKind.Response,
-                  codec: protocol.ZLinkStreamCodec.Json,
-                  flags: 0,
-                  name: 'Ping',
-                  metadata: new Map()
-                },
-                Buffer.from(JSON.stringify(response))
-              )
-            )
-          ]
-        };
+      submit(submit, _signal, entry = new ZLinkRequestResult()) {
+        return entry.observe(
+          (async () => {
+            submit(entry);
+            const response = await terminal;
+            return {
+              terminalResult: 0,
+              failureErrno: 0,
+              parts: [
+                Message.from(
+                  protocol.encodeStreamFrame(
+                    {
+                      kind: protocol.ZLinkStreamMessageKind.Response,
+                      codec: protocol.ZLinkStreamCodec.Json,
+                      flags: 0,
+                      name: 'Ping',
+                      metadata: new Map()
+                    },
+                    Buffer.from(JSON.stringify(response))
+                  )
+                )
+              ]
+            };
+          })()
+        );
       }
     })
   });
@@ -309,7 +316,10 @@ test('Actor packet dispatch is reused for messages in one activation', async () 
     else assert.strictEqual(f.source.actorPacketDispatch, actorPacketDispatch);
   }
 
-  assert.deepEqual(f.calls.map((call) => call[1]), ['first', 'second']);
+  assert.deepEqual(
+    f.calls.map((call) => call[1]),
+    ['first', 'second']
+  );
 });
 
 for (const updated of [false, true]) {
@@ -398,13 +408,15 @@ for (const updated of [false, true]) {
         primaryMeshNode: { status: () => ({ routingId: 'session-owner' }) }
       }),
       routeTransport: {
-        request: (_channel, _node, _name, payload) =>
-          prepareZLinkRequestReply(
+        request: (entry, _channel, _node, _name, payload) =>
+          observeZLinkRequestReply(
             receiver.receiveRemoteActorPacketRelay(payload, {
               meshName: 'mesh',
               sourceNodeRid: 'session-owner'
             }),
-            identityRequestReply
+            identityRequestReply,
+            identityRequestReply,
+            entry
           )
       }
     });
@@ -582,12 +594,20 @@ for (const returnResponse of [false, true]) {
       Message.from('{}')
     ];
     try {
-      const response = dispatch.dispatch(undefined, 'remote', 'alice', parts, returnResponse, undefined, {
-        actorId: 'alice',
-        objectGeneration: 1n,
-        nodeRid: 'target',
-        meshName: 'mesh'
-      });
+      const response = dispatch.dispatch(
+        undefined,
+        'remote',
+        'alice',
+        parts,
+        returnResponse,
+        undefined,
+        {
+          actorId: 'alice',
+          objectGeneration: 1n,
+          nodeRid: 'target',
+          meshName: 'mesh'
+        }
+      );
       if (!returnResponse) {
         await assert.rejects(
           response,
