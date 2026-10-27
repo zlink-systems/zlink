@@ -28,18 +28,9 @@
     "reason": "공개 동작 관찰로 바꾸려면 기존 backend provider 주입과 공개 startup·shutdown·relocation 흐름으로 실패 경계를 고정하는 통합 fixture가 필요하다. 후속 작업은 #2309에서 이어서 처리한다.",
     "accesses": {
       "03fac09765245a216e676a7c910a40a4956b164a625a6eb565b3d23e82a2a144": 1,
-      "1be8074d09fdf4d5c7d1926fbc240f0012b41d4c97ecd4debb1382deaaaf74b2": 1,
-      "2210d4dfe68eef60914f06662bfed424af406eeddbc0158407ed0843082c2a2e": 1,
-      "2cf83fd031fb73fef84e1a9a6c53641da092607f342582fdea7e896a11f31841": 1,
-      "3209020cf608b2ac100b534a2049959bf926327d65a32bb72d75110c8f0759d1": 1,
       "33310f11d3e7b5626ef777ee2831202452cfdb2bf1a12b8217ea370d42a98b79": 1,
-      "3ba0af2c82de71b11ce3d0ae3edcf62a7f5bd21ecf57645df5d729378028d6fd": 2,
-      "435a18fb7935f94fb53a63ef4b03f8641066c00ca090d0e3b6bfcdfa25d724f7": 1,
-      "4708c4186102b3be48744fda996365671256b63e356a306d48003678fd38f6ee": 1,
-      "4a35c51e7bce71c2763dde0656322fc1a6bf8dd07d3aa3b8ef57dd46a6ce035e": 3,
-      "5578c37989ae3dc6c3a0de932b44cde0dfa5b774e2316ae74fb0cd4ad0bfd847": 1,
+      "4a35c51e7bce71c2763dde0656322fc1a6bf8dd07d3aa3b8ef57dd46a6ce035e": 1,
       "64805e854dc5a37c1268cf0e3a790451b65b782e1249f7d9fdf90725677704e5": 1,
-      "65d9eafcb202c6671a61027b021c6f49882a022ab36bedbb30074e6603cf36cc": 2,
       "803fb4fd955146079ee9d7f2cfd9553d9529c9d7e0df02e482119a02937f0cea": 1
     }
   },
@@ -372,7 +363,6 @@
   "zlink-framework-core/src/test/java/systems/zlink/framework/runtime/channels/ZLinkChannelShutdownInFlightTest.java": {
     "reason": "공개 동작 관찰로 바꾸려면 backend socket·scheduler·종료 executor를 생성 시 주입하고 공개 submit·shutdown 결과로 수신 순서와 실패를 확인하는 fixture가 필요하다. 후속 작업은 #2309에서 이어서 처리한다.",
     "accesses": {
-      "024c2a559ebec01832d0dfc0ed8a26dcf8a22c112e4fa797df94e70e6b15e23f": 1,
       "10c782587989f8bf443eb49574494f2966bd26d75dfe28465e23ec0e0715980f": 1,
       "4f68163112e421470bee6b421b333fe7d226a99097b9756e87a6967da46efe88": 1,
       "6c4f8ad07e4fafe8ccfd740ab97463309bb8b75b9a22740ea3edb5731ec600d7": 1,
@@ -762,7 +752,6 @@
     "accesses": {
       "229411842f18d9402cadc24a732cbf2dfd944ba96e6ae4cf3ba92fc3d587449b": 1,
       "249bb1ecea483b5a7934b2aee30bf5978784a4c0d6fe9373f3313f7041830608": 4,
-      "5fd583c8a58cbf0ffc4dc27256edad081b2fd6224100648c8aa79ee3d03729dd": 1,
       "6cd299a9df1c92b3ef99f5d633be807ba0931e6d29c0b5a7db389667badfda47": 1,
       "7271639c976e434f18e5f5436418ea45ef1016772ddfaec98c2e76e0e9083a1a": 2
     }
