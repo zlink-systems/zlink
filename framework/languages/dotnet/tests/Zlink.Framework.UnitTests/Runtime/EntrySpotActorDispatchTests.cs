@@ -9541,7 +9541,7 @@ public sealed partial class EntrySpotActorDispatchTests
             {
                 var memberRef = actorRef with { ActorId = actorId };
                 if (actorId != actorRef.ActorId)
-                    await CreateTrackedLocalActorOwnershipAsync(
+                    memberRef = await CreateTrackedLocalActorOwnershipAsync(
                         runtime.Services.GetRequiredService<ZLinkLocationRuntime>().Store,
                         runtime.Services.GetRequiredService<ZLinkLocationRuntime>().OwnerToken,
                         runtime
@@ -11054,7 +11054,7 @@ public sealed partial class EntrySpotActorDispatchTests
         Assert.Null(activation.ExistingLocation);
     }
 
-    private static async ValueTask CreateTrackedLocalActorOwnershipAsync(
+    private static async ValueTask<ZLinkBackendActorRef> CreateTrackedLocalActorOwnershipAsync(
         IZLinkLocationRepository store,
         ZLinkLocationOwnerToken owner,
         ZLinkActorOwnershipCoordinator ownership,
@@ -11079,7 +11079,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 1
             )
         );
-        await ReserveAndCommitLocalAuthorityAsync(
+        var snapshot = await ReserveAndCommitLocalAuthorityAsync(
             store,
             ZLinkActorAuthorityPayloadCodec.AuthorityKey(actor.ActorId),
             ZLinkPlacementObjectKind.Actor,
@@ -11100,9 +11100,10 @@ public sealed partial class EntrySpotActorDispatchTests
         );
         Assert.NotNull(activation.Activated);
         Assert.Null(activation.ExistingLocation);
+        return actor with { Generation = snapshot.ObjectGeneration };
     }
 
-    private static async ValueTask ReserveAndCommitLocalAuthorityAsync(
+    private static async ValueTask<ZLinkAuthoritySnapshot> ReserveAndCommitLocalAuthorityAsync(
         IZLinkLocationRepository store,
         ZLinkAuthorityKey key,
         ZLinkPlacementObjectKind objectKind,
@@ -11144,9 +11145,11 @@ public sealed partial class EntrySpotActorDispatchTests
                     + $"capabilities={string.Join(',', descriptor.ObjectCapabilities.Select(static value => $"{value.ObjectKind}:{value.StableType}"))}."
             );
         }
-        Assert.IsType<ZLinkObjectCommitResult.Committed>(
-            await store.CommitAsync(reserved.Reservation, payload)
-        );
+        return Assert
+            .IsType<ZLinkObjectCommitResult.Committed>(
+                await store.CommitAsync(reserved.Reservation, payload)
+            )
+            .Snapshot;
     }
 
     [Fact]
@@ -12167,7 +12170,7 @@ public sealed partial class EntrySpotActorDispatchTests
         }
         if (includeActorFactory && preseedActorOwnership)
         {
-            await CreateTrackedLocalActorOwnershipAsync(
+            actorRef = await CreateTrackedLocalActorOwnershipAsync(
                 locationStore,
                 locationRuntime.OwnerToken,
                 locationLifecycle.ActorOwnership,
