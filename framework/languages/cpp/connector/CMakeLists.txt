@@ -245,7 +245,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_compile_features(test_connector_lifecycle PRIVATE cxx_std_20)
   target_link_libraries(test_connector_lifecycle PRIVATE zlink::stream_connector Threads::Threads)
   zlink_framework_cpp_add_boost_headers(test_connector_lifecycle)
-  set(_lifecycle_test_modes closed close_connect refused timeout)
+  set(_lifecycle_test_modes closed close_connect immediate_close_connect refused timeout)
   if(ZLINK_HTTP_CLIENT_TEST_WITH_OPENSSL)
     target_compile_definitions(test_connector_lifecycle PRIVATE
       ZLINK_CONNECTOR_LIFECYCLE_TLS
@@ -302,4 +302,32 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     set_tests_properties(test_connector_error_surface_${_mode} PROPERTIES
       LABELS "contract;connector-contract;framework-contract" TIMEOUT 15)
   endforeach()
+endif()
+
+if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
+  foreach(_test dispatch unreal_fifo wait_isolation)
+    add_executable(test_connector_${_test} tests/test_connector_${_test}.cpp)
+    target_compile_features(test_connector_${_test} PRIVATE cxx_std_20)
+    target_include_directories(test_connector_${_test} PRIVATE
+      ${CMAKE_CURRENT_LIST_DIR}/core/src
+      ${CMAKE_CURRENT_LIST_DIR}/engines/unreal/Source/ZLinkStreamConnector/Public)
+    target_link_libraries(test_connector_${_test} PRIVATE zlink::stream_connector Threads::Threads)
+    zlink_framework_cpp_add_boost_headers(test_connector_${_test})
+  endforeach()
+  target_sources(test_connector_dispatch PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_DIR}/tests/support/allocation_counter.cpp)
+  foreach(_mode immediate manual close-handoff allocations)
+    add_test(NAME test_connector_dispatch_${_mode} COMMAND test_connector_dispatch ${_mode})
+    set_tests_properties(test_connector_dispatch_${_mode} PROPERTIES
+      LABELS "contract;connector-contract;framework-contract" TIMEOUT 15)
+  endforeach()
+  foreach(_mode manual immediate)
+    add_test(NAME test_connector_wait_isolation_${_mode}
+      COMMAND test_connector_wait_isolation ${_mode})
+    set_tests_properties(test_connector_wait_isolation_${_mode} PROPERTIES
+      LABELS "contract;connector-contract;framework-contract" TIMEOUT 15)
+  endforeach()
+  add_test(NAME test_connector_unreal_fifo COMMAND test_connector_unreal_fifo)
+  set_tests_properties(test_connector_unreal_fifo PROPERTIES
+    LABELS "contract;connector-contract;framework-contract" TIMEOUT 15)
 endif()
