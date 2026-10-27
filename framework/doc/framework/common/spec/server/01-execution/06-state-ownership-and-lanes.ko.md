@@ -129,7 +129,8 @@ class SendCounter              // C3 — 증가만 한다
 한 컴포넌트 안에 세 종류가 섞여 있으면 **C2가 이긴다** — 가장 강한 요구가 그
 컴포넌트 전체의 메커니즘을 결정한다. 컴포넌트를 부분적으로만 lane으로 옮기고 나머지를
 concurrent map이나 별도 lock으로 남기면, C2가 막으려는 교차 불변식 위반이 그 경계에서
-다시 나타난다.
+다시 나타난다. Request terminal 표와 deadline 인덱스의 상태 분류 및 소유 경계는
+[Submit과 완료 「10.1」](01-submit-and-completion.ko.md#101-pending-entry와-deadline-인덱스)이 정한다.
 
 **C2를 concurrent map으로 치환하지 않는다.** Concurrent map은 map 하나에 대한 개별
 연산만 원자적으로 만든다. 여러 collection·field에 걸친 불변식은 map 단위의 원자성으로
