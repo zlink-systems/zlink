@@ -1,5 +1,15 @@
+const { createRelayHost } = require('./fixtures/relay-host');
+const startedHosts = [];
+function createTopologyHost(...args) {
+  const fixture = createRelayHost(...args);
+  startedHosts.push(fixture.host);
+  return fixture;
+}
 const assert = require('node:assert/strict');
 const test = require('node:test');
+test.afterEach(async () => {
+  for (const host of startedHosts.splice(0)) await internal.ZLinkFrameworkRuntimeHost.prototype.stop.call(host);
+});
 
 const framework = require('../../packages/framework/dist');
 const internal = require('../../packages/framework/dist/internal');
@@ -342,7 +352,7 @@ test('ClientServer and Fanout topology disable readiness during host relocation 
 });
 
 test('Stopped host observation delivers terminal status and completes', async () => {
-  const host = new internal.ZLinkFrameworkRuntimeHost({
+  const { host } = createTopologyHost({
     registration: internal.createFrameworkRegistration()
   });
   await host.shutdown({ deadlineMs: 1000 });
@@ -355,7 +365,7 @@ test('Stopped host observation delivers terminal status and completes', async ()
 });
 
 test('Framework runtime shutdown surface emits status and Nest exports topology tokens', async () => {
-  const host = new internal.ZLinkFrameworkRuntimeHost({
+  const { host } = createTopologyHost({
     registration: internal.createFrameworkRegistration()
   });
   const events = host.observe()[Symbol.asyncIterator]();
@@ -387,7 +397,7 @@ test('Manual RouteMesh without a Location Store reports ready when the host serv
       .routingId(`manual-ready-node-${process.pid}`);
     mesh.channel(meshName).server();
   });
-  const host = new internal.ZLinkFrameworkRuntimeHost({ registration });
+  const { host } = createTopologyHost({ registration });
 
   try {
     await host.start();
@@ -532,7 +542,7 @@ test(
   'Host, ClientServer and fanout observation starts with the current complete status',
   { timeout: 1000 },
   async () => {
-    const host = new internal.ZLinkFrameworkRuntimeHost({
+    const { host } = createTopologyHost({
       registration: internal.createFrameworkRegistration()
     });
     const manager = {
@@ -568,30 +578,21 @@ test(
 
 test('Framework shutdown disposes the registered Location Store after runtime cleanup', async () => {
   let disposed = 0;
+  const provider = new internal.ZLinkInMemoryProviderLocationStore();
   const store = {
-    async read() {
-      return { kind: 'missing', storeNow: new Date(0) };
-    },
-    async write() {
-      return { kind: 'conflict', storeNow: new Date(0) };
-    },
-    async scan() {
-      return { kind: 'expired' };
-    },
+    read: provider.read.bind(provider),
+    write: provider.write.bind(provider),
+    scan: provider.scan.bind(provider),
     dispose() {
       disposed += 1;
     }
   };
-  const host = new internal.ZLinkFrameworkRuntimeHost({
+  const { host } = createTopologyHost({
     registration: internal.createFrameworkRegistration({
       locations: { storeInstance: store }
     })
   });
-  host.executionState = {
-    abortController: new AbortController(),
-    listenerTasks: [],
-    async dispose() {}
-  };
+  await host.start();
 
   const result = await host.shutdown({ deadlineMs: 1000 });
 
@@ -646,7 +647,7 @@ test('Shutdown seals active RouteMesh ClientServer and Fanout observers with ter
             peerChannels: () => ({ names: [], weights: [] })
           }
         : undefined,
-    hostState: () => host.runtimeState,
+    hostState: () => host.status.state,
     admission: new internal.ZLinkRuntimeAdmissionGate(),
     publishRetiring: async () => {},
     rollbackRetiring: async () => {},
@@ -656,20 +657,12 @@ test('Shutdown seals active RouteMesh ClientServer and Fanout observers with ter
     cleanupHostResources: async () => {},
     forceStopResources: async () => {}
   });
-  const host = new internal.ZLinkFrameworkRuntimeHost({
+  const { host } = createTopologyHost({
     registration: internal.createFrameworkRegistration()
-  });
-  host.executionState = { abortController: new AbortController() };
-  host.runtimeState = framework.ZLinkFrameworkRuntimeState.Serving;
-  routeMesh.markServing();
-  host.channelRuntime = manager;
-  host.routeMeshCoordinator = routeMesh;
+  }, { createRouteMeshCoordinator: () => routeMesh });
+  await host.start();
   host.clientServerRuntime = clientServer;
   host.fanoutRuntime = fanout;
-  host.stop = async () => {
-    host.stopTopologyObservers();
-    host.executionState = undefined;
-  };
 
   const routeEvents = routeMesh.observe('game')[Symbol.asyncIterator]();
   const clientEvents = clientServer.observe('orders')[Symbol.asyncIterator]();
@@ -696,15 +689,15 @@ test('Shutdown seals active RouteMesh ClientServer and Fanout observers with ter
   }
 });
 
-test('Topology observer callback failures do not change host lifecycle transitions', () => {
-  const host = new internal.ZLinkFrameworkRuntimeHost({
+test('Topology observer callback failures do not change host lifecycle transitions', async () => {
+  const { host, coordinator } = createTopologyHost({
     registration: internal.createFrameworkRegistration()
   });
-  host.routeMeshCoordinator = {
+  Object.assign(coordinator, {
     hostStateChanged() {
       throw new Error('route observer failed');
     }
-  };
+  });
   host.clientServerRuntime = {
     hostStateChanged() {
       throw new Error('client observer failed');
@@ -716,8 +709,10 @@ test('Topology observer callback failures do not change host lifecycle transitio
     }
   };
 
-  assert.doesNotThrow(() => host.setRuntimeState(framework.ZLinkFrameworkRuntimeState.Draining));
+  const shutdown = host.shutdown({ deadlineMs: 1000 });
   assert.equal(host.status.state, framework.ZLinkFrameworkRuntimeState.Draining);
+  await assert.doesNotReject(shutdown);
+  assert.equal(host.status.state, framework.ZLinkFrameworkRuntimeState.Stopped);
 });
 
 test('Relocate rejects local manual topology before changing host state and Shutdown remains available', async () => {
@@ -726,11 +721,11 @@ test('Relocate rejects local manual topology before changing host state and Shut
       orders: { client: { manualConnections: ['tcp://127.0.0.1:19001'] } }
     }
   });
-  const host = new internal.ZLinkFrameworkRuntimeHost({ registration });
+  const { host } = createTopologyHost({ registration });
 
   // The focused contract test enters the observable Serving state without
   // starting transport resources; the blocker must run before touching them.
-  host.runtimeState = framework.ZLinkFrameworkRuntimeState.Serving;
+  await host.start();
   assert.deepEqual(
     await host.relocate({
       mode: framework.ZLinkFrameworkRelocationMode.PlannedMaintenance
@@ -751,10 +746,10 @@ test('Relocate rejects local manual topology before changing host state and Shut
 });
 
 test('Concurrent relocation with a different deadline joins the running operation', async () => {
-  const host = new internal.ZLinkFrameworkRuntimeHost({
+  const { host } = createTopologyHost({
     registration: internal.createFrameworkRegistration()
   });
-  host.runtimeState = framework.ZLinkFrameworkRuntimeState.Serving;
+  await host.start();
 
   const first = host.relocate({
     mode: framework.ZLinkFrameworkRelocationMode.PlannedMaintenance,
@@ -777,10 +772,10 @@ test('Concurrent relocation with a different deadline joins the running operatio
 });
 
 test('Rejected concurrent relocation reports the requested target version', async () => {
-  const host = new internal.ZLinkFrameworkRuntimeHost({
+  const { host } = createTopologyHost({
     registration: internal.createFrameworkRegistration()
   });
-  host.runtimeState = framework.ZLinkFrameworkRuntimeState.Serving;
+  await host.start();
 
   const running = host.relocate({
     mode: framework.ZLinkFrameworkRelocationMode.PlannedMaintenance,
@@ -801,32 +796,31 @@ test('Rejected concurrent relocation reports the requested target version', asyn
   await running;
 });
 
-test('Serving readiness stays public while a sealed admission gate stops new work', () => {
-  const host = new internal.ZLinkFrameworkRuntimeHost({
+test('Serving readiness stays public while a sealed admission gate stops new work', async () => {
+  const { host, admission } = createTopologyHost({
     registration: internal.createFrameworkRegistration()
   });
-  host.runtimeState = framework.ZLinkFrameworkRuntimeState.Serving;
-  host.admission.register('mesh-a');
+  await host.start();
+  admission.register('mesh-a');
   assert.equal(host.status.isReady, true);
   assert.equal(host.status.acceptingWork, true);
 
-  host.admission.seal('mesh-a');
+  admission.seal('mesh-a');
   assert.equal(host.status.state, framework.ZLinkFrameworkRuntimeState.Serving);
   assert.equal(host.status.isReady, true);
   assert.equal(host.status.acceptingWork, false);
 });
 
 test('Relocate keeps Serving when descriptor publication is reversibly rolled back', async () => {
-  const host = new internal.ZLinkFrameworkRuntimeHost({
+  const { host, coordinator } = createTopologyHost({
     registration: internal.createFrameworkRegistration()
   });
-  host.executionState = { abortController: new AbortController() };
-  host.runtimeState = framework.ZLinkFrameworkRuntimeState.Serving;
-  host.routeMeshCoordinator = {
+  await host.start();
+  Object.assign(coordinator, {
     async prepareHostRetire() {
       return 'store_unavailable';
     }
-  };
+  });
 
   assert.deepEqual(
     await host.relocate({
@@ -844,16 +838,15 @@ test('Relocate keeps Serving when descriptor publication is reversibly rolled ba
 });
 
 test('Relocate reports an irreversible descriptor rollback failure without claiming success', async () => {
-  const host = new internal.ZLinkFrameworkRuntimeHost({
+  const { host, coordinator } = createTopologyHost({
     registration: internal.createFrameworkRegistration()
   });
-  host.executionState = { abortController: new AbortController() };
-  host.runtimeState = framework.ZLinkFrameworkRuntimeState.Serving;
-  host.routeMeshCoordinator = {
+  await host.start();
+  Object.assign(coordinator, {
     async prepareHostRetire() {
       throw new internal.ZLinkRetiringRollbackError();
     }
-  };
+  });
   host.stop = async () => {};
 
   const result = await host.relocate({
@@ -865,12 +858,11 @@ test('Relocate reports an irreversible descriptor rollback failure without claim
 });
 
 test('Relocate preserves an incompatible participant state as StateIncompatible', async () => {
-  const host = new internal.ZLinkFrameworkRuntimeHost({
+  const { host, coordinator } = createTopologyHost({
     registration: internal.createFrameworkRegistration()
   });
-  host.executionState = { abortController: new AbortController() };
-  host.runtimeState = framework.ZLinkFrameworkRuntimeState.Serving;
-  host.routeMeshCoordinator = {
+  await host.start();
+  Object.assign(coordinator, {
     async prepareHostRetire() {
       return 'prepared';
     },
@@ -884,7 +876,7 @@ test('Relocate preserves an incompatible participant state as StateIncompatible'
       };
     },
     async restoreHostServing() {}
-  };
+  });
 
   const result = await host.relocate({
     mode: framework.ZLinkFrameworkRelocationMode.PlannedMaintenance
@@ -895,11 +887,10 @@ test('Relocate preserves an incompatible participant state as StateIncompatible'
 });
 
 test('Relocate spends one absolute deadline across preflight publication and resource movement', async () => {
-  const host = new internal.ZLinkFrameworkRuntimeHost({
+  const { host, coordinator } = createTopologyHost({
     registration: internal.createFrameworkRegistration()
   });
-  host.executionState = { abortController: new AbortController() };
-  host.runtimeState = framework.ZLinkFrameworkRuntimeState.Serving;
+  await host.start();
   let preflightDeadlineAt;
   let publicationBudget;
   let movementBudget;
@@ -908,7 +899,7 @@ test('Relocate spends one absolute deadline across preflight publication and res
     await new Promise((resolve) => setTimeout(resolve, 15));
     return undefined;
   };
-  host.routeMeshCoordinator = {
+  Object.assign(coordinator, {
     async prepareHostRetire(deadlineMs) {
       publicationBudget = deadlineMs;
       await new Promise((resolve) => setTimeout(resolve, 15));
@@ -918,7 +909,7 @@ test('Relocate spends one absolute deadline across preflight publication and res
       movementBudget = deadlineMs;
       return { kind: 'drained' };
     }
-  };
+  });
   host.publishHostRelocated = async () => {};
 
   const startedAt = performance.now();
@@ -988,7 +979,7 @@ test('Relocation manual topology classification covers every local service regis
 });
 
 test('Relocation requires explicit valid mode and rolling update target version', async () => {
-  const host = new internal.ZLinkFrameworkRuntimeHost({
+  const { host } = createTopologyHost({
     registration: internal.createFrameworkRegistration({ applicationVersion: 3n })
   });
   assert.throws(() => host.relocate({}), /mode is required/);
@@ -1011,19 +1002,18 @@ test('Relocation requires explicit valid mode and rolling update target version'
 });
 
 test('Successful relocation leaves infrastructure started until explicit shutdown', async () => {
-  const host = new internal.ZLinkFrameworkRuntimeHost({
+  const { host, coordinator } = createTopologyHost({
     registration: internal.createFrameworkRegistration({ applicationVersion: 3n })
   });
-  host.executionState = { abortController: new AbortController() };
-  host.runtimeState = framework.ZLinkFrameworkRuntimeState.Serving;
-  host.routeMeshCoordinator = {
+  await host.start();
+  Object.assign(coordinator, {
     async prepareHostRetire() {
       return 'prepared';
     },
     async relocateHost() {
       return { kind: 'drained' };
     }
-  };
+  });
 
   const result = await host.relocate({
     mode: framework.ZLinkFrameworkRelocationMode.RollingUpdate,
@@ -1040,11 +1030,10 @@ test('Successful relocation leaves infrastructure started until explicit shutdow
 });
 
 test('Shutdown stops new relocation units and waits only for admitted work to commit', async () => {
-  const host = new internal.ZLinkFrameworkRuntimeHost({
+  const { host, coordinator } = createTopologyHost({
     registration: internal.createFrameworkRegistration()
   });
-  host.executionState = { abortController: new AbortController() };
-  host.runtimeState = framework.ZLinkFrameworkRuntimeState.Serving;
+  await host.start();
   let relocationStarted;
   let releaseAdmitted;
   const started = new Promise((resolve) => {
@@ -1054,7 +1043,7 @@ test('Shutdown stops new relocation units and waits only for admitted work to co
     releaseAdmitted = resolve;
   });
   const events = [];
-  host.routeMeshCoordinator = {
+  Object.assign(coordinator, {
     async prepareHostRetire() {
       return 'prepared';
     },
@@ -1073,7 +1062,7 @@ test('Shutdown stops new relocation units and waits only for admitted work to co
       events.push('shutdown:drain');
       return { kind: 'drained' };
     }
-  };
+  });
   host.stop = async () => {
     events.push('shutdown:stop');
   };
@@ -1106,14 +1095,13 @@ test('Shutdown stops new relocation units and waits only for admitted work to co
 });
 
 test('concurrent Relocate shares identical options and rejects a different operation', async () => {
-  const host = new internal.ZLinkFrameworkRuntimeHost({
+  const { host, coordinator } = createTopologyHost({
     registration: internal.createFrameworkRegistration({ applicationVersion: 3n })
   });
-  host.executionState = { abortController: new AbortController() };
-  host.runtimeState = framework.ZLinkFrameworkRuntimeState.Serving;
+  await host.start();
   let release;
   let prepares = 0;
-  host.routeMeshCoordinator = {
+  Object.assign(coordinator, {
     async prepareHostRetire() {
       prepares++;
       await new Promise((resolve) => {
@@ -1121,7 +1109,7 @@ test('concurrent Relocate shares identical options and rejects a different opera
       });
       return 'store_unavailable';
     }
-  };
+  });
 
   const first = host.relocate({
     mode: framework.ZLinkFrameworkRelocationMode.PlannedMaintenance
@@ -1141,15 +1129,15 @@ test('concurrent Relocate shares identical options and rejects a different opera
 });
 
 test('application shutdown hook tears down without implicitly relocating', async () => {
-  const host = new internal.ZLinkFrameworkRuntimeHost({
+  const { host, coordinator } = createTopologyHost({
     registration: internal.createFrameworkRegistration()
   });
   let stopped = 0;
-  host.routeMeshCoordinator = {
+  Object.assign(coordinator, {
     async drainHost() {
       throw new Error('shutdown hook must not relocate');
     }
-  };
+  });
   host.stop = async () => {
     stopped++;
   };
@@ -1159,12 +1147,12 @@ test('application shutdown hook tears down without implicitly relocating', async
 });
 
 test('Shared shutdown keeps the first absolute deadline', async () => {
-  const host = new internal.ZLinkFrameworkRuntimeHost({
+  const { host, coordinator } = createTopologyHost({
     registration: internal.createFrameworkRegistration()
   });
   let finishShutdown;
   let observedDeadline;
-  host.routeMeshCoordinator.shutdownHost = async (deadline) => {
+  coordinator.shutdownHost = async (deadline) => {
     observedDeadline = deadline;
     await new Promise((resolve) => {
       finishShutdown = resolve;
@@ -1173,7 +1161,7 @@ test('Shared shutdown keeps the first absolute deadline', async () => {
   };
   const first = host.shutdown({ deadlineMs: 50 });
   const joined = host.shutdown({ deadlineMs: 30_000 });
-  assert.equal(host.runtimeDeadline, observedDeadline);
+  assert.equal(host.status.deadline, observedDeadline);
   finishShutdown();
   assert.equal(await first, await joined);
 });
@@ -1188,7 +1176,7 @@ test('Host Draining publishes weights only for locally registered server channel
     mesh.channel('server-channel').server();
     mesh.channel('client-channel').client();
   });
-  const host = new internal.ZLinkFrameworkRuntimeHost({ registration });
+  const { host } = createTopologyHost({ registration });
   await host.start();
   const result = await host.shutdown({ deadlineMs: 1000 });
   assert.equal(result.outcome, framework.ZLinkFrameworkTerminationOutcome.Stopped);
@@ -1198,7 +1186,7 @@ test('Host Draining publishes weights only for locally registered server channel
 test('Shutdown deadline includes final owned resource cleanup', async (t) => {
   let nowMs = 0;
   t.mock.method(performance, 'now', () => nowMs);
-  const host = new internal.ZLinkFrameworkRuntimeHost({
+  const { host } = createTopologyHost({
     registration: internal.createFrameworkRegistration()
   });
   host.stop = async () => {
@@ -1210,7 +1198,7 @@ test('Shutdown deadline includes final owned resource cleanup', async (t) => {
 });
 
 test('Host Observe retains current status before lifecycle changes', async () => {
-  const host = new internal.ZLinkFrameworkRuntimeHost({
+  const { host } = createTopologyHost({
     registration: internal.createFrameworkRegistration()
   });
   const expected = host.status;
@@ -1227,7 +1215,7 @@ test('Host Observe retains current status before lifecycle changes', async () =>
 });
 
 test('Host Observe coalesces an unread initial status with lifecycle changes', async () => {
-  const host = new internal.ZLinkFrameworkRuntimeHost({
+  const { host } = createTopologyHost({
     registration: internal.createFrameworkRegistration()
   });
   const events = host.observe()[Symbol.asyncIterator]();
