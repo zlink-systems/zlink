@@ -133,6 +133,13 @@ lease fencing은 `target_closed`로 기록한다.
 `reply_path_missing`, `unexpected_reply`, `backpressure`, `stale_target`,
 `shutdown`.
 
+기존 admission·Message Follow 규칙이 local dispatch 대상을 확정한 뒤 그 대상의 packet handler 조회만
+실패하면 `no_handler`다. 그 규칙이 대상 Actor·Spot·node 또는 유효한 target route가 없다고 확정해 전달을
+끝내면 `stale_target`이다. 대상이 있는지는 packet이 지정한 dispatch 대상과 그 경로에 적용되는 identity·fence
+규칙으로 판단하며, Follow가 진행 중이면 대상 부재를 terminal 실패로 확정하지 않는다. 이 구분은
+`zlink.dispatch_error`와 [runtime metrics의 message drop](02-runtime-metrics.ko.md#5-one-way-message-drop)에
+쓴다. `zlink.message_flow`의 reason은 위의 닫힌 목록을 따른다.
+
 | `action` | Framework가 실패를 처리한 결과 |
 |---|---|
 | `reply_error` | Reply 전달 경로가 있는 request에 error reply를 보냈다. |
