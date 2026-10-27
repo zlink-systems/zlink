@@ -21,6 +21,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorReceive
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.spots.ZLinkSpotSerialExecutor;
+import systems.zlink.framework.runtime.spots.ZLinkSpotSerialExecutorTesting;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Proxy;
@@ -1389,13 +1390,7 @@ final class ZLinkActorDispatchSerialsTest {
     }
 
     private static ZLinkActorDispatchTarget actorTarget(ZLinkStateLane stateLane) {
-        return new ZLinkSpotSerialExecutor(
-                new ZLinkSerialExecutionQueue(Runnable::run, ZLinkExecutionLanePolicy.spot()),
-                new ZLinkSerialExecutionQueue(Runnable::run, ZLinkExecutionLanePolicy.spot()),
-                Runnable::run,
-                ZLinkUserSpotExecutionMode.PER_ACTOR,
-                false,
-                stateLane);
+        return ZLinkSpotSerialExecutorTesting.inlinePerActor(stateLane);
     }
 
     private static void closeSpotExecutor(ZLinkSpotSerialExecutor executor) throws Exception {

@@ -68,7 +68,7 @@ public final class ZLinkSpotSerialExecutor implements ZLinkActorDispatchTarget {
                 new ZLinkStateLane());
     }
 
-    public ZLinkSpotSerialExecutor(
+    ZLinkSpotSerialExecutor(
             ZLinkSerialExecutionQueue spotQueue,
             ZLinkSerialExecutionQueue infrastructureQueue,
             Executor serialExecutor,
