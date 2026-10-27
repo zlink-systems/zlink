@@ -1,5 +1,30 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #include "../support/session_disconnect_probe_spot.hpp"
+#include <zlink.hpp>
+#if defined(ZLINK_TEST_CONNECT_COUNT)
+#include <zlink.h>
+#include <atomic>
+
+std::atomic<std::size_t> native_connect_calls{0};
+std::atomic<std::size_t> native_disconnect_calls{0};
+std::atomic<std::size_t> native_call_sequence{0};
+std::atomic<std::size_t> last_native_connect{0};
+std::atomic<std::size_t> last_native_disconnect{0};
+extern "C" zlink_connect_result_t __real_zlink_connect (void *, const char *);
+extern "C" zlink_connect_result_t __real_zlink_disconnect (void *, const char *);
+extern "C" zlink_connect_result_t __wrap_zlink_connect (void *socket, const char *endpoint)
+{
+    ++native_connect_calls;
+    last_native_connect = ++native_call_sequence;
+    return __real_zlink_connect (socket, endpoint);
+}
+extern "C" zlink_connect_result_t __wrap_zlink_disconnect (void *socket, const char *endpoint)
+{
+    ++native_disconnect_calls;
+    last_native_disconnect = ++native_call_sequence;
+    return __real_zlink_disconnect (socket, endpoint);
+}
+#endif
 #include "../support/runtime_failure_fixture.hpp"
 
 #include "runtime/mesh/mesh_node_runtime.hpp"
@@ -3207,8 +3232,82 @@ int run_cross_process_delivery ()
 #endif
 } // namespace
 
+void verify_repeated_mesh_connect_keeps_one_physical_connection ()
+{
+    namespace mesh = zlink::framework::runtime::mesh;
+    for (const bool typed : {false, true}) {
+        auto context = std::make_shared<zlink::context_t> ();
+        zlink::router_socket_t peer (*context);
+        peer.options ().handover (true);
+        peer.set_routing_id (zlink::routing_id_t::from (std::string ("intent-peer")));
+        const auto endpoint = typed ? "inproc://typed-connect-intent" : "inproc://connect-intent";
+        peer.bind (endpoint);
+        auto monitor = peer.monitor_open (zlink::monitor_event::connection_ready);
+        mesh::raw_mesh_node_options_t options;
+        options.descriptor.mesh_name = "connect-intent";
+        options.descriptor.node_routing_id = {'l', 'o', 'c', 'a', 'l'};
+        options.descriptor.lifecycle_generation = 1;
+        options.descriptor.descriptor_revision = 1;
+        options.descriptor.advertised_endpoint = std::string (endpoint) + "-local";
+        options.runtime_failures =
+          std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ();
+        mesh::raw_mesh_node_owner_t local (std::move (options), context);
+        local.start ();
+        auto expected = local.topology ().local_descriptor ();
+        expected.node_routing_id = {'i', 'n', 't', 'e', 'n', 't', '-', 'p', 'e', 'e', 'r'};
+        expected.advertised_endpoint = endpoint;
+        const auto connect = [&] {
+            return typed ? local.connect_peer (endpoint, expected) : local.connect_peer (endpoint);
+        };
+        const auto wait_ready = [&] (std::chrono::milliseconds timeout) {
+            zlink::poller_t poller;
+            poller.add (monitor, zlink::poll_event_flag_t::pollin, 1);
+            zlink::poll_event_t event;
+            if (poller.wait (&event, 1, timeout) != 1)
+                return false;
+            return monitor.recv (zlink::recv_flags_t::dontwait).has_value ();
+        };
+        assert (connect ());
+        assert (wait_ready (2s));
+#if defined(ZLINK_TEST_CONNECT_COUNT)
+        const auto first_connects = native_connect_calls.load ();
+#endif
+        assert (connect ());
+        assert (!wait_ready (100ms));
+#if defined(ZLINK_TEST_CONNECT_COUNT)
+        assert (native_connect_calls == first_connects);
+        if (typed) {
+            for (int change = 0; change != 3; ++change) {
+                if (change == 0)
+                    expected.security_identity = "replacement-security";
+                else if (change == 1)
+                    ++expected.lifecycle_generation;
+                else
+                    expected.node_routing_id.push_back ('2');
+                const auto connects = native_connect_calls.load ();
+                const auto disconnects = native_disconnect_calls.load ();
+                assert (connect ());
+                assert (native_connect_calls == connects + 1);
+                assert (native_disconnect_calls == disconnects + 1);
+                assert (last_native_disconnect < last_native_connect);
+                assert (connect ());
+                assert (native_connect_calls == connects + 1);
+            }
+        }
+#endif
+        local.disconnect_peer (endpoint);
+        assert (connect ());
+        assert (wait_ready (2s));
+        local.close ();
+    }
+}
+
 int main (int argc, char **argv)
 {
+    if (argc == 2 && std::string_view (argv[1]) == "--connect-intent") {
+        verify_repeated_mesh_connect_keeps_one_physical_connection ();
+        return 0;
+    }
     if ((argc == 2 || argc == 3) && std::string_view (argv[1]) == "--automatic-intent") {
         const int repetitions = argc == 3 ? std::stoi (argv[2]) : 1;
         if (repetitions <= 0)

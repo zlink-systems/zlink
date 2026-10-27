@@ -679,64 +679,36 @@ service_mailbox_t &raw_mesh_node_owner_t::mailbox () noexcept
     return _mailbox;
 }
 
-bool raw_mesh_node_owner_t::connect_peer (const std::string &endpoint)
-{
-    return _lane
-      .run ([this, &endpoint] {
-          std::lock_guard lifecycle_lock (_lifecycle_mutex);
-          if (!_router || endpoint.empty ()) {
-              return false;
-          }
-          try {
-              std::lock_guard socket_lock (*_socket_mutex);
-              trace_mesh ("connect endpoint=" + endpoint);
-              _router->connect (endpoint);
-              _outbound_endpoints.insert (endpoint);
-              return true;
-          }
-          catch (const zlink::binding_error_t &rejection) {
-              // Mesh node: a rejection fails only this attempt and keeps no intent.
-              trace_mesh ("connect rejected endpoint=" + endpoint + " error=" + rejection.what ());
-              return false;
-          }
-      })
-      .get ();
-}
-
-bool raw_mesh_node_owner_t::connect_peer (const std::string &endpoint,
-                                          service_node_descriptor_t expected_descriptor)
+bool raw_mesh_node_owner_t::connect_peer (
+  const std::string &endpoint, std::optional<service_node_descriptor_t> expected_descriptor)
 {
     return _lane
       .run ([this, &endpoint, expected_descriptor = std::move (expected_descriptor)] () mutable {
           std::lock_guard lifecycle_lock (_lifecycle_mutex);
-          if (!_router || endpoint.empty ()) {
+          if (!_router || endpoint.empty ())
               return false;
+          const auto expectation =
+            expected_descriptor
+              ? std::make_optional (std::make_tuple (expected_descriptor->node_routing_id,
+                                                     expected_descriptor->security_identity,
+                                                     expected_descriptor->lifecycle_generation))
+              : std::nullopt;
+          const auto existing = _outbound_endpoints.find (endpoint);
+          if (existing != _outbound_endpoints.end ()) {
+              if (existing->second == expectation) {
+                  if (expected_descriptor)
+                      _expected_peers.insert_or_assign (expected_descriptor->node_routing_id,
+                                                        *expected_descriptor);
+                  return true;
+              }
           }
-          const auto is_stale_same_endpoint = [&endpoint,
-                                               &expected_descriptor] (const auto &entry) {
-              return entry.first != expected_descriptor.node_routing_id
-                     && entry.second.advertised_endpoint == endpoint;
-          };
-          const auto endpoint_retargeted =
-            std::any_of (_expected_peers.begin (), _expected_peers.end (), is_stale_same_endpoint);
           try {
               std::lock_guard socket_lock (*_socket_mutex);
-              trace_mesh ("connect endpoint=" + endpoint
-                          + " expected=" + owner_key (expected_descriptor.node_routing_id));
-              if (endpoint_retargeted && _outbound_endpoints.contains (endpoint)) {
-                  // connect_routing_id is captured only when a new connect intent is
-                  // created. Retire the stale same-endpoint intent before assigning
-                  // the replacement RID, otherwise reconnect keeps publishing the
-                  // previous alias and RouteMesh can never admit the replacement.
+              if (existing != _outbound_endpoints.end ()) {
                   _router->disconnect (endpoint);
-              }
-              _router->options ().connect_routing_id (
-                zlink::routing_id_t::from (expected_descriptor.node_routing_id));
-              _router->connect (endpoint);
-              _outbound_endpoints.insert (endpoint);
-              if (endpoint_retargeted) {
+                  _outbound_endpoints.erase (existing);
                   for (auto peer = _expected_peers.begin (); peer != _expected_peers.end ();) {
-                      if (!is_stale_same_endpoint (*peer)) {
+                      if (peer->second.advertised_endpoint != endpoint) {
                           ++peer;
                           continue;
                       }
@@ -745,19 +717,24 @@ bool raw_mesh_node_owner_t::connect_peer (const std::string &endpoint,
                       end_peer_operations_if_disconnected_locked (retired_rid);
                   }
               }
-              _expected_peers.insert_or_assign (expected_descriptor.node_routing_id,
-                                                expected_descriptor);
+              if (expected_descriptor)
+                  _router->options ().connect_routing_id (
+                    zlink::routing_id_t::from (expected_descriptor->node_routing_id));
+              _router->connect (endpoint);
+              _outbound_endpoints.emplace (endpoint, expectation);
+              if (expected_descriptor)
+                  _expected_peers.insert_or_assign (expected_descriptor->node_routing_id,
+                                                    *expected_descriptor);
               return true;
           }
           catch (const zlink::binding_error_t &rejection) {
-              // Mesh node: a rejection fails only this attempt and keeps no intent.
+              // A rejected submission has no transport registration to reuse.
               trace_mesh ("connect rejected endpoint=" + endpoint + " error=" + rejection.what ());
               return false;
           }
       })
       .get ();
 }
-
 void raw_mesh_node_owner_t::disconnect_peer (const std::string &endpoint) noexcept
 {
     (void) disconnect_peer ({}, endpoint);
