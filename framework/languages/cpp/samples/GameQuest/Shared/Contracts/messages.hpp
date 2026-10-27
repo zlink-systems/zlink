@@ -2,6 +2,7 @@
 #pragma once
 
 #include <nlohmann/json.hpp>
+#include <zlink/json_profile.hpp>
 
 #include <cstdint>
 #include <string>
@@ -235,288 +236,236 @@ struct server_assertion_res_t
     std::vector<std::string> evidence;
 };
 
-inline void to_json (nlohmann::json &json, const kill_monster_req_t &value)
-{
-    json = {{"playerId", value.player_id},
-            {"monsterId", value.monster_id},
-            {"areaId", value.area_id},
-            {"idempotencyKey", value.idempotency_key}};
-}
-inline void from_json (const nlohmann::json &json, kill_monster_req_t &value)
-{
-    json.at ("playerId").get_to (value.player_id);
-    json.at ("monsterId").get_to (value.monster_id);
-    json.at ("areaId").get_to (value.area_id);
-    json.at ("idempotencyKey").get_to (value.idempotency_key);
-}
-inline void to_json (nlohmann::json &json, const kill_monster_res_t &value)
-{
-    json = {{"eventId", value.event_id}};
-}
-inline void from_json (const nlohmann::json &json, kill_monster_res_t &value)
-{
-    json.at ("eventId").get_to (value.event_id);
-}
-inline void to_json (nlohmann::json &json, const collect_item_req_t &value)
-{
-    json = {{"playerId", value.player_id},
-            {"itemId", value.item_id},
-            {"count", value.count},
-            {"idempotencyKey", value.idempotency_key}};
-}
-inline void from_json (const nlohmann::json &json, collect_item_req_t &value)
-{
-    json.at ("playerId").get_to (value.player_id);
-    json.at ("itemId").get_to (value.item_id);
-    json.at ("count").get_to (value.count);
-    json.at ("idempotencyKey").get_to (value.idempotency_key);
-}
-inline void to_json (nlohmann::json &json, const enter_area_req_t &value)
-{
-    json = {{"playerId", value.player_id},
-            {"areaId", value.area_id},
-            {"idempotencyKey", value.idempotency_key}};
-}
-inline void from_json (const nlohmann::json &json, enter_area_req_t &value)
-{
-    json.at ("playerId").get_to (value.player_id);
-    json.at ("areaId").get_to (value.area_id);
-    json.at ("idempotencyKey").get_to (value.idempotency_key);
-}
-inline void to_json (nlohmann::json &json, const join_session_req_t &value)
-{
-    json = {{"playerId", value.player_id}};
-}
-inline void from_json (const nlohmann::json &json, join_session_req_t &value)
-{
-    json.at ("playerId").get_to (value.player_id);
-}
-inline void to_json (nlohmann::json &json, const stored_quest_event_t &value)
-{
-    json = {
-      {"eventId", value.event_id},
-      {"playerId", value.player_id},
-      {"questId", value.quest_id},
-      {"type", value.type},
-      {"payload", value.payload},
-      {"sourceEventId",
-       value.source_event_id ? nlohmann::json (*value.source_event_id) : nlohmann::json (nullptr)},
-      {"version", value.version},
-      {"createdAtUnixMs", value.created_at_unix_ms}};
-}
-inline void from_json (const nlohmann::json &json, stored_quest_event_t &value)
-{
-    json.at ("eventId").get_to (value.event_id);
-    json.at ("playerId").get_to (value.player_id);
-    json.at ("questId").get_to (value.quest_id);
-    json.at ("type").get_to (value.type);
-    value.payload = json.value ("payload", nlohmann::json::object ());
-    if (!json.contains ("sourceEventId") || json.at ("sourceEventId").is_null ()) {
-        value.source_event_id = std::nullopt;
-    } else {
-        value.source_event_id = json.at ("sourceEventId").get<std::string> ();
-    }
-    value.version = json.value ("version", 0LL);
-    value.created_at_unix_ms = json.value ("createdAtUnixMs", 0LL);
-}
-inline void to_json (nlohmann::json &json, const quest_progress_t &value)
-{
-    json = {{"playerId", value.player_id},
-            {"questId", value.quest_id},
-            {"status", value.status},
-            {"currentCount", value.current_count},
-            {"requiredCount", value.required_count},
-            {"lastSourceEventId",
-             value.last_source_event_id ? nlohmann::json (*value.last_source_event_id)
-                                        : nlohmann::json (nullptr)},
-            {"version", value.version},
-            {"updatedAtUnixMs", value.updated_at_unix_ms}};
-}
-inline void from_json (const nlohmann::json &json, quest_progress_t &value)
-{
-    json.at ("playerId").get_to (value.player_id);
-    json.at ("questId").get_to (value.quest_id);
-    json.at ("status").get_to (value.status);
-    json.at ("currentCount").get_to (value.current_count);
-    json.at ("requiredCount").get_to (value.required_count);
-    if (!json.contains ("lastSourceEventId") || json.at ("lastSourceEventId").is_null ()) {
-        value.last_source_event_id = std::nullopt;
-    } else {
-        value.last_source_event_id = json.at ("lastSourceEventId").get<std::string> ();
-    }
-    value.version = json.value ("version", 0LL);
-    json.at ("updatedAtUnixMs").get_to (value.updated_at_unix_ms);
-}
-inline void to_json (nlohmann::json &json, const join_session_res_t &value)
-{
-    json = {{"playerId", value.player_id}, {"activeQuests", value.active_quests}};
-}
-inline void from_json (const nlohmann::json &json, join_session_res_t &value)
-{
-    value.player_id = json.value ("playerId", std::string{});
-    json.at ("activeQuests").get_to (value.active_quests);
-}
-inline void to_json (nlohmann::json &json, const get_quest_progress_req_t &value)
-{
-    json = {{"playerId", value.player_id}};
-}
-inline void from_json (const nlohmann::json &json, get_quest_progress_req_t &value)
-{
-    json.at ("playerId").get_to (value.player_id);
-}
-inline void to_json (nlohmann::json &json, const get_quest_progress_res_t &value)
-{
-    json = {{"activeQuests", value.active_quests}};
-}
-inline void from_json (const nlohmann::json &json, get_quest_progress_res_t &value)
-{
-    json.at ("activeQuests").get_to (value.active_quests);
-}
-inline void to_json (nlohmann::json &json, const sync_quest_progress_req_t &value)
-{
-    json = {{"playerId", value.player_id}};
-}
-inline void from_json (const nlohmann::json &json, sync_quest_progress_req_t &value)
-{
-    json.at ("playerId").get_to (value.player_id);
 }
 
-inline void to_json (nlohmann::json &json, const sync_quest_progress_owner_req_t &value)
+template <> struct zlink::json::dto_traits<zlink::samples::gamequest::kill_monster_req_t>
 {
-    json = {{"playerId", value.player_id}, {"snapshotKillCount", value.snapshot_kill_count}};
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("playerId", &zlink::samples::gamequest::kill_monster_req_t::player_id),
+      zlink::json::field ("monsterId", &zlink::samples::gamequest::kill_monster_req_t::monster_id),
+      zlink::json::field ("areaId", &zlink::samples::gamequest::kill_monster_req_t::area_id),
+      zlink::json::field ("idempotencyKey",
+                          &zlink::samples::gamequest::kill_monster_req_t::idempotency_key)};
+};
 
-inline void from_json (const nlohmann::json &json, sync_quest_progress_owner_req_t &value)
+template <> struct zlink::json::dto_traits<zlink::samples::gamequest::kill_monster_res_t>
 {
-    json.at ("playerId").get_to (value.player_id);
-    value.snapshot_kill_count = json.value ("snapshotKillCount", 0);
-}
-inline void to_json (nlohmann::json &json, const sync_quest_progress_res_t &value)
-{
-    json = {{"updatedQuests", value.updated_quests}};
-}
-inline void from_json (const nlohmann::json &json, sync_quest_progress_res_t &value)
-{
-    json.at ("updatedQuests").get_to (value.updated_quests);
-}
-inline void to_json (nlohmann::json &json, const quest_progress_notify_t &value)
-{
-    json = {{"playerId", value.player_id}, {"progress", value.progress}};
-}
-inline void from_json (const nlohmann::json &json, quest_progress_notify_t &value)
-{
-    json.at ("playerId").get_to (value.player_id);
-    json.at ("progress").get_to (value.progress);
-}
-inline void to_json (nlohmann::json &json, const quest_completed_notify_t &value)
-{
-    json = {{"playerId", value.player_id},
-            {"progress", value.progress},
-            {"rewardGranted", value.reward_granted}};
-}
-inline void from_json (const nlohmann::json &json, quest_completed_notify_t &value)
-{
-    json.at ("playerId").get_to (value.player_id);
-    json.at ("progress").get_to (value.progress);
-    json.at ("rewardGranted").get_to (value.reward_granted);
-}
-inline void to_json (nlohmann::json &json, const gameplay_msg_t &value)
-{
-    json = {{"eventId", value.event_id},
-            {"playerId", value.player_id},
-            {"type", value.type},
-            {"payload", value.payload},
-            {"occurredAtUnixMs", value.occurred_at_unix_ms}};
-}
-inline void from_json (const nlohmann::json &json, gameplay_msg_t &value)
-{
-    json.at ("eventId").get_to (value.event_id);
-    json.at ("playerId").get_to (value.player_id);
-    json.at ("type").get_to (value.type);
-    json.at ("payload").get_to (value.payload);
-    json.at ("occurredAtUnixMs").get_to (value.occurred_at_unix_ms);
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("eventId", &zlink::samples::gamequest::kill_monster_res_t::event_id)};
+};
 
-inline void to_json (nlohmann::json &json, const close_player_quest_msg_t &value)
+template <> struct zlink::json::dto_traits<zlink::samples::gamequest::collect_item_req_t>
 {
-    json = nlohmann::json::object ();
-    if (value.reason) {
-        json["reason"] = *value.reason;
-    }
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("playerId", &zlink::samples::gamequest::collect_item_req_t::player_id),
+      zlink::json::field ("itemId", &zlink::samples::gamequest::collect_item_req_t::item_id),
+      zlink::json::field ("count", &zlink::samples::gamequest::collect_item_req_t::count),
+      zlink::json::field ("idempotencyKey",
+                          &zlink::samples::gamequest::collect_item_req_t::idempotency_key)};
+};
 
-inline void from_json (const nlohmann::json &json, close_player_quest_msg_t &value)
+template <> struct zlink::json::dto_traits<zlink::samples::gamequest::enter_area_req_t>
 {
-    if (!json.contains ("reason") || json.at ("reason").is_null ()) {
-        value.reason = std::nullopt;
-    } else {
-        value.reason = json.at ("reason").get<std::string> ();
-    }
-}
-inline void to_json (nlohmann::json &json, const notify_quest_progress_msg_t &value)
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("playerId", &zlink::samples::gamequest::enter_area_req_t::player_id),
+      zlink::json::field ("areaId", &zlink::samples::gamequest::enter_area_req_t::area_id),
+      zlink::json::field ("idempotencyKey",
+                          &zlink::samples::gamequest::enter_area_req_t::idempotency_key)};
+};
+
+template <> struct zlink::json::dto_traits<zlink::samples::gamequest::join_session_req_t>
 {
-    json = {{"playerId", value.player_id},
-            {"projection", value.projection},
-            {"completedQuestId", value.completed_quest_id}};
-}
-inline void from_json (const nlohmann::json &json, notify_quest_progress_msg_t &value)
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("playerId", &zlink::samples::gamequest::join_session_req_t::player_id)};
+};
+
+template <> struct zlink::json::dto_traits<zlink::samples::gamequest::stored_quest_event_t>
 {
-    json.at ("playerId").get_to (value.player_id);
-    json.at ("projection").get_to (value.projection);
-    value.completed_quest_id = json.value ("completedQuestId", std::string{});
-}
-inline void to_json (nlohmann::json &json, const projection_admin_req_t &value)
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("eventId", &zlink::samples::gamequest::stored_quest_event_t::event_id),
+      zlink::json::field ("playerId", &zlink::samples::gamequest::stored_quest_event_t::player_id),
+      zlink::json::field ("questId", &zlink::samples::gamequest::stored_quest_event_t::quest_id),
+      zlink::json::field ("type", &zlink::samples::gamequest::stored_quest_event_t::type),
+      zlink::json::field ("payload", &zlink::samples::gamequest::stored_quest_event_t::payload),
+      zlink::json::field ("version", &zlink::samples::gamequest::stored_quest_event_t::version),
+      zlink::json::field ("createdAtUnixMs",
+                          &zlink::samples::gamequest::stored_quest_event_t::created_at_unix_ms),
+      zlink::json::field ("sourceEventId",
+                          &zlink::samples::gamequest::stored_quest_event_t::source_event_id)};
+};
+
+template <> struct zlink::json::dto_traits<zlink::samples::gamequest::quest_progress_t>
 {
-    json = {
-      {"playerId", value.player_id}, {"questId", value.quest_id}, {"operation", value.operation}};
-}
-inline void from_json (const nlohmann::json &json, projection_admin_req_t &value)
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("playerId", &zlink::samples::gamequest::quest_progress_t::player_id),
+      zlink::json::field ("questId", &zlink::samples::gamequest::quest_progress_t::quest_id),
+      zlink::json::field ("status", &zlink::samples::gamequest::quest_progress_t::status),
+      zlink::json::field ("currentCount",
+                          &zlink::samples::gamequest::quest_progress_t::current_count),
+      zlink::json::field ("requiredCount",
+                          &zlink::samples::gamequest::quest_progress_t::required_count),
+      zlink::json::field ("version", &zlink::samples::gamequest::quest_progress_t::version),
+      zlink::json::field ("updatedAtUnixMs",
+                          &zlink::samples::gamequest::quest_progress_t::updated_at_unix_ms),
+      zlink::json::field ("lastSourceEventId",
+                          &zlink::samples::gamequest::quest_progress_t::last_source_event_id)};
+};
+
+template <> struct zlink::json::dto_traits<zlink::samples::gamequest::join_session_res_t>
 {
-    json.at ("playerId").get_to (value.player_id);
-    json.at ("questId").get_to (value.quest_id);
-    json.at ("operation").get_to (value.operation);
-}
-inline void to_json (nlohmann::json &json, const projection_admin_res_t &value)
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("playerId", &zlink::samples::gamequest::join_session_res_t::player_id),
+      zlink::json::field ("activeQuests",
+                          &zlink::samples::gamequest::join_session_res_t::active_quests)};
+};
+
+template <> struct zlink::json::dto_traits<zlink::samples::gamequest::get_quest_progress_req_t>
 {
-    json = {{"ok", value.ok}, {"projection", value.projection}};
-}
-inline void from_json (const nlohmann::json &json, projection_admin_res_t &value)
+    static constexpr auto fields = std::tuple{zlink::json::field (
+      "playerId", &zlink::samples::gamequest::get_quest_progress_req_t::player_id)};
+};
+
+template <> struct zlink::json::dto_traits<zlink::samples::gamequest::get_quest_progress_res_t>
 {
-    json.at ("ok").get_to (value.ok);
-    json.at ("projection").get_to (value.projection);
-}
-inline void to_json (nlohmann::json &json, const unpublished_kill_req_t &value)
+    static constexpr auto fields = std::tuple{zlink::json::field (
+      "activeQuests", &zlink::samples::gamequest::get_quest_progress_res_t::active_quests)};
+};
+
+template <> struct zlink::json::dto_traits<zlink::samples::gamequest::sync_quest_progress_req_t>
 {
-    json = {{"playerId", value.player_id}, {"count", value.count}};
-}
-inline void from_json (const nlohmann::json &json, unpublished_kill_req_t &value)
+    static constexpr auto fields = std::tuple{zlink::json::field (
+      "playerId", &zlink::samples::gamequest::sync_quest_progress_req_t::player_id)};
+};
+
+template <>
+struct zlink::json::dto_traits<zlink::samples::gamequest::sync_quest_progress_owner_req_t>
 {
-    json.at ("playerId").get_to (value.player_id);
-    json.at ("count").get_to (value.count);
-}
-inline void to_json (nlohmann::json &json, const unpublished_kill_res_t &value)
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("playerId",
+                          &zlink::samples::gamequest::sync_quest_progress_owner_req_t::player_id),
+      zlink::json::field (
+        "snapshotKillCount",
+        &zlink::samples::gamequest::sync_quest_progress_owner_req_t::snapshot_kill_count)};
+};
+
+template <> struct zlink::json::dto_traits<zlink::samples::gamequest::sync_quest_progress_res_t>
 {
-    json = {{"ok", value.ok}};
-}
-inline void from_json (const nlohmann::json &json, unpublished_kill_res_t &value)
+    static constexpr auto fields = std::tuple{zlink::json::field (
+      "updatedQuests", &zlink::samples::gamequest::sync_quest_progress_res_t::updated_quests)};
+};
+
+template <> struct zlink::json::dto_traits<zlink::samples::gamequest::quest_progress_notify_t>
 {
-    json.at ("ok").get_to (value.ok);
-}
-inline void to_json (nlohmann::json &json, const server_assertion_req_t &)
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("playerId",
+                          &zlink::samples::gamequest::quest_progress_notify_t::player_id),
+      zlink::json::field ("progress",
+                          &zlink::samples::gamequest::quest_progress_notify_t::progress)};
+};
+
+template <> struct zlink::json::dto_traits<zlink::samples::gamequest::quest_completed_notify_t>
 {
-    json = nlohmann::json::object ();
-}
-inline void from_json (const nlohmann::json &, server_assertion_req_t &)
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("playerId",
+                          &zlink::samples::gamequest::quest_completed_notify_t::player_id),
+      zlink::json::field ("progress",
+                          &zlink::samples::gamequest::quest_completed_notify_t::progress),
+      zlink::json::field ("rewardGranted",
+                          &zlink::samples::gamequest::quest_completed_notify_t::reward_granted)};
+};
+
+template <> struct zlink::json::dto_traits<zlink::samples::gamequest::gameplay_msg_t>
 {
-}
-inline void to_json (nlohmann::json &json, const server_assertion_res_t &value)
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("eventId", &zlink::samples::gamequest::gameplay_msg_t::event_id),
+      zlink::json::field ("playerId", &zlink::samples::gamequest::gameplay_msg_t::player_id),
+      zlink::json::field ("type", &zlink::samples::gamequest::gameplay_msg_t::type),
+      zlink::json::field ("payload", &zlink::samples::gamequest::gameplay_msg_t::payload),
+      zlink::json::field ("occurredAtUnixMs",
+                          &zlink::samples::gamequest::gameplay_msg_t::occurred_at_unix_ms)};
+};
+
+template <> struct zlink::json::dto_traits<zlink::samples::gamequest::close_player_quest_msg_t>
 {
-    json = {{"passed", value.passed}, {"evidence", value.evidence}};
-}
-inline void from_json (const nlohmann::json &json, server_assertion_res_t &value)
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("reason", &zlink::samples::gamequest::close_player_quest_msg_t::reason)};
+};
+
+template <> struct zlink::json::dto_traits<zlink::samples::gamequest::notify_quest_progress_msg_t>
 {
-    json.at ("passed").get_to (value.passed);
-    json.at ("evidence").get_to (value.evidence);
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("playerId",
+                          &zlink::samples::gamequest::notify_quest_progress_msg_t::player_id),
+      zlink::json::field ("projection",
+                          &zlink::samples::gamequest::notify_quest_progress_msg_t::projection),
+      zlink::json::field (
+        "completedQuestId",
+        &zlink::samples::gamequest::notify_quest_progress_msg_t::completed_quest_id)};
+};
+
+template <> struct zlink::json::dto_traits<zlink::samples::gamequest::projection_admin_req_t>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("playerId",
+                          &zlink::samples::gamequest::projection_admin_req_t::player_id),
+      zlink::json::field ("questId", &zlink::samples::gamequest::projection_admin_req_t::quest_id),
+      zlink::json::field ("operation",
+                          &zlink::samples::gamequest::projection_admin_req_t::operation)};
+};
+
+template <> struct zlink::json::dto_traits<zlink::samples::gamequest::projection_admin_res_t>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("ok", &zlink::samples::gamequest::projection_admin_res_t::ok),
+      zlink::json::field ("projection",
+                          &zlink::samples::gamequest::projection_admin_res_t::projection)};
+};
+
+template <> struct zlink::json::dto_traits<zlink::samples::gamequest::unpublished_kill_req_t>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("playerId",
+                          &zlink::samples::gamequest::unpublished_kill_req_t::player_id),
+      zlink::json::field ("count", &zlink::samples::gamequest::unpublished_kill_req_t::count)};
+};
+
+template <> struct zlink::json::dto_traits<zlink::samples::gamequest::unpublished_kill_res_t>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("ok", &zlink::samples::gamequest::unpublished_kill_res_t::ok)};
+};
+
+template <> struct zlink::json::dto_traits<zlink::samples::gamequest::server_assertion_req_t>
+{
+    static constexpr auto fields = std::tuple{};
+};
+
+template <> struct zlink::json::dto_traits<zlink::samples::gamequest::server_assertion_res_t>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("passed", &zlink::samples::gamequest::server_assertion_res_t::passed),
+      zlink::json::field ("evidence",
+                          &zlink::samples::gamequest::server_assertion_res_t::evidence)};
+};
+
+namespace zlink::samples::gamequest
+{
 
 } // namespace zlink::samples::gamequest
+
+// Explicit JSON state-store conversion shares the typed messaging profile.
+namespace zlink::samples::gamequest
+{
+template <typename T>
+    requires zlink::detail::json_profile::has_dto<T>
+void to_json (nlohmann::json &out, const T &value)
+{
+    out = zlink::detail::json_profile::encode_value (value);
+}
+template <typename T>
+    requires zlink::detail::json_profile::has_dto<T>
+void from_json (const nlohmann::json &in, T &value)
+{
+    value = zlink::detail::json_profile::decode_value<T> (in);
+}
+}

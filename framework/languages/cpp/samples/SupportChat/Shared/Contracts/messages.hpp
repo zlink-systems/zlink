@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <nlohmann/json.hpp>
+#include <zlink/json_profile.hpp>
 #include <optional>
 #include <string>
 #include <utility>
@@ -19,39 +20,39 @@ using zlink::framework::node_rid_t;
 
 struct actor_location_t
 {
-    node_rid_t node_rid;
+    std::string node_rid;
     std::string actor_id;
     std::uint64_t generation = 0;
 
     static actor_location_t from (const actor_ref_t &actor_ref)
     {
-        return actor_location_t{actor_ref.node_rid (),
+        return actor_location_t{std::string (actor_ref.node_rid ().value ()),
                                 std::string (actor_ref.actor_id ().value ()),
                                 actor_ref.object_generation ()};
     }
 
     actor_ref_t to_actor_ref (std::string mesh_name) const
     {
-        return actor_ref_t (actor_id_t (actor_id), generation, std::move (mesh_name), node_rid);
+        return actor_ref_t (actor_id_t (actor_id),
+                            generation,
+                            std::move (mesh_name),
+                            node_rid_t::from_string (node_rid));
     }
 };
 
-inline void to_json (nlohmann::json &json, const actor_location_t &value)
-{
-    json = {{"nodeRid", std::string (value.node_rid.value ())},
-            {"actorId", value.actor_id},
-            {"generation", value.generation}};
 }
 
-inline void from_json (const nlohmann::json &json, actor_location_t &value)
+template <> struct zlink::json::dto_traits<zlink::samples::supportchat::actor_location_t>
 {
-    const auto node_rid = json.contains ("nodeRid") ? json.value ("nodeRid", std::string{})
-                                                    : json.value ("node_rid", std::string{});
-    value.node_rid = node_rid_t::from_string (node_rid);
-    value.actor_id = json.contains ("actorId") ? json.value ("actorId", std::string{})
-                                               : json.value ("actor_id", std::string{});
-    value.generation = json.value ("generation", std::uint64_t{0});
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("nodeRid", &zlink::samples::supportchat::actor_location_t::node_rid),
+      zlink::json::field ("actorId", &zlink::samples::supportchat::actor_location_t::actor_id),
+      zlink::json::field ("generation",
+                          &zlink::samples::supportchat::actor_location_t::generation)};
+};
+
+namespace zlink::samples::supportchat
+{
 
 struct role_t
 {
@@ -328,377 +329,343 @@ inline std::optional<std::int64_t> json_optional_i64 (const nlohmann::json &json
     return json.at (name).get<std::int64_t> ();
 }
 
-inline void to_json (nlohmann::json &json, const chat_message_t &value)
-{
-    json = {{"conversationId", value.conversation_id},
-            {"messageSeq", value.message_seq},
-            {"senderActorId", value.sender_actor_id},
-            {"text", value.text},
-            {"sentAtUnixMs", value.sent_at_unix_ms}};
 }
 
-inline void from_json (const nlohmann::json &json, chat_message_t &value)
+template <> struct zlink::json::dto_traits<zlink::samples::supportchat::chat_message_t>
 {
-    value.conversation_id = json.value ("conversationId", "");
-    value.message_seq = json.value ("messageSeq", std::uint64_t{0});
-    value.sender_actor_id = json.value ("senderActorId", "");
-    value.text = json.value ("text", "");
-    value.sent_at_unix_ms = json.value ("sentAtUnixMs", std::int64_t{0});
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("conversationId",
+                          &zlink::samples::supportchat::chat_message_t::conversation_id),
+      zlink::json::field ("messageSeq", &zlink::samples::supportchat::chat_message_t::message_seq),
+      zlink::json::field ("senderActorId",
+                          &zlink::samples::supportchat::chat_message_t::sender_actor_id),
+      zlink::json::field ("text", &zlink::samples::supportchat::chat_message_t::text),
+      zlink::json::field ("sentAtUnixMs",
+                          &zlink::samples::supportchat::chat_message_t::sent_at_unix_ms)};
+};
 
-inline void to_json (nlohmann::json &json, const conversation_state_t &value)
+template <> struct zlink::json::dto_traits<zlink::samples::supportchat::conversation_state_t>
 {
-    json = {{"conversationId", value.conversation_id},
-            {"subject", value.subject},
-            {"status", value.status},
-            {"customerActorId", value.customer_actor_id},
-            {"lastMessageSeq", value.last_message_seq}};
-    set_optional (json, "agentActorId", value.agent_actor_id);
-    set_optional (json, "lastMessageAtUnixMs", value.last_message_at_unix_ms);
-    set_optional (json, "idleDeadlineUnixMs", value.idle_deadline_unix_ms);
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("conversationId",
+                          &zlink::samples::supportchat::conversation_state_t::conversation_id),
+      zlink::json::field ("subject", &zlink::samples::supportchat::conversation_state_t::subject),
+      zlink::json::field ("status", &zlink::samples::supportchat::conversation_state_t::status),
+      zlink::json::field ("customerActorId",
+                          &zlink::samples::supportchat::conversation_state_t::customer_actor_id),
+      zlink::json::field ("lastMessageSeq",
+                          &zlink::samples::supportchat::conversation_state_t::last_message_seq),
+      zlink::json::field ("agentActorId",
+                          &zlink::samples::supportchat::conversation_state_t::agent_actor_id),
+      zlink::json::field (
+        "lastMessageAtUnixMs",
+        &zlink::samples::supportchat::conversation_state_t::last_message_at_unix_ms),
+      zlink::json::field (
+        "idleDeadlineUnixMs",
+        &zlink::samples::supportchat::conversation_state_t::idle_deadline_unix_ms)};
+};
 
-inline void from_json (const nlohmann::json &json, conversation_state_t &value)
+template <> struct zlink::json::dto_traits<zlink::samples::supportchat::authenticate_req_t>
 {
-    value.conversation_id = json.value ("conversationId", "");
-    value.subject = json.value ("subject", "");
-    value.status = json.value ("status", "");
-    value.customer_actor_id = json.value ("customerActorId", "");
-    value.agent_actor_id = json_optional_string (json, "agentActorId");
-    value.last_message_seq = json.value ("lastMessageSeq", std::uint64_t{0});
-    value.last_message_at_unix_ms = json_optional_i64 (json, "lastMessageAtUnixMs");
-    value.idle_deadline_unix_ms = json_optional_i64 (json, "idleDeadlineUnixMs");
-}
+    static constexpr auto fields = std::tuple{zlink::json::field (
+      "accessToken", &zlink::samples::supportchat::authenticate_req_t::access_token)};
+};
 
-#define SUPPORTCHAT_JSON_STRING_REQ(type, field_name, json_name)                                   \
-    inline void to_json (nlohmann::json &json, const type &value)                                  \
-    {                                                                                              \
-        json = {{json_name, value.field_name}};                                                    \
-    }                                                                                              \
-    inline void from_json (const nlohmann::json &json, type &value)                                \
-    {                                                                                              \
-        value.field_name = json.value (json_name, "");                                             \
-    }
-
-SUPPORTCHAT_JSON_STRING_REQ (authenticate_req_t, access_token, "accessToken")
-SUPPORTCHAT_JSON_STRING_REQ (authenticate_user_req_t, access_token, "accessToken")
-inline void to_json (nlohmann::json &json, const open_conversation_req_t &value)
+template <> struct zlink::json::dto_traits<zlink::samples::supportchat::authenticate_user_req_t>
 {
-    json = {{"subject", value.subject}};
-}
-inline void from_json (const nlohmann::json &json, open_conversation_req_t &value)
-{
-    value.subject = json.value ("subject", "");
-}
-SUPPORTCHAT_JSON_STRING_REQ (send_chat_message_req_t, text, "text")
+    static constexpr auto fields = std::tuple{zlink::json::field (
+      "accessToken", &zlink::samples::supportchat::authenticate_user_req_t::access_token)};
+};
 
-#undef SUPPORTCHAT_JSON_STRING_REQ
-
-inline void to_json (nlohmann::json &json, const authenticate_res_t &value)
+template <> struct zlink::json::dto_traits<zlink::samples::supportchat::open_conversation_req_t>
 {
-    json = {{"actorId", value.actor_id}, {"displayName", value.display_name}, {"role", value.role}};
-}
+    static constexpr auto fields = std::tuple{zlink::json::field (
+      "subject", &zlink::samples::supportchat::open_conversation_req_t::subject)};
+};
 
-inline void from_json (const nlohmann::json &json, authenticate_res_t &value)
+template <> struct zlink::json::dto_traits<zlink::samples::supportchat::send_chat_message_req_t>
 {
-    value.actor_id = json.value ("actorId", "");
-    value.display_name = json.value ("displayName", "");
-    value.role = json.value ("role", "");
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("text", &zlink::samples::supportchat::send_chat_message_req_t::text)};
+};
 
-inline void to_json (nlohmann::json &json, const authenticate_user_res_t &value)
+template <> struct zlink::json::dto_traits<zlink::samples::supportchat::authenticate_res_t>
 {
-    json = {{"accepted", value.accepted}};
-    set_optional (json, "actorId", value.actor_id);
-    set_optional (json, "displayName", value.display_name);
-    set_optional (json, "role", value.role);
-    set_optional (json, "reason", value.reason);
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("actorId", &zlink::samples::supportchat::authenticate_res_t::actor_id),
+      zlink::json::field ("displayName",
+                          &zlink::samples::supportchat::authenticate_res_t::display_name),
+      zlink::json::field ("role", &zlink::samples::supportchat::authenticate_res_t::role)};
+};
 
-inline void from_json (const nlohmann::json &json, authenticate_user_res_t &value)
+template <> struct zlink::json::dto_traits<zlink::samples::supportchat::authenticate_user_res_t>
 {
-    value.accepted = json.value ("accepted", false);
-    value.actor_id = json_optional_string (json, "actorId");
-    value.display_name = json_optional_string (json, "displayName");
-    value.role = json_optional_string (json, "role");
-    value.reason = json_optional_string (json, "reason");
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("accepted",
+                          &zlink::samples::supportchat::authenticate_user_res_t::accepted),
+      zlink::json::field ("actorId",
+                          &zlink::samples::supportchat::authenticate_user_res_t::actor_id),
+      zlink::json::field ("displayName",
+                          &zlink::samples::supportchat::authenticate_user_res_t::display_name),
+      zlink::json::field ("role", &zlink::samples::supportchat::authenticate_user_res_t::role),
+      zlink::json::field ("reason", &zlink::samples::supportchat::authenticate_user_res_t::reason)};
+};
 
-inline void to_json (nlohmann::json &json, const open_conversation_api_req_t &value)
+template <> struct zlink::json::dto_traits<zlink::samples::supportchat::open_conversation_api_req_t>
 {
-    json = {{"customerActorId", value.customer_actor_id},
-            {"customerDisplayName", value.customer_display_name},
-            {"subject", value.subject}};
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field (
+        "customerActorId",
+        &zlink::samples::supportchat::open_conversation_api_req_t::customer_actor_id),
+      zlink::json::field (
+        "customerDisplayName",
+        &zlink::samples::supportchat::open_conversation_api_req_t::customer_display_name),
+      zlink::json::field ("subject",
+                          &zlink::samples::supportchat::open_conversation_api_req_t::subject)};
+};
 
-inline void from_json (const nlohmann::json &json, open_conversation_api_req_t &value)
+template <> struct zlink::json::dto_traits<zlink::samples::supportchat::open_conversation_api_res_t>
 {
-    value.customer_actor_id = json.value ("customerActorId", "");
-    value.customer_display_name = json.value ("customerDisplayName", "");
-    value.subject = json.value ("subject", "");
-}
+    static constexpr auto fields = std::tuple{zlink::json::field (
+      "state", &zlink::samples::supportchat::open_conversation_api_res_t::state)};
+};
 
-inline void to_json (nlohmann::json &json, const open_conversation_api_res_t &value)
+template <> struct zlink::json::dto_traits<zlink::samples::supportchat::conversation_create_req_t>
 {
-    json = {{"state", value.state}};
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field (
+        "customerActorId",
+        &zlink::samples::supportchat::conversation_create_req_t::customer_actor_id),
+      zlink::json::field (
+        "customerDisplayName",
+        &zlink::samples::supportchat::conversation_create_req_t::customer_display_name),
+      zlink::json::field ("subject",
+                          &zlink::samples::supportchat::conversation_create_req_t::subject),
+      zlink::json::field (
+        "createdAtUnixMs",
+        &zlink::samples::supportchat::conversation_create_req_t::created_at_unix_ms)};
+};
 
-inline void from_json (const nlohmann::json &json, open_conversation_api_res_t &value)
+template <> struct zlink::json::dto_traits<zlink::samples::supportchat::conversation_create_res_t>
 {
-    value.state = json.value ("state", conversation_state_t{});
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("state", &zlink::samples::supportchat::conversation_create_res_t::state)};
+};
 
-inline void to_json (nlohmann::json &json, const conversation_create_req_t &value)
+template <>
+struct zlink::json::dto_traits<zlink::samples::supportchat::ensure_support_user_actor_req_t>
 {
-    json = {{"customerActorId", value.customer_actor_id},
-            {"customerDisplayName", value.customer_display_name},
-            {"subject", value.subject},
-            {"createdAtUnixMs", value.created_at_unix_ms}};
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("actorId",
+                          &zlink::samples::supportchat::ensure_support_user_actor_req_t::actor_id),
+      zlink::json::field (
+        "displayName", &zlink::samples::supportchat::ensure_support_user_actor_req_t::display_name),
+      zlink::json::field ("role",
+                          &zlink::samples::supportchat::ensure_support_user_actor_req_t::role),
+      zlink::json::field (
+        "participantId",
+        &zlink::samples::supportchat::ensure_support_user_actor_req_t::participant_id)};
+};
 
-inline void from_json (const nlohmann::json &json, conversation_create_req_t &value)
+template <>
+struct zlink::json::dto_traits<zlink::samples::supportchat::ensure_support_user_actor_res_t>
 {
-    value.customer_actor_id = json.value ("customerActorId", "");
-    value.customer_display_name = json.value ("customerDisplayName", "");
-    value.subject = json.value ("subject", "");
-    value.created_at_unix_ms = json.value ("createdAtUnixMs", std::int64_t{0});
-}
+    static constexpr auto fields = std::tuple{zlink::json::field (
+      "actor", &zlink::samples::supportchat::ensure_support_user_actor_res_t::actor)};
+};
 
-inline void to_json (nlohmann::json &json, const conversation_create_res_t &value)
+template <>
+struct zlink::json::dto_traits<zlink::samples::supportchat::ensure_agent_conversation_req_t>
 {
-    json = {{"state", value.state}};
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field (
+        "rosterActorId",
+        &zlink::samples::supportchat::ensure_agent_conversation_req_t::roster_actor_id),
+      zlink::json::field (
+        "displayName", &zlink::samples::supportchat::ensure_agent_conversation_req_t::display_name),
+      zlink::json::field (
+        "conversationId",
+        &zlink::samples::supportchat::ensure_agent_conversation_req_t::conversation_id)};
+};
 
-inline void from_json (const nlohmann::json &json, conversation_create_res_t &value)
+template <>
+struct zlink::json::dto_traits<zlink::samples::supportchat::ensure_agent_conversation_res_t>
 {
-    value.state = json.value ("state", conversation_state_t{});
-}
+    static constexpr auto fields = std::tuple{zlink::json::field (
+      "actor", &zlink::samples::supportchat::ensure_agent_conversation_res_t::actor)};
+};
 
-inline void to_json (nlohmann::json &json, const ensure_support_user_actor_req_t &value)
+template <> struct zlink::json::dto_traits<zlink::samples::supportchat::open_conversation_res_t>
 {
-    json = {{"actorId", value.actor_id},
-            {"displayName", value.display_name},
-            {"role", value.role},
-            {"participantId", value.participant_id}};
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("conversationId",
+                          &zlink::samples::supportchat::open_conversation_res_t::conversation_id),
+      zlink::json::field ("state", &zlink::samples::supportchat::open_conversation_res_t::state)};
+};
 
-inline void from_json (const nlohmann::json &json, ensure_support_user_actor_req_t &value)
+template <> struct zlink::json::dto_traits<zlink::samples::supportchat::set_agent_available_req_t>
 {
-    value.actor_id = json.value ("actorId", "");
-    value.display_name = json.value ("displayName", "");
-    value.role = json.value ("role", "");
-    value.participant_id = json.value ("participantId", "");
-}
+    static constexpr auto fields = std::tuple{zlink::json::field (
+      "isAvailable", &zlink::samples::supportchat::set_agent_available_req_t::is_available)};
+};
 
-inline void to_json (nlohmann::json &json, const ensure_support_user_actor_res_t &value)
+template <> struct zlink::json::dto_traits<zlink::samples::supportchat::set_agent_available_res_t>
 {
-    json = {{"actor", value.actor}};
-}
+    static constexpr auto fields = std::tuple{zlink::json::field (
+      "isAvailable", &zlink::samples::supportchat::set_agent_available_res_t::is_available)};
+};
 
-inline void from_json (const nlohmann::json &json, ensure_support_user_actor_res_t &value)
+template <> struct zlink::json::dto_traits<zlink::samples::supportchat::join_conversation_req_t>
 {
-    value.actor = json.value ("actor", actor_location_t{});
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("conversationId",
+                          &zlink::samples::supportchat::join_conversation_req_t::conversation_id),
+      zlink::json::field ("participantId",
+                          &zlink::samples::supportchat::join_conversation_req_t::participant_id),
+      zlink::json::field ("role", &zlink::samples::supportchat::join_conversation_req_t::role),
+      zlink::json::field ("displayName",
+                          &zlink::samples::supportchat::join_conversation_req_t::display_name)};
+};
 
-inline void to_json (nlohmann::json &json, const ensure_agent_conversation_req_t &value)
+template <> struct zlink::json::dto_traits<zlink::samples::supportchat::join_conversation_res_t>
 {
-    json = {{"rosterActorId", value.roster_actor_id},
-            {"displayName", value.display_name},
-            {"conversationId", value.conversation_id}};
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("scheduled",
+                          &zlink::samples::supportchat::join_conversation_res_t::scheduled),
+      zlink::json::field ("actorId",
+                          &zlink::samples::supportchat::join_conversation_res_t::actor_id),
+      zlink::json::field ("state", &zlink::samples::supportchat::join_conversation_res_t::state)};
+};
 
-inline void from_json (const nlohmann::json &json, ensure_agent_conversation_req_t &value)
+template <>
+struct zlink::json::dto_traits<zlink::samples::supportchat::join_conversation_failed_notify_t>
 {
-    value.roster_actor_id = json.value ("rosterActorId", "");
-    value.display_name = json.value ("displayName", "");
-    value.conversation_id = json.value ("conversationId", "");
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field (
+        "conversationId",
+        &zlink::samples::supportchat::join_conversation_failed_notify_t::conversation_id),
+      zlink::json::field ("error",
+                          &zlink::samples::supportchat::join_conversation_failed_notify_t::error)};
+};
 
-inline void to_json (nlohmann::json &json, const ensure_agent_conversation_res_t &value)
+template <> struct zlink::json::dto_traits<zlink::samples::supportchat::send_chat_message_res_t>
 {
-    json = {{"actor", value.actor}};
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("message",
+                          &zlink::samples::supportchat::send_chat_message_res_t::message),
+      zlink::json::field ("state", &zlink::samples::supportchat::send_chat_message_res_t::state)};
+};
 
-inline void from_json (const nlohmann::json &json, ensure_agent_conversation_res_t &value)
+template <> struct zlink::json::dto_traits<zlink::samples::supportchat::set_typing_msg_t>
 {
-    value.actor = json.value ("actor", actor_location_t{});
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("isTyping", &zlink::samples::supportchat::set_typing_msg_t::is_typing)};
+};
 
-inline void to_json (nlohmann::json &json, const open_conversation_res_t &value)
+template <> struct zlink::json::dto_traits<zlink::samples::supportchat::close_conversation_req_t>
 {
-    json = {{"conversationId", value.conversation_id}, {"state", value.state}};
-}
+    static constexpr auto fields = std::tuple{zlink::json::field (
+      "reason", &zlink::samples::supportchat::close_conversation_req_t::reason)};
+};
 
-inline void from_json (const nlohmann::json &json, open_conversation_res_t &value)
+template <> struct zlink::json::dto_traits<zlink::samples::supportchat::close_conversation_res_t>
 {
-    value.conversation_id = json.value ("conversationId", "");
-    value.state = json.value ("state", conversation_state_t{});
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("state", &zlink::samples::supportchat::close_conversation_res_t::state)};
+};
 
-inline void to_json (nlohmann::json &json, const set_agent_available_req_t &value)
+namespace zlink::samples::supportchat
 {
-    json = {{"isAvailable", value.is_available}};
-}
-
-inline void from_json (const nlohmann::json &json, set_agent_available_req_t &value)
-{
-    value.is_available = json.value ("isAvailable", false);
-}
-
-inline void to_json (nlohmann::json &json, const set_agent_available_res_t &value)
-{
-    json = {{"isAvailable", value.is_available}};
-}
-
-inline void from_json (const nlohmann::json &json, set_agent_available_res_t &value)
-{
-    value.is_available = json.value ("isAvailable", false);
-}
-
-inline void to_json (nlohmann::json &json, const join_conversation_req_t &value)
-{
-    json = {{"conversationId", value.conversation_id},
-            {"participantId", value.participant_id},
-            {"role", value.role},
-            {"displayName", value.display_name}};
-}
-
-inline void from_json (const nlohmann::json &json, join_conversation_req_t &value)
-{
-    value.conversation_id = json.value ("conversationId", "");
-    value.participant_id = json.value ("participantId", "");
-    value.role = json.value ("role", "");
-    value.display_name = json.value ("displayName", "");
-}
-
-inline void to_json (nlohmann::json &json, const join_conversation_res_t &value)
-{
-    json = {{"scheduled", value.scheduled}, {"actorId", value.actor_id}, {"state", value.state}};
-}
-
-inline void from_json (const nlohmann::json &json, join_conversation_res_t &value)
-{
-    value.scheduled = json.value ("scheduled", false);
-    value.actor_id = json.value ("actorId", "");
-    value.state = json.value ("state", conversation_state_t{});
-}
-
-inline void to_json (nlohmann::json &json, const join_conversation_failed_notify_t &value)
-{
-    json = {{"conversationId", value.conversation_id}, {"error", value.error}};
-}
-
-inline void from_json (const nlohmann::json &json, join_conversation_failed_notify_t &value)
-{
-    value.conversation_id = json.value ("conversationId", "");
-    value.error = json.value ("error", "");
-}
-
-inline void to_json (nlohmann::json &json, const send_chat_message_res_t &value)
-{
-    json = {{"message", value.message}, {"state", value.state}};
-}
-
-inline void from_json (const nlohmann::json &json, send_chat_message_res_t &value)
-{
-    value.message = json.value ("message", chat_message_t{});
-    value.state = json.value ("state", conversation_state_t{});
-}
-
-inline void to_json (nlohmann::json &json, const set_typing_msg_t &value)
-{
-    json = {{"isTyping", value.is_typing}};
-}
-
-inline void from_json (const nlohmann::json &json, set_typing_msg_t &value)
-{
-    value.is_typing = json.value ("isTyping", false);
-}
-
-inline void to_json (nlohmann::json &json, const close_conversation_req_t &value)
-{
-    json = nlohmann::json::object ();
-    set_optional (json, "reason", value.reason);
-}
-
-inline void from_json (const nlohmann::json &json, close_conversation_req_t &value)
-{
-    value.reason = json_optional_string (json, "reason");
-}
-
-inline void to_json (nlohmann::json &json, const close_conversation_res_t &value)
-{
-    json = {{"state", value.state}};
-}
-
-inline void from_json (const nlohmann::json &json, close_conversation_res_t &value)
-{
-    value.state = json.value ("state", conversation_state_t{});
-}
 
 /* 공통 sample spec §12: notify wire shape는 `{ConversationId, State}`다. state를 루트로
  * 펼치지 않는다. */
-#define SUPPORTCHAT_NOTIFY_JSON(type)                                                              \
-    inline void to_json (nlohmann::json &json, const type &value)                                  \
-    {                                                                                              \
-        json = {{"conversationId", value.conversation_id}, {"state", value.state}};                \
-    }                                                                                              \
-    inline void from_json (const nlohmann::json &json, type &value)                                \
-    {                                                                                              \
-        value.conversation_id = json.value ("conversationId", "");                                 \
-        value.state = json.value ("state", conversation_state_t{});                                \
-    }
 
-SUPPORTCHAT_NOTIFY_JSON (conversation_assigned_notify_t)
-SUPPORTCHAT_NOTIFY_JSON (conversation_idle_notify_t)
-SUPPORTCHAT_NOTIFY_JSON (conversation_closed_notify_t)
-
-#undef SUPPORTCHAT_NOTIFY_JSON
-
-inline void to_json (nlohmann::json &json, const participant_joined_notify_t &value)
-{
-    json = {{"conversationId", value.conversation_id},
-            {"actorId", value.actor_id},
-            {"role", value.role},
-            {"state", value.state}};
 }
 
-inline void from_json (const nlohmann::json &json, participant_joined_notify_t &value)
+template <>
+struct zlink::json::dto_traits<zlink::samples::supportchat::conversation_assigned_notify_t>
 {
-    value.conversation_id = json.value ("conversationId", "");
-    value.actor_id = json.value ("actorId", "");
-    value.role = json.value ("role", "");
-    value.state = json.value ("state", conversation_state_t{});
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field (
+        "conversationId",
+        &zlink::samples::supportchat::conversation_assigned_notify_t::conversation_id),
+      zlink::json::field ("state",
+                          &zlink::samples::supportchat::conversation_assigned_notify_t::state)};
+};
 
-inline void to_json (nlohmann::json &json, const chat_message_notify_t &value)
+template <> struct zlink::json::dto_traits<zlink::samples::supportchat::conversation_idle_notify_t>
 {
-    json = {{"conversationId", value.conversation_id},
-            {"message", value.message},
-            {"state", value.state}};
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field (
+        "conversationId",
+        &zlink::samples::supportchat::conversation_idle_notify_t::conversation_id),
+      zlink::json::field ("state",
+                          &zlink::samples::supportchat::conversation_idle_notify_t::state)};
+};
 
-inline void from_json (const nlohmann::json &json, chat_message_notify_t &value)
+template <>
+struct zlink::json::dto_traits<zlink::samples::supportchat::conversation_closed_notify_t>
 {
-    value.conversation_id = json.value ("conversationId", "");
-    value.message = json.value ("message", chat_message_t{});
-    value.state = json.value ("state", conversation_state_t{});
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field (
+        "conversationId",
+        &zlink::samples::supportchat::conversation_closed_notify_t::conversation_id),
+      zlink::json::field ("state",
+                          &zlink::samples::supportchat::conversation_closed_notify_t::state)};
+};
 
-inline void to_json (nlohmann::json &json, const typing_changed_notify_t &value)
+template <> struct zlink::json::dto_traits<zlink::samples::supportchat::participant_joined_notify_t>
 {
-    json = {{"conversationId", value.conversation_id},
-            {"actorId", value.actor_id},
-            {"isTyping", value.is_typing},
-            {"state", value.state}};
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field (
+        "conversationId",
+        &zlink::samples::supportchat::participant_joined_notify_t::conversation_id),
+      zlink::json::field ("actorId",
+                          &zlink::samples::supportchat::participant_joined_notify_t::actor_id),
+      zlink::json::field ("role", &zlink::samples::supportchat::participant_joined_notify_t::role),
+      zlink::json::field ("state",
+                          &zlink::samples::supportchat::participant_joined_notify_t::state)};
+};
 
-inline void from_json (const nlohmann::json &json, typing_changed_notify_t &value)
+template <> struct zlink::json::dto_traits<zlink::samples::supportchat::chat_message_notify_t>
 {
-    value.conversation_id = json.value ("conversationId", "");
-    value.actor_id = json.value ("actorId", "");
-    value.is_typing = json.value ("isTyping", false);
-    value.state = json.value ("state", conversation_state_t{});
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("conversationId",
+                          &zlink::samples::supportchat::chat_message_notify_t::conversation_id),
+      zlink::json::field ("message", &zlink::samples::supportchat::chat_message_notify_t::message),
+      zlink::json::field ("state", &zlink::samples::supportchat::chat_message_notify_t::state)};
+};
+
+template <> struct zlink::json::dto_traits<zlink::samples::supportchat::typing_changed_notify_t>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("conversationId",
+                          &zlink::samples::supportchat::typing_changed_notify_t::conversation_id),
+      zlink::json::field ("actorId",
+                          &zlink::samples::supportchat::typing_changed_notify_t::actor_id),
+      zlink::json::field ("isTyping",
+                          &zlink::samples::supportchat::typing_changed_notify_t::is_typing),
+      zlink::json::field ("state", &zlink::samples::supportchat::typing_changed_notify_t::state)};
+};
+
+namespace zlink::samples::supportchat
+{
 
 } // namespace zlink::samples::supportchat
+
+// Explicit JSON state-store conversion shares the typed messaging profile.
+namespace zlink::samples::supportchat
+{
+template <typename T>
+    requires zlink::detail::json_profile::has_dto<T>
+void to_json (nlohmann::json &out, const T &value)
+{
+    out = zlink::detail::json_profile::encode_value (value);
+}
+template <typename T>
+    requires zlink::detail::json_profile::has_dto<T>
+void from_json (const nlohmann::json &in, T &value)
+{
+    value = zlink::detail::json_profile::decode_value<T> (in);
+}
+}
