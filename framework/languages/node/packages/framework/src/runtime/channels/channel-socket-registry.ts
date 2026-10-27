@@ -16,7 +16,10 @@ import {
   ZLINK_MAX_PUBLIC_WEIGHT
 } from '../../contracts/Configuration/RegistrationBuilderPolicy';
 import type { ZLinkChannelOptions } from '../../contracts/Configuration/RegistrationTypes';
-import { attachEndpointConnections } from '../../contracts/Configuration/RuntimeEndpointConnections';
+import {
+  attachEndpointConnections,
+  endpointConnections
+} from '../../contracts/Configuration/RuntimeEndpointConnections';
 import { createAbortError, throwIfAborted } from '../abort';
 import type {
   ZLinkBackendContext,
@@ -1714,7 +1717,10 @@ export class ZLinkChannelSocketRegistry {
     applySocketConfig(router, routeChannel);
     this.trackRouteMonitor(routerChannelId, router);
     if ((routeChannel.manualConnections ?? []).length > 0) {
-      for (const endpoint of routeChannel.manualConnections ?? []) {
+      for (const endpoint of endpointConnections(
+        routeChannel,
+        routeChannel.manualConnections ?? []
+      ).listConnections()) {
         router.connect(endpoint);
       }
     }
