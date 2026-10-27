@@ -2412,11 +2412,12 @@ int main ()
 
     zlink::framework::detail::route_channel_runtime_t route_runtime ("game.route");
     const auto target_node = zlink::routing_id_t::from (std::string ("remote-node"));
+    // Submit §3: this registered runtime has not started accepting admission.
     auto disconnected_send =
       route_runtime.submit_send (target_node, "event", event_t{77}, serializers);
     if (disconnected_send
         || disconnected_send.error_kind ()
-             != zlink::framework::framework_error_kind_t::unavailable) {
+             != zlink::framework::framework_error_kind_t::shutting_down) {
         return 33;
     }
     route_runtime.start ();
@@ -2544,6 +2545,7 @@ int main ()
             success (envelope_codec.encode_raw_body_parts (std::move (header), std::move (body)));
       });
     if (!spot_backend_runtime.submit_spot_send_parts (target_node, target_spot, request_parts)
+           .result ()
         || spot_backend_sends != 1) {
         return 380;
     }

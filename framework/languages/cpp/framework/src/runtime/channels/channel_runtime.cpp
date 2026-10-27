@@ -1592,7 +1592,8 @@ route_client_t::submit_spot_send_erased (const std::shared_ptr<detail::route_cli
         }
         detail::channel_runtime_manager_t manager (state->runtime);
         auto &runtime = manager.get_route_channel (router_channel_id);
-        co_return runtime.submit_spot_send_parts (target_node_rid, spot_id, std::move (parts));
+        co_await runtime.submit_spot_send_parts (target_node_rid, spot_id, std::move (parts));
+        co_return result_t<void>::success ();
     }
     catch (const framework_exception_t &error) {
         co_return detail::result_access_t::failure<void> (error);

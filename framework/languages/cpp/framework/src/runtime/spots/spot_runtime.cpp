@@ -4151,15 +4151,9 @@ send_call_t spot_context_t::send_to_erased (node_rid_t node_rid,
               auto parts = encode_spot_route_parts (
                 runtime::messaging::message_kind_t::command, *route_channel_name,
                 submitted_packet_name, payload, std::chrono::milliseconds::zero (), metadata);
-              auto submitted = runtime.submit_spot_send_parts (
+              co_await runtime.submit_spot_send_parts (
                 zlink::routing_id_t::from (std::string (node_rid.value ())), spot_id,
                 std::move (parts));
-              if (!submitted) {
-                  throw submitted.error ()
-                    ? *submitted.error ()
-                    : framework_exception_t (framework_error_kind_t::internal_failure,
-                                             "SPOT mesh send was not submitted");
-              }
               co_return;
           }
           auto native = state->native_spot.lock ();

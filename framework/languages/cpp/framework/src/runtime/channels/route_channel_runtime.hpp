@@ -12,7 +12,6 @@
 
 #include <chrono>
 #include <functional>
-#include <mutex>
 #include <optional>
 #include <set>
 #include <string>
@@ -108,9 +107,9 @@ class route_channel_runtime_t
                          runtime::messaging::message_parts_t parts,
                          std::chrono::milliseconds timeout);
 
-    result_t<void> submit_spot_send_parts (const zlink::routing_id_t &target_node_rid,
-                                           const std::string &target_spot_id,
-                                           runtime::messaging::message_parts_t parts);
+    task_t<void> submit_spot_send_parts (const zlink::routing_id_t &target_node_rid,
+                                         const std::string &target_spot_id,
+                                         runtime::messaging::message_parts_t parts);
 
     request_task_t<runtime::messaging::message_parts_t>
     request_reply_spot_parts (const zlink::routing_id_t &target_node_rid,
@@ -123,12 +122,20 @@ class route_channel_runtime_t
     void set_request_backend (request_backend_t backend);
     std::vector<route_outbound_packet_t> outbound_packets () const;
     std::size_t pending_request_count () const;
-    result_t<void> wait_until_connected (std::chrono::milliseconds timeout) const;
-    result_t<void> wait_until_peer_ready (const zlink::routing_id_t &target_node_rid,
-                                          std::chrono::milliseconds timeout) const;
 
   private:
     struct state_t;
+    struct removed_route_t;
+    struct ready_observer_t;
+    bool disconnect_endpoint (std::optional<zlink::routing_id_t> peer_rid, std::string endpoint);
+    static result_t<void> submit_send_unlocked (const std::shared_ptr<state_t> &state,
+                                                const zlink::routing_id_t &target,
+                                                std::optional<std::string> spot,
+                                                runtime::messaging::message_parts_t parts);
+    static task_t<void>
+    await_readiness (std::shared_ptr<state_t> state,
+                     std::shared_ptr<ready_observer_t> observer,
+                     std::optional<std::chrono::steady_clock::time_point> deadline);
     static request_task_t<runtime::messaging::message_parts_t>
     request_backend_parts (const std::shared_ptr<state_t> &_state,
                            const zlink::routing_id_t &target_node_rid,
@@ -144,7 +151,9 @@ class route_channel_runtime_t
     result_t<std::uint64_t> register_request_unlocked (const zlink::routing_id_t &target_node_rid,
                                                        std::optional<std::string> target_spot_id,
                                                        runtime::messaging::message_parts_t parts);
-    static result_t<void> ensure_connected (const std::shared_ptr<state_t> &_state);
+    static result_t<void>
+    ensure_ready (const std::shared_ptr<state_t> &state,
+                  const std::optional<zlink::routing_id_t> &target = std::nullopt);
     static request_task_t<runtime::messaging::message_parts_t>
     request_reply_spot_parts_owned (std::shared_ptr<state_t> state,
                                     zlink::routing_id_t target_node_rid,
@@ -155,8 +164,9 @@ class route_channel_runtime_t
                                           std::optional<zlink::routing_id_t> target,
                                           std::chrono::steady_clock::time_point deadline);
     static std::optional<result_t<void>>
-    ready_unlocked (const state_t &state, const std::optional<zlink::routing_id_t> &target);
-    void notify_state_changed ();
+    ready_unlocked (const state_t &state,
+                    const std::optional<zlink::routing_id_t> &target,
+                    const std::optional<removed_route_t> *send_change = nullptr);
     std::shared_ptr<state_t> _state;
 };
 
