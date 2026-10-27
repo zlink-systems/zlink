@@ -46,8 +46,11 @@ on:
 #       - "framework/languages/node/cross-language/**"
 #       - "framework/languages/dotnet/cross-language/**"
   workflow_dispatch:
+  workflow_call:
+  schedule:
+    - cron: "0 18 * * *"
   # Mergify merge-queue batches and backports run CI on their own branches only;
-  # ordinary PRs and main pushes still start CI by hand.
+  # main dependency pushes use the companion cache workflow.
   push:
     branches:
       - "mergify/merge-queue/**"
@@ -70,7 +73,10 @@ concurrency:
 jobs:
   framework-node:
     name: ${{ matrix.target.name }} / node${{ matrix.node-version }}
-    runs-on: ${{ matrix.target.runner }}
+    # ZLINK_LINUX_RUNNER/ZLINK_WINDOWS_RUNNER (JSON label lists) move the x64 Linux/Windows
+    # jobs to self-hosted runners; arm64 and macOS stay hosted. Queue, manual
+    # and main cache runs do not execute fork PR code.
+    runs-on: ${{ (matrix.target.runner == 'ubuntu-24.04' && vars.ZLINK_LINUX_RUNNER && fromJSON(vars.ZLINK_LINUX_RUNNER)) || (matrix.target.runner == 'windows-latest' && vars.ZLINK_WINDOWS_RUNNER && fromJSON(vars.ZLINK_WINDOWS_RUNNER)) || matrix.target.runner }}
     strategy:
       fail-fast: false
       matrix:
@@ -103,6 +109,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v5
         with:
+          package-manager-cache: false
           node-version: ${{ matrix.node-version }}
 
       - name: Verify Node perf package.json pins
@@ -211,7 +218,7 @@ jobs:
 
       - name: Cache Chromium for browser connector E2E
         if: matrix.node-version == 22 && (matrix.target.name == 'linux-x64' || matrix.target.name == 'win-x64')
-        uses: actions/cache@v5
+        uses: ./.github/actions/main-cache
         with:
           path: ${{ env.PLAYWRIGHT_BROWSERS_PATH }}
           key: playwright-${{ runner.os }}-${{ hashFiles('framework/languages/node/package-lock.json') }}
@@ -228,7 +235,7 @@ jobs:
 
       - name: Cache emsdk for the Unity WebGL adapter link
         if: matrix.node-version == 22 && matrix.target.name == 'linux-x64'
-        uses: actions/cache@v5
+        uses: ./.github/actions/main-cache
         with:
           path: ~/.cache/zlink/emsdk
           key: emsdk-3.1.38-manifest-3.1.38-${{ runner.os }}-${{ runner.arch }}
@@ -272,7 +279,7 @@ jobs:
 
   framework-node-cross-language:
     name: cross-language smoke
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.ZLINK_LINUX_RUNNER && fromJSON(vars.ZLINK_LINUX_RUNNER) || 'ubuntu-24.04' }}
     timeout-minutes: 30
     needs:
       - framework-node
@@ -284,6 +291,7 @@ jobs:
       - name: Setup Node.js 22
         uses: actions/setup-node@v5
         with:
+          package-manager-cache: false
           node-version: 22
 
       - name: Setup .NET 8 SDK
@@ -374,7 +382,7 @@ jobs:
           npm run build
 
       - name: Cache Chromium for browser connector E2E
-        uses: actions/cache@v5
+        uses: ./.github/actions/main-cache
         with:
           path: ${{ env.PLAYWRIGHT_BROWSERS_PATH }}
           key: playwright-${{ runner.os }}-${{ hashFiles('framework/languages/node/package-lock.json') }}
@@ -389,7 +397,7 @@ jobs:
 
   framework-node-gate:
     name: node-release-gate
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.ZLINK_LINUX_RUNNER && fromJSON(vars.ZLINK_LINUX_RUNNER) || 'ubuntu-24.04' }}
     needs:
       - framework-node
       - framework-node-cross-language
