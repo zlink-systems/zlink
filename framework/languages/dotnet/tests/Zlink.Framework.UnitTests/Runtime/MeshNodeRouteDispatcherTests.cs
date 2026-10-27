@@ -123,18 +123,31 @@ public sealed partial class EntrySpotActorDispatchTests
     }
 
     [Theory]
-    [InlineData(false, false)]
-    [InlineData(true, false)]
-    [InlineData(false, true)]
-    [InlineData(true, true)]
-    public async Task MeshNode_Channel_Turn_Holds_Gate_Until_Async_Terminal(
+    [MemberData(nameof(MeshTurnCases))]
+    public async Task MeshNode_Starts_Next_Record_Before_Prior_Terminal(
         bool firstIsRequest,
-        bool separateBatches
+        bool secondIsRequest,
+        bool separateBatches,
+        bool nodeDirect
     )
     {
         var capture = new MeshChannelTurnCapture();
+        using var admissionQueue = new ZLinkApplicationJobQueue(
+            new(ZLinkApplicationJobQueueProfile.Balanced, 2, 1, 2)
+        );
+        capture.Admissions["first"] = await admissionQueue.AcquireAsync(
+            CancellationToken.None,
+            ZLinkApplicationJobOrigin.Remote
+        );
+        capture.Admissions["second"] = await admissionQueue.AcquireAsync(
+            CancellationToken.None,
+            ZLinkApplicationJobOrigin.Remote
+        );
+        foreach (var admission in capture.Admissions.Values)
+            admission.MarkQueued();
         await using var services = new ServiceCollection()
             .AddSingleton(capture)
+            .AddScoped<MeshTurnScope>()
             .AddTransient<MeshChannelTurnHandler>()
             .BuildServiceProvider();
         var registration = new ZLinkFrameworkRegistration
@@ -147,7 +160,23 @@ public sealed partial class EntrySpotActorDispatchTests
             SpotNodeName = "mesh",
             RoutingId = RoutingId.From("mesh-node"),
         };
-        foreach (var name in new[] { "play", "other" })
+        spotNode.RouteSendHandlers.Add(
+            new ZLinkRouteHandlerRegistration(
+                typeof(MeshChannelTurnHandler),
+                typeof(MeshTurnMessage),
+                null,
+                "TurnSend"
+            )
+        );
+        spotNode.RouteRequestHandlers.Add(
+            new ZLinkRouteHandlerRegistration(
+                typeof(MeshChannelTurnHandler),
+                typeof(MeshTurnMessage),
+                typeof(MeshReply),
+                "TurnRequest"
+            )
+        );
+        foreach (var name in new[] { "play" })
         {
             var membership = new ZLinkMeshChannelMembership { ChannelName = name };
             membership.SendHandlers.Add(
@@ -188,10 +217,9 @@ public sealed partial class EntrySpotActorDispatchTests
         var batch = new[]
         {
             Record("play", "first", firstIsRequest),
-            Record("play", "send", false),
-            Record("play", "request", true),
-            Record("other", "other", true),
+            Record("play", "second", secondIsRequest),
         };
+        Task? shutdown = null;
         Task dispatch;
         if (separateBatches)
         {
@@ -207,26 +235,41 @@ public sealed partial class EntrySpotActorDispatchTests
         try
         {
             await capture.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
-            await capture.OtherReplied.Task.WaitAsync(TimeSpan.FromSeconds(5));
-            Assert.Equal(new[] { "first:start", "other" }, capture.Events.ToArray());
+            await capture.SecondCompleted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            if (secondIsRequest)
+                await capture.SecondReplied.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(new[] { "first", "second" }, capture.Starts.ToArray());
+            Assert.Equal(new[] { "second" }, capture.Completions.ToArray());
+            Assert.DoesNotContain("first", capture.DisposedScopes);
+            Assert.DoesNotContain("first", capture.ReleasedPayloads);
+            Assert.False(capture.FirstReplied.Task.IsCompleted);
             Assert.False(dispatch.IsCompleted);
+            Assert.Equal(0UL, admissionQueue.GetStatus().PermitsInUse);
+            if (!nodeDirect)
+            {
+                shutdown = dispatcher.DisposeAsync().AsTask();
+                Assert.False(shutdown.IsCompleted);
+            }
         }
         finally
         {
             capture.Release.TrySetResult();
             await dispatch.WaitAsync(TimeSpan.FromSeconds(5));
+            if (shutdown is not null)
+                await shutdown.WaitAsync(TimeSpan.FromSeconds(5));
             await runner.StopAsync();
         }
-        Assert.Equal(
-            new[] { "first:start", "other", "first:end", "send", "request" },
-            capture.Events.ToArray()
-        );
+        Assert.Equal(0UL, admissionQueue.GetStatus().PermitsInUse);
+        Assert.Equal(new[] { "second", "first" }, capture.Completions.ToArray());
+        Assert.Equal(new[] { "first", "second" }, capture.DisposedScopes.Order().ToArray());
+        Assert.Equal(new[] { "first", "second" }, capture.ReleasedPayloads.Order().ToArray());
+        Assert.Equal(firstIsRequest, capture.FirstReplied.Task.IsCompletedSuccessfully);
 
         ZLinkBackendRouteReceived Record(string channel, string value, bool request)
         {
             var header = new ZLinkEnvelopeHeader(
                 request ? ZLinkMessageKind.Request : ZLinkMessageKind.Command,
-                channel,
+                nodeDirect ? "mesh" : channel,
                 request ? "TurnRequest" : "TurnSend",
                 ZLinkEnvelopeCodec.DefaultContentType,
                 request ? value : null,
@@ -252,45 +295,104 @@ public sealed partial class EntrySpotActorDispatchTests
                             ZLinkMessageKind.Response,
                             ZLinkEnvelopeCodec.DecodeHeader(parts).Kind
                         );
-                        if (value == "other")
-                            capture.OtherReplied.TrySetResult();
+                        if (value == "second")
+                            capture.SecondReplied.TrySetResult();
+                        else
+                            capture.FirstReplied.TrySetResult();
                         return SubmitResult.Ok;
                     }
                     : null,
-                channelName: channel
+                channelName: nodeDirect ? null : channel,
+                payloadOwner: new ZLinkApplicationJobQueueRecordOwner(
+                    new MeshTurnPayload(capture, value),
+                    capture.Admissions[value]
+                )
             );
         }
+    }
+
+    public static IEnumerable<object[]> MeshTurnCases()
+    {
+        foreach (var firstRequest in new[] { false, true })
+        foreach (var secondRequest in new[] { false, true })
+        foreach (var separateBatches in new[] { false, true })
+        foreach (var nodeDirect in new[] { false, true })
+            yield return [firstRequest, secondRequest, separateBatches, nodeDirect];
     }
 
     private sealed record MeshTurnMessage(string Value);
 
     private sealed class MeshChannelTurnCapture
     {
-        internal ConcurrentQueue<string> Events { get; } = new();
+        internal Dictionary<string, ZLinkApplicationJobQueueLease> Admissions { get; } = new();
+        internal ConcurrentQueue<string> Starts { get; } = new();
+        internal ConcurrentQueue<string> Completions { get; } = new();
+        internal ConcurrentQueue<string> DisposedScopes { get; } = new();
+        internal ConcurrentQueue<string> ReleasedPayloads { get; } = new();
         internal TaskCompletionSource Started { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal TaskCompletionSource Release { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
-        internal TaskCompletionSource OtherReplied { get; } =
+        internal TaskCompletionSource SecondCompleted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource SecondReplied { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource FirstReplied { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
 
-    private sealed class MeshChannelTurnHandler(MeshChannelTurnCapture capture)
-        : IZLinkSendHandler<MeshTurnMessage>,
-            IZLinkRequestHandler<MeshTurnMessage, MeshReply>
+    private sealed class MeshTurnScope(MeshChannelTurnCapture capture) : IDisposable
     {
-        async ValueTask IZLinkSendHandler<MeshTurnMessage>.HandleAsync(
+        internal string Value { get; set; } = "unset";
+        internal bool Disposed { get; private set; }
+
+        public void Dispose()
+        {
+            Assert.False(Disposed);
+            Disposed = true;
+            capture.DisposedScopes.Enqueue(Value);
+        }
+    }
+
+    private sealed class MeshTurnPayload(MeshChannelTurnCapture capture, string value) : IDisposable
+    {
+        public void Dispose() => capture.ReleasedPayloads.Enqueue(value);
+    }
+
+    private sealed class MeshChannelTurnHandler(MeshChannelTurnCapture capture, MeshTurnScope scope)
+        : IZLinkSendHandler<MeshTurnMessage>,
+            IZLinkRequestHandler<MeshTurnMessage, MeshReply>,
+            IZLinkRouteSendHandler<MeshTurnMessage>,
+            IZLinkRouteRequestHandler<MeshTurnMessage, MeshReply>
+    {
+        ValueTask IZLinkSendHandler<MeshTurnMessage>.HandleAsync(
+            MeshTurnMessage message,
+            IZLinkMessageContext context,
+            CancellationToken cancellationToken
+        ) => HandleTurnAsync(message, cancellationToken);
+
+        async ValueTask<MeshReply> IZLinkRequestHandler<MeshTurnMessage, MeshReply>.HandleAsync(
             MeshTurnMessage message,
             IZLinkMessageContext context,
             CancellationToken cancellationToken
         )
         {
             await HandleTurnAsync(message, cancellationToken);
+            return new MeshReply(message.Value);
         }
 
-        async ValueTask<MeshReply> IZLinkRequestHandler<MeshTurnMessage, MeshReply>.HandleAsync(
+        ValueTask IZLinkRouteSendHandler<MeshTurnMessage>.HandleAsync(
             MeshTurnMessage message,
-            IZLinkMessageContext context,
+            ZLinkRouteMessageContext context,
+            CancellationToken cancellationToken
+        ) => HandleTurnAsync(message, cancellationToken);
+
+        async ValueTask<MeshReply> IZLinkRouteRequestHandler<
+            MeshTurnMessage,
+            MeshReply
+        >.HandleAsync(
+            MeshTurnMessage message,
+            ZLinkRouteMessageContext context,
             CancellationToken cancellationToken
         )
         {
@@ -303,18 +405,20 @@ public sealed partial class EntrySpotActorDispatchTests
             CancellationToken cancellationToken
         )
         {
+            Assert.True(capture.Admissions[message.Value].IsReleased);
+            scope.Value = message.Value;
+            capture.Starts.Enqueue(message.Value);
+            Assert.False(scope.Disposed);
             if (message.Value == "first")
             {
-                capture.Events.Enqueue("first:start");
                 capture.Started.TrySetResult();
-                await capture.Release.Task.WaitAsync(cancellationToken);
-                capture.Events.Enqueue("first:end");
+                await capture.Release.Task;
             }
-            else
-            {
-                await capture.Started.Task.WaitAsync(cancellationToken);
-                capture.Events.Enqueue(message.Value);
-            }
+            Assert.False(scope.Disposed);
+            Assert.DoesNotContain(message.Value, capture.ReleasedPayloads);
+            capture.Completions.Enqueue(message.Value);
+            if (message.Value == "second")
+                capture.SecondCompleted.TrySetResult();
         }
     }
 
