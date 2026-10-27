@@ -1,5 +1,10 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #include "allocation_counter.hpp"
+#include <zlink/framework.hpp>
+#include "runtime/client_server/client_server_location_runtime.hpp"
+#include "runtime/client_server/raw_client_server_owner.hpp"
+#include <boost/asio/co_spawn.hpp>
+#include <boost/asio/io_context.hpp>
 #include "runtime/stateful/public_host_runtime.hpp"
 #include "runtime/dispatch/dispatch_limits.hpp"
 #include "runtime/spots/spot_runtime.hpp"
@@ -14,6 +19,18 @@
 #include <limits>
 #include <memory>
 #include <optional>
+
+namespace zlink::framework::runtime::client_server
+{
+struct client_server_location_runtime_test_access_t
+{
+    static auto drain (client_server_location_runtime_t &runtime,
+                       std::shared_ptr<raw_client_server_server_t> server)
+    {
+        return runtime.drain_server_owner (std::move (server), "receive");
+    }
+};
+} // namespace zlink::framework::runtime::client_server
 
 namespace
 {
@@ -304,5 +321,95 @@ TEST (ReceiveAllocations, PendingManagementKeepsTemporaryOwnerState)
     EXPECT_TRUE (suspended);
     ASSERT_TRUE (result);
     EXPECT_FALSE (result.value ());
+}
+} // namespace
+
+namespace
+{
+struct receive_send_t
+{
+    static constexpr const char *packet_name = "receive.send";
+};
+void to_json (nlohmann::json &json, const receive_send_t &)
+{
+    json = nlohmann::json::object ();
+}
+void from_json (const nlohmann::json &, receive_send_t &)
+{
+}
+struct receive_handler_t
+{
+    using message_type = receive_send_t;
+    void handle (const receive_send_t &) { ++calls; }
+    inline static unsigned calls = 0;
+};
+
+TEST (ReceiveAllocations, AutomaticClientServerSendRecordHasFixedAllocationCount)
+{
+    namespace cs = fw::runtime::client_server;
+    auto app = fw::app_t::create ();
+    app.add_zlink_framework ([] (fw::zlink_framework_options_t &options) {
+        options.handlers ().group ("receive").add_send<receive_handler_t> ();
+        options.add_client_server_channel ("receive").server ().listen ().add_handler_group (
+          "receive");
+    });
+    auto provider = app.advanced ().services ().build_provider ();
+    auto &runtime = dynamic_cast<cs::client_server_location_runtime_t &> (
+      provider.get_required<fw::client_server_runtime_t> ());
+    auto context = std::make_shared<zlink::context_t> ();
+    cs::raw_client_server_server_options_t options{{.channel_name = "receive",
+                                                    .server_routing_id = {'r'},
+                                                    .advertised_endpoint = "tcp://127.0.0.1:*"}};
+    options.runtime_failures = std::make_shared<fw::runtime::runtime_failure_collector_t> ();
+    auto server = std::make_shared<cs::raw_client_server_server_t> (options, context);
+    server->mailbox ().bind_application_dispatch ({}, [] (const std::string &) {});
+    boost::asio::io_context executor;
+    receive_handler_t::calls = 0;
+    const auto dispatch = [&] {
+        executor.restart ();
+        bool completed = false;
+        bool succeeded = false;
+        auto work = [&] () -> boost::asio::awaitable<void> {
+            const auto result =
+              co_await cs::client_server_location_runtime_test_access_t::drain (runtime, server);
+            completed = true;
+            succeeded = static_cast<bool> (result);
+        };
+        boost::asio::co_spawn (executor, work (), [&] (std::exception_ptr error) {
+            if (error)
+                succeeded = false;
+        });
+        executor.run ();
+        return completed && succeeded;
+    };
+    const auto enqueue = [&] {
+        mesh::service_mailbox_record_t record;
+        record.owner = "receive";
+        record.domain = mesh::service_mailbox_domain_t::application;
+        record.envelope_header.kind = fw::runtime::messaging::message_kind_t::command;
+        record.envelope_header.message_name = "receive.send";
+        record.envelope_header.content_type = "application/json";
+        record.parts.push_back (zlink::message_t::from ("header"));
+        record.parts.push_back (zlink::message_t::from ("{}"));
+        return server->mailbox ().try_enqueue (std::move (record));
+    };
+    // Measures one received record through FIFO claim, handler, terminal and release.
+    // Enqueue, socket ingress and provider setup are excluded; the drain runs on this thread.
+    ASSERT_TRUE (enqueue ());
+    ASSERT_TRUE (dispatch ());
+    for (unsigned sample = 0; sample != 3; ++sample) {
+        ASSERT_TRUE (enqueue ());
+        bool succeeded = false;
+        const auto actual = fw::tests::measure_allocations ([&] { succeeded = dispatch (); });
+        ASSERT_TRUE (succeeded);
+        EXPECT_EQ (actual.count, 27u);
+        EXPECT_EQ (receive_handler_t::calls, sample + 2);
+        EXPECT_EQ (
+          server->mailbox ().pending_messages (mesh::service_mailbox_domain_t::application), 0u);
+        std::printf ("automatic ClientServer send record: sample=%u allocations=%zu bytes=%zu "
+                     "largest=%zu\n",
+                     sample, actual.count, actual.bytes, actual.largest);
+    }
+    server->close ();
 }
 } // namespace

@@ -1621,8 +1621,8 @@ boost::asio::awaitable<result_t<void>> client_server_location_runtime_t::drain_s
                 if (!result)
                     _channel_runtime.runtime_failures ()->report (result.exception ());
                 std::lock_guard lock (_server_progress_mutex);
-                --_active_application_drains;
-                _server_progress_changed.notify_all ();
+                if (--_active_application_drains == 0)
+                    _server_progress_changed.notify_all ();
             });
             (void) mailbox.release (*active_claim);
             active_claim.reset ();
