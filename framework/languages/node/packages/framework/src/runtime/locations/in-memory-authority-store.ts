@@ -230,10 +230,15 @@ export class ZLinkInMemoryAuthorityStore {
       actor?.currentSpotKind === ZLinkSpotKind.User &&
       (previousActor?.currentSpotKind !== ZLinkSpotKind.User ||
         previousActor.currentSpotId !== actor.currentSpotId ||
-        previousActor.currentSpotGeneration !== actor.currentSpotGeneration) &&
-      !this.acceptsUserSpotMembership(actor.currentSpotId, actor.currentSpotGeneration)
-    )
-      return { kind: 'conflict', current: this.read(keyValue) };
+        previousActor.currentSpotGeneration !== actor.currentSpotGeneration)
+    ) {
+      const membershipFailure = this.userSpotMembershipFailure(
+        actor.currentSpotId,
+        actor.currentSpotGeneration
+      );
+      if (membershipFailure !== undefined)
+        return { kind: 'conflict', current: this.read(keyValue), membershipFailure };
+    }
     if (
       mutation.generationTransition === 'reincarnate' &&
       (this.objectGeneration >= MAX_GENERATION || this.ownerGeneration >= MAX_GENERATION)
@@ -322,15 +327,22 @@ export class ZLinkInMemoryAuthorityStore {
   }
 
   acceptsUserSpotMembership(spotId: string, objectGeneration: bigint): boolean {
+    return this.userSpotMembershipFailure(spotId, objectGeneration) === undefined;
+  }
+
+  private userSpotMembershipFailure(
+    spotId: string,
+    objectGeneration: bigint
+  ): ZLinkFrameworkErrorKind.NotFound | ZLinkFrameworkErrorKind.Unavailable | undefined {
     const row = this.rows.get(encodeAuthorityKey('user_spot', spotId).value);
-    return (
-      row !== undefined &&
-      row.snapshot.allocation.objectKind === 'user_spot' &&
+    if (row === undefined) return ZLinkFrameworkErrorKind.NotFound;
+    return row.snapshot.allocation.objectKind === 'user_spot' &&
       row.snapshot.allocation.state === 'active' &&
       row.snapshot.objectGeneration === objectGeneration &&
       decodeServiceReadySpotAuthority(row.snapshot.payload)?.kind === 'user_spot' &&
       this.isOwnerLive(row.snapshot)
-    );
+      ? undefined
+      : ZLinkFrameworkErrorKind.Unavailable;
   }
 
   private tryReleaseEndedReservation(

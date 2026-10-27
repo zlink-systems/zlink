@@ -65,11 +65,14 @@ const {
 // Creation and Join use public managers, typed dispatch and completion callbacks.
 // The Store contract assertion checks membership, which the public object query
 // does not expose (it only returns the object's owner and generation).
-test(
-  'placement-created same-node Player commits Table and Entry membership before Accepted',
+for (const failure of ['none', 'missing', 'generation', 'internal']) test(
+  failure === 'none'
+    ? 'placement-created same-node Player commits Table and Entry membership before Accepted'
+    : `public deferred Join preserves ${failure} failure kind`,
   { timeout: 15000 },
   async () => {
     const completions = [];
+    let failCommit = async () => {};
     let completed;
     class Join {
       constructor(spotId) {
@@ -102,6 +105,7 @@ test(
       }
       configure() {}
       async onActorJoin() {
+        await failCommit();
         return { accepted: true };
       }
       async onJoinedActor() {}
@@ -154,6 +158,47 @@ test(
       const key = encodeAuthorityKey('actor', 'player');
       const before = await repository.readAuthority(key);
       const entry = decodeActorAuthorityIdentity(before.payload, before.objectGeneration);
+      if (failure !== 'none') {
+        failCommit = async () => {
+          if (failure === 'internal') throw new Error('factory/staging fault');
+          const spotKey = encodeAuthorityKey('user_spot', String(table.spot.spotId));
+          const current = await repository.readAuthority(spotKey);
+          const result = await repository.compareExchangeAuthority(
+            spotKey,
+            current.storeVersion,
+            failure === 'missing'
+              ? { kind: 'delete' }
+              : {
+                  kind: 'put',
+                  generationTransition: 'reincarnate',
+                  payload: current.payload
+                }
+          );
+          assert.equal(result.kind, failure === 'missing' ? 'deleted' : 'stored');
+        };
+        const completion = new Promise((resolve) => {
+          completed = resolve;
+        });
+        await client.sendToActor('player', new Join(String(table.spot.spotId))).submit();
+        const terminal = await completion;
+        assert.equal(terminal.status, 'failed');
+        assert.equal(
+          terminal.kind,
+          framework.ZLinkFrameworkErrorKind[
+            failure === 'missing'
+              ? 'NotFound'
+              : failure === 'generation'
+                ? 'Unavailable'
+                : 'InternalFailure'
+          ]
+        );
+        assert.equal(completions.length, 1);
+        const current = await repository.readAuthority(key);
+        const identity = decodeActorAuthorityIdentity(current.payload, current.objectGeneration);
+        assert.equal(identity.spotKind, entry.spotKind);
+        assert.equal(String(identity.spotId), String(entry.spotId));
+        return;
+      }
       for (const [spotId, generation, kind] of [
         [table.spot.spotId, table.spot.objectGeneration, framework.ZLinkSpotKind.User],
         [entry.spotId, entry.spotGeneration, framework.ZLinkSpotKind.Entry]
@@ -660,7 +705,9 @@ for (const mismatch of [
           framework.ZLinkSpotKind.User,
           7n
         ),
-      /authority (fence|identity) does not match/
+      error => error instanceof framework.ZLinkFrameworkException &&
+        error.kind === (mismatch === 'object' ? framework.ZLinkFrameworkErrorKind.InvalidOperation
+          : framework.ZLinkFrameworkErrorKind.Unavailable) && /authority (fence|identity) does not match/.test(error.message)
     );
     assert.equal(writes, 0);
   });
@@ -784,5 +831,268 @@ for (const membership of [
         membership === 'stale root incarnation' ? /root object projection/ : /participant inventory/
       );
     }
+  });
+}
+
+for (const backend of ['authority-memory', 'provider-memory']) {
+  for (const failure of ['none', 'missing', 'generation', 'expiredLease', 'otherLeaseGeneration']) {
+    test(`${backend} membership commit classifies ${failure} at Store and claim boundary`, async () => {
+      const f = await membershipFailureFixture(backend);
+      let generation = f.spot.objectGeneration;
+      if (failure === 'missing') {
+        const deleted = await f.store.compareExchangeAuthority(
+          encodeAuthorityKey('user_spot', 'table'),
+          f.spot.storeVersion,
+          { kind: 'delete' }
+        );
+        assert.equal(deleted.kind, 'deleted');
+      }
+      if (failure === 'generation') generation++;
+      if (failure === 'expiredLease') await f.expire();
+      if (failure === 'otherLeaseGeneration') await f.replaceLease();
+      let result;
+      let writes = 0;
+      const claims = new ZLinkActorLocationClaims({ currentOwnerToken: f.owner }, {}, 'play', {
+        readAuthority: (...args) => f.store.readAuthority(...args),
+        async compareExchangeAuthority(...args) {
+          writes++;
+          result = await f.store.compareExchangeAuthority(...args);
+          return result;
+        }
+      });
+      const commit = () =>
+        claims.commitMembership(
+          'Player',
+          f.actor,
+          f.actorSnapshot.authorityOwnerGeneration,
+          'table',
+          generation,
+          framework.ZLinkSpotKind.User,
+          7n
+        );
+      if (failure === 'none') {
+        await commit();
+        assert.equal(result.kind, 'stored');
+        const identity = decodeActorAuthorityIdentity(result.payload, result.objectGeneration);
+        assert.equal(identity.spotKind, framework.ZLinkSpotKind.User);
+        assert.equal(identity.spotGeneration, generation);
+      } else {
+        const expected =
+          failure === 'missing'
+            ? framework.ZLinkFrameworkErrorKind.NotFound
+            : framework.ZLinkFrameworkErrorKind.Unavailable;
+        await assert.rejects(
+          commit,
+          (error) => error instanceof framework.ZLinkFrameworkException && error.kind === expected
+        );
+        assert.equal(result.kind, 'conflict');
+        assert.equal(result.membershipFailure, expected);
+        const current = await f.store.readAuthority(encodeAuthorityKey('actor', 'player'));
+        assert.equal(current.storeVersion.value, f.actorSnapshot.storeVersion.value);
+        assert.deepEqual(current.payload, f.actorSnapshot.payload);
+      }
+      assert.equal(writes, 1);
+    });
+  }
+}
+
+async function membershipFailureFixture(backend) {
+  const internal = require('../../packages/framework/dist/internal');
+  const {
+    ZLinkInMemoryAuthorityStore
+  } = require('../../packages/framework/dist/runtime/locations/in-memory-authority-store');
+  let now = Date.now();
+  const live = new Map([
+    ['actor-owner', 1n],
+    ['spot-owner', 1n]
+  ]);
+  const provider = new ZLinkInMemoryProviderLocationStore(() => new Date(now));
+  const store =
+    backend === 'authority-memory'
+      ? new ZLinkInMemoryAuthorityStore(
+          {
+            isOwnerLive: (token) => live.get(token.ownerId) === token.leaseGeneration,
+            isTargetLive: (_descriptor, _generation, token) =>
+              live.get(token.ownerId) === token.leaseGeneration
+          },
+          () => new Date(now)
+        )
+      : new ZLinkLocationStoreRepository(provider, () => new Date(now));
+  const targets = {};
+  for (const name of ['actor', 'spot']) {
+    const ownerId = `${name}-owner`;
+    const owner =
+      backend === 'authority-memory'
+        ? { ownerId, leaseGeneration: 1n }
+        : (await store.claimOwnerLease(ownerId, name === 'spot' ? 1000 : 60000)).token;
+    assert.ok(owner);
+    const target = {
+      meshName: 'play',
+      nodeRid: `${name}-node`,
+      nodeLifecycleGeneration: 7n,
+      owner
+    };
+    targets[name] = target;
+    if (backend === 'provider-memory') {
+      const descriptor = {
+        meshName: 'play',
+        rid: target.nodeRid,
+        lifecycleGeneration: 7n,
+        descriptorRevision: 1n,
+        endpoint: `tcp://${name}`,
+        objectRole: internal.ZLinkObjectRole.Server,
+        placementWeight: 1,
+        populationCapacity: {
+          actors: { active: 0, reserved: 0, limit: 10 },
+          spots: { active: 0, reserved: 0, limit: 10 },
+          spotTypes: []
+        },
+        activationConcurrency: { active: 0, limit: 10 },
+        channelWeights: {},
+        applicationVersion: 1n,
+        spotTypes: [],
+        objectCapabilities: [],
+        state: internal.ZLinkFrameworkRuntimeState.Serving,
+        securityIdentity: 'test',
+        ownerId,
+        leaseGeneration: owner.leaseGeneration,
+        updatedAt: new Date(now)
+      };
+      assert.equal(
+        (await store.updateMeshNode(descriptor, internal.ZLinkLocationWriteIntent.NewClaim)).status,
+        internal.ZLinkLocationWriteStatus.Stored
+      );
+    }
+  }
+  async function create(kind, id, target, payload) {
+    const key = { kind, globalId: id };
+    const reserved = await store.reserve({
+      key,
+      intent: {
+        stableType: kind === 'actor' ? 'Player' : 'Table',
+        requestContentReference: `test:${id}`,
+        requestSha256: Buffer.alloc(32, 1),
+        requestEncodedSize: 1n
+      },
+      target,
+      creatingPayload: Buffer.from('creating'),
+      capacity: kind === 'actor' ? { actors: 1, spots: 0 } : { actors: 0, spots: 1 },
+      actorRelocationPolicy: 'disabled'
+    });
+    assert.equal(reserved.kind, 'reserved');
+    const readyPayload = payload(reserved.creating.objectGeneration);
+    const request = {
+      key,
+      reservationId: reserved.reservationId,
+      expectedStoreVersion: reserved.creating.storeVersion.value,
+      target,
+      readyPayload
+    };
+    const committed =
+      kind === 'actor'
+        ? await store.completeCreation({
+            ...request,
+            completion: {
+              kind: 'created',
+              readyPayload,
+              terminal: {
+                operation: {
+                  sourceNodeRid: target.nodeRid,
+                  sourceNodeGeneration: 7n,
+                  operationId: { high: 1n, low: 1n }
+                },
+                terminalEnvelope: Buffer.from('created'),
+                operationDeadline: new Date(now + 60000)
+              }
+            }
+          })
+        : await store.commit(request);
+    assert.equal(committed.kind, kind === 'actor' ? 'created' : 'committed');
+    return committed.ready;
+  }
+  const spot = await create('user_spot', 'table', targets.spot, () =>
+    encodeServiceUserSpotAuthorityPayload({
+      state: 'ready',
+      stableType: 'Table',
+      spotId: 'table',
+      ownerId: targets.spot.owner.ownerId,
+      ownerLeaseGeneration: targets.spot.owner.leaseGeneration,
+      ownerMeshName: 'play',
+      ownerNodeRid: targets.spot.nodeRid,
+      ownerNodeGeneration: 7n
+    })
+  );
+  let actor;
+  const actorSnapshot = await create('actor', 'player', targets.actor, (generation) => {
+    actor = {
+      actorId: 'player',
+      objectGeneration: generation,
+      nodeRid: targets.actor.nodeRid,
+      meshName: 'play'
+    };
+    return encodeActorAuthorityIdentity({
+      actor,
+      actorType: 'Player',
+      meshName: 'play',
+      owner: targets.actor.owner,
+      ownerNodeGeneration: 7n,
+      spotId: targets.actor.nodeRid,
+      spotGeneration: 7n,
+      spotKind: framework.ZLinkSpotKind.Entry
+    });
+  });
+  return {
+    store,
+    spot,
+    actor,
+    actorSnapshot,
+    owner: targets.actor.owner,
+    async expire() {
+      now += 1001;
+      live.delete('spot-owner');
+    },
+    async replaceLease() {
+      if (backend === 'authority-memory') live.set('spot-owner', 2n);
+      else {
+        assert.equal(await store.releaseOwnerLease(targets.spot.owner), 'released');
+        const claimed = await store.claimOwnerLease('spot-owner', 1000);
+        assert.equal(claimed.kind, 'claimed');
+        assert.notEqual(claimed.token.leaseGeneration, targets.spot.owner.leaseGeneration);
+      }
+    }
+  };
+}
+
+for (const fault of ['read', 'write', 'generationExhausted']) {
+  test(`membership commit preserves internal ${fault} failure`, async () => {
+    const f = authorityFixture();
+    const internalError = new Error(`internal ${fault} fault`);
+    const claims = new ZLinkActorLocationClaims({ currentOwnerToken: f.owner }, {}, 'play', {
+      async readAuthority() {
+        if (fault === 'read') throw internalError;
+        return f.snapshot;
+      },
+      async compareExchangeAuthority() {
+        if (fault === 'write') throw internalError;
+        return { kind: 'generationExhausted' };
+      }
+    });
+    await assert.rejects(
+      () =>
+        claims.commitMembership(
+          'Player',
+          f.actor,
+          5n,
+          'table',
+          11n,
+          framework.ZLinkSpotKind.User,
+          7n
+        ),
+      (error) =>
+        fault === 'generationExhausted'
+          ? error instanceof framework.ZLinkFrameworkException &&
+            error.kind === framework.ZLinkFrameworkErrorKind.InternalFailure
+          : error === internalError
+    );
   });
 }
