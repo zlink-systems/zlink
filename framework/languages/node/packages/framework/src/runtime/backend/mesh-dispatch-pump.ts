@@ -566,20 +566,24 @@ export class ZLinkMeshDispatchPump {
       }
       if (isNodeOrChannelRecord(record)) {
         // Return the receive claim for the next batch; the existing terminal observer owns record lifetime.
-        terminal = terminal.finally(() => this.releaseRecord(record));
-        this.activeDrains.add(terminal);
-        void terminal.then(
-          () => this.activeDrains.delete(terminal),
-          (error) => {
-            this.activeDrains.delete(terminal);
-            this.reportDispatchError(error, meshDispatchFailureContext(record));
-          }
-        );
+        this.observeRecordTerminal(terminal, record);
         continue;
       }
       return terminal.then(state.dispatchRecords);
     }
     return undefined;
+  }
+
+  private observeRecordTerminal(terminal: Promise<void>, record: ReceiveRecord): void {
+    const tracked = terminal.finally(() => this.releaseRecord(record));
+    this.activeDrains.add(tracked);
+    void tracked.then(
+      () => this.activeDrains.delete(tracked),
+      (error) => {
+        this.activeDrains.delete(tracked);
+        this.reportDispatchError(error, meshDispatchFailureContext(record));
+      }
+    );
   }
 
   private continuePendingClaim(
