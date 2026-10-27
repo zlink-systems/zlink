@@ -2726,6 +2726,58 @@ void verify_deferred_application_terminal_ownership ()
     assert (node->active_application_callbacks () == 0);
 }
 
+bool verify_application_terminal_drain_waits_for_capture_destruction ()
+{
+    using namespace zlink::framework;
+    namespace runtime = zlink::framework::runtime;
+
+    auto registration = make_node ("tcp://127.0.0.1:0", "terminal-capture-drain");
+    auto node = std::make_shared<detail::mesh_node_runtime_t> (registration);
+    node->application_work_enqueued ();
+    node->application_work_started ();
+
+    struct destruction_gate_t
+    {
+        std::promise<void> entered;
+        std::promise<void> release;
+        std::shared_future<void> released = release.get_future ().share ();
+    };
+    struct blocking_capture_t
+    {
+        std::shared_ptr<destruction_gate_t> gate;
+
+        ~blocking_capture_t ()
+        {
+            gate->entered.set_value ();
+            gate->released.wait ();
+        }
+    };
+
+    auto gate = std::make_shared<destruction_gate_t> ();
+    std::future<void> capture_destruction_entered = gate->entered.get_future ();
+    auto capture = std::make_shared<blocking_capture_t> ();
+    capture->gate = gate;
+    runtime::application_dispatch_terminal_owner_t terminal (
+      node, [capture = std::move (capture)] {}, {});
+    capture.reset ();
+
+    std::thread settlement ([&] { terminal.settle (); });
+    const bool capture_destruction_started =
+      capture_destruction_entered.wait_for (2s) == std::future_status::ready;
+    const auto active_during_capture_destruction = node->active_application_callbacks ();
+    gate->release.set_value ();
+    settlement.join ();
+
+    const auto active_after_settlement = node->active_application_callbacks ();
+    const bool passed = capture_destruction_started && active_during_capture_destruction == 1
+                        && active_after_settlement == 0;
+    if (!passed)
+        std::cerr << "terminal capture destruction started=" << capture_destruction_started
+                  << " active during destruction=" << active_during_capture_destruction
+                  << " active after settlement=" << active_after_settlement << '\n';
+    return passed;
+}
+
 #if defined(__unix__)
 // A node process binds "tcp://127.0.0.1:*" and passes the endpoint it resolved to
 // the other process through a pipe, so no port is reserved before the bind.
@@ -3305,6 +3357,8 @@ void verify_repeated_mesh_connect_keeps_one_physical_connection ()
 
 int main (int argc, char **argv)
 {
+    if (argc == 2 && std::string_view (argv[1]) == "--terminal-owner-capture-lifetime")
+        return verify_application_terminal_drain_waits_for_capture_destruction () ? 0 : 1;
     if (argc == 2 && std::string_view (argv[1]) == "--connect-intent") {
         verify_repeated_mesh_connect_keeps_one_physical_connection ();
         return 0;

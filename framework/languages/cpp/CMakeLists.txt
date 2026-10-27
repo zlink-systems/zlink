@@ -1323,6 +1323,11 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     COMMAND test_cpp_framework_m6b_runtime --dispatch-callback-lifetime
     LABELS "framework-unit;framework-m6-runtime;stateful"
     TIMEOUT 30)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_message_follow_capture_lifetime
+    COMMAND test_cpp_framework_m6b_runtime --message-follow-capture-lifetime
+    LABELS "framework-unit;framework-m6-runtime;stateful"
+    TIMEOUT 30)
 
   add_executable(test_cpp_framework_reply_submit_claim
     tests/Zlink.Framework.UnitTests/test_cpp_framework_reply_submit_claim.cpp)
@@ -1478,6 +1483,11 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     NAME zlink_cpp_framework_mesh_node_vertical_test
     COMMAND zlink_cpp_framework_mesh_node_vertical_test
     LABELS "framework-unit;framework-zlink;framework-zlink-channel;framework-zlink-spot;framework-zlink-actor-gateway"
+    TIMEOUT 30)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_application_terminal_capture_lifetime
+    COMMAND zlink_cpp_framework_mesh_node_vertical_test --terminal-owner-capture-lifetime
+    LABELS "framework-unit;framework-regression;resource"
     TIMEOUT 30)
   zlink_framework_cpp_add_test(
     NAME zlink_cpp_framework_mesh_management_async_test
@@ -2000,6 +2010,11 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     tests/Zlink.Framework.UnitTests/test_cpp_framework_async_task.cpp
     "framework-unit;framework-regression;async")
   zlink_framework_cpp_add_boost_headers(test_cpp_framework_async_task)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_coroutine_executor_capture_lifetime
+    COMMAND test_cpp_framework_async_task --coroutine-executor-capture-lifetime
+    LABELS "framework-unit;framework-regression;async;resource"
+    TIMEOUT 30)
   add_zlink_framework_test(
     test_cpp_framework_completion_allocations
     tests/Zlink.Framework.UnitTests/test_cpp_framework_completion_allocations.cpp
