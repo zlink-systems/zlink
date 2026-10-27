@@ -447,6 +447,30 @@ void test_close_cancels_pending_inproc_retry_timer ()
     run_disabled_or_cancelled_inproc_retry (
       "inproc://same-socket-reconnect-close", 100, false, true);
 }
+
+// A due retry runs on the context's control runtime. Context shutdown refuses
+// new control runtimes but leaves the running one in place until teardown, so
+// the retry task must reach the socket's own shutdown check instead of failing
+// on the runtime lookup (#2899).
+void test_context_shutdown_with_pending_inproc_retry ()
+{
+    const char *endpoint = "inproc://same-socket-reconnect-shutdown";
+    void *server = new_router ("server", ZLINK_RID_DUPLICATE_REJECT);
+    void *client = new_router ("client", ZLINK_RID_DUPLICATE_REJECT, 10);
+    observation_t client_events (client);
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_bind (server, endpoint));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (client, endpoint));
+    const uint64_t old_connection = client_events.wait (
+      ZLINK_EVENT_CONNECTION_READY, 0);
+
+    test_context_socket_close_zero_linger (server);
+    client_events.wait (ZLINK_EVENT_DISCONNECTED, old_connection, true);
+
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_ctx_shutdown (get_test_context ()));
+    // Several retry intervals pass with the client still open.
+    msleep (100);
+    test_context_socket_close_zero_linger (client);
+}
 }
 
 int main ()
@@ -468,6 +492,7 @@ int main ()
     RUN_SELECTED (test_reconnect_ivl_zero_discards_inproc_intent);
     RUN_SELECTED (test_disconnect_cancels_pending_inproc_retry);
     RUN_SELECTED (test_close_cancels_pending_inproc_retry_timer);
+    RUN_SELECTED (test_context_shutdown_with_pending_inproc_retry);
 #undef RUN_SELECTED
     return UNITY_END ();
 }
