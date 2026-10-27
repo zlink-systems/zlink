@@ -2106,11 +2106,13 @@ void verify_client_server_close_drains_parked_control_reply ()
     std::promise<void> release;
     const auto released = release.get_future ().share ();
     std::atomic_bool first{true};
+    zlink::poller_t client_poller;
     auto options = zlink::framework::test::runtime_failure_options (
       client_server::raw_client_server_client_options_t{
         bytes ("client-close-drain"),
         {expected.channel_name, expected.security_identity, expected.effective_max_message_bytes},
         expected});
+    options.transport_poller = &client_poller;
     options.control_reply_parked = [&] {
         if (first.exchange (false)) {
             entered.set_value ();
@@ -2125,6 +2127,9 @@ void verify_client_server_close_drains_parked_control_reply ()
         (void) client.drain_monitor_events (std::chrono::steady_clock::now ()).result ().value ();
         (void) server.drain_monitor_events (std::chrono::steady_clock::now ());
         (void) server.pump_one (std::chrono::steady_clock::now ()).result ().value ();
+        // Drive the binding completion owner without applying the parked reply.
+        zlink::poll_event_t event;
+        (void) client_poller.wait (&event, 1, 0ms);
         std::this_thread::sleep_for (1ms);
     }
     const bool parked = callback_entered.wait_for (0ms) == std::future_status::ready;
@@ -4503,6 +4508,8 @@ int main (int argc, char **argv)
                 verify_bound_session_bind_retries_until_route_is_admitted ();
             else if (name == "close-reply")
                 verify_bound_session_close_reply_grammar ();
+            else if (name == "client-server-close-drain")
+                verify_client_server_close_drains_parked_control_reply ();
             else if (name == "silent")
                 verify_unadmitted_route (false);
             else if (name == "prepare")
