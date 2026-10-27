@@ -343,12 +343,12 @@ raw_route_port_t::request (const raw_bytes_t &target_routing_id,
     return result;
 }
 
-zlink::poll_event_flag_t raw_route_port_t::poll (std::chrono::milliseconds timeout,
-                                                 bool accept_application_receive)
+std::optional<zlink::poll_event_flag_t> raw_route_port_t::poll (std::chrono::milliseconds timeout,
+                                                                bool accept_application_receive)
 {
     std::lock_guard lock (_poller_mutex);
     if (_socket == nullptr)
-        return zlink::poll_event_flag_t::none;
+        return std::nullopt;
     zlink::poll_event_t events[3];
     const auto completion_events =
       zlink::poll_event_flag_t::pollout | zlink::poll_event_flag_t::pollcompletion;
@@ -387,9 +387,9 @@ zlink::poll_event_flag_t raw_route_port_t::poll (std::chrono::milliseconds timeo
             wake = true;
         }
     }
-    return readiness != zlink::poll_event_flag_t::none ? readiness
-           : wake                                      ? zlink::poll_event_flag_t::pollin
-                                                       : zlink::poll_event_flag_t::none;
+    if (readiness != zlink::poll_event_flag_t::none || wake || count != 0)
+        return readiness;
+    return std::nullopt;
 }
 
 void raw_route_port_t::signal_activity () noexcept
@@ -430,7 +430,8 @@ std::optional<raw_received_t> raw_route_port_t::receive_if_ready (zlink::poll_ev
 
 std::optional<raw_received_t> raw_route_port_t::try_receive ()
 {
-    return receive_if_ready (poll (std::chrono::milliseconds::zero ()));
+    return receive_if_ready (
+      poll (std::chrono::milliseconds::zero ()).value_or (zlink::poll_event_flag_t::none));
 }
 
 bool raw_route_port_t::reply (const raw_received_t &request, raw_message_t parts)

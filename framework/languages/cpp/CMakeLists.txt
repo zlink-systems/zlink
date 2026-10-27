@@ -2284,6 +2284,30 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     test_cpp_framework_channel_messaging
     tests/Zlink.Framework.UnitTests/test_cpp_framework_channel_messaging.cpp
     "framework-unit;framework-regression;channel")
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_zlink_framework_test(
+      test_cpp_framework_manual_ingress_wait
+      tests/Zlink.Framework.UnitTests/test_cpp_framework_manual_ingress_wait.cpp
+      "framework-unit;framework-regression;framework-client-server;liveness")
+    add_zlink_framework_test(
+      test_cpp_framework_manual_source_threads
+      tests/Zlink.Framework.UnitTests/test_cpp_framework_manual_source_threads.cpp
+      "framework-unit;framework-regression;framework-client-server;liveness")
+    target_include_directories(test_cpp_framework_manual_source_threads PRIVATE
+      ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+    add_zlink_framework_test(
+      test_cpp_framework_client_server_control_submit
+      tests/Zlink.Framework.UnitTests/test_cpp_framework_client_server_control_submit.cpp
+      "framework-unit;framework-regression;framework-client-server;liveness")
+    target_include_directories(test_cpp_framework_client_server_control_submit PRIVATE
+      ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+    target_use_zlink_gtest_main(test_cpp_framework_manual_ingress_wait)
+    target_include_directories(test_cpp_framework_manual_ingress_wait PRIVATE
+      ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+    target_link_options(test_cpp_framework_manual_ingress_wait PRIVATE
+      "LINKER:--wrap=zlink_poller_add" "LINKER:--wrap=zlink_poller_wait"
+      "LINKER:--wrap=zlink_set_router_option" "LINKER:--wrap=zlink_socket_monitor_recv")
+  endif()
   add_zlink_framework_test(
     test_cpp_framework_manual_dispatch_owner
     tests/Zlink.Framework.UnitTests/test_cpp_framework_manual_dispatch_owner.cpp

@@ -35,9 +35,12 @@ class service_liveness_registry_t
   public:
     using clock_t = std::chrono::steady_clock;
 
+    static constexpr std::chrono::milliseconds default_probe_interval{std::chrono::seconds (5)};
+    static constexpr std::chrono::milliseconds default_peer_timeout{std::chrono::seconds (15)};
     explicit service_liveness_registry_t (
-      std::chrono::milliseconds probe_interval = std::chrono::seconds (5),
-      std::chrono::milliseconds peer_timeout = std::chrono::seconds (15));
+      std::chrono::milliseconds probe_interval = default_probe_interval,
+      std::chrono::milliseconds peer_timeout = default_peer_timeout,
+      runtime::offload_executor_t *infrastructure_executor = nullptr);
 
     struct peer_t
     {
@@ -105,8 +108,8 @@ class service_liveness_registry_t
 
     const std::chrono::milliseconds _probe_interval;
     const std::chrono::milliseconds _peer_timeout;
-    runtime::offload_executor_t _lane_executor;
-    mutable runtime::state_lane_t _lane{_lane_executor};
+    std::unique_ptr<runtime::offload_executor_t> _lane_executor;
+    mutable runtime::state_lane_t _lane;
     std::map<std::vector<std::uint8_t>, connection_t, byte_vector_less_t> _peers;
     std::uint64_t _next_probe_id = 1;
     // Earliest instant a peer or admission retry can be due, written on the lane. A receive only

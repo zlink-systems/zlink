@@ -28,7 +28,6 @@
 #include <cstdlib>
 #include <iostream>
 #include <limits>
-#include <random>
 #include <stdexcept>
 #include <string_view>
 #include <utility>
@@ -2035,18 +2034,6 @@ void client_server_location_runtime_t::stop_servers ()
           _server_pump_snapshot.clear ();
       })
       .get ();
-}
-
-std::uint64_t client_server_location_runtime_t::make_lifecycle_generation ()
-{
-    static std::atomic_uint64_t counter{1};
-    const auto random = (static_cast<std::uint64_t> (std::random_device{}()) << 32u)
-                        ^ static_cast<std::uint64_t> (std::random_device{}());
-    const auto time =
-      static_cast<std::uint64_t> (std::chrono::steady_clock::now ().time_since_epoch ().count ());
-    auto value = (random ^ time ^ counter.fetch_add (1))
-                 & static_cast<std::uint64_t> (std::numeric_limits<std::int64_t>::max ());
-    return value == 0 ? 1 : value;
 }
 
 std::uint32_t client_server_location_runtime_t::effective_max_message_bytes (

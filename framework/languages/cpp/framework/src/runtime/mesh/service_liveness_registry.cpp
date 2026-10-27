@@ -10,9 +10,15 @@
 namespace zlink::framework::runtime::mesh
 {
 
-service_liveness_registry_t::service_liveness_registry_t (std::chrono::milliseconds probe_interval,
-                                                          std::chrono::milliseconds peer_timeout) :
-    _probe_interval (probe_interval), _peer_timeout (peer_timeout)
+service_liveness_registry_t::service_liveness_registry_t (
+  std::chrono::milliseconds probe_interval,
+  std::chrono::milliseconds peer_timeout,
+  runtime::offload_executor_t *infrastructure_executor) :
+    _probe_interval (probe_interval),
+    _peer_timeout (peer_timeout),
+    _lane_executor (infrastructure_executor ? nullptr
+                                            : std::make_unique<runtime::offload_executor_t> ()),
+    _lane (infrastructure_executor ? *infrastructure_executor : *_lane_executor)
 {
     if (_probe_interval <= std::chrono::milliseconds::zero () || _peer_timeout <= _probe_interval) {
         throw std::invalid_argument (

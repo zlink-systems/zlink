@@ -406,6 +406,8 @@ class application_job_queue_t
                                                                  std::uint32_t requested)
         {
             if (!_supply.valid ()) {
+                if (auto available = queue.try_reserve_supply_batch (requested))
+                    return std::optional<permit_batch_t> (std::move (available));
                 auto filled = std::make_shared<std::promise<std::optional<permit_batch_t>>> ();
                 _supply = filled->get_future ();
                 _waiter = queue.wait_for_supply_batch (

@@ -254,6 +254,7 @@ class channel_runtime_state_t
     std::shared_ptr<runtime::offload_executor_t> route_client_executor;
     std::map<std::string, route_handler_registry_t> route_handlers;
     std::map<std::string, int> server_peer_weight_overrides;
+    std::function<void ()> server_options_changed;
     std::map<std::string, std::uint64_t> weighted_discovery_cursors;
     std::map<std::string, std::string> last_discovery_request_endpoints;
     dispatch_options_t dispatch;
@@ -410,6 +411,7 @@ class channel_runtime_t
     void bind_fanout_transport (std::string channel_name,
                                 channel_runtime_state_t::fanout_publish_t publish);
     void unbind_fanout_transport (const std::string &channel_name) noexcept;
+    runtime::offload_executor_t &state_executor () const noexcept { return _state->lane_executor; }
     std::shared_ptr<runtime::runtime_failure_collector_t> runtime_failures () const
     {
         return runtime_failures_for (_state->monitoring);
@@ -424,6 +426,7 @@ class channel_runtime_t
                                std::string local_address = {},
                                std::string remote_address = {}) const;
     void set_server_weight (const std::string &channel_name, int value);
+    void bind_server_options_changed (std::function<void ()> notify);
     std::optional<int> server_peer_weight_override (const std::string &channel_name) const;
     task_t<std::optional<int>> server_peer_weight_override_task (std::string channel_name) const;
 

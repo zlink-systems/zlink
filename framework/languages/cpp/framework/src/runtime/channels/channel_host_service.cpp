@@ -4,6 +4,7 @@
 #include "runtime/configuration/service_scope.hpp"
 
 #include "runtime/channels/channel_packet_dispatcher.hpp"
+#include "runtime/client_server/raw_client_server_owner.hpp"
 #include "runtime/channels/channel_reply_writer.hpp"
 #include "runtime/channels/channel_runtime.hpp"
 #include "runtime/channels/channel_runtime_manager.hpp"
@@ -98,8 +99,29 @@ class channel_host_service_t::server_loop_t
         _handler_executor = std::make_unique<offload_executor_t> (
           0, std::min<std::size_t> (hardware_workers, channel_handler_worker_limit),
           channel_worker_idle_timeout, "zlink-channel-server");
-        _poller.add (*_router, zlink::poll_event_flag_t::pollin, 1);
         _poller.add (_monitor, zlink::poll_event_flag_t::pollin, monitor_poll_slot);
+        auto server_routing_id = zlink::routing_id_t::from ("server");
+        _router->get_routing_id (server_routing_id);
+        protocol::client_server_server_admission_t descriptor;
+        descriptor.channel_name = _channel_name;
+        descriptor.server_routing_id = server_routing_id.to_bytes ();
+        descriptor.advertised_endpoint = transport::advertised_tcp_endpoint (
+          _router->options ().last_endpoint (), advertise_host, "ClientServer");
+        descriptor.descriptor_revision = 1;
+        descriptor.lifecycle_generation = client_server::make_lifecycle_generation ();
+        descriptor.state = mesh::service_node_state_t::serving;
+        descriptor.security_identity = transport::default_security_identity;
+        descriptor.weight = static_cast<std::uint32_t> (_capability.service_weight);
+        descriptor.effective_max_message_bytes = static_cast<std::uint32_t> (
+          _capability.max_message_size ? _capability.max_message_size->bytes ()
+                                       : std::numeric_limits<std::int32_t>::max ());
+        client_server::raw_client_server_server_options_t options{descriptor, advertise_host};
+        options.transport_poller = &_poller;
+        options.transport_poller_slot = 1;
+        options.runtime_failures = _runtime.runtime_failures ();
+        _source = std::make_unique<client_server::raw_client_server_server_t> (
+          std::move (options), _context, &_runtime.state_executor ());
+        _source->start (*_router);
         if (_listener_statuses)
             _listener_statuses->update (
               listener_kind_t::client_server, _channel_name,
@@ -109,47 +131,46 @@ class channel_host_service_t::server_loop_t
 
     ~server_loop_t () { stop (); }
 
+    void signal_activity () noexcept { _source->signal_activity (); }
+
     void run ()
     {
         while (!_stop->load (std::memory_order_acquire)) {
             apply_runtime_options ();
-            zlink::poll_event_t readiness;
-            std::size_t ready_count = 0;
+            drain_monitor_events ();
+            const auto now = mesh::service_liveness_registry_t::clock_t::now ();
+            (void) _source->tick_liveness (now).result ().value ();
+            auto next = _source->next_liveness_activity_task ().result ().value ();
+            const auto remaining = [&] {
+                return next
+                         ? std::max (std::chrono::milliseconds::zero (),
+                                     std::chrono::ceil<std::chrono::milliseconds> (
+                                       *next - mesh::service_liveness_registry_t::clock_t::now ()))
+                         : std::chrono::milliseconds (-1);
+            };
             try {
-                ready_count = _poller.wait (&readiness, 1, channel_poll_interval);
+                const auto readiness = _source->poll (remaining ());
+                if (!readiness || *readiness == zlink::poll_event_flag_t::none)
+                    continue;
             }
             catch (...) {
                 break;
             }
-            if (_stop->load (std::memory_order_acquire)) {
+            if (_stop->load (std::memory_order_acquire))
                 break;
-            }
-            if (ready_count != 1) {
-                continue;
-            }
-            const short revents = static_cast<short> (readiness.revents);
-            const short pollin = static_cast<short> (zlink::poll_event_flag_t::pollin);
-            if (readiness.slot == monitor_poll_slot) {
-                if ((revents & pollin) != 0) {
-                    drain_monitor_events ();
-                }
-                continue;
-            }
-            if (readiness.slot != 1 || (revents & pollin) == 0) {
-                continue;
-            }
+            drain_monitor_events ();
             auto permit = _supply.take_batch (
-              *_application_jobs, channel_poll_interval, {},
-              application_job_queue_t::origin_t::remote,
+              *_application_jobs, std::chrono::milliseconds::zero (),
+              [this] { _source->signal_activity (); }, application_job_queue_t::origin_t::remote,
               static_cast<std::uint32_t> (dispatch_limits::receive_batch_messages));
             if (!permit) {
-                drain_monitor_events ();
+                (void) _source->poll (remaining (), false);
                 continue;
             }
             if (!*permit)
                 break;
-            // Reserve this rotation before claiming any ordinary record.
             receive_batch_budget_t budget;
+            std::vector<client_server::received_application_record_t> activity;
             auto next_permit = (**permit).take ();
             while (next_permit && budget.can_receive ()
                    && !_stop->load (std::memory_order_acquire)) {
@@ -160,10 +181,26 @@ class channel_host_service_t::server_loop_t
                 for (const auto &part : _received.parts ())
                     bytes += part.size ();
                 budget.account (bytes);
-                dispatch_async (std::make_shared<zlink::received_t> (std::move (_received)),
-                                std::move (next_permit));
+                if (auto control = _source->consume_control (_received)) {
+                    (void) control->result ().value ();
+                    _received.close ();
+                    next = _source->next_liveness_activity_task ().result ().value ();
+                } else {
+                    if (next && _received.routing_id ()) {
+                        mesh::service_mailbox_record_t record{};
+                        record.source_routing_id = _received.routing_id ()->to_bytes ();
+                        activity.push_back ({std::move (record),
+                                             {},
+                                             mesh::service_liveness_registry_t::clock_t::now (),
+                                             _received.route_generation ()});
+                    }
+                    dispatch_async (std::make_shared<zlink::received_t> (std::move (_received)),
+                                    std::move (next_permit));
+                }
                 next_permit = (**permit).take ();
             }
+            if (!activity.empty ())
+                _source->record_application_activity (activity).result ().value ();
         }
         if (_handler_executor)
             _handler_executor->drain ();
@@ -175,6 +212,8 @@ class channel_host_service_t::server_loop_t
         runtime_failure_collector_t failures;
         if (_handler_executor)
             failures.capture ([&] { _handler_executor->drain (); });
+        if (_source)
+            failures.capture ([&] { _source->close (); });
         failures.capture ([&] { _poller.close (); });
         if (_monitor.valid ())
             failures.capture ([&] { _monitor.close (); });
@@ -390,6 +429,12 @@ class channel_host_service_t::server_loop_t
         }
         _router->options ().peer_weight (
           zlink::peer_weight_t::value (static_cast<std::uint32_t> (std::min (*peer_weight, 100))));
+        auto descriptor = _source->descriptor ();
+        if (descriptor.descriptor_revision == std::numeric_limits<std::uint64_t>::max ())
+            throw std::overflow_error ("ClientServer descriptor revision is exhausted");
+        ++descriptor.descriptor_revision;
+        descriptor.weight = static_cast<std::uint32_t> (*peer_weight);
+        _source->update_descriptor (std::move (descriptor));
         _applied_peer_weight = *peer_weight;
     }
 
@@ -399,19 +444,6 @@ class channel_host_service_t::server_loop_t
             return;
         }
         for (;;) {
-            zlink::poll_event_t readiness;
-            try {
-                if (_poller.wait (&readiness, 1, std::chrono::milliseconds::zero ()) != 1
-                    || readiness.slot != monitor_poll_slot
-                    || (static_cast<short> (readiness.revents)
-                        & static_cast<short> (zlink::poll_event_flag_t::pollin))
-                         == 0) {
-                    return;
-                }
-            }
-            catch (...) {
-                return;
-            }
             std::optional<zlink::monitor_event_t> event;
             try {
                 event = _monitor.recv (zlink::recv_flags_t::dontwait);
@@ -422,6 +454,7 @@ class channel_host_service_t::server_loop_t
             if (!event) {
                 return;
             }
+            _source->observe_monitor_event (*event).result ().value ();
             const auto kind = detail::map_socket_monitor_event (event->event);
             if (!kind) {
                 continue;
@@ -459,6 +492,7 @@ class channel_host_service_t::server_loop_t
     zlink::received_t _received;
     zlink::socket_monitor_t _monitor;
     zlink::poller_t _poller;
+    std::unique_ptr<client_server::raw_client_server_server_t> _source;
     std::set<std::string> _pending_handshake_remotes;
     std::optional<int> _applied_peer_weight;
     std::unique_ptr<offload_executor_t> _handler_executor;
@@ -706,12 +740,18 @@ task_t<void> channel_host_service_t::start (service_provider_t &services)
         stop ();
         throw;
     }
+    detail::channel_runtime_t::from (_bus).bind_server_options_changed ([this] {
+        for (const auto &loop : _loops)
+            loop->signal_activity ();
+    });
     return task_t<void> (result_t<void>::success ());
 }
 
 void channel_host_service_t::request_stop () noexcept
 {
     _stop.store (true, std::memory_order_release);
+    for (const auto &loop : _loops)
+        loop->signal_activity ();
     if (_application_jobs)
         _application_jobs->stop ();
 }
@@ -719,6 +759,8 @@ void channel_host_service_t::request_stop () noexcept
 void channel_host_service_t::stop () noexcept
 {
     request_stop ();
+    _runtime_failures->capture (
+      [&] { detail::channel_runtime_t::from (_bus).bind_server_options_changed ({}); });
     for (auto &thread : _threads)
         if (thread.joinable ())
             _runtime_failures->capture ([&] { thread.join (); });

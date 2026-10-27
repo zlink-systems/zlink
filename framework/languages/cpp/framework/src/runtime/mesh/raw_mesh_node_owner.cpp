@@ -2968,7 +2968,8 @@ std::optional<zlink::poll_event_flag_t> raw_mesh_node_owner_t::begin_receive_tur
         return zlink::poll_event_flag_t::none;
     zlink::poll_event_flag_t readiness = zlink::poll_event_flag_t::none;
     try {
-        readiness = port->poll (std::chrono::milliseconds::zero ());
+        readiness =
+          port->poll (std::chrono::milliseconds::zero ()).value_or (zlink::poll_event_flag_t::none);
     }
     catch (...) {
         return std::nullopt;
@@ -3823,7 +3824,7 @@ bool raw_mesh_node_owner_t::wait_for_activity (std::chrono::milliseconds timeout
     if (!port)
         return false;
     try {
-        return port->poll (timeout, accept_application_receive) != zlink::poll_event_flag_t::none;
+        return port->poll (timeout, accept_application_receive).has_value ();
     }
     catch (...) {
         return false;
@@ -3943,7 +3944,8 @@ std::size_t raw_mesh_node_owner_t::observe_routes ()
     }
     if (!port)
         return 0;
-    const auto readiness = port->poll (std::chrono::milliseconds::zero ());
+    const auto readiness =
+      port->poll (std::chrono::milliseconds::zero ()).value_or (zlink::poll_event_flag_t::none);
     return apply_route_snapshot (readiness);
 }
 

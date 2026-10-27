@@ -899,8 +899,22 @@ void channel_runtime_t::set_server_weight (const std::string &channel_name, int 
     if (value < 0 || value > 10000)
         throw std::invalid_argument ("service weight must be in range 0..10000");
     _state->lane
-      .run_checked (
-        [&] { _state->server_peer_weight_overrides.insert_or_assign (channel_name, value); })
+      .run_checked ([&] {
+          _state->server_peer_weight_overrides.insert_or_assign (channel_name, value);
+          if (_state->server_options_changed)
+              _state->server_options_changed ();
+      })
+      .get ();
+}
+
+void channel_runtime_t::bind_server_options_changed (std::function<void ()> notify)
+{
+    _state->lane
+      .run_checked ([&] {
+          _state->server_options_changed = std::move (notify);
+          if (_state->server_options_changed)
+              _state->server_options_changed ();
+      })
       .get ();
 }
 

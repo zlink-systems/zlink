@@ -1747,3 +1747,34 @@ TEST (ApplicationJobQueue, SupplyRequestBatchReturnsPartialReservationAndOnePend
     EXPECT_EQ (0u, queue.snapshot ().permits_in_use);
     EXPECT_EQ (0u, queue.snapshot ().capacity_waiters);
 }
+
+TEST (ApplicationJobQueue, ImmediateBatchSupplyDoesNotNotifyWaitingIngress)
+{
+    using queue_t = zlink::framework::runtime::application_job_queue_t;
+    using namespace std::chrono_literals;
+    zlink::framework::runtime::application_job_queue_configuration_t configuration;
+    configuration.effective_max_queued_application_jobs = 2;
+    queue_t queue (configuration);
+    queue_t::supply_request_t request;
+    unsigned notifications = 0;
+    auto batch =
+      request.take_batch (queue, 0ms, [&] { ++notifications; }, queue_t::origin_t::remote, 2);
+    ASSERT_TRUE (batch);
+    ASSERT_TRUE (*batch);
+    EXPECT_EQ (0u, notifications);
+    EXPECT_EQ (2u, queue.snapshot ().permits_in_use);
+    EXPECT_FALSE (
+      request.take_batch (queue, 0ms, [&] { ++notifications; }, queue_t::origin_t::remote, 2));
+    EXPECT_EQ (0u, notifications);
+    batch.reset ();
+    auto filled =
+      request.take_batch (queue, 0ms, [&] { ++notifications; }, queue_t::origin_t::remote, 2);
+    ASSERT_TRUE (filled);
+    ASSERT_TRUE (*filled);
+    EXPECT_EQ (1u, notifications);
+    filled.reset ();
+    queue.stop ();
+    auto stopped = request.take_batch (queue, 0ms, {}, queue_t::origin_t::remote, 2);
+    ASSERT_TRUE (stopped);
+    EXPECT_FALSE (*stopped);
+}
