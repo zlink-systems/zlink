@@ -1809,8 +1809,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     id: bigint,
     result: RawServiceRequestResult,
     operationKind: number | undefined
-  ): void =>
-    this.deliverCompletion({ high: 1n, low: id }, operationKind ?? 0, result);
+  ): void => this.deliverCompletion({ high: 1n, low: id }, operationKind ?? 0, result);
 
   private readonly requestObserver: RawServiceRequestObserver = {
     operationCompleted: this.onRequestCompleted,

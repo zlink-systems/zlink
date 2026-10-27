@@ -75,7 +75,10 @@ export interface RawServiceRequestResult {
 }
 
 /** Receives observed request terminals; the context is the caller's operation kind. */
-export interface RawServiceRequestObserver extends OperationObserver<RawServiceRequestResult, number> {
+export interface RawServiceRequestObserver extends OperationObserver<
+  RawServiceRequestResult,
+  number
+> {
   /** Observes a late reply for diagnostics without delivering a second terminal. */
   operationDiscarded?(
     id: bigint,
