@@ -217,11 +217,15 @@ Owner queue에 들어온 record는 application worker가 꺼내 실행한다.
 
 | 단계 | worker가 하는 일 | 그래서 |
 |---|---|---|
-| W1 acquire | 준비된 owner 집합에서 owner를 얻고 그 owner의 [execution gate](../00-foundation/02-glossary.ko.md#execution-gate)를 잡는다([Handler turn 「6」](02-handler-turn-and-execution-gate.ko.md#6-처리-권한-획득의-함정-구현), [「11」](02-handler-turn-and-execution-gate.ko.md#11-두-동기화-지점을-싸게-만든다-구현)). | 무경합이면 원자 연산 하나로 gate를 얻는다. |
+| W1 acquire | 준비된 owner 집합에서 owner를 얻고, execution gate가 있는 owner면 그 [execution gate](../00-foundation/02-glossary.ko.md#execution-gate)를 잡는다([Handler turn 「6」](02-handler-turn-and-execution-gate.ko.md#6-처리-권한-획득의-함정-구현), [「11」](02-handler-turn-and-execution-gate.ko.md#11-두-동기화-지점을-싸게-만든다-구현)). | 무경합이면 원자 연산 하나로 gate를 얻는다. |
 | W2 decode | typed payload를 한 번 역직렬화한다([Payload ownership 「6」](05-payload-ownership-and-codec.ko.md#6-역직렬화를-언제-하는가)). | 실행 권한을 얻기 전에는 역직렬화하지 않는다. |
-| W3 run | handler를 호출한다. permit은 handler의 첫 instruction 직전에 반환한다. handler가 suspend하거나 `Yield`하면 재개는 [Handler turn 「3」](02-handler-turn-and-execution-gate.ko.md#3-yield-시-gate와-claim)을 따른다. | handler 안의 `await`는 permit을 다시 얻지 않는다. |
+| W3 run | handler를 호출한다. permit은 handler의 첫 instruction 직전에 반환한다. 일반 비동기 대기 뒤 재개는 [Handler turn §2](02-handler-turn-and-execution-gate.ko.md#execution-gate)의 turn 유지 규칙을 따르고, 허용된 `Yield` 뒤 재개만 [Handler turn 「3」](02-handler-turn-and-execution-gate.ko.md#3-yield-시-gate와-claim)을 따른다. | handler 안의 `await`는 permit을 다시 얻지 않는다. |
 | W4 reply | handler가 완료된 뒤 그 turn 문맥에서 reply payload를 encode해 binding의 reply operation을 그 자리에서 시작한다. 다른 실행 자원에 넘기지 않는다. | reply 경로에 Framework의 실행 자원 전환이 없다. |
-| W5 next | 시간 예산([Handler turn 「9」](02-handler-turn-and-execution-gate.ko.md#9-시간-예산과-batch-처리-구현)) 안이면 같은 owner의 다음 record를 처리하고, 아니면 gate를 반납하고 다음 owner로 간다. | 한 owner가 worker를 독점하지 않는다. |
+| W5 next | 시간 예산([Handler turn 「9」](02-handler-turn-and-execution-gate.ko.md#9-시간-예산과-batch-처리-구현)) 안이면 같은 owner의 다음 record를 처리하고, 아니면 보유한 gate가 있을 때 반납하고 다음 owner로 간다. | 한 owner가 worker를 독점하지 않는다. |
+
+Gate가 없는 Node·ChannelName owner는 owner queue의 FIFO 순서로 handler를 시작하며, 다음 record는 앞
+handler의 terminal completion을 기다리지 않는다. W3의 handler가 suspend하면 worker는 W5로 가고, W4 reply는
+그 handler가 완료된 뒤 그 handler의 turn 문맥에서 한다.
 
 **Framework는 record마다 별도 dispatch task나 supervisor wrapper를 만들지 않고 공유 worker의 drain을
 재사용한다.** 요청마다 task·future·virtual thread를 만들어 supervisor에 등록하는 모양은 위반이다.
