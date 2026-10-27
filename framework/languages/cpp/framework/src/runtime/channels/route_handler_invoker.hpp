@@ -11,14 +11,15 @@ namespace zlink::framework::detail
 class route_handler_invoker_t
 {
   public:
-    task_t<void> invoke_send (const route_handler_registry_t::entry_t &handler,
-                              const handler_registry_t &filters,
-                              handler_dispatch_kind_t dispatch_kind,
-                              service_provider_t &services,
-                              serializer_registry_t &serializers,
-                              const zlink::message_t &message,
-                              const framework::route_message_context_t &context,
-                              std::function<void ()> before_application_handler = {}) const;
+    task_t<void>
+    invoke_send (const route_handler_registry_t::entry_t &handler,
+                 const handler_registry_t &filters,
+                 handler_dispatch_kind_t dispatch_kind,
+                 service_provider_t &services,
+                 serializer_registry_t &serializers,
+                 const zlink::message_t &message,
+                 const framework::route_message_context_t &context,
+                 detail::handler_start_callback_ref_t before_application_handler = {}) const;
 
     task_t<zlink::message_t>
     invoke_request (const route_handler_registry_t::entry_t &handler,
@@ -28,7 +29,7 @@ class route_handler_invoker_t
                     serializer_registry_t &serializers,
                     const zlink::message_t &message,
                     const framework::route_message_context_t &context,
-                    std::function<void ()> before_application_handler = {}) const;
+                    detail::handler_start_callback_ref_t before_application_handler = {}) const;
 };
 
 } // namespace zlink::framework::detail

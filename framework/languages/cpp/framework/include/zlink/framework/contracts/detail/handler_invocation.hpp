@@ -6,15 +6,51 @@
 #include <zlink/framework/contracts/errors/result.hpp>
 
 #include <functional>
+#include <memory>
 #include <type_traits>
 #include <utility>
 
 namespace zlink::framework::detail
 {
 
+// Borrows its callable until the awaited handler invocation completes.
+class handler_start_callback_ref_t
+{
+  public:
+    handler_start_callback_ref_t () noexcept = default;
+
+    template <typename TCallback>
+        requires (!std::is_same_v<std::remove_cvref_t<TCallback>, handler_start_callback_ref_t>
+                  && std::is_invocable_r_v<void, const TCallback &>)
+    handler_start_callback_ref_t (const TCallback &callback) noexcept :
+        _target (std::addressof (callback)), _invoke (&invoke<TCallback>)
+    {
+    }
+
+    handler_start_callback_ref_t (const std::function<void ()> &callback) noexcept
+    {
+        if (callback) {
+            _target = std::addressof (callback);
+            _invoke = &invoke<std::function<void ()>>;
+        }
+    }
+
+    explicit operator bool () const noexcept { return _invoke != nullptr; }
+    void operator() () const { _invoke (_target); }
+
+  private:
+    template <typename TCallback> static void invoke (const void *target)
+    {
+        std::invoke (*static_cast<const TCallback *> (target));
+    }
+
+    const void *_target = nullptr;
+    void (*_invoke) (const void *) = nullptr;
+};
+
 // Arguments and typed payload are prepared before the target callback starts.
 template <typename TMethod, typename TOwner, typename... TArgs>
-decltype (auto) invoke_prepared_handler (const std::function<void ()> &before_application_handler,
+decltype (auto) invoke_prepared_handler (handler_start_callback_ref_t before_application_handler,
                                          TMethod method,
                                          TOwner &owner,
                                          TArgs &&...args)

@@ -222,7 +222,115 @@ struct route_boundary_handler_t
 {
     int calls = 0;
     void send (const int &, const route_message_context_t &) { ++calls; }
+    int request (const int &value, const route_message_context_t &)
+    {
+        ++calls;
+        return value;
+    }
 };
+
+TEST (RouteHandlerBoundary, ResolverDoesNotAllocateKeys)
+{
+    detail::route_handler_registry_t handlers;
+    const std::string mesh (2048, 'm');
+    const std::string packet (4096, 'p');
+    const std::string other_mesh (2048, 'x');
+    const std::string other_packet (4096, 'x');
+    handlers.on_send<route_boundary_handler_t, int> (mesh, packet, &route_boundary_handler_t::send);
+    const detail::route_handler_registry_t::entry_t *hit = nullptr;
+    const detail::route_handler_registry_t::entry_t *wrong_mesh = nullptr;
+    const detail::route_handler_registry_t::entry_t *wrong_packet = nullptr;
+    const detail::route_handler_registry_t::entry_t *wrong_kind = nullptr;
+    const auto allocations = tests::count_allocations ([&] {
+        hit = handlers.resolve (mesh, runtime::messaging::message_kind_t::command, packet);
+        wrong_mesh =
+          handlers.resolve (other_mesh, runtime::messaging::message_kind_t::command, packet);
+        wrong_packet =
+          handlers.resolve (mesh, runtime::messaging::message_kind_t::command, other_packet);
+        wrong_kind = handlers.resolve (mesh, runtime::messaging::message_kind_t::request, packet);
+    });
+    EXPECT_EQ (0u, allocations);
+    ASSERT_NE (nullptr, hit);
+    EXPECT_EQ (mesh, hit->descriptor.router_channel_id);
+    EXPECT_EQ (packet, hit->descriptor.packet_name);
+    EXPECT_EQ (nullptr, wrong_mesh);
+    EXPECT_EQ (nullptr, wrong_packet);
+    EXPECT_EQ (nullptr, wrong_kind);
+}
+
+struct copy_counting_permit_t
+{
+    int *copies;
+    int *calls;
+    std::array<std::byte, 1024> storage{};
+
+    copy_counting_permit_t (int &copy_count, int &call_count) :
+        copies (&copy_count), calls (&call_count)
+    {
+    }
+    copy_counting_permit_t (const copy_counting_permit_t &other) :
+        copies (other.copies), calls (other.calls)
+    {
+        ++*copies;
+    }
+    void operator() () const { ++*calls; }
+};
+
+TEST (RouteHandlerBoundary, DispatcherBorrowsPermitCallback)
+{
+    for (const auto mode : {message_flow_log_mode_t::off, message_flow_log_mode_t::normal}) {
+        for (const auto kind : {runtime::messaging::message_kind_t::command,
+                                runtime::messaging::message_kind_t::request}) {
+            SCOPED_TRACE (std::to_string (static_cast<int> (mode)) + ":"
+                          + std::to_string (static_cast<int> (kind)));
+            service_collection_t services;
+            services.add_singleton<route_boundary_handler_t> ();
+            auto provider = services.build_provider ();
+            auto &owner = provider.get_required<route_boundary_handler_t> ();
+            serializer_registry_t serializers;
+            detail::route_handler_registry_t handlers;
+            handlers.on_send<route_boundary_handler_t, int> ("mesh", "packet",
+                                                             &route_boundary_handler_t::send);
+            handlers.on_request<route_boundary_handler_t, int, int> (
+              "mesh", "packet", &route_boundary_handler_t::request);
+            detail::no_route_internal_packet_dispatcher_t internal;
+            int copies = 0;
+            int calls = 0;
+            int dispatched = 0;
+            std::function<void ()> permit = copy_counting_permit_t (copies, calls);
+            dispatch_options_t options;
+            options.message_flow (mode);
+            detail::dispatch_options_access_t::set_observer_for_tests (
+              options, [&] (const message_flow_event_t &event) {
+                  if (event.outcome == message_flow_outcome_t::dispatched) {
+                      ++dispatched;
+                      EXPECT_EQ (1, calls);
+                      EXPECT_EQ (0, owner.calls);
+                  }
+              });
+            detail::route_packet_dispatcher_t dispatcher (
+              "mesh", provider, serializers, handlers, internal, options, nullptr,
+              handler_dispatch_kind_t::node_direct_send,
+              handler_dispatch_kind_t::node_direct_request, permit);
+            runtime::messaging::envelope_header_t header;
+            header.kind = kind;
+            header.channel_name = "mesh";
+            header.message_name = "packet";
+            header.content_type = "application/json";
+            header.correlation_id = "01890a5d-ac96-774b-bcce-b302099a8057";
+            auto encoded = runtime::messaging::envelope_codec_t{}.encode_raw_body_parts (
+              header, zlink::message_t::from (std::string ("42")));
+            detail::route_received_packet_t received{zlink::routing_id_t::from ("source"), 1,
+                                                     std::move (encoded)};
+            copies = 0;
+            ASSERT_TRUE (dispatcher.dispatch (received, header));
+            EXPECT_EQ (0, copies);
+            EXPECT_EQ (1, calls);
+            EXPECT_EQ (1, owner.calls);
+            EXPECT_EQ (mode == message_flow_log_mode_t::off ? 0 : 1, dispatched);
+        }
+    }
+}
 
 TEST (RouteHandlerBoundary, DispatcherResolvesHandlerOnce)
 {
@@ -247,10 +355,10 @@ TEST (RouteHandlerBoundary, DispatcherResolvesHandlerOnce)
     detail::route_received_packet_t received{zlink::routing_id_t::from ("source"), std::nullopt,
                                              std::move (encoded)};
     ASSERT_TRUE (dispatcher.dispatch (received, header));
-    // Header and context each copy the packet name; the registry creates one lookup key.
+    // Only the header and context copy the packet name; lookup borrows both key strings.
     const auto copies = tests::count_allocations (
       [&] { EXPECT_TRUE (dispatcher.dispatch (received, header)); }, packet.size () + 1);
-    EXPECT_EQ (3u, copies);
+    EXPECT_EQ (2u, copies);
     EXPECT_EQ (2, provider.get_required<route_boundary_handler_t> ().calls);
 }
 

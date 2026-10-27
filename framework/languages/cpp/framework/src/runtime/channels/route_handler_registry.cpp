@@ -34,8 +34,7 @@ route_handler_registry_t::resolve (std::string_view router_channel_id,
                                    runtime::messaging::message_kind_t kind,
                                    std::string_view packet_name) const
 {
-    const auto found =
-      _handlers.find (key_t{std::string (router_channel_id), kind, std::string (packet_name)});
+    const auto found = _handlers.find (key_view_t{router_channel_id, kind, packet_name});
     return found == _handlers.end () ? nullptr : &found->second;
 }
 

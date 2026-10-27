@@ -35,7 +35,7 @@ using mesh_handler_invoker_t =
                                           serializer_registry_t &,
                                           const zlink::message_t &,
                                           const route_message_context_t &,
-                                          std::function<void ()>)>;
+                                          detail::handler_start_callback_ref_t)>;
 struct mesh_handler_registration_t
 {
     bool request = false;
@@ -549,7 +549,8 @@ mesh_channel_server_builder_t &mesh_channel_server_builder_t::add_handler (bool 
       std::type_index (typeid (TMessage)), std::type_index (typeid (void)),
       [] (service_provider_t &services, serializer_registry_t &serializers,
           const zlink::message_t &message, const route_message_context_t &context,
-          std::function<void ()> before_application_handler) -> task_t<zlink::message_t> {
+          detail::handler_start_callback_ref_t before_application_handler)
+        -> task_t<zlink::message_t> {
           try {
               auto &owner = services.get_required<THandler> ();
               auto payload = detail::deserialize_typed_payload<TMessage> (
@@ -609,7 +610,8 @@ mesh_channel_server_builder_t &mesh_channel_server_builder_t::add_handler (bool 
       std::type_index (typeid (TRequest)), std::type_index (typeid (TReply)),
       [] (service_provider_t &services, serializer_registry_t &serializers,
           const zlink::message_t &message, const route_message_context_t &context,
-          std::function<void ()> before_application_handler) -> task_t<zlink::message_t> {
+          detail::handler_start_callback_ref_t before_application_handler)
+        -> task_t<zlink::message_t> {
           try {
               auto &owner = services.get_required<THandler> ();
               auto payload = detail::deserialize_typed_payload<TRequest> (
