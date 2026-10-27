@@ -14,12 +14,15 @@
 #include "runtime/channels/channel_runtime.hpp"
 #include "runtime/locations/in_memory_location_store.hpp"
 #include "runtime/spots/spot_route_packets.hpp"
+#include "../support/allocation_counter.hpp"
 #include "../support/runtime_failure_fixture.hpp"
 
+#include <array>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <future>
+#include <iostream>
 #include <optional>
 #include <sstream>
 #include <thread>
@@ -92,6 +95,126 @@ TEST (RoutePayloadOwnership, TypedSendRetainsPayloadWhenSerializerDestroysTheCal
     EXPECT_TRUE (alive_during_serializer);
     EXPECT_TRUE (lifetime.expired ());
     EXPECT_FALSE (delivered);
+}
+
+// Size of the one allocation that `make` performs: a task's shared state.
+template <typename TMake> std::size_t single_allocation_size (TMake make)
+{
+    std::array<tests::allocation_event_t, 8> events{};
+    tests::allocation_event_log_t log{events.data (), events.size ()};
+    tests::allocation_event_log = &log;
+    const auto count = tests::count_allocations (make);
+    tests::allocation_event_log = nullptr;
+    EXPECT_EQ (1u, count);
+    return count == 1 ? events[0].size : 0;
+}
+
+struct route_send_fixture_t
+{
+    serializer_registry_t serializers;
+    zlink_builder_t builder = test::runtime_failure_builder ();
+    std::optional<route_client_t> client;
+
+    template <typename TSend> explicit route_send_fixture_t (TSend send)
+    {
+        serializers.add<send_payload_t> (
+          [] (const send_payload_t &) { return encoded_payload_t::from_string ("7"); },
+          [] (const encoded_payload_t &) { return send_payload_t{}; }, "x/y");
+        auto runtime = detail::channel_runtime_t::from (builder.message_bus ());
+        runtime.bind_serializers (serializers);
+        runtime.bind_mesh_node_transport ("m", std::move (send), {});
+        client.emplace (builder.route_client (serializers));
+    }
+
+    route_send_call_t send () { return client->send_to_node ("m", rid, send_payload_t{}); }
+
+    zlink::routing_id_t rid = zlink::routing_id_t::from ("n");
+};
+
+// Submit/completion §4/§7 and hot path E4/E5: a route send owns one public task.
+// The transport boundary is the only coroutine between the call and the transport task.
+TEST (RoutePayloadOwnership, NodeSendCreatesOneTaskAboveTheTransport)
+{
+    const auto public_state =
+      single_allocation_size ([] { task_t<void> ready (result_t<void>::success ()); });
+    const auto transport_state = single_allocation_size ([] {
+        task_t<result_t<void>> ready (
+          result_t<result_t<void>>::success (result_t<void>::success ()));
+    });
+    ASSERT_NE (0u, public_state);
+    ASSERT_NE (0u, transport_state);
+    ASSERT_NE (public_state, transport_state);
+    int delivered = 0;
+    route_send_fixture_t fixture (
+      [&] (const zlink::routing_id_t &, runtime::messaging::message_parts_t) {
+          ++delivered;
+          return task_t<result_t<void>> (
+            result_t<result_t<void>>::success (result_t<void>::success ()));
+      });
+    for (int warmup = 0; warmup < 4; ++warmup) {
+        auto call = fixture.send ();
+        call.async ().result ().value ();
+    }
+    auto call = fixture.send ();
+    std::array<tests::allocation_event_t, 256> events{};
+    tests::allocation_event_log_t log{events.data (), events.size ()};
+    tests::allocation_event_log = &log;
+    const auto total = tests::count_allocations ([&] { call.async ().result ().value (); });
+    tests::allocation_event_log = nullptr;
+    ASSERT_FALSE (log.overflow);
+    std::size_t public_states = 0;
+    std::size_t transport_states = 0;
+    std::ostringstream sizes;
+    for (std::size_t index = 0; index < log.count; ++index) {
+        sizes << events[index].size << ' ';
+        public_states += events[index].size == public_state ? 1 : 0;
+        transport_states += events[index].size == transport_state ? 1 : 0;
+    }
+    std::cout << "route-send allocations=" << total << " public-task-states=" << public_states
+              << " result-task-states=" << transport_states << " sizes=" << sizes.str () << '\n';
+    EXPECT_EQ (5, delivered);
+    // One public task<void> and the transport's own ready task. A wrapper coroutine
+    // between them adds a task state and a frame for every message.
+    EXPECT_EQ (1u, public_states);
+    EXPECT_EQ (1u, transport_states);
+}
+
+// Hot path E4: a deferred transport exception becomes internal_failure at the transport
+// boundary, and a transport failure result keeps its Framework error.
+TEST (RoutePayloadOwnership, NodeSendProjectsDeferredTransportFailures)
+{
+    task_completion_source_t<void> release;
+    auto released = release.task ();
+    route_send_fixture_t thrown (
+      [&] (const zlink::routing_id_t &,
+           runtime::messaging::message_parts_t) -> task_t<result_t<void>> {
+          co_await std::move (released);
+          throw std::runtime_error ("deferred route failure");
+      });
+    auto pending = thrown.send ().async ();
+    release.complete (result_t<void>::success ());
+    const auto &deferred = pending.result ();
+    ASSERT_FALSE (deferred);
+    ASSERT_NE (nullptr, deferred.error ());
+    EXPECT_EQ (framework_error_kind_t::internal_failure, deferred.error_kind ());
+    EXPECT_STREQ ("deferred route failure", deferred.error ()->what ());
+
+    route_send_fixture_t rejected (
+      [] (const zlink::routing_id_t &, runtime::messaging::message_parts_t) {
+          return task_t<result_t<void>> (result_t<result_t<void>>::success (
+            result_t<void>::failure (framework_error_kind_t::unavailable, "route lost")));
+      });
+    const auto failed = rejected.send ().async ();
+    ASSERT_FALSE (failed.result ());
+    EXPECT_EQ (framework_error_kind_t::unavailable, failed.result ().error_kind ());
+    EXPECT_STREQ ("route lost", failed.result ().error ()->what ());
+
+    auto once = rejected.send ();
+    auto copy = once;
+    (void) once.async ().result ();
+    const auto duplicate = copy.async ();
+    ASSERT_FALSE (duplicate.result ());
+    EXPECT_EQ (framework_error_kind_t::protocol_error, duplicate.result ().error_kind ());
 }
 
 TEST (RoutePayloadOwnership, SendBorrowsPayloadForTheAwaitedHandler)
