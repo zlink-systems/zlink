@@ -57,7 +57,7 @@ public final class ZLinkBlockingCalls {
         }
     }
 
-    private static boolean isRuntimeExecutionContext() {
+    public static boolean isRuntimeExecutionContext() {
         return Boolean.TRUE.equals(INFRASTRUCTURE_THREAD.get())
                 || ZLinkApplicationJobContext.current().isPresent()
                 || ZLinkSuspendInvocationContext.currentApplicationExecution() != null
