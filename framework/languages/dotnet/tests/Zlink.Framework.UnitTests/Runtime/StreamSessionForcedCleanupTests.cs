@@ -14,6 +14,13 @@ public sealed class StreamSessionForcedCleanupTests
     [Fact]
     public async Task Fatal_pool_failure_ends_stream_source_and_is_reported_once()
     {
+        if (
+            await IsolatedTestProcess.RunIsolatedAsync(
+                typeof(StreamSessionForcedCleanupTests),
+                nameof(Fatal_pool_failure_ends_stream_source_and_is_reported_once)
+            )
+        )
+            return;
         var registration = new ZLinkFrameworkRegistration();
         ZLinkFrameworkRuntime runtime = null!;
         await using var provider = new ServiceCollection()

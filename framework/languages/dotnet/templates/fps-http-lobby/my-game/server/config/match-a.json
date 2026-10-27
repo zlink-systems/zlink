@@ -1,0 +1,7 @@
+{
+  "Id": "matchA",
+  "RedisEndpoint": "127.0.0.1:6379",
+  "KeyPrefix": "my-game-arena:",
+  "MeshEndpoint": "tcp://127.0.0.1:0",
+  "StreamEndpoint": null
+}
