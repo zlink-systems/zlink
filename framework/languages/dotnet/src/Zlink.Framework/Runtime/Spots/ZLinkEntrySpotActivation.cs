@@ -36,7 +36,7 @@ internal sealed partial class ZLinkEntrySpotActivation
     private readonly ZLinkStateLane _lane = new();
     private bool _configurationOpen = true;
     private Task? _finalization;
-    private int _disposed;
+    private Task? _cancellation;
 
     public ZLinkEntrySpotActivation(
         ZLinkFrameworkRuntime runtime,
@@ -104,14 +104,32 @@ internal sealed partial class ZLinkEntrySpotActivation
 
     public string SpotNodeName { get; }
 
-    private bool IsDisposed => Volatile.Read(ref _disposed) != 0;
+    private bool IsDisposed => Volatile.Read(ref _finalization) is not null;
+
+    // Cancel current operations while Actor terminal barriers still use the gate.
+    internal void CancelActiveOperations()
+    {
+        var cancellation = AwaitStateLane(
+            _lane.RunAsync(() =>
+                _cancellation ??= ZLinkRuntimeTaskRunner.WithoutExecutionContextFlow(
+                    static source => source.CancelAsync(),
+                    _stopSource
+                )
+            )
+        );
+        cancellation.GetAwaiter().GetResult();
+    }
 
     internal void RequestStop()
     {
-        if (IsDisposed)
-            return;
-        _serial?.Complete();
-        _stopSource.Cancel();
+        try
+        {
+            _serial?.Complete();
+        }
+        finally
+        {
+            CancelActiveOperations();
+        }
     }
 
     internal void InitializeRuntimeResources()
@@ -147,11 +165,10 @@ internal sealed partial class ZLinkEntrySpotActivation
                 if (_finalization is not null)
                     return (Task: _finalization, Completion: (TaskCompletionSource?)null);
 
-                Volatile.Write(ref _disposed, 1);
                 var completion = new TaskCompletionSource(
                     TaskCreationOptions.RunContinuationsAsynchronously
                 );
-                _finalization = completion.Task;
+                Volatile.Write(ref _finalization, completion.Task);
                 return (Task: _finalization, Completion: completion);
             })
         );
@@ -184,7 +201,7 @@ internal sealed partial class ZLinkEntrySpotActivation
         await CaptureAsync(_timers.DisposeAsync).ConfigureAwait(false);
         if (_serial is not null)
             await CaptureAsync(_serial.DisposeAsync).ConfigureAwait(false);
-        Capture(_stopSource.Dispose);
+        Capture(() => AwaitStateLane(_lane.RunAsync(_stopSource.Dispose)));
         await CaptureAsync(_handlerInstances.DisposeAsync).ConfigureAwait(false);
         await CaptureAsync(_scope.DisposeAsync).ConfigureAwait(false);
         if (failures.Count == 1)
@@ -281,7 +298,7 @@ internal sealed partial class ZLinkEntrySpotActivation
     public IZLinkWorkerCall<TResult> RunCpuWorker<TResult>(Func<CancellationToken, TResult> work)
     {
         ArgumentNullException.ThrowIfNull(work);
-        return new ZLinkWorkerCall<TResult>(_runtime.WorkerPool, work, _runtime.ErrorSink);
+        return new ZLinkWorkerCall<TResult>(_runtime.WorkerPool, work);
     }
 
     public IZLinkWorkerCall<TResult> RunIoWorker<TResult>(
@@ -289,11 +306,7 @@ internal sealed partial class ZLinkEntrySpotActivation
     )
     {
         ArgumentNullException.ThrowIfNull(work);
-        return new ZLinkIoWorkerCall<TResult>(
-            _runtime.WorkerPool.ShutdownToken,
-            work,
-            _runtime.ErrorSink
-        );
+        return new ZLinkIoWorkerCall<TResult>(_runtime.WorkerPool.ShutdownToken, work);
     }
 
     public void Configure()

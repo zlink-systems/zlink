@@ -58,7 +58,7 @@ Sends a one-way message to the connected client.
 ```cpp
 co_await stream
   .write_packet(zlink::framework::message_t::from(server_tick_t{tick_number}))
-  .submit();
+  .async();
 ```
 
 **Options.** `stream_send_call_t` provides the following modifiers.
@@ -90,7 +90,7 @@ Responds to the request packet currently being processed.
 ```cpp
 co_await stream
   .reply_packet(zlink::framework::message_t::from(get_player_state_result_t{state}))
-  .submit();
+  .async();
 ```
 
 **Options.** `stream_write_call_t` provides the following modifiers.

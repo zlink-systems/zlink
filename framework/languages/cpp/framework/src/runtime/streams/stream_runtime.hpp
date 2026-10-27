@@ -15,6 +15,11 @@
 #include <string_view>
 #include <vector>
 
+namespace zlink::framework::detail
+{
+class stream_allocation_test_access_t;
+}
+
 namespace zlink::framework::runtime
 {
 class session_serial_executor_t;
@@ -162,6 +167,7 @@ class stream_runtime_t
     std::vector<zlink::message_t> written_payloads (const stream_t &stream) const;
 
   private:
+    friend class detail::stream_allocation_test_access_t;
     void send_control_frame (stream_t &stream,
                              const char *name,
                              std::optional<stream_close_reason_t> close_reason = std::nullopt,

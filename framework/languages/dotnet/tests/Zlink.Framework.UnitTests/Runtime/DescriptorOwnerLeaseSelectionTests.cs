@@ -266,7 +266,7 @@ public sealed partial class EntrySpotActorDispatchTests
             );
             time.Advance(TimeSpan.FromSeconds(2));
             var actor = RegisterProbeActor(runtime, actorRef);
-            await using var sourceActivation = AttachActorToUserSpot(runtime, actor);
+            await using var sourceActivation = await AttachActorToUserSpotAsync(runtime, actor);
 
             var result = await runtime.JoinActorEntrySpotAsync(
                 actor,
@@ -293,7 +293,7 @@ public sealed partial class EntrySpotActorDispatchTests
         try
         {
             var actor = RegisterProbeActor(runtime, actorRef);
-            await using var sourceActivation = AttachActorToUserSpot(runtime, actor);
+            await using var sourceActivation = await AttachActorToUserSpotAsync(runtime, actor);
 
             var result = await runtime.JoinActorEntrySpotAsync(
                 actor,
@@ -336,7 +336,7 @@ public sealed partial class EntrySpotActorDispatchTests
             );
             corruptStore!.Enabled = true;
             var actor = RegisterProbeActor(runtime, actorRef);
-            await using var sourceActivation = AttachActorToUserSpot(runtime, actor);
+            await using var sourceActivation = await AttachActorToUserSpotAsync(runtime, actor);
 
             var error = await Assert.ThrowsAsync<InvalidDataException>(async () =>
                 await runtime.JoinActorEntrySpotAsync(
@@ -800,7 +800,7 @@ public sealed partial class EntrySpotActorDispatchTests
         Assert.Equal("activate-reply", reply.Value);
     }
 
-    private static ZLinkUserSpotActivation AttachActorToUserSpot(
+    private static async ValueTask<ZLinkUserSpotActivation> AttachActorToUserSpotAsync(
         ZLinkFrameworkRuntime runtime,
         IZLinkActor actor
     )
@@ -815,7 +815,18 @@ public sealed partial class EntrySpotActorDispatchTests
             "entry",
             TimeSpan.FromSeconds(1)
         );
-        runtime.GetOrCreateActorState(actor.Context.ActorId).JoinSpot(activation);
+        // This fixture has no join descriptor; use the normal membership owner
+        // so scoped terminal cleanup includes the Actor before closing its gate.
+        const System.Reflection.BindingFlags flags =
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+        var staged =
+            (ValueTask<ZLinkSpotActivation?>)
+                typeof(ZLinkSpotActivation)
+                    .GetMethod("StageActorMembershipAsync", flags)!
+                    .Invoke(activation, new object[] { actor, CancellationToken.None })!;
+        _ = await staged;
+        Assert.True(activation.TryGetJoinedActor(actor.Context.ActorId, out var member));
+        Assert.Same(actor, member);
         return activation;
     }
 

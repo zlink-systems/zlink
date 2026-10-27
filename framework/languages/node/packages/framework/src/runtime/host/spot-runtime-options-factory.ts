@@ -1,3 +1,4 @@
+import { DEFAULT_REQUEST_TIMEOUT_MS } from '../../contracts/Configuration/Registration';
 import { routingIdsEqual } from '../routing-id';
 import type { ZLinkRuntimeEventPublisher } from '../diagnostics';
 import { ZLinkSpotRelocationCoordinationMode, ZLinkUserSpotExecutionMode } from '../../contracts';
@@ -87,6 +88,8 @@ export class ZLinkSpotRuntimeOptionsFactory {
   create(actorTransferRuntime: ZLinkActorTransferRuntime): Partial<ZLinkSpotManagerOptions> {
     const spotRouterChannelIdForMesh = this.options.meshRouters.spotRouterChannelIdByMesh();
     return {
+      defaultRequestTimeoutMs:
+        this.options.registration.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
       nodeRid: undefined,
       nodeRidProvider: (meshName) => this.meshNodeRoutingId(meshName),
       nodeGenerationProvider: (meshName) =>

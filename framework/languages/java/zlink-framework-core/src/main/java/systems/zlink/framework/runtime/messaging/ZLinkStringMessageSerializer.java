@@ -3,6 +3,7 @@ package systems.zlink.framework.runtime.messaging;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.ZLinkEncodedPayload;
 import systems.zlink.framework.ZLinkMessageSerializer;
+import systems.zlink.framework.runtime.internal.messaging.ZLinkEncodedPayloadAccess;
 
 import java.nio.charset.StandardCharsets;
 
@@ -10,12 +11,13 @@ public final class ZLinkStringMessageSerializer implements ZLinkMessageSerialize
     @Override
     public <T> ZLinkEncodedPayload serialize(T value) {
         if (value instanceof Message message) {
-            return ZLinkEncodedPayload.from(message.toByteArray());
+            return ZLinkEncodedPayloadAccess.fromOwned(message.toByteArray());
         }
         if (value instanceof byte[] bytes) {
             return ZLinkEncodedPayload.from(bytes);
         }
-        return ZLinkEncodedPayload.from(String.valueOf(value).getBytes(StandardCharsets.UTF_8));
+        return ZLinkEncodedPayloadAccess.fromOwned(
+                String.valueOf(value).getBytes(StandardCharsets.UTF_8));
     }
 
     @Override
