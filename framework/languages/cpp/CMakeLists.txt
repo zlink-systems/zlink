@@ -2292,6 +2292,10 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_include_directories(test_cpp_framework_manual_dispatch_owner PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   add_zlink_framework_test(
+    test_cpp_framework_manual_client_connections
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_manual_client_connections.cpp
+    "framework-unit;framework-regression;framework-client-server")
+  add_zlink_framework_test(
     test_cpp_framework_submission_failure_contract
     tests/Zlink.Framework.UnitTests/test_cpp_framework_submission_failure_contract.cpp
     "framework-contract;channel;messaging")
