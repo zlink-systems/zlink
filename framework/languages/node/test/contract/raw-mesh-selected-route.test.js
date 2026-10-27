@@ -495,7 +495,7 @@ test('a direct RID request selects only the logical target and leaves route acce
 
     // An admitted target is submitted to Core even before its first liveness
     // ACK; Core's REQUEST result is the terminal, not a Framework copy.
-    assert.equal(runtime.topology.admit(peer, 'route:21'), 'admitted');
+    assert.equal(runtime.topology.admit(peer, 'route:21', undefined, undefined, wire.M6aServiceWireCommand.admit), 'admitted');
     runtime.liveness.admit('peer', 'route:21', performance.now());
     // 05-transport-liveness.ko.md:228 (§5): handshake readiness does not wait for ACK.
     assert.equal(runtime.isPeerRouteReady('peer'), true);
@@ -827,7 +827,8 @@ test('maintenance preserves probe boundaries, ACK expiry and replacement admissi
 
 for (const initiallySealed of [false, true]) {
   test(`HELLO maintenance resumes after admission reopens (initiallySealed=${initiallySealed})`, async (t) => {
-    t.mock.method(performance, 'now', () => 0);
+    let now = 0;
+    t.mock.method(performance, 'now', () => now);
     let sealed = initiallySealed;
     const h = selectedRouteRuntime(new Map([['peer', 11n]]), undefined, {
       peerAdmissionSealed: () => sealed
@@ -843,11 +844,16 @@ for (const initiallySealed of [false, true]) {
       assert.equal(hellos().length, before);
       assert.equal(h.runtime.nextMaintenanceDeadlineMs(0), Infinity);
       sealed = false;
-      assert.equal(h.runtime.nextMaintenanceDeadlineMs(1000), 6000);
-      h.runtime.tickLiveness(5999);
-      assert.equal(hellos().length, before);
-      h.runtime.tickLiveness(6000);
-      assert.equal(hellos().length, before + 1);
+      now = 1000;
+      assert.equal(h.runtime.nextMaintenanceDeadlineMs(now), 6000);
+      const initial = initiallySealed ? 1 : 0;
+      assert.equal(hellos().length, before + initial, 'only an unsubmitted first HELLO starts immediately');
+      now = 5999;
+      h.runtime.tickLiveness(now);
+      assert.equal(hellos().length, before + initial);
+      now = 6000;
+      h.runtime.tickLiveness(now);
+      assert.equal(hellos().length, before + initial + 1);
       if (before !== 0) assert.deepEqual(hellos()[1][2], hellos()[0][2]);
     } finally {
       h.runtime.close();
