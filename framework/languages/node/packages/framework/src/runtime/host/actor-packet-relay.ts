@@ -1,3 +1,4 @@
+import type { ZLinkActorSessionAuthorityFence } from '../streams/actor-session-binding-registry';
 import { mapZLinkRequestReply } from '../messaging/request-result';
 import {
   ZLinkFrameworkInternalErrorKind,
@@ -42,7 +43,7 @@ import { streamMetadataMap } from '../actors/bound-session-wire';
 import { decodeRoutingId, normalizeRoutingId, routingIdsEqual } from '../routing-id';
 import { encodeSessionDisconnected } from '../actors/session-disconnected-wire';
 import { ZLinkSubmitStatus } from '../messaging/submission-result';
-import type { DefaultZLinkSpotManager, ZLinkSpotNodeRuntimeManager } from '../spots';
+import type { ZLinkSpotNodeRuntimeManager } from '../spots';
 import type { ZLinkDetachedTaskRunner } from '../spots/spot-actor-join-dispatch';
 import type { ZLinkBoundSessionResponseTarget } from '../streams';
 import type {
@@ -71,7 +72,6 @@ export interface ZLinkActorPacketRelayOptions {
   readonly streamBindingRuntime: () => ZLinkBoundSessionResponsePort & ZLinkStreamActorLookupPort;
   readonly meshRouters: MeshRouterResolver;
   readonly actorManager: () => DefaultZLinkActorManager | undefined;
-  readonly spotManager: () => DefaultZLinkSpotManager | undefined;
   readonly spotNodeRuntime: () => ZLinkSpotNodeRuntimeManager | undefined;
   readonly detachedTaskRunner: ZLinkDetachedTaskRunner;
   readonly errorSink: () => { reportRuntimeTaskException(taskName: string, error: unknown): void };
@@ -113,7 +113,8 @@ export class ZLinkActorPacketRelay {
   async notifyBoundActorDisconnected(
     actor: ZLinkSessionActor,
     signal?: AbortSignal,
-    binding?: ServiceStreamSessionBinding
+    binding?: ServiceStreamSessionBinding,
+    authorityFence?: ZLinkActorSessionAuthorityFence
   ): Promise<void> {
     // The Session binding owns this route, including after relocation and detach (§5, §7).
     const actorRefTarget = this.targets.targetForActorRef(actor.ref);
@@ -123,11 +124,18 @@ export class ZLinkActorPacketRelay {
         actorRefTarget,
         signal,
         actor.ref,
-        binding
+        binding,
+        authorityFence
       );
       return;
     }
-    await this.notifyLocalActorDisconnectedById(actor.actorId, signal, binding, actor.ref);
+    await this.notifyLocalActorDisconnectedById(
+      actor.actorId,
+      signal,
+      binding,
+      actor.ref,
+      authorityFence
+    );
   }
 
   clearRemoteActorPacketTarget(actorId: string): void {
@@ -146,33 +154,32 @@ export class ZLinkActorPacketRelay {
     actorId: string,
     signal?: AbortSignal,
     binding?: ServiceStreamSessionBinding,
-    bindingActorRef?: ActorRef
+    bindingActorRef?: ActorRef,
+    authorityFence?: ZLinkActorSessionAuthorityFence
   ): Promise<void> {
     throwIfAborted(signal);
-    const state = this.options.actorManager()?.getState(actorId);
     const frame = this.disconnectedFrame(actorId, binding);
     const header = RuntimeMessage.fromOwned(Buffer.from(frame.header));
     const body = RuntimeMessage.fromOwned(frame.payload);
     try {
-      if (state?.spotId === undefined)
-        await this.requireSpotNodeRuntime().dispatchEntryActorPacket(
-          'local',
-          actorId,
-          [header, body],
-          false,
-          undefined,
-          bindingActorRef
-        );
-      else
-        await this.requireSpotManager().dispatchRoutedActorPacket(
-          'local',
-          state.spotId,
-          actorId,
-          [header, body],
-          false,
-          undefined,
-          bindingActorRef
-        );
+      const context = sessionActorFollowContext(
+        bindingActorRef,
+        authorityFence,
+        [header, body],
+        false
+      );
+      const ref =
+        context === undefined || bindingActorRef === undefined
+          ? bindingActorRef
+          : attachActorMessageFollowContext(bindingActorRef, context);
+      await this.requireSpotNodeRuntime().dispatchEntryActorPacket(
+        'local',
+        actorId,
+        [header, body],
+        false,
+        undefined,
+        ref
+      );
     } finally {
       header.close();
       body.close();
@@ -276,30 +283,18 @@ export class ZLinkActorPacketRelay {
       ) {
         this.requireCurrentRemoteBinding(relay, _routeContext);
       }
-      const state = this.options.actorManager()?.getState(relay.actorId);
       if (
         frameHeader.kind === ZLinkStreamMessageKind.Send ||
         frameHeader.name === ZLINK_REMOTE_ACTOR_SESSION_DISCONNECTED_PACKET
       ) {
-        const dispatch =
-          state?.spotId === undefined
-            ? this.requireSpotNodeRuntime().dispatchEntryActorPacket(
-                'remote',
-                relay.actorId,
-                [header, body],
-                false,
-                remoteBoundSessionTarget,
-                fallbackActorRef
-              )
-            : this.requireSpotManager().dispatchRoutedActorPacket(
-                'remote',
-                state.spotId,
-                relay.actorId,
-                [header, body],
-                false,
-                remoteBoundSessionTarget,
-                fallbackActorRef
-              );
+        const dispatch = this.requireSpotNodeRuntime().dispatchEntryActorPacket(
+          'remote',
+          relay.actorId,
+          [header, body],
+          false,
+          remoteBoundSessionTarget,
+          fallbackActorRef
+        );
         if (frameHeader.name === ZLINK_REMOTE_ACTOR_SESSION_DISCONNECTED_PACKET) {
           await dispatch;
           return {
@@ -345,25 +340,14 @@ export class ZLinkActorPacketRelay {
         frameHeader.requestSeq !== undefined &&
         relay.returnResponse !== true
       ) {
-        const dispatch =
-          state?.spotId === undefined
-            ? this.requireSpotNodeRuntime().dispatchEntryActorPacket(
-                'remote',
-                relay.actorId,
-                [header, body],
-                false,
-                remoteBoundSessionTarget,
-                fallbackActorRef
-              )
-            : this.requireSpotManager().dispatchRoutedActorPacket(
-                'remote',
-                state.spotId,
-                relay.actorId,
-                [header, body],
-                false,
-                remoteBoundSessionTarget,
-                fallbackActorRef
-              );
+        const dispatch = this.requireSpotNodeRuntime().dispatchEntryActorPacket(
+          'remote',
+          relay.actorId,
+          [header, body],
+          false,
+          remoteBoundSessionTarget,
+          fallbackActorRef
+        );
         closeFrameMessages = false;
         const deferredPacketName = frameHeader.name;
         const deferredRequestSeq = frameHeader.requestSeq;
@@ -414,25 +398,14 @@ export class ZLinkActorPacketRelay {
           )
         };
       }
-      const response =
-        state?.spotId === undefined
-          ? await this.requireSpotNodeRuntime().dispatchEntryActorPacket(
-              'remote',
-              relay.actorId,
-              [header, body],
-              relay.returnResponse === true,
-              remoteBoundSessionTarget,
-              fallbackActorRef
-            )
-          : await this.requireSpotManager().dispatchRoutedActorPacket(
-              'remote',
-              state.spotId,
-              relay.actorId,
-              [header, body],
-              relay.returnResponse === true,
-              remoteBoundSessionTarget,
-              fallbackActorRef
-            );
+      const response = await this.requireSpotNodeRuntime().dispatchEntryActorPacket(
+        'remote',
+        relay.actorId,
+        [header, body],
+        relay.returnResponse === true,
+        remoteBoundSessionTarget,
+        fallbackActorRef
+      );
       return {
         ok: true,
         response,
@@ -612,28 +585,15 @@ export class ZLinkActorPacketRelay {
     );
     let request: Record<string, unknown>;
     try {
-      const authority = aggregateRoute?.authorityFence;
-      const messageFollowContext =
-        authority?.ownerId === undefined || authority.ownerNodeGeneration === undefined
-          ? undefined
-          : createInitialActorMessageFollowContext(
-              {
-                meshName: storedActorRef.meshName,
-                actorRef: storedActorRef,
-                actorType: authority.actorType ?? '',
-                ownerNodeGeneration: authority.ownerNodeGeneration,
-                ownerId: authority.ownerId,
-                ownerLeaseGeneration: authority.ownerLeaseGeneration,
-                authorityOwnerGeneration: authority.authorityOwnerGeneration,
-                authorityStoreVersion: authority.authorityStoreVersion ?? ''
-              },
-              [header, payload],
-              returnResponse,
-              undefined,
-              isValidMessageFollowId(frameHeader.correlationId)
-                ? frameHeader.correlationId
-                : createMessageFollowId()
-            );
+      const messageFollowContext = sessionActorFollowContext(
+        storedActorRef,
+        aggregateRoute?.authorityFence,
+        [header, payload],
+        returnResponse,
+        isValidMessageFollowId(frameHeader.correlationId)
+          ? frameHeader.correlationId
+          : createMessageFollowId()
+      );
       request = encodeRemoteActorPacketRelayPayload({
         actorId: actor.actorId,
         routerChannelId: remoteTarget.routerChannelId,
@@ -752,7 +712,8 @@ export class ZLinkActorPacketRelay {
     remoteTarget: ZLinkRemoteBoundSessionTarget | ZLinkRemoteActorPacketTarget,
     signal?: AbortSignal,
     bindingActorRef?: ActorRef,
-    binding?: ServiceStreamSessionBinding
+    binding?: ServiceStreamSessionBinding,
+    authorityFence?: ZLinkActorSessionAuthorityFence
   ): Promise<void> {
     const spotKind: ZLinkSpotKind | undefined =
       'spotKind' in remoteTarget ? (remoteTarget.spotKind as ZLinkSpotKind | undefined) : undefined;
@@ -761,12 +722,27 @@ export class ZLinkActorPacketRelay {
       binding,
       'sessionNodeRid' in remoteTarget ? remoteTarget : undefined
     );
-    const payload = encodeRemoteActorPacketRelayPayload({
-      actorId,
-      routerChannelId: remoteTarget.routerChannelId,
-      bindingActorRef,
-      ...frame
-    });
+    const parts = [
+      RuntimeMessage.fromOwned(Buffer.from(frame.header)),
+      RuntimeMessage.fromOwned(frame.payload)
+    ];
+    let payload: Record<string, unknown>;
+    try {
+      payload = encodeRemoteActorPacketRelayPayload({
+        actorId,
+        routerChannelId: remoteTarget.routerChannelId,
+        bindingActorRef,
+        messageFollowContext: sessionActorFollowContext(
+          bindingActorRef,
+          authorityFence,
+          parts,
+          false
+        ),
+        ...frame
+      });
+    } finally {
+      for (const part of parts) part.close();
+    }
     if ((spotKind ?? ZLinkSpotKind.Entry) === ZLinkSpotKind.Entry) {
       await mapZLinkRequestReply(
         this.options.routeTransport.request(
@@ -893,13 +869,10 @@ export class ZLinkActorPacketRelay {
     payload: Message
   ): Promise<boolean> {
     const state = this.options.actorManager()?.getState(actor.actorId);
-    const spotId = state?.spotId as RoutingId | undefined;
-    const hasActiveSpot =
-      spotId !== undefined && this.options.spotManager()?.hasActiveSpot(spotId) === true;
-    if (!hasActiveSpot) {
+    if (state === undefined) {
       return false;
     }
-    const actorRef = state?.nativeActorRef as ActorRef | undefined;
+    const actorRef = state.nativeActorRef as ActorRef | undefined;
     const localNode = this.options.spotNodeRuntime()?.primaryMeshNode;
     const localNodeRid = localNode === undefined ? undefined : String(localNode.status().routingId);
     if (
@@ -923,12 +896,13 @@ export class ZLinkActorPacketRelay {
     try {
       this.options.detachedTaskRunner.runDetached('local actor packet relay', async () => {
         try {
-          const response = await this.requireSpotManager().dispatchRoutedActorPacket(
+          const response = await this.requireSpotNodeRuntime().dispatchEntryActorPacket(
             'local',
-            spotId,
             actor.actorId,
             [header, body],
-            returnResponse
+            returnResponse,
+            undefined,
+            actor.ref
           );
           if (!returnResponse) {
             return;
@@ -1011,14 +985,6 @@ export class ZLinkActorPacketRelay {
     }
     return runtime;
   }
-
-  private requireSpotManager(): DefaultZLinkSpotManager {
-    const manager = this.options.spotManager();
-    if (manager === undefined) {
-      throw new Error('SPOT manager runtime is not started.');
-    }
-    return manager;
-  }
 }
 
 function isValidMessageFollowId(value: string | undefined): value is string {
@@ -1032,4 +998,35 @@ function withDefaultSpotKind(
   return target.spotKind === undefined
     ? { ...target, spotKind: ZLinkSpotKind.Entry }
     : (target as ZLinkRemoteActorPacketTarget & { readonly spotKind: ZLinkSpotKind });
+}
+
+function sessionActorFollowContext(
+  actorRef: ActorRef | undefined,
+  authority: ZLinkActorSessionAuthorityFence | undefined,
+  parts: readonly Message[],
+  request: boolean,
+  operationId?: string
+) {
+  if (
+    actorRef === undefined ||
+    authority?.ownerId === undefined ||
+    authority.ownerNodeGeneration === undefined
+  )
+    return undefined;
+  return createInitialActorMessageFollowContext(
+    {
+      meshName: actorRef.meshName,
+      actorRef,
+      actorType: authority.actorType ?? '',
+      ownerNodeGeneration: authority.ownerNodeGeneration,
+      ownerId: authority.ownerId,
+      ownerLeaseGeneration: authority.ownerLeaseGeneration,
+      authorityOwnerGeneration: authority.authorityOwnerGeneration,
+      authorityStoreVersion: authority.authorityStoreVersion ?? ''
+    },
+    parts,
+    request,
+    undefined,
+    operationId
+  );
 }
