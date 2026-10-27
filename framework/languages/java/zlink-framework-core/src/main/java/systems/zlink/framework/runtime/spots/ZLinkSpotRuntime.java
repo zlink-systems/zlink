@@ -69,6 +69,7 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkPendingObjectCrea
 import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementCapacityBundle;
 import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementCapacityExhausted;
 import systems.zlink.framework.runtime.internal.locations.ZLinkRelocationFound;
+import systems.zlink.framework.runtime.internal.messaging.ZLinkEncodedPayloadAccess;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkMeshMessageMetrics;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics;
 import systems.zlink.framework.runtime.internal.monitoring.ZLinkRuntimeEventDispatcher;
@@ -137,6 +138,11 @@ import java.util.stream.Collectors;
 
 public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         implements ZLinkSpotManager, AutoCloseable {
+    public static Set<Class<?>> prepareConstruction(
+            ZLinkFrameworkRegistration registration, ZLinkHandlerActivator handlerFactory) {
+        return ZLinkSpotActivationFactory.prepareConstruction(registration, handlerFactory);
+    }
+
     private static final int ACTOR_RECV_INFO_NO_BIND = 1;
     private static final long ACTOR_JOURNAL_SIZE_HINT_OVERHEAD_BYTES = 512L;
 
@@ -1181,7 +1187,11 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                         .closeOnLifecycle(
                                                                 intent.orElseThrow()
                                                                         .intent()
-                                                                        .target()))
+                                                                        .target(),
+                                                                Instant.ofEpochMilli(
+                                                                        intent.orElseThrow()
+                                                                                .intent()
+                                                                                .deadlineUnixMs())))
                         .exceptionallyCompose(
                                 failure -> {
                                     Throwable cause = unwrapCompletion(failure);
@@ -1268,6 +1278,10 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                         });
     }
 
+    Instant defaultCloseDeadline(Instant startedAt) {
+        return startedAt.plus(defaultRequestTimeout);
+    }
+
     private static void rejectAfterRelocationReady(String operation) {
         systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext
                 .rejectAfterRelocationReady(operation);
@@ -1284,7 +1298,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         ZLinkLocationRepository locations = requireUserSpotLocationStore();
         String selectedMesh = resolveObjectMesh(meshName);
         String spotId = requestedId == null ? UUID.randomUUID().toString() : requestedId;
-        byte[] applicationBytes = request.toEncodedPayload(serializer).bytes();
+        byte[] applicationBytes =
+                ZLinkEncodedPayloadAccess.borrow(request.toEncodedPayload(serializer));
         byte[] envelope =
                 userSpotPayloads.encodeApplicationPayload(
                         new systems.zlink.framework.runtime.internal.service

@@ -1,5 +1,30 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #include "../support/session_disconnect_probe_spot.hpp"
+#include <zlink.hpp>
+#if defined(ZLINK_TEST_CONNECT_COUNT)
+#include <zlink.h>
+#include <atomic>
+
+std::atomic<std::size_t> native_connect_calls{0};
+std::atomic<std::size_t> native_disconnect_calls{0};
+std::atomic<std::size_t> native_call_sequence{0};
+std::atomic<std::size_t> last_native_connect{0};
+std::atomic<std::size_t> last_native_disconnect{0};
+extern "C" zlink_connect_result_t __real_zlink_connect (void *, const char *);
+extern "C" zlink_connect_result_t __real_zlink_disconnect (void *, const char *);
+extern "C" zlink_connect_result_t __wrap_zlink_connect (void *socket, const char *endpoint)
+{
+    ++native_connect_calls;
+    last_native_connect = ++native_call_sequence;
+    return __real_zlink_connect (socket, endpoint);
+}
+extern "C" zlink_connect_result_t __wrap_zlink_disconnect (void *socket, const char *endpoint)
+{
+    ++native_disconnect_calls;
+    last_native_disconnect = ++native_call_sequence;
+    return __real_zlink_disconnect (socket, endpoint);
+}
+#endif
 #include "../support/runtime_failure_fixture.hpp"
 
 #include "runtime/mesh/mesh_node_runtime.hpp"
@@ -31,6 +56,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cassert>
+#include <cerrno>
 #include <chrono>
 #include <cstdio>
 #include <condition_variable>
@@ -51,6 +77,7 @@
 #include <vector>
 
 #if defined(__unix__)
+#include <poll.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #endif
@@ -875,7 +902,7 @@ class expired_actor_bind_session_t final : public zlink::framework::packet_strea
     }
     zlink::framework::task_t<void> on_packet (zlink::framework::stream_t &,
                                               const zlink::framework::session_message_context_t &,
-                                              const zlink::message_t &) override
+                                              const zlink::framework::message_t &) override
     {
         co_return;
     }
@@ -2759,6 +2786,33 @@ int run_cross_process_delivery ()
     int reciprocal_endpoint_pipe[2];
     int formal_descriptor_pipe[2];
     int formal_ack_pipe[2];
+    const auto read_byte_while_dispatching = [] (auto &node, int fd, char &value) {
+        pollfd descriptor{fd, POLLIN, 0};
+        while (true) {
+            const int poll_result = poll (&descriptor, 1, 0);
+            if (poll_result < 0) {
+                if (errno == EINTR)
+                    continue;
+                return false;
+            }
+            if (poll_result > 0
+                && (descriptor.revents & (POLLIN | POLLHUP | POLLERR | POLLNVAL)) != 0) {
+                const ssize_t bytes = read (fd, &value, sizeof (value));
+                if (bytes >= 0)
+                    return bytes == 1;
+                if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)
+                    continue;
+                return false;
+            }
+            (void) std::move (
+              node.dispatch_ready ([] (const zlink::framework::runtime::host::ready_record_t &,
+                                       const zlink::framework::runtime::host::receive_record_t &,
+                                       std::vector<zlink::message_t>) {}))
+              .result ()
+              .value ();
+            std::this_thread::sleep_for (10ms);
+        }
+    };
     if (pipe (endpoint_pipe) != 0 || pipe (direct_ack_pipe) != 0 || pipe (channel_ack_pipe) != 0
         || pipe (request_ack_pipe) != 0 || pipe (completion_ack_pipe) != 0
         || pipe (spot_request_ack_pipe) != 0 || pipe (reciprocal_ready_pipe) != 0
@@ -2922,7 +2976,7 @@ int run_cross_process_delivery ()
         (void) write (reciprocal_child_ready_pipe[1], &ready, sizeof (ready));
         close (reciprocal_child_ready_pipe[1]);
         char stop = 0;
-        (void) read (reciprocal_child_stop_pipe[0], &stop, sizeof (stop));
+        (void) read_byte_while_dispatching (reciprocal_node, reciprocal_child_stop_pipe[0], stop);
         close (reciprocal_child_stop_pipe[0]);
         reciprocal_node.stop ();
         completion_owner.close ();
@@ -2951,8 +3005,7 @@ int run_cross_process_delivery ()
     node.start ();
     assert (wait_until_admitted (node));
     char reciprocal_ready = 0;
-    assert (read (reciprocal_ready_pipe[0], &reciprocal_ready, sizeof (reciprocal_ready))
-            == sizeof (reciprocal_ready));
+    assert (read_byte_while_dispatching (node, reciprocal_ready_pipe[0], reciprocal_ready));
     close (reciprocal_ready_pipe[0]);
     assert (reciprocal_ready == 1);
 
@@ -3180,8 +3233,82 @@ int run_cross_process_delivery ()
 #endif
 } // namespace
 
+void verify_repeated_mesh_connect_keeps_one_physical_connection ()
+{
+    namespace mesh = zlink::framework::runtime::mesh;
+    for (const bool typed : {false, true}) {
+        auto context = std::make_shared<zlink::context_t> ();
+        zlink::router_socket_t peer (*context);
+        peer.options ().handover (true);
+        peer.set_routing_id (zlink::routing_id_t::from (std::string ("intent-peer")));
+        const auto endpoint = typed ? "inproc://typed-connect-intent" : "inproc://connect-intent";
+        peer.bind (endpoint);
+        auto monitor = peer.monitor_open (zlink::monitor_event::connection_ready);
+        mesh::raw_mesh_node_options_t options;
+        options.descriptor.mesh_name = "connect-intent";
+        options.descriptor.node_routing_id = {'l', 'o', 'c', 'a', 'l'};
+        options.descriptor.lifecycle_generation = 1;
+        options.descriptor.descriptor_revision = 1;
+        options.descriptor.advertised_endpoint = std::string (endpoint) + "-local";
+        options.runtime_failures =
+          std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ();
+        mesh::raw_mesh_node_owner_t local (std::move (options), context);
+        local.start ();
+        auto expected = local.topology ().local_descriptor ();
+        expected.node_routing_id = {'i', 'n', 't', 'e', 'n', 't', '-', 'p', 'e', 'e', 'r'};
+        expected.advertised_endpoint = endpoint;
+        const auto connect = [&] {
+            return typed ? local.connect_peer (endpoint, expected) : local.connect_peer (endpoint);
+        };
+        const auto wait_ready = [&] (std::chrono::milliseconds timeout) {
+            zlink::poller_t poller;
+            poller.add (monitor, zlink::poll_event_flag_t::pollin, 1);
+            zlink::poll_event_t event;
+            if (poller.wait (&event, 1, timeout) != 1)
+                return false;
+            return monitor.recv (zlink::recv_flags_t::dontwait).has_value ();
+        };
+        assert (connect ());
+        assert (wait_ready (2s));
+#if defined(ZLINK_TEST_CONNECT_COUNT)
+        const auto first_connects = native_connect_calls.load ();
+#endif
+        assert (connect ());
+        assert (!wait_ready (100ms));
+#if defined(ZLINK_TEST_CONNECT_COUNT)
+        assert (native_connect_calls == first_connects);
+        if (typed) {
+            for (int change = 0; change != 3; ++change) {
+                if (change == 0)
+                    expected.security_identity = "replacement-security";
+                else if (change == 1)
+                    ++expected.lifecycle_generation;
+                else
+                    expected.node_routing_id.push_back ('2');
+                const auto connects = native_connect_calls.load ();
+                const auto disconnects = native_disconnect_calls.load ();
+                assert (connect ());
+                assert (native_connect_calls == connects + 1);
+                assert (native_disconnect_calls == disconnects + 1);
+                assert (last_native_disconnect < last_native_connect);
+                assert (connect ());
+                assert (native_connect_calls == connects + 1);
+            }
+        }
+#endif
+        local.disconnect_peer (endpoint);
+        assert (connect ());
+        assert (wait_ready (2s));
+        local.close ();
+    }
+}
+
 int main (int argc, char **argv)
 {
+    if (argc == 2 && std::string_view (argv[1]) == "--connect-intent") {
+        verify_repeated_mesh_connect_keeps_one_physical_connection ();
+        return 0;
+    }
     if ((argc == 2 || argc == 3) && std::string_view (argv[1]) == "--automatic-intent") {
         const int repetitions = argc == 3 ? std::stoi (argv[2]) : 1;
         if (repetitions <= 0)

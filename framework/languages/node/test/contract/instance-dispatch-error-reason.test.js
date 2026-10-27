@@ -20,7 +20,7 @@ const {
 const failures = [
   [
     new framework.ZLinkFrameworkException(framework.ZLinkFrameworkErrorKind.NotFound, 'missing'),
-    'no_handler'
+    'handler_exception'
   ],
   [
     new framework.ZLinkFrameworkException(
@@ -49,7 +49,7 @@ const failures = [
       ZLinkFrameworkInternalErrorKind.SpotRouteNotFound,
       'missing route'
     ),
-    'no_handler'
+    'stale_target'
   ],
   [new Error('handler failed'), 'handler_exception']
 ];

@@ -1,0 +1,9 @@
+{
+  "Id": "session",
+  "RedisEndpoint": "127.0.0.1:6379",
+  "KeyPrefix": "my-game:",
+  "MeshEndpoint": "tcp://127.0.0.1:0",
+  "Capacity": 2,
+  "RegionLimit": 2,
+  "StreamEndpoint": "ws://127.0.0.1:0"
+}

@@ -58,6 +58,7 @@ import systems.zlink.framework.runtime.internal.spots.SpotTransportAddressResolv
 import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
 import systems.zlink.framework.runtime.locations.ZLinkLocationLifecycle;
 import systems.zlink.framework.runtime.locations.ZLinkStoreLocationResolvers;
+import systems.zlink.framework.runtime.messaging.ZLinkMessagePayloads;
 import systems.zlink.framework.runtime.messaging.ZLinkPayloadEncoding;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderCodec;
@@ -2684,7 +2685,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         if (request == null) {
             throw new ZLinkConfigurationException("request is required");
         }
-        return Message.from(request.toEncodedPayload(serializer).bytes());
+        return ZLinkMessagePayloads.message(request, serializer);
     }
 
     ZLinkBackendActorRef refFor(ZLinkActor actor) {
@@ -5012,7 +5013,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
 
         private Message messageFromRequest(Object request) {
             if (request instanceof ZLinkMessage message) {
-                return Message.from(message.toEncodedPayload(serializer).bytes());
+                return ZLinkMessagePayloads.message(message, serializer);
             }
             ZLinkPayloadEncoding.EncodedPayload encoded =
                     ZLinkPayloadEncoding.encode(serializer, request);

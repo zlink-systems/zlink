@@ -23,6 +23,7 @@ import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
 import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
 import systems.zlink.framework.runtime.locations.ZLinkServiceAuthorityPayloadCodec;
 import systems.zlink.framework.runtime.mesh.ZLinkActivationAdmission;
+import systems.zlink.framework.runtime.messaging.ZLinkMessagePayloads;
 import systems.zlink.framework.spots.ZLinkSpot;
 import systems.zlink.framework.spots.ZLinkSpotCloseReason;
 
@@ -152,7 +153,7 @@ final class ZLinkUserSpotOperationHandler
         var fence = request.intent().target();
         SpotActivation activation = lifecycle.spotActivationFor(fence.spotId());
         if (activation == null) {
-            return closeOnLifecycle(fence)
+            return closeOnLifecycle(fence, Instant.ofEpochMilli(request.intent().deadlineUnixMs()))
                     .thenApply(ZLinkInternalMeshNode.UserSpotCloseResponse::new);
         }
         CompletableFuture<ZLinkInternalMeshNode.UserSpotCloseResponse> result =
@@ -161,7 +162,10 @@ final class ZLinkUserSpotOperationHandler
                 .context
                 .enqueueClose(
                         () ->
-                                closeOnLifecycle(fence)
+                                closeOnLifecycle(
+                                                fence,
+                                                Instant.ofEpochMilli(
+                                                        request.intent().deadlineUnixMs()))
                                         .handle(
                                                 (closed, failure) -> {
                                                     if (failure == null) {
@@ -191,7 +195,8 @@ final class ZLinkUserSpotOperationHandler
      * lifecycle lane when the activation exists, so a Join or leave accepted earlier on that lane
      * has decided its membership before the membership check here.
      */
-    CompletionStage<Boolean> closeOnLifecycle(ZLinkServiceM6BWireCodec.UserSpotCloseFence fence) {
+    CompletionStage<Boolean> closeOnLifecycle(
+            ZLinkServiceM6BWireCodec.UserSpotCloseFence fence, Instant deadline) {
         ZLinkSpotCloseCoordinator retained =
                 runtime.closingCoordinator(
                         fence.spotId(),
@@ -459,8 +464,7 @@ final class ZLinkUserSpotOperationHandler
                                                                                                     .closingStage(
                                                                                                             ZLinkSpotCloseReason
                                                                                                                     .EXPLICIT_CLOSE,
-                                                                                                            Instant
-                                                                                                                    .now())),
+                                                                                                            deadline)),
                                                                     ZLinkSpotCloseCoordinator.Step
                                                                             .operation(
                                                                                     () -> {
@@ -781,7 +785,7 @@ final class ZLinkUserSpotOperationHandler
         List<Message> parts =
                 reply == null
                         ? List.of()
-                        : List.of(Message.from(reply.toEncodedPayload(serializer).bytes()));
+                        : List.of(ZLinkMessagePayloads.message(reply, serializer));
         return new ZLinkInternalMeshNode.UserSpotCreateResponse(
                 result, request.intent().spotId(), generation, parts);
     }

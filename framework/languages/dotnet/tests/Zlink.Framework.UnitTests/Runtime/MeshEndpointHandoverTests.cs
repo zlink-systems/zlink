@@ -307,7 +307,6 @@ public sealed partial class StatefulServiceRuntimeTests
         {
             private IRouterSocket _inner = null!;
             private Action? _beforeDisconnectRid;
-            internal IRouterSocket Inner => _inner;
 
             public void Initialize(IRouterSocket inner, Action beforeDisconnectRid)
             {

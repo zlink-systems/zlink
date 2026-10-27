@@ -963,53 +963,62 @@ public sealed partial class SpotCloseConformanceTests(Xunit.Abstractions.ITestOu
                 authority.ObjectGeneration
             )
         )!;
-        await activation.BeginCloseBoundaryAsync(CancellationToken.None);
-        activation.BeginCommittedClose();
-        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var publishEntered = new TaskCompletionSource(
-            TaskCreationOptions.RunContinuationsAsynchronously
-        );
-        var releasePublication = new TaskCompletionSource(
-            TaskCreationOptions.RunContinuationsAsynchronously
-        );
-        host.State.OnPendingHandler = _ =>
-        {
-            entered.TrySetResult();
-            return Task.CompletedTask;
-        };
-        var retained = await AdmitRetainedIntentAsync(
-            host,
-            activation,
-            oldAuthority,
-            spotId,
-            "pending-hold"
-        );
-        var commit = activation
-            .SetSuccessorAsync(
-                successor,
-                authority,
-                null,
-                async completeSuccessor =>
-                {
-                    publishEntered.TrySetResult();
-                    await releasePublication.Task;
-                    await completeSuccessor();
-                }
-            )
-            .AsTask();
         try
         {
-            await publishEntered.Task.WaitAsync(Wait);
-            Assert.True(activation._serial.HasPendingAcceptedState(static _ => true));
-            Assert.False(entered.Task.IsCompleted);
+            await activation.BeginCloseBoundaryAsync(CancellationToken.None);
+            activation.BeginCommittedClose();
+            var entered = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously
+            );
+            var publishEntered = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously
+            );
+            var releasePublication = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously
+            );
+            host.State.OnPendingHandler = _ =>
+            {
+                entered.TrySetResult();
+                return Task.CompletedTask;
+            };
+            var retained = await AdmitRetainedIntentAsync(
+                host,
+                activation,
+                oldAuthority,
+                spotId,
+                "pending-hold"
+            );
+            var commit = activation
+                .SetSuccessorAsync(
+                    successor,
+                    authority,
+                    null,
+                    async completeSuccessor =>
+                    {
+                        publishEntered.TrySetResult();
+                        await releasePublication.Task;
+                        await completeSuccessor();
+                    }
+                )
+                .AsTask();
+            try
+            {
+                await publishEntered.Task.WaitAsync(Wait);
+                Assert.True(activation._serial.HasPendingAcceptedState(static _ => true));
+                Assert.False(entered.Task.IsCompleted);
+            }
+            finally
+            {
+                releasePublication.TrySetResult();
+                await commit.WaitAsync(Wait);
+            }
+            Assert.Equal(RequestResult.Ok, (await retained.WaitAsync(Wait)).Result);
+            Assert.True(entered.Task.IsCompleted);
         }
         finally
         {
-            releasePublication.TrySetResult();
-            await commit.WaitAsync(Wait);
+            await activation.DisposeAsync();
         }
-        Assert.Equal(RequestResult.Ok, (await retained.WaitAsync(Wait)).Result);
-        Assert.True(entered.Task.IsCompleted);
     }
 
     private static async Task<Task<InstanceSpotActivationTerminal>> AdmitRetainedIntentAsync(
