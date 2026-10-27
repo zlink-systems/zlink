@@ -1,0 +1,48 @@
+package MyGame.instance;
+
+import MyGame.*;
+
+import systems.zlink.framework.ZLinkMessageContext;
+import systems.zlink.framework.handlers.*;
+
+import java.util.concurrent.*;
+
+@ZLinkHandlerGroup(Names.PLAYER)
+public final class DungeonActions {
+    @ZLinkSpotActorSend
+    public CompletionStage<Void> login(
+            Dungeon spot, Player actor, ZLinkMessageContext context, JoinLobbyRequest request) {
+        actor.checkIdentity(request.playerId());
+        return spot.show(actor);
+    }
+
+    @ZLinkSpotActorSend
+    public CompletionStage<Void> view(
+            Dungeon spot, Player actor, ZLinkMessageContext context, ViewRequest request) {
+        return spot.show(actor);
+    }
+
+    @ZLinkSpotActorSend
+    public CompletionStage<Void> advance(
+            Dungeon spot, Player actor, ZLinkMessageContext context, AdvanceRequest request) {
+        return spot.advance(actor);
+    }
+
+    @ZLinkSpotActorSend
+    public CompletionStage<Void> deliver(
+            Dungeon spot, Player actor, ZLinkMessageContext context, DungeonView request) {
+        return actor.deliver(request);
+    }
+    @ZLinkSpotActorSend
+    public CompletionStage<Void> reject(Dungeon spot, Player actor, ZLinkMessageContext context, ActionRejected r) {
+        return actor.deliver(r);
+    }
+    @ZLinkSpotActorSend
+    public CompletionStage<Void> enter(Dungeon spot, Player actor, ZLinkMessageContext context, EnterDungeonRequest r) { return spot.enter(actor); }
+    @ZLinkSpotActorSend
+    public CompletionStage<Void> travel(Dungeon spot, Player actor, ZLinkMessageContext context, JoinDungeon r) { actor.context().joinSpot(r.dungeonId(), r).defer(); return CompletableFuture.completedFuture(null); }
+    @ZLinkSpotActorSend
+    public CompletionStage<Void> party(Dungeon spot, Player actor, ZLinkMessageContext context, PartyView r) {
+        return actor.deliver(r);
+    }
+}
