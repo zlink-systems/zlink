@@ -561,7 +561,7 @@ class no_op_stream_session_t final : public zlink::framework::packet_stream_sess
 
     zlink::framework::task_t<void> on_packet (zlink::framework::stream_t &,
                                               const zlink::framework::session_message_context_t &,
-                                              const zlink::message_t &) override
+                                              const zlink::framework::message_t &) override
     {
         return success ();
     }
@@ -594,7 +594,7 @@ class echo_stream_session_t final : public zlink::framework::packet_stream_sessi
 
     zlink::framework::task_t<void> on_packet (zlink::framework::stream_t &stream,
                                               const zlink::framework::session_message_context_t &,
-                                              const zlink::message_t &payload) override
+                                              const zlink::framework::message_t &payload) override
     {
         stream.reply_packet (payload).async ();
         return success ();
@@ -737,7 +737,8 @@ class stream_roundtrip_client_t final : public zlink::framework::hosted_service_
         auto header = _runtime.decode_header (header_bytes);
         if (!header
             || header.value ().kind () != zlink::framework::detail::stream_message_kind_t::response
-            || header.value ().request_seq () != 91) {
+            || header.value ().request_seq () != 91
+            || header.value ().codec () != zlink::framework::stream_codec_t::raw) {
             if (!header) {
                 throw std::runtime_error ("failed to decode stream reply header");
             }
