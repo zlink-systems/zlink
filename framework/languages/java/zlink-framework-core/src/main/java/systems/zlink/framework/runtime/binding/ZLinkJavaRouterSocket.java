@@ -16,13 +16,15 @@ import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.function.BiConsumer;
 
 final class ZLinkJavaRouterSocket implements ZLinkBackendRouterSocket, ZLinkJavaSocketBacked {
     private final RouterSocket socket;
     private final ZLinkJavaSocketReceivePoller receivePoller;
     private final ZLinkServiceOperationRegistry operations =
             new ZLinkServiceOperationRegistry(
-                    ZLinkOneWayCalls.failureForStatus(ZLinkOneWayCalls.SHUTDOWN));
+                    ZLinkOneWayCalls.failureForStatus(ZLinkOneWayCalls.SHUTDOWN),
+                    ZLinkJavaSocketSupport::requestTimeout);
 
     ZLinkJavaRouterSocket(RouterSocket socket) {
         this.socket = socket;
@@ -142,7 +144,18 @@ final class ZLinkJavaRouterSocket implements ZLinkBackendRouterSocket, ZLinkJava
             Duration timeout,
             CompletableFuture<Void> requestAdmission) {
         return ZLinkJavaSocketSupport.submitRequest(
-                socket.request(routingId), parts, timeout, null, requestAdmission);
+                socket.request(routingId), parts, timeout, null, requestAdmission, operations);
+    }
+
+    @Override
+    public synchronized CompletionStage<?> requestTo(
+            RoutingId routingId,
+            List<Message> parts,
+            Duration timeout,
+            CompletableFuture<Void> requestAdmission,
+            BiConsumer<ZLinkBackendReceived, Throwable> terminal) {
+        return ZLinkJavaSocketSupport.submitRequestTo(
+                socket.request(routingId), parts, timeout, null, requestAdmission, terminal);
     }
 
     @Override
