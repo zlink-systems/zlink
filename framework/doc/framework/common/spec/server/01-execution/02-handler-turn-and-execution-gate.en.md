@@ -101,7 +101,10 @@ handler start through terminal completion.
 - **Node handlers and [ChannelName](../00-foundation/02-glossary.en.md#channelname) handlers have no
   execution gate.** Each record's handler turn is independent. These handlers hold no state; state
   that must persist is owned by Spots and Actors. Records start their handlers in the order
-  received, and the next record does not wait for the previous handler to complete. The same handler runs concurrently for several records, so the
+  received, and the next record does not wait for the previous handler to complete. Start here means
+  entry into that record's filter and handler pipeline. While an earlier record's filter waits
+  asynchronously, the next record's pipeline may enter, so the order in which handler bodies are
+  entered after filters is not defined. The same handler runs concurrently for several records, so the
   application owns synchronization of any application state shared between handlers.
 - **Two application turns on the same gate never run concurrently.** `Yield` transfers authority
   as specified in [§3](#yield-gate-and-claim); [§16](#yield-call-eligibility) specifies availability

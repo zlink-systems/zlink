@@ -97,7 +97,9 @@ completion까지다.
 - **Node handler와 [ChannelName](../00-foundation/02-glossary.ko.md#channelname) handler에는
   execution gate가 없다.** Handler turn은 record마다 독립이다. 이 handler는 상태를 갖지
   않으며, 유지할 상태는 Spot·Actor가 소유한다. Record는 받은 순서대로 handler를 시작하고,
-  다음 record는 앞 handler의 완료를 기다리지 않는다. 같은 handler가 여러 record에서 동시에 진행되므로, handler 사이에서
+  다음 record는 앞 handler의 완료를 기다리지 않는다. 여기서 시작은 그 record의 filter·handler
+  pipeline 진입이다. 앞 record의 filter가 비동기로 기다리는 동안에도 다음 record의 pipeline은
+  진입할 수 있으므로, filter 뒤 handler 본문의 진입 순서는 정하지 않는다. 같은 handler가 여러 record에서 동시에 진행되므로, handler 사이에서
   공유하는 application 상태의 동기화는 application이 소유한다.
 - **같은 gate의 application turn 두 개를 동시에 실행하지 않는다.** `Yield`의 권한
   이전은 [§3](#yield-gate-and-claim)을 따르며, 실행 mode와 call별 제공 범위는
