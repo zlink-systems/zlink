@@ -139,8 +139,9 @@ Node.js runtime은 **단일 JS 스레드**다. 그 스레드를 막으면 framew
 이 결정은 framework 표면에만 적용된다. **binding Node의 `submit_sync()`는 그대로 있다**
 ([async-coroutine-policy §6](../../../../../../../bindings/doc/spec/async-coroutine-policy.ko.md#6-언어별-terminal-interface)) — binding은 framework runtime의 완료 배달에 의존하지 않는다.
 
-**동기 blocking 종결자는 runtime 실행 문맥에서 부를 수 없다(F2-a).** handler turn·Spot turn·state
-lane 위에서 blocking하면 gate를 쥔 채 완료를 기다려 교착한다. [상태 소유와 state lane §5](06-state-ownership-and-lanes.ko.md#반환-전-완료-보장)(반환 전 완료 보장)·[handler turn §2](02-handler-turn-and-execution-gate.ko.md)과 같은 원칙으로, runtime 실행 문맥에서 동기
+**동기 blocking 종결자는 runtime 실행 문맥에서 부를 수 없다(F2-a).** gate 보유 여부와 무관하게 모든
+runtime 실행 문맥(handler turn·Spot turn·state lane)에서 `InvalidOperation`으로 실패한다. gate를 쥔
+문맥에서 blocking하면 완료를 기다려 교착하고, gate가 없는 문맥에서도 runtime 실행 자원을 완료까지 점유한다. [상태 소유와 state lane §5](06-state-ownership-and-lanes.ko.md#반환-전-완료-보장)(반환 전 완료 보장)·[handler turn §2](02-handler-turn-and-execution-gate.ko.md)과 같은 원칙으로, runtime 실행 문맥에서 동기
 종결자를 부르면 `InvalidOperation`으로 즉시 실패한다. 동기 종결자의 용도는 application
 thread(main·테스트·스크립트)다.
 
@@ -362,7 +363,7 @@ socket send timeout과 결합하지 않는다. Timeout이나 cancellation으로 
 outbound admission의 일부이며 같은 request timeout을 쓴다. Binding operation을 시작하지 않은 채 deadline이 먼저
 확정되어도 `DeadlineExceeded`다.
 
-같은 handler turn에서 보낸 request를 기다릴 때 gate를 어떻게 반납하고 재개하는지는
+Gate가 있는 실행 범위에서 같은 handler turn에서 보낸 request를 기다릴 때 gate를 어떻게 반납하고 재개하는지는
 [Handler turn과 execution gate 「4. 같은 turn에서의 대기와 반납」](02-handler-turn-and-execution-gate.ko.md#4-같은-turn에서의-대기와-반납)이
 정의한다.
 
