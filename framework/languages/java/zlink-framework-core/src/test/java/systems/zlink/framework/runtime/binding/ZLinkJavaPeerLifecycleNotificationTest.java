@@ -101,7 +101,7 @@ final class ZLinkJavaPeerLifecycleNotificationTest {
 
     private static CompletableFuture<List<byte[]>> request(
             ZLinkJavaRawMeshNode source, RoutingId target, CompletableFuture<Void> observed) {
-        return ZLinkJavaDurableRequest.request(
+        return ZLinkJavaDurableRequestTest.request(
                         () -> List.of(new byte[] {1}),
                         (frames, remaining, admission) -> {
                             throw new AssertionError("An absent route cannot submit");

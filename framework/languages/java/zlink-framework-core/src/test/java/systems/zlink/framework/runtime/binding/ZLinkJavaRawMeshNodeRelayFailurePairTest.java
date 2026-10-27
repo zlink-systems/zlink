@@ -78,7 +78,7 @@ final class ZLinkJavaRawMeshNodeRelayFailurePairTest {
     @Test
     void unavailableActorJoinPreservesPublicErrorKind() {
         int[] pair =
-                ZLinkJavaRawMeshNode.canonicalActorJoinFailurePair(
+                ZLinkJavaRawMeshNode.relayedFailurePair(
                         new ZLinkFrameworkException(
                                 ZLinkFrameworkErrorKind.UNAVAILABLE, "unavailable"));
         assertArrayEquals(
@@ -150,26 +150,26 @@ final class ZLinkJavaRawMeshNodeRelayFailurePairTest {
     void canonicalActorJoinKeepsStoreFailureTerminalKinds() {
         assertArrayEquals(
                 new int[] {102, 14},
-                ZLinkJavaRawMeshNode.canonicalActorJoinFailurePair(
+                ZLinkJavaRawMeshNode.relayedFailurePair(
                         new ZLinkFrameworkException(ZLinkFrameworkErrorKind.NOT_FOUND, "missing")));
         assertArrayEquals(
                 new int[] {104, 16},
-                ZLinkJavaRawMeshNode.canonicalActorJoinFailurePair(
+                ZLinkJavaRawMeshNode.relayedFailurePair(
                         new ZLinkFrameworkException(
                                 ZLinkFrameworkErrorKind.PROTOCOL_ERROR, "fence")));
         assertArrayEquals(
                 new int[] {107, 7},
-                ZLinkJavaRawMeshNode.canonicalActorJoinFailurePair(
+                ZLinkJavaRawMeshNode.relayedFailurePair(
                         new ZLinkFrameworkException(
                                 ZLinkFrameworkErrorKind.TYPE_MISMATCH, "type")));
         assertArrayEquals(
                 new int[] {106, 15},
-                ZLinkJavaRawMeshNode.canonicalActorJoinFailurePair(
+                ZLinkJavaRawMeshNode.relayedFailurePair(
                         new ZLinkFrameworkException(ZLinkFrameworkErrorKind.REJECTED, "rejected")));
     }
 
     @Test
-    void relayedAndActorJoinFailuresKeepReceivedSameKindCause() {
+    void receivedFailureKeepsSameKindCause() {
         var mapping =
                 systems.zlink.framework.runtime.internal.backend.ZLinkRequestFailureMapping
                         .receivedFailure(
@@ -178,8 +178,6 @@ final class ZLinkJavaRawMeshNodeRelayFailurePairTest {
                                 21,
                                 java.util.Map.of());
         assertArrayEquals(new int[] {107, 21}, ZLinkJavaRawMeshNode.relayedFailurePair(mapping));
-        assertArrayEquals(
-                new int[] {107, 21}, ZLinkJavaRawMeshNode.canonicalActorJoinFailurePair(mapping));
         var origin =
                 systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorOrigin.framework(
                         ZLinkFrameworkErrorKind.INVALID_OPERATION, "binding", 8);
@@ -201,8 +199,6 @@ final class ZLinkJavaRawMeshNodeRelayFailurePairTest {
                         "wrapped",
                         new java.util.concurrent.CompletionException(received));
         assertArrayEquals(new int[] {107, 21}, ZLinkJavaRawMeshNode.relayedFailurePair(sameKind));
-        assertArrayEquals(
-                new int[] {107, 21}, ZLinkJavaRawMeshNode.canonicalActorJoinFailurePair(sameKind));
         var otherKind =
                 new ZLinkFrameworkException(ZLinkFrameworkErrorKind.NOT_FOUND, "wrapped", received);
         assertArrayEquals(new int[] {102, 14}, ZLinkJavaRawMeshNode.relayedFailurePair(otherKind));
@@ -226,8 +222,6 @@ final class ZLinkJavaRawMeshNodeRelayFailurePairTest {
                                 java.util.Map.of(),
                                 inner);
         assertArrayEquals(new int[] {107, 21}, ZLinkJavaRawMeshNode.relayedFailurePair(outer));
-        assertArrayEquals(
-                new int[] {107, 21}, ZLinkJavaRawMeshNode.canonicalActorJoinFailurePair(outer));
         var otherKind =
                 systems.zlink.framework.runtime.internal.backend.ZLinkRequestFailureMapping
                         .receivedFailure(
