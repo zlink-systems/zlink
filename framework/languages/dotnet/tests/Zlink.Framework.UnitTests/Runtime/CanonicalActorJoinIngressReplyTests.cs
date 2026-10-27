@@ -178,8 +178,13 @@ public sealed class CanonicalActorJoinIngressReplyTests
         using var otherCompletionOwner = new TestCompletionPollerDriver(otherSource);
         otherSource.SetRoutingId(RoutingId.From($"other-source-{Guid.NewGuid():N}"));
         otherSource.Connect(runtime.Target.Status().LocalEndpoint);
-        await SendHelloAsync(otherSource, $"inproc://other-source-{Guid.NewGuid():N}");
-        using var otherAdmission = await ReceiveAsync(otherSource);
+        var otherEndpoint = $"inproc://other-source-{Guid.NewGuid():N}";
+        await SendHelloAsync(otherSource, otherEndpoint);
+        using var otherAdmission = await RawMeshPeerAdmission.CompleteAsync(
+            otherSource,
+            "mesh",
+            otherEndpoint
+        );
         await WaitUntilAsync(() => runtime.Target.Status().AdmittedPeerCount == 2);
         Task<IReadOnlyList<Message>> Request(ZLinkServiceWireCodec.RelocationPrepareRecord record)
         {
@@ -732,23 +737,13 @@ public sealed class CanonicalActorJoinIngressReplyTests
         using var sourceCompletionOwner = new TestCompletionPollerDriver(source);
         source.SetRoutingId(sourceRid);
         source.Connect(targetEndpoint);
-        using (
-            var hello = Message.From(
-                ZLinkServiceWireCodec.EncodeRouteAdmission(
-                    ServiceWireConstants.Command.Hello,
-                    "mesh",
-                    sourceEndpoint,
-                    lifecycleGeneration: 1,
-                    descriptorRevision: 1,
-                    new Dictionary<string, uint>(StringComparer.Ordinal),
-                    objectRole: (byte)ZLinkMeshNodeObjectRole.Server
-                )
-            )
-        )
-            await source.Send().Message(hello).Async(CancellationToken.None).Admitted;
-
+        await SendHelloAsync(source, sourceEndpoint);
+        using var admission = await RawMeshPeerAdmission.CompleteAsync(
+            source,
+            "mesh",
+            sourceEndpoint
+        );
         await WaitUntilAsync(() => target.Status().AdmittedPeerCount == 1);
-        using var admission = await ReceiveAsync(source);
         await ReceiveAdmissionProbeAsync(source);
 
         var acceptedRequest = CreateRequest(
@@ -1198,7 +1193,11 @@ public sealed class CanonicalActorJoinIngressReplyTests
                 // over: readiness ends before the new route's handshake.
                 await WaitUntilAsync(() => runtime.Target.Status().AdmittedPeerCount == 0);
                 await SendHelloAsync(replacement, sourceEndpoint);
-                return await ReceiveAsync(replacement);
+                return await RawMeshPeerAdmission.CompleteAsync(
+                    replacement,
+                    "mesh",
+                    sourceEndpoint
+                );
             }
         );
 
@@ -1913,7 +1912,11 @@ public sealed class CanonicalActorJoinIngressReplyTests
             );
             Source = replacement;
             await SendHelloAsync(replacement, SourceEndpoint);
-            using var admission = await ReceiveAsync(replacement);
+            using var admission = await RawMeshPeerAdmission.CompleteAsync(
+                replacement,
+                "mesh",
+                SourceEndpoint
+            );
             await ReceiveAdmissionProbeAsync(replacement);
         }
 
@@ -1932,7 +1935,11 @@ public sealed class CanonicalActorJoinIngressReplyTests
             if (admitReplacement is null)
             {
                 await SendHelloAsync(replacement, SourceEndpoint);
-                using var admission = await ReceiveAsync(replacement);
+                using var admission = await RawMeshPeerAdmission.CompleteAsync(
+                    replacement,
+                    "mesh",
+                    SourceEndpoint
+                );
                 await ReceiveAdmissionProbeAsync(replacement);
             }
             else
@@ -2012,8 +2019,12 @@ public sealed class CanonicalActorJoinIngressReplyTests
             await WaitUntilAsync(() => connectionMonitor!.ReadyAppliedCount >= 1);
             await SendHelloAsync(source, sourceEndpoint);
 
+            using var admission = await RawMeshPeerAdmission.CompleteAsync(
+                source,
+                "mesh",
+                sourceEndpoint
+            );
             await WaitUntilAsync(() => target.Status().AdmittedPeerCount == 1);
-            using var admission = await ReceiveAsync(source);
             await ReceiveAdmissionProbeAsync(source);
             return new ConnectedRuntime(
                 context,
