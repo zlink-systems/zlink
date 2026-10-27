@@ -589,7 +589,10 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
             java.util.function.Function<List<Message>, T> decodeReply,
             java.util.function.Consumer<T> discardReply,
             java.util.function.Function<Throwable, Throwable> mapFailure,
-            CompletableFuture<T> completion) {
+            systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry
+                                    .Operation<
+                            T>
+                    completion) {
         CompletionStage<List<Message>> reply =
                 requestToActor(actor, parts, flags, timeout, requestAdmission);
         ZLinkCompletionBridge.forwardCancellation(completion, reply);

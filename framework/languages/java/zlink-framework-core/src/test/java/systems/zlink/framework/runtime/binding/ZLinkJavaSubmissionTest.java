@@ -212,12 +212,16 @@ final class ZLinkJavaSubmissionTest {
 
     @ParameterizedTest
     @EnumSource(Adapter.class)
-    void cancellingPendingRequestCancelsBindingWaiterWithoutResubmission(Adapter adapter) {
+    void cancellingPendingRequestCancelsBindingWaiterWithoutResubmission(Adapter adapter)
+            throws Exception {
         try (var binding = new BindingProbe();
                 Message part = Message.from("request")) {
             binding.result = SubmitResult.BACKPRESSURED;
             var completion = requestForCancellation(binding, adapter, List.of(part));
             assertTrue(completion.cancel(false));
+            assertEquals(0, binding.operations.pendingCount());
+            // §10.1/§11: physical waiter cancellation follows the caller's dispatcher terminal.
+            binding.replies.getFirst().handle((reply, failure) -> null).get(1, TimeUnit.SECONDS);
             assertTrue(binding.replies.getFirst().isCancelled());
             assertEquals(1, binding.submissions);
             binding.admission.complete(null);
@@ -255,13 +259,16 @@ final class ZLinkJavaSubmissionTest {
 
     @ParameterizedTest
     @EnumSource(Adapter.class)
-    void lateBindingReplyAfterCallerCancellationClosesItsPayload(Adapter adapter) {
+    void lateBindingReplyAfterCallerCancellationClosesItsPayload(Adapter adapter) throws Exception {
         try (var binding = new BindingProbe();
                 Message part = Message.from("request")) {
             binding.result = SubmitResult.BACKPRESSURED;
             binding.ignoreReplyCancellation = true;
             var completion = requestForCancellation(binding, adapter, List.of(part));
             assertTrue(completion.cancel(false));
+            assertEquals(0, binding.operations.pendingCount());
+            // Observe the dispatched caller terminal before checking its Future cancellation state.
+            completion.handle((reply, failure) -> null).get(1, TimeUnit.SECONDS);
             binding.admission.complete(null);
             try (Message late = Message.from("late")) {
                 assertTrue(binding.replies.getFirst().complete(List.of(late)));
@@ -272,7 +279,7 @@ final class ZLinkJavaSubmissionTest {
     }
 
     @Test
-    void cancelledServiceRequestDiscardsALateDecodedReply() {
+    void cancelledServiceRequestDiscardsALateDecodedReply() throws Exception {
         try (var binding = new BindingProbe();
                 Message part = Message.from("request");
                 Message decoded = Message.from("decoded")) {
@@ -314,6 +321,7 @@ final class ZLinkJavaSubmissionTest {
             try {
                 assertTrue(decoderEntered.await(5, TimeUnit.SECONDS));
                 assertTrue(completion.cancel(false));
+                assertEquals(0, binding.operations.pendingCount());
             } catch (InterruptedException failure) {
                 Thread.currentThread().interrupt();
                 throw new AssertionError(failure);
@@ -322,6 +330,8 @@ final class ZLinkJavaSubmissionTest {
             }
             delivery.join();
             assertTrue(decoded.empty());
+            // Native decode cleanup and caller dispatcher notification are separate events.
+            completion.handle((reply, failure) -> null).get(1, TimeUnit.SECONDS);
             assertTrue(completion.isCancelled());
         }
     }

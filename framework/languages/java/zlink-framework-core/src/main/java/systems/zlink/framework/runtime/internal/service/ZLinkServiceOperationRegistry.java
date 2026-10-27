@@ -6,6 +6,8 @@ import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkReceiveBatchBudget;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.VarHandle;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.Objects;
@@ -251,7 +253,7 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
         Objects.requireNonNull(id, "id");
         Objects.requireNonNull(submission, "submission");
         Objects.requireNonNull(discardValue, "discardValue");
-        var completion = new CompletableFuture<T>();
+        Operation<T> completion = prepareOperation(id);
         submitTerminal(id, timeout, submission, discardValue, completion);
         return completion;
     }
@@ -262,41 +264,48 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
             Duration timeout,
             Function<BiConsumer<T, Throwable>, CompletionStage<?>> submission,
             Consumer<? super T> discardValue,
-            CompletableFuture<T> completion) {
+            Operation<T> completion) {
         Objects.requireNonNull(id, "id");
         Objects.requireNonNull(submission, "submission");
         Objects.requireNonNull(discardValue, "discardValue");
         Objects.requireNonNull(completion, "completion");
+        if (!completion.id().equals(id))
+            throw new IllegalArgumentException("receiver and operation identities differ");
         long nanos = timeoutNanos(timeout);
         long deadline = nanoTime.getAsLong() + nanos;
         var registration =
                 submitOwnerTurn(
                         () -> {
-                            if (completion.isCancelled()) return false;
+                            if (!completion.beginRegistration()) return false;
                             if (closed) {
+                                if (!completion.finishRegistration(this)) return false;
                                 ZLinkServiceCompletionDispatcher.deliver(
                                         CompletableFuture.failedStage(closeFailure), completion);
                                 return false;
                             }
                             long remaining = deadline - nanoTime.getAsLong();
                             if (remaining <= 0) {
+                                if (!completion.finishRegistration(this)) return false;
                                 ZLinkServiceCompletionDispatcher.deliver(
                                         CompletableFuture.failedStage(timeoutFailure.get()),
                                         completion);
                                 return false;
                             }
-                            registerEntry(deadline, id, Kind.REQUEST, completion, discardValue);
-                            completion.whenComplete(
-                                    (value, failure) -> {
-                                        if (completion.isCancelled()) cancel(id, completion);
-                                    });
+                            Entry<T> entry =
+                                    registerEntry(
+                                            deadline, id, Kind.REQUEST, completion, discardValue);
+                            if (!completion.finishRegistration(this)) {
+                                abandonRegistration(entry);
+                                return false;
+                            }
+                            if (!isPending(id)) return false;
                             submitOnOwner(id, submission, discardValue, completion);
                             return true;
                         },
                         true);
         registration.whenComplete(
                 (accepted, failure) -> {
-                    if (failure != null)
+                    if (failure != null && completion.rejectRegistration(this))
                         ZLinkServiceCompletionDispatcher.deliver(
                                 CompletableFuture.failedStage(failure), completion);
                 });
@@ -357,6 +366,11 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
         entry.clearCancellation();
         completions.releaseWithoutDispatch(entry);
         return true;
+    }
+
+    /** The terminal table alone owns whether a logical request is still pending. */
+    public boolean isPending(UUID id) {
+        return pending.containsKey(Objects.requireNonNull(id, "id"));
     }
 
     public int pendingCount() {
@@ -431,7 +445,14 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
     }
 
     private Entry<?> take(Entry<?> entry) {
+        if (entry.completion instanceof Operation<?> operation
+                && !operation.finishRegistration(this)) return null;
         return pending.remove(entry.id, entry) ? entry : null;
+    }
+
+    private void abandonRegistration(Entry<?> entry) {
+        if (!pending.remove(entry.id, entry)) return;
+        completions.releaseWithoutDispatch(entry);
     }
 
     private boolean cancel(UUID id, CompletableFuture<?> caller) {
@@ -595,12 +616,14 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
 
     private <T> Operation<T> registerOnOwner(long deadlineNanos, UUID suppliedId, Kind kind) {
         UUID id = suppliedId == null ? ZLinkServiceOperationIds.next() : suppliedId;
-        Operation<T> operation = new Operation<>(kind == Kind.REQUEST ? this : null, id);
-        registerEntry(deadlineNanos, id, kind, operation, null);
+        Operation<T> operation = new Operation<>(kind == Kind.REQUEST, id);
+        operation.beginRegistration();
+        Entry<T> entry = registerEntry(deadlineNanos, id, kind, operation, null);
+        if (!operation.finishRegistration(this)) abandonRegistration(entry);
         return operation;
     }
 
-    private <T> void registerEntry(
+    private <T> Entry<T> registerEntry(
             long deadlineNanos,
             UUID id,
             Kind kind,
@@ -643,6 +666,12 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
             indexDeadline(entry, targetTick);
             reserveMaintenanceVisit(entry);
         }
+        return entry;
+    }
+
+    /** Prepares the final receiver; owner registration accepts it before physical submission. */
+    public static <T> Operation<T> prepareOperation(UUID id) {
+        return new Operation<>(true, Objects.requireNonNull(id, "id"));
     }
 
     private static long timeoutNanos(Duration timeout) {
@@ -658,11 +687,25 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
     }
 
     public static final class Operation<T> extends CompletableFuture<T> {
-        private volatile ZLinkServiceOperationRegistry owner;
+        private static final Object UNREGISTERED = new Object();
+        private static final Object REGISTERING = new Object();
+        private static final VarHandle OWNER;
+
+        static {
+            try {
+                OWNER =
+                        MethodHandles.lookup()
+                                .findVarHandle(Operation.class, "owner", Object.class);
+            } catch (ReflectiveOperationException failure) {
+                throw new ExceptionInInitializerError(failure);
+            }
+        }
+
+        private volatile Object owner;
         private final UUID id;
 
-        private Operation(ZLinkServiceOperationRegistry owner, UUID id) {
-            this.owner = owner;
+        private Operation(boolean cancellable, UUID id) {
+            this.owner = cancellable ? UNREGISTERED : null;
             this.id = id;
         }
 
@@ -678,10 +721,33 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
             owner = null;
         }
 
+        boolean beginRegistration() {
+            return OWNER.compareAndSet(this, UNREGISTERED, REGISTERING);
+        }
+
+        boolean finishRegistration(ZLinkServiceOperationRegistry registry) {
+            if (owner == registry) return true;
+            return OWNER.compareAndSet(this, REGISTERING, registry) || owner == registry;
+        }
+
+        boolean rejectRegistration(ZLinkServiceOperationRegistry registry) {
+            while (true) {
+                Object current = owner;
+                if (current == registry) return true;
+                if (current != UNREGISTERED && current != REGISTERING) return false;
+                if (OWNER.compareAndSet(this, current, registry)) return true;
+            }
+        }
+
         @Override
         public boolean cancel(boolean mayInterruptIfRunning) {
-            ZLinkServiceOperationRegistry registry = owner;
-            return registry != null && registry.cancel(id, this);
+            while (true) {
+                Object current = owner;
+                if (current instanceof ZLinkServiceOperationRegistry registry)
+                    return registry.cancel(id, this);
+                if (current != UNREGISTERED && current != REGISTERING) return false;
+                if (OWNER.compareAndSet(this, current, null)) return super.cancel(false);
+            }
         }
 
         void completeCancellation() {

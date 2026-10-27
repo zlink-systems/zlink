@@ -161,7 +161,11 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
         ZLinkFlowContext.State operationFlow = ZLinkFlowContext.current();
         long requestStarted = System.nanoTime();
         Duration requestTimeout = timeout == null ? defaultTimeout : timeout;
-        CompletableFuture<TReply> result = new CompletableFuture<>();
+        var result =
+                systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry
+                        .<TReply>prepareOperation(
+                                systems.zlink.framework.runtime.internal.service
+                                        .ZLinkServiceOperationIds.next());
         result.whenComplete(
                 (ignored, error) -> {
                     if (error != null && isStaleActorError(error))
@@ -336,7 +340,10 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
             long requestStarted,
             Class<TReply> replyType,
             CompletableFuture<Void> requestAdmission,
-            CompletableFuture<TReply> completion) {
+            systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry
+                                    .Operation<
+                            TReply>
+                    completion) {
         List<Message> parts =
                 createPacketParts(
                         ZLinkStreamMessageKind.REQUEST,

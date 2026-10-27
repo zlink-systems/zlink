@@ -2,6 +2,7 @@ package systems.zlink.framework.runtime.internal.service;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
@@ -34,6 +35,155 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.LockSupport;
 
 final class ZLinkServiceOperationRegistryTest {
+    @Test
+    void replyTakenBeforeDispatchCannotBeOverwrittenByCallerCancellation() throws Exception {
+        try (var registry = new ZLinkServiceOperationRegistry(new ManualMaintenance())) {
+            UUID id = ZLinkServiceOperationIds.next();
+            var result =
+                    registry.<String>submitTerminal(
+                            id, Duration.ofHours(1), terminal -> null, ignored -> {});
+            int workers = ForkJoinPool.getCommonPoolParallelism();
+            var occupied = new CountDownLatch(workers);
+            var release = new CountDownLatch(1);
+            for (int worker = 0; worker < workers; worker++)
+                ForkJoinPool.commonPool()
+                        .execute(
+                                () -> {
+                                    occupied.countDown();
+                                    await(release);
+                                });
+            try {
+                assertTrue(occupied.await(5, TimeUnit.SECONDS));
+                assertTrue(registry.complete(id, "reply"));
+                assertEquals(0, registry.pendingCount());
+                assertFalse(result.isDone(), "dispatcher delivery is held by the occupied pool");
+                assertFalse(result.cancel(false), "the reply already took C1 terminal authority");
+            } finally {
+                release.countDown();
+            }
+            assertEquals("reply", result.get(5, TimeUnit.SECONDS));
+        }
+    }
+
+    @Test
+    void cancellationWhileOwnerRegistrationIsQueuedPreventsSubmission() throws Exception {
+        try (var registry = new ZLinkServiceOperationRegistry(new ManualMaintenance())) {
+            var entered = new CountDownLatch(1);
+            var release = new CountDownLatch(1);
+            var lane = ownerLane(registry);
+            var submissions = new AtomicInteger();
+            lane.runAsync(
+                    () -> {
+                        entered.countDown();
+                        await(release);
+                    });
+            try {
+                assertTrue(entered.await(5, TimeUnit.SECONDS));
+                var receiver =
+                        ZLinkServiceOperationRegistry.<String>prepareOperation(
+                                ZLinkServiceOperationIds.next());
+                var registration =
+                        lane.runAsync(
+                                () ->
+                                        registry.submitTerminal(
+                                                receiver.id(),
+                                                Duration.ofHours(1),
+                                                terminal -> {
+                                                    submissions.incrementAndGet();
+                                                    return null;
+                                                },
+                                                ignored -> {},
+                                                receiver));
+                assertTrue(receiver.cancel(false));
+                release.countDown();
+                registration.toCompletableFuture().get(5, TimeUnit.SECONDS);
+                assertTrue(receiver.isCancelled());
+                assertEquals(0, submissions.get());
+                assertEquals(0, registry.pendingCount());
+            } finally {
+                release.countDown();
+            }
+        }
+    }
+
+    @Test
+    void cancellationDuringRegistrationHandoffPreventsSubmission() throws Exception {
+        var entered = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
+        var armed = new java.util.concurrent.atomic.AtomicBoolean();
+        var submissions = new AtomicInteger();
+        try (var registry =
+                new ZLinkServiceOperationRegistry(
+                        new ManualMaintenance(),
+                        new IllegalStateException("closed"),
+                        () -> {
+                            if (armed.get()
+                                    && StackWalker.getInstance()
+                                            .walk(
+                                                    frames ->
+                                                            frames.anyMatch(
+                                                                    frame ->
+                                                                            frame.getMethodName()
+                                                                                    .equals(
+                                                                                            "registerEntry")))) {
+                                entered.countDown();
+                                await(release);
+                            }
+                            return 0;
+                        })) {
+            var receiver =
+                    ZLinkServiceOperationRegistry.<String>prepareOperation(
+                            ZLinkServiceOperationIds.next());
+            armed.set(true);
+            var registration =
+                    ownerLane(registry)
+                            .runAsync(
+                                    () ->
+                                            registry.submitTerminal(
+                                                    receiver.id(),
+                                                    Duration.ofHours(1),
+                                                    terminal -> {
+                                                        submissions.incrementAndGet();
+                                                        return null;
+                                                    },
+                                                    ignored -> {},
+                                                    receiver));
+            try {
+                assertTrue(entered.await(5, TimeUnit.SECONDS));
+                assertTrue(receiver.cancel(false), "handoff does not drop cancellation");
+            } finally {
+                release.countDown();
+            }
+            registration.toCompletableFuture().get(5, TimeUnit.SECONDS);
+            assertTrue(receiver.isCancelled());
+            assertEquals(0, submissions.get());
+            assertEquals(0, registry.pendingCount());
+            assertEquals(1, wheelEntryCount(registry));
+            ZLinkCompletionBridge.await(registry.expire(TimeUnit.MILLISECONDS.toNanos(256)));
+            assertEquals(0, wheelEntryCount(registry));
+        } finally {
+            release.countDown();
+        }
+    }
+
+    @Test
+    void rejectedOwnerRegistrationCompletesThePreparedReceiver() throws Exception {
+        var registry = new ZLinkServiceOperationRegistry(new ManualMaintenance());
+        {
+            ownerLane(registry).closeAsync().toCompletableFuture().get(5, TimeUnit.SECONDS);
+            var receiver =
+                    ZLinkServiceOperationRegistry.<String>prepareOperation(
+                            ZLinkServiceOperationIds.next());
+            registry.submitTerminal(
+                    receiver.id(), Duration.ofHours(1), terminal -> null, ignored -> {}, receiver);
+            var failure =
+                    assertThrows(
+                            java.util.concurrent.ExecutionException.class,
+                            () -> receiver.get(5, TimeUnit.SECONDS));
+            assertInstanceOf(IllegalStateException.class, failure.getCause());
+        }
+    }
+
     @Test
     void hugeTimeoutDoesNotExpireWhenTheRelativeNanosecondDeadlineWraps() {
         AtomicLong clock = new AtomicLong();

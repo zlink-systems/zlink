@@ -262,6 +262,44 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
                 requestAdmission);
     }
 
+    /** Reports a physical request to its existing logical entry. */
+    CompletionStage<?> requestTo(
+            RouterSocket router,
+            RoutingId target,
+            List<byte[]> frames,
+            Duration timeout,
+            CompletableFuture<Void> requestAdmission,
+            BiConsumer<List<byte[]>, Throwable> terminal) {
+        return requestTo(
+                router,
+                target,
+                frames,
+                timeout,
+                reply -> reply.stream().map(Message::toByteArray).toList(),
+                requestAdmission,
+                terminal);
+    }
+
+    <T> CompletionStage<?> requestTo(
+            RouterSocket router,
+            RoutingId target,
+            List<byte[]> frames,
+            Duration timeout,
+            Function<List<Message>, T> decodeReply,
+            CompletableFuture<Void> requestAdmission,
+            BiConsumer<T, Throwable> terminal) {
+        return requestMessagesTo(
+                router,
+                target,
+                copyMessages(frames, "service request must not be empty"),
+                timeout,
+                decodeReply,
+                null,
+                terminal,
+                null,
+                requestAdmission);
+    }
+
     <T> CompletionStage<T> request(
             RouterSocket router,
             RoutingId target,
@@ -300,7 +338,9 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
                 discardReply,
                 receivedAdmission,
                 requestAdmission,
-                new CompletableFuture<>());
+                ZLinkServiceOperationRegistry.<T>prepareOperation(
+                        systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationIds
+                                .next()));
     }
 
     <T> CompletionStage<T> requestMessages(
@@ -313,10 +353,10 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
             systems.zlink.framework.runtime.internal.service.ZLinkServiceLivenessRegistry.PeerState
                     receivedAdmission,
             CompletableFuture<Void> requestAdmission,
-            CompletableFuture<T> completion) {
+            ZLinkServiceOperationRegistry.Operation<T> completion) {
         Objects.requireNonNull(discardReply, "discardReply");
         Objects.requireNonNull(completion, "completion");
-        var id = systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationIds.next();
+        var id = completion.id();
         operations
                 .submitTerminal(
                         id,

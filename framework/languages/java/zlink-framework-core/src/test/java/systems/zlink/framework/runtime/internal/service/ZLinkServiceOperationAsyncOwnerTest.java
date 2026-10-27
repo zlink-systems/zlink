@@ -197,13 +197,14 @@ final class ZLinkServiceOperationAsyncOwnerTest {
                             });
             try {
                 assertTrue(entered.await(1, TimeUnit.SECONDS));
-                var caller = new CompletableFuture<String>();
+                var caller =
+                        ZLinkServiceOperationRegistry.<String>prepareOperation(UUID.randomUUID());
                 var registration =
                         new ZLinkStateLane()
                                 .runAsync(
                                         () ->
                                                 registry.submitTerminal(
-                                                        UUID.randomUUID(),
+                                                        caller.id(),
                                                         Duration.ofSeconds(5),
                                                         terminal -> {
                                                             attempts.incrementAndGet();

@@ -77,13 +77,17 @@ public final class ZLinkJavaRequestCompletionCostTest {
                                 1,
                                 1,
                                 1);
-                var result = new CompletableFuture<List<Message>>();
+                var result =
+                        ZLinkServiceOperationRegistry.<List<Message>>prepareOperation(
+                                systems.zlink.framework.runtime.internal.service
+                                        .ZLinkServiceOperationIds.next());
                 fixture.beforeSubmit =
                         () -> {
                             assertEquals(
                                     1,
                                     meshOperations.pendingCount(),
-                                    "Framework entry and dispatcher slot must precede binding submit");
+                                    "Framework entry and dispatcher slot must precede binding"
+                                            + " submit");
                             try {
                                 var entries =
                                         (java.util.Map<?, ?>) field(meshOperations, "pending");
@@ -99,7 +103,8 @@ public final class ZLinkJavaRequestCompletionCostTest {
                                 assertSame(
                                         result,
                                         field(entry, "completion"),
-                                        "registry must dispatch straight to the final typed receiver");
+                                        "registry must dispatch straight to the final typed"
+                                                + " receiver");
                             } catch (Exception failure) {
                                 throw new AssertionError(failure);
                             }
@@ -120,7 +125,8 @@ public final class ZLinkJavaRequestCompletionCostTest {
                     assertEquals(
                             1,
                             meshOperations.pendingCount(),
-                            "Framework completion must remain registered while the binding reply is pending");
+                            "Framework completion must remain registered while the binding reply is"
+                                    + " pending");
                     // The binding submission captures the original wire correlation.
                     var wire =
                             new systems.zlink.framework.runtime.internal.service
@@ -303,16 +309,27 @@ public final class ZLinkJavaRequestCompletionCostTest {
                 }
                 if (!event.getEventType().getName().equals("jdk.ObjectAllocationOutsideTLAB")
                         || !event.getClass("objectClass")
-                                .getName()
-                                .equals(CompletableFuture.class.getName())) continue;
+                                        .getName()
+                                        .equals(CompletableFuture.class.getName())
+                                && !event.getClass("objectClass")
+                                        .getName()
+                                        .equals(
+                                                ZLinkServiceOperationRegistry.Operation.class
+                                                        .getName())) continue;
                 var stack = event.getStackTrace();
                 assertNotNull(stack);
                 assertFalse(stack.isTruncated());
-                // An explicit receiver allocation starts at the port constructor call.
-                // whenComplete allocates its dependent stage inside CompletableFuture instead.
+                // The same prepared receiver now allocates in the registry factory.
+                // Dependent CompletableFuture stages do not represent prepared receivers.
                 var allocation = stack.getFrames().getFirst().getMethod();
-                if (allocation.getType().getName().equals(ZLinkJavaRawServicePort.class.getName())
-                        && allocation.getName().equals("requestMessages")) preparedReceivers++;
+                if (event.getClass("objectClass")
+                                .getName()
+                                .equals(ZLinkServiceOperationRegistry.Operation.class.getName())
+                        && allocation
+                                .getType()
+                                .getName()
+                                .equals(ZLinkServiceOperationRegistry.class.getName())
+                        && allocation.getName().equals("prepareOperation")) preparedReceivers++;
                 boolean portRequest = false;
                 boolean rawReply = false;
                 for (var frame : stack.getFrames()) {
