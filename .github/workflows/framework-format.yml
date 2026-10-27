@@ -4,8 +4,11 @@ name: Framework Format
 # per language and its pinned version (doc/principal/dev/source-formatting.ko.md).
 on:
   workflow_dispatch:
+  workflow_call:
+  schedule:
+    - cron: "0 18 * * *"
   # Mergify merge-queue batches and backports run CI on their own branches only,
-  # as in the language workflows.
+  # main dependency pushes use the companion cache workflow.
   push:
     branches:
       - "mergify/merge-queue/**"
@@ -41,6 +44,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v5
         with:
+          package-manager-cache: false
           node-version: 22
 
       - name: Install clang-format 18

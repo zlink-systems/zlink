@@ -1,0 +1,16 @@
+name: Framework dotnet main dependency cache
+
+# Path filters on this main-only entry point do not suppress merge-queue checks.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "**/packages.lock.json"
+      - "**/Directory.Packages.props"
+
+permissions:
+  contents: read
+
+jobs:
+  warm-cache:
+    uses: ./.github/workflows/framework-dotnet.yml

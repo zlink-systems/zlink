@@ -5,9 +5,15 @@
 # PRs to main are squash-merged so a merged fix is one commit that Mergify can
 # backport. A PR labelled `backport-0.30.3` then gets a backport PR to the release
 # branch, which enters the release queue by itself and merges after the same checks.
+# One batch already needs about 20 GitHub-hosted jobs (the hosted concurrency
+# limit), so more parallel batches only wait for runners and get reset by
+# requeues. Fewer, larger batches merge more PRs per hour.
+merge_queue:
+  max_parallel_checks: 2
+
 queue_rules:
   - name: default
-    batch_size: 4
+    batch_size: 8
     merge_method: squash
     queue_conditions:
       - base=main
@@ -21,7 +27,7 @@ queue_rules:
       - check-success=win-x64 / Framework C++ unit and contract tests
       - check-success=Framework source format
   - name: release
-    batch_size: 4
+    batch_size: 8
     merge_method: merge
     queue_conditions:
       - base~=^release/
