@@ -2453,15 +2453,59 @@ int main ()
         return 37;
     }
     const std::string target_spot = "remote-spot";
+    auto spot_request_builder = zlink::framework::test::runtime_failure_builder ();
+    spot_request_builder.route_channel ("spot.route").connect ("tcp://spot-route-peer:7500");
+    auto spot_request_manager =
+      zlink::framework::detail::channel_runtime_manager_t::from (spot_request_builder);
+    spot_request_manager.initialize_route_channels (spot_request_builder);
+    auto &spot_backend_runtime = spot_request_manager.get_route_channel ("spot.route");
+    auto spot_request_resolver = std::make_shared<test_spot_address_resolver_t> ();
+    spot_request_resolver->set (target_spot, zlink::framework::runtime::spot_address_t{
+                                               "spot.route", target_node, target_spot});
+    zlink::framework::detail::channel_runtime_t::from (spot_request_builder.message_bus ())
+      .bind_spot_address_resolver (spot_request_resolver);
+    auto spot_request_client = spot_request_builder.route_client (serializers);
+    zlink::framework::task_completion_source_t<
+      zlink::framework::runtime::messaging::message_parts_t>
+      spot_reply_source;
+    auto spot_admitted = std::make_shared<zlink::framework::task_completion_source_t<void>> ();
+    spot_admitted->complete (zlink::framework::result_t<void>::success ());
+    bool spot_request_input_matches = false;
+    spot_backend_runtime.set_request_backend (
+      [&] (const auto &target, const auto &spot, const auto &parts, auto) {
+          const auto body = envelope_codec.decode_body (parts);
+          spot_request_input_matches =
+            target == target_node && spot == target_spot && body
+            && serializers.get<request_t> ()
+                   .deserialize (zlink::framework::detail::encoded_payload_from_raw (body.value ()))
+                   .value
+                 == 79;
+          return zlink::framework::request_task_t<
+            zlink::framework::runtime::messaging::message_parts_t> (spot_reply_source.task (),
+                                                                    spot_admitted);
+      });
     auto spot_request =
-      route_runtime.request_to_spot_parts (target_node, target_spot, request_parts);
-    if (!spot_request || route_runtime.pending_request_count () != 2
-        || route_runtime.outbound_packets ().back ().target_spot_id != target_spot) {
+      spot_request_client.request_to_spot (target_spot, request_t{79}).async<reply_t> ();
+    if (!spot_request_input_matches || spot_request.await_ready ()
+        || route_runtime.pending_request_count () != 1
+        || spot_backend_runtime.pending_request_count () != 0
+        || spot_backend_runtime.outbound_packets ().back ().target_spot_id != target_spot) {
         return 38;
     }
-    zlink::framework::detail::route_channel_runtime_t spot_backend_runtime ("spot.route");
-    spot_backend_runtime.start ();
-    spot_backend_runtime.connect ("tcp://spot-route-peer:7500");
+    zlink::framework::runtime::messaging::envelope_header_t spot_reply_header;
+    spot_reply_header.kind = zlink::framework::runtime::messaging::message_kind_t::response;
+    spot_reply_header.channel_name = "spot.route";
+    spot_reply_header.message_name = request_t::packet_name;
+    const reply_t spot_reply_value{79};
+    spot_reply_source.complete (
+      zlink::framework::result_t<zlink::framework::runtime::messaging::message_parts_t>::success (
+        envelope_codec.encode_parts (spot_reply_header, std::type_index (typeid (reply_t)),
+                                     &spot_reply_value, serializers)));
+    const auto spot_request_result = spot_request.result ();
+    if (!spot_request_result || spot_request_result.value ().value != 79
+        || spot_backend_runtime.pending_request_count () != 0) {
+        return 384;
+    }
     int spot_backend_sends = 0;
     int spot_backend_requests = 0;
     spot_backend_runtime.set_send_backend (
@@ -2475,30 +2519,45 @@ int main ()
           ++spot_backend_sends;
           return zlink::framework::result_t<void>::success ();
       });
+    auto spot_request_budget =
+      std::chrono::duration_cast<std::chrono::milliseconds> (std::chrono::seconds (30));
+    auto spot_request_started = std::chrono::steady_clock::now ();
     spot_backend_runtime.set_request_backend (
       [&] (const zlink::routing_id_t &target, const std::optional<std::string> &spot,
            const zlink::framework::runtime::messaging::message_parts_t &parts,
            std::chrono::milliseconds timeout) {
+          const auto minimum_remaining = std::chrono::duration_cast<std::chrono::milliseconds> (
+            spot_request_started + spot_request_budget - std::chrono::steady_clock::now ());
           if (target != target_node || spot != target_spot || parts.size () == 0
-              || (timeout != std::chrono::seconds (30)
-                  && timeout != std::chrono::milliseconds (25))) {
+              || timeout <= std::chrono::milliseconds::zero () || timeout > spot_request_budget
+              || timeout < minimum_remaining) {
               return zlink::framework::
                 result_t<zlink::framework::runtime::messaging::message_parts_t>::failure (
                   zlink::framework::framework_error_kind_t::internal_failure,
                   "unexpected spot request backend input");
           }
           ++spot_backend_requests;
-          return zlink::framework::result_t<
-            zlink::framework::runtime::messaging::message_parts_t>::success (parts);
+          auto header = envelope_codec.decode_header (parts).value ();
+          header.kind = zlink::framework::runtime::messaging::message_kind_t::response;
+          auto body = envelope_codec.decode_body (parts).value ();
+          return zlink::framework::result_t<zlink::framework::runtime::messaging::message_parts_t>::
+            success (envelope_codec.encode_raw_body_parts (std::move (header), std::move (body)));
       });
     if (!spot_backend_runtime.submit_spot_send_parts (target_node, target_spot, request_parts)
         || spot_backend_sends != 1) {
         return 380;
     }
-    if (!spot_backend_runtime.request_to_spot_parts (target_node, target_spot, request_parts)
+    spot_request_started = std::chrono::steady_clock::now ();
+    const auto spot_backend_public_reply =
+      spot_request_client.request_to_spot (target_spot, request_t{79})
+        .async<request_t> ()
+        .result ();
+    if (!spot_backend_public_reply || spot_backend_public_reply.value ().value != 79
         || spot_backend_requests != 1 || spot_backend_runtime.pending_request_count () != 0) {
         return 381;
     }
+    spot_request_budget = std::chrono::milliseconds (25);
+    spot_request_started = std::chrono::steady_clock::now ();
     auto spot_backend_reply = spot_backend_runtime
                                 .request_reply_spot_parts (target_node, target_spot, request_parts,
                                                            std::chrono::steady_clock::now ()
@@ -2537,7 +2596,7 @@ int main ()
     }
 
     if (!route_runtime.complete_request (route_request.value ())
-        || route_runtime.pending_request_count () != 1) {
+        || route_runtime.pending_request_count () != 0) {
         return 39;
     }
     route_runtime.stop ();

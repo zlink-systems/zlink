@@ -112,10 +112,6 @@ class route_channel_runtime_t
                                            const std::string &target_spot_id,
                                            runtime::messaging::message_parts_t parts);
 
-    result_t<std::uint64_t> request_to_spot_parts (const zlink::routing_id_t &target_node_rid,
-                                                   const std::string &target_spot_id,
-                                                   runtime::messaging::message_parts_t parts);
-
     request_task_t<runtime::messaging::message_parts_t>
     request_reply_spot_parts (const zlink::routing_id_t &target_node_rid,
                               const std::string &target_spot_id,

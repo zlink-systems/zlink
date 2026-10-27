@@ -393,40 +393,6 @@ route_channel_runtime_t::submit_spot_send_parts (const zlink::routing_id_t &targ
     return result_t<void>::success ();
 }
 
-result_t<std::uint64_t>
-route_channel_runtime_t::request_to_spot_parts (const zlink::routing_id_t &target_node_rid,
-                                                const std::string &target_spot_id,
-                                                runtime::messaging::message_parts_t parts)
-{
-    request_backend_t backend;
-    std::uint64_t request_seq = 0;
-    auto registered = _state->_lane.run_sync ([&, this] {
-        if (auto connected = ensure_connected (_state); !connected) {
-            return detail::propagate_failure<std::uint64_t> (connected,
-                                                             "route channel is not connected");
-        }
-        auto result = register_request_unlocked (target_node_rid, target_spot_id, parts);
-        request_seq = result.value ();
-        if (_state->_request_backend) {
-            backend = _state->_request_backend;
-        }
-        return result;
-    });
-    if (!registered)
-        return registered;
-    if (backend) {
-        auto reply =
-          backend (target_node_rid, target_spot_id, parts, default_request_timeout ()).result ();
-        _state->_lane.run_sync ([&, this] { _state->_pending_requests.remove (request_seq); });
-        if (!reply) {
-            return result_t<std::uint64_t>::failure (reply.error_kind (),
-                                                     reply.error () ? reply.error ()->what ()
-                                                                    : "route spot request failed");
-        }
-    }
-    return result_t<std::uint64_t>::success (request_seq);
-}
-
 request_task_t<runtime::messaging::message_parts_t>
 route_channel_runtime_t::request_reply_spot_parts (const zlink::routing_id_t &target_node_rid,
                                                    const std::string &target_spot_id,

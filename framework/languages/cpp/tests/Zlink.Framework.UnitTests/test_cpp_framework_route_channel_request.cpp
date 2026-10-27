@@ -1,5 +1,10 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #include "runtime/channels/route_channel_runtime.hpp"
+#include "runtime/channels/channel_runtime_manager.hpp"
+#include "runtime/channels/channel_runtime.hpp"
+#include "runtime/locations/spot_address_resolvers.hpp"
+#include "../support/runtime_failure_fixture.hpp"
+#include <zlink/framework.hpp>
 
 #include <gtest/gtest.h>
 #include <zlink/framework/detail/deadline_scheduler.hpp>
@@ -11,6 +16,49 @@ namespace
 using namespace std::chrono_literals;
 using namespace zlink::framework;
 using parts_t = runtime::messaging::message_parts_t;
+
+struct spot_packet_t
+{
+    static constexpr const char *packet_name = "spot.packet";
+    int value{};
+};
+
+class spot_resolver_t final : public runtime::spot_address_resolver_t
+{
+  public:
+    task_t<std::optional<runtime::spot_address_t>> resolve_spot_address (std::string,
+                                                                         std::string spot) override
+    {
+        co_return runtime::spot_address_t{"spot-route", zlink::routing_id_t::from ("peer"),
+                                          std::move (spot)};
+    }
+    void invalidate_spot_address (std::string_view) override {}
+    void invalidate_all_routes_after_store_recovery () override {}
+};
+
+struct public_spot_fixture_t
+{
+    zlink_builder_t builder = test::runtime_failure_builder ();
+    serializer_registry_t serializers;
+    detail::channel_runtime_manager_t manager = detail::channel_runtime_manager_t::from (builder);
+
+    public_spot_fixture_t ()
+    {
+        serializers.add<spot_packet_t> (
+          [] (const auto &packet) {
+              return encoded_payload_t::from_string (std::to_string (packet.value));
+          },
+          [] (const encoded_payload_t &payload) {
+              return spot_packet_t{std::stoi (payload.to_string ())};
+          },
+          "application/json");
+        builder.route_channel ("spot-route");
+        manager.initialize_route_channels (builder);
+        detail::channel_runtime_t::from (builder.message_bus ())
+          .bind_spot_address_resolver (std::make_shared<spot_resolver_t> ());
+    }
+    detail::route_channel_runtime_t &route () { return manager.get_route_channel ("spot-route"); }
+};
 
 class readiness_turn_t final : public detail::serial_turn_t
 {
@@ -146,6 +194,103 @@ TEST (CppFrameworkRouteChannelRequest, SpotPreparationReturnsPendingBeforePeerRe
     route.mark_peer_ready (target);
     (void) submission.get ();
     EXPECT_EQ (std::future_status::ready, status);
+}
+
+TEST (CppFrameworkRouteChannelRequest, SpotRequestReturnsBeforeCallerCompletesReply)
+{
+    public_spot_fixture_t fixture;
+    auto &route = fixture.route ();
+    const auto target = zlink::routing_id_t::from (std::string ("peer"));
+    task_completion_source_t<parts_t> reply;
+    auto admitted = std::make_shared<task_completion_source_t<void>> ();
+    admitted->complete (result_t<void>::success ());
+    std::promise<void> entered;
+    std::optional<std::string> observed_spot;
+    std::string observed_target;
+    std::string observed_body;
+    route.set_request_backend ([&] (const auto &node, const auto &spot, const auto &parts, auto) {
+        observed_spot = spot;
+        observed_target = node.to_string ();
+        runtime::messaging::envelope_codec_t codec;
+        observed_body =
+          detail::encoded_payload_from_raw (codec.decode_body (parts).value ()).to_string ();
+        entered.set_value ();
+        return request_task_t<parts_t> (reply.task (), admitted);
+    });
+    auto client = fixture.builder.route_client (fixture.serializers);
+    auto invocation = std::async (std::launch::async, [&] {
+        return client.request_to_spot ("spot", spot_packet_t{79})
+          .timeout (1s)
+          .async<spot_packet_t> ();
+    });
+    const auto backend_entered = entered.get_future ().wait_for (1s);
+    const auto status = invocation.wait_for (100ms);
+    std::optional<request_task_t<spot_packet_t>> pending;
+    if (status == std::future_status::ready)
+        pending.emplace (invocation.get ());
+    const bool unfinished = pending && !pending->await_ready ();
+    const auto framework_pending = route.pending_request_count ();
+    runtime::messaging::envelope_header_t header;
+    header.kind = runtime::messaging::message_kind_t::response;
+    header.channel_name = "spot-route";
+    header.message_name = spot_packet_t::packet_name;
+    header.content_type = "application/json";
+    runtime::messaging::envelope_codec_t codec;
+    reply.complete (result_t<parts_t>::success (
+      codec.encode_raw_body_parts (std::move (header), zlink::message_t::from ("79"))));
+    if (!pending)
+        pending.emplace (invocation.get ());
+    EXPECT_EQ (std::optional<std::string> ("spot"), observed_spot);
+    EXPECT_EQ ("peer", observed_target);
+    EXPECT_EQ ("79", observed_body);
+    EXPECT_EQ (std::future_status::ready, backend_entered);
+    EXPECT_EQ (std::future_status::ready, status);
+    EXPECT_TRUE (unfinished);
+    EXPECT_EQ (0u, framework_pending);
+    const auto result = pending->result ();
+    ASSERT_TRUE (result);
+    EXPECT_EQ (79, result.value ().value);
+    EXPECT_EQ (0u, route.pending_request_count ());
+}
+
+TEST (CppFrameworkRouteChannelRequest, PublicSpotPreparationConsumesSingleBudget)
+{
+    public_spot_fixture_t fixture;
+    auto &route = fixture.route ();
+    route.bind_endpoint ("tcp://self:7500");
+    const auto target = zlink::routing_id_t::from (std::string ("peer"));
+    route.connect (target, "tcp://peer:7500");
+    std::chrono::milliseconds submitted_timeout{};
+    std::chrono::steady_clock::time_point submitted_at;
+    route.set_request_backend ([&] (const auto &, const auto &, const auto &parts, auto timeout) {
+        submitted_at = std::chrono::steady_clock::now ();
+        submitted_timeout = timeout;
+        runtime::messaging::envelope_codec_t codec;
+        auto header = codec.decode_header (parts).value ();
+        header.kind = runtime::messaging::message_kind_t::response;
+        return request_task_t<parts_t> (result_t<parts_t>::success (
+          codec.encode_raw_body_parts (header, codec.decode_body (parts).value ())));
+    });
+    auto client = fixture.builder.route_client (fixture.serializers);
+    const auto started = std::chrono::steady_clock::now ();
+    auto pending =
+      client.request_to_spot ("spot", spot_packet_t{79}).timeout (1s).async<spot_packet_t> ();
+    const auto returned = std::chrono::steady_clock::now ();
+    const bool unfinished = !pending.await_ready ();
+    std::this_thread::sleep_for (30ms);
+    route.mark_peer_ready (target);
+    const auto result = pending.result ();
+    ASSERT_TRUE (result);
+    EXPECT_TRUE (unfinished);
+    EXPECT_EQ (79, result.value ().value);
+    EXPECT_GT (submitted_timeout, 0ms);
+    const auto minimum_remaining =
+      std::chrono::duration_cast<std::chrono::milliseconds> (started + 1s - submitted_at);
+    const auto maximum_remaining =
+      std::chrono::ceil<std::chrono::milliseconds> (returned + 1s - submitted_at);
+    EXPECT_GE (submitted_timeout, minimum_remaining);
+    EXPECT_LE (submitted_timeout, maximum_remaining);
+    EXPECT_LT (submitted_timeout, 1s);
 }
 
 TEST (CppFrameworkRouteChannelRequest, ThrowingSubmissionRemovesPendingEntry)
