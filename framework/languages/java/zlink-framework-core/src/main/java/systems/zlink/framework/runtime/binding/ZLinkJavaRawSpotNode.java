@@ -787,7 +787,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
             Function<List<Message>, T> decodeReply,
             Consumer<T> discardReply,
             Function<Throwable, Throwable> mapFailure,
-            CompletableFuture<T> completion) {
+            ZLinkServiceOperationRegistry.Operation<T> completion) {
         if (!routingId().equals(target.actor().nodeRid())) {
             owner.requestActor(
                     target,
@@ -3592,7 +3592,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                             });
                 };
         if (operations != null) {
-            var registered = new CompletableFuture<ZLinkBackendReceived>();
+            var registered = operations.<ZLinkBackendReceived>prepareOperation(operationId);
             operations
                     .submitTerminal(
                             operationId,

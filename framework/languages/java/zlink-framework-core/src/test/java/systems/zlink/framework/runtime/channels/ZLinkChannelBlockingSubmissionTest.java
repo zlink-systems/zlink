@@ -149,6 +149,10 @@ final class ZLinkChannelBlockingSubmissionTest {
                                     getClass().getClassLoader(),
                                     new Class<?>[] {ZLinkBackendRouterSocket.class},
                                     (proxy, method, args) -> {
+                                        if (method.isDefault()
+                                                && method.getName().equals("requestTo"))
+                                            return java.lang.reflect.InvocationHandler
+                                                    .invokeDefault(proxy, method, args);
                                         if (method.getName().equals("waitForReadable")) {
                                             try {
                                                 assertInvalid(

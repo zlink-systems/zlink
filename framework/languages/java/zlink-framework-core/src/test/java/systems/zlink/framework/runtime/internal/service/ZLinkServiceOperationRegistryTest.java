@@ -2,6 +2,7 @@ package systems.zlink.framework.runtime.internal.service;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
@@ -34,6 +35,282 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.LockSupport;
 
 final class ZLinkServiceOperationRegistryTest {
+    @Test
+    void replyTakenBeforeDispatchCannotBeOverwrittenByCallerCancellation() throws Exception {
+        try (var registry = new ZLinkServiceOperationRegistry(new ManualMaintenance())) {
+            UUID id = ZLinkServiceOperationIds.next();
+            var result =
+                    registry.<String>submitTerminal(
+                            id, Duration.ofHours(1), terminal -> null, ignored -> {});
+            int workers = ForkJoinPool.getCommonPoolParallelism();
+            var occupied = new CountDownLatch(workers);
+            var release = new CountDownLatch(1);
+            for (int worker = 0; worker < workers; worker++)
+                ForkJoinPool.commonPool()
+                        .execute(
+                                () -> {
+                                    occupied.countDown();
+                                    await(release);
+                                });
+            try {
+                assertTrue(occupied.await(5, TimeUnit.SECONDS));
+                assertTrue(registry.complete(id, "reply"));
+                assertEquals(0, registry.pendingCount());
+                assertFalse(result.isDone(), "dispatcher delivery is held by the occupied pool");
+                assertFalse(result.cancel(false), "the reply already took C1 terminal authority");
+            } finally {
+                release.countDown();
+            }
+            assertEquals("reply", result.get(5, TimeUnit.SECONDS));
+        }
+    }
+
+    @Test
+    void cancellationWhileOwnerRegistrationIsQueuedPreventsSubmission() throws Exception {
+        try (var registry = new ZLinkServiceOperationRegistry(new ManualMaintenance())) {
+            var entered = new CountDownLatch(1);
+            var release = new CountDownLatch(1);
+            var lane = ownerLane(registry);
+            var submissions = new AtomicInteger();
+            lane.runAsync(
+                    () -> {
+                        entered.countDown();
+                        await(release);
+                    });
+            try {
+                assertTrue(entered.await(5, TimeUnit.SECONDS));
+                var receiver =
+                        ZLinkServiceOperationRegistry.<String>prepareOperation(
+                                ZLinkServiceOperationIds.next());
+                var registration =
+                        lane.runAsync(
+                                () ->
+                                        registry.submitTerminal(
+                                                receiver.id(),
+                                                Duration.ofHours(1),
+                                                terminal -> {
+                                                    submissions.incrementAndGet();
+                                                    return null;
+                                                },
+                                                ignored -> {},
+                                                receiver));
+                assertTrue(receiver.cancel(false));
+                release.countDown();
+                registration.toCompletableFuture().get(5, TimeUnit.SECONDS);
+                assertTrue(receiver.isCancelled());
+                assertEquals(0, submissions.get());
+                assertEquals(0, registry.pendingCount());
+            } finally {
+                release.countDown();
+            }
+        }
+    }
+
+    @Test
+    void cancellationDuringRegistrationHandoffPreventsSubmission() throws Exception {
+        var entered = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
+        var armed = new java.util.concurrent.atomic.AtomicBoolean();
+        var submissions = new AtomicInteger();
+        try (var registry =
+                new ZLinkServiceOperationRegistry(
+                        new ManualMaintenance(),
+                        new IllegalStateException("closed"),
+                        () -> {
+                            if (armed.get()
+                                    && StackWalker.getInstance()
+                                            .walk(
+                                                    frames ->
+                                                            frames.anyMatch(
+                                                                    frame ->
+                                                                            frame.getMethodName()
+                                                                                    .equals(
+                                                                                            "registerEntry")))) {
+                                entered.countDown();
+                                await(release);
+                            }
+                            return 0;
+                        })) {
+            var receiver =
+                    ZLinkServiceOperationRegistry.<String>prepareOperation(
+                            ZLinkServiceOperationIds.next());
+            armed.set(true);
+            var registration =
+                    ownerLane(registry)
+                            .runAsync(
+                                    () ->
+                                            registry.submitTerminal(
+                                                    receiver.id(),
+                                                    Duration.ofHours(1),
+                                                    terminal -> {
+                                                        submissions.incrementAndGet();
+                                                        return null;
+                                                    },
+                                                    ignored -> {},
+                                                    receiver));
+            try {
+                assertTrue(entered.await(5, TimeUnit.SECONDS));
+                assertTrue(receiver.cancel(false), "handoff does not drop cancellation");
+            } finally {
+                release.countDown();
+            }
+            registration.toCompletableFuture().get(5, TimeUnit.SECONDS);
+            assertTrue(receiver.isCancelled());
+            assertEquals(0, submissions.get());
+            assertEquals(0, registry.pendingCount());
+            assertEquals(1, wheelEntryCount(registry));
+            ZLinkCompletionBridge.await(registry.expire(TimeUnit.MILLISECONDS.toNanos(256)));
+            assertEquals(0, wheelEntryCount(registry));
+        } finally {
+            release.countDown();
+        }
+    }
+
+    @Test
+    void rejectedOwnerRegistrationCompletesThePreparedReceiver() throws Exception {
+        var registry = new ZLinkServiceOperationRegistry(new ManualMaintenance());
+        {
+            ownerLane(registry).closeAsync().toCompletableFuture().get(5, TimeUnit.SECONDS);
+            var receiver =
+                    ZLinkServiceOperationRegistry.<String>prepareOperation(
+                            ZLinkServiceOperationIds.next());
+            registry.submitTerminal(
+                    receiver.id(), Duration.ofHours(1), terminal -> null, ignored -> {}, receiver);
+            var failure =
+                    assertThrows(
+                            java.util.concurrent.ExecutionException.class,
+                            () -> receiver.get(5, TimeUnit.SECONDS));
+            assertInstanceOf(IllegalStateException.class, failure.getCause());
+        }
+    }
+
+    @Test
+    void hugeTimeoutDoesNotExpireWhenTheRelativeNanosecondDeadlineWraps() {
+        AtomicLong clock = new AtomicLong();
+        try (var registry =
+                new ZLinkServiceOperationRegistry(
+                        new ManualMaintenance(), new IllegalStateException("closed"), clock::get)) {
+            clock.set(TimeUnit.MILLISECONDS.toNanos(1));
+            var request =
+                    ZLinkCompletionBridge.await(
+                            registry.register(Duration.ofSeconds(Long.MAX_VALUE)));
+            clock.set(TimeUnit.MILLISECONDS.toNanos(257));
+            assertEquals(0, ZLinkCompletionBridge.await(registry.expire(clock.get())));
+            assertFalse(request.isDone());
+            assertEquals(1, registry.pendingCount());
+        }
+    }
+
+    @Test
+    void cancellationRemovesOneThousandPendingRequestsWithoutOwnerCleanupTurns() {
+        var maintenance = new ManualMaintenance();
+        try (var registry = new ZLinkServiceOperationRegistry(maintenance)) {
+            var requests = new ArrayList<ZLinkServiceOperationRegistry.Operation<Object>>();
+            for (int request = 0; request < 1_000; request++)
+                requests.add(ZLinkCompletionBridge.await(registry.register(Duration.ofHours(1))));
+            assertEquals(1_000, registry.pendingCount());
+            for (var request : requests) assertTrue(request.cancel(false));
+            assertEquals(0, registry.pendingCount());
+            assertEquals(1, maintenance.starts);
+        }
+    }
+
+    @Test
+    void retainedReservationDoesNotReadTheClockAgain() throws Exception {
+        AtomicLong clock = new AtomicLong();
+        AtomicInteger reads = new AtomicInteger();
+        var maintenance = new ManualMaintenance();
+        try (var registry =
+                new ZLinkServiceOperationRegistry(
+                        maintenance,
+                        new IllegalStateException("closed"),
+                        () -> {
+                            reads.incrementAndGet();
+                            return clock.get();
+                        })) {
+            var first = ZLinkCompletionBridge.await(registry.register(Duration.ofSeconds(30)));
+            assertTrue(registry.complete(first.id(), 1));
+            int before = reads.get();
+            var second = ZLinkCompletionBridge.await(registry.register(Duration.ofSeconds(30)));
+            assertEquals(
+                    2,
+                    reads.get() - before,
+                    "deadline capture and index insertion read time; a retained visit needs no"
+                            + " clock read");
+            assertTrue(registry.complete(second.id(), 2));
+        }
+    }
+
+    @Test
+    void registrationKeepsDeadlineWhileWaitingForOwner() throws Exception {
+        AtomicLong clock = new AtomicLong();
+        var maintenance = new ManualMaintenance();
+        var registry =
+                new ZLinkServiceOperationRegistry(
+                        maintenance, new IllegalStateException("closed"), clock::get);
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        var lane = ownerLane(registry);
+        lane.runAsync(
+                () -> {
+                    entered.countDown();
+                    await(release);
+                });
+        try {
+            assertTrue(entered.await(1, TimeUnit.SECONDS));
+            var registered = registry.register(Duration.ofMillis(10));
+            clock.set(TimeUnit.MILLISECONDS.toNanos(20));
+            release.countDown();
+            var request = ZLinkCompletionBridge.await(registered);
+            assertEquals(1, ZLinkCompletionBridge.await(registry.expire(clock.get())));
+            assertThrows(CompletionException.class, request::join);
+            assertEquals(0, registry.pendingCount());
+        } finally {
+            release.countDown();
+            registry.close();
+        }
+    }
+
+    @Test
+    void longDeadlineSlotsDoNotAdvanceManagementVisits() throws Exception {
+        AtomicLong clock = new AtomicLong();
+        var maintenance = new ManualMaintenance();
+        try (var registry =
+                new ZLinkServiceOperationRegistry(
+                        maintenance, new IllegalStateException("closed"), clock::get)) {
+            for (int request = 0; request < 1_000; request++)
+                ZLinkCompletionBridge.await(registry.register(Duration.ofMillis(10_000 + request)));
+            var tick = ZLinkServiceOperationRegistry.class.getDeclaredField("maintenanceTick");
+            tick.setAccessible(true);
+            assertEquals(256, tick.getLong(registry));
+            clock.set(TimeUnit.MILLISECONDS.toNanos(256));
+            assertEquals(0, ZLinkCompletionBridge.await(registry.expire(clock.get())));
+            assertEquals(1_000, registry.pendingCount());
+        }
+    }
+
+    @Test
+    void completedLongDeadlineEntriesLeaveTheIndexWithinOneRotation() throws Exception {
+        AtomicLong clock = new AtomicLong();
+        var maintenance = new ManualMaintenance();
+        try (var registry =
+                new ZLinkServiceOperationRegistry(
+                        maintenance, new IllegalStateException("closed"), clock::get)) {
+            for (int request = 0; request < 1_000; request++) {
+                var operation =
+                        ZLinkCompletionBridge.await(
+                                registry.register(Duration.ofMillis(10_000 + request)));
+                assertTrue(registry.complete(operation.id(), request));
+            }
+            assertEquals(0, registry.pendingCount());
+            clock.set(TimeUnit.MILLISECONDS.toNanos(256));
+            ZLinkCompletionBridge.await(registry.expire(clock.get()));
+            var heads = ZLinkServiceOperationRegistry.class.getDeclaredField("deadlineHeads");
+            heads.setAccessible(true);
+            for (Object entry : (Object[]) heads.get(registry)) assertNull(entry);
+        }
+    }
+
     @Test
     void repeatedCloseReturnsWhileTheFirstCloseJoinsMaintenance() throws Exception {
         CountDownLatch workerExited = new CountDownLatch(1);
@@ -790,7 +1067,7 @@ final class ZLinkServiceOperationRegistryTest {
     void registrationsDoNotCreateAdditionalScheduledTasks() {
         var maintenance = new ManualMaintenance();
         try (var registry = new ZLinkServiceOperationRegistry(maintenance)) {
-            for (int index = 0; index < 100; index++) {
+            for (int index = 0; index < 1_000; index++) {
                 var operation = ZLinkCompletionBridge.await(registry.register(Duration.ofHours(1)));
                 assertTrue(registry.discard(operation.id()));
             }

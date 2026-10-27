@@ -120,6 +120,10 @@ final class ZLinkChannelCallRuntime {
                 ZLinkFlowOrigin.APPLICATION, flow.captureEnabled());
     }
 
+    CompletionStage<Void> submitSend(Supplier<CompletionStage<Void>> admitted) {
+        return operations.submitSend(admitted);
+    }
+
     <T> CompletableFuture<T> submit(
             Duration timeout,
             Supplier<? extends CompletionStage<T>> submission,
@@ -144,16 +148,18 @@ final class ZLinkChannelCallRuntime {
             List<Message> requestParts,
             Duration timeout,
             CompletableFuture<Void> requestAdmission) {
+        UUID id = ZLinkServiceOperationIds.next();
         return preserveCurrentFlow(
-                submit(
-                        ZLinkServiceOperationIds.next(),
+                operations.submitTerminal(
+                        id,
                         timeout,
-                        () ->
-                                client.request(
+                        terminal ->
+                                client.requestTo(
                                         requestParts,
-                                        timeout,
+                                        operations.remainingTimeout(id),
                                         client.receiveAdmission(),
-                                        requestAdmission),
+                                        requestAdmission,
+                                        terminal),
                         ZLinkBackendReceived::close));
     }
 
@@ -165,10 +171,16 @@ final class ZLinkChannelCallRuntime {
             Duration timeout,
             CompletableFuture<Void> requestAdmission) {
         return preserveCurrentFlow(
-                submit(
+                operations.submitTerminal(
                         operationId,
                         timeout,
-                        () -> router.request(target, requestParts, timeout, requestAdmission),
+                        terminal ->
+                                router.requestTo(
+                                        target,
+                                        requestParts,
+                                        operations.remainingTimeout(operationId),
+                                        requestAdmission,
+                                        terminal),
                         ZLinkBackendReceived::close));
     }
 

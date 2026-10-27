@@ -6,6 +6,8 @@ import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkReceiveBatchBudget;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.VarHandle;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.Objects;
@@ -44,6 +46,10 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
     private final long[] deadlineOccupied = new long[DEADLINE_SLOTS / BITMAP_WORD_BITS];
     private final long deadlineOrigin;
     private long deadlineTick;
+    private long maintenanceVisitedTick;
+    private long deadlineSweepEndTick = -1;
+    private long deadlineNextVisitTick;
+    private static final long VISIT_IN_FLIGHT = -2;
     private Entry<?> deadlineCursor;
     private volatile boolean closed;
 
@@ -143,14 +149,15 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
 
     private <T> CompletionStage<Operation<T>> register(Duration timeout, UUID suppliedId) {
         long timeoutNanos = timeoutNanos(timeout);
-        return submitOwnerTurn(() -> registerOnOwner(timeoutNanos, suppliedId, Kind.REQUEST));
+        long deadline = nanoTime.getAsLong() + timeoutNanos;
+        return submitOwnerTurn(() -> registerOnOwner(deadline, suppliedId, Kind.REQUEST));
     }
 
     /** Direct registration for a submission already executing on this registry's owner. */
     public <T> Operation<T> registerOnOwner(Duration timeout) {
         if (!owner.isOnLane())
             throw new IllegalStateException("registration requires its owner turn");
-        return registerOnOwner(timeoutNanos(timeout), null, Kind.REQUEST);
+        return registerOnOwner(nanoTime.getAsLong() + timeoutNanos(timeout), null, Kind.REQUEST);
     }
 
     /** Registers a backpressured send before observing its binding admission terminal. */
@@ -246,7 +253,7 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
         Objects.requireNonNull(id, "id");
         Objects.requireNonNull(submission, "submission");
         Objects.requireNonNull(discardValue, "discardValue");
-        var completion = new CompletableFuture<T>();
+        Operation<T> completion = prepareOperation(id);
         submitTerminal(id, timeout, submission, discardValue, completion);
         return completion;
     }
@@ -257,41 +264,48 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
             Duration timeout,
             Function<BiConsumer<T, Throwable>, CompletionStage<?>> submission,
             Consumer<? super T> discardValue,
-            CompletableFuture<T> completion) {
+            Operation<T> completion) {
         Objects.requireNonNull(id, "id");
         Objects.requireNonNull(submission, "submission");
         Objects.requireNonNull(discardValue, "discardValue");
         Objects.requireNonNull(completion, "completion");
+        if (!completion.id().equals(id))
+            throw new IllegalArgumentException("receiver and operation identities differ");
         long nanos = timeoutNanos(timeout);
-        long submittedAt = nanoTime.getAsLong();
+        long deadline = nanoTime.getAsLong() + nanos;
         var registration =
                 submitOwnerTurn(
                         () -> {
-                            if (completion.isCancelled()) return false;
+                            if (!completion.beginRegistration()) return false;
                             if (closed) {
+                                if (!completion.finishRegistration(this)) return false;
                                 ZLinkServiceCompletionDispatcher.deliver(
                                         CompletableFuture.failedStage(closeFailure), completion);
                                 return false;
                             }
-                            long remaining = nanos - (nanoTime.getAsLong() - submittedAt);
+                            long remaining = deadline - nanoTime.getAsLong();
                             if (remaining <= 0) {
+                                if (!completion.finishRegistration(this)) return false;
                                 ZLinkServiceCompletionDispatcher.deliver(
                                         CompletableFuture.failedStage(timeoutFailure.get()),
                                         completion);
                                 return false;
                             }
-                            registerEntry(remaining, id, Kind.REQUEST, completion, discardValue);
-                            completion.whenComplete(
-                                    (value, failure) -> {
-                                        if (completion.isCancelled()) cancel(id, completion);
-                                    });
+                            Entry<T> entry =
+                                    registerEntry(
+                                            deadline, id, Kind.REQUEST, completion, discardValue);
+                            if (!completion.finishRegistration(this)) {
+                                abandonRegistration(entry);
+                                return false;
+                            }
+                            if (!isPending(id)) return false;
                             submitOnOwner(id, submission, discardValue, completion);
                             return true;
                         },
                         true);
         registration.whenComplete(
                 (accepted, failure) -> {
-                    if (failure != null)
+                    if (failure != null && completion.rejectRegistration(this))
                         ZLinkServiceCompletionDispatcher.deliver(
                                 CompletableFuture.failedStage(failure), completion);
                 });
@@ -354,8 +368,20 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
         return true;
     }
 
+    /** The terminal table alone owns whether a logical request is still pending. */
+    public boolean isPending(UUID id) {
+        return pending.containsKey(Objects.requireNonNull(id, "id"));
+    }
+
     public int pendingCount() {
         return pending.size();
+    }
+
+    /** Reads the one deadline owned by the registered logical request. */
+    public Duration remainingTimeout(UUID id) {
+        Entry<?> entry = pending.get(Objects.requireNonNull(id, "id"));
+        if (entry == null) return Duration.ZERO;
+        return Duration.ofNanos(Math.max(0L, entry.deadlineNanos - nanoTime.getAsLong()));
     }
 
     public boolean isClosed() {
@@ -419,7 +445,14 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
     }
 
     private Entry<?> take(Entry<?> entry) {
+        if (entry.completion instanceof Operation<?> operation
+                && !operation.finishRegistration(this)) return null;
         return pending.remove(entry.id, entry) ? entry : null;
+    }
+
+    private void abandonRegistration(Entry<?> entry) {
+        if (!pending.remove(entry.id, entry)) return;
+        completions.releaseWithoutDispatch(entry);
     }
 
     private boolean cancel(UUID id, CompletableFuture<?> caller) {
@@ -448,7 +481,7 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
     }
 
     private void indexDeadline(Entry<?> entry, long targetTick) {
-        long tick = Math.max(targetTick, deadlineTick);
+        long tick = targetTick;
         int slot = (int) (tick & (DEADLINE_SLOTS - 1));
         entry.deadlineSlot = slot;
         entry.deadlineTick = tick;
@@ -488,18 +521,33 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
         int expired = 0;
         long startedNanos = nanoTime.getAsLong();
         long nowTick = (nowNanos - deadlineOrigin) / DEADLINE_TICK_NANOS;
-        if (deadlineCursor == null)
-            deadlineTick = Math.max(deadlineTick, nowTick - DEADLINE_SLOTS + 1);
+        if (deadlineSweepEndTick < 0) {
+            maintenanceVisitedTick = nowTick;
+            deadlineTick = nowTick;
+            deadlineSweepEndTick = nowTick + DEADLINE_SLOTS;
+            deadlineNextVisitTick = nowTick + DEADLINE_SLOTS;
+        }
         while (nanoTime.getAsLong() - startedNanos
                 < ZLinkReceiveBatchBudget.DEFAULT_MAX_ELAPSED_NANOS) {
             if (deadlineCursor == null) {
                 long next = nextOccupiedTick();
-                if (next < 0 || next > nowTick) break;
+                if (next < 0 || next >= deadlineSweepEndTick) {
+                    deadlineSweepEndTick = -1;
+                    if (next >= 0 && nowTick - maintenanceVisitedTick >= DEADLINE_SLOTS) {
+                        maintenanceVisitedTick = nowTick;
+                        deadlineTick = nowTick;
+                        deadlineSweepEndTick = nowTick + DEADLINE_SLOTS;
+                        deadlineNextVisitTick = nowTick + DEADLINE_SLOTS;
+                        continue;
+                    }
+                    break;
+                }
                 deadlineTick = next;
                 deadlineCursor = deadlineHeads[(int) (next & (DEADLINE_SLOTS - 1))];
             }
             Entry<?> current = deadlineCursor;
             if (current.deadlineTick > nowTick && pending.get(current.id) == current) {
+                deadlineNextVisitTick = Math.min(deadlineNextVisitTick, current.deadlineTick);
                 deadlineCursor = current.deadlineNext;
                 if (deadlineCursor == null) deadlineTick++;
                 continue;
@@ -519,9 +567,24 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
         return expired;
     }
 
-    private void reserveMaintenanceVisit() {
-        long next = nextOccupiedTick();
-        if (maintenanceTick < 0 || (next >= 0 && next < maintenanceTick)) {
+    private long nextMaintenanceTick() {
+        if (nextOccupiedTick() < 0) return -1;
+        // The cursor also reduces the next deadline while visiting, within the same budget.
+        return deadlineSweepEndTick >= 0 ? maintenanceVisitedTick : deadlineNextVisitTick;
+    }
+
+    private void reserveMaintenanceVisit(Entry<?> entry) {
+        if (deadlineSweepEndTick >= 0)
+            deadlineNextVisitTick = Math.min(deadlineNextVisitTick, entry.deadlineTick);
+        // Keep the booked visit even if completion has emptied the index. Only that visit
+        // decides whether to stop; a later deadline cannot move it or needs another clock read.
+        if (maintenanceTick == VISIT_IN_FLIGHT
+                || maintenanceTick >= 0 && entry.deadlineTick >= maintenanceTick) return;
+        long nowTick = (nanoTime.getAsLong() - deadlineOrigin) / DEADLINE_TICK_NANOS;
+        if (maintenanceTick < 0) maintenanceVisitedTick = nowTick;
+        long horizon = maintenanceVisitedTick + DEADLINE_SLOTS;
+        long next = Math.min(entry.deadlineTick, horizon);
+        if (maintenanceTick < 0 || next < maintenanceTick) {
             maintenanceTick = next;
             LockSupport.unpark(maintenance);
         }
@@ -536,31 +599,35 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
                         tick * DEADLINE_TICK_NANOS - (nanoTime.getAsLong() - deadlineOrigin);
                 if (remaining > 0) LockSupport.parkNanos(this, remaining);
                 else {
+                    // Registration wakes must not submit another visit while this one is queued.
+                    maintenanceTick = VISIT_IN_FLIGHT;
                     if (!owner.tryPost(
                             () -> {
                                 if (!closed) {
-                                    expireOnOwner(nanoTime.getAsLong());
-                                    maintenanceTick = nextOccupiedTick();
+                                    long now = nanoTime.getAsLong();
+                                    expireOnOwner(now);
+                                    maintenanceTick = nextMaintenanceTick();
                                 }
                                 LockSupport.unpark(maintenance);
                                 return CompletableFuture.completedFuture(null);
                             })) return;
-                    LockSupport.park(this);
                 }
             }
             if (Thread.interrupted()) return;
         }
     }
 
-    private <T> Operation<T> registerOnOwner(long timeoutNanos, UUID suppliedId, Kind kind) {
+    private <T> Operation<T> registerOnOwner(long deadlineNanos, UUID suppliedId, Kind kind) {
         UUID id = suppliedId == null ? ZLinkServiceOperationIds.next() : suppliedId;
-        Operation<T> operation = new Operation<>(kind == Kind.REQUEST ? this : null, id);
-        registerEntry(timeoutNanos, id, kind, operation, null);
+        Operation<T> operation = new Operation<>(kind == Kind.REQUEST, id);
+        operation.beginRegistration();
+        Entry<T> entry = registerEntry(deadlineNanos, id, kind, operation, null);
+        if (!operation.finishRegistration(this)) abandonRegistration(entry);
         return operation;
     }
 
-    private <T> void registerEntry(
-            long timeoutNanos,
+    private <T> Entry<T> registerEntry(
+            long deadlineNanos,
             UUID id,
             Kind kind,
             CompletableFuture<T> completion,
@@ -579,26 +646,35 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
                 worker.start();
                 maintenance = worker;
             }
-            long elapsed = nanoTime.getAsLong() - deadlineOrigin;
+            long now = nanoTime.getAsLong();
+            long elapsed = now - deadlineOrigin;
             if (nextOccupiedTick() < 0)
                 deadlineTick = Math.max(deadlineTick, elapsed / DEADLINE_TICK_NANOS);
+            long remaining = Math.max(0L, deadlineNanos - now);
             targetTick =
                     elapsed / DEADLINE_TICK_NANOS
-                            + timeoutNanos / DEADLINE_TICK_NANOS
+                            + remaining / DEADLINE_TICK_NANOS
                             + (elapsed % DEADLINE_TICK_NANOS
-                                            + timeoutNanos % DEADLINE_TICK_NANOS
+                                            + remaining % DEADLINE_TICK_NANOS
                                             + DEADLINE_TICK_NANOS
                                             - 1)
                                     / DEADLINE_TICK_NANOS;
         }
         // Each registration keeps its identity while a stale deadline still references it.
         Entry<T> entry = new Entry<>(id, completion, discardValue);
+        entry.deadlineNanos = deadlineNanos;
         completions.register(entry);
         pending.put(id, entry);
         if (kind == Kind.REQUEST) {
             indexDeadline(entry, targetTick);
-            reserveMaintenanceVisit();
+            reserveMaintenanceVisit(entry);
         }
+        return entry;
+    }
+
+    /** Prepares the final receiver; owner registration accepts it before physical submission. */
+    public static <T> Operation<T> prepareOperation(UUID id) {
+        return new Operation<>(true, Objects.requireNonNull(id, "id"));
     }
 
     private static long timeoutNanos(Duration timeout) {
@@ -614,11 +690,25 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
     }
 
     public static final class Operation<T> extends CompletableFuture<T> {
-        private volatile ZLinkServiceOperationRegistry owner;
+        private static final Object UNREGISTERED = new Object();
+        private static final Object REGISTERING = new Object();
+        private static final VarHandle OWNER;
+
+        static {
+            try {
+                OWNER =
+                        MethodHandles.lookup()
+                                .findVarHandle(Operation.class, "owner", Object.class);
+            } catch (ReflectiveOperationException failure) {
+                throw new ExceptionInInitializerError(failure);
+            }
+        }
+
+        private volatile Object owner;
         private final UUID id;
 
-        private Operation(ZLinkServiceOperationRegistry owner, UUID id) {
-            this.owner = owner;
+        private Operation(boolean cancellable, UUID id) {
+            this.owner = cancellable ? UNREGISTERED : null;
             this.id = id;
         }
 
@@ -634,10 +724,33 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
             owner = null;
         }
 
+        boolean beginRegistration() {
+            return OWNER.compareAndSet(this, UNREGISTERED, REGISTERING);
+        }
+
+        boolean finishRegistration(ZLinkServiceOperationRegistry registry) {
+            if (owner == registry) return true;
+            return OWNER.compareAndSet(this, REGISTERING, registry) || owner == registry;
+        }
+
+        boolean rejectRegistration(ZLinkServiceOperationRegistry registry) {
+            while (true) {
+                Object current = owner;
+                if (current == registry) return true;
+                if (current != UNREGISTERED && current != REGISTERING) return false;
+                if (OWNER.compareAndSet(this, current, registry)) return true;
+            }
+        }
+
         @Override
         public boolean cancel(boolean mayInterruptIfRunning) {
-            ZLinkServiceOperationRegistry registry = owner;
-            return registry != null && registry.cancel(id, this);
+            while (true) {
+                Object current = owner;
+                if (current instanceof ZLinkServiceOperationRegistry registry)
+                    return registry.cancel(id, this);
+                if (current != UNREGISTERED && current != REGISTERING) return false;
+                if (OWNER.compareAndSet(this, current, null)) return super.cancel(false);
+            }
         }
 
         void completeCancellation() {
@@ -660,6 +773,7 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
         private Consumer<? super T> discardValue;
         private final UUID id;
         private long deadlineTick;
+        private long deadlineNanos;
         private int deadlineSlot;
         private Entry<?> deadlinePrevious;
         private Entry<?> deadlineNext;

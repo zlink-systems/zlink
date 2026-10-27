@@ -236,17 +236,23 @@ final class ZLinkActorClientRuntimeTest {
                                                 || !e.getClass("objectClass")
                                                         .getName()
                                                         .equals(
-                                                                "java.util.concurrent.CompletableFuture"))
-                                            return false;
+                                                                systems.zlink.framework.runtime
+                                                                        .internal.service
+                                                                        .ZLinkServiceOperationRegistry
+                                                                        .Operation.class
+                                                                        .getName())) return false;
                                         var stack = e.getStackTrace();
                                         assertFalse(stack.isTruncated());
                                         var top = stack.getFrames().getFirst().getMethod();
                                         return top.getType()
                                                         .getName()
                                                         .equals(
-                                                                ZLinkActorClientRuntime.class
+                                                                systems.zlink.framework.runtime
+                                                                        .internal.service
+                                                                        .ZLinkServiceOperationRegistry
+                                                                        .class
                                                                         .getName())
-                                                && top.getName().equals("requestAsync")
+                                                && top.getName().equals("prepareOperation")
                                                 && e.getStartTime().isBefore(submit.getStartTime());
                                     })
                             .count();
