@@ -42,8 +42,11 @@ final class ZLinkSessionPacketDispatcherRuntime<TSessionContext extends ZLinkSes
         this.handlerExecutor = Objects.requireNonNull(handlerExecutor, "handlerExecutor");
     }
 
-    void initializeHandlers(List<Class<?>> handlerTypes, ZLinkHandlerActivator handlerFactory,
-            ZLinkMessageSerializer serializer, List<ZLinkSuspendInvocationAdapter> suspendHandlerInvokers) {
+    void initializeHandlers(
+            List<Class<?>> handlerTypes,
+            ZLinkHandlerActivator handlerFactory,
+            ZLinkMessageSerializer serializer,
+            List<ZLinkSuspendInvocationAdapter> suspendHandlerInvokers) {
         Objects.requireNonNull(serializer, "serializer");
         buildHandlerMap(handlers, handlerTypes, handlerFactory, serializer, suspendHandlerInvokers);
     }
@@ -104,11 +107,11 @@ final class ZLinkSessionPacketDispatcherRuntime<TSessionContext extends ZLinkSes
     }
 
     private static void buildHandlerMap(
-                    Map<String, Handler> map,
-                    List<Class<?>> handlerTypes,
-                    ZLinkHandlerActivator handlerFactory,
-                    ZLinkMessageSerializer serializer,
-                    List<ZLinkSuspendInvocationAdapter> suspendInvokers) {
+            Map<String, Handler> map,
+            List<Class<?>> handlerTypes,
+            ZLinkHandlerActivator handlerFactory,
+            ZLinkMessageSerializer serializer,
+            List<ZLinkSuspendInvocationAdapter> suspendInvokers) {
         for (Class<?> handlerType : handlerTypes) {
             Object handler = handlerFactory.create(handlerType);
             Class<?> messageType =

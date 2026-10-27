@@ -6,8 +6,8 @@ import java.lang.reflect.Constructor;
 import java.lang.reflect.Modifier;
 import java.util.ArrayDeque;
 import java.util.Arrays;
-import java.util.Comparator;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
@@ -36,11 +36,14 @@ public interface ZLinkHandlerActivator {
     }
 
     /** Compiles against service keys without retaining their scope or instances. */
-    default PreparedConstruction prepareConstruction(Class<?> handlerType, Set<Class<?>> runtimeServices) {
+    default PreparedConstruction prepareConstruction(
+            Class<?> handlerType, Set<Class<?>> runtimeServices) {
         prepare(handlerType);
-        ConstructionPlan plan = PublicConstructorPlan.forType(handlerType)
-                .compile(runtimeServices, this::isServiceAvailable, false);
-        return plan == null ? (activation, resolver) -> activation.create(handlerType, resolver)
+        ConstructionPlan plan =
+                PublicConstructorPlan.forType(handlerType)
+                        .compile(runtimeServices, this::isServiceAvailable, false);
+        return plan == null
+                ? (activation, resolver) -> activation.create(handlerType, resolver)
                 : plan.bind();
     }
 
@@ -122,7 +125,8 @@ public interface ZLinkHandlerActivator {
             if (construction instanceof PreparedConstruction procedure) {
                 return procedure.create(this, resolver);
             }
-            throw new ZLinkConfigurationException("activation does not support prepared construction metadata");
+            throw new ZLinkConfigurationException(
+                    "activation does not support prepared construction metadata");
         }
 
         void destroy(Object instance);
@@ -140,9 +144,10 @@ public interface ZLinkHandlerActivator {
         private final Map<Class<?>, Object> services = new LinkedHashMap<>();
         private volatile Map<Class<?>, Object> serviceIndex = Map.of();
         private final ZLinkHandlerActivator fallback;
-        private final Map<Class<?>, PreparedConstruction> constructionPlans = new ConcurrentHashMap<>();
-        private final Map<Class<?>, Map<Set<Class<?>>, PreparedConstruction>> runtimeConstructionPlans =
+        private final Map<Class<?>, PreparedConstruction> constructionPlans =
                 new ConcurrentHashMap<>();
+        private final Map<Class<?>, Map<Set<Class<?>>, PreparedConstruction>>
+                runtimeConstructionPlans = new ConcurrentHashMap<>();
 
         private MutableServices(ZLinkHandlerActivator fallback) {
             this.fallback = fallback;
@@ -166,7 +171,8 @@ public interface ZLinkHandlerActivator {
         }
 
         @Override
-        public PreparedConstruction prepareConstruction(Class<?> handlerType, Set<Class<?>> runtimeServices) {
+        public PreparedConstruction prepareConstruction(
+                Class<?> handlerType, Set<Class<?>> runtimeServices) {
             PreparedConstruction plan;
             if (serviceIndex.keySet().containsAll(runtimeServices)) {
                 plan = constructionPlan(handlerType);
@@ -179,13 +185,16 @@ public interface ZLinkHandlerActivator {
         }
 
         private PreparedConstruction constructionPlan(Class<?> handlerType) {
-            return constructionPlans.computeIfAbsent(handlerType,
-                    type -> fallback.prepareConstruction(type, serviceIndex.keySet()));
+            return constructionPlans.computeIfAbsent(
+                    handlerType, type -> fallback.prepareConstruction(type, serviceIndex.keySet()));
         }
 
-        private PreparedConstruction runtimeConstructionPlan(Class<?> handlerType, Set<Class<?>> available) {
-            return runtimeConstructionPlans.computeIfAbsent(handlerType, ignored -> new ConcurrentHashMap<>())
-                    .computeIfAbsent(available, keys -> fallback.prepareConstruction(handlerType, keys));
+        private PreparedConstruction runtimeConstructionPlan(
+                Class<?> handlerType, Set<Class<?>> available) {
+            return runtimeConstructionPlans
+                    .computeIfAbsent(handlerType, ignored -> new ConcurrentHashMap<>())
+                    .computeIfAbsent(
+                            available, keys -> fallback.prepareConstruction(handlerType, keys));
         }
 
         @Override
@@ -194,8 +203,8 @@ public interface ZLinkHandlerActivator {
             if (registered != null) {
                 return registered;
             }
-            return constructionPlan(handlerType).create(
-                    fallback.openActivation(), this::findRuntimeService);
+            return constructionPlan(handlerType)
+                    .create(fallback.openActivation(), this::findRuntimeService);
         }
 
         @Override
@@ -206,7 +215,9 @@ public interface ZLinkHandlerActivator {
 
         @Override
         public Object findService(Constructor<?> constructor, int parameterIndex) {
-            Object registered = findRuntimeService(PublicConstructorPlan.parameterType(constructor, parameterIndex));
+            Object registered =
+                    findRuntimeService(
+                            PublicConstructorPlan.parameterType(constructor, parameterIndex));
             return registered != null
                     ? registered
                     : fallback.findService(constructor, parameterIndex);
@@ -229,8 +240,7 @@ public interface ZLinkHandlerActivator {
                 return fallbackActivation.createPrepared(plan, resolver);
             }
 
-            private final Set<Object> borrowed =
-                    Collections.newSetFromMap(new IdentityHashMap<>());
+            private final Set<Object> borrowed = Collections.newSetFromMap(new IdentityHashMap<>());
 
             @Override
             public Object create(Class<?> handlerType) {
@@ -239,8 +249,8 @@ public interface ZLinkHandlerActivator {
                     borrowed.add(runtimeService);
                     return runtimeService;
                 }
-                return constructionPlan(handlerType).create(
-                        fallbackActivation, MutableServices.this::findRuntimeService);
+                return constructionPlan(handlerType)
+                        .create(fallbackActivation, MutableServices.this::findRuntimeService);
             }
 
             @Override
@@ -250,11 +260,15 @@ public interface ZLinkHandlerActivator {
                     borrowed.add(runtimeService);
                     return runtimeService;
                 }
-                return constructionPlan(handlerType).create(
-                        fallbackActivation, dependencyType -> {
-                            Object service = findRuntimeService(dependencyType);
-                            return service != null ? service : dependencyResolver.resolve(dependencyType);
-                        });
+                return constructionPlan(handlerType)
+                        .create(
+                                fallbackActivation,
+                                dependencyType -> {
+                                    Object service = findRuntimeService(dependencyType);
+                                    return service != null
+                                            ? service
+                                            : dependencyResolver.resolve(dependencyType);
+                                });
             }
 
             @Override
@@ -316,12 +330,14 @@ public interface ZLinkHandlerActivator {
 }
 
 final class ReflectionActivator implements ZLinkHandlerActivator {
-    private static final ClassValue<ConstructionPlan> PLANS = new ClassValue<>() {
-        @Override
-        protected ConstructionPlan computeValue(Class<?> type) {
-            return PublicConstructorPlan.forType(type).compile(Set.of(), (constructor, index) -> false, true);
-        }
-    };
+    private static final ClassValue<ConstructionPlan> PLANS =
+            new ClassValue<>() {
+                @Override
+                protected ConstructionPlan computeValue(Class<?> type) {
+                    return PublicConstructorPlan.forType(type)
+                            .compile(Set.of(), (constructor, index) -> false, true);
+                }
+            };
 
     @Override
     public void prepare(Class<?> handlerType) {
@@ -330,8 +346,9 @@ final class ReflectionActivator implements ZLinkHandlerActivator {
 
     @Override
     public PreparedConstruction prepareConstruction(Class<?> type, Set<Class<?>> runtimeServices) {
-        ConstructionPlan plan = PublicConstructorPlan.forType(type)
-                .compile(runtimeServices, this::isServiceAvailable, true);
+        ConstructionPlan plan =
+                PublicConstructorPlan.forType(type)
+                        .compile(runtimeServices, this::isServiceAvailable, true);
         if (plan == null) {
             throw new ZLinkConfigurationException(
                     "No available public constructor: " + type.getName());
@@ -366,19 +383,28 @@ final class ReflectionActivator implements ZLinkHandlerActivator {
 }
 
 record PublicConstructorPlan(Class<?> handlerType, Map<Constructor<?>, Class<?>[]> constructors) {
-    private static final ClassValue<PublicConstructorPlan> PLANS = new ClassValue<>() {
-        @Override
-        protected PublicConstructorPlan computeValue(Class<?> type) {
-            Map<Constructor<?>, Class<?>[]> constructors = new LinkedHashMap<>();
-            Arrays.stream(type.getConstructors())
-                    .sorted(Comparator.<Constructor<?>>comparingInt(
-                            Constructor::getParameterCount).reversed())
-                    .forEach(constructor -> constructors.put(constructor, constructor.getParameterTypes()));
-            return new PublicConstructorPlan(type, Collections.unmodifiableMap(constructors));
-        }
-    };
+    private static final ClassValue<PublicConstructorPlan> PLANS =
+            new ClassValue<>() {
+                @Override
+                protected PublicConstructorPlan computeValue(Class<?> type) {
+                    Map<Constructor<?>, Class<?>[]> constructors = new LinkedHashMap<>();
+                    Arrays.stream(type.getConstructors())
+                            .sorted(
+                                    Comparator.<Constructor<?>>comparingInt(
+                                                    Constructor::getParameterCount)
+                                            .reversed())
+                            .forEach(
+                                    constructor ->
+                                            constructors.put(
+                                                    constructor, constructor.getParameterTypes()));
+                    return new PublicConstructorPlan(
+                            type, Collections.unmodifiableMap(constructors));
+                }
+            };
 
-    static void prepare(Class<?> type) { forType(type); }
+    static void prepare(Class<?> type) {
+        forType(type);
+    }
 
     static PublicConstructorPlan forType(Class<?> type) {
         return PLANS.get(Objects.requireNonNull(type, "handlerType"));
@@ -388,8 +414,10 @@ record PublicConstructorPlan(Class<?> handlerType, Map<Constructor<?>, Class<?>[
         return forType(constructor.getDeclaringClass()).constructors().get(constructor)[index];
     }
 
-    ConstructionPlan compile(Set<Class<?>> runtimeServices,
-            BiPredicate<Constructor<?>, Integer> available, boolean allowNoArg) {
+    ConstructionPlan compile(
+            Set<Class<?>> runtimeServices,
+            BiPredicate<Constructor<?>, Integer> available,
+            boolean allowNoArg) {
         if (Modifier.isAbstract(handlerType.getModifiers())) {
             return null;
         }
@@ -436,17 +464,19 @@ record ConstructionPlan(
     }
 
     ZLinkHandlerActivator.PreparedConstruction bind() {
-        return (activation, resolver) -> create((selected, index, type) -> {
-            if (!runtimeArguments[index]) {
-                return activation.findService(selected, index);
-            }
-            Object dependency = resolver.resolve(type);
-            if (dependency == null) {
-                throw new ZLinkConfigurationException(
-                        "Runtime dependency is unavailable: " + type.getName());
-            }
-            return dependency;
-        });
+        return (activation, resolver) ->
+                create(
+                        (selected, index, type) -> {
+                            if (!runtimeArguments[index]) {
+                                return activation.findService(selected, index);
+                            }
+                            Object dependency = resolver.resolve(type);
+                            if (dependency == null) {
+                                throw new ZLinkConfigurationException(
+                                        "Runtime dependency is unavailable: " + type.getName());
+                            }
+                            return dependency;
+                        });
     }
 
     Object create(ArgumentResolver resolver) {
@@ -458,7 +488,8 @@ record ConstructionPlan(
             return constructor.newInstance(arguments);
         } catch (ReflectiveOperationException failure) {
             throw new ZLinkConfigurationException(
-                    "failed to create handler: " + constructor.getDeclaringClass().getName(), failure);
+                    "failed to create handler: " + constructor.getDeclaringClass().getName(),
+                    failure);
         }
     }
 }

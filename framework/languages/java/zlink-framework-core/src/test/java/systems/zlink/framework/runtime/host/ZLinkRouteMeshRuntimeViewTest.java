@@ -236,10 +236,7 @@ final class ZLinkRouteMeshRuntimeViewTest {
     void unavailableRequiredPeerDegradesTopologyButNotPlacement() throws Exception {
         RoutingId missingRid = rid("view-missing-target");
         var unavailableTarget = new DefaultZLinkFrameworkOptions();
-        unavailableTarget
-                .addRouteMesh(MESH)
-                .listen("tcp://127.0.0.1:0")
-                .setRoutingId(missingRid);
+        unavailableTarget.addRouteMesh(MESH).listen("tcp://127.0.0.1:0").setRoutingId(missingRid);
         String unavailableEndpoint;
         try (var targetRuntime = start(unavailableTarget)) {
             unavailableEndpoint = endpoint(targetRuntime);
@@ -385,10 +382,7 @@ final class ZLinkRouteMeshRuntimeViewTest {
     void zeroWeightPlacementUsesCapacityReasonEvenWhenAPeerIsUnavailable() throws Exception {
         RoutingId missingRid = rid("view-weight-zero-missing");
         var unavailableTarget = new DefaultZLinkFrameworkOptions();
-        unavailableTarget
-                .addRouteMesh(MESH)
-                .listen("tcp://127.0.0.1:0")
-                .setRoutingId(missingRid);
+        unavailableTarget.addRouteMesh(MESH).listen("tcp://127.0.0.1:0").setRoutingId(missingRid);
         String unavailableEndpoint;
         try (var targetRuntime = start(unavailableTarget)) {
             unavailableEndpoint = endpoint(targetRuntime);
@@ -398,8 +392,7 @@ final class ZLinkRouteMeshRuntimeViewTest {
         var node = options.addRouteMesh(MESH).listen("tcp://127.0.0.1:0").setPlacementWeight(0);
         node.objects().server();
         node.channelName("work").server();
-        node.peerConnections()
-                .connect(missingRid, unavailableEndpoint);
+        node.peerConnections().connect(missingRid, unavailableEndpoint);
         try (var runtime = start(options)) {
             var status =
                     awaitSnapshot(

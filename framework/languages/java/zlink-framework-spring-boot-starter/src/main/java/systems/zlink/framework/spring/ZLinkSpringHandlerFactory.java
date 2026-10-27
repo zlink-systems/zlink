@@ -71,16 +71,24 @@ final class ZLinkSpringHandlerFactory implements ZLinkHandlerActivator {
     private static final String CLOSE_METHOD_NAME = "close";
     private static final String PRE_DESTROY_ANNOTATION_CLASS_NAME = "jakarta.annotation.PreDestroy";
     private static final String ACTIVATION_BEAN_NAME_SUFFIX = "#zlinkActivation";
-    private static final ClassValue<HandlerMetadata> HANDLER_METADATA = new ClassValue<>() {
-        @Override
-        protected HandlerMetadata computeValue(Class<?> type) {
-            return new HandlerMetadata(Arrays.stream(type.getConstructors())
-                    .sorted(Comparator.<Constructor<?>>comparingInt(
-                                    ZLinkSpringHandlerFactory::autowiredPriority)
-                            .thenComparingInt(Constructor::getParameterCount).reversed()).toList(),
-                    type.getName() + ACTIVATION_BEAN_NAME_SUFFIX, springInvokesClose(type));
-        }
-    };
+    private static final ClassValue<HandlerMetadata> HANDLER_METADATA =
+            new ClassValue<>() {
+                @Override
+                protected HandlerMetadata computeValue(Class<?> type) {
+                    return new HandlerMetadata(
+                            Arrays.stream(type.getConstructors())
+                                    .sorted(
+                                            Comparator.<Constructor<?>>comparingInt(
+                                                            ZLinkSpringHandlerFactory
+                                                                    ::autowiredPriority)
+                                                    .thenComparingInt(
+                                                            Constructor::getParameterCount)
+                                                    .reversed())
+                                    .toList(),
+                            type.getName() + ACTIVATION_BEAN_NAME_SUFFIX,
+                            springInvokesClose(type));
+                }
+            };
     private final AutowireCapableBeanFactory beanFactory;
     private final Map<Class<?>, HandlerPlan> handlerPlans = new ConcurrentHashMap<>();
 
@@ -133,8 +141,10 @@ final class ZLinkSpringHandlerFactory implements ZLinkHandlerActivator {
             }
             return null;
         }
-        String selected = candidates.size() == 1 ? candidates.keySet().iterator().next()
-                : new MetadataCandidateSelector(source).select(candidates, descriptor);
+        String selected =
+                candidates.size() == 1
+                        ? candidates.keySet().iterator().next()
+                        : new MetadataCandidateSelector(source).select(candidates, descriptor);
         if (selected == null) {
             throw new NoUniqueBeanDefinitionException(
                     descriptor.getResolvableType(), candidates.keySet());
@@ -280,7 +290,8 @@ final class ZLinkSpringHandlerFactory implements ZLinkHandlerActivator {
             return Activation.super.createPrepared(construction, resolver);
         }
 
-        private Object create(Class<?> handlerType, HandlerPlan plan, DependencyResolver dependencyResolver) {
+        private Object create(
+                Class<?> handlerType, HandlerPlan plan, DependencyResolver dependencyResolver) {
             if (closed) {
                 throw new IllegalStateException("Spring handler activation is closed");
             }
@@ -363,7 +374,8 @@ final class ZLinkSpringHandlerFactory implements ZLinkHandlerActivator {
                             "Spring dependency is unavailable: " + parameter.typeName());
                 }
                 arguments[index] = dependency;
-                if (shortcut == null && ownedDependencies != null
+                if (shortcut == null
+                        && ownedDependencies != null
                         && ownedDependencies.size() > ownedBefore) {
                     scopedDependencies.put(parameter.key(), dependency);
                 }
@@ -445,17 +457,21 @@ final class ZLinkSpringHandlerFactory implements ZLinkHandlerActivator {
                 ParameterPlan[] plans = new ParameterPlan[parameters.length];
                 for (int index = 0; index < parameters.length; index++) {
                     Parameter parameter = parameters[index];
-                    DependencyDescriptor descriptor = new DependencyDescriptor(
-                            new MethodParameter(constructor, index), true);
+                    DependencyDescriptor descriptor =
+                            new DependencyDescriptor(new MethodParameter(constructor, index), true);
                     String shortcut = null;
                     if (runtimeServices.contains(parameter.getType())) {
                         descriptor = null;
                     } else {
                         shortcut = validateDependency(descriptor);
                     }
-                    plans[index] = new ParameterPlan(parameter.getType(),
-                            parameter.getParameterizedType().getTypeName(),
-                            DependencyKey.from(parameter), descriptor, shortcut);
+                    plans[index] =
+                            new ParameterPlan(
+                                    parameter.getType(),
+                                    parameter.getParameterizedType().getTypeName(),
+                                    DependencyKey.from(parameter),
+                                    descriptor,
+                                    shortcut);
                 }
                 return new HandlerPlan(new ConstructorPlan(constructor, plans), metadata);
             } catch (NoSuchBeanDefinitionException unavailable) {
@@ -476,8 +492,11 @@ final class ZLinkSpringHandlerFactory implements ZLinkHandlerActivator {
     private record ConstructorPlan(Constructor<?> constructor, ParameterPlan[] parameters) {}
 
     private record ParameterPlan(
-            Class<?> type, String typeName, DependencyKey key,
-            DependencyDescriptor descriptor, String shortcut) {}
+            Class<?> type,
+            String typeName,
+            DependencyKey key,
+            DependencyDescriptor descriptor,
+            String shortcut) {}
 
     private static int autowiredPriority(Constructor<?> constructor) {
         return constructor.isAnnotationPresent(Autowired.class) ? 1 : 0;

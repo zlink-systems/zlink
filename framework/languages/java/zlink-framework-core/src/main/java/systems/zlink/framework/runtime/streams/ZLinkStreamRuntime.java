@@ -78,8 +78,8 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 public final class ZLinkStreamRuntime implements AutoCloseable {
-    private static final Set<Class<?>> SESSION_SERVICES = Set.of(
-            ZLinkSessionContext.class, ZLinkSessionPacketDispatcher.class);
+    private static final Set<Class<?>> SESSION_SERVICES =
+            Set.of(ZLinkSessionContext.class, ZLinkSessionPacketDispatcher.class);
 
     public static Set<Class<?>> prepareConstruction(
             ZLinkFrameworkRegistration registration, ZLinkHandlerActivator handlerFactory) {
@@ -1607,16 +1607,22 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                         replyRetryExecutor);
         sessionContexts.add(context);
         try {
-            ZLinkHandlerActivator.MutableServices sessionFactory = ZLinkHandlerActivator.services(handlerFactory);
+            ZLinkHandlerActivator.MutableServices sessionFactory =
+                    ZLinkHandlerActivator.services(handlerFactory);
             var dispatcher =
                     new ZLinkSessionPacketDispatcherRuntime<ZLinkSessionContext>(handlerExecutor);
-            SESSION_SERVICES.forEach(key -> sessionFactory.add(key,
-                    key == ZLinkSessionContext.class ? context : dispatcher));
+            SESSION_SERVICES.forEach(
+                    key ->
+                            sessionFactory.add(
+                                    key, key == ZLinkSessionContext.class ? context : dispatcher));
             if (actors != null) {
                 sessionFactory.add(ZLinkActorManager.class, actors);
             }
-            dispatcher.initializeHandlers(streamNode.sessionPacketHandlers(), sessionFactory,
-                    serializer, suspendHandlerInvokers);
+            dispatcher.initializeHandlers(
+                    streamNode.sessionPacketHandlers(),
+                    sessionFactory,
+                    serializer,
+                    suspendHandlerInvokers);
             Object createdSession = sessionFactory.create(streamNode.sessionType());
             if (!(createdSession instanceof ZLinkSession session)) {
                 throw new ZLinkConfigurationException(

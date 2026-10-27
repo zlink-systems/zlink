@@ -42,8 +42,7 @@ final class ZLinkSpotActivationFactory {
     private static final Set<Class<?>> INSTANCE_SERVICES = Set.of(ZLinkInstanceSpotContext.class);
 
     static Set<Class<?>> prepareConstruction(
-            ZLinkFrameworkRegistration registration,
-            ZLinkHandlerActivator handlerFactory) {
+            ZLinkFrameworkRegistration registration, ZLinkHandlerActivator handlerFactory) {
         Set<Class<?>> prepared = new HashSet<>();
         for (var node : registration.spotNodes()) {
             prepareTypes(node.spotFactories(), SPOT_SERVICES, handlerFactory, prepared);
@@ -53,14 +52,18 @@ final class ZLinkSpotActivationFactory {
             prepareTypes(node.spotFactories(), SPOT_SERVICES, handlerFactory, prepared);
             prepareTypes(node.entrySpots(), ENTRY_SERVICES, handlerFactory, prepared);
             for (var factory : node.relocatableInstanceSpotFactories().values()) {
-                prepareTypes(List.of(factory.spotType()), INSTANCE_SERVICES, handlerFactory, prepared);
+                prepareTypes(
+                        List.of(factory.spotType()), INSTANCE_SERVICES, handlerFactory, prepared);
             }
         }
         return Set.copyOf(prepared);
     }
 
-    private static void prepareTypes(Iterable<? extends Class<?>> types, Set<Class<?>> services,
-            ZLinkHandlerActivator handlerFactory, Set<Class<?>> prepared) {
+    private static void prepareTypes(
+            Iterable<? extends Class<?>> types,
+            Set<Class<?>> services,
+            ZLinkHandlerActivator handlerFactory,
+            Set<Class<?>> prepared) {
         for (Class<?> type : types) {
             handlerFactory.prepareConstruction(type, services);
             prepared.add(type);
@@ -561,9 +564,7 @@ final class ZLinkSpotActivationFactory {
     private ZLinkSpot<?> createSpot(
             Class<? extends ZLinkSpot<?>> spotType, ZLinkSpotContext context) {
         try {
-            return (ZLinkSpot<?>)
-                    activationServices(SPOT_SERVICES, context)
-                            .create(spotType);
+            return (ZLinkSpot<?>) activationServices(SPOT_SERVICES, context).create(spotType);
         } catch (RuntimeException error) {
             throw new ZLinkConfigurationException(
                     "failed to create spot: " + spotType.getName(), error);
@@ -574,8 +575,7 @@ final class ZLinkSpotActivationFactory {
             Class<? extends ZLinkEntrySpot<?>> entrySpotType, ZLinkEntrySpotContext context) {
         try {
             return (ZLinkEntrySpot<?>)
-                    activationServices(ENTRY_SERVICES, context)
-                            .create(entrySpotType);
+                    activationServices(ENTRY_SERVICES, context).create(entrySpotType);
         } catch (RuntimeException error) {
             throw new ZLinkConfigurationException(
                     "failed to create entry spot: " + entrySpotType.getName(), error);

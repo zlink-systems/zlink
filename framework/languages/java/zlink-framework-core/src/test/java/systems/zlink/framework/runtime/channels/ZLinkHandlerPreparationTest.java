@@ -43,22 +43,40 @@ final class ZLinkHandlerPreparationTest {
         field.setAccessible(true);
         var index = (Map<Class<?>, Object>) field.get(services);
         var hashes = new AtomicInteger();
-        var keys = new AbstractSet<Class<?>>() {
-            public Iterator<Class<?>> iterator() { return index.keySet().iterator(); }
-            public int size() { return index.size(); }
-            public boolean contains(Object key) { return index.containsKey(key); }
-            public int hashCode() {
-                hashes.incrementAndGet();
-                return super.hashCode();
-            }
-        };
-        field.set(services, new AbstractMap<Class<?>, Object>() {
-            public Set<Map.Entry<Class<?>, Object>> entrySet() {
-                return index.entrySet();
-            }
-            public Object get(Object key) { return index.get(key); }
-            public Set<Class<?>> keySet() { return keys; }
-        });
+        var keys =
+                new AbstractSet<Class<?>>() {
+                    public Iterator<Class<?>> iterator() {
+                        return index.keySet().iterator();
+                    }
+
+                    public int size() {
+                        return index.size();
+                    }
+
+                    public boolean contains(Object key) {
+                        return index.containsKey(key);
+                    }
+
+                    public int hashCode() {
+                        hashes.incrementAndGet();
+                        return super.hashCode();
+                    }
+                };
+        field.set(
+                services,
+                new AbstractMap<Class<?>, Object>() {
+                    public Set<Map.Entry<Class<?>, Object>> entrySet() {
+                        return index.entrySet();
+                    }
+
+                    public Object get(Object key) {
+                        return index.get(key);
+                    }
+
+                    public Set<Class<?>> keySet() {
+                        return keys;
+                    }
+                });
         keys.hashCode();
         assertEquals(1, hashes.get());
         services.prepare(CatalogHandler.class);
@@ -67,14 +85,17 @@ final class ZLinkHandlerPreparationTest {
             assertSame(known, ((CatalogHandler) services.create(CatalogHandler.class)).known);
             try (var activation = services.openActivation()) {
                 assertSame(known, ((CatalogHandler) activation.create(CatalogHandler.class)).known);
-                assertSame(known, ((CatalogHandler) activation.create(
-                        CatalogHandler.class, ignored -> null)).known);
+                assertSame(
+                        known,
+                        ((CatalogHandler) activation.create(CatalogHandler.class, ignored -> null))
+                                .known);
             }
             try (var owner = new ZLinkHandlerInstanceOwner(services)) {
                 assertSame(known, ((CatalogHandler) owner.instance(CatalogHandler.class)).known);
             }
         }
-        assertEquals(0, hashes.get(), "dispatch must look up construction plans by handler type only");
+        assertEquals(
+                0, hashes.get(), "dispatch must look up construction plans by handler type only");
     }
 
     @Test
@@ -83,7 +104,9 @@ final class ZLinkHandlerPreparationTest {
         var plan = services.prepareConstruction(CatalogHandler.class, Set.of(Known.class));
         var dependency = new Known();
         try (var activation = ZLinkHandlerActivator.reflection().openActivation()) {
-            assertSame(dependency, ((CatalogHandler) plan.create(activation, type -> dependency)).known);
+            assertSame(
+                    dependency,
+                    ((CatalogHandler) plan.create(activation, type -> dependency)).known);
         }
     }
 
@@ -91,13 +114,18 @@ final class ZLinkHandlerPreparationTest {
     void nestedScopesReuseTheParentCatalogConstructionPlan() {
         var compilations = new AtomicInteger();
         var reflection = ZLinkHandlerActivator.reflection();
-        var adapter = new ZLinkHandlerActivator() {
-            public Object create(Class<?> type) { return reflection.create(type); }
-            public PreparedConstruction prepareConstruction(Class<?> type, Set<Class<?>> keys) {
-                compilations.incrementAndGet();
-                return reflection.prepareConstruction(type, keys);
-            }
-        };
+        var adapter =
+                new ZLinkHandlerActivator() {
+                    public Object create(Class<?> type) {
+                        return reflection.create(type);
+                    }
+
+                    public PreparedConstruction prepareConstruction(
+                            Class<?> type, Set<Class<?>> keys) {
+                        compilations.incrementAndGet();
+                        return reflection.prepareConstruction(type, keys);
+                    }
+                };
         var parent = ZLinkHandlerActivator.services(adapter);
         var known = new Known();
         parent.add(Known.class, known);
@@ -108,7 +136,8 @@ final class ZLinkHandlerPreparationTest {
             scoped.add(Known.class, current);
             scoped.prepare(CatalogHandler.class);
             try (var activation = scoped.openActivation()) {
-                assertSame(current, ((CatalogHandler) activation.create(CatalogHandler.class)).known);
+                assertSame(
+                        current, ((CatalogHandler) activation.create(CatalogHandler.class)).known);
             }
         }
         assertEquals(1, compilations.get());
@@ -122,16 +151,21 @@ final class ZLinkHandlerPreparationTest {
         assertNotNull(reflection.findService(DualConstructorSpot.class));
     }
 
-    public static final class DualConstructorSpot
-            implements ZLinkSpot<ZLinkActor> {
+    public static final class DualConstructorSpot implements ZLinkSpot<ZLinkActor> {
         public DualConstructorSpot() {}
+
         public DualConstructorSpot(ZLinkSpotContext context) {
             throw new AssertionError("Standalone reflection must use the no-arg constructor");
         }
-        public ZLinkSpotContext context() { return null; }
+
+        public ZLinkSpotContext context() {
+            return null;
+        }
+
         public CompletionStage<Void> onJoinedActor(ZLinkActor actor) {
             return CompletableFuture.completedFuture(null);
         }
+
         public CompletionStage<Void> onLeaveActor(ZLinkActor actor) {
             return CompletableFuture.completedFuture(null);
         }
@@ -161,10 +195,12 @@ final class ZLinkHandlerPreparationTest {
     void explicitApplicationFactoryRemainsTheConstructionProcedure() {
         var expected = new CatalogHandler();
         var calls = new AtomicInteger();
-        var services = ZLinkHandlerActivator.services(type -> {
-            calls.incrementAndGet();
-            return expected;
-        });
+        var services =
+                ZLinkHandlerActivator.services(
+                        type -> {
+                            calls.incrementAndGet();
+                            return expected;
+                        });
         services.prepare(CatalogHandler.class);
         assertEquals(0, calls.get());
         assertSame(expected, services.create(CatalogHandler.class));
@@ -185,28 +221,39 @@ final class ZLinkHandlerPreparationTest {
 
     public static final class CatalogHandler {
         final Known known;
-        public CatalogHandler(Known known) { this.known = known; }
-        public CatalogHandler() { this.known = null; }
+
+        public CatalogHandler(Known known) {
+            this.known = known;
+        }
+
+        public CatalogHandler() {
+            this.known = null;
+        }
     }
 
     @Test
     void mutableServicesReusesThePreparedConstructorWithoutMissingDependencyLookups() {
         var missingLookups = new AtomicInteger();
         var reflection = ZLinkHandlerActivator.reflection();
-        var fallback = new ZLinkHandlerActivator() {
-            public boolean isServiceAvailable(Constructor<?> constructor, int index) {
-                Class<?> type = constructor.getParameterTypes()[index];
-                return Arrays.stream(type.getConstructors())
-                        .anyMatch(candidate -> candidate.getParameterCount() == 0);
-            }
-            public Object create(Class<?> type) { return reflection.create(type); }
-            public Object findService(Class<?> type) {
-                if (type == Missing.class) {
-                    missingLookups.incrementAndGet();
-                }
-                return reflection.findService(type);
-            }
-        };
+        var fallback =
+                new ZLinkHandlerActivator() {
+                    public boolean isServiceAvailable(Constructor<?> constructor, int index) {
+                        Class<?> type = constructor.getParameterTypes()[index];
+                        return Arrays.stream(type.getConstructors())
+                                .anyMatch(candidate -> candidate.getParameterCount() == 0);
+                    }
+
+                    public Object create(Class<?> type) {
+                        return reflection.create(type);
+                    }
+
+                    public Object findService(Class<?> type) {
+                        if (type == Missing.class) {
+                            missingLookups.incrementAndGet();
+                        }
+                        return reflection.findService(type);
+                    }
+                };
         var services = ZLinkHandlerActivator.services(fallback);
         services.add(Known.class, new Known());
         services.prepare(PreparedConstruction.class);
@@ -218,11 +265,14 @@ final class ZLinkHandlerPreparationTest {
     }
 
     public static final class Known {}
+
     public interface Missing {}
+
     public static final class PreparedConstruction {
         public PreparedConstruction(Known known, Missing missing) {
             throw new AssertionError("Rejected constructor executed");
         }
+
         public PreparedConstruction(Known known) {}
     }
 

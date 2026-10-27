@@ -181,7 +181,8 @@ public final class ZLinkFrameworkRegistration {
             types.addAll(channel.handlerTypes());
         }
         for (MeshNodeRegistration meshNode : meshNodes) {
-            types.addAll(constructionOnly ? meshNode.constructionTypes() : meshNode.applicationTypes());
+            types.addAll(
+                    constructionOnly ? meshNode.constructionTypes() : meshNode.applicationTypes());
         }
         for (SpotNodeRegistration spotNode : spotNodes) {
             types.addAll(spotNode.spotFactories());

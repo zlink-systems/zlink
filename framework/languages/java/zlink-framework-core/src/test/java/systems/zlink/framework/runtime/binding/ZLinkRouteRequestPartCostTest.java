@@ -149,8 +149,7 @@ public final class ZLinkRouteRequestPartCostTest {
                 .setRoutingId(TARGET)
                 .addRouteRequestHandler(Echo.class, Probe.class, Probe.class);
         try (var target = ZLinkFrameworkRuntimeTestAccess.start(targetOptions)) {
-            String endpoint =
-                    target.listenerStatus(ZLinkListenerKind.ROUTE_MESH, MESH).endpoint();
+            String endpoint = target.listenerStatus(ZLinkListenerKind.ROUTE_MESH, MESH).endpoint();
             var sourceOptions = new DefaultZLinkFrameworkOptions();
             sourceOptions
                     .addRouteMesh(MESH)

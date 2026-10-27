@@ -24,7 +24,8 @@ final class SpringStartupDependencyMetadataTest {
                     NoSuchBeanDefinitionException.class,
                     () ->
                             new ZLinkSpringHandlerFactory(context.getBeanFactory())
-                                    .prepareConstruction(RequiredSpot.class, Set.of(ZLinkSpotContext.class)));
+                                    .prepareConstruction(
+                                            RequiredSpot.class, Set.of(ZLinkSpotContext.class)));
         }
     }
 
@@ -35,7 +36,8 @@ final class SpringStartupDependencyMetadataTest {
             assertDoesNotThrow(
                     () ->
                             new ZLinkSpringHandlerFactory(context.getBeanFactory())
-                                    .prepareConstruction(OptionalSpot.class, Set.of(ZLinkSpotContext.class)));
+                                    .prepareConstruction(
+                                            OptionalSpot.class, Set.of(ZLinkSpotContext.class)));
         }
     }
 
@@ -57,9 +59,17 @@ final class SpringStartupDependencyMetadataTest {
             var factory = new ZLinkSpringHandlerFactory(context.getBeanFactory());
             assertThrows(
                     NoUniqueBeanDefinitionException.class,
-                    () -> factory.prepareConstruction(RequiredSpot.class, Set.of(ZLinkSpotContext.class)));
-            assertDoesNotThrow(() -> factory.prepareConstruction(QualifiedSpot.class, Set.of(ZLinkSpotContext.class)));
-            assertDoesNotThrow(() -> factory.prepareConstruction(NamedSpot.class, Set.of(ZLinkSpotContext.class)));
+                    () ->
+                            factory.prepareConstruction(
+                                    RequiredSpot.class, Set.of(ZLinkSpotContext.class)));
+            assertDoesNotThrow(
+                    () ->
+                            factory.prepareConstruction(
+                                    QualifiedSpot.class, Set.of(ZLinkSpotContext.class)));
+            assertDoesNotThrow(
+                    () ->
+                            factory.prepareConstruction(
+                                    NamedSpot.class, Set.of(ZLinkSpotContext.class)));
             assertEquals(0, created.get());
         }
     }

@@ -827,8 +827,10 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
 
     private void prepareConstruction(ZLinkHandlerActivator.MutableServices runtimeHandlers) {
         var constructionTypes = new HashSet<>(registration.constructionTypes());
-        constructionTypes.removeAll(ZLinkSpotRuntime.prepareConstruction(registration, runtimeHandlers));
-        constructionTypes.removeAll(ZLinkStreamRuntime.prepareConstruction(registration, runtimeHandlers));
+        constructionTypes.removeAll(
+                ZLinkSpotRuntime.prepareConstruction(registration, runtimeHandlers));
+        constructionTypes.removeAll(
+                ZLinkStreamRuntime.prepareConstruction(registration, runtimeHandlers));
         runtimeHandlers.prepare(constructionTypes);
     }
 
