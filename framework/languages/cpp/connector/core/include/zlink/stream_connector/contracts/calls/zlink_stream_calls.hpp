@@ -144,11 +144,11 @@ void submit_wait_async (std::shared_ptr<void> state,
 void post_runtime_operation (std::function<void ()> operation);
 void schedule_delivery (std::shared_ptr<void> state, std::function<void ()> callback);
 void run_request_sending (const std::shared_ptr<void> &state, request_sending_context_t &context);
-void run_reply_received (const std::shared_ptr<void> &state,
-                         const reply_received_context_t &context,
-                         const std::vector<std::uint64_t> &handler_ids);
 std::vector<std::uint64_t> capture_reply_hook_ids (const std::shared_ptr<void> &state);
 void schedule_reply_received (const std::shared_ptr<void> &state, reply_received_context_t context);
+void schedule_reply_received (const std::shared_ptr<void> &state,
+                              reply_received_context_t context,
+                              const std::vector<std::uint64_t> &handler_ids);
 } // namespace detail
 
 class send_call_t
@@ -295,14 +295,17 @@ class request_call_t
            callback = std::move (callback)] (result_t<detail::request_reply_t> reply) mutable {
               erased_result_t erased (state, reply);
               auto result = erased.template as<TReply> ();
-              detail::run_reply_received (
+              detail::schedule_reply_received (
                 state, reply_context (request_name, actor_id, reply, result, started),
                 *reply_hook_ids);
               if (callback) {
-                  callback (std::move (result));
+                  detail::schedule_delivery (state, [callback = std::move (callback),
+                                                     result = std::move (result)] () mutable {
+                      callback (std::move (result));
+                  });
               }
           },
-          false, _actor_binding, reply_hook_ids);
+          true, _actor_binding, reply_hook_ids);
     }
 
   private:
