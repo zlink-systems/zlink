@@ -173,6 +173,9 @@ public:
  config_builder_t &config() noexcept;
  logging_builder_t &logging() noexcept;
  health_builder_t &health() noexcept;
+ app_t &use_metric_provider(
+ opentelemetry::nostd::shared_ptr<opentelemetry::metrics::MeterProvider>
+ provider);
 
  app_t &add_module(module_t &module);
  zlink_framework_options_t &add_zlink_framework();
@@ -958,6 +961,17 @@ public:
 JSON loader는 `nlohmann/json`을 사용한다. YAML은 필요하면 configuration extension으로
 둔다. Application은 표준 logging provider와 health 표면을 구성한다. Runtime event DTO,
 metric payload callback, exporter lifecycle과 provider 내부 registry는 public contract가 아니다.
+
+C++ Framework의 표준 metric provider는 OpenTelemetry C++ Metrics API의
+`opentelemetry::metrics::MeterProvider`이며 meter 이름은 `zlink.framework`다. Application은 provider와 그
+SDK·reader·exporter를 구성한 뒤 host가 `run`을 시작하기 전에 `app_t::use_metric_provider(...)`로 넘긴다.
+Host는 넘겨받은 provider의 공유 소유권을 가지며 모든 Framework 계기를 그 provider에서 만든다. 정적 빌드와
+공유 빌드는 같은 연결 방법을 쓰고, Framework는 OpenTelemetry 전역 provider를 조회하지 않는다. 전역
+provider를 쓰려면 application이 그것을 조회해 넘긴다. Provider를 넘기지 않았거나 빈 pointer를 넘긴 host는
+no-op provider에 기록한다. `run`을 시작한 뒤의 호출은 `std::logic_error`로 거부하고 provider를 바꾸지
+않는다. Application은 host가 정지를 마치기 전에 provider를 shutdown하지 않으며, Framework는 provider의
+flush·shutdown을 호출하지 않는다. 계기 카탈로그와 기록·수집 규칙은
+[Runtime metrics](../../../06-observability/02-runtime-metrics.ko.md)가 소유한다.
 
 ### 5.1 Instance Spot metric
 
