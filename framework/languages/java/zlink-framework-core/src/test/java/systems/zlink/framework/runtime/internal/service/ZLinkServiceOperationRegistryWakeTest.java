@@ -12,6 +12,7 @@ import java.lang.constant.ClassDesc;
 import java.lang.constant.MethodTypeDesc;
 import java.lang.reflect.InvocationTargetException;
 import java.time.Duration;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -247,6 +248,68 @@ public final class ZLinkServiceOperationRegistryWakeTest {
         }
         if (serialReturns > 2)
             throw new AssertionError("serial wait returns=" + serialReturns + " > 2");
+        queuedVisitDoesNotMultiplyOnRegistrationWakeups();
         System.out.println("PASS");
+    }
+
+    private static void queuedVisitDoesNotMultiplyOnRegistrationWakeups() throws Exception {
+        worker.set(null);
+        AtomicLong clock = new AtomicLong();
+        var registry =
+                new ZLinkServiceOperationRegistry(
+                        command -> {
+                            Thread thread = new Thread(command, "queued-deadline-worker");
+                            worker.set(thread);
+                            return thread;
+                        },
+                        new IllegalStateException("closed"),
+                        clock::get);
+        blocker = registry;
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        try {
+            var request = ZLinkCompletionBridge.await(registry.register(Duration.ofMillis(1)));
+            parked();
+            var ownerField = ZLinkServiceOperationRegistry.class.getDeclaredField("owner");
+            ownerField.setAccessible(true);
+            var lane =
+                    (systems.zlink.framework.runtime.internal.execution.ZLinkStateLane)
+                            ownerField.get(registry);
+            lane.runAsync(
+                    () -> {
+                        entered.countDown();
+                        try {
+                            release.await();
+                        } catch (InterruptedException failure) {
+                            throw new AssertionError(failure);
+                        }
+                    });
+            if (!entered.await(5, TimeUnit.SECONDS))
+                throw new AssertionError("owner did not enter");
+            clock.set(TimeUnit.MILLISECONDS.toNanos(2));
+            for (int wake = 0; wake < 20; wake++) {
+                int before = returns.get();
+                java.util.concurrent.locks.LockSupport.unpark(worker.get());
+                awaitReturns(before + 1);
+                parked();
+            }
+            var mailboxField = lane.getClass().getDeclaredField("mailbox");
+            mailboxField.setAccessible(true);
+            var mailbox = (java.util.Queue<?>) mailboxField.get(lane);
+            int queued = mailbox.size();
+            release.countDown();
+            if (queued != 1)
+                throw new AssertionError("queued management visits=" + queued + " expected=1");
+            try {
+                request.get(5, TimeUnit.SECONDS);
+                throw new AssertionError("deadline did not expire");
+            } catch (ExecutionException failure) {
+                if (!(failure.getCause() instanceof TimeoutException)) throw failure;
+            }
+            System.out.println("queued_wakeups=20 management_turns=1");
+        } finally {
+            release.countDown();
+            registry.close();
+        }
     }
 }
