@@ -520,7 +520,8 @@ index immediately also satisfies this rule.
 **One index decides the next management visit.** Let L be the reference time of the preceding
 management visit and R the rotation duration. The next visit is the earlier of L+R and the earliest
 absolute deadline at or before L+R among unfinished entries remaining in the index; if there is no
-candidate, it is L+R. Candidates are determined by this absolute time window rather than a slot's stored
+candidate, it is L+R. When the index holds no entry, no next visit is scheduled; the next
+registration schedules it. Candidates are determined by this absolute time window rather than a slot's stored
 rounds, accounting for cursor and round progress over skipped time — visiting every slot that holds only
 entries with rounds remaining would create owner turns in proportion to the request count and to time.
 An implementation that scans a single table returns the earlier of a lower bound no later than the real
