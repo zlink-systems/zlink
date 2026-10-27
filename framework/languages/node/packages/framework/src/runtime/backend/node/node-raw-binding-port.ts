@@ -1,3 +1,6 @@
+import { RequestRuntime } from '../../foundation/request-runtime';
+import type { OperationHandle } from '../../foundation/operation-registry';
+import { remainingRequestTimeout } from '../../messaging/request-deadline';
 import {
   Message,
   Received,
@@ -133,6 +136,7 @@ class NodeRawHostPort implements ZLinkRawHostPort {
 }
 
 abstract class NodeRawSocketPort<TSocket extends Socket> implements ZLinkRawSocketPort {
+  protected readonly requests = new RequestRuntime();
   protected readonly received = new Received();
   private readonly endpoints = new Set<string>();
   private readonly monitors = new Set<NodeRawMonitorPort>();
@@ -184,6 +188,7 @@ abstract class NodeRawSocketPort<TSocket extends Socket> implements ZLinkRawSock
   }
 
   close(): void {
+    this.requests.close();
     if (this.closed) return;
     const failures: unknown[] = [];
     try {
@@ -320,19 +325,43 @@ class NodeRawRouterPort extends NodeRawSocketPort<RouterSocket> implements ZLink
     onReply: (parts: readonly Buffer[]) => T,
     onFailed: (error: unknown) => T,
     recordReceived?: () => void,
-    onAdmitted?: () => void
+    onAdmitted?: () => void,
+    existing?: Pick<OperationHandle<unknown>, 'id' | 'deadlineMs'>
   ): Promise<T> {
-    let submission: ReturnType<RequestSubmitOperation['submit']>;
-    const deadlineMs = performance.now() + timeoutMs;
-    try {
+    if (existing !== undefined) {
       this.requireOpen();
-      submission = appendRequestParts(this.socket.request(this.preparedRoutingId(targetRid)), parts)
-        .timeout(timeoutMs)
-        .submit();
-    } catch (error) {
-      throw translateBindingResultError(error, 'submit');
+      const submission = submitRawRequest(
+        appendRequestParts(this.socket.request(this.preparedRoutingId(targetRid)), parts).timeout(
+          remainingRequestTimeout('Request', existing.deadlineMs) ?? timeoutMs
+        )
+      );
+      return requestReply(submission, 0, onReply, onFailed, recordReceived, onAdmitted);
     }
-    return requestReply(submission, deadlineMs, onReply, onFailed, recordReceived, onAdmitted);
+    return this.requests.observe<readonly Buffer[], T>(
+      timeoutMs,
+      (entry) => {
+        this.requireOpen();
+        const submission = submitRawRequest(
+          appendRequestParts(this.socket.request(this.preparedRoutingId(targetRid)), parts).timeout(
+            remainingRequestTimeout('Request', entry.deadlineMs) ?? timeoutMs
+          )
+        );
+        void requestReply(
+          submission,
+          0,
+          (value) => {
+            entry.complete(value);
+          },
+          (error) => {
+            entry.fail(error);
+          },
+          recordReceived,
+          onAdmitted
+        );
+      },
+      onReply,
+      onFailed
+    );
   }
 
   routesSnapshot(): readonly ZLinkRawRouterRoute[] {
@@ -376,22 +405,31 @@ class NodeRawDealerPort extends NodeRawSocketPort<DealerSocket> implements ZLink
     timeoutMs: number,
     onAdmitted?: () => void
   ): Promise<readonly Buffer[]> {
-    let submission: ReturnType<RequestSubmitOperation['submit']>;
-    const deadlineMs = performance.now() + timeoutMs;
-    try {
-      this.requireOpen();
-      submission = appendRequestParts(this.socket.request(), parts).timeout(timeoutMs).submit();
-      return requestReply(
-        submission,
-        deadlineMs,
-        (parts) => parts,
-        rethrowCompletion,
-        undefined,
-        onAdmitted
-      );
-    } catch (error) {
-      return Promise.reject(translateBindingResultError(error, 'submit'));
-    }
+    return this.requests.observe<readonly Buffer[]>(
+      timeoutMs,
+      (entry) => {
+        this.requireOpen();
+        const submission = submitRawRequest(
+          appendRequestParts(this.socket.request(), parts).timeout(
+            remainingRequestTimeout('Request', entry.deadlineMs) ?? timeoutMs
+          )
+        );
+        void requestReply(
+          submission,
+          0,
+          (value) => {
+            entry.complete(value);
+          },
+          (error) => {
+            entry.fail(error);
+          },
+          undefined,
+          onAdmitted
+        );
+      },
+      (value) => value,
+      rethrowCompletion
+    );
   }
 
   receive(dontWait = false): ZLinkRawReceivedRecord | undefined {
@@ -542,7 +580,7 @@ function receiveRecord(
  */
 function requestReply<T>(
   submission: ReturnType<RequestSubmitOperation['submit']>,
-  deadlineMs: number,
+  _deadlineMs: number,
   onReply: (parts: readonly Buffer[]) => T,
   onFailed: (error: unknown) => T,
   recordReceived: (() => void) | undefined,
@@ -550,7 +588,7 @@ function requestReply<T>(
 ): Promise<T> {
   if (submission.result === SubmitResult.Backpressured) {
     return observeRequestReply(
-      bindingRequestReply(submission, deadlineMs, recordReceived, onAdmitted),
+      bindingRequestReply(submission, recordReceived, onAdmitted),
       onReply,
       onFailed
     );
@@ -626,4 +664,14 @@ function copyMonitorEvent(event: MonitorEvent): ZLinkRawMonitorRecord {
     transportLane: event.transportLane,
     flags: event.flags
   };
+}
+
+function submitRawRequest(
+  operation: RequestSubmitOperation
+): ReturnType<RequestSubmitOperation['submit']> {
+  try {
+    return operation.submit();
+  } catch (error) {
+    throw translateBindingResultError(error, 'submit');
+  }
 }
