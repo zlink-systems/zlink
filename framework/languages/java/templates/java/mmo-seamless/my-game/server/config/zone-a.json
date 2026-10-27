@@ -1,0 +1,9 @@
+{
+  "id": "zoneA",
+  "redisEndpoint": "127.0.0.1:6379",
+  "keyPrefix": "my-game:",
+  "meshEndpoint": "tcp://127.0.0.1:0",
+  "streamEndpoint": null,
+  "zoneIds": ["zone-1", "zone-2", "zone-3"],
+  "zoneCapacity": 3
+}

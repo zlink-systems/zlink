@@ -3788,6 +3788,9 @@ internal sealed partial class ZLinkFrameworkRuntime
         return state.HandlerInstances;
     }
 
+    internal ValueTask InvalidateSpotActorRuntimeAsync(ZLinkSpotActivation activation) =>
+        _actorSessionManager.InvalidateSpotActorRuntimeAsync(activation);
+
     internal bool TryGetActorState(string actorId, out ZLinkActorRuntimeState state)
     {
         return _actorSessionManager.TryGetState(actorId, out state!);

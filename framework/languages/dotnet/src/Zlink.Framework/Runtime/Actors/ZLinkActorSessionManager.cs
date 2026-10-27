@@ -46,6 +46,19 @@ internal sealed partial class ZLinkActorSessionManager(
     internal ValueTask<ZLinkActorRuntimeState[]> SnapshotStatesAsync() =>
         _actorSessions.SnapshotAsync();
 
+    internal async ValueTask InvalidateSpotActorRuntimeAsync(ZLinkSpotActivation activation)
+    {
+        var failures = new ZLinkFailureCollector();
+        foreach (var actorId in activation.SnapshotActorIds())
+            if (TryGetState(actorId, out var state))
+                await failures
+                    .CaptureAsync(() =>
+                        state.InvalidateRuntimeGenerationAfterDispatchesAsync(activation)
+                    )
+                    .ConfigureAwait(false);
+        failures.ThrowIfAny();
+    }
+
     internal int CountActiveActors(string meshName) => _actorSessions.CountActive(meshName);
 
     public async ValueTask<CreateActorResult> CreateAndBindActorAsync(

@@ -34,6 +34,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <tuple>
 #include <vector>
 
 namespace zlink
@@ -148,8 +149,8 @@ class raw_mesh_node_owner_t
     service_liveness_registry_t &liveness () noexcept;
     service_mailbox_t &mailbox () noexcept;
 
-    bool connect_peer (const std::string &endpoint);
-    bool connect_peer (const std::string &endpoint, service_node_descriptor_t expected_descriptor);
+    bool connect_peer (const std::string &endpoint,
+                       std::optional<service_node_descriptor_t> expected_descriptor = std::nullopt);
     void disconnect_peer (const std::string &endpoint) noexcept;
     bool disconnect_peer (const std::vector<std::uint8_t> &expected_routing_id,
                           const std::string &endpoint) noexcept;
@@ -594,7 +595,9 @@ class raw_mesh_node_owner_t
         std::vector<std::uint8_t> hello;
     };
     std::map<std::vector<std::uint8_t>, selected_route_t, raw_mesh_byte_vector_less_t> _routes;
-    std::set<std::string> _outbound_endpoints;
+    std::map<std::string,
+             std::optional<std::tuple<std::vector<std::uint8_t>, std::string, std::uint64_t>>>
+      _outbound_endpoints;
     std::uint64_t _next_reply_route_id = 1;
     std::uint64_t _next_operation_sequence = 1;
     bool _closed = false;
