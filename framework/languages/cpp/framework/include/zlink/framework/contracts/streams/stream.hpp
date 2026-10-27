@@ -21,6 +21,11 @@
 #include <string_view>
 #include <utility>
 
+namespace zlink::framework::detail
+{
+class stream_allocation_test_access_t;
+}
+
 namespace zlink::framework
 {
 
@@ -218,13 +223,13 @@ class stream_t
     std::optional<std::string> remote_address () const;
     session_actor_manager_t &actors ();
     task_t<void> close ();
-    stream_send_call_t write_packet (const zlink::message_t &payload);
-    stream_write_call_t reply_packet (const zlink::message_t &payload);
+    stream_send_call_t write_packet (const zlink::framework::message_t &payload);
     stream_write_call_t reply_packet (const zlink::framework::message_t &payload);
 
   private:
     friend class detail::actor_gateway_runtime_t;
     friend class detail::session_actor_manager_access_t;
+    friend class detail::stream_allocation_test_access_t;
     friend class detail::stream_runtime_t;
     friend class session_actor_manager_t;
     explicit stream_t (std::shared_ptr<detail::stream_state_t> state);
@@ -237,8 +242,7 @@ class stream_t
 };
 
 /* Typed session packet handler contract: the serializer registry decodes the
- * payload first, then the handler completes with task_t<void>. The raw
- * message_t on_packet callback stays at the session runtime boundary. */
+ * payload first, then the handler completes with task_t<void>. */
 template <typename THandler, typename TSessionContext, typename TPayload>
 concept typed_session_packet_handler_for =
   requires (THandler &handler, TSessionContext &context, const TPayload &payload) {
@@ -250,10 +254,9 @@ template <typename TPayload, typename THandler>
 task_t<void> dispatch_typed_session_packet (THandler &handler,
                                             stream_t &stream,
                                             serializer_registry_t &serializers,
-                                            const zlink::message_t &payload)
+                                            const zlink::framework::message_t &payload)
 {
-    const auto decoded =
-      serializers.get<TPayload> ().deserialize (detail::encoded_payload_from_raw (payload));
+    const auto decoded = payload.decode<TPayload> (serializers);
     co_await handler.handle (stream, decoded);
 }
 
@@ -272,7 +275,7 @@ class packet_stream_session_t
     }
     virtual task_t<void> on_packet (stream_t &stream,
                                     const session_message_context_t &context,
-                                    const zlink::message_t &payload)
+                                    const zlink::framework::message_t &payload)
     {
         (void) stream;
         (void) context;

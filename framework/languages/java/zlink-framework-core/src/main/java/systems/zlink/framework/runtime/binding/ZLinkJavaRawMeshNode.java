@@ -962,6 +962,15 @@ final class ZLinkJavaRawMeshNode
                                     expectedLifecycleGeneration,
                                     expectedSecurityIdentity));
         }
+        return replacePeerConnection(
+                endpoint, expectedRoutingId, expectedLifecycleGeneration, expectedSecurityIdentity);
+    }
+
+    private long createPeerConnection(
+            String endpoint,
+            RoutingId expectedRoutingId,
+            long expectedLifecycleGeneration,
+            String expectedSecurityIdentity) {
         RouterSocket current = requireStarted();
         if (endpoint == null || endpoint.isBlank()) {
             throw new IllegalArgumentException("peer endpoint is required");
@@ -1069,7 +1078,7 @@ final class ZLinkJavaRawMeshNode
         // not issue the same endpoint termination once per stale intent; an
         // endpoint may have both a startup intent and a descriptor intent.
         staleIntentIds.forEach(intentId -> removePeerConnection(intentId, false));
-        return connectPeer(
+        return createPeerConnection(
                 normalizedEndpoint,
                 expectedRoutingId,
                 expectedLifecycleGeneration,
