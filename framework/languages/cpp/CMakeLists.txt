@@ -2285,6 +2285,13 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     tests/Zlink.Framework.UnitTests/test_cpp_framework_channel_messaging.cpp
     "framework-unit;framework-regression;channel")
   add_zlink_framework_test(
+    test_cpp_framework_manual_dispatch_owner
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_manual_dispatch_owner.cpp
+    "framework-unit;framework-regression;framework-client-server")
+  target_use_zlink_gtest_main(test_cpp_framework_manual_dispatch_owner)
+  target_include_directories(test_cpp_framework_manual_dispatch_owner PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  add_zlink_framework_test(
     test_cpp_framework_submission_failure_contract
     tests/Zlink.Framework.UnitTests/test_cpp_framework_submission_failure_contract.cpp
     "framework-contract;channel;messaging")

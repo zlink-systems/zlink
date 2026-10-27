@@ -3,7 +3,6 @@
 
 #include <zlink/framework.hpp>
 
-#include "../support/read_text_file.hpp"
 #include "test_completion_poller_driver.hpp"
 
 #include "runtime/channels/channel_host_service.hpp"
@@ -26,7 +25,6 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
-#include <filesystem>
 #include <mutex>
 #include <sstream>
 #include <string>
@@ -35,38 +33,6 @@
 namespace
 {
 using namespace std::chrono_literals;
-
-using zlink::framework::tests::read_text_file;
-
-std::size_t count_text (std::string_view value, std::string_view needle)
-{
-    std::size_t count = 0;
-    for (std::size_t offset = 0; (offset = value.find (needle, offset)) != std::string_view::npos;
-         offset += needle.size ()) {
-        ++count;
-    }
-    return count;
-}
-
-TEST (ChannelHostReplyAdmissionContract, OwnsOneBindingSubmitTerminalWithoutFrameworkRetry)
-{
-    const std::filesystem::path root = ZLINK_FRAMEWORK_CPP_SOURCE_DIR;
-    const std::string source =
-      read_text_file (root / "framework/src/runtime/channels/channel_host_service.cpp");
-    const auto owner = source.find ("void reply (completed_reply_t completed)");
-    ASSERT_NE (std::string::npos, owner);
-    const auto end = source.find ("void clear_replies", owner);
-    ASSERT_NE (std::string::npos, end);
-    const std::string_view admission (source.data () + owner, end - owner);
-
-    EXPECT_EQ (1u, count_text (admission, ".submit ()"));
-    EXPECT_EQ (std::string_view::npos, admission.find (".async ()"));
-    EXPECT_EQ (std::string_view::npos, admission.find ("co_await"));
-    EXPECT_NE (std::string_view::npos, admission.find ("std::move (completed)"));
-    EXPECT_EQ (std::string_view::npos, admission.find ("observe_task_completion"));
-    EXPECT_EQ (std::string_view::npos, admission.find ("_replies.push_front"));
-    EXPECT_EQ (std::string_view::npos, admission.find ("_replies.push_back"));
-}
 
 struct request_t
 {
@@ -191,7 +157,7 @@ class runtime_cleanup_t
     zlink::router_socket_t *_source;
 };
 
-TEST (ChannelHostReplyAdmission, MissingRouteTerminatesOnceWithOrdinaryEnvelopeOwnership)
+TEST (ChannelHostReplyAdmission, MissingRouteReportsOneTerminalAndReleasesOrdinaryEnvelope)
 {
     auto context = std::make_shared<zlink::context_t> ();
     context->options ().auto_hwm_enabled (false);
@@ -200,7 +166,17 @@ TEST (ChannelHostReplyAdmission, MissingRouteTerminatesOnceWithOrdinaryEnvelopeO
     const auto server_rid = zlink::routing_id_t::from ("framework-channel-reply-server");
     const auto source_rid = zlink::routing_id_t::from ("framework-channel-reply-source");
 
+    std::mutex errors_mutex;
+    std::vector<zlink::framework::message_dispatch_error_event_t> errors;
+    zlink::framework::dispatch_options_t options;
+    options.message_flow (zlink::framework::message_flow_log_mode_t::normal);
+    zlink::framework::detail::dispatch_options_access_t::set_dispatch_error_observer_for_tests (
+      options, [&] (const auto &event) {
+          std::lock_guard lock (errors_mutex);
+          errors.push_back (event);
+      });
     zlink::framework::zlink_builder_t builder = zlink::framework::test::runtime_failure_builder ();
+    zlink::framework::detail::apply_dispatch_options (builder, options);
     builder.channel ("reply-admission")
       .enable_server ()
       .set_routing_id (server_rid)
@@ -280,6 +256,21 @@ TEST (ChannelHostReplyAdmission, MissingRouteTerminatesOnceWithOrdinaryEnvelopeO
       2s));
     handler.release ();
     ASSERT_TRUE (handler.wait_until_returned (2s));
+
+    // Stop drains the accepted handler and its binding reply terminal before assertions.
+    // A retry or duplicate submission would produce another missing-route terminal.
+    host.stop ();
+    {
+        std::lock_guard lock (errors_mutex);
+        ASSERT_EQ (1u, errors.size ());
+        EXPECT_EQ (zlink::framework::dispatch_error_surface_t::channel, errors.front ().surface);
+        EXPECT_EQ (zlink::framework::dispatch_message_kind_t::response,
+                   errors.front ().message_kind);
+        EXPECT_EQ (zlink::framework::dispatch_error_reason_t::unexpected_reply,
+                   errors.front ().reason);
+        EXPECT_EQ (zlink::framework::dispatch_error_action_t::drop, errors.front ().action);
+        EXPECT_TRUE (errors.front ().exception);
+    }
 
     EXPECT_EQ (0u, context->core_hwm_budget_snapshot ().outstanding_application_lease_count ());
 

@@ -308,6 +308,16 @@ class channel_runtime_t
                             zlink::message_t message,
                             detail::inbound_message_context_t inbound = {}) const;
 
+    task_t<zlink::message_t>
+    dispatch_request_in_handler (std::string channel_name,
+                                 std::string topic,
+                                 std::string packet_name,
+                                 service_provider_t &services,
+                                 serializer_registry_t &serializers,
+                                 const handler_registry_t &handlers,
+                                 zlink::message_t message,
+                                 detail::inbound_message_context_t inbound) const;
+
     boost::asio::awaitable<result_t<zlink::message_t>>
     dispatch_request_on_handler_executor (std::string channel_name,
                                           std::string topic,
@@ -335,6 +345,16 @@ class channel_runtime_t
                                       const handler_registry_t &handlers,
                                       zlink::message_t message,
                                       detail::inbound_message_context_t inbound) const;
+
+    task_t<zlink::message_t>
+    dispatch_send_in_handler (std::string channel_name,
+                              std::string topic,
+                              std::string packet_name,
+                              service_provider_t &services,
+                              serializer_registry_t &serializers,
+                              const handler_registry_t &handlers,
+                              zlink::message_t message,
+                              detail::inbound_message_context_t inbound) const;
 
     boost::asio::awaitable<void>
     dispatch_send_on_handler_executor (std::string channel_name,
