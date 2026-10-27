@@ -18,6 +18,7 @@ import systems.zlink.framework.ZLinkEncodedPayload;
 import systems.zlink.framework.ZLinkMessageSerializer;
 import systems.zlink.framework.actors.ActorRef;
 import systems.zlink.framework.runtime.internal.json.ZLinkFrameworkJsonProfile;
+import systems.zlink.framework.runtime.internal.messaging.ZLinkEncodedPayloadAccess;
 import systems.zlink.framework.runtime.internal.messaging.ZLinkOwnedMessageSerializer;
 import systems.zlink.framework.spots.SpotRef;
 
@@ -47,12 +48,12 @@ public final class ZLinkJsonMessageSerializer
     @Override
     public <T> ZLinkEncodedPayload serialize(T value) {
         if (value instanceof Message message) {
-            return ZLinkEncodedPayload.from(message.toByteArray());
+            return ZLinkEncodedPayloadAccess.fromOwned(message.toByteArray());
         }
         if (value instanceof byte[] bytes) {
             return ZLinkEncodedPayload.from(bytes);
         }
-        return ZLinkEncodedPayload.from(encodeJson(value));
+        return ZLinkEncodedPayloadAccess.fromOwned(encodeJson(value));
     }
 
     @Override

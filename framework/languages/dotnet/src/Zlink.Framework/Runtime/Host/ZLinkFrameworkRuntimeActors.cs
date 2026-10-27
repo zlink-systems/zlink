@@ -1295,7 +1295,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                 .ConfigureAwait(false);
     }
 
-    private static ZLinkRemoteActorHandoffCompletionRequest CreateCanonicalRoutedActorCompletion(
+    internal static ZLinkRemoteActorHandoffCompletionRequest CreateCanonicalRoutedActorCompletion(
         ZLinkRemoteActorJoinRequest request,
         string spotId,
         ZLinkActorRelocationRecoveryRecord recovery
@@ -1978,17 +1978,8 @@ internal sealed partial class ZLinkFrameworkRuntime
             ?? throw new InvalidOperationException(
                 $"Actor '{actorState.ActorId}' handoff target has no Spot identity."
             );
-        if (
-            !locations.SpotLocations.TryGetTrackedGeneration(
-                ZLinkSpotId.FromBoundary(targetSpotId, nameof(targetSpotId)),
-                out var targetSpotGeneration
-            )
-            || targetSpotGeneration == 0
-        )
-            throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.NotFound,
-                $"Actor '{actorState.ActorId}' handoff target Spot generation is unavailable."
-            );
+        var targetSpotGeneration =
+            target.UserSpot?.ObjectGeneration ?? target.EntrySpot!.ObjectGeneration;
 
         var actorType =
             actorState.ActorType
@@ -2950,7 +2941,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         }
     }
 
-    private async ValueTask DeliverFailedTransferredActorJoinAsync(
+    internal async ValueTask DeliverFailedTransferredActorJoinAsync(
         ZLinkActorRuntimeState actorState,
         ZLinkRemoteActorHandoffCompletionRequest request,
         Exception failure,
@@ -3787,6 +3778,9 @@ internal sealed partial class ZLinkFrameworkRuntime
         var state = await GetOrCreateActorStateAsync(actor.Context.ActorId).ConfigureAwait(false);
         return state.HandlerInstances;
     }
+
+    internal ValueTask InvalidateSpotActorRuntimeAsync(ZLinkSpotActivation activation) =>
+        _actorSessionManager.InvalidateSpotActorRuntimeAsync(activation);
 
     internal bool TryGetActorState(string actorId, out ZLinkActorRuntimeState state)
     {

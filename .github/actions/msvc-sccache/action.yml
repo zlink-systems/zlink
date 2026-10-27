@@ -1,0 +1,14 @@
+name: MSVC compiler cache
+description: Connect Visual Studio MSBuild to sccache without changing the build script.
+runs:
+  using: composite
+  steps:
+    - name: Export MSBuild compiler wrapper
+      shell: pwsh
+      env:
+        SCCACHE_ACTION_PATH: ${{ github.action_path }}
+      run: |
+        $compiler = (Get-Command cl.exe -CommandType Application -ErrorAction Stop).Source
+        Add-Content -LiteralPath $env:GITHUB_ENV -Value "ZLINK_SCCACHE_CL=$compiler"
+        $props = Join-Path $env:SCCACHE_ACTION_PATH 'sccache.props'
+        Add-Content -LiteralPath $env:GITHUB_ENV -Value "ForceImportBeforeCppTargets=$props"
