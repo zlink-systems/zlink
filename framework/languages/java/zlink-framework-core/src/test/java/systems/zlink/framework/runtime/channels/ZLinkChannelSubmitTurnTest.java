@@ -198,7 +198,7 @@ final class ZLinkChannelSubmitTurnTest {
                     // Hot-path §3 separates selector and operation turns. Replacing
                     // the registration must progress while the selected owner is busy.
                     replacement.get(5, TimeUnit.SECONDS);
-                    assertFalse(submission.isDone());
+                    assertFalse(submission.isDone(), "application caller waits for E4 to return");
                     releaseBinding.countDown();
                     CompletionStage<?> completion = submission.get(5, TimeUnit.SECONDS);
                     if (request) assertTerminal(completion);
@@ -335,6 +335,10 @@ final class ZLinkChannelSubmitTurnTest {
                             null,
                             null,
                             null);
+            var operations = field(runtime, "operations");
+            var owner = ZLinkServiceOperationRegistry.class.getDeclaredField("owner");
+            owner.setAccessible(true);
+            owner.set(operations, operationLane);
         }
 
         void register(Duration timeout) {
@@ -366,6 +370,9 @@ final class ZLinkChannelSubmitTurnTest {
                             getClass().getClassLoader(),
                             new Class<?>[] {ZLinkInternalSpotNode.class},
                             (proxy, method, args) -> {
+                                if (method.getName().equals("operationRegistry")) {
+                                    return field(runtime, "operations");
+                                }
                                 if (method.getName().equals("sourceTransportLane")) {
                                     return operationLane;
                                 }
