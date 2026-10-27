@@ -4,11 +4,21 @@
 
 #include <string>
 
+namespace
+{
+void dispatch_all (UZLinkStreamConnector &connector)
+{
+    while (connector.PendingDispatchCount () != 0) {
+        connector.Dispatch ();
+    }
+}
+} // namespace
+
 int main ()
 {
     UZLinkStreamConnector connector;
     connector.Connect ("tcp://127.0.0.1:9400");
-    connector.Dispatch ();
+    dispatch_all (connector);
     if (connector.IsConnected ()
         || connector.LastState () != EZLinkStreamConnectionState::Disconnected) {
         return 1;
@@ -37,7 +47,7 @@ int main ()
       [&request_completed_count] (const FZLinkStreamRequestResult &) {
           ++request_completed_count;
       });
-    connector.Dispatch ();
+    dispatch_all (connector);
     connector.Tick (0.016f);
     if (connector.PendingDispatchCount () != 0) {
         return 2;
@@ -59,13 +69,13 @@ int main ()
                                }
                            });
     connector.Connect ("tcp://127.0.0.1:9403");
-    connector.Dispatch ();
+    dispatch_all (connector);
     if (reconnect_failures != 1 || reconnect_completions != 1) {
         return 8;
     }
 
     connector.ShutdownForPie ();
-    connector.Dispatch ();
+    dispatch_all (connector);
     if (connector.IsConnected () || connector.LastState () != EZLinkStreamConnectionState::Closed) {
         return 3;
     }
@@ -76,14 +86,14 @@ int main ()
 
     connector.Connect ("tcp://127.0.0.1:9401");
     connector.ShutdownForMapUnload ();
-    connector.Dispatch ();
+    dispatch_all (connector);
     if (connector.LastState () != EZLinkStreamConnectionState::Closed) {
         return 4;
     }
 
     connector.Connect ("tcp://127.0.0.1:9402");
     connector.ShutdownForGameInstanceShutdown ();
-    connector.Dispatch ();
+    dispatch_all (connector);
     if (connector.LastState () != EZLinkStreamConnectionState::Closed) {
         return 5;
     }
