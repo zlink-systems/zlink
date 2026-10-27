@@ -233,6 +233,17 @@ Counter 3개(`flow_pause_applied_total`, `flow_resume_applied_total`,
 이 flow counter와 다른 field 군 사이의 snapshot 일관성은 [§6.3](#63-byte와-pending-진단-field)의
 경계를 따른다.
 
+### 6.5 `READY` state bit
+
+`state_flags`의 `ZLINK_MONITOR_STATE_READY`는 그 monitor source에 ready logical peer가 하나 이상
+있다는 뜻이다. 이 bit와 `CONNECTION_READY` event의 `value`는 같은 ready logical peer count 하나를
+원천으로 한다 — snapshot을 위해 socket 종류별로 따로 계산한 ready 값을 두지 않는다.
+
+- `CONNECTION_READY_EDGE` event를 받은 뒤 조회한 snapshot은, 그 사이 같은 source에 not-ready 전이가
+  없었다면 `READY`를 포함한다.
+- `READY`는 logical connection이 성립했다는 사실만 나타낸다. SUB·XSUB·XPUB에서 구독 message가
+  실제로 전달되기 시작하는 시점은 이 bit가 나타내지 않으며, 구독 전파 규칙을 따른다.
+
 ## 7. 타입과 상수
 
 ### 7.1 Event mask
