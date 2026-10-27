@@ -5,6 +5,7 @@ import systems.zlink.framework.ZLinkEncodedPayload;
 import systems.zlink.framework.ZLinkMessageSerializer;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.runtime.internal.configuration.ZLinkCodecRegistration;
+import systems.zlink.framework.runtime.internal.messaging.ZLinkEncodedPayloadAccess;
 import systems.zlink.framework.runtime.internal.messaging.ZLinkOwnedMessageSerializer;
 
 import java.nio.ByteBuffer;
@@ -13,11 +14,11 @@ public final class ZLinkMessagePayloads {
     private ZLinkMessagePayloads() {}
 
     public static ZLinkEncodedPayload encoded(Message message) {
-        return ZLinkEncodedPayload.from(message.toByteArray());
+        return ZLinkEncodedPayloadAccess.fromOwned(message.toByteArray());
     }
 
     public static Message message(ZLinkEncodedPayload payload) {
-        return Message.from(payload.bytes());
+        return Message.from(ZLinkEncodedPayloadAccess.borrow(payload));
     }
 
     public static Message message(
@@ -41,6 +42,6 @@ public final class ZLinkMessagePayloads {
         }
         byte[] bytes = new byte[payload.remaining()];
         payload.duplicate().get(bytes);
-        return selected.deserialize(ZLinkEncodedPayload.from(bytes), type);
+        return selected.deserialize(ZLinkEncodedPayloadAccess.fromOwned(bytes), type);
     }
 }
