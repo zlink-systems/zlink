@@ -26,7 +26,6 @@ class actor_serial_executor_t
                                       queue_ptr_t queue = {},
                                       queue_ptr_t spot_gate = {}) :
         _worker_executor (std::move (worker_executor)),
-        _state_lane (*_worker_executor),
         _queue (std::move (queue))
     {
         if (!_queue) {

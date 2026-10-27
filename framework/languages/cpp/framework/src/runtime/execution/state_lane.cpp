@@ -10,6 +10,10 @@ namespace zlink::framework::runtime
 
 thread_local state_lane_t *state_lane_t::_current_lane = nullptr;
 
+state_lane_t::state_lane_t () : state_lane_t (infrastructure_executor ())
+{
+}
+
 state_lane_t::state_lane_t (offload_executor_t &executor) noexcept : _executor (executor)
 {
 }

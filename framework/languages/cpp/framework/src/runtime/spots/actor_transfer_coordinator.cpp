@@ -132,7 +132,7 @@ void actor_transfer_coordinator_t::erase_move_on_lane (const std::string &actor_
     const auto completion = std::move (move.mapped ().close_completion);
     // Continuations may enter the node lane or query this coordinator.
     // Deliver outside the state lane using its existing executor.
-    if (!_lane_executor.try_submit_internal (
+    if (!runtime::infrastructure_executor ().try_submit_internal (
           [completion] { completion->complete (result_t<void>::success ()); }))
         completion->complete (result_t<void>::failure (framework_error_kind_t::shutting_down,
                                                        "Actor transfer executor is stopping"));

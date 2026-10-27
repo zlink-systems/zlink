@@ -47,7 +47,7 @@ struct location_runtime_test_access_t
     {
         runtime._lane.run_checked ([] {}).get ();
         task_completion_source_t<void> completion;
-        runtime._lane_executor.submit ([&] { completion.complete (result_t<void>::success ()); });
+        infrastructure_executor ().submit ([&] { completion.complete (result_t<void>::success ()); });
         completion.task ().result ();
     }
 };

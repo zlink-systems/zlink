@@ -14,6 +14,13 @@
 namespace zlink::framework::runtime
 {
 
+offload_executor_t &infrastructure_executor ()
+{
+    static offload_executor_t executor (std::max (1u, std::thread::hardware_concurrency ()),
+                                       "zlink-infra");
+    return executor;
+}
+
 #ifdef ZLINK_FRAMEWORK_DEBUG_WAIT_GUARD
 thread_local const offload_executor_t *offload_executor_t::_current_worker_executor = nullptr;
 

@@ -60,9 +60,7 @@ bool is_request_dispatch (handler_dispatch_kind_t kind)
 
 struct filter_next_state_t
 {
-    std::shared_ptr<runtime::offload_executor_t> lane_executor{
-      detail::handler_invocation_executor ()};
-    runtime::state_lane_t lane{*lane_executor};
+    runtime::state_lane_t lane;
     bool called = false;
     bool duplicate = false;
     std::optional<result_t<zlink::message_t>> downstream;
@@ -283,6 +281,8 @@ void configure_handler_invocation_executor ()
 
 std::shared_ptr<runtime::offload_executor_t> handler_invocation_executor ()
 {
+    // Prepare both process execution resources before admitting handler calls.
+    (void) runtime::infrastructure_executor ();
     std::lock_guard lock (handler_invocation_executor_mutex ());
     if (!handler_invocation_executor_ref ()) {
         handler_invocation_executor_ref () = std::make_shared<runtime::offload_executor_t> (

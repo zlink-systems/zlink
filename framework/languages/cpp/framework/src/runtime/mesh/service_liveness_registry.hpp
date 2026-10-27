@@ -105,8 +105,8 @@ class service_liveness_registry_t
 
     const std::chrono::milliseconds _probe_interval;
     const std::chrono::milliseconds _peer_timeout;
-    runtime::offload_executor_t _lane_executor;
-    mutable runtime::state_lane_t _lane{_lane_executor};
+
+    mutable runtime::state_lane_t _lane;
     std::map<std::vector<std::uint8_t>, connection_t, byte_vector_less_t> _peers;
     std::uint64_t _next_probe_id = 1;
     // Earliest instant a peer or admission retry can be due, written on the lane. A receive only

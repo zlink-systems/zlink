@@ -183,8 +183,7 @@ class service_topology_registry_t
     struct topology_state_t;
     std::function<void ()> publish_topology (std::shared_ptr<topology_state_t> next);
 
-    runtime::offload_executor_t _lane_executor;
-    mutable runtime::state_lane_t _lane{_lane_executor};
+    mutable runtime::state_lane_t _lane;
     struct topology_state_t
     {
         service_node_descriptor_t local;

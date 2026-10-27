@@ -836,8 +836,7 @@ struct raw_client_server_client_t::control_reply_state_t
         detail::backend::raw_request_completion_t completion;
     };
 
-    runtime::offload_executor_t lane_executor;
-    runtime::state_lane_t lane{lane_executor};
+    runtime::state_lane_t lane;
     bool admission_in_flight = false;
     std::optional<parked_reply_t> admission;
     std::vector<std::pair<std::uint64_t, parked_reply_t>> probes;

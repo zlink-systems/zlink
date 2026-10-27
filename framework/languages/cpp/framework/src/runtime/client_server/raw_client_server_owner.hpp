@@ -143,8 +143,8 @@ class raw_client_server_server_t
     };
 
     raw_client_server_server_options_t _options;
-    runtime::offload_executor_t _lane_executor;
-    mutable runtime::state_lane_t _lane{_lane_executor};
+
+    mutable runtime::state_lane_t _lane;
     std::shared_ptr<std::mutex> _socket_mutex = std::make_shared<std::mutex> ();
     std::shared_ptr<zlink::context_t> _context;
     std::unique_ptr<zlink::router_socket_t> _router;
@@ -233,8 +233,8 @@ class raw_client_server_client_t
                              mesh::service_liveness_registry_t::clock_t::time_point now);
 
     raw_client_server_client_options_t _options;
-    runtime::offload_executor_t _lane_executor;
-    mutable runtime::state_lane_t _lane{_lane_executor};
+
+    mutable runtime::state_lane_t _lane;
     std::shared_ptr<std::mutex> _socket_mutex = std::make_shared<std::mutex> ();
     std::shared_ptr<zlink::context_t> _context;
     std::unique_ptr<zlink::dealer_socket_t> _dealer;

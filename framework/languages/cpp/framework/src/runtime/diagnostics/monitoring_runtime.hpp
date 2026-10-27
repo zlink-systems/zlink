@@ -119,8 +119,8 @@ class monitoring_runtime_state_t
 {
   public:
     monitoring_runtime_state_t ();
-    runtime::offload_executor_t lane_executor;
-    mutable runtime::state_lane_t lane{lane_executor};
+
+    mutable runtime::state_lane_t lane;
     logger_t<> diagnostics_logger;
     std::shared_ptr<runtime::runtime_failure_collector_t> runtime_failures;
     opentelemetry::nostd::shared_ptr<opentelemetry::metrics::Meter> metric_meter;

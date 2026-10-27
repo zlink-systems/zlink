@@ -229,6 +229,7 @@ class state_lane_t
     friend struct state_lane_test_access_t;
 
   public:
+    state_lane_t ();
     explicit state_lane_t (offload_executor_t &executor) noexcept;
     ~state_lane_t ();
 
