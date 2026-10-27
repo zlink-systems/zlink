@@ -218,50 +218,56 @@ route_channel_runtime_t::submit_request_parts (const zlink::routing_id_t &target
     });
 }
 
-result_t<runtime::messaging::message_parts_t> route_channel_runtime_t::request_reply_parts (
-  const zlink::routing_id_t &target_node_rid,
-  runtime::messaging::message_parts_t parts,
-  std::chrono::milliseconds timeout,
-  std::shared_ptr<task_completion_source_t<void>> admitted)
+request_task_t<result_t<runtime::messaging::message_parts_t>>
+route_channel_runtime_t::request_reply_parts (const zlink::routing_id_t &target_node_rid,
+                                              runtime::messaging::message_parts_t parts,
+                                              std::chrono::milliseconds timeout)
 {
-    request_backend_t backend;
-    std::uint64_t request_seq = 0;
-    if (auto connected = wait_until_connected (std::chrono::milliseconds::zero ()); !connected) {
-        return detail::propagate_failure<runtime::messaging::message_parts_t> (
-          connected, "route channel is not connected");
-    }
+    using reply_t = result_t<runtime::messaging::message_parts_t>;
     if (auto ready = wait_until_peer_ready (target_node_rid, std::chrono::milliseconds::zero ());
         !ready) {
-        return detail::propagate_failure<runtime::messaging::message_parts_t> (
-          ready, "route channel peer is not ready");
+        return result_t<reply_t>::success (
+          detail::propagate_failure<runtime::messaging::message_parts_t> (
+            ready, "route channel peer is not ready"));
     }
-    auto prepared = _lane.run_sync ([&, this] {
-        if (auto connected = ensure_connected (); !connected) {
-            return detail::propagate_failure<runtime::messaging::message_parts_t> (
-              connected, "route channel is not connected");
-        }
-        auto registered = register_request_unlocked (target_node_rid, std::nullopt, parts);
-        request_seq = registered.value ();
-        if (!_request_backend) {
-            _pending_requests.remove (request_seq);
-            return detail::boundary_failure<runtime::messaging::message_parts_t> (
-              detail::boundary_error_t::timed_out,
-              "route request reply was not completed by a backend");
-        }
-        backend = _request_backend;
-        return result_t<runtime::messaging::message_parts_t>::success ({});
-    });
-    if (!prepared)
-        return prepared;
-    auto pending = backend (target_node_rid, std::nullopt, parts, timeout);
-    if (admitted) {
-        auto stage = pending.admitted ();
-        detail::observe_task_terminal (
-          stage, [admitted] (const auto &result) { admitted->complete (result); });
+    // The selected backend may borrow its arguments through the physical terminal.
+    auto packet = std::make_shared<route_outbound_packet_t> (
+      route_outbound_packet_t{target_node_rid, std::nullopt, std::move (parts), std::nullopt});
+    request_backend_t backend;
+    auto prepared = _lane.run_sync (
+      [&, this] () -> result_t<request_task_t<runtime::messaging::message_parts_t>> {
+          if (auto connected = ensure_connected (); !connected) {
+              return detail::propagate_failure<
+                request_task_t<runtime::messaging::message_parts_t>> (
+                connected, "route channel is not connected");
+          }
+          if (!_request_backend) {
+              return detail::boundary_failure<request_task_t<runtime::messaging::message_parts_t>> (
+                detail::boundary_error_t::timed_out,
+                "route request reply was not completed by a backend");
+          }
+          backend = _request_backend;
+          // This sequence records the diagnostic packet. The backend request task
+          // owns correlation and completion; no second pending entry is needed here.
+          packet->request_seq = _pending_requests.next_request_seq ();
+          append_outbound_unlocked (packet->target_node_rid, packet->target_spot_id, packet->parts,
+                                    packet->request_seq);
+          return result_t<request_task_t<runtime::messaging::message_parts_t>>::success (
+            backend (packet->target_node_rid, packet->target_spot_id, packet->parts, timeout));
+      });
+    if (!prepared) {
+        return result_t<reply_t>::success (
+          detail::propagate_failure<runtime::messaging::message_parts_t> (
+            prepared, "route request submission failed"));
     }
-    auto reply = pending.result ();
-    _lane.run_sync ([&, this] { _pending_requests.remove (request_seq); });
-    return reply;
+    auto pending = std::move (prepared.value ());
+    return detail::project_request_reply<reply_t> (
+      pending,
+      [packet = std::move (packet), backend = std::move (backend)] (const reply_t &terminal) {
+          (void) packet;
+          (void) backend;
+          return result_t<reply_t>::success (terminal);
+      });
 }
 
 result_t<void>

@@ -1801,29 +1801,13 @@ try {
     catch (const framework_exception_t &error) {
         return detail::result_access_t::failure<zlink::message_t> (error);
     }
-    // The conversion must not retain a route channel whose final release drains
-    // its executor. The worker resolves that channel through the runtime state.
-    if (route)
-        route->reset ();
     const auto ambient_guard = detail::enter_ambient_context (ambient_context);
     try {
         auto reply_task = [&] () -> request_task_t<result_t<runtime::messaging::message_parts_t>> {
             if (mesh)
                 return (*mesh)->request (*target_owner, std::move (parts), effective_timeout);
-            auto admitted = std::make_shared<task_completion_source_t<void>> ();
-            return request_task_t<result_t<runtime::messaging::message_parts_t>> (
-              detail::offload_route_reply (
-                state->runtime->route_client_executor,
-                [runtime_state = state->runtime, router_channel_id, target_owner,
-                 parts = std::move (parts), effective_timeout, ambient_context,
-                 admitted] () mutable {
-                    const auto worker_context = detail::enter_ambient_context (ambient_context);
-                    detail::channel_runtime_manager_t manager (runtime_state);
-                    auto &runtime = manager.get_route_channel (router_channel_id);
-                    return runtime.request_reply_parts (*target_owner, std::move (parts),
-                                                        effective_timeout, admitted);
-                }),
-              admitted);
+            return (*route)->request_reply_parts (*target_owner, std::move (parts),
+                                                  effective_timeout);
         }();
         // The reply decodes the selected operation's terminal once (hot path E5).
         return detail::project_request_reply<zlink::message_t> (
@@ -2144,22 +2128,23 @@ try {
             if (mesh_requester)
                 return (*mesh_requester) (target_rid, spot_id, target_spot_generation,
                                           std::move (parts), effective_timeout);
+            if (detail::is_internal_spot_route_packet (packet_name)) {
+                detail::channel_runtime_manager_t manager (state->runtime);
+                return manager.get_route_channel (router_channel_id)
+                  .request_reply_parts (target_rid, std::move (parts), effective_timeout);
+            }
             auto admitted = std::make_shared<task_completion_source_t<void>> ();
             return request_task_t<result_t<runtime::messaging::message_parts_t>> (
               detail::offload_route_reply (
                 state->runtime->route_client_executor,
                 [runtime_state = state->runtime, router_channel_id, target_node_rid = target_rid,
-                 spot_id = std::string (spot_id), packet_name, parts = std::move (parts),
-                 effective_timeout, ambient_context, admitted] () mutable {
+                 spot_id = std::string (spot_id), parts = std::move (parts), effective_timeout,
+                 ambient_context, admitted] () mutable {
                     const auto worker_context = detail::enter_ambient_context (ambient_context);
                     detail::channel_runtime_manager_t manager (runtime_state);
                     auto &runtime = manager.get_route_channel (router_channel_id);
-                    return detail::is_internal_spot_route_packet (packet_name)
-                             ? runtime.request_reply_parts (target_node_rid, std::move (parts),
-                                                            effective_timeout, admitted)
-                             : runtime.request_reply_spot_parts (target_node_rid, spot_id,
-                                                                 std::move (parts),
-                                                                 effective_timeout, admitted);
+                    return runtime.request_reply_spot_parts (
+                      target_node_rid, spot_id, std::move (parts), effective_timeout, admitted);
                 }),
               admitted);
         }();

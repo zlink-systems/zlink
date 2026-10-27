@@ -99,11 +99,10 @@ class route_channel_runtime_t
     result_t<std::uint64_t> submit_request_parts (const zlink::routing_id_t &target_node_rid,
                                                   runtime::messaging::message_parts_t parts);
 
-    result_t<runtime::messaging::message_parts_t>
+    request_task_t<result_t<runtime::messaging::message_parts_t>>
     request_reply_parts (const zlink::routing_id_t &target_node_rid,
                          runtime::messaging::message_parts_t parts,
-                         std::chrono::milliseconds timeout,
-                         std::shared_ptr<task_completion_source_t<void>> admitted = {});
+                         std::chrono::milliseconds timeout);
 
     result_t<void> submit_spot_send_parts (const zlink::routing_id_t &target_node_rid,
                                            const std::string &target_spot_id,
