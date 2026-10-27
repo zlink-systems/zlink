@@ -970,8 +970,8 @@ Host는 넘겨받은 provider의 공유 소유권을 가지며 모든 Framework 
 provider를 쓰려면 application이 그것을 조회해 넘긴다. Provider를 넘기지 않았거나 빈 pointer를 넘긴 host는
 no-op provider에 기록한다. `run`을 시작한 뒤의 호출은 `std::logic_error`로 거부하고 provider를 바꾸지
 않는다. Application은 host가 정지를 마치기 전에 provider를 shutdown하지 않으며, Framework는 provider의
-flush·shutdown을 호출하지 않는다. `runtime.status()`는 계기를 내보내는 경로가 아니다. 계기 카탈로그와 수집
-경계는 [Runtime metrics §11](../../../06-observability/02-runtime-metrics.ko.md#11-수집-경계)이 소유한다.
+flush·shutdown을 호출하지 않는다. 계기 카탈로그와 기록·수집 규칙은
+[Runtime metrics](../../../06-observability/02-runtime-metrics.ko.md)가 소유한다.
 
 ### 5.1 Instance Spot metric
 

@@ -1103,8 +1103,8 @@ OpenTelemetry global provider. To use the global provider, the application looks
 host given no provider or an empty pointer records to a no-op provider. A call after `run` has started is
 rejected with `std::logic_error` and doesn't change the provider. The application doesn't shut the provider
 down before the host has finished stopping, and the Framework doesn't call the provider's flush or shutdown.
-`runtime.status()` isn't an instrument export path. The instrument catalog and collection boundary are owned
-by [Runtime metrics §11](../../../06-observability/02-runtime-metrics.en.md#11-collection-boundary).
+The instrument catalog and recording and collection rules are owned by
+[Runtime metrics](../../../06-observability/02-runtime-metrics.en.md).
 
 ### 5.1 Instance Spot Metric
 
