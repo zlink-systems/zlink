@@ -33,12 +33,13 @@ function descriptor(nodeRoutingId) {
   };
 }
 
-function fixture(deferred) {
+function fixture(deferred, options = {}) {
   const sent = [];
   let complete;
   const runtime = new RawServiceMeshRuntime({
     descriptor: descriptor('local'),
     probeIntervalMs: PROBE_INTERVAL_MS,
+    peerAdmissionSealed: options.peerAdmissionSealed,
     applicationJobQueue: new ApplicationJobQueue(resolveApplicationJobQueueConfiguration()),
     bindingPort: {
       createHost: () => ({
@@ -48,7 +49,7 @@ function fixture(deferred) {
           setReadableHandler() {},
           bind() {},
           localEndpoint: () => descriptor('local').advertisedEndpoint,
-          routesSnapshot: () => [{ routingId: 'peer', routeGeneration: 11n }],
+          routesSnapshot: () => options.routes ?? [{ routingId: 'peer', routeGeneration: 11n }],
           submitSend(target, parts) {
             const command = wire.decodeHeader(parts[0]).command;
             sent.push(command);
@@ -154,6 +155,61 @@ test('a pending HELLO submission waits for completion readiness', async (t) => {
     assert.equal(f.hellos(), 2, 'completion permits the next due HELLO');
   } finally {
     await f.completeHello();
+    f.runtime.close();
+  }
+});
+
+for (const resume of ['observation', 'management']) {
+  test(`a sealed route submits its first HELLO before the retry deadline on ${resume}`, async (t) => {
+    let sealed = true;
+    let now = 1000;
+    t.mock.method(performance, 'now', () => now);
+    const f = fixture(false, { peerAdmissionSealed: () => sealed });
+    try {
+      await f.runtime.observeSelectedRoutes();
+      assert.equal(f.hellos(), 0, 'the admission seal still blocks new handshakes');
+      sealed = false;
+      if (resume === 'observation') await f.runtime.observeSelectedRoutes();
+      else f.runtime.tickLiveness(1000);
+      assert.equal(
+        f.hellos(),
+        1,
+        'first HELLO is submitted without advancing the management clock'
+      );
+      await f.runtime.observeSelectedRoutes();
+      f.runtime.tickLiveness(1000);
+      assert.equal(f.hellos(), 1, 'an unchanged route does not duplicate its initial submission');
+      for (let period = 1; period <= 2; period++) {
+        now += PROBE_INTERVAL_MS;
+        f.runtime.tickLiveness(now);
+        assert.equal(f.hellos(), period + 1, 'submitted HELLO follows the existing retry cadence');
+      }
+      await f.receive(wire.M6aServiceWireCommand.admit);
+      now += PROBE_INTERVAL_MS;
+      f.runtime.tickLiveness(now);
+      assert.equal(f.hellos(), 3, 'remote ADMIT ends retransmission after the first HELLO resumes');
+    } finally {
+      f.runtime.close();
+    }
+  });
+}
+
+test('route observation submits one initial HELLO per selected generation before management', async (t) => {
+  t.mock.method(performance, 'now', () => 1000);
+  const routes = [{ routingId: 'peer', routeGeneration: 11n }];
+  const f = fixture(false, { routes });
+  try {
+    await f.runtime.observeSelectedRoutes();
+    assert.equal(f.hellos(), 1);
+    await f.runtime.observeSelectedRoutes();
+    assert.equal(f.hellos(), 1);
+    await f.receive(wire.M6aServiceWireCommand.admit);
+    routes[0] = { routingId: 'peer', routeGeneration: 12n };
+    await f.runtime.observeSelectedRoutes();
+    assert.equal(f.hellos(), 2, 'replacement begins a new handshake immediately');
+    await f.runtime.observeSelectedRoutes();
+    assert.equal(f.hellos(), 2);
+  } finally {
     f.runtime.close();
   }
 });
