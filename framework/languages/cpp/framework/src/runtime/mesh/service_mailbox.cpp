@@ -6,6 +6,7 @@
 #include "runtime/spots/activation_admission.hpp"
 
 #include <algorithm>
+#include <iterator>
 #include <limits>
 #include <stdexcept>
 #include <utility>
@@ -171,7 +172,7 @@ service_mailbox_t::claim_owner_locked (domain_t &source,
     const auto limit = std::min (message_budget, queue.records.size ());
     claim->records.reserve (limit);
     claim->record_bytes.reserve (limit);
-    // The claim stays the front prefix of the FIFO; deque references survive push_back.
+    // The claim stays the front prefix of the FIFO; list references survive push_back.
     for (auto &slot : queue.records) {
         if (claim->records.size () == limit)
             break;
@@ -276,11 +277,11 @@ service_mailbox_t::cut_owners (const std::vector<std::string> &owners,
         // The claimed prefix keeps its slots until the claim settles; the remaining
         // unclaimed records leave the FIFO now.
         const auto claimed = std::min (queue.active_messages, queue.records.size ());
-        for (std::size_t slot = 0; slot != claimed; ++slot)
-            if (has_original (queue.records[slot]))
-                records.push_back (transfer_locked (queue.records[slot]));
-        for (auto slot = queue.records.begin () + static_cast<std::ptrdiff_t> (claimed);
-             slot != queue.records.end (); ++slot) {
+        auto unclaimed = queue.records.begin ();
+        for (std::size_t index = 0; index != claimed; ++index, ++unclaimed)
+            if (has_original (*unclaimed))
+                records.push_back (transfer_locked (*unclaimed));
+        for (auto slot = unclaimed; slot != queue.records.end (); ++slot) {
             const auto bytes = retained_bytes (*slot);
             queue.bytes -= bytes;
             source.bytes -= bytes;
@@ -288,8 +289,7 @@ service_mailbox_t::cut_owners (const std::vector<std::string> &owners,
             --source.messages;
             records.push_back (transfer_locked (*slot));
         }
-        queue.records.erase (queue.records.begin () + static_cast<std::ptrdiff_t> (claimed),
-                             queue.records.end ());
+        queue.records.erase (unclaimed, queue.records.end ());
         if (queue.records.empty () && queue.active_messages == 0
             && queue.phase != owner_phase_t::draining)
             source.owners.erase (found);
@@ -389,8 +389,7 @@ bool service_mailbox_t::finish_locked (state_t &state, const service_mailbox_cla
     auto &queue = found->second;
     // Every slot of the prefix was taken or discarded before its credit settled.
     queue.records.erase (queue.records.begin (),
-                         queue.records.begin ()
-                           + static_cast<std::ptrdiff_t> (claim.claimed_messages));
+                         std::next (queue.records.begin (), claim.claimed_messages));
     queue.active_messages -= claim.claimed_messages;
     queue.active_bytes -= claim.claimed_bytes;
     target.active_messages -= claim.claimed_messages;
@@ -471,11 +470,36 @@ void service_mailbox_t::begin_application_receive_turn ()
 
 void service_mailbox_t::end_application_receive_turn ()
 {
-    {
-        std::lock_guard lock (_state->mutex);
-        _state->application_receive_turn = false;
+    auto ready = take_application_receive_turn ();
+    notify_application_ready (ready);
+}
+
+service_mailbox_t::application_ready_batch_t service_mailbox_t::take_application_receive_turn ()
+{
+    std::lock_guard lock (_state->mutex);
+    _state->application_receive_turn = false;
+    return take_application_ready_locked (*_state);
+}
+
+service_mailbox_t::application_ready_batch_t
+service_mailbox_t::take_application_ready_locked (state_t &state)
+{
+    if (state.application_receive_turn || !state.application_ready
+        || state.application.ready.empty ())
+        return std::nullopt;
+    application_ready_batch_t ready (std::in_place);
+    ready->second = state.application_ready;
+    ready->first.swap (state.application.ready);
+    return ready;
+}
+
+void service_mailbox_t::notify_application_ready (application_ready_batch_t &ready)
+{
+    while (ready && !ready->first.empty ()) {
+        auto owner = std::move (ready->first.front ());
+        ready->first.pop_front ();
+        ready->second (owner);
     }
-    notify_application_ready ();
 }
 
 void service_mailbox_t::notify_application_ready ()
@@ -486,15 +510,9 @@ void service_mailbox_t::notify_application_ready ()
 void service_mailbox_t::notify_application_ready_owned (const std::shared_ptr<state_t> &state)
 {
     std::unique_lock lock (state->mutex);
-    if (state->application_receive_turn || !state->application_ready
-        || state->application.ready.empty ())
-        return;
-    std::deque<std::string> ready;
-    ready.swap (state->application.ready);
-    auto notify = state->application_ready;
+    auto ready = take_application_ready_locked (*state);
     lock.unlock ();
-    for (const auto &owner : ready)
-        notify (owner);
+    notify_application_ready (ready);
 }
 
 void service_mailbox_t::close ()
