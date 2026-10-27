@@ -228,7 +228,6 @@ final class ZLinkJavaRawMeshNodeM6ATest {
     }
 
     @Test
-    @SuppressWarnings("unchecked")
     void handshakeAdmissionIsReadyBeforeAnyAck_PerTransportLivenessSection5() throws Exception {
         // 05-transport-liveness.ko.md:228: Ready has no probe-ACK prerequisite.
         RoutingId peerRid = RoutingId.from("handshake-ready-peer");
@@ -239,11 +238,8 @@ final class ZLinkJavaRawMeshNodeM6ATest {
             var topologyField = ZLinkJavaRawMeshNode.class.getDeclaredField("topology");
             topologyField.setAccessible(true);
             topologyField.set(node, topology);
-            var readyField =
-                    ZLinkJavaRawMeshNode.class.getDeclaredField("admissionControlReadyConnections");
-            readyField.setAccessible(true);
             assertEquals(MeshPeerState.CONNECTING, node.peers().getFirst().state());
-            ((java.util.Map<RoutingId, String>) readyField.get(node)).put(peerRid, "pair");
+            topology.admit(descriptor(peerRid), "pair", ServiceWireConstants.COMMAND_ADMIT);
             assertEquals(MeshPeerState.ADMITTED, node.peers().getFirst().state());
         }
     }
