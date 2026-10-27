@@ -521,7 +521,7 @@ TEST (ZLinkFrameworkSpotCloseConformance, FailedPreparationDrainsYieldedTimerAnd
     state->spot_serial_executor->close_preparation_admission ();
     proceed.complete (result_t<void>::success ());
     cancellation_started.get ();
-    auto drained = node->lane.run ([&] { return state->preparation_callback_terminal; }).get ();
+    auto drained = node->lane.run ([&] { return state->admitted_callback_terminal; }).get ();
     ASSERT_TRUE (drained);
     auto early_close = created.context.close ();
     resume.complete (result_t<void>::success ());
