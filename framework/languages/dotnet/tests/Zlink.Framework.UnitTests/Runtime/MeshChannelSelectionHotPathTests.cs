@@ -50,9 +50,9 @@ public sealed class MeshChannelSelectionHotPathTests
             BindingFlags.Instance | BindingFlags.NonPublic
         )!;
         process.Invoke(node, [rid, 1UL, ServiceWireConstants.Command.Hello, admission, null]);
-        // MeshNode §7.1: accepting the Hello records the peer as admitted.
+        // Transport liveness §5: local registration does not establish send readiness.
         Assert.Equal(
-            ZLinkRouteMeshTargetClassification.ReadyEligible,
+            ZLinkRouteMeshTargetClassification.Unknown,
             node.ClassifyLiveRouterTarget(rid)
         );
         AssertDirectPeerPublished(node, rid);
