@@ -88,7 +88,8 @@ struct manual_source_t
     fw::service_provider_t provider = services.build_provider ();
     std::unique_ptr<fw::runtime::channel_host_service_t> host;
     std::string endpoint;
-    explicit manual_source_t (std::shared_ptr<fw::runtime::application_job_queue_t> jobs = {})
+    explicit manual_source_t (std::shared_ptr<fw::runtime::application_job_queue_t> jobs = {},
+                              std::function<void (manual_source_t &)> configure = {})
     {
         static std::atomic_uint64_t sequence{0};
         endpoint = "inproc://manual-ingress-wait-" + std::to_string (++sequence);
@@ -109,6 +110,8 @@ struct manual_source_t
           .bind (endpoint);
         auto runtime = fw::detail::channel_runtime_t::from (builder.message_bus ());
         runtime.bind_core_context (context);
+        if (configure)
+            configure (*this);
         host = std::make_unique<fw::runtime::channel_host_service_t> (
           std::make_shared<fw::runtime::runtime_failure_collector_t> (), builder.message_bus (),
           runtime.channel_snapshots (), handlers, serializers, std::map<std::string, std::string>{},
@@ -449,4 +452,91 @@ TEST (ManualIngressWaitObservation, AcceptsOnlyRouterSendProgress)
     EXPECT_FALSE (is_send_progress (event, &router));
     event.source_kind = ZLINK_POLLER_SOURCE_FD;
     EXPECT_FALSE (is_send_progress (event, &router));
+}
+
+namespace
+{
+struct suspended_handler_state_t
+{
+    fw::task_completion_source_t<void> release;
+    std::mutex mutex;
+    std::condition_variable changed;
+    std::size_t entered = 0;
+    std::atomic_size_t scopes_closed{0};
+};
+struct suspended_handler_t
+{
+    std::shared_ptr<suspended_handler_state_t> state;
+    explicit suspended_handler_t (std::shared_ptr<suspended_handler_state_t> state) :
+        state (std::move (state))
+    {
+    }
+    ~suspended_handler_t () { ++state->scopes_closed; }
+    fw::task_t<void> handle (const std::string &)
+    {
+        {
+            std::lock_guard lock (state->mutex);
+            ++state->entered;
+            state->changed.notify_all ();
+        }
+        co_await state->release.task ();
+    }
+};
+}
+
+TEST (ManualIngressWait, SuspendedHandlersReturnWorkersBeforeTerminal)
+{
+    auto handler = std::make_shared<suspended_handler_state_t> ();
+    // Complete on every exit, including fatal assertions, before host destruction.
+    struct release_t
+    {
+        std::shared_ptr<suspended_handler_state_t> handler;
+        ~release_t () { handler->release.complete (fw::result_t<void>::success ()); }
+    };
+    manual_source_t source ({}, [&] (manual_source_t &source) {
+        source.services.add_factory<suspended_handler_t> (
+          [handler] (fw::service_provider_t &) {
+              return std::make_unique<suspended_handler_t> (handler);
+          },
+          fw::service_lifetime_t::scoped);
+        source.provider = source.services.build_provider ();
+        source.handlers.on_send<suspended_handler_t, std::string> (
+          "manual-wait", "", &suspended_handler_t::handle, {.packet_name = "suspend"});
+        source.serializers.add<std::string> (
+          [] (const std::string &value) { return fw::encoded_payload_t::from_string (value); },
+          [] (const fw::encoded_payload_t &value) { return value.to_string (); },
+          "application/json");
+    });
+    release_t release{handler};
+    ASSERT_TRUE (observe_until ([] { return waits.size () >= 2; }));
+    zlink::router_socket_t client (*source.context);
+    fw::test::completion_poller_driver_t completions (client);
+    client.set_routing_id (zlink::routing_id_t::from ("manual-worker-client"));
+    client.connect (source.endpoint);
+    ASSERT_TRUE (observe_until ([] { return server_ready; }));
+    const auto workers = std::min (8u, std::max (1u, std::thread::hardware_concurrency ()));
+    for (unsigned index = 0; index <= workers; ++index) {
+        fw::runtime::messaging::envelope_header_t header;
+        header.channel_name = "manual-wait";
+        header.kind = fw::runtime::messaging::message_kind_t::command;
+        header.message_name = "suspend";
+        header.correlation_id = std::to_string (index);
+        auto parts = fw::runtime::messaging::envelope_codec_t{}
+                       .encode_parts (header, std::string ("payload"), source.serializers)
+                       .take_items ();
+        auto operation =
+          client.send (zlink::routing_id_t::from ("manual-wait-server")).message (parts[0]);
+        for (std::size_t part = 1; part < parts.size (); ++part)
+            operation = std::move (operation).message (parts[part]);
+        std::move (operation).submit ();
+    }
+    std::unique_lock lock (handler->mutex);
+    EXPECT_TRUE (handler->changed.wait_for (lock, 2s, [&] { return handler->entered > workers; }))
+      << "handler terminal occupied every application worker; the next record never entered";
+    EXPECT_FALSE (handler->release.task ().await_ready ());
+    EXPECT_EQ (0u, handler->scopes_closed.load ());
+    lock.unlock ();
+    handler->release.complete (fw::result_t<void>::success ());
+    source.host->stop ();
+    EXPECT_EQ (workers + 1, handler->scopes_closed.load ());
 }

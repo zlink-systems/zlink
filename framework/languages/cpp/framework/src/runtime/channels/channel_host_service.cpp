@@ -3,29 +3,29 @@
 #include "runtime/channels/channel_host_service.hpp"
 #include "runtime/configuration/service_scope.hpp"
 
+#include "runtime/backend/raw_binding_adapter.hpp"
 #include "runtime/channels/channel_packet_dispatcher.hpp"
-#include "runtime/client_server/raw_client_server_owner.hpp"
 #include "runtime/channels/channel_reply_writer.hpp"
 #include "runtime/channels/channel_runtime.hpp"
 #include "runtime/channels/channel_runtime_manager.hpp"
 #include "runtime/channels/channel_socket_options.hpp"
 #include "runtime/channels/socket_monitor_event.hpp"
-#include "runtime/backend/raw_binding_adapter.hpp"
-#include "runtime/dispatch/dispatch_limits.hpp"
-#include "runtime/dispatch/receive_batch_budget.hpp"
-#include "runtime/dispatch/offload_executor.hpp"
-#include "runtime/handlers/handler_registry_runtime.hpp"
+#include "runtime/client_server/raw_client_server_owner.hpp"
 #include "runtime/diagnostics/dispatch_error_reporter.hpp"
 #include "runtime/diagnostics/message_flow_tracer.hpp"
+#include "runtime/dispatch/dispatch_limits.hpp"
+#include "runtime/dispatch/offload_executor.hpp"
+#include "runtime/dispatch/receive_batch_budget.hpp"
 #include "runtime/fanout/fanout_subscription.hpp"
+#include "runtime/handlers/handler_registry_runtime.hpp"
 #include "runtime/transport/listener_identity.hpp"
 
-#include <zlink/Contracts/Eventing/poller.hpp>
 #include <zlink/Contracts/Core/context.hpp>
 #include <zlink/Contracts/Core/routing_id.hpp>
 #include <zlink/Contracts/Eventing/events.hpp>
 #include <zlink/Contracts/Eventing/monitor.hpp>
 #include <zlink/Contracts/Eventing/poll_event.hpp>
+#include <zlink/Contracts/Eventing/poller.hpp>
 #include <zlink/Contracts/Messaging/message.hpp>
 #include <zlink/Contracts/Messaging/operation_contracts.hpp>
 #include <zlink/Contracts/Messaging/received.hpp>
@@ -309,23 +309,40 @@ class channel_host_service_t::server_loop_t
         auto work = [this, routing_id = std::move (routing_id), reply_token, shared_parts,
                      application_job] () mutable {
             try {
-                auto scope = detail::service_scope_t::create (
-                  *_services, detail::service_scope_kind_t::handler_invocation);
-                auto result =
-                  _dispatcher
-                    .dispatch_server_message_in_handler (
-                      _channel_name, *shared_parts, scope.provider (), *_serializers, *_handlers,
-                      [application_job] { application_job->release_for_handler_entry (); })
-                    .result ();
-                if (result) {
-                    if (result.value ().size () != 0 && routing_id && reply_token)
-                        reply (*routing_id, *reply_token, result.value ());
-                } else {
-                    report_dispatch_failure (
-                      shared_parts, result.error () ? std::make_exception_ptr (*result.error ())
-                                                    : std::exception_ptr{});
-                }
-                scope.close ();
+                auto scope =
+                  std::make_shared<detail::service_scope_t> (detail::service_scope_t::create (
+                    *_services, detail::service_scope_kind_t::handler_invocation));
+                auto pending = _dispatcher.dispatch_server_message_in_handler (
+                  _channel_name, *shared_parts, scope->provider (), *_serializers, *_handlers,
+                  [application_job] { application_job->release_for_handler_entry (); });
+                auto finish = [this, routing_id = std::move (routing_id), reply_token, shared_parts,
+                               scope] (const result_t<messaging::message_parts_t> &result) {
+                    std::exception_ptr failure;
+                    try {
+                        if (result) {
+                            if (result.value ().size () != 0 && routing_id && reply_token)
+                                reply (*routing_id, *reply_token, result.value ());
+                        } else if (result.error ()) {
+                            failure = std::make_exception_ptr (*result.error ());
+                        }
+                    }
+                    catch (...) {
+                        failure = std::current_exception ();
+                    }
+                    if (!result || failure)
+                        report_dispatch_failure (shared_parts, failure);
+                    scope->close ();
+                };
+                // The dispatch coroutine owns its task state until physical terminal.
+                // Retain only the existing executor drain count while it is suspended.
+                auto retained = pending.await_ready () ? std::shared_ptr<void>{}
+                                                       : _handler_executor->retain_internal_work ();
+                detail::observe_task_terminal (
+                  pending, [retained = std::move (retained), finish = std::move (finish)] (
+                             const result_t<messaging::message_parts_t> &result) mutable {
+                      finish (result);
+                      retained.reset ();
+                  });
             }
             catch (...) {
                 report_dispatch_failure (shared_parts, std::current_exception ());
@@ -497,7 +514,6 @@ class channel_host_service_t::server_loop_t
     std::optional<int> _applied_peer_weight;
     std::unique_ptr<offload_executor_t> _handler_executor;
 };
-
 
 class channel_host_service_t::subscriber_loop_t
 {
@@ -735,8 +751,8 @@ task_t<void> channel_host_service_t::start (service_provider_t &services)
         }
     }
     catch (...) {
-        // A partial start leaves joinable loop threads; stop joins them before the failure
-        // leaves this service.
+        // A partial start leaves joinable loop threads; stop joins them before the
+        // failure leaves this service.
         stop ();
         throw;
     }

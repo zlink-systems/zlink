@@ -7,6 +7,7 @@
 
 #include <gtest/gtest.h>
 
+#include <atomic>
 #include <future>
 #include <string>
 #include <thread>
@@ -113,3 +114,46 @@ TEST (ManualDispatchOwner, SynchronousSendPreservesApplicationWorker)
     check_synchronous_handler_owner (false);
 }
 } // namespace
+
+TEST (ManualDispatchOwner, PendingTerminalRetainsDrainWithoutOccupyingWorker)
+{
+    using namespace std::chrono_literals;
+    for (const bool fail : {false, true}) {
+        SCOPED_TRACE (fail);
+        fw::runtime::offload_executor_t worker (1, "manual-terminal-drain");
+        auto terminal = std::make_shared<fw::task_completion_source_t<void>> ();
+        struct release_t
+        {
+            std::shared_ptr<fw::task_completion_source_t<void>> terminal;
+            ~release_t () { terminal->complete (fw::result_t<void>::success ()); }
+        } release{terminal};
+        auto entered = std::make_shared<std::promise<void>> ();
+        auto started = entered->get_future ();
+        auto terminal_observed = std::make_shared<std::atomic_bool> (false);
+        worker.submit ([&worker, terminal, entered, terminal_observed] {
+            auto retained = worker.retain_internal_work ();
+            auto pending = terminal->task ();
+            fw::detail::observe_task_terminal (
+              pending, [retained = std::move (retained), terminal_observed] (const auto &) mutable {
+                  terminal_observed->store (true, std::memory_order_release);
+                  retained.reset ();
+              });
+            entered->set_value ();
+        });
+        ASSERT_EQ (std::future_status::ready, started.wait_for (2s));
+        auto next = std::make_shared<std::promise<void>> ();
+        auto progressed = next->get_future ();
+        worker.submit ([next] { next->set_value (); });
+        ASSERT_EQ (std::future_status::ready, progressed.wait_for (2s));
+        EXPECT_FALSE (terminal->task ().await_ready ());
+        EXPECT_FALSE (worker.drain_until (std::chrono::steady_clock::now ()))
+          << "drain returned before an accepted handler's physical terminal";
+        terminal->complete (
+          fail ? fw::result_t<void>::failure (fw::framework_error_kind_t::internal_failure,
+                                              "terminal test failure")
+               : fw::result_t<void>::success ());
+        EXPECT_TRUE (worker.drain_until (std::chrono::steady_clock::now () + 2s));
+        EXPECT_TRUE (terminal_observed->load (std::memory_order_acquire));
+        EXPECT_TRUE (worker.drained ());
+    }
+}
