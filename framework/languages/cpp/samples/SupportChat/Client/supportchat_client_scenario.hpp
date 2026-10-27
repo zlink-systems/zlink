@@ -16,6 +16,7 @@
 #include <functional>
 #include <memory>
 #include <nlohmann/json.hpp>
+#include <zlink/json.hpp>
 #include <stdexcept>
 #include <string>
 #include <string_view>
