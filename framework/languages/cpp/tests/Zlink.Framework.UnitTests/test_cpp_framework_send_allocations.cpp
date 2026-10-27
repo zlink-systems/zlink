@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+#include "../support/stateful_object_sync.hpp"
 #include <gtest/gtest.h>
 #include "allocation_counter.hpp"
 #include "runtime/mesh/mesh_node_runtime.hpp"
@@ -352,7 +353,8 @@ TEST (SendAllocations, ReceiveTurnRetainsCallbacksAcrossNativeSuspension)
           1,
           descriptor.mesh_name,
           zlink::routing_id_t::from (descriptor.node_routing_id).to_string ()};
-        const auto created = runtime.objects ().begin_reserved_object (actor, "actor", {});
+        const auto created =
+          fw::test::begin_reserved_object (runtime.objects (), actor, "actor", {});
         ASSERT_EQ (created.error, stateful::stateful_error_t::none);
         ASSERT_EQ (runtime.objects ().commit_create (created.attempt),
                    stateful::stateful_error_t::none);

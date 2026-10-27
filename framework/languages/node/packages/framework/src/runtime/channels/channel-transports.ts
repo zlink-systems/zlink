@@ -507,36 +507,45 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
           `MeshNode '${meshName}' target '${targetNodeRid}' is an Object Client.`
         );
       }
-      const parts = this.encodeMessage(
-        ZLinkChannelMessageKind.Request,
-        meshName,
-        packetName,
-        request,
-        timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
-        metadata,
-        correlationId
-      );
-      const requestOptions = { flags: 1, onAdmitted, timeoutMs: requestTimeoutBudget(timeoutMs) };
       let pending: Promise<ZLinkMeshCompletion>;
-      try {
-        pending = this.completionTable(meshName).submit(() => {
-          const operationId = node.requestToNode(
-            toBackendRoutingId(targetNodeRid),
-            parts,
-            requestOptions
-          );
-          this.traceNodeRequest(
-            ZLinkMessageFlowOutcome.Sent,
-            undefined,
-            meshName,
-            targetNodeRid,
-            packetName,
-            correlationId
-          );
-          return operationId;
-        }, signal);
-      } catch (error) {
-        pending = Promise.reject(error);
+      {
+        // Only the submit operation sees the encoded parts. The reply reactions
+        // below are created outside this block, so a pending request does not
+        // keep its outbound bytes alive until the reply.
+        const parts = this.encodeMessage(
+          ZLinkChannelMessageKind.Request,
+          meshName,
+          packetName,
+          request,
+          timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+          metadata,
+          correlationId
+        );
+        const requestOptions = {
+          flags: 1,
+          onAdmitted,
+          timeoutMs: requestTimeoutBudget(timeoutMs)
+        };
+        try {
+          pending = this.completionTable(meshName).submit(() => {
+            const operationId = node.requestToNode(
+              toBackendRoutingId(targetNodeRid),
+              parts,
+              requestOptions
+            );
+            this.traceNodeRequest(
+              ZLinkMessageFlowOutcome.Sent,
+              undefined,
+              meshName,
+              targetNodeRid,
+              packetName,
+              correlationId
+            );
+            return operationId;
+          }, signal);
+        } catch (error) {
+          pending = Promise.reject(error);
+        }
       }
       return prepareZLinkRequestReply(
         pending,
@@ -682,15 +691,30 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
     try {
       throwIfAborted(signal);
       const node = this.requireMeshNode(meshName);
-      const parts = this.encodeMessage(
-        ZLinkChannelMessageKind.Request,
-        channelName,
-        packetName,
-        request,
-        timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
-        metadata
-      );
-      const metric = this.metrics?.startRequest(meshName, 'channel');
+      let metric: ReturnType<ZLinkRuntimeMetrics['startRequest']> | undefined;
+      let pending: Promise<ZLinkMeshCompletion>;
+      {
+        // Only the submit operation sees the encoded parts; the reply reactions
+        // below do not keep the outbound bytes alive until the reply.
+        const parts = this.encodeMessage(
+          ZLinkChannelMessageKind.Request,
+          channelName,
+          packetName,
+          request,
+          timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+          metadata
+        );
+        metric = this.metrics?.startRequest(meshName, 'channel');
+        const requestOptions = { flags: 1, timeoutMs: requestTimeoutBudget(timeoutMs), onAdmitted };
+        try {
+          pending = this.completionTable(meshName).submit(
+            () => node.requestToChannel(channelName, parts, requestOptions),
+            signal
+          );
+        } catch (error) {
+          pending = Promise.reject(error);
+        }
+      }
       const recordFailure = (error: unknown): unknown => {
         metric?.complete(requestMetricOutcome(error, signal));
         if (
@@ -702,16 +726,6 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
         }
         return error;
       };
-      const requestOptions = { flags: 1, timeoutMs: requestTimeoutBudget(timeoutMs), onAdmitted };
-      let pending: Promise<ZLinkMeshCompletion>;
-      try {
-        pending = this.completionTable(meshName).submit(
-          () => node.requestToChannel(channelName, parts, requestOptions),
-          signal
-        );
-      } catch (error) {
-        pending = Promise.reject(error);
-      }
       return prepareZLinkRequestReply(
         pending,
         (completion) => {

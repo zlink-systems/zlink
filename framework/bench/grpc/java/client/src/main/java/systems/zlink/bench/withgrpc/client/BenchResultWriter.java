@@ -26,6 +26,21 @@ public final class BenchResultWriter {
         String language,
         String streamImplementation,
         Map<String, Object> metadataAdditions) throws IOException {
+        String resultFile;
+        String reportOutputFile;
+        switch (observed.trigger().phase()) {
+            case "warmup" -> {
+                resultFile = "results.warmup.json";
+                reportOutputFile = "report.warmup.txt";
+            }
+            case "active" -> {
+                resultFile = "results.json";
+                reportOutputFile = options.reportFile;
+            }
+            default -> throw new IllegalArgumentException(
+                "unknown result phase " + observed.trigger().phase());
+        }
+
         Map<String, Object> trigger = new LinkedHashMap<>();
         trigger.put("runId", observed.trigger().runId());
         trigger.put("cellId", observed.trigger().cellId());
@@ -103,7 +118,7 @@ public final class BenchResultWriter {
         json.append(",\n  \"cells\": [\n    ");
         Json.write(json, cell, 2);
         json.append("\n  ]\n}\n");
-        Files.writeString(Path.of(options.output, "results.json"), json.toString(),
+        Files.writeString(Path.of(options.output, resultFile), json.toString(),
             StandardCharsets.UTF_8);
 
         Map<String, String> fields = new LinkedHashMap<>();
@@ -134,7 +149,7 @@ public final class BenchResultWriter {
             report.append(String.format("RESULT,current,%s,local,%d,%s,%.3f%n",
                 scenario, options.payloadSizes.get(0), entry.getKey(), value.doubleValue()));
         }
-        Files.writeString(Path.of(options.output, options.reportFile), report.toString(),
+        Files.writeString(Path.of(options.output, reportOutputFile), report.toString(),
             StandardCharsets.UTF_8);
         System.out.print(report);
         System.out.flush();

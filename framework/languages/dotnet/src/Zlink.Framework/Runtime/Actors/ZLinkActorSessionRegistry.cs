@@ -44,9 +44,9 @@ internal sealed class ZLinkActorSessionRegistry(
         return lookup.found;
     }
 
-    public void TryRemove(ZLinkActorId actorId, ZLinkActorRuntimeState state)
+    public bool TryRemove(ZLinkActorId actorId, ZLinkActorRuntimeState state)
     {
-        AwaitStateLane(
+        return AwaitStateLane(
             _lane.RunAsync(() =>
             {
                 if (
@@ -55,7 +55,8 @@ internal sealed class ZLinkActorSessionRegistry(
                     && state.SessionId is null
                     && state.Activation is null
                 )
-                    _states.Remove(actorId);
+                    return _states.Remove(actorId);
+                return false;
             })
         );
     }

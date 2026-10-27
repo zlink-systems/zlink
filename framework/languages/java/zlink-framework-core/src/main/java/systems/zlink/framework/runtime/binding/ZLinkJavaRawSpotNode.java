@@ -309,8 +309,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
     @Override
     public CompletionStage<Void> sendToNode(
             RoutingId targetNodeRid, byte[] metadata, List<Message> parts) {
-        return owner.inSourceTurn(
-                () -> owner.sendNode(targetNodeRid, metadata, parts, false, null));
+        return owner.inSourceTurn(() -> owner.sendNode(targetNodeRid, metadata, parts));
     }
 
     @Override

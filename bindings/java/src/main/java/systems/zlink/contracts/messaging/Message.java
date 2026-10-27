@@ -645,9 +645,7 @@ public final class Message implements AutoCloseable {
             throw new IllegalArgumentException("destination buffer too small");
         if (size == 0)
             return 0;
-        ByteBuffer dst = destination.slice();
-        dst.limit(size);
-        ContractAccess.nativeMessageCopyToBuffer(dataSegment(), 0, dst, size);
+        ContractAccess.nativeMessageCopyToBuffer(dataSegment(), 0, destination, size);
         destination.position(destination.position() + size);
         return size;
     }

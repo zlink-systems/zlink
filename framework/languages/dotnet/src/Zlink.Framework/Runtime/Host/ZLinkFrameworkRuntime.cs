@@ -1080,35 +1080,14 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
     )
     {
         var admission = await _stateLane
-            .RunAsync(() =>
-            {
-                if (
-                    _drainAdmission.IsSealedForShutdown || (ownsObjectWork && !IsOwnerAdmissionOpen)
-                )
-                {
-                    return (
-                        Admitted: (ZLinkFrameworkComponentState?)null,
-                        Accepted: false,
-                        Neutral: true
-                    );
-                }
-                // Before native startup no transport can deliver a record. A
-                // neutral lease keeps dispatcher construction independent from
-                // runtime startup while the drain seal remains authoritative.
-                if (Volatile.Read(ref _lifecyclePhase) != (int)ZLinkRuntimeLifecyclePhase.Running)
-                {
-                    return (
-                        Admitted: (ZLinkFrameworkComponentState?)null,
-                        Accepted: true,
-                        Neutral: true
-                    );
-                }
-                return (
-                    Admitted: (ZLinkFrameworkComponentState?)AdmitOperationOnLane(countAsRequest),
-                    Accepted: true,
-                    Neutral: false
-                );
-            })
+            .RunAsync(
+                static state =>
+                    state.Runtime.AdmitUnnestedInboundOperationOnLane(
+                        state.CountAsRequest,
+                        state.OwnsObjectWork
+                    ),
+                (Runtime: this, CountAsRequest: countAsRequest, OwnsObjectWork: ownsObjectWork)
+            )
             .ConfigureAwait(false);
 
         if (!admission.Accepted)
@@ -1116,6 +1095,30 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
         if (admission.Neutral)
             return default;
         return new ZLinkRuntimeOperationAdmission(this, admission.Admitted, countAsRequest);
+    }
+
+    private (
+        ZLinkFrameworkComponentState? Admitted,
+        bool Accepted,
+        bool Neutral
+    ) AdmitUnnestedInboundOperationOnLane(bool countAsRequest, bool ownsObjectWork)
+    {
+        if (_drainAdmission.IsSealedForShutdown || (ownsObjectWork && !IsOwnerAdmissionOpen))
+        {
+            return (Admitted: (ZLinkFrameworkComponentState?)null, Accepted: false, Neutral: true);
+        }
+        // Before native startup no transport can deliver a record. A
+        // neutral lease keeps dispatcher construction independent from
+        // runtime startup while the drain seal remains authoritative.
+        if (Volatile.Read(ref _lifecyclePhase) != (int)ZLinkRuntimeLifecyclePhase.Running)
+        {
+            return (Admitted: (ZLinkFrameworkComponentState?)null, Accepted: true, Neutral: true);
+        }
+        return (
+            Admitted: (ZLinkFrameworkComponentState?)AdmitOperationOnLane(countAsRequest),
+            Accepted: true,
+            Neutral: false
+        );
     }
 
     internal async ValueTask ExecuteOperationAsync(Func<ValueTask> operation)

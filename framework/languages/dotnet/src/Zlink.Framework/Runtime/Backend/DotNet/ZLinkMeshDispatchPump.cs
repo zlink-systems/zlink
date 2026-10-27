@@ -10,19 +10,14 @@ using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
 
 namespace Zlink.Framework.Runtime.Backend.DotNet;
 
-// Persistent application workers claim the existing node/owner mailboxes and
-// invoke node/channel handlers directly. The shared ready mask reserves wakeups;
-// no per-batch supervisor task or second application queue is involved. Claims
-// are released by their ready batch. Suspended preparation retains that batch, while the
-// worker continues consuming readiness, including infrastructure completions.
-// Spot pull consumers and completion callbacks retain their existing contracts.
+// The process pool schedules turns of the existing node/owner mailboxes.
+// Domain readiness is the wake reservation, and async claims retain their
+// batches while the physical worker returns to the common capacity.
 internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
 {
-    private const int MinimumApplicationWorkers = 2;
     private const int ReadyOwnersPerBatch = 1;
 
-    internal static int ApplicationWorkerCount =>
-        Math.Max(MinimumApplicationWorkers, Environment.ProcessorCount);
+    internal static int ApplicationWorkerCount => ZLinkProcessExecutionPool.ApplicationWorkerCount;
 
     private readonly IMeshNode _node;
     private readonly ZLinkMeshCompletionTable _completions;
@@ -41,10 +36,9 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
     >? _nodeRouteHandler;
     private ZLinkRuntimeTaskRunner? _applicationTaskRunner;
     private readonly ZLinkStateLane _lane = new();
-    private readonly SemaphoreSlim _signal = new(0);
+    private ZLinkProcessExecutionPool.ApplicationSource? _applicationSource;
+    private ZLinkRuntimeTaskRunner.ExecutionLease? _sourceExecution;
     private CancellationTokenSource? _stop;
-    private CancellationTokenRegistration _wakeOnStop;
-    private Task? _loop;
     private int _pendingReadyDomains;
     private bool _started;
     private bool _disposed;
@@ -120,19 +114,26 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
             _applicationTaskRunner?.ShutdownToken ?? CancellationToken.None
         );
         _node.SetReadyHandler(OnReady);
-        using (ExecutionContext.SuppressFlow())
-        {
-            var workers = new Task[ApplicationWorkerCount];
-            // The pump lifetime owns this registration until all workers have joined.
-            // Release every waiter together: an exiting worker must not unregister
-            // a cancellation callback that still owes another worker a wakeup.
-            _wakeOnStop = _stop.Token.UnsafeRegister(_ => _signal.Release(workers.Length), null);
-            for (var index = 0; index < workers.Length; index++)
-                workers[index] = _applicationTaskRunner is { } runner
-                    ? runner.Run("mesh-application-worker", _ => RunAsync(_stop.Token))
-                    : Task.Run(() => RunAsync(_stop.Token).AsTask());
-            _loop = Task.WhenAll(workers);
-        }
+        _applicationSource = ZLinkProcessExecutionPool.CreateApplicationSource(
+            worker =>
+                _applicationTaskRunner is { } runner
+                    ? runner.RunSourceTurn(
+                        _sourceExecution!,
+                        static (state, token) => state.Pump.RunTurn(state.Worker, token),
+                        (Pump: this, Worker: worker)
+                    )
+                    : RunTurn(worker, _stop.Token),
+            error => ObserveDispatchResult(Task.FromException(error)),
+            maximumConcurrentTurns: ApplicationWorkerCount
+        );
+        if (_applicationTaskRunner is { } taskRunner)
+            _sourceExecution = taskRunner.RegisterSource(
+                "mesh-application-source",
+                _applicationSource.Completion
+            );
+        _applicationSource.StopOnCancellation(_stop.Token);
+        if (Volatile.Read(ref _pendingReadyDomains) != 0)
+            _applicationSource.Signal();
     }
 
     // Registers (or replaces) the per-spot dispatch-event handler and returns the
@@ -279,50 +280,69 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
         // to nonempty transition publishes a signal; no state-lane turn is needed.
         if (Interlocked.Or(ref _pendingReadyDomains, (int)readyDomains) != 0)
             return;
-        try
-        {
-            _signal.Release();
-        }
-        catch (ObjectDisposedException) { }
+        _applicationSource?.Signal();
     }
 
     private MeshReadyDomains TakePendingReadyDomains() =>
         (MeshReadyDomains)Interlocked.Exchange(ref _pendingReadyDomains, 0);
 
-    private async ValueTask RunAsync(CancellationToken cancellationToken)
+    private ValueTask RunTurn(
+        ZLinkProcessExecutionPool.ApplicationTurn worker,
+        CancellationToken cancellationToken
+    )
     {
-        var readyBatch = new MeshReadyBatch { MaximumRecords = ReadyOwnersPerBatch };
-        var receiveBatch = new MeshReceiveBatch();
-        // These are claim/handler asynchronous results, not another record queue.
-        // Their lifetime remains inside the persistent worker.
-        var pending = new List<Task>();
+        if (cancellationToken.IsCancellationRequested)
+            return ValueTask.CompletedTask;
+        worker.Ready.MaximumRecords = ReadyOwnersPerBatch;
+        var draining = DrainResidueAsync(
+            worker.Ready,
+            worker.Received,
+            worker.Pending,
+            cancellationToken
+        );
+        if (!draining.IsCompletedSuccessfully)
+        {
+            var completion = CompleteSuspendedTurnAsync(
+                draining,
+                worker.Ready,
+                worker.Received,
+                worker.Pending
+            );
+            worker.Transfer();
+            _applicationSource!.Retain(completion);
+            return ValueTask.CompletedTask;
+        }
+        (worker.Ready, worker.Received, worker.Pending) = draining.Result;
+        for (var index = worker.Pending.Count - 1; index >= 0; index--)
+        {
+            if (!worker.Pending[index].IsCompleted)
+                continue;
+            ObserveDispatchResult(worker.Pending[index]);
+            worker.Pending.RemoveAt(index);
+        }
+        if (worker.Pending.Count == 0)
+            return ValueTask.CompletedTask;
+        var pending = worker.Pending;
+        worker.Pending = [];
+        _applicationSource!.Retain(new ValueTask(Task.WhenAll(pending)));
+        return ValueTask.CompletedTask;
+    }
+
+    private static async ValueTask CompleteSuspendedTurnAsync(
+        ValueTask<(MeshReadyBatch, MeshReceiveBatch, List<Task>)> draining,
+        MeshReadyBatch ready,
+        MeshReceiveBatch received,
+        List<Task> pending
+    )
+    {
         try
         {
-            while (!cancellationToken.IsCancellationRequested)
-            {
-                for (var index = pending.Count - 1; index >= 0; index--)
-                {
-                    if (!pending[index].IsCompleted)
-                        continue;
-                    ObserveDispatchResult(pending[index]);
-                    pending.RemoveAt(index);
-                }
-                await _signal.WaitAsync().ConfigureAwait(false);
-                cancellationToken.ThrowIfCancellationRequested();
-                (readyBatch, receiveBatch, pending) = await DrainResidueAsync(
-                        readyBatch,
-                        receiveBatch,
-                        pending,
-                        cancellationToken
-                    )
-                    .ConfigureAwait(false);
-            }
+            (ready, received, pending) = await draining.ConfigureAwait(false);
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
         finally
         {
-            readyBatch.Dispose();
-            receiveBatch.Dispose();
+            ready.Dispose();
+            received.Dispose();
             if (pending.Count != 0)
                 await Task.WhenAll(pending).ConfigureAwait(false);
         }
@@ -379,10 +399,8 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
             bool residue;
             try
             {
-                // Non-blocking: the native drain/claim receives block indefinitely
-                // by default, which would park this pump thread inside one claim
-                // and starve every other owner. The signal semaphore provides the
-                // wakeups; the pump itself must never wait inside the native API.
+                // Claims are nonblocking; source readiness reserves the next turn.
+                // A claim never occupies a physical worker while waiting for ingress.
                 residue = await _node
                     .DrainReadyAsync(domains, readyBatch, RecvFlags.DontWait)
                     .ConfigureAwait(false);
@@ -871,14 +889,14 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
         if (stopped is null)
             return;
         _node.CloseSubmissions();
-        var (stop, loop, wakeOnStop) = stopped.Value;
+        var (stop, applicationSource) = stopped.Value;
         stop?.Cancel();
 
         Exception? loopFailure = null;
-        if (loop is not null)
+        if (applicationSource is not null)
             try
             {
-                await loop.ConfigureAwait(false);
+                await applicationSource.DisposeAsync().ConfigureAwait(false);
             }
             catch (OperationCanceledException) { }
             catch (Exception exception)
@@ -891,22 +909,19 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
         await failures
             .CaptureAsync(() => new ValueTask(_completions.CompletionDrained))
             .ConfigureAwait(false);
-        failures.Capture(wakeOnStop.Dispose);
         failures.Capture(() => stop?.Dispose());
-        failures.Capture(_signal.Dispose);
         failures.ThrowIfAny();
     }
 
     private (
         CancellationTokenSource? Stop,
-        Task? Loop,
-        CancellationTokenRegistration WakeOnStop
+        ZLinkProcessExecutionPool.ApplicationSource? ApplicationSource
     )? StopOnLane()
     {
         if (_disposed)
             return null;
         _disposed = true;
-        return (_stop, _loop, _wakeOnStop);
+        return (_stop, _applicationSource);
     }
 
     // Per-spot decoded-record queues plus the registered dispatch-event handler.

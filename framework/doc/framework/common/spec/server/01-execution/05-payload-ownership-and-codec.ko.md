@@ -101,6 +101,8 @@ C++과 .NET은 이 전이가 `close`·`Dispose` 호출로 드러난다. JVM의 m
 
 **Handler에는 역직렬화된 소유 객체를 넘긴다. Native 저장소나 해제 책임은 넘기지 않는다.**
 
+Handler 등록이 수신 message 형식을 클래스로 선언하면 Framework는 그 클래스의 인스턴스를 넘긴다. Application이 그 값을 바꾸지 않고 다른 typed messaging API에 넘겨도 packet 형식 정보가 유지된다. 클래스 복원과 codec 선택은 Framework가 소유하며 application에 별도 변환이나 message별 codec 등록을 요구하지 않는다. 형식을 선언하는 방법은 언어별 인터페이스가 정한다.
+
 이 규칙 때문에 역직렬화 복사 한 번은 불가피하다. Typed handler를 제공하는 이상 wire
 표현을 그 언어의 객체로 만들어야 한다.
 
@@ -127,8 +129,10 @@ Raw byte를 다루는 API는 transport 검사와 codec extension 구현에만 �
 
 ## 6. 역직렬화를 언제 하는가
 
-**헤더는 먼저 읽고, payload 역직렬화는 실행 권한을 얻은 뒤 handler 직전에 한다.** 전체
+**수신 application message의 헤더는 먼저 읽고, payload 역직렬화는 실행 권한을 얻은 뒤 handler 직전에 한다.** 전체
 경로의 owner 전이는 §4의 그림을 참고한다.
+
+Request의 응답을 requester의 결과로 변환하는 decode는 completion 실행 자원에서 수행할 수 있다. 각 codec 소유자는 응답을 한 번만 해석한다. 최종 수신자의 구조와 수명은 [Submit과 완료 §9](01-submit-and-completion.ko.md#9-request-completion--완료-경쟁과-timeout-budget)를 따른다.
 
 헤더를 먼저 읽는 것은 선택이 아니다 — 어느 owner에게 보낼지 정하려면 필요하다. 반면
 payload는 handler가 실행되기 전까지 아무도 보지 않는다.

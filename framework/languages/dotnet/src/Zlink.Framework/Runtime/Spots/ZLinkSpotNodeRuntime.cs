@@ -866,6 +866,7 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
     internal void CancelActiveOperations()
     {
         AwaitStateLane(_spots.CancelActiveOperationsAsync());
+        _entrySpotActivation?.CancelActiveOperations();
     }
 
     private async ValueTask CloseLifecycleAsync()

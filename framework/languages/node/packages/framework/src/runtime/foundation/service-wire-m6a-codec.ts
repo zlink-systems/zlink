@@ -250,7 +250,10 @@ function allocateApplicationPayload(
   const prefixLength = 1 + APPLICATION_PAYLOAD_LENGTH_FIELD_BYTES;
   const bodyLength = frameLength - prefixLength;
   if (bodyLength > MAX_U32) fail('Application payload body exceeds u32.');
-  const result = Buffer.alloc(frameLength);
+  // Both callers write every payload byte after these header fields, so the
+  // frame needs no zero fill and a small frame comes from the shared pool
+  // instead of its own backing store.
+  const result = Buffer.allocUnsafe(frameLength);
   result[0] = APPLICATION_PAYLOAD_VERSION;
   result.writeUInt32BE(bodyLength, 1);
   let offset = writeText8(result, prefixLength, packetName, packetNameLength);

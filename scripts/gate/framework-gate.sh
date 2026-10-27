@@ -3,6 +3,7 @@
 # node npm test (incl. M6A), all JVM test source sets, dotnet sample-regression + unit tests.
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh" || exit $?
 cd "$Z" || exit
+check_playwright || exit $?
 require_quiet || exit 2
 unset ZLINK_LIBRARY_PATH; : > "$LOGS/results.txt"
 # Formatting first: it is the cheapest step and the guides excerpt these sources as they are

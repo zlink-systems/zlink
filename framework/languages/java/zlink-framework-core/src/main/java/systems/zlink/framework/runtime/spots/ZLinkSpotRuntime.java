@@ -69,6 +69,7 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkPendingObjectCrea
 import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementCapacityBundle;
 import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementCapacityExhausted;
 import systems.zlink.framework.runtime.internal.locations.ZLinkRelocationFound;
+import systems.zlink.framework.runtime.internal.messaging.ZLinkEncodedPayloadAccess;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkMeshMessageMetrics;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics;
 import systems.zlink.framework.runtime.internal.monitoring.ZLinkRuntimeEventDispatcher;
@@ -1284,7 +1285,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         ZLinkLocationRepository locations = requireUserSpotLocationStore();
         String selectedMesh = resolveObjectMesh(meshName);
         String spotId = requestedId == null ? UUID.randomUUID().toString() : requestedId;
-        byte[] applicationBytes = request.toEncodedPayload(serializer).bytes();
+        byte[] applicationBytes =
+                ZLinkEncodedPayloadAccess.borrow(request.toEncodedPayload(serializer));
         byte[] envelope =
                 userSpotPayloads.encodeApplicationPayload(
                         new systems.zlink.framework.runtime.internal.service
@@ -4724,8 +4726,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
     CompletionStage<Void> notifySpotActorLifecycle(
             Object spotSurface, ZLinkActor actor, boolean joined) {
         if (spotSurface instanceof ZLinkSpot spot) {
-            DefaultSpotContext context = spotLifecycle.contextFor(spot);
-            if (context == null) {
+            if (!(spot.context() instanceof DefaultSpotContext context)) {
                 return CompletableFuture.failedFuture(
                         new ZLinkConfigurationException(
                                 "Spot activation context is unavailable: "
@@ -4857,7 +4858,13 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
     @SuppressWarnings({"rawtypes", "unchecked"})
     private CompletionStage<ZLinkSpotActorJoinResult> joinLocalActor(
             ZLinkActor actor, String targetSpotId, Message requestPart) {
-        Object targetSurface = spotSurfaceFor(targetSpotId);
+        SpotActivation targetActivation = spotLifecycle.spotActivationFor(targetSpotId);
+        EntrySpotActivation targetEntry =
+                targetActivation == null ? entrySpotActivationFor(targetSpotId) : null;
+        Object targetSurface =
+                targetActivation != null
+                        ? targetActivation.spot()
+                        : targetEntry == null ? null : targetEntry.entrySpot();
         Object sourceSurface = localActorSpotSurface(actor);
         if (targetSurface == null) {
             return CompletableFuture.failedFuture(
@@ -4883,10 +4890,9 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                 () -> {
                     CompletionStage<ZLinkSpotActorJoinResult> admission;
                     if (targetSurface instanceof ZLinkSpot<?> target) {
-                        var activation = spotLifecycle.spotActivationFor(targetSpotId);
                         admission =
                                 runWithOutbound(
-                                        activation.context.dispatchOutbound(),
+                                        targetActivation.context.dispatchOutbound(),
                                         () ->
                                                 ZLinkHandlerStages.fromStageSupplier(
                                                         () ->
@@ -4966,11 +4972,11 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                 };
         CompletionStage<ZLinkSpotActorJoinResult> targetStage;
         if (targetSurface instanceof ZLinkSpot<?>) {
-            targetStage = spotLifecycle.spotActivationFor(targetSpotId).admitActorJoin(operation);
+            targetStage = targetActivation.admitActorJoin(operation);
         } else {
             CompletableFuture<ZLinkSpotActorJoinResult> response = new CompletableFuture<>();
             targetStage =
-                    entrySpotActivationFor(targetSpotId)
+                    targetEntry
                             .context
                             .enqueueDispatch(() -> operation.get().thenAccept(response::complete))
                             .thenCompose(ignored -> response);

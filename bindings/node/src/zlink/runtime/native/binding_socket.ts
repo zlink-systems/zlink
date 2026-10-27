@@ -32,9 +32,14 @@ export interface SocketNativeBinding {
     socket: NativeHandle,
     target: Buffer | null,
     parts: unknown,
-    timeoutMs: number
+    timeoutMs: number,
+    allocator: typeof Buffer.allocUnsafe
   ) => NativeSyncRequestResult;
-  socketCompletionRecv: (socket: NativeHandle, flags: number) => NativeCompletion | null;
+  socketCompletionRecv: (
+    socket: NativeHandle,
+    flags: number,
+    allocator: typeof Buffer.allocUnsafe
+  ) => NativeCompletion | null;
   socketReadableWatchStart: (
     socket: NativeHandle,
     callback: (status: number, nativeErrno?: number) => void
@@ -43,7 +48,8 @@ export interface SocketNativeBinding {
   socketReply: (socket: NativeHandle, sourceRid: Buffer, replyToken: bigint, parts: unknown) => void;
   socketStreamRecvPacket: (
     socket: NativeHandle,
-    flags: number
+    flags: number,
+    allocator: typeof Buffer.allocUnsafe
   ) => { routingId: Buffer; header: Buffer; body: Buffer } | null;
   handleGetRoutingId: (handle: NativeHandle) => Buffer;
   handleSetRoutingId: (handle: NativeHandle, routingId: Buffer) => void;
@@ -55,16 +61,18 @@ export interface SocketNativeBinding {
   routerRecvMessage: (
     socket: NativeHandle,
     flags: number,
-    preferManagedParts?: boolean,
-    routingIdStorage?: Buffer | null
+    preferManagedParts: boolean,
+    routingIdStorage: Buffer | null,
+    allocator: typeof Buffer.allocUnsafe
   ) => NativeReceivedRaw | null;
   routerRoutesSnapshot: (
     socket: NativeHandle
   ) => Array<{ routingId: Buffer | null; routeGeneration: bigint }>;
   routerRecvMessageNoWait: (
     socket: NativeHandle,
-    preferManagedParts?: boolean,
-    routingIdStorage?: Buffer | null
+    preferManagedParts: boolean,
+    routingIdStorage: Buffer | null,
+    allocator: typeof Buffer.allocUnsafe
   ) => NativeReceivedRaw | null;
   socketBind: (socket: NativeHandle, endpoint: string) => void;
   socketClose: (socket: NativeHandle) => void;
@@ -79,8 +87,12 @@ export interface SocketNativeBinding {
     payload: unknown,
     flags: number
   ) => number;
-  socketRecvMessage: (socket: NativeHandle, flags: number) => NativeReceivedRaw | null;
-  socketRecvMessageNoWait: (socket: NativeHandle) => NativeReceivedRaw | null;
+  socketRecvMessage: (
+    socket: NativeHandle,
+    flags: number,
+    allocator: typeof Buffer.allocUnsafe
+  ) => NativeReceivedRaw | null;
+  socketRecvMessageNoWait: (socket: NativeHandle, allocator: typeof Buffer.allocUnsafe) => NativeReceivedRaw | null;
   socketSetOpt: (socket: NativeHandle, option: number, value: Buffer) => void;
   socketSetReceiveFlowState: (socket: NativeHandle, state: number) => void;
   socketSetSubscription: (socket: NativeHandle, topic: string) => void;
@@ -98,7 +110,8 @@ export interface SocketNativeBinding {
   ) => void;
   socketSubscribeMessage: (
     socket: NativeHandle,
-    flags: number
+    flags: number,
+    allocator: typeof Buffer.allocUnsafe
   ) => NativeTopicMessageRaw | null;
   socketSubscriptionEvent: (
     socket: NativeHandle,
@@ -109,7 +122,7 @@ export interface SocketNativeBinding {
     topic: string,
     payload: unknown
   ) => number;
-  socketTrySubscribeMessage: (socket: NativeHandle) => NativeTopicMessageRaw | null;
+  socketTrySubscribeMessage: (socket: NativeHandle, allocator: typeof Buffer.allocUnsafe) => NativeTopicMessageRaw | null;
   socketTrySubscriptionEvent: (
     socket: NativeHandle
   ) => { routingId?: Buffer | null; topic: string; subscribed: boolean } | null;

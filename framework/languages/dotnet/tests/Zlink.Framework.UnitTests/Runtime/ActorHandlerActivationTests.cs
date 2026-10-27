@@ -9,12 +9,96 @@ using Zlink.Framework.Runtime.Identifiers;
 
 namespace Zlink.Framework.UnitTests.Runtime;
 
-public sealed class ActorHandlerActivationTests
+public sealed class ActorHandlerActivationTests : IAsyncLifetime
 {
+    private readonly ActorStateLifetime _states = new();
+
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public Task DisposeAsync() => _states.DisposeAsync().AsTask();
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task IncomingHandoffWaitsForTerminalAfterReturningItsMailboxClaim(
+        bool sharedParent
+    )
+    {
+        using var errors = new ZLinkRuntimeErrorSink();
+        var runner = new ZLinkRuntimeTaskRunner(errors, CancellationToken.None);
+        await using var parent = new ZLinkSerialExecutionQueue(
+            runner,
+            errors,
+            CancellationToken.None,
+            ZLinkExecutionLanePolicy.Default,
+            sharedGate: true
+        );
+        ZLinkSerialExecutionQueue? owner = sharedParent ? parent : null;
+        var state = new ZLinkActorRuntimeState("incoming-terminal-placement");
+        var mailbox = (ZLinkActorSerialExecutor)
+            typeof(ZLinkActorRuntimeState)
+                .GetField("_dispatchMailbox", BindingFlags.Instance | BindingFlags.NonPublic)!
+                .GetValue(state)!;
+        var queue = (ZLinkSerialExecutionQueue)
+            typeof(ZLinkActorSerialExecutor)
+                .GetField("_queue", BindingFlags.Instance | BindingFlags.NonPublic)!
+                .GetValue(mailbox)!;
+        if (sharedParent)
+            mailbox.BindExecutionOwner(() => owner);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task? preparing = null;
+        var terminal = state
+            .BeginHandlerActivationAsyncCompletion(async () =>
+            {
+                entered.TrySetResult();
+                await release.Task;
+                return await state.ExecuteLockedAsync(
+                    () =>
+                    {
+                        state.ClearAfterDestroyOnLane();
+                        owner = null;
+                        return true;
+                    },
+                    CancellationToken.None
+                );
+            })
+            .Completion;
+        try
+        {
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            // RuntimeActors performs the finite Import turn before waiting for
+            // the previous terminal in PrepareForTransferredActivationAsync.
+            Assert.True(
+                await state.ExecuteHandoffTransitionAsync(static () => true, CancellationToken.None)
+            );
+            preparing = state.PrepareForTransferredActivationAsync(CancellationToken.None).AsTask();
+            Assert.False(preparing.IsCompleted);
+            release.TrySetResult();
+            await Task.WhenAll(terminal, preparing).WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.False(queue.HasSharedConsumer);
+            await parent.DisposeAsync();
+            await state.ExecuteDispatchAsync(
+                static _ => ValueTask.CompletedTask,
+                CancellationToken.None
+            );
+        }
+        finally
+        {
+            release.TrySetResult();
+            await terminal;
+            if (preparing is not null)
+                await preparing;
+            await state.InvalidateRuntimeGenerationAfterDispatchesAsync();
+            await parent.DisposeAsync();
+            await runner.StopAsync();
+        }
+    }
+
     [Fact]
     public async Task ActorLifecycle_UsesLifecycleLaneBeforeQueuedApplication()
     {
-        var state = new ZLinkActorRuntimeState("actor-lifecycle-lane");
+        var state = _states.Track(new ZLinkActorRuntimeState("actor-lifecycle-lane"));
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var order = new ConcurrentQueue<string>();
@@ -396,7 +480,7 @@ public sealed class ActorHandlerActivationTests
     [Fact]
     public async Task Terminal_Barrier_Runs_After_Already_Accepted_Turns_And_Closes_Admission()
     {
-        var mailbox = new ZLinkActorSerialExecutor();
+        await using var mailbox = new ZLinkActorSerialExecutor();
         var current = await mailbox.EnterAsync(CancellationToken.None);
         var accepted = mailbox.EnterAsync(CancellationToken.None).AsTask();
         var terminal = mailbox.CloseAdmissionAndReserveLifecycleBarrier();
@@ -581,5 +665,26 @@ public sealed class ActorHandlerActivationTests
 
         public ValueTask DisposeAsync() =>
             ValueTask.FromException(new InvalidOperationException("detached cleanup failed"));
+    }
+}
+
+internal sealed class ActorStateLifetime : IAsyncDisposable
+{
+    private readonly List<ZLinkActorRuntimeState> _states = [];
+
+    internal ZLinkActorRuntimeState Track(ZLinkActorRuntimeState state)
+    {
+        _states.Add(state);
+        return state;
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        var failures = new Zlink.Framework.Runtime.ZLinkFailureCollector();
+        foreach (var state in _states)
+            state.FenceRuntimeGeneration();
+        foreach (var state in _states)
+            await failures.CaptureAsync(state.InvalidateRuntimeGenerationAfterDispatchesAsync);
+        failures.ThrowIfAny();
     }
 }

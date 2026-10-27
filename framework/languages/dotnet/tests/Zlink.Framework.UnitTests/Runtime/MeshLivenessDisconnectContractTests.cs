@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Reflection;
+using System.Runtime.ExceptionServices;
 using Zlink.Framework.Runtime.Service;
 
 namespace Zlink.Framework.UnitTests;
@@ -8,43 +10,122 @@ public sealed partial class StatefulServiceRuntimeTests
     [Fact]
     public async Task LivenessDisconnect_NonNotFoundBindingFailureIsExposed()
     {
-        await using var ownerContext = Systems.Zlink.Zlink.CreateContext();
-        await using var peerContext = Systems.Zlink.Zlink.CreateContext();
-        var bindingFailure = new ZlinkConnectException(
-            ZlinkConnectException.ErrorCode.InternalError
-        );
-        var captured = new CapturingMeshSocketContext(ownerContext)
-        {
-            DisconnectFailure = bindingFailure,
-        };
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        var captured = new CapturingMeshSocketContext(context);
         try
         {
-            using var poller = new DeferredMeshTurnPoller();
-            await using var owner = new ZLinkManagedMeshNode(
-                captured,
-                "mesh",
-                receivePollerFactory: () => poller
+            var rid = RoutingId.From("disconnect-error-peer");
+            foreach (
+                var result in Enum.GetValues<ZlinkConnectException.ErrorCode>()
+                    .Where(result => result != ZlinkConnectException.ErrorCode.Ok)
+            )
+            {
+                var failure = new ZlinkConnectException(result);
+                captured.DisconnectFailure = failure;
+                using var socket = captured.CreateRouterSocket();
+                var before = captured.DisconnectRidCalls;
+                if (result == ZlinkConnectException.ErrorCode.NotFound)
+                    ZLinkManagedMeshNode.DisconnectPhysicalPeer(socket, rid);
+                else
+                {
+                    var error = Assert.Throws<ZlinkConnectException>(() =>
+                        ZLinkManagedMeshNode.DisconnectPhysicalPeer(socket, rid)
+                    );
+                    Assert.Equal(failure.Result, error.Result);
+                    Assert.Same(failure, error);
+                }
+                Assert.Equal(before + 1, captured.DisconnectRidCalls);
+            }
+            using var native = context.CreateRouterSocket();
+            var proxy = DispatchProxy.Create<
+                IRouterSocket,
+                CapturingMeshSocketContext.CapturingRouterSocketProxy
+            >();
+            var unrelated = new InvalidOperationException("unrelated disconnect failure");
+            var calls = 0;
+            ((CapturingMeshSocketContext.CapturingRouterSocketProxy)(object)proxy).Initialize(
+                native,
+                () =>
+                {
+                    calls++;
+                    throw unrelated;
+                }
             );
-            owner.SetRoutingId(RoutingId.From("disconnect-error-owner"));
-            await using var peer = NewNode(peerContext, "disconnect-error-peer");
-            owner.SetBind("tcp://127.0.0.1:0");
-            owner.Start();
-            peer.Start();
-            peer.ConnectPeer(Assert.IsType<string>(owner.Status().LocalEndpoint), owner.RoutingId);
-            await ObserveAsync(() => owner.Status().AdmittedPeerCount == 1);
-            var error = Assert.Throws<ZlinkConnectException>(() =>
-                owner.DisconnectPeer(peer.RoutingId)
+            Assert.Same(
+                unrelated,
+                Assert.Throws<InvalidOperationException>(() =>
+                    ZLinkManagedMeshNode.DisconnectPhysicalPeer(proxy, rid)
+                )
             );
-            Assert.Equal(bindingFailure.Result, error.Result);
-            Assert.Same(bindingFailure, error);
-            Assert.Single(owner.Peers(), candidate => candidate.RoutingId == peer.RoutingId);
-            Assert.Equal(1, captured.DisconnectRidCalls);
+            Assert.Equal(1, calls);
         }
         finally
         {
             captured.DisposeCapturedRouter();
-            ownerContext.Shutdown();
-            peerContext.Shutdown();
+        }
+    }
+
+    [Fact]
+    public async Task LivenessDisconnect_AlreadyMissingPhysicalPeerExpiresLogicalAdmission()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        var scheduler = new GatedTaskScheduler();
+        await using var owner = new ZLinkManagedMeshNode(
+            context,
+            "mesh",
+            routedSubmitScheduler: scheduler
+        );
+        owner.SetRoutingId(RoutingId.From("liveness-missing-owner"));
+        owner.SetBind("tcp://127.0.0.1:0");
+        using (var socket = context.CreateRouterSocket())
+        using (var physicalPeer = context.CreateDealerSocket())
+        {
+            var rid = RoutingId.From("liveness-missing-peer");
+            physicalPeer.SetRoutingId(rid);
+            var endpoint = $"inproc://liveness-missing-{Guid.NewGuid():N}";
+            socket.Bind(endpoint);
+            physicalPeer.Connect(endpoint);
+            await ObserveAsync(() => socket.RoutesSnapshot().Count == 1);
+            var route = Assert.Single(socket.RoutesSnapshot());
+            var peer = new ZLinkMeshPeer(1)
+            {
+                RoutingId = rid,
+                PhysicalRoutingId = rid,
+                RouteGeneration = route.RouteGeneration,
+                Admitted = true,
+                State = MeshPeerState.Admitted,
+                Liveness = new ZLinkServiceLiveness(0),
+            };
+            LivenessField<Dictionary<RoutingId, ZLinkMeshPeer>>(owner, "_peersByRid")
+                .Add(rid, peer);
+            SetLivenessField(owner, "_socket", socket);
+            SetLivenessField(
+                owner,
+                "_activeSocketGeneration",
+                LivenessField<ulong>(owner, "_lifecycleGeneration")
+            );
+            try
+            {
+                // No receive loop runs. Keep the accepted probe on its existing scheduler.
+                TickLiveness(owner, 0);
+                await scheduler.Queued.WaitAsync(TimeSpan.FromSeconds(5));
+                socket.DisconnectRid(rid);
+                physicalPeer.Disconnect(endpoint);
+                var missing = Assert.Throws<ZlinkConnectException>(() => socket.DisconnectRid(rid));
+                Assert.Equal(ZlinkConnectException.ErrorCode.NotFound, missing.Result);
+                Assert.Equal(1U, owner.Status().AdmittedPeerCount);
+                Assert.Single(owner.Peers(), candidate => candidate.RoutingId == rid);
+                TickLiveness(owner, 15 * Stopwatch.Frequency);
+                Assert.Equal(0U, owner.Status().AdmittedPeerCount);
+                Assert.NotEqual(MeshNodeState.Error, owner.Status().State);
+                Assert.DoesNotContain(owner.Peers(), candidate => candidate.RoutingId == rid);
+            }
+            finally
+            {
+                await scheduler.ReleaseAsync();
+                SetLivenessField(owner, "_socket", null);
+                SetLivenessField(owner, "_activeSocketGeneration", 0UL);
+            }
         }
     }
 
@@ -53,91 +134,94 @@ public sealed partial class StatefulServiceRuntimeTests
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();
         var captured = new CapturingMeshSocketContext(context);
-        using var poller = new DeferredMeshTurnPoller();
-        await using var owner = new ZLinkManagedMeshNode(
-            captured,
-            "mesh",
-            receivePollerFactory: () => poller
-        );
-        await using var peer = NewNode(context, "liveness-missing-peer");
-        owner.SetRoutingId(RoutingId.From("liveness-missing-owner"));
+        await using var owner = NewNode(captured, "liveness-running-owner");
         owner.SetBind("tcp://127.0.0.1:0");
         owner.Start();
-        peer.Start();
-        peer.ConnectPeer(Assert.IsType<string>(owner.Status().LocalEndpoint), owner.RoutingId);
-        await ObserveAsync(() =>
-            owner.Status().AdmittedPeerCount == 1 && peer.Status().AdmittedPeerCount == 1
-        );
-        poller.Arm();
-        owner.SignalReceiveOwner();
-        try
+        await using (var peer = NewNode(context, "liveness-departing-peer"))
         {
-            await poller.Held.Task.WaitAsync(TimeSpan.FromSeconds(5));
-            Assert.False(poller.HeldRouteEvent);
-            Assert.Equal(
-                SubmitResult.Ok,
-                owner.SendToNode(peer.RoutingId, [Message.From("before-disconnect"u8)])
-            );
-            await ObserveAsync(() => peer.Status().PendingApplicationMessages != 0);
-            captured.Router!.DisconnectRid(peer.RoutingId);
+            peer.Start();
+            peer.ConnectPeer(Assert.IsType<string>(owner.Status().LocalEndpoint), owner.RoutingId);
             await ObserveAsync(() =>
-            {
-                try
-                {
-                    captured.Router.DisconnectRid(peer.RoutingId);
-                    return false;
-                }
-                catch (ZlinkConnectException error)
-                    when (error.Result == ZlinkConnectException.ErrorCode.NotFound)
-                {
-                    return true;
-                }
-            });
-            await peer.DisposeAsync();
-            Assert.Equal(1U, owner.Status().AdmittedPeerCount);
-
-            // A native timer advances beyond the admitted peer's liveness deadline.
-            // The held batch predates physical teardown and contains no route event.
-            using var deadline = Systems.Zlink.Zlink.CreateTimer();
-            using var deadlinePoller = Systems.Zlink.Zlink.CreatePoller();
-            deadlinePoller.Add(deadline, 1);
-            deadline.Start(ZLinkServiceLiveness.PeerTimeout, 1);
-            await Task.Run(() =>
-            {
-                var events = new PollEvent[1];
-                Assert.Equal(1, deadlinePoller.Wait(events, Timeout.InfiniteTimeSpan));
-                Assert.Equal(PollSourceKind.Timer, events[0].SourceKind);
-            });
-            var stillMissing = Assert.Throws<ZlinkConnectException>(() =>
-                captured.Router.DisconnectRid(peer.RoutingId)
+                owner.Status().AdmittedPeerCount == 1 && peer.Status().AdmittedPeerCount == 1
             );
-            Assert.Equal(ZlinkConnectException.ErrorCode.NotFound, stillMissing.Result);
-            poller.Release();
-            await poller.TurnCompleted.Task.WaitAsync(TimeSpan.FromSeconds(5));
-            // The next native Wait has not run: route observation cannot cause this.
+            await VerifyLivenessDeliveryAsync(owner, peer, "before-disconnect");
+            captured.Router!.DisconnectRid(peer.RoutingId);
+            peer.DisconnectPeer(owner.RoutingId);
+            // Liveness uses Stopwatch, independently of the operation deadline clock.
+            // Keep the original 15-second liveness interval and five-second observation bound.
+            await Task.Delay(ZLinkServiceLiveness.PeerTimeout);
+            await ObserveAsync(() =>
+                !owner.Peers().Any(candidate => candidate.RoutingId == peer.RoutingId)
+            );
             Assert.Equal(0U, owner.Status().AdmittedPeerCount);
             Assert.NotEqual(MeshNodeState.Error, owner.Status().State);
-            Assert.DoesNotContain(
-                owner.Peers(),
-                candidate => candidate.RoutingId == peer.RoutingId
-            );
+        }
+        await using var healthy = NewNode(context, "liveness-after-cleanup");
+        healthy.Start();
+        healthy.ConnectPeer(Assert.IsType<string>(owner.Status().LocalEndpoint), owner.RoutingId);
+        await ObserveAsync(() =>
+            owner.Status().AdmittedPeerCount == 1 && healthy.Status().AdmittedPeerCount == 1
+        );
+        await VerifyLivenessDeliveryAsync(healthy, owner, "after-cleanup");
+        await VerifyLivenessDeliveryAsync(owner, healthy, "reply-after-cleanup");
+        Assert.NotEqual(MeshNodeState.Error, owner.Status().State);
+    }
+
+    [Fact]
+    public async Task LivenessDisconnect_ExplicitNativeDisconnectFailureKeepsPeer()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var owner = NewNode(context, "native-disconnect-failure");
+        using var socket = context.CreateRouterSocket();
+        using var physicalPeer = context.CreateDealerSocket();
+        var rid = RoutingId.From("native-disconnect-failure-peer");
+        physicalPeer.SetRoutingId(rid);
+        var endpoint = $"inproc://native-disconnect-failure-{Guid.NewGuid():N}";
+        socket.Bind(endpoint);
+        physicalPeer.Connect(endpoint);
+        await ObserveAsync(() => socket.RoutesSnapshot().Count == 1);
+        var route = Assert.Single(socket.RoutesSnapshot());
+        var peer = new ZLinkMeshPeer(1)
+        {
+            RoutingId = rid,
+            PhysicalRoutingId = rid,
+            RouteGeneration = route.RouteGeneration,
+            Admitted = true,
+            State = MeshPeerState.Admitted,
+        };
+        LivenessField<Dictionary<RoutingId, ZLinkMeshPeer>>(owner, "_peersByRid").Add(rid, peer);
+        SetLivenessField(owner, "_socket", socket);
+        try
+        {
+            // A closed concrete socket exercises failure before logical removal.
+            // It is never registered with the process receive pool.
+            socket.Dispose();
+            Assert.Throws<ObjectDisposedException>(() => owner.DisconnectPeer(rid));
+            Assert.Single(owner.Peers(), candidate => candidate.RoutingId == rid);
+            Assert.Equal(1U, owner.Status().AdmittedPeerCount);
         }
         finally
         {
-            poller.ReleaseAll();
+            SetLivenessField(owner, "_socket", null);
         }
+    }
 
-        await using var sender = NewNode(context, "liveness-after-cleanup");
-        sender.Start();
-        sender.ConnectPeer(Assert.IsType<string>(owner.Status().LocalEndpoint), owner.RoutingId);
-        await ObserveAsync(() => sender.Status().AdmittedPeerCount == 1);
+    private static async Task VerifyLivenessDeliveryAsync(
+        ZLinkManagedMeshNode sender,
+        ZLinkManagedMeshNode receiver,
+        string payload
+    )
+    {
         Assert.Equal(
             SubmitResult.Ok,
-            sender.SendToNode(owner.RoutingId, [Message.From("after-cleanup"u8)])
+            sender.SendToNode(
+                receiver.RoutingId,
+                [Message.From(System.Text.Encoding.UTF8.GetBytes(payload))]
+            )
         );
-        await ObserveAsync(() => owner.Status().PendingApplicationMessages != 0);
+        await ObserveAsync(() => receiver.Status().PendingApplicationMessages != 0);
         using var ready = new MeshReadyBatch();
-        owner.DrainReady(MeshReadyDomains.All, ready, RecvFlags.DontWait);
+        receiver.DrainReady(MeshReadyDomains.All, ready, RecvFlags.DontWait);
         Assert.True(ready.Count > 0);
         var delivered = false;
         for (var index = 0; index < ready.Count; index++)
@@ -147,134 +231,45 @@ public sealed partial class StatefulServiceRuntimeTests
             while (claim.Receive(received, RecvFlags.DontWait))
             {
                 for (var record = 0; record < received.Count; record++)
-                {
                     foreach (var part in received.RetainMessage(record))
                     {
-                        delivered |= part.AsReadOnlySpan().SequenceEqual("after-cleanup"u8);
+                        delivered |= part.AsReadOnlySpan()
+                            .SequenceEqual(System.Text.Encoding.UTF8.GetBytes(payload));
                         part.Dispose();
                     }
-                }
                 received.Reset();
             }
         }
         Assert.True(delivered);
     }
 
-    private sealed class DeferredMeshTurnPoller : IPoller
+    private static void TickLiveness(ZLinkManagedMeshNode node, long now)
     {
-        private readonly IPoller _inner = Systems.Zlink.Zlink.CreatePoller();
-        private readonly ManualResetEventSlim _release = new(false);
-        private readonly ManualResetEventSlim _continue = new(false);
-        private PollEvent[] _deferred = [];
-        private int _phase;
-        public TaskCompletionSource Held { get; } =
-            new(TaskCreationOptions.RunContinuationsAsynchronously);
-        public TaskCompletionSource TurnCompleted { get; } =
-            new(TaskCreationOptions.RunContinuationsAsynchronously);
-        public bool HeldRouteEvent { get; private set; }
-        public int Size => _inner.Size;
-
-        public void Arm() => Volatile.Write(ref _phase, 1);
-
-        public void Release() => _release.Set();
-
-        public void ReleaseAll()
+        try
         {
-            _release.Set();
-            _continue.Set();
+            typeof(ZLinkManagedMeshNode)
+                .GetMethod("ProcessInfrastructure", BindingFlags.Instance | BindingFlags.NonPublic)!
+                .Invoke(node, [now]);
         }
-
-        public int Wait(Span<PollEvent> destination, TimeSpan timeout)
+        catch (TargetInvocationException error) when (error.InnerException is not null)
         {
-            if (Interlocked.CompareExchange(ref _phase, 3, 2) == 2)
-            {
-                TurnCompleted.TrySetResult();
-                _continue.Wait();
-            }
-            if (_deferred.Length != 0)
-            {
-                var deferredCount = Math.Min(destination.Length, _deferred.Length);
-                _deferred.AsSpan(0, deferredCount).CopyTo(destination);
-                _deferred = _deferred[deferredCount..];
-                return deferredCount;
-            }
-            var count = _inner.Wait(destination, timeout);
-            var timerCount = 0;
-            for (var i = 0; i < count; i++)
-                if (destination[i].SourceKind == PollSourceKind.Timer)
-                    timerCount++;
-            if (timerCount > 0 && Interlocked.CompareExchange(ref _phase, 2, 1) == 1)
-            {
-                _deferred = new PollEvent[count - timerCount];
-                var timers = 0;
-                var deferred = 0;
-                for (var i = 0; i < count; i++)
-                {
-                    var ready = destination[i];
-                    if (ready.SourceKind == PollSourceKind.Timer)
-                    {
-                        destination[timers++] = ready;
-                        HeldRouteEvent |= (ready.Revents & PollEventFlags.PollRoute) != 0;
-                    }
-                    else
-                        _deferred[deferred++] = ready;
-                }
-                count = timerCount;
-                Held.TrySetResult();
-                _release.Wait();
-            }
-            return count;
-        }
-
-        public void Add(IZlinkSocket socket, PollEventFlags events, nuint slot) =>
-            _inner.Add(Unwrap(socket), events, slot);
-
-        public void Add(ISocketMonitor monitor, PollEventFlags events, nuint slot) =>
-            _inner.Add(monitor, events, slot);
-
-        public void Add(IZlinkTimer timer, nuint slot) => _inner.Add(timer, slot);
-
-        public void AddFd(int fd, PollEventFlags events, nuint slot) =>
-            _inner.AddFd(fd, events, slot);
-
-        public void Modify(IZlinkSocket socket, PollEventFlags events) =>
-            _inner.Modify(Unwrap(socket), events);
-
-        public void Modify(ISocketMonitor monitor, PollEventFlags events) =>
-            _inner.Modify(monitor, events);
-
-        public void ModifyFd(int fd, PollEventFlags events) => _inner.ModifyFd(fd, events);
-
-        public bool Remove(IZlinkSocket socket) => _inner.Remove(Unwrap(socket));
-
-        private static IZlinkSocket Unwrap(IZlinkSocket socket) =>
-            socket is CapturingMeshSocketContext.CapturingRouterSocketProxy proxy
-                ? proxy.Inner
-                : socket;
-
-        public bool Remove(ISocketMonitor monitor) => _inner.Remove(monitor);
-
-        public bool Remove(IZlinkTimer timer) => _inner.Remove(timer);
-
-        public bool Remove(int fd) => _inner.Remove(fd);
-
-        public void Clear() => _inner.Clear();
-
-        public void Close() => Dispose();
-
-        public void Dispose()
-        {
-            _inner.Dispose();
-            _release.Dispose();
-            _continue.Dispose();
-        }
-
-        public ValueTask DisposeAsync()
-        {
-            Dispose();
-            return ValueTask.CompletedTask;
+            ExceptionDispatchInfo.Capture(error.InnerException).Throw();
+            throw;
         }
     }
+
+    private static T LivenessField<T>(object owner, string name) =>
+        (T)
+            owner
+                .GetType()
+                .GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!
+                .GetValue(owner)!;
+
+    private static void SetLivenessField(object owner, string name, object? value) =>
+        owner
+            .GetType()
+            .GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!
+            .SetValue(owner, value);
 
     private static async Task ObserveAsync(Func<bool> condition)
     {

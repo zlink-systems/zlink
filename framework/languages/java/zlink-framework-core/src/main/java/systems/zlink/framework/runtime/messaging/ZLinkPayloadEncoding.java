@@ -25,6 +25,17 @@ public final class ZLinkPayloadEncoding {
 
     public static EncodedPayload encode(
             ZLinkMessageSerializer serializer, Object payload, String contentType) {
+        Message message = encodeMessage(serializer, payload, contentType);
+        try {
+            return encodedPayload(message, payload, contentType);
+        } catch (RuntimeException | Error failure) {
+            message.close();
+            throw failure;
+        }
+    }
+
+    public static Message encodeMessage(
+            ZLinkMessageSerializer serializer, Object payload, String contentType) {
         Objects.requireNonNull(serializer, "serializer");
         Message message;
         if (payload instanceof ZLinkMessage declared) {
@@ -37,12 +48,7 @@ public final class ZLinkPayloadEncoding {
                             ? owned.serializeOwned(payload)
                             : ZLinkMessagePayloads.message(selected.serialize(payload));
         }
-        try {
-            return encodedPayload(message, payload, contentType);
-        } catch (RuntimeException | Error failure) {
-            message.close();
-            throw failure;
-        }
+        return message;
     }
 
     private static EncodedPayload encodedPayload(

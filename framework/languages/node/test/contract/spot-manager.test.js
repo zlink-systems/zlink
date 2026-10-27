@@ -1153,15 +1153,19 @@ test('Instance context close returns after activation completion', async () => {
   const laterLifecycle = activation.serial.executeLifecycleOperation(() => {
     events.push('later-lifecycle');
   });
+  const laterLifecycleRejected = assert.rejects(
+    laterLifecycle,
+    (error) => error.kind === framework.ZLinkFrameworkErrorKind.NotFound
+  );
   await Promise.resolve();
   assert.equal(events.includes('later-lifecycle'), false);
 
   releaseQuiescence.resolve();
   assert.equal(await closeResult, true);
-  await laterLifecycle;
+  await laterLifecycleRejected;
   await waitFor(() => durableCloseCalls === 1);
   assert.equal(await manager.find('test.mesh', spotId), null);
-  assert.deepEqual(events, ['close-returned', 'wait-for-terminal', 'durable-closing', 'later-lifecycle']);
+  assert.deepEqual(events, ['close-returned', 'wait-for-terminal', 'durable-closing']);
 });
 
 test('Spot Close retains its lifecycle item until a failed authority decision settles', async () => {
@@ -1331,7 +1335,7 @@ test('User Join membership settles before a later Close checks Ready authority',
   }
 });
 
-test('User Close commits before a later Join and rejects that Join', async () => {
+test('User Close commits before a later Join and returns NotFound', async () => {
   const spotId = 'close-before-join-lane';
   const casEntered = createDeferred();
   const finishCas = createDeferred();
@@ -1372,7 +1376,7 @@ test('User Close commits before a later Join and rejects that Join', async () =>
     finishCas.resolve();
     await assert.rejects(
       () => joining,
-      (error) => error.kind === framework.ZLinkFrameworkErrorKind.Rejected
+      (error) => error.kind === framework.ZLinkFrameworkErrorKind.NotFound
     );
     assert.equal(await closing, true);
     assert.equal(authorityState, 'missing');
@@ -1382,7 +1386,7 @@ test('User Close commits before a later Join and rejects that Join', async () =>
   }
 });
 
-test('User Close seal rejects a formal remote Actor Join at Mesh ingress', async () => {
+test('User Close seal returns NotFound for a formal remote Actor Join at Mesh ingress', async () => {
   const closingEntered = createDeferred();
   const finishClosing = createDeferred();
   let joinCalls = 0;
@@ -1434,7 +1438,7 @@ test('User Close seal rejects a formal remote Actor Join at Mesh ingress', async
         parts: [message],
         replyActorJoin: () => assert.fail('sealed remote Join must not reply as accepted')
       }),
-      (error) => error.kind === framework.ZLinkFrameworkErrorKind.Rejected
+      (error) => error.kind === framework.ZLinkFrameworkErrorKind.NotFound
     );
     assert.equal(joinCalls, 0);
   } finally {
@@ -1499,7 +1503,7 @@ test('Close invokes OnClosing after a yielded continuation finishes', async () =
   assert.equal(closingCalls, 1);
 });
 
-test('OnClosing runs as a Spot turn while Close keeps its lifecycle slot', async () => {
+test('OnClosing receives NotFound for later lifecycle work while Close keeps its lifecycle slot', async () => {
   const spotId = zlink.RoutingId.from('closing-inside-turn');
   const events = [];
   let activation;
@@ -1527,7 +1531,7 @@ test('OnClosing runs as a Spot turn while Close keeps its lifecycle slot', async
   await manager.materializeInstance('test.mesh', 'test', spotId, 1n);
   activation = manager.activations.activationForClose('test.mesh', spotId);
   assert.equal(await manager.close('test.mesh', spotId), true);
-  assert.equal((await laterLifecycle).kind, framework.ZLinkFrameworkErrorKind.Rejected);
+  assert.equal((await laterLifecycle).kind, framework.ZLinkFrameworkErrorKind.NotFound);
   assert.deepEqual(events, [
     'onClosing:turn=true',
     'onClosing:end',

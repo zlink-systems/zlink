@@ -35,7 +35,7 @@ public final class ZLinkChannelDispatchStageBudgetTest {
                                                     String.class,
                                                     String.class,
                                                     "request"),
-                                            payload)
+                                            payload.dataBuffer())
                                     .toCompletableFuture()
                                     .join()) {
                 assertEquals("reply", reply.toUtf8String());
@@ -94,7 +94,8 @@ public final class ZLinkChannelDispatchStageBudgetTest {
                         Handler.class, String.class, String.class, "request");
         return () -> {
             try (var payload = Message.from("request")) {
-                var result = invoker.invokeRequestHandler("channel", registration, payload);
+                var result =
+                        invoker.invokeRequestHandler("channel", registration, payload.dataBuffer());
                 if (filterType == RejectingFilter.class) {
                     var rejected =
                             org.junit.jupiter.api.Assertions.assertThrows(

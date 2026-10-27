@@ -341,9 +341,8 @@ class stateful_object_runtime_t
     void replace_placement_candidates (std::vector<placement_candidate_t> candidates);
     create_result_t begin_create (const create_request_t &request);
     task_t<create_result_t> begin_create_async (create_request_t request);
-    create_result_t begin_reserved_object (const object_ref_t &reserved,
-                                           const std::string &stable_type,
-                                           std::vector<std::uint8_t> creation_request);
+    task_t<create_result_t> begin_reserved_object_async (
+      object_ref_t reserved, std::string stable_type, std::vector<std::uint8_t> creation_request);
     // Accepts the next authority fence for an actor that is retained as a
     // remote copy while ownership returns to this node.
     stateful_error_t adopt_reserved_actor_owner (const object_ref_t &reserved,
@@ -470,6 +469,10 @@ class stateful_object_runtime_t
                                          std::uint64_t timer_id,
                                          std::vector<std::uint8_t> payload);
     std::vector<logical_timer_t> timers (const object_ref_t &owner) const;
+    // Projects queued work in the state lane; the existing claim gate still
+    // decides execution eligibility when the caller visits each owner.
+    task_t<std::vector<object_ref_t>>
+    application_owner_refs_async (std::string local_node_id) const;
     task_t<std::vector<object_inventory_t>> inventory_async () const;
     task_t<std::vector<object_inventory_t>> actor_inventory () const;
     task_t<std::optional<std::vector<object_inventory_t>>>

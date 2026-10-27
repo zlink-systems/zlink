@@ -167,7 +167,7 @@ const zlink = require('@zlink-systems/zlink');
                 try {
                     strict_1.default.equal(scope.getStore(), 'request-owner');
                     strict_1.default.equal(status, 0);
-                    const completion = native.socketCompletionRecv(dealer._native, zlink.RecvFlags.DontWait);
+                    const completion = native.socketCompletionRecv(dealer._native, zlink.RecvFlags.DontWait, Buffer.allocUnsafe);
                     if (!completion)
                         return;
                     strict_1.default.equal(completion.requestResult, zlink.RequestResult.Ok);

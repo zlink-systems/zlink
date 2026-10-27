@@ -131,6 +131,8 @@ is no normal-completion value; completion only means the source-local admission 
 defined by the operation family accepted the message. Remote handler execution, subscriber
 receipt, remote Spot queue acceptance, or application callback completion are not awaited.
 
+An already settled one-way result is carried directly by the language's completion representation. The Framework does not create another operation or intermediate completion owner solely to deliver it. This rule does not change the inter-submission stage isolation in §2 or completion delivery in §11.
+
 <a id="41-nodejs-provides-no-synchronous-blocking-terminator"></a>
 ### 4.1 Node.js Provides No Synchronous Blocking Terminator
 
@@ -216,7 +218,7 @@ create a separate readiness callback, retry waiter, or separate binding adapter,
 | No Spot authority | `NotFound` |
 | No Mesh | `NotFound` |
 | ChannelName target selection fails | Follows [the Framework API channel selection result](../00-foundation/06-framework-api.en.md#channel-selection-result) |
-| No route available | `Unavailable` |
+| No route available | `Unavailable`. A remote request first follows "Requests before the connection is ready" below |
 | The route is lost while waiting | Follows [§7](#7-one-way-send-wait-termination-and-classic-fanout-send-timeout) |
 | Runtime not accepting new admission | `ShuttingDown` |
 | Same call's terminal invoked twice | `InvalidOperation` |
@@ -234,6 +236,47 @@ eligibility or source-local admission before any binding operation has started.
 Starting the binding operation fixes the selected target. The binding owns resubmission and
 completion after an HWM wait; the Framework does not reselect for capacity or resubmit the binding operation.
 There is no automatic resubmission after completion. Termination of a send wait follows [§7](#7-one-way-send-wait-termination-and-classic-fanout-send-timeout). A new select-one operation may choose members eligible when it starts.
+
+**Requests before the connection is ready.** After a remote request fixes a valid target and owner
+descriptor under the existing rules, it checks the connection to that owner and
+[service admission](../02-channel-transport/05-transport-liveness.en.md#5-ready-and-failure-determination) before
+starting a binding operation. Lifecycle requests that the Framework starts (Actor create and Join, session bind,
+relocation PREPARE) do the same. Each language decides this in one logical request admission point.
+
+- HELLO, ADMIT, and REJECT are control records that drive the handshake and aren't subject to this wait. ClientServer
+  uses the existing ClientServer ready (completion of the directional handshake) as connection readiness, and the
+  selected-route conditions below apply to RouteMesh.
+- When a request first starts waiting, it keeps the target intent's `intent_id` and `last_failure_id` as baselines.
+  The socket's single observer handles the snapshot that read the baselines and the change subscription in the same
+  turn, so no change between them is missed. If, while waiting, the target intent disappears, its `intent_id`
+  changes, or its `last_failure_id` changes, the request ends with `Unavailable`, even if the current snapshot shows
+  the connection and service admission already recovered. This check is made before deciding whether to submit a
+  waiting request. A request that started waiting because there was no Core row yet makes no baseline, and the
+  first row's appearance isn't an intent replacement. If the first row already has a failure history
+  (`last_failure_id` isn't 0), the request ends with `Unavailable` even if the current state recovered; otherwise it
+  keeps waiting with that row's identifiers as baselines. Before the first row is seen, removal of the target,
+  descriptor, or logical intent, and the deadline and shutdown, are handled by notifications from their existing
+  owners, and the Framework doesn't make up Core identifiers or keep a separate physical intent list.
+- If the target RID has a Core selected route and that route's service admission has finished, the binding request
+  starts once with the remaining timeout. A failure of another physical connection unrelated to that route doesn't
+  invalidate it, and a new request using an already ready route isn't rejected for a past failure alone. This
+  readiness check only reads the state the observer has already applied; the connection state snapshot is read
+  only when `ZLINK_POLLCONNECT` is ready. The wait and baseline handling below applies only to requests that
+  aren't ready.
+- If there's no selected route and the target endpoint's [connection state](../../../../../../../core/doc/spec/core/socket/README.en.md#zlink_socket_connection_attempts_snapshot) is
+  `ATTEMPT_FAILED`, the request ends at once with `Unavailable`. It doesn't wait even while Core is reconnecting.
+- If the connection state is `CONNECTING`, or a valid descriptor exists but there's no Core connection row yet, or a
+  Core connection exists but the selected route or service admission isn't ready yet, the request waits within the
+  remaining request timeout of [§9](#9-request-completion--the-completion-race-and-timeout-budget). While it waits,
+  invalidation of the target, descriptor, or authority fence, or an explicit service rejection ends it with
+  `Unavailable`. If the runtime no longer takes new admission, it's `ShuttingDown`. A synchronous failure of the
+  connect call itself isn't rewritten as a failure in the connection state row.
+- Once a binding operation starts, neither an application request nor a lifecycle request resubmits the same
+  operation. Connection loss, handover, a selected-route change, and a lost reply end with the binding's typed
+  result. Relocation relay and cutover batches and Store authority settlement follow their own transaction
+  contracts and aren't implemented as request restarts.
+- The wait of a one-way send is defined by [§7](#7-one-way-send-wait-termination-and-classic-fanout-send-timeout), and
+  this rule doesn't apply to it.
 
 ## 6. Logical Multicast and Classic Fanout
 
@@ -316,6 +359,10 @@ The one-shot [reply token](../00-foundation/02-glossary.en.md#reply-token) rules
 
 ## 9. Request Completion — The Completion Race and Timeout Budget
 
+A request prepares its final result consumer before submission. The existing terminal owner delivers its settled result through value conversions owned by the codecs to one final typed publisher. No separate asynchronous results or observation links are introduced solely for conversions between internal layers.
+
+Early completion of the public result does not release the final consumer prepared before submission or the resources it needs until physical-result processing finishes. This also applies when admission fails. A successful physical reply delivered to that consumer passes through each codec owner's conversion once, regardless of whether the public result has completed. The conversion's value or failure does not change an already settled public result, and the payload is cleaned up exactly once. [Cancellation and Shutdown §3](03-cancellation-and-shutdown.en.md#3-handling-the-cancellation-race) owns the handling of late native replies that are not delivered to the final consumer because the correlation is closed.
+
 The caller of a request observes exactly one result: whichever of reply, remote error, timeout,
 cancellation, or shutdown is decided first. Timeout and cancellation end the caller's wait,
 but do not roll back work the remote handler already started. A late reply for a Framework
@@ -345,7 +392,9 @@ outbound admission is the remaining request timeout, and it is not combined with
 timeout. When a timeout or cancellation ends the caller's wait, that does not mean the request was
 not sent — a request that ended before admission can still be sent later by a resubmission the
 binding already started, and its reply is discarded because the correlation is closed. The resubmission boundary for a request after timeout or connection failure is defined by
-[§5](#5-backpressure-and-error-classification).
+[§5](#5-backpressure-and-error-classification). The wait for connection readiness in §5 is part of outbound admission
+and uses the same request timeout. If the deadline is reached before any binding operation starts, the result is
+still `DeadlineExceeded`.
 
 How a request sent within the same handler turn releases and reacquires the gate while
 waiting is defined by
@@ -358,6 +407,8 @@ The resubmission boundary after target connection closure or timeout is defined 
 [§5](#5-backpressure-and-error-classification).
 
 ## 10. Operation Identity and Where Completion Happens (Implementation)
+
+The final typed result delivery structure follows [§9](#9-request-completion--the-completion-race-and-timeout-budget).
 
 Each call has one completion slot, and several paths compete for it. Only the path that
 claims it releases the caller's wait. The losing paths do nothing.
@@ -458,9 +509,9 @@ decides which execution resource runs that turn.
 **Where a wait started doesn't change this condition.** Even when it started outside a runtime execution
 context, such as on an application thread, and has no lane to return to, the completion callbacks and
 asynchronous resumptions that the Framework delivers follow the new-execution-turn conditions above and the
-execution-resource placement in Messaging Hot Path "4.4". Where dependent actions that the application registers directly on a
-language future, task, or promise run, and the thread on which a synchronous blocking wait returns, follow
-that language API's contract.
+execution-resource placement in Messaging Hot Path "4.4".
+
+Value conversion and resource cleanup for internal results are not application callback delivery. Callbacks and suspended continuations delivered by the Framework follow this section's new execution turn regardless of whether the result settles immediately. Directly consuming an already completed value or registering dependent actions on a language completion representation follows that language API's contract. The thread on which a synchronous blocking wait returns also follows that language API's contract.
 
 **Putting a completion callback on the dispatcher cannot fail.** The dispatcher has no limit.
 Nothing rejects a request for lack of a slot, and nothing throws away the completion of a

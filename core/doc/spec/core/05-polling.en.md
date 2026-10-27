@@ -129,6 +129,12 @@ becomes ready when the selected route of an RID changes;
 when it is cleared. A source that is not a ROUTER and a closed source follow the existing rules for an
 unsupported event and a closed source.
 
+A socket that supports connect can use `ZLINK_POLLCONNECT` with both `zlink_poll()` and a poller. It is a
+level readiness that becomes ready when a connection state row is added or removed or its content changes;
+[`zlink_socket_connection_attempts_snapshot`](socket/README.en.md#zlink_socket_connection_attempts_snapshot)
+defines when it becomes ready and when it is cleared. It is independent of `ZLINK_POLLIN`,
+`ZLINK_POLLCOMPLETION`, and `ZLINK_POLLROUTE`, and none of them clears another's readiness.
+
 `zlink_poller_wait()` does not remove completions or invoke callbacks. The event
 array does not contain operation payloads, and its capacity is unrelated to the
 number of completions. For each ready socket, the caller repeatedly invokes
@@ -204,7 +210,8 @@ typedef enum zlink_poller_event_flag_e {
   ZLINK_POLLPRI        = 8,   // platform POLLPRI for an FD (§3)
   ZLINK_POLLITEMS_DFLT = 16,  // recommended initial item count; not a readiness bit (§3)
   ZLINK_POLLCOMPLETION = 32,  // socket completion-queue readiness (§4)
-  ZLINK_POLLROUTE      = 64   // ROUTER selected-route change (ROUTER §10.1)
+  ZLINK_POLLROUTE      = 64,  // ROUTER selected-route change (ROUTER §10.1)
+  ZLINK_POLLCONNECT    = 128  // connection state row change (Socket zlink_socket_connection_attempts_snapshot)
 } zlink_poller_event_flag_e;
 
 #define ZLINK_HAVE_POLLER 1   // public poller API is included in the build

@@ -172,10 +172,11 @@ Ready Actor를 찾은 다른 operation의 조회 결과이며 새 reservation이
 Created terminal publish는 Ready authority와 active capacity 전환을 함께 수행한다.
 Rejected terminal publish는 Ready authority와 active capacity를 만들지 않고 Creating
 authority와 reserved capacity를 정리한다. Terminal record는 source Node
-RID·lifecycle generation·`OperationId`가 모두 일치해야 식별하며 같은 operation의 재전송에만 사용한다.
-Request correlation과 reply route가 없는 `creation-operation-terminal-v1` semantic
-envelope와 SHA-256을 original deadline 뒤 5분까지 보존한다. Framework는 재전송 시
-현재 request의 correlation과 reply route로 새 command reply를 encode한다.
+RID·lifecycle generation·`OperationId`가 모두 일치해야 식별하며 같은 operation이 다시 도착했을 때에만
+사용한다. Request correlation과 reply route가 없는 `creation-operation-terminal-v1` semantic
+envelope와 SHA-256을 original deadline 뒤 5분까지 보존한다. 같은 operation이 다시 도착하면 Framework는
+그 request의 correlation과 reply route로 새 command reply를 encode한다. Sender는 이 operation을 다시 보내지
+않는다([Submit과 완료 §5](../01-execution/01-submit-and-completion.ko.md#5-backpressure와-오류-분류)).
 
 Entry Spot은 startup initialization을 마치기 전 descriptor와 resolver에 publish하지 않는다. Actor creation은
 initial Entry Spot membership과 Ready barrier를 같은 lifecycle에서 완료하며 `OnActorJoin`과
