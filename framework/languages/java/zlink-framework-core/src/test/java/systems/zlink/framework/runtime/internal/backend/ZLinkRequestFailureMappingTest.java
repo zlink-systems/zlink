@@ -105,7 +105,27 @@ final class ZLinkRequestFailureMappingTest {
             assertArrayEquals(
                     new int[] {row.get("terminalResult").asInt(), code},
                     ZLinkRequestFailureMapping.outgoing(
+                            new java.util.concurrent.CompletionException(failure)));
+            assertArrayEquals(
+                    new int[] {row.get("terminalResult").asInt(), code},
+                    ZLinkRequestFailureMapping.outgoing(
                             failure.kind(), ZLinkRequestFailureMapping.causeCode(failure)));
         }
+    }
+
+    @Test
+    void wrappedCancellationUsesTerminatedWithoutFailureCode() {
+        int[] expected = {systems.zlink.contracts.sockets.RequestResult.TERMINATED.value(), 0};
+        var cancelled = new java.util.concurrent.CancellationException("cancelled");
+        assertArrayEquals(expected, ZLinkRequestFailureMapping.outgoing(cancelled));
+        assertArrayEquals(
+                expected,
+                ZLinkRequestFailureMapping.outgoing(
+                        new java.util.concurrent.CompletionException(
+                                new java.util.concurrent.ExecutionException(cancelled))));
+        assertArrayEquals(
+                ZLinkRequestFailureMapping.outgoing(ZLinkFrameworkErrorKind.INTERNAL_FAILURE),
+                ZLinkRequestFailureMapping.outgoing(
+                        new IllegalArgumentException("provider failed")));
     }
 }

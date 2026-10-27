@@ -673,6 +673,8 @@ final class ZLinkNodeSubmitTurnTest {
                 lane = new ZLinkStateLane(laneExecutor);
                 setField(sockets, "stateLane", lane);
             }
+            // This unmanaged backend's operation owner is the fixture's source lane.
+            setField(field(field(runtime, "callRuntime"), "operations"), "owner", lane);
         }
 
         void register(Duration timeout) {

@@ -2,13 +2,14 @@ package systems.zlink.framework.runtime.internal.service;
 
 import org.junit.jupiter.api.Test;
 
+import systems.zlink.framework.runtime.internal.ZLinkCompletionBridge;
+
 import java.io.IOException;
 import java.lang.classfile.ClassFile;
 import java.lang.classfile.ClassTransform;
 import java.lang.classfile.instruction.InvokeInstruction;
 import java.lang.constant.ClassDesc;
 import java.lang.constant.MethodTypeDesc;
-import java.lang.management.ManagementFactory;
 import java.lang.reflect.InvocationTargetException;
 import java.time.Duration;
 import java.util.concurrent.ExecutionException;
@@ -18,12 +19,12 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
-/** Isolates monitor notifications from real timer scheduling and elapsed wall time. */
+/** Isolates maintenance wakeups from real timer scheduling and elapsed wall time. */
 public final class ZLinkServiceOperationRegistryWakeTest {
     @Test
     void serialRequestsRetainTheReservedVisitAndIdleDoesNotPoll() throws Throwable {
         // Rewrite only the isolated copy's waits. The real registry's registration,
-        // completion, wheel, notification and lifecycle code executes unchanged.
+        // completion, wheel, wakeup and lifecycle code executes unchanged.
         ClassLoader isolated =
                 new ClassLoader(getClass().getClassLoader()) {
                     @Override
@@ -51,7 +52,8 @@ public final class ZLinkServiceOperationRegistryWakeTest {
                                                         ClassTransform.transformingMethodBodies(
                                                                 method ->
                                                                         method.methodName()
-                                                                                .equalsString(
+                                                                                .stringValue()
+                                                                                .contains(
                                                                                         "maintainDeadlines"),
                                                                 (builder, element) -> {
                                                                     if (element
@@ -60,23 +62,23 @@ public final class ZLinkServiceOperationRegistryWakeTest {
                                                                                             call
                                                                             && call.name()
                                                                                     .equalsString(
-                                                                                            "timedWait")) {
+                                                                                            "parkNanos")) {
                                                                         builder.invokestatic(
                                                                                 helper,
-                                                                                "timedWait",
+                                                                                "parkNanos",
                                                                                 MethodTypeDesc
                                                                                         .ofDescriptor(
-                                                                                                "(Ljava/util/concurrent/TimeUnit;Ljava/lang/Object;J)V"));
+                                                                                                "(Ljava/lang/Object;J)V"));
                                                                     } else if (element
                                                                                     instanceof
                                                                                     InvokeInstruction
                                                                                             call
                                                                             && call.name()
                                                                                     .equalsString(
-                                                                                            "wait")) {
+                                                                                            "park")) {
                                                                         builder.invokestatic(
                                                                                 helper,
-                                                                                "emptyWait",
+                                                                                "park",
                                                                                 MethodTypeDesc
                                                                                         .ofDescriptor(
                                                                                                 "(Ljava/lang/Object;)V"));
@@ -86,7 +88,7 @@ public final class ZLinkServiceOperationRegistryWakeTest {
                                                                                             call
                                                                             && call.name()
                                                                                     .equalsString(
-                                                                                            "expire")) {
+                                                                                            "expireOnOwner")) {
                                                                         builder.invokestatic(
                                                                                 helper,
                                                                                 "expire",
@@ -116,38 +118,39 @@ public final class ZLinkServiceOperationRegistryWakeTest {
     static final AtomicInteger returns = new AtomicInteger();
     static final AtomicInteger expires = new AtomicInteger();
     static final AtomicReference<Thread> worker = new AtomicReference<>();
-    static Object gate;
+    static Object blocker;
 
-    public static void timedWait(TimeUnit unit, Object monitor, long remaining)
-            throws InterruptedException {
+    public static void parkNanos(Object owner, long remaining) {
         if (remaining <= 0) throw new AssertionError("nonpositive timed wait");
-        monitor.wait(); // The test advances virtual time and notifies at the scheduled visit.
+        java.util.concurrent.locks.LockSupport.park(owner);
         returns.incrementAndGet();
     }
 
-    public static void emptyWait(Object monitor) throws InterruptedException {
-        monitor.wait();
+    public static void park(Object owner) {
+        java.util.concurrent.locks.LockSupport.park(owner);
         returns.incrementAndGet();
     }
 
     public static int expire(ZLinkServiceOperationRegistry registry, long now) {
         expires.incrementAndGet();
-        return registry.expire(now);
+        return ZLinkCompletionBridge.await(registry.expire(now));
     }
 
     static void parked() {
         long guard = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
         while (true) {
-            synchronized (gate) {
-                var info =
-                        ManagementFactory.getThreadMXBean().getThreadInfo(worker.get().threadId());
-                if (info != null
-                        && info.getThreadState() == Thread.State.WAITING
-                        && info.getLockInfo() != null
-                        && info.getLockInfo().getIdentityHashCode()
-                                == System.identityHashCode(gate)) return;
-            }
+            if (worker.get().getState() == Thread.State.WAITING
+                    && java.util.concurrent.locks.LockSupport.getBlocker(worker.get()) == blocker)
+                return;
             if (System.nanoTime() - guard >= 0) throw new AssertionError("worker did not park");
+            Thread.yield();
+        }
+    }
+
+    private static void awaitReturns(int minimum) {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (returns.get() < minimum) {
+            if (System.nanoTime() - deadline >= 0) throw new AssertionError("worker did not wake");
             Thread.yield();
         }
     }
@@ -164,14 +167,17 @@ public final class ZLinkServiceOperationRegistryWakeTest {
                         },
                         new IllegalStateException("closed"),
                         clock::get);
-        gate = registry.deadlineGateForTest();
+        blocker = registry;
         int serialReturns;
         try (registry) {
-            var operation = registry.<Integer>register(Duration.ofMillis(100));
+            var operation =
+                    ZLinkCompletionBridge.await(registry.<Integer>register(Duration.ofMillis(100)));
             parked();
             int before = returns.get();
             for (int request = 0; request < 1_000; request++) {
-                if (request != 0) operation = registry.register(Duration.ofMillis(100));
+                if (request != 0)
+                    operation =
+                            ZLinkCompletionBridge.await(registry.register(Duration.ofMillis(100)));
                 if (!registry.complete(operation.id(), request))
                     throw new AssertionError("reply lost");
                 if (operation.get(5, TimeUnit.SECONDS) != request)
@@ -183,10 +189,17 @@ public final class ZLinkServiceOperationRegistryWakeTest {
                     "serial requests=1000 completed=1000 wait_returns=%d expire_calls=%d upper_bound=2%n",
                     serialReturns, expires.get());
             // Let the already reserved visit occur, then observe indefinite idle.
-            synchronized (gate) {
-                clock.set(TimeUnit.MILLISECONDS.toNanos(100));
-                gate.notifyAll();
+            int beforeVisit = returns.get();
+            clock.set(TimeUnit.MILLISECONDS.toNanos(100));
+            java.util.concurrent.locks.LockSupport.unpark(worker.get());
+            long guard = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+            var tick = ZLinkServiceOperationRegistry.class.getDeclaredField("maintenanceTick");
+            tick.setAccessible(true);
+            while (tick.getLong(registry) >= 0) {
+                if (System.nanoTime() - guard >= 0) throw new AssertionError("wheel did not drain");
+                Thread.yield();
             }
+            awaitReturns(beforeVisit + 2);
             parked();
             int idleBefore = returns.get();
             int expiryBefore = expires.get();
@@ -198,18 +211,28 @@ public final class ZLinkServiceOperationRegistryWakeTest {
             if (returns.get() != idleBefore || expires.get() != expiryBefore)
                 throw new AssertionError("idle polling");
             // The first registration wakes indefinite wait. Completing it leaves its timed visit.
-            var later = registry.register(Duration.ofSeconds(30));
+            var later = ZLinkCompletionBridge.await(registry.register(Duration.ofSeconds(30)));
+            awaitReturns(idleBefore + 1);
             parked();
             if (returns.get() - idleBefore != 1)
                 throw new AssertionError("long deadline must wake the idle owner once");
             System.out.printf(
                     "long_deadline seconds=30 wait_returns=%d%n", returns.get() - idleBefore);
             if (!registry.discard(later.id())) throw new AssertionError("discard failed");
-            ZLinkServiceOperationRegistry.Operation<Object> earlier;
-            synchronized (gate) {
-                earlier = registry.register(Duration.ofNanos(1));
-                clock.addAndGet(TimeUnit.MILLISECONDS.toNanos(2));
-            }
+            var ownerField = ZLinkServiceOperationRegistry.class.getDeclaredField("owner");
+            ownerField.setAccessible(true);
+            var lane =
+                    (systems.zlink.framework.runtime.internal.execution.ZLinkStateLane)
+                            ownerField.get(registry);
+            var earlier =
+                    lane.awaitTurn(
+                            () -> {
+                                var request =
+                                        ZLinkCompletionBridge.await(
+                                                registry.register(Duration.ofNanos(1)));
+                                clock.addAndGet(TimeUnit.MILLISECONDS.toNanos(2));
+                                return request;
+                            });
             try {
                 earlier.get(5, TimeUnit.SECONDS);
                 throw new AssertionError("deadline did not expire");

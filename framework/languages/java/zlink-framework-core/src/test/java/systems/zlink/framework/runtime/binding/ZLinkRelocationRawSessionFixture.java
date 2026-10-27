@@ -20,7 +20,6 @@ import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
-import java.util.Map;
 import java.util.UUID;
 
 /** Real raw binding and native outbound, with the already-ready peer installed before replay. */
@@ -48,11 +47,8 @@ public final class ZLinkRelocationRawSessionFixture implements AutoCloseable {
                 assertEquals(peerRid, inbound.source());
             }
             var topology = new ZLinkServiceTopologyRegistry(descriptor(localRid, 17));
-            topology.admit(descriptor(peerRid, 31), "ready", ServiceWireConstants.COMMAND_HELLO);
+            topology.admit(descriptor(peerRid, 31), "ready", ServiceWireConstants.COMMAND_ADMIT);
             set("topology", topology);
-            @SuppressWarnings("unchecked")
-            var ready = (Map<RoutingId, String>) field("admissionControlReadyConnections");
-            ready.put(peerRid, "ready");
         } catch (ReflectiveOperationException | RuntimeException | Error failure) {
             close();
             throw new AssertionError(failure);
