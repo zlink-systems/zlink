@@ -1,0 +1,6 @@
+**/.git
+.logs
+.validation
+build
+.zlink
+**/zlink.license

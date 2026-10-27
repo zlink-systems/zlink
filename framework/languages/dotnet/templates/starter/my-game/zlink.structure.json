@@ -1,0 +1,57 @@
+{
+  "version": 1,
+  "id": "starter",
+  "name": "my-game",
+  "language": "dotnet",
+  "run": {
+    "commands": {
+      "sh": [
+        "./run-e2e.sh --build-only",
+        "./run-e2e.sh",
+        "./run-e2e.sh --scenario connect"
+      ],
+      "powershell": [
+        "pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly",
+        "pwsh -NoProfile -File ./run-e2e.ps1",
+        "pwsh -NoProfile -File ./run-e2e.ps1 -Scenario connect"
+      ]
+    },
+    "scenarios": [
+      "connect"
+    ]
+  },
+  "nodes": [
+    {
+      "id": "client",
+      "role": "external",
+      "title": "STREAM client",
+      "config": null
+    },
+    {
+      "id": "session",
+      "role": "session",
+      "title": "Session",
+      "config": "server/config/session.json"
+    },
+    {
+      "id": "redis",
+      "role": "location-store",
+      "title": "Redis",
+      "config": "docker-compose.yml"
+    }
+  ],
+  "channels": [],
+  "spots": [],
+  "edges": [
+    {
+      "from": "client",
+      "to": "session",
+      "label": "STREAM (WebSocket)"
+    },
+    {
+      "from": "session",
+      "to": "redis",
+      "label": "Location / relocation store"
+    }
+  ]
+}
