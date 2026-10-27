@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+#include <zlink/json.hpp>
 
 #include "runtime/dispatch/offload_executor.hpp"
 #include "runtime/execution/serial_execution_queue.hpp"
@@ -43,6 +44,17 @@ struct admission_request_t
 {
     int packet{};
 };
+}
+
+template <> struct zlink::json::dto_traits<admission_request_t>
+{
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("packet", &admission_request_t::packet)};
+};
+
+namespace
+{
+
 
 struct admission_entry_spot_t
 {
