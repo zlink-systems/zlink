@@ -6,10 +6,11 @@ namespace Zlink.Framework.Runtime.Actors;
 internal sealed class ZLinkActorSessionRegistry(
     IServiceProvider? services = null,
     Action<string>? handoffDiagnostic = null,
-    TimeSpan? sessionBindingTombstoneRetention = null
+    TimeSpan? sessionBindingTombstoneRetention = null,
+    ZLinkStateLane? lane = null
 )
 {
-    private readonly ZLinkStateLane _lane = new();
+    private readonly ZLinkStateLane _lane = lane ?? new();
     private readonly Dictionary<ZLinkActorId, ZLinkActorRuntimeState> _states = [];
 
     public ZLinkActorRuntimeState GetOrCreate(ZLinkActorId actorId) =>

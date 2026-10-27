@@ -33,6 +33,9 @@ public sealed class InstanceSpotActivationJournalTests
         var (store, reservation, _) = await ReserveCreatingAsync("spot");
         var operation = Operation(new MeshOperationId(101, 103)) with
         {
+            DeadlineUnixMs = checked(
+                (ulong)DateTimeOffset.UtcNow.AddSeconds(30).ToUnixTimeMilliseconds()
+            ),
             Target = Operation(new MeshOperationId(101, 103)).Target with
             {
                 TargetNodeRid = reservation.TargetDescriptor.Rid,
@@ -125,23 +128,14 @@ public sealed class InstanceSpotActivationJournalTests
         var before = Assert
             .IsType<ZLinkAuthorityReadResult.Found>(await store.ReadAuthorityAsync(reservation.Key))
             .Snapshot;
-        var method = typeof(ZLinkInstanceSpotActivationTarget).GetMethod(
-            "ActivateCoreAsync",
-            BindingFlags.Instance | BindingFlags.NonPublic
-        )!;
-        var task =
-            (Task<Task<InstanceSpotActivationTerminal>>)
-                method.Invoke(
-                    target,
-                    [
-                        operation,
-                        field == "metadataBytes"
-                            ? (ReadOnlyMemory<byte>?)new byte[] { 1, 1, 1, 107, 0, 1, 118 }
-                            : null,
-                        new ReadOnlyMemory<byte>[] { new byte[] { 1 } },
-                        CancellationToken.None,
-                    ]
-                )!;
+        var task = target.ActivateAsync(
+            operation,
+            field == "metadataBytes"
+                ? (ReadOnlyMemory<byte>?)new byte[] { 1, 1, 1, 107, 0, 1, 118 }
+                : null,
+            new ReadOnlyMemory<byte>[] { new byte[] { 1 } },
+            CancellationToken.None
+        );
         var failure = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () => await task);
         Assert.Equal(
             field is "match" or "operation"
