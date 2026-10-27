@@ -259,6 +259,12 @@ jobs:
         working-directory: framework/languages/node
         run: npm run verify:ci
 
+      # The browser build rewrites the committed WebGL bundle, so the bundle
+      # check inside the gate always sees a fresh file. A diff here means the
+      # source changed without the regenerated bundle being committed.
+      - name: Verify the build left the committed WebGL bundle unchanged
+        run: git diff --exit-code -- framework/languages/unity/com.zlink.stream-connector.webgl
+
       - name: Run actual Chromium Stream Connector E2E
         if: matrix.node-version == 22 && (matrix.target.name == 'linux-x64' || matrix.target.name == 'win-x64')
         working-directory: framework/languages/node
