@@ -273,6 +273,36 @@ static_assert (has_submit<zlink::framework::stream_write_call_t>);
 static_assert (!has_callback_async<zlink::framework::stream_write_call_t, void>);
 static_assert (!has_submit<zlink::framework::route_send_call_t>);
 static_assert (!has_callback_async<zlink::framework::route_send_call_t, void>);
+// languages/cpp/interfaces/03-channel-messaging.ko.md §4 (route_client_t, route_send_call_t and
+// spot_*_call_t declarations): the calls expose metadata/option setters and terminals only, and
+// route_client_t is their only producer.
+using route_metadata_t = zlink::framework::route_send_call_t::metadata_map_t;
+static_assert (
+  !std::is_constructible_v<
+    zlink::framework::route_send_call_t,
+    std::string,
+    std::function<zlink::framework::task_t<void> (const std::string &, const route_metadata_t &)>>);
+static_assert (!std::is_constructible_v<
+               zlink::framework::route_send_call_t,
+               std::string,
+               std::function<zlink::framework::task_t<zlink::framework::result_t<void>> (
+                 const std::string &, const route_metadata_t &)>>);
+static_assert (!std::is_constructible_v<zlink::framework::route_send_call_t,
+                                        std::string,
+                                        std::function<zlink::framework::result_t<void> (
+                                          const std::string &, const route_metadata_t &)>>);
+static_assert (
+  !std::is_constructible_v<
+    zlink::framework::spot_send_call_t,
+    std::string,
+    std::function<zlink::framework::task_t<void> (const std::string &, const route_metadata_t &)>,
+    std::shared_ptr<zlink::framework::detail::spot_activation_intent_t>>);
+static_assert (
+  !std::is_constructible_v<zlink::framework::spot_request_call_t,
+                           std::string,
+                           zlink::framework::serializer_registry_t *,
+                           zlink::framework::channel_request_call_t::submit_fn_t,
+                           std::shared_ptr<zlink::framework::detail::spot_activation_intent_t>>);
 static_assert (!has_submit<zlink::framework::channel_request_call_t>);
 static_assert (has_typed_submit<zlink::framework::channel_request_call_t, std::uint64_t>);
 static_assert (has_typed_async<zlink::framework::channel_request_call_t, std::uint64_t>);
