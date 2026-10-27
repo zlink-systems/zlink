@@ -72,7 +72,7 @@ concurrency:
 jobs:
   prepare-dotnet-binding:
     name: prepare-dotnet-binding
-    runs-on: ${{ vars.ZLINK_LINUX_RUNNER && fromJSON(vars.ZLINK_LINUX_RUNNER) || 'ubuntu-24.04' }}
+    runs-on: ${{ fromJSON('["self-hosted","linux","x64"]') || 'ubuntu-24.04' }}
     outputs:
       binding_version: ${{ steps.versions.outputs.binding_version }}
       artifact_name: ${{ steps.versions.outputs.artifact_name }}
@@ -126,7 +126,7 @@ jobs:
     # ZLINK_LINUX_RUNNER/ZLINK_WINDOWS_RUNNER (JSON label lists) move the x64 Linux/Windows
     # jobs to self-hosted runners; arm64 and macOS stay hosted. Only Mergify branch pushes
     # and manual runs start this workflow, so fork code never reaches them.
-    runs-on: ${{ (matrix.target.runner == 'ubuntu-24.04' && vars.ZLINK_LINUX_RUNNER && fromJSON(vars.ZLINK_LINUX_RUNNER)) || (matrix.target.runner == 'windows-latest' && vars.ZLINK_WINDOWS_RUNNER && fromJSON(vars.ZLINK_WINDOWS_RUNNER)) || matrix.target.runner }}
+    runs-on: ${{ (matrix.target.runner == 'ubuntu-24.04' && fromJSON('["self-hosted","linux","x64"]')) || (matrix.target.runner == 'windows-latest' && fromJSON('["self-hosted","windows","x64"]')) || matrix.target.runner }}
     needs:
       - prepare-dotnet-binding
     strategy:
@@ -263,7 +263,7 @@ jobs:
 
   framework-dotnet-gate:
     name: dotnet-release-gate
-    runs-on: ${{ vars.ZLINK_LINUX_RUNNER && fromJSON(vars.ZLINK_LINUX_RUNNER) || 'ubuntu-24.04' }}
+    runs-on: ${{ fromJSON('["self-hosted","linux","x64"]') || 'ubuntu-24.04' }}
     needs:
       - framework-dotnet
     steps:
