@@ -220,17 +220,17 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
     }
 
     <T> CompletionStage<T> runRelocationInitialization(Supplier<CompletionStage<T>> operation) {
-        return stateLane
-                .runAsync(
-                        () -> {
-                            if (phase != Phase.RESTORING || initializing) {
-                                throw new IllegalStateException(
-                                        "timer relocation staging is not active");
-                            }
-                            initializing = true;
-                            return null;
-                        })
-                .thenComposeAsync(
+        return ZLinkSerialExecutionQueue.yieldCurrent(
+                        stateLane.runAsync(
+                                () -> {
+                                    if (phase != Phase.RESTORING || initializing) {
+                                        throw new IllegalStateException(
+                                                "timer relocation staging is not active");
+                                    }
+                                    initializing = true;
+                                    return null;
+                                }))
+                .thenCompose(
                         ignored -> {
                             CompletionStage<T> result;
                             try {
@@ -240,17 +240,20 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
                             } catch (RuntimeException | Error failure) {
                                 result = CompletableFuture.failedFuture(failure);
                             }
-                            return result.handle(
+                            return ZLinkSerialExecutionQueue.manageCurrentInTurn(result)
+                                    .handle(
                                             (value, failure) ->
-                                                    stateLane.runAsync(
-                                                            () -> {
-                                                                initializing = false;
-                                                                if (failure != null) {
-                                                                    throw new CompletionException(
-                                                                            unwrap(failure));
-                                                                }
-                                                                return value;
-                                                            }))
+                                                    ZLinkSerialExecutionQueue.yieldCurrent(
+                                                            stateLane.runAsync(
+                                                                    () -> {
+                                                                        initializing = false;
+                                                                        if (failure != null) {
+                                                                            throw new CompletionException(
+                                                                                    unwrap(
+                                                                                            failure));
+                                                                        }
+                                                                        return value;
+                                                                    })))
                                     .thenCompose(stage -> stage);
                         });
     }
