@@ -3129,7 +3129,15 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         String key =
                 systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec.spot(
                         envelope.targetSpotId());
-        return store.read(key, () -> System.currentTimeMillis() >= envelope.deadlineUnixMs())
+        // A provider may throw cancellation before returning its stage.
+        return CompletableFuture.completedFuture(key)
+                .thenCompose(
+                        value ->
+                                store.read(
+                                        value,
+                                        () ->
+                                                System.currentTimeMillis()
+                                                        >= envelope.deadlineUnixMs()))
                 .thenCompose(
                         read -> {
                             if (!(read instanceof ZLinkAuthoritySnapshot snapshot)
@@ -3231,7 +3239,12 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                                     + " stored activation");
                                                 return read;
                                             });
-                        });
+                        })
+                .exceptionallyCompose(
+                        failure ->
+                                CompletableFuture.failedFuture(
+                                        instanceSpotActivationFailure(
+                                                failure, envelope.deadlineUnixMs())));
     }
 
     private CompletionStage<
@@ -3568,7 +3581,12 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                                                     });
                                                                 });
                                             });
-                        });
+                        })
+                .exceptionallyCompose(
+                        failure ->
+                                CompletableFuture.failedFuture(
+                                        instanceSpotActivationFailure(
+                                                failure, envelope.deadlineUnixMs())));
     }
 
     private CompletionStage<Void> completeInstanceActivation(
@@ -3761,10 +3779,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                     restoreFirst) {
         long remaining = deadlineUnixMs - System.currentTimeMillis();
         if (remaining <= 0)
-            return CompletableFuture.failedFuture(
-                    new ZLinkFrameworkException(
-                            ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
-                            "Instance activation deadline expired"));
+            return CompletableFuture.failedFuture(instanceSpotActivationDeadlineFailure(null));
         return activateInstanceSpotTargetCore(
                         meshName, factory, route, backendSpot, deadlineUnixMs, restoreFirst)
                 .toCompletableFuture()
@@ -3772,11 +3787,30 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                 .exceptionallyCompose(
                         failure ->
                                 CompletableFuture.failedFuture(
-                                        failure instanceof java.util.concurrent.TimeoutException
-                                                ? new ZLinkFrameworkException(
-                                                        ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
-                                                        "Instance activation deadline expired")
-                                                : failure));
+                                        unwrapCompletion(failure)
+                                                        instanceof
+                                                        java.util.concurrent.TimeoutException
+                                                ? instanceSpotActivationDeadlineFailure(
+                                                        unwrapCompletion(failure))
+                                                : instanceSpotActivationFailure(
+                                                        failure, deadlineUnixMs)));
+    }
+
+    private Throwable instanceSpotActivationFailure(Throwable failure, long deadlineUnixMs) {
+        Throwable cause = unwrapCompletion(failure);
+        if (cause instanceof java.util.concurrent.CancellationException
+                && !closing
+                && System.currentTimeMillis() >= deadlineUnixMs) {
+            return instanceSpotActivationDeadlineFailure(cause);
+        }
+        return cause;
+    }
+
+    private static ZLinkFrameworkException instanceSpotActivationDeadlineFailure(Throwable cause) {
+        return new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+                "Instance activation deadline expired",
+                cause);
     }
 
     private CompletionStage<Void> activateInstanceSpotTargetCore(
