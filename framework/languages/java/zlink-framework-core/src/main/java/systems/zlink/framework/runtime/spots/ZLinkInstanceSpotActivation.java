@@ -270,7 +270,9 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
                                                     rescheduleIdleCheck();
                                                     return;
                                                 }
-                                                closeWithReason(ZLinkSpotCloseReason.IDLE_EVICTED);
+                                                closeWithReason(
+                                                        ZLinkSpotCloseReason.IDLE_EVICTED,
+                                                        Instant::now);
                                             });
                         });
     }
@@ -422,13 +424,16 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
     }
 
     CompletionStage<Boolean> closeExplicit() {
-        return closeWithReason(ZLinkSpotCloseReason.EXPLICIT_CLOSE);
+        Instant startedAt = Instant.now();
+        return closeWithReason(
+                ZLinkSpotCloseReason.EXPLICIT_CLOSE, () -> host.defaultCloseDeadline(startedAt));
     }
 
-    private CompletionStage<Boolean> closeWithReason(ZLinkSpotCloseReason reason) {
+    private CompletionStage<Boolean> closeWithReason(
+            ZLinkSpotCloseReason reason, Supplier<Instant> deadline) {
         CompletableFuture<Boolean> result = new CompletableFuture<>();
         return context.enqueueClose(
-                        () -> closeOnLifecycle(reason).thenAccept(result::complete),
+                        () -> closeOnLifecycle(reason, deadline).thenAccept(result::complete),
                         message ->
                                 host.dispatchQueuedInstanceMessage(
                                         this, (ZLinkBackendReceived) message),
@@ -442,7 +447,8 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
                 .thenCompose(ignored -> result);
     }
 
-    private CompletionStage<Boolean> closeOnLifecycle(ZLinkSpotCloseReason reason) {
+    private CompletionStage<Boolean> closeOnLifecycle(
+            ZLinkSpotCloseReason reason, Supplier<Instant> deadline) {
         if (!hasExpectedNodeGeneration()) return CompletableFuture.completedFuture(false);
         ZLinkSpotCloseCoordinator existing = existingCloseCoordinator();
         if (existing != null) {
@@ -501,7 +507,7 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
                                                                     .completedFuture(null);
                                                         }),
                                                 ZLinkSpotCloseCoordinator.Step.onClosing(
-                                                        () -> closingStage(reason, Instant.now())),
+                                                        () -> closingStage(reason, deadline.get())),
                                                 ZLinkSpotCloseCoordinator.Step.operation(
                                                         () -> {
                                                             backendSpot.closeInstanceSpot();
