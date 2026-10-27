@@ -1182,7 +1182,11 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                         .closeOnLifecycle(
                                                                 intent.orElseThrow()
                                                                         .intent()
-                                                                        .target()))
+                                                                        .target(),
+                                                                Instant.ofEpochMilli(
+                                                                        intent.orElseThrow()
+                                                                                .intent()
+                                                                                .deadlineUnixMs())))
                         .exceptionallyCompose(
                                 failure -> {
                                     Throwable cause = unwrapCompletion(failure);
@@ -1267,6 +1271,10 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                             snapshot.storeVersion()),
                                                     deadline)));
                         });
+    }
+
+    Instant defaultCloseDeadline(Instant startedAt) {
+        return startedAt.plus(defaultRequestTimeout);
     }
 
     private static void rejectAfterRelocationReady(String operation) {
