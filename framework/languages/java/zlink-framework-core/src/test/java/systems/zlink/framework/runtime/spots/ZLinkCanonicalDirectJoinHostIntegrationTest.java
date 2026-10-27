@@ -831,7 +831,8 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                                     .anyMatch(
                                             message ->
                                                     message.contains(
-                                                                    "injected target joined failure")
+                                                                    "injected target joined"
+                                                                            + " failure")
                                                             && message.contains(
                                                                     scenario
                                                                                     == Scenario
@@ -1089,7 +1090,8 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
         assertEquals(
                 refreshed,
                 targetGetter.invoke(retained),
-                "duplicate ActorLeft must not refresh the already claimed callback's Message Follow route");
+                "duplicate ActorLeft must not refresh the already claimed callback's Message Follow"
+                        + " route");
         assertEquals(1, EVENTS.stream().filter("source.leave"::equals).count());
     }
 
@@ -1708,6 +1710,35 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                                                 sourceLeftHandler.set(arguments[0]);
                                             }
                                             yield null;
+                                        }
+                                        case "requestCanonicalRelocationPrepare" -> {
+                                            byte[] command = ((byte[]) arguments[1]).clone();
+                                            EVENTS.add("canonical.prepare");
+                                            canonicalPrepare.set(command.clone());
+                                            var reply =
+                                                    peer.get()
+                                                            .apply(
+                                                                    descriptor.rid(),
+                                                                    1L,
+                                                                    Byte.toUnsignedInt(command[3]),
+                                                                    command);
+                                            ((CompletableFuture<Void>) arguments[3]).complete(null);
+                                            yield reply.thenApply(
+                                                    encoded -> {
+                                                        if (Byte.toUnsignedInt(encoded[3])
+                                                                == ServiceWireConstants
+                                                                        .COMMAND_RELOCATION_READY) {
+                                                            if (readyInjected.compareAndSet(
+                                                                    false, true)) {
+                                                                EVENTS.add("canonical.ready");
+                                                                readyHook.get().run();
+                                                            }
+                                                            readyTransportSuccessNanos
+                                                                    .compareAndSet(
+                                                                            0L, System.nanoTime());
+                                                        }
+                                                        return encoded;
+                                                    });
                                         }
                                         case "sendCanonicalRelocationControl" -> {
                                             byte[] command = ((byte[]) arguments[1]).clone();

@@ -42,6 +42,9 @@ final class ZLinkChannelCallRuntimeTest {
                                 getClass().getClassLoader(),
                                 new Class<?>[] {ZLinkBackendRouterSocket.class},
                                 (proxy, method, args) -> {
+                                    if (method.isDefault() && method.getName().equals("requestTo"))
+                                        return java.lang.reflect.InvocationHandler.invokeDefault(
+                                                proxy, method, args);
                                     if (method.getName().equals("request")) {
                                         routeRequests.incrementAndGet();
                                         return CompletableFuture.completedFuture(reply());
@@ -54,6 +57,9 @@ final class ZLinkChannelCallRuntimeTest {
                                 getClass().getClassLoader(),
                                 new Class<?>[] {ZLinkBackendDealerSocket.class},
                                 (proxy, method, args) -> {
+                                    if (method.isDefault() && method.getName().equals("requestTo"))
+                                        return java.lang.reflect.InvocationHandler.invokeDefault(
+                                                proxy, method, args);
                                     if (method.getName().equals("request")) {
                                         clientRequests.incrementAndGet();
                                         return CompletableFuture.completedFuture(reply());
@@ -231,10 +237,17 @@ final class ZLinkChannelCallRuntimeTest {
                                 getClass().getClassLoader(),
                                 new Class<?>[] {ZLinkBackendDealerSocket.class},
                                 (proxy, method, args) -> {
+                                    if (method.isDefault() && method.getName().equals("requestTo"))
+                                        return java.lang.reflect.InvocationHandler.invokeDefault(
+                                                proxy, method, args);
                                     // This unmanaged backend has no ClientServer admission.
                                     if (method.getName().equals("receiveAdmission")) return null;
                                     assertEquals("request", method.getName());
-                                    assertSame(timeout, args[1]);
+                                    // §9 passes the original deadline's remaining budget to binding
+                                    // admission.
+                                    Duration remaining = (Duration) args[1];
+                                    assertTrue(remaining.isPositive());
+                                    assertTrue(remaining.compareTo(timeout) <= 0);
                                     attempts.incrementAndGet();
                                     return binding;
                                 });
