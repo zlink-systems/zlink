@@ -205,6 +205,9 @@ public:
  config_builder_t &config() noexcept;
  logging_builder_t &logging() noexcept;
  health_builder_t &health() noexcept;
+ app_t &use_metric_provider(
+ opentelemetry::nostd::shared_ptr<opentelemetry::metrics::MeterProvider>
+ provider);
 
  app_t &add_module(module_t &module);
  zlink_framework_options_t &add_zlink_framework();
@@ -1090,6 +1093,18 @@ extension if needed. The application configures the standard logging
 provider and health surface. Runtime event DTO, metric payload
 callback, exporter lifecycle, and provider-internal registry aren't a
 public contract.
+
+The C++ Framework's standard metric provider is the OpenTelemetry C++ Metrics API
+`opentelemetry::metrics::MeterProvider`, and the meter name is `zlink.framework`. The application builds the
+provider and its SDK, reader, and exporter, then passes it with `app_t::use_metric_provider(...)` before the
+host starts `run`. The host takes shared ownership of that provider and creates every Framework instrument
+from it. Static and shared builds use the same connection, and the Framework doesn't look up the
+OpenTelemetry global provider. To use the global provider, the application looks it up and passes it. A
+host given no provider or an empty pointer records to a no-op provider. A call after `run` has started is
+rejected with `std::logic_error` and doesn't change the provider. The application doesn't shut the provider
+down before the host has finished stopping, and the Framework doesn't call the provider's flush or shutdown.
+The instrument catalog and recording and collection rules are owned by
+[Runtime metrics](../../../06-observability/02-runtime-metrics.en.md).
 
 ### 5.1 Instance Spot Metric
 
