@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+#include <nlohmann/json.hpp>
 #include <zlink/json.hpp>
 
 #include <zlink/framework.hpp>
@@ -498,6 +499,14 @@ struct number_http_handler_t
     {
         return {.id = request.id, .page = request.page};
     }
+};
+
+struct json_http_handler_t
+{
+    using request_type = nlohmann::json;
+    using reply_type = nlohmann::json;
+
+    reply_type handle (const request_type &request) { return request; }
 };
 
 struct response_game_http_handler_t
@@ -1330,6 +1339,7 @@ int main (int test_argc, char **test_argv)
           .map_put<create_game_http_handler_t> ("/games/{id}")
           .map_delete<create_game_http_handler_t> ("/games/{id}")
           .map_get<number_http_handler_t> ("/numbers/{id}")
+          .map_put<json_http_handler_t> ("/json/{id}")
           .map_get<response_game_http_handler_t> ("/response-games/{id}")
           .map_get<response_context_http_handler_t> ("/response-context-games/{id}")
           .map_get<request_task_http_handler_t> ("/request-task-games/{id}")
@@ -1384,6 +1394,14 @@ int main (int test_argc, char **test_argv)
                               .submit<create_game_http_handler_t::reply_type> ();
     const auto number_get_result =
       http_client.get ("/numbers/41?page=2").submit<number_http_handler_t::reply_type> ();
+    const auto number_route_query_collision_result =
+      http_client.get ("/numbers/51?id=99&page=3")
+        .body (number_http_handler_t::request_type{.id = 12, .page = 4})
+        .submit<number_http_handler_t::reply_type> ();
+    const auto non_dto_binding_result =
+      http_client.put ("/json/route-id?id=query-id&query=query-value")
+        .body (nlohmann::json{{"bodyOnly", "body"}, {"id", "body-id"}, {"query", "body-query"}})
+        .submit_raw ();
     const auto response_object_result =
       http_client.get ("/response-games/9?filter=direct&name=object")
         .body (create_game_http_handler_t::request_type{})
@@ -1432,6 +1450,8 @@ int main (int test_argc, char **test_argv)
                                              .header ("X-Correlation-Id", "corr-invalid-json")
                                              .body (std::string ("not-an-object"))
                                              .submit_raw ();
+    const auto invalid_json_array_result =
+      http_client.post ("/games").body (std::string ("[1,2]")).submit_raw ();
     const auto route_parse_failure_result =
       http_client.get ("/numbers/not-a-number?page=2").submit_raw ();
     const auto query_parse_failure_result = http_client.get ("/numbers/41?page=bad").submit_raw ();
@@ -1517,6 +1537,19 @@ int main (int test_argc, char **test_argv)
         || number_get_result.value ().body.page != 2) {
         return 46;
     }
+    if (!number_route_query_collision_result
+        || number_route_query_collision_result.value ().body.id != 51
+        || number_route_query_collision_result.value ().body.page != 3) {
+        return 49;
+    }
+    if (!non_dto_binding_result || non_dto_binding_result.value ().status != 200) {
+        return 50;
+    }
+    const auto non_dto_body = nlohmann::json::parse (non_dto_binding_result.value ().body);
+    if (non_dto_body.at ("id") != "route-id" || non_dto_body.at ("query") != "query-value"
+        || non_dto_body.at ("bodyOnly") != "body") {
+        return 51;
+    }
     if (!response_object_result || response_object_result.value ().status != 202
         || response_object_result.value ().body.id != "9"
         || response_object_result.value ().body.name != "response:object"
@@ -1577,6 +1610,12 @@ int main (int test_argc, char **test_argv)
         || invalid_json_shape_result.value ().body.find ("corr-invalid-json") == std::string::npos
         || invalid_json_shape_result.value ().headers.at ("x-middleware-after") != "seen") {
         return 22;
+    }
+    if (!invalid_json_array_result || invalid_json_array_result.value ().status != 400
+        || invalid_json_array_result.value ().body.find ("protocol_error") == std::string::npos
+        || invalid_json_array_result.value ().body.find ("HTTP JSON body must be an object")
+             == std::string::npos) {
+        return 52;
     }
     if (!route_parse_failure_result || route_parse_failure_result.value ().status != 400
         || route_parse_failure_result.value ().body.find ("protocol_error") == std::string::npos

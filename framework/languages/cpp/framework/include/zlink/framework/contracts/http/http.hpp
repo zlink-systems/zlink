@@ -126,12 +126,17 @@ template <typename T> bool normalize_http_uri_value (const std::string &text, st
 template <typename T>
 std::string bind_typed_http_uri (const http_request_t &http, const std::string &body)
 {
+    std::string error;
+    const std::string binding_body = body.empty () ? "{}" : body;
+    auto binding =
+      zlink::detail::json_profile::try_parse (binding_body.begin (), binding_body.end (), &error);
+    if (!binding)
+        throw framework_exception_t (framework_error_kind_t::protocol_error,
+                                     error.empty () ? "invalid HTTP JSON body" : error);
+    if (!binding->is_object ())
+        throw framework_exception_t (framework_error_kind_t::protocol_error,
+                                     "HTTP JSON body must be an object");
     if constexpr (zlink::detail::json_profile::has_dto<T>) {
-        std::string error;
-        auto binding = zlink::detail::json_profile::try_parse (body.begin (), body.end (), &error);
-        if (!binding)
-            throw framework_exception_t (framework_error_kind_t::protocol_error,
-                                         error.empty () ? "invalid HTTP JSON body" : error);
         std::apply (
           [&] (auto... field) {
               (
@@ -172,7 +177,13 @@ std::string bind_typed_http_uri (const http_request_t &http, const std::string &
                                          error.empty () ? "invalid HTTP JSON body" : error);
         return std::move (*encoded);
     } else {
-        return body;
+        for (const auto &[key, value] : http.query_values) {
+            (*binding)[key] = value;
+        }
+        for (const auto &[key, value] : http.route_values) {
+            (*binding)[key] = value;
+        }
+        return binding->dump ();
     }
 }
 } // namespace detail
