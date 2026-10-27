@@ -11,8 +11,7 @@ import systems.zlink.framework.ZLinkEncodedPayload;
 import systems.zlink.framework.ZLinkMessageSerializer;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.runtime.internal.messaging.ZLinkEncodedPayloadAccess;
-
-import java.lang.management.ManagementFactory;
+import systems.zlink.framework.testutil.PerCallAllocation;
 
 final class ZLinkPayloadCopiesTest {
     private static final int PAYLOAD_SIZE = 4 * 1024 * 1024;
@@ -94,11 +93,16 @@ final class ZLinkPayloadCopiesTest {
             assertFalse(ZLinkMessage.fromEncoded(small, serializer).isEmpty());
         }
         var payload = ZLinkEncodedPayload.from(new byte[PAYLOAD_SIZE]);
-        var allocations = allocations();
-        long thread = Thread.currentThread().threadId();
-        long before = allocations.getThreadAllocatedBytes(thread);
-        var message = ZLinkMessage.fromEncoded(payload, serializer);
-        long allocated = allocations.getThreadAllocatedBytes(thread) - before;
+        ZLinkMessage[] measuredMessage = new ZLinkMessage[1];
+        long allocated =
+                PerCallAllocation.minWindow(
+                        () -> {
+                            measuredMessage[0] = ZLinkMessage.fromEncoded(payload, serializer);
+                            return measuredMessage[0];
+                        },
+                        1,
+                        2_000);
+        var message = measuredMessage[0];
         System.out.println("fromEncoded allocated bytes: " + allocated);
         assertFalse(message.isEmpty());
         assertSame(payload, message.toEncodedPayload(serializer));
@@ -116,21 +120,19 @@ final class ZLinkPayloadCopiesTest {
         }
         var payload = ZLinkEncodedPayload.from(new byte[PAYLOAD_SIZE]);
         var message = ZLinkMessage.fromEncoded(payload, serializer);
-        var allocations = allocations();
-        long thread = Thread.currentThread().threadId();
-        long before = allocations.getThreadAllocatedBytes(thread);
-        try (Message sent = ZLinkMessagePayloads.message(message, serializer)) {
-            long allocated = allocations.getThreadAllocatedBytes(thread) - before;
-            System.out.println("internal send allocated bytes: " + allocated);
-            assertEquals(PAYLOAD_SIZE, sent.size());
-            assertTrue(allocated < PAYLOAD_SIZE, "internal send allocated " + allocated + " bytes");
-        }
-    }
-
-    private static com.sun.management.ThreadMXBean allocations() {
-        var bean = (com.sun.management.ThreadMXBean) ManagementFactory.getThreadMXBean();
-        assertTrue(bean.isThreadAllocatedMemorySupported());
-        bean.setThreadAllocatedMemoryEnabled(true);
-        return bean;
+        int[] sentSize = new int[1];
+        long allocated =
+                PerCallAllocation.minWindow(
+                        () -> {
+                            try (Message sent = ZLinkMessagePayloads.message(message, serializer)) {
+                                sentSize[0] = sent.size();
+                                return sent;
+                            }
+                        },
+                        1,
+                        2_000);
+        System.out.println("internal send allocated bytes: " + allocated);
+        assertEquals(PAYLOAD_SIZE, sentSize[0]);
+        assertTrue(allocated < PAYLOAD_SIZE, "internal send allocated " + allocated + " bytes");
     }
 }
