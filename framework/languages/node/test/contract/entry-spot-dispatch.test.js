@@ -1,4 +1,4 @@
-const { createRelayHost } = require('./fixtures/relay-host');
+const { createRelayHost, createRelayMeshHost } = require('./fixtures/relay-host');
 const assert = require('node:assert/strict');
 const test = require('node:test');
 
@@ -757,17 +757,17 @@ test('runtime host keeps routed packet target across stream actor wrappers', asy
 
 test('runtime host raw actor relay reply updates actor packet target for the next request', async () => {
   const routedTargets = [];
-  const { host: runtime, relay: runtimeRelay } = createRelayHost({
+  const { host: runtime, relay: runtimeRelay, meshRuntime } = createRelayMeshHost({
     registration: framework.createFrameworkRegistration({
       locations: { useInMemoryStores: true },
       routeChannels: ['bingo.room.route']
     })
   });
-  runtime.spotNodeRuntime = {
+  Object.assign(meshRuntime, {
     primaryNode: {
       routingId: 'bingo-session-node-b'
     }
-  };
+  });
   const state = new framework.ZLinkActorRuntimeState('player-2');
   state.setRemoteActorPacketTarget({
     routerChannelId: 'bingo.room.route',

@@ -260,6 +260,8 @@ export class ZLinkFrameworkRuntimeHost
     return Object.freeze({
       ownerLeaseUsable: this.locationOwner.currentRuntime?.ownerLeaseUsable,
       ownerId: this.locationOwner.currentRuntime?.ownerId,
+      hasOwnerToken: this.locationOwner.currentRuntime?.currentOwnerToken !== undefined,
+      ownerAdmissionOpen: this.admission.ownerAdmissionOpen(),
       channelRuntimeStarted: this.channelRuntime !== undefined
     });
   }

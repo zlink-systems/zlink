@@ -1,3 +1,4 @@
+import { inspectRuntime } from '../../packages/framework/src/runtime/internal-observation';
 import { ZLinkSpotActorPacketDispatch } from '../../packages/framework/src/runtime/spots/spot-actor-packet-dispatch';
 import {
   encodeStreamHeader,
@@ -2201,8 +2202,10 @@ for (const observed of [
       assert.equal(harness.targetActorManager.published, 1, 'B ran after A→B commit');
       assert.equal(harness.events.includes('source:rolled-back'), false);
       const [window] = harness.sourceCutoverWindows();
+      assert.ok(Object.isFrozen(window));
+      assert.equal(Reflect.set(window!, 'frameCount', 0), false);
       assert.ok(
-        window.frames.length > 0,
+        window !== undefined && window.frameCount !== undefined && window.frameCount > 0,
         'the source retains the boundary batch while its read is blocked'
       );
       const codec = new ServiceRelocationAuthorityPayloadCodec();
@@ -2282,7 +2285,7 @@ for (const observed of [
         'A must never resume beside a committed owner'
       );
       assert.equal(harness.location.preserves, preserves, 'A must not Preserve after B→C commit');
-      assert.equal(window.frames, undefined, 'settlement releases the retained boundary batch');
+      assert.equal(window?.frameCount, undefined, 'settlement releases the retained boundary batch');
       if (
         observed === 'normalized-target' ||
         observed === 'second-commit' ||
@@ -3783,15 +3786,13 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
       }
     },
     joinTargetControl: () => Promise.all(targetDeliveries),
-    sourceCutoverWindows: () => [
-      ...((sourceRuntime as any).sourceCutoverWindows as Map<string, any>).values()
-    ],
+    sourceCutoverWindows: () => [sourceRuntime[inspectRuntime]().sourceCutoverWindow],
     sourceLeaveSpotIds,
     sourceProfileCount: () =>
-      ((sourceRuntime as any).sourceActorJoinProfiles as Map<string, unknown>).size,
+      sourceRuntime[inspectRuntime]().sourceActorJoinProfiles,
     completeSourceCleanup: () => sourceRuntime.completeActorJoinSourceCleanup(actorId),
     async targetIdle() {
-      await waitUntil(() => (targetRuntime as any).targetStages.size === 0);
+      await waitUntil(() => targetRuntime[inspectRuntime]().targetStages === 0);
       await Promise.all(targetDeliveries);
       await targetMailbox.execute(() => undefined);
       assert.deepEqual(deliveryErrors, []);
@@ -3799,8 +3800,7 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
     async deliverCutoverAgain() {
       const prepare = controlKinds;
       assert.equal(prepare[0], 'prepare');
-      const targetTerminal = (targetRuntime as any).terminalTargets;
-      assert.notEqual(targetTerminal, undefined);
+      assert.ok(targetRuntime[inspectRuntime]().terminalTargets > 0);
       const wire = {
         kind: 'cutover',
         relocation: { high: 0n, low: 145n },
@@ -3839,7 +3839,7 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
         part.close();
       }
     },
-    targetStageCount: () => (targetRuntime as any).targetStages.size as number,
+    targetStageCount: () => targetRuntime[inspectRuntime]().targetStages,
     reachRestoreDeadline: () => sourceSignal.abort(new Error('Restore deadline reached.')),
     clearDeliveryErrors: () => {
       deliveryErrors.length = 0;

@@ -1,4 +1,4 @@
-const { createRelayHost } = require('./fixtures/relay-host');
+const { createRelayMeshHost } = require('./fixtures/relay-host');
 'use strict';
 
 const assert = require('node:assert/strict');
@@ -10,7 +10,7 @@ function scenario(t, ownerUsable) {
   const registration = framework.createFrameworkRegistrationWithBuilder(builder => {
     builder.addRouteMesh('mesh').objects().server();
   });
-  const { host, admission, relay } = createRelayHost({ registration });
+  const { host, admission, relay, meshRuntime } = createRelayMeshHost({ registration });
   admission.register('mesh');
   let ownerReads = 0;
   let dispatched = 0;
@@ -25,10 +25,11 @@ function scenario(t, ownerUsable) {
     canDispatchLocalMeshRoute: () => true,
     dispatchLocalMeshRoute: dispatch
   };
-  host.setSpotManager({ dispatchMeshActor: dispatchAdmitted, dispatchMeshInstance: dispatchAdmitted });
+  const spotManager = { dispatchMeshActor: dispatchAdmitted, dispatchMeshInstance: dispatchAdmitted };
+  host.setSpotManager(spotManager);
   t.mock.method(host.serviceRelocation, 'tryHandleControl', () => false);
   t.mock.method(host, 'dispatchMeshSpotRecord', dispatchAdmitted);
-  return { host, admission, relay, ownerReads: () => ownerReads, dispatched: () => dispatched, setOwnerUsable: value => { ownerUsable = value; } };
+  return { host, admission, relay, meshRuntime, spotManager, ownerReads: () => ownerReads, dispatched: () => dispatched, setOwnerUsable: value => { ownerUsable = value; } };
 }
 
 const directKinds = ['NodeSend', 'NodeRequest', 'ChannelSend', 'ChannelRequest'];
@@ -186,8 +187,8 @@ for (const entry of [true, false]) {
       const s = scenario(t, ownerUsable);
       const endpoint = await actorEndpoint(t, s, entry);
       s.host.setActorManager({ getState: () => entry ? undefined : { spotId: 'room' } });
-      s.host.spotNodeRuntime = { dispatchEntryActorPacket: endpoint.dispatch };
-      s.host.spotManager.dispatchRoutedActorPacket = (origin, _spot, ...args) => endpoint.dispatch(origin, ...args);
+      s.meshRuntime.dispatchEntryActorPacket = endpoint.dispatch;
+      s.spotManager.dispatchRoutedActorPacket = (origin, _spot, ...args) => endpoint.dispatch(origin, ...args);
       const parts = actorParts();
       const payload = relayWire.encodeRemoteActorPacketRelayPayload({
         actorId: 'actor', header: parts[0].data(), payload: parts[1].data(), returnResponse: true
@@ -269,7 +270,7 @@ test('Actor relay disconnect cleanup survives expired owner and mesh seal', asyn
   s.admission.seal('mesh');
   s.host.setActorManager({ getState: () => undefined });
   let disconnects = 0;
-  s.host.spotNodeRuntime = { dispatchEntryActorPacket: async () => { disconnects++; } };
+  s.meshRuntime.dispatchEntryActorPacket = async () => { disconnects++; };
   const payload = relayWire.encodeRemoteActorPacketRelayPayload({
     actorId: 'actor',
     header: protocol.encodeStreamHeader({

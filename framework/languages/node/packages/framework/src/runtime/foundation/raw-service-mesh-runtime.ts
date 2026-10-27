@@ -178,9 +178,11 @@ interface ControlSendState {
  * It owns protocol, admission, mailbox, request and liveness state.
  */
 export class RawServiceMeshRuntime {
-  [inspectRuntime]() {
+  [inspectRuntime](nodeRoutingId?: string) {
     return Object.freeze({
       pendingControlSends: this.controlSends.size,
+      selectedRouteGeneration:
+        nodeRoutingId === undefined ? undefined : this.selectedRoutes.get(nodeRoutingId),
       peerRouteObservers: this.peerRouteChanged.size,
       peerConnectionIntentObservers: this.peerConnectionIntentRemoved.size,
       expectedPeers: this.expectedPeers.size
