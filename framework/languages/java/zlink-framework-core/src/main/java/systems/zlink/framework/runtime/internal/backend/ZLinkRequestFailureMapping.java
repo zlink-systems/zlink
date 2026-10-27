@@ -5,6 +5,12 @@ import static systems.zlink.framework.runtime.protocol.ServiceWireConstants.*;
 
 import systems.zlink.contracts.sockets.RequestResult;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
+
+import java.util.Map;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutionException;
 
 /** Maps Framework wire failure codes using error model section 2.1. */
 public final class ZLinkRequestFailureMapping {
@@ -65,7 +71,7 @@ public final class ZLinkRequestFailureMapping {
     private ZLinkRequestFailureMapping() {}
 
     /** Classifies a User Spot terminal the same way for a remote reply and a local owner. */
-    public static systems.zlink.framework.errors.ZLinkFrameworkException userSpotFailure(
+    public static ZLinkFrameworkException userSpotFailure(
             int terminalResult, int failureCode, Throwable cause) {
         return receivedFailure(
                 ZLinkBackendRequestResult.fromWireTerminal(terminalResult)
@@ -75,38 +81,34 @@ public final class ZLinkRequestFailureMapping {
                         + " failureCode="
                         + failureCode,
                 failureCode,
-                java.util.Map.of(),
+                Map.of(),
                 cause);
     }
 
-    private static final class ReceivedFailure
-            extends systems.zlink.framework.errors.ZLinkFrameworkException {
+    private static final class ReceivedFailure extends ZLinkFrameworkException {
         private final int failureCode;
 
         ReceivedFailure(
                 ZLinkFrameworkErrorKind kind,
                 String message,
                 int failureCode,
-                java.util.Map<String, String> metadata,
+                Map<String, String> metadata,
                 Throwable cause) {
             super(kind, message, cause, metadata);
             this.failureCode = failureCode;
         }
     }
 
-    public static systems.zlink.framework.errors.ZLinkFrameworkException receivedFailure(
-            ZLinkFrameworkErrorKind kind,
-            String message,
-            int code,
-            java.util.Map<String, String> metadata) {
+    public static ZLinkFrameworkException receivedFailure(
+            ZLinkFrameworkErrorKind kind, String message, int code, Map<String, String> metadata) {
         return receivedFailure(kind, message, code, metadata, null);
     }
 
-    public static systems.zlink.framework.errors.ZLinkFrameworkException receivedFailure(
+    public static ZLinkFrameworkException receivedFailure(
             ZLinkFrameworkErrorKind kind,
             String message,
             int code,
-            java.util.Map<String, String> metadata,
+            Map<String, String> metadata,
             Throwable cause) {
         return new ReceivedFailure(kind, message, code, metadata, cause);
     }
@@ -122,6 +124,20 @@ public final class ZLinkRequestFailureMapping {
 
     public static int[] outgoing(ZLinkFrameworkErrorKind kind) {
         return outgoing(kind, (int) FRAMEWORK_ERROR_NONE);
+    }
+
+    /** Preserves typed execution failures; unexpected provider errors are internal failures. */
+    public static int[] outgoing(Throwable failure) {
+        while ((failure instanceof CompletionException || failure instanceof ExecutionException)
+                && failure.getCause() != null) {
+            failure = failure.getCause();
+        }
+        return failure instanceof ZLinkFrameworkException framework
+                ? outgoing(framework.kind(), causeCode(framework))
+                : outgoing(
+                        failure instanceof CancellationException
+                                ? SHUTTING_DOWN
+                                : INTERNAL_FAILURE);
     }
 
     public static int[] outgoing(ZLinkFrameworkErrorKind kind, int causeCode) {
