@@ -167,13 +167,22 @@ public final class ZLinkFrameworkRegistration {
     }
 
     public Set<Class<?>> applicationTypes() {
+        return applicationTypes(false);
+    }
+
+    public Set<Class<?>> constructionTypes() {
+        return applicationTypes(true);
+    }
+
+    private Set<Class<?>> applicationTypes(boolean constructionOnly) {
         Set<Class<?>> types = new LinkedHashSet<>();
         types.addAll(filters);
         for (ChannelRegistration channel : channels) {
             types.addAll(channel.handlerTypes());
         }
         for (MeshNodeRegistration meshNode : meshNodes) {
-            types.addAll(meshNode.applicationTypes());
+            types.addAll(
+                    constructionOnly ? meshNode.constructionTypes() : meshNode.applicationTypes());
         }
         for (SpotNodeRegistration spotNode : spotNodes) {
             types.addAll(spotNode.spotFactories());
