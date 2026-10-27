@@ -2,6 +2,8 @@ package systems.zlink.framework.runtime.binding;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import jdk.jfr.Event;
+import jdk.jfr.Name;
 import jdk.jfr.Recording;
 import jdk.jfr.consumer.RecordingFile;
 
@@ -15,6 +17,8 @@ import systems.zlink.contracts.messaging.RequestSubmission;
 import systems.zlink.contracts.messaging.RequestSubmitOperation;
 import systems.zlink.contracts.sockets.RouterSocket;
 import systems.zlink.contracts.sockets.SubmitResult;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.internal.calls.ZLinkRequestStages;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry;
@@ -39,9 +43,167 @@ public final class ZLinkJavaRequestCompletionCostTest {
     private static final Duration TIMEOUT = Duration.ofSeconds(5);
 
     @Test
+    void standaloneRequestsDeliverToTheirPreparedReceiverWithoutRawFuture() throws Exception {
+        launchAllocationProbe(getClass(), "standalone");
+    }
+
+    @Test
     void registryRequestsUseOnlyBindingObserversBeforeTheirReservedCompletion() throws Exception {
+        launchAllocationProbe(getClass(), "registry");
+    }
+
+    @Test
+    void actorRequestsRegisterFrameworkCompletionBeforeBindingSubmit() throws Exception {
+        try (var fixture = new Fixture(false)) {
+            var mesh = new ZLinkJavaRawMeshNode(fixture.context, "actor-completion");
+            var meshOperations = (ZLinkServiceOperationRegistry) field(mesh, "operations");
+            try {
+                setField(mesh, "port", fixture.port);
+                setField(mesh, "router", fixture.router);
+                var local = RoutingId.from("actor-source");
+                var remote = RoutingId.from("actor-target");
+                var topology =
+                        new systems.zlink.framework.runtime.internal.service
+                                .ZLinkServiceTopologyRegistry(actorDescriptor(local));
+                topology.admit(actorDescriptor(remote), "actor-route", 1);
+                setField(mesh, "topology", topology);
+                var reply = new CompletableFuture<List<Message>>();
+                fixture.pending.set(new Pending(CompletableFuture.completedFuture(null), reply));
+                var target =
+                        new systems.zlink.framework.runtime.internal.service
+                                .ZLinkServiceM6BWireCodec.ActorRouteFence(
+                                new systems.zlink.framework.runtime.internal.backend
+                                        .ZLinkBackendActorRef(remote, "actor", 1),
+                                1,
+                                1,
+                                1);
+                var result = new CompletableFuture<List<Message>>();
+                fixture.beforeSubmit =
+                        () -> {
+                            assertEquals(
+                                    1,
+                                    meshOperations.pendingCount(),
+                                    "Framework entry and dispatcher slot must precede binding submit");
+                            try {
+                                var entries =
+                                        (java.util.Map<?, ?>) field(meshOperations, "pending");
+                                var entry = entries.values().iterator().next();
+                                var registered =
+                                        entry.getClass()
+                                                .getSuperclass()
+                                                .getDeclaredField("registered");
+                                registered.setAccessible(true);
+                                assertTrue(
+                                        registered.getBoolean(entry),
+                                        "dispatcher slot must precede submit");
+                                assertSame(
+                                        result,
+                                        field(entry, "completion"),
+                                        "registry must dispatch straight to the final typed receiver");
+                            } catch (Exception failure) {
+                                throw new AssertionError(failure);
+                            }
+                        };
+                var requestPart = Message.from(new byte[] {1});
+                try {
+                    var admission = new CompletableFuture<Void>();
+                    mesh.requestActor(
+                            target,
+                            List.of(requestPart),
+                            TIMEOUT,
+                            admission,
+                            java.util.function.Function.identity(),
+                            Message::closeAll,
+                            result);
+                    admission.get(1, TimeUnit.SECONDS);
+                    assertEquals(1, fixture.submits.get());
+                    assertEquals(
+                            1,
+                            meshOperations.pendingCount(),
+                            "Framework completion must remain registered while the binding reply is pending");
+                    // The binding submission captures the original wire correlation.
+                    var wire =
+                            new systems.zlink.framework.runtime.internal.service
+                                    .ZLinkServiceM6AWireCodec();
+                    var stateful =
+                            new systems.zlink.framework.runtime.internal.service
+                                    .ZLinkServiceM6BWireCodec();
+                    long correlation =
+                            stateful.decodeActorHeader(
+                                            fixture.submittedMessages
+                                                    .get()
+                                                    .getFirst()
+                                                    .toByteArray())
+                                    .correlation();
+                    var body = Message.from(new byte[] {42});
+                    byte[] encoded;
+                    try {
+                        encoded = wire.encodeFrameworkMultipartFrame(List.of(body));
+                    } finally {
+                        body.close();
+                    }
+                    reply.complete(
+                            List.of(
+                                    Message.from(wire.encodeReplyHeader(correlation, 0, 0)),
+                                    Message.from(encoded)));
+                    var received = result.toCompletableFuture().get(1, TimeUnit.SECONDS);
+                    try {
+                        assertArrayEquals(new byte[] {42}, received.getFirst().toByteArray());
+                    } finally {
+                        received.forEach(Message::close);
+                    }
+                } finally {
+                    requestPart.close();
+                }
+            } finally {
+                meshOperations.close();
+            }
+        }
+    }
+
+    private static Object field(Object target, String name) throws Exception {
+        var field = target.getClass().getDeclaredField(name);
+        field.setAccessible(true);
+        return field.get(target);
+    }
+
+    private static void setField(Object target, String name, Object value) throws Exception {
+        var field = target.getClass().getDeclaredField(name);
+        field.setAccessible(true);
+        field.set(target, value);
+    }
+
+    private static systems.zlink.framework.runtime.internal.service.ZLinkServiceNodeDescriptor
+            actorDescriptor(RoutingId rid) {
+        var capability =
+                systems.zlink.framework.runtime.internal.service.ZLinkServiceNodeDescriptor
+                        .REQUIRED_CAPABILITY;
+        return new systems.zlink.framework.runtime.internal.service.ZLinkServiceNodeDescriptor(
+                "actor-completion",
+                rid,
+                1,
+                1,
+                "inproc://" + rid,
+                List.of(),
+                systems.zlink.framework.runtime.internal.service.ZLinkServiceNodeDescriptor.State
+                        .SERVING,
+                systems.zlink.framework.runtime.internal.service.ZLinkServiceNodeDescriptor
+                        .PLAINTEXT_SECURITY_IDENTITY,
+                1,
+                List.of(capability),
+                systems.zlink.framework.runtime.internal.service.ZLinkServiceNodeDescriptor
+                        .ObjectRole.NONE,
+                1,
+                1,
+                0,
+                0,
+                0);
+    }
+
+    /** Runs allocation assertions with TLAB disabled, including under the normal Gradle JVM. */
+    public static void launchAllocationProbe(Class<?> testClass, String mode) throws Exception {
         var classpath = new LinkedHashSet<String>();
-        for (ClassLoader loader = getClass().getClassLoader();
+        for (ClassLoader loader = testClass.getClassLoader();
                 loader != null;
                 loader = loader.getParent()) {
             if (loader instanceof URLClassLoader urls) {
@@ -64,7 +226,8 @@ public final class ZLinkJavaRequestCompletionCostTest {
                                     "-XX:FlightRecorderOptions=stackdepth=128",
                                     "-cp",
                                     String.join(java.io.File.pathSeparator, classpath),
-                                    getClass().getName())
+                                    testClass.getName(),
+                                    mode)
                             .redirectErrorStream(true)
                             .redirectOutput(output.toFile())
                             .start();
@@ -78,7 +241,11 @@ public final class ZLinkJavaRequestCompletionCostTest {
     }
 
     public static void main(String[] args) throws Exception {
-        assertAll(() -> measure(false), () -> measure(true));
+        if (args.length != 0 && args[0].equals("standalone")) {
+            assertAll(() -> measureStandalone(false), () -> measureStandalone(true));
+        } else {
+            assertAll(() -> measure(false), () -> measure(true));
+        }
     }
 
     /** Public test entry point for alternating original/current adapters in one JVM. */
@@ -102,6 +269,73 @@ public final class ZLinkJavaRequestCompletionCostTest {
             assertEquals(operations, fixture.decodes.get());
             assertEquals(0, fixture.discards.get());
             return new long[] {elapsed, operations, fixture.submits.get(), fixture.terminals.get()};
+        }
+    }
+
+    private static void measureStandalone(boolean backpressured) throws Exception {
+        Path recordingPath = Files.createTempFile("zlink-standalone-completion-", ".jfr");
+        try (var fixture = new Fixture(backpressured)) {
+            for (int i = 0; i < 32; i++) fixture.completeStandalone();
+            try (var recording = new Recording()) {
+                recording.enable("jdk.ObjectAllocationOutsideTLAB").withStackTrace();
+                recording.enable("jdk.DataLoss");
+                recording.enable("zlink.test.BindingSubmit");
+                recording.start();
+                for (int i = 0; i < REQUESTS; i++) fixture.completeStandalone();
+                recording.stop();
+                recording.dump(recordingPath);
+            }
+            long rawFutures = 0;
+            long futures = 0;
+            long preparedReceivers = 0;
+            long submitted = 0;
+            var events = RecordingFile.readAllEvents(recordingPath);
+            events.sort(
+                    java.util.Comparator.comparing(jdk.jfr.consumer.RecordedEvent::getStartTime));
+            for (var event : events) {
+                assertNotEquals("jdk.DataLoss", event.getEventType().getName());
+                if (event.getEventType().getName().equals("zlink.test.BindingSubmit")) {
+                    assertEquals(
+                            ++submitted,
+                            preparedReceivers,
+                            "the final receiver must exist before binding submission");
+                    continue;
+                }
+                if (!event.getEventType().getName().equals("jdk.ObjectAllocationOutsideTLAB")
+                        || !event.getClass("objectClass")
+                                .getName()
+                                .equals(CompletableFuture.class.getName())) continue;
+                var stack = event.getStackTrace();
+                assertNotNull(stack);
+                assertFalse(stack.isTruncated());
+                for (var frame : stack.getFrames()) {
+                    var allocation = frame.getMethod();
+                    String owner = allocation.getType().getName();
+                    if (owner.startsWith("java.") || owner.startsWith("jdk.")) continue;
+                    if (owner.equals(ZLinkJavaRawServicePort.class.getName())
+                            && allocation.getName().equals("requestMessages")) preparedReceivers++;
+                    break;
+                }
+                boolean portRequest = false;
+                boolean rawReply = false;
+                for (var frame : stack.getFrames()) {
+                    var method = frame.getMethod();
+                    if (method.getType().getName().equals(ZLinkJavaRawServicePort.class.getName())
+                            && method.getName().equals("requestMessages")) portRequest = true;
+                    if (method.getType().getName().equals(ZLinkJavaSocketSupport.class.getName())
+                            && method.getName().equals("reply")) rawReply = true;
+                }
+                if (portRequest) futures++;
+                if (portRequest && rawReply) rawFutures++;
+            }
+            System.out.printf(
+                    "standalone backpressured=%s requests=%d rawFutures=%d futures=%d%n",
+                    backpressured, REQUESTS, rawFutures, futures);
+            assertEquals(REQUESTS, submitted);
+            assertEquals(REQUESTS, preparedReceivers);
+            assertEquals(0, rawFutures, "raw reply must reach the prepared receiver directly");
+        } finally {
+            Files.deleteIfExists(recordingPath);
         }
     }
 
@@ -244,6 +478,45 @@ public final class ZLinkJavaRequestCompletionCostTest {
         }
     }
 
+    @Test
+    void standaloneCancellationRetainsThePreparedReceiverForThePhysicalReply() throws Exception {
+        try (var fixture = new Fixture(true)) {
+            var request = fixture.submitStandalone(TIMEOUT);
+            assertTrue(request.completion.cancel(false));
+            fixture.cancellationReached.get(1, TimeUnit.SECONDS);
+            request.pending.admitted.complete(null);
+            var reply = Message.from(new byte[] {2});
+            request.pending.reply.complete(List.of(reply));
+            assertTrue(request.completion.isCancelled());
+            assertEquals(1, fixture.decodes.get());
+            assertEquals(1, fixture.discards.get());
+            assertEquals(0, reply.size());
+        }
+    }
+
+    @Test
+    void standaloneAdmissionDeadlineRetainsThePreparedReceiverForThePhysicalReply()
+            throws Exception {
+        try (var fixture = new Fixture(true)) {
+            var request = fixture.submitStandalone(Duration.ofMillis(20));
+            var failure =
+                    assertThrows(
+                            java.util.concurrent.ExecutionException.class,
+                            () -> request.completion.get(1, TimeUnit.SECONDS));
+            var framework = assertInstanceOf(ZLinkFrameworkException.class, failure.getCause());
+            assertEquals(ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED, framework.kind());
+            request.pending.admitted.complete(null);
+            var reply = Message.from(new byte[] {2});
+            request.pending.reply.complete(List.of(reply));
+            assertEquals(1, fixture.decodes.get());
+            assertEquals(1, fixture.discards.get());
+            assertEquals(0, reply.size());
+        }
+    }
+
+    @Name("zlink.test.BindingSubmit")
+    private static final class BindingSubmitEvent extends Event {}
+
     private record Pending(
             CompletableFuture<Void> admitted, CompletableFuture<List<Message>> reply) {}
 
@@ -265,7 +538,10 @@ public final class ZLinkJavaRequestCompletionCostTest {
                 new ZLinkServiceOperationRegistry();
         private final ZLinkJavaRawServicePort port;
         private final RouterSocket router;
+        private final Context context;
+        private final AtomicReference<List<Message>> submittedMessages = new AtomicReference<>();
         private final boolean backpressured;
+        private Runnable beforeSubmit = () -> {};
 
         private Fixture(boolean backpressured) {
             this.backpressured = backpressured;
@@ -283,7 +559,7 @@ public final class ZLinkJavaRequestCompletionCostTest {
                                                 default ->
                                                         throw new AssertionError(method.getName());
                                             });
-            var context =
+            context =
                     (Context)
                             Proxy.newProxyInstance(
                                     Context.class.getClassLoader(),
@@ -298,8 +574,11 @@ public final class ZLinkJavaRequestCompletionCostTest {
 
         private RequestOperation operation() {
             class Operation implements RequestOperation, RequestSubmitOperation {
+                private final java.util.ArrayList<Message> messages = new java.util.ArrayList<>();
+
                 @Override
                 public RequestSubmitOperation message(Message message) {
+                    messages.add(message);
                     return this;
                 }
 
@@ -310,6 +589,9 @@ public final class ZLinkJavaRequestCompletionCostTest {
 
                 @Override
                 public RequestSubmission submit() {
+                    beforeSubmit.run();
+                    submittedMessages.set(List.copyOf(messages));
+                    new BindingSubmitEvent().commit();
                     submits.incrementAndGet();
                     var next = pending.get();
                     return new RequestSubmission() {
@@ -340,7 +622,7 @@ public final class ZLinkJavaRequestCompletionCostTest {
             return new Operation();
         }
 
-        private Submitted submit() {
+        private Submitted submit() throws Exception {
             var admission = new CompletableFuture<Void>();
             var next =
                     new Pending(
@@ -379,8 +661,51 @@ public final class ZLinkJavaRequestCompletionCostTest {
                                             null,
                                             admission),
                             ignored -> discards.incrementAndGet());
+            ((ZLinkStateLane) field(operations, "owner"))
+                    .runAsync(() -> {})
+                    .toCompletableFuture()
+                    .get(1, TimeUnit.SECONDS);
             var observed = ZLinkRequestStages.observe(completion, admission);
             return new Submitted(pending.get(), admission, observed.toCompletableFuture());
+        }
+
+        private Submitted submitStandalone(Duration timeout) {
+            var next =
+                    new Pending(
+                            new CompletableFuture<>(),
+                            new CompletableFuture<>() {
+                                @Override
+                                public boolean cancel(boolean interrupt) {
+                                    cancellationReached.complete(null);
+                                    return false;
+                                }
+                            });
+            pending.set(next);
+            var admission = new CompletableFuture<Void>();
+            var result =
+                    port.requestMessages(
+                            router,
+                            RoutingId.from("standalone-target"),
+                            List.of(Message.from(new byte[] {1})),
+                            timeout,
+                            parts -> {
+                                decodes.incrementAndGet();
+                                return parts.getFirst().size();
+                            },
+                            ignored -> discards.incrementAndGet(),
+                            null,
+                            admission);
+            return new Submitted(next, admission, result.toCompletableFuture());
+        }
+
+        private void completeStandalone() throws Exception {
+            var request = submitStandalone(TIMEOUT);
+            assertFalse(request.completion.isDone());
+            request.pending.admitted.complete(null);
+            var reply = Message.from(new byte[] {2});
+            request.pending.reply.complete(List.of(reply));
+            assertEquals(1, request.completion.get(1, TimeUnit.SECONDS));
+            assertEquals(0, reply.size());
         }
 
         private void completeRequest() throws Exception {
