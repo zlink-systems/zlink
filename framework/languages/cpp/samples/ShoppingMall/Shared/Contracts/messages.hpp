@@ -2,6 +2,7 @@
 #pragma once
 
 #include <nlohmann/json.hpp>
+#include <zlink/json_profile.hpp>
 
 #include <algorithm>
 #include <cctype>
@@ -14,89 +15,6 @@
 
 namespace zlink::samples::shoppingmall
 {
-
-class decimal_t
-{
-  public:
-    decimal_t () = default;
-    explicit decimal_t (std::string_view value) : _value (normalize (value)) {}
-
-    const std::string &value () const noexcept { return _value; }
-
-    friend bool operator== (const decimal_t &, const decimal_t &) = default;
-
-  private:
-    static std::string normalize (std::string_view value)
-    {
-        if (value.empty ()) {
-            throw std::invalid_argument ("decimal value must not be empty");
-        }
-        bool negative = false;
-        if (value.front () == '-' || value.front () == '+') {
-            negative = value.front () == '-';
-            value.remove_prefix (1);
-        }
-        const auto point = value.find ('.');
-        auto integral = std::string (value.substr (0, point));
-        auto fractional = point == std::string_view::npos ? std::string{}
-                                                          : std::string (value.substr (point + 1));
-        if (integral.empty () || (point != std::string_view::npos && fractional.empty ())
-            || !std::all_of (integral.begin (),
-                             integral.end (),
-                             [] (unsigned char ch) { return std::isdigit (ch) != 0; })
-            || !std::all_of (fractional.begin (), fractional.end (), [] (unsigned char ch) {
-                   return std::isdigit (ch) != 0;
-               })) {
-            throw std::invalid_argument ("decimal value must use ordinary JSON number syntax");
-        }
-        const auto first_digit = integral.find_first_not_of ('0');
-        integral = first_digit == std::string::npos ? "0" : integral.substr (first_digit);
-        while (!fractional.empty () && fractional.back () == '0') {
-            fractional.pop_back ();
-        }
-        const auto significant_digits = (integral == "0" ? std::size_t{0} : integral.size ())
-                                        + fractional.size ();
-        if (significant_digits > 29 || fractional.size () > 28) {
-            throw std::out_of_range ("decimal value exceeds the .NET decimal range");
-        }
-        if (integral == "0" && fractional.empty ()) {
-            negative = false;
-        }
-        return std::string (negative ? "-" : "") + integral
-               + (fractional.empty () ? std::string{} : "." + fractional);
-    }
-
-    std::string _value{"0"};
-};
-
-inline void to_json (nlohmann::json &json, const decimal_t &value)
-{
-    json = nlohmann::json::parse (value.value ());
-}
-
-inline void from_json (const nlohmann::json &json, decimal_t &value)
-{
-    if (!json.is_number ()) {
-        throw nlohmann::json::type_error::create (302, "decimal must be a JSON number", &json);
-    }
-    value = decimal_t (json.dump ());
-}
-
-inline decimal_t json_decimal (const nlohmann::json &json, const char *camel, const char *snake)
-{
-    const auto name = json.contains (camel) ? camel : snake;
-    return json.contains (name) ? json.at (name).get<decimal_t> () : decimal_t{};
-}
-
-inline std::optional<decimal_t>
-json_nullable_decimal (const nlohmann::json &json, const char *camel, const char *snake)
-{
-    const auto name = json.contains (camel) ? camel : snake;
-    if (!json.contains (name) || json.at (name).is_null ()) {
-        return std::nullopt;
-    }
-    return json.at (name).get<decimal_t> ();
-}
 
 struct order_status_t
 {
@@ -136,7 +54,7 @@ struct order_state_t
     std::optional<std::string> reservation_id;
     std::optional<std::string> payment_id;
     std::optional<std::string> reason;
-    std::optional<decimal_t> amount;
+    std::optional<double> amount;
     std::optional<std::string> currency;
     std::int64_t updated_at_unix_ms{};
 };
@@ -210,7 +128,7 @@ struct authorize_payment_command_t
     std::string order_id;
     std::string payment_id;
     std::string payment_method_id;
-    decimal_t amount;
+    double amount{};
     std::string currency;
 };
 
@@ -226,7 +144,7 @@ struct cart_seed_t
 {
     std::string cart_id;
     std::vector<order_line_input_t> lines;
-    decimal_t amount;
+    double amount{};
     std::string currency;
 };
 
@@ -253,7 +171,7 @@ struct start_order_workflow_req_t
     std::string idempotency_key;
     std::string source_command_id;
     std::vector<order_line_input_t> lines;
-    decimal_t amount;
+    double amount{};
     std::string currency;
 };
 
@@ -353,313 +271,266 @@ json_nullable_string (const nlohmann::json &json, const char *camel, const char 
     return json.contains (camel) ? read (camel) : read (snake);
 }
 
-inline void to_json (nlohmann::json &json, const order_line_input_t &value)
-{
-    json = {{"sku", value.sku}, {"quantity", value.quantity}};
 }
 
-inline void from_json (const nlohmann::json &json, order_line_input_t &value)
+template <> struct zlink::json::dto_traits<zlink::samples::shoppingmall::order_line_input_t>
 {
-    value.sku = json.value ("sku", "");
-    value.quantity = json.value ("quantity", 0);
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("sku", &zlink::samples::shoppingmall::order_line_input_t::sku),
+      zlink::json::field ("quantity", &zlink::samples::shoppingmall::order_line_input_t::quantity)};
+};
 
-inline void to_json (nlohmann::json &json, const continue_order_workflow_msg_t &value)
+template <>
+struct zlink::json::dto_traits<zlink::samples::shoppingmall::continue_order_workflow_msg_t>
 {
-    json = {{"orderId", value.order_id}};
-}
+    static constexpr auto fields = std::tuple{zlink::json::field (
+      "orderId", &zlink::samples::shoppingmall::continue_order_workflow_msg_t::order_id)};
+};
 
-inline void from_json (const nlohmann::json &json, continue_order_workflow_msg_t &value)
+template <> struct zlink::json::dto_traits<zlink::samples::shoppingmall::stored_order_event_t>
 {
-    value.order_id = json_string (json, "orderId", "order_id");
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("eventId", &zlink::samples::shoppingmall::stored_order_event_t::event_id),
+      zlink::json::field ("sourceCommandId",
+                          &zlink::samples::shoppingmall::stored_order_event_t::source_command_id),
+      zlink::json::field ("orderId", &zlink::samples::shoppingmall::stored_order_event_t::order_id),
+      zlink::json::field ("eventType",
+                          &zlink::samples::shoppingmall::stored_order_event_t::event_type),
+      zlink::json::field ("payload", &zlink::samples::shoppingmall::stored_order_event_t::payload),
+      zlink::json::field ("version", &zlink::samples::shoppingmall::stored_order_event_t::version),
+      zlink::json::field ("createdAtUnixMs",
+                          &zlink::samples::shoppingmall::stored_order_event_t::created_at_unix_ms)};
+};
 
-inline void to_json (nlohmann::json &json, const stored_order_event_t &value)
+template <>
+struct zlink::json::dto_traits<zlink::samples::shoppingmall::authorize_payment_command_t>
 {
-    json = {{"eventId", value.event_id},
-            {"sourceCommandId", value.source_command_id},
-            {"orderId", value.order_id},
-            {"eventType", value.event_type},
-            {"payload", value.payload},
-            {"version", value.version},
-            {"createdAtUnixMs", value.created_at_unix_ms}};
-}
+    using type = zlink::samples::shoppingmall::authorize_payment_command_t;
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("orderId", &type::order_id),
+      zlink::json::field ("paymentId", &type::payment_id),
+      zlink::json::field ("paymentMethodId", &type::payment_method_id),
+      zlink::json::field ("amount", &type::amount),
+      zlink::json::field ("currency", &type::currency)};
+};
 
-inline void from_json (const nlohmann::json &json, stored_order_event_t &value)
+template <> struct zlink::json::dto_traits<zlink::samples::shoppingmall::cart_seed_t>
 {
-    value.event_id = json.value ("eventId", "");
-    value.source_command_id = json.value ("sourceCommandId", "");
-    value.order_id = json.value ("orderId", "");
-    value.event_type = json.value ("eventType", "");
-    value.payload = json.contains ("payload") ? json.at ("payload") : nlohmann::json::object ();
-    value.version = json.value ("version", std::int64_t{0});
-    value.created_at_unix_ms = json.value ("createdAtUnixMs", std::int64_t{0});
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("cartId", &zlink::samples::shoppingmall::cart_seed_t::cart_id),
+      zlink::json::field ("lines", &zlink::samples::shoppingmall::cart_seed_t::lines),
+      zlink::json::field ("amount", &zlink::samples::shoppingmall::cart_seed_t::amount),
+      zlink::json::field ("currency", &zlink::samples::shoppingmall::cart_seed_t::currency)};
+};
 
-inline void to_json (nlohmann::json &json, const cart_seed_t &value)
+template <> struct zlink::json::dto_traits<zlink::samples::shoppingmall::inventory_seed_t>
 {
-    json = {{"cartId", value.cart_id},
-            {"lines", value.lines},
-            {"amount", value.amount},
-            {"currency", value.currency}};
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("sku", &zlink::samples::shoppingmall::inventory_seed_t::sku),
+      zlink::json::field ("availableQuantity",
+                          &zlink::samples::shoppingmall::inventory_seed_t::available_quantity)};
+};
 
-inline void from_json (const nlohmann::json &json, cart_seed_t &value)
+template <> struct zlink::json::dto_traits<zlink::samples::shoppingmall::payment_method_seed_t>
 {
-    value.cart_id = json.value ("cartId", "");
-    value.lines = json.value ("lines", std::vector<order_line_input_t>{});
-    value.amount = json_decimal (json, "amount", "amount");
-    value.currency = json.value ("currency", "");
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("paymentMethodId",
+                          &zlink::samples::shoppingmall::payment_method_seed_t::payment_method_id),
+      zlink::json::field ("shouldAuthorize",
+                          &zlink::samples::shoppingmall::payment_method_seed_t::should_authorize),
+      zlink::json::field ("failureReason",
+                          &zlink::samples::shoppingmall::payment_method_seed_t::failure_reason)};
+};
 
-inline void to_json (nlohmann::json &json, const inventory_seed_t &value)
+template <> struct zlink::json::dto_traits<zlink::samples::shoppingmall::start_order_req_t>
 {
-    json = {{"sku", value.sku}, {"availableQuantity", value.available_quantity}};
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("cartId", &zlink::samples::shoppingmall::start_order_req_t::cart_id),
+      zlink::json::field ("shippingAddressId",
+                          &zlink::samples::shoppingmall::start_order_req_t::shipping_address_id),
+      zlink::json::field ("paymentMethodId",
+                          &zlink::samples::shoppingmall::start_order_req_t::payment_method_id),
+      zlink::json::field ("idempotencyKey",
+                          &zlink::samples::shoppingmall::start_order_req_t::idempotency_key)};
+};
 
-inline void from_json (const nlohmann::json &json, inventory_seed_t &value)
+template <> struct zlink::json::dto_traits<zlink::samples::shoppingmall::get_order_state_req_t>
 {
-    value.sku = json.value ("sku", "");
-    value.available_quantity = json.value ("availableQuantity", 0);
-}
+    static constexpr auto fields = std::tuple{zlink::json::field (
+      "orderId", &zlink::samples::shoppingmall::get_order_state_req_t::order_id)};
+};
 
-inline void to_json (nlohmann::json &json, const payment_method_seed_t &value)
+template <> struct zlink::json::dto_traits<zlink::samples::shoppingmall::order_state_t>
 {
-    json = {{"paymentMethodId", value.payment_method_id},
-            {"shouldAuthorize", value.should_authorize},
-            {"failureReason", value.failure_reason}};
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("orderId", &zlink::samples::shoppingmall::order_state_t::order_id),
+      zlink::json::field ("status", &zlink::samples::shoppingmall::order_state_t::status),
+      zlink::json::field ("shippingAddressId",
+                          &zlink::samples::shoppingmall::order_state_t::shipping_address_id),
+      zlink::json::field ("reservationId",
+                          &zlink::samples::shoppingmall::order_state_t::reservation_id),
+      zlink::json::field ("paymentId", &zlink::samples::shoppingmall::order_state_t::payment_id),
+      zlink::json::field ("reason", &zlink::samples::shoppingmall::order_state_t::reason),
+      zlink::json::field ("currency", &zlink::samples::shoppingmall::order_state_t::currency),
+      zlink::json::field ("updatedAtUnixMs",
+                          &zlink::samples::shoppingmall::order_state_t::updated_at_unix_ms),
+      zlink::json::field ("amount", &zlink::samples::shoppingmall::order_state_t::amount)};
+};
 
-inline void from_json (const nlohmann::json &json, payment_method_seed_t &value)
+template <> struct zlink::json::dto_traits<zlink::samples::shoppingmall::start_order_res_t>
 {
-    value.payment_method_id = json.value ("paymentMethodId", "");
-    value.should_authorize = json.value ("shouldAuthorize", false);
-    value.failure_reason = json.value ("failureReason", "");
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("orderId", &zlink::samples::shoppingmall::start_order_res_t::order_id),
+      zlink::json::field ("state", &zlink::samples::shoppingmall::start_order_res_t::state)};
+};
 
-
-inline void to_json (nlohmann::json &json, const start_order_req_t &value)
+template <> struct zlink::json::dto_traits<zlink::samples::shoppingmall::get_order_state_res_t>
 {
-    json = {{"cartId", value.cart_id},
-            {"shippingAddressId", value.shipping_address_id},
-            {"paymentMethodId", value.payment_method_id},
-            {"idempotencyKey", value.idempotency_key}};
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("state", &zlink::samples::shoppingmall::get_order_state_res_t::state)};
+};
 
-inline void from_json (const nlohmann::json &json, start_order_req_t &value)
+template <> struct zlink::json::dto_traits<zlink::samples::shoppingmall::start_order_workflow_req_t>
 {
-    value.cart_id = json_string (json, "cartId", "cart_id");
-    value.shipping_address_id = json_string (json, "shippingAddressId", "shipping_address_id");
-    value.payment_method_id = json_string (json, "paymentMethodId", "payment_method_id");
-    value.idempotency_key = json_string (json, "idempotencyKey", "idempotency_key");
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("orderId",
+                          &zlink::samples::shoppingmall::start_order_workflow_req_t::order_id),
+      zlink::json::field ("cartId",
+                          &zlink::samples::shoppingmall::start_order_workflow_req_t::cart_id),
+      zlink::json::field (
+        "shippingAddressId",
+        &zlink::samples::shoppingmall::start_order_workflow_req_t::shipping_address_id),
+      zlink::json::field (
+        "paymentMethodId",
+        &zlink::samples::shoppingmall::start_order_workflow_req_t::payment_method_id),
+      zlink::json::field (
+        "idempotencyKey",
+        &zlink::samples::shoppingmall::start_order_workflow_req_t::idempotency_key),
+      zlink::json::field (
+        "sourceCommandId",
+        &zlink::samples::shoppingmall::start_order_workflow_req_t::source_command_id),
+      zlink::json::field ("lines",
+                          &zlink::samples::shoppingmall::start_order_workflow_req_t::lines),
+      zlink::json::field ("amount",
+                          &zlink::samples::shoppingmall::start_order_workflow_req_t::amount),
+      zlink::json::field ("currency",
+                          &zlink::samples::shoppingmall::start_order_workflow_req_t::currency)};
+};
 
-inline void to_json (nlohmann::json &json, const get_order_state_req_t &value)
+template <> struct zlink::json::dto_traits<zlink::samples::shoppingmall::start_order_workflow_res_t>
 {
-    json = {{"orderId", value.order_id}};
-}
+    static constexpr auto fields = std::tuple{zlink::json::field (
+      "state", &zlink::samples::shoppingmall::start_order_workflow_res_t::state)};
+};
 
-inline void from_json (const nlohmann::json &json, get_order_state_req_t &value)
+template <>
+struct zlink::json::dto_traits<zlink::samples::shoppingmall::continue_order_workflow_req_t>
 {
-    value.order_id = json_string (json, "orderId", "order_id");
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("orderId",
+                          &zlink::samples::shoppingmall::continue_order_workflow_req_t::order_id),
+      zlink::json::field (
+        "sourceCommandId",
+        &zlink::samples::shoppingmall::continue_order_workflow_req_t::source_command_id)};
+};
 
-inline void to_json (nlohmann::json &json, const order_state_t &value)
+template <>
+struct zlink::json::dto_traits<zlink::samples::shoppingmall::continue_order_workflow_res_t>
 {
-    json = {
-      {"orderId", value.order_id},
-      {"status", value.status},
-      {"shippingAddressId",
-       value.shipping_address_id ? nlohmann::json (*value.shipping_address_id)
-                                 : nlohmann::json (nullptr)},
-      {"reservationId",
-       value.reservation_id ? nlohmann::json (*value.reservation_id) : nlohmann::json (nullptr)},
-      {"paymentId",
-       value.payment_id ? nlohmann::json (*value.payment_id) : nlohmann::json (nullptr)},
-      {"reason", value.reason ? nlohmann::json (*value.reason) : nlohmann::json (nullptr)},
-      {"currency", value.currency ? nlohmann::json (*value.currency) : nlohmann::json (nullptr)},
-      {"updatedAtUnixMs", value.updated_at_unix_ms}};
-    json["amount"] = value.amount ? nlohmann::json (*value.amount) : nlohmann::json (nullptr);
-}
+    static constexpr auto fields = std::tuple{zlink::json::field (
+      "state", &zlink::samples::shoppingmall::continue_order_workflow_res_t::state)};
+};
 
-inline void from_json (const nlohmann::json &json, order_state_t &value)
+template <>
+struct zlink::json::dto_traits<zlink::samples::shoppingmall::rebuild_order_projection_req_t>
 {
-    value.order_id = json_string (json, "orderId", "order_id");
-    value.status = json.value ("status", "");
-    value.shipping_address_id = json_nullable_string (
-      json, "shippingAddressId", "shipping_address_id");
-    value.reservation_id = json_nullable_string (json, "reservationId", "reservation_id");
-    value.payment_id = json_nullable_string (json, "paymentId", "payment_id");
-    value.reason = json_nullable_string (json, "reason", "reason");
-    value.amount = json_nullable_decimal (json, "amount", "amount");
-    value.currency = json_nullable_string (json, "currency", "currency");
-    value.updated_at_unix_ms = json.value ("updatedAtUnixMs", std::int64_t{0});
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("orderId",
+                          &zlink::samples::shoppingmall::rebuild_order_projection_req_t::order_id),
+      zlink::json::field (
+        "sourceCommandId",
+        &zlink::samples::shoppingmall::rebuild_order_projection_req_t::source_command_id)};
+};
 
-inline void to_json (nlohmann::json &json, const start_order_res_t &value)
+template <>
+struct zlink::json::dto_traits<zlink::samples::shoppingmall::rebuild_order_projection_res_t>
 {
-    json = {{"orderId", value.order_id}, {"state", value.state}};
-}
+    static constexpr auto fields = std::tuple{zlink::json::field (
+      "state", &zlink::samples::shoppingmall::rebuild_order_projection_res_t::state)};
+};
 
-inline void from_json (const nlohmann::json &json, start_order_res_t &value)
+template <> struct zlink::json::dto_traits<zlink::samples::shoppingmall::pending_mapping_req_t>
 {
-    value.order_id = json_string (json, "orderId", "order_id");
-    value.state = json.value ("state", order_state_t{});
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("idempotencyKey",
+                          &zlink::samples::shoppingmall::pending_mapping_req_t::idempotency_key),
+      zlink::json::field ("orderId",
+                          &zlink::samples::shoppingmall::pending_mapping_req_t::order_id)};
+};
 
-inline void to_json (nlohmann::json &json, const get_order_state_res_t &value)
+template <> struct zlink::json::dto_traits<zlink::samples::shoppingmall::delete_projection_req_t>
 {
-    json = {{"state", value.state}};
-}
+    static constexpr auto fields = std::tuple{zlink::json::field (
+      "orderId", &zlink::samples::shoppingmall::delete_projection_req_t::order_id)};
+};
 
-inline void from_json (const nlohmann::json &json, get_order_state_res_t &value)
+template <> struct zlink::json::dto_traits<zlink::samples::shoppingmall::ok_res_t>
 {
-    value.state = json.value ("state", order_state_t{});
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("ok", &zlink::samples::shoppingmall::ok_res_t::ok)};
+};
 
-inline void to_json (nlohmann::json &json, const start_order_workflow_req_t &value)
+template <> struct zlink::json::dto_traits<zlink::samples::shoppingmall::server_assertion_req_t>
 {
-    json = {{"orderId", value.order_id},
-            {"cartId", value.cart_id},
-            {"shippingAddressId", value.shipping_address_id},
-            {"paymentMethodId", value.payment_method_id},
-            {"idempotencyKey", value.idempotency_key},
-            {"sourceCommandId", value.source_command_id},
-            {"lines", value.lines},
-            {"amount", value.amount},
-            {"currency", value.currency}};
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field (
+        "successfulOrderId",
+        &zlink::samples::shoppingmall::server_assertion_req_t::successful_order_id),
+      zlink::json::field (
+        "pendingRecoveredOrderId",
+        &zlink::samples::shoppingmall::server_assertion_req_t::pending_recovered_order_id),
+      zlink::json::field (
+        "concurrentOrderId",
+        &zlink::samples::shoppingmall::server_assertion_req_t::concurrent_order_id),
+      zlink::json::field ("resumedOrderId",
+                          &zlink::samples::shoppingmall::server_assertion_req_t::resumed_order_id),
+      zlink::json::field (
+        "inventoryFailureOrderId",
+        &zlink::samples::shoppingmall::server_assertion_req_t::inventory_failure_order_id),
+      zlink::json::field (
+        "paymentFailureOrderId",
+        &zlink::samples::shoppingmall::server_assertion_req_t::payment_failure_order_id),
+      zlink::json::field (
+        "scaleOutOrderId",
+        &zlink::samples::shoppingmall::server_assertion_req_t::scale_out_order_id)};
+};
 
-inline void from_json (const nlohmann::json &json, start_order_workflow_req_t &value)
+template <> struct zlink::json::dto_traits<zlink::samples::shoppingmall::server_assertion_res_t>
 {
-    value.order_id = json_string (json, "orderId", "order_id");
-    value.cart_id = json_string (json, "cartId", "cart_id");
-    value.shipping_address_id = json_string (json, "shippingAddressId", "shipping_address_id");
-    value.payment_method_id = json_string (json, "paymentMethodId", "payment_method_id");
-    value.idempotency_key = json_string (json, "idempotencyKey", "idempotency_key");
-    value.source_command_id = json_string (json, "sourceCommandId", "source_command_id");
-    value.lines = json.value ("lines", std::vector<order_line_input_t>{});
-    value.amount = json_decimal (json, "amount", "amount");
-    value.currency = json.value ("currency", "");
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("passed", &zlink::samples::shoppingmall::server_assertion_res_t::passed),
+      zlink::json::field ("evidence",
+                          &zlink::samples::shoppingmall::server_assertion_res_t::evidence)};
+};
 
-inline void to_json (nlohmann::json &json, const start_order_workflow_res_t &value)
+namespace zlink::samples::shoppingmall
 {
-    json = {{"state", value.state}};
-}
-
-inline void from_json (const nlohmann::json &json, start_order_workflow_res_t &value)
-{
-    value.state = json.value ("state", order_state_t{});
-}
-
-inline void to_json (nlohmann::json &json, const continue_order_workflow_req_t &value)
-{
-    json = {{"orderId", value.order_id}, {"sourceCommandId", value.source_command_id}};
-}
-
-inline void from_json (const nlohmann::json &json, continue_order_workflow_req_t &value)
-{
-    value.order_id = json_string (json, "orderId", "order_id");
-    value.source_command_id = json_string (json, "sourceCommandId", "source_command_id");
-}
-
-inline void to_json (nlohmann::json &json, const continue_order_workflow_res_t &value)
-{
-    json = {{"state", value.state}};
-}
-
-inline void from_json (const nlohmann::json &json, continue_order_workflow_res_t &value)
-{
-    value.state = json.value ("state", order_state_t{});
-}
-
-inline void to_json (nlohmann::json &json, const rebuild_order_projection_req_t &value)
-{
-    json = {{"orderId", value.order_id}, {"sourceCommandId", value.source_command_id}};
-}
-
-inline void from_json (const nlohmann::json &json, rebuild_order_projection_req_t &value)
-{
-    value.order_id = json_string (json, "orderId", "order_id");
-    value.source_command_id = json_string (json, "sourceCommandId", "source_command_id");
-}
-
-inline void to_json (nlohmann::json &json, const rebuild_order_projection_res_t &value)
-{
-    json = {{"state", value.state}};
-}
-
-inline void from_json (const nlohmann::json &json, rebuild_order_projection_res_t &value)
-{
-    value.state = json.value ("state", order_state_t{});
-}
-
-inline void to_json (nlohmann::json &json, const pending_mapping_req_t &value)
-{
-    json = {{"idempotencyKey", value.idempotency_key}, {"orderId", value.order_id}};
-}
-
-inline void from_json (const nlohmann::json &json, pending_mapping_req_t &value)
-{
-    value.idempotency_key = json_string (json, "idempotencyKey", "idempotency_key");
-    value.order_id = json_string (json, "orderId", "order_id");
-}
-
-inline void to_json (nlohmann::json &json, const delete_projection_req_t &value)
-{
-    json = {{"orderId", value.order_id}};
-}
-
-inline void from_json (const nlohmann::json &json, delete_projection_req_t &value)
-{
-    value.order_id = json_string (json, "orderId", "order_id");
-}
-
-inline void to_json (nlohmann::json &json, const ok_res_t &value)
-{
-    json = {{"ok", value.ok}};
-}
-
-inline void from_json (const nlohmann::json &json, ok_res_t &value)
-{
-    value.ok = json.value ("ok", false);
-}
-
-inline void to_json (nlohmann::json &json, const server_assertion_req_t &value)
-{
-    json = {{"successfulOrderId", value.successful_order_id},
-            {"pendingRecoveredOrderId", value.pending_recovered_order_id},
-            {"concurrentOrderId", value.concurrent_order_id},
-            {"resumedOrderId", value.resumed_order_id},
-            {"inventoryFailureOrderId", value.inventory_failure_order_id},
-            {"paymentFailureOrderId", value.payment_failure_order_id},
-            {"scaleOutOrderId", value.scale_out_order_id}};
-}
-
-inline void from_json (const nlohmann::json &json, server_assertion_req_t &value)
-{
-    value.successful_order_id = json_string (json, "successfulOrderId", "successful_order_id");
-    value.pending_recovered_order_id = json_string (
-      json, "pendingRecoveredOrderId", "pending_recovered_order_id");
-    value.concurrent_order_id = json_string (json, "concurrentOrderId", "concurrent_order_id");
-    value.resumed_order_id = json_string (json, "resumedOrderId", "resumed_order_id");
-    value.inventory_failure_order_id = json_string (
-      json, "inventoryFailureOrderId", "inventory_failure_order_id");
-    value.payment_failure_order_id = json_string (
-      json, "paymentFailureOrderId", "payment_failure_order_id");
-    value.scale_out_order_id = json_string (json, "scaleOutOrderId", "scale_out_order_id");
-}
-
-inline void to_json (nlohmann::json &json, const server_assertion_res_t &value)
-{
-    json = {{"passed", value.passed}, {"evidence", value.evidence}};
-}
-
-inline void from_json (const nlohmann::json &json, server_assertion_res_t &value)
-{
-    value.passed = json.value ("passed", false);
-    value.evidence = json.value ("evidence", std::vector<std::string>{});
-}
 
 } // namespace zlink::samples::shoppingmall
+
+// Explicit JSON state-store conversion shares the typed messaging profile.
+namespace zlink::samples::shoppingmall
+{
+template <typename T>
+    requires zlink::detail::json_profile::has_dto<T>
+void to_json (nlohmann::json &out, const T &value)
+{
+    out = zlink::detail::json_profile::encode_value (value);
+}
+template <typename T>
+    requires zlink::detail::json_profile::has_dto<T>
+void from_json (const nlohmann::json &in, T &value)
+{
+    value = zlink::detail::json_profile::decode_value<T> (in);
+}
+}
