@@ -1,3 +1,4 @@
+import type { PendingOperation } from '../foundation/operation-registry';
 import { ZLinkBufferMessage as RuntimeMessage } from '../backend/runtime-message';
 import type { Message } from '../../contracts/Common/Message';
 import type { ZLinkSpotRouteTarget } from '../spots/spot-routing-internal';
@@ -9,6 +10,7 @@ export async function tryRequestRoutedJson(
   payload: unknown,
   options: {
     readonly timeoutMs?: number;
+    readonly requestOperation?: PendingOperation<unknown>;
     readonly signal?: AbortSignal;
     readonly onAdmitted?: () => void;
   }
@@ -30,6 +32,7 @@ export async function requestRoutedJsonReply<T>(
   payload: unknown,
   options: {
     readonly timeoutMs?: number;
+    readonly requestOperation?: PendingOperation<unknown>;
     readonly signal?: AbortSignal;
     readonly onAdmitted?: () => void;
   },
