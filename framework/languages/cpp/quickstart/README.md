@@ -176,7 +176,7 @@ README. Specific to this project:
 
 - `bootstrap.cmake` and the `find_package(zlink_framework CONFIG REQUIRED)` +
   `target_link_libraries(... zlink::framework)` pair in `CMakeLists.txt`.
-- `Shared/messages.hpp`'s `NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE` pattern for message contracts.
+- `Shared/messages.hpp`'s `zlink::json::dto_traits` pattern for message contracts.
 - `Server/main.cpp`'s `add_route_mesh(...).listen(...).set_object_role(none).set_routing_id(...)`
   block — every call is required for a channel-only node.
 - `Client/main.cpp`'s `peer_connections().connect(...)` and the HTTP handler shape. A real
