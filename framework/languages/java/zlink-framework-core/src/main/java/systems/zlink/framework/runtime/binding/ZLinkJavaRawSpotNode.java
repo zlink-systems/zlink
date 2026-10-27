@@ -52,7 +52,9 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BiFunction;
 import java.util.function.Consumer;
+import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -89,7 +91,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                     this.stateLane.runNowOrQueue(
                             () -> transition.apply(RemoteSessionBindingTransition.NONE));
     private final ZLinkJavaInstanceSpotRegistry instanceSpots;
-    private volatile java.util.function.Function<
+    private volatile Function<
                     ZLinkInstanceActivationRecoveryCodec.RecoveryEnvelope,
                     CompletionStage<ZLinkAuthorityReadResult>>
             instanceActivationValidator = envelope -> CompletableFuture.completedFuture(null);
@@ -299,6 +301,11 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
     @Override
     public CompletionStage<Void> sendToNode(RoutingId targetNodeRid, List<Message> parts) {
         return sendToNode(targetNodeRid, new byte[0], parts);
+    }
+
+    @Override
+    public ZLinkServiceOperationRegistry operationRegistry() {
+        return owner.operationRegistry();
     }
 
     @Override
@@ -770,6 +777,40 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                 requestAdmission);
     }
 
+    @Override
+    public <T> void requestToActor(
+            ZLinkServiceM6BWireCodec.ActorRouteFence target,
+            List<Message> parts,
+            SendFlags flags,
+            Duration timeout,
+            CompletableFuture<Void> requestAdmission,
+            Function<List<Message>, T> decodeReply,
+            Consumer<T> discardReply,
+            Function<Throwable, Throwable> mapFailure,
+            ZLinkServiceOperationRegistry.Operation<T> completion) {
+        if (!routingId().equals(target.actor().nodeRid())) {
+            owner.requestActor(
+                    target,
+                    parts,
+                    timeout,
+                    requestAdmission,
+                    decodeReply,
+                    discardReply,
+                    completion);
+            return;
+        }
+        ZLinkInternalSpotNode.super.requestToActor(
+                target,
+                parts,
+                flags,
+                timeout,
+                requestAdmission,
+                decodeReply,
+                discardReply,
+                mapFailure,
+                completion);
+    }
+
     CompletionStage<List<Message>> requestExactActor(
             ZLinkBackendActorRef actor,
             List<Message> parts,
@@ -789,8 +830,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
     }
 
     private CompletionStage<List<Message>> requestLocalActor(
-            java.util.function.BiFunction<Long, CompletableFuture<Void>, CompletionStage<Void>>
-                    dispatch,
+            BiFunction<Long, CompletableFuture<Void>, CompletionStage<Void>> dispatch,
             Duration timeout,
             CompletableFuture<Void> requestAdmission) {
         Long requestId = nextActorRequestSequence.getAndIncrement();
@@ -2525,7 +2565,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
     }
 
     void setInstanceSpotActivationValidator(
-            java.util.function.Function<
+            Function<
                             ZLinkInstanceActivationRecoveryCodec.RecoveryEnvelope,
                             CompletionStage<ZLinkAuthorityReadResult>>
                     validator) {
@@ -2931,7 +2971,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                                                                                         .<Void>
                                                                                                 failedFuture(
                                                                                                         handlerFailure))))
-                .thenCompose(java.util.function.Function.identity());
+                .thenCompose(Function.identity());
     }
 
     private static void closeRemoteInstancePayload(List<Message> parts) {
@@ -3534,10 +3574,8 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                         ZLinkChannelContentTypeFrame.decode(parts));
         // The local ingress takes the prepared record; rejected registration
         // leaves that ownership here. Payload preparation stays outside E3.
-        boolean[] handedOff = {false};
         Supplier<CompletionStage<ZLinkBackendReceived>> enqueue =
                 () -> {
-                    handedOff[0] = true;
                     var dispatched = enqueueLocalSpot(target, true, request, requestAdmission);
                     dispatched.whenComplete(
                             (ignored, failure) -> {
@@ -3554,16 +3592,23 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                             });
                 };
         if (operations != null) {
-            try {
-                var registered =
-                        operations.submit(
-                                operationId, timeout, enqueue, ZLinkBackendReceived::close);
-                return registered.whenComplete((reply, failure) -> completion.cancel(false));
-            } finally {
-                if (!handedOff[0]) {
-                    request.close();
-                }
-            }
+            var registered = operations.<ZLinkBackendReceived>prepareOperation(operationId);
+            operations
+                    .submitTerminal(
+                            operationId,
+                            timeout,
+                            terminalResult -> {
+                                var submitted = enqueue.get();
+                                submitted.whenComplete(terminalResult);
+                                return submitted;
+                            },
+                            ZLinkBackendReceived::close,
+                            registered)
+                    .whenComplete(
+                            (accepted, failure) -> {
+                                if (failure != null || !accepted) request.close();
+                            });
+            return registered.whenComplete((reply, failure) -> completion.cancel(false));
         }
         if (timeout != null && !timeout.isNegative() && !timeout.isZero()) {
             CompletableFuture.delayedExecutor(timeout.toNanos(), TimeUnit.NANOSECONDS)

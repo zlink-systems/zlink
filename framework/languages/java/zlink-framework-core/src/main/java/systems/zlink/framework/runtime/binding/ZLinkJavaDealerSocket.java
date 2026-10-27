@@ -14,6 +14,7 @@ import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.function.BiConsumer;
 
 final class ZLinkJavaDealerSocket implements ZLinkBackendDealerSocket, ZLinkJavaSocketBacked {
     private volatile Runnable receiveAdmission;
@@ -32,7 +33,8 @@ final class ZLinkJavaDealerSocket implements ZLinkBackendDealerSocket, ZLinkJava
     private final ZLinkJavaSocketReceivePoller receivePoller;
     private final ZLinkServiceOperationRegistry operations =
             new ZLinkServiceOperationRegistry(
-                    ZLinkOneWayCalls.failureForStatus(ZLinkOneWayCalls.SHUTDOWN));
+                    ZLinkOneWayCalls.failureForStatus(ZLinkOneWayCalls.SHUTDOWN),
+                    ZLinkJavaSocketSupport::requestTimeout);
 
     ZLinkJavaDealerSocket(DealerSocket socket) {
         this.socket = socket;
@@ -88,7 +90,18 @@ final class ZLinkJavaDealerSocket implements ZLinkBackendDealerSocket, ZLinkJava
             Runnable receiveAdmission,
             CompletableFuture<Void> requestAdmission) {
         return ZLinkJavaSocketSupport.submitRequest(
-                socket.request(), parts, timeout, receiveAdmission, requestAdmission);
+                socket.request(), parts, timeout, receiveAdmission, requestAdmission, operations);
+    }
+
+    @Override
+    public synchronized CompletionStage<?> requestTo(
+            List<Message> parts,
+            Duration timeout,
+            Runnable receiveAdmission,
+            CompletableFuture<Void> requestAdmission,
+            BiConsumer<ZLinkBackendReceived, Throwable> terminal) {
+        return ZLinkJavaSocketSupport.submitRequestTo(
+                socket.request(), parts, timeout, receiveAdmission, requestAdmission, terminal);
     }
 
     @Override
