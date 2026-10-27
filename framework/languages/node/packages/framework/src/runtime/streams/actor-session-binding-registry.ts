@@ -409,6 +409,22 @@ export class ZLinkActorSessionBindingRegistry<
     return await this.lane.run(() => this.routeCore(actorId));
   }
 
+  /** Registers a current binding's frame in the same turn that can retire its slot. */
+  async submitCurrent<T>(
+    actorId: string,
+    bindingToken: string,
+    submit: (route: ZLinkActorSessionRoute<TContext, TActor>) => Promise<T>
+  ): Promise<T | undefined> {
+    const { submission } = await this.lane.run(() => {
+      const route = this.routeCore(actorId);
+      return {
+        submission: route?.bindingToken === bindingToken ? submit(route) : undefined
+      };
+    });
+    // Transport completion must not hold the registry lane.
+    return await submission;
+  }
+
   /** Selects the route only when it is the exact Session binding (§8.1 validation values). */
   async routeForSessionBinding(
     actorId: string,
