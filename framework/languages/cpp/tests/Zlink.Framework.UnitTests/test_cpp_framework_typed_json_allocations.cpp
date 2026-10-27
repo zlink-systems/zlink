@@ -49,8 +49,15 @@ template <> struct zlink::json::dto_traits<nested_allocation_dto_t>
                  zlink::json::field ("bytes", &nested_allocation_dto_t::bytes)};
 };
 
-int main ()
+int main (int argc, char **argv)
 {
+    const std::string_view injection = argc > 1 ? argv[1] : "";
+    const auto inject = [&] (std::string_view direction) {
+        if (injection == direction) {
+            auto *memory = ::operator new (1);
+            ::operator delete (memory);
+        }
+    };
     using namespace zlink::detail::json_profile;
     using nlohmann::detail::zlink_dom_constructions;
     allocation_dto_t input;
@@ -68,16 +75,31 @@ int main ()
     assert (zlink_dom_constructions > before_control);
     std::string encoded;
     auto before = zlink_dom_constructions;
-    auto enc = zlink::framework::tests::count_allocations ([&] { encoded = encode (input); });
+    auto enc = zlink::framework::tests::count_allocations ([&] {
+        encoded = encode (input);
+        inject ("--inject-encode-allocation");
+    });
     auto enc_dom = zlink_dom_constructions - before;
     std::optional<allocation_dto_t> decoded;
     before = zlink_dom_constructions;
-    auto dec = zlink::framework::tests::count_allocations (
-      [&] { decoded = try_decode<allocation_dto_t> (wire.begin (), wire.end ()); });
+    auto dec = zlink::framework::tests::count_allocations ([&] {
+        decoded = try_decode<allocation_dto_t> (wire.begin (), wire.end ());
+        inject ("--inject-decode-allocation");
+    });
     auto dec_dom = zlink_dom_constructions - before;
     assert (decoded && encoded == wire && decoded->name == input.name && decoded->id == input.id);
     std::cout << "encode_new=" << enc << " decode_new=" << dec << " encode_dom=" << enc_dom
-              << " decode_dom=" << dec_dom << " positive_control_new=" << control << "\n";
+              << " decode_dom=" << dec_dom << " positive_control_new=" << control << std::endl;
+    assert (enc <= 2);
+    assert (dec <= 15);
+    std::vector<std::uint8_t> payload;
+    const auto payload_allocations = zlink::framework::tests::count_allocations ([&] {
+        byte_output out (payload);
+        out.reserve (initial_output_capacity);
+        assert (write_value (input, out, nullptr));
+    });
+    assert (std::string (payload.begin (), payload.end ()) == wire);
+    assert (payload_allocations <= 2);
     assert (decoded->description == input.description && decoded->count == input.count
             && decoded->rank == input.rank && decoded->flags == input.flags
             && decoded->status == input.status && decoded->optional == input.optional);

@@ -34,8 +34,13 @@ template <typename T> struct codec_traits
 
     static std::vector<std::uint8_t> encode (const T &value)
     {
-        const auto text = zlink::detail::json_profile::encode (value);
-        return {text.begin (), text.end ()};
+        std::vector<std::uint8_t> bytes;
+        zlink::detail::json_profile::byte_output out (bytes);
+        out.reserve (zlink::detail::json_profile::initial_output_capacity);
+        std::string error;
+        if (!zlink::detail::json_profile::write_value (value, out, &error))
+            throw std::invalid_argument (error);
+        return bytes;
     }
 
     static T decode (const std::vector<std::uint8_t> &payload)

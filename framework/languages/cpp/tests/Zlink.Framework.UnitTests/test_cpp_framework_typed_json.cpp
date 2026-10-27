@@ -246,8 +246,112 @@ void verify_float_bytes ()
     }
 }
 
+bool legacy_decode_bytes (std::string_view text, std::vector<std::byte> &bytes)
+{
+    namespace p = zlink::detail::json_profile;
+    if (text.size () % 4)
+        return false;
+    bytes.clear ();
+    for (std::size_t i = 0; i < text.size (); i += 4) {
+        unsigned v[4]{};
+        for (unsigned j = 0; j < 4; ++j) {
+            if (text[i + j] == '=' && j >= 2 && i + 4 == text.size ())
+                continue;
+            const auto n = p::base64_alphabet.find (text[i + j]);
+            if (n == std::string_view::npos)
+                return false;
+            v[j] = static_cast<unsigned> (n);
+        }
+        bytes.push_back (std::byte ((v[0] << 2) | (v[1] >> 4)));
+        if (text[i + 2] != '=')
+            bytes.push_back (std::byte ((v[1] << 4) | (v[2] >> 2)));
+        if (text[i + 3] != '=')
+            bytes.push_back (std::byte ((v[2] << 6) | v[3]));
+    }
+    return p::encode_bytes (bytes) == text;
+}
+void verify_base64_padding ()
+{
+    namespace p = zlink::detail::json_profile;
+    std::vector<std::byte> previous, current;
+    std::size_t canonical = 0, noncanonical = 0;
+    const auto verify = [&] (const std::string &text) {
+        const bool expected = legacy_decode_bytes (text, previous);
+        assert (p::decode_bytes (text, current) == expected);
+        if (expected) {
+            assert (current == previous);
+            ++canonical;
+        } else
+            ++noncanonical;
+    };
+    for (const std::string prefix : {"", "AAAA"}) {
+        for (const char a : p::base64_alphabet)
+            for (const char b : p::base64_alphabet) {
+                verify (prefix + a + b + "==");
+                for (const char c : p::base64_alphabet)
+                    verify (prefix + a + b + c + "=");
+            }
+    }
+    for (const std::string text : {"", "AAAA", "AQIDBAUG", "A", "AAA", "AAAA=", "=AAA", "A=AA",
+                                   "AA=A", "AA==AAAA", "AAAA\n", "AA-_", "AA?="})
+        verify (text);
+    assert (canonical > 0 && noncanonical > 0);
+    std::cout << "base64_canonical=" << canonical << " base64_noncanonical=" << noncanonical
+              << '\n';
+}
+struct mask_dto
+{
+    int value = 0;
+};
+struct empty_dto
+{
+};
+template <> struct zlink::json::dto_traits<empty_dto>
+{
+    static constexpr auto fields = std::tuple{};
+};
+template <> struct zlink::json::dto_traits<mask_dto>
+{
+    static constexpr auto names = [] {
+        std::array<std::array<char, 3>, 65> result{};
+        for (std::size_t i = 0; i < result.size (); ++i)
+            result[i] = {'f', static_cast<char> ('0' + i / 10), static_cast<char> ('0' + i % 10)};
+        return result;
+    }();
+    static constexpr auto fields = []<std::size_t... I> (std::index_sequence<I...>) {
+        return std::tuple{
+          zlink::json::field (std::string_view (names[I].data (), 3), &mask_dto::value)...};
+    }(std::make_index_sequence<65>{});
+};
+void verify_field_masks ()
+{
+    namespace p = zlink::detail::json_profile;
+    const auto wire = p::encode (mask_dto{7});
+    auto value = p::try_decode<mask_dto> (wire.begin (), wire.end ());
+    assert (value && value->value == 7);
+    for (const std::string name : {"f00", "f63", "f64"}) {
+        auto duplicate = wire;
+        duplicate.insert (1, "\"" + name + "\":7,");
+        assert (!p::try_decode<mask_dto> (duplicate.begin (), duplicate.end ()));
+        auto missing = wire;
+        const auto start = missing.find ("\"" + name + "\":7");
+        missing.erase (start, 7);
+        if (start == 1)
+            missing.erase (start, 1);
+        else
+            missing.erase (start - 1, 1);
+        assert (!p::try_decode<mask_dto> (missing.begin (), missing.end ()));
+    }
+    for (const std::string text : {"{}", "{\"future\":{\"nested\":[[[[1]]]]}}"})
+        assert (p::try_decode<empty_dto> (text.begin (), text.end ()));
+    for (const std::string text : {"{\"future\":1,\"future\":2}", "{\"future\":{\"x\":1,\"x\":2}}"})
+        assert (!p::try_decode<empty_dto> (text.begin (), text.end ()));
+}
+
 int main ()
 {
+    verify_base64_padding ();
+    verify_field_masks ();
     verify_float_round_trips ();
     verify_goldens ();
     verify_boundaries ();

@@ -26,6 +26,9 @@ namespace zlink::detail::json_profile
 
 inline constexpr char content_type[] = "application/json";
 inline constexpr char empty_object[] = "{}";
+inline constexpr std::size_t initial_output_capacity = 256;
+inline constexpr std::size_t initial_frame_capacity = 4;
+inline constexpr std::size_t field_mask_bits = std::numeric_limits<std::uint64_t>::digits;
 
 template <typename T = double> bool valid_float (double value)
 {
@@ -257,6 +260,7 @@ inline constexpr std::string_view base64_alphabet =
 inline std::string encode_bytes (const std::vector<std::byte> &bytes)
 {
     std::string text;
+    text.reserve ((bytes.size () / 3 + (bytes.size () % 3 != 0)) * 4);
     for (std::size_t i = 0; i < bytes.size (); i += 3) {
         const unsigned a = std::to_integer<unsigned> (bytes[i]);
         const unsigned b = i + 1 < bytes.size () ? std::to_integer<unsigned> (bytes[i + 1]) : 0;
@@ -283,13 +287,17 @@ inline bool decode_bytes (std::string_view text, std::vector<std::byte> &bytes)
                 return false;
             v[j] = static_cast<unsigned> (n);
         }
+        if (text[i + 2] == '=' && (text[i + 3] != '=' || (v[1] & 15) != 0))
+            return false;
+        if (text[i + 3] == '=' && (v[2] & 3) != 0)
+            return false;
         bytes.push_back (std::byte ((v[0] << 2) | (v[1] >> 4)));
         if (text[i + 2] != '=')
             bytes.push_back (std::byte ((v[1] << 4) | (v[2] >> 2)));
         if (text[i + 3] != '=')
             bytes.push_back (std::byte ((v[2] << 6) | v[3]));
     }
-    return encode_bytes (bytes) == text;
+    return true;
 }
 
 inline bool valid_utf8 (std::string_view text)
@@ -342,7 +350,23 @@ inline bool has_valid_strings (const nlohmann::json &value)
     return true;
 }
 
-inline bool write_string (std::string_view value, std::string &out, std::string *error)
+class byte_output
+{
+    std::vector<std::uint8_t> &bytes;
+
+  public:
+    explicit byte_output (std::vector<std::uint8_t> &out) : bytes (out) {}
+    void reserve (std::size_t size) { bytes.reserve (size); }
+    void operator+= (char value) { bytes.push_back (static_cast<std::uint8_t> (value)); }
+    void operator+= (std::string_view value)
+    {
+        bytes.insert (bytes.end (), value.begin (), value.end ());
+    }
+    void append (const char *begin, const char *end) { bytes.insert (bytes.end (), begin, end); }
+};
+
+template <typename Output>
+bool write_string (std::string_view value, Output &out, std::string *error)
 {
     if (!valid_utf8 (value))
         return fail (error, "invalid UTF-8 string");
@@ -384,7 +408,7 @@ inline bool write_string (std::string_view value, std::string &out, std::string 
     return true;
 }
 
-template <typename T> void write_integer (T value, std::string &out)
+template <typename T, typename Output> void write_integer (T value, Output &out)
 {
     char buffer[32];
     auto result = std::to_chars (buffer, buffer + sizeof buffer, value);
@@ -406,14 +430,30 @@ template <typename T> bool read_decimal (std::string_view text, T &out, std::str
            || fail (error, "64-bit integer out of range");
 }
 
-template <typename T, typename Visit> bool visit_fields (T &value, Visit visit)
+template <typename T> struct dto_layout
 {
-    return std::apply (
-      [&] (auto... field) { return (visit (field.name, value.*(field.member)) && ...); },
-      zlink::json::dto_traits<std::remove_cv_t<T>>::fields);
-}
+    static constexpr auto fields = zlink::json::dto_traits<T>::fields;
+    static constexpr std::size_t count = std::tuple_size_v<decltype (fields)>;
+    static constexpr auto names = std::apply (
+      [] (auto... field) { return std::array<std::string_view, count>{field.name...}; }, fields);
+    static constexpr auto order = [] {
+        std::array<std::size_t, count> indices{};
+        for (std::size_t i = 0; i < count; ++i)
+            indices[i] = i;
+        std::sort (indices.begin (), indices.end (),
+                   [] (auto a, auto b) { return names[a] < names[b]; });
+        return indices;
+    }();
+    static std::size_t find (std::string_view key)
+    {
+        const auto it =
+          std::lower_bound (order.begin (), order.end (), key,
+                            [] (auto index, auto name) { return names[index] < name; });
+        return it != order.end () && names[*it] == key ? *it : count;
+    }
+};
 
-inline void write_float (double value, std::string &out)
+template <typename Output> void write_float (double value, Output &out)
 {
     // Message model §5 fixes only "finite JSON number"; the text is the shortest
     // round-trip form. Negative zero keeps a fraction so a reader sees a float.
@@ -430,7 +470,8 @@ inline void write_float (double value, std::string &out)
     const auto converted = std::to_chars (buffer, buffer + sizeof buffer, value);
     out.append (buffer, converted.ptr);
 }
-template <typename T> bool write_value (const T &value, std::string &out, std::string *error)
+template <typename T, typename Output>
+bool write_value (const T &value, Output &out, std::string *error)
 {
     static_assert (validate_type<T> ());
     if constexpr (std::is_same_v<T, nlohmann::json>) {
@@ -496,30 +537,21 @@ template <typename T> bool write_value (const T &value, std::string &out, std::s
         }
         out += '}';
     } else {
-        constexpr auto fields = zlink::json::dto_traits<T>::fields;
-        constexpr std::size_t count = std::tuple_size_v<decltype (fields)>;
-        static constexpr auto order = [] {
-            std::array<std::string_view, count> names{};
-            std::size_t index = 0;
-            std::apply ([&] (auto... field) { ((names[index++] = field.name), ...); },
-                        zlink::json::dto_traits<T>::fields);
-            std::sort (names.begin (), names.end ());
-            return names;
-        }();
+        using layout = dto_layout<T>;
         out += '{';
-        bool first = true;
-        for (const auto name : order) {
-            if (!first)
+        const auto write_field = [&]<std::size_t Position> () {
+            constexpr auto field = std::get<layout::order[Position]> (layout::fields);
+            if constexpr (Position != 0)
                 out += ',';
-            first = false;
-            if (!write_string (name, out, error))
+            if (!write_string (field.name, out, error))
                 return false;
             out += ':';
-            if (!visit_fields (value, [&] (auto key, const auto &member) {
-                    return key != name || write_value (member, out, error);
-                }))
-                return false;
-        }
+            return write_value (value.*(field.member), out, error);
+        };
+        if (![&]<std::size_t... I> (std::index_sequence<I...>) {
+                return (write_field.template operator()<I> () && ...);
+            }(std::make_index_sequence<layout::count>{}))
+            return false;
         out += '}';
     }
     return true;
@@ -561,6 +593,15 @@ class typed_sax final : public nlohmann::json_sax<nlohmann::json>
         bool (*finish) (typed_sax &, frame &);
         std::vector<std::string> keys;
         bool pending_key = false;
+        bool (*key) (frame &, std::string_view) = &remember_key;
+        destination next{nullptr, &skip_value};
+        std::uint64_t seen = 0;
+        std::vector<std::uint64_t> extra_seen;
+
+        std::uint64_t &seen_word (std::size_t index)
+        {
+            return index == 0 ? seen : extra_seen[index - 1];
+        }
     };
     std::vector<frame> frames;
     destination root;
@@ -609,23 +650,48 @@ class typed_sax final : public nlohmann::json_sax<nlohmann::json>
         } else if constexpr (map_type<T>::value)
             return target (value[parent.keys.back ()]);
         else {
-            destination result{nullptr, &skip_value};
-            visit_fields (value, [&] (auto name, auto &member) {
-                if (name == parent.keys.back ())
-                    result = target (member);
-                return true;
-            });
-            return result;
+            return parent.next;
         }
+    }
+    static bool remember_key (frame &parent, std::string_view key)
+    {
+        if (std::find (parent.keys.begin (), parent.keys.end (), key) != parent.keys.end ())
+            return false;
+        parent.keys.emplace_back (key);
+        return true;
+    }
+    template <typename T> static bool dto_key (frame &parent, std::string_view key)
+    {
+        using layout = dto_layout<T>;
+        const auto index = layout::find (key);
+        parent.next = {nullptr, &skip_value};
+        if (index == layout::count)
+            return remember_key (parent, key);
+        auto &word = parent.seen_word (index / field_mask_bits);
+        const auto bit = std::uint64_t{1} << (index % field_mask_bits);
+        if (word & bit)
+            return false;
+        word |= bit;
+        using select = destination (*) (T &);
+        static constexpr auto targets = []<std::size_t... I> (std::index_sequence<I...>) {
+            return std::array<select, layout::count>{
+              +[] (T &value) { return target (value.*(std::get<I> (layout::fields).member)); }...};
+        }(std::make_index_sequence<layout::count>{});
+        parent.next = targets[index](*static_cast<T *> (parent.value));
+        return true;
     }
     template <typename T> static bool finish (typed_sax &in, frame &parent)
     {
         if constexpr (has_dto<T>) {
-            return visit_fields (*static_cast<T *> (parent.value), [&] (auto name, auto &) {
-                return std::find (parent.keys.begin (), parent.keys.end (), name)
-                         != parent.keys.end ()
-                       || in.reject ("missing required property");
-            });
+            constexpr auto count = dto_layout<T>::count;
+            for (std::size_t index = 0; index < count; index += field_mask_bits) {
+                const auto remaining = count - index;
+                const auto required = remaining >= field_mask_bits
+                                        ? ~std::uint64_t{0}
+                                        : (std::uint64_t{1} << remaining) - 1;
+                if (parent.seen_word (index / field_mask_bits) != required)
+                    return in.reject ("missing required property");
+            }
         }
         return true;
     }
@@ -633,7 +699,13 @@ class typed_sax final : public nlohmann::json_sax<nlohmann::json>
     {
         if (event.kind != expected)
             return reject ("unexpected JSON container");
-        frames.push_back ({expected, &out, &child<T>, &finish<T>, {}});
+        frame next{expected, &out, &child<T>, &finish<T>, {}};
+        if constexpr (has_dto<T>) {
+            next.key = &dto_key<T>;
+            if constexpr (dto_layout<T>::count > field_mask_bits)
+                next.extra_seen.resize ((dto_layout<T>::count - 1) / field_mask_bits);
+        }
+        frames.push_back (std::move (next));
         return true;
     }
     template <typename T> static bool accept (typed_sax &in, void *pointer, const sax_event &event)
@@ -768,6 +840,7 @@ class typed_sax final : public nlohmann::json_sax<nlohmann::json>
     template <typename T>
     typed_sax (T &out, std::string *failure) : root (target (out)), error (failure)
     {
+        frames.reserve (initial_frame_capacity);
     }
     bool complete () const { return healthy && started && frames.empty (); }
     bool null () override { return dispatch ({sax_kind::null}); }
@@ -810,9 +883,8 @@ class typed_sax final : public nlohmann::json_sax<nlohmann::json>
         if (frames.empty () || frames.back ().kind != sax_kind::object)
             return reject ("unexpected property name");
         auto &parent = frames.back ();
-        if (std::find (parent.keys.begin (), parent.keys.end (), value) != parent.keys.end ())
+        if (!parent.key (parent, value))
             return reject ("framework-json-v1 rejects duplicate properties");
-        parent.keys.push_back (value);
         parent.pending_key = true;
         return true;
     }
@@ -828,6 +900,7 @@ template <typename T>
 std::optional<std::string> try_encode (const T &value, std::string *error = nullptr)
 {
     std::string out;
+    out.reserve (initial_output_capacity);
     if (!write_value (value, out, error))
         return std::nullopt;
     return out;
