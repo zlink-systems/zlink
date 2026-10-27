@@ -202,6 +202,77 @@ public sealed class EnvelopeHeaderCacheHotPathTests(Xunit.Abstractions.ITestOutp
     }
 
     [Fact]
+    public void HeaderEnumValidationMatchesTheDefinedValues()
+    {
+        var kinds = Enum.GetValues<ZLinkMessageKind>();
+        var kindValues = kinds
+            .Select(static kind => (int)kind)
+            .Concat(Enumerable.Range(-1, 258))
+            .Append(int.MinValue)
+            .Append(int.MaxValue)
+            .Distinct();
+        foreach (var value in kindValues)
+        {
+            var kind = (ZLinkMessageKind)value;
+            var header = Header("kind-validation") with
+            {
+                FormatMarker = 242,
+                Kind = kind,
+                CorrelationId = "validation",
+                ErrorCode = kind == ZLinkMessageKind.Error ? "error" : null,
+            };
+            AssertValidation(header, kinds.Contains(kind));
+            if (
+                kind
+                is not (
+                    ZLinkMessageKind.Request
+                    or ZLinkMessageKind.Response
+                    or ZLinkMessageKind.Error
+                )
+            )
+                AssertValidation(header with { CorrelationId = null }, kinds.Contains(kind));
+        }
+
+        var origins = Enum.GetValues<ZLinkFlowOrigin>();
+        for (var value = 0; value <= byte.MaxValue; value++)
+        {
+            var origin = (ZLinkFlowOrigin)value;
+            var header = Header("origin-validation") with
+            {
+                FormatMarker = 242,
+                FlowId = "0194f5a0-1234-7000-8000-000000000001",
+                FlowOrigin = origin,
+            };
+            var valid = origins.Contains(origin);
+            AssertValidation(header, valid);
+            Assert.Equal(valid ? header.FlowId : null, ZLinkEnvelopeCodec.ValidFlow(header).FlowId);
+        }
+
+        static void AssertValidation(ZLinkEnvelopeHeader header, bool valid)
+        {
+            using var wire = Message.From(ZLinkEnvelopeCodec.EncodeProtocolJsonBytes(header));
+            if (valid)
+            {
+                using var encoded = ZLinkEnvelopeCodec.EncodeHeader(header);
+                Assert.Equal(header.Kind, ZLinkEnvelopeCodec.DecodeHeader(wire).Kind);
+                Assert.Equal(
+                    header.FlowOrigin,
+                    ZLinkEnvelopeCodec.DecodeHeader(encoded).FlowOrigin
+                );
+            }
+            else
+            {
+                Assert.Throws<ZLinkEnvelopeProtocolException>(() =>
+                    ZLinkEnvelopeCodec.EncodeHeader(header)
+                );
+                Assert.Throws<ZLinkEnvelopeProtocolException>(() =>
+                    ZLinkEnvelopeCodec.DecodeHeader(wire)
+                );
+            }
+        }
+    }
+
+    [Fact]
     public void DynamicHeaderEncodingDoesNotAllocateAManagedBufferProportionalToValues()
     {
         var small = Header("dynamic-allocation") with { CorrelationId = "small" };
