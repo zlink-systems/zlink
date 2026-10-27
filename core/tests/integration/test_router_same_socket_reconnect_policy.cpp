@@ -448,26 +448,19 @@ void test_close_cancels_pending_inproc_retry_timer ()
       "inproc://same-socket-reconnect-close", 100, false, true);
 }
 
-// A due retry runs on the context's control runtime. Context shutdown refuses
-// new control runtimes but leaves the running one in place until teardown, so
-// the retry task must reach the socket's own shutdown check instead of failing
-// on the runtime lookup (#2899).
+// Context shutdown completes pending inproc connects by binding and closing a
+// temporary peer, so the client schedules a retry while the context refuses new
+// control runtimes. That retry runs on the control runtime that still exists
+// until teardown and must reach the socket's own shutdown check instead of
+// failing the runtime lookup (#2899).
 void test_context_shutdown_with_pending_inproc_retry ()
 {
-    const char *endpoint = "inproc://same-socket-reconnect-shutdown";
-    void *server = new_router ("server", ZLINK_RID_DUPLICATE_REJECT);
     void *client = new_router ("client", ZLINK_RID_DUPLICATE_REJECT, 50);
-    observation_t client_events (client);
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_bind (server, endpoint));
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (client, endpoint));
-    const uint64_t old_connection = client_events.wait (
-      ZLINK_EVENT_CONNECTION_READY, 0);
-
-    test_context_socket_close_zero_linger (server);
-    client_events.wait (ZLINK_EVENT_DISCONNECTED, old_connection, true);
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_connect (client, "inproc://same-socket-reconnect-shutdown"));
 
     TEST_ASSERT_SUCCESS_ERRNO (zlink_ctx_shutdown (get_test_context ()));
-    // The retry scheduled by the disconnect becomes due after the shutdown.
+    // The retry scheduled by shutdown's temporary peer becomes due.
     msleep (200);
     test_context_socket_close_zero_linger (client);
 }
