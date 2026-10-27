@@ -1,6 +1,7 @@
 package systems.zlink.framework.execution;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import org.junit.jupiter.api.Test;
 
@@ -18,6 +19,86 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
 
 final class ZLinkSharedPendingOwnershipTest {
+    @Test
+    void closeOnSharedGateControlTurnReportsIncompleteRelocationBoundary() throws Exception {
+        assumeTrue(ZLinkSharedPendingOwnershipTest.class.desiredAssertionStatus());
+        var tasks = new LinkedBlockingQueue<Runnable>();
+        var spot = new ZLinkSerialExecutionQueue(tasks::add, ZLinkExecutionLanePolicy.spot());
+        var gate = new ZLinkSerialExecutionQueue.SharedSpotGate(spot);
+        var actor =
+                new ZLinkSerialExecutionQueue(tasks::add, ZLinkExecutionLanePolicy.actorDelivery());
+        actor.bindSharedSpotGate(gate);
+        var reservation = gate.reserveBoundary(List.of(actor)).toCompletableFuture();
+        tasks.poll(5, TimeUnit.SECONDS).run();
+        var boundary = reservation.join().get(actor);
+        try {
+            var close =
+                    gate.controlAsync(
+                                    () -> {
+                                        actor.close();
+                                        return null;
+                                    })
+                            .toCompletableFuture();
+            tasks.poll(5, TimeUnit.SECONDS).run();
+            assertInstanceOf(
+                    AssertionError.class,
+                    assertThrows(CompletionException.class, close::join).getCause());
+        } finally {
+            boundary.release();
+            tasks.poll(5, TimeUnit.SECONDS).run();
+        }
+        boundary.finished().toCompletableFuture().get(5, TimeUnit.SECONDS);
+        actor.close();
+        spot.close();
+    }
+
+    @Test
+    void closeOutsideSharedGateReportsIncompleteRelocationBoundaryOnWorker() throws Exception {
+        assumeTrue(ZLinkSharedPendingOwnershipTest.class.desiredAssertionStatus());
+        var tasks = new LinkedBlockingQueue<Runnable>();
+        var spot = new ZLinkSerialExecutionQueue(tasks::add, ZLinkExecutionLanePolicy.spot());
+        var gate = new ZLinkSerialExecutionQueue.SharedSpotGate(spot);
+        var actor =
+                new ZLinkSerialExecutionQueue(tasks::add, ZLinkExecutionLanePolicy.actorDelivery());
+        actor.bindSharedSpotGate(gate);
+        var reservation = gate.reserveBoundary(List.of(actor)).toCompletableFuture();
+        tasks.poll(5, TimeUnit.SECONDS).run();
+        var boundary = reservation.join().get(actor);
+        try {
+            assertDoesNotThrow(actor::close);
+            var workerTurn = tasks.poll(5, TimeUnit.SECONDS);
+            assertNotNull(workerTurn);
+            assertThrows(AssertionError.class, workerTurn::run);
+        } finally {
+            boundary.release();
+            var cleanup = tasks.poll(5, TimeUnit.SECONDS);
+            if (cleanup != null) cleanup.run();
+        }
+        boundary.finished().toCompletableFuture().get(5, TimeUnit.SECONDS);
+        actor.close();
+        spot.close();
+    }
+
+    @Test
+    void closeWithFinishedSharedRelocationBoundaryDoesNotThrow() throws Exception {
+        assumeTrue(ZLinkSharedPendingOwnershipTest.class.desiredAssertionStatus());
+        var tasks = new LinkedBlockingQueue<Runnable>();
+        var spot = new ZLinkSerialExecutionQueue(tasks::add, ZLinkExecutionLanePolicy.spot());
+        var gate = new ZLinkSerialExecutionQueue.SharedSpotGate(spot);
+        var actor =
+                new ZLinkSerialExecutionQueue(tasks::add, ZLinkExecutionLanePolicy.actorDelivery());
+        actor.bindSharedSpotGate(gate);
+        var reservation = gate.reserveBoundary(List.of(actor)).toCompletableFuture();
+        tasks.poll(5, TimeUnit.SECONDS).run();
+        var boundary = reservation.join().get(actor);
+        boundary.release();
+        tasks.poll(5, TimeUnit.SECONDS).run();
+        boundary.finished().toCompletableFuture().get(5, TimeUnit.SECONDS);
+        assertDoesNotThrow(actor::close);
+        actor.close();
+        spot.close();
+    }
+
     @Test
     void gateTakeNextInvalidatesProducerIterator() throws Exception {
         var tasks = new LinkedBlockingQueue<Runnable>();

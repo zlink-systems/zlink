@@ -286,9 +286,13 @@ public final class ZLinkSerialExecutionQueue {
             stage.whenComplete((ignored, failure) -> schedule());
         }
 
+        private boolean isCurrentControlTurn() {
+            return CURRENT_CONTROL.get() == this || spot.isCurrent();
+        }
+
         public <T> CompletionStage<T> controlAsync(Supplier<T> operation) {
             Objects.requireNonNull(operation, "operation");
-            if (CURRENT_CONTROL.get() == this || spot.isCurrent()) {
+            if (isCurrentControlTurn()) {
                 try {
                     return CompletableFuture.completedFuture(operation.get());
                 } catch (RuntimeException | Error failure) {
@@ -777,7 +781,8 @@ public final class ZLinkSerialExecutionQueue {
     }
 
     private boolean assertRelocationBoundariesFinished() {
-        if (sharedSpotGate != null) {
+        if (sharedSpotGate != null && !sharedSpotGate.isCurrentControlTurn()) {
+            // drain() rethrows AssertionError from this posted turn on the gate worker.
             sharedSpotGate.post(() -> assertRelocationBoundariesFinishedDirect());
             return true;
         }
