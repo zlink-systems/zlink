@@ -797,6 +797,12 @@ internal sealed class ZLinkActorOwnershipCoordinator(
                     checked((ulong)targetOwner.LeaseGeneration)
                 );
 
+            case ZLinkAuthorityCompareExchangeResult.Conflict { MembershipFailure: { } failure }:
+                throw new ZLinkFrameworkException(
+                    failure,
+                    $"Actor '{actorId}' target membership authority rejected the commit."
+                );
+
             case ZLinkAuthorityCompareExchangeResult.Conflict conflict:
                 if (
                     TryResolveCommittedAuthority(
@@ -1553,6 +1559,16 @@ internal sealed class ZLinkActorOwnershipCoordinator(
                     return;
                 }
 
+                if (
+                    result is ZLinkAuthorityCompareExchangeResult.Conflict
+                    {
+                        MembershipFailure: { } failure
+                    }
+                )
+                    throw new ZLinkFrameworkException(
+                        failure,
+                        $"Actor '{actorId}' target membership authority rejected the commit."
+                    );
                 if (result is not ZLinkAuthorityCompareExchangeResult.Conflict)
                     break;
                 var refreshed = await runtime
