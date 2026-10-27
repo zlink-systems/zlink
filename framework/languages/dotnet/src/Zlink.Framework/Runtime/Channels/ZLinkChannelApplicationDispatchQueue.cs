@@ -127,8 +127,9 @@ internal sealed class ZLinkChannelApplicationDispatchQueue<TWork> : IAsyncDispos
             {
                 var result = _dispatch(work.Payload, cancellationToken);
                 if (!result.IsCompleted)
-                    return CompleteDispatchAsync(result, cancellationToken);
-                result.GetAwaiter().GetResult();
+                    _applicationSource.Retain(CompleteDispatchAsync(result, cancellationToken));
+                else
+                    result.GetAwaiter().GetResult();
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
             catch (Exception exception)
@@ -154,11 +155,6 @@ internal sealed class ZLinkChannelApplicationDispatchQueue<TWork> : IAsyncDispos
         catch (Exception exception)
         {
             Report(exception);
-        }
-        finally
-        {
-            if (_queue.Reader.TryPeek(out _))
-                _applicationSource.Signal();
         }
     }
 
