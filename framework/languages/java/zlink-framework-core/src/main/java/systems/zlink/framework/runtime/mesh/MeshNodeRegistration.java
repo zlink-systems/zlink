@@ -286,6 +286,14 @@ public final class MeshNodeRegistration implements ZLinkMeshNodeBuilder {
     }
 
     public Set<Class<?>> applicationTypes() {
+        return applicationTypes(false);
+    }
+
+    public Set<Class<?>> constructionTypes() {
+        return applicationTypes(true);
+    }
+
+    private Set<Class<?>> applicationTypes(boolean constructionOnly) {
         Set<Class<?>> types = new LinkedHashSet<>();
         routeHandlers.forEach(handler -> types.add(handler.handlerType()));
         channels.values()
@@ -314,7 +322,9 @@ public final class MeshNodeRegistration implements ZLinkMeshNodeBuilder {
                 .values()
                 .forEach(
                         factory -> {
-                            types.add(factory.actorType());
+                            if (!constructionOnly) {
+                                types.add(factory.actorType());
+                            }
                             types.add(factory.factoryType());
                             addRelocationAdapterType(types, factory.relocationPolicy());
                         });
