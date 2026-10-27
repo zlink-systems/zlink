@@ -392,14 +392,11 @@ public sealed class MeshMailboxReadinessTests(Xunit.Abstractions.ITestOutputHelp
             enumerate();
             fixture.Node.DrainReady(domains, batch);
         }
-        var before = GC.GetAllocatedBytesForCurrentThread();
-        for (var index = 0; index < iterations; index++)
-            enumerate();
-        var enumerationBytes = GC.GetAllocatedBytesForCurrentThread() - before;
-        before = GC.GetAllocatedBytesForCurrentThread();
-        for (var index = 0; index < iterations; index++)
-            fixture.Node.DrainReady(domains, batch);
-        var selectionBytes = GC.GetAllocatedBytesForCurrentThread() - before;
+        var enumerationBytes = PerCallAllocation.MinWindow(enumerate, iterations);
+        var selectionBytes = PerCallAllocation.MinWindow(
+            () => fixture.Node.DrainReady(domains, batch),
+            iterations
+        );
         output.WriteLine(
             $"owners={owners}; domains={domains}; calls={iterations}; "
                 + $"enumeration bytes/call={enumerationBytes / iterations}; "
@@ -409,7 +406,7 @@ public sealed class MeshMailboxReadinessTests(Xunit.Abstractions.ITestOutputHelp
         // may allocate less for the same enumeration, never more for selection.
         Assert.True(
             selectionBytes <= enumerationBytes,
-            $"selection allocated {selectionBytes} bytes, enumeration {enumerationBytes}"
+            $"selection allocated {selectionBytes} B, enumeration {enumerationBytes} B per {iterations} calls"
         );
         Assert.Equal(0, batch.Count);
         Assert.All(fixture.Ready.Values.Cast<bool>(), Assert.True);

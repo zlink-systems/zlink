@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Test;
 
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
+import systems.zlink.framework.testutil.PerCallAllocation;
 
 import java.lang.management.ManagementFactory;
 import java.net.URLClassLoader;
@@ -79,10 +80,16 @@ public final class ZLinkServiceMultipartWriteBudgetTest {
         for (int i = 0; i < body.length; i++) body[i] = (byte) i;
         byte[] expected = expectedFrame(header, body);
         writeRoundtrips(header, body, WARMUP_ROUNDTRIPS);
-        long before = threads.getCurrentThreadAllocatedBytes();
-        int frames = writeRoundtrips(header, body, ROUNDTRIPS);
-        long allocated = threads.getCurrentThreadAllocatedBytes() - before;
-        assertEquals(2 * ROUNDTRIPS, frames, "both request and reply were written");
+        int[] frames = new int[1];
+        long allocated =
+                PerCallAllocation.minWindow(
+                        () -> {
+                            frames[0] = writeRoundtrips(header, body, ROUNDTRIPS);
+                            return null;
+                        },
+                        1,
+                        0);
+        assertEquals(2 * ROUNDTRIPS, frames[0], "both request and reply were written");
         for (int roundtrip = 0; roundtrip < ROUNDTRIPS; roundtrip++) {
             for (int direction = 0; direction < 2; direction++) {
                 try (Message first = Message.from(header);

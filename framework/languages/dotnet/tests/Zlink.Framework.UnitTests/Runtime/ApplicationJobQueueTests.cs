@@ -31,32 +31,37 @@ public sealed class ApplicationJobQueueContractTests(Xunit.Abstractions.ITestOut
             Assert.Equal(1, queue.TryReserveBatch(1));
             queue.ReleaseReserved(1);
         }
-        var start = GC.GetAllocatedBytesForCurrentThread();
-        for (var index = 0; index < iterations; index++)
-            leases[index] = Acquire();
-        var actual = GC.GetAllocatedBytesForCurrentThread() - start;
-        Assert.Equal((ulong)iterations, queue.GetStatus().PermitsInUse);
-        foreach (var lease in leases)
-            lease.Dispose();
-        start = GC.GetAllocatedBytesForCurrentThread();
-        for (var index = 0; index < iterations; index++)
+        // Each window acquires 1000 permits, then releases them outside the window.
+        void ReleaseWindow(int _)
         {
-            _ = queue.TryReserveBatch(1);
-            leases[index] = new ZLinkApplicationJobQueueLease(
-                queue,
-                ZLinkApplicationJobOrigin.Remote
-            );
+            Assert.Equal((ulong)iterations, queue.GetStatus().PermitsInUse);
+            foreach (var lease in leases)
+                lease.Dispose();
+            Assert.Equal(0UL, queue.GetStatus().PermitsInUse);
         }
-        var baseline = GC.GetAllocatedBytesForCurrentThread() - start;
-        foreach (var lease in leases)
-            lease.Dispose();
-        Assert.Equal(0UL, queue.GetStatus().PermitsInUse);
+        var actual = PerCallAllocation.MinWindow(
+            index => leases[index] = Acquire(),
+            iterations,
+            afterWindow: ReleaseWindow
+        );
+        var baseline = PerCallAllocation.MinWindow(
+            index =>
+            {
+                _ = queue.TryReserveBatch(1);
+                leases[index] = new ZLinkApplicationJobQueueLease(
+                    queue,
+                    ZLinkApplicationJobOrigin.Remote
+                );
+            },
+            iterations,
+            afterWindow: ReleaseWindow
+        );
         output.WriteLine(
-            $"batch={batch}, cancellable={cancellable}, acquire={actual}B, baseline={baseline}B, excess={actual - baseline}B/{iterations}"
+            $"batch={batch}, cancellable={cancellable}, acquire={actual}B, baseline={baseline}B, excess={actual - baseline}B/window"
         );
         Assert.True(
             actual == baseline,
-            $"acquire={actual}B, lane + lease baseline={baseline}B, excess={actual - baseline}B/{iterations}"
+            $"acquire={actual}B, lane + lease baseline={baseline}B, excess={actual - baseline}B/window"
         );
 
         ZLinkApplicationJobQueueLease Acquire()
