@@ -1,6 +1,7 @@
 #pragma once
 
 #include <nlohmann/json.hpp>
+#include <zlink/json.hpp>
 #include <string>
 #include <vector>
 
@@ -184,247 +185,145 @@ struct node_status_t
 };
 // --8<-- [end:node-direct-contracts]
 
-// The JSON codec is the default one, and it reaches these structs through
-// argument-dependent lookup. A struct with no to_json/from_json pair is
-// rejected when the serializer registry is asked for it, so every contract
-// above needs an entry here. Writing the pair by hand rather than using
-// NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE is what lets the wire keep camelCase
-// names while the C++ members stay snake_case.
+// The default JSON codec reads the DTO traits below. Wire names remain camelCase.
 
-inline void to_json (nlohmann::json &json, const get_player_profile_t &value)
+template <> struct zlink::json::dto_traits<get_player_profile_t>
 {
-    json = {{"playerId", value.player_id}};
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("playerId", &get_player_profile_t::player_id)};
+};
 
-inline void from_json (const nlohmann::json &json, get_player_profile_t &value)
+template <> struct zlink::json::dto_traits<player_profile_t>
 {
-    value.player_id = json.value ("playerId", "");
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("playerId", &player_profile_t::player_id),
+      zlink::json::field ("nickname", &player_profile_t::nickname),
+      zlink::json::field ("level", &player_profile_t::level)};
+};
 
-inline void to_json (nlohmann::json &json, const player_profile_t &value)
+template <> struct zlink::json::dto_traits<record_login_t>
 {
-    json = {{"playerId", value.player_id}, {"nickname", value.nickname}, {"level", value.level}};
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("playerId", &record_login_t::player_id)};
+};
 
-inline void from_json (const nlohmann::json &json, player_profile_t &value)
+template <> struct zlink::json::dto_traits<issue_session_ticket_t>
 {
-    value.player_id = json.value ("playerId", "");
-    value.nickname = json.value ("nickname", "");
-    value.level = json.value ("level", 0);
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("playerId", &issue_session_ticket_t::player_id)};
+};
 
-inline void to_json (nlohmann::json &json, const record_login_t &value)
+template <> struct zlink::json::dto_traits<session_ticket_t>
 {
-    json = {{"playerId", value.player_id}};
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("value", &session_ticket_t::value)};
+};
 
-inline void from_json (const nlohmann::json &json, record_login_t &value)
+template <> struct zlink::json::dto_traits<maintenance_notice_t>
 {
-    value.player_id = json.value ("playerId", "");
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("message", &maintenance_notice_t::message)};
+};
 
-inline void to_json (nlohmann::json &json, const issue_session_ticket_t &value)
+template <> struct zlink::json::dto_traits<get_node_status_t>
 {
-    json = {{"playerId", value.player_id}};
-}
+    static constexpr auto fields = std::tuple{};
+};
 
-inline void from_json (const nlohmann::json &json, issue_session_ticket_t &value)
+template <> struct zlink::json::dto_traits<node_status_t>
 {
-    value.player_id = json.value ("playerId", "");
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("meshName", &node_status_t::mesh_name),
+      zlink::json::field ("channelName", &node_status_t::channel_name),
+      zlink::json::field ("calledBy", &node_status_t::called_by),
+      zlink::json::field ("uptime", &node_status_t::uptime)};
+};
 
-inline void to_json (nlohmann::json &json, const session_ticket_t &value)
+template <> struct zlink::json::dto_traits<open_room_t>
 {
-    json = {{"value", value.value}};
-}
+    static constexpr auto fields = std::tuple{zlink::json::field ("title", &open_room_t::title)};
+};
 
-inline void from_json (const nlohmann::json &json, session_ticket_t &value)
+template <> struct zlink::json::dto_traits<post_chat_t>
 {
-    value.value = json.value ("value", "");
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("playerId", &post_chat_t::player_id),
+      zlink::json::field ("text", &post_chat_t::text)};
+};
 
-inline void to_json (nlohmann::json &json, const maintenance_notice_t &value)
+template <> struct zlink::json::dto_traits<get_room_state_t>
 {
-    json = {{"message", value.message}};
-}
+    static constexpr auto fields = std::tuple{};
+};
 
-inline void from_json (const nlohmann::json &json, maintenance_notice_t &value)
+template <> struct zlink::json::dto_traits<room_state_t>
 {
-    value.message = json.value ("message", "");
-}
+    static constexpr auto fields = std::tuple{zlink::json::field ("title", &room_state_t::title),
+                                              zlink::json::field ("chat", &room_state_t::chat)};
+};
 
-inline void to_json (nlohmann::json &json, const get_node_status_t &)
+template <> struct zlink::json::dto_traits<join_match_queue_t>
 {
-    json = nlohmann::json::object ();
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("playerId", &join_match_queue_t::player_id)};
+};
 
-inline void from_json (const nlohmann::json &, get_node_status_t &)
+template <> struct zlink::json::dto_traits<match_queue_status_t>
 {
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("waiting", &match_queue_status_t::waiting)};
+};
 
-inline void to_json (nlohmann::json &json, const node_status_t &value)
+template <> struct zlink::json::dto_traits<create_player_t>
 {
-    json = {{"meshName", value.mesh_name},
-            {"channelName", value.channel_name},
-            {"calledBy", value.called_by},
-            {"uptime", value.uptime}};
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("nickname", &create_player_t::nickname)};
+};
 
-inline void from_json (const nlohmann::json &json, node_status_t &value)
+template <> struct zlink::json::dto_traits<change_nickname_t>
 {
-    value.mesh_name = json.value ("meshName", "");
-    value.channel_name = json.value ("channelName", "");
-    value.called_by = json.value ("calledBy", "");
-    value.uptime = json.value ("uptime", "");
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("nickname", &change_nickname_t::nickname)};
+};
 
-inline void to_json (nlohmann::json &json, const open_room_t &value)
+template <> struct zlink::json::dto_traits<get_player_t>
 {
-    json = {{"title", value.title}};
-}
+    static constexpr auto fields = std::tuple{};
+};
 
-inline void from_json (const nlohmann::json &json, open_room_t &value)
+template <> struct zlink::json::dto_traits<player_info_t>
 {
-    value.title = json.value ("title", "");
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("playerId", &player_info_t::player_id),
+      zlink::json::field ("nickname", &player_info_t::nickname)};
+};
 
-inline void to_json (nlohmann::json &json, const post_chat_t &value)
+template <> struct zlink::json::dto_traits<ping_t>
 {
-    json = {{"playerId", value.player_id}, {"text", value.text}};
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("sentAtUnixMs", &ping_t::sent_at_unix_ms)};
+};
 
-inline void from_json (const nlohmann::json &json, post_chat_t &value)
+template <> struct zlink::json::dto_traits<pong_t>
 {
-    value.player_id = json.value ("playerId", "");
-    value.text = json.value ("text", "");
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("sentAtUnixMs", &pong_t::sent_at_unix_ms)};
+};
 
-inline void to_json (nlohmann::json &json, const get_room_state_t &)
+template <> struct zlink::json::dto_traits<authenticate_t>
 {
-    json = nlohmann::json::object ();
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("playerId", &authenticate_t::player_id)};
+};
 
-inline void from_json (const nlohmann::json &, get_room_state_t &)
+template <> struct zlink::json::dto_traits<authenticated_t>
 {
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("playerId", &authenticated_t::player_id)};
+};
 
-inline void to_json (nlohmann::json &json, const room_state_t &value)
+template <> struct zlink::json::dto_traits<nickname_changed_t>
 {
-    json = {{"title", value.title}, {"chat", value.chat}};
-}
-
-inline void from_json (const nlohmann::json &json, room_state_t &value)
-{
-    value.title = json.value ("title", "");
-    value.chat = json.value ("chat", std::vector<std::string>{});
-}
-
-inline void to_json (nlohmann::json &json, const join_match_queue_t &value)
-{
-    json = {{"playerId", value.player_id}};
-}
-
-inline void from_json (const nlohmann::json &json, join_match_queue_t &value)
-{
-    value.player_id = json.value ("playerId", "");
-}
-
-inline void to_json (nlohmann::json &json, const match_queue_status_t &value)
-{
-    json = {{"waiting", value.waiting}};
-}
-
-inline void from_json (const nlohmann::json &json, match_queue_status_t &value)
-{
-    value.waiting = json.value ("waiting", 0);
-}
-
-inline void to_json (nlohmann::json &json, const create_player_t &value)
-{
-    json = {{"nickname", value.nickname}};
-}
-
-inline void from_json (const nlohmann::json &json, create_player_t &value)
-{
-    value.nickname = json.value ("nickname", "");
-}
-
-inline void to_json (nlohmann::json &json, const change_nickname_t &value)
-{
-    json = {{"nickname", value.nickname}};
-}
-
-inline void from_json (const nlohmann::json &json, change_nickname_t &value)
-{
-    value.nickname = json.value ("nickname", "");
-}
-
-inline void to_json (nlohmann::json &json, const get_player_t &)
-{
-    json = nlohmann::json::object ();
-}
-
-inline void from_json (const nlohmann::json &, get_player_t &)
-{
-}
-
-inline void to_json (nlohmann::json &json, const player_info_t &value)
-{
-    json = {{"playerId", value.player_id}, {"nickname", value.nickname}};
-}
-
-inline void from_json (const nlohmann::json &json, player_info_t &value)
-{
-    value.player_id = json.value ("playerId", "");
-    value.nickname = json.value ("nickname", "");
-}
-
-inline void to_json (nlohmann::json &json, const ping_t &value)
-{
-    json = {{"sentAtUnixMs", value.sent_at_unix_ms}};
-}
-
-inline void from_json (const nlohmann::json &json, ping_t &value)
-{
-    value.sent_at_unix_ms = json.value ("sentAtUnixMs", "");
-}
-
-inline void to_json (nlohmann::json &json, const pong_t &value)
-{
-    json = {{"sentAtUnixMs", value.sent_at_unix_ms}};
-}
-
-inline void from_json (const nlohmann::json &json, pong_t &value)
-{
-    value.sent_at_unix_ms = json.value ("sentAtUnixMs", "");
-}
-
-inline void to_json (nlohmann::json &json, const authenticate_t &value)
-{
-    json = {{"playerId", value.player_id}};
-}
-
-inline void from_json (const nlohmann::json &json, authenticate_t &value)
-{
-    value.player_id = json.value ("playerId", "");
-}
-
-inline void to_json (nlohmann::json &json, const authenticated_t &value)
-{
-    json = {{"playerId", value.player_id}};
-}
-
-inline void from_json (const nlohmann::json &json, authenticated_t &value)
-{
-    value.player_id = json.value ("playerId", "");
-}
-
-inline void to_json (nlohmann::json &json, const nickname_changed_t &value)
-{
-    json = {{"nickname", value.nickname}};
-}
-
-inline void from_json (const nlohmann::json &json, nickname_changed_t &value)
-{
-    value.nickname = json.value ("nickname", "");
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("nickname", &nickname_changed_t::nickname)};
+};

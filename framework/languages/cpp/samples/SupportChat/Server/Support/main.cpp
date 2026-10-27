@@ -190,12 +190,13 @@ class support_user_actor_relocation_adapter_t final
   public:
     task_t<std::vector<std::byte>> capture (support_user_actor_t &actor, std::stop_token) override
     {
-        const auto message = zlink::message_t::from_json (
-          support_user_actor_relocation_state_t{actor.display_name,
-                                                actor.role,
-                                                actor.participant_id,
-                                                actor.current_conversation_id,
-                                                actor.completed_join_operations ()});
+        const auto message = zlink::message_t::from (
+          nlohmann::json (support_user_actor_relocation_state_t{actor.display_name,
+                                                                actor.role,
+                                                                actor.participant_id,
+                                                                actor.current_conversation_id,
+                                                                actor.completed_join_operations ()})
+            .dump ());
         co_return std::vector<std::byte> (message.bytes ().begin (), message.bytes ().end ());
     }
 
@@ -204,7 +205,8 @@ class support_user_actor_relocation_adapter_t final
     {
         const auto message = zlink::message_t::from (
           std::span<const std::byte> (payload.data (), payload.size ()));
-        auto relocated = message.parse_json<support_user_actor_relocation_state_t> ();
+        auto relocated = message.parse_json<nlohmann::json> ()
+                           .get<support_user_actor_relocation_state_t> ();
         actor.display_name = std::move (relocated.display_name);
         actor.role = std::move (relocated.role);
         actor.participant_id = std::move (relocated.participant_id);
