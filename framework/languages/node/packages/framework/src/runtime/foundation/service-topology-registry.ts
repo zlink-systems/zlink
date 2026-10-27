@@ -214,6 +214,18 @@ export class ServiceTopologyRegistry {
     return this.peersByRid.get(nodeRoutingId);
   }
 
+  hasRemoteAdmit(nodeRoutingId: string, connectionId?: string | bigint): boolean {
+    const admission = this.routeAdmission(nodeRoutingId);
+    return (
+      admission?.remoteAdmitReceived === true &&
+      (connectionId === undefined || admission.connectionId === connectionId)
+    );
+  }
+
+  readyPeer(nodeRoutingId: string): AdmittedServicePeer | undefined {
+    return this.hasRemoteAdmit(nodeRoutingId) ? this.admittedPeer(nodeRoutingId) : undefined;
+  }
+
   peers(): readonly AdmittedServicePeer[] {
     return this.peersCore();
   }
@@ -331,7 +343,8 @@ export class ServiceTopologyRegistry {
       (value) => value.peer.descriptor.nodeRoutingId,
       (left, right) =>
         compareOrdinal(left.peer.descriptor.nodeRoutingId, right.peer.descriptor.nodeRoutingId),
-      (value) => isReady(value.peer)
+      (value) =>
+        this.readyPeer(value.peer.descriptor.nodeRoutingId) !== undefined && isReady(value.peer)
     )?.peer;
   }
 
@@ -357,7 +370,7 @@ export class ServiceTopologyRegistry {
       (peer) => peer.descriptor.nodeRoutingId,
       (left, right) =>
         compareOrdinal(left.descriptor.nodeRoutingId, right.descriptor.nodeRoutingId),
-      isReady
+      (peer) => this.readyPeer(peer.descriptor.nodeRoutingId) !== undefined && isReady(peer)
     );
   }
 
@@ -423,7 +436,12 @@ export class ServiceTopologyRegistry {
         descriptor.pendingCapacityUsed < descriptor.pendingCapacityLimit
     );
     if (withCapacity.length === 0) return { status: 'capacity', eligible: [] };
-    const weighted = withCapacity.filter((descriptor) => descriptor.placementWeight > 0);
+    const weighted = withCapacity.filter(
+      (descriptor) =>
+        descriptor.placementWeight > 0 &&
+        (descriptor.nodeRoutingId === this.local.nodeRoutingId ||
+          this.readyPeer(descriptor.nodeRoutingId) !== undefined)
+    );
     return { status: weighted.some(isReady) ? 'available' : 'unavailable', eligible: weighted };
   }
 
