@@ -1171,7 +1171,9 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
 
   add_executable(test_cpp_framework_operation_registry
     tests/Zlink.Framework.UnitTests/test_cpp_framework_operation_registry.cpp
-    framework/src/runtime/foundation/operation_registry.cpp)
+    framework/src/runtime/foundation/operation_registry.cpp
+    framework/src/runtime/execution/state_lane.cpp
+    framework/src/runtime/dispatch/offload_executor.cpp)
   target_compile_features(test_cpp_framework_operation_registry PRIVATE cxx_std_20)
   target_include_directories(test_cpp_framework_operation_registry PRIVATE
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
@@ -1188,6 +1190,12 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     COMMAND test_cpp_framework_operation_registry
     LABELS "framework-unit;framework-foundation;operation;resource"
     TIMEOUT 30)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_request_deadline_index_contract
+    COMMAND test_cpp_framework_operation_registry --request-deadline
+    LABELS "framework-contract;operation;resource"
+    TIMEOUT 30)
+
   zlink_framework_cpp_add_test(
     NAME test_cpp_framework_completion_dispatcher_shutdown
     COMMAND test_cpp_framework_operation_registry --dispatcher-shutdown

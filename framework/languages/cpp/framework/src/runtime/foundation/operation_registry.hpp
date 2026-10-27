@@ -2,6 +2,7 @@
 #pragma once
 
 #include "runtime/operations/call_id.hpp"
+#include "runtime/execution/state_lane.hpp"
 #include "runtime/foundation/operation_terminal.hpp"
 #include "runtime/diagnostics/mesh_request_metrics.hpp"
 
@@ -10,12 +11,14 @@
 
 #include <chrono>
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <stop_token>
 #include <unordered_map>
 #include <vector>
 
@@ -48,7 +51,10 @@ class operation_registry_t
     std::optional<request_identity_t> request_identity (call_id_t id, call_id_t operation) const;
 
     operation_registry_t ();
-    explicit operation_registry_t (now_t now);
+    explicit operation_registry_t (now_t now, std::function<void ()> deadline_changed = {});
+    explicit operation_registry_t (runtime::state_lane_t &owner,
+                                   now_t now = &clock_t::now,
+                                   std::function<void ()> deadline_changed = {});
     ~operation_registry_t () noexcept;
 
     bool register_operation (call_id_t id,
@@ -56,7 +62,8 @@ class operation_registry_t
                              callback_t callback,
                              std::vector<std::uint8_t> target_routing_id = {},
                              mesh_request_metric_t request_metric = {},
-                             std::optional<request_identity_t> request = {});
+                             std::optional<request_identity_t> request = {},
+                             std::stop_token cancellation = {});
     bool contains (const call_id_t &id) const;
     std::size_t fail_target (const std::vector<std::uint8_t> &target_routing_id,
                              operation_terminal_t terminal);
@@ -77,16 +84,16 @@ class operation_registry_t
                std::optional<operation_terminal_t> request_terminal = {});
     bool unregister (const call_id_t &id);
     std::size_t expire (clock_t::time_point now);
-    // The next occupied management tick includes slots with remaining rounds.
+    // An already reserved visit survives terminal removal, including the last entry.
     std::optional<clock_t::time_point> next_deadline () const;
     std::size_t shutdown ();
     std::size_t size () const;
+    std::size_t index_size () const;
 
   private:
     using id_hash_t = runtime::call_id_hash_t;
 
     static constexpr std::size_t deadline_slot_count = 256;
-    static constexpr unsigned deadline_bitmap_word_bits = 64;
     static constexpr auto deadline_tick_duration = std::chrono::milliseconds (1);
 
     struct pending_t
@@ -94,7 +101,7 @@ class operation_registry_t
         std::unique_ptr<operation_completion_item_t> completion;
         std::vector<std::uint8_t> target_routing_id;
         call_id_t id;
-        std::uint64_t deadline_rounds = 0;
+        clock_t::time_point deadline;
         std::size_t deadline_slot = 0;
         pending_t *deadline_previous = nullptr;
         pending_t *deadline_next = nullptr;
@@ -102,19 +109,31 @@ class operation_registry_t
     };
 
     bool take (const call_id_t &id, std::unique_ptr<operation_completion_item_t> &completion);
-    std::optional<std::uint64_t> next_occupied_tick () const noexcept;
-    void index_deadline (const call_id_t &id, clock_t::time_point deadline, pending_t &pending);
+    bool index_deadline (const call_id_t &id, clock_t::time_point deadline, pending_t &pending);
     void unindex_deadline (pending_t &pending) noexcept;
 
+    template <typename Work> decltype (auto) on_owner (Work &&work) const
+    {
+        if (runtime::state_lane_t::current () == &_owner)
+            return work ();
+        return _owner.run_sync (std::forward<Work> (work));
+    }
+
+    std::unique_ptr<runtime::state_lane_t> _owned_lane;
+    runtime::state_lane_t &_owner;
     std::shared_ptr<operation_registry_drain_state_t> _drain_state;
     mutable std::mutex _mutex;
-    std::unordered_map<call_id_t, pending_t, id_hash_t> _pending;
+    std::unordered_map<call_id_t, pending_t *, id_hash_t> _pending;
     const now_t _now;
     const clock_t::time_point _deadline_origin;
+    std::function<void ()> _deadline_changed;
     std::array<pending_t *, deadline_slot_count> _deadline_heads{};
     std::array<pending_t *, deadline_slot_count> _deadline_tails{};
-    std::array<std::uint64_t, deadline_slot_count / deadline_bitmap_word_bits> _deadline_occupied{};
-    std::uint64_t _deadline_tick = 0;
+    std::size_t _index_size = 0;
+    // The owner's single reservation is also the polling resource's wake snapshot.
+    std::atomic<clock_t::duration::rep> _next_visit{clock_t::duration::max ().count ()};
+    clock_t::time_point _visit_next;
+    std::size_t _visit_slot = deadline_slot_count;
     pending_t *_deadline_cursor = nullptr;
     bool _closed = false;
 };

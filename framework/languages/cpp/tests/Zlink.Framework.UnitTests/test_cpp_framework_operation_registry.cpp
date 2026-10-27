@@ -12,6 +12,7 @@
 #include <string_view>
 #include "runtime/foundation/operation_registry.hpp"
 #include "runtime/operations/exactly_once_table.hpp"
+#include <zlink/framework/detail/deadline_scheduler.hpp>
 
 #include <nlohmann/json.hpp>
 
@@ -53,10 +54,12 @@ foundation::call_id_t id (std::uint8_t value)
 
 foundation::operation_registry_t::clock_t::time_point injected_now{};
 foundation::operation_registry_t::clock_t::duration injected_step{};
+std::size_t clock_reads = 0;
 
 // Each read advances the injected clock by the configured step.
 foundation::operation_registry_t::clock_t::time_point read_injected_clock ()
 {
+    ++clock_reads;
     const auto now = injected_now;
     injected_now += injected_step;
     return now;
@@ -479,8 +482,155 @@ void verify_completion_resource_transitions ()
               << " transitions_after=" << after << " handoffs=" << handoffs << '\n';
 }
 
+void verify_request_deadline_index_contract ()
+{
+    using namespace std::chrono_literals;
+    using registry_t = foundation::operation_registry_t;
+    using terminal_t = foundation::operation_terminal_t;
+    const auto timers =
+      zlink::framework::detail::deadline_scheduler_t::instance ().scheduled_count ();
+    injected_now = {};
+    injected_step = {};
+    std::size_t wakeups = 0;
+    registry_t registry (&read_injected_clock, [&] { ++wakeups; });
+    std::size_t visits = 0, reservations = 0;
+    std::optional<registry_t::clock_t::time_point> reserved;
+    for (std::size_t i = 0; i < 1000; ++i) {
+        const foundation::call_id_t key{1001, i + 1};
+        assert (registry.register_operation (key, injected_now + 30s, [] (auto, auto) {}));
+        const auto next = registry.next_deadline ();
+        if (!reserved || next != reserved) {
+            ++reservations;
+            reserved = next;
+        }
+        const auto reads = clock_reads;
+        assert (registry.complete (key, {}));
+        assert (clock_reads == reads);
+        assert (registry.size () == 0);
+        assert (registry.next_deadline () == reserved);
+        injected_now += 1ms;
+        if (injected_now >= *reserved) {
+            assert (registry.expire (injected_now) == 0);
+            ++visits;
+            assert (registry.index_size () == 0);
+            assert (!registry.next_deadline ());
+            reserved.reset ();
+        }
+    }
+    assert (reservations <= 4 && wakeups == reservations);
+    assert (visits <= 3);
+    // #2889: retain the already booked visit, then stop completely at idle.
+    assert (registry.next_deadline ());
+    injected_now = *registry.next_deadline ();
+    assert (registry.expire (injected_now) == 0);
+    assert (registry.index_size () == 0);
+    assert (!registry.next_deadline ());
+    for (int i = 0; i < 1000; ++i) {
+        injected_now += 1ms;
+        assert (registry.expire (injected_now) == 0);
+        assert (!registry.next_deadline ());
+    }
+    assert (wakeups == reservations);
+    // Long deadlines in every slot must not schedule one turn per occupied slot.
+    const auto started = injected_now;
+    for (std::size_t i = 0; i < 1000; ++i)
+        assert (
+          registry.register_operation ({1002, i + 1}, started + 30s + i * 1ms, [] (auto, auto) {}));
+    assert (registry.next_deadline () == started + 256ms);
+    for (std::size_t i = 0; i < 1000; ++i)
+        assert (registry.cancel ({1002, i + 1}));
+    assert (registry.size () == 0 && registry.index_size () == 1000);
+    injected_now = started + 256ms;
+    registry.expire (injected_now);
+    assert (registry.index_size () == 0 && !registry.next_deadline ());
+    std::stop_source cancel_batch;
+    for (std::size_t i = 0; i < 1000; ++i)
+        assert (registry.register_operation (
+          {1006, i + 1}, injected_now + 30s, [] (auto, auto) {}, {}, {}, {},
+          cancel_batch.get_token ()));
+    cancel_batch.request_stop ();
+    assert (registry.size () == 0 && registry.index_size () == 1000);
+    injected_now += 256ms;
+    registry.expire (injected_now);
+    assert (registry.index_size () == 0 && !registry.next_deadline ());
+    // A previously cancelled caller still uses the same C1 terminal take.
+    assert (registry.register_operation (
+      {1006, 1001}, injected_now + 30s, [] (auto, auto) {}, {}, {}, {}, cancel_batch.get_token ()));
+    assert (registry.size () == 0);
+    injected_now += 256ms;
+    registry.expire (injected_now);
+    assert (registry.index_size () == 0);
+    // Reusing an id must not let an old index reference expire the new entry.
+    assert (registry.register_operation ({1003, 1}, injected_now + 1ms, [] (auto, auto) {}));
+    assert (registry.unregister ({1003, 1}));
+    assert (registry.register_operation ({1003, 1}, injected_now + 1s, [] (auto, auto) {}));
+    injected_now += 1ms;
+    assert (registry.expire (injected_now) == 0);
+    assert (registry.contains ({1003, 1}) && registry.index_size () == 1);
+    assert (registry.unregister ({1003, 1}));
+    registry.shutdown ();
+    assert (zlink::framework::detail::deadline_scheduler_t::instance ().scheduled_count ()
+            == timers);
+
+    std::size_t earlier_wakes = 0;
+    registry_t earlier (&read_injected_clock, [&] { ++earlier_wakes; });
+    assert (earlier.register_operation ({1007, 1}, injected_now + 1s, [] (auto, auto) {}));
+    assert (earlier.register_operation ({1007, 2}, injected_now + 5ms, [] (auto, auto) {}));
+    assert (earlier.register_operation ({1007, 3}, injected_now + 50ms, [] (auto, auto) {}));
+    assert (earlier_wakes == 2 && earlier.next_deadline () == injected_now + 5ms);
+    earlier.shutdown ();
+    // Terminal removal must work while the operation owner's lane is occupied.
+    runtime::offload_executor_t executor;
+    runtime::state_lane_t lane (executor);
+    registry_t direct (lane);
+    std::stop_source direct_cancel;
+    assert (direct.register_operation (
+      {1004, 1}, registry_t::clock_t::time_point::max (), [] (auto, auto) {}, {}, {}, {},
+      direct_cancel.get_token ()));
+    const auto reserved_direct = direct.next_deadline ();
+    std::latch entered (1), release (1);
+    std::thread blocked ([&] {
+        lane.run_sync ([&] {
+            entered.count_down ();
+            release.wait ();
+        });
+    });
+    entered.wait ();
+    direct_cancel.request_stop ();
+    const auto taken = !direct.contains ({1004, 1});
+    const auto pending = direct.size ();
+    const auto unchanged = direct.next_deadline () == reserved_direct;
+    const auto idle_expired = direct.expire (registry_t::clock_t::time_point{});
+    release.count_down ();
+    blocked.join ();
+    assert (taken && pending == 0 && unchanged && idle_expired == 0);
+    assert (direct.index_size () == 1);
+    direct.shutdown ();
+    std::shared_ptr<registry_t> late;
+    {
+        runtime::offload_executor_t late_executor;
+        runtime::state_lane_t late_lane (late_executor);
+        late = std::make_shared<registry_t> (late_lane);
+        assert (late->register_operation ({1005, 1}, registry_t::clock_t::time_point::max (),
+                                          [] (auto, auto) {}));
+        assert (late->shutdown () == 1);
+    }
+    assert (!late->complete ({1005, 1}, {}));
+    assert (late->shutdown () == 0);
+    late.reset ();
+    std::cout << "request_deadline_index_contract serial_requests=1000 batch_requests=2000 "
+                 "timers=0 serial_reservations="
+              << reservations << " maintenance_visits=" << visits + 1
+              << " pending=0 index=0 owner_blocked_take=1\n";
+}
+
 int main (int argc, char **argv)
 {
+    if (argc == 2 && std::string_view (argv[1]) == "--request-deadline") {
+        zlink::framework::completion_owner_t owner;
+        verify_request_deadline_index_contract ();
+        return 0;
+    }
     if (argc == 2 && std::string_view (argv[1]) == "--dispatcher-lifetime") {
         verify_provider_completion_releases_dispatcher ();
         verify_worker_lifecycle_is_rejected ();
@@ -543,45 +693,35 @@ int main (int argc, char **argv)
     {
         foundation::operation_registry_t ordered;
         std::array<bool, 128> active{};
-        active.fill (true);
         for (std::size_t index = 0; index < active.size (); ++index)
             assert (ordered.register_operation (id (static_cast<std::uint8_t> (index + 1)),
                                                 now + std::chrono::microseconds (index ^ 63),
                                                 [] (auto, auto) {}));
         const auto first_tick = *ordered.next_deadline ();
         assert (first_tick >= now && first_tick <= now + std::chrono::milliseconds (1));
-        // Hot-path E3: next_deadline is the bitmap-selected occupied 1ms wheel tick.
+        // #2889 preserves the existing reservation when C1 removes entries.
         for (std::size_t step = 0; step < active.size (); ++step) {
-            std::optional<foundation::operation_registry_t::clock_t::time_point> expected;
-            for (std::size_t index = 0; index < active.size (); ++index) {
-                const auto deadline = now + std::chrono::microseconds (index ^ 63);
-                if (active[index] && (!expected || deadline < *expected))
-                    expected = deadline;
-            }
-            if (expected)
-                expected = first_tick
-                           + std::chrono::ceil<std::chrono::milliseconds> (*expected - first_tick);
-            assert (ordered.next_deadline () == expected);
+            assert (ordered.next_deadline () == first_tick);
             const auto removed = step * 37 % active.size ();
             assert (ordered.unregister (id (static_cast<std::uint8_t> (removed + 1))));
-            active[removed] = false;
         }
-        assert (!ordered.next_deadline ());
+        ordered.expire (now + std::chrono::milliseconds (256));
+        assert (!ordered.next_deadline () && ordered.index_size () == 0);
     }
     {
-        foundation::operation_registry_t wheel;
-        const auto deadline =
-          foundation::operation_registry_t::clock_t::now () + std::chrono::milliseconds (513);
+        injected_now = {};
+        injected_step = {};
+        foundation::operation_registry_t wheel (&read_injected_clock);
+        const auto deadline = injected_now + std::chrono::milliseconds (513);
         assert (wheel.register_operation (id (1), deadline, [] (auto, auto) {}));
         const auto first_tick = *wheel.next_deadline ();
-        // Hot-path E3: remaining rounds prevent early expiry; the deadline rounds up by at most 1ms.
+        assert (first_tick == injected_now + std::chrono::milliseconds (256));
         assert (wheel.expire (first_tick) == 0);
         assert (*wheel.next_deadline () == first_tick + std::chrono::milliseconds (256));
         assert (wheel.expire (first_tick + std::chrono::milliseconds (256)) == 0);
-        const auto expiry_tick = first_tick + std::chrono::milliseconds (512);
-        assert (expiry_tick >= deadline && expiry_tick <= deadline + std::chrono::milliseconds (1));
+        assert (*wheel.next_deadline () == deadline);
         assert (wheel.expire (deadline - std::chrono::nanoseconds (1)) == 0);
-        assert (wheel.expire (expiry_tick) == 1);
+        assert (wheel.expire (deadline) == 1);
         assert (!wheel.next_deadline ());
     }
     {
