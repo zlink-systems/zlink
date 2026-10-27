@@ -125,11 +125,12 @@ export class ZLinkBoundSessionService {
       this.actorSlot(route)
     );
     try {
-      throwIfAborted(signal);
-      if ((await this.routes.route(actorId))?.bindingToken !== route.bindingToken) {
-        return { status: ZLinkSubmitStatus.TargetNotFound };
-      }
-      return await route.context.stream.submitRaw(frame);
+      return (
+        (await this.routes.submitCurrent(actorId, route.bindingToken, (current) => {
+          throwIfAborted(signal);
+          return current.context.stream.submitRaw(frame);
+        })) ?? { status: ZLinkSubmitStatus.TargetNotFound }
+      );
     } finally {
       frame.close();
     }
@@ -370,10 +371,12 @@ export class ZLinkBoundSessionService {
       this.actorSlot(route)
     );
     try {
-      if ((await this.routes.route(actorId))?.bindingToken !== route.bindingToken) {
+      const result = await this.routes.submitCurrent(actorId, route.bindingToken, (current) =>
+        current.context.stream.submitRaw(frame)
+      );
+      if (result === undefined) {
         return false;
       }
-      const result = await route.context.stream.submitRaw(frame);
       if (result.status !== ZLinkSubmitStatus.Submitted) {
         throw new Error(`Actor '${actorId}' local bound session ${operationName} failed.`);
       }
