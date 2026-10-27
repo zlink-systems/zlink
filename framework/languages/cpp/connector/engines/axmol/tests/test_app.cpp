@@ -237,6 +237,8 @@ int main (int argc, char **argv)
                  && failed_reply_hooks[0].error
                  && failed_reply_hooks[0].error->code == error_code_t::disconnected,
                "failed request reply hook missing error");
+        check (failures.empty (), "result callback ran in reply hook pump");
+        disconnected.dispatch ();
         check (failures.size () == 1 && !failures[0].reply
                  && failures[0].error_code == error_code_t::disconnected
                  && !failures[0].error_message.empty (),
