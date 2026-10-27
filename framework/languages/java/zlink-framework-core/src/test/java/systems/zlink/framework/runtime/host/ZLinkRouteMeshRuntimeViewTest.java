@@ -26,7 +26,6 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkProviderLocationR
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryProviderLocationStore;
 
-import java.net.ServerSocket;
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -236,6 +235,15 @@ final class ZLinkRouteMeshRuntimeViewTest {
     @Test
     void unavailableRequiredPeerDegradesTopologyButNotPlacement() throws Exception {
         RoutingId missingRid = rid("view-missing-target");
+        var unavailableTarget = new DefaultZLinkFrameworkOptions();
+        unavailableTarget
+                .addRouteMesh(MESH)
+                .listen("tcp://127.0.0.1:0")
+                .setRoutingId(missingRid);
+        String unavailableEndpoint;
+        try (var targetRuntime = start(unavailableTarget)) {
+            unavailableEndpoint = endpoint(targetRuntime);
+        }
         var source = new DefaultZLinkFrameworkOptions();
         source.addLocationStore(new ZLinkInMemoryLocationStore());
         var sourceNode =
@@ -244,7 +252,7 @@ final class ZLinkRouteMeshRuntimeViewTest {
                         .setRoutingId(rid("view-required-source"));
         sourceNode.channelName("work").server();
         sourceNode.objects().server();
-        sourceNode.peerConnections().connect(missingRid, "tcp://127.0.0.1:" + unusedPort());
+        sourceNode.peerConnections().connect(missingRid, unavailableEndpoint);
         try (var sourceRuntime = start(source)) {
             ZLinkFrameworkRuntimeTestAccess.startupCompletion(sourceRuntime)
                     .toCompletableFuture()
@@ -375,13 +383,23 @@ final class ZLinkRouteMeshRuntimeViewTest {
 
     @Test
     void zeroWeightPlacementUsesCapacityReasonEvenWhenAPeerIsUnavailable() throws Exception {
+        RoutingId missingRid = rid("view-weight-zero-missing");
+        var unavailableTarget = new DefaultZLinkFrameworkOptions();
+        unavailableTarget
+                .addRouteMesh(MESH)
+                .listen("tcp://127.0.0.1:0")
+                .setRoutingId(missingRid);
+        String unavailableEndpoint;
+        try (var targetRuntime = start(unavailableTarget)) {
+            unavailableEndpoint = endpoint(targetRuntime);
+        }
         var options = new DefaultZLinkFrameworkOptions();
         options.addLocationStore(new ZLinkInMemoryLocationStore());
         var node = options.addRouteMesh(MESH).listen("tcp://127.0.0.1:0").setPlacementWeight(0);
         node.objects().server();
         node.channelName("work").server();
         node.peerConnections()
-                .connect(rid("view-weight-zero-missing"), "tcp://127.0.0.1:" + unusedPort());
+                .connect(missingRid, unavailableEndpoint);
         try (var runtime = start(options)) {
             var status =
                     awaitSnapshot(
@@ -724,12 +742,6 @@ final class ZLinkRouteMeshRuntimeViewTest {
 
     private static String endpoint(ZLinkFrameworkRuntime runtime) {
         return runtime.listenerStatus(ZLinkListenerKind.ROUTE_MESH, MESH).endpoint();
-    }
-
-    private static int unusedPort() throws Exception {
-        try (var socket = new ServerSocket(0)) {
-            return socket.getLocalPort();
-        }
     }
 
     private static ZLinkPeerState peerState(ZLinkMeshNodeSnapshot status, RoutingId peer) {
