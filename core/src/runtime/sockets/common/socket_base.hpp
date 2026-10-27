@@ -50,6 +50,11 @@ typedef bool (*transport_pair_owner_after_claim_test_hook_fn) (
 void test_set_transport_pair_owner_after_claim_hook (
   transport_pair_owner_after_claim_test_hook_fn hook_, void *userdata_);
 
+typedef void (*async_mailbox_before_drain_test_hook_fn) (
+  socket_base_t *socket_, void *userdata_);
+void test_set_async_mailbox_before_drain_hook (
+  async_mailbox_before_drain_test_hook_fn hook_, void *userdata_);
+
 enum async_owner_transition_test_point_t
 {
     async_owner_test_monitor_acquire_before_gate = 1,

@@ -256,6 +256,9 @@ class command_drain_active_guard_t
 };
 
 #ifdef ZLINK_BUILD_TESTS
+std::atomic<zlink::async_mailbox_before_drain_test_hook_fn>
+  async_mailbox_before_drain_test_hook (NULL);
+std::atomic<void *> async_mailbox_before_drain_test_hook_userdata (NULL);
 std::atomic<zlink::async_owner_transition_test_hook_fn>
   async_owner_transition_test_hook (NULL);
 std::atomic<void *> async_owner_transition_test_hook_userdata (NULL);
@@ -285,6 +288,18 @@ void invoke_completion_pull_before_wait_test_hook ()
 }
 
 #ifdef ZLINK_BUILD_TESTS
+void zlink::test_set_async_mailbox_before_drain_hook (
+  async_mailbox_before_drain_test_hook_fn hook_, void *userdata_)
+{
+    if (!hook_) {
+        async_mailbox_before_drain_test_hook.store (NULL, std::memory_order_release);
+        async_mailbox_before_drain_test_hook_userdata.store (NULL, std::memory_order_release);
+        return;
+    }
+    async_mailbox_before_drain_test_hook_userdata.store (userdata_, std::memory_order_release);
+    async_mailbox_before_drain_test_hook.store (hook_, std::memory_order_release);
+}
+
 void zlink::test_set_async_owner_transition_hook (
   async_owner_transition_test_hook_fn hook_, void *userdata_)
 {
@@ -335,6 +350,13 @@ void zlink::socket_base_t::async_mailbox_handler (void *arg_)
     socket_base_t *self = static_cast<socket_base_t *> (arg_);
     socket_base_t *previous = async_mailbox_dispatch_socket_tls ();
     async_mailbox_dispatch_socket_tls () = self;
+#ifdef ZLINK_BUILD_TESTS
+    const async_mailbox_before_drain_test_hook_fn hook =
+      async_mailbox_before_drain_test_hook.load (std::memory_order_acquire);
+    if (hook)
+        hook (self, async_mailbox_before_drain_test_hook_userdata.load (
+                      std::memory_order_acquire));
+#endif
     self->process_async_mailbox ();
     async_mailbox_dispatch_socket_tls () = previous;
     self->dec_mailbox_ref ();
@@ -1244,18 +1266,6 @@ bool zlink::socket_base_t::stop_unowned_async_command_processing_at_idle ()
           async_owner_test_idle_stop_gate_held);
 #endif
 
-        // An empty mailbox can still owe a pipe termination acknowledgement.
-        // Keep its executor installed until the existing pipe lifecycle owner
-        // removes that pipe; the later ack must not require an application poll.
-        {
-            scoped_lock_t endpoint_lock (monitor_runtime ().sync);
-            const socket_endpoint_runtime_t &endpoints = endpoint_runtime ();
-            for (size_t i = 0; i != endpoints.attached_pipe_count (); ++i) {
-                const pipe_t *const pipe = endpoints.attached_pipe (i);
-                if (pipe && !pipe->is_lifecycle_active ())
-                    return false;
-            }
-        }
         mailbox_t *const mailbox = static_cast<mailbox_t *> (_mailbox);
         // Keep the owner gate across the final empty check, physical detach and
         // lifecycle publication. An acquire therefore either cancels the
