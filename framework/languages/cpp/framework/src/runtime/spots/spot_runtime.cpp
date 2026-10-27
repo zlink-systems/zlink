@@ -6001,16 +6001,18 @@ spot_node_runtime_t::actor_admission (spot_context_t &context,
 }
 
 task_t<std::function<void (std::function<void (result_t<void>)>)>>
-spot_node_runtime_t::commit_accepted_actor_join (const std::string &key,
-                                                 spot_context_t &context,
-                                                 const actor_ref_t &committed,
-                                                 std::type_index actor_type,
-                                                 void *actor,
-                                                 const spot_actor_admission_callbacks_t &admission,
-                                                 bool create_entry_actor,
-                                                 const zlink::message_t &create_request,
-                                                 std::string operation_id,
-                                                 bool &authority_committed)
+spot_node_runtime_t::commit_accepted_actor_join (
+  const std::string &key,
+  spot_context_t &context,
+  const actor_ref_t &committed,
+  std::type_index actor_type,
+  void *actor,
+  const spot_actor_admission_callbacks_t &admission,
+  bool create_entry_actor,
+  const zlink::message_t &create_request,
+  std::string operation_id,
+  bool &authority_committed,
+  std::optional<std::chrono::steady_clock::time_point> deadline)
 {
     authority_committed = false;
     struct commit_plan_t
@@ -6122,35 +6124,52 @@ spot_node_runtime_t::commit_accepted_actor_join (const std::string &key,
     if (services && _state->location_lifecycle) {
         auto &repository = services->get_required<location_repository_t> ();
         const auto authority_key = runtime::actor_authority_key (committed.actor_id ().value ());
-        const auto current = co_await repository.read_authority (authority_key);
-        const auto *snapshot = std::get_if<authority_snapshot_t> (&current);
-        auto member = snapshot ? runtime::decode_direct_actor_authority_payload (snapshot->payload)
-                               : std::nullopt;
-        if (!member || snapshot->object_generation != committed.object_generation ())
-            throw framework_exception_t (framework_error_kind_t::unavailable,
-                                         "Actor membership authority is unavailable");
-        const auto kind = target_state.is_entry_spot ()
-                            ? runtime::actor_authority_spot_kind_t::entry
-                            : runtime::actor_authority_spot_kind_t::user;
-        const auto generation =
-          target_state.is_entry_spot ()
-            ? (plan.native_node ? plan.native_node->status ().lifecycle_generation ()
-                                : target_state.object_generation)
-            : target_state.object_generation;
-        if (member->current_spot_id != std::string (target_state.spot_id)
-            || member->current_spot_generation != generation || member->current_spot_kind != kind) {
+        auto current = co_await repository.read_authority (authority_key);
+        std::optional<framework_error_kind_t> commit_failure;
+        for (;;) {
+            const auto *snapshot = std::get_if<authority_snapshot_t> (&current);
+            auto member = snapshot
+                            ? runtime::decode_direct_actor_authority_payload (snapshot->payload)
+                            : std::nullopt;
+            if (snapshot && snapshot->object_generation != committed.object_generation ())
+                throw framework_exception_t (framework_error_kind_t::invalid_operation,
+                                             "Actor generation does not match current authority");
+            if (!member)
+                throw framework_exception_t (framework_error_kind_t::unavailable,
+                                             "Actor membership authority is unavailable");
             if (member->has_relocation_state)
                 throw framework_exception_t (framework_error_kind_t::unavailable,
                                              "Actor membership is relocating");
-            member->current_spot_id = std::string (target_state.spot_id);
-            member->current_spot_generation = generation;
-            member->current_spot_kind = kind;
-            const auto stored = co_await repository.compare_exchange_authority (
-              authority_key, snapshot->store_version,
-              authority_put_t{runtime::encode_actor_authority_payload (*member)});
-            if (!std::holds_alternative<authority_stored_t> (stored))
-                throw framework_exception_t (framework_error_kind_t::unavailable,
-                                             "Actor membership commit conflicted");
+            if (commit_failure)
+                throw framework_exception_t (*commit_failure, "Actor membership commit conflicted");
+            const auto kind = target_state.is_entry_spot ()
+                                ? runtime::actor_authority_spot_kind_t::entry
+                                : runtime::actor_authority_spot_kind_t::user;
+            const auto generation =
+              target_state.is_entry_spot ()
+                ? (plan.native_node ? plan.native_node->status ().lifecycle_generation ()
+                                    : target_state.object_generation)
+                : target_state.object_generation;
+            if (member->current_spot_id != std::string (target_state.spot_id)
+                || member->current_spot_generation != generation
+                || member->current_spot_kind != kind) {
+                member->current_spot_id = std::string (target_state.spot_id);
+                member->current_spot_generation = generation;
+                member->current_spot_kind = kind;
+                const auto stored = co_await repository.compare_exchange_authority (
+                  authority_key, snapshot->store_version,
+                  authority_put_t{runtime::encode_actor_authority_payload (*member), deadline});
+                if (std::holds_alternative<authority_generation_exhausted_t> (stored))
+                    throw framework_exception_t (framework_error_kind_t::internal_failure,
+                                                 "Actor authority generation is exhausted");
+                if (const auto *conflict = std::get_if<authority_conflict_t> (&stored)) {
+                    current = conflict->current;
+                    commit_failure =
+                      conflict->membership_failure.value_or (framework_error_kind_t::unavailable);
+                    continue;
+                }
+            }
+            break;
         }
     }
     authority_committed = true;
@@ -6553,7 +6572,8 @@ task_t<actor_join_reply_t> spot_node_runtime_t::join_actor_to_spot_erased (
   actor_context_t actor_context,
   std::uint64_t operation_id_high,
   std::uint64_t operation_id_low,
-  std::function<void (std::function<void (result_t<void>)>)> *source_leave)
+  std::function<void (std::function<void (result_t<void>)>)> *source_leave,
+  std::optional<std::chrono::steady_clock::time_point> deadline)
 {
     if (::zlink::framework::detail::actor_ref_access_t::empty (actor_ref)) {
         co_return result_t<actor_join_reply_t>::failure (framework_error_kind_t::not_found,
@@ -6693,7 +6713,7 @@ task_t<actor_join_reply_t> spot_node_runtime_t::join_actor_to_spot_erased (
           !actor_transfer_marker_enabled () || (operation_id_high == 0 && operation_id_low == 0)
             ? std::string{}
             : std::to_string (operation_id_high) + ":" + std::to_string (operation_id_low),
-          authority_committed);
+          authority_committed, deadline);
         if (source_leave)
             *source_leave = std::move (leave);
         else if (leave)
@@ -6717,11 +6737,12 @@ task_t<actor_join_reply_t> spot_node_runtime_t::join_actor_to_spot_erased (
       actor_join_reply_t{0, committed, framework_reply_or_empty (response.reply, serializers)});
 }
 
-task_t<actor_join_reply_t>
-spot_node_runtime_t::join_remote_actor_to_spot_erased (const actor_ref_t &actor_ref,
-                                                       spot_id_t spot_id,
-                                                       const zlink::message_t &request,
-                                                       actor_context_t actor_context)
+task_t<actor_join_reply_t> spot_node_runtime_t::join_remote_actor_to_spot_erased (
+  const actor_ref_t &actor_ref,
+  spot_id_t spot_id,
+  const zlink::message_t &request,
+  actor_context_t actor_context,
+  std::optional<std::chrono::steady_clock::time_point> deadline)
 {
     /* graceful-drain-handoff §4-2/§5.2: a draining node rejects new actor
     * admission and joins; already-admitted transfer commits stay accepted. */
@@ -6837,7 +6858,7 @@ spot_node_runtime_t::join_remote_actor_to_spot_erased (const actor_ref_t &actor_
     try {
         auto leave = co_await commit_accepted_actor_join (
           key, context, committed, registration.actor_type, actor_instance.get (),
-          admission_callbacks, false, request, key, authority_committed);
+          admission_callbacks, false, request, key, authority_committed, deadline);
         if (leave)
             leave ({});
     }
@@ -12060,7 +12081,8 @@ task_t<actor_join_reply_t> spot_node_runtime_t::join_actor_to_entry_spot_erased 
   const zlink::message_t &request,
   const std::optional<zlink::message_t> &actor_snapshot,
   actor_context_t actor_context,
-  std::function<void (std::function<void (result_t<void>)>)> *source_leave)
+  std::function<void (std::function<void (result_t<void>)>)> *source_leave,
+  std::optional<std::chrono::steady_clock::time_point> deadline)
 {
     /* graceful-drain-handoff §4-2/§5.2: a draining node rejects new actor
     * admission and joins; already-admitted transfer commits stay accepted. */
@@ -12118,7 +12140,7 @@ task_t<actor_join_reply_t> spot_node_runtime_t::join_actor_to_entry_spot_erased 
     }
     co_return co_await join_actor_to_spot_erased (actor_ref, *entry.entry_id, request,
                                                   actor_snapshot, std::move (actor_context), 0, 0,
-                                                  source_leave);
+                                                  source_leave, deadline);
 }
 
 void spot_node_runtime_t::on_destroy_actor (
@@ -15961,11 +15983,12 @@ bool spot_node_runtime_t::dispatch_mesh_record (
        request = parts.empty () ? zlink::message_t{} : parts.front (),
        targets_entry_spot = join_dispatch_snapshot.targets_entry_spot,
        local_node_rid = join_dispatch_snapshot.local_node_rid, services = &services,
-       serializers = &serializers] () mutable -> task_t<void> {
-          join_result->joined.emplace (co_await runtime::await_result (
-            runtime.run_actor_join_control (actor, control, join_spot_id, parts, request,
-                                            remote_transfer, targets_entry_spot, local_node_rid,
-                                            *services, *serializers, &join_result->source_leave)));
+       serializers = &serializers,
+       deadline = record.operation_deadline] () mutable -> task_t<void> {
+          join_result->joined.emplace (
+            co_await runtime::await_result (runtime.run_actor_join_control (
+              actor, control, join_spot_id, parts, request, remote_transfer, targets_entry_spot,
+              local_node_rid, *services, *serializers, &join_result->source_leave, deadline)));
       },
       [join_result, settle_once] (result_t<void> rejected) {
           if (!join_result->joined)
@@ -16000,7 +16023,8 @@ task_t<actor_join_reply_t> spot_node_runtime_t::run_actor_join_control (
   const std::string &local_node_rid,
   service_provider_t &services,
   serializer_registry_t &serializers,
-  std::function<void (std::function<void (result_t<void>)>)> *source_leave)
+  std::function<void (std::function<void (result_t<void>)>)> *source_leave,
+  std::optional<std::chrono::steady_clock::time_point> deadline)
 {
     spot_node_runtime_t owner (_state);
     if (remote_transfer) {
@@ -16084,10 +16108,10 @@ task_t<actor_join_reply_t> spot_node_runtime_t::run_actor_join_control (
               "Actor gateway Context has no serializer registry");
         co_return co_await owner.join_actor_to_entry_spot_erased (
           actor, node_rid_t::from_string (local_node_rid), request, std::nullopt,
-          std::move (actor_context), source_leave);
+          std::move (actor_context), source_leave, deadline);
     }
-    co_return co_await owner.join_actor_to_spot_erased (actor, spot_id_t (join_spot_id), request,
-                                                        std::nullopt, {}, 0, 0, source_leave);
+    co_return co_await owner.join_actor_to_spot_erased (
+      actor, spot_id_t (join_spot_id), request, std::nullopt, {}, 0, 0, source_leave, deadline);
 }
 
 

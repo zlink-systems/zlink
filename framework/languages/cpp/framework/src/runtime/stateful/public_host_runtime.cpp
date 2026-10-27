@@ -8496,7 +8496,7 @@ public_host_runtime_t::prepare_local_completion (pending_operation_t &operation)
     return _transport->prepare_local_operation_async ();
 }
 
-void public_host_runtime_t::register_local_completion (
+std::chrono::steady_clock::time_point public_host_runtime_t::register_local_completion (
   pending_operation_t &operation,
   const mesh::raw_mesh_node_owner_t::local_operation_reservation_t &reservation,
   std::chrono::milliseconds timeout,
@@ -8511,8 +8511,9 @@ void public_host_runtime_t::register_local_completion (
     result->record.operation_id = reservation.first;
     result->record.source_node_rid =
       zlink::routing_id_t::from (_options.mesh.descriptor.node_routing_id);
+    const auto deadline = foundation::operation_registry_t::clock_t::now () + timeout;
     const auto registered = _transport->register_prepared_local_operation (
-      reservation, foundation::operation_registry_t::clock_t::now () + timeout,
+      reservation, deadline,
       [source, result, completion = std::move (completion),
        incomplete] (foundation::operation_terminal_t terminal, zlink::message_t payload) mutable {
           std::string terminal_message;
@@ -8571,6 +8572,7 @@ void public_host_runtime_t::register_local_completion (
                                      "Operation completion registry is closed");
     operation.id = reservation.first;
     operation.local_result = result;
+    return deadline;
 }
 
 
@@ -8616,12 +8618,13 @@ public_host_runtime_t::begin_local_actor_join (const actor_ref_t &actor,
     task_t<zlink::submit_result_t> dispatch{
       result_t<zlink::submit_result_t>::success (zlink::submit_result_t::terminated)};
     std::exception_ptr failure;
+    std::optional<std::chrono::steady_clock::time_point> operation_deadline;
     try {
         co_await _lifecycle_configuration_lane.run_task ([&] {
             if (!_started || _closing)
                 return;
             try {
-                register_local_completion (
+                operation_deadline = register_local_completion (
                   operation, *reservation, timeout, {},
                   [host = shared_from_this (), membership,
                    cleanup = local_request_wait_cleanup (waiter)] {
@@ -8678,6 +8681,7 @@ public_host_runtime_t::begin_local_actor_join (const actor_ref_t &actor,
             record.domain = ready_domain_t::application;
             record.operation_id = operation.id;
             record.operation_kind = operation_kind_t::actor_join;
+            record.operation_deadline = operation_deadline;
             record.source_node_rid = status ().routing_id ();
             record.actor_control = actor_control_t{lifecycle_kind_t::joined, actor};
             record.reply_token.local_actor_join = [weak, operation, actor_type, membership] (
