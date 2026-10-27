@@ -4,6 +4,7 @@ import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.actors.ActorRef;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityConflict;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityDelete;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityDeleted;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityExpectFound;
@@ -143,7 +144,9 @@ public final class ZLinkLocationLifecycle implements AutoCloseable {
                                                         instanceof
                                                         ZLinkAuthoritySnapshot spotSnapshot)) {
                                                     return CompletableFuture.failedFuture(
-                                                            new IllegalStateException(
+                                                            new ZLinkFrameworkException(
+                                                                    ZLinkFrameworkErrorKind
+                                                                            .NOT_FOUND,
                                                                     "Spot authority is unavailable:"
                                                                             + " "
                                                                             + spotId));
@@ -168,7 +171,9 @@ public final class ZLinkLocationLifecycle implements AutoCloseable {
                                                         || !spot.nodeRid()
                                                                 .equals(actorRef.nodeRid())) {
                                                     return CompletableFuture.failedFuture(
-                                                            new IllegalStateException(
+                                                            new ZLinkFrameworkException(
+                                                                    ZLinkFrameworkErrorKind
+                                                                            .UNAVAILABLE,
                                                                     "Spot authority changed before"
                                                                             + " durable Actor join: "
                                                                             + spotId));
@@ -270,13 +275,21 @@ public final class ZLinkLocationLifecycle implements AutoCloseable {
                         new ZLinkAuthorityPut(next),
                         NEVER_CANCEL)
                 .thenCompose(
-                        written ->
-                                written instanceof ZLinkAuthorityStored
-                                        ? CompletableFuture.completedFuture(null)
-                                        : CompletableFuture.failedFuture(
-                                                new IllegalStateException(
-                                                        "Actor Spot join authority CAS conflicted: "
-                                                                + actor.actorId())));
+                        written -> {
+                            if (written instanceof ZLinkAuthorityStored)
+                                return CompletableFuture.completedFuture(null);
+                            String message =
+                                    "Actor Spot join authority CAS conflicted: " + actor.actorId();
+                            if (written instanceof ZLinkAuthorityConflict conflict)
+                                return CompletableFuture.failedFuture(
+                                        new ZLinkFrameworkException(
+                                                conflict.membershipFailure() != null
+                                                        ? conflict.membershipFailure()
+                                                        : ZLinkFrameworkErrorKind.UNAVAILABLE,
+                                                message));
+                            return CompletableFuture.failedFuture(
+                                    new IllegalStateException(message));
+                        });
     }
 
     public CompletionStage<Void> releaseActor(String actorType, String actorId) {

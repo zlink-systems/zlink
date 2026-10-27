@@ -129,8 +129,12 @@ final class ZLinkInMemoryAuthorityStore {
                         if (!current.owner.equals(restore.expectedOwner())) {
                             return completed(new ZLinkAuthorityConflict(snapshot(current, now)));
                         }
-                        if (!spotMembershipIsCurrent(current.payload, restore.payload()))
-                            return completed(new ZLinkAuthorityConflict(snapshot(current, now)));
+                        var membershipFailure =
+                                spotMembershipFailure(current.payload, restore.payload());
+                        if (membershipFailure != null)
+                            return completed(
+                                    new ZLinkAuthorityConflict(
+                                            snapshot(current, now), membershipFailure));
                         if (revision == Long.MAX_VALUE) {
                             return completed(new ZLinkAuthorityGenerationExhausted());
                         }
@@ -146,12 +150,16 @@ final class ZLinkInMemoryAuthorityStore {
                         return completed(stored(stored, now));
                     }
                     byte[] reincarnatePayload = ZLinkAuthorityMutation.reincarnatePayload(mutation);
-                    if (!spotMembershipIsCurrent(
-                            current.payload,
-                            reincarnatePayload != null
-                                    ? reincarnatePayload
-                                    : ((ZLinkAuthorityPut) mutation).payload()))
-                        return completed(new ZLinkAuthorityConflict(snapshot(current, now)));
+                    var membershipFailure =
+                            spotMembershipFailure(
+                                    current.payload,
+                                    reincarnatePayload != null
+                                            ? reincarnatePayload
+                                            : ((ZLinkAuthorityPut) mutation).payload());
+                    if (membershipFailure != null)
+                        return completed(
+                                new ZLinkAuthorityConflict(
+                                        snapshot(current, now), membershipFailure));
                     if (revision == Long.MAX_VALUE
                             || (reincarnatePayload != null
                                     && (objectGeneration == Long.MAX_VALUE
@@ -216,10 +224,14 @@ final class ZLinkInMemoryAuthorityStore {
     }
 
     private boolean spotMembershipIsCurrent(byte[] previousPayload, byte[] payload) {
+        return spotMembershipFailure(previousPayload, payload) == null;
+    }
+
+    private ZLinkFrameworkErrorKind spotMembershipFailure(byte[] previousPayload, byte[] payload) {
         var actor = new ZLinkActorAuthorityPayloadCodec().decode(payload);
         if (actor.isEmpty()
                 || actor.get().currentSpotKind()
-                        != systems.zlink.framework.spots.ZLinkSpotKind.USER.value()) return true;
+                        != systems.zlink.framework.spots.ZLinkSpotKind.USER.value()) return null;
         var membership = actor.get();
         var previous = new ZLinkActorAuthorityPayloadCodec().decode(previousPayload);
         if (previous.isPresent()
@@ -227,22 +239,25 @@ final class ZLinkInMemoryAuthorityStore {
                 && previous.get().currentSpotKind() == membership.currentSpotKind()
                 && previous.get().currentSpotId().equals(membership.currentSpotId())
                 && previous.get().currentSpotGeneration() == membership.currentSpotGeneration())
-            return true;
+            return null;
         Row target = rows.get(ZLinkAuthorityKeyCodec.spot(membership.currentSpotId()));
-        if (target == null
-                || target.objectGeneration != membership.currentSpotGeneration()
+        if (target == null) return ZLinkFrameworkErrorKind.NOT_FOUND;
+        if (target.objectGeneration != membership.currentSpotGeneration()
                 || !ownerLeaseIsLive.test(target.owner)
                 || participantIsPrepared(ZLinkAuthorityKeyCodec.spot(membership.currentSpotId())))
-            return false;
+            return ZLinkFrameworkErrorKind.UNAVAILABLE;
         return new ZLinkServiceAuthorityPayloadCodec()
-                .decode(target.payload)
-                .filter(
-                        spot ->
-                                spot.user().isPresent()
-                                        && spot.spotId().equals(membership.currentSpotId())
-                                        && spot.state()
-                                                == ZLinkServiceAuthorityPayloadCodec.State.READY)
-                .isPresent();
+                        .decode(target.payload)
+                        .filter(
+                                spot ->
+                                        spot.user().isPresent()
+                                                && spot.spotId().equals(membership.currentSpotId())
+                                                && spot.state()
+                                                        == ZLinkServiceAuthorityPayloadCodec.State
+                                                                .READY)
+                        .isPresent()
+                ? null
+                : ZLinkFrameworkErrorKind.UNAVAILABLE;
     }
 
     CompletionStage<Boolean> releaseEndedReservation(

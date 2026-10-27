@@ -16,14 +16,124 @@ import systems.zlink.framework.runtime.internal.configuration.ZLinkObjectFactory
 import systems.zlink.framework.runtime.internal.locations.*;
 import systems.zlink.framework.spots.ZLinkSpotKind;
 
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.ZoneId;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletionException;
 
 final class ZLinkEndedSpotRecreationTest {
+    @ParameterizedTest
+    @CsvSource({
+        "provider,missing",
+        "memory,missing",
+        "provider,generation",
+        "memory,generation",
+        "provider,expired",
+        "memory,expired",
+        "provider,lease-generation",
+        "memory,lease-generation"
+    })
+    void membershipConflictPreservesFailureKind(String backend, String condition) {
+        var clock = new MembershipClock();
+        ZLinkLocationRepository store =
+                backend.equals("provider")
+                        ? new ZLinkProviderLocationRepository(
+                                new ZLinkInMemoryProviderLocationStore(clock))
+                        : new ZLinkInMemoryLocationStore(clock);
+        var fixture =
+                fixture(
+                        store,
+                        ZLinkPlacementObjectKind.USER_SPOT,
+                        ZLinkServiceAuthorityPayloadCodec.State.READY);
+        var actor = member(fixture, "kind-member", false);
+        fixture.store
+                .renewOwnerLease(fixture.newOwner, Duration.ofHours(1))
+                .toCompletableFuture()
+                .join();
+        var before =
+                (ZLinkAuthoritySnapshot)
+                        fixture.store
+                                .read(actor.authorityKey(), () -> false)
+                                .toCompletableFuture()
+                                .join();
+        var spot =
+                (ZLinkAuthoritySnapshot)
+                        fixture.store.read(fixture.key, () -> false).toCompletableFuture().join();
+        byte[] payload = memberPayload(fixture, "kind-member", true);
+        if (condition.equals("missing")) {
+            assertInstanceOf(
+                    ZLinkAuthorityDeleted.class,
+                    fixture.store
+                            .compareExchange(
+                                    fixture.key,
+                                    new ZLinkAuthorityExpectFound(spot.storeVersion()),
+                                    new ZLinkAuthorityDelete(),
+                                    () -> false)
+                            .toCompletableFuture()
+                            .join());
+        } else if (condition.equals("generation")) {
+            payload =
+                    new ZLinkActorAuthorityPayloadCodec()
+                            .encode(
+                                    ZLinkActorAuthorityPayloadCodec.State.READY,
+                                    "player",
+                                    "kind-member",
+                                    "ended-spot",
+                                    spot.objectGeneration() + 1,
+                                    ZLinkSpotKind.USER.value(),
+                                    fixture.newOwner.ownerId(),
+                                    fixture.newOwner.leaseGeneration(),
+                                    "mesh",
+                                    fixture.newDescriptor.rid(),
+                                    1);
+        } else if (condition.equals("expired")) {
+            clock.now = clock.now.plus(Duration.ofMinutes(6));
+        } else {
+            fixture.store.releaseOwnerLease(fixture.oldOwner).toCompletableFuture().join();
+            if (condition.equals("lease-generation")) {
+                var replacement =
+                        assertInstanceOf(
+                                        ZLinkOwnerLeaseClaimed.class,
+                                        fixture.store
+                                                .claimOwnerLease(
+                                                        fixture.oldOwner.ownerId(),
+                                                        Duration.ofMinutes(5))
+                                                .toCompletableFuture()
+                                                .join())
+                                .token();
+                assertNotEquals(fixture.oldOwner.leaseGeneration(), replacement.leaseGeneration());
+            }
+        }
+        var conflict =
+                assertInstanceOf(
+                        ZLinkAuthorityConflict.class,
+                        fixture.store
+                                .compareExchange(
+                                        actor.authorityKey(),
+                                        new ZLinkAuthorityExpectFound(before.storeVersion()),
+                                        new ZLinkAuthorityPut(payload),
+                                        () -> false)
+                                .toCompletableFuture()
+                                .join());
+        assertEquals(
+                condition.equals("missing")
+                        ? ZLinkFrameworkErrorKind.NOT_FOUND
+                        : ZLinkFrameworkErrorKind.UNAVAILABLE,
+                conflict.membershipFailure());
+        var after =
+                (ZLinkAuthoritySnapshot)
+                        fixture.store
+                                .read(actor.authorityKey(), () -> false)
+                                .toCompletableFuture()
+                                .join();
+        assertEquals(before.storeVersion(), after.storeVersion());
+        assertArrayEquals(before.payload(), after.payload());
+    }
+
     @ParameterizedTest
     @CsvSource({"false", "true"})
     void nonMembershipAuthorityCommitKeepsGenerationOnlyOwnerFence(boolean missingExpiry) {
@@ -1620,6 +1730,25 @@ final class ZLinkEndedSpotRecreationTest {
                 owner.ownerId(),
                 owner.leaseGeneration(),
                 Instant.now());
+    }
+
+    private static final class MembershipClock extends Clock {
+        private Instant now = Instant.now();
+
+        @Override
+        public ZoneId getZone() {
+            return ZoneId.of("UTC");
+        }
+
+        @Override
+        public Clock withZone(ZoneId zone) {
+            return this;
+        }
+
+        @Override
+        public Instant instant() {
+            return now;
+        }
     }
 
     private record Fixture(

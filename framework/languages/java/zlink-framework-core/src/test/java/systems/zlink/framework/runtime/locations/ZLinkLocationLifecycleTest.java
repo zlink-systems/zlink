@@ -3,13 +3,18 @@ package systems.zlink.framework.runtime.locations;
 import static org.junit.jupiter.api.Assertions.*;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.actors.ActorRef;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityConflict;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityExpectFound;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityExpectation;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityGenerationExhausted;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityMissing;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityMutation;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityPut;
@@ -195,6 +200,92 @@ final class ZLinkLocationLifecycleTest {
         runtime.close();
     }
 
+    @ParameterizedTest
+    @CsvSource({
+        "missing,NOT_FOUND",
+        "fence,UNAVAILABLE",
+        "invalid,INTERNAL_FAILURE",
+        "cas,UNAVAILABLE",
+        "typed-notfound,NOT_FOUND",
+        "typed-unavailable,UNAVAILABLE",
+        "exhausted,INTERNAL_FAILURE",
+        "store-error,INTERNAL_FAILURE"
+    })
+    void joinFailureKeepsMembershipClassification(
+            String condition, ZLinkFrameworkErrorKind expected) {
+        var node = RoutingId.from("node-a");
+        var store =
+                new ActorJoinStore(
+                        node,
+                        "kind-actor",
+                        "room-a",
+                        condition.equals("cas") || condition.startsWith("typed-"));
+        store.writeFailure = condition;
+        var spotKey = ZLinkAuthorityKeyCodec.spot("room-a");
+        if (condition.startsWith("typed-")) {
+            store.membershipFailure =
+                    condition.equals("typed-notfound")
+                            ? ZLinkFrameworkErrorKind.NOT_FOUND
+                            : ZLinkFrameworkErrorKind.UNAVAILABLE;
+        }
+        if (condition.equals("missing")) store.rows.remove(spotKey);
+        if (condition.equals("fence") || condition.equals("invalid")) {
+            byte[] payload =
+                    condition.equals("invalid")
+                            ? new byte[] {0}
+                            : new ZLinkServiceAuthorityPayloadCodec()
+                                    .encodeUser(
+                                            ZLinkServiceAuthorityPayloadCodec.State.READY,
+                                            "room",
+                                            "room-a",
+                                            "owner-a",
+                                            1,
+                                            "other-mesh",
+                                            node,
+                                            8);
+            store.rows.put(
+                    spotKey,
+                    store.snapshot(
+                            "spot-changed",
+                            payload,
+                            11,
+                            ZLinkPlacementObjectKind.USER_SPOT,
+                            "room"));
+        }
+        try (var runtime =
+                        new ZLinkLocationRuntime(
+                                ZLinkRegisteredLocationStores.fromUnified(store),
+                                "owner-a",
+                                Duration.ofSeconds(30),
+                                Duration.ofSeconds(5));
+                var lifecycle = new ZLinkLocationLifecycle(runtime)) {
+            lifecycle
+                    .setActorRef(
+                            "player", "kind-actor", new ActorRef("kind-actor", 7, "game", node))
+                    .toCompletableFuture()
+                    .join();
+            var failure =
+                    assertThrows(
+                                    CompletionException.class,
+                                    () ->
+                                            lifecycle
+                                                    .notifyActorJoinedSpot(
+                                                            "player",
+                                                            "kind-actor",
+                                                            "game",
+                                                            "room-a")
+                                                    .toCompletableFuture()
+                                                    .join())
+                            .getCause();
+            assertEquals(
+                    expected,
+                    failure instanceof ZLinkFrameworkException framework
+                            ? framework.kind()
+                            : ZLinkFrameworkErrorKind.INTERNAL_FAILURE);
+            assertEquals(0, store.casCount);
+        }
+    }
+
     private static final class ActorJoinStore extends ZLinkLocationStoreTestAdapter {
         private final Map<String, ZLinkAuthoritySnapshot> rows = new ConcurrentHashMap<>();
         private final RoutingId node;
@@ -202,6 +293,8 @@ final class ZLinkLocationLifecycleTest {
         private final String spotId;
         private final boolean forceConflict;
         private int casCount;
+        private ZLinkFrameworkErrorKind membershipFailure;
+        private String writeFailure;
 
         ActorJoinStore(RoutingId node, String actorId, String spotId) {
             this(node, actorId, spotId, false);
@@ -264,8 +357,14 @@ final class ZLinkLocationLifecycleTest {
                 ZLinkAuthorityMutation mutation,
                 ZLinkStoreCancellation cancellation) {
             ZLinkAuthoritySnapshot current = rows.get(key);
+            if ("exhausted".equals(writeFailure))
+                return CompletableFuture.completedFuture(new ZLinkAuthorityGenerationExhausted());
+            if ("store-error".equals(writeFailure))
+                return CompletableFuture.failedFuture(
+                        new IllegalStateException("store internal failure"));
             if (forceConflict) {
-                return CompletableFuture.completedFuture(new ZLinkAuthorityConflict(current));
+                return CompletableFuture.completedFuture(
+                        new ZLinkAuthorityConflict(current, membershipFailure));
             }
             if (!(current != null
                     && expectation instanceof ZLinkAuthorityExpectFound expected
