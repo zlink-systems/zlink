@@ -50,7 +50,7 @@ class bingo_session_t final : public packet_stream_session_t
     // --8<-- [start:doc-bingo-session-relay]
     task_t<void> on_packet (stream_t &stream,
                             const session_message_context_t &dispatch,
-                            const zlink::message_t &payload) override
+                            const zlink::framework::message_t &payload) override
     {
         if (_authenticate.can_handle (dispatch)) {
             auto authenticated = co_await _authenticate.handle (_actors, stream, payload);
@@ -64,8 +64,7 @@ class bingo_session_t final : public packet_stream_session_t
             co_return;
         }
         if (dispatch.can_reply) {
-            auto reply = co_await actor.value ().relay_request (payload).async ();
-            stream.reply_packet (reply).async ();
+            stream.reply_packet (co_await actor.value ().relay_request (payload).async ()).async ();
             co_return;
         }
         co_await actor.value ().relay (payload);
