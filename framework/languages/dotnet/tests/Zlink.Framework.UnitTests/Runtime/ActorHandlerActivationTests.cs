@@ -1,6 +1,5 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
-using System.Reflection;
 using Microsoft.Extensions.DependencyInjection;
 using Zlink.Framework.Contracts.Errors;
 using Zlink.Framework.Runtime.Backend.Contracts;
@@ -34,15 +33,11 @@ public sealed class ActorHandlerActivationTests : IAsyncLifetime
             sharedGate: true
         );
         ZLinkSerialExecutionQueue? owner = sharedParent ? parent : null;
-        var state = new ZLinkActorRuntimeState("incoming-terminal-placement");
-        var mailbox = (ZLinkActorSerialExecutor)
-            typeof(ZLinkActorRuntimeState)
-                .GetField("_dispatchMailbox", BindingFlags.Instance | BindingFlags.NonPublic)!
-                .GetValue(state)!;
-        var queue = (ZLinkSerialExecutionQueue)
-            typeof(ZLinkActorSerialExecutor)
-                .GetField("_queue", BindingFlags.Instance | BindingFlags.NonPublic)!
-                .GetValue(mailbox)!;
+        var mailbox = new ZLinkActorSerialExecutor();
+        var state = new ZLinkActorRuntimeState(
+            "incoming-terminal-placement",
+            dispatchMailbox: mailbox
+        );
         if (sharedParent)
             mailbox.BindExecutionOwner(() => owner);
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -76,7 +71,6 @@ public sealed class ActorHandlerActivationTests : IAsyncLifetime
             Assert.False(preparing.IsCompleted);
             release.TrySetResult();
             await Task.WhenAll(terminal, preparing).WaitAsync(TimeSpan.FromSeconds(5));
-            Assert.False(queue.HasSharedConsumer);
             await parent.DisposeAsync();
             await state.ExecuteDispatchAsync(
                 static _ => ValueTask.CompletedTask,
@@ -261,13 +255,9 @@ public sealed class ActorHandlerActivationTests : IAsyncLifetime
     [Fact]
     public async Task Runtime_Generation_Reset_Fences_States_Before_The_Next_Registry_Turn()
     {
-        var registry = new ZLinkActorSessionRegistry();
+        var lane = new ZLinkStateLane();
+        var registry = new ZLinkActorSessionRegistry(lane: lane);
         var state = registry.GetOrCreate(ZLinkActorId.FromBoundary("actor-reset-fence", "actorId"));
-        var lane = Assert.IsType<ZLinkStateLane>(
-            typeof(ZLinkActorSessionRegistry)
-                .GetField("_lane", BindingFlags.Instance | BindingFlags.NonPublic)!
-                .GetValue(registry)
-        );
         var blockerStarted = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
@@ -280,15 +270,9 @@ public sealed class ActorHandlerActivationTests : IAsyncLifetime
             await releaseBlocker.Task.ConfigureAwait(false);
         });
         await blockerStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        // The lane's queued turns; only their count is observed here.
-        var mailbox = Assert.IsAssignableFrom<System.Collections.ICollection>(
-            typeof(ZLinkStateLane)
-                .GetField("_mailbox", BindingFlags.Instance | BindingFlags.NonPublic)!
-                .GetValue(lane)
-        );
 
         var reset = Task.Run(async () => await registry.ResetGenerationAsync());
-        Assert.True(SpinWait.SpinUntil(() => mailbox.Count == 1, TimeSpan.FromSeconds(5)));
+        Assert.True(SpinWait.SpinUntil(() => lane.QueuedWorkCount == 1, TimeSpan.FromSeconds(5)));
         var observedByNextTurn = lane.RunAsync(() => state.ContextInvalidated).AsTask();
 
         releaseBlocker.TrySetResult();

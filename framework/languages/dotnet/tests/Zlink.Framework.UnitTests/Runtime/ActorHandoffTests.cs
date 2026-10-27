@@ -319,14 +319,15 @@ public sealed class ActorHandoffTests : IAsyncLifetime
         var resolution = state.Handoff.RouteFrame(source, source);
         Assert.Equal(ZLinkActorFrameRoute.MessageFollow, resolution.Route);
         var route = Assert.IsType<ZLinkActorMessageFollowRoute>(resolution.MessageFollowRoute);
-        var validate =
-            typeof(Zlink.Framework.Runtime.Spots.ZLinkActorMessageFollowDispatcher).GetMethod(
-                "ValidateMessageFollowRoute",
-                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static
-            )!;
         try
         {
-            validate.Invoke(null, [route, default(ZLinkBackendActorRouteContext)]);
+            Assert.True(
+                Zlink.Framework.Runtime.Spots.ZLinkActorMessageFollowDispatcher.CanFollow(
+                    state,
+                    source,
+                    default
+                )
+            );
         }
         finally
         {
