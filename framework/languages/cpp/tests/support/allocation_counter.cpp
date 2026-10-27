@@ -7,6 +7,8 @@
 #endif
 namespace zlink::framework::tests
 {
+std::atomic_bool tracking_process_allocations{false};
+std::atomic<std::size_t> process_allocation_count{0};
 thread_local bool tracking_allocations = false;
 thread_local std::size_t tracked_allocation_count = 0;
 thread_local std::size_t tracked_allocation_size = 0;
@@ -16,6 +18,8 @@ thread_local allocation_event_log_t *allocation_event_log = nullptr;
 
 void record_allocation (const void *memory, std::size_t size) noexcept
 {
+    if (tracking_process_allocations.load (std::memory_order_relaxed))
+        process_allocation_count.fetch_add (1, std::memory_order_relaxed);
     if (tracking_allocations && (tracked_allocation_size == 0 || tracked_allocation_size == size)) {
         if (allocation_event_log != nullptr) {
             if (allocation_event_log->count < allocation_event_log->capacity)
