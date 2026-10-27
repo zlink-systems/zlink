@@ -12,12 +12,30 @@ public sealed class MeshReceiveHandoffTests
     // Spec 08 §4.4: an idle resource takes the receive role before the previous
     // receiver enters the application's existing owner turn on that same thread.
     [Fact]
-    public Task ReceiveRoleHandoff_RunsHandlerOnPreviousReceiverWhileNextReceiveProgresses() =>
-        RunHandoffAsync(false);
+    public async Task ReceiveRoleHandoff_RunsHandlerOnPreviousReceiverWhileNextReceiveProgresses()
+    {
+        if (
+            await IsolatedTestProcess.RunIsolatedAsync(
+                typeof(MeshReceiveHandoffTests),
+                nameof(ReceiveRoleHandoff_RunsHandlerOnPreviousReceiverWhileNextReceiveProgresses)
+            )
+        )
+            return;
+        await RunHandoffAsync(false);
+    }
 
     [Fact]
-    public Task ReceiveRoleHandoff_WhenPoolIsFull_KeepsNativeReceiveAndDeadlineProgressing() =>
-        RunHandoffAsync(true);
+    public async Task ReceiveRoleHandoff_WhenPoolIsFull_KeepsNativeReceiveAndDeadlineProgressing()
+    {
+        if (
+            await IsolatedTestProcess.RunIsolatedAsync(
+                typeof(MeshReceiveHandoffTests),
+                nameof(ReceiveRoleHandoff_WhenPoolIsFull_KeepsNativeReceiveAndDeadlineProgressing)
+            )
+        )
+            return;
+        await RunHandoffAsync(true);
+    }
 
     private static async Task RunHandoffAsync(bool exhaustApplicationResources)
     {
