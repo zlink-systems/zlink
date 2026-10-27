@@ -522,8 +522,8 @@ occupied slot; an implementation that scans a single table returns a lower bound
 earliest deadline. There is no second index for the earliest deadline. When an earlier visit appears, the
 existing wait is woken and brought forward, and a visit that is already due is not pushed back by a fixed
 floor. The management work uses the owner turn only at that time and creates no management turns in
-proportion to the request count. The I0 wait bound is the minimum of the visit times returned by the
-management tasks ([Messaging Hot Path "4.2"](08-messaging-hot-path.en.md#42-management-work-per-receive-turn)).
+proportion to the request count. [Messaging Hot Path "4.2"](08-messaging-hot-path.en.md#42-management-work-per-receive-turn) defines how the I0
+wait bound is composed.
 
 **Index quantization never decides a timeout before the deadline.** When a late management visit makes a
 reply and a timeout race, the one taken first from the terminal authority table is the result. There is

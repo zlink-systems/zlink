@@ -475,7 +475,7 @@ slot 256개, 한 회전 256 ms). 시간 예산 안에 방문을 끝내지 못하
 순회하는 구현은 실제 가장 이른 deadline보다 늦지 않은 하한을 반환한다. 가장 이른 deadline을 위한 두 번째
 인덱스를 두지 않는다. 더 이른 방문이 생기면 기존 대기를 깨워 앞당기고, 이미 도래한 방문을 고정 하한으로
 미루지 않는다. 관리 작업은 이 시각에만 소유자 turn을 쓰며, request 수에 비례한 관리 turn을 만들지 않는다.
-I0의 대기 상한은 각 관리 작업이 반환한 방문 시각의 최솟값이다([Messaging hot path 「4.2」](08-messaging-hot-path.ko.md#42-수신-회전별-관리-작업)).
+I0 대기 상한의 합성은 [Messaging hot path 「4.2」](08-messaging-hot-path.ko.md#42-수신-회전별-관리-작업)가 정한다.
 
 **인덱스의 양자화는 deadline보다 먼저 timeout을 확정하지 않는다.** 관리 방문이 늦어 reply와 timeout이
 경쟁하면 terminal 권한 표에서 먼저 꺼낸 쪽이 결과다. Reply마다 시계를 다시 읽어 두 번째 만료 판정을
