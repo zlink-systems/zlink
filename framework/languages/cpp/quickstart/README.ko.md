@@ -172,7 +172,7 @@ IDE가 같은 `build/`를 이어서 쓴다. 이 파일은 bootstrap이 매번 �
 
 - `bootstrap.cmake`, 그리고 `CMakeLists.txt`의 `find_package(zlink_framework CONFIG REQUIRED)`
   + `target_link_libraries(... zlink::framework)` 쌍.
-- `Shared/messages.hpp`의 `NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE` 메시지 계약 패턴.
+- `Shared/messages.hpp`의 `zlink::json::dto_traits` 메시지 계약 패턴.
 - `Server/main.cpp`의 `add_route_mesh(...).listen(...).set_object_role(none).set_routing_id(...)`
   블록 — channel만 쓰는 node에도 모두 필요하다.
 - `Client/main.cpp`의 `peer_connections().connect(...)`와 HTTP handler 구성. 실제 서비스는 수동
