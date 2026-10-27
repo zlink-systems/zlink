@@ -1188,6 +1188,28 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     opentelemetry-cpp::metrics
     Threads::Threads
     nlohmann_json::nlohmann_json)
+  add_executable(bench_cpp_framework_registry_requests
+    tests/Zlink.Framework.UnitTests/bench_cpp_framework_registry_requests.cpp
+    tests/support/allocation_counter.cpp
+    framework/src/runtime/foundation/operation_registry.cpp
+    framework/src/runtime/execution/state_lane.cpp
+    framework/src/runtime/dispatch/offload_executor.cpp)
+  target_compile_features(bench_cpp_framework_registry_requests PRIVATE cxx_std_20)
+  target_include_directories(bench_cpp_framework_registry_requests PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
+    ${ZLINK_FRAMEWORK_CPP_DIR}/tests/support)
+  target_link_libraries(bench_cpp_framework_registry_requests PRIVATE
+    zlink::framework_provider_abstractions zlink::cpp opentelemetry-cpp::metrics Threads::Threads)
+
+  add_executable(bench_cpp_framework_dealer_requests
+    tests/Zlink.Framework.UnitTests/bench_cpp_framework_dealer_requests.cpp
+    tests/support/allocation_counter.cpp)
+  target_compile_features(bench_cpp_framework_dealer_requests PRIVATE cxx_std_20)
+  target_include_directories(bench_cpp_framework_dealer_requests PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
+    ${ZLINK_FRAMEWORK_CPP_DIR}/tests/support)
+  target_link_libraries(bench_cpp_framework_dealer_requests PRIVATE zlink_framework Threads::Threads)
+
   zlink_framework_cpp_add_test(
     NAME test_cpp_framework_operation_registry
     COMMAND test_cpp_framework_operation_registry
