@@ -507,6 +507,7 @@ public sealed class SubmitAdmissionRuntimeTests
         for (var sequence = 0; sequence < recordCount; sequence++)
         {
             using var received = Received.Create();
+            Assert.True(await pair.WaitForReceiveAsync());
             Assert.True(pair.Server.Recv(received));
             pair.DrainCompletions();
             Assert.Equal(AdmissionPair.Payload(sequence), received.SinglePartOrThrow().ToArray());
@@ -1063,6 +1064,35 @@ public sealed class SubmitAdmissionRuntimeTests
 
         internal void DrainCompletions() =>
             _completionPoller.Wait(_completionEvents, TimeSpan.Zero);
+
+        internal async Task<bool> WaitForReceiveAsync()
+        {
+            _completionPoller.Add(Server, PollEventFlags.PollIn, 2);
+            try
+            {
+                var events = new PollEvent[2];
+                var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+                // Keep the sole completion owner progressing while yielding to
+                // the producer continuation before receiving the next record.
+                // A completion event can wake the poller first; keep waiting for PollIn.
+                while (DateTime.UtcNow < deadline)
+                {
+                    var remaining = deadline - DateTime.UtcNow;
+                    var count = await Task.Run(() => _completionPoller.Wait(events, remaining));
+                    if (
+                        events
+                            .Take(count)
+                            .Any(e => e.Slot == 2 && (e.Revents & PollEventFlags.PollIn) != 0)
+                    )
+                        return true;
+                }
+                return false;
+            }
+            finally
+            {
+                _completionPoller.Remove(Server);
+            }
+        }
 
         internal static byte[] Payload(int sequence)
         {
