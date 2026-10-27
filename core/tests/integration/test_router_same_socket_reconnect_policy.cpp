@@ -456,7 +456,7 @@ void test_context_shutdown_with_pending_inproc_retry ()
 {
     const char *endpoint = "inproc://same-socket-reconnect-shutdown";
     void *server = new_router ("server", ZLINK_RID_DUPLICATE_REJECT);
-    void *client = new_router ("client", ZLINK_RID_DUPLICATE_REJECT, 10);
+    void *client = new_router ("client", ZLINK_RID_DUPLICATE_REJECT, 50);
     observation_t client_events (client);
     TEST_ASSERT_SUCCESS_ERRNO (zlink_bind (server, endpoint));
     TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (client, endpoint));
@@ -467,8 +467,8 @@ void test_context_shutdown_with_pending_inproc_retry ()
     client_events.wait (ZLINK_EVENT_DISCONNECTED, old_connection, true);
 
     TEST_ASSERT_SUCCESS_ERRNO (zlink_ctx_shutdown (get_test_context ()));
-    // Several retry intervals pass with the client still open.
-    msleep (100);
+    // The retry scheduled by the disconnect becomes due after the shutdown.
+    msleep (200);
     test_context_socket_close_zero_linger (client);
 }
 }
