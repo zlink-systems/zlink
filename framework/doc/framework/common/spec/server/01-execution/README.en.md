@@ -12,8 +12,8 @@ title: "Execution"
 ## 1. What Execution Covers
 
 When Application submits a Messaging or Worker call, the call passes source-local
-admission, enters the target owner's queue, has its handler executed in execution-gate
-order, and completes with whichever result — reply, timeout, cancellation, or shutdown —
+admission, enters the target owner's queue, has its handler executed with the start order and
+concurrency defined by [Handler Turn And Execution Gate §2](02-handler-turn-and-execution-gate.en.md#execution-gate), and completes with whichever result — reply, timeout, cancellation, or shutdown —
 is decided first. This topic covers that entire path — from submit to completion.
 
 - [Submit And Completion](01-submit-and-completion.en.md) covers when each terminator
