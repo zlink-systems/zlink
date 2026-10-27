@@ -740,7 +740,7 @@ final class ZLinkCanonicalRelocationSettlementTest {
                                                                                 .failedFuture(
                                                                                         new IllegalStateException(
                                                                                                 "CAS response"
-                                                                                                    + " lost")));
+                                                                                                        + " lost")));
                                             }
                                         }
                                         if (method.getName().equals("readAggregateProgress")
