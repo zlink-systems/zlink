@@ -497,9 +497,12 @@ wait_framework_peer_ready_counts() {
 # One checkout shares Gradle output, so its Java and Kotlin sample builds share
 # one lock. Different checkouts do not share output and use different locks.
 zlink_sample_gradle_lock_path() {
-  # Same expression as the runner templates, so both select the same lock.
+  # Same key as the runner templates and redis-common.ps1: the first 16 hex
+  # digits of SHA-256 over the checkout root of this file.
+  local here
+  here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   printf '/tmp/zlink-framework-java-kotlin-sample-gradle-%s.lock' \
-    "$( (git -C "${PWD}" rev-parse --show-toplevel 2>/dev/null || pwd -P) | cksum | cut -d' ' -f1)"
+    "$(git -C "${here}" rev-parse --show-toplevel | tr -d '\r\n' | sha256sum | cut -c1-16)"
 }
 
 zlink_sample_gradle_locked() {

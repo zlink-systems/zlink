@@ -43,7 +43,7 @@ APPLICATION_MAX_PORT=35999
 run_build() {
   if [[ "${LANGUAGE}" == "java" || "${LANGUAGE}" == "kotlin" ]]; then
     flock --exclusive --close \
-      "/tmp/zlink-framework-java-kotlin-sample-gradle-$(git -C "${SCRIPT_DIR}" rev-parse --show-toplevel | cksum | cut -d' ' -f1).lock" "$@"
+      "/tmp/zlink-framework-java-kotlin-sample-gradle-$(git -C "${SCRIPT_DIR}" rev-parse --show-toplevel | tr -d '\r\n' | sha256sum | cut -c1-16).lock" "$@"
     return
   fi
   "$@"

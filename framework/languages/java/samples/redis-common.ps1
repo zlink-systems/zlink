@@ -389,6 +389,8 @@ function Invoke-ZlinkSampleGradleBuild {
     )
 
     # One checkout shares Gradle output; different checkouts use different locks.
+    # The key matches the bash runners: first 16 hex digits of SHA-256 over the
+    # checkout root as printed by git.
     $checkoutRoot = (& git -C $PSScriptRoot rev-parse --show-toplevel 2>$null)
     if (-not $checkoutRoot) { $checkoutRoot = (Resolve-Path $PSScriptRoot).Path }
     $sha = [System.Security.Cryptography.SHA256]::Create()
