@@ -521,6 +521,10 @@ public sealed class ProviderLocationRepositoryAuthorityTests
     }
 
     [Theory]
+    [InlineData("missing", false)]
+    [InlineData("missing", true)]
+    [InlineData("differentSpotGeneration", false)]
+    [InlineData("differentSpotGeneration", true)]
     [InlineData("live", false)]
     [InlineData("live", true)]
     [InlineData("expired", false)]
@@ -588,6 +592,14 @@ public sealed class ProviderLocationRepositoryAuthorityTests
                 ZLinkActorAuthorityPayloadCodec.Encode(previous)
             )
         );
+        if (scenario == "missing")
+            Assert.IsType<ZLinkAuthorityCompareExchangeResult.Deleted>(
+                await repository.CompareExchangeAuthorityAsync(
+                    spot.Reservation.Key,
+                    spotReady.Snapshot.StoreVersion,
+                    new ZLinkAuthorityMutation.Delete()
+                )
+            );
         if (scenario is "expired" or "differentLeaseGeneration")
             await repository.ReleaseOwnerLeaseAsync(owner);
         if (scenario == "differentLeaseGeneration")
@@ -626,7 +638,9 @@ public sealed class ProviderLocationRepositoryAuthorityTests
                     previous with
                     {
                         CurrentSpotId = "join-spot",
-                        CurrentSpotGeneration = spot.Reservation.ObjectGeneration,
+                        CurrentSpotGeneration =
+                            spot.Reservation.ObjectGeneration
+                            + (scenario == "differentSpotGeneration" ? 1UL : 0UL),
                         CurrentSpotKind = ZLinkSpotKind.User,
                     }
                 ),
@@ -639,7 +653,11 @@ public sealed class ProviderLocationRepositoryAuthorityTests
             Assert.IsType<ZLinkAuthorityCompareExchangeResult.Stored>(result);
         else
         {
-            Assert.IsType<ZLinkAuthorityCompareExchangeResult.Conflict>(result);
+            var conflict = Assert.IsType<ZLinkAuthorityCompareExchangeResult.Conflict>(result);
+            if (scenario == "missing")
+                Assert.Equal(ZLinkFrameworkErrorKind.NotFound, conflict.MembershipFailure);
+            if (scenario is "expired" or "differentLeaseGeneration" or "differentSpotGeneration")
+                Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, conflict.MembershipFailure);
             var after = Assert.IsType<ZLinkAuthorityReadResult.Found>(
                 await repository.ReadAuthorityAsync(actor.Reservation.Key)
             );
