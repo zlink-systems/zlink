@@ -65,7 +65,7 @@ final class ZLinkJavaRawMeshNodeDurableReplayTest {
 
     @ParameterizedTest
     @EnumSource(Operation.class)
-    void missingRawMeshRouteWaitsUntilDeadlineAndRemainsUnadmitted(Operation operation) {
+    void missingRawMeshRouteReachesDeadlineWithoutBindingSubmission(Operation operation) {
         RoutingId sourceRid = RoutingId.from("durable-source");
         RoutingId targetRid = RoutingId.from("durable-missing-target");
         Duration timeout = Duration.ofMillis(80);
@@ -135,8 +135,9 @@ final class ZLinkJavaRawMeshNodeDurableReplayTest {
                     assertThrows(
                             CompletionException.class,
                             () -> completion.toCompletableFuture().join());
+            // Submit and completion §9 includes readiness in the request budget.
             assertEquals(
-                    ZLinkFrameworkErrorKind.UNAVAILABLE,
+                    ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
                     assertInstanceOf(ZLinkFrameworkException.class, failure.getCause()).kind());
             assertTrue(System.nanoTime() - started >= timeout.toNanos());
         }
