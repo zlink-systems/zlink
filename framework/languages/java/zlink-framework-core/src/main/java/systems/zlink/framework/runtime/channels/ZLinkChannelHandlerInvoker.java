@@ -436,22 +436,17 @@ final class ZLinkChannelHandlerInvoker {
             Runnable beforeHandler,
             Function<CompletionStage<Object>, CompletionStage<T>> finish) {
         if (filterTypes.isEmpty()) {
-            var activation = handlerFactory.openActivation();
-            Object handler;
-            try {
-                handler = activation.create(handlerType);
-            } catch (RuntimeException failure) {
-                try (activation) {
-                    throw failure;
-                }
-            }
+            var activation = ZLinkHandlerInstanceOwner.openActivation(handlerFactory);
+            Object handler = ZLinkHandlerInstanceOwner.createSingle(activation, handlerType);
             try {
                 return finish.apply(
                                 invokeHandlerCore(
                                         handler, invocation, message, context, beforeHandler))
-                        .whenComplete((ignored, failure) -> closeHandler(activation, handler));
+                        .whenComplete(
+                                (ignored, failure) ->
+                                        ZLinkHandlerInstanceOwner.closeSingle(activation, handler));
             } catch (RuntimeException failure) {
-                closeHandler(activation, handler);
+                ZLinkHandlerInstanceOwner.closeSingle(activation, handler);
                 throw failure;
             }
         }
@@ -489,12 +484,6 @@ final class ZLinkChannelHandlerInvoker {
                                                 return result.value();
                                             }));
                 });
-    }
-
-    private static void closeHandler(ZLinkHandlerActivator.Activation activation, Object handler) {
-        try (activation) {
-            activation.destroy(handler);
-        }
     }
 
     private static CompletionStage<Object> invokeHandlerCore(

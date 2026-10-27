@@ -7,6 +7,8 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -195,6 +197,148 @@ final class ZLinkHandlerInstanceOwnerTest {
 
         assertEquals(2, creates.get());
         assertEquals(2, destroys.get());
+    }
+
+    @ParameterizedTest
+    @CsvSource({"false,false", "false,true", "true,false", "true,true"})
+    void failedReleasesStayOwnedAndSuccessfulReleasesAreNotRepeated(
+            boolean single, boolean failFirstScopeClose) throws Exception {
+        var destroyFailure = new IllegalStateException("first destroy failed");
+        var closeFailure = new IllegalStateException("first scope close failed");
+        var destroyCalls = new AtomicInteger();
+        var closeCalls = new AtomicInteger();
+        var handler = new TestHandler();
+        var activator =
+                new ZLinkHandlerActivator() {
+                    @Override
+                    public Object create(Class<?> type) {
+                        return handler;
+                    }
+
+                    @Override
+                    public Activation openActivation() {
+                        return new Activation() {
+                            @Override
+                            public Object create(Class<?> type) {
+                                return handler;
+                            }
+
+                            @Override
+                            public void destroy(Object instance) {
+                                assertSame(handler, instance);
+                                if (destroyCalls.incrementAndGet() == 1) throw destroyFailure;
+                            }
+
+                            @Override
+                            public void close() {
+                                if (closeCalls.incrementAndGet() == 1 && failFirstScopeClose)
+                                    throw closeFailure;
+                            }
+                        };
+                    }
+                };
+        var owner = single ? null : new ZLinkHandlerInstanceOwner(activator);
+        var activation = single ? ZLinkHandlerInstanceOwner.openActivation(activator) : null;
+        assertSame(
+                handler,
+                single
+                        ? ZLinkHandlerInstanceOwner.createSingle(activation, TestHandler.class)
+                        : owner.instance(TestHandler.class));
+        RuntimeException observed =
+                assertThrows(
+                        RuntimeException.class,
+                        () -> {
+                            if (single) ZLinkHandlerInstanceOwner.closeSingle(activation, handler);
+                            else owner.close();
+                        });
+        assertSame(destroyFailure, single ? observed.getCause() : observed);
+        AutoCloseable scope = single ? ZLinkHandlerInstanceOwner.pendingRelease(observed) : owner;
+        org.junit.jupiter.api.Assertions.assertNotNull(scope);
+        assertEquals(1, destroyCalls.get());
+        assertEquals(1, closeCalls.get());
+        assertEquals(failFirstScopeClose ? 1 : 0, destroyFailure.getSuppressed().length);
+        if (failFirstScopeClose) assertSame(closeFailure, destroyFailure.getSuppressed()[0]);
+        if (!single)
+            assertThrows(IllegalStateException.class, () -> owner.instance(TestHandler.class));
+
+        scope.close();
+        assertEquals(2, destroyCalls.get());
+        assertEquals(failFirstScopeClose ? 2 : 1, closeCalls.get());
+        scope.close();
+        assertEquals(2, destroyCalls.get());
+        assertEquals(failFirstScopeClose ? 2 : 1, closeCalls.get());
+    }
+
+    @Test
+    void repeatedSingleReleaseFailureKeepsTheSameRetryOwner() {
+        var firstFailure = new IllegalStateException("first destroy failed");
+        var secondFailure = new IllegalStateException("second destroy failed");
+        var destroyCalls = new AtomicInteger();
+        var closeCalls = new AtomicInteger();
+        var activation =
+                new ZLinkHandlerActivator.Activation() {
+                    @Override
+                    public Object create(Class<?> type) {
+                        return new TestHandler();
+                    }
+
+                    @Override
+                    public void destroy(Object handler) {
+                        int call = destroyCalls.incrementAndGet();
+                        if (call == 1) throw firstFailure;
+                        if (call == 2) throw secondFailure;
+                    }
+
+                    @Override
+                    public void close() {
+                        closeCalls.incrementAndGet();
+                    }
+                };
+        Object handler = ZLinkHandlerInstanceOwner.createSingle(activation, TestHandler.class);
+        var pending =
+                assertThrows(
+                        ZLinkHandlerInstanceOwner.PendingRelease.class,
+                        () -> ZLinkHandlerInstanceOwner.closeSingle(activation, handler));
+        assertSame(firstFailure, pending.getCause());
+        assertSame(
+                pending,
+                assertThrows(ZLinkHandlerInstanceOwner.PendingRelease.class, pending::close));
+        assertEquals(1, pending.getSuppressed().length);
+        assertSame(secondFailure, pending.getSuppressed()[0]);
+        pending.close();
+        pending.close();
+        assertEquals(3, destroyCalls.get());
+        assertEquals(1, closeCalls.get());
+    }
+
+    @Test
+    void retryDoesNotDestroyOtherSuccessfullyReleasedInstancesAgain() {
+        var first = new TestHandler();
+        var second = new Object();
+        var firstCalls = new AtomicInteger();
+        var secondCalls = new AtomicInteger();
+        var activator =
+                new ZLinkHandlerActivator() {
+                    @Override
+                    public Object create(Class<?> type) {
+                        return type == TestHandler.class ? first : second;
+                    }
+
+                    @Override
+                    public void destroy(Object instance) {
+                        if (instance == first && firstCalls.incrementAndGet() == 1)
+                            throw new IllegalStateException("first destroy failed");
+                        if (instance == second) secondCalls.incrementAndGet();
+                    }
+                };
+        var owner = new ZLinkHandlerInstanceOwner(activator);
+        owner.instance(TestHandler.class);
+        owner.instance(Object.class);
+        assertThrows(IllegalStateException.class, owner::close);
+        owner.close();
+        owner.close();
+        assertEquals(2, firstCalls.get());
+        assertEquals(1, secondCalls.get());
     }
 
     private static final class TestHandler {}
