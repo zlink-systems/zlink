@@ -91,7 +91,7 @@
 | [packaging.ko.md](building/packaging.ko.md) | 릴리즈 및 패키징 |
 | [versioning.ko.md](building/versioning.ko.md) | 버전 정책(Core·binding·framework 번호 규칙, 호환, 1.0 계획) |
 | [release-pipeline.ko.md](building/release-pipeline.ko.md) | 빌드 스크립트 위치와 배포 파이프라인(워크플로우·채널·인증) 한눈에 보기 |
-| [release-accounts.ko.md](building/release-accounts.ko.md) | 공식 배포 계정/시크릿 |
+| 내부 문서(비공개 저장소 zlink-systems/docs의 `zlink/building/release-accounts.ko.md`) | 공식 배포 계정/시크릿 |
 | [platforms.ko.md](building/platforms.ko.md) | 지원 플랫폼 및 컴파일러 |
 
 ## 라이선스 정책 (license/)

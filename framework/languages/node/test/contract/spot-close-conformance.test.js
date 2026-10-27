@@ -140,7 +140,8 @@ async function createOwner(given) {
       return { accepted: true };
     }
 
-    async onClosing() {
+    async onClosing(context) {
+      given.observeClosing?.(context);
       counters.onClosing++;
       events.push('onClosing');
       closingEntered.resolve();
@@ -157,6 +158,7 @@ async function createOwner(given) {
     }
   }
   const manager = new framework.DefaultZLinkSpotManager({
+    defaultRequestTimeoutMs: given.requestTimeoutMs,
     detachedTaskRunner: detachedTaskRunner,
     spotFactories: [RoomSpot],
     spotPacketHandlers: [{ spotType: RoomSpot, handlerType: PingHandler, packetName: 'Ping' }],
@@ -186,7 +188,7 @@ async function createOwner(given) {
     factories: new Map([[MESH, new Map([['room', { implementation: RoomSpot }]])]]),
     resolver: () => undefined,
     isLocalNode: () => true,
-    defaultTimeoutMs: 1_000
+    defaultTimeoutMs: given.requestTimeoutMs ?? 1_000
   });
   const spotId = 'conformance-room';
   const key = encodeAuthorityKey('user_spot', spotId);
@@ -475,8 +477,12 @@ test('a second Close during committed Closing joins the first Close', async () =
     assert.equal(await owner.authority(), 'Closing');
     secondClose = owner.spots.close(owner.ref);
     void secondClose.then(
-      () => { secondCloseSettled = true; },
-      () => { secondCloseSettled = true; }
+      () => {
+        secondCloseSettled = true;
+      },
+      () => {
+        secondCloseSettled = true;
+      }
     );
     await new Promise((resolve) => setImmediate(resolve));
     assert.equal(secondCloseSettled, false);
@@ -503,18 +509,19 @@ for (const decision of [
       return 'accepted';
     });
     void operation.then(
-      () => { operationSettled = true; },
-      () => { operationSettled = true; }
+      () => {
+        operationSettled = true;
+      },
+      () => {
+        operationSettled = true;
+      }
     );
 
     await new Promise((resolve) => setImmediate(resolve));
     const remainedPending = !operationSettled;
     authorityCas.resolve(decision.committed);
     const casCommitted = await authorityCas.promise;
-    assert.equal(
-      casCommitted ? barrier.commit(seal) : barrier.abort(seal),
-      true
-    );
+    assert.equal(casCommitted ? barrier.commit(seal) : barrier.abort(seal), true);
 
     if (decision.committed) {
       await assert.rejects(
@@ -560,10 +567,12 @@ for (const closeStarted of [false, true]) {
         if (commits) serial.setLifecycleAdmissionClosed(true);
       });
       if (closeStarted) await entered.promise;
-      const joining = outcome(() => serial.executeLifecycleOperation(() => {
-        calls++;
-        return 'accepted';
-      }));
+      const joining = outcome(() =>
+        serial.executeLifecycleOperation(() => {
+          calls++;
+          return 'accepted';
+        })
+      );
       assert.equal(calls, 0);
       release.resolve();
       await close;
@@ -703,3 +712,58 @@ test('relocation seal holds ingress until its result is known', async () => {
   await handled.promise;
   assert.deepEqual(events, ['handled']);
 });
+
+for (const fromContext of [false, true]) {
+  test(`explicit User Spot Close uses the configured request deadline (context=${fromContext})`, async () => {
+    let closing;
+    const owner = await createOwner({
+      authority: 'Ready',
+      requestTimeoutMs: 7000,
+      observeClosing: (context) => {
+        closing = context;
+      }
+    });
+    const before = Date.now();
+    let close;
+    if (fromContext) {
+      await owner.manager.executeOnSpot(owner.RoomSpot, owner.spotId, (spot) => {
+        close = spot.context.close();
+      });
+    } else {
+      close = owner.spots.close(owner.ref);
+    }
+    assert.equal(await close, true);
+    const after = Date.now();
+    assert.ok(closing.deadline.getTime() >= before + 7000);
+    assert.ok(closing.deadline.getTime() <= after + 7000);
+  });
+
+  test(`explicit Instance Spot Close fixes its request deadline before queueing (context=${fromContext})`, async () => {
+    let closing;
+    class Instance {
+      async onClosing(context) {
+        closing = context;
+      }
+    }
+    const manager = new framework.DefaultZLinkSpotManager({
+      detachedTaskRunner,
+      spotFactories: [],
+      defaultRequestTimeoutMs: 7000,
+      instanceSpotFactories: new Map([['mesh', new Map([['instance', Instance]])]])
+    });
+    await manager.materializeInstance('mesh', 'instance', 'deadline-instance', 1n);
+    const before = Date.now();
+    let close;
+    if (fromContext) {
+      await manager.executeOnSpot(Instance, 'deadline-instance', (spot) => {
+        close = spot.context.close();
+      });
+    } else {
+      close = manager.close('mesh', 'deadline-instance');
+    }
+    const queuedAt = Date.now();
+    assert.equal(await close, true);
+    assert.ok(closing.deadline.getTime() >= before + 7000);
+    assert.ok(closing.deadline.getTime() <= queuedAt + 7000);
+  });
+}

@@ -153,7 +153,7 @@ final class ZLinkUserSpotOperationHandler
         var fence = request.intent().target();
         SpotActivation activation = lifecycle.spotActivationFor(fence.spotId());
         if (activation == null) {
-            return closeOnLifecycle(fence)
+            return closeOnLifecycle(fence, Instant.ofEpochMilli(request.intent().deadlineUnixMs()))
                     .thenApply(ZLinkInternalMeshNode.UserSpotCloseResponse::new);
         }
         CompletableFuture<ZLinkInternalMeshNode.UserSpotCloseResponse> result =
@@ -162,7 +162,10 @@ final class ZLinkUserSpotOperationHandler
                 .context
                 .enqueueClose(
                         () ->
-                                closeOnLifecycle(fence)
+                                closeOnLifecycle(
+                                                fence,
+                                                Instant.ofEpochMilli(
+                                                        request.intent().deadlineUnixMs()))
                                         .handle(
                                                 (closed, failure) -> {
                                                     if (failure == null) {
@@ -192,7 +195,8 @@ final class ZLinkUserSpotOperationHandler
      * lifecycle lane when the activation exists, so a Join or leave accepted earlier on that lane
      * has decided its membership before the membership check here.
      */
-    CompletionStage<Boolean> closeOnLifecycle(ZLinkServiceM6BWireCodec.UserSpotCloseFence fence) {
+    CompletionStage<Boolean> closeOnLifecycle(
+            ZLinkServiceM6BWireCodec.UserSpotCloseFence fence, Instant deadline) {
         ZLinkSpotCloseCoordinator retained =
                 runtime.closingCoordinator(
                         fence.spotId(),
@@ -460,8 +464,7 @@ final class ZLinkUserSpotOperationHandler
                                                                                                     .closingStage(
                                                                                                             ZLinkSpotCloseReason
                                                                                                                     .EXPLICIT_CLOSE,
-                                                                                                            Instant
-                                                                                                                    .now())),
+                                                                                                            deadline)),
                                                                     ZLinkSpotCloseCoordinator.Step
                                                                             .operation(
                                                                                     () -> {
