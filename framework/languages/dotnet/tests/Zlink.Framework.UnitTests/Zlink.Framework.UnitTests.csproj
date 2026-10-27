@@ -107,6 +107,7 @@
         <Compile Include="Runtime/ActorHandoffTests.cs"/>
         <Compile Include="Runtime/ActorHandoffDrainTests.cs"/>
         <Compile Include="Runtime/JoinCallbackSendTests.cs"/>
+        <Compile Include="Runtime/JoinCommitGenerationTests.cs"/>
         <Compile Include="Runtime/ActorJoinPrewarmRegistryTests.cs"/>
         <Compile Include="Runtime/ActorHandlerActivationTests.cs"/>
         <Compile Include="Runtime/ActorClientTests.cs"/>
