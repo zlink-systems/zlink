@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+#include <zlink/json.hpp>
 #include "../support/runtime_failure_fixture.hpp"
 
 #include <zlink/framework.hpp>
@@ -221,17 +222,46 @@ struct request_t
     static constexpr const char *packet_name = "profile.lookup";
     int value{};
 };
+}
+
+template <> struct zlink::json::dto_traits<request_t>
+{
+    static constexpr auto fields = std::tuple{zlink::json::field ("value", &request_t::value)};
+};
+
+namespace
+{
+
 
 struct reply_t
 {
     int value{};
 };
+}
+
+template <> struct zlink::json::dto_traits<reply_t>
+{
+    static constexpr auto fields = std::tuple{zlink::json::field ("value", &reply_t::value)};
+};
+
+namespace
+{
 
 struct event_t
 {
     static constexpr const char *packet_name = "profile.changed.event";
     int value{};
 };
+}
+
+template <> struct zlink::json::dto_traits<event_t>
+{
+    static constexpr auto fields = std::tuple{zlink::json::field ("value", &event_t::value)};
+};
+
+namespace
+{
+
 
 struct outer_route_request_t
 {
@@ -244,18 +274,51 @@ struct inner_route_request_t
     static constexpr const char *packet_name = "inner";
     int value{};
 };
+}
+
+template <> struct zlink::json::dto_traits<inner_route_request_t>
+{
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("value", &inner_route_request_t::value)};
+};
+
+namespace
+{
+
 
 struct api_hop_request_t
 {
     static constexpr const char *packet_name = "api-hop";
     int value{};
 };
+}
+
+template <> struct zlink::json::dto_traits<api_hop_request_t>
+{
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("value", &api_hop_request_t::value)};
+};
+
+namespace
+{
+
 
 struct missing_probe_request_t
 {
     static constexpr const char *packet_name = "missing.request";
     int value{};
 };
+}
+
+template <> struct zlink::json::dto_traits<missing_probe_request_t>
+{
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("value", &missing_probe_request_t::value)};
+};
+
+namespace
+{
+
 
 class local_handler_t
 {

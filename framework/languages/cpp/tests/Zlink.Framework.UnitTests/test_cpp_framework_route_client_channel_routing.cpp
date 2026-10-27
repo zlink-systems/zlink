@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+#include <zlink/json.hpp>
 #include "../support/runtime_failure_fixture.hpp"
 
 #include <zlink/framework.hpp>
@@ -38,17 +39,47 @@ struct route_request_t
     static constexpr const char *packet_name = "channel-route.request";
     int value{};
 };
+}
+
+template <> struct zlink::json::dto_traits<route_request_t>
+{
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("value", &route_request_t::value)};
+};
+
+namespace
+{
+
 
 struct route_reply_t
 {
     int value{};
 };
+}
+
+template <> struct zlink::json::dto_traits<route_reply_t>
+{
+    static constexpr auto fields = std::tuple{zlink::json::field ("value", &route_reply_t::value)};
+};
+
+namespace
+{
 
 struct route_event_t
 {
     static constexpr const char *packet_name = "channel-route.event";
     int value{};
 };
+}
+
+template <> struct zlink::json::dto_traits<route_event_t>
+{
+    static constexpr auto fields = std::tuple{zlink::json::field ("value", &route_event_t::value)};
+};
+
+namespace
+{
+
 
 template <typename T>
 void add_int_serializer (zlink::framework::serializer_registry_t &serializers,

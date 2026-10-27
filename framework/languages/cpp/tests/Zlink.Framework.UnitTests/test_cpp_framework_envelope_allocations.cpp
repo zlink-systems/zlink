@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+#include <zlink/json.hpp>
 #include <gtest/gtest.h>
 #include "allocation_counter.hpp"
 #include "runtime/diagnostics/message_flow_tracer.hpp"
@@ -25,6 +26,16 @@ struct payload_t
 {
     int value = 7;
 };
+}
+
+template <> struct zlink::json::dto_traits<payload_t>
+{
+    static constexpr auto fields = std::tuple{zlink::json::field ("value", &payload_t::value)};
+};
+
+namespace
+{
+
 
 struct allocation_handler_t
 {
