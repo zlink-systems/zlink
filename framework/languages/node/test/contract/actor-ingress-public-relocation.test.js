@@ -51,10 +51,22 @@ class Ask {
 }
 class Unregistered {}
 
+const redisUrl = process.env.ZLINK_TEST_REDIS_URL ?? 'redis://127.0.0.1:6379';
+
 test(
   'public relocation transfers queued sends, requests and physical disconnect to the current Spot',
   { timeout: 30000 },
   async (t) => {
+    const probe = createClient({ url: redisUrl, socket: { reconnectStrategy: false } });
+    probe.on('error', () => {});
+    try {
+      await probe.connect();
+    } catch (error) {
+      if (probe.isOpen) probe.disconnect();
+      t.skip(`Redis is unavailable at ${redisUrl}: ${error.message}`);
+      return;
+    }
+    await probe.quit();
     const suffix = randomUUID();
     const mesh = 'follow-' + suffix;
     const prefix = 'f2799:' + suffix + ':';
@@ -179,13 +191,13 @@ test(
       builder.configureDispatch().messageFlow('normal');
       builder.addLocationStore(
         new locations.ZLinkRedisLocationStore({
-          url: 'redis://127.0.0.1:6379',
+          url: redisUrl,
           keyPrefix: prefix + 'location'
         })
       );
       builder.addRelocationStore(
         new locations.ZLinkRedisRelocationStore({
-          url: 'redis://127.0.0.1:6379',
+          url: redisUrl,
           keyPrefix: prefix + 'relocation'
         })
       );
@@ -414,7 +426,7 @@ test(
       if (client) await client.close();
       for (const app of apps.reverse()) await app.close();
       const redis = createClient({
-        url: 'redis://127.0.0.1:6379',
+        url: redisUrl,
         socket: { reconnectStrategy: false }
       });
       redis.on('error', () => {});
