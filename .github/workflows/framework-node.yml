@@ -70,7 +70,10 @@ concurrency:
 jobs:
   framework-node:
     name: ${{ matrix.target.name }} / node${{ matrix.node-version }}
-    runs-on: ${{ matrix.target.runner }}
+    # ZLINK_LINUX_RUNNER/ZLINK_WINDOWS_RUNNER (JSON label lists) move the x64 Linux/Windows
+    # jobs to self-hosted runners; arm64 and macOS stay hosted. Only Mergify branch pushes
+    # and manual runs start this workflow, so fork code never reaches them.
+    runs-on: ${{ (matrix.target.runner == 'ubuntu-24.04' && vars.ZLINK_LINUX_RUNNER && fromJSON(vars.ZLINK_LINUX_RUNNER)) || (matrix.target.runner == 'windows-latest' && vars.ZLINK_WINDOWS_RUNNER && fromJSON(vars.ZLINK_WINDOWS_RUNNER)) || matrix.target.runner }}
     strategy:
       fail-fast: false
       matrix:
@@ -259,6 +262,12 @@ jobs:
         working-directory: framework/languages/node
         run: npm run verify:ci
 
+      # The browser build rewrites the committed WebGL bundle, so the bundle
+      # check inside the gate always sees a fresh file. A diff here means the
+      # source changed without the regenerated bundle being committed.
+      - name: Verify the build left the committed WebGL bundle unchanged
+        run: git diff --exit-code -- framework/languages/unity/com.zlink.stream-connector.webgl
+
       - name: Run actual Chromium Stream Connector E2E
         if: matrix.node-version == 22 && (matrix.target.name == 'linux-x64' || matrix.target.name == 'win-x64')
         working-directory: framework/languages/node
@@ -266,7 +275,7 @@ jobs:
 
   framework-node-cross-language:
     name: cross-language smoke
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.ZLINK_LINUX_RUNNER && fromJSON(vars.ZLINK_LINUX_RUNNER) || 'ubuntu-24.04' }}
     timeout-minutes: 30
     needs:
       - framework-node
@@ -383,7 +392,7 @@ jobs:
 
   framework-node-gate:
     name: node-release-gate
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.ZLINK_LINUX_RUNNER && fromJSON(vars.ZLINK_LINUX_RUNNER) || 'ubuntu-24.04' }}
     needs:
       - framework-node
       - framework-node-cross-language

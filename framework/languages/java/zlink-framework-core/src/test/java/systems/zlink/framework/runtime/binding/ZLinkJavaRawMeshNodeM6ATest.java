@@ -9,6 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.Test;
 
 import systems.zlink.contracts.core.Context;
@@ -64,7 +65,7 @@ import java.util.logging.Logger;
 import java.util.stream.IntStream;
 
 final class ZLinkJavaRawMeshNodeM6ATest {
-    @Test
+    @RepeatedTest(20)
     void nodeRequestKeepsMultipartViewUntilDispatchRelease() throws Exception {
         String endpoint = "inproc://request-view-" + System.nanoTime();
         RoutingId sourceRid = RoutingId.from("request-view-source");
@@ -80,7 +81,7 @@ final class ZLinkJavaRawMeshNodeM6ATest {
             target.startDispatch(received::complete);
             source.start();
             target.start();
-            source.connectPeer(endpoint, targetRid);
+            long intent = source.connectPeer(endpoint, targetRid);
             awaitAdmitted(source);
             try (Message packet = Message.from("request.view");
                     Message payload = Message.from(new byte[] {1, 2, 3})) {
@@ -96,6 +97,7 @@ final class ZLinkJavaRawMeshNodeM6ATest {
                                         null)
                                 .toCompletableFuture();
                 try (var record = received.get(2, TimeUnit.SECONDS)) {
+                    long repeatedIntent = source.connectPeer(endpoint, targetRid);
                     assertTrue(record.parts() instanceof ZLinkFrameworkMultipartView);
                     assertEquals("request.view", record.parts().getFirst().toUtf8String());
                     assertArrayEquals(new byte[] {1, 2, 3}, record.parts().get(1).toByteArray());
@@ -105,6 +107,7 @@ final class ZLinkJavaRawMeshNodeM6ATest {
                     try (var result = requested.get(2, TimeUnit.SECONDS)) {
                         assertEquals(ZLinkBackendRequestResult.OK, result.result());
                         assertEquals("reply", result.parts().getFirst().toUtf8String());
+                        assertEquals(intent, repeatedIntent);
                     }
                 }
             }

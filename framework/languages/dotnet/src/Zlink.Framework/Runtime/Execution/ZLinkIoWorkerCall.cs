@@ -7,8 +7,7 @@ namespace Zlink.Framework.Runtime.Execution;
 /// </summary>
 internal sealed class ZLinkIoWorkerCall<TResult>(
     CancellationToken runtimeStopToken,
-    Func<CancellationToken, ValueTask<TResult>> work,
-    IZLinkRuntimeFailureReporter errorSink
+    Func<CancellationToken, ValueTask<TResult>> work
 ) : IZLinkWorkerCall<TResult>
 {
     private readonly ZLinkSerialTurn? _turn = ZLinkSerialTurn.Current;
@@ -30,12 +29,8 @@ internal sealed class ZLinkIoWorkerCall<TResult>(
 
     public void Submit(CancellationToken cancellationToken = default)
     {
-        EnsureSingleTerminator();
-        ZLinkUnawaitedSubmit.Observe(
-            ObserveAsync(cancellationToken),
-            "I/O worker submit",
-            errorSink
-        );
+        ZLinkApplicationExecutionContext.EnsureBlockingSubmitAllowed();
+        _ = Async(cancellationToken).AsTask().GetAwaiter().GetResult();
     }
 
     public ValueTask<TResult> Yield(CancellationToken cancellationToken = default)
@@ -47,35 +42,38 @@ internal sealed class ZLinkIoWorkerCall<TResult>(
 
     private async ValueTask<TResult> ExecuteAsync(CancellationToken cancellationToken)
     {
+        using var deadlineSource = _timeout is { } timeout
+            ? new CancellationTokenSource(timeout)
+            : null;
         using var stopSource = CancellationTokenSource.CreateLinkedTokenSource(
             runtimeStopToken,
-            cancellationToken
+            cancellationToken,
+            deadlineSource?.Token ?? CancellationToken.None
         );
         try
         {
+            stopSource.Token.ThrowIfCancellationRequested();
             var operation = work(stopSource.Token).AsTask();
-            return _timeout is { } timeout
-                ? await operation.WaitAsync(timeout, stopSource.Token).ConfigureAwait(false)
-                : await operation.WaitAsync(stopSource.Token).ConfigureAwait(false);
+            return await operation.WaitAsync(stopSource.Token).ConfigureAwait(false);
         }
-        catch (TimeoutException ex)
+        catch (OperationCanceledException ex) when (cancellationToken.IsCancellationRequested)
         {
-            stopSource.Cancel();
+            throw new OperationCanceledException(ex.Message, ex, cancellationToken);
+        }
+        catch (OperationCanceledException) when (runtimeStopToken.IsCancellationRequested)
+        {
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.ShuttingDown,
+                "I/O worker call was stopped because the framework runtime stopped."
+            );
+        }
+        catch (OperationCanceledException ex) when (deadlineSource?.IsCancellationRequested == true)
+        {
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.DeadlineExceeded,
                 "I/O worker call timed out.",
                 ZLinkRetryAdvice.DoNotRetry,
                 ex
-            );
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (OperationCanceledException) when (runtimeStopToken.IsCancellationRequested)
-        {
-            throw new OperationCanceledException(
-                "I/O worker call was canceled because the framework runtime stopped."
             );
         }
         catch (Exception ex) when (ex is not ZLinkFrameworkException)
@@ -87,11 +85,6 @@ internal sealed class ZLinkIoWorkerCall<TResult>(
                 ex
             );
         }
-    }
-
-    private async ValueTask ObserveAsync(CancellationToken cancellationToken)
-    {
-        _ = await ExecuteAsync(cancellationToken).ConfigureAwait(false);
     }
 
     private void EnsureSingleTerminator()
