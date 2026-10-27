@@ -517,12 +517,16 @@ kept until the callback returns, and after that a reference left in the index ho
 continuation, result payload, or cancellation callback. An implementation that removes the entry from the
 index immediately also satisfies this rule.
 
-**One index decides the next management visit.** The next visit is the earlier of the earliest
-deadline that actually expires within the current rotation and the previous visit plus one rotation. A
-slot holding only entries with rounds remaining does not bring the visit forward — visiting every such
-slot would create owner turns in proportion to the request count and to time. An implementation that
-scans a single table returns the earlier of a lower bound no later than the real earliest deadline and
-the previous visit plus one rotation. This time is not kept in a second data structure outside the index. When an earlier visit appears, the
+**One index decides the next management visit.** Let L be the reference time of the preceding
+management visit and R the rotation duration. The next visit is the earlier of L+R and the earliest
+absolute deadline at or before L+R among unfinished entries remaining in the index; if there is no
+candidate, it is L+R. Candidates are determined by this absolute time window rather than a slot's stored
+rounds, accounting for cursor and round progress over skipped time — visiting every slot that holds only
+entries with rounds remaining would create owner turns in proportion to the request count and to time.
+An implementation that scans a single table returns the earlier of a lower bound no later than the real
+earliest deadline and L+R. There is no second index for the earliest deadline, whether inside or outside
+the deadline-index object; the next visit is computed from the entries, slots and visit cursor of that
+same index. When an earlier visit appears, the
 existing wait is woken and brought forward, and a visit that is already due is not pushed back by a fixed
 floor. The management work uses the owner turn only at that time and creates no management turns in
 proportion to the request count. [Messaging Hot Path "4.2"](08-messaging-hot-path.en.md#42-management-work-per-receive-turn) defines how the I0
