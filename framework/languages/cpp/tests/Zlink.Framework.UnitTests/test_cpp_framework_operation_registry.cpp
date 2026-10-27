@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 
 #include "runtime/dispatch/dispatch_limits.hpp"
+#include "allocation_counter.hpp"
 #include "runtime/dispatch/completion_turn.hpp"
 #include <zlink/framework/contracts/dispatch/task.hpp>
 #include <boost/asio/execution/occupancy.hpp>
@@ -712,8 +713,55 @@ void verify_registration_does_not_wait_for_owner ()
     std::cout << "registry_no_hop owner_blocked_register_expire_index_shutdown=1\n";
 }
 
+void verify_publication_allocation_failure ()
+{
+    runtime::offload_executor_t executor;
+    runtime::state_lane_t lane (executor);
+    std::latch entered (1), release (1);
+    assert (lane.try_post ([&] {
+        entered.count_down ();
+        release.wait ();
+    }));
+    entered.wait ();
+    std::size_t rejected = 0, accepted = 0;
+    for (std::size_t failure = 0; failure < 8; ++failure) {
+        std::stop_source cancellation;
+        {
+            foundation::operation_registry_t registry (lane);
+            zlink::framework::tests::allocations_before_failure = failure;
+            try {
+                const bool registered = registry.register_operation (
+                  {2002, failure + 1},
+                  foundation::operation_registry_t::clock_t::time_point::max (), [] (auto, auto) {},
+                  {}, {}, {}, cancellation.get_token ());
+                zlink::framework::tests::allocations_before_failure.reset ();
+                assert (registered && registry.size () == 1);
+                assert (registry.unregister ({2002, failure + 1}));
+                ++accepted;
+            }
+            catch (const std::bad_alloc &) {
+                zlink::framework::tests::allocations_before_failure.reset ();
+                assert (registry.size () == 0 && !registry.contains ({2002, failure + 1}));
+                ++rejected;
+            }
+            assert (registry.shutdown () == 0);
+        }
+        // A failed publication must have removed its stop subscription before
+        // the registry is destroyed, even while its owner lane is unavailable.
+        cancellation.request_stop ();
+    }
+    release.count_down ();
+    lane.run_sync ([] {});
+    assert (rejected >= 4 && accepted > 0);
+}
+
 int main (int argc, char **argv)
 {
+    if (argc == 2 && std::string_view (argv[1]) == "--publication-failure") {
+        zlink::framework::completion_owner_t owner;
+        verify_publication_allocation_failure ();
+        return 0;
+    }
     if (argc == 2 && std::string_view (argv[1]) == "--no-global-registry-thread") {
         verify_no_global_registry_thread ();
         return 0;

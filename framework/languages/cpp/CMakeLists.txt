@@ -1172,12 +1172,14 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
 
   add_executable(test_cpp_framework_operation_registry
     tests/Zlink.Framework.UnitTests/test_cpp_framework_operation_registry.cpp
+    tests/support/allocation_counter.cpp
     framework/src/runtime/foundation/operation_registry.cpp
     framework/src/runtime/execution/state_lane.cpp
     framework/src/runtime/dispatch/offload_executor.cpp)
   target_compile_features(test_cpp_framework_operation_registry PRIVATE cxx_std_20)
   target_include_directories(test_cpp_framework_operation_registry PRIVATE
-    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
+    ${ZLINK_FRAMEWORK_CPP_DIR}/tests/support)
   target_compile_definitions(test_cpp_framework_operation_registry PRIVATE
     ZLINK_COMPLETION_TERMINAL_CONFORMANCE_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/conformance/completion-terminal-v1.json")
   target_link_libraries(test_cpp_framework_operation_registry PRIVATE
@@ -1199,6 +1201,12 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
   zlink_framework_cpp_add_test(
     NAME test_cpp_framework_registry_no_global_thread
     COMMAND test_cpp_framework_operation_registry --no-global-registry-thread
+    LABELS "framework-contract;operation;resource"
+    TIMEOUT 30)
+
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_registry_publication_failure
+    COMMAND test_cpp_framework_operation_registry --publication-failure
     LABELS "framework-contract;operation;resource"
     TIMEOUT 30)
 
