@@ -224,7 +224,8 @@ test('shared maintenance budget advances both registries while raw work carries 
 
 test('backend shared maintenance gives raw and stateful registries one divided budget', async (t) => {
   // Subtracting this fractional origin from its deadline does not recover the exact budget.
-  t.mock.method(performance, 'now', () => 0.3);
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 0 });
+  t.mock.method(performance, 'now', () => Date.now() + 0.3);
   const backend = require('../../packages/framework/dist/runtime/backend');
   const {
     RAW_MESH_RECEIVE_TIME_BUDGET_MS
@@ -256,7 +257,11 @@ test('backend shared maintenance gives raw and stateful registries one divided b
     node.start();
     // Maintenance runs at the nearest management deadline (spec 08 §4.2); a
     // pending request gives this idle node one.
-    node.requestToNode('budget-missing-peer', [Buffer.from('budget')], { timeoutMs: 5 });
+    const rawPending = node.runtime.operations.register(1000);
+    const statefulPending = node.stateful.operations.register(1000);
+    void rawPending.promise.catch(() => {});
+    void statefulPending.promise.catch(() => {});
+    t.mock.timers.tick(256);
     await observed;
     await new Promise(setImmediate);
     assert.equal(observations[0].now, observations[1].now);
