@@ -355,7 +355,8 @@ flowchart LR
 
 Request timeout은 outbound admission과 reply 대기 전체를 포함하며, global object request는
 current Ready authority resolve와 handler 시간도 포함한다. Source는 앞 단계에서 사용한 시간을 뺀
-잔여 시간만 다음 단계에 전달한다. Outbound admission의 시간 상한은 남은 request timeout이며
+잔여 시간만 다음 단계에 전달한다. 기준은 request 진입 때 monotonic clock으로 정한 절대 deadline 하나이며,
+selector·operation 소유자의 turn을 기다린 시간도 이 deadline에서 차감된다. 단계마다 timeout을 새로 시작하지 않는다. Outbound admission의 시간 상한은 남은 request timeout이며
 socket send timeout과 결합하지 않는다. Timeout이나 cancellation으로 caller의 대기가 끝나도 request가
 전송되지 않았다는 뜻은 아니다 — admission 전에 끝난 request도 binding이 이미 시작한 재제출로 나중에
 전송될 수 있고, 그 reply는 닫힌 correlation이므로 폐기한다. Timeout·연결 실패 뒤 request의 재제출 경계는 [§5](#5-backpressure와-오류-분류)가 정의한다. §5의 연결 준비 대기는
@@ -438,6 +439,47 @@ sequenceDiagram
     P->>P: 등록한 entry를 atomic하게 꺼낸다
     P-->>S: 새 execution turn에 completion을 전달한다
 ```
+
+<a id="101-pending-entry와-deadline-인덱스"></a>
+### 10.1 Pending entry와 deadline 인덱스
+
+**Framework logical request 하나에 pending entry는 하나다.** Reply, remote 오류, timeout, caller
+cancellation과 shutdown은 모두 이 entry 하나의 원자적 꺼내기로 terminal 권한을 경쟁한다. Typed caller
+수신자는 이 entry의 dispatcher 자리에 등록한다. Caller 대기를 끝내는 바깥 자리와 Framework 안의 두 번째
+pending을 따로 두고 각각 취소하지 않는다. Caller 대기가 끝난 뒤의 native operation과 late reply 관찰은
+binding 계약을 따르며, 그것을 위해 Framework pending을 deadline까지 남기지 않는다.
+
+**Deadline은 entry의 값이다.** Request마다 timer 객체(timer callback, timeout task, 자기 deadline을 가진
+cancellation source)를 만들지 않는다. Route resolve, readiness 대기, admission(HWM) 대기도 같다 — 같은
+절대 deadline([§9](#9-request-completion--완료-경쟁과-timeout-budget))을 entry에서 읽고, 만료는 operation 소유자의
+deadline 인덱스가 확정한다.
+
+상태는 둘로 나뉜다.
+
+| 상태 | 분류 | 소유와 규칙 |
+|---|---|---|
+| terminal 권한 표 | C1 — 원자적 꺼내기만 한다 | 완료 알림을 받은 자리에서 꺼내고 그 자리에서 pending에서 사라진다. 소유 turn으로 왕복하지 않는다. Request가 pending인지는 이 표만으로 판정한다. |
+| deadline 인덱스와 방문 cursor | C2 — operation 소유자의 state lane | 만료 후보를 찾는 방문용 참조다. Terminal 권한을 갖지 않으며, 인덱스에 남아 있다는 사실로 pending을 판정하지 않는다. 등록과 close 수락은 terminal 권한 표와 함께 operation 소유자가 직렬화한다. |
+
+두 표는 서로 다른 컴포넌트이며 [상태 소유와 state lane 「4」](06-state-ownership-and-lanes.ko.md#4-상태-분류와-판별-기준)의 "C2가 이긴다"는
+한 컴포넌트 안의 규칙이다. 같은 완료 사실을 completed flag로 한 번 더 저장하지 않는다.
+
+**완료된 entry의 인덱스 참조는 다음 관리 방문에서 정리한다.** 완료된 entry는 원래 deadline이나 남은
+회전을 기다리지 않고, 완료 시점부터 인덱스 한 회전 안에 그 자리의 방문 대상이 된다(기본 인덱스는 1 ms
+slot 256개, 한 회전 256 ms). 시간 예산 안에 방문을 끝내지 못하면 cursor를 유지하고 다음 관리 turn에서
+잇는다. 인덱스 정리만을 위해 완료마다 소유 turn이나 별도 queue를 만들지 않는다. Dispatcher 자리는 callback이
+반환할 때까지 유지하고, 반환 뒤 인덱스에 남은 참조는 caller continuation·결과 payload·cancellation callback을
+붙잡지 않는다. 즉시 인덱스에서 지우는 구현도 이 규칙을 만족한다.
+
+**다음 관리 방문 시각은 인덱스 하나가 정한다.** Timer wheel은 다음 점유 slot의 방문 시각을, 단일 표를
+순회하는 구현은 실제 가장 이른 deadline보다 늦지 않은 하한을 반환한다. 가장 이른 deadline을 위한 두 번째
+인덱스를 두지 않는다. 더 이른 방문이 생기면 기존 대기를 깨워 앞당기고, 이미 도래한 방문을 고정 하한으로
+미루지 않는다. 관리 작업은 이 시각에만 소유자 turn을 쓰며, request 수에 비례한 관리 turn을 만들지 않는다.
+I0의 대기 상한은 각 관리 작업이 반환한 방문 시각의 최솟값이다([Messaging hot path 「4.2」](08-messaging-hot-path.ko.md#42-수신-회전별-관리-작업)).
+
+**인덱스의 양자화는 deadline보다 먼저 timeout을 확정하지 않는다.** 관리 방문이 늦어 reply와 timeout이
+경쟁하면 terminal 권한 표에서 먼저 꺼낸 쪽이 결과다. Reply마다 시계를 다시 읽어 두 번째 만료 판정을
+하지 않는다.
 
 ## 11. 완료 callback의 execution turn (구현)
 

@@ -110,7 +110,8 @@ the mechanism that guards it follows mechanically.
 When a component mixes all three, **C2 wins** — the strongest requirement decides the
 mechanism for the whole component. Moving only part of a component to a lane while leaving the
 rest on a concurrent map or a separate lock lets the cross-invariant violation that C2 exists
-to prevent reappear at that boundary.
+to prevent reappear at that boundary. A request's terminal authority table (C1) and its deadline index
+(C2) are different components ([Submit And Completion "10.1"](01-submit-and-completion.en.md#101-pending-entry-and-deadline-index)).
 
 ```csharp
 // contract pseudocode, not the real API — the real signatures are owned by each language interface.
