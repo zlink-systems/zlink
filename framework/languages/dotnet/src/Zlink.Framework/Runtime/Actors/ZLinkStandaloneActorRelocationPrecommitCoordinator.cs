@@ -234,6 +234,16 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
             }
             if (result is ZLinkAuthorityCompareExchangeResult.Stored stored)
                 return stored.Snapshot;
+            if (
+                result is ZLinkAuthorityCompareExchangeResult.Conflict
+                {
+                    MembershipFailure: { } failure
+                }
+            )
+                throw new ZLinkFrameworkException(
+                    failure,
+                    "Standalone Actor target membership authority rejected the commit."
+                );
             var current = result switch
             {
                 ZLinkAuthorityCompareExchangeResult.Conflict conflict => conflict.Current,
