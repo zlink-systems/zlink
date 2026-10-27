@@ -769,6 +769,7 @@ final class ZLinkStreamConnectorTest {
         try {
             return connector.send(payload).submit();
         } finally {
+            // submit() encodes the payload into its own frame bytes before it returns.
             payload.payload().close();
         }
     }
