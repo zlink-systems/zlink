@@ -4,6 +4,7 @@ using Zlink.Framework.Runtime.Actors;
 using Zlink.Framework.Runtime.Diagnostics;
 using Zlink.Framework.Runtime.Dispatch;
 using Zlink.Framework.Runtime.Execution;
+using Zlink.Framework.Runtime.Messaging;
 using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
 
 namespace Zlink.Framework.Runtime.Host;
@@ -908,6 +909,9 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
         return new ZLinkRuntimeOperationAdmission(this, null, countsRequest: true);
     }
 
+    private ZLinkRuntimeOperationAdmission? RefuseClosedApplicationAdmission() =>
+        _drainAdmission.IsSealed ? ZLinkRuntimeOperationAdmission.Refused : null;
+
     private async ValueTask<ZLinkRuntimeOperationAdmission> AdmitUnnestedOperationAsync(
         bool countAsRequest
     )
@@ -917,7 +921,7 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
             {
                 //  New host work: any drain-gate seal (relocation fence or
                 //  shutdown) refuses it.
-                if (_drainAdmission.IsSealed)
+                if (RefuseClosedApplicationAdmission() is not null)
                     return null;
                 if (!IsOwnerAdmissionOpen)
                     throw NotAcceptingOperations("owner admission is closed");
@@ -1225,6 +1229,17 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
 
     internal CancellationToken ShutdownToken =>
         _state?.StopTokenSource.Token ?? new CancellationToken(canceled: true);
+
+    internal CancellationToken GetSendCancellationToken()
+    {
+        var token = ShutdownToken;
+        if (token.IsCancellationRequested)
+            ZLinkOneWaySubmitOutcome.EnsureAccepted(
+                new ZLinkOneWaySubmitResult(ZLinkOneWaySubmitStatus.Shutdown),
+                "Route send"
+            );
+        return token;
+    }
 
     internal CancellationToken ForceStopToken =>
         _state?.ForceStopTokenSource.Token ?? new CancellationToken(canceled: true);
@@ -1594,9 +1609,14 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
     private ZLinkFrameworkComponentState GetOrStartState()
     {
         if (!IsStarted || _state is null)
+        {
+            // Consult the admission owner before reporting a missing generation:
+            // shutdown refuses new work even after its runtime state is disposed.
+            RefuseClosedApplicationAdmission()?.Enter();
             throw new InvalidOperationException(
                 "ZLink framework runtime is not started. Call StartAsync before using synchronous runtime APIs."
             );
+        }
 
         return _state;
     }
