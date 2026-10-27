@@ -19,6 +19,7 @@
 #include "../../samples/DeliveryDispatch/Shared/Contracts/messages.hpp"
 #include "../../samples/GameQuest/Shared/Contracts/messages.hpp"
 #include "../../samples/ShoppingMall/Shared/Contracts/messages.hpp"
+#include "../../samples/ShoppingMall/Shared/Contracts/decimal_amount.hpp"
 #include "../../samples/SupportChat/Shared/Contracts/messages.hpp"
 
 #include "../support/read_text_file.hpp"
@@ -232,7 +233,6 @@ TEST (CppFrameworkSampleParity, BingoUsesDotNetSamplePacketSurface)
     ASSERT_TRUE (second_joined.reply);
     EXPECT_EQ (second_joined.reply->decode<bingo_room_join_res_t> ().state ().players_size (), 1);
 }
-
 
 namespace
 {
@@ -847,12 +847,12 @@ TEST (CppFrameworkSampleParity, DeliveryDispatchUsesDotNetSampleStatusSurface)
       "delivery-1", delivery_status_t::assigned, "courier-1", 1721001600000LL});
     EXPECT_EQ (status_wire.at ("status"), "Assigned");
     EXPECT_EQ (status_wire.at ("courierId"), "courier-1");
-    EXPECT_EQ (status_wire.at ("occurredAtUnixMs"), 1721001600000LL);
+    EXPECT_EQ (status_wire.at ("occurredAtUnixMs"), "1721001600000");
 
     const auto missing_courier_wire = nlohmann::json (delivery_status_notify_t{
       "delivery-1", delivery_status_t::assigned, std::nullopt, 1721001600001LL});
     EXPECT_TRUE (missing_courier_wire.at ("courierId").is_null ());
-    EXPECT_EQ (missing_courier_wire.at ("occurredAtUnixMs"), 1721001600001LL);
+    EXPECT_EQ (missing_courier_wire.at ("occurredAtUnixMs"), "1721001600001");
 
     const auto bind_request_wire = nlohmann::json (bind_courier_session_req_t{"courier-1"});
     const auto bind_response_wire = nlohmann::json (bind_courier_session_res_t{"courier-1"});
@@ -914,7 +914,7 @@ TEST (CppFrameworkSampleParity, GameQuestUsesFlatOneWayGameplayMessage)
     EXPECT_EQ (wire.at ("playerId"), "player-1");
     EXPECT_EQ (wire.at ("type"), "MonsterKilled");
     EXPECT_EQ (wire.at ("payload"), expected_payload);
-    EXPECT_EQ (wire.at ("occurredAtUnixMs"), 42);
+    EXPECT_EQ (wire.at ("occurredAtUnixMs"), "42");
     EXPECT_EQ (wire.find ("event"), wire.end ())
       << "GameplayMsg must not wrap a private gameplay envelope";
 
@@ -2087,7 +2087,15 @@ TEST (CppFrameworkSampleParity, SupportChatConversationJoinCarriesParticipantIde
     EXPECT_NE (contracts.find ("std::string participant_id;"), std::string::npos);
     EXPECT_NE (contracts.find ("std::string role;"), std::string::npos);
     EXPECT_NE (contracts.find ("std::string display_name;"), std::string::npos);
-    EXPECT_NE (contracts.find ("{\"participantId\", value.participant_id}"), std::string::npos);
+    using zlink::samples::supportchat::join_conversation_req_t;
+    const join_conversation_req_t request{"conversation-1", "participant-1", "Customer", "Alice"};
+    const auto wire = zlink::detail::json_profile::encode_value (request);
+    EXPECT_EQ (wire.at ("conversationId"), "conversation-1");
+    EXPECT_EQ (wire.at ("participantId"), "participant-1");
+    EXPECT_EQ (wire.at ("role"), "Customer");
+    EXPECT_EQ (wire.at ("displayName"), "Alice");
+    const auto restored = zlink::detail::json_profile::decode_value<join_conversation_req_t> (wire);
+    EXPECT_EQ (restored.participant_id, request.participant_id);
     EXPECT_NE (
       support.find ("join_conversation_req_t{conversation_id, participant_id, role, display_name}"),
       std::string::npos)
@@ -2162,11 +2170,10 @@ TEST (CppFrameworkSampleParity, TicTacToeStatePreservesNullableWireFields)
     EXPECT_FALSE (projected.contains ("draw"));
 }
 
-TEST (CppFrameworkSampleParity, ShoppingMallUsesNullableDecimalAmounts)
+TEST (CppFrameworkSampleParity, ShoppingMallUsesNullableNumberAmountsWithExplicitDecimalBoundary)
 {
-    const auto contracts =
-      read_text_file (cpp_language_root () / "samples/ShoppingMall/Shared/Contracts/messages.hpp");
-    EXPECT_EQ (contracts.find ("double amount"), std::string::npos);
+    static_assert (std::is_same_v<decltype (zlink::samples::shoppingmall::order_state_t::amount),
+                                  std::optional<double>>);
 
     const nlohmann::json wire = {{"orderId", "order-null-amount"},
                                  {"status", "Created"},
@@ -2176,7 +2183,7 @@ TEST (CppFrameworkSampleParity, ShoppingMallUsesNullableDecimalAmounts)
                                  {"reason", nullptr},
                                  {"amount", nullptr},
                                  {"currency", "USD"},
-                                 {"updatedAtUnixMs", 1}};
+                                 {"updatedAtUnixMs", "1"}};
     zlink::samples::shoppingmall::order_state_t state;
     EXPECT_NO_THROW (wire.get_to (state));
     EXPECT_FALSE (state.amount.has_value ());
@@ -2203,10 +2210,36 @@ TEST (CppFrameworkSampleParity, ShoppingMallUsesNullableDecimalAmounts)
         EXPECT_NE (declaration.find (nullable_field), std::string::npos) << nullable_field;
     }
 
-    const auto amount = zlink::samples::shoppingmall::decimal_t ("120.01");
-    const nlohmann::json amount_wire = amount;
-    EXPECT_TRUE (amount_wire.is_number ());
-    EXPECT_EQ (amount_wire.get<zlink::samples::shoppingmall::decimal_t> (), amount);
+    using namespace zlink::samples::shoppingmall;
+    for (const auto value : {120.0, 75.0, 60.0, 120.01, 0.01, 0.29, 35184372088831.99}) {
+        const auto amount = decimal_t::from_wire (value);
+        EXPECT_EQ (amount.to_wire_number (), value);
+        const auto check_dto = [&] (auto dto) {
+            using dto_type = decltype (dto);
+            dto.amount = amount.to_wire_number ();
+            const auto encoded = zlink::detail::json_profile::encode (dto);
+            EXPECT_EQ (
+              zlink::detail::json_profile::decode<dto_type> (encoded.begin (), encoded.end ())
+                .amount,
+              value);
+        };
+        check_dto (order_state_t{});
+        check_dto (authorize_payment_command_t{});
+        check_dto (cart_seed_t{});
+        check_dto (start_order_workflow_req_t{});
+    }
+    for (const auto value :
+         {-0.01, 0.001, 1.005, 35184372088832.0, std::numeric_limits<double>::infinity (),
+          std::numeric_limits<double>::quiet_NaN ()}) {
+        EXPECT_THROW (decimal_t::from_wire (value), std::exception);
+    }
+    for (const auto *value : {"-0.01", "0.001", "35184372088832"}) {
+        EXPECT_THROW (decimal_t (value).to_wire_number (), std::exception);
+    }
+    for (const auto value : {120.0, 75.0, 60.0}) {
+        EXPECT_EQ (zlink::detail::json_profile::encode (value),
+                   std::to_string (static_cast<int> (value)));
+    }
 }
 
 TEST (CppFrameworkSampleParity, ClientScenariosUseBlockingHttpSubmit)

@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+#include <zlink/json.hpp>
 
 #include <zlink/framework.hpp>
 
@@ -63,6 +64,11 @@ struct payload_t
     int value{};
 };
 
+enum class unregistered_enum_t
+{
+    value
+};
+
 struct missing_t
 {
     int value{};
@@ -78,20 +84,24 @@ struct decode_source_t
     int value{};
 };
 
+
 struct decode_once_t
 {
     int value{};
 };
+
 
 struct decode_other_t
 {
     int value{};
 };
 
+
 struct decode_failure_t
 {
     int value{};
 };
+
 
 struct nested_inner_t
 {
@@ -130,15 +140,15 @@ struct custom_payload_codec_extension_t
     }
 };
 
-void to_json (nlohmann::json &json, const json_payload_t &payload)
-{
-    json = nlohmann::json{{"value", payload.value}};
 }
 
-void from_json (const nlohmann::json &json, json_payload_t &payload)
+template <> struct zlink::json::dto_traits<json_payload_t>
 {
-    payload.value = json.at ("value").get<int> ();
-}
+    static constexpr auto fields = std::tuple{zlink::json::field ("value", &json_payload_t::value)};
+};
+
+namespace
+{
 
 const nlohmann::json &codec_selection_fixture ()
 {
@@ -313,6 +323,49 @@ int main ()
     if (decoded.value != 42) {
         return 2;
     }
+    namespace profile = zlink::detail::json_profile;
+    static_assert (!profile::is_json_candidate<payload_t> ());
+    static_assert (!profile::is_json_candidate<unregistered_enum_t> ());
+    static_assert (!profile::is_json_candidate<long double> ());
+    static_assert (!profile::is_json_candidate<std::vector<payload_t>> ());
+    static_assert (!profile::is_json_candidate<std::optional<payload_t>> ());
+    static_assert (!profile::is_json_candidate<std::map<std::string, payload_t>> ());
+    static_assert (profile::is_json_candidate<json_payload_t> ());
+    static_assert (profile::is_json_candidate<std::vector<std::int64_t>> ());
+    static_assert (profile::is_json_candidate<std::optional<double>> ());
+    static_assert (profile::is_json_candidate<std::map<std::string, bool>> ());
+    zlink::framework::serializer_registry_t unregistered;
+    for (const bool decoding : {false, true}) {
+        bool rejected = false;
+        try {
+            const auto serializer = unregistered.get<payload_t> ();
+            if (decoding)
+                (void) serializer.deserialize (encoded);
+            else
+                (void) serializer.serialize ({42});
+        }
+        catch (const zlink::framework::framework_exception_t &error) {
+            rejected = error.kind () == zlink::framework::framework_error_kind_t::protocol_error
+                       && std::string (error.what ()).find ("No serializer is registered")
+                            != std::string::npos;
+        }
+        if (!rejected)
+            return 34;
+    }
+    const auto reject_unregistered = [&]<typename T> (const T &value) {
+        try {
+            (void) unregistered.get<T> ().serialize (value);
+        }
+        catch (const zlink::framework::framework_exception_t &error) {
+            return error.kind () == zlink::framework::framework_error_kind_t::protocol_error
+                   && std::string (error.what ()).find ("No serializer is registered")
+                        != std::string::npos;
+        }
+        return false;
+    };
+    if (!reject_unregistered (unregistered_enum_t::value) || !reject_unregistered (1.0L)
+        || !reject_unregistered (std::vector<payload_t>{}))
+        return 35;
     const auto json_encoded = serializers.get<json_payload_t> ().serialize ({77});
     const auto json_decoded = serializers.get<json_payload_t> ().deserialize (json_encoded);
     if (json_encoded.to_string () != R"({"value":77})" || json_decoded.value != 77) {

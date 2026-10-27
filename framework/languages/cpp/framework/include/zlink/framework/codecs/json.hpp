@@ -14,13 +14,12 @@ template <typename T> T parse_message (const message_t &message)
 {
     const auto *begin = reinterpret_cast<const char *> (message.data ());
     const auto *end = begin ? begin + message.size () : begin;
-    return zlink::detail::json_profile::parse (begin, end).template get<T> ();
+    return zlink::detail::json_profile::decode<T> (begin, end);
 }
 
 template <typename T> message_t make_message (const T &value)
 {
-    const auto json = nlohmann::json (value);
-    const auto text = zlink::detail::json_profile::dump (json);
+    const auto text = zlink::detail::json_profile::encode (value);
     return message_t::from (std::as_bytes (std::span<const char> (text.data (), text.size ())));
 }
 
