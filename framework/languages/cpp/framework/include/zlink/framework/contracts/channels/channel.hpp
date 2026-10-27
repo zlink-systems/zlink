@@ -974,17 +974,6 @@ class route_client_t
                              payload_encoder_t encode_payload,
                              const route_send_call_t::metadata_map_t &metadata);
 
-    static task_t<std::uint64_t>
-    submit_spot_request_erased (const std::shared_ptr<detail::route_client_state_t> &state,
-                                const std::string &router_channel_id,
-                                const zlink::routing_id_t &target_node_rid,
-                                const spot_id_t &spot_target,
-                                const std::string &packet_name,
-                                std::type_index request_type,
-                                payload_encoder_t encode_payload,
-                                std::chrono::milliseconds timeout,
-                                const channel_request_call_t::metadata_map_t &metadata);
-
     static request_task_t<zlink::message_t>
     submit_request_reply_message_erased (const std::shared_ptr<detail::route_client_state_t> &state,
                                          std::string router_channel_id,
