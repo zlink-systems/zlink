@@ -494,13 +494,31 @@ wait_framework_peer_ready_counts() {
   return 1
 }
 
+# One checkout shares Gradle output, so its Java and Kotlin sample builds share
+# one lock. Different checkouts do not share output and use different locks.
+zlink_sample_gradle_lock_path() {
+  # Same expression as the runner templates, so both select the same lock.
+  printf '/tmp/zlink-framework-java-kotlin-sample-gradle-%s.lock' \
+    "$( (git -C "${PWD}" rev-parse --show-toplevel 2>/dev/null || pwd -P) | cksum | cut -d' ' -f1)"
+}
+
 zlink_sample_gradle_locked() {
-  local lock_path="/tmp/zlink-framework-java-kotlin-sample-gradle.lock"
+  local lock_path
+  lock_path="$(zlink_sample_gradle_lock_path)"
   if ! command -v flock >/dev/null 2>&1; then
     echo 'flock is required to serialize Java and Kotlin sample builds.' >&2
     return 1
   fi
-  flock --exclusive --close "${lock_path}" "$@"
+  (
+    exec 9>"${lock_path}"
+    if ! flock --exclusive --nonblock 9; then
+      printf '[%s] gradle lock wait: %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "${lock_path}" >&2
+      flock --exclusive 9
+    fi
+    printf '[%s] gradle lock acquired: %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "${lock_path}" >&2
+    # The build must not inherit the lock descriptor; a Gradle daemon would keep it.
+    "$@" 9>&-
+  )
 }
 
 # Rebuilds the framework jars a monorepo dev-loop wants fresh, only when this
