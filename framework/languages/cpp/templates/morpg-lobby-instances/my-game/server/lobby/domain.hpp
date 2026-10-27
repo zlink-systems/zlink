@@ -71,11 +71,6 @@ struct PartyState
         if (runId != id || (phase != RunPhase::Active && phase != RunPhase::Completed)) return Rejection::run_mismatch;
         phase = RunPhase::Completed; return {};
     }
-    void after_relocation ()
-    {
-        normalize_sorted_unique (ready);
-        normalize_sorted_unique (entered);
-    }
 };
 }
 

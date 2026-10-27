@@ -17,8 +17,6 @@ class StateRelocation final : public fx::spot_relocation_adapter_t<Spot>
     {
         auto state = fx::serializer_registry_t{}.get<State> ().deserialize (
           fx::encoded_payload_t::from_bytes (std::span<const std::byte> (payload)));
-        if constexpr (requires { state.after_relocation (); })
-            state.after_relocation ();
         spot.state = std::move (state);
         co_return;
     }

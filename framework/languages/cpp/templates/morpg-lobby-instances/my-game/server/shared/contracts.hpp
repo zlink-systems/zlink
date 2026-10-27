@@ -24,12 +24,6 @@ inline bool insert_sorted_unique (std::vector<std::string> &values, const std::s
     return true;
 }
 
-inline void normalize_sorted_unique (std::vector<std::string> &values)
-{
-    std::sort (values.begin (), values.end ());
-    values.erase (std::unique (values.begin (), values.end ()), values.end ());
-}
-
 inline std::string new_id(const std::string &prefix) {
     auto value = boost::uuids::to_string(boost::uuids::random_generator()());
     std::erase(value, '-'); return prefix + value;

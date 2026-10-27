@@ -4,18 +4,13 @@
 #include <algorithm>
 #include <regex>
 #include <iostream>
-#include <type_traits>
-#include <utility>
 #include "test_json.hpp"
 
 namespace test_json_morpg_lobby_domain
 {
 template <class T> inline T state_roundtrip (const T &value)
 {
-    auto state = decode<T> (nlohmann::json::parse (encode (value)));
-    if constexpr (requires { state.after_relocation (); })
-        state.after_relocation ();
-    return state;
+    return decode<T> (nlohmann::json::parse (encode (value)));
 }
 } // namespace test_json_morpg_lobby_domain
 namespace MyGame::E2E {

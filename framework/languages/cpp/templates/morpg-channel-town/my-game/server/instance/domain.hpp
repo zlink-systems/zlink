@@ -73,7 +73,6 @@ struct DungeonState
             phase = RunPhase::Completed;
         return std::nullopt;
     }
-    void after_relocation () { normalize_sorted_unique (joined); }
 
 };
 }

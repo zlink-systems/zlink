@@ -31,7 +31,6 @@ struct DungeonState {
         if (phase != RunPhase::Active) return Rejection::run_not_active;
         ++stage; if (stage == Names::final_stage) phase = RunPhase::Completed; return {};
     }
-    void after_relocation () { normalize_sorted_unique (joined); }
 };
 }
 

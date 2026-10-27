@@ -143,7 +143,6 @@ class DungeonRelocation final : public fx::spot_relocation_adapter_t<Dungeon>
     {
         auto state = fx::serializer_registry_t{}.get<DungeonState> ().deserialize (
           fx::encoded_payload_t::from_bytes (std::span<const std::byte> (payload)));
-        state.after_relocation ();
         dungeon.state = std::move (state);
         co_return;
     }

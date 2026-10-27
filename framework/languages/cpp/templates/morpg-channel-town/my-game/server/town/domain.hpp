@@ -100,7 +100,6 @@ struct TownState
         }
     }
 
-    void after_relocation () { normalize_sorted_unique (players); }
 };
 }
 

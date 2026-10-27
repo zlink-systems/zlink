@@ -16,12 +16,6 @@ inline bool insert_sorted_unique (std::vector<std::string> &values, std::string_
     return true;
 }
 
-inline void normalize_sorted_unique (std::vector<std::string> &values)
-{
-    std::sort (values.begin (), values.end ());
-    values.erase (std::unique (values.begin (), values.end ()), values.end ());
-}
-
 inline std::string server_id (std::string_view prefix)
 {
     static constexpr char digits[] = "0123456789abcdef";

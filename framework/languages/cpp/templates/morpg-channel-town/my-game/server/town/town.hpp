@@ -250,7 +250,6 @@ class TownRelocation final : public fx::spot_relocation_adapter_t<Town>
     {
         auto state = fx::serializer_registry_t{}.get<TownState> ().deserialize (
           fx::encoded_payload_t::from_bytes (std::span<const std::byte> (payload)));
-        state.after_relocation ();
         town.state = std::move (state);
         co_return;
     }
