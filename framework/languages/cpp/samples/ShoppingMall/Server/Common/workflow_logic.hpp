@@ -2,6 +2,7 @@
 #pragma once
 
 #include "store.hpp"
+#include "../../Shared/Contracts/decimal_amount.hpp"
 
 #include <algorithm>
 #include <format>
@@ -102,7 +103,8 @@ inline order_aggregate_t fold (const std::vector<stored_order_event_t> &stream,
             aggregate.shipping_address_id = payload.value ("shippingAddressId", "");
             aggregate.payment_method_id = payload.value ("paymentMethodId", "");
             aggregate.lines = payload.value ("lines", std::vector<order_line_input_t>{});
-            aggregate.amount = json_decimal (payload, "amount", "amount");
+            aggregate.amount = decimal_t::from_wire (
+              payload.value ("amount", nlohmann::json{}).get<double> ());
             aggregate.currency = payload.value ("currency", "");
         } else if (event.event_type == order_event_types_t::inventory_reserved) {
             aggregate.status = order_status_t::inventory_reserved;
@@ -149,7 +151,7 @@ inline order_state_t projection_of (const order_aggregate_t &aggregate)
     state.reservation_id = aggregate.reservation_id;
     state.payment_id = aggregate.payment_id;
     state.reason = aggregate.reason;
-    state.amount = aggregate.amount;
+    state.amount = aggregate.amount.to_wire_number ();
     state.currency = aggregate.currency;
     state.updated_at_unix_ms = now_unix_ms ();
     return state;
@@ -248,6 +250,7 @@ class payment_module_t
     static authorize_payment_result_t authorize (nlohmann::json &state,
                                                  const authorize_payment_command_t &command)
     {
+        const auto amount = decimal_t::from_wire (command.amount);
         auto &payments = state["payments"];
         if (payments.contains (command.payment_id)) {
             const std::string line = std::format (
@@ -267,7 +270,7 @@ class payment_module_t
         payments[command.payment_id] = nlohmann::json{{"orderId", command.order_id},
                                                       {"accepted", result.accepted},
                                                       {"reason", result.reason},
-                                                      {"amount", command.amount},
+                                                      {"amount", amount.to_wire_number ()},
                                                       {"currency", command.currency}};
         if (!result.accepted) {
             state["paymentAttempts"][command.order_id] = result.reason;
@@ -302,17 +305,18 @@ inline bool advance_once (nlohmann::json &state,
         if (start_command == nullptr) {
             return false;
         }
-        append_event (state,
-                      order_id,
-                      order_event_types_t::order_started,
-                      source_command_id,
-                      nlohmann::json{{"cartId", start_command->cart_id},
-                                     {"shippingAddressId", start_command->shipping_address_id},
-                                     {"paymentMethodId", start_command->payment_method_id},
-                                     {"lines", start_command->lines},
-                                     {"amount", start_command->amount},
-                                     {"currency", start_command->currency}},
-                      aggregate.version);
+        append_event (
+          state,
+          order_id,
+          order_event_types_t::order_started,
+          source_command_id,
+          nlohmann::json{{"cartId", start_command->cart_id},
+                         {"shippingAddressId", start_command->shipping_address_id},
+                         {"paymentMethodId", start_command->payment_method_id},
+                         {"lines", start_command->lines},
+                         {"amount", decimal_t::from_wire (start_command->amount).to_wire_number ()},
+                         {"currency", start_command->currency}},
+          aggregate.version);
         return true;
     }
 
@@ -350,7 +354,7 @@ inline bool advance_once (nlohmann::json &state,
           authorize_payment_command_t{order_id,
                                       payment_id,
                                       aggregate.payment_method_id,
-                                      aggregate.amount,
+                                      aggregate.amount.to_wire_number (),
                                       aggregate.currency});
         if (result.accepted) {
             append_event (state,
