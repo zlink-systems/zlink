@@ -919,6 +919,10 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
         return serials.finishActivationPreparation();
     }
 
+    CompletionStage<Void> continueActivationPreparation(Supplier<CompletionStage<Void>> operation) {
+        return serials.continueActivationPreparation(() -> runLifecycleExecution(operation));
+    }
+
     CompletionStage<Void> enqueueLifecycle(Supplier<CompletionStage<Void>> operation) {
         return serials.executeLifecycle(() -> runLifecycleExecution(operation));
     }
