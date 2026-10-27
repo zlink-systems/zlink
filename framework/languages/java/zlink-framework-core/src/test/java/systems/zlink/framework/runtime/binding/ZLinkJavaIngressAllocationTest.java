@@ -17,6 +17,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkMeshApplicationRece
 import systems.zlink.framework.runtime.internal.backend.ZLinkMeshDispatchRecord;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceLivenessRegistry;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceTopologyRegistry;
 
 import java.net.URLClassLoader;
 import java.nio.charset.StandardCharsets;
@@ -89,6 +90,7 @@ public final class ZLinkJavaIngressAllocationTest {
             long managementCallbacks = 0;
             long managementDurations = 0;
             long closeIterators = 0;
+            long sourceTurns = 0;
             try (var events = new RecordingFile(recordingPath)) {
                 while (events.hasMoreEvents()) {
                     var event = events.readEvent();
@@ -99,6 +101,8 @@ public final class ZLinkJavaIngressAllocationTest {
                         continue;
                     String allocated = event.getClass("objectClass").getName();
                     if (!(allocated.startsWith("systems.zlink.framework.runtime.binding.")
+                            || allocated.startsWith(
+                                    ZLinkServiceTopologyRegistry.class.getName() + "$$Lambda")
                             || allocated.equals("systems.zlink.contracts.messaging.Received")
                             || allocated.equals("java.time.Duration")
                             || allocated.endsWith("$Itr")
@@ -133,6 +137,10 @@ public final class ZLinkJavaIngressAllocationTest {
                             && allocated.startsWith(ZLinkJavaRawMeshNode.class.getName())
                             && allocated.contains("$$Lambda")) resumeCallbacks++;
                     if (bytes && allocated.endsWith("$Itr")) byteIterators++;
+                    // A topology lane call outside the receive turn allocates its turn closure.
+                    if (allocated.startsWith(
+                            ZLinkServiceTopologyRegistry.class.getName() + "$$Lambda"))
+                        sourceTurns++;
                     if ("tickLiveness".equals(firstFrameworkMethod)
                             && allocated.endsWith("$ListItr")) managementIterators++;
                     if ("tickLiveness".equals(firstFrameworkMethod)
@@ -144,7 +152,7 @@ public final class ZLinkJavaIngressAllocationTest {
                 }
             }
             System.out.printf(
-                    "records=%d attempts=%d portObjects=%d resumeCallbacks=%d byteIterators=%d managementIterators=%d managementCallbacks=%d managementDurations=%d closeIterators=%d%n",
+                    "records=%d attempts=%d portObjects=%d resumeCallbacks=%d byteIterators=%d managementIterators=%d managementCallbacks=%d managementDurations=%d closeIterators=%d sourceTurns=%d%n",
                     records,
                     attempts,
                     portObjects,
@@ -153,7 +161,8 @@ public final class ZLinkJavaIngressAllocationTest {
                     managementIterators,
                     managementCallbacks,
                     managementDurations,
-                    closeIterators);
+                    closeIterators,
+                    sourceTurns);
             assertTrue(
                     records >= REQUESTS,
                     "include all requests and any ordinary management records");
@@ -163,6 +172,7 @@ public final class ZLinkJavaIngressAllocationTest {
             assertEquals(
                     attempts + records, portObjects, "no separate header-list owner per record");
             assertEquals(0, resumeCallbacks, "immediate permits need no resumption closure");
+            assertEquals(0, sourceTurns, "the receive turn reads the source peer of its record");
             assertEquals(0, byteIterators, "byte accounting indexes the existing message list");
             assertEquals(0, managementIterators, "management lists need no cursor object");
             assertEquals(0, managementCallbacks, "timeout iteration needs no capturing callback");

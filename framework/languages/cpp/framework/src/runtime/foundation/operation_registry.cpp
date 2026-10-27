@@ -3,6 +3,7 @@
 #include "runtime/foundation/operation_registry.hpp"
 #include "runtime/diagnostics/mesh_request_metrics.hpp"
 #include "runtime/dispatch/dispatch_limits.hpp"
+#include "runtime/execution/task_result.hpp"
 
 #include <zlink/framework/contracts/dispatch/task.hpp>
 
@@ -156,7 +157,8 @@ bool operation_registry_t::register_operation (call_id_t id,
                                                clock_t::time_point deadline,
                                                callback_t callback,
                                                std::vector<std::uint8_t> target_routing_id,
-                                               mesh_request_metric_t request_metric)
+                                               mesh_request_metric_t request_metric,
+                                               std::optional<request_identity_t> request)
 {
     if (!callback) {
         throw std::invalid_argument ("operation callback is required");
@@ -178,6 +180,7 @@ bool operation_registry_t::register_operation (call_id_t id,
         completion->request_metric = std::move (request_metric);
         completion->request_metric.start ();
         inserted.first->second.completion = std::move (completion);
+        inserted.first->second.request = std::move (request);
         return true;
     }
     catch (...) {
@@ -185,6 +188,17 @@ bool operation_registry_t::register_operation (call_id_t id,
         _pending.erase (inserted.first);
         throw;
     }
+}
+
+std::optional<operation_registry_t::request_identity_t>
+operation_registry_t::request_identity (call_id_t id, call_id_t operation) const
+{
+    std::lock_guard lock (_mutex);
+    const auto found = _pending.find (id);
+    if (found == _pending.end () || !found->second.request
+        || found->second.request->operation != operation)
+        return std::nullopt;
+    return found->second.request;
 }
 
 std::optional<std::uint64_t> operation_registry_t::next_occupied_tick () const noexcept
@@ -295,6 +309,29 @@ bool operation_registry_t::complete (const call_id_t &id,
     }
     notify (std::move (completion), operation_terminal_t::completed, std::move (payload),
             request_terminal);
+    return true;
+}
+
+namespace
+{
+task_t<void> finish_completion_async (std::unique_ptr<operation_completion_item_t> completion,
+                                      std::function<task_t<void> ()> before_dispatch)
+{
+    const auto prepared = co_await runtime::await_result (before_dispatch ());
+    notify (std::move (completion),
+            prepared ? operation_terminal_t::completed : operation_terminal_t::transport_failed,
+            {});
+}
+} // namespace
+
+bool operation_registry_t::complete_async (const call_id_t &id,
+                                           std::function<task_t<void> ()> before_dispatch)
+{
+    std::unique_ptr<operation_completion_item_t> completion;
+    if (!take (id, completion))
+        return false;
+    // The existing completion reservation retains the drain until preparation ends.
+    (void) finish_completion_async (std::move (completion), std::move (before_dispatch));
     return true;
 }
 

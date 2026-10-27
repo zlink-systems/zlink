@@ -150,3 +150,38 @@ for (const count of [2, 17]) {
         context.close();
     }
 });
+(0, node_test_1.default)('successful submit consumes Message parts but never Buffer parts', async () => {
+    const context = zlink.createContext();
+    const left = zlink.createPairSocket(context);
+    const right = zlink.createPairSocket(context);
+    const received = new zlink.Received();
+    const owner = zlink.Message.allocate(5);
+    try {
+        left.bind('inproc://multipart-buffer-part');
+        right.connect('inproc://multipart-buffer-part');
+        owner.data().write('owner');
+        // Native submit copies a Buffer part as bytes. A property with the
+        // snapshot field name must not make submit consume another Message.
+        const bytes = Buffer.from('bytes');
+        bytes.nativeMessage = owner._nativeMessage;
+        const moved = zlink.Message.allocate(4);
+        const view = moved.data();
+        view.write('move');
+        await right.send().message(bytes).message(moved).submit().admitted;
+        strict_1.default.equal(view.byteLength, 0);
+        strict_1.default.equal(moved.size(), 0);
+        strict_1.default.equal(left.recv(received), true);
+        strict_1.default.deepEqual(received.parts.map((part) => part.data().toString()), ['bytes', 'move']);
+        // The untouched owner still sends its own native frame.
+        await right.send().message(owner).submit().admitted;
+        strict_1.default.equal(left.recv(received), true);
+        strict_1.default.deepEqual(received.parts.map((part) => part.data().toString()), ['owner']);
+    }
+    finally {
+        owner.close();
+        received.close();
+        right.close();
+        left.close();
+        context.close();
+    }
+});

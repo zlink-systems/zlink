@@ -1029,7 +1029,7 @@ test('RouteMesh ready remote weight-zero channel reports Unavailable for send an
     assert.equal(runtime.topology.admit({ ...runtime.topology.localDescriptor(),
       nodeRoutingId: remoteRid, advertisedEndpoint: 'tcp://127.0.0.1:1',
       objectRole: 'server', channels: [{ name: 'zero-channel', weight: 0 }]
-    }, connectionId), 'admitted');
+    }, connectionId, undefined, undefined, serviceWire.M6aServiceWireCommand.admit), 'admitted');
     runtime.liveness.admit(remoteRid, connectionId, 0);
     const [probe] = runtime.liveness.tick(0).probes;
     assert.equal(runtime.liveness.acknowledge(remoteRid, connectionId, probe.probeId, 0), true);
@@ -1072,7 +1072,7 @@ for (const state of ['preparing', 'stopped', 'error', 'retiring', 'draining']) {
       const current = runtime.topology.localDescriptor();
       // Channel messaging §2: the snapshot must describe a remote target.
       assert.equal(runtime.topology.admit({ ...current, nodeRoutingId: 'remote-selection',
-        advertisedEndpoint: 'tcp://127.0.0.1:1', state }, 'remote-connection'), 'admitted');
+        advertisedEndpoint: 'tcp://127.0.0.1:1', state }, 'remote-connection', undefined, undefined, serviceWire.M6aServiceWireCommand.admit), 'admitted');
       const unavailable = state === 'retiring' || state === 'draining';
       const payload = { packetName: 'Notice', contentType: 'application/json', payload: Buffer.from('{}') };
       assert.equal(await runtime.sendToChannel('api', payload), unavailable ? zlink.SubmitResult.NotConnected : zlink.SubmitResult.NotFound);
@@ -4209,11 +4209,11 @@ test('classic fanout filters receive a minimal context and isolate each handler 
     channelName: 'events',
     dispatchErrors: noDispatchErrorReporter(),
     handlers: new Map([
-      ['Event', {
+      ['Event', { handler: {
         async handle(payload) {
           handled.push(payload.value);
         }
-      }]
+      } }]
     ]),
     filters: [{
       async invoke(context, next) {
@@ -4301,20 +4301,20 @@ test('ZLinkChannelRequestDispatcher invokes request handler and replies through 
       channelName: 'api',
       dispatchErrors: noDispatchErrorReporter(),
       handlers: new Map([
-        ['Ping', {
+        ['Ping', { handler: {
           async handle(payload, context) {
             assert.equal(payload, 'ping');
             assert.equal(context.metadata.find('tenant-id'), 'tenant-42');
             return context.metadata.find('tenant-id');
           }
-        }]
+        } }]
       ]),
-      sendHandlers: new Map([['Notice', {
+      sendHandlers: new Map([['Notice', { handler: {
         handle(payload, context) {
           assert.equal(payload, 'notice');
           sendMetadata = context.metadata.find('tenant-id');
         }
-      }]]),
+      } }]]),
       filters: [{
         async invoke(_invocation, next) {
           filterEvents.push('before');
@@ -4373,11 +4373,11 @@ test('ClientServer malformed metadata replies ProtocolError before handlers', as
       channelName: 'api',
       dispatchErrors: noDispatchErrorReporter(),
       handlers: new Map([
-        ['Ping', {
+        ['Ping', { handler: {
           handle() {
             invocations++;
           }
-        }]
+        } }]
       ]),
       sendHandlers: new Map()
     });
@@ -4436,11 +4436,11 @@ test('ZLinkChannelRequestDispatcher preserves source node identity for RouteMesh
     dispatchErrors: noDispatchErrorReporter(),
     handlers: new Map(),
     sendHandlers: new Map([
-      ['NodeStatus', {
+      ['NodeStatus', { handler: {
         async handle(payload, context) {
           invocation = { payload, context };
         }
-      }]
+      } }]
     ])
   });
   const parts = encodeDotnetEnvelope({
@@ -4528,12 +4528,12 @@ test('ZLinkChannelRequestDispatcher rejects filter short circuit without seriali
     channelName: 'api',
     dispatchErrors: noDispatchErrorReporter(),
     handlers: new Map([
-      ['Ping', {
+      ['Ping', { handler: {
         handle() {
           handlerInvocations += 1;
           return 'handler-reply';
         }
-      }]
+      } }]
     ]),
     filters: [{
       async invoke(context) {
@@ -4589,12 +4589,12 @@ test('ZLinkChannelRequestDispatcher drops requests without a reply token without
       { reportRuntimeTaskException() {} }
     ),
     handlers: new Map([
-      ['Ping', {
+      ['Ping', { handler: {
         handle() {
           handlerInvocations += 1;
           return 'pong';
         }
-      }]
+      } }]
     ])
   });
   const parts = encodeDotnetEnvelope({
@@ -4647,17 +4647,17 @@ test('DERR-006 ZLinkChannelRequestDispatcher replies error and reports provider 
       }
     ),
     handlers: new Map([
-      ['BrokenReq', {
+      ['BrokenReq', { handler: {
         handle() {
           handlerInvocations += 1;
           return { value: 'unexpected' };
         }
-      }],
-      ['KnownReq', {
+      } }],
+      ['KnownReq', { handler: {
         handle(payload) {
           return { value: `known:${payload.value}` };
         }
-      }]
+      } }]
     ]),
     sendHandlers: new Map()
   });
@@ -4737,11 +4737,11 @@ test('ZLinkChannelRequestDispatcher submits error replies directly to the comple
     channelName: 'api',
     dispatchErrors: noDispatchErrorReporter(),
     handlers: new Map([
-      ['ThrowReq', {
+      ['ThrowReq', { handler: {
         handle() {
           throw new Error('deterministic handler failure');
         }
-      }]
+      } }]
     ]),
     sendHandlers: new Map()
   });
@@ -4859,16 +4859,16 @@ test('DERR-009 ZLinkChannelRequestDispatcher writes structured dispatch errors t
       { reportRuntimeTaskException() {} }
     ),
     handlers: new Map([
-      ['DecodeReq', {
+      ['DecodeReq', { handler: {
         handle() {
           return { value: 'unexpected' };
         }
-      }],
-      ['ThrowReq', {
+      } }],
+      ['ThrowReq', { handler: {
         handle() {
           throw new Error('DERR-007 handler exception');
         }
-      }]
+      } }]
     ]),
     sendHandlers: new Map()
   });

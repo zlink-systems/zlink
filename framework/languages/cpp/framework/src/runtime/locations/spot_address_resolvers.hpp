@@ -3,6 +3,7 @@
 
 #include <zlink/Contracts/Core/routing_id.hpp>
 #include <zlink/framework/contracts/dispatch/task.hpp>
+#include <zlink/framework/contracts/actors/actor.hpp>
 #include <runtime/locations/location_repository_values.hpp>
 
 #include <cstdint>
@@ -57,6 +58,8 @@ class actor_address_resolver_t
   public:
     virtual ~actor_address_resolver_t () = default;
     virtual task_t<std::optional<spot_address_t>> resolve_actor_address (std::string actor_id) = 0;
+    virtual task_t<std::optional<spot_address_t>>
+    resolve_actor_session_binding_address (actor_ref_t actor) = 0;
     virtual void invalidate_actor_address (std::string_view actor_id) { (void) actor_id; }
     virtual bool invalidate_actor_address_if_matches (std::string_view actor_id,
                                                       const spot_address_t &expected)
@@ -64,6 +67,12 @@ class actor_address_resolver_t
         (void) actor_id;
         (void) expected;
         return false;
+    }
+    virtual task_t<bool> invalidate_actor_address_if_matches_async (std::string actor_id,
+                                                                    spot_address_t expected)
+    {
+        return task_t<bool> (
+          result_t<bool>::success (invalidate_actor_address_if_matches (actor_id, expected)));
     }
 };
 

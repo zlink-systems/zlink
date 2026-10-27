@@ -269,10 +269,12 @@ public final class ZLinkStatusPublisher<T> implements Flow.Publisher<ZLinkObserv
         try {
             while (workPending.getAndSet(false)) {
                 if (observationPending.getAndSet(false)) {
+                    // A subscription registered during collection starts with the next snapshot.
+                    var observers = subscriptions.iterator();
                     T current = snapshot.get();
                     Object currentFingerprint = fingerprint.apply(current);
-                    for (SnapshotSubscription subscription : subscriptions) {
-                        subscription.observe(current, currentFingerprint);
+                    while (observers.hasNext()) {
+                        observers.next().observe(current, currentFingerprint);
                     }
                 }
                 for (SnapshotSubscription subscription : subscriptions) {

@@ -1044,7 +1044,7 @@ final class ZLinkStreamRuntimeIngressTest {
     }
 
     @Test
-    void drainedCloseUsesServerDrainMetricReason() throws Exception {
+    void drainedCloseUsesServerShutdownMetricReason() throws Exception {
         FakeStream stream = new FakeStream();
         stream.enqueue(PEER_A, frame("initial", "{}"));
         List<String> closeReasons = Collections.synchronizedList(new ArrayList<>());
@@ -1057,7 +1057,7 @@ final class ZLinkStreamRuntimeIngressTest {
             runtime.beginDrain();
             runtime.closeAsync().toCompletableFuture().join();
 
-            assertEquals(List.of("server_drain"), closeReasons);
+            assertEquals(List.of("server_shutdown"), closeReasons);
         }
     }
 

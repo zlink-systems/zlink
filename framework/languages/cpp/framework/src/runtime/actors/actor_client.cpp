@@ -28,6 +28,7 @@
 #include <string>
 #include <system_error>
 #include <utility>
+#include <tuple>
 #include <vector>
 
 namespace zlink::framework
@@ -156,26 +157,31 @@ actor_create_call_t &actor_create_call_t::timeout (std::chrono::milliseconds tim
 
 task_t<actor_create_result_t> actor_create_call_t::async ()
 {
-    return _state->lane
-      .run ([&] {
-          if (_state->submitted)
-              return task_t<actor_create_result_t> (result_t<actor_create_result_t>::failure (
-                framework_error_kind_t::invalid_operation,
-                "Actor create call was already submitted"));
-          _state->submitted = true;
-          if (!_state->manager || !_state->manager->create_actor)
-              return task_t<actor_create_result_t> (result_t<actor_create_result_t>::failure (
-                framework_error_kind_t::not_configured,
-                "Actor manager is not bound to an object runtime"));
-          const auto sequence = _state->manager->operation_sequence.fetch_add (1);
+    const auto state = _state;
+    auto [create, exclusive, actor_id, stable_type, mesh_name, request, timeout, operation] =
+      co_await state->lane.run_task ([state] {
+          if (state->submitted)
+              throw framework_exception_t (framework_error_kind_t::invalid_operation,
+                                           "Actor create call was already submitted");
+          state->submitted = true;
+          if (!state->manager || !state->manager->create_actor)
+              throw framework_exception_t (framework_error_kind_t::not_configured,
+                                           "Actor manager is not bound to an object runtime");
+          const auto sequence = state->manager->operation_sequence.fetch_add (1);
           const creation_operation_id_t operation{
-            static_cast<std::uint64_t> (reinterpret_cast<std::uintptr_t> (_state->manager.get ())),
+            static_cast<std::uint64_t> (reinterpret_cast<std::uintptr_t> (state->manager.get ())),
             sequence};
-          return _state->manager->create_actor (_state->exclusive, *_state->actor_id,
-                                                _state->stable_type, _state->mesh_name,
-                                                _state->request, _state->timeout, operation);
-      })
-      .get ();
+          return std::tuple{state->manager->create_actor,
+                            state->exclusive,
+                            *state->actor_id,
+                            state->stable_type,
+                            state->mesh_name,
+                            state->request,
+                            state->timeout,
+                            operation};
+      });
+    co_return co_await create (exclusive, std::move (actor_id), std::move (stable_type),
+                               std::move (mesh_name), std::move (request), timeout, operation);
 }
 
 task_t<actor_create_result_t> actor_create_call_t::yield ()

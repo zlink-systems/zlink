@@ -32,6 +32,30 @@ final class GeneratedServiceWireCommandCodecConformanceTest {
             new ServiceWireCodec.DecoderContext(null, null, null, 0xffff_ffffL, 4_294_966_774L);
 
     @Test
+    void statefulMessagesUseSharedSchemaBytes() throws Exception {
+        var shared = fixture("stateful-message-v1.json");
+        assertEquals(8, shared.path("valid").size());
+        assertEquals(4, shared.path("invalid").size());
+        for (var vector : shared.path("valid")) {
+            List<byte[]> frames = new ArrayList<>();
+            for (var frame : vector.path("framesHex"))
+                frames.add(HexFormat.of().parseHex(frame.asText()));
+            var decoded = ServiceWireCodec.decodeCommand(frames, CONTEXT);
+            assertEquals(vector.path("commandId").asInt(), decoded.id());
+            assertFramesEqual(frames, ServiceWireCodec.encodeCommandFrames(decoded, CONTEXT));
+        }
+        for (var vector : shared.path("invalid")) {
+            List<byte[]> frames = new ArrayList<>();
+            for (var frame : vector.path("framesHex"))
+                frames.add(HexFormat.of().parseHex(frame.asText()));
+            assertThrows(
+                    IOException.class,
+                    () -> ServiceWireCodec.decodeCommand(frames, CONTEXT),
+                    vector.path("name").asText());
+        }
+    }
+
+    @Test
     void boundSessionCloseUsesSharedCrossLanguageBytes() throws Exception {
         var shared = fixture("bound-session-close-v1.json");
         var bytes = hex(shared.path("canonical"));

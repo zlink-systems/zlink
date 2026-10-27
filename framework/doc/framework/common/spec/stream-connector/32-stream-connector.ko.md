@@ -90,6 +90,10 @@ connector를 사용한다.** 브라우저 샌드박스에서 OS 소켓을 열 �
 브라우저 계열에서 `ws`·`wss`는 **플랫폼의 네이티브 WebSocket API**로 구현한다. 핸드셰이크와
 프레이밍을 플랫폼이 수행하므로 connector가 직접 구현하지 않는다.
 
+**네이티브 connector는 모든 transport에서 endpoint에 직접 연결하며 OS·시스템 proxy 설정을 쓰지 않는다.**
+proxy 탐색(예: Windows WPAD 자동 검색)은 연결 시간(§6.1) 안에서 끝난다는 보장이 없고 endpoint가
+같아도 머신마다 연결 경로가 달라진다. 브라우저 계열은 플랫폼 WebSocket API가 연결 경로를 정한다.
+
 ## 4. Wire 계약
 
 ### 4.1 frame

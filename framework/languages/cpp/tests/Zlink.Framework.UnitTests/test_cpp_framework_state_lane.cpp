@@ -2,8 +2,10 @@
 
 #include "runtime/dispatch/offload_executor.hpp"
 #include "runtime/execution/state_lane.hpp"
+#include "runtime/execution/serial_application_record.hpp"
 #include "runtime/dispatch/coroutine_executor.hpp"
 #include "runtime/foundation/operation_registry.hpp"
+#include "runtime/actors/actor_gateway_runtime.hpp"
 #include "runtime/spots/spot_runtime.hpp"
 #include "runtime/stateful/stateful_object_runtime.hpp"
 #include "../support/runtime_failure_fixture.hpp"
@@ -143,7 +145,6 @@ TEST (ZLinkStateLaneDeathTest, CleanupContinuationReleasesWorkerForPendingLaneAn
 {
     // A failed self-wait cannot unwind the executor. Isolate it so the bounded
     // observation reports a failure without joining the blocked worker.
-    ::testing::FLAGS_gtest_death_test_style = "threadsafe";
     ASSERT_EXIT (
       ([] {
           using namespace zlink::framework;
@@ -204,6 +205,165 @@ TEST (ZLinkStateLaneDeathTest, CleanupContinuationReleasesWorkerForPendingLaneAn
       ::testing::ExitedWithCode (0), "");
 }
 
+TEST (ZLinkStateLaneDeathTest, PreparedSpotPublicationCompletesSameLaneAdmission)
+{
+    ASSERT_EXIT (
+      ([] {
+          using namespace zlink::framework;
+          using namespace zlink::framework::detail;
+          namespace host = runtime::host;
+          constexpr auto completion_timeout = std::chrono::seconds (2);
+          runtime::configure_handler_coroutine_executor (1);
+          runtime::install_host_context_hooks ();
+          auto node = test::runtime_failure_fixture<spot_node_builder_state_t> ("spot-admission");
+          node->worker_executor = std::make_shared<offload_executor_t> (1);
+          auto context = std::make_shared<spot_context_state_t> ();
+          context->node = node;
+          context->lane_owner = node;
+          context->spot_id = "prepared-spot";
+          context->execution_mode = user_spot_execution_mode_t::spot_wide;
+          context->spot_instance = std::make_shared<int> (0);
+          context->serial_queue = std::make_shared<runtime::serial_execution_queue_t> (
+            *node->worker_executor, runtime::serial_execution_queue_options_t{},
+            runtime::serial_execution_queue_t::error_handler_t{},
+            runtime::serial_lane_policy_t::spot_wide ());
+          std::atomic_int handlers{0}, terminals{0}, lane_turns{0};
+          const auto fail = [&] (int status, const char *stage, const char *error = "") {
+              std::fprintf (stderr,
+                            "Spot admission failed at %s: handlers=%d terminals=%d "
+                            "lane_turns=%d error=%s\n",
+                            stage, handlers.load (), terminals.load (), lane_turns.load (), error);
+              std::_Exit (status);
+          };
+          context->handlers.push_back (spot_handler_descriptor_t{spot_handler_kind_t::packet,
+                                                                 "admission",
+                                                                 {},
+                                                                 std::type_index (typeid (int)),
+                                                                 std::type_index (typeid (void)),
+                                                                 std::type_index (typeid (void)),
+                                                                 std::type_index (typeid (void))});
+          context->handler_invokers.push_back (
+            [&] (void *, void *, service_provider_t &, serializer_registry_t &,
+                 const zlink::message_t &, const spot_inbound_message_t &) {
+                ++handlers;
+                return task_t<zlink::message_t> (
+                  result_t<zlink::message_t>::success (zlink::message_t{}));
+            });
+          node->spot_contexts_by_id.emplace (context->spot_id,
+                                             spot_context_access_t::create (context));
+          spot_node_runtime_t spots (node);
+          spots.set_route_client (route_client_t{});
+          service_collection_t services;
+          services.add_singleton<actor_gateway_runtime_t> ();
+          auto provider = services.build_provider ();
+          serializer_registry_t serializers;
+          runtime::messaging::envelope_header_t header;
+          header.kind = runtime::messaging::message_kind_t::command;
+          header.message_name = "admission";
+          auto parts = runtime::messaging::envelope_codec_t{}
+                         .encode_raw_body_parts (header, zlink::message_t::from ("42"))
+                         .take_items ();
+          const host::ready_record_t owner{.owner_kind = host::owner_kind_t::spot,
+                                           .domain = host::ready_domain_t::application,
+                                           .spot_id = std::string (context->spot_id)};
+          host::receive_record_t record{.kind = host::record_kind_t::spot_send,
+                                        .domain = host::ready_domain_t::application};
+          record.application_record = std::make_shared<runtime::serial_application_record_t> ();
+
+          std::promise<void> occupied, release;
+          auto released = release.get_future ().share ();
+          if (!node->lane.try_post ([&] {
+                  occupied.set_value ();
+                  released.wait ();
+              }))
+              fail (2, "preparation blocker submission");
+          if (occupied.get_future ().wait_for (completion_timeout) != std::future_status::ready)
+              fail (3, "preparation blocker deadline");
+
+          std::promise<void> published;
+          auto publication = published.get_future ();
+          task_completion_source_t<void> terminal;
+          task_completion_source_t<bool> publication_result;
+          auto dispatched = publication_result.task ();
+          auto preparation = spots.prepare_spot_dispatch (context->spot_id, {});
+          if (preparation.await_ready ())
+              fail (4, "preparation did not queue");
+          bool handled = false;
+          // Observe the owner's actual completion thread without adding a caller scheduler.
+          detail::observe_task_terminal (preparation, [&] (const auto &prepared) {
+              try {
+                  const auto target = prepared.value ();
+                  record.application_record->target = target;
+                  auto admitted = target->queue->admit_native_application ([&] (bool sealed) {
+                      if (sealed)
+                          throw std::runtime_error ("fixture Spot gate was sealed");
+                      // Reserve the next lane drain regardless of the completion thread.
+                      // On the old path it sits behind this sole worker's publication,
+                      // whose real handler admission synchronously waits for that lane.
+                      if (!node->lane.try_post ([&] { ++lane_turns; }))
+                          throw std::runtime_error ("fixture lane rejected the successor");
+                      published.set_value ();
+                      handled = spots.dispatch_mesh_record (
+                        owner, record, parts, header, provider, serializers, [&] {
+                            ++terminals;
+                            terminal.complete (result_t<void>::success ());
+                        });
+                  });
+                  detail::observe_task_terminal (admitted, [&] (const auto &admission) {
+                      try {
+                          publication_result.complete (
+                            result_t<bool>::success (handled && !admission.value ()));
+                      }
+                      catch (...) {
+                          publication_result.complete (detail::current_exception_result<bool> ());
+                      }
+                  });
+              }
+              catch (...) {
+                  publication_result.complete (detail::current_exception_result<bool> ());
+              }
+          });
+          release.set_value ();
+          if (publication.wait_for (completion_timeout) != std::future_status::ready) {
+              const auto observed = dispatched.result_for (std::chrono::seconds (0));
+              fail (5, "publication entry deadline",
+                    observed && observed->error () ? observed->error ()->what () : "pending");
+          }
+          const auto admitted = dispatched.result_for (completion_timeout);
+          if (!admitted)
+              fail (6, "publication completion deadline", "blocked on its state lane");
+          if (!*admitted || !admitted->value ())
+              fail (7, "publication result",
+                    admitted->error () ? admitted->error ()->what () : "record was not dispatched");
+          const auto completed = terminal.task ().result_for (completion_timeout);
+          if (!completed)
+              fail (8, "handler terminal deadline");
+          if (!*completed)
+              fail (8, "handler terminal result",
+                    completed->error () ? completed->error ()->what () : "unsuccessful terminal");
+          if (handlers != 1 || terminals != 1 || lane_turns != 1)
+              fail (8, "handler/terminal/lane execution count");
+          context->serial_queue->drain ();
+          const auto callbacks = node->lane.run ([&] { return context->callback_depth; }).get ();
+          if (callbacks != 0) {
+              std::fprintf (stderr, "callback_depth=%zu\n", callbacks);
+              fail (9, "callback settlement");
+          }
+          node->lane.run ([&] { node->spot_contexts_by_id.clear (); }).get ();
+          context->spot_serial_executor->close ();
+          context->serial_queue->close ();
+          node->worker_executor->drain ();
+          node->lane_executor.drain ();
+          runtime::shutdown_handler_coroutine_executor ();
+          std::printf ("Spot admission completed: handlers=%d terminals=%d lane_turns=%d "
+                       "callback_depth=%zu\n",
+                       handlers.load (), terminals.load (), lane_turns.load (), callbacks);
+          std::fflush (stdout);
+          std::_Exit (0);
+      }()),
+      ::testing::ExitedWithCode (0), "");
+}
+
 TEST (ZLinkStateLane, ActorMailboxLookupAndReadyReleaseTheOnlyLaneWorker)
 {
     using namespace zlink::framework;
@@ -214,7 +374,7 @@ TEST (ZLinkStateLane, ActorMailboxLookupAndReadyReleaseTheOnlyLaneWorker)
     std::promise<bool> ready_completed;
     auto lookup_result = lookup_completed.get_future ();
     auto ready_result = ready_completed.get_future ();
-    std::atomic<int> takes{0};
+    auto takes = std::make_shared<std::atomic<int>> (0);
     node->lane_executor.submit ([&] {
         // The only lane worker still owns this callback. Its posted predecessor
         // cannot drain until both asynchronous lookups have returned to it.
@@ -231,8 +391,8 @@ TEST (ZLinkStateLane, ActorMailboxLookupAndReadyReleaseTheOnlyLaneWorker)
               lookup_completed.set_value (lookup_pending && terminal && !terminal.value ());
           });
         auto ready = std::make_shared<task_t<bool>> (spots.notify_actor_application_ready (
-          "missing", [&] () -> std::optional<runtime::serial_prefix_work_t> {
-              ++takes;
+          "missing", [takes] () -> std::optional<runtime::serial_prefix_work_t> {
+              ++*takes;
               return std::nullopt;
           }));
         const bool ready_pending = !ready->await_ready ();
@@ -244,7 +404,7 @@ TEST (ZLinkStateLane, ActorMailboxLookupAndReadyReleaseTheOnlyLaneWorker)
     EXPECT_TRUE (lookup_result.get ());
     EXPECT_TRUE (ready_result.get ());
     node->lane_executor.drain ();
-    EXPECT_EQ (0, takes.load ());
+    EXPECT_EQ (0, takes->load ());
 }
 
 TEST (ZLinkStateLane, ActorMailboxTasksRetainSubmittedHandleStateAndActorId)
@@ -279,7 +439,7 @@ TEST (ZLinkStateLane, ActorMailboxTasksRetainSubmittedHandleStateAndActorId)
     std::promise<bool> ready_completed;
     auto lookup_result = lookup_completed.get_future ();
     auto ready_result = ready_completed.get_future ();
-    std::atomic<int> takes{0};
+    auto takes = std::make_shared<std::atomic<int>> (0);
     node->lane_executor.submit ([&] {
         if (!node->lane.try_post ([] {})) {
             lookup_completed.set_value (false);
@@ -295,8 +455,8 @@ TEST (ZLinkStateLane, ActorMailboxTasksRetainSubmittedHandleStateAndActorId)
                                         && terminal.value () == expected_queue);
         });
         auto ready = std::make_shared<task_t<bool>> (ready_handle.notify_actor_application_ready (
-          "actor", [&] () -> std::optional<runtime::serial_prefix_work_t> {
-              ++takes;
+          "actor", [takes] () -> std::optional<runtime::serial_prefix_work_t> {
+              ++*takes;
               return std::nullopt;
           }));
         const bool ready_pending = !ready->await_ready ();
@@ -313,7 +473,7 @@ TEST (ZLinkStateLane, ActorMailboxTasksRetainSubmittedHandleStateAndActorId)
     EXPECT_TRUE (lookup_result.get ());
     EXPECT_TRUE (ready_result.get ());
     scheduler->run_all ();
-    EXPECT_EQ (1, takes.load ());
+    EXPECT_EQ (1, takes->load ());
     expected_queue.reset ();
     node->lane.run ([&] { node->spot_contexts_by_id.clear (); }).get ();
     spot.reset ();
@@ -337,14 +497,14 @@ TEST (ZLinkStateLane, ActorReadyRevalidationFailureReachesRuntimeCollector)
     auto serial = node->lane.run ([&] { return spot->ensure_spot_serial_executor (); }).get ();
     scheduler->run_all ();
     spot_node_runtime_t spots (node);
-    unsigned takes = 0;
+    auto takes = std::make_shared<std::atomic<unsigned>> (0);
     auto ready = spots.notify_actor_application_ready (
-      "actor", [&] () -> std::optional<runtime::serial_prefix_work_t> {
-          ++takes;
+      "actor", [takes] () -> std::optional<runtime::serial_prefix_work_t> {
+          ++*takes;
           return std::nullopt;
       });
     ASSERT_TRUE (ready.result ().value ());
-    EXPECT_EQ (0u, takes);
+    EXPECT_EQ (0u, takes->load ());
     auto queue =
       node->lane.run ([&] { return serial->actor_executor ("player:actor")->queue (); }).get ();
     auto root = serial->spot_queue ();
@@ -354,7 +514,7 @@ TEST (ZLinkStateLane, ActorReadyRevalidationFailureReachesRuntimeCollector)
     node->lane.close ();
     EXPECT_TRUE (scheduler->run_one ());
     scheduler->run_all ();
-    EXPECT_EQ (0u, takes);
+    EXPECT_EQ (0u, takes->load ());
     try {
         node->runtime_failures ()->rethrow_if_failed ();
         ADD_FAILURE () << "actor-ready revalidation failure was not reported";
@@ -407,7 +567,7 @@ zlink::framework::task_t<int> wrap_completion_task (zlink::framework::task_t<int
     co_return co_await task;
 }
 
-class stopped_completion_executor_t final : public offload_executor_t
+class drain_only_executor_t final : public offload_executor_t
 {
   public:
     bool try_submit_internal (std::function<void ()> work) override
@@ -424,24 +584,121 @@ class stopped_completion_executor_t final : public offload_executor_t
     std::function<void ()> _drain;
 };
 
-TEST (ZLinkStateLane, RejectedCompletionDoesNotResumeCallerInsideTheLane)
+TEST (ZLinkStateLane, TaskReturningInlineTurnReusesItsInnerTaskWithoutAllocating)
+{
+    using namespace zlink::framework;
+    offload_executor_t executor (1);
+    state_lane_t lane (executor);
+    task_completion_source_t<int> source;
+    std::optional<task_t<int>> pending;
+    const auto measured = tests::measure_allocations (
+      [&] { pending.emplace (lane.run_task ([&] { return source.task (); })); });
+    EXPECT_EQ (measured.count, 0u);
+    EXPECT_FALSE (pending->await_ready ());
+    source.complete (result_t<int>::success (42));
+    EXPECT_EQ (pending->result ().value (), 42);
+    EXPECT_EQ (state_lane_t::current (), nullptr);
+}
+
+TEST (ZLinkStateLane, TaskReturningQueuedTurnReleasesLaneBeforeWaitingForInnerResult)
+{
+    using namespace zlink::framework;
+    offload_executor_t executor (1);
+    std::optional<state_lane_t> lane (std::in_place, executor);
+    std::promise<void> entered, release, invoked;
+    auto released = release.get_future ().share ();
+    ASSERT_TRUE (lane->try_post ([&] {
+        entered.set_value ();
+        released.wait ();
+    }));
+    entered.get_future ().wait ();
+    task_completion_source_t<int> source;
+    auto pending = lane->run_task ([&] {
+        EXPECT_TRUE (lane->is_on_lane ());
+        invoked.set_value ();
+        return source.task ();
+    });
+    release.set_value ();
+    invoked.get_future ().wait ();
+    EXPECT_FALSE (pending.await_ready ());
+    // A completed owner turn does not retain its lane until another task ends.
+    lane.reset ();
+    source.complete (result_t<int>::success (42));
+    EXPECT_EQ (pending.result ().value (), 42);
+    EXPECT_EQ (state_lane_t::current (), nullptr);
+}
+
+TEST (ZLinkStateLane, TaskReturningTurnPreservesInnerAndInvocationFailureFacets)
+{
+    using namespace zlink::framework;
+    for (const bool queued : {false, true}) {
+        for (const bool inner_failure : {false, true}) {
+            test::manual_internal_scheduler_t executor;
+            state_lane_t lane (executor);
+            if (queued)
+                ASSERT_TRUE (lane.try_post ([] {}));
+            const auto code =
+              static_cast<std::uint32_t> (runtime::protocol::framework_error_code::spotMoving);
+            auto pending = lane.run_task ([code, inner_failure] () -> task_t<int> {
+                const auto error = detail::with_failure_code (
+                  detail::make_framework_origin_exception (framework_error_kind_t::unavailable,
+                                                           "state owner refused the operation"),
+                  code);
+                if (!inner_failure)
+                    throw error;
+                return task_t<int> (detail::result_access_t::failure<int> (error));
+            });
+            executor.run_all ();
+            const auto &result = pending.result ();
+            ASSERT_FALSE (result);
+            ASSERT_NE (result.error (), nullptr);
+            EXPECT_EQ (result.error_kind (), framework_error_kind_t::unavailable);
+            EXPECT_EQ (detail::error_origin (*result.error ()), detail::error_origin_t::framework);
+            EXPECT_EQ (detail::failure_code (*result.error ()), code);
+        }
+    }
+}
+
+TEST (ZLinkStateLane, TaskReturningQueuedTurnDeliversWithoutResubmittingToLaneExecutor)
 {
     using namespace zlink::framework;
     using namespace zlink::framework::runtime;
     configure_handler_coroutine_executor (1);
     install_host_context_hooks ();
-    stopped_completion_executor_t executor;
+    drain_only_executor_t executor;
+    state_lane_t lane (executor);
+    ASSERT_TRUE (lane.try_post ([] {}));
+    auto pending = lane.run_task ([] { return task_t<int> (result_t<int>::success (42)); });
+    auto caller = wrap_completion_task (std::move (pending));
+    std::promise<bool> resumed_inside_lane;
+    detail::observe_task_terminal (caller, [&] (const auto &) {
+        resumed_inside_lane.set_value (state_lane_t::current () != nullptr);
+    });
+    executor.finish_accepted_drain ();
+    EXPECT_FALSE (resumed_inside_lane.get_future ().get ());
+    shutdown_handler_coroutine_executor ();
+    EXPECT_EQ (caller.result ().value (), 42);
+}
+
+TEST (ZLinkStateLane, QueuedTurnDeliversWithoutResubmittingToLaneExecutor)
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::runtime;
+    configure_handler_coroutine_executor (1);
+    install_host_context_hooks ();
+    drain_only_executor_t executor;
     state_lane_t lane (executor);
     ASSERT_TRUE (lane.try_post ([] {}));
     auto pending = lane.run_task ([] { return 42; });
     auto caller = wrap_completion_task (std::move (pending));
-    bool resumed_inside_lane = false;
-    detail::observe_task_terminal (
-      caller, [&] (const auto &) { resumed_inside_lane = state_lane_t::current () != nullptr; });
+    std::promise<bool> resumed_inside_lane;
+    detail::observe_task_terminal (caller, [&] (const auto &) {
+        resumed_inside_lane.set_value (state_lane_t::current () != nullptr);
+    });
     executor.finish_accepted_drain ();
+    EXPECT_FALSE (resumed_inside_lane.get_future ().get ());
     shutdown_handler_coroutine_executor ();
-    EXPECT_FALSE (resumed_inside_lane);
-    EXPECT_EQ (framework_error_kind_t::shutting_down, caller.result ().error_kind ());
+    EXPECT_EQ (caller.result ().value (), 42);
 }
 
 TEST (ZLinkStateLane, PendingResultOutsideLaneDoesNotWaitForAnotherExecutor)
@@ -473,8 +730,11 @@ TEST (ZLinkStateLane, PendingResultOutsideLaneDoesNotWaitForAnotherExecutor)
     }));
     lane_entered.get_future ().wait ();
     auto caller = wrap_completion_task (lane.run_task ([] { return 42; }));
+    std::promise<void> completed;
+    detail::observe_task_terminal (caller, [&] (const auto &) { completed.set_value (); });
     lane_release.set_value ();
     executor.drain ();
+    completed.get_future ().wait ();
     const auto ready = caller.result_for (std::chrono::milliseconds::zero ());
     host_pool.run ();
     ASSERT_TRUE (ready.has_value ());
@@ -541,6 +801,40 @@ TEST (ZLinkStateLane, CallerDrainedVoidAndFailureTasksLeaveTheLaneBeforeCompleti
     });
 }
 
+TEST (ZLinkStateLane, RunTaskPreservesFrameworkFailureFacets)
+{
+    using namespace zlink::framework;
+    for (const bool asynchronous : {false, true}) {
+        SCOPED_TRACE (asynchronous);
+        offload_executor_t executor (1);
+        state_lane_t lane (executor);
+        std::promise<void> entered, release;
+        auto held = release.get_future ().share ();
+        if (asynchronous) {
+            ASSERT_TRUE (lane.try_post ([&] {
+                entered.set_value ();
+                held.wait ();
+            }));
+            entered.get_future ().wait ();
+        }
+        const auto code =
+          static_cast<std::uint32_t> (runtime::protocol::framework_error_code::spotMoving);
+        auto failed = lane.run_task ([code] () -> int {
+            throw detail::with_failure_code (
+              detail::make_framework_origin_exception (framework_error_kind_t::unavailable,
+                                                       "state owner refused the operation"),
+              code);
+        });
+        release.set_value ();
+        const auto result = failed.result ();
+        ASSERT_FALSE (result);
+        ASSERT_NE (result.error (), nullptr);
+        EXPECT_EQ (result.error_kind (), framework_error_kind_t::unavailable);
+        EXPECT_EQ (detail::error_origin (*result.error ()), detail::error_origin_t::framework);
+        EXPECT_EQ (detail::failure_code (*result.error ()), code);
+    }
+}
+
 TEST (ZLinkStateLane, StandaloneTaskCompletionAllowsLaneReentry)
 {
     constexpr auto completion_timeout = std::chrono::seconds (5);
@@ -578,6 +872,51 @@ TEST (ZLinkStateLane, StandaloneTaskCompletionAllowsLaneReentry)
     open_lane ();
     ASSERT_EQ (std::future_status::ready, result.wait_for (completion_timeout));
     EXPECT_EQ (42, result.get ());
+}
+
+TEST (ZLinkStateLane, QueuedCompletionReleasesTheOnlyWorkerBeforeDependentLaneWait)
+{
+    using namespace zlink::framework;
+    for (const bool asynchronous_work : {false, true}) {
+        offload_executor_t executor (1);
+        state_lane_t lane (executor);
+        std::promise<std::thread::id> entered;
+        std::promise<void> release;
+        auto released = release.get_future ().share ();
+        ASSERT_TRUE (lane.try_post ([&] {
+            entered.set_value (std::this_thread::get_id ());
+            released.wait ();
+        }));
+        const auto worker = entered.get_future ().get ();
+        auto pending = asynchronous_work
+                         ? lane.run_task ([] { return task_t<int> (result_t<int>::success (42)); })
+                         : lane.run_task ([] { return 42; });
+        std::promise<void> observed;
+        detail::observe_task_terminal (pending, [&] (const result_t<int> &result) {
+            const bool on_worker = std::this_thread::get_id () == worker;
+            EXPECT_FALSE (on_worker);
+            EXPECT_EQ (state_lane_t::current (), nullptr);
+            // RED reports the forbidden worker placement without entering a deadlock.
+            // GREEN exercises the same pending lane wait as the ZW-C2 continuation.
+            if (!on_worker) {
+                std::promise<void> nested_entered, nested_release;
+                auto nested_released = nested_release.get_future ().share ();
+                EXPECT_TRUE (lane.try_post ([&] {
+                    nested_entered.set_value ();
+                    nested_released.wait ();
+                }));
+                nested_entered.get_future ().wait ();
+                auto next = lane.run ([&] { return result.value (); });
+                EXPECT_EQ (next.wait_for (std::chrono::seconds::zero ()),
+                           std::future_status::timeout);
+                nested_release.set_value ();
+                EXPECT_EQ (next.get (), 42);
+            }
+            observed.set_value ();
+        });
+        release.set_value ();
+        observed.get_future ().wait ();
+    }
 }
 
 #ifdef ZLINK_FRAMEWORK_DEBUG_WAIT_GUARD

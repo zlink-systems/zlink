@@ -329,9 +329,7 @@ public final class ZLinkSerialTurnAllocationTest {
             System.out.println("serial worker submission actions: " + actions + "/1000");
             System.out.println("serial finish Iterator allocations: " + iterators + "/1000");
             System.out.println(
-                    "serial physical/deferred context ThreadLocal entries: "
-                            + turnContextEntries
-                            + "/1000");
+                    "serial physical context ThreadLocal entries: " + turnContextEntries + "/1000");
             System.out.println(
                     "channel unfiltered owner actions: "
                             + unfilteredActions
@@ -382,10 +380,9 @@ public final class ZLinkSerialTurnAllocationTest {
                                             + " mapping and scope cleanup actions"),
                     () ->
                             assertEquals(
-                                    2000,
+                                    1000,
                                     contextEntries,
-                                    "one physical turn and one deferred-release context entry per"
-                                            + " turn"),
+                                    "one physical turn context entry per turn"),
                     () ->
                             assertEquals(
                                     0,

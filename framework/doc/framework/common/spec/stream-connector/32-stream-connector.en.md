@@ -105,6 +105,13 @@ In the browser family, `ws`/`wss` are implemented with the **platform's
 native WebSocket API.** Since the platform performs the handshake and
 framing, the connector doesn't implement it directly.
 
+**A native connector connects directly to the endpoint on every
+transport and doesn't use the OS or system proxy settings.** Proxy
+discovery (for example Windows WPAD auto-detection) isn't guaranteed to
+finish within the connect timeout (§6.1), and it makes the connection
+path differ between machines for the same endpoint. In the browser
+family, the platform WebSocket API decides the connection path.
+
 ## 4. Wire Contract
 
 ### 4.1 Frame

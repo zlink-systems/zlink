@@ -1,10 +1,36 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #include "../support/session_disconnect_probe_spot.hpp"
+#include <zlink.hpp>
+#if defined(ZLINK_TEST_CONNECT_COUNT)
+#include <zlink.h>
+#include <atomic>
+
+std::atomic<std::size_t> native_connect_calls{0};
+std::atomic<std::size_t> native_disconnect_calls{0};
+std::atomic<std::size_t> native_call_sequence{0};
+std::atomic<std::size_t> last_native_connect{0};
+std::atomic<std::size_t> last_native_disconnect{0};
+extern "C" zlink_connect_result_t __real_zlink_connect (void *, const char *);
+extern "C" zlink_connect_result_t __real_zlink_disconnect (void *, const char *);
+extern "C" zlink_connect_result_t __wrap_zlink_connect (void *socket, const char *endpoint)
+{
+    ++native_connect_calls;
+    last_native_connect = ++native_call_sequence;
+    return __real_zlink_connect (socket, endpoint);
+}
+extern "C" zlink_connect_result_t __wrap_zlink_disconnect (void *socket, const char *endpoint)
+{
+    ++native_disconnect_calls;
+    last_native_disconnect = ++native_call_sequence;
+    return __real_zlink_disconnect (socket, endpoint);
+}
+#endif
 #include "../support/runtime_failure_fixture.hpp"
 
 #include "runtime/mesh/mesh_node_runtime.hpp"
 #include <runtime/locations/location_repository.hpp>
 #include "runtime/locations/in_memory_location_store.hpp"
+#include "runtime/locations/live_location_reader.hpp"
 #include "runtime/locations/location_runtime.hpp"
 #include "runtime/locations/store_location_resolvers.hpp"
 #include "runtime/dispatch/dispatch_limits.hpp"
@@ -30,6 +56,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cassert>
+#include <cerrno>
 #include <chrono>
 #include <cstdio>
 #include <condition_variable>
@@ -50,6 +77,7 @@
 #include <vector>
 
 #if defined(__unix__)
+#include <poll.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #endif
@@ -670,7 +698,10 @@ void verify_route_internal_packets_precede_application_dispatch ()
     service.start (provider).result ().value ();
     const auto node = service.nodes ().front ();
     auto native_spot = std::make_shared<host::spot_handle_t> (
-      node->native_node ().get_or_create_spot (std::string (context->spot_id)));
+      node->native_node ()
+        .get_or_create_spot_async (std::string (context->spot_id))
+        .result ()
+        .value ());
     registration->spot_state->lane.run ([&] { context->native_spot = native_spot; }).get ();
 
     native_spot->set_subscription ("work", "rel-358-topic");
@@ -765,12 +796,13 @@ void verify_local_join_timeout_releases_membership ()
     node.start ();
     auto &runtime = node.native_node ();
     auto actor = runtime.create_actor ("vertical.actor", "join-timeout-actor");
-    auto target = runtime.get_or_create_spot ("join-timeout-spot");
+    auto target = runtime.get_or_create_spot_async ("join-timeout-spot").result ().value ();
     const auto rid = runtime.status ().routing_id ();
     const auto generation = target.status ().lifecycle_generation ();
     host::pending_operation_t expired;
-    assert (actor.join_spot (rid, "join-timeout-spot", generation, {}, expired, 25ms)
-            == zlink::submit_result_t::ok);
+    assert (
+      actor.join_spot (rid, "join-timeout-spot", generation, {}, expired, 25ms).result ().value ()
+      == zlink::submit_result_t::ok);
     assert (runtime.transport ().expire_requests (std::chrono::steady_clock::now () + 1s) == 1);
     auto first = expired.completion->task ();
     assert (!first.result ());
@@ -782,8 +814,9 @@ void verify_local_join_timeout_releases_membership ()
     // The expired queued control is skipped, and the same Actor can start
     // another membership move because the terminal owner released its token.
     auto &retried = expired;
-    assert (actor.join_spot (rid, "join-timeout-spot", generation, {}, retried, 1s)
-            == zlink::submit_result_t::ok);
+    assert (
+      actor.join_spot (rid, "join-timeout-spot", generation, {}, retried, 1s).result ().value ()
+      == zlink::submit_result_t::ok);
     bool replied = false;
     (void) runtime
       .dispatch_ready ([&] (const host::ready_record_t &, const host::receive_record_t &record,
@@ -809,6 +842,12 @@ void verify_local_join_timeout_releases_membership ()
 
 void register_mesh_location_resolvers (zlink::framework::service_collection_t &services)
 {
+    services.add_factory<zlink::framework::runtime::live_location_reader_t> (
+      [] (zlink::framework::service_provider_t &provider) {
+          return std::make_unique<zlink::framework::runtime::live_location_reader_t> (
+            provider.get_required<zlink::framework::location_repository_t> ());
+      },
+      zlink::framework::service_lifetime_t::singleton);
     services.add_factory<zlink::framework::runtime::store_location_resolvers_t> (
       [] (zlink::framework::service_provider_t &provider) {
           return std::make_unique<zlink::framework::runtime::store_location_resolvers_t> (
@@ -863,7 +902,7 @@ class expired_actor_bind_session_t final : public zlink::framework::packet_strea
     }
     zlink::framework::task_t<void> on_packet (zlink::framework::stream_t &,
                                               const zlink::framework::session_message_context_t &,
-                                              const zlink::message_t &) override
+                                              const zlink::framework::message_t &) override
     {
         co_return;
     }
@@ -1245,7 +1284,7 @@ void verify_local_node_submit_bridge ()
 
     {
         auto parts = encode ("owned-after-return");
-        assert (service.submit_local_node_send (node, parts.items ())
+        assert (service.submit_local_node_send (node, parts.items ()).result ().value ()
                 == zlink::submit_result_t::ok);
     }
     {
@@ -1279,15 +1318,16 @@ void verify_local_node_submit_bridge ()
     // handler is blocked. The same-node successor retains its permit until
     // that node's first handler reaches terminal completion (02 §2).
     auto independent = encode ("independent-owner", "independent-mesh");
-    assert (service.submit_local_node_send (independent_node, independent.items ())
-            == zlink::submit_result_t::ok);
+    assert (
+      service.submit_local_node_send (independent_node, independent.items ()).result ().value ()
+      == zlink::submit_result_t::ok);
     {
         std::unique_lock lock (probe->mutex);
         assert (probe->changed.wait_for (lock, 1s, [&] { return probe->entered == 2; }));
         assert (probe->completed == 0);
     }
     auto progresses = encode ("progress-after-entry");
-    assert (service.submit_local_node_send (node, progresses.items ())
+    assert (service.submit_local_node_send (node, progresses.items ()).result ().value ()
             == zlink::submit_result_t::ok);
     {
         std::unique_lock lock (probe->mutex);
@@ -1323,10 +1363,11 @@ void verify_local_node_submit_bridge ()
     assert (service.wait_for_accepted_callbacks_until (std::chrono::steady_clock::now () + 1s));
 
     auto throwing = encode ("throw");
-    assert (service.submit_local_node_send (node, throwing.items ()) == zlink::submit_result_t::ok);
+    assert (service.submit_local_node_send (node, throwing.items ()).result ().value ()
+            == zlink::submit_result_t::ok);
     assert (service.wait_for_accepted_callbacks_until (std::chrono::steady_clock::now () + 1s));
     auto after_throw = encode ("after-throw");
-    assert (service.submit_local_node_send (node, after_throw.items ())
+    assert (service.submit_local_node_send (node, after_throw.items ()).result ().value ()
             == zlink::submit_result_t::ok);
     {
         std::unique_lock lock (probe->mutex);
@@ -1338,7 +1379,7 @@ void verify_local_node_submit_bridge ()
 
     service.seal_application_dispatch ();
     auto after_seal = encode ("after-seal");
-    assert (service.submit_local_node_send (node, after_seal.items ())
+    assert (service.submit_local_node_send (node, after_seal.items ()).result ().value ()
             == zlink::submit_result_t::terminated);
     service.stop ();
     location_runtime.stop ();
@@ -2541,7 +2582,8 @@ void verify_accepted_handler_push_after_host_seal (bool shutdown)
     assert (service.publish_descriptor_state (shutdown ? framework_runtime_state_t::draining
                                                        : framework_runtime_state_t::relocating));
     service.seal_application_dispatch ();
-    assert (service.submit_local_node_send (node, {}) == zlink::submit_result_t::terminated);
+    assert (service.submit_local_node_send (node, {}).result ().value ()
+            == zlink::submit_result_t::terminated);
     assert (!service.wait_for_accepted_callbacks_until (std::chrono::steady_clock::now ()));
     release.set_value ();
     assert (handler.wait_for (1s) == std::future_status::ready);
@@ -2743,6 +2785,33 @@ int run_cross_process_delivery ()
     int reciprocal_endpoint_pipe[2];
     int formal_descriptor_pipe[2];
     int formal_ack_pipe[2];
+    const auto read_byte_while_dispatching = [] (auto &node, int fd, char &value) {
+        pollfd descriptor{fd, POLLIN, 0};
+        while (true) {
+            const int poll_result = poll (&descriptor, 1, 0);
+            if (poll_result < 0) {
+                if (errno == EINTR)
+                    continue;
+                return false;
+            }
+            if (poll_result > 0
+                && (descriptor.revents & (POLLIN | POLLHUP | POLLERR | POLLNVAL)) != 0) {
+                const ssize_t bytes = read (fd, &value, sizeof (value));
+                if (bytes >= 0)
+                    return bytes == 1;
+                if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)
+                    continue;
+                return false;
+            }
+            (void) std::move (
+              node.dispatch_ready ([] (const zlink::framework::runtime::host::ready_record_t &,
+                                       const zlink::framework::runtime::host::receive_record_t &,
+                                       std::vector<zlink::message_t>) {}))
+              .result ()
+              .value ();
+            std::this_thread::sleep_for (10ms);
+        }
+    };
     if (pipe (endpoint_pipe) != 0 || pipe (direct_ack_pipe) != 0 || pipe (channel_ack_pipe) != 0
         || pipe (request_ack_pipe) != 0 || pipe (completion_ack_pipe) != 0
         || pipe (spot_request_ack_pipe) != 0 || pipe (reciprocal_ready_pipe) != 0
@@ -2775,7 +2844,7 @@ int run_cross_process_delivery ()
         auto state = make_node ("tcp://127.0.0.1:*", "vertical-b");
         zlink::framework::detail::mesh_node_runtime_t node (state);
         node.start ();
-        auto target_spot = node.get_or_create_spot ("target-spot");
+        auto target_spot = node.get_or_create_spot_async ("target-spot").result ().value ();
         auto target_actor = node.create_actor ("vertical.actor", "target-actor", {}, 5s);
         const std::uint64_t formal_descriptors[2]{target_spot.status ().lifecycle_generation (),
                                                   target_actor.ref ().object_generation ()};
@@ -2906,7 +2975,7 @@ int run_cross_process_delivery ()
         (void) write (reciprocal_child_ready_pipe[1], &ready, sizeof (ready));
         close (reciprocal_child_ready_pipe[1]);
         char stop = 0;
-        (void) read (reciprocal_child_stop_pipe[0], &stop, sizeof (stop));
+        (void) read_byte_while_dispatching (reciprocal_node, reciprocal_child_stop_pipe[0], stop);
         close (reciprocal_child_stop_pipe[0]);
         reciprocal_node.stop ();
         completion_owner.close ();
@@ -2935,8 +3004,7 @@ int run_cross_process_delivery ()
     node.start ();
     assert (wait_until_admitted (node));
     char reciprocal_ready = 0;
-    assert (read (reciprocal_ready_pipe[0], &reciprocal_ready, sizeof (reciprocal_ready))
-            == sizeof (reciprocal_ready));
+    assert (read_byte_while_dispatching (node, reciprocal_ready_pipe[0], reciprocal_ready));
     close (reciprocal_ready_pipe[0]);
     assert (reciprocal_ready == 1);
 
@@ -3017,8 +3085,8 @@ int run_cross_process_delivery ()
     close (formal_ack_pipe[0]);
     assert (actor_ack == 1);
 
-    auto local_source = node.get_or_create_spot ("source-spot");
-    auto local_target = node.get_or_create_spot ("local-target");
+    auto local_source = node.get_or_create_spot_async ("source-spot").result ().value ();
+    auto local_target = node.get_or_create_spot_async ("local-target").result ().value ();
     const std::vector<zlink::message_t> local_request_parts{
       zlink::message_t::from (std::string ("local-request"))};
     const auto local_node_rid = node.status ().routing_id ();
@@ -3107,8 +3175,8 @@ int run_cross_process_delivery ()
     zlink::framework::detail::mesh_node_runtime_t race_node (race_state);
     configure_vertical_route_fences (race_node);
     race_node.start ();
-    auto race_source = race_node.get_or_create_spot ("race-source");
-    auto race_target = race_node.get_or_create_spot ("race-target");
+    auto race_source = race_node.get_or_create_spot_async ("race-source").result ().value ();
+    auto race_target = race_node.get_or_create_spot_async ("race-target").result ().value ();
     const auto race_node_rid = race_node.status ().routing_id ();
     const auto race_target_generation = race_target.status ().lifecycle_generation ();
     const std::vector<zlink::message_t> race_parts{zlink::message_t::from (std::string ("race"))};
@@ -3164,8 +3232,82 @@ int run_cross_process_delivery ()
 #endif
 } // namespace
 
+void verify_repeated_mesh_connect_keeps_one_physical_connection ()
+{
+    namespace mesh = zlink::framework::runtime::mesh;
+    for (const bool typed : {false, true}) {
+        auto context = std::make_shared<zlink::context_t> ();
+        zlink::router_socket_t peer (*context);
+        peer.options ().handover (true);
+        peer.set_routing_id (zlink::routing_id_t::from (std::string ("intent-peer")));
+        const auto endpoint = typed ? "inproc://typed-connect-intent" : "inproc://connect-intent";
+        peer.bind (endpoint);
+        auto monitor = peer.monitor_open (zlink::monitor_event::connection_ready);
+        mesh::raw_mesh_node_options_t options;
+        options.descriptor.mesh_name = "connect-intent";
+        options.descriptor.node_routing_id = {'l', 'o', 'c', 'a', 'l'};
+        options.descriptor.lifecycle_generation = 1;
+        options.descriptor.descriptor_revision = 1;
+        options.descriptor.advertised_endpoint = std::string (endpoint) + "-local";
+        options.runtime_failures =
+          std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ();
+        mesh::raw_mesh_node_owner_t local (std::move (options), context);
+        local.start ();
+        auto expected = local.topology ().local_descriptor ();
+        expected.node_routing_id = {'i', 'n', 't', 'e', 'n', 't', '-', 'p', 'e', 'e', 'r'};
+        expected.advertised_endpoint = endpoint;
+        const auto connect = [&] {
+            return typed ? local.connect_peer (endpoint, expected) : local.connect_peer (endpoint);
+        };
+        const auto wait_ready = [&] (std::chrono::milliseconds timeout) {
+            zlink::poller_t poller;
+            poller.add (monitor, zlink::poll_event_flag_t::pollin, 1);
+            zlink::poll_event_t event;
+            if (poller.wait (&event, 1, timeout) != 1)
+                return false;
+            return monitor.recv (zlink::recv_flags_t::dontwait).has_value ();
+        };
+        assert (connect ());
+        assert (wait_ready (2s));
+#if defined(ZLINK_TEST_CONNECT_COUNT)
+        const auto first_connects = native_connect_calls.load ();
+#endif
+        assert (connect ());
+        assert (!wait_ready (100ms));
+#if defined(ZLINK_TEST_CONNECT_COUNT)
+        assert (native_connect_calls == first_connects);
+        if (typed) {
+            for (int change = 0; change != 3; ++change) {
+                if (change == 0)
+                    expected.security_identity = "replacement-security";
+                else if (change == 1)
+                    ++expected.lifecycle_generation;
+                else
+                    expected.node_routing_id.push_back ('2');
+                const auto connects = native_connect_calls.load ();
+                const auto disconnects = native_disconnect_calls.load ();
+                assert (connect ());
+                assert (native_connect_calls == connects + 1);
+                assert (native_disconnect_calls == disconnects + 1);
+                assert (last_native_disconnect < last_native_connect);
+                assert (connect ());
+                assert (native_connect_calls == connects + 1);
+            }
+        }
+#endif
+        local.disconnect_peer (endpoint);
+        assert (connect ());
+        assert (wait_ready (2s));
+        local.close ();
+    }
+}
+
 int main (int argc, char **argv)
 {
+    if (argc == 2 && std::string_view (argv[1]) == "--connect-intent") {
+        verify_repeated_mesh_connect_keeps_one_physical_connection ();
+        return 0;
+    }
     if ((argc == 2 || argc == 3) && std::string_view (argv[1]) == "--automatic-intent") {
         const int repetitions = argc == 3 ? std::stoi (argv[2]) : 1;
         if (repetitions <= 0)

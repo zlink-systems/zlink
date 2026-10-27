@@ -10,6 +10,7 @@ import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
+import systems.zlink.framework.runtime.internal.service.ZLinkFrameworkMultipartView;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationIds;
 import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 
@@ -351,20 +352,19 @@ public final class ZLinkChannelEnvelope {
     }
 
     public static Message encodeHeader(Header header) {
+        return Message.from(encodeHeaderBytes(header));
+    }
+
+    /** Encodes the JSON header into heap storage, sized by a first counting pass. */
+    public static byte[] encodeHeaderBytes(Header header) {
         validateFlowPair(header.flowId(), header.flowOrigin());
         try {
             long size = writeHeader(header, null);
             if (size > Integer.MAX_VALUE)
                 throw new IOException("ZLink envelope header is too large");
-            Message encoded = Message.allocate((int) size);
-            boolean complete = false;
-            try {
-                writeHeader(header, encoded.mutableDataBuffer());
-                complete = true;
-                return encoded;
-            } finally {
-                if (!complete) encoded.close();
-            }
+            byte[] encoded = new byte[(int) size];
+            writeHeader(header, ByteBuffer.wrap(encoded));
+            return encoded;
         } catch (IOException ex) {
             throw new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.INTERNAL_FAILURE,
@@ -373,9 +373,12 @@ public final class ZLinkChannelEnvelope {
         }
     }
 
-    /** Encodes {@code [header, body]}; the body message is not copied. */
+    /**
+     * Encodes {@code [header, body]}; the body message is not copied and the header stays in heap
+     * storage until a transport writes or materializes it. Closing the list releases the body.
+     */
     public static List<Message> encode(Header header, Message body) {
-        return List.of(encodeHeader(header), body);
+        return ZLinkFrameworkMultipartView.encoded(encodeHeaderBytes(header), body);
     }
 
     /**
@@ -385,7 +388,15 @@ public final class ZLinkChannelEnvelope {
      * captureFlow} is set (spec 27 §4).
      */
     public static Header decodeHeader(Message headerPart, boolean captureFlow) {
-        try (JsonParser json = JSON.createParser(new MessageInputStream(headerPart))) {
+        return decodeHeader(headerPart.dataBuffer(), captureFlow);
+    }
+
+    /**
+     * Reads the header bytes in place and consumes the buffer's remaining bytes; the buffer owner
+     * must outlive this call.
+     */
+    public static Header decodeHeader(ByteBuffer headerPart, boolean captureFlow) {
+        try (JsonParser json = JSON.createParser(new BufferInputStream(headerPart))) {
             return decodeHeader(json, captureFlow);
         } catch (Exception ex) {
             if (ex instanceof ZLinkFrameworkException frameworkError) {
@@ -405,7 +416,7 @@ public final class ZLinkChannelEnvelope {
             return null;
         }
         try {
-            return decodeHeader(parts.get(0), captureFlow);
+            return decodeHeader(ZLinkFrameworkMultipartView.buffer(parts, 0), captureFlow);
         } catch (RuntimeException ignored) {
             return null;
         }
@@ -420,20 +431,28 @@ public final class ZLinkChannelEnvelope {
         if (!looksLikeEnvelope(parts)) {
             return null;
         }
-        return decodeHeader(parts.get(0), captureFlow);
+        return decodeHeader(ZLinkFrameworkMultipartView.buffer(parts, 0), captureFlow);
     }
 
-    /** Packet name and payload selected from the decoded envelope or an internal raw frame. */
-    public record DispatchPacket(String packetName, Message payload, Header header) {}
+    /**
+     * Packet name and payload selected from the decoded envelope or an internal raw frame. The
+     * payload part is read from the received parts only when a consumer asks for it.
+     */
+    public record DispatchPacket(
+            String packetName, List<Message> parts, int payloadIndex, Header header) {
+        public Message payload() {
+            return parts.get(payloadIndex);
+        }
+    }
 
     public static DispatchPacket decodeDispatchPacket(List<Message> parts, Header decodedHeader) {
         Header header = decodedHeader == null ? decodeDispatchHeader(parts, false) : decodedHeader;
         if (header != null) {
-            return new DispatchPacket(header.messageName(), decodeBody(parts), header);
+            return new DispatchPacket(header.messageName(), parts, bodyIndex(parts), header);
         }
         return parts.size() >= 2
-                ? new DispatchPacket(parts.get(0).toUtf8String(), parts.get(1), null)
-                : new DispatchPacket("", parts.get(0), null);
+                ? new DispatchPacket(parts.get(0).toUtf8String(), parts, 1, null)
+                : new DispatchPacket("", parts, 0, null);
     }
 
     /** Two or more parts whose first frame starts with a JSON object byte. */
@@ -441,9 +460,9 @@ public final class ZLinkChannelEnvelope {
         if (parts == null || parts.size() < 2) {
             return false;
         }
-        Message first = parts.get(0);
-        for (int index = 0; index < first.size(); index++) {
-            byte value = first.readByte(index);
+        ByteBuffer first = ZLinkFrameworkMultipartView.buffer(parts, 0);
+        for (int index = first.position(); index < first.limit(); index++) {
+            byte value = first.get(index);
             if (value == ' ' || value == '\t' || value == '\r' || value == '\n') {
                 continue;
             }
@@ -452,12 +471,12 @@ public final class ZLinkChannelEnvelope {
         return false;
     }
 
-    /** Envelope body part; {@code PROTOCOL_ERROR} when it is missing. */
-    public static Message decodeBody(List<Message> parts) {
+    /** Envelope body part index; {@code PROTOCOL_ERROR} when it is missing. */
+    private static int bodyIndex(List<Message> parts) {
         if (parts.size() < 2) {
             throw protocolError("ZLink envelope body part is missing", null);
         }
-        return parts.get(1);
+        return 1;
     }
 
     /**
@@ -816,19 +835,16 @@ public final class ZLinkChannelEnvelope {
         }
     }
 
-    private static final class MessageInputStream extends InputStream {
-        private final Message message;
-        private final int size;
-        private int position;
+    private static final class BufferInputStream extends InputStream {
+        private final ByteBuffer input;
 
-        MessageInputStream(Message message) {
-            this.message = message;
-            size = message.size();
+        BufferInputStream(ByteBuffer input) {
+            this.input = input;
         }
 
         @Override
         public int read() {
-            return position == size ? -1 : message.readByte(position++) & 0xff;
+            return input.hasRemaining() ? input.get() & 0xff : -1;
         }
 
         @Override
@@ -837,13 +853,11 @@ public final class ZLinkChannelEnvelope {
             if (length == 0) {
                 return 0;
             }
-            int remaining = size - position;
-            if (remaining == 0) {
+            if (!input.hasRemaining()) {
                 return -1;
             }
-            int count = Math.min(length, remaining);
-            message.copyTo(target, position, offset, count);
-            position += count;
+            int count = Math.min(length, input.remaining());
+            input.get(target, offset, count);
             return count;
         }
     }

@@ -122,6 +122,8 @@ Send, publish, bound session send, session Actor relay와 명시적인 STREAM se
 boundary가 message를 수락했다는 뜻이다. Remote handler 실행, subscriber 수신, remote Spot queue
 수락 또는 application callback 완료는 기다리지 않는다.
 
+이미 확정된 one-way 결과는 해당 언어의 완료 표현으로 직접 전달한다. Framework는 그 결과를 전달하기 위한 별도 operation이나 중간 완료 소유자를 만들지 않는다. 이 규칙은 §2의 제출 간 stage 격리와 §11의 완료 배달 규칙을 바꾸지 않는다.
+
 <a id="41-nodejs는-동기-blocking-종결자를-제공하지-않는다"></a>
 ### 4.1 Node.js는 동기 blocking 종결자를 제공하지 않는다
 
@@ -199,7 +201,7 @@ admission을 받지 않을 때까지 기다린다. Core HWM으로 binding operat
 | Spot authority 없음 | `NotFound` |
 | Mesh 없음 | `NotFound` |
 | ChannelName target 선택 실패 | [Framework API의 Channel 선택 결과](../00-foundation/06-framework-api.ko.md#channel-selection-result)를 따른다 |
-| 사용할 route가 없음 | `Unavailable` |
+| 사용할 route가 없음 | `Unavailable`. Remote request는 먼저 아래 「연결 준비 전 request」를 따른다 |
 | 대기 중 route가 없어짐 | [§7](#7-one-way-send의-대기-종료와-classic-fanout-send-timeout)을 따른다 |
 | runtime이 새 admission을 받지 않음 | `ShuttingDown` |
 | 같은 call의 terminal을 두 번 실행 | `InvalidOperation` |
@@ -215,6 +217,41 @@ source-local admission 확인 단계에서만 다른 eligible member를 선택�
 Binding operation이 시작되면 선택한 target이 확정된다. HWM 대기 뒤의 재제출과
 완료는 binding이 소유하며 Framework는 용량을 이유로 target을 다시 선택하거나 binding operation을
 다시 제출하지 않는다. 완료 뒤에는 자동 재제출하지 않는다. Send 대기의 종료는 [§7](#7-one-way-send의-대기-종료와-classic-fanout-send-timeout)을 따른다. 새 select-one operation은 시작할 때 그 시점의 eligible member를 선택할 수 있다.
+
+**연결 준비 전 request.** Remote request는 기존 규칙으로 유효한 target과 owner descriptor를 확정한 뒤, binding
+operation을 시작하기 전에 그 owner로 가는 연결과
+[service admission](../02-channel-transport/05-transport-liveness.ko.md#5-ready와-장애-판정)을 확인한다. Framework가 시작하는
+lifecycle request(Actor create·Join, session bind, relocation PREPARE)도 같다. 판정은 언어마다 logical request
+admission 한 곳에서 한다.
+
+- HELLO·ADMIT·REJECT는 handshake를 진행하는 제어 record이며 이 대기의 대상이 아니다. ClientServer는 기존
+  ClientServer ready(방향별 handshake 완료)를 연결 준비로 쓰고, 아래 선택 route 조건은 RouteMesh에 적용한다.
+- 처음 대기에 들어갈 때 대상 intent의 `intent_id`와 `last_failure_id`를 기준값으로 보존한다. 기준값을 읽은 snapshot과
+  변화 구독은 socket의 단일 관찰자가 같은 차례에 처리해 그 사이의 변경을 놓치지 않는다. 대기 중 대상 intent가
+  없어지거나 `intent_id`가 바뀌거나 `last_failure_id`가 바뀌면 `Unavailable`로 끝낸다. 현재 snapshot에서 연결과
+  service admission이 이미 회복됐어도 같다. 이 판정은 대기 중인 request를 제출할지 정하기 전에 한다. Core 행이
+  아직 없어 대기를 시작한 request는 기준값을 만들지 않고, 최초 행의 출현을 intent 교체로 보지 않는다. 최초 행에
+  이미 실패 이력(`last_failure_id`가 0이 아님)이 있으면 현재 상태가 회복됐어도 `Unavailable`로 끝내고, 없으면 그
+  행의 식별자를 기준값으로 삼아 대기를 계속한다. 최초 행을 보기 전에는 target·descriptor·logical intent 제거와
+  deadline·shutdown을 기존 소유자의 통지로 처리하며, Framework가 가짜 Core 식별자나 별도 physical intent 목록을
+  만들지 않는다.
+- 대상 RID의 Core 선택 route가 있고 그 route의 service admission이 끝났으면 남은 timeout으로 binding request를
+  한 번 시작한다. 그 route와 무관한 다른 physical 연결의 실패는 이 route를 무효로 만들지 않으며, 이미 준비된
+  route를 쓰는 새 request를 과거 실패만으로 거부하지 않는다. 이 준비 판정은 관찰자가 이미 반영한 상태를 읽는 것으로
+  끝나며, 연결 상태 snapshot은 `ZLINK_POLLCONNECT`가 준비됐을 때만 읽는다. 아래 대기·기준값 처리는 준비되지 않은
+  request에만 적용한다.
+- 선택 route가 없고 대상 endpoint의 [연결 상태](../../../../../../../core/doc/spec/core/socket/README.ko.md#zlink_socket_connection_attempts_snapshot)가 `ATTEMPT_FAILED`이면
+  즉시 `Unavailable`로 끝낸다. Core가 재연결하는 중이어도 기다리지 않는다.
+- 연결 상태가 `CONNECTING`이거나, 유효 descriptor는 있으나 Core 연결 행이 아직 없거나, Core 연결은 있으나 선택
+  route·service admission이 아직 준비 중이면 [§9](#9-request-completion--완료-경쟁과-timeout-budget)의 남은
+  request timeout 안에서 기다린다. 기다리는 동안 target·descriptor·authority fence가 무효가 되거나 service가
+  명시적으로 거부하면 `Unavailable`로 끝낸다. Runtime이 새 admission을 받지 않으면 `ShuttingDown`이다. Connect
+  호출 자체의 동기 실패를 연결 상태 행의 실패로 바꿔 쓰지 않는다.
+- Binding operation을 시작한 뒤에는 application request와 lifecycle request 모두 같은 operation을 다시
+  제출하지 않는다. 연결 손실, handover, 선택 route 변경과 reply 유실은 binding의 typed 결과로 끝난다.
+  Relocation relay·cutover batch와 Store authority settlement는 각 transaction 계약을 따르며 request 재시작으로
+  구현하지 않는다.
+- One-way send의 대기는 [§7](#7-one-way-send의-대기-종료와-classic-fanout-send-timeout)이 정하며 이 규칙을 적용하지 않는다.
 
 ## 6. Logical Multicast와 Classic fanout
 
@@ -290,6 +327,10 @@ STREAM reply의 one-shot [reply token](../00-foundation/02-glossary.ko.md#reply-
 
 ## 9. Request completion — 완료 경쟁과 timeout budget
 
+Request는 제출 전에 최종 결과의 수신자를 준비한다. 기존 terminal 소유자가 확정한 결과는 각 codec 소유자의 값 변환을 거쳐 최종 typed 결과에 한 곳에서 전달한다. 내부 계층 사이의 변환만을 위한 별도 비동기 결과와 관찰 연결을 두지 않는다.
+
+Public 결과가 먼저 끝나도 제출 전에 준비한 최종 수신자는 physical 결과 처리에 필요한 자원을 그 처리의 완료까지 유지한다. Admission 실패로 public 결과가 먼저 끝나는 경우에도 같다. 그 수신자에 전달된 정상 physical 응답은 public 결과의 완료 여부와 관계없이 각 codec 소유자의 변환을 한 번 거친다. 이 변환의 값이나 실패는 이미 확정된 public 결과를 바꾸지 않으며, payload는 정확히 한 번 정리한다. 닫힌 correlation 때문에 최종 수신자에 전달되지 않는 late native reply의 처리는 [Cancellation과 shutdown §3](03-cancellation-and-shutdown.ko.md#3-cancellation의-경쟁-처리)의 소유 경계를 따른다.
+
 Request caller는 reply, remote 오류, timeout, cancellation 또는 shutdown 가운데 먼저
 확정된 결과 하나를 관찰한다. Timeout과 cancellation은 호출자의 대기를 끝내지만
 원격 handler가 이미 시작한 업무를 되돌리지 않는다. Framework service operation의
@@ -317,7 +358,9 @@ current Ready authority resolve와 handler 시간도 포함한다. Source는 앞
 잔여 시간만 다음 단계에 전달한다. Outbound admission의 시간 상한은 남은 request timeout이며
 socket send timeout과 결합하지 않는다. Timeout이나 cancellation으로 caller의 대기가 끝나도 request가
 전송되지 않았다는 뜻은 아니다 — admission 전에 끝난 request도 binding이 이미 시작한 재제출로 나중에
-전송될 수 있고, 그 reply는 닫힌 correlation이므로 폐기한다. Timeout·연결 실패 뒤 request의 재제출 경계는 [§5](#5-backpressure와-오류-분류)가 정의한다.
+전송될 수 있고, 그 reply는 닫힌 correlation이므로 폐기한다. Timeout·연결 실패 뒤 request의 재제출 경계는 [§5](#5-backpressure와-오류-분류)가 정의한다. §5의 연결 준비 대기는
+outbound admission의 일부이며 같은 request timeout을 쓴다. Binding operation을 시작하지 않은 채 deadline이 먼저
+확정되어도 `DeadlineExceeded`다.
 
 같은 handler turn에서 보낸 request를 기다릴 때 gate를 어떻게 반납하고 재개하는지는
 [Handler turn과 execution gate 「4. 같은 turn에서의 대기와 반납」](02-handler-turn-and-execution-gate.ko.md#4-같은-turn에서의-대기와-반납)이
@@ -328,6 +371,8 @@ Reply, timeout, cancellation과 Spot shutdown이 경쟁하면 먼저 확정된 t
 activation의 늦은 reply를 새 Spot에 전달하지 않는다. Target 연결 종료·timeout 뒤 재제출 경계는 [§5](#5-backpressure와-오류-분류)가 정의한다.
 
 ## 10. Operation identity와 완료 자리 (구현)
+
+최종 typed 결과의 전달 구조는 [§9](#9-request-completion--완료-경쟁과-timeout-budget)를 따른다.
 
 호출마다 완료 자리를 하나 두고, 여러 경로가 그 자리를 두고 경쟁한다. 차지한 경로만
 caller의 대기를 푼다. 진 경로는 아무것도 하지 않는다.
@@ -421,8 +466,9 @@ dispatcher에 넣고, 아래에서 정한 새 execution turn 조건에 따라 �
 
 **대기를 어디서 시작했는지는 이 조건을 바꾸지 않는다.** Application thread처럼 runtime 실행 문맥 밖에서
 시작해 돌아갈 lane이 없어도, Framework가 전달하는 완료 callback과 비동기 재개는 위 새 execution turn 조건과
-Messaging hot path 「4.4」의 실행 자원 배치를 따른다. Application이 언어의 future·task·promise에 직접 등록한 의존 작업의 실행
-위치와 동기 blocking 대기가 반환하는 thread는 그 언어 API의 계약을 따른다.
+Messaging hot path 「4.4」의 실행 자원 배치를 따른다.
+
+내부 결과의 값 변환과 자원 정리는 application callback 배달이 아니다. Framework가 배달하는 callback과 suspended continuation은 결과의 즉시 확정 여부와 관계없이 이 절의 새 execution turn을 따른다. 언어 완료 표현의 이미 완료된 값을 직접 소비하거나 의존 작업을 직접 등록하는 동작은 해당 언어 API 계약을 따른다. 동기 blocking 대기가 반환하는 thread도 해당 언어 API 계약을 따른다.
 
 **완료 callback을 dispatcher에 넣는 일은 실패하지 않는다.** Dispatcher에 상한이 없기
 때문이다. 자리가 없다는 이유로 request를 거부하거나, 이미 수락한 호출의 완료를 버리는

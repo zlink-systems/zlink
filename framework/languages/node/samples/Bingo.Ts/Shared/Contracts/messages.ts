@@ -50,6 +50,7 @@ const PacketNames = Object.freeze({
   playerJoinedNotify: 'PlayerJoinedNotify',
   gameStartedNotify: 'BingoGameStartedNotify',
   numberDrawnNotify: 'BingoNumberDrawnNotify',
+  observationStateNotify: 'BingoObservationStateNotify',
   gameEndedNotify: 'BingoGameEndedNotify',
   rewardAnnouncedNotify: 'BingoRewardAnnouncedNotify'
 });

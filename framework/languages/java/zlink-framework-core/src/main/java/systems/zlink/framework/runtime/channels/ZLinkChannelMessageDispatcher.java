@@ -266,7 +266,8 @@ final class ZLinkChannelMessageDispatcher {
                                                                                                 channelName,
                                                                                                 registration,
                                                                                                 topic,
-                                                                                                payload,
+                                                                                                payload
+                                                                                                        .dataBuffer(),
                                                                                                 contentType)))
                                                 .whenComplete(
                                                         (ignored, error) -> {
@@ -350,7 +351,8 @@ final class ZLinkChannelMessageDispatcher {
                                                                         invoker.invokeSendHandler(
                                                                                 channelName,
                                                                                 registration,
-                                                                                payload,
+                                                                                payload
+                                                                                        .dataBuffer(),
                                                                                 packet.header()
                                                                                                 == null
                                                                                         ? Map.of()
@@ -442,7 +444,8 @@ final class ZLinkChannelMessageDispatcher {
                                                                                                                 .invokeRequestHandler(
                                                                                                                         channelName,
                                                                                                                         registration,
-                                                                                                                        payload,
+                                                                                                                        payload
+                                                                                                                                .dataBuffer(),
                                                                                                                         packet
                                                                                                                                                 .header()
                                                                                                                                         == null

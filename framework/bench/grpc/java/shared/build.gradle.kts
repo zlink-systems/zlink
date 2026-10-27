@@ -39,3 +39,10 @@ val rawWireTest by tasks.registering(JavaExec::class) {
     dependsOn(tasks.testClasses)
 }
 tasks.check { dependsOn(rawWireTest) }
+
+val triggerCompletionTest by tasks.registering(JavaExec::class) {
+    classpath = sourceSets.test.get().runtimeClasspath
+    mainClass.set("systems.zlink.bench.withgrpc.shared.TriggerCompletionTest")
+    dependsOn(tasks.testClasses)
+}
+tasks.check { dependsOn(triggerCompletionTest) }

@@ -49,6 +49,8 @@ class mesh_request_metrics_t
         if (dynamic_cast<opentelemetry::metrics::NoopMeterProvider *> (provider.get ()))
             return;
         auto meter = provider->GetMeter ("zlink.framework");
+        if (!meter)
+            return;
         _inflight =
           meter->CreateDoubleUpDownCounter ("zlink.mesh_node.requests.inflight", "", "{request}");
         _duration = meter->CreateDoubleHistogram ("zlink.mesh_node.request.duration", "", "s");
@@ -56,7 +58,7 @@ class mesh_request_metrics_t
           meter->CreateDoubleCounter ("zlink.mesh_node.request.timeouts", "", "{request}");
     }
 
-    bool enabled () const noexcept { return _inflight != nullptr; }
+    bool enabled () const noexcept { return _inflight && _duration && _timeouts; }
 
     void start (mesh_request_surface_t surface) const noexcept
     {

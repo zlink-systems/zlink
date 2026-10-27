@@ -1,4 +1,6 @@
+import { DEFAULT_REQUEST_TIMEOUT_MS } from '../../contracts/Configuration/Registration';
 import { encodeActorReply } from '../actors/actor-reply';
+import { boundSessionErrorPayload } from '../streams/bound-session-response-target';
 import { RELOCATED_REQUEST_OWNED_BY_REQUESTER } from '../actors/actor-handoff';
 import { routingIdsEqual } from '../routing-id';
 import type { ApplicationJobOrigin } from '../application-jobs/contracts';
@@ -145,7 +147,7 @@ import type {
   ZLinkSpotActorTransferRuntime,
   ZLinkSpotBoundSessionRuntime
 } from './spot-runtime-ports';
-import type { ZLinkRuntimeAdmissionGate } from '../admission';
+import type { ZLinkRuntimeAdmissionGate, ZLinkMeshDispatchAdmission } from '../admission';
 import type { ZLinkActivationAdmission } from '../activation-admission';
 import type { ZLinkDetachedTaskRunner } from './spot-actor-join-dispatch';
 import type { ZLinkLocalSpotCreateResult } from './spot-manager-internal-contracts';
@@ -163,6 +165,7 @@ export {
 export { ZLinkPublicSpotManager, type ZLinkPublicSpotManagerOptions } from './spot-manager-public';
 
 export interface ZLinkSpotManagerOptions {
+  readonly defaultRequestTimeoutMs?: number;
   readonly spotFactories: readonly Type<ZLinkSpot>[];
   readonly instanceSpotFactories?: ReadonlyMap<
     string,
@@ -1158,14 +1161,15 @@ export class DefaultZLinkSpotManager {
     beginAuthority: (
       onCommitted: () => void
     ) => Promise<import('../locations/spot-location-claims').ZLinkInstanceClosingAuthority>,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    deadline?: Date
   ): Promise<boolean> {
     return await this.closeWithReason(
       meshName,
       spotId,
       signal,
       ZLinkSpotCloseReason.ExplicitClose,
-      undefined,
+      deadline,
       beginAuthority
     );
   }
@@ -1221,6 +1225,11 @@ export class DefaultZLinkSpotManager {
     >,
     contextActivation?: ZLinkSpotActivation
   ): Promise<boolean> {
+    if (reason === ZLinkSpotCloseReason.ExplicitClose) {
+      deadline ??= new Date(
+        Date.now() + (this.options.defaultRequestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS)
+      );
+    }
     requireMeshName(meshName);
     const key = `${meshName}\0${String(spotId)}`;
     let operation = this.closeOperations.get(key);
@@ -1520,12 +1529,6 @@ export class DefaultZLinkSpotManager {
   ): Promise<ZLinkSpotActorJoinResult> {
     const meshName = this.activations.resolveUnique(spotId)?.meshName;
     this.options.admission?.requireRequest('Actor join admission', meshName);
-    if (meshName !== undefined && this.isSpotClosing(meshName, spotId)) {
-      throw createInternalFrameworkException(
-        ZLinkFrameworkInternalErrorKind.RequestRejected,
-        `Spot '${String(spotId)}' is closing.`
-      );
-    }
     return await this.actorMembership.admitActorJoin(
       spotId,
       actor,
@@ -1702,7 +1705,8 @@ export class DefaultZLinkSpotManager {
   async dispatchMeshSpot(
     meshName: string,
     owner: ReadyRecord,
-    record: ReceiveRecord
+    record: ReceiveRecord,
+    admit?: ZLinkMeshDispatchAdmission
   ): Promise<void> {
     const spotId = owner.spotId as unknown as RoutingId | null;
     if (spotId === null) {
@@ -1720,11 +1724,13 @@ export class DefaultZLinkSpotManager {
           'MeshNode Spot multicast record is missing its topic.'
         );
       }
-      await activation.actorDispatch.dispatchSubscriptionRecord(
-        record.topic,
-        record.parts,
-        record.sourceNodeRid as unknown as RoutingId | null
-      );
+      const dispatch = () =>
+        activation.actorDispatch!.dispatchSubscriptionRecord(
+          record.topic!,
+          record.parts,
+          record.sourceNodeRid as unknown as RoutingId | null
+        );
+      await (admit === undefined ? dispatch() : admit(dispatch));
       return;
     }
     const envelope = decodeChannelEnvelope(
@@ -1737,7 +1743,8 @@ export class DefaultZLinkSpotManager {
       this.options.messageSerializers === undefined
         ? undefined
         : { serializers: this.options.messageSerializers };
-    const decodePayload = () => decodeChannelPayload(envelope, codecs);
+    const decodePayload = (messageType?: Type) =>
+      decodeChannelPayload(envelope, codecs, messageType);
     const context = {
       channelName: envelope.header.channelName,
       contentType: envelope.header.contentType,
@@ -1746,28 +1753,32 @@ export class DefaultZLinkSpotManager {
         record.applicationMetadata?.byteLength ?? zlinkMetadataByteLength(envelope.header.metadata)
       )
     };
-    if (record.kind === ReceiveKind.SpotSend) {
-      await this.ensureInstanceApplicationActivation(meshName, spotId);
-      await this.routedSpotPackets.sendEncoded(spotId, packetName, decodePayload, context);
-      return;
-    }
-    if (record.kind !== ReceiveKind.SpotRequest) {
-      throw new ZLinkConfigurationException(
-        `Unsupported MeshNode Spot record kind '${record.kind}'.`
-      );
-    }
     try {
-      await this.ensureInstanceApplicationActivation(meshName, spotId);
-      const response = await this.routedSpotPackets.requestEncoded(
-        spotId,
-        packetName,
-        decodePayload,
-        context
-      );
-      requireMeshSpotReply(
-        record.reply(encodeChannelReplyParts(envelope.header, response, codecs))
-      );
+      const dispatch = async () => {
+        if (record.kind === ReceiveKind.SpotSend) {
+          await this.ensureInstanceApplicationActivation(meshName, spotId);
+          await this.routedSpotPackets.sendEncoded(spotId, packetName, decodePayload, context);
+          return;
+        }
+        if (record.kind !== ReceiveKind.SpotRequest) {
+          throw new ZLinkConfigurationException(
+            `Unsupported MeshNode Spot record kind '${record.kind}'.`
+          );
+        }
+        await this.ensureInstanceApplicationActivation(meshName, spotId);
+        const response = await this.routedSpotPackets.requestEncoded(
+          spotId,
+          packetName,
+          decodePayload,
+          context
+        );
+        requireMeshSpotReply(
+          record.reply(encodeChannelReplyParts(envelope.header, response, codecs))
+        );
+      };
+      await (admit === undefined ? dispatch() : admit(dispatch));
     } catch (error) {
+      if (record.kind !== ReceiveKind.SpotRequest) throw error;
       requireMeshSpotReply(record.reply(encodeChannelErrorReplyParts(envelope.header, error)));
     }
   }
@@ -1802,7 +1813,8 @@ export class DefaultZLinkSpotManager {
   async dispatchMeshInstance(
     meshName: string,
     owner: ReadyRecord,
-    record: ReceiveRecord
+    record: ReceiveRecord,
+    admit?: ZLinkMeshDispatchAdmission
   ): Promise<void> {
     const spotId = owner.spotId as unknown as RoutingId | null;
     if (spotId === null) {
@@ -1832,75 +1844,112 @@ export class DefaultZLinkSpotManager {
         'activating'
       );
       try {
-        await this.ensureInstanceApplicationActivation(meshName, spotId);
-        const activation = this.resolveApplicationActivation(spotId, meshName);
-        if (activation === undefined || activation.domain.kind !== 'instance') {
-          throw new ZLinkConfigurationException(
-            `MeshNode Instance Spot target '${String(spotId)}' is not active.`
+        const dispatch = async () => {
+          await this.ensureInstanceApplicationActivation(meshName, spotId);
+          const activation = this.resolveApplicationActivation(spotId, meshName);
+          if (activation === undefined || activation.domain.kind !== 'instance') {
+            throw new ZLinkConfigurationException(
+              `MeshNode Instance Spot target '${String(spotId)}' is not active.`
+            );
+          }
+          const target = this.options.instanceSpotApplicationTargetProvider?.(meshName, spotId);
+          if (
+            target !== undefined &&
+            activation.domain.objectGeneration !== target.objectGeneration
+          ) {
+            throw createInternalFrameworkException(
+              ZLinkFrameworkInternalErrorKind.SpotGenerationStale,
+              `Instance Spot target '${String(spotId)}' application generation is stale.`
+            );
+          }
+          const codecs =
+            this.options.messageSerializers === undefined
+              ? undefined
+              : { serializers: this.options.messageSerializers };
+          const decodePayload = (messageType?: Type) =>
+            decodeChannelPayload(envelope, codecs, messageType);
+          const context = {
+            channelName: envelope.header.channelName,
+            contentType: envelope.header.contentType,
+            awaitFirstHandlerTurn: record.kind === ReceiveKind.InstanceSpotActivation,
+            activationRecord: record,
+            onOneWayError:
+              this.options.dispatchErrors?.captureEnabled() === true
+                ? (error: unknown) =>
+                    this.reportInstanceDispatchFailure(
+                      meshName,
+                      spotId,
+                      record,
+                      envelope,
+                      false,
+                      error
+                    )
+                : undefined,
+            workOptions: zlinkSerialWorkOptions(
+              envelope.payload.byteLength,
+              record.applicationMetadata?.byteLength ??
+                zlinkMetadataByteLength(envelope.header.metadata)
+            )
+          };
+          // Spot messaging §7 step 3: an Instance intent request that reaches an
+          // incarnation whose Close ended admission is refused before admission
+          // with the owner fence terminal, so its caller re-reads authority.
+          const instanceIntent =
+            record.activationRecord?.activation === 'missing' ||
+            (record.activationRecord?.activation === 'ready' &&
+              record.activationRecord.instanceIntent);
+          const refusal = activation.serial.applicationAdmissionRefusal(instanceIntent === true);
+          if (request && refusal !== undefined && record.replyFailure !== undefined) {
+            this.reportInstanceDispatchFailure(
+              meshName,
+              spotId,
+              record,
+              envelope,
+              request,
+              refusal
+            );
+            const terminal = internalFrameworkWireReply(refusal);
+            requireMeshSpotReply(
+              record.replyFailure(terminal.terminalResult, terminal.failureCode)
+            );
+            return;
+          }
+          this.traceInstanceMessage(
+            ZLinkMessageFlowOutcome.Admitted,
+            meshName,
+            spotId,
+            record,
+            envelope,
+            'ready',
+            target?.stableType
           );
-        }
-        const target = this.options.instanceSpotApplicationTargetProvider?.(meshName, spotId);
-        if (
-          target !== undefined &&
-          activation.domain.objectGeneration !== target.objectGeneration
-        ) {
-          throw createInternalFrameworkException(
-            ZLinkFrameworkInternalErrorKind.SpotGenerationStale,
-            `Instance Spot target '${String(spotId)}' application generation is stale.`
-          );
-        }
-        const codecs =
-          this.options.messageSerializers === undefined
-            ? undefined
-            : { serializers: this.options.messageSerializers };
-        const decodePayload = () => decodeChannelPayload(envelope, codecs);
-        const context = {
-          channelName: envelope.header.channelName,
-          contentType: envelope.header.contentType,
-          awaitFirstHandlerTurn: record.kind === ReceiveKind.InstanceSpotActivation,
-          activationRecord: record,
-          onOneWayError:
-            this.options.dispatchErrors?.captureEnabled() === true
-              ? (error: unknown) =>
-                  this.reportInstanceDispatchFailure(
-                    meshName,
-                    spotId,
-                    record,
-                    envelope,
-                    false,
-                    error
-                  )
-              : undefined,
-          workOptions: zlinkSerialWorkOptions(
-            envelope.payload.byteLength,
-            record.applicationMetadata?.byteLength ??
-              zlinkMetadataByteLength(envelope.header.metadata)
-          )
-        };
-        // Spot messaging §7 step 3: an Instance intent request that reaches an
-        // incarnation whose Close ended admission is refused before admission
-        // with the owner fence terminal, so its caller re-reads authority.
-        const instanceIntent =
-          record.activationRecord?.activation === 'missing' ||
-          (record.activationRecord?.activation === 'ready' &&
-            record.activationRecord.instanceIntent);
-        const refusal = activation.serial.applicationAdmissionRefusal(instanceIntent === true);
-        if (request && refusal !== undefined && record.replyFailure !== undefined) {
-          this.reportInstanceDispatchFailure(meshName, spotId, record, envelope, request, refusal);
-          const terminal = internalFrameworkWireReply(refusal);
-          requireMeshSpotReply(record.replyFailure(terminal.terminalResult, terminal.failureCode));
-          return;
-        }
-        this.traceInstanceMessage(
-          ZLinkMessageFlowOutcome.Admitted,
-          meshName,
-          spotId,
-          record,
-          envelope,
-          'ready',
-          target?.stableType
-        );
-        if (!request) {
+          if (!request) {
+            this.traceInstanceMessage(
+              ZLinkMessageFlowOutcome.Dispatched,
+              meshName,
+              spotId,
+              record,
+              envelope,
+              'ready',
+              target?.stableType
+            );
+            await this.routedSpotPackets.sendEncoded(
+              spotId,
+              envelope.packetName,
+              decodePayload,
+              context
+            );
+            this.traceInstanceMessage(
+              ZLinkMessageFlowOutcome.Completed,
+              meshName,
+              spotId,
+              record,
+              envelope,
+              'ready',
+              target?.stableType
+            );
+            return;
+          }
           this.traceInstanceMessage(
             ZLinkMessageFlowOutcome.Dispatched,
             meshName,
@@ -1910,14 +1959,17 @@ export class DefaultZLinkSpotManager {
             'ready',
             target?.stableType
           );
-          await this.routedSpotPackets.sendEncoded(
+          const response = await this.routedSpotPackets.requestEncoded(
             spotId,
             envelope.packetName,
             decodePayload,
             context
           );
+          requireMeshSpotReply(
+            record.reply(encodeChannelReplyParts(envelope.header, response, codecs))
+          );
           this.traceInstanceMessage(
-            ZLinkMessageFlowOutcome.Completed,
+            ZLinkMessageFlowOutcome.Replied,
             meshName,
             spotId,
             record,
@@ -1925,35 +1977,8 @@ export class DefaultZLinkSpotManager {
             'ready',
             target?.stableType
           );
-          return;
-        }
-        this.traceInstanceMessage(
-          ZLinkMessageFlowOutcome.Dispatched,
-          meshName,
-          spotId,
-          record,
-          envelope,
-          'ready',
-          target?.stableType
-        );
-        const response = await this.routedSpotPackets.requestEncoded(
-          spotId,
-          envelope.packetName,
-          decodePayload,
-          context
-        );
-        requireMeshSpotReply(
-          record.reply(encodeChannelReplyParts(envelope.header, response, codecs))
-        );
-        this.traceInstanceMessage(
-          ZLinkMessageFlowOutcome.Replied,
-          meshName,
-          spotId,
-          record,
-          envelope,
-          'ready',
-          target?.stableType
-        );
+        };
+        await (admit === undefined ? dispatch() : admit(dispatch));
       } catch (error) {
         this.reportInstanceDispatchFailure(meshName, spotId, record, envelope, request, error);
         const reason = dispatchReasonFromError(error);
@@ -2048,7 +2073,8 @@ export class DefaultZLinkSpotManager {
     origin: ApplicationJobOrigin,
     meshName: string,
     owner: ReadyRecord,
-    record: ReceiveRecord
+    record: ReceiveRecord,
+    admit?: ZLinkMeshDispatchAdmission
   ): Promise<void> {
     const spotId = owner.spotId as unknown as RoutingId | null;
     const entrySpotId = this.options.entryNodeRidProvider?.() ?? this.options.entryNodeRid;
@@ -2106,44 +2132,49 @@ export class DefaultZLinkSpotManager {
         )
       : undefined;
     try {
-      if (this.formalRemoteTransfers.has(actor.actorId)) {
-        throw new Error(`Actor '${actor.actorId}' target transfer reconciliation is not complete.`);
-      }
-      const response = targetsEntrySpot
-        ? await this.options.dispatchEntryActorPacket?.(
-            origin,
-            actor.actorId,
-            record.parts,
-            request,
-            undefined,
-            ownerActorRef,
-            requestTerminal,
-            record.messageFollowOrigin
-          )
-        : await this.dispatchMeshActorPacket(
-            origin,
-            meshName,
-            spotId,
-            actor.actorId,
-            record.parts,
-            request,
-            ownerActorRef,
-            requestTerminal,
-            record.messageFollowOrigin
+      const dispatch = async () => {
+        if (this.formalRemoteTransfers.has(actor.actorId)) {
+          throw new Error(
+            `Actor '${actor.actorId}' target transfer reconciliation is not complete.`
           );
-      if (targetsEntrySpot && this.options.dispatchEntryActorPacket === undefined) {
-        throw new ZLinkConfigurationException(
-          'MeshNode Entry Spot Actor dispatch is not configured.'
-        );
-      }
-      if (response === RELOCATED_REQUEST_OWNED_BY_REQUESTER) return;
-      if (request && !requestTerminalState.submitted) {
-        requireMeshSpotReply(
-          record.reply(
-            this.encodeMeshActorReply(record.parts[0], ZLinkStreamMessageKind.Response, response)
-          )
-        );
-      }
+        }
+        const response = targetsEntrySpot
+          ? await this.options.dispatchEntryActorPacket?.(
+              origin,
+              actor.actorId,
+              record.parts,
+              request,
+              undefined,
+              ownerActorRef,
+              requestTerminal,
+              record.messageFollowOrigin
+            )
+          : await this.dispatchMeshActorPacket(
+              origin,
+              meshName,
+              spotId,
+              actor.actorId,
+              record.parts,
+              request,
+              ownerActorRef,
+              requestTerminal,
+              record.messageFollowOrigin
+            );
+        if (targetsEntrySpot && this.options.dispatchEntryActorPacket === undefined) {
+          throw new ZLinkConfigurationException(
+            'MeshNode Entry Spot Actor dispatch is not configured.'
+          );
+        }
+        if (response === RELOCATED_REQUEST_OWNED_BY_REQUESTER) return;
+        if (request && !requestTerminalState.submitted) {
+          requireMeshSpotReply(
+            record.reply(
+              this.encodeMeshActorReply(record.parts[0], ZLinkStreamMessageKind.Response, response)
+            )
+          );
+        }
+      };
+      await (admit === undefined ? dispatch() : admit(dispatch));
     } catch (error) {
       if (!request) {
         throw error;
@@ -2153,10 +2184,11 @@ export class DefaultZLinkSpotManager {
       }
       requireMeshSpotReply(
         record.reply(
-          this.encodeMeshActorReply(record.parts[0], ZLinkStreamMessageKind.Error, {
-            message: error instanceof Error ? error.message : String(error),
-            kind: spotActorFailureKind(error)
-          })
+          this.encodeMeshActorReply(
+            record.parts[0],
+            ZLinkStreamMessageKind.Error,
+            boundSessionErrorPayload(error)
+          )
         )
       );
     }

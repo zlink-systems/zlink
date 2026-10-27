@@ -44,6 +44,7 @@ class fanout_location_runtime_t final : public fanout_runtime_t
                                service_provider_t &services,
                                serializer_registry_t &serializers,
                                const handler_registry_t &handlers,
+                               std::function<framework_runtime_state_t ()> framework_state,
                                std::shared_ptr<offload_executor_t> dispatch_executor,
                                std::map<std::string, std::string> publisher_advertise_hosts = {},
                                std::shared_ptr<listener_status_registry_t> listener_statuses = {},
@@ -110,7 +111,7 @@ class fanout_location_runtime_t final : public fanout_runtime_t
     service_provider_t _services;
     // Resolved once during configuration. The service registry is not a concurrent
     // structure, so snapshot reads use this reference instead of resolving again.
-    framework_runtime_t *_framework_runtime;
+    const std::function<framework_runtime_state_t ()> _framework_state;
     serializer_registry_t *_serializers;
     const handler_registry_t *_handlers;
     std::shared_ptr<application_job_queue_t> _application_jobs;

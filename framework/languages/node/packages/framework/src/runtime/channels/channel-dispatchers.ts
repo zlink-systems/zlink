@@ -1,3 +1,5 @@
+import type { ZLinkHandlerMessageType } from '../../contracts/Common/HandlerMessageType';
+import type { ZLinkMeshDispatchAdmission } from '../admission';
 import type {
   RoutingId,
   ZLinkMessageContext,
@@ -41,6 +43,7 @@ import { codecsForFrameworkPacket } from './channel-framework-packets';
 import {
   ZLinkChannelDispatchPipeline,
   type ZLinkChannelDispatchFields,
+  type ZLinkOneWayDispatch,
   type ZLinkRequestDispatch
 } from './channel-dispatch-pipeline';
 
@@ -54,8 +57,14 @@ export interface ZLinkChannelRequestDispatcherOptions {
   readonly routeMesh?: boolean;
   readonly codecs?: ZLinkChannelEnvelopeCodecRegistry;
   readonly dispatchErrors: ZLinkDispatchErrorReporter;
-  readonly handlers: ReadonlyMap<string, ZLinkChannelRequestHandler>;
-  readonly sendHandlers?: ReadonlyMap<string, ZLinkChannelSendHandler>;
+  readonly handlers: ReadonlyMap<
+    string,
+    Pick<ZLinkRequestDispatch<ZLinkMessageContext>, 'handler' | 'messageType'>
+  >;
+  readonly sendHandlers?: ReadonlyMap<
+    string,
+    Pick<ZLinkOneWayDispatch<ZLinkMessageContext>, 'handler' | 'messageType'>
+  >;
   readonly filters?: readonly ZLinkHandlerFilter[];
   readonly unhandled?: ZLinkUnhandledDispatchOptions;
 }
@@ -71,6 +80,7 @@ export interface ZLinkChannelSendHandler {
 }
 
 export interface ZLinkRouteHandlerRegistration {
+  readonly messageType?: ZLinkHandlerMessageType;
   readonly kind: 'send' | 'request';
   readonly packetName: string;
   readonly handler: ZLinkRouteRuntimeSendHandler | ZLinkRouteRuntimeRequestHandler;
@@ -181,7 +191,8 @@ export class ZLinkChannelRequestDispatcher {
         fields,
         envelope,
         codecs: this.options.codecs,
-        handler,
+        handler: handler?.handler,
+        messageType: handler?.messageType,
         context,
         signal
       });
@@ -216,7 +227,8 @@ export class ZLinkChannelRequestDispatcher {
       fields: requestFields,
       envelope,
       codecs: this.options.codecs,
-      handler,
+      handler: handler?.handler,
+      messageType: handler?.messageType,
       context,
       signal,
       missingHandlerMessage: `No channel request handler is registered for '${this.options.channelName}:${packetName}'.`,
@@ -239,7 +251,11 @@ export class ZLinkChannelRequestDispatcher {
     });
   }
 
-  dispatchMesh(record: ReceiveRecord, signal?: AbortSignal): void | Promise<void> {
+  dispatchMesh(
+    record: ReceiveRecord,
+    signal?: AbortSignal,
+    admit?: ZLinkMeshDispatchAdmission
+  ): void | Promise<void> {
     if (record.parts.length === 0 || record.parts[0].data().length === 0) {
       return completedChannelReply;
     }
@@ -271,20 +287,25 @@ export class ZLinkChannelRequestDispatcher {
     }
     const correlationId = envelope.header.correlationId ?? undefined;
     if (envelope.header.kind === ZLinkChannelMessageKind.Command) {
-      return this.pipeline.dispatchOneWay({
-        fields: {
-          messageKind: ZLinkDispatchMessageKind.Send,
-          packetName,
-          correlationId,
-          flowId: envelope.header.flowId,
-          flowOrigin: envelope.header.flowOrigin
+      const handler = this.options.sendHandlers?.get(packetName);
+      return this.pipeline.dispatchOneWay(
+        {
+          fields: {
+            messageKind: ZLinkDispatchMessageKind.Send,
+            packetName,
+            correlationId,
+            flowId: envelope.header.flowId,
+            flowOrigin: envelope.header.flowOrigin
+          },
+          envelope,
+          codecs: this.options.codecs,
+          handler: handler?.handler,
+          messageType: handler?.messageType,
+          context: this.createMeshContext(envelope, record.sourceNodeRid),
+          signal
         },
-        envelope,
-        codecs: this.options.codecs,
-        handler: this.options.sendHandlers?.get(packetName),
-        context: this.createMeshContext(envelope, record.sourceNodeRid),
-        signal
-      });
+        admit
+      );
     }
     if (envelope.header.kind !== ZLinkChannelMessageKind.Request) {
       return completedChannelReply;
@@ -307,7 +328,8 @@ export class ZLinkChannelRequestDispatcher {
         record,
         'channel',
         this.options.channelName
-      )
+      ),
+      admit
     );
   }
 
@@ -357,13 +379,22 @@ class ZLinkMeshRequestDispatch<
     readonly fields: ZLinkChannelDispatchFields,
     readonly envelope: ReturnType<typeof decodeChannelEnvelope>,
     readonly codecs: ZLinkChannelEnvelopeCodecRegistry | undefined,
-    readonly handler: ZLinkRequestDispatch<TContext>['handler'],
+    private readonly registration:
+      Pick<ZLinkRequestDispatch<TContext>, 'handler' | 'messageType'> | undefined,
     readonly context: TContext,
     readonly signal: AbortSignal | undefined,
     private readonly record: ReceiveRecord,
     private readonly handlerSurface: 'channel' | 'routed',
     private readonly channelName: string
   ) {}
+
+  get handler(): ZLinkRequestDispatch<TContext>['handler'] {
+    return this.registration?.handler;
+  }
+
+  get messageType(): ZLinkHandlerMessageType | undefined {
+    return this.registration?.messageType;
+  }
 
   get missingHandlerMessage(): string {
     return `No ${this.handlerSurface} request handler is registered for '${this.channelName}:${this.fields.packetName}'.`;
@@ -395,7 +426,10 @@ export interface ZLinkChannelPublishDispatcherOptions {
   readonly channelName: string;
   readonly codecs?: ZLinkChannelEnvelopeCodecRegistry;
   readonly dispatchErrors: ZLinkDispatchErrorReporter;
-  readonly handlers: ReadonlyMap<string, ZLinkRuntimePublishHandler>;
+  readonly handlers: ReadonlyMap<
+    string,
+    Pick<ZLinkOneWayDispatch<ZLinkPublishMessageContext>, 'handler' | 'messageType'>
+  >;
   readonly filters?: readonly ZLinkHandlerFilter[];
   readonly unhandled?: ZLinkUnhandledDispatchOptions;
   readonly metrics?: ZLinkRuntimeMetrics;
@@ -479,7 +513,8 @@ export class ZLinkChannelPublishDispatcher {
       fields,
       envelope,
       codecs: this.options.codecs,
-      handler,
+      handler: handler?.handler,
+      messageType: handler?.messageType,
       context,
       signal
     });
@@ -501,22 +536,26 @@ export function collectRouteChannelHandlers(
 ): ZLinkRouteHandlerRegistration[] {
   return [
     ...(routeChannel.handlers ?? []),
-    ...(routeChannel.sendHandlers ?? []).map((handler): ZLinkRouteHandlerRegistration => ({
+    ...(routeChannel.sendHandlers ?? []).map((registration): ZLinkRouteHandlerRegistration => ({
       kind: 'send',
-      packetName: handler.packetName,
-      handler: handler.handler
+      ...registration
     })),
-    ...(routeChannel.requestHandlers ?? []).map((handler): ZLinkRouteHandlerRegistration => ({
+    ...(routeChannel.requestHandlers ?? []).map((registration): ZLinkRouteHandlerRegistration => ({
       kind: 'request',
-      packetName: handler.packetName,
-      handler: handler.handler
+      ...registration
     }))
   ];
 }
 
 export class ZLinkRoutePacketDispatcher {
-  private readonly sendHandlers = new Map<string, ZLinkRouteRuntimeSendHandler>();
-  private readonly requestHandlers = new Map<string, ZLinkRouteRuntimeRequestHandler>();
+  private readonly sendHandlers = new Map<
+    string,
+    Pick<ZLinkOneWayDispatch<ZLinkRouteMessageContext>, 'handler' | 'messageType'>
+  >();
+  private readonly requestHandlers = new Map<
+    string,
+    Pick<ZLinkRequestDispatch<ZLinkRouteMessageContext>, 'handler' | 'messageType'>
+  >();
   private readonly codecs?: ZLinkChannelEnvelopeCodecRegistry;
   private readonly pipeline: ZLinkChannelDispatchPipeline;
 
@@ -539,7 +578,7 @@ export class ZLinkRoutePacketDispatcher {
           `Duplicate routed handler '${options.routerChannelId}:${handler.kind}:${handler.packetName}'.`
         );
       }
-      target.set(handler.packetName, handler.handler as never);
+      target.set(handler.packetName, handler as never);
     }
   }
 
@@ -658,7 +697,8 @@ export class ZLinkRoutePacketDispatcher {
         fields,
         envelope,
         codecs: codecsForFrameworkPacket(packetName, this.codecs),
-        handler,
+        handler: handler?.handler,
+        messageType: handler?.messageType,
         context: this.createRouteContext(envelope, received.routingId),
         signal
       });
@@ -696,7 +736,8 @@ export class ZLinkRoutePacketDispatcher {
       fields: requestFields,
       envelope,
       codecs,
-      handler,
+      handler: handler?.handler,
+      messageType: handler?.messageType,
       context: this.createRouteContext(envelope, received.routingId),
       signal,
       missingHandlerMessage: `No routed request handler is registered for '${this.routerChannelId}:${packetName}'.`,
@@ -717,7 +758,11 @@ export class ZLinkRoutePacketDispatcher {
     });
   }
 
-  dispatchMesh(record: ReceiveRecord, signal?: AbortSignal): void | Promise<void> {
+  dispatchMesh(
+    record: ReceiveRecord,
+    signal?: AbortSignal,
+    admit?: ZLinkMeshDispatchAdmission
+  ): void | Promise<void> {
     if (record.parts.length === 0 || record.parts[0].data().length === 0) {
       return completedChannelReply;
     }
@@ -755,7 +800,8 @@ export class ZLinkRoutePacketDispatcher {
         packetName,
         sourceNodeRid,
         record.sourceNodeRid,
-        signal
+        signal,
+        admit
       );
     }
     if (envelope.header.kind !== ZLinkChannelMessageKind.Request) {
@@ -780,7 +826,8 @@ export class ZLinkRoutePacketDispatcher {
         record,
         'routed',
         this.routerChannelId
-      )
+      ),
+      admit
     );
   }
 
@@ -826,23 +873,29 @@ export class ZLinkRoutePacketDispatcher {
     packetName: string,
     sourceRid: string,
     sourceNodeRid: unknown,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    admit?: ZLinkMeshDispatchAdmission
   ): void | Promise<void> {
-    return this.pipeline.dispatchOneWay({
-      fields: {
-        messageKind: ZLinkDispatchMessageKind.Send,
-        packetName,
-        sourceRid,
-        correlationId: envelope.header.correlationId ?? undefined,
-        flowId: envelope.header.flowId,
-        flowOrigin: envelope.header.flowOrigin
+    const handler = this.sendHandlers.get(packetName);
+    return this.pipeline.dispatchOneWay(
+      {
+        fields: {
+          messageKind: ZLinkDispatchMessageKind.Send,
+          packetName,
+          sourceRid,
+          correlationId: envelope.header.correlationId ?? undefined,
+          flowId: envelope.header.flowId,
+          flowOrigin: envelope.header.flowOrigin
+        },
+        envelope,
+        codecs: codecsForFrameworkPacket(packetName, this.codecs),
+        handler: handler?.handler,
+        messageType: handler?.messageType,
+        context: this.createRouteContext(envelope, sourceNodeRid),
+        signal
       },
-      envelope,
-      codecs: codecsForFrameworkPacket(packetName, this.codecs),
-      handler: this.sendHandlers.get(packetName),
-      context: this.createRouteContext(envelope, sourceNodeRid),
-      signal
-    });
+      admit
+    );
   }
 
   private submitReply(operation: ZLinkMultipartReplyOperation): Promise<void> {

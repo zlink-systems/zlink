@@ -1,7 +1,7 @@
 // GENERATED FILE - DO NOT EDIT.
 // Produced by framework/languages/node/scripts/sync-unity-webgl-package.mjs from
 // @zlink-systems/stream-connector (package root, IIFE build).
-// Package version: 0.30.1
+// Package version: 0.30.3
 //
 // This is the same TypeScript connector the npm package root ships. The UPM
 // adapter adds no wire runtime of its own (stream-connector spec 32 section 11).
@@ -956,6 +956,9 @@ var ZlinkStreamConnectorBundle = (() => {
       this.text = text;
       this.options = options;
       __publicField(this, "index", 0);
+      __publicField(this, "firstEscape");
+      const escape = text.indexOf("\\");
+      this.firstEscape = escape === -1 ? text.length : escape;
     }
     scan() {
       this.skipWhitespace();
@@ -1023,19 +1026,32 @@ var ZlinkStreamConnectorBundle = (() => {
       }
     }
     scanString() {
-      const start = this.index++;
+      const text = this.text;
+      const start = this.index;
+      let index = start + 1;
+      const end = text.indexOf('"', index);
+      if (end !== -1 && end < this.firstEscape) {
+        this.index = end + 1;
+        return text.slice(index, end);
+      }
       let sawEscape = false;
       for (; ; ) {
-        if (this.index >= this.text.length) this.fail("unterminated string");
-        const character = this.text[this.index++];
+        if (index >= text.length) {
+          this.index = index;
+          this.fail("unterminated string");
+        }
+        const character = text[index++];
         if (character === '"') {
-          return sawEscape ? JSON.parse(this.text.slice(start, this.index)) : this.text.slice(start + 1, this.index - 1);
+          this.index = index;
+          return sawEscape ? JSON.parse(text.slice(start, index)) : text.slice(start + 1, index - 1);
         }
         if (character === "\\") {
           sawEscape = true;
-          if (this.index >= this.text.length) this.fail("unterminated escape");
-          const escaped = this.text[this.index++];
-          if (escaped === "u") this.index += 4;
+          if (index >= text.length) {
+            this.index = index;
+            this.fail("unterminated escape");
+          }
+          if (text[index++] === "u") index += 4;
         }
       }
     }

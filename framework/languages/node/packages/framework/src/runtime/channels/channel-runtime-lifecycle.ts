@@ -1,3 +1,4 @@
+import type { ZLinkMeshDispatchAdmission } from '../admission';
 import { RuntimeDisposal } from '../disposal';
 import type { ZLinkLocationOptionOverrides } from '../../contracts/Locations/Options';
 import type { ZLinkRequestHandler, ZLinkSendHandler } from '../../contracts/Handlers';
@@ -258,11 +259,13 @@ export class ZLinkChannelRuntimeLifecycle {
         ...(mesh.routeSendHandlers ?? []).map((registration) => ({
           kind: 'send' as const,
           packetName: registration.packetName,
+          messageType: registration.messageType,
           handler: this.options.dispatchServices.routeSendHandler(registration.handlerType)
         })),
         ...(mesh.routeRequestHandlers ?? []).map((registration) => ({
           kind: 'request' as const,
           packetName: registration.packetName,
+          messageType: registration.messageType,
           handler: this.options.dispatchServices.routeRequestHandler(registration.handlerType)
         })),
         ...[...(this.options.internalRouteSendHandlers?.entries() ?? [])].map(
@@ -313,27 +316,42 @@ export class ZLinkChannelRuntimeLifecycle {
               taskRunner.errorSink
             ),
             handlers: new Map(
-              channel.requestHandlers?.map((handler) => [
-                handler.packetName,
-                (
+              channel.requestHandlers?.map((handler) => {
+                const configuredHandler = (
                   handler as typeof handler & {
                     readonly handler?: ZLinkRequestHandler<unknown, unknown>;
                   }
-                ).handler ??
-                  adaptRouteRequestHandler(
-                    this.options.dispatchServices.routeRequestHandler(handler.handlerType)
-                  )
-              ])
+                ).handler;
+                return [
+                  handler.packetName,
+                  {
+                    messageType: handler.messageType,
+                    handler:
+                      configuredHandler ??
+                      adaptRouteRequestHandler(
+                        this.options.dispatchServices.routeRequestHandler(handler.handlerType)
+                      )
+                  }
+                ];
+              })
             ),
             sendHandlers: new Map(
-              channel.sendHandlers?.map((handler) => [
-                handler.packetName,
-                (handler as typeof handler & { readonly handler?: ZLinkSendHandler<unknown> })
-                  .handler ??
-                  adaptRouteSendHandler(
-                    this.options.dispatchServices.routeSendHandler(handler.handlerType)
-                  )
-              ])
+              channel.sendHandlers?.map((handler) => {
+                const configuredHandler = (
+                  handler as typeof handler & { readonly handler?: ZLinkSendHandler<unknown> }
+                ).handler;
+                return [
+                  handler.packetName,
+                  {
+                    messageType: handler.messageType,
+                    handler:
+                      configuredHandler ??
+                      adaptRouteSendHandler(
+                        this.options.dispatchServices.routeSendHandler(handler.handlerType)
+                      )
+                  }
+                ];
+              })
             ),
             filters: this.options.dispatchServices.handlerFilters(),
             unhandled: this.options.registration.dispatch?.unhandled
@@ -346,7 +364,8 @@ export class ZLinkChannelRuntimeLifecycle {
   dispatchMeshChannel(
     meshName: string,
     record: ReceiveRecord,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    admit?: ZLinkMeshDispatchAdmission
   ): void | Promise<void> {
     const channelName = record.channelName;
     if (channelName === null) {
@@ -358,13 +377,14 @@ export class ZLinkChannelRuntimeLifecycle {
         `RouteMesh '${meshName}' channel '${channelName}' has no registered handlers.`
       );
     }
-    return dispatcher.dispatchMesh(record, signal);
+    return dispatcher.dispatchMesh(record, signal, admit);
   }
 
   dispatchMeshRoute(
     meshName: string,
     record: ReceiveRecord,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    admit?: ZLinkMeshDispatchAdmission
   ): void | Promise<void> {
     const dispatcher = this.meshRouteDispatchers.get(meshName);
     if (dispatcher === undefined) {
@@ -372,7 +392,7 @@ export class ZLinkChannelRuntimeLifecycle {
         `RouteMesh '${meshName}' has no registered node-direct handlers.`
       );
     }
-    return dispatcher.dispatchMesh(record, signal);
+    return dispatcher.dispatchMesh(record, signal, admit);
   }
 
   dispatchLocalMeshRoute(
@@ -533,19 +553,27 @@ export class ZLinkChannelRuntimeLifecycle {
         handlers: new Map(
           channel.requestHandlers?.map((handler) => [
             handler.packetName,
-            handler.handler ??
-              this.options.dispatchServices.channelRequestHandler(
-                requireChannelHandlerType(handler.handlerType, channelName, handler.packetName)
-              )
+            {
+              messageType: handler.messageType,
+              handler:
+                handler.handler ??
+                this.options.dispatchServices.channelRequestHandler(
+                  requireChannelHandlerType(handler.handlerType, channelName, handler.packetName)
+                )
+            }
           ])
         ),
         sendHandlers: new Map(
           channel.sendHandlers?.map((handler) => [
             handler.packetName,
-            handler.handler ??
-              this.options.dispatchServices.channelSendHandler(
-                requireChannelHandlerType(handler.handlerType, channelName, handler.packetName)
-              )
+            {
+              messageType: handler.messageType,
+              handler:
+                handler.handler ??
+                this.options.dispatchServices.channelSendHandler(
+                  requireChannelHandlerType(handler.handlerType, channelName, handler.packetName)
+                )
+            }
           ])
         ),
         filters: this.options.dispatchServices.handlerFilters(),
@@ -596,7 +624,10 @@ export class ZLinkChannelRuntimeLifecycle {
         codecs: this.options.codecs,
         dispatchErrors: this.options.dispatchServices.dispatchErrorReporter(taskRunner.errorSink),
         handlers: new Map(
-          channel.publishHandlers?.map((handler) => [handler.packetName, handler.handler])
+          channel.publishHandlers?.map((handler) => [
+            handler.packetName,
+            { handler: handler.handler, messageType: handler.messageType }
+          ])
         ),
         filters: this.options.dispatchServices.handlerFilters(),
         unhandled: this.options.registration.dispatch?.unhandled,
@@ -884,7 +915,10 @@ export class ZLinkChannelRuntimeLifecycle {
       codecs: this.options.codecs,
       dispatchErrors: this.options.dispatchServices.dispatchErrorReporter(taskRunner.errorSink),
       handlers: new Map(
-        channel.publishHandlers?.map((handler) => [handler.packetName, handler.handler])
+        channel.publishHandlers?.map((handler) => [
+          handler.packetName,
+          { handler: handler.handler, messageType: handler.messageType }
+        ])
       ),
       filters: this.options.dispatchServices.handlerFilters(),
       unhandled: this.options.registration.dispatch?.unhandled,
@@ -1003,9 +1037,7 @@ export class ZLinkChannelRuntimeLifecycle {
 function adaptRouteRequestHandler(
   handler: ZLinkRouteRuntimeRequestHandler
 ): ZLinkRequestHandler<unknown, unknown> {
-  return {
-    handle: async (payload, context) => handler.handle(payload, context as never)
-  };
+  return { handle: async (payload, context) => handler.handle(payload, context as never) };
 }
 
 function adaptRouteSendHandler(handler: ZLinkRouteRuntimeSendHandler): ZLinkSendHandler<unknown> {

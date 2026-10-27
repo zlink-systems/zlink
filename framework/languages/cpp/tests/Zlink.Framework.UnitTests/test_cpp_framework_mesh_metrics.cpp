@@ -2,6 +2,7 @@
 #include "../support/runtime_failure_fixture.hpp"
 
 #include "metric_test_reader.hpp"
+#include "../support/runtime_metric_contract.hpp"
 
 #include "runtime/diagnostics/mesh_request_metrics.hpp"
 #include "runtime/foundation/operation_registry.hpp"
@@ -95,7 +96,9 @@ std::string describe_labels (const labels_t &value)
 std::vector<metric_sample_t> samples (metric_test::provider_t &provider)
 {
     std::vector<metric_sample_t> result;
-    for (const auto &metric : provider.collect ()) {
+    const auto collected = provider.collect ();
+    metric_test::validate_metric_contract (collected);
+    for (const auto &metric : collected) {
         for (const auto &point : metric.point_data_attr_) {
             metric_sample_t sample{metric.instrument_descriptor.name_,
                                    metric.instrument_descriptor.unit_,
@@ -394,8 +397,8 @@ void verify_not_required_peer_counts_as_configured ()
     require_metric (provider, "zlink.mesh_node.peers.ready", "gauge", "{peer}", peer_labels, 0);
 }
 
-std::optional<mesh::service_mailbox_claim_t> claim_request (mesh::raw_mesh_node_owner_t &target,
-                                                            mesh::service_mailbox_domain_t domain)
+std::shared_ptr<mesh::service_mailbox_claim_t> claim_request (mesh::raw_mesh_node_owner_t &target,
+                                                              mesh::service_mailbox_domain_t domain)
 {
     const auto deadline = std::chrono::steady_clock::now () + 2s;
     while (std::chrono::steady_clock::now () < deadline) {
@@ -408,7 +411,7 @@ std::optional<mesh::service_mailbox_claim_t> claim_request (mesh::raw_mesh_node_
                  "raw request pump reported a protocol error");
         std::this_thread::yield ();
     }
-    return std::nullopt;
+    return nullptr;
 }
 
 using request_result_t = std::pair<foundation::operation_terminal_t, std::vector<std::uint8_t>>;
@@ -436,7 +439,7 @@ void complete_remote_request (mesh::raw_mesh_node_owner_t &source,
     const labels_t inflight_labels{{"mesh_name", "metrics-requests"}, {"surface", surface}};
     require_metric (provider, "zlink.mesh_node.requests.inflight", "updown", "{request}",
                     inflight_labels, 1);
-    require (reply (claim->records.front ()), surface + " request reply failed");
+    require (reply ((*claim->records.front ())), surface + " request reply failed");
     require (target.mailbox ().release (*claim), surface + " request mailbox release failed");
 
     const auto deadline = std::chrono::steady_clock::now () + 2s;
@@ -578,8 +581,8 @@ void verify_request_metrics_all_surfaces_and_late_reply ()
              "failed instance activation was not delivered");
     require_metric (provider, "zlink.mesh_node.requests.inflight", "updown", "{request}",
                     {{"mesh_name", "metrics-requests"}, {"surface", "instance_spot"}}, 1);
-    require (target.reply_instance_spot_activation (failed_activation_claim->records.front (), 104,
-                                                    16, std::nullopt),
+    require (target.reply_instance_spot_activation ((*failed_activation_claim->records.front ()),
+                                                    104, 16, std::nullopt),
              "failed instance activation reply could not be sent");
     require (target.mailbox ().release (*failed_activation_claim),
              "failed instance activation mailbox release failed");
@@ -636,7 +639,7 @@ void verify_request_metrics_all_surfaces_and_late_reply ()
     require_metric (provider, "zlink.mesh_node.requests.inflight", "updown", "{request}",
                     {{"mesh_name", "metrics-requests"}, {"surface", "node"}}, 1);
     require (target.reply_failure (
-               failed_claim->records.front (),
+               (*failed_claim->records.front ()),
                static_cast<std::uint32_t> (protocol::request_terminal_result::internalError),
                static_cast<std::uint32_t> (protocol::framework_error_code::requestFailed)),
              "failed request reply could not be sent");
@@ -694,7 +697,7 @@ void verify_request_metrics_all_surfaces_and_late_reply ()
     require_metric (provider, "zlink.mesh_node.request.timeouts", "counter", "{request}",
                     {{"mesh_name", "metrics-requests"}, {"surface", "node"}}, 1);
 
-    require (target.reply (late_claim->records.front (), reply_payload),
+    require (target.reply ((*late_claim->records.front ()), reply_payload),
              "late reply could not be sent");
     require (target.mailbox ().release (*late_claim), "late request mailbox release failed");
 
@@ -715,7 +718,7 @@ void verify_request_metrics_all_surfaces_and_late_reply ()
              "wire timeout request was not delivered");
     require_metric (provider, "zlink.mesh_node.requests.inflight", "updown", "{request}",
                     {{"mesh_name", "metrics-requests"}, {"surface", "node"}}, 1);
-    require (target.reply_failure (wire_timeout_claim->records.front (), 101, 0),
+    require (target.reply_failure ((*wire_timeout_claim->records.front ()), 101, 0),
              "wire timeout reply could not be sent");
     require (target.mailbox ().release (*wire_timeout_claim),
              "wire timeout mailbox release failed");
@@ -819,8 +822,8 @@ void verify_public_host_local_spot_and_actor_requests ()
       zlink::message_t::from (std::string ("request"))};
     const std::vector<zlink::message_t> reply_parts{zlink::message_t::from (std::string ("reply"))};
 
-    auto source_spot = node.get_or_create_spot ("source-spot");
-    auto target_spot = node.get_or_create_spot ("target-spot");
+    auto source_spot = node.get_or_create_spot_async ("source-spot").result ().value ();
+    auto target_spot = node.get_or_create_spot_async ("target-spot").result ().value ();
     host::pending_operation_t spot_operation;
     require (await_task (source_spot.request_to_spot (
                node_id, target_spot.spot_id (), target_spot.status ().lifecycle_generation (),
@@ -881,7 +884,11 @@ void verify_public_host_local_spot_and_actor_requests ()
     require (!find_sample (provider, "zlink.mesh_node.request.timeouts",
                            {{"mesh_name", "metrics-local-public"}, {"surface", "actor"}}),
              "local public Actor completion emitted a timeout counter");
+    require_metric (provider, "zlink.actor.count", "updown", "{actor}",
+                    {{"mesh_name", "metrics-local-public"}}, 2);
     node.stop ();
+    require_metric (provider, "zlink.actor.count", "updown", "{actor}",
+                    {{"mesh_name", "metrics-local-public"}}, 0);
 }
 
 } // namespace

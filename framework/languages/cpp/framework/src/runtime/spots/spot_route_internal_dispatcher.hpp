@@ -56,6 +56,12 @@ class spot_route_internal_dispatcher_t final : public route_internal_packet_disp
       const runtime::messaging::envelope_header_t &header,
       service_provider_t &services,
       std::function<void (result_t<zlink::message_t>)> completion) const;
+    task_t<void> dispatch_actor_commit_request_async (
+      spot_actor_commit_route_request_t request,
+      route_received_packet_t received,
+      runtime::messaging::envelope_header_t header,
+      service_provider_t services,
+      std::function<void (result_t<zlink::message_t>)> completion) const;
 
     spot_node_runtime_t _runtime;
     actor_gateway_runtime_t _actor_gateway;

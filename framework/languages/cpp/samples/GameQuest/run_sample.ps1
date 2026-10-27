@@ -15,6 +15,7 @@ $RunDir = Join-Path ([System.IO.Path]::GetTempPath()) "gamequest-cpp-$PID-$([Gui
 $LogDir = Join-Path $RunDir "logs"
 $ConfigDir = Join-Path $RunDir "config"
 $ReleaseFile = Join-Path $RunDir "owner-loss-release"
+$CloseReplayReleaseFile = Join-Path $RunDir "close-replay-release"
 New-Item -ItemType Directory -Force -Path $LogDir, $ConfigDir | Out-Null
 
 function Find-Binary([string]$Name) {
@@ -210,7 +211,22 @@ try {
     $client = Start-Role "client" $ClientBin @(
         "--api-a-stream-endpoint", $ApiAStreamEndpoint, "--api-b-stream-endpoint", $ApiBStreamEndpoint,
         "--api-a-http-url", $ApiAHttpUrl, "--api-b-http-url", $ApiBHttpUrl,
-        "--owner-loss-release-file", $ReleaseFile)
+        "--owner-loss-release-file", $ReleaseFile,
+        "--close-replay-release-file", $CloseReplayReleaseFile)
+    Wait-ExactLineCount "close replay client stage" (Role-Logs "client") "gamequest-close-replay-armed player=player-alice" 1
+    $missionLogs = @((Role-Logs "mission-a") + (Role-Logs "mission-b"))
+    Wait-PrefixExactCount "player-alice OnClosing" $missionLogs "gamequest-owner closing-entered player=player-alice objectGeneration=" 1
+    New-Item -ItemType File -Path $CloseReplayReleaseFile | Out-Null
+    Wait-PrefixMinimum "player-alice replay" $missionLogs "gamequest-mission replayed player=player-alice generation=" 1
+    $closingGeneration = @(Get-Content -LiteralPath $missionLogs | ForEach-Object {
+        if ($_ -cmatch '^gamequest-owner closing-entered player=player-alice objectGeneration=([1-9][0-9]*)$') { $Matches[1] }
+    })
+    $replayGeneration = @(Get-Content -LiteralPath $missionLogs | ForEach-Object {
+        if ($_ -cmatch '^gamequest-mission replayed player=player-alice generation=[1-9][0-9]* objectGeneration=([1-9][0-9]*)$') { $Matches[1] }
+    })
+    if ($closingGeneration.Count -ne 1 -or $replayGeneration.Count -ne 1 -or $closingGeneration[0] -ceq $replayGeneration[0]) {
+        throw "Close replay must execute in a different runtime ObjectGeneration"
+    }
     Wait-ExactLineCount "owner-loss client stage" (Role-Logs "client") "gamequest-owner-loss-stage-ready player=player-owner-failure" 1
 
     $ownerNode = $null
@@ -239,7 +255,7 @@ try {
     Wait-PrefixMinimum "Api event routing across nodes" @((Role-Logs "api-a") + (Role-Logs "api-b")) "gamequest-api event-routed player=" 4
     Wait-PrefixMinimum "Mission event processing across nodes" @((Role-Logs "mission-a") + (Role-Logs "mission-b")) "gamequest-mission processed player=" 4
     Wait-ExactLineCount "player-alice reconcile" @((Role-Logs "mission-a") + (Role-Logs "mission-b")) "gamequest-mission reconciled player=player-alice quest=first-hunt" 1
-    Wait-PrefixExactCount "player-alice replay" @((Role-Logs "mission-a") + (Role-Logs "mission-b")) "gamequest-mission replayed player=player-alice generation=" 1
+    Wait-PrefixExactCount "player-alice replay" $missionLogs "gamequest-mission replayed player=player-alice generation=" 1
     Wait-ExactLineCount "owner unavailable" @((Role-Logs "api-a") + (Role-Logs "api-b")) "gamequest-owner unavailable player=player-owner-failure" 1
     Wait-ExactLineCount "replacement handler absence" @((Role-Logs "mission-a") + (Role-Logs "mission-b")) "gamequest-owner replacement-handler-invoked player=player-owner-failure" 0
     $Succeeded = $true

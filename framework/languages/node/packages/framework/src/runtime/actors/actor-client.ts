@@ -1,3 +1,5 @@
+import { isUtf8 } from 'node:buffer';
+import { channelErrorKindFromCode } from '../channels/channel-envelope';
 import { routingIdsEqual } from '../routing-id';
 import { ZlinkStreamContentType } from '@zlink-systems/stream-wire';
 import {
@@ -13,7 +15,6 @@ import {
   type ZLinkActorRequestCall,
   type ZLinkActorSendCall,
   type ZLinkMessageSerializer,
-  ZLinkFrameworkErrorKind,
   ZLinkFrameworkException,
   ZLinkSpotKind
 } from '../../contracts';
@@ -64,6 +65,7 @@ import {
   encodeStreamHeader,
   streamCodecForContentType,
   tryDecodeStreamFrame,
+  ZLinkStreamCodec,
   ZLinkStreamHeaderFlags,
   ZLinkStreamMessageKind
 } from '../streams/protocol';
@@ -785,19 +787,21 @@ function decodeActorReply<TReply>(
         const header = decodeStreamHeader(frame.header);
         const payload = RuntimeMessage.from(frame.payload) as Message;
         try {
-          return decodeActorReplyPayload<TReply>(header.kind, payload, serializers, packetName);
+          return decodeActorReplyPayload<TReply>(
+            header.kind,
+            header.codec,
+            payload,
+            serializers,
+            packetName
+          );
         } finally {
           payload.close();
         }
       }
     }
-    if (reply.length >= 2) {
-      const header = decodeStreamHeader(reply[0].data());
-      return decodeActorReplyPayload<TReply>(header.kind, reply[1], serializers, packetName);
-    }
     throw createInternalFrameworkException(
       ZLinkFrameworkInternalErrorKind.RequestProtocolError,
-      'Actor request reply is empty.'
+      'Actor request reply must contain one valid STREAM frame.'
     );
   } finally {
     closeMessages(reply);
@@ -810,24 +814,39 @@ function closeMessages(parts: readonly Message[]): void {
 
 function decodeActorReplyPayload<TReply>(
   kind: ZLinkStreamMessageKind,
+  codec: ZLinkStreamCodec,
   payload: Message,
   serializers?: ReadonlyMap<string, ZLinkMessageSerializer>,
   packetName?: string
 ): TReply {
   if (kind === ZLinkStreamMessageKind.Error) {
-    const error = decodeFrameworkPayloadMessage<{
-      readonly message?: string;
-      readonly kind?: number;
-    }>(payload, serializers);
-    const wireKind = error.kind;
-    const publicKind =
-      typeof wireKind === 'number' &&
-      Number.isInteger(wireKind) &&
-      wireKind >= ZLinkFrameworkErrorKind.NotFound &&
-      wireKind <= ZLinkFrameworkErrorKind.InternalFailure
-        ? (wireKind as ZLinkFrameworkErrorKind)
-        : ZLinkFrameworkErrorKind.InternalFailure;
-    throw new ZLinkFrameworkException(publicKind, error.message ?? 'Actor request failed.');
+    if (codec !== ZLinkStreamCodec.Json || !isUtf8(payload.data())) {
+      throw createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.RequestProtocolError,
+        'Actor Error reply requires UTF-8 JSON.'
+      );
+    }
+    const error = decodeFrameworkPayloadMessage<unknown>(payload);
+    if (
+      typeof error !== 'object' ||
+      error === null ||
+      typeof (error as { code?: unknown }).code !== 'string' ||
+      typeof (error as { message?: unknown }).message !== 'string'
+    ) {
+      throw createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.RequestProtocolError,
+        'Actor Error reply requires code and message strings.'
+      );
+    }
+    const wire = error as { code: string; message: string };
+    const kind = channelErrorKindFromCode(wire.code);
+    if (kind === undefined) {
+      throw createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.RequestProtocolError,
+        `Actor Error reply uses an unknown error code '${wire.code}'.`
+      );
+    }
+    throw new ZLinkFrameworkException(kind, wire.message);
   }
   return decodeFrameworkPayloadMessage<TReply>(
     payload,

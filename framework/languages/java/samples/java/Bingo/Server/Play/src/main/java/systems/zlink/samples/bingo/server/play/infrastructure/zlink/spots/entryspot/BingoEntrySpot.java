@@ -61,6 +61,7 @@ public final class BingoEntrySpot implements ZLinkEntrySpot<PlayerActor> {
 
     @Override
     public CompletionStage<Void> onLeaveActor(PlayerActor actor) {
+        logger.info("bingo-lifecycle entry-leave actor={}", actor.actorId());
         return CompletableFuture.completedFuture(null);
     }
 

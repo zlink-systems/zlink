@@ -229,7 +229,7 @@ void expect_successful_channel_request (mesh::raw_mesh_node_owner_t &source,
                                      promise.set_value ({terminal, std::move (payload)});
                                  })));
 
-    std::optional<mesh::service_mailbox_claim_t> claim;
+    std::shared_ptr<mesh::service_mailbox_claim_t> claim;
     const auto request_deadline = std::chrono::steady_clock::now () + 2s;
     while (!claim && std::chrono::steady_clock::now () < request_deadline) {
         claim =
@@ -243,7 +243,7 @@ void expect_successful_channel_request (mesh::raw_mesh_node_owner_t &source,
     ASSERT_TRUE (claim);
     ASSERT_EQ (1u, claim->records.size ());
     const protocol::application_payload_t reply{"WeightReply", "application/json", bytes ("reply")};
-    ASSERT_TRUE (target.reply (claim->records.front (), reply));
+    ASSERT_TRUE (target.reply ((*claim->records.front ()), reply));
     ASSERT_TRUE (target.mailbox ().release (*claim));
 
     const auto reply_deadline = std::chrono::steady_clock::now () + 2s;
@@ -489,14 +489,14 @@ TEST_P (ChannelMessageFlow, RouteMeshRequestAndSendRecordAllReceiverStages)
           "X", payload, 2s, [replied] (auto, auto) { replied->set_value (); })));
     else
         ASSERT_TRUE (await_task (source.send_to_channel ("X", payload)));
-    std::optional<mesh::service_mailbox_claim_t> claim;
+    std::shared_ptr<mesh::service_mailbox_claim_t> claim;
     ASSERT_TRUE (pump_until (source, target, [&] {
         if (!claim)
             claim = target.mailbox ().try_claim (mesh::service_mailbox_domain_t::application, 1,
                                                  64u * 1024u);
-        return claim.has_value ();
+        return static_cast<bool> (claim);
     }));
-    auto &received = claim->records.front ();
+    auto &received = *claim->records.front ();
     auto parts = protocol::decode_application_parts (
       protocol::decode_application_payload (protocol::message_bytes (received.parts[1]), true));
     runtime::messaging::message_parts_t encoded (std::move (parts));

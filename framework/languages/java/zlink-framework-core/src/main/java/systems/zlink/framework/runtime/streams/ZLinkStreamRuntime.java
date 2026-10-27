@@ -1689,7 +1689,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                     return null;
                 });
         sessionContexts.forEach(ZLinkStreamSessionContextState::closeReplyRetries);
-        String closeReason = draining ? "server_drain" : "transport_error";
+        String closeReason = draining ? "server_shutdown" : "transport_error";
         for (int index = 0; index < activeSessions.size(); index++) {
             recordSessionClosed(activeSessions.get(index), closeReason);
         }

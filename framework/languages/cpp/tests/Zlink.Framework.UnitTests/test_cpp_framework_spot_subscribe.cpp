@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+#include "../support/stateful_object_sync.hpp"
 #include "../support/runtime_failure_fixture.hpp"
 #include "runtime/dispatch/offload_executor.hpp"
 #include "runtime/diagnostics/dispatch_options_access.hpp"
@@ -17,6 +18,8 @@
 #include <thread>
 #include <utility>
 #include <zlink/framework.hpp>
+
+using zlink::framework::test::begin_reserved_object;
 
 namespace
 {
@@ -126,6 +129,44 @@ class SpotSubscribe : public testing::Test
     fw::service_provider_t provider;
     fw::serializer_registry_t serializers;
 };
+
+TEST_F (SpotSubscribe, ClosedTurnDoesNotEnterApplicationHandler)
+{
+    subscribe (channel, "closed-turn");
+    state->serial_queue =
+      std::make_shared<fw::runtime::serial_execution_queue_t> (*state->serial_executor);
+    std::latch worker_started{1};
+    std::latch release_worker{1};
+    ASSERT_TRUE (state->serial_executor->try_submit_internal ([&] {
+        worker_started.count_down ();
+        release_worker.wait ();
+    }));
+    worker_started.wait ();
+    std::shared_ptr<void> release_on_exit (nullptr, [&] (void *) { release_worker.count_down (); });
+
+    messaging::envelope_header_t header;
+    header.kind = messaging::message_kind_t::publish;
+    header.channel_name = channel;
+    header.topic = "closed-turn";
+    header.message_name = event_t::packet_name;
+    header.content_type = messaging::envelope_codec_t::default_content_type;
+    auto parts = messaging::envelope_codec_t{}.encode_raw_body_parts (
+      header, zlink::message_t::from (std::string ("{\"value\":1}")));
+    std::atomic_int handler_entries{0};
+    auto submitted = detail::spot_node_runtime_t (node).dispatch_subscription (
+      context, "closed-turn", parts.items (), provider, serializers,
+      [&] { handler_entries.fetch_add (1, std::memory_order_relaxed); });
+    node->lane.run ([this] { state->closed = fw::spot_close_reason_t::explicit_close; }).get ();
+    // The admitted turn must observe the closed incarnation before handler entry.
+    release_on_exit.reset ();
+    ASSERT_TRUE (submitted);
+    ASSERT_TRUE (submitted.value ());
+    const auto result = submitted.value ()->result ();
+    EXPECT_EQ (0, handler_entries.load (std::memory_order_relaxed));
+    EXPECT_TRUE (subscriber->values.empty ());
+    ASSERT_FALSE (result);
+    EXPECT_EQ (fw::framework_error_kind_t::not_found, result.error_kind ());
+}
 
 TEST_F (SpotSubscribe, RuntimeTopicReachesNamedChannel)
 {
@@ -377,7 +418,7 @@ void SpotSubscribe::verify_pre_ready (bool reject, bool fail_initialize)
     const stateful::object_ref_t reference{
       stateful::object_kind_t::user_spot, "pre-ready-spot", 7, 1, "mesh", "publisher"};
     const auto reservation =
-      native->objects ().begin_reserved_object (reference, "framework.spot", {});
+      begin_reserved_object (native->objects (), reference, "framework.spot", {});
     ASSERT_TRUE (reservation.factory_owner);
     std::function<fw::task_t<void> (bool)> preparation_terminal;
     fw::task_completion_source_t<void> entered;

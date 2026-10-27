@@ -1482,14 +1482,16 @@ route_client_t::submit_send_erased (const std::shared_ptr<detail::route_client_s
     }
 }
 
-task_t<result_t<void>> route_client_t::submit_channel_send_erased (
-  const std::shared_ptr<detail::route_client_state_t> &state,
-  const std::string &channel_name,
-  const std::string &packet_name,
-  std::type_index message_type,
-  payload_encoder_t encode_payload,
-  const route_send_call_t::metadata_map_t &metadata)
+task_t<result_t<void>>
+route_client_t::submit_channel_send_erased (std::shared_ptr<detail::route_client_state_t> state,
+                                            std::string channel_name,
+                                            std::string packet_name,
+                                            std::type_index message_type,
+                                            payload_encoder_t encode_payload,
+                                            const route_send_call_t::metadata_map_t &metadata)
 {
+    // The call can be destroyed while the sender suspends. Own the values used
+    // by the sent trace after completion; metadata and the encoder are consumed before it.
     auto submit_flow = runtime::flow_context_t::enter_current_or_create (
       flow_origin_t::application,
       state && state->runtime ? detail::message_flow_tracer_t (state->runtime->dispatch).mode ()

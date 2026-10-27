@@ -395,6 +395,35 @@ final class ZLinkChannelCallRuntime {
             Optional<String> packetName,
             Message payload,
             String contentType,
+            Map<String, String> metadata) {
+        return envelopeParts(
+                kind, channelName, packetName.orElse(null), payload, contentType, metadata);
+    }
+
+    static List<Message> envelopeParts(
+            int kind,
+            String channelName,
+            Optional<String> packetName,
+            Message payload,
+            String contentType,
+            Map<String, String> metadata,
+            UUID operationId) {
+        return envelopeParts(
+                kind,
+                channelName,
+                packetName.orElse(null),
+                payload,
+                contentType,
+                metadata,
+                operationId);
+    }
+
+    static List<Message> envelopeParts(
+            int kind,
+            String channelName,
+            String packetName,
+            Message payload,
+            String contentType,
             java.util.Map<String, String> metadata) {
         return envelopeParts(
                 kind,
@@ -411,19 +440,19 @@ final class ZLinkChannelCallRuntime {
     static List<Message> envelopeParts(
             int kind,
             String channelName,
-            Optional<String> packetName,
+            String packetName,
             Message payload,
             String contentType,
             Map<String, String> metadata,
             UUID operationId) {
-        if (packetName.isEmpty()) {
+        if (packetName == null) {
             return List.of(payload);
         }
         return systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.encode(
                 systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.create(
                         kind,
                         channelName,
-                        packetName.orElseThrow(),
+                        packetName,
                         contentType,
                         null,
                         metadata,

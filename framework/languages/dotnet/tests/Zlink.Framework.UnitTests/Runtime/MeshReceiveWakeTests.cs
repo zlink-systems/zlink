@@ -14,6 +14,13 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
     [Fact]
     public async Task IdleReceiveOwnerWaitsForReadinessWithoutAPeriodicDeadline()
     {
+        if (
+            await IsolatedTestProcess.RunIsolatedAsync(
+                typeof(MeshReceiveWakeTests),
+                nameof(IdleReceiveOwnerWaitsForReadinessWithoutAPeriodicDeadline)
+            )
+        )
+            return;
         await using var context = Systems.Zlink.Zlink.CreateContext();
         var poller = new ControlledReceivePoller { CaptureIdleWait = true };
         await using var node = new ZLinkManagedMeshNode(
@@ -23,11 +30,38 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
         );
         node.SetRoutingId(RoutingId.From("idle-wait"));
         node.Start();
+        await poller.MonitorRegistered.Task.WaitAsync(CompletionBound);
         Assert.Equal(
             Timeout.InfiniteTimeSpan,
             await poller.IdleWait.Task.WaitAsync(CompletionBound)
         );
-        Assert.True(poller.MonitorRegistered);
+    }
+
+    [Fact]
+    public async Task IdleWaitObservationPreservesFiniteDeadlinesAndSkipsNonblockingTurns()
+    {
+        using var poller = new ControlledReceivePoller { CaptureIdleWait = true };
+        var events = new PollEvent[1];
+        Assert.Equal(0, poller.Wait(events, TimeSpan.Zero));
+        Assert.False(poller.IdleWait.Task.IsCompleted);
+        var nonblocking = Task.Run(() => poller.Wait(events, TimeSpan.Zero));
+        try
+        {
+            await Task.WhenAny(nonblocking, poller.IdleWait.Task).WaitAsync(CompletionBound);
+            Assert.False(poller.IdleWait.Task.IsCompleted);
+            Assert.Equal(0, await nonblocking.WaitAsync(CompletionBound));
+        }
+        finally
+        {
+            if (!nonblocking.IsCompleted)
+            {
+                poller.ReleaseWait();
+                await nonblocking.WaitAsync(CompletionBound);
+            }
+        }
+        var finite = TimeSpan.FromMilliseconds(1);
+        Assert.Equal(0, poller.Wait(events, finite));
+        Assert.Equal(finite, await poller.IdleWait.Task.WaitAsync(CompletionBound));
     }
 
     [Fact]
@@ -36,7 +70,7 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
         await using var context = Systems.Zlink.Zlink.CreateContext();
         await using var node = new ZLinkManagedMeshNode(context, "long-deadline-wake");
         var wake = new CountingWakeTimer();
-        node._receiveWakeTimer = wake;
+        node.ReceiveWakeObserver = () => wake.Starts++;
         Assert.True(
             node.TryBeginOperation(MeshOperationKind.NodeRequest, TimeSpan.FromSeconds(30), out _)
         );
@@ -62,7 +96,7 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
         var wake = new CountingWakeTimer();
         // No receive loop runs here: registration and the actual wake timer
         // starts are deterministic, including equal deadlines in the same slot.
-        node._receiveWakeTimer = wake;
+        node.ReceiveWakeObserver = () => wake.Starts++;
         Register(TimeSpan.FromMilliseconds(20));
         Assert.Equal(1, wake.Starts);
         wake.Starts = 0;
@@ -131,6 +165,14 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
     [InlineData(true)]
     public async Task PermitGrantResumesReceiveOwnerWithoutAPollTick(bool failRearm)
     {
+        if (
+            failRearm
+            && await IsolatedTestProcess.RunIsolatedAsync(
+                typeof(MeshReceiveWakeTests),
+                nameof(PermitGrantResumesReceiveOwnerWithoutAPollTick)
+            )
+        )
+            return;
         await using var context = Systems.Zlink.Zlink.CreateContext();
         using var queue = new ZLinkApplicationJobQueue(
             new(ZLinkApplicationJobQueueProfile.Balanced, 1, 1, 1)
@@ -157,11 +199,12 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
             node.DrainRawSocket(stop);
             Assert.Equal(1UL, queue.GetStatus().CapacityWaiters);
             poller.AllowWait();
+            await poller.SourcePaused.Task.WaitAsync(CompletionBound);
             held.Dispose();
 
             // Native Wait has no elapsed-time exit in this fixture. Only an
             // owner notification can resume it; the bound guards a stuck test.
-            await poller.SecondWait.Task.WaitAsync(CompletionBound);
+            await poller.RearmObserved.Task.WaitAsync(CompletionBound);
             Assert.Equal(poller.OwnerThread, poller.ResumeThread);
             Assert.Equal(0UL, queue.GetStatus().PermitsInUse);
             Assert.Equal(0UL, queue.GetStatus().CapacityWaiters);
@@ -297,6 +340,74 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
         }
     }
 
+    // Spec 08 §4.2: a receive rotation runs its management work once. With no
+    // peer activity due, that work is the two uncontended node turns that read
+    // liveness and operation deadlines; it creates no empty result container.
+    [Fact]
+    public async Task IdleReceiveRotationManagementAddsNoAllocationBeyondItsNodeTurns()
+    {
+        const int warmup = 128;
+        const int iterations = 1000;
+        var poller = new ControlledReceivePoller();
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        var node = new ZLinkManagedMeshNode(
+            context,
+            "idle-rotation-allocation",
+            receivePollerFactory: () => poller
+        );
+        node.SetRoutingId(RoutingId.From("idle-rotation-allocation"));
+        await using var lane = new ZLinkStateLane();
+        long actual = 0;
+        long baseline = 0;
+        var rotations = 0;
+        long last = 0;
+        SemaphoreSlim rotated = new(0);
+        // The window opens after the controlled poller returns and closes before
+        // its next wait, so it holds only the node's own rotation.
+        poller.AfterWait = () => last = GC.GetAllocatedBytesForCurrentThread();
+        poller.BeforeWait = () =>
+        {
+            var now = GC.GetAllocatedBytesForCurrentThread();
+            var measured = now - last;
+            var start = GC.GetAllocatedBytesForCurrentThread();
+            _ = lane.RunAsync(static value => value, 0).GetAwaiter().GetResult();
+            _ = lane.RunAsync(static value => value, 0).GetAwaiter().GetResult();
+            var control = GC.GetAllocatedBytesForCurrentThread() - start;
+            if (rotations > warmup)
+            {
+                actual += measured;
+                baseline += control;
+            }
+            rotations++;
+            rotated.Release();
+        };
+        node.Start();
+        try
+        {
+            await poller.FirstWait.Task.WaitAsync(CompletionBound);
+            poller.AllowWait();
+            await rotated.WaitAsync(CompletionBound);
+            for (var index = 0; index < warmup + iterations; index++)
+            {
+                node.SignalReceiveOwner();
+                Assert.True(await rotated.WaitAsync(CompletionBound));
+            }
+            output.WriteLine(
+                $"idle rotation={actual}B, node turns={baseline}B, excess={actual - baseline}B/{iterations}"
+            );
+            Assert.True(
+                actual == baseline,
+                $"idle rotation={actual}B, node turns={baseline}B, excess={actual - baseline}B/{iterations}"
+            );
+        }
+        finally
+        {
+            var shutdown = node.DisposeAsync();
+            poller.ReleaseWait();
+            await shutdown;
+        }
+    }
+
     [Fact]
     public async Task NodeIngressSourceGenerationAddsNoAllocationBeyondItsOwners()
     {
@@ -305,7 +416,7 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
         await using var inner = Systems.Zlink.Zlink.CreateContext();
         var context = new EmptyIngressContext(inner);
         var targetPoller = new ControlledReceivePoller { RespectTimeoutAfterWake = true };
-        var sourcePoller = new ControlledReceivePoller { RespectTimeoutAfterWake = true };
+        var sourcePoller = targetPoller;
         await using var source = new ZLinkManagedMeshNode(
             inner,
             "source-allocation",
@@ -330,13 +441,10 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
         var targetAdmitted = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
-        sourcePoller.BeforeWait = () =>
+        targetPoller.BeforeWait = () =>
         {
             if (source.Status().AdmittedPeerCount == 1)
                 sourceAdmitted.TrySetResult();
-        };
-        targetPoller.BeforeWait = () =>
-        {
             if (target.Status().AdmittedPeerCount == 1)
                 targetAdmitted.TrySetResult();
         };
@@ -372,8 +480,9 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
             var samples = 0;
             var key = MeshMailboxKey.ForNode(MeshReadyDomains.Application);
             var readyMap = new ConcurrentDictionary<MeshMailboxKey, bool>();
-            // The baseline retains both source checks' uncontended lane turns
-            // and the existing record/mailbox containers without fixed byte sizes.
+            // The baseline retains the one uncontended source lane turn that reads
+            // route currency and generation together, and the existing
+            // record/mailbox containers without fixed byte sizes.
             var mailbox = baselineMailbox = new ZLinkMeshNodeOwnedMailbox(
                 static _ => { },
                 static _ => { },
@@ -385,7 +494,6 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
                 // properties; both counters run on this same receive thread.
                 lastActual = GC.GetAllocatedBytesForCurrentThread() - router.RecordStart;
                 var start = GC.GetAllocatedBytesForCurrentThread();
-                _ = lane.RunAsync(static value => value, 0).GetAwaiter().GetResult();
                 _ = lane.RunAsync(static value => value, 0).GetAwaiter().GetResult();
                 if (
                     !mailbox.TryEnqueue(
@@ -458,6 +566,53 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
                 baselineMailbox?.Dispose();
             }
         }
+    }
+
+    [Fact]
+    public async Task PoolWaitFailureTerminatesNodeAndJoinsTheReceiveWorker()
+    {
+        if (
+            await IsolatedTestProcess.RunIsolatedAsync(
+                typeof(MeshReceiveWakeTests),
+                nameof(PoolWaitFailureTerminatesNodeAndJoinsTheReceiveWorker)
+            )
+        )
+            return;
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        var poller = new ControlledReceivePoller();
+        var failure = new InvalidOperationException("Injected process wait failure.");
+        Thread? receiver = null;
+        var failedWait = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        poller.BeforeWait = () =>
+        {
+            receiver = Thread.CurrentThread;
+            failedWait.TrySetResult();
+            throw failure;
+        };
+        var node = new ZLinkManagedMeshNode(
+            context,
+            "wait-failure",
+            receivePollerFactory: () => poller
+        );
+        node.SetRoutingId(RoutingId.From("wait-failure"));
+        node.Start();
+        await poller.FirstWait.Task.WaitAsync(CompletionBound);
+        poller.AllowWait();
+        await failedWait.Task.WaitAsync(CompletionBound);
+        var observed = await Assert.ThrowsAnyAsync<Exception>(() =>
+            node.DisposeAsync().AsTask().WaitAsync(CompletionBound)
+        );
+        var failures = observed is AggregateException aggregate
+            ? aggregate.Flatten().InnerExceptions
+            : new[] { observed }.AsEnumerable();
+        Assert.Contains(failures, error => ReferenceEquals(error, failure));
+        Assert.NotNull(receiver);
+        Assert.False(receiver!.IsAlive);
+        await using var restarted = ZLinkProcessExecutionPool.CreateReceiveSource();
+        await restarted.ResumeAsync();
+        Assert.False(Thread.CurrentThread.IsThreadPoolThread);
     }
 
     private sealed class EmptyIngressRouter(IRouterSocket inner)
@@ -563,7 +718,7 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
-    private sealed class ControlledReceivePoller : IPoller
+    internal sealed class ControlledReceivePoller : IPoller
     {
         private static readonly nuint ControlSlot = nuint.MaxValue;
         private readonly IPoller _inner = Systems.Zlink.Zlink.CreatePoller();
@@ -576,16 +731,25 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
         internal readonly TaskCompletionSource FirstWait = new(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
+        internal readonly TaskCompletionSource RearmObserved = new(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        internal readonly TaskCompletionSource SourcePaused = new(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         internal readonly TaskCompletionSource SecondWait = new(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
         internal Action? BeforeWait;
+        internal Action? AfterWait;
         internal int OwnerThread { get; private set; }
         internal int ResumeThread { get; private set; }
         internal bool FailRearm { get; init; }
         internal bool RespectTimeoutAfterWake { get; init; }
         internal bool CaptureIdleWait { get; init; }
-        internal bool MonitorRegistered { get; private set; }
+        internal readonly TaskCompletionSource MonitorRegistered = new(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         internal readonly TaskCompletionSource<TimeSpan> IdleWait = new(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
@@ -593,6 +757,9 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
         internal ControlledReceivePoller() => _inner.Add(_control, ControlSlot);
 
         internal void AllowWait() => _allowWait.Set();
+
+        // One controlled wake: the owner runs a rotation with no ready source.
+        internal void Tick() => _control.Start(TimeSpan.FromTicks(1), 1);
 
         // Node disposal can wake the owner, which then disposes this poller before
         // the test's fallback release runs. A disposed poller has no Wait to release.
@@ -611,10 +778,11 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
         {
             if (CaptureIdleWait)
             {
-                if (++_waitCount == 1)
-                    return 0;
-                IdleWait.TrySetResult(timeout);
-                return _inner.Wait(destination, Timeout.InfiniteTimeSpan);
+                // Zero-time turns apply startup registrations and pending wakes.
+                // Observe the first blocking wait, preserving even a finite deadline.
+                if (timeout != TimeSpan.Zero)
+                    IdleWait.TrySetResult(timeout);
+                return _inner.Wait(destination, timeout);
             }
             if (++_waitCount == 1)
             {
@@ -624,6 +792,8 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
             }
             else
                 SecondWait.TrySetResult();
+            if (ResumeThread != 0)
+                RearmObserved.TrySetResult();
             BeforeWait?.Invoke();
             var count = _inner.Wait(
                 destination,
@@ -638,6 +808,7 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
                 else
                     destination[written++] = ready;
             }
+            AfterWait?.Invoke();
             return written;
         }
 
@@ -650,17 +821,23 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
                     throw new InvalidOperationException("Controlled receive rearm failure.");
             }
             _inner.Modify(socket is EmptyIngressRouter adapter ? adapter.Inner : socket, events);
+            if ((events & PollEventFlags.PollIn) == 0)
+                SourcePaused.TrySetResult();
         }
 
         public int Size => _inner.Size;
 
-        public void Add(IZlinkSocket socket, PollEventFlags events, nuint slot) =>
+        public void Add(IZlinkSocket socket, PollEventFlags events, nuint slot)
+        {
             _inner.Add(socket is EmptyIngressRouter adapter ? adapter.Inner : socket, events, slot);
+            if ((events & PollEventFlags.PollIn) == 0)
+                SourcePaused.TrySetResult();
+        }
 
         public void Add(ISocketMonitor monitor, PollEventFlags events, nuint slot)
         {
-            MonitorRegistered = true;
             _inner.Add(monitor, events, slot);
+            MonitorRegistered.TrySetResult();
         }
 
         public void Add(IZlinkTimer timer, nuint slot) => _inner.Add(timer, slot);

@@ -6,15 +6,8 @@ import type { ZLinkBackendActorRef, ZLinkBackendActorRecvInfo } from '../backend
 import type { ZLinkActorPacketDelivery } from './spot-actor-packet-dispatch';
 import { REMOTE_BOUND_SESSION_BIND_PACKET } from './spot-remote-codec';
 import { ZLINK_RECV_DONT_WAIT } from './spot-native-flags';
-import {
-  decodeStreamHeader,
-  encodeStreamFrame,
-  messageToBytes,
-  streamCodecForContentType,
-  ZLinkStreamHeaderFlags,
-  ZLinkStreamMessageKind
-} from '../streams/protocol';
-import { encodeFrameworkPayload } from '../messaging/payload-codec';
+import { decodeStreamHeader, messageToBytes, ZLinkStreamMessageKind } from '../streams/protocol';
+import { encodeActorReply } from '../actors/actor-reply';
 import { boundSessionErrorPayload } from '../streams/bound-session-response-target';
 
 export interface ZLinkActorDispatchPart {
@@ -231,40 +224,14 @@ export class ZLinkSpotActorPacketDrain {
     kind: ZLinkStreamMessageKind.Response | ZLinkStreamMessageKind.Error,
     payload: unknown
   ): Message {
-    const requestHeader = decodeStreamHeader(messageToBytes(requestHeaderPart), this.flowEnabled());
-    const encoded =
-      kind === ZLinkStreamMessageKind.Response
-        ? encodeFrameworkPayload(
-            payload,
-            this.options.messageSerializers,
-            requestHeader.name,
-            'payload'
-          )
-        : encodeFrameworkPayload(payload);
-    try {
-      //  encodeStreamFrame returns a fresh, unaliased array; view it without re-copying.
-      const frame = encodeStreamFrame(
-        {
-          kind,
-          codec: streamCodecForContentType(encoded.contentType),
-          flags: ZLinkStreamHeaderFlags.None,
-          requestSeq: requestHeader.requestSeq,
-          name: '',
-          metadata: new Map(),
-          correlationId: requestHeader.correlationId,
-          // Spec 27 §7: preserve the request flow pair on the reply while
-          // tracing is on; the gated decode above already strips it at Off.
-          flowId: requestHeader.flowId,
-          flowOrigin: requestHeader.flowOrigin
-        },
-        encoded.message.data()
-      );
-      return RuntimeMessage.fromOwned(
-        Buffer.from(frame.buffer, frame.byteOffset, frame.byteLength)
-      ) as Message;
-    } finally {
-      encoded.message.close();
-    }
+    const [frame] = encodeActorReply(
+      messageToBytes(requestHeaderPart),
+      kind,
+      payload,
+      this.options.messageSerializers,
+      this.flowEnabled()
+    );
+    return RuntimeMessage.fromOwned(frame) as Message;
   }
 
   private consumeRemoteBoundSessionBind(

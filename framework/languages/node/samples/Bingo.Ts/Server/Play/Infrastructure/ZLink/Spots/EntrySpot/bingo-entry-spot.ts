@@ -68,15 +68,13 @@ class BingoEntrySpot implements ZLinkEntrySpot<PlayerActor> {
   packetName: 'DestroyBingoActorMsg'
 })
 class DestroyBingoActorMsgHandler {
-  constructor(private readonly entrySpot: BingoEntrySpot) {}
-
   async handle(
-    _spot: BingoEntrySpot,
+    spot: BingoEntrySpot,
     actor: PlayerActor,
     _context: ZLinkMessageContext,
     _message: DestroyBingoActorMsg
   ): Promise<void> {
-    this.entrySpot.scheduleDestroy(actor);
+    spot.scheduleDestroy(actor);
   }
 }
 

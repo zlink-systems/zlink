@@ -1,8 +1,13 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #include <zlink/framework.hpp>
 #include "runtime/locations/in_memory_store_providers.hpp"
+#include "runtime/locations/authority_key_codec.hpp"
+#include "runtime/locations/relocation_authority_payload.hpp"
+#include "runtime/mesh/mesh_node_runtime.hpp"
+#include "runtime/spots/spot_runtime.hpp"
 #include <gtest/gtest.h>
 #include <chrono>
+#include <atomic>
 #include <condition_variable>
 #include <mutex>
 #include <thread>
@@ -33,6 +38,13 @@ struct where_t
     std::string handler;
 };
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE (where_t, spot, node, handler)
+
+struct prefix_t
+{
+    static constexpr const char *packet_name = "spot-abort-prefix";
+    int value;
+};
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE (prefix_t, value)
 
 struct joins_t
 {
@@ -114,7 +126,19 @@ class room_t final : public fw::spot_t<member_t>
     explicit room_t (fw::spot_context_t context) : _context (std::move (context)) {}
     fw::spot_context_t &context () noexcept override { return _context; }
     const fw::spot_context_t &context () const noexcept override { return _context; }
-    void configure () override { _context.handlers ().add_actor_request<&room_t::where> (); }
+    void configure () override
+    {
+        _context.handlers ().add_actor_request<&room_t::where> ();
+        _context.handlers ().add_handler<&room_t::prefix> ();
+    }
+    void prefix (fw::message_context_t &, const prefix_t &message)
+    {
+        if (received)
+            received (message.value);
+    }
+    std::function<void (int)> received;
+    std::function<fw::task_t<std::vector<std::byte>> ()> capture;
+
     where_t where (member_t &actor, fw::message_context_t &, const where_t &)
     {
         return {std::string (_context.spot_id ()),
@@ -135,6 +159,18 @@ class room_t final : public fw::spot_t<member_t>
 
   private:
     fw::spot_context_t _context;
+};
+class failing_capture_t final : public fw::spot_relocation_adapter_t<room_t>
+{
+  public:
+    fw::task_t<std::vector<std::byte>> capture (room_t &spot, std::stop_token) override
+    {
+        co_return co_await spot.capture ();
+    }
+    fw::task_t<void> restore (room_t &, std::vector<std::byte>, std::stop_token) override
+    {
+        co_return;
+    }
 };
 struct host_t
 {
@@ -255,5 +291,185 @@ TEST (SpotWideHostRelocation, FrameworkManagedMembersKeepUserSpotHandler)
     }
     std::lock_guard lock (joins.mutex);
     EXPECT_EQ (joins.accepted, 2u);
+}
+TEST (SpotWideHostRelocation, GetOrCreateReturnsExistingRelocationTarget)
+{
+    auto locations = std::make_shared<fw::runtime::in_memory_location_store_t> ();
+    auto relocations = std::make_shared<fw::runtime::in_memory_relocation_store_t> ();
+    std::atomic<unsigned> factory_calls = 0;
+    const auto configure = [&] (host_t &host, const char *rid) {
+        auto &options = host.app.add_zlink_framework ();
+        options.add_location_store (locations);
+        options.add_relocation_store (relocations);
+        options.configure_dispatch ().message_flow (fw::message_flow_log_mode_t::normal);
+        host.app.logging ().use_file (std::string (rid) + "-existing.flow");
+        options.add_route_mesh (mesh_name)
+          .set_object_role (fw::object_role_t::server)
+          .set_routing_id (zlink::routing_id_t::from (rid))
+          .listen ("tcp://127.0.0.1:0")
+          .add_spot_factory<room_t> (
+            room_type,
+            [&] (fw::spot_context_t context) {
+                ++factory_calls;
+                return std::make_shared<room_t> (std::move (context));
+            },
+            [] (auto &factory) { factory.recreate_on_relocation (); });
+    };
+    host_t source, target;
+    configure (source, source_rid);
+    source.start ();
+    ASSERT_TRUE (observe ([&] { return source.app.is_ready (); }));
+    auto services = source.app.advanced ().services ().build_provider ();
+    const auto created = services.get_required<fw::spot_manager_t> ()
+                           .get_or_create (fw::spot_id_t (room_id), room_type)
+                           .async ()
+                           .result ();
+    ASSERT_TRUE (created);
+    ASSERT_EQ (created.value ().state, fw::spot_create_state_t::created);
+    ASSERT_EQ (created.value ().spot.node_rid ().value (), source_rid);
+    configure (target, target_rid);
+    target.start ();
+    ASSERT_TRUE (observe ([&] { return target.app.is_ready (); }));
+    ASSERT_TRUE (observe ([&] {
+        return services.get_required<fw::route_mesh_runtime_t> ()
+                 .snapshot (mesh_name)
+                 .ready_peer_count
+               == 1;
+    }));
+    const auto moved =
+      source.app
+        .relocate ({.mode = fw::relocation_mode_t::planned_maintenance, .deadline = wait_budget})
+        .result ();
+    ASSERT_TRUE (moved);
+    ASSERT_EQ (moved.value ().outcome, fw::relocation_outcome_t::relocated);
+    const auto read = services.get_required<fw::location_repository_t> ()
+                        .read_authority (fw::runtime::spot_authority_key (fw::spot_id_t (room_id)))
+                        .result ();
+    ASSERT_TRUE (read);
+    const auto *current = std::get_if<fw::authority_snapshot_t> (&read.value ());
+    ASSERT_NE (current, nullptr);
+    ASSERT_EQ (current->allocation.state, fw::placement_allocation_state_t::active);
+    ASSERT_EQ (current->allocation.target.node_rid.value (), target_rid);
+    const auto relocation =
+      fw::runtime::stateful::authority_relocation_payload_codec_t::decode (*current);
+    ASSERT_TRUE (relocation);
+    const auto ready =
+      fw::runtime::decode_direct_user_spot_authority_payload (relocation->application_payload);
+    ASSERT_TRUE (ready);
+    ASSERT_EQ (ready->state, fw::runtime::user_spot_authority_state_t::ready);
+    ASSERT_EQ (ready->node_rid.value (), source_rid);
+    ASSERT_NE (ready->node_rid.value (), current->allocation.target.node_rid.value ());
+    const auto calls_after_relocation = factory_calls.load ();
+    ASSERT_EQ (calls_after_relocation, 2u);
+    auto target_services = target.app.advanced ().services ().build_provider ();
+    const auto existing = target_services.get_required<fw::spot_manager_t> ()
+                            .get_or_create (fw::spot_id_t (room_id), room_type)
+                            .async ()
+                            .result ();
+    ASSERT_TRUE (existing) << (existing.error () ? existing.error ()->what () : "");
+    EXPECT_EQ (existing.value ().state, fw::spot_create_state_t::existing);
+    EXPECT_EQ (existing.value ().spot.spot_id (), fw::spot_id_t (room_id));
+    EXPECT_EQ (existing.value ().spot.mesh_name (), current->allocation.target.mesh_name);
+    EXPECT_EQ (existing.value ().spot.node_rid ().value (),
+               current->allocation.target.node_rid.value ());
+    EXPECT_EQ (existing.value ().spot.object_generation (), current->object_generation);
+    EXPECT_EQ (current->object_generation, created.value ().spot.object_generation ());
+    EXPECT_EQ (factory_calls.load (), calls_after_relocation);
+}
+
+TEST (SpotWideHostRelocation, AbortRunsAcceptedSpotPrefixWithoutNewIngress)
+{
+    auto locations = std::make_shared<fw::runtime::in_memory_location_store_t> ();
+    auto relocations = std::make_shared<fw::runtime::in_memory_relocation_store_t> ();
+    fw::task_completion_source_t<void> capturing, release;
+    std::mutex mutex;
+    std::condition_variable changed;
+    std::vector<int> executed;
+    const auto capture = [&] () -> fw::task_t<std::vector<std::byte>> {
+        capturing.complete (fw::result_t<void>::success ());
+        co_await release.task ();
+        throw std::runtime_error ("intentional source capture failure");
+        co_return std::vector<std::byte>{};
+    };
+    const auto configure = [&] (host_t &host, const char *rid) {
+        auto &options = host.app.add_zlink_framework ();
+        options.add_location_store (locations);
+        options.add_relocation_store (relocations);
+        options.configure_dispatch ().message_flow (fw::message_flow_log_mode_t::detailed);
+        host.app.logging ().use_file (std::string (rid) + "-abort.flow");
+        options.add_route_mesh (mesh_name)
+          .set_object_role (fw::object_role_t::server)
+          .set_routing_id (zlink::routing_id_t::from (rid))
+          .listen ("tcp://127.0.0.1:0")
+          .add_spot_factory<room_t> (
+            room_type,
+            [&] (fw::spot_context_t context) {
+                auto spot = std::make_shared<room_t> (std::move (context));
+                spot->capture = capture;
+                spot->received = [&] (int value) {
+                    std::lock_guard lock (mutex);
+                    executed.push_back (value);
+                    changed.notify_all ();
+                };
+                return spot;
+            },
+            [] (auto &factory) { factory.template preserve_state_with<failing_capture_t> (); });
+    };
+    host_t source, target;
+    struct release_capture_t
+    {
+        fw::task_completion_source_t<void> &release;
+        ~release_capture_t ()
+        {
+            if (!release.task ().await_ready ())
+                release.complete (fw::result_t<void>::success ());
+        }
+    } release_capture{release};
+    configure (source, "abort-source");
+    configure (target, "abort-target");
+    source.start ();
+    target.start ();
+    ASSERT_TRUE (observe ([&] { return source.app.is_ready () && target.app.is_ready (); }));
+    auto services = source.app.advanced ().services ().build_provider ();
+    ASSERT_TRUE (observe ([&] {
+        return services.get_required<fw::route_mesh_runtime_t> ()
+                 .snapshot (mesh_name)
+                 .ready_peer_count
+               == 1;
+    }));
+    ASSERT_TRUE (services.get_required<fw::spot_manager_t> ()
+                   .get_or_create (fw::spot_id_t (room_id), room_type)
+                   .async ()
+                   .result ());
+    const auto registration =
+      fw::detail::mesh_node_runtime_t::registrations (source.app.advanced ().zlink ()).front ();
+    const auto gate = fw::detail::spot_node_runtime_t (registration->spot_state)
+                        .spot_execution_queue (room_id)
+                        .result ()
+                        .value ();
+    ASSERT_TRUE (gate);
+    gate->set_application_start_policy ([] (const auto &) { return false; });
+    auto client = source.app.advanced ().zlink ().route_client (
+      services.get_required<fw::serializer_registry_t> ());
+    for (int value : {1, 2}) {
+        const auto sent =
+          client.send_to_spot (fw::spot_id_t (room_id), prefix_t{value}).async ().result ();
+        ASSERT_TRUE (sent) << static_cast<int> (sent.error_kind ()) << " "
+                           << (sent.error () ? sent.error ()->what () : "");
+    }
+    ASSERT_TRUE (observe (
+      [&] { return gate->pending_count (fw::runtime::serial_work_lane_t::application) == 2; }));
+    auto moving = source.app.relocate (
+      {.mode = fw::relocation_mode_t::planned_maintenance, .deadline = wait_budget});
+    ASSERT_TRUE (observe ([&] { return capturing.task ().await_ready (); }));
+    gate->set_application_start_policy ([] (const auto &) { return true; });
+    release.complete (fw::result_t<void>::success ());
+    const auto result = moving.result ();
+    ASSERT_TRUE (result);
+    EXPECT_EQ (result.value ().outcome, fw::relocation_outcome_t::blocked);
+    EXPECT_EQ (result.value ().reason, fw::relocation_reason_t::relocation_failed);
+    std::unique_lock lock (mutex);
+    ASSERT_TRUE (changed.wait_for (lock, wait_budget, [&] { return executed.size () == 2; }));
+    EXPECT_EQ (executed, (std::vector<int>{1, 2}));
 }
 } // namespace

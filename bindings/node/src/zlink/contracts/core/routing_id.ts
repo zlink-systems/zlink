@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 
+import { isUtf8 } from 'node:buffer';
 import { ConfigError, ConfigResult } from '../errors/errors';
 
 const ROUTING_ID_MAX_LENGTH = 255;
@@ -49,10 +50,10 @@ function normalizeRoutingIdValue(value: string | Buffer | Uint8Array | number): 
 }
 
 function tryPrintableUtf8(bytes: Buffer): string | null {
-  const text = bytes.toString('utf8');
-  if (!Buffer.from(text, 'utf8').equals(bytes)) {
+  if (!isUtf8(bytes)) {
     return null;
   }
+  const text = bytes.toString('utf8');
   return /[\u0000-\u001f\u007f-\u009f]/u.test(text) ? null : text;
 }
 

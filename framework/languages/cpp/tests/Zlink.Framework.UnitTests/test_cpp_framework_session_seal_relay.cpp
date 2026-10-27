@@ -196,7 +196,9 @@ void verify_relay_seal (bool close_owner, bool request_timeout = false)
         ASSERT_EQ (other_seal.error, stateful::stateful_error_t::none);
         other_barrier = other_seal.barrier;
         ASSERT_TRUE (
-          other_bound->relay ("OtherSealRelay", zlink::message_t::from ("other")).result ());
+          other_bound
+            ->relay ("OtherSealRelay", zlink::framework::message_t::from (std::string ("other")))
+            .result ());
     }
 
     auto completed = std::async (std::launch::async, [bound, request_timeout] () mutable {
@@ -210,25 +212,31 @@ void verify_relay_seal (bool close_owner, bool request_timeout = false)
         header.with_correlation_id ("seal-correlation");
         const detail::stream_relay_dispatch_scope_t scope (header);
         if (request_timeout) {
-            const auto reply = bound.relay_request (zlink::message_t::from ("payload"))
-                                 .timeout (50ms)
-                                 .async ()
-                                 .result ();
+            const auto reply =
+              bound.relay_request (zlink::framework::message_t::from (std::string ("payload")))
+                .timeout (50ms)
+                .async ()
+                .result ();
             return reply ? result_t<void>::success ()
                          : result_t<void>::failure (reply.error_kind (), reply.error ()->what ());
         }
-        auto relay = bound.relay (zlink::message_t::from ("payload"));
+        auto relay = bound.relay (zlink::framework::message_t::from (std::string ("payload")));
         return relay.result ();
     });
     const auto before_release = completed.wait_for (2s);
     EXPECT_EQ (before_release, std::future_status::ready)
       << "one-way relay must complete at Session owner seal retention admission";
     if (request_timeout) {
-        const auto next = bound.relay ("AfterExpired", zlink::message_t::from ("next")).result ();
+        const auto next =
+          bound.relay ("AfterExpired", zlink::framework::message_t::from (std::string ("next")))
+            .result ();
         ASSERT_TRUE (next) << "next relay must be accepted on the same sealed binding";
     }
     if (!close_owner && !request_timeout)
-        ASSERT_TRUE (bound.relay ("SealRelaySecond", zlink::message_t::from ("second")).result ());
+        ASSERT_TRUE (
+          bound
+            .relay ("SealRelaySecond", zlink::framework::message_t::from (std::string ("second")))
+            .result ());
     if (close_owner)
         EXPECT_TRUE (sessions.close (connection));
     else
@@ -321,6 +329,15 @@ void verify_relay_seal (bool close_owner, bool request_timeout = false)
         }
         EXPECT_EQ (drops, 1u);
     }
+    if (!close_owner) {
+        // The native Session owner allocates and completes ingress identities.
+        const auto [admission, next] = sessions.admit_inbound (binding);
+        ASSERT_EQ (admission, stateful::stateful_error_t::none);
+        ASSERT_TRUE (next);
+        EXPECT_EQ (next->inbound_sequence, 3u);
+        EXPECT_EQ (sessions.complete_inbound (*next), stateful::stateful_error_t::none);
+        EXPECT_NE (sessions.complete_inbound (*next), stateful::stateful_error_t::none);
+    }
 }
 
 } // namespace
@@ -371,7 +388,7 @@ TEST (FrameworkSessionSealRelay, public_request_preserves_wire_correlation_and_f
     target->start ();
     const auto target_status = target->status ();
     auto target_actor = target->create_actor ("player", "seal-wire-actor");
-    const auto object = target->resolve_actor (target_actor.ref ());
+    const auto object = target->resolve_actor_async (target_actor.ref ()).result ().value ();
     ASSERT_TRUE (object);
     auto source_state = zlink::framework::test::runtime_failure_fixture<
       zlink::framework::detail::mesh_node_builder_state_t> ("seal-wire-mesh");
@@ -441,7 +458,9 @@ TEST (FrameworkSessionSealRelay, public_request_preserves_wire_correlation_and_f
     ASSERT_TRUE (peer_ready ());
     auto gateway_state = std::make_shared<actor_gateway_state_t> ();
     gateway_state->dispatch.message_flow (message_flow_log_mode_t::normal);
+    serializer_registry_t relay_serializers;
     actor_gateway_runtime_t gateway (gateway_state);
+    gateway.bind_serializers (relay_serializers);
     gateway.on_relay ([&] (const actor_ref_t &actor, const actor_context_t &,
                            const stream_header_t &header, const zlink::message_t &payload,
                            std::optional<bound_session_relay_source_t> relay_source,
@@ -461,7 +480,7 @@ TEST (FrameworkSessionSealRelay, public_request_preserves_wire_correlation_and_f
         header.with_flow ("0199a500-0000-7000-8000-000000000001", flow_origin_t::inbound);
         header.with_correlation_id ("seal-wire-correlation");
         const stream_relay_dispatch_scope_t scope (header);
-        return bound.relay_request (zlink::message_t::from ("payload"))
+        return bound.relay_request (zlink::framework::message_t::from (std::string ("payload")))
           .timeout (2s)
           .async ()
           .result ();
@@ -556,7 +575,8 @@ TEST (FrameworkSessionSealRelay, different_sessions_do_not_share_replies_for_sam
     source.start ();
     const auto native_actor = source.create_actor ("player", "seal-dedup-actor", {}, 2s);
     ASSERT_EQ (native_actor.ref ().object_generation (), actor.object_generation ());
-    const auto native_object = source.native_node ().resolve_actor (native_actor.ref ());
+    const auto native_object =
+      source.native_node ().resolve_actor_async (native_actor.ref ()).result ().value ();
     ASSERT_TRUE (native_object);
     spot_node_runtime_t spots (node);
     spots.record_actor_spot (actor, spot->spot_id);
@@ -631,10 +651,10 @@ TEST (FrameworkSessionSealRelay, different_sessions_do_not_share_replies_for_sam
           if (record.kind != host::record_kind_t::actor_request)
               return;
           ASSERT_TRUE (record.application_record);
-          ASSERT_TRUE (record.application_record->payload);
-          ASSERT_TRUE (record.application_record->payload->application_record);
+          ASSERT_TRUE (record.application_record->payload ());
+          ASSERT_TRUE (record.application_record->payload ()->application_record);
           const auto *accepted_body = std::get_if<protocol::frozen_actor_application_body_t> (
-            &record.application_record->payload->application_record->body);
+            &record.application_record->payload ()->application_record->body);
           ASSERT_NE (accepted_body, nullptr);
           if (record.actor_route)
               EXPECT_EQ (*record.actor_route, accepted_body->target);
@@ -664,7 +684,9 @@ TEST (FrameworkSessionSealRelay, different_sessions_do_not_share_replies_for_sam
               complete ();
       },
       [] {});
+    serializer_registry_t relay_serializers;
     actor_gateway_runtime_t gateway;
+    gateway.bind_serializers (relay_serializers);
     gateway.on_relay ([&] (const actor_ref_t &target, const actor_context_t &,
                            const stream_header_t &header, const zlink::message_t &payload,
                            std::optional<bound_session_relay_source_t> relay_source,
@@ -691,24 +713,23 @@ TEST (FrameworkSessionSealRelay, different_sessions_do_not_share_replies_for_sam
         auto binding = manager.bind (actor).async ().result ();
         EXPECT_TRUE (binding);
         if (!binding)
-            return result_t<zlink::message_t>::failure (binding.error_kind (),
-                                                        binding.error ()->what ());
+            return result_t<message_t>::failure (binding.error_kind (), binding.error ()->what ());
         stream_header_t header (stream_message_kind_t::request, stream_codec_t::json,
                                 stream_header_flags_t::none, 17, "SessionIdentityRequest");
         header.with_correlation_id ("same-upstream-correlation");
         const stream_relay_dispatch_scope_t scope (header);
         return binding.value ()
-          .relay_request (zlink::message_t::from (std::move (payload)))
+          .relay_request (zlink::framework::message_t::from (std::move (payload)))
           .timeout (2s)
           .async ()
           .result ();
     };
     const auto first = invoke (first_manager, "first-session-result");
     ASSERT_TRUE (first) << (first.error () ? first.error ()->what () : "");
-    EXPECT_EQ (first.value ().to_string (), "first-session-result");
+    EXPECT_EQ (first.value ().decode<std::string> (), "first-session-result");
     const auto second = invoke (second_manager, "second-session-result");
     ASSERT_TRUE (second) << (second.error () ? second.error ()->what () : "");
-    EXPECT_EQ (second.value ().to_string (), "second-session-result");
+    EXPECT_EQ (second.value ().decode<std::string> (), "second-session-result");
     EXPECT_EQ (executions.load (std::memory_order_relaxed), 2u);
     const auto original = delivered_operation;
     const auto original_reply_route = delivered_reply_route;
@@ -738,7 +759,7 @@ TEST (FrameworkSessionSealRelay, different_sessions_do_not_share_replies_for_sam
         header.message_name = "SessionIdentityRequest";
         header.content_type = "application/json";
         header.correlation_id = "same-upstream-correlation";
-        auto encoded = encode_actor_packet (header, zlink::message_t::from (std::move (payload)));
+        auto encoded = detail::encode_actor_packet (header, zlink::message_t::from_json (payload));
         auto parts = std::move (encoded).take_items ();
         // Redeliver the received operation at the Framework ingress boundary.
         // Submitting another local client request would allocate a new operation.
@@ -761,12 +782,13 @@ TEST (FrameworkSessionSealRelay, different_sessions_do_not_share_replies_for_sam
                 original_session->to_bytes (), original_binding_generation,
                 original_session_sequence};
         record.application_record = std::make_shared<runtime::serial_application_record_t> ();
-        record.application_record->payload.emplace ();
-        record.application_record->payload->application_record = stateful::accepted_actor_record (
-          actor_header,
-          {"seal-dedup-source-owner", 17, record.source_node_rid.to_bytes (),
-           source.status ().lifecycle_generation ()},
-          protocol::application_payload_t::from_parts (parts), true);
+        record.application_record->payload ().emplace ();
+        record.application_record->payload ()->application_record =
+          stateful::accepted_actor_record (
+            actor_header,
+            {"seal-dedup-source-owner", 17, record.source_node_rid.to_bytes (),
+             source.status ().lifecycle_generation ()},
+            protocol::application_payload_t::from_parts (parts), true);
         auto replied = std::make_shared<std::promise<std::vector<zlink::message_t>>> ();
         auto reply = replied->get_future ();
         auto reply_calls = std::make_shared<std::atomic_uint32_t> (0);
@@ -795,7 +817,7 @@ TEST (FrameworkSessionSealRelay, different_sessions_do_not_share_replies_for_sam
               framework_error_kind_t::deadline_exceeded, "replayed request did not reply");
         EXPECT_EQ (reply_calls->load (), 1u);
         runtime::messaging::message_parts_t response (reply.get ());
-        return decode_actor_reply (response);
+        return detail::decode_actor_reply (response);
     };
     auto stale_route = *original_route;
     ++stale_route.owner_lease_generation;
@@ -805,20 +827,212 @@ TEST (FrameworkSessionSealRelay, different_sessions_do_not_share_replies_for_sam
     const auto duplicate = replay (original, "second-session-result");
     ASSERT_TRUE (duplicate);
     ASSERT_TRUE (duplicate.value ());
-    EXPECT_EQ (duplicate.value ()->to_string (), "second-session-result");
+    EXPECT_EQ (duplicate.value ()->parse_json<std::string> (), "second-session-result");
     EXPECT_EQ (executions.load (std::memory_order_relaxed), 2u);
     auto other_high = original;
     other_high.high ^= 0x100;
     const auto high_result = replay (other_high, "other-high-result");
     ASSERT_TRUE (high_result);
     ASSERT_TRUE (high_result.value ());
-    EXPECT_EQ (high_result.value ()->to_string (), "other-high-result");
+    EXPECT_EQ (high_result.value ()->parse_json<std::string> (), "other-high-result");
     EXPECT_EQ (executions.load (std::memory_order_relaxed), 3u);
     auto other_low = original;
     other_low.low ^= 0x100;
     const auto low_result = replay (other_low, "other-low-result");
     ASSERT_TRUE (low_result);
     ASSERT_TRUE (low_result.value ());
-    EXPECT_EQ (low_result.value ()->to_string (), "other-low-result");
+    EXPECT_EQ (low_result.value ()->parse_json<std::string> (), "other-low-result");
     EXPECT_EQ (executions.load (std::memory_order_relaxed), 4u);
+}
+
+// An Actor that just relocated to this node is bound with its new exact route
+// while this node's Location cache can still hold the previous owner's entry.
+// The bound request keeps the binding's fence; the stale cache entry must not
+// replace it, or the local owner rejects the request as a stale fence.
+TEST (FrameworkSessionSealRelay, bound_request_to_relocated_local_actor_keeps_binding_fence)
+{
+    namespace host = runtime::host;
+    namespace protocol = runtime::protocol;
+    runtime::in_memory_location_repository_t authority_repository;
+    const auto target_owner =
+      std::get<owner_lease_claimed_t> (
+        authority_repository.claim_owner_lease ("relocated-owner", 30s).result ().value ())
+        .token;
+    auto source_state = zlink::framework::test::runtime_failure_fixture<
+      zlink::framework::detail::mesh_node_builder_state_t> ("relocated-mesh");
+    source_state->core_context = std::make_shared<zlink::context_t> ();
+    source_state->listen_endpoint = "tcp://127.0.0.1:0";
+    source_state->routing_id = zlink::routing_id_t::from ("relocated-owner");
+    auto node = source_state->spot_state;
+    node->snapshot.actor_types.push_back ("player");
+    node->worker_executor = std::make_shared<runtime::offload_executor_t> (1, "relocated-worker");
+    serializer_registry_t serializers;
+    node->channel_runtime =
+      zlink::framework::test::runtime_failure_fixture<channel_runtime_state_t> ();
+    node->channel_runtime->serializers = &serializers;
+    auto spot = std::make_shared<spot_context_state_t> ();
+    spot->node = node;
+    spot->node_rid = node_rid_t::from_string ("relocated-owner");
+    spot->spot_id = spot_id_t ("relocated-user");
+    spot->spot_name = "user";
+    spot->spot_instance = std::make_shared<int> (1);
+    spot->channel_runtime = node->channel_runtime;
+    spot->serial_executor = node->worker_executor;
+    node->spot_contexts_by_id.emplace (spot->spot_id, spot_context_access_t::create (spot));
+    spot_node_builder_state_t::actor_factory_registration_t factory;
+    factory.actor_type = std::type_index (typeid (int));
+    factory.create_instance = [] (std::string) { return std::make_shared<int> (7); };
+    factory.configure_instance = [] (void *, const actor_ref_t &, void *) {};
+    node->actor_factories.emplace ("player", std::move (factory));
+    const auto actor = actor_ref_access_t::make (node_rid_t::from_string ("relocated-owner"),
+                                                 "player", "relocated-actor", 1);
+    const std::string actor_key = "player:relocated-actor";
+    node->actor_instances.emplace (actor_key, std::make_shared<int> (7));
+    node->actor_spot_ids.emplace (actor_key, spot->spot_id);
+    node->actor_generations.emplace (actor_key, 1);
+    node->actor_types_by_id.emplace ("relocated-actor", "player");
+    spot->handlers.push_back (
+      spot_handler_descriptor_t{spot_handler_kind_t::actor_request, "RelocatedRequest", "",
+                                std::type_index (typeid (int)), std::type_index (typeid (void)),
+                                std::type_index (typeid (int)), std::type_index (typeid (void))});
+    spot->handler_invokers.push_back (
+      [] (void *, void *, service_provider_t &, serializer_registry_t &,
+          const zlink::message_t &payload,
+          const spot_inbound_message_t &) -> task_t<zlink::message_t> { co_return payload; });
+    service_collection_t services;
+    services.add_singleton<actor_gateway_runtime_t> ();
+    services.add_singleton<serializer_registry_t> ();
+    node->root_services = services.build_provider ();
+    mesh_node_runtime_t source (source_state);
+    // The owner accepts only its current authority; its lease fence is checked
+    // against the header as for any accepted record.
+    auto current_authority = std::make_shared<std::atomic_uint64_t> (0);
+    source.configure_stateful_dispatch (
+      [target_owner, current_authority] (stateful::accepted_record_authority_query_t query)
+        -> task_t<std::optional<stateful::accepted_record_authority_t>> {
+          if (query.requested_authority_owner_generation != current_authority->load ())
+              co_return std::nullopt;
+          co_return stateful::accepted_record_authority_t{
+            {"relocated-source-owner", 17, query.source_node_routing_id,
+             query.source_node_generation},
+            static_cast<std::uint64_t> (target_owner.lease_generation)};
+      });
+    // The Location cache answers with the current route until the relocation
+    // binding exists, then with the previous owner's entry (its node and lease
+    // fence) it still holds.
+    std::optional<runtime::spot_address_t> current_address;
+    std::atomic_bool cache_holds_previous_owner{false};
+    source.configure_actor_route_resolver (
+      [&] (actor_ref_t) -> task_t<std::optional<runtime::spot_address_t>> {
+          auto address = current_address;
+          if (address && cache_holds_previous_owner.load ()) {
+              address->node_rid = zlink::routing_id_t::from ("relocated-previous-owner");
+              address->owner = {"relocated-previous-owner-lease",
+                                address->owner.lease_generation + 1};
+          }
+          co_return address;
+      });
+    source.start ();
+    const auto native_actor = source.create_actor ("player", "relocated-actor", {}, 2s);
+    ASSERT_EQ (native_actor.ref ().object_generation (), actor.object_generation ());
+    const auto native_object =
+      source.native_node ().resolve_actor_async (native_actor.ref ()).result ().value ();
+    ASSERT_TRUE (native_object);
+    current_authority->store (native_object->authority_owner_generation);
+    const auto status = source.status ();
+    current_address = runtime::spot_address_t{"relocated-mesh",
+                                              status.routing_id (),
+                                              source.native_node ().entry_spot ().spot_id (),
+                                              status.lifecycle_generation (),
+                                              {},
+                                              native_object->object_generation,
+                                              native_object->authority_owner_generation,
+                                              target_owner,
+                                              status.lifecycle_generation ()};
+    spot_node_runtime_t spots (node);
+    spots.record_actor_spot (actor, spot->spot_id);
+    std::mutex received_mutex;
+    std::optional<protocol::actor_route_fence_t> received_actor_route;
+    dispatch_loop_t source_loop (
+      source.native_node (),
+      [&] (const host::ready_record_t &owner, const host::receive_record_t &record,
+           std::vector<zlink::message_t> parts) {
+          if (record.kind != host::record_kind_t::actor_request)
+              return;
+          ASSERT_TRUE (record.application_record);
+          ASSERT_TRUE (record.application_record->payload ());
+          ASSERT_TRUE (record.application_record->payload ()->application_record);
+          const auto *accepted_body = std::get_if<protocol::frozen_actor_application_body_t> (
+            &record.application_record->payload ()->application_record->body);
+          ASSERT_NE (accepted_body, nullptr);
+          {
+              std::lock_guard lock (received_mutex);
+              received_actor_route = accepted_body->target;
+          }
+          const auto header = runtime::decode_mesh_record_header (record, parts, true);
+          ASSERT_TRUE (header);
+          ASSERT_TRUE (header.value ());
+          const auto complete = [record] {
+              if (record.complete_stateful_dispatch)
+                  record.complete_stateful_dispatch ();
+          };
+          bool deferred = false;
+          EXPECT_TRUE (spots.dispatch_mesh_record (owner, record, parts, header.value (),
+                                                   *node->root_services, serializers, complete,
+                                                   &deferred, record.before_application_handler));
+          if (!deferred)
+              complete ();
+      },
+      [] {});
+    // As the application gateway does, the relay carries the native Session
+    // binding's exact route: the Actor on this node with its new fence.
+    const protocol::actor_route_fence_t binding_route{
+      std::string (actor.actor_id ().value ()),
+      native_object->object_generation,
+      status.routing_id ().to_bytes (),
+      status.lifecycle_generation (),
+      native_object->authority_owner_generation,
+      static_cast<std::uint64_t> (target_owner.lease_generation)};
+    serializer_registry_t relay_serializers;
+    actor_gateway_runtime_t gateway;
+    gateway.bind_serializers (relay_serializers);
+    gateway.on_relay ([&] (const actor_ref_t &target, const actor_context_t &,
+                           const stream_header_t &header, const zlink::message_t &payload,
+                           std::optional<bound_session_relay_source_t> relay_source,
+                           std::chrono::milliseconds timeout) {
+        return source.relay_application_actor (target, header, payload, timeout, true,
+                                               std::move (relay_source), binding_route);
+    });
+    zlink_builder_t builder = zlink::framework::test::runtime_failure_builder ();
+    builder.stream ("relocated-stream").bind ("tcp://127.0.0.1:0");
+    auto streams = stream_runtime_t::from (builder);
+    auto stream = streams.open_session ("relocated-stream");
+    streams.attach_transport_writer (stream,
+                                     [] (const stream_header_t &, const zlink::message_t &) {
+                                         return task_t<void> (result_t<void>::success ());
+                                     });
+    auto manager = gateway.manager ();
+    session_actor_manager_access_t::attach (manager, std::move (stream));
+    auto binding = manager.bind (actor).async ().result ();
+    ASSERT_TRUE (binding) << (binding.error () ? binding.error ()->what () : "");
+    cache_holds_previous_owner.store (true);
+    stream_header_t header (stream_message_kind_t::request, stream_codec_t::json,
+                            stream_header_flags_t::none, 17, "RelocatedRequest");
+    header.with_correlation_id ("relocated-correlation");
+    const auto reply = [&] {
+        const stream_relay_dispatch_scope_t scope (header);
+        return binding.value ()
+          .relay_request (zlink::framework::message_t::from (std::string ("relocated-result")))
+          .timeout (2s)
+          .async ()
+          .result ();
+    }();
+    ASSERT_TRUE (reply) << (reply.error () ? reply.error ()->what () : "");
+    EXPECT_EQ (reply.value ().decode<std::string> (), "relocated-result");
+    std::lock_guard lock (received_mutex);
+    ASSERT_TRUE (received_actor_route);
+    EXPECT_EQ (received_actor_route->authority_owner_generation,
+               native_object->authority_owner_generation);
+    EXPECT_EQ (received_actor_route->owner_lease_generation,
+               static_cast<std::uint64_t> (target_owner.lease_generation));
 }

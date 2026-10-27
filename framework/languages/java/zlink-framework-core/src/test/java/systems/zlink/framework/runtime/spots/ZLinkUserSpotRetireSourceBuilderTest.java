@@ -358,10 +358,12 @@ final class ZLinkUserSpotRetireSourceBuilderTest {
             releaseTurn.complete(null);
             ZLinkUserSpotRelocationBarrier.Seal seal =
                     sealing.toCompletableFuture().get().orElseThrow();
+            var eventsAtSeal = List.copyOf(LiveSpot.events);
 
             assertTrue(barrier.abort(seal).toCompletableFuture().get());
             CompletableFuture.allOf(first.toCompletableFuture(), held.toCompletableFuture()).get();
 
+            assertEquals(List.of("turn"), eventsAtSeal);
             assertEquals(List.of("turn", "continued", "held"), List.copyOf(LiveSpot.events));
         }
     }

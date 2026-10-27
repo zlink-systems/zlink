@@ -1,9 +1,11 @@
+import type { ZLinkMeshDispatchAdmission } from '../admission';
 import type { ApplicationJobOrigin } from '../application-jobs/contracts';
 import { RuntimeDisposal } from '../disposal';
 import { randomUUID } from 'node:crypto';
 import {
   type ActorRef,
   type RoutingId,
+  type Type,
   type ZLinkActor,
   type ZLinkChannelClient,
   type ZLinkFanoutClient,
@@ -988,7 +990,8 @@ export class ZLinkSpotNodeRuntimeManager {
   async dispatchEntrySpotRecord(
     meshName: string,
     owner: ReadyRecord,
-    record: ReceiveRecord
+    record: ReceiveRecord,
+    admit?: ZLinkMeshDispatchAdmission
   ): Promise<boolean> {
     if (
       record.kind !== ReceiveKind.SpotSend &&
@@ -1008,11 +1011,13 @@ export class ZLinkSpotNodeRuntimeManager {
           'MeshNode Entry Spot multicast record is missing its topic.'
         );
       }
-      await activation.dispatchSubscriptionRecord(
-        record.topic,
-        record.parts,
-        record.sourceNodeRid as unknown as RoutingId | null
-      );
+      const dispatch = () =>
+        activation.dispatchSubscriptionRecord(
+          record.topic!,
+          record.parts,
+          record.sourceNodeRid as unknown as RoutingId | null
+        );
+      await (admit === undefined ? dispatch() : admit(dispatch));
       return true;
     }
     const envelope = decodeChannelEnvelope(
@@ -1021,26 +1026,36 @@ export class ZLinkSpotNodeRuntimeManager {
       this.options.dispatchErrors?.flow.flowCreationEnabled() ?? true
     );
     const codecs = { serializers: this.options.registration.messageSerializers };
-    const decodePayload = () => decodeChannelPayload(envelope, codecs);
+    const decodePayload = (messageType?: Type) =>
+      decodeChannelPayload(envelope, codecs, messageType);
     const context = {
       channelName: envelope.header.channelName,
       contentType: envelope.header.contentType
     };
-    if (record.kind === ReceiveKind.SpotSend) {
-      await activation.dispatchPacketEncoded(envelope.packetName, decodePayload, context, false);
-      return true;
-    }
     try {
-      const response = await activation.dispatchPacketEncoded(
-        envelope.packetName,
-        decodePayload,
-        context,
-        true
-      );
-      requireEntrySpotReply(
-        record.reply(encodeChannelReplyParts(envelope.header, response, codecs))
-      );
+      const dispatch = async () => {
+        if (record.kind === ReceiveKind.SpotSend) {
+          await activation.dispatchPacketEncoded(
+            envelope.packetName,
+            decodePayload,
+            context,
+            false
+          );
+          return;
+        }
+        const response = await activation.dispatchPacketEncoded(
+          envelope.packetName,
+          decodePayload,
+          context,
+          true
+        );
+        requireEntrySpotReply(
+          record.reply(encodeChannelReplyParts(envelope.header, response, codecs))
+        );
+      };
+      await (admit === undefined ? dispatch() : admit(dispatch));
     } catch (error) {
+      if (record.kind !== ReceiveKind.SpotRequest) throw error;
       requireEntrySpotReply(record.reply(encodeChannelErrorReplyParts(envelope.header, error)));
     }
     return true;

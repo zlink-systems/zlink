@@ -1,0 +1,258 @@
+{
+  "fixture": "zlink.framework.actor-error-payload",
+  "version": 1,
+  "cases": [
+    {
+      "id": "not_found",
+      "valid": true,
+      "expectedKind": 0,
+      "code": "not_found",
+      "message": "failure not_found",
+      "parts": [
+        "000d00000032f20401010000000000000001007b22636f6465223a226e6f745f666f756e64222c226d657373616765223a226661696c757265206e6f745f666f756e64227d"
+      ]
+    },
+    {
+      "id": "already_exists",
+      "valid": true,
+      "expectedKind": 1,
+      "code": "already_exists",
+      "message": "failure already_exists",
+      "parts": [
+        "000d0000003cf20401010000000000000001007b22636f6465223a22616c72656164795f657869737473222c226d657373616765223a226661696c75726520616c72656164795f657869737473227d"
+      ]
+    },
+    {
+      "id": "type_mismatch",
+      "valid": true,
+      "expectedKind": 2,
+      "code": "type_mismatch",
+      "message": "failure type_mismatch",
+      "parts": [
+        "000d0000003af20401010000000000000001007b22636f6465223a22747970655f6d69736d61746368222c226d657373616765223a226661696c75726520747970655f6d69736d61746368227d"
+      ]
+    },
+    {
+      "id": "not_configured",
+      "valid": true,
+      "expectedKind": 3,
+      "code": "not_configured",
+      "message": "failure not_configured",
+      "parts": [
+        "000d0000003cf20401010000000000000001007b22636f6465223a226e6f745f636f6e66696775726564222c226d657373616765223a226661696c757265206e6f745f636f6e66696775726564227d"
+      ]
+    },
+    {
+      "id": "rejected",
+      "valid": true,
+      "expectedKind": 4,
+      "code": "rejected",
+      "message": "failure rejected",
+      "parts": [
+        "000d00000030f20401010000000000000001007b22636f6465223a2272656a6563746564222c226d657373616765223a226661696c7572652072656a6563746564227d"
+      ]
+    },
+    {
+      "id": "unavailable",
+      "valid": true,
+      "expectedKind": 5,
+      "code": "unavailable",
+      "message": "failure unavailable",
+      "parts": [
+        "000d00000036f20401010000000000000001007b22636f6465223a22756e617661696c61626c65222c226d657373616765223a226661696c75726520756e617661696c61626c65227d"
+      ]
+    },
+    {
+      "id": "deadline_exceeded",
+      "valid": true,
+      "expectedKind": 6,
+      "code": "deadline_exceeded",
+      "message": "failure deadline_exceeded",
+      "parts": [
+        "000d00000042f20401010000000000000001007b22636f6465223a22646561646c696e655f6578636565646564222c226d657373616765223a226661696c75726520646561646c696e655f6578636565646564227d"
+      ]
+    },
+    {
+      "id": "shutting_down",
+      "valid": true,
+      "expectedKind": 7,
+      "code": "shutting_down",
+      "message": "failure shutting_down",
+      "parts": [
+        "000d0000003af20401010000000000000001007b22636f6465223a227368757474696e675f646f776e222c226d657373616765223a226661696c757265207368757474696e675f646f776e227d"
+      ]
+    },
+    {
+      "id": "protocol_error",
+      "valid": true,
+      "expectedKind": 8,
+      "code": "protocol_error",
+      "message": "failure protocol_error",
+      "parts": [
+        "000d0000003cf20401010000000000000001007b22636f6465223a2270726f746f636f6c5f6572726f72222c226d657373616765223a226661696c7572652070726f746f636f6c5f6572726f72227d"
+      ]
+    },
+    {
+      "id": "invalid_operation",
+      "valid": true,
+      "expectedKind": 9,
+      "code": "invalid_operation",
+      "message": "failure invalid_operation",
+      "parts": [
+        "000d00000042f20401010000000000000001007b22636f6465223a22696e76616c69645f6f7065726174696f6e222c226d657373616765223a226661696c75726520696e76616c69645f6f7065726174696f6e227d"
+      ]
+    },
+    {
+      "id": "data_lost",
+      "valid": true,
+      "expectedKind": 10,
+      "code": "data_lost",
+      "message": "failure data_lost",
+      "parts": [
+        "000d00000032f20401010000000000000001007b22636f6465223a22646174615f6c6f7374222c226d657373616765223a226661696c75726520646174615f6c6f7374227d"
+      ]
+    },
+    {
+      "id": "internal_failure",
+      "valid": true,
+      "expectedKind": 11,
+      "code": "internal_failure",
+      "message": "failure internal_failure",
+      "parts": [
+        "000d00000040f20401010000000000000001007b22636f6465223a22696e7465726e616c5f6661696c757265222c226d657373616765223a226661696c75726520696e7465726e616c5f6661696c757265227d"
+      ]
+    },
+    {
+      "id": "empty-message",
+      "valid": true,
+      "expectedKind": 5,
+      "code": "unavailable",
+      "message": "",
+      "parts": [
+        "000d00000023f20401010000000000000001007b22636f6465223a22756e617661696c61626c65222c226d657373616765223a22227d"
+      ]
+    },
+    {
+      "id": "utf8-message",
+      "valid": true,
+      "expectedKind": 0,
+      "code": "not_found",
+      "message": "처리할 수 없습니다",
+      "parts": [
+        "000d0000003bf20401010000000000000001007b22636f6465223a226e6f745f666f756e64222c226d657373616765223a22ecb298eba6aced95a020ec889820ec9786ec8ab5eb8b88eb8ba4227d"
+      ]
+    },
+    {
+      "id": "legacy-kind",
+      "valid": false,
+      "expectedKind": 8,
+      "parts": [
+        "000d0000001df20401010000000000000001007b226b696e64223a302c226d657373616765223a226c6567616379227d"
+      ]
+    },
+    {
+      "id": "unknown-code",
+      "valid": false,
+      "expectedKind": 8,
+      "parts": [
+        "000d0000002bf20401010000000000000001007b22636f6465223a226675747572655f6572726f72222c226d657373616765223a22756e6b6e6f776e227d"
+      ]
+    },
+    {
+      "id": "legacy-alias",
+      "valid": false,
+      "expectedKind": 8,
+      "parts": [
+        "000d00000036f20401010000000000000001007b22636f6465223a22726571756573745f7461726765745f6e6f745f666f756e64222c226d657373616765223a226c6567616379227d"
+      ]
+    },
+    {
+      "id": "missing-code",
+      "valid": false,
+      "expectedKind": 8,
+      "parts": [
+        "000d00000015f20401010000000000000001007b226d657373616765223a226d697373696e67227d"
+      ]
+    },
+    {
+      "id": "null-code",
+      "valid": false,
+      "expectedKind": 8,
+      "parts": [
+        "000d00000021f20401010000000000000001007b22636f6465223a6e756c6c2c226d657373616765223a226d697373696e67227d"
+      ]
+    },
+    {
+      "id": "numeric-code",
+      "valid": false,
+      "expectedKind": 8,
+      "parts": [
+        "000d0000001cf20401010000000000000001007b22636f6465223a302c226d657373616765223a2277726f6e67227d"
+      ]
+    },
+    {
+      "id": "missing-message",
+      "valid": false,
+      "expectedKind": 8,
+      "parts": [
+        "000d00000014f20401010000000000000001007b22636f6465223a226e6f745f666f756e64227d"
+      ]
+    },
+    {
+      "id": "null-message",
+      "valid": false,
+      "expectedKind": 8,
+      "parts": [
+        "000d00000023f20401010000000000000001007b22636f6465223a226e6f745f666f756e64222c226d657373616765223a6e756c6c7d"
+      ]
+    },
+    {
+      "id": "numeric-message",
+      "valid": false,
+      "expectedKind": 8,
+      "parts": [
+        "000d00000020f20401010000000000000001007b22636f6465223a226e6f745f666f756e64222c226d657373616765223a377d"
+      ]
+    },
+    {
+      "id": "malformed-json",
+      "valid": false,
+      "expectedKind": 8,
+      "parts": [
+        "000d00000001f20401010000000000000001007b"
+      ]
+    },
+    {
+      "id": "null-payload",
+      "valid": false,
+      "expectedKind": 8,
+      "parts": [
+        "000d00000004f20401010000000000000001006e756c6c"
+      ]
+    },
+    {
+      "id": "array-payload",
+      "valid": false,
+      "expectedKind": 8,
+      "parts": [
+        "000d00000002f20401010000000000000001005b5d"
+      ]
+    },
+    {
+      "id": "non-json-codec",
+      "valid": false,
+      "expectedKind": 8,
+      "parts": [
+        "000d0000002cf20402010000000000000001007b22636f6465223a226e6f745f666f756e64222c226d657373616765223a2277726f6e6720636f646563227d"
+      ]
+    },
+    {
+      "id": "invalid-utf8",
+      "valid": false,
+      "expectedKind": 8,
+      "parts": [
+        "000d00000022f20401010000000000000001007b22636f6465223a226e6f745f666f756e64222c226d657373616765223a22ff227d"
+      ]
+    }
+  ]
+}

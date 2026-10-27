@@ -41,6 +41,7 @@ import systems.zlink.framework.runtime.locations.ZLinkServiceAuthorityPayloadCod
 import systems.zlink.framework.runtime.messaging.ZLinkJsonMessageSerializer;
 import systems.zlink.framework.spots.ZLinkSpot;
 import systems.zlink.framework.spots.ZLinkSpotContext;
+import systems.zlink.framework.testutil.PerCallAllocation;
 
 import java.lang.reflect.Proxy;
 import java.time.Duration;
@@ -188,20 +189,15 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
     private static final int REPLAYS_PER_WINDOW = 32;
     private static final int REPLAY_WINDOWS = 8;
 
-    // Smallest total over several windows of replays. A diagnostic allocation, even one every
-    // few replays, is in every window, while a one-time runtime allocation lands in one only.
     private static long replayAllocatedBytes(Runnable operation) {
-        var bean =
-                (com.sun.management.ThreadMXBean)
-                        java.lang.management.ManagementFactory.getThreadMXBean();
-        long threadId = Thread.currentThread().threadId();
-        long minimum = Long.MAX_VALUE;
-        for (int window = 0; window < REPLAY_WINDOWS; window++) {
-            long before = bean.getThreadAllocatedBytes(threadId);
-            for (int replay = 0; replay < REPLAYS_PER_WINDOW; replay++) operation.run();
-            minimum = Math.min(minimum, bean.getThreadAllocatedBytes(threadId) - before);
-        }
-        return minimum;
+        return PerCallAllocation.minWindow(
+                () -> {
+                    operation.run();
+                    return null;
+                },
+                REPLAYS_PER_WINDOW,
+                0,
+                REPLAY_WINDOWS);
     }
 
     @Test
@@ -318,6 +314,7 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
         var actorBackend = new RestartActorBackend(operations);
         var actorStaging = new ZLinkStandaloneActorRelocationStagingOwner(actorBackend);
         CompletableFuture<Void> bindingRestore = new CompletableFuture<>();
+        CompletableFuture<Void> bindingRestoreEntered = new CompletableFuture<>();
         CompletableFuture<Void> normalization = new CompletableFuture<>();
         CompletableFuture<Void> normalizationEntered = new CompletableFuture<>();
         var endpoint =
@@ -346,6 +343,7 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                         (req, generations) -> {
                             assertEquals(java.util.Set.of(actorId), generations.keySet());
                             operations.add("install-target-binding");
+                            bindingRestoreEntered.complete(null);
                             return bindingRestore;
                         });
         var request =
@@ -383,13 +381,13 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
         coordinator.commit(prepared, OPEN).toCompletableFuture().join();
         authority.reads.set(0);
         CompletionStage<Void> publishing = endpoint.publish(request);
-        actorBackend.drain();
+        actorBackend.tasks.drainUntil(bindingRestoreEntered);
         assertFalse(publishing.toCompletableFuture().isDone());
         assertFalse(
                 operations.contains("command44"), "route switch must await binding installation");
         assertFalse(normalizationEntered.isDone());
         bindingRestore.complete(null);
-        actorBackend.drain();
+        actorBackend.tasks.drainUntil(normalizationEntered);
 
         var terminal = new CompletableFuture<Void>();
         try {
@@ -445,7 +443,7 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                     admission,
                     null,
                     null);
-            actorBackend.drain();
+            actorBackend.tasks.drainUntil(admission);
             assertTrue(admission.isDone() && !admission.isCompletedExceptionally());
             assertFalse(
                     handled.isDone(),
@@ -459,8 +457,9 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                             "normalize"),
                     operations);
             normalization.complete(null);
-            actorBackend.drain();
+            actorBackend.tasks.drainUntil(publishing);
             publishing.toCompletableFuture().join();
+            actorBackend.tasks.drainUntil(handled);
             assertTrue(handled.isDone());
             assertFalse(terminal.isDone(), "publication must not await handler terminal");
             terminal.complete(null);

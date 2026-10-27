@@ -1,6 +1,7 @@
 using System.Reflection;
 using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Runtime.Dispatch;
+using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Messaging;
 using Zlink.Framework.Runtime.Service;
 
@@ -48,8 +49,8 @@ public sealed class MeshPermitHandoffTests
         using var stop = new CancellationTokenSource();
         AddAdmittedPeer(node, sourceRid, sourceGeneration, routeGeneration);
         SetField(node, "_socket", socket);
-        using var poller = CreateReceivePoller(socket);
-        SetField(node, "_poller", poller);
+        await using var source = CreateReceiveSource(socket);
+        SetField(node, "_poller", source);
 
         try
         {
@@ -73,7 +74,7 @@ public sealed class MeshPermitHandoffTests
                 Assert.True(submission.EnsureAcceptedAsync().IsCompletedSuccessfully);
             }
 
-            FillIngress();
+            await FillIngressAsync();
             var atCapacity = queue.GetStatus();
             Assert.Equal((ulong)capacity, atCapacity.QueuedApplicationJobs);
             Assert.Equal((ulong)capacity, atCapacity.PermitsInUse);
@@ -83,9 +84,13 @@ public sealed class MeshPermitHandoffTests
             // With both permits owned by queued records, the next
             // drain registers its one waiter and returns before Recv. The next
             // ordinary record is therefore still on the ROUTER socket.
-            Assert.True(DrainWhenReadable(node, poller, stop.Token));
-            Assert.False(DrainWhenReadable(node, poller, stop.Token));
-            Assert.False(DrainWhenReadable(node, poller, stop.Token));
+            // An inactive source masks PollIn. Re-arm it and take the actual
+            // readable turn before checking the permit-blocked source twice.
+            Assert.True(
+                await DrainWhenReadableAsync(node, source, stop.Token, Timeout.InfiniteTimeSpan)
+            );
+            Assert.False(await DrainWhenReadableAsync(node, source, stop.Token, TimeSpan.Zero));
+            Assert.False(await DrainWhenReadableAsync(node, source, stop.Token, TimeSpan.Zero));
             Assert.Equal(1UL, queue.GetStatus().CapacityWaiters);
             Assert.Equal((uint)capacity, node.Status().PendingApplicationMessages);
             using var retained = Received.Create();
@@ -104,7 +109,7 @@ public sealed class MeshPermitHandoffTests
             DrainAndDisposeApplicationRecords(node, capacity);
             Assert.Equal(0UL, queue.GetStatus().PermitsInUse);
 
-            FillIngress();
+            await FillIngressAsync();
             var secondWave = queue.GetStatus();
             Assert.Equal((ulong)capacity, secondWave.QueuedApplicationJobs);
             Assert.Equal((ulong)capacity, secondWave.PermitsInUse);
@@ -119,14 +124,14 @@ public sealed class MeshPermitHandoffTests
             SetField(node, "_poller", null);
         }
 
-        void FillIngress()
+        async Task FillIngressAsync()
         {
             // A receive turn may stop at its time budget before exhausting
             // permits. All records are already supplied; at most two such
             // turns are needed to fill this queue, with no polling or delay.
             for (var turn = 0; turn < capacity; turn++)
             {
-                Drain(node, CancellationToken.None);
+                await DrainAsync(node, source, CancellationToken.None);
                 if (queue.GetStatus().PermitsInUse == capacity)
                     return;
             }
@@ -149,8 +154,8 @@ public sealed class MeshPermitHandoffTests
         );
         using var stop = new CancellationTokenSource();
         SetField(node, "_socket", socket);
-        using var poller = CreateReceivePoller(socket);
-        SetField(node, "_poller", poller);
+        await using var source = CreateReceiveSource(socket);
+        SetField(node, "_poller", source);
 
         // Arrange the producer's published reservation. The actual lease is
         // the handoff fact, including capacity for a successor waiter.
@@ -159,11 +164,11 @@ public sealed class MeshPermitHandoffTests
         ZLinkApplicationJobQueueLease? held = null;
         try
         {
-            Drain(node, stop.Token);
+            await DrainAsync(node, source, stop.Token);
             Assert.Equal(0UL, queue.GetStatus().PermitsInUse);
             held = await queue.AcquireAsync(stop.Token, ZLinkApplicationJobOrigin.Remote);
 
-            Drain(node, stop.Token);
+            await DrainAsync(node, source, stop.Token);
             Assert.Equal(1UL, queue.GetStatus().CapacityWaiters);
         }
         finally
@@ -189,7 +194,7 @@ public sealed class MeshPermitHandoffTests
         // from its single return point. Only the claimed records keep a permit.
         for (var rotation = 0; rotation < suppliedRecords; rotation++)
         {
-            Drain(fixture.Node, CancellationToken.None);
+            await fixture.DrainAsync(CancellationToken.None);
             var status = fixture.Queue.GetStatus();
             Assert.Equal(0UL, status.ReservedSupplyPermits);
             Assert.Equal(status.QueuedApplicationJobs, status.PermitsInUse);
@@ -221,8 +226,8 @@ public sealed class MeshPermitHandoffTests
         await using (var closed = fixture.Context.CreateRouterSocket())
             SetField(fixture.Node, "_socket", closed);
         // DisposeAsync has completed: the poller still holds the open socket.
-        var failure = Assert.Throws<TargetInvocationException>(() =>
-            Drain(fixture.Node, CancellationToken.None)
+        var failure = await Assert.ThrowsAsync<TargetInvocationException>(() =>
+            fixture.DrainAsync(CancellationToken.None)
         );
         Assert.IsAssignableFrom<Exception>(failure.InnerException);
 
@@ -238,7 +243,9 @@ public sealed class MeshPermitHandoffTests
         admitted.Dispose();
 
         // Without a waiter the same failure returns a counted reservation.
-        Assert.Throws<TargetInvocationException>(() => Drain(fixture.Node, CancellationToken.None));
+        await Assert.ThrowsAsync<TargetInvocationException>(() =>
+            fixture.DrainAsync(CancellationToken.None)
+        );
         Assert.Equal(0UL, fixture.Queue.GetStatus().PermitsInUse);
         Assert.Equal(4UL, fixture.Queue.GetStatus().PeakPermitsInUse);
     }
@@ -271,7 +278,7 @@ public sealed class MeshPermitHandoffTests
         // permit to the source at once, so at most two rotations post both.
         for (var rotation = 0; rotation < capacity; rotation++)
         {
-            Drain(fixture.Node, stop.Token);
+            await fixture.DrainAsync(stop.Token);
             if (fixture.Queue.GetStatus().QueuedApplicationJobs == capacity)
                 break;
         }
@@ -300,7 +307,7 @@ public sealed class MeshPermitHandoffTests
                 ZLinkApplicationJobOrigin.Remote
             )
         );
-        Drain(fixture.Node, CancellationToken.None);
+        await fixture.DrainAsync(CancellationToken.None);
         var last = fixture.Queue.GetStatus();
         Assert.Equal(1UL, last.QueuedApplicationJobs);
         Assert.Equal(0UL, last.ReservedSupplyPermits);
@@ -322,7 +329,7 @@ public sealed class MeshPermitHandoffTests
         var current = peer.RouteGeneration;
         peer.RouteGeneration = current + 1;
         fixture.SupplyNodeSend(0);
-        Drain(fixture.Node, CancellationToken.None);
+        await fixture.DrainAsync(CancellationToken.None);
         Assert.Equal(0UL, fixture.Queue.GetStatus().PermitsInUse);
         Assert.Equal(0U, fixture.Node.Status().PendingApplicationMessages);
         Assert.Equal(admittedDeadline, peer.Liveness.DeadlineTimestamp);
@@ -331,7 +338,7 @@ public sealed class MeshPermitHandoffTests
         peer.RouteGeneration = current;
         peer.State = MeshPeerState.NotRequired;
         fixture.SupplyNodeSend(1);
-        Drain(fixture.Node, CancellationToken.None);
+        await fixture.DrainAsync(CancellationToken.None);
         Assert.Equal(0U, fixture.Node.Status().PendingApplicationMessages);
         Assert.Equal(admittedDeadline, peer.Liveness.DeadlineTimestamp);
 
@@ -339,7 +346,7 @@ public sealed class MeshPermitHandoffTests
         // peer's liveness deadline in the same node turn.
         peer.State = MeshPeerState.Admitted;
         fixture.SupplyNodeSend(2);
-        Drain(fixture.Node, CancellationToken.None);
+        await fixture.DrainAsync(CancellationToken.None);
         Assert.Equal(1U, fixture.Node.Status().PendingApplicationMessages);
         Assert.True(peer.Liveness.DeadlineTimestamp > admittedDeadline);
         Assert.Equal(1, DrainAndDisposeAllApplicationRecords(fixture.Node));
@@ -351,9 +358,9 @@ public sealed class MeshPermitHandoffTests
         await using var fixture = await RawIngressFixture.CreateAsync(4, "reply-capture");
         fixture.SupplyNodeSend(0);
         var request = fixture.SupplyNodeRequest(7);
-        Drain(fixture.Node, CancellationToken.None);
+        await fixture.DrainAsync(CancellationToken.None);
         if (fixture.Node.Status().PendingApplicationMessages < 2)
-            Drain(fixture.Node, CancellationToken.None);
+            await fixture.DrainAsync(CancellationToken.None);
 
         using var ready = new MeshReadyBatch();
         fixture.Node.DrainReady(MeshReadyDomains.Application, ready, RecvFlags.DontWait);
@@ -415,7 +422,7 @@ public sealed class MeshPermitHandoffTests
         private const ulong SourceGeneration = 17;
         private IDealerSocket _dealer = null!;
         private IRouterSocket _socket = null!;
-        private IPoller _poller = null!;
+        private ZLinkProcessExecutionPool.ReceiveSource _source = null!;
         private IPoller? _completionPoller;
 
         internal Systems.Zlink.IContext Context { get; private init; } = null!;
@@ -448,9 +455,9 @@ public sealed class MeshPermitHandoffTests
             AddAdmittedPeer(node, sourceRid, SourceGeneration, routeGeneration);
             var peer = Field<Dictionary<RoutingId, ZLinkMeshPeer>>(node, "_peersByRid")[sourceRid];
             SetField(node, "_socket", socket);
-            var poller = CreateReceivePoller(socket);
-            SetField(node, "_poller", poller);
-            await Task.CompletedTask;
+            var source = CreateReceiveSource(socket);
+            SetField(node, "_poller", source);
+            await source.ResumeAsync().ConfigureAwait(false);
             return new RawIngressFixture
             {
                 Context = context,
@@ -459,9 +466,12 @@ public sealed class MeshPermitHandoffTests
                 Node = node,
                 _dealer = dealer,
                 _socket = socket,
-                _poller = poller,
+                _source = source,
             };
         }
+
+        internal Task DrainAsync(CancellationToken stop) =>
+            MeshPermitHandoffTests.DrainAsync(Node, _source, stop);
 
         internal void SupplyNodeSend(int index) =>
             Supply(
@@ -532,38 +542,49 @@ public sealed class MeshPermitHandoffTests
             await Node.DisposeAsync();
             Queue.Dispose();
             _completionPoller?.Dispose();
-            _poller.Dispose();
+            await _source.DisposeAsync();
             await _socket.DisposeAsync();
             await _dealer.DisposeAsync();
             await Context.DisposeAsync();
         }
     }
 
-    private static IPoller CreateReceivePoller(IRouterSocket socket)
+    private static ZLinkProcessExecutionPool.ReceiveSource CreateReceiveSource(IRouterSocket socket)
     {
-        var poller = Systems.Zlink.Zlink.CreatePoller();
-        poller.Add(
+        var source = ZLinkProcessExecutionPool.CreateReceiveSource();
+        source.Add(
             socket,
             PollEventFlags.PollIn | PollEventFlags.PollCompletion | PollEventFlags.PollErr,
             ReceiveSocketSlot
         );
-        return poller;
+        return source;
     }
 
-    private static bool DrainWhenReadable(
+    private static async Task<bool> DrainWhenReadableAsync(
         ZLinkManagedMeshNode node,
-        IPoller poller,
-        CancellationToken stop
+        ZLinkProcessExecutionPool.ReceiveSource source,
+        CancellationToken stop,
+        TimeSpan waitBound
     )
     {
-        var events = new PollEvent[1];
+        var events = new ZLinkProcessExecutionPool.ReceiveEvent[1];
         if (
-            poller.Wait(events, TimeSpan.Zero) == 0
+            await source.WaitAsync(events, waitBound).ConfigureAwait(false) == 0
             || (events[0].Revents & PollEventFlags.PollIn) == 0
         )
             return false;
         Drain(node, stop);
         return true;
+    }
+
+    private static async Task DrainAsync(
+        ZLinkManagedMeshNode node,
+        ZLinkProcessExecutionPool.ReceiveSource source,
+        CancellationToken stop
+    )
+    {
+        await source.ResumeAsync().ConfigureAwait(false);
+        Drain(node, stop);
     }
 
     private static void Drain(ZLinkManagedMeshNode node, CancellationToken stop) =>

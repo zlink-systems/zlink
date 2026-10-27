@@ -349,7 +349,9 @@ final class ZLinkSameNodeJoinCommitTest {
         @Override
         public CompletionStage<Void> onJoinedActor(Player actor) {
             EVENTS.add("room-joined");
-            return CompletableFuture.completedFuture(null);
+            return context.runIoWorker(cancellation -> CompletableFuture.completedFuture("joined"))
+                    .yield()
+                    .thenAccept(value -> assertEquals("joined", value));
         }
 
         @Override

@@ -223,7 +223,23 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
         var cached = await TryGetCachedAsync(_actorRoutes, key).ConfigureAwait(false);
         if (cached.Found)
             return (cached.Row, true, ZLinkLocationResolutionKind.Ready);
+        return await ReadActorRowCoreAsync(key, cancellationToken).ConfigureAwait(false);
+    }
 
+    /// <summary>Reads the Actor's current row from the Location Store, never from the route
+    /// cache, and caches the result. Every Session bind reads here for its fence
+    /// (Session-Actor binding §5).</summary>
+    internal async ValueTask<ZLinkResolvedActorLocation?> ReadActorRowAsync(
+        ZLinkActorLocationKey key,
+        CancellationToken cancellationToken = default
+    ) => (await ReadActorRowCoreAsync(key, cancellationToken).ConfigureAwait(false)).Row;
+
+    private async ValueTask<(
+        ZLinkResolvedActorLocation? Row,
+        bool LiveRowPresent,
+        ZLinkLocationResolutionKind Kind
+    )> ReadActorRowCoreAsync(ZLinkActorLocationKey key, CancellationToken cancellationToken)
+    {
         var authority = await ZLinkLocationStoreRead
             .ExecuteAsync(
                 _health,

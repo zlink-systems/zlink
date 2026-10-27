@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #pragma once
 #include "runtime/locations/actor_authority_payload.hpp"
+#include "runtime/locations/relocation_authority_payload.hpp"
 
 #include "../../../../../../runtime/protocol/generated/cpp/service_wire_constants.hpp"
 
@@ -41,6 +42,8 @@ struct owner_lease_row_t
 
 class in_memory_location_repository_t : public location_repository_t
 {
+    friend struct in_memory_location_repository_test_access_t;
+
   public:
     in_memory_location_repository_t () : _lane_executor (), _lane (_lane_executor) {}
 
@@ -130,30 +133,28 @@ class in_memory_location_repository_t : public location_repository_t
     task_t<location_page_t<mesh_node_descriptor_t>>
     list_mesh_nodes (std::string mesh_name, location_page_request_t page = {}) override
     {
-        return _lane
-          .run ([&] {
-              std::vector<mesh_node_descriptor_t> matched;
-              for (const auto &[_, descriptor] : _mesh_nodes) {
-                  if (descriptor.mesh_name == mesh_name) {
-                      auto projected = descriptor;
-                      apply_capacity_projection (projected);
-                      matched.push_back (std::move (projected));
-                  }
-              }
-              const auto offset =
-                page.continuation_token ? parse_offset (*page.continuation_token) : 0;
-              const auto page_size =
-                page.page_size > 0 ? static_cast<std::size_t> (page.page_size) : matched.size ();
-              location_page_t<mesh_node_descriptor_t> result;
-              for (std::size_t index = offset;
-                   index < matched.size () && result.items.size () < page_size; ++index)
-                  result.items.push_back (matched[index]);
-              const auto next = offset + result.items.size ();
-              if (next < matched.size ())
-                  result.continuation_token = std::to_string (next);
-              return completed (std::move (result));
-          })
-          .get ();
+        return _lane.run_task ([this, mesh_name = std::move (mesh_name), page = std::move (page)] {
+            std::vector<mesh_node_descriptor_t> matched;
+            for (const auto &[_, descriptor] : _mesh_nodes) {
+                if (descriptor.mesh_name == mesh_name) {
+                    auto projected = descriptor;
+                    apply_capacity_projection (projected);
+                    matched.push_back (std::move (projected));
+                }
+            }
+            const auto offset =
+              page.continuation_token ? parse_offset (*page.continuation_token) : 0;
+            const auto page_size =
+              page.page_size > 0 ? static_cast<std::size_t> (page.page_size) : matched.size ();
+            location_page_t<mesh_node_descriptor_t> result;
+            for (std::size_t index = offset;
+                 index < matched.size () && result.items.size () < page_size; ++index)
+                result.items.push_back (matched[index]);
+            const auto next = offset + result.items.size ();
+            if (next < matched.size ())
+                result.continuation_token = std::to_string (next);
+            return result;
+        });
     }
 
     task_t<location_write_result_t>
@@ -408,22 +409,20 @@ class in_memory_location_repository_t : public location_repository_t
 
     task_t<owner_lease_read_result_t> read_owner_lease (std::string owner_id) override
     {
-        return _lane
-          .run ([&] {
-              const auto now = clock_t::now ();
-              const auto lease = _leases.find (owner_id);
-              const auto generation = _active_lease_generations.find (owner_id);
-              if (lease == _leases.end () || generation == _active_lease_generations.end ()
-                  || lease->second.lease_expires_at <= now) {
-                  if (lease != _leases.end ())
-                      _leases.erase (lease);
-                  _active_lease_generations.erase (owner_id);
-                  return completed (owner_lease_read_result_t{owner_lease_missing_t{}});
-              }
-              return completed (owner_lease_read_result_t{owner_lease_found_t{
-                {std::move (owner_id), generation->second}, lease->second.lease_expires_at, now}});
-          })
-          .get ();
+        return _lane.run_task ([this, owner_id = std::move (owner_id)] () mutable {
+            const auto now = clock_t::now ();
+            const auto lease = _leases.find (owner_id);
+            const auto generation = _active_lease_generations.find (owner_id);
+            if (lease == _leases.end () || generation == _active_lease_generations.end ()
+                || lease->second.lease_expires_at <= now) {
+                if (lease != _leases.end ())
+                    _leases.erase (lease);
+                _active_lease_generations.erase (owner_id);
+                return owner_lease_read_result_t{owner_lease_missing_t{}};
+            }
+            return owner_lease_read_result_t{owner_lease_found_t{
+              {std::move (owner_id), generation->second}, lease->second.lease_expires_at, now}};
+        });
     }
 
     task_t<owner_lease_renew_result_t>
@@ -1352,9 +1351,11 @@ class in_memory_location_repository_t : public location_repository_t
                 || old_member->current_spot_generation != member->current_spot_generation)) {
             const auto spot =
               _authorities.find (spot_authority_key (member->current_spot_id).value);
-            const auto ready = spot == _authorities.end ()
-                                 ? std::optional<user_spot_authority_payload_t>{}
-                                 : decode_ready_user_spot_authority_payload (spot->second.payload);
+            const auto ready =
+              spot == _authorities.end ()
+                ? std::optional<user_spot_authority_payload_t>{}
+                : stateful::authority_relocation_payload_codec_t::decode_ready_user_spot (
+                    spot->second);
             if (!ready || ready->spot_id != member->current_spot_id
                 || spot->second.allocation.object_kind != placement_object_kind_t::user_spot
                 || spot->second.allocation.state != placement_allocation_state_t::active
@@ -1410,7 +1411,8 @@ class in_memory_location_repository_t : public location_repository_t
                 throw framework_exception_t (framework_error_kind_t::unavailable,
                                              "Actor is not steady Ready");
             if (snapshot.allocation.object_kind == placement_object_kind_t::user_spot) {
-                const auto spot = decode_ready_user_spot_authority_payload (snapshot.payload);
+                const auto spot =
+                  stateful::authority_relocation_payload_codec_t::decode_ready_user_spot (snapshot);
                 if (!spot || spot->spot_id != request->key.global_id
                     || spot->stable_type != request->intent.stable_type)
                     throw framework_exception_t (framework_error_kind_t::unavailable,

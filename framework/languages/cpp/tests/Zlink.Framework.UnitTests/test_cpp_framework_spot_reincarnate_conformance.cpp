@@ -833,7 +833,8 @@ class exercise_t final : public zf::hosted_service_t
                                 .async<reply_t> ()
                                 .result ();
         if (!accepted)
-            throw std::runtime_error ("application Close trigger failed");
+            throw std::runtime_error (accepted.error () ? accepted.error ()->what ()
+                                                        : "application Close trigger failed");
         require_ready (closing, "public OnClosing did not start");
         {
             std::lock_guard lock (_evidence->mutex);

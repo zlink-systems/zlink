@@ -6,6 +6,12 @@ import { isPromiseLike } from './abort';
 import { ReceiveKind, type ReceiveRecord } from './foundation/service-runtime-contracts';
 const BACKING_ARRAY_COMPACTION_MIN_HEAD = 1024;
 
+/** Runs host admission inside the domain's request completion boundary. */
+export type ZLinkMeshDispatchAdmission = (
+  dispatch: () => void | Promise<void>,
+  onRejected?: (error: unknown) => void | Promise<void>
+) => void | Promise<void>;
+
 /** 소비한 배열 prefix가 정리 조건에 도달했는지 판정합니다. */
 export function shouldCompactBackingArray(head: number, length: number): boolean {
   return head >= BACKING_ARRAY_COMPACTION_MIN_HEAD && head * 2 >= length;
@@ -90,15 +96,16 @@ export class ZLinkRuntimeAdmissionGate {
     meshName: string,
     operation: string,
     work: () => T | Promise<T>,
-    kind?: ReceiveRecord['kind']
+    kind?: ReceiveRecord['kind'],
+    onRejected?: (error: unknown) => T | Promise<T>
   ): T | Promise<T> {
     let state: ZLinkMeshAdmissionState;
     let result: T | Promise<T>;
     try {
       state = this.enter(meshName, operation, kind);
     } catch (error) {
-      // A closed admission and a failing dispatch stay asynchronous rejections.
-      return Promise.reject(error);
+      // The domain owns admission rejection completion, just as it owns handler failure.
+      return onRejected === undefined ? Promise.reject(error) : onRejected(error);
     }
     try {
       result = work();

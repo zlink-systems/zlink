@@ -32,6 +32,58 @@ import java.util.concurrent.atomic.AtomicReference;
 
 final class ZLinkSpotOutboundFailureTest {
     @Test
+    void asynchronousOutboundCallbackRetainsTheSerialQueueUntilCompletion() {
+        withRuntime(
+                (runtime, outbound, executor) -> {
+                    var release = new CompletableFuture<Void>();
+                    var callbackEntered = new AtomicBoolean();
+                    var followingRan = new AtomicBoolean();
+                    var queue =
+                            new ZLinkSerialExecutionQueue(
+                                    executor, ZLinkExecutionLanePolicy.spot());
+                    try {
+                        var callback =
+                                queue.enqueue(
+                                        () ->
+                                                runtime.runWithOutbound(
+                                                        outbound,
+                                                        () -> {
+                                                            assertTrue(queue.isCurrent());
+                                                            assertSame(
+                                                                    outbound,
+                                                                    ZLinkSuspendInvocationContext
+                                                                            .currentSpotOutbound());
+                                                            callbackEntered.set(true);
+                                                            return release;
+                                                        }),
+                                        null);
+                        var following =
+                                queue.enqueue(
+                                        () -> {
+                                            followingRan.set(true);
+                                            return CompletableFuture.completedFuture(null);
+                                        },
+                                        null);
+                        executor.drain();
+                        assertTrue(callbackEntered.get());
+                        assertFalse(callback.toCompletableFuture().isDone());
+                        assertFalse(followingRan.get());
+                        assertFalse(following.toCompletableFuture().isDone());
+                        assertNull(ZLinkSuspendInvocationContext.currentSpotOutbound());
+
+                        release.complete(null);
+                        executor.drain();
+                        callback.toCompletableFuture().join();
+                        following.toCompletableFuture().join();
+                        assertTrue(followingRan.get());
+                        assertTrue(queue.awaitQuiescence().toCompletableFuture().isDone());
+                    } finally {
+                        queue.close();
+                    }
+                });
+    }
+
+    @Test
     void synchronousFailureReturnsFailedStageAndRestoresOutboundScope() {
         withRuntime(
                 (runtime, outbound, executor) -> {

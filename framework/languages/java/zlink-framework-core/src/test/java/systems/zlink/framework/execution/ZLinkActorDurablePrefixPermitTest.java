@@ -707,7 +707,7 @@ final class ZLinkActorDurablePrefixPermitTest {
     }
 
     @org.junit.jupiter.api.RepeatedTest(20)
-    void propagatedSpotCarrierAdmitsActorOnceWithoutGateControlThreadLocal() {
+    void propagatedSpotCarrierRetainsItsQueueRecordUntilActorAdmissionCompletes() {
         var executor = new ManualExecutor();
         var carriers = new ArrayDeque<Runnable>();
         var spot = new ZLinkSerialExecutionQueue(executor, ZLinkExecutionLanePolicy.spot());
@@ -730,12 +730,13 @@ final class ZLinkActorDurablePrefixPermitTest {
             var outer =
                     spot.enqueue(
                                     () -> {
-                                        ZLinkSerialExecutionQueue.deferCurrentReleaseUntil(
-                                                carrierFinished);
                                         ZLinkSerialExecutionQueue.propagateCurrent(
                                                         carriers::addLast)
                                                 .execute(
                                                         () -> {
+                                                            assertTrue(
+                                                                    spot.isCurrent(),
+                                                                    "carrier must resume the owning Spot record");
                                                             try (var scope =
                                                                     ZLinkApplicationJobContext
                                                                             .enter(permit)) {
@@ -766,10 +767,20 @@ final class ZLinkActorDurablePrefixPermitTest {
                                     },
                                     null)
                             .toCompletableFuture();
+            var following =
+                    spot.enqueue(
+                                    () -> {
+                                        calls.add("spot");
+                                        return CompletableFuture.completedFuture(null);
+                                    },
+                                    null)
+                            .toCompletableFuture();
             try {
                 executor.drain();
                 assertEquals(1, carriers.size());
                 assertFalse(outer.isDone());
+                assertFalse(following.isDone(), "callback result retains the owning Spot record");
+                assertTrue(calls.isEmpty());
                 assertDoesNotThrow(() -> carriers.removeFirst().run());
                 assertNotNull(accepted.get());
                 assertFalse(
@@ -780,7 +791,9 @@ final class ZLinkActorDurablePrefixPermitTest {
                 outer.join();
                 assertTrue(accepted.get().isDone());
                 accepted.get().join();
-                assertEquals(List.of("actor"), calls);
+                assertTrue(following.isDone());
+                following.join();
+                assertEquals(List.of("actor", "spot"), calls.stream().sorted().toList());
                 assertEquals(0, jobs.snapshot().permitsInUse());
                 assertEquals(0, jobs.snapshot().capacityWaiters());
             } finally {

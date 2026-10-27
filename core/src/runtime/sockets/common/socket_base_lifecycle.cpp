@@ -957,14 +957,16 @@ bool zlink::socket_base_t::stop_async_mailbox_processing (
         // coordinator directly because it already holds this gate.
         scoped_lock_t progress_lock (
           _transport_pair_owner_progress_sync);
-        // Completion ownership changes only who drains replies. A monitor
-        // keeps its command lease even while that public poller stays idle.
+        // Completion ownership changes only who drains replies. A monitor and
+        // a temporary transport owner keep their command lease even while that
+        // public poller stays idle: the pair READY/attach commands queued under
+        // the transport lease must not wait for an application poll.
         if (monitor_runtime ().owns_async_command_processing.load (
-              std::memory_order_acquire))
+              std::memory_order_acquire)
+            || _transport_pair_owner_progress_refs != 0)
             return false;
         if (require_unowned_
-            && (_transport_pair_owner_progress_refs != 0
-                || _async_command_processing_retained.load (
+            && (_async_command_processing_retained.load (
                   std::memory_order_acquire)
                 || _completion_poller_refs.load (
                   std::memory_order_acquire)

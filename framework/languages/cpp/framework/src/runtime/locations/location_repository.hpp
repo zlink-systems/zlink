@@ -477,6 +477,11 @@ class location_repository_t
 {
   public:
     virtual ~location_repository_t () = default;
+    virtual task_t<void> refresh_capacity_metrics (std::string mesh_name, zlink::routing_id_t rid)
+    {
+        co_return;
+    }
+
     virtual task_t<location_write_result_t> update_mesh_node (mesh_node_descriptor_t descriptor,
                                                               location_write_intent_t intent) = 0;
     virtual task_t<location_write_status_t> remove_mesh_node (mesh_node_descriptor_key_t key,

@@ -33,9 +33,8 @@ final class ZLinkActorDispatchSerials {
     private final ZLinkActorDispatchTarget legacyTarget;
     private final Function<String, CompletionStage<ZLinkActorDispatchTarget.ActivationSnapshot>>
             targetResolver;
-    // Source cleanup can outlive its Actor registry entry. Keep the accepted
-    // turn's Spot target so queue retirement never falls back to a different
-    // coordinator after that registry entry disappears.
+    // Retain accepted Actor turns until retirement, including turns that still
+    // belong to the source Spot after membership moves to another Spot.
     private final Map<String, QueuedTurn> actorTargets = new HashMap<>();
     private final ZLinkStateLane stateLane = new ZLinkStateLane();
     private final Map<String, TeardownSetup> teardowns = new HashMap<>();
@@ -489,14 +488,8 @@ final class ZLinkActorDispatchSerials {
                             if (setup.barrier() != null) setup.barrier().complete(null);
                             CompletionStage<ZLinkActorDispatchTarget.ActivationSnapshot>
                                     resolution =
-                                            setup.target() == null
-                                                    ? ZLinkHandlerStages.fromStageSupplier(
-                                                            () -> targetResolver.apply(actorId))
-                                                    : CompletableFuture.completedFuture(
-                                                            new ZLinkActorDispatchTarget
-                                                                    .ActivationSnapshot(
-                                                                    setup.target(),
-                                                                    setup.incarnation()));
+                                            ZLinkHandlerStages.fromStageSupplier(
+                                                    () -> targetResolver.apply(actorId));
                             return resolution
                                     .thenCompose(
                                             snapshot ->
@@ -527,23 +520,18 @@ final class ZLinkActorDispatchSerials {
                                     .thenCompose(
                                             resolved -> {
                                                 if (resolved == null) {
-                                                    completeTeardown(actorId, setup, null);
+                                                    completeTeardown(actorId, setup, null, null);
                                                     return CompletableFuture.<Void>completedFuture(
                                                             null);
                                                 }
                                                 CompletionStage<ZLinkActorSerialExecutor>
                                                         activation =
-                                                                resolved.activation() == null
-                                                                        ? ZLinkHandlerStages
-                                                                                .fromStageSupplier(
-                                                                                        () ->
-                                                                                                resolved.target()
-                                                                                                        .claimActorQueue(
-                                                                                                                actorId))
-                                                                        : CompletableFuture
-                                                                                .completedFuture(
-                                                                                        resolved
-                                                                                                .activation());
+                                                                ZLinkHandlerStages
+                                                                        .fromStageSupplier(
+                                                                                () ->
+                                                                                        resolved.target()
+                                                                                                .claimActorQueue(
+                                                                                                        actorId));
                                                 return activation.thenCompose(
                                                         accepted -> {
                                                             TeardownSetup claimed =
@@ -556,16 +544,15 @@ final class ZLinkActorDispatchSerials {
                                                                             accepted);
                                                             return onRegistry(
                                                                             () -> {
-                                                                                actorTargets
-                                                                                        .putIfAbsent(
+                                                                                actorTargets.put(
+                                                                                        actorId,
+                                                                                        new QueuedTurn(
                                                                                                 actorId,
-                                                                                                new QueuedTurn(
-                                                                                                        actorId,
-                                                                                                        claimed
-                                                                                                                .target(),
-                                                                                                        claimed
-                                                                                                                .incarnation(),
-                                                                                                        accepted));
+                                                                                                claimed
+                                                                                                        .target(),
+                                                                                                claimed
+                                                                                                        .incarnation(),
+                                                                                                accepted));
                                                                                 return null;
                                                                             })
                                                                     .thenCompose(
@@ -578,6 +565,7 @@ final class ZLinkActorDispatchSerials {
                                                                                 startTeardown(
                                                                                         actorId,
                                                                                         claimed,
+                                                                                        setup,
                                                                                         failure
                                                                                                         == null
                                                                                                 ? cleanup
@@ -598,7 +586,7 @@ final class ZLinkActorDispatchSerials {
                                     .handle(
                                             (ignored, failure) -> {
                                                 if (failure != null)
-                                                    completeTeardown(actorId, setup, failure);
+                                                    completeTeardown(actorId, setup, null, failure);
                                                 return setup.teardown();
                                             });
                         });
@@ -770,29 +758,54 @@ final class ZLinkActorDispatchSerials {
     }
 
     private void startTeardown(
-            String actorId, TeardownSetup setup, Supplier<CompletionStage<Void>> cleanup) {
+            String actorId,
+            TeardownSetup setup,
+            TeardownSetup previous,
+            Supplier<CompletionStage<Void>> cleanup) {
         try {
-            setup.activation().relocationLane().sealClosingAdmission();
-            setup.activation()
-                    .relocationLane()
-                    .awaitQuiescence(ZLinkSerialExecutionQueue.Quiescence.APPLICATION)
+            var lanes =
+                    Stream.of(previous.activation(), setup.activation())
+                            .filter(Objects::nonNull)
+                            .map(ZLinkActorSerialExecutor::relocationLane)
+                            .distinct()
+                            .toList();
+            lanes.forEach(ZLinkSerialExecutionQueue::sealClosingAdmission);
+            ZLinkHandlerStages.completeAll(
+                            lanes.stream()
+                                    .<Supplier<? extends CompletionStage<Void>>>map(
+                                            lane ->
+                                                    () ->
+                                                            lane.awaitQuiescence(
+                                                                    ZLinkSerialExecutionQueue
+                                                                            .Quiescence
+                                                                            .APPLICATION))
+                                    .toList())
                     .thenCompose(ignored -> setup.activation().executeLifecycle(cleanup))
-                    .whenComplete((ignored, error) -> completeTeardown(actorId, setup, error));
+                    .whenComplete(
+                            (ignored, error) -> completeTeardown(actorId, setup, previous, error));
         } catch (RuntimeException failure) {
-            completeTeardown(actorId, setup, failure);
+            completeTeardown(actorId, setup, previous, failure);
         }
     }
 
-    private void completeTeardown(String actorId, TeardownSetup setup, Throwable error) {
-        CompletionStage<Void> removed;
-        try {
-            removed =
-                    setup.activation() == null
-                            ? COMPLETED
-                            : setup.target().removeActorQueueAsync(actorId, setup.activation());
-        } catch (RuntimeException | Error failure) {
-            removed = CompletableFuture.failedFuture(failure);
-        }
+    private void completeTeardown(
+            String actorId, TeardownSetup setup, TeardownSetup previous, Throwable error) {
+        var retirements =
+                previous == null || previous.activation() == setup.activation()
+                        ? List.of(setup)
+                        : List.of(previous, setup);
+        CompletionStage<Void> removed =
+                ZLinkHandlerStages.completeAll(
+                        retirements.stream()
+                                .filter(retired -> retired.activation() != null)
+                                .<Supplier<? extends CompletionStage<Void>>>map(
+                                        retired ->
+                                                () ->
+                                                        retired.target()
+                                                                .removeActorQueueAsync(
+                                                                        actorId,
+                                                                        retired.activation()))
+                                .toList());
         removed.whenComplete(
                 (ignored, removalFailure) -> {
                     CompletionStage<Void> registration;

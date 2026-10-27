@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #include "../support/runtime_failure_fixture.hpp"
+#include "../support/runtime_metric_contract.hpp"
 
 #include <zlink/framework.hpp>
 #include <zlink/stream_connector.hpp>
@@ -80,10 +81,12 @@ class sample_session_t final : public zlink::framework::packet_stream_session_t
     zlink::framework::task_t<void>
     on_packet (zlink::framework::stream_t &stream,
                const zlink::framework::session_message_context_t &dispatch,
-               const zlink::message_t &payload) override
+               const zlink::framework::message_t &payload) override
     {
         events.push_back ("packet:" + std::string (dispatch.packet_name) + ":"
-                          + payload.to_string ());
+                          + zlink::framework::detail::message_to_raw (
+                              payload, zlink::framework::serializer_registry_t{})
+                              .to_string ());
         last_can_reply = dispatch.can_reply;
         last_metadata = dispatch.metadata;
         last_actor_id =
@@ -130,7 +133,7 @@ class reentrant_session_t final : public zlink::framework::packet_stream_session
 
     zlink::framework::task_t<void> on_packet (zlink::framework::stream_t &,
                                               const zlink::framework::session_message_context_t &,
-                                              const zlink::message_t &) override
+                                              const zlink::framework::message_t &) override
     {
         co_return;
     }
@@ -164,7 +167,7 @@ class duplicate_reply_session_t final : public zlink::framework::packet_stream_s
 
     zlink::framework::task_t<void> on_packet (zlink::framework::stream_t &stream,
                                               const zlink::framework::session_message_context_t &,
-                                              const zlink::message_t &payload) override
+                                              const zlink::framework::message_t &payload) override
     {
         auto winner = stream.reply_packet (payload);
         auto loser = stream.reply_packet (payload);
@@ -205,7 +208,7 @@ class failed_reply_session_t final : public zlink::framework::packet_stream_sess
 
     zlink::framework::task_t<void> on_packet (zlink::framework::stream_t &stream,
                                               const zlink::framework::session_message_context_t &,
-                                              const zlink::message_t &payload) override
+                                              const zlink::framework::message_t &payload) override
     {
         const auto first = stream.reply_packet (payload).async ().result ();
         first_failed =
@@ -244,7 +247,7 @@ class throwing_packet_session_t final : public zlink::framework::packet_stream_s
 
     zlink::framework::task_t<void> on_packet (zlink::framework::stream_t &,
                                               const zlink::framework::session_message_context_t &,
-                                              const zlink::message_t &) override
+                                              const zlink::framework::message_t &) override
     {
         return zlink::framework::task_t<void> (zlink::framework::result_t<void>::failure (
           zlink::framework::framework_error_kind_t::internal_failure,
@@ -277,7 +280,7 @@ class delayed_reply_session_t final : public zlink::framework::packet_stream_ses
 
     zlink::framework::task_t<void> on_packet (zlink::framework::stream_t &stream,
                                               const zlink::framework::session_message_context_t &,
-                                              const zlink::message_t &payload) override
+                                              const zlink::framework::message_t &payload) override
     {
         _entered.set_value ();
         co_await _resume.task ();
@@ -322,7 +325,7 @@ class pending_connected_session_t final : public zlink::framework::packet_stream
     }
     zlink::framework::task_t<void> on_packet (zlink::framework::stream_t &,
                                               const zlink::framework::session_message_context_t &,
-                                              const zlink::message_t &) override
+                                              const zlink::framework::message_t &) override
     {
         packet.set_value ();
         co_return;
@@ -347,6 +350,8 @@ class shutdown_session_control_t final
     void record_destroyed () { record (_destroyed, "destroyed"); }
 
     bool wait_connected () { return wait_for (_connected, 1); }
+    bool wait_destroyed () { return wait_for (_destroyed, 1); }
+    bool wait_disconnected () { return wait_for (_disconnected, 1); }
     bool wait_packet_entered () { return wait_for (_packet_entered, 1); }
 
     std::size_t connected () const noexcept { return _connected.load (std::memory_order_acquire); }
@@ -434,7 +439,7 @@ class shutdown_failure_session_t final : public zlink::framework::packet_stream_
 
     zlink::framework::task_t<void> on_packet (zlink::framework::stream_t &,
                                               const zlink::framework::session_message_context_t &,
-                                              const zlink::message_t &) override
+                                              const zlink::framework::message_t &) override
     {
         _control->record_packet_entered ();
         co_await _control->wait_for_release ();
@@ -533,14 +538,14 @@ class transport_error_session_t final : public zlink::framework::packet_stream_s
     zlink::framework::task_t<void>
     on_packet (zlink::framework::stream_t &stream,
                const zlink::framework::session_message_context_t &dispatch,
-               const zlink::message_t &payload) override
+               const zlink::framework::message_t &payload) override
     {
         record (_packets);
         if (dispatch.packet_name == async_write_probe_name) {
-            auto writing =
-              stream
-                .reply_packet (zlink::message_t::from (std::string (async_write_probe_size, 'x')))
-                .async ();
+            auto writing = stream
+                             .reply_packet (zlink::framework::message_t::from (
+                               std::string (async_write_probe_size, 'x')))
+                             .async ();
             async_write_submitted.set_value ();
             co_await std::move (writing);
             co_return;
@@ -645,7 +650,7 @@ class permit_wait_session_t final : public zlink::framework::packet_stream_sessi
 
     zlink::framework::task_t<void> on_packet (zlink::framework::stream_t &,
                                               const zlink::framework::session_message_context_t &,
-                                              const zlink::message_t &) override
+                                              const zlink::framework::message_t &) override
     {
         ++packets;
         co_return;
@@ -872,7 +877,7 @@ class core_error_close_session_t final : public zlink::framework::packet_stream_
 
     zlink::framework::task_t<void> on_packet (zlink::framework::stream_t &,
                                               const zlink::framework::session_message_context_t &,
-                                              const zlink::message_t &) override
+                                              const zlink::framework::message_t &) override
     {
         co_return;
     }
@@ -951,9 +956,68 @@ bool contains_error_frame (const zlink::framework::detail::stream_runtime_t &run
     return false;
 }
 
-int core_connected_rejection_cleanup ()
+double stream_metric_sum (metric_test::provider_t &provider,
+                          std::string_view name,
+                          std::string_view close_reason = {})
+{
+    const auto data = provider.collect ();
+    metric_test::validate_metric_contract (data);
+    double total = 0;
+    bool found = false;
+    for (const auto &metric : data) {
+        if (metric.instrument_descriptor.name_ != name)
+            continue;
+        found = true;
+        for (const auto &point : metric.point_data_attr_) {
+            if (!close_reason.empty ()
+                && opentelemetry::nostd::get<std::string> (point.attributes.at ("close_reason"))
+                     != close_reason)
+                continue;
+            const auto &sum =
+              opentelemetry::nostd::get<metric_test::sdk::SumPointData> (point.point_data);
+            total += opentelemetry::nostd::get<double> (sum.value_);
+        }
+    }
+    if (!found && name == "zlink.stream.connections.active")
+        throw std::runtime_error ("connection metric instrument was not registered");
+    return total;
+}
+
+enum class connection_close_case_t
+{
+    connected_rejected,
+    client_close,
+    disconnect_rejected,
+    server_stop,
+    heartbeat_timeout
+};
+
+const char *expected_close_reason (connection_close_case_t close_case)
+{
+    switch (close_case) {
+        case connection_close_case_t::connected_rejected:
+            return "transport_error";
+        case connection_close_case_t::client_close:
+        case connection_close_case_t::disconnect_rejected:
+            return "client_close";
+        case connection_close_case_t::server_stop:
+            return "server_shutdown";
+        case connection_close_case_t::heartbeat_timeout:
+            return "heartbeat_timeout";
+    }
+    throw std::logic_error ("unknown close case");
+}
+
+int core_connected_rejection_cleanup (
+  metric_test::provider_t &metrics,
+  connection_close_case_t close_case = connection_close_case_t::connected_rejected)
 {
     using namespace zlink::framework;
+    const auto opened = stream_metric_sum (metrics, "zlink.stream.connections.opened");
+    const auto closed = stream_metric_sum (metrics, "zlink.stream.connections.closed");
+    const auto reason = expected_close_reason (close_case);
+    const auto closed_with_reason =
+      stream_metric_sum (metrics, "zlink.stream.connections.closed", reason);
     service_collection_t services;
     handler_registry_t handlers;
     serializer_registry_t serializers;
@@ -979,6 +1043,7 @@ int core_connected_rejection_cleanup ()
       .listen (loopback_tcp_any_port);
     options.add_stream_node ("connected-rejection-stream")
       .bind (loopback_tcp_any_port)
+      .set_heartbeat (std::chrono::milliseconds{50}, std::chrono::milliseconds{500})
       .register_session ("connected-rejection-session");
     options.apply ();
     for (const auto &registration : detail::mesh_node_runtime_t::registrations (builder)) {
@@ -1033,21 +1098,43 @@ int core_connected_rejection_cleanup ()
             detail::configure_stream_dispatch_executor ();
         }
     } cleanup{host, *mesh, provider};
+    host.bind_monitoring (test::runtime_failure_monitoring ());
     mesh->start ();
     host.start (provider);
 
     // Reject admission before any connected callback can execute.
-    detail::shutdown_stream_dispatch_executor ();
+    if (close_case == connection_close_case_t::connected_rejected)
+        detail::shutdown_stream_dispatch_executor ();
     auto client = connect_loopback (endpoint_port (
       listener_endpoint (*listeners, listener_kind_t::stream, "connected-rejection-stream")));
     if (!client)
         return 337;
-    const bool rejection_observed =
-      rejected.wait_for (std::chrono::seconds (2)) == std::future_status::ready;
+    if (close_case == connection_close_case_t::connected_rejected) {
+        if (rejected.wait_for (std::chrono::seconds (2)) != std::future_status::ready)
+            return 338;
+    } else {
+        if (!control->wait_connected ())
+            return 343;
+        if (stream_metric_sum (metrics, "zlink.stream.connections.opened") - opened != 1
+            || stream_metric_sum (metrics, "zlink.stream.connections.active") != 1)
+            return 345;
+        if (close_case == connection_close_case_t::disconnect_rejected)
+            detail::shutdown_stream_dispatch_executor ();
+        if (close_case == connection_close_case_t::client_close
+            || close_case == connection_close_case_t::disconnect_rejected)
+            close_native_client (client, true);
+        if ((close_case == connection_close_case_t::client_close
+             || close_case == connection_close_case_t::heartbeat_timeout)
+            && !control->wait_disconnected ())
+            return 344;
+    }
+    if ((close_case == connection_close_case_t::connected_rejected
+         || close_case == connection_close_case_t::disconnect_rejected)
+        && !control->wait_destroyed ())
+        return 346;
+    host.stop ();
     host.stop ();
     close_native_client (client);
-    if (!rejection_observed)
-        return 338;
 
     // A fresh Core STREAM socket assigns its first connection RID 1. The
     // registry uses that RID's hex key and its own first connection generation.
@@ -1055,14 +1142,32 @@ int core_connected_rejection_cleanup ()
       zlink::routing_id_t::from (std::uint32_t{1}).to_hex (), 1, mesh->routing_id (),
       mesh->native_node ().status ().lifecycle_generation ()};
     const auto residual = mesh->native_node ().sessions ().close (connection);
-    std::cerr << "core-connected-rejection-cleanup rejection_observed=" << rejection_observed
-              << " residual.closed=" << residual.closed << " connected=" << control->connected ()
-              << " disconnected=" << control->disconnected ()
-              << " destroyed=" << control->destroyed () << '\n';
-    if (residual.closed)
+    if (residual.closed || control->destroyed () != 1)
         return 339;
-    if (control->connected () != 0 || control->disconnected () != 0 || control->destroyed () != 1)
+    const bool connected_rejected = close_case == connection_close_case_t::connected_rejected;
+    const bool disconnect_rejected = close_case == connection_close_case_t::disconnect_rejected;
+    if (control->connected () != (connected_rejected ? 0u : 1u)
+        || control->disconnected () != (connected_rejected || disconnect_rejected ? 0u : 1u))
         return 340;
+    if (stream_metric_sum (metrics, "zlink.stream.connections.opened") - opened != 1
+        || stream_metric_sum (metrics, "zlink.stream.connections.closed") - closed != 1
+        || stream_metric_sum (metrics, "zlink.stream.connections.active") != 0
+        || stream_metric_sum (metrics, "zlink.stream.connections.closed", reason)
+               - closed_with_reason
+             != 1) {
+        std::cerr << "FAIL connection metrics case=" << static_cast<int> (close_case) << " opened="
+                  << stream_metric_sum (metrics, "zlink.stream.connections.opened") - opened
+                  << " closed="
+                  << stream_metric_sum (metrics, "zlink.stream.connections.closed") - closed
+                  << " active=" << stream_metric_sum (metrics, "zlink.stream.connections.active")
+                  << " expected_close_reason=" << reason << " matching_closed="
+                  << stream_metric_sum (metrics, "zlink.stream.connections.closed", reason)
+                       - closed_with_reason
+                  << '\n';
+        return 342;
+    }
+    std::cout << "PASS connection metrics case=" << static_cast<int> (close_case)
+              << " opened=closed=1 active=0 close_reason=" << reason << '\n';
     return 0;
 }
 
@@ -1088,7 +1193,7 @@ class descriptor_drop_session_t final : public zlink::framework::packet_stream_s
     }
     zlink::framework::task_t<void> on_packet (zlink::framework::stream_t &,
                                               const zlink::framework::session_message_context_t &,
-                                              const zlink::message_t &) override
+                                              const zlink::framework::message_t &) override
     {
         co_return;
     }
@@ -1199,7 +1304,7 @@ class held_retirement_session_t final : public zlink::framework::packet_stream_s
     }
     zlink::framework::task_t<void> on_packet (zlink::framework::stream_t &,
                                               const zlink::framework::session_message_context_t &,
-                                              const zlink::message_t &) override
+                                              const zlink::framework::message_t &) override
     {
         co_return;
     }
@@ -1232,6 +1337,27 @@ int reader_retirement_is_tracked_until_complete ()
     held_retirement_session_t session (detail::actor_ref_access_t::make (
       node_rid_t::from_string ("held-actor-node"), "player", "held-actor", 1));
     auto connected = session.connected.get_future ();
+    struct held_binding_resolver_t final : runtime::actor_address_resolver_t
+    {
+        std::shared_ptr<task_completion_source_t<std::optional<runtime::spot_address_t>>> route =
+          std::make_shared<task_completion_source_t<std::optional<runtime::spot_address_t>>> ();
+        std::promise<void> entered;
+
+        task_t<std::optional<runtime::spot_address_t>> resolve_actor_address (std::string) override
+        {
+            co_return std::nullopt;
+        }
+        task_t<std::optional<runtime::spot_address_t>>
+        resolve_actor_session_binding_address (actor_ref_t) override
+        {
+            entered.set_value ();
+            return route->task ();
+        }
+    };
+    auto resolver = std::make_unique<held_binding_resolver_t> ();
+    auto route = resolver->route;
+    auto route_started = resolver->entered.get_future ();
+    services.add_singleton<runtime::actor_address_resolver_t> (std::move (resolver));
     zlink_framework_options_t options (services, handlers, serializers, builder);
     options.add_route_mesh ("held-mesh")
       .set_routing_id (zlink::routing_id_t::from ("held-node"))
@@ -1247,13 +1373,6 @@ int reader_retirement_is_tracked_until_complete ()
     auto provider = services.build_provider ();
     auto mesh = detail::mesh_node_runtime_t::from (builder, "held-mesh");
     mesh->bind_serializers (serializers);
-    auto route =
-      std::make_shared<task_completion_source_t<std::optional<runtime::spot_address_t>>> ();
-    auto route_entered = std::make_shared<std::promise<void>> ();
-    mesh->configure_actor_route_resolver ([route, route_entered] (actor_ref_t) {
-        route_entered->set_value ();
-        return route->task ();
-    });
     auto disconnect = std::make_shared<task_completion_source_t<void>> ();
     auto disconnect_entered = std::make_shared<std::promise<void>> ();
     provider.get_required<detail::actor_gateway_runtime_t> ().on_disconnect (
@@ -1276,7 +1395,6 @@ int reader_retirement_is_tracked_until_complete ()
       {boost::asio::ip::make_address ("127.0.0.1"),
        endpoint_port (listener_endpoint (*listeners, listener_kind_t::stream, "held-stream"))});
     client.handshake ("127.0.0.1", "/held");
-    auto route_started = route_entered->get_future ();
     auto disconnect_started = disconnect_entered->get_future ();
     int result = 0;
     if (connected.wait_for (5s) != std::future_status::ready
@@ -1321,7 +1439,7 @@ class close_probe_session_t final : public zlink::framework::packet_stream_sessi
     }
     zlink::framework::task_t<void> on_packet (zlink::framework::stream_t &,
                                               const zlink::framework::session_message_context_t &,
-                                              const zlink::message_t &) override
+                                              const zlink::framework::message_t &) override
     {
         co_return;
     }
@@ -1569,17 +1687,28 @@ int main (int argc, char **argv)
         return descriptor_unavailable_replacement_records_drop ();
     if (descriptor_unavailable_replacement_records_drop () != 0)
         return 202;
+    metric_test::provider_t metric_provider;
     using zlink::framework::framework_error_kind_t;
     using zlink::framework::stream_codec_t;
     using zlink::framework::detail::stream_header_flags_t;
     using zlink::framework::detail::stream_message_kind_t;
 
     if (argc == 2 && std::string_view (argv[1]) == "--core-connected-rejection-cleanup")
-        return core_connected_rejection_cleanup ();
-    if (argc != 1)
+        return core_connected_rejection_cleanup (metric_provider);
+    const bool metrics_only = argc == 2 && std::string_view (argv[1]) == "--connection-metrics";
+    if (argc != 1 && !metrics_only)
         return 341;
-    if (const auto result = core_connected_rejection_cleanup (); result != 0)
-        return result;
+    for (const auto close_case :
+         {connection_close_case_t::connected_rejected, connection_close_case_t::client_close,
+          connection_close_case_t::disconnect_rejected, connection_close_case_t::server_stop,
+          connection_close_case_t::heartbeat_timeout}) {
+        if (const auto result = core_connected_rejection_cleanup (metric_provider, close_case);
+            result != 0)
+            return result;
+    }
+
+    if (metrics_only)
+        return 0;
 
     zlink::monitor_event_t ready_snapshot;
     ready_snapshot.event = zlink::monitor_event::connection_ready;
@@ -2111,7 +2240,7 @@ int main (int argc, char **argv)
                                   zlink::message_t::from (std::string ("codec-selection")))) {
         return 292;
     }
-    push_codec_stream.write_packet (zlink::message_t::from (std::string ("json-push")))
+    push_codec_stream.write_packet (zlink::framework::message_t::from (std::string ("json-push")))
       .packet_name ("JsonPush")
       .async ()
       .result ()
@@ -2430,7 +2559,7 @@ int main (int argc, char **argv)
 
     auto fluent_stream = runtime.open_session ("client-stream");
     auto send_call =
-      fluent_stream.write_packet (zlink::message_t::from (std::string ("send-payload")));
+      fluent_stream.write_packet (zlink::framework::message_t::from (std::string ("send-payload")));
     send_call.packet_name ("original");
     if (!runtime.written_headers (fluent_stream).empty ()) {
         return 17;
@@ -2473,7 +2602,8 @@ int main (int argc, char **argv)
         }
     };
     if (!write_rejected_disconnected ([&] {
-            return fluent_stream.write_packet (zlink::message_t::from (std::string ("after-close")))
+            return fluent_stream
+              .write_packet (zlink::framework::message_t::from (std::string ("after-close")))
               .async ()
               .result ()
               .value ();
@@ -2484,7 +2614,8 @@ int main (int argc, char **argv)
         return 19;
     }
     if (!write_rejected_disconnected ([&] {
-            return stream.write_packet (zlink::message_t::from (std::string ("after-disconnect")))
+            return stream
+              .write_packet (zlink::framework::message_t::from (std::string ("after-disconnect")))
               .async ()
               .result ()
               .value ();
@@ -2579,6 +2710,11 @@ int main (int argc, char **argv)
     zlink::framework::service_collection_t custom_services;
     zlink::framework::handler_registry_t custom_handlers;
     zlink::framework::serializer_registry_t custom_serializers;
+    custom_serializers.add<std::string> (
+      [] (const std::string &value) {
+          return zlink::framework::encoded_payload_t::from_string (value);
+      },
+      [] (const zlink::framework::encoded_payload_t &payload) { return payload.to_string (); });
     zlink::framework::zlink_builder_t custom_zlink =
       zlink::framework::test::runtime_failure_builder ();
     zlink::framework::zlink_framework_options_t custom_options (custom_services, custom_handlers,
@@ -2592,6 +2728,7 @@ int main (int argc, char **argv)
       .set_tls_server ("server.crt", "server.key", true)
       .register_session ("configured-mutual-tls-session");
     custom_options.apply ();
+    zlink::framework::detail::bind_stream_serializers (custom_zlink, custom_serializers);
     auto custom_runtime = zlink::framework::detail::stream_runtime_t::from (custom_zlink);
     const auto configured_tls = custom_runtime.snapshots ();
     const auto configured_tls_snapshot =
@@ -2603,7 +2740,7 @@ int main (int argc, char **argv)
         return 26;
     }
     auto custom_stream = custom_runtime.open_session ("custom-stream");
-    custom_stream.write_packet (zlink::message_t::from (std::string ("custom-outbound")))
+    custom_stream.write_packet (zlink::framework::message_t::from (std::string ("custom-outbound")))
       .compress ()
       .async ()
       .result ()
@@ -2635,11 +2772,12 @@ int main (int argc, char **argv)
       .bind ("tcp://0.0.0.0:9202")
       .register_session ("disabled-session");
     disabled_options.apply ();
+    zlink::framework::detail::bind_stream_serializers (disabled_zlink, custom_serializers);
     auto disabled_runtime = zlink::framework::detail::stream_runtime_t::from (disabled_zlink);
     auto disabled_stream = disabled_runtime.open_session ("disabled-stream");
     bool disabled_compress_rejected = false;
     try {
-        disabled_stream.write_packet (zlink::message_t::from (std::string ("disabled")))
+        disabled_stream.write_packet (zlink::framework::message_t::from (std::string ("disabled")))
           .compress ()
           .async ()
           .result ()
@@ -2688,6 +2826,11 @@ int main (int argc, char **argv)
     zlink::framework::service_collection_t transport_services;
     zlink::framework::handler_registry_t transport_handlers;
     zlink::framework::serializer_registry_t transport_serializers;
+    transport_serializers.add<std::string> (
+      [] (const std::string &value) {
+          return zlink::framework::encoded_payload_t::from_string (value);
+      },
+      [] (const zlink::framework::encoded_payload_t &payload) { return payload.to_string (); });
     zlink::framework::zlink_builder_t transport_zlink =
       zlink::framework::test::runtime_failure_builder ();
     transport_services.add_singleton<zlink::framework::detail::actor_gateway_runtime_t> ();
@@ -2703,6 +2846,7 @@ int main (int argc, char **argv)
     transport_stream_options.configure_socket ().max_message_size = 0;
     transport_stream_options.bind (loopback_tcp_any_port).register_session ("transport-session");
     transport_options.apply ();
+    zlink::framework::detail::bind_stream_serializers (transport_zlink, transport_serializers);
     std::mutex stale_diagnostics_mutex;
     std::vector<zlink::framework::message_dispatch_error_event_t> stale_dispatch_errors;
     std::vector<zlink::framework::message_flow_event_t> stale_flow_events;
@@ -2733,6 +2877,7 @@ int main (int argc, char **argv)
       std::chrono::milliseconds{30'000}, nullptr, {}, transport_listeners);
     auto transport_drain = std::make_shared<std::atomic_bool> (false);
     transport_host.bind_drain_flag (transport_drain);
+    transport_host.bind_monitoring (zlink::framework::test::runtime_failure_monitoring ());
     transport_host.start (transport_provider);
     const auto transport_endpoint = listener_endpoint (
       *transport_listeners, zlink::framework::listener_kind_t::stream, "transport-stream");
@@ -3451,5 +3596,23 @@ int main (int argc, char **argv)
     }
     error_close_stop_thread.join ();
     error_close_mesh->stop ();
+    const auto metric_data = metric_provider.collect ();
+    try {
+        metric_test::validate_metric_contract (metric_data);
+        for (const auto &metric : metric_data) {
+            if (metric.instrument_descriptor.name_ != "zlink.stream.connections.active")
+                continue;
+            for (const auto &point : metric.point_data_attr_) {
+                const auto &sum =
+                  opentelemetry::nostd::get<metric_test::sdk::SumPointData> (point.point_data);
+                if (opentelemetry::nostd::get<double> (sum.value_) < 0)
+                    throw std::runtime_error ("STREAM connection count underflow");
+            }
+        }
+    }
+    catch (const std::exception &error) {
+        std::cerr << error.what () << '\n';
+        return 321;
+    }
     return 0;
 }

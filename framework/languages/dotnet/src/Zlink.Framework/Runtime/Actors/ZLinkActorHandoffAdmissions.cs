@@ -22,12 +22,7 @@ internal sealed class ZLinkActorHandoffAdmissions(
     private long _drainEpoch;
 
     internal ValueTask<ZLinkActorHandoffDrainSnapshot> SnapshotDrainAsync() =>
-        _lane.RunAsync(() =>
-            new ZLinkActorHandoffDrainSnapshot(
-                _drainEpoch,
-                !_drainUnsafe && _admitting.Count == 0 && _pending.Count == 0
-            )
-        );
+        _lane.RunAsync(() => new ZLinkActorHandoffDrainSnapshot(_drainEpoch, IsDrainSafeLocked()));
 
     public async Task WaitUntilDrainSafeAsync(CancellationToken cancellationToken)
     {
@@ -656,9 +651,20 @@ internal sealed class ZLinkActorHandoffAdmissions(
             );
     }
 
+    private bool IsDrainSafeLocked()
+    {
+        if (_admitting.Count != 0)
+            return false;
+        // Completed rejection replies remain replayable without owning handoff work.
+        foreach (var pending in _pending.Values)
+            if (pending.Reply.Accepted)
+                return false;
+        return true;
+    }
+
     private void TryCompleteDrainSafeLocked()
     {
-        if (_admitting.Count == 0 && _pending.Count == 0 && _drainUnsafe)
+        if (_drainUnsafe && IsDrainSafeLocked())
         {
             _drainUnsafe = false;
             _drainEpoch++;

@@ -19,6 +19,24 @@ template <typename T> task_t<result_t<T>> await_result (task_t<T> pending)
     return task;
 }
 
+/* Ready results continue on the caller's stack; only an unfinished task gets a
+ * continuation frame (#2418). `next` maps the value to the next task and is a
+ * coroutine parameter, so its captures outlive every suspended await. */
+template <typename R, typename T, typename Next>
+task_t<R> continue_task (task_t<T> pending, Next next)
+{
+    if (!pending.await_ready ())
+        return [] (task_t<T> pending, Next next) -> task_t<R> {
+            co_return co_await next (co_await pending);
+        }(std::move (pending), std::move (next));
+    try {
+        return next (pending.await_resume ());
+    }
+    catch (...) {
+        return task_t<R> (detail::current_exception_result<R> ());
+    }
+}
+
 /* The one blocking wait for a Location or Relocation Store chain on an
  * infrastructure thread (execution gate §1, §13). `start` begins the chain
  * inside the scope, so every continuation it registers resumes on the thread
