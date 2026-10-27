@@ -10,6 +10,7 @@ namespace Zlink.Framework.UnitTests.Runtime;
 public sealed class EnvelopeCodecAllocationRegressionTests(ITestOutputHelper output)
 {
     private const int Iterations = 128;
+    private const int WindowCalls = 1024;
 
     [Theory]
     [InlineData(21)]
@@ -52,19 +53,25 @@ public sealed class EnvelopeCodecAllocationRegressionTests(ITestOutputHelper out
                         false
                     );
         }
-        var encodeBytes = Allocated(Encode);
-        var decodeBytes = Allocated(() =>
-        {
-            if (
-                !Zlink.Framework.Runtime.Service.ZLinkServiceWireCodec.TryDecodeStateful(
-                    encoded,
-                    "mesh",
-                    out _,
-                    out _
-                )
-            )
-                throw new InvalidOperationException("Invalid stateful fixture.");
-        });
+        var encodeBytes =
+            PerCallAllocation.MinWindow(Encode, WindowCalls, warmup: Iterations) / WindowCalls;
+        var decodeBytes =
+            PerCallAllocation.MinWindow(
+                () =>
+                {
+                    if (
+                        !Zlink.Framework.Runtime.Service.ZLinkServiceWireCodec.TryDecodeStateful(
+                            encoded,
+                            "mesh",
+                            out _,
+                            out _
+                        )
+                    )
+                        throw new InvalidOperationException("Invalid stateful fixture.");
+                },
+                WindowCalls,
+                warmup: Iterations
+            ) / WindowCalls;
         output.WriteLine($"command={commandId}: encode={encodeBytes}, decode={decodeBytes} B/call");
         // Release final: spot decode 112 B, Actor decode 72 B; final
         // encode 616/624/432/592 B for commands 21/22/24/25. Allow 16 B
@@ -153,12 +160,18 @@ public sealed class EnvelopeCodecAllocationRegressionTests(ITestOutputHelper out
         using var large = ActorReply(65536);
         Message[] smallParts = [small];
         Message[] largeParts = [large];
-        var smallBytes = SteadyAllocated(() => ZLinkActorReplyDecoder.DecodeTerminal(smallParts));
-        var largeBytes = SteadyAllocated(() => ZLinkActorReplyDecoder.DecodeTerminal(largeParts));
-        output.WriteLine($"terminal small={smallBytes}, large={largeBytes} B/call");
+        var smallBytes = PerCallAllocation.MinWindow(
+            () => ZLinkActorReplyDecoder.DecodeTerminal(smallParts),
+            WindowCalls
+        );
+        var largeBytes = PerCallAllocation.MinWindow(
+            () => ZLinkActorReplyDecoder.DecodeTerminal(largeParts),
+            WindowCalls
+        );
+        output.WriteLine($"terminal small={smallBytes}, large={largeBytes} B/window");
         Assert.True(
             largeBytes <= smallBytes,
-            $"Payload growth added {largeBytes - smallBytes} managed B/call."
+            $"Payload growth added {largeBytes - smallBytes} managed B/window."
         );
     }
 
@@ -170,17 +183,23 @@ public sealed class EnvelopeCodecAllocationRegressionTests(ITestOutputHelper out
         );
         var wire = ZLinkMeshMetadataCodec.Encode(values);
         ZLinkMessageMetadata? decoded = null;
-        var bytes = Allocated(() =>
-        {
-            if (!ZLinkMeshMetadataCodec.TryDecode(wire.Span, out decoded))
-                throw new InvalidOperationException("Invalid metadata fixture.");
-        });
+        var bytes = PerCallAllocation.MinWindow(
+            () =>
+            {
+                if (!ZLinkMeshMetadataCodec.TryDecode(wire.Span, out decoded))
+                    throw new InvalidOperationException("Invalid metadata fixture.");
+            },
+            WindowCalls
+        );
         Assert.Equal("한글", decoded!.Find("tenant"));
         Assert.Equal("abc", decoded.Find("trace"));
-        output.WriteLine($"metadata decode={bytes} B/call");
+        output.WriteLine($"metadata decode={bytes} B/window");
         // Two strings per entry and the immutable dictionary snapshot fit in
         // this budget; per-entry UTF8Encoding/fallback objects do not.
-        Assert.True(bytes <= 700, $"Metadata decode allocated {bytes} B/call.");
+        Assert.True(
+            bytes <= 700L * WindowCalls,
+            $"Metadata decode allocated {bytes} B/{WindowCalls} calls."
+        );
     }
 
     [Fact]
@@ -188,15 +207,25 @@ public sealed class EnvelopeCodecAllocationRegressionTests(ITestOutputHelper out
     {
         var value = new Probe("wrapped");
         var wrapped = ZLinkMessage.From(value);
-        var directBytes = Allocated(() =>
-        {
-            using var encoded = ZLinkEnvelopeCodec.EncodeBody(value, typeof(Probe), null);
-        });
-        var wrappedBytes = Allocated(() =>
-        {
-            using var encoded = ZLinkEnvelopeCodec.EncodeBody(wrapped, typeof(ZLinkMessage), null);
-        });
-        output.WriteLine($"encode direct={directBytes}, wrapped={wrappedBytes} B/call");
+        var directBytes = PerCallAllocation.MinWindow(
+            () =>
+            {
+                using var encoded = ZLinkEnvelopeCodec.EncodeBody(value, typeof(Probe), null);
+            },
+            WindowCalls
+        );
+        var wrappedBytes = PerCallAllocation.MinWindow(
+            () =>
+            {
+                using var encoded = ZLinkEnvelopeCodec.EncodeBody(
+                    wrapped,
+                    typeof(ZLinkMessage),
+                    null
+                );
+            },
+            WindowCalls
+        );
+        output.WriteLine($"encode direct={directBytes}, wrapped={wrappedBytes} B/window");
         Assert.Equal(directBytes, wrappedBytes);
     }
 
@@ -249,11 +278,11 @@ public sealed class EnvelopeCodecAllocationRegressionTests(ITestOutputHelper out
                         registry
                     )!;
         }
-        var explicitBytes = Allocated(() => Decode(codecs));
-        var defaultBytes = Allocated(() => Decode(null));
+        var explicitBytes = PerCallAllocation.MinWindow(() => Decode(codecs), WindowCalls);
+        var defaultBytes = PerCallAllocation.MinWindow(() => Decode(null), WindowCalls);
         Assert.Equal("wrapped", result!.Decode<Probe>().Text);
         output.WriteLine(
-            $"borrowed={borrowed}: explicit={explicitBytes}, default={defaultBytes} B/call"
+            $"borrowed={borrowed}: explicit={explicitBytes}, default={defaultBytes} B/window"
         );
         Assert.Equal(explicitBytes, defaultBytes);
     }
@@ -276,52 +305,6 @@ public sealed class EnvelopeCodecAllocationRegressionTests(ITestOutputHelper out
         Assert.Equal("before", snapshot.Decode<MutableProbe>().Text);
         using var raw = snapshot.ToRawMessage(codecs);
         Assert.Equal("before", raw.GetString());
-    }
-
-    // Per-call bytes over Iterations warmed calls that no GC pause interrupted.
-    // A GC suspension can retire the thread allocation context inside a call and
-    // add its unused tail to the thread counter (see ProtobufNativePayloadTests).
-    private long Allocated(Action action)
-    {
-        for (var i = 0; i < Iterations; i++)
-            action();
-        long allocated = 0;
-        for (var measured = 0; measured < Iterations; )
-        {
-            var pause = GC.GetTotalPauseDuration();
-            var before = GC.GetAllocatedBytesForCurrentThread();
-            action();
-            var bytes = GC.GetAllocatedBytesForCurrentThread() - before;
-            if (GC.GetTotalPauseDuration() != pause)
-                continue;
-            allocated += bytes;
-            measured++;
-        }
-        return allocated / Iterations;
-    }
-
-    // Steady per-call bytes: the value most warmed, pause-free calls allocate. A
-    // payload copy adds to every call, while a one-time runtime allocation inside
-    // the window (tier-up, a lazy runtime table) adds to a single call only, so a
-    // size comparison must not average that one call into the result.
-    private static long SteadyAllocated(Action action)
-    {
-        for (var i = 0; i < Iterations; i++)
-            action();
-        var counts = new Dictionary<long, int>();
-        for (var measured = 0; measured < Iterations; )
-        {
-            var pause = GC.GetTotalPauseDuration();
-            var before = GC.GetAllocatedBytesForCurrentThread();
-            action();
-            var bytes = GC.GetAllocatedBytesForCurrentThread() - before;
-            if (GC.GetTotalPauseDuration() != pause)
-                continue;
-            counts[bytes] = counts.GetValueOrDefault(bytes) + 1;
-            measured++;
-        }
-        // On a tie, report the larger count so a real per-call cost is never hidden.
-        return counts.MaxBy(static entry => (entry.Value, entry.Key)).Key;
     }
 
     private static Message ActorReply(int size) => ActorReply(new byte[size]);
