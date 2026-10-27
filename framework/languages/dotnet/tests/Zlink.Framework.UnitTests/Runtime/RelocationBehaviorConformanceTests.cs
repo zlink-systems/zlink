@@ -25,6 +25,196 @@ namespace Zlink.Framework.UnitTests.Runtime;
 
 public sealed partial class RelocationBehaviorConformanceTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Session_bind_uses_authenticated_ingress_before_reverse_route_is_ready(
+        bool staleActor
+    )
+    {
+        var trace = new RelocationBehaviorTrace();
+        var store = new RecordingLocationStore(new ZLinkInMemoryProviderLocationStore(), trace);
+        var relocationStore = new SynchronizedRelocationStore();
+        await using var source = await RelocationBehaviorHost.StartAsync(
+            "source",
+            trace,
+            store,
+            relocationStore,
+            registerTargetSpot: false
+        );
+        var actorId = $"bind-before-admit-{Guid.NewGuid():N}";
+        var created = Assert.IsType<ZLinkActorCreateResult.Created>(
+            await source
+                .Services.GetRequiredService<IZLinkActorManager>()
+                .GetOrCreate(actorId, RelocationBehaviorHost.ActorType)
+                .InMesh(RelocationBehaviorHost.MeshName)
+                .Request(new BehaviorCreate(7))
+                .Async()
+        );
+        // Publish a live Session owner descriptor while its automatic connector is held.
+        var connectGate = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        await using var sessionOwner = await RelocationBehaviorHost.StartAsync(
+            "session-owner",
+            trace,
+            store,
+            relocationStore,
+            registerTargetSpot: false,
+            autoConnectGate: connectGate.Task
+        );
+        var ownerNode = sessionOwner
+            .Runtime.GetMeshNodeRuntime(RelocationBehaviorHost.MeshName)
+            .Node;
+        var ownerStatus = ownerNode.MeshStatus();
+        var actorNode = source.Runtime.GetMeshNodeRuntime(RelocationBehaviorHost.MeshName).Node;
+        var actorStatus = actorNode.MeshStatus();
+        Assert.True(source.Runtime.TryGetActorState(actorId, out var actorState));
+        var actorRef = actorState.NativeActorRef!.Value;
+        var authorityReader = Assert.IsAssignableFrom<IZLinkBackendLocalActorAuthorityReader>(
+            actorNode
+        );
+        Assert.True(
+            authorityReader.TryGetLocalActorAuthority(actorRef, out var authority, out var lease)
+        );
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var peer = context.CreateDealerSocket();
+        using var poller = Systems.Zlink.Zlink.CreatePoller();
+        poller.Add(peer, PollEventFlags.PollIn | PollEventFlags.PollCompletion, 1);
+        peer.SetRoutingId(ownerStatus.RoutingId);
+        using var monitor = peer.MonitorOpen(SocketEvent.ConnectionReady);
+        peer.Connect(
+            source
+                .Runtime.GetListenerStatus(
+                    ZLinkListenerKind.RouteMesh,
+                    RelocationBehaviorHost.MeshName
+                )
+                .Endpoint
+        );
+        var events = new PollEvent[1];
+        using var monitorPoller = Systems.Zlink.Zlink.CreatePoller();
+        monitorPoller.Add(monitor, PollEventFlags.PollIn, 1);
+        Assert.NotEqual(0, monitorPoller.Wait(events, TimeSpan.FromSeconds(2)));
+        using (
+            var hello = Message.From(
+                ZLinkServiceWireCodec.EncodeRouteAdmission(
+                    ServiceWireConstants.Command.Hello,
+                    RelocationBehaviorHost.MeshName,
+                    sessionOwner
+                        .Runtime.GetListenerStatus(
+                            ZLinkListenerKind.RouteMesh,
+                            RelocationBehaviorHost.MeshName
+                        )
+                        .Endpoint,
+                    ownerStatus.LifecycleGeneration,
+                    ownerStatus.DescriptorRevision,
+                    new Dictionary<string, uint>(),
+                    objectRole: (byte)ZLinkMeshNodeObjectRole.Server
+                )
+            )
+        )
+            await PumpAsync(peer.Send().Message(hello).Async().EnsureAcceptedAsync());
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        while (true)
+        {
+            poller.Wait(events, TimeSpan.FromMilliseconds(1));
+            using var received = Received.Create();
+            if (!peer.Recv(received, RecvFlags.DontWait))
+            {
+                await Task.Delay(1, deadline.Token);
+                continue;
+            }
+            Assert.True(
+                ZLinkServiceWireCodec.TryDecodeRouteAdmission(
+                    received.FirstPart().AsSpan(),
+                    out var command,
+                    out _,
+                    out _
+                )
+            );
+            if (command == ServiceWireConstants.Command.Admit)
+                break;
+            Assert.Equal(ServiceWireConstants.Command.Hello, command);
+        }
+        // The raw Session owner can submit after receiving ADMIT, but never answers HELLO.
+        Assert.False(Assert.Single(actorNode.MeshPeers()).IsAdmitted);
+        var request = new ServiceWireCodec.BoundSessionBind38(
+            0,
+            new(1),
+            new(
+                new(new(actorId), new(staleActor ? actorRef.Generation + 1 : actorRef.Generation)),
+                new(actorStatus.RoutingId.ToBytes().ToArray()),
+                new(actorStatus.LifecycleGeneration),
+                new(authority),
+                new(lease)
+            ),
+            new(RoutingId.From("bind-before-admit-session").ToBytes().ToArray()),
+            new ServiceWireCodec.BoundSessionBindingTransitionCase0(
+                ServiceWireCodec.BoundSessionBindingState.Active,
+                new(1)
+            )
+        );
+        using var head = Message.From(
+            ServiceWireCodec.EncodeBoundSessionBind38(
+                request,
+                ServiceWireCodec.DecodeContext.Empty
+            )[0]
+        );
+        var pending = peer.Request().Message(head).Timeout(TimeSpan.FromSeconds(2)).Async().Reply;
+        await PumpAsync(pending, drainHello: true);
+        var reply = await pending;
+        try
+        {
+            Assert.True(
+                ZLinkServiceWireCodec.TryDecodeReply(
+                    Assert.Single(reply).AsReadOnlyMemory().Span,
+                    out var terminal,
+                    out _
+                )
+            );
+            Assert.Equal(
+                (int)(staleActor ? RequestResult.InternalError : RequestResult.Ok),
+                terminal.TerminalResult
+            );
+            Assert.Equal(!staleActor, actorState.TryGetBoundSession(out var binding));
+            if (!staleActor)
+            {
+                Assert.Equal(ownerStatus.RoutingId, binding.SessionNodeRid);
+                Assert.Equal(ownerStatus.LifecycleGeneration, binding.SessionOwnerNodeGeneration);
+            }
+            Assert.False(Assert.Single(actorNode.MeshPeers()).IsAdmitted);
+        }
+        finally
+        {
+            foreach (var part in reply)
+                part.Dispose();
+        }
+
+        async Task PumpAsync(Task task, bool drainHello = false)
+        {
+            using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+            while (!task.IsCompleted)
+            {
+                poller.Wait(events, TimeSpan.FromMilliseconds(1));
+                using var control = Received.Create();
+                if (drainHello && peer.Recv(control, RecvFlags.DontWait))
+                {
+                    Assert.True(
+                        ZLinkServiceWireCodec.TryDecodeRouteAdmission(
+                            control.FirstPart().AsSpan(),
+                            out var command,
+                            out _,
+                            out _
+                        )
+                    );
+                    Assert.Equal(ServiceWireConstants.Command.Hello, command);
+                }
+                await Task.Delay(1, stop.Token);
+            }
+            await task;
+        }
+    }
+
     [Fact]
     public async Task ForceStop_preserves_bound_actor_membership_and_context_during_OnClosing()
     {
