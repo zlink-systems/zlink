@@ -2090,6 +2090,59 @@ void verify_client_server_stale_admission_reply_is_discarded ()
     replacement->close ();
 }
 
+void verify_client_server_close_drains_parked_control_reply ()
+{
+    protocol::client_server_server_admission_t descriptor{
+      "client-server-close-drain", bytes ("server-close-drain"), 41, 1, 100,
+      mesh::service_node_state_t::serving, "security-close-drain", 1024 * 1024,
+      "tcp://127.0.0.1:0"};
+    client_server::raw_client_server_server_t server (
+      zlink::framework::test::runtime_failure_options (
+        client_server::raw_client_server_server_options_t{descriptor}));
+    server.start ();
+    const auto expected = server.descriptor ();
+    std::promise<void> entered;
+    auto callback_entered = entered.get_future ();
+    std::promise<void> release;
+    const auto released = release.get_future ().share ();
+    std::atomic_bool first{true};
+    auto options = zlink::framework::test::runtime_failure_options (
+      client_server::raw_client_server_client_options_t{
+        bytes ("client-close-drain"),
+        {expected.channel_name, expected.security_identity, expected.effective_max_message_bytes},
+        expected});
+    options.control_reply_parked = [&] {
+        if (first.exchange (false)) {
+            entered.set_value ();
+            released.wait ();
+        }
+    };
+    client_server::raw_client_server_client_t client (std::move (options));
+    client.start ();
+    const auto deadline = std::chrono::steady_clock::now () + 5s;
+    while (callback_entered.wait_for (0ms) != std::future_status::ready
+           && std::chrono::steady_clock::now () < deadline) {
+        (void) client.drain_monitor_events (std::chrono::steady_clock::now ()).result ().value ();
+        (void) server.drain_monitor_events (std::chrono::steady_clock::now ());
+        (void) server.pump_one (std::chrono::steady_clock::now ()).result ().value ();
+        std::this_thread::sleep_for (1ms);
+    }
+    const bool parked = callback_entered.wait_for (0ms) == std::future_status::ready;
+    if (!parked) {
+        release.set_value ();
+        assert (parked);
+        return;
+    }
+    auto closing = client.close_task ();
+    const bool waited_for_reply_lane = !closing.await_ready ();
+    // Release before asserting so a regression cannot strand the fixture's callback.
+    release.set_value ();
+    closing.result ().value ();
+    assert (waited_for_reply_lane);
+    client.close_task ().result ().value ();
+    server.close ();
+}
+
 void verify_client_server_plain_hello_is_rejected ()
 {
     /* Spec 51 §4 (ClientServer direction): admission rides the Core
@@ -4567,6 +4620,7 @@ int main (int argc, char **argv)
     verify_location_descriptor_cas_snapshot_and_watch ();
     verify_manual_and_automatic_classic_fanout ();
     verify_client_server_stale_admission_reply_is_discarded ();
+    verify_client_server_close_drains_parked_control_reply ();
     verify_client_server_plain_hello_is_rejected ();
     verify_client_server_independent_raw_path ();
     verify_client_server_admits_before_monitor_drain ();

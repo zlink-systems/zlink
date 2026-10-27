@@ -820,9 +820,8 @@ bool raw_client_server_server_t::byte_vector_less_t::operator() (
 
 // Completed admission/probe request replies parked by the asynchronous
 // completion callbacks until the pump loop applies them. The callbacks
-// capture only this shared state (never the owning client), so a completion
-// arriving after the client is destroyed writes into an orphaned state and
-// is dropped.
+// capture only this shared state (never the owning client). Client close seals
+// and drains its lane before releasing ownership; late posts are rejected.
 struct raw_client_server_client_t::control_reply_state_t
 {
     /* Spec 51 §4 physical-connection replacement: a late event from a
@@ -960,6 +959,7 @@ task_t<void> raw_client_server_client_t::close_task (transport_turn_t transport_
         }
         return true;
     });
+    co_await _control_replies->lane.close_async ();
     if (failure)
         std::rethrow_exception (failure);
 }

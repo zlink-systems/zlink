@@ -110,7 +110,7 @@ class offload_executor_t
     std::size_t _idle_workers = 0;
 };
 
-// Process ownership keeps infrastructure resources alive across component and host teardown.
-offload_executor_t &infrastructure_executor ();
+// Runtimes share one process pool and retain it until their lanes have drained.
+std::shared_ptr<offload_executor_t> infrastructure_executor ();
 
 } // namespace zlink::framework::runtime

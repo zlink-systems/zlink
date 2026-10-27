@@ -2,7 +2,9 @@
 #include "runtime/mesh/service_liveness_registry.hpp"
 #include <gtest/gtest.h>
 #include "../support/scope_exit.hpp"
+#include <atomic>
 #include <chrono>
+#include <cstdlib>
 #include <filesystem>
 #include <future>
 #include <iterator>
@@ -10,6 +12,28 @@
 #include <vector>
 
 #ifdef __linux__
+TEST (ZLinkStateLane, LastRuntimeOwnerReleasesInfrastructureThreads)
+{
+    const auto thread_count = [] {
+        return std::distance (std::filesystem::directory_iterator ("/proc/self/task"),
+                              std::filesystem::directory_iterator ());
+    };
+    const auto before = thread_count ();
+    {
+        zlink::framework::runtime::mesh::service_liveness_registry_t owner;
+        std::promise<void> completed;
+        zlink::framework::runtime::state_lane_t lane;
+        ASSERT_TRUE (lane.try_post ([&] { completed.set_value (); }));
+        completed.get_future ().get ();
+        EXPECT_EQ (0u, owner.size ());
+    }
+    // All accepted work and its execution resources belong to the runtime scope.
+    const auto after = thread_count ();
+    RecordProperty ("threads_before", static_cast<int> (before));
+    RecordProperty ("threads_after", static_cast<int> (after));
+    EXPECT_EQ (before, after);
+}
+
 TEST (ZLinkStateLane, ComponentCountDoesNotIncreaseInfrastructureThreads)
 {
     using zlink::framework::runtime::mesh::service_liveness_registry_t;
@@ -48,6 +72,45 @@ TEST (ZLinkStateLane, ClosingOwnerPreservesOtherOwnersAsyncDrain)
     std::promise<void> completed;
     ASSERT_TRUE (remaining.try_post ([&] { completed.set_value (); }));
     completed.get_future ().get ();
+}
+
+TEST (ZLinkStateLane, CloseFromOnlyWorkerYieldsUntilPostedCapturesAreReleased)
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::runtime;
+    ASSERT_EXIT (
+      ([] {
+          struct capture_t
+          {
+              std::atomic_bool &released;
+              ~capture_t () { released.store (true); }
+          };
+          offload_executor_t executor (1);
+          state_lane_t lane (executor);
+          std::atomic_bool released{false};
+          std::promise<bool> completed;
+          auto result = completed.get_future ();
+          executor.submit ([&] {
+              auto capture = std::make_shared<capture_t> (released);
+              if (!lane.try_post ([capture = std::move (capture)] {}))
+                  std::_Exit (2);
+              auto closing = lane.close_async ();
+              if (closing.await_ready ())
+                  std::_Exit (3);
+              detail::observe_task_completion (closing, [&] (const result_t<void> &settled) {
+                  completed.set_value (settled && released.load ());
+              });
+          });
+          if (result.wait_for (std::chrono::seconds (2)) != std::future_status::ready)
+              std::_Exit (4);
+          if (!result.get () || lane.try_post ([] {}))
+              std::_Exit (5);
+          // Repeated close and destruction retain the same completed drain.
+          lane.close ();
+          executor.drain ();
+          std::_Exit (0);
+      }()),
+      ::testing::ExitedWithCode (0), "");
 }
 
 TEST (ZLinkStateLane, InfrastructureProgressesWhileApplicationWorkerWaits)

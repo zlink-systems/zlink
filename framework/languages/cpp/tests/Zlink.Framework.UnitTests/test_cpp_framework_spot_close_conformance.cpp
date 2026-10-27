@@ -47,7 +47,7 @@ TEST (ActorEntryPlacementRegression, ReadyContinuationAwaitsBusySpotInventory)
       "inventory-continuation");
     fw::detail::spot_node_runtime_t runtime (node);
     auto release_workers = fw::test::reserve_single_infrastructure_worker (
-      fw::runtime::infrastructure_executor ());
+      *fw::runtime::infrastructure_executor ());
     std::promise<void> ready, occupied, release, yielded;
     auto ready_seen = ready.get_future ();
     auto occupied_seen = occupied.get_future ().share ();
@@ -58,10 +58,10 @@ TEST (ActorEntryPlacementRegression, ReadyContinuationAwaitsBusySpotInventory)
         (void) co_await runtime.relocation_ready_async ();
         ready.set_value ();
         occupied_seen.wait ();
-        ::zlink::framework::runtime::infrastructure_executor ().submit ([&] { yielded.set_value (); });
+        ::zlink::framework::runtime::infrastructure_executor ()->submit ([&] { yielded.set_value (); });
         co_return co_await runtime.active_user_spot_count_async ();
     };
-    ::zlink::framework::runtime::infrastructure_executor ().submit ([&] { query.emplace (count_after_ready ()); });
+    ::zlink::framework::runtime::infrastructure_executor ()->submit ([&] { query.emplace (count_after_ready ()); });
     ready_seen.get ();
     std::jthread holder ([&] {
         node->lane

@@ -88,9 +88,8 @@ void stateful_object_runtime_t::notify_quiescence ()
         return;
     // Resume a waiting seal off this lane; it re-checks the participants in its own turn.
     for (auto &waiter : std::exchange (_quiescence_waiters, {})) {
-        auto wake = [waiter] { waiter->complete (result_t<void>::success ()); };
-        if (!runtime::infrastructure_executor ().try_submit_internal (wake))
-            wake ();
+        detail::dispatch_completion (
+          [waiter] { waiter->complete (result_t<void>::success ()); }, false, waiter.get ());
     }
 }
 

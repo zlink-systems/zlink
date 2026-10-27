@@ -14,10 +14,17 @@
 namespace zlink::framework::runtime
 {
 
-offload_executor_t &infrastructure_executor ()
+std::shared_ptr<offload_executor_t> infrastructure_executor ()
 {
-    static offload_executor_t executor (std::max (1u, std::thread::hardware_concurrency ()),
-                                       "zlink-infra");
+    static std::mutex mutex;
+    static std::weak_ptr<offload_executor_t> shared;
+    std::lock_guard lock (mutex);
+    auto executor = shared.lock ();
+    if (!executor) {
+        executor = std::make_shared<offload_executor_t> (
+          std::max (1u, std::thread::hardware_concurrency ()), "zlink-infra");
+        shared = executor;
+    }
     return executor;
 }
 

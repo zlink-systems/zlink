@@ -281,13 +281,20 @@ void configure_handler_invocation_executor ()
 
 std::shared_ptr<runtime::offload_executor_t> handler_invocation_executor ()
 {
-    // Prepare both process execution resources before admitting handler calls.
-    (void) runtime::infrastructure_executor ();
     std::lock_guard lock (handler_invocation_executor_mutex ());
     if (!handler_invocation_executor_ref ()) {
-        handler_invocation_executor_ref () = std::make_shared<runtime::offload_executor_t> (
-          0, std::max<std::size_t> (1, std::thread::hardware_concurrency ()),
-          std::chrono::milliseconds (100), "zlink-handler");
+        struct execution_resources_t
+        {
+            // Destroy application work before releasing its infrastructure resource.
+            std::shared_ptr<runtime::offload_executor_t> infrastructure =
+              runtime::infrastructure_executor ();
+            runtime::offload_executor_t application{
+              0, std::max<std::size_t> (1, std::thread::hardware_concurrency ()),
+              std::chrono::milliseconds (100), "zlink-handler"};
+        };
+        auto resources = std::make_shared<execution_resources_t> ();
+        handler_invocation_executor_ref () =
+          std::shared_ptr<runtime::offload_executor_t> (resources, &resources->application);
     }
     return handler_invocation_executor_ref ();
 }
