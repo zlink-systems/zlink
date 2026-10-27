@@ -244,7 +244,12 @@ final class ZLinkJavaSubmissionTest {
         return adapter == Adapter.SERVICE
                 ? binding.request(adapter, parts).toCompletableFuture()
                 : ZLinkJavaSocketSupport.submitRequest(
-                                binding.requestOperation(), parts, TIMEOUT, null, null)
+                                binding.requestOperation(),
+                                parts,
+                                TIMEOUT,
+                                null,
+                                null,
+                                binding.operations)
                         .toCompletableFuture();
     }
 
@@ -768,7 +773,7 @@ final class ZLinkJavaSubmissionTest {
                         null);
             }
             return ZLinkJavaSocketSupport.submitRequest(
-                            requestOperation(), messages, TIMEOUT, null, null)
+                            requestOperation(), messages, TIMEOUT, null, null, operations)
                     .thenApply(
                             reply -> {
                                 try (reply) {
@@ -824,7 +829,12 @@ final class ZLinkJavaSubmissionTest {
 
                         @Override
                         public RequestSubmitOperation timeout(Duration timeout) {
-                            assertEquals(TIMEOUT, timeout);
+                            assertTrue(
+                                    timeout.compareTo(Duration.ZERO) > 0,
+                                    "binding receives a positive remaining request budget");
+                            assertTrue(
+                                    timeout.compareTo(TIMEOUT) <= 0,
+                                    "binding budget must not exceed the original request timeout");
                             return this;
                         }
 

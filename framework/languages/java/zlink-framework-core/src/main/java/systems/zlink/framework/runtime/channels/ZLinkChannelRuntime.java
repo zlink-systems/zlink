@@ -1171,7 +1171,7 @@ public final class ZLinkChannelRuntime
                 spotId,
                 encoded.payload(),
                 Optional.of(encoded.packetName()),
-                Duration.ofSeconds(1),
+                defaultRequestTimeout,
                 encoded.contentType(),
                 false,
                 null,

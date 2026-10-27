@@ -308,14 +308,11 @@ public final class ZLinkJavaRequestCompletionCostTest {
                 var stack = event.getStackTrace();
                 assertNotNull(stack);
                 assertFalse(stack.isTruncated());
-                for (var frame : stack.getFrames()) {
-                    var allocation = frame.getMethod();
-                    String owner = allocation.getType().getName();
-                    if (owner.startsWith("java.") || owner.startsWith("jdk.")) continue;
-                    if (owner.equals(ZLinkJavaRawServicePort.class.getName())
-                            && allocation.getName().equals("requestMessages")) preparedReceivers++;
-                    break;
-                }
+                // An explicit receiver allocation starts at the port constructor call.
+                // whenComplete allocates its dependent stage inside CompletableFuture instead.
+                var allocation = stack.getFrames().getFirst().getMethod();
+                if (allocation.getType().getName().equals(ZLinkJavaRawServicePort.class.getName())
+                        && allocation.getName().equals("requestMessages")) preparedReceivers++;
                 boolean portRequest = false;
                 boolean rawReply = false;
                 for (var frame : stack.getFrames()) {
@@ -535,7 +532,11 @@ public final class ZLinkJavaRequestCompletionCostTest {
         private final AtomicReference<Pending> pending = new AtomicReference<>();
         private final CompletableFuture<Void> cancellationReached = new CompletableFuture<>();
         private final ZLinkServiceOperationRegistry operations =
-                new ZLinkServiceOperationRegistry();
+                new ZLinkServiceOperationRegistry(
+                        new ZLinkStateLane(),
+                        new IllegalStateException("service runtime is closed"),
+                        ZLinkJavaSocketSupport::requestTimeout,
+                        System::nanoTime);
         private final ZLinkJavaRawServicePort port;
         private final RouterSocket router;
         private final Context context;
