@@ -3867,7 +3867,7 @@ void test_source_relocation_metric_outcomes (test_context_t &test)
     for (const std::string_view scenario :
          {"commit", "preserve", "missing", "shutdown", "cleanup-error"}) {
         metric_test::provider_t provider;
-        auto monitoring = std::make_shared<fw::detail::monitoring_runtime_state_t> ();
+        auto monitoring = zlink::framework::test::runtime_failure_monitoring ();
         stateful_object_runtime_t objects;
         objects.configure_relocation_state (
           [] (const object_ref_t &, const std::string &,
@@ -4054,7 +4054,7 @@ void test_relocation_metric_starts_only_after_unit_admission (test_context_t &te
         test.require (!occupied.await_ready (),
                       "fixture must hold an admitted preparation pending");
         eligible_relocation_unit_t::canonical_wire_context_t wire{
-          .monitoring = std::make_shared<fw::detail::monitoring_runtime_state_t> (),
+          .monitoring = zlink::framework::test::runtime_failure_monitoring (),
           .mesh_name = "admission-contract",
           .policy = fw::detail::factory_relocation_kind_t::recreate};
         const auto reason =
@@ -4097,7 +4097,8 @@ void test_source_relocation_failure_stops_state_chunks_and_unseals (test_context
     zlink::framework::detail::delay_owner_t delays (delay_mutex);
     maintenance_runtime_t relocation (objects, authority, roots);
     relocation.bind_delay_owner (delays);
-    relocation.configure_metrics (std::make_shared<framework::runtime::relocation_metrics_t> ());
+    relocation.configure_metrics (
+      std::make_shared<framework::runtime::relocation_metrics_t> (metric_provider.api ()));
 
     auto target_terminal =
       std::make_shared<framework::task_completion_source_t<relocation_reason_t>> ();
@@ -4142,7 +4143,7 @@ void test_source_relocation_failure_stops_state_chunks_and_unseals (test_context
       },
       .abort_target_before_cutover = [] { return true; }};
 
-    wire.monitoring = std::make_shared<framework::detail::monitoring_runtime_state_t> ();
+    wire.monitoring = zlink::framework::test::runtime_failure_monitoring ();
     wire.mesh_name = "source-metric-mesh";
     wire.policy = framework::detail::factory_relocation_kind_t::preserve_state;
     auto operation = relocation.relocate (actor, "target-node", {"target-owner", 9}, 1024 * 1024,
@@ -4285,7 +4286,7 @@ void test_source_settlement_after_subsequent_moves (test_context_t &test)
         maintenance_runtime_t relocation (objects, authority, roots);
         relocation.bind_delay_owner (delays);
         relocation.configure_metrics (
-          std::make_shared<framework::runtime::relocation_metrics_t> ());
+          std::make_shared<framework::runtime::relocation_metrics_t> (metric_provider.api ()));
         int committed = 0;
         int unavailable = 0;
         int cutover_calls = 0;
@@ -4364,7 +4365,7 @@ void test_source_settlement_after_subsequent_moves (test_context_t &test)
           },
           .restore_deadline = std::chrono::steady_clock::time_point::max (),
           .abort_target_before_cutover = [] { return true; }};
-        wire.monitoring = std::make_shared<framework::detail::monitoring_runtime_state_t> ();
+        wire.monitoring = zlink::framework::test::runtime_failure_monitoring ();
         wire.mesh_name = "settlement-metric-mesh";
         wire.policy = framework::detail::factory_relocation_kind_t::preserve_state;
         const auto result = await_task (relocation.relocate (
@@ -4505,7 +4506,7 @@ void test_relocation_request_source_registration (test_context_t &test,
     namespace protocol = framework::runtime::protocol;
     namespace mesh = framework::runtime::mesh;
     metric_test::provider_t provider;
-    auto monitoring = std::make_shared<framework::detail::monitoring_runtime_state_t> ();
+    auto monitoring = zlink::framework::test::runtime_failure_monitoring ();
     stateful_object_runtime_t objects;
     objects.configure_relocation_state (
       [] (const auto &, const auto &, std::stop_token)

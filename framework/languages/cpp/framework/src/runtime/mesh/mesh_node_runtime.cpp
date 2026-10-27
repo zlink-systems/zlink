@@ -768,6 +768,8 @@ void mesh_node_runtime_t::start (
               _state->advertise_host, _state->socket.receive_timeout, _state->auto_hwm_profile,
               _state->application_jobs};
             native_options.runtime_failures = _state->spot_state->runtime_failures ();
+            if (const auto &monitoring = _state->spot_state->monitoring)
+                native_options.metric_provider = monitoring->metric_provider;
             auto options = host::host_options_t{
               std::move (native_options), spot_snapshot.entry_spot_name.value_or ("entry"),
               std::move (stable_types),   _owner_lease_fencing_margin,
@@ -791,6 +793,7 @@ void mesh_node_runtime_t::start (
             _user_spot_store ? (manual ? "manual_and_redis" : "redis") : "manual";
       })
       .get ();
+    const auto metric_provider = node_options.mesh.metric_provider;
     auto node = std::make_shared<host::public_host_runtime_t> (std::move (node_options));
     if (_delay_owner)
         node->set_delay_owner (*_delay_owner);
@@ -883,7 +886,8 @@ void mesh_node_runtime_t::start (
     if (_relocation_authority && _relocation_store)
         node->configure_relocation (_relocation_authority, _relocation_store,
                                     _aggregate_relocation_authority, _relocation_limits);
-    _state->spot_state->activation_admission->configure_metrics (_state->mesh_name);
+    _state->spot_state->activation_admission->configure_metrics (_state->mesh_name,
+                                                                 metric_provider);
     node->configure_relocation_gate (std::move (relocation_gate), std::move (native_spot_target),
                                      std::move (relocation_resume));
     node->start ();

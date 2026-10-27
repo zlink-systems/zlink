@@ -421,7 +421,8 @@ std::unique_ptr<fanout_runtime_observation_t> fanout_location_runtime_t::observe
     if (!is_observable_channel (channel_name))
         throw framework_exception_t (framework_error_kind_t::not_configured,
                                      "automatic Fanout channel is not configured: " + channel_name);
-    auto value = std::make_shared<observer_t> (capacity, std::move (observer));
+    auto value =
+      std::make_shared<observer_t> (capacity, std::move (observer), _locations->monitoring ());
     value->start ();
     {
         std::lock_guard lock (_gate);

@@ -2849,6 +2849,7 @@ static void verify_activation_failure_terminal (bool local,
                               .descriptor_revision = 1,
                               .advertised_endpoint = "tcp://127.0.0.1:0"},
                .runtime_failures = std::make_shared<rt::runtime_failure_collector_t> ()}};
+    options.mesh.metric_provider = metrics.api ();
     options.mesh.dispatch.message_flow (fw::message_flow_log_mode_t::normal);
     std::vector<fw::message_flow_event_t> events;
     std::vector<fw::message_dispatch_error_event_t> errors;

@@ -73,6 +73,7 @@ struct raw_mesh_node_options_t
     std::vector<std::string> metric_channel_names;
     std::string metric_source = "manual";
     std::shared_ptr<runtime_failure_collector_t> runtime_failures;
+    metric_provider_t metric_provider = noop_metric_provider ();
 };
 
 struct raw_mesh_byte_vector_less_t

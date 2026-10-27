@@ -6560,7 +6560,8 @@ void verify_queued_owner_accepts_request_without_blocking_other_owner ()
     mesh::raw_mesh_node_owner_t target (mesh::raw_mesh_node_options_t{
       .descriptor = target_descriptor,
       .runtime_failures =
-        std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()});
+        std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> (),
+      .metric_provider = metric_provider.api ()});
     source.start ();
     target.start ();
     const auto source_descriptor = source.topology ().local_descriptor ();

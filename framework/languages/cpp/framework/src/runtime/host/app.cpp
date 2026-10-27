@@ -505,6 +505,7 @@ class app_state_t
     std::condition_variable termination_teardown_changed;
     std::size_t active_relocation_preflights = 0;
     bool run_active = false;
+    bool run_started = false;
     bool teardown_complete = false;
 
     class relocation_preflight_guard_t
@@ -725,9 +726,10 @@ std::shared_ptr<framework_observer_state_t> framework_runtime_status_source_t::o
   std::size_t capacity,
   std::function<void (const observed_status_t<framework_runtime_status_t> &)> observer)
 {
-    auto state = std::make_shared<framework_observer_state_t> (capacity, std::move (observer));
-    state->start ();
     std::shared_lock state_lock (_access->mutex);
+    auto state = std::make_shared<framework_observer_state_t> (
+      capacity, std::move (observer), _access->state ? _access->state->monitoring : nullptr);
+    state->start ();
     std::lock_guard lock (_mutex);
     auto initial = snapshot_locked ();
     _observers.erase (std::remove_if (_observers.begin (), _observers.end (),
@@ -1323,9 +1325,11 @@ void app_t::_apply_zlink_framework ()
     if (!_state->services.contains (std::type_index (typeid (runtime::location_runtime_t)))) {
         const auto location_options = options.location_options ();
         _state->services.add_factory<runtime::location_runtime_t> (
-          [location_options] (service_provider_t &provider) {
-              return std::make_unique<runtime::location_runtime_t> (
+          [location_options, monitoring = _state->monitoring] (service_provider_t &provider) {
+              auto runtime = std::make_unique<runtime::location_runtime_t> (
                 provider.get_required<location_repository_t> (), location_options);
+              runtime->bind_monitoring (monitoring);
+              return runtime;
           },
           service_lifetime_t::singleton);
     }
@@ -3016,8 +3020,22 @@ app_t &app_t::add_hosted_service (std::unique_ptr<hosted_service_t> service)
     return *this;
 }
 
+app_t &app_t::use_metric_provider (runtime::metric_provider_t provider)
+{
+    std::lock_guard lock (_state->termination_teardown_mutex);
+    if (_state->run_started)
+        throw std::logic_error ("Metric provider must be configured before run");
+    _state->monitoring->use_metric_provider (std::move (provider));
+    _state->runtime_state.connect (_state->monitoring->metric_provider);
+    return *this;
+}
+
 int app_t::run (int argc, char **argv)
 try {
+    {
+        std::lock_guard lock (_state->termination_teardown_mutex);
+        _state->run_started = true;
+    }
     const completion_owner_t completion_owner;
     const auto completion_dispatcher = detail::borrow_completion_dispatcher ();
     _apply_zlink_framework ();
