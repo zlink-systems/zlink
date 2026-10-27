@@ -112,6 +112,16 @@ struct packet_handler_entry_t
     }
 };
 
+/* The selected Manual packet and its registration snapshot remain in the
+ * connector until its handlers return. Both queue locks protect it. */
+struct selected_packet_t
+{
+    dispatch_envelope_t envelope;
+    std::vector<packet_handler_entry_t> handlers;
+    std::size_t next_handler = 0;
+    std::size_t active_callbacks = 0;
+};
+
 template <typename THandler> struct handler_entry_t
 {
     std::uint64_t id = 0;
@@ -130,8 +140,7 @@ struct pending_wait_t
     std::shared_ptr<boost::asio::steady_timer> timeout_timer;
     // The synchronous wait_for sets this, like pending_request_t: its callback
     // only resolves the promise its caller blocks on, so it runs where the
-    // result is decided instead of on the delivery strand, which that caller
-    // may be holding.
+    // result is decided without a Manual callback pump.
     bool deliver_direct = false;
 };
 
@@ -167,6 +176,7 @@ class connector_state_t : public std::enable_shared_from_this<connector_state_t>
      * (stream-connector §10). */
     std::uint64_t dispatch_queue_generation = 0;
     std::deque<delivery_t> delivery_queue;
+    std::optional<selected_packet_t> dispatch_cursor;
     /* stream-connector §7: a Manual pump runs queued packets and callbacks in
      * one arrival order. A packet takes its number when it is decoded, a
      * callback when it is queued; the pump runs both queues by it. */
@@ -225,7 +235,6 @@ class connector_state_t : public std::enable_shared_from_this<connector_state_t>
     std::shared_ptr<shared_runtime_t> runtime;
     boost::asio::io_context &io_context;
     boost::asio::strand<boost::asio::io_context::executor_type> write_strand;
-    boost::asio::strand<boost::asio::io_context::executor_type> delivery_strand;
     std::shared_ptr<stream_connection_t> connection;
     std::shared_ptr<transport_connect_control_t> connect_control;
     /* Guards state, the handler registries and the close reason. Lock order:
@@ -346,16 +355,31 @@ result_t<packet_t> wait_for_packet (std::shared_ptr<connector_state_t> state,
 void deliver_received_packet (connector_state_t &state, packet_t packet);
 /* Appends to dispatch_queue. The caller must already hold transport_mutex. */
 void enqueue_received_message (connector_state_t &state, dispatch_envelope_t envelope);
-/* Runs `callback` on the delivery strand inside a callback_scope_t: one
- * callback of the connector at a time, never on the calling thread. */
-void run_on_delivery_strand (std::shared_ptr<connector_state_t> state,
-                             std::function<void ()> callback);
-/* Immediate: run_on_delivery_strand. Manual: queued for the next dispatch pump
- * (stream-connector §7). `callbacks` counts the handler calls `callback` makes
- * (delivery_t); without it the delivery is one callback. */
+/* Immediate runs in the current context; Manual queues the next pump (SC §7).
+ * `callbacks` counts the calls made by `callback`; without it the delivery
+ * counts as one callback. */
 void schedule_delivery (std::shared_ptr<connector_state_t> state,
                         std::function<void ()> callback,
                         std::function<std::size_t ()> callbacks = {});
+/* Queue each event handler separately so one pump invokes one callback. */
+template <typename TEntry, typename TCallback>
+void schedule_handler_deliveries (const std::shared_ptr<connector_state_t> &state,
+                                  std::vector<TEntry> connector_state_t::*registry,
+                                  const std::vector<std::uint64_t> &ids,
+                                  TCallback callback)
+{
+    for (const auto id : ids) {
+        schedule_delivery (
+          state,
+          [state, registry, id, callback] {
+              for (const auto &entry : registered_handlers (*state, registry, {id})) {
+                  callback (entry.handler);
+              }
+          },
+          registered_handler_count (state, registry, {id}));
+    }
+}
+
 /* Marks the current thread as running user callbacks of `state` (stream-connector
  * §7 handlers and callbacks) for the scope's lifetime. A close called inside
  * one of them starts the close work and returns instead of waiting for it. */
@@ -388,9 +412,8 @@ void count_received_locked (connector_state_t &state, const packet_t &packet);
  * (stream-connector §7, §10). lifecycle_mutex nests under a held
  * transport_mutex. */
 std::size_t packet_handler_count (connector_state_t &state, const dispatch_envelope_t &envelope);
-/* Immediate: hands the queued packets a newly registered handler takes to the
- * delivery strand. No effect in Manual, where the next pump takes them. The
- * caller holds no connector lock. */
+/* Immediate delivers queued packets to new handlers in the current context.
+ * Manual waits for the next pump. The caller holds no connector lock. */
 void deliver_queued_to_handlers (const std::shared_ptr<connector_state_t> &state);
 /* Randomized reconnect wait: a value between 50% and 100% of the base delay
  * (stream-connector §6). */
@@ -402,6 +425,8 @@ result_t<transport_t> resolve_transport (const connector_options_t &options);
 result_t<transport_t> validate_options (const connector_options_t &options);
 void post_runtime_operation (const std::shared_ptr<connector_state_t> &state,
                              std::function<void ()> operation);
+void post_wait_callback (const std::shared_ptr<connector_state_t> &state,
+                         std::function<void ()> callback);
 void post_connect_operation (const std::shared_ptr<connector_state_t> &state,
                              std::function<void ()> operation);
 std::shared_ptr<boost::asio::steady_timer>
