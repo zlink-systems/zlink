@@ -331,9 +331,10 @@ Session owner에 target route 적용과 seal 해제를 one-way로 알린다.
 | Actor의 relocation policy가 cross-node 이동을 금지한다. | `Rejected` |
 | Deadline까지 위치 변경을 commit하지 못한다. | `DeadlineExceeded` |
 | Capture·factory·restore·staging이 내부 오류로 실패한다. | `InternalFailure` |
+| 갱신할 authority generation이 최대값이라 Store가 `GenerationExhausted`를 반환한다. | `InternalFailure` |
 | 전송한 relocation payload의 chunk 조립 또는 checksum 검증이 실패한다. | `DataLost` |
 | Actor generation이 현재 값과 다르다. | `InvalidOperation` |
-| Owner 또는 membership fence가 다르거나 Actor가 이동 중이다. | `Unavailable` |
+| Owner 또는 membership fence가 다르거나 Actor가 이동 중이다. 대상 User Spot이 commit되지 않은 relocation에 참여 중인 것도 fence가 다른 경우다. | `Unavailable` |
 | Runtime shutdown이 먼저 시작되어 relay-ready accepted 전에 중단한다. | `ShuttingDown` |
 
 `Accepted`는 위치와 membership 변경이 commit되었다는 뜻이다. Completion callback 실행까지
