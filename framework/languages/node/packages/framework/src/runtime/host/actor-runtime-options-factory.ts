@@ -1,3 +1,4 @@
+import type { RequestRuntime } from '../foundation/request-runtime';
 import type { ActorRef, RoutingId, ZLinkActor, ZLinkMessage } from '../../contracts';
 import type { ZLinkProviderResolver } from '../../contracts/Common/ZLinkProviderResolver';
 import type { Type } from '../../contracts/Common/CoreTypes';
@@ -34,6 +35,7 @@ import type { ZLinkRemoteActorPacketTarget } from '../actors';
 import type { ZLinkActorJoinRelocation } from '../actors/actor-join-relocation';
 
 export interface ZLinkActorRuntimeOptionsFactoryOptions {
+  readonly requests?: RequestRuntime;
   readonly terminateActorActivation: (
     actor: ZLinkActor,
     terminal: () => Promise<void>
@@ -261,6 +263,7 @@ export class ZLinkActorRuntimeOptionsFactory {
   createActorClientOptions(): ConstructorParameters<typeof DefaultZLinkActorClient>[0] {
     const locationResolver = this.options.createActorLocationResolver();
     return {
+      requests: this.options.requests,
       nodeProvider: this.options.meshNode,
       completionTableProvider: this.options.meshCompletions,
       locationResolver: () => locationResolver,
@@ -283,7 +286,8 @@ export class ZLinkActorRuntimeOptionsFactory {
         returnResponse,
         actor,
         deadlineUnixMs,
-        onAdmitted
+        onAdmitted,
+        requestOperation
       ) =>
         this.actorBelongsToMesh(meshName, actorId) &&
         !this.options.actorHandoff.isProvisional(actorId)
@@ -297,7 +301,8 @@ export class ZLinkActorRuntimeOptionsFactory {
               deadlineUnixMs,
               undefined,
               undefined,
-              onAdmitted
+              onAdmitted,
+              requestOperation
             )
           : undefined,
       sendErrorReporter: this.options.reportPostCommitError
