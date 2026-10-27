@@ -62,7 +62,11 @@ env:
 jobs:
   framework-cpp:
     name: Framework C++ unit and contract tests
-    runs-on: ubuntu-24.04
+    # A repository variable holding a JSON label list (for example
+    # ["self-hosted","linux","x64"]) moves this job to a self-hosted runner;
+    # without it the job stays on the GitHub-hosted image. Only Mergify branch
+    # pushes and manual runs start this workflow, so fork code never reaches it.
+    runs-on: ${{ vars.ZLINK_CPP_LINUX_RUNNER && fromJSON(vars.ZLINK_CPP_LINUX_RUNNER) || 'ubuntu-24.04' }}
     steps:
       - uses: actions/checkout@v5
 
@@ -166,7 +170,8 @@ jobs:
 
   framework-cpp-windows:
     name: win-x64 / Framework C++ unit and contract tests
-    runs-on: windows-2022
+    # Same rule as the Linux job, with its own variable.
+    runs-on: ${{ vars.ZLINK_CPP_WINDOWS_RUNNER && fromJSON(vars.ZLINK_CPP_WINDOWS_RUNNER) || 'windows-2022' }}
     env:
       VCPKG_INSTALLED_DIR: ${{ github.workspace }}\.cache\framework-cpp\vcpkg-installed
       ZLINK_LOCAL_PACKAGE_ROOT: ${{ github.workspace }}\.artifacts\windows

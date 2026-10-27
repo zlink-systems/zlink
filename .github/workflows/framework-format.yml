@@ -21,7 +21,7 @@ concurrency:
 jobs:
   framework-format:
     name: Framework source format
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.ZLINK_LINUX_RUNNER && fromJSON(vars.ZLINK_LINUX_RUNNER) || 'ubuntu-24.04' }}
     timeout-minutes: 20
     steps:
       - name: Checkout

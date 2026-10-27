@@ -999,7 +999,9 @@ int route_update_preserves_object_generation ()
     using namespace zlink::framework;
     using namespace zlink::framework::detail;
 
+    serializer_registry_t relay_serializers;
     actor_gateway_runtime_t gateway;
+    gateway.bind_serializers (relay_serializers);
     auto manager = gateway.manager ();
     session_actor_manager_access_t::attach (manager, stream_t{});
     const actor_ref_t original = test_actor_ref ("actor-node-a", "player", "actor-route", 7);
@@ -1019,7 +1021,7 @@ int route_update_preserves_object_generation ()
     const actor_ref_t relocated = test_actor_ref ("actor-node-b", "player", "actor-route", 7);
     if (!gateway.update_actor_ref (relocated))
         return 1;
-    if (!original_binding.relay ("packet", zlink::message_t{}).result ()
+    if (!original_binding.relay ("packet", zlink::framework::message_t{}).result ()
         || relay_routes.size () != 1
         || relay_routes.front ().node_rid ().value () != original.node_rid ().value ()) {
         return 5;
@@ -1029,12 +1031,12 @@ int route_update_preserves_object_generation ()
         return 7;
     }
     auto relocated_binding = manager.bind (relocated).async ().result ().value ();
-    if (!relocated_binding.relay ("packet", zlink::message_t{}).result ()
+    if (!relocated_binding.relay ("packet", zlink::framework::message_t{}).result ()
         || relay_routes.size () != 2
         || relay_routes.back ().node_rid ().value () != relocated.node_rid ().value ()) {
         return 8;
     }
-    if (!unaffected_binding.relay ("packet", zlink::message_t{}).result ()
+    if (!unaffected_binding.relay ("packet", zlink::framework::message_t{}).result ()
         || relay_routes.size () != 3
         || relay_routes.back ().node_rid ().value () != unaffected.node_rid ().value ()) {
         return 6;
@@ -2478,7 +2480,9 @@ int session_relay_queue_is_ordered_without_blocking_other_actors ()
     using namespace zlink::framework;
     using namespace zlink::framework::detail;
 
+    serializer_registry_t relay_serializers;
     actor_gateway_runtime_t gateway;
+    gateway.bind_serializers (relay_serializers);
     auto manager = gateway.manager ();
     session_actor_manager_access_t::attach (manager, stream_t{});
     const auto actor_a = test_actor_ref ("actor-owner", "game.actor", "relay-a", 1);
@@ -2516,9 +2520,9 @@ int session_relay_queue_is_ordered_without_blocking_other_actors ()
           result_t<std::optional<zlink::message_t>>::success (std::nullopt));
     });
 
-    auto first = bound_a.relay ("A1", zlink::message_t{});
-    auto second = bound_a.relay ("A2", zlink::message_t{});
-    auto independent = bound_b.relay ("B1", zlink::message_t{});
+    auto first = bound_a.relay ("A1", zlink::framework::message_t{});
+    auto second = bound_a.relay ("A2", zlink::framework::message_t{});
+    auto independent = bound_b.relay ("B1", zlink::framework::message_t{});
     {
         std::unique_lock lock (mutex);
         if (!changed.wait_for (lock, std::chrono::seconds (2), [&] {
@@ -2551,7 +2555,9 @@ int session_relay_does_not_start_actor_dispatch_on_session_thread ()
     using namespace zlink::framework;
     using namespace zlink::framework::detail;
 
+    serializer_registry_t relay_serializers;
     actor_gateway_runtime_t gateway;
+    gateway.bind_serializers (relay_serializers);
     gateway.offload_session_relay ();
     auto manager = gateway.manager ();
     session_actor_manager_access_t::attach (manager, stream_t{});
@@ -2567,7 +2573,7 @@ int session_relay_does_not_start_actor_dispatch_on_session_thread ()
           result_t<std::optional<zlink::message_t>>::success (std::nullopt));
     });
 
-    const auto delivered = binding.relay ("execution", zlink::message_t{}).result ();
+    const auto delivered = binding.relay ("execution", zlink::framework::message_t{}).result ();
     return !delivered || actor_dispatch_thread == std::thread::id{}
                || actor_dispatch_thread == session_thread
              ? 1
@@ -2713,7 +2719,9 @@ int relay_request_survives_pending_dispatcher_completion ()
     using namespace zlink::framework;
     using namespace zlink::framework::detail;
 
+    serializer_registry_t relay_serializers;
     actor_gateway_runtime_t gateway;
+    gateway.bind_serializers (relay_serializers);
     auto manager = gateway.manager ();
     session_actor_manager_access_t::attach (manager, stream_t{});
     const std::string actor_id (96, 'a');
@@ -2727,13 +2735,13 @@ int relay_request_survives_pending_dispatcher_completion ()
                         const actor_ref_t &relayed_actor, actor_context_t,
                         const stream_header_t &header, const zlink::message_t &payload,
                         std::optional<bound_session_relay_source_t>, std::chrono::milliseconds) {
-        return test::accepted_request_task (
-          inspect_pending_relay_arguments (relayed_actor, header, payload, pending, relay_started,
-                                           actor_id, packet_name, payload_text));
+        return test::accepted_request_task (inspect_pending_relay_arguments (
+          relayed_actor, header, payload, pending, relay_started, actor_id, packet_name,
+          nlohmann::json (payload_text).dump ()));
     });
 
     auto request =
-      bound.relay_request (packet_name, zlink::message_t::from (payload_text)).async ();
+      bound.relay_request (packet_name, zlink::framework::message_t::from (payload_text)).async ();
     auto admitted = request.admitted ();
     if (!admitted.await_ready () || !admitted.result () || request.await_ready ()
         || !relay_started->load (std::memory_order_acquire))
@@ -2747,7 +2755,11 @@ int relay_request_survives_pending_dispatcher_completion ()
     std::thread completion ([pending] { pending->complete (result_t<void>::success ()); });
     completion.join ();
     const auto completed = request.result ();
-    return completed && completed.value ().to_string () == "delayed-reply" ? 0 : 2;
+    return completed && completed.value ().encoded ()
+               && detail::message_to_raw (completed.value (), relay_serializers).to_string ()
+                    == "delayed-reply"
+             ? 0
+             : 2;
 }
 
 int relay_send_survives_pending_dispatcher_completion ()
@@ -2755,7 +2767,9 @@ int relay_send_survives_pending_dispatcher_completion ()
     using namespace zlink::framework;
     using namespace zlink::framework::detail;
 
+    serializer_registry_t relay_serializers;
     actor_gateway_runtime_t gateway;
+    gateway.bind_serializers (relay_serializers);
     auto manager = gateway.manager ();
     session_actor_manager_access_t::attach (manager, stream_t{});
     const std::string actor_id (96, 's');
@@ -2769,12 +2783,12 @@ int relay_send_survives_pending_dispatcher_completion ()
                         const actor_ref_t &relayed_actor, actor_context_t,
                         const stream_header_t &header, const zlink::message_t &payload,
                         std::optional<bound_session_relay_source_t>, std::chrono::milliseconds) {
-        return test::accepted_request_task (
-          inspect_pending_relay_arguments (relayed_actor, header, payload, pending, relay_started,
-                                           actor_id, packet_name, payload_text));
+        return test::accepted_request_task (inspect_pending_relay_arguments (
+          relayed_actor, header, payload, pending, relay_started, actor_id, packet_name,
+          nlohmann::json (payload_text).dump ()));
     });
 
-    auto relayed = bound.relay (packet_name, zlink::message_t::from (payload_text));
+    auto relayed = bound.relay (packet_name, zlink::framework::message_t::from (payload_text));
     if (!relay_started->load (std::memory_order_acquire))
         return 1;
 
@@ -7348,7 +7362,9 @@ int session_relay_waiter_accepts_beyond_former_capacity ()
         ~relay_fixture_t () { released.set_value (dispatch_count); }
     };
 
+    serializer_registry_t relay_serializers;
     actor_gateway_runtime_t gateway;
+    gateway.bind_serializers (relay_serializers);
     auto manager = gateway.manager ();
     session_actor_manager_access_t::attach (manager, stream_t{});
     const actor_ref_t actor = test_actor_ref ("actor-node-a", "player", "actor-capacity", 1);
@@ -7391,7 +7407,8 @@ int session_relay_waiter_accepts_beyond_former_capacity ()
 
         /* One relay occupies the drain turn; the rest cross the former boundary. */
         for (std::size_t index = 0; index != relay_count; ++index)
-            accepted.push_back (binding.relay (std::to_string (index), zlink::message_t{}));
+            accepted.push_back (
+              binding.relay (std::to_string (index), zlink::framework::message_t{}));
         auto completed = std::make_shared<std::promise<void>> ();
         auto completion = completed->get_future ();
         observe_task_completion (accepted.back (),
