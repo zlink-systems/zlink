@@ -73,11 +73,21 @@ function sessionFixture(disconnectFailure, nativeSocket, routingId = zlink.Routi
   };
   const service = backend.createStreamSessionService(native);
   service.start();
-  service.lookupActor = (_node, actorId) => backend.observeStateful(OperationKind.ActorLookup, {
-    id: 100n,
-    promise: Promise.resolve({ terminalResult: zlink.RequestResult.Ok, failureCode: 0,
-      kindData: { kind: 'actorLookupCompletion', location: { actor: actorId === actor.actorId ? actor : nextActor } } })
-  });
+  service.lookupActor = (_node, actorId) =>
+    backend.observeStateful(
+      OperationKind.ActorLookup,
+      Object.assign(
+        Object.create(
+          new (require('../../packages/framework/dist/runtime/foundation/operation-registry').OperationRegistry)().register(
+            1000
+          )
+        ),
+        {
+          promise: Promise.resolve({ terminalResult: zlink.RequestResult.Ok, failureCode: 0,
+            kindData: { kind: 'actorLookupCompletion', location: { actor: actorId === actor.actorId ? actor : nextActor } } })
+        }
+      )
+    );
   let closed = 0;
   let removed = 0;
   let resolveRemoved;
@@ -193,7 +203,6 @@ for (const error of [
     } finally { await fixture.dispose(); }
   });
 }
-
 
 test('raw bound delivery survives a RID already removed by installed Core', { timeout: 5000 }, async () => {
   const context = zlink.createContext();
