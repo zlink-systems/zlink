@@ -31,6 +31,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cassert>
+#include <cerrno>
 #include <chrono>
 #include <cstdio>
 #include <condition_variable>
@@ -51,6 +52,7 @@
 #include <vector>
 
 #if defined(__unix__)
+#include <poll.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #endif
@@ -2758,6 +2760,33 @@ int run_cross_process_delivery ()
     int reciprocal_endpoint_pipe[2];
     int formal_descriptor_pipe[2];
     int formal_ack_pipe[2];
+    const auto read_byte_while_dispatching = [] (auto &node, int fd, char &value) {
+        pollfd descriptor{fd, POLLIN, 0};
+        while (true) {
+            const int poll_result = poll (&descriptor, 1, 0);
+            if (poll_result < 0) {
+                if (errno == EINTR)
+                    continue;
+                return false;
+            }
+            if (poll_result > 0
+                && (descriptor.revents & (POLLIN | POLLHUP | POLLERR | POLLNVAL)) != 0) {
+                const ssize_t bytes = read (fd, &value, sizeof (value));
+                if (bytes >= 0)
+                    return bytes == 1;
+                if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)
+                    continue;
+                return false;
+            }
+            (void) std::move (
+              node.dispatch_ready ([] (const zlink::framework::runtime::host::ready_record_t &,
+                                       const zlink::framework::runtime::host::receive_record_t &,
+                                       std::vector<zlink::message_t>) {}))
+              .result ()
+              .value ();
+            std::this_thread::sleep_for (10ms);
+        }
+    };
     if (pipe (endpoint_pipe) != 0 || pipe (direct_ack_pipe) != 0 || pipe (channel_ack_pipe) != 0
         || pipe (request_ack_pipe) != 0 || pipe (completion_ack_pipe) != 0
         || pipe (spot_request_ack_pipe) != 0 || pipe (reciprocal_ready_pipe) != 0
@@ -2921,7 +2950,7 @@ int run_cross_process_delivery ()
         (void) write (reciprocal_child_ready_pipe[1], &ready, sizeof (ready));
         close (reciprocal_child_ready_pipe[1]);
         char stop = 0;
-        (void) read (reciprocal_child_stop_pipe[0], &stop, sizeof (stop));
+        (void) read_byte_while_dispatching (reciprocal_node, reciprocal_child_stop_pipe[0], stop);
         close (reciprocal_child_stop_pipe[0]);
         reciprocal_node.stop ();
         completion_owner.close ();
@@ -2950,8 +2979,7 @@ int run_cross_process_delivery ()
     node.start ();
     assert (wait_until_admitted (node));
     char reciprocal_ready = 0;
-    assert (read (reciprocal_ready_pipe[0], &reciprocal_ready, sizeof (reciprocal_ready))
-            == sizeof (reciprocal_ready));
+    assert (read_byte_while_dispatching (node, reciprocal_ready_pipe[0], reciprocal_ready));
     close (reciprocal_ready_pipe[0]);
     assert (reciprocal_ready == 1);
 
