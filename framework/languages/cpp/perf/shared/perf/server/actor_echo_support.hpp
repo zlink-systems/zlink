@@ -171,13 +171,13 @@ class session_actor_setup_t
   public:
     explicit session_actor_setup_t (role_t &role) : _role (role) {}
 
-    fw::task_t<fw::session_actor_t> prepare (fw::stream_t &stream, const zlink::message_t &probe)
+    fw::task_t<fw::session_actor_t> prepare (fw::stream_t &stream, const fw::message_t &probe)
     {
         auto &measurement = _role.measurement;
         if (measurement.phase () != "setup")
             throw std::logic_error ("Actors are created and bound during setup only.");
         try {
-            const auto request = probe.parse_json<echo_request_t> ();
+            const auto request = probe.decode<echo_request_t> ();
             if (request.client_id < 0
                 || static_cast<std::size_t> (request.client_id) >= _role.config.actor_ids.size ())
                 throw validation_error_t ("IdentityMismatch",
@@ -302,11 +302,11 @@ class perf_actor_relay_session_t final : public fw::packet_stream_session_t
 
     fw::task_t<void> on_packet (fw::stream_t &stream,
                                 const fw::session_message_context_t &dispatch,
-                                const zlink::message_t &payload) override
+                                const zlink::framework::message_t &payload) override
     {
         auto &measurement = _role.measurement;
         try {
-            zlink::message_t reply;
+            fw::message_t reply;
             const bool setup_probe = measurement.phase () == "setup";
             if (dispatch.actor || _binding) {
                 if (dispatch.actor)
