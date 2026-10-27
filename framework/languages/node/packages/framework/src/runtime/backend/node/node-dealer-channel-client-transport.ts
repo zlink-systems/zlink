@@ -1,5 +1,7 @@
+import { RequestRuntime } from '../../foundation/request-runtime';
 import {
   prepareZLinkRequestReply,
+  identityRequestReply,
   rejectZLinkRequestReply,
   type ZLinkRequestResult
 } from '../../messaging/request-result';
@@ -23,7 +25,8 @@ const EMPTY_METADATA: ReadonlyMap<string, string> = new Map();
 export class ZLinkDealerChannelClientTransport implements ZLinkChannelClientTransport {
   constructor(
     private readonly dealer: DealerSocket,
-    private readonly publisher?: PubSocket
+    private readonly publisher?: PubSocket,
+    private readonly requests = new RequestRuntime()
   ) {}
 
   async send(
@@ -67,6 +70,12 @@ export class ZLinkDealerChannelClientTransport implements ZLinkChannelClientTran
   ): ZLinkRequestResult<TReply> {
     try {
       throwIfAborted(signal);
+    } catch (error) {
+      return rejectZLinkRequestReply(error);
+    }
+    const requestOperation = this.requests.begin(timeoutMs, signal);
+    try {
+      throwIfAborted(signal);
       const operation = runWithOutboundFlow(true, () =>
         appendParts(
           this.dealer.request(),
@@ -87,17 +96,12 @@ export class ZLinkDealerChannelClientTransport implements ZLinkChannelClientTran
       if (timeoutMs !== undefined) operation.timeout(timeoutMs);
       const pending = submitRequestOperation(
         {
-          submit: () =>
-            bindingRequestReply(
-              operation.submit(),
-              timeoutMs === undefined ? undefined : performance.now() + timeoutMs,
-              undefined,
-              onAdmitted
-            )
+          submit: () => bindingRequestReply(operation.submit(), undefined, onAdmitted)
         },
         'channel request'
       );
-      return prepareZLinkRequestReply(pending, (reply) => {
+      const observed = this.requests.run(requestOperation, () => pending, closeReply);
+      return prepareZLinkRequestReply(observed, (reply) => {
         try {
           return decodeChannelReply<TReply>(reply);
         } finally {
@@ -105,7 +109,11 @@ export class ZLinkDealerChannelClientTransport implements ZLinkChannelClientTran
         }
       });
     } catch (error) {
-      return rejectZLinkRequestReply(error);
+      requestOperation.fail(error);
+      return prepareZLinkRequestReply(
+        requestOperation.promise as Promise<TReply>,
+        identityRequestReply
+      );
     }
   }
 
@@ -150,4 +158,8 @@ export class ZLinkDealerChannelClientTransport implements ZLinkChannelClientTran
     throwIfAborted(signal);
     return this.tryPublish(channelName, topic, packetName, event, metadata);
   }
+}
+
+function closeReply(parts: readonly { close(): void }[]): void {
+  for (const part of parts) part.close();
 }

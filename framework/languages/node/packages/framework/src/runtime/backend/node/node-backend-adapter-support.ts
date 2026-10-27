@@ -1,5 +1,7 @@
-import { constants as osConstants } from 'node:os';
 import { waitRequestReply } from '../../messaging/request-deadline';
+import { constants as osConstants } from 'node:os';
+import type { PendingOperation } from '../../foundation/operation-registry';
+import { remainingRequestTimeout, requestTerminalError } from '../../messaging/request-deadline';
 import {
   requireClassicFanoutCompletion,
   ZLinkSubmitStatus
@@ -183,10 +185,10 @@ export async function submitBindingRequest(
   operation: ZLinkBindingRequestOperation,
   payload: unknown,
   timeoutMs: number | undefined,
-  recordReceived?: () => void,
-  onAdmitted?: () => void
+  recordReceived: (() => void) | undefined,
+  onAdmitted: (() => void) | undefined,
+  pending: PendingOperation<unknown>
 ): Promise<readonly unknown[]> {
-  const deadlineMs = timeoutMs === undefined ? undefined : performance.now() + timeoutMs;
   try {
     let current: ZLinkBindingRequestSubmitOperation | undefined;
     if (Array.isArray(payload)) {
@@ -200,43 +202,42 @@ export async function submitBindingRequest(
     }
     current ??= operation.message(Buffer.alloc(0));
     if (timeoutMs !== undefined) {
-      current = current.timeout(timeoutMs);
+      current = current.timeout(
+        Math.min(timeoutMs, remainingRequestTimeout('Request', pending.deadlineMs) ?? timeoutMs)
+      );
     }
-    return await bindingRequestReply(current.submit(), deadlineMs, recordReceived, onAdmitted);
+    const physical = bindingRequestReply(current.submit(), recordReceived, onAdmitted);
+    const caller = pending.hasObserver()
+      ? waitRequestReply(physical, 'Request', pending, undefined, closeBindingReply)
+      : (pending.promise as Promise<readonly unknown[]>);
+    void physical.then(
+      (parts) => {
+        if (!pending.reply(parts) && caller === pending.promise) closeBindingReply(parts);
+      },
+      (error) => pending.replyFailure(translateBindingResultError(error))
+    );
+    return await caller;
   } catch (error) {
-    throw translateBindingResultError(error);
+    pending.replyFailure(translateBindingResultError(error));
+    throw requestTerminalError('Request', translateBindingResultError(error));
   }
 }
 
 export async function bindingRequestReply(
   submission: import('@zlink-systems/zlink').RequestSubmission,
-  deadlineMs: number | undefined,
   recordReceived?: () => void,
   onAdmitted?: () => void
 ): Promise<import('@zlink-systems/zlink').Message[]> {
-  const reply = submission.reply;
   if (submission.result === SubmitResult.Backpressured) {
-    try {
-      const [, replies] = await waitRequestReply(
-        Promise.all([submission.admitted.then(() => onAdmitted?.()), reply]),
-        'Request',
-        deadlineMs
-      );
-      recordReceived?.();
-      return replies;
-    } catch (error) {
-      void reply.then(
-        (parts) => {
-          recordReceived?.();
-          closeBindingReply(parts);
-        },
-        () => undefined
-      );
-      throw error;
-    }
+    const [, replies] = await Promise.all([
+      submission.admitted.then(() => onAdmitted?.()),
+      submission.reply
+    ]);
+    recordReceived?.();
+    return replies;
   }
   onAdmitted?.();
-  const replies = await reply;
+  const replies = await submission.reply;
   recordReceived?.();
   return replies;
 }
