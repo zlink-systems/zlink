@@ -9,6 +9,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import org.junit.jupiter.api.Test;
 
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.locations.ZLinkActivationConcurrency;
 import systems.zlink.framework.locations.ZLinkCapacityUsage;
 import systems.zlink.framework.locations.ZLinkMeshNodeObjectRole;
@@ -60,6 +62,31 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 final class ZLinkCanonicalRelocationReadySubmissionTest {
+    private final java.util.List<
+                    systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry>
+            requestOwners = new java.util.ArrayList<>();
+
+    @org.junit.jupiter.api.AfterEach
+    void closeRequestOwners() {
+        requestOwners.forEach(
+                systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry
+                        ::close);
+    }
+
+    private systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry
+            requestOwner() {
+        var owner =
+                new systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry(
+                        new ZLinkFrameworkException(
+                                ZLinkFrameworkErrorKind.SHUTTING_DOWN, "test backend closed"),
+                        () ->
+                                new ZLinkFrameworkException(
+                                        ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+                                        "test request deadline"));
+        requestOwners.add(owner);
+        return owner;
+    }
+
     private static final java.time.Instant STAGE_DEADLINE =
             java.time.Instant.parse("2100-01-01T00:00:00Z");
     private static final ZLinkStoreCancellation OPEN = () -> false;
@@ -319,6 +346,8 @@ final class ZLinkCanonicalRelocationReadySubmissionTest {
         AtomicBoolean rejectFirstCutover = new AtomicBoolean(true);
         AtomicReference<byte[]> rejectedCutover = new AtomicReference<>();
         AtomicReference<byte[]> submittedPrepare = new AtomicReference<>();
+        var prepareTerminal =
+                new AtomicReference<java.util.function.BiConsumer<byte[], Throwable>>();
         List<ScheduledExpiry> retainedExpiry = new CopyOnWriteArrayList<>();
         CountingEndpoint targetEndpoint = new CountingEndpoint();
         source.set(
@@ -330,7 +359,8 @@ final class ZLinkCanonicalRelocationReadySubmissionTest {
                                 rejectFirstReady,
                                 rejectFirstCutover,
                                 rejectedCutover,
-                                submittedPrepare),
+                                submittedPrepare,
+                                prepareTerminal),
                         "mesh",
                         "source-entry",
                         observedLocations,
@@ -345,7 +375,8 @@ final class ZLinkCanonicalRelocationReadySubmissionTest {
                                 rejectFirstReady,
                                 rejectFirstCutover,
                                 rejectedCutover,
-                                submittedPrepare),
+                                submittedPrepare,
+                                prepareTerminal),
                         "mesh",
                         "target-entry",
                         observedLocations,
@@ -605,14 +636,16 @@ final class ZLinkCanonicalRelocationReadySubmissionTest {
                 Instant.now());
     }
 
-    private static ZLinkInternalMeshNode node(
+    private ZLinkInternalMeshNode node(
             RoutingId localRid,
             long generation,
             AtomicReference<ZLinkCanonicalRelocationStateMachine> peer,
             AtomicBoolean rejectFirstReady,
             AtomicBoolean rejectFirstCutover,
             AtomicReference<byte[]> rejectedCutover,
-            AtomicReference<byte[]> submittedPrepare) {
+            AtomicReference<byte[]> submittedPrepare,
+            AtomicReference<java.util.function.BiConsumer<byte[], Throwable>> prepareTerminal) {
+        var requests = requestOwner();
         MeshNodeStatus status =
                 new MeshNodeStatus(
                         MeshNodeState.READY,
@@ -650,6 +683,33 @@ final class ZLinkCanonicalRelocationReadySubmissionTest {
                                         yield (AutoCloseable) () -> {};
                                     }
                                     case "status" -> status;
+                                    case "requestCanonicalRelocationPrepare" -> {
+                                        byte[] encoded = ((byte[]) args[1]).clone();
+                                        submittedPrepare.set(encoded);
+                                        yield requests.<byte[]>submitTerminal(
+                                                systems.zlink.framework.runtime.internal.service
+                                                        .ZLinkServiceOperationIds.next(),
+                                                (Duration) args[2],
+                                                terminal -> {
+                                                    prepareTerminal.set(terminal);
+                                                    var delivered =
+                                                            peer.get()
+                                                                    .apply(
+                                                                            localRid,
+                                                                            ServiceWireConstants
+                                                                                    .COMMAND_RELOCATION_PREPARE,
+                                                                            encoded);
+                                                    ((CompletableFuture<Void>) args[3])
+                                                            .complete(null);
+                                                    delivered.whenComplete(
+                                                            (ignored, failure) -> {
+                                                                if (failure != null)
+                                                                    terminal.accept(null, failure);
+                                                            });
+                                                    return null;
+                                                },
+                                                ignored -> {});
+                                    }
                                     case "sendCanonicalRelocationControl" -> {
                                         byte[] encoded = (byte[]) args[1];
                                         int command = Byte.toUnsignedInt(encoded[3]);
@@ -660,9 +720,11 @@ final class ZLinkCanonicalRelocationReadySubmissionTest {
                                         }
                                         if (command == ServiceWireConstants.COMMAND_RELOCATION_READY
                                                 && rejectFirstReady.compareAndSet(true, false)) {
-                                            yield CompletableFuture.failedFuture(
+                                            var failure =
                                                     new IllegalStateException(
-                                                            "READY transport rejected"));
+                                                            "READY transport rejected");
+                                            prepareTerminal.get().accept(null, failure);
+                                            yield CompletableFuture.failedFuture(failure);
                                         }
                                         if (command
                                                         == ServiceWireConstants
@@ -673,7 +735,23 @@ final class ZLinkCanonicalRelocationReadySubmissionTest {
                                                     new IllegalStateException(
                                                             "CUTOVER transport rejected"));
                                         }
-                                        yield peer.get().apply(localRid, command, encoded);
+                                        var delivered =
+                                                peer.get().apply(localRid, command, encoded);
+                                        if (command == ServiceWireConstants.COMMAND_RELOCATION_READY
+                                                || command
+                                                        == ServiceWireConstants
+                                                                .COMMAND_RELOCATION_FAILED) {
+                                            delivered.whenComplete(
+                                                    (ignored, failure) ->
+                                                            prepareTerminal
+                                                                    .get()
+                                                                    .accept(
+                                                                            failure == null
+                                                                                    ? encoded
+                                                                                    : null,
+                                                                            failure));
+                                        }
+                                        yield delivered;
                                     }
                                     default ->
                                             throw new UnsupportedOperationException(
@@ -681,12 +759,13 @@ final class ZLinkCanonicalRelocationReadySubmissionTest {
                                 });
     }
 
-    private static ZLinkInternalMeshNode droppingNode(RoutingId localRid, long generation) {
+    private ZLinkInternalMeshNode droppingNode(RoutingId localRid, long generation) {
         return droppingNode(localRid, generation, new CompletableFuture<>());
     }
 
-    private static ZLinkInternalMeshNode droppingNode(
+    private ZLinkInternalMeshNode droppingNode(
             RoutingId localRid, long generation, CompletableFuture<byte[]> submittedPrepare) {
+        var requests = requestOwner();
         MeshNodeStatus status =
                 new MeshNodeStatus(
                         MeshNodeState.READY,
@@ -724,6 +803,20 @@ final class ZLinkCanonicalRelocationReadySubmissionTest {
                                         yield (AutoCloseable) () -> {};
                                     }
                                     case "status" -> status;
+                                    case "requestCanonicalRelocationPrepare" -> {
+                                        byte[] encoded = ((byte[]) args[1]).clone();
+                                        yield requests.<byte[]>submitTerminal(
+                                                systems.zlink.framework.runtime.internal.service
+                                                        .ZLinkServiceOperationIds.next(),
+                                                (Duration) args[2],
+                                                terminal -> {
+                                                    submittedPrepare.complete(encoded);
+                                                    ((CompletableFuture<Void>) args[3])
+                                                            .complete(null);
+                                                    return null;
+                                                },
+                                                ignored -> {});
+                                    }
                                     case "sendCanonicalRelocationControl" -> {
                                         byte[] encoded = (byte[]) args[1];
                                         if (Byte.toUnsignedInt(encoded[3])
