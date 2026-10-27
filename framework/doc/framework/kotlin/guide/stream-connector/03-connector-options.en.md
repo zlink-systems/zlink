@@ -110,8 +110,10 @@ they run in the execution context that called the pump. This is the default beca
 cannot be touched outside the main thread.
 
 Switching to immediate execution runs handlers on the receive path with no pump. A slow handler
-then blocks that path and delays the receive work behind it. Use it where there is no main-thread
-constraint, such as a CLI or a tool.
+then blocks that path and delays the receive work behind it. A handler that synchronously waits for a
+later receive on the same connector (another packet, or a request's reply) never finishes, because the
+path that would process that receive is blocked by the handler; do such waiting outside the handler.
+Use it where there is no main-thread constraint, such as a CLI or a tool.
 
 The difference between the two settings, and registration, are covered by
 [Receiving Packets](05-receiving.en.md).
