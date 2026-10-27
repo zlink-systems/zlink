@@ -922,7 +922,7 @@ Application은 owner RID나 endpoint를 지정하지 않는다.
 <a id="handler-turn"></a>
 ### Handler turn
 
-Handler가 execution gate를 얻어 실행하고 그 권한을 반납하기까지의 구간이다. Spot뿐 아니라 Node·Channel·Actor·Session의 실행 문맥을 설명할 때 사용한다.
+Handler가 실행되는 구간이다. 경계는 [실행 계약 §2·§3](../01-execution/02-handler-turn-and-execution-gate.ko.md#execution-gate)이 정한다.
 
 | 항목 | 내용 |
 |---|---|
