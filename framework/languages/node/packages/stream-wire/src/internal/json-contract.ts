@@ -1,5 +1,10 @@
 const MAX_CONTRACT_SCHEMA_DEPTH = 64;
 
+function isIntegerEnumName(name: string): boolean {
+  // framework-json-v1 permits only declared enum names, never ordinal strings.
+  return /^[+-]?\d+$/u.test(name);
+}
+
 /** Describes the fields accepted by the default framework-json-v1 serializer. */
 export type ZLinkJsonSchema =
   | { readonly type: 'boolean' }
@@ -104,9 +109,13 @@ function normalizeJsonSchema(
       if (
         !Array.isArray(normalizedSchema.names) ||
         normalizedSchema.names.length === 0 ||
-        normalizedSchema.names.some((name) => typeof name !== 'string' || name.length === 0)
+        normalizedSchema.names.some(
+          (name) => typeof name !== 'string' || name.length === 0 || isIntegerEnumName(name)
+        )
       ) {
-        throw new TypeError('ZLink packet enum schema requires non-empty string names.');
+        throw new TypeError(
+          'ZLink packet enum schema requires non-empty, non-numeric string names.'
+        );
       }
       if (new Set(normalizedSchema.names).size !== normalizedSchema.names.length) {
         throw new TypeError('ZLink packet enum schema names must be unique.');
