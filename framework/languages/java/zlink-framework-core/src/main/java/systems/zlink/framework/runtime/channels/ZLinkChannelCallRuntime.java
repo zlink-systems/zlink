@@ -14,6 +14,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResul
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRouterSocket;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
+import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationIds;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry;
 import systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope;
@@ -83,9 +84,20 @@ final class ZLinkChannelCallRuntime {
             SpotSend spotSend,
             SpotRequest spotRequest,
             LongSupplier nanoTime) {
+        this(flow, replyDecoder, spotSend, spotRequest, nanoTime, new ZLinkStateLane());
+    }
+
+    ZLinkChannelCallRuntime(
+            ZLinkMessageFlowTracer flow,
+            ZLinkChannelReplyDecoder replyDecoder,
+            SpotSend spotSend,
+            SpotRequest spotRequest,
+            LongSupplier nanoTime,
+            ZLinkStateLane owner) {
         this.flow = flow;
         this.operations =
                 new ZLinkServiceOperationRegistry(
+                        owner,
                         closedFailure(),
                         () -> requestFailure(new TimeoutException("service operation timed out")),
                         nanoTime);
@@ -106,6 +118,10 @@ final class ZLinkChannelCallRuntime {
     ZLinkFlowContext.Scope enterApplicationFlow() {
         return ZLinkFlowContext.enterCurrentOrCreate(
                 ZLinkFlowOrigin.APPLICATION, flow.captureEnabled());
+    }
+
+    CompletionStage<Void> submitSend(Supplier<CompletionStage<Void>> admitted) {
+        return operations.submitSend(admitted);
     }
 
     <T> CompletableFuture<T> submit(
@@ -132,16 +148,18 @@ final class ZLinkChannelCallRuntime {
             List<Message> requestParts,
             Duration timeout,
             CompletableFuture<Void> requestAdmission) {
+        UUID id = ZLinkServiceOperationIds.next();
         return preserveCurrentFlow(
-                submit(
-                        ZLinkServiceOperationIds.next(),
+                operations.submitTerminal(
+                        id,
                         timeout,
-                        () ->
-                                client.request(
+                        terminal ->
+                                client.requestTo(
                                         requestParts,
-                                        timeout,
+                                        operations.remainingTimeout(id),
                                         client.receiveAdmission(),
-                                        requestAdmission),
+                                        requestAdmission,
+                                        terminal),
                         ZLinkBackendReceived::close));
     }
 
@@ -153,11 +171,23 @@ final class ZLinkChannelCallRuntime {
             Duration timeout,
             CompletableFuture<Void> requestAdmission) {
         return preserveCurrentFlow(
-                submit(
+                operations.submitTerminal(
                         operationId,
                         timeout,
-                        () -> router.request(target, requestParts, timeout, requestAdmission),
+                        terminal ->
+                                router.requestTo(
+                                        target,
+                                        requestParts,
+                                        operations.remainingTimeout(operationId),
+                                        requestAdmission,
+                                        terminal),
                         ZLinkBackendReceived::close));
+    }
+
+    static ZLinkServiceOperationRegistry operationOwner(
+            ZLinkInternalSpotNode node, ZLinkServiceOperationRegistry fallback) {
+        var owner = node.operationRegistry();
+        return owner == null ? fallback : owner;
     }
 
     CompletionStage<ZLinkBackendReceived> requestChannel(
@@ -178,7 +208,7 @@ final class ZLinkChannelCallRuntime {
                             metadata,
                             requestParts,
                             timeout,
-                            operations,
+                            operationOwner(node, operations),
                             operationId,
                             requestAdmission));
         } catch (RuntimeException failure) {
@@ -204,7 +234,7 @@ final class ZLinkChannelCallRuntime {
                             metadata,
                             requestParts,
                             timeout,
-                            operations,
+                            operationOwner(node, operations),
                             operationId,
                             requestAdmission));
         } catch (RuntimeException failure) {

@@ -30,7 +30,7 @@ final class ZLinkJavaDurableInitialPeerTest {
             var submitted = new AtomicInteger();
             var reply = List.of(new byte[] {9});
             var request =
-                    ZLinkJavaDurableRequest.request(
+                    ZLinkJavaDurableRequestTest.request(
                                     () -> List.of(new byte[] {1}),
                                     (frames, remaining, admission) -> {
                                         submitted.incrementAndGet();
