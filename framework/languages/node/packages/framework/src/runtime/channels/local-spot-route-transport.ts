@@ -1,3 +1,5 @@
+import { RequestRuntime } from '../foundation/request-runtime';
+import type { PendingOperation } from '../foundation/operation-registry';
 import type { RoutingId } from '../../contracts';
 import { ZLinkConfigurationException } from '../configuration';
 import type { ZLinkLocalSpotRouteDispatcher } from './spot-route-dispatch-strategy';
@@ -5,7 +7,8 @@ import type { ZLinkLocalSpotRouteDispatcher } from './spot-route-dispatch-strate
 export class ZLinkLocalSpotRouteTransport {
   constructor(
     private readonly dispatcher: ZLinkLocalSpotRouteDispatcher | undefined,
-    private readonly defaultRequestTimeoutMs: number | undefined
+    private readonly defaultRequestTimeoutMs: number | undefined,
+    private readonly requests = new RequestRuntime()
   ) {}
 
   async send(
@@ -33,40 +36,29 @@ export class ZLinkLocalSpotRouteTransport {
     request: unknown,
     timeoutMs: number | undefined,
     signal?: AbortSignal,
-    onAdmitted?: () => void
+    onAdmitted?: () => void,
+    existing?: PendingOperation<unknown>
   ): Promise<TReply> {
     if (this.dispatcher === undefined) {
       throw new ZLinkConfigurationException(
         `Route channel '${routerChannelId}' could not dispatch local SPOT request.`
       );
     }
-    const pending = this.dispatcher.request<TReply>(spotId, packetName, request, {
-      channelName: routerChannelId,
-      onAdmitted,
-      signal
-    });
     const effectiveTimeoutMs = timeoutMs ?? this.defaultRequestTimeoutMs;
-    if (effectiveTimeoutMs === undefined) return pending;
-    return new Promise<TReply>((resolve, reject) => {
-      const timeout = setTimeout(
-        () =>
-          reject(
-            new ZLinkConfigurationException(
-              `Route channel '${routerChannelId}' local SPOT request timed out.`
-            )
-          ),
-        effectiveTimeoutMs
-      );
-      pending.then(
-        (value) => {
-          clearTimeout(timeout);
-          resolve(value);
-        },
-        (error) => {
-          clearTimeout(timeout);
-          reject(error);
-        }
-      );
-    });
+    const dispatcher = this.dispatcher;
+    return this.requests.request(
+      effectiveTimeoutMs,
+      signal,
+      async (requestOperation) => {
+        const pending = dispatcher.request<TReply>(spotId, packetName, request, {
+          channelName: routerChannelId,
+          onAdmitted,
+          signal,
+          requestOperation
+        });
+        return pending;
+      },
+      existing
+    );
   }
 }
