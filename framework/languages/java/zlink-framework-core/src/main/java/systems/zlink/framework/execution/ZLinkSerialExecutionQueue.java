@@ -929,8 +929,10 @@ public final class ZLinkSerialExecutionQueue {
         enqueueLifecycleBarrier(preparation)
                 .whenComplete(
                         (ignored, failure) -> {
-                            if (failure != null)
+                            if (failure != null) {
                                 preparation.prepared.completeExceptionally(failure);
+                                preparation.continued.completeExceptionally(failure);
+                            }
                         });
         return preparation.prepared.minimalCompletionStage();
     }
@@ -961,6 +963,25 @@ public final class ZLinkSerialExecutionQueue {
 
     public CompletionStage<Void> finishActivationPreparation() {
         return completePreparation(null, null, () -> CompletableFuture.completedFuture(null));
+    }
+
+    /** Resumes initialization within the preparation's existing lifecycle item. */
+    public CompletionStage<Void> continueActivationPreparation(
+            Supplier<CompletionStage<Void>> operation) {
+        Objects.requireNonNull(operation, "operation");
+        return underSharedSpotGateAsync(() -> activationPreparation)
+                .thenCompose(
+                        preparation -> {
+                            if (preparation == null)
+                                return CompletableFuture.failedFuture(
+                                        new IllegalStateException(
+                                                "activation preparation is not owned"));
+                            if (!preparation.continuation.complete(operation))
+                                return CompletableFuture.failedFuture(
+                                        new IllegalStateException(
+                                                "activation preparation already resumed"));
+                            return preparation.continued.minimalCompletionStage();
+                        });
     }
 
     public CompletionStage<Void> discardActivationPreparation() {
@@ -1029,6 +1050,12 @@ public final class ZLinkSerialExecutionQueue {
                                                                         }
                                                                         activationPreparation =
                                                                                 null;
+                                                                        preparation.continuation
+                                                                                .complete(
+                                                                                        () ->
+                                                                                                CompletableFuture
+                                                                                                        .completedFuture(
+                                                                                                                null));
                                                                         if (terminalFailure == null)
                                                                             preparation.terminal
                                                                                     .complete(null);
@@ -1056,6 +1083,9 @@ public final class ZLinkSerialExecutionQueue {
         private final CompletableFuture<T> prepared = new CompletableFuture<>();
         private final CompletableFuture<Void> terminal = new CompletableFuture<>();
         private final CompletableFuture<Entry> admission = new CompletableFuture<>();
+        private final CompletableFuture<Supplier<CompletionStage<Void>>> continuation =
+                new CompletableFuture<>();
+        private final CompletableFuture<Void> continued = new CompletableFuture<>();
 
         private ActivationPreparation(Supplier<CompletionStage<T>> initialize) {
             this.initialize = initialize;
@@ -1080,6 +1110,25 @@ public final class ZLinkSerialExecutionQueue {
                             })
                     // The callback keeps its turn; publication and durable recovery are
                     // infrastructure waits within the same lifecycle item (execution gate §7).
+                    .thenCompose(ignored -> yieldCurrent(continuation))
+                    .thenCompose(
+                            operation -> {
+                                CompletionStage<Void> stage;
+                                try {
+                                    stage =
+                                            Objects.requireNonNull(
+                                                    operation.get(), "continuation result");
+                                } catch (RuntimeException | Error failure) {
+                                    stage = CompletableFuture.failedFuture(failure);
+                                }
+                                return manageCurrentInTurn(stage)
+                                        .handle(
+                                                (ignored, failure) -> {
+                                                    if (failure == null) continued.complete(null);
+                                                    else continued.completeExceptionally(failure);
+                                                    return null;
+                                                });
+                            })
                     .thenCompose(ignored -> yieldCurrent(terminal));
         }
     }
