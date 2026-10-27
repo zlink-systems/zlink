@@ -336,7 +336,15 @@ export class ZLinkInMemoryAuthorityStore {
   ): ZLinkFrameworkErrorKind.NotFound | ZLinkFrameworkErrorKind.Unavailable | undefined {
     const row = this.rows.get(encodeAuthorityKey('user_spot', spotId).value);
     if (row === undefined) return ZLinkFrameworkErrorKind.NotFound;
-    return row.snapshot.allocation.objectKind === 'user_spot' &&
+    return ![...this.aggregates.values()].some(
+      (aggregate) =>
+        aggregate.state === 'prepared' &&
+        aggregate.request.participants.some(
+          (participant) =>
+            participant.authorityKey.value === encodeAuthorityKey('user_spot', spotId).value
+        )
+    ) &&
+      row.snapshot.allocation.objectKind === 'user_spot' &&
       row.snapshot.allocation.state === 'active' &&
       row.snapshot.objectGeneration === objectGeneration &&
       decodeServiceReadySpotAuthority(row.snapshot.payload)?.kind === 'user_spot' &&

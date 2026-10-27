@@ -65,178 +65,179 @@ const {
 // Creation and Join use public managers, typed dispatch and completion callbacks.
 // The Store contract assertion checks membership, which the public object query
 // does not expose (it only returns the object's owner and generation).
-for (const failure of ['none', 'missing', 'generation', 'internal']) test(
-  failure === 'none'
-    ? 'placement-created same-node Player commits Table and Entry membership before Accepted'
-    : `public deferred Join preserves ${failure} failure kind`,
-  { timeout: 15000 },
-  async () => {
-    const completions = [];
-    let failCommit = async () => {};
-    let completed;
-    class Join {
-      constructor(spotId) {
-        this.spotId = spotId;
-      }
-    }
-    class Player {
-      constructor(context) {
-        this.context = context;
-      }
-      async onJoinCompleted(completion) {
-        completions.push(completion);
-        completed(completion);
-      }
-    }
-    class PlayerFactory {
-      async create(context) {
-        return new Player(context);
-      }
-    }
-    class Entry {
-      constructor(context) {
-        this.context = context;
-      }
-      configure() {}
-    }
-    class Table {
-      constructor(context) {
-        this.context = context;
-      }
-      configure() {}
-      async onActorJoin() {
-        await failCommit();
-        return { accepted: true };
-      }
-      async onJoinedActor() {}
-      async onLeaveActor() {}
-    }
-    class JoinHandler {
-      async handle(_spot, actor, _context, request) {
-        if (request.spotId === undefined) actor.context.joinEntrySpot().defer();
-        else actor.context.joinSpot(request.spotId).defer();
-      }
-    }
-    nestjs.zlinkEntrySpotActorSendHandler({
-      entrySpot: () => Entry,
-      actor: () => Player,
-      packetName: 'Join'
-    })(JoinHandler);
-    class LeaveHandler extends JoinHandler {}
-    nestjs.zlinkSpotActorSendHandler({
-      spot: () => Table,
-      actor: () => Player,
-      packetName: 'Join'
-    })(LeaveHandler);
-    const provider = new ZLinkInMemoryProviderLocationStore();
-    const builder = nestjs.zlinkFramework().addLocationStore(provider);
-    builder
-      .addRouteMesh('play')
-      .listen(`inproc://join-authority-${process.pid}`)
-      .objects()
-      .server()
-      .addEntrySpot(Entry, 'Player')
-      .addActorFactory('Player', PlayerFactory, (f) => f.disableRelocation())
-      .addSpotFactory('Table', Table, (f) => f.disableRelocation());
-    class TestModule {}
-    Module({
-      imports: [nestjs.ZLinkModule.forRoot(builder.build())],
-      providers: [JoinHandler, LeaveHandler]
-    })(TestModule);
-    const app = await NestFactory.createApplicationContext(TestModule, {
-      logger: false,
-      abortOnError: false
-    });
-    try {
-      const actors = app.get(nestjs.ZLINK_ACTOR_MANAGER);
-      const spots = app.get(nestjs.ZLINK_SPOT_MANAGER);
-      const client = app.get(nestjs.ZLINK_ACTOR_CLIENT);
-      const query = app.get(nestjs.ZLINK_LOCATION_RUNTIME_QUERY);
-      const table = await spots.getOrCreate('table', 'Table').inMesh('play').submit();
-      await actors.create('player', 'Player').inMesh('play').submit();
-      const repository = new ZLinkLocationStoreRepository(provider);
-      const key = encodeAuthorityKey('actor', 'player');
-      const before = await repository.readAuthority(key);
-      const entry = decodeActorAuthorityIdentity(before.payload, before.objectGeneration);
-      if (failure !== 'none') {
-        failCommit = async () => {
-          if (failure === 'internal') throw new Error('factory/staging fault');
-          const spotKey = encodeAuthorityKey('user_spot', String(table.spot.spotId));
-          const current = await repository.readAuthority(spotKey);
-          const result = await repository.compareExchangeAuthority(
-            spotKey,
-            current.storeVersion,
-            failure === 'missing'
-              ? { kind: 'delete' }
-              : {
-                  kind: 'put',
-                  generationTransition: 'reincarnate',
-                  payload: current.payload
-                }
-          );
-          assert.equal(result.kind, failure === 'missing' ? 'deleted' : 'stored');
-        };
-        const completion = new Promise((resolve) => {
-          completed = resolve;
-        });
-        await client.sendToActor('player', new Join(String(table.spot.spotId))).submit();
-        const terminal = await completion;
-        assert.equal(terminal.status, 'failed');
-        assert.equal(
-          terminal.kind,
-          framework.ZLinkFrameworkErrorKind[
-            failure === 'missing'
-              ? 'NotFound'
-              : failure === 'generation'
-                ? 'Unavailable'
-                : 'InternalFailure'
-          ]
-        );
-        assert.equal(completions.length, 1);
-        const current = await repository.readAuthority(key);
-        const identity = decodeActorAuthorityIdentity(current.payload, current.objectGeneration);
-        assert.equal(identity.spotKind, entry.spotKind);
-        assert.equal(String(identity.spotId), String(entry.spotId));
-        return;
-      }
-      for (const [spotId, generation, kind] of [
-        [table.spot.spotId, table.spot.objectGeneration, framework.ZLinkSpotKind.User],
-        [entry.spotId, entry.spotGeneration, framework.ZLinkSpotKind.Entry]
-      ]) {
-        const completion = new Promise((resolve) => {
-          completed = resolve;
-        });
-        await client
-          .sendToActor(
-            'player',
-            new Join(kind === framework.ZLinkSpotKind.User ? String(spotId) : undefined)
-          )
-          .submit();
-        assert.equal((await completion).status, 'accepted');
-        const location = await query.findActorLocation('player');
-        assert.equal(location.objectGeneration, before.objectGeneration);
-        const membership = await actors.findSpot('player');
-        if (kind === framework.ZLinkSpotKind.User) {
-          assert.equal(String(membership.spotId), String(spotId));
-          assert.equal(
-            (await query.findSpotLocation(membership.spotId)).objectGeneration,
-            generation
-          );
-        } else {
-          assert.equal(membership, undefined);
+for (const failure of ['none', 'missing', 'generation', 'internal'])
+  test(
+    failure === 'none'
+      ? 'placement-created same-node Player commits Table and Entry membership before Accepted'
+      : `public deferred Join preserves ${failure} failure kind`,
+    { timeout: 15000 },
+    async () => {
+      const completions = [];
+      let failCommit = async () => {};
+      let completed;
+      class Join {
+        constructor(spotId) {
+          this.spotId = spotId;
         }
-        const current = await repository.readAuthority(key);
-        const identity = decodeActorAuthorityIdentity(current.payload, current.objectGeneration);
-        assert.equal(String(identity.spotId), String(spotId));
-        assert.equal(identity.spotGeneration, generation);
-        assert.equal(identity.spotKind, kind);
       }
-      assert.equal(completions.length, 2);
-    } finally {
-      await app.close();
+      class Player {
+        constructor(context) {
+          this.context = context;
+        }
+        async onJoinCompleted(completion) {
+          completions.push(completion);
+          completed(completion);
+        }
+      }
+      class PlayerFactory {
+        async create(context) {
+          return new Player(context);
+        }
+      }
+      class Entry {
+        constructor(context) {
+          this.context = context;
+        }
+        configure() {}
+      }
+      class Table {
+        constructor(context) {
+          this.context = context;
+        }
+        configure() {}
+        async onActorJoin() {
+          await failCommit();
+          return { accepted: true };
+        }
+        async onJoinedActor() {}
+        async onLeaveActor() {}
+      }
+      class JoinHandler {
+        async handle(_spot, actor, _context, request) {
+          if (request.spotId === undefined) actor.context.joinEntrySpot().defer();
+          else actor.context.joinSpot(request.spotId).defer();
+        }
+      }
+      nestjs.zlinkEntrySpotActorSendHandler({
+        entrySpot: () => Entry,
+        actor: () => Player,
+        packetName: 'Join'
+      })(JoinHandler);
+      class LeaveHandler extends JoinHandler {}
+      nestjs.zlinkSpotActorSendHandler({
+        spot: () => Table,
+        actor: () => Player,
+        packetName: 'Join'
+      })(LeaveHandler);
+      const provider = new ZLinkInMemoryProviderLocationStore();
+      const builder = nestjs.zlinkFramework().addLocationStore(provider);
+      builder
+        .addRouteMesh('play')
+        .listen(`inproc://join-authority-${process.pid}`)
+        .objects()
+        .server()
+        .addEntrySpot(Entry, 'Player')
+        .addActorFactory('Player', PlayerFactory, (f) => f.disableRelocation())
+        .addSpotFactory('Table', Table, (f) => f.disableRelocation());
+      class TestModule {}
+      Module({
+        imports: [nestjs.ZLinkModule.forRoot(builder.build())],
+        providers: [JoinHandler, LeaveHandler]
+      })(TestModule);
+      const app = await NestFactory.createApplicationContext(TestModule, {
+        logger: false,
+        abortOnError: false
+      });
+      try {
+        const actors = app.get(nestjs.ZLINK_ACTOR_MANAGER);
+        const spots = app.get(nestjs.ZLINK_SPOT_MANAGER);
+        const client = app.get(nestjs.ZLINK_ACTOR_CLIENT);
+        const query = app.get(nestjs.ZLINK_LOCATION_RUNTIME_QUERY);
+        const table = await spots.getOrCreate('table', 'Table').inMesh('play').submit();
+        await actors.create('player', 'Player').inMesh('play').submit();
+        const repository = new ZLinkLocationStoreRepository(provider);
+        const key = encodeAuthorityKey('actor', 'player');
+        const before = await repository.readAuthority(key);
+        const entry = decodeActorAuthorityIdentity(before.payload, before.objectGeneration);
+        if (failure !== 'none') {
+          failCommit = async () => {
+            if (failure === 'internal') throw new Error('factory/staging fault');
+            const spotKey = encodeAuthorityKey('user_spot', String(table.spot.spotId));
+            const current = await repository.readAuthority(spotKey);
+            const result = await repository.compareExchangeAuthority(
+              spotKey,
+              current.storeVersion,
+              failure === 'missing'
+                ? { kind: 'delete' }
+                : {
+                    kind: 'put',
+                    generationTransition: 'reincarnate',
+                    payload: current.payload
+                  }
+            );
+            assert.equal(result.kind, failure === 'missing' ? 'deleted' : 'stored');
+          };
+          const completion = new Promise((resolve) => {
+            completed = resolve;
+          });
+          await client.sendToActor('player', new Join(String(table.spot.spotId))).submit();
+          const terminal = await completion;
+          assert.equal(terminal.status, 'failed');
+          assert.equal(
+            terminal.kind,
+            framework.ZLinkFrameworkErrorKind[
+              failure === 'missing'
+                ? 'NotFound'
+                : failure === 'generation'
+                  ? 'Unavailable'
+                  : 'InternalFailure'
+            ]
+          );
+          assert.equal(completions.length, 1);
+          const current = await repository.readAuthority(key);
+          const identity = decodeActorAuthorityIdentity(current.payload, current.objectGeneration);
+          assert.equal(identity.spotKind, entry.spotKind);
+          assert.equal(String(identity.spotId), String(entry.spotId));
+          return;
+        }
+        for (const [spotId, generation, kind] of [
+          [table.spot.spotId, table.spot.objectGeneration, framework.ZLinkSpotKind.User],
+          [entry.spotId, entry.spotGeneration, framework.ZLinkSpotKind.Entry]
+        ]) {
+          const completion = new Promise((resolve) => {
+            completed = resolve;
+          });
+          await client
+            .sendToActor(
+              'player',
+              new Join(kind === framework.ZLinkSpotKind.User ? String(spotId) : undefined)
+            )
+            .submit();
+          assert.equal((await completion).status, 'accepted');
+          const location = await query.findActorLocation('player');
+          assert.equal(location.objectGeneration, before.objectGeneration);
+          const membership = await actors.findSpot('player');
+          if (kind === framework.ZLinkSpotKind.User) {
+            assert.equal(String(membership.spotId), String(spotId));
+            assert.equal(
+              (await query.findSpotLocation(membership.spotId)).objectGeneration,
+              generation
+            );
+          } else {
+            assert.equal(membership, undefined);
+          }
+          const current = await repository.readAuthority(key);
+          const identity = decodeActorAuthorityIdentity(current.payload, current.objectGeneration);
+          assert.equal(String(identity.spotId), String(spotId));
+          assert.equal(identity.spotGeneration, generation);
+          assert.equal(identity.spotKind, kind);
+        }
+        assert.equal(completions.length, 2);
+      } finally {
+        await app.close();
+      }
     }
-  }
-);
+  );
 
 function authorityFixture() {
   const actor = { actorId: 'player', objectGeneration: 3n, nodeRid: 'node', meshName: 'play' };
@@ -705,9 +706,13 @@ for (const mismatch of [
           framework.ZLinkSpotKind.User,
           7n
         ),
-      error => error instanceof framework.ZLinkFrameworkException &&
-        error.kind === (mismatch === 'object' ? framework.ZLinkFrameworkErrorKind.InvalidOperation
-          : framework.ZLinkFrameworkErrorKind.Unavailable) && /authority (fence|identity) does not match/.test(error.message)
+      (error) =>
+        error instanceof framework.ZLinkFrameworkException &&
+        error.kind ===
+          (mismatch === 'object'
+            ? framework.ZLinkFrameworkErrorKind.InvalidOperation
+            : framework.ZLinkFrameworkErrorKind.Unavailable) &&
+        /authority (fence|identity) does not match/.test(error.message)
     );
     assert.equal(writes, 0);
   });
@@ -835,7 +840,16 @@ for (const membership of [
 }
 
 for (const backend of ['authority-memory', 'provider-memory']) {
-  for (const failure of ['none', 'missing', 'generation', 'expiredLease', 'otherLeaseGeneration']) {
+  for (const failure of [
+    'none',
+    'missing',
+    'generation',
+    'expiredLease',
+    'otherLeaseGeneration',
+    'notReady',
+    'prepared',
+    'actorGeneration'
+  ]) {
     test(`${backend} membership commit classifies ${failure} at Store and claim boundary`, async () => {
       const f = await membershipFailureFixture(backend);
       let generation = f.spot.objectGeneration;
@@ -850,6 +864,24 @@ for (const backend of ['authority-memory', 'provider-memory']) {
       if (failure === 'generation') generation++;
       if (failure === 'expiredLease') await f.expire();
       if (failure === 'otherLeaseGeneration') await f.replaceLease();
+      if (failure === 'notReady') {
+        assert.equal(
+          (
+            await f.store.compareExchangeAuthority(
+              encodeAuthorityKey('user_spot', 'table'),
+              f.spot.storeVersion,
+              { kind: 'put', generationTransition: 'preserve', payload: Buffer.from('not-ready') }
+            )
+          ).kind,
+          'stored'
+        );
+      }
+      if (failure === 'prepared') await f.prepareSpot();
+      assert.notEqual(f.actor.objectGeneration, f.spot.objectGeneration);
+      const actorRef =
+        failure === 'actorGeneration'
+          ? { ...f.actor, objectGeneration: f.actor.objectGeneration + 1n }
+          : f.actor;
       let result;
       let writes = 0;
       const claims = new ZLinkActorLocationClaims({ currentOwnerToken: f.owner }, {}, 'play', {
@@ -863,7 +895,7 @@ for (const backend of ['authority-memory', 'provider-memory']) {
       const commit = () =>
         claims.commitMembership(
           'Player',
-          f.actor,
+          actorRef,
           f.actorSnapshot.authorityOwnerGeneration,
           'table',
           generation,
@@ -880,18 +912,22 @@ for (const backend of ['authority-memory', 'provider-memory']) {
         const expected =
           failure === 'missing'
             ? framework.ZLinkFrameworkErrorKind.NotFound
-            : framework.ZLinkFrameworkErrorKind.Unavailable;
+            : failure === 'actorGeneration'
+              ? framework.ZLinkFrameworkErrorKind.InvalidOperation
+              : framework.ZLinkFrameworkErrorKind.Unavailable;
         await assert.rejects(
           commit,
           (error) => error instanceof framework.ZLinkFrameworkException && error.kind === expected
         );
-        assert.equal(result.kind, 'conflict');
-        assert.equal(result.membershipFailure, expected);
+        if (failure !== 'actorGeneration') {
+          assert.equal(result.kind, 'conflict');
+          assert.equal(result.membershipFailure, expected);
+        }
         const current = await f.store.readAuthority(encodeAuthorityKey('actor', 'player'));
         assert.equal(current.storeVersion.value, f.actorSnapshot.storeVersion.value);
         assert.deepEqual(current.payload, f.actorSnapshot.payload);
       }
-      assert.equal(writes, 1);
+      assert.equal(writes, failure === 'actorGeneration' ? 0 : 1);
     });
   }
 }
@@ -1043,9 +1079,31 @@ async function membershipFailureFixture(backend) {
   });
   return {
     store,
+    provider,
     spot,
     actor,
     actorSnapshot,
+    async prepareSpot() {
+      const prepared = await store.prepareAggregate({
+        aggregateId: { value: '33333333-3333-4333-8333-333333333333' },
+        aggregateGeneration: 1n,
+        participants: [
+          {
+            authorityKey: encodeAuthorityKey('user_spot', 'table'),
+            expectedStoreVersion: spot.storeVersion,
+            ownerTransition: 'newOwner',
+            authorityPayload: spot.payload,
+            membershipMutation: Buffer.alloc(0)
+          }
+        ],
+        inventoryDigest: Buffer.alloc(32, 7),
+        targetDescriptor: { meshName: 'play', rid: targets.actor.nodeRid },
+        targetDescriptorLifecycleGeneration: 7n,
+        targetOwner: targets.actor.owner,
+        capacity: { actors: 0, spots: 1 }
+      });
+      assert.equal(prepared.kind, 'prepared');
+    },
     owner: targets.actor.owner,
     async expire() {
       now += 1001;
@@ -1094,5 +1152,117 @@ for (const fault of ['read', 'write', 'generationExhausted']) {
             error.kind === framework.ZLinkFrameworkErrorKind.InternalFailure
           : error === internalError
     );
+  });
+}
+
+for (const change of [
+  'revision',
+  'spotMissing',
+  'spotGeneration',
+  'actorVersion',
+  'deadline',
+  'timerDeadline'
+]) {
+  test(`provider membership Conflict rebuilds only while qualified: ${change}`, async () => {
+    const f = await membershipFailureFixture('provider-memory');
+    const write = f.provider.write.bind(f.provider);
+    let conflicts = 0;
+    const controller = new AbortController();
+    const timer = change === 'timerDeadline' ? setTimeout(() => controller.abort(), 20) : undefined;
+    // Discover the actual conditioned keys rather than relying on the storage prefix.
+    f.provider.write = async (request, signal) => {
+      const actorMutation = request.mutations.find((m) =>
+        m.key.value.endsWith('authority\0actor\0player')
+      );
+      if (actorMutation && (conflicts === 0 || change === 'timerDeadline')) {
+        conflicts++;
+        if (change === 'deadline') controller.abort();
+        const condition = request.conditions.find((c) =>
+          c.key.value.endsWith('authority\0spot\0table')
+        );
+        assert.ok(condition);
+        if (change === 'revision' || change === 'spotMissing' || change === 'spotGeneration') {
+          if (change === 'spotMissing') {
+            await write({ conditions: [], mutations: [{ kind: 'delete', key: condition.key }] });
+          } else if (change === 'spotGeneration') {
+            const changed = await f.store.compareExchangeAuthority(
+              encodeAuthorityKey('user_spot', 'table'),
+              f.spot.storeVersion,
+              { kind: 'put', generationTransition: 'reincarnate', payload: f.spot.payload }
+            );
+            assert.equal(changed.kind, 'stored');
+          } else {
+            const {
+              decodeServiceReadySpotAuthority
+            } = require('../../packages/framework/dist/runtime/foundation/service-authority-payload-codec');
+            const spotIdentity = decodeServiceReadySpotAuthority(f.spot.payload);
+            const changed = await f.store.compareExchangeAuthority(
+              encodeAuthorityKey('user_spot', 'table'),
+              f.spot.storeVersion,
+              {
+                kind: 'put',
+                generationTransition: 'preserve',
+                payload: encodeServiceUserSpotAuthorityPayload({
+                  ...spotIdentity,
+                  state: 'ready',
+                  ownerNodeGeneration: spotIdentity.ownerNodeGeneration + 1n
+                })
+              }
+            );
+            assert.equal(changed.kind, 'stored');
+          }
+        }
+        if (change === 'actorVersion') {
+          const read = await f.provider.read(actorMutation.key);
+          await write({
+            conditions: [],
+            mutations: [{ kind: 'put', key: actorMutation.key, bytes: read.value.bytes }]
+          });
+        }
+        return { kind: 'conflict', storeNow: new Date() };
+      }
+      return write(request, signal);
+    };
+    const claims = new ZLinkActorLocationClaims(
+      { currentOwnerToken: f.owner },
+      {},
+      'play',
+      f.store
+    );
+    try {
+      const operation = () =>
+        claims.commitMembership(
+          'Player',
+          f.actor,
+          f.actorSnapshot.authorityOwnerGeneration,
+          'table',
+          f.spot.objectGeneration,
+          framework.ZLinkSpotKind.User,
+          7n,
+          controller.signal
+        );
+      if (change === 'revision') {
+        await operation();
+        const current = await f.store.readAuthority(encodeAuthorityKey('actor', 'player'));
+        assert.equal(
+          decodeActorAuthorityIdentity(current.payload, current.objectGeneration).spotId,
+          'table'
+        );
+      } else {
+        await assert.rejects(operation, (error) =>
+          change === 'deadline' || change === 'timerDeadline'
+            ? error.name === 'AbortError'
+            : error.kind ===
+              (change === 'spotMissing'
+                ? framework.ZLinkFrameworkErrorKind.NotFound
+                : framework.ZLinkFrameworkErrorKind.Unavailable)
+        );
+        const current = await f.store.readAuthority(encodeAuthorityKey('actor', 'player'));
+        assert.deepEqual(current.payload, f.actorSnapshot.payload);
+      }
+      assert.ok(conflicts >= 1);
+    } finally {
+      clearTimeout(timer);
+    }
   });
 }

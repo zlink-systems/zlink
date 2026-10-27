@@ -1,3 +1,4 @@
+import { macrotaskBoundary } from '../abort';
 import type { ZLinkRuntimeMetrics } from '../diagnostics/runtime-metrics';
 import { routingIdsEqual, toBackendRoutingId } from '../routing-id';
 import {
@@ -461,7 +462,10 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
           },
           signal
         );
-        if (result.kind === 'conflict') continue;
+        if (result.kind === 'conflict') {
+          await macrotaskBoundary();
+          continue;
+        }
         const storeVersion = result.putVersions.find(
           (entry) => entry.key.value === rowKey.value
         )?.version;
@@ -615,7 +619,10 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         },
         signal
       );
-      if (result.kind === 'conflict') continue;
+      if (result.kind === 'conflict') {
+        await macrotaskBoundary();
+        continue;
+      }
       const storeVersion = result.putVersions.find(
         (entry) => entry.key.value === rowKey.value
       )?.version;
