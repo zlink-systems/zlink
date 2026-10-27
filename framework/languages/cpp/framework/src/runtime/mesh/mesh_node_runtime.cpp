@@ -3842,12 +3842,6 @@ mesh_node_runtime_t::bind_application_actor_session (const actor_ref_t &actor,
           actor_route.node_generation,
           actor_route.authority_owner_generation,
           static_cast<std::uint64_t> (actor_route.owner.lease_generation)};
-        if (!_node->transport ().has_peer_descriptor (actor_fence.target_node_routing_id,
-                                                      actor_route.node_generation)) {
-            co_return result_t<runtime::protocol::stream_bind_reply_tail_t>::failure (
-              framework_error_kind_t::unavailable,
-              "Remote Actor session binding owner descriptor is unavailable");
-        }
         auto completion =
           std::make_shared<task_completion_source_t<runtime::protocol::stream_bind_reply_t>> ();
         auto output = completion->task ();

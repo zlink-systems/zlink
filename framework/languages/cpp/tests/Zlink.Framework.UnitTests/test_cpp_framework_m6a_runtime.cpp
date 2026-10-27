@@ -466,6 +466,7 @@ void verify_bound_session_bind_retries_until_route_is_admitted ()
     source.start ();
     target.start ();
     const auto target_descriptor = target.topology ().local_descriptor ();
+    source.expect_peer (target_descriptor);
     std::promise<completion_t> completion_promise;
     auto completion = completion_promise.get_future ();
     assert (await_task (source.request_bound_session_bind (
@@ -498,6 +499,7 @@ void verify_bound_session_bind_exposes_only_accepted_attempt ()
     source.start ();
     target.start ();
     const auto remote = target.topology ().local_descriptor ();
+    source.expect_peer (remote);
     auto accepted = std::make_shared<zlink::framework::task_completion_source_t<void>> ();
     auto admission = accepted->task ();
     std::promise<completion_t> completion_promise;
@@ -534,6 +536,7 @@ bound_session_request (mesh::raw_mesh_node_owner_t &source,
                        std::chrono::milliseconds timeout)
 {
     using namespace zlink::framework;
+    source.expect_peer (target);
     auto reply = std::make_shared<task_completion_source_t<bound_session_completion_t>> ();
     auto admitted = std::make_shared<task_completion_source_t<void>> ();
     request_task_t<bound_session_completion_t> result (reply->task (), admitted);
@@ -554,6 +557,81 @@ bound_session_request (mesh::raw_mesh_node_owner_t &source,
       },
       admitted)));
     return result;
+}
+
+void verify_bound_session_bind_missing_descriptor_is_unavailable_without_blocking ()
+{
+    using namespace zlink::framework;
+    mesh::raw_mesh_node_owner_t source (mesh::raw_mesh_node_options_t{
+      .descriptor = descriptor ("bind-missing-descriptor-source"),
+      .runtime_failures = std::make_shared<runtime::runtime_failure_collector_t> ()});
+    const auto remote = descriptor ("bind-missing-descriptor-target");
+
+    std::promise<void> lane_entered_promise;
+    auto lane_entered = lane_entered_promise.get_future ();
+    std::promise<void> release_lane_promise;
+    auto release_lane = release_lane_promise.get_future ().share ();
+    std::thread lane_blocker ([&] {
+        (void) source.publish_descriptor_update ([&] (auto &local) {
+            ++local.descriptor_revision;
+            lane_entered_promise.set_value ();
+            release_lane.wait ();
+        });
+    });
+
+    const bool lane_entered_in_time = lane_entered.wait_for (2s) == std::future_status::ready;
+    if (!lane_entered_in_time) {
+        release_lane_promise.set_value ();
+        lane_blocker.join ();
+        assert (lane_entered_in_time);
+    }
+
+    std::promise<task_t<bool>> bind_promise;
+    auto bind_result = bind_promise.get_future ();
+    std::thread bind_caller ([&] {
+        bind_promise.set_value (source.request_bound_session_bind (
+          remote.node_routing_id,
+          bound_session_bind_request (remote, "missing-bind-actor"), 2s,
+          [] (foundation::operation_terminal_t, zlink::message_t) {}));
+    });
+    const bool returned_while_lane_held = bind_result.wait_for (2s) == std::future_status::ready;
+    std::optional<task_t<bool>> bind;
+    bool pending_while_lane_held = false;
+    if (returned_while_lane_held) {
+        bind.emplace (bind_result.get ());
+        pending_while_lane_held = !bind->await_ready ();
+    }
+    release_lane_promise.set_value ();
+    lane_blocker.join ();
+    bind_caller.join ();
+    if (!bind)
+        bind.emplace (bind_result.get ());
+    assert (returned_while_lane_held && pending_while_lane_held);
+
+    const auto completion_deadline = std::chrono::steady_clock::now () + 2s;
+    while (!bind->await_ready () && std::chrono::steady_clock::now () < completion_deadline)
+        std::this_thread::yield ();
+    assert (bind->await_ready ());
+
+    bool unavailable = false;
+    try {
+        (void) await_task (std::move (*bind));
+    }
+    catch (const framework_exception_t &error) {
+        unavailable = error.kind () == framework_error_kind_t::unavailable
+                      && std::string_view (error.what ())
+                           == "Remote Actor session binding owner descriptor is unavailable";
+    }
+    assert (unavailable);
+
+    source.expect_peer (remote);
+    bool shutdown_callback_called = false;
+    const auto submitted = await_task (source.request_bound_session_bind (
+      remote.node_routing_id, bound_session_bind_request (remote, "configured-bind-actor"), 2s,
+      [&shutdown_callback_called] (foundation::operation_terminal_t terminal, zlink::message_t) {
+          shutdown_callback_called = terminal == foundation::operation_terminal_t::shutdown;
+      }));
+    assert (submitted && shutdown_callback_called);
 }
 
 // Opt-in Core boundary repro: send the first new handshake record after local
@@ -778,6 +856,7 @@ void verify_bound_session_bind_permanent_absence_is_bounded ()
     source.start ();
     auto target_descriptor = descriptor ("bind-timeout-target", "tcp://127.0.0.1:1");
     target_descriptor.state = mesh::service_node_state_t::serving;
+    source.expect_peer (target_descriptor);
     std::promise<completion_t> completion_promise;
     auto completion = completion_promise.get_future ();
     const auto started = std::chrono::steady_clock::now ();
@@ -4223,6 +4302,7 @@ void verify_durable_attempt_waits_for_admit (protocol::command kind)
     target.start ();
     const auto local = source.topology ().local_descriptor ();
     const auto remote = target.topology ().local_descriptor ();
+    source.expect_peer (remote);
     using completion_t = foundation::operation_terminal_t;
     std::promise<completion_t> promise;
     auto completed = promise.get_future ();
@@ -4244,7 +4324,6 @@ void verify_durable_attempt_waits_for_admit (protocol::command kind)
           remote.node_routing_id, actor_join_request (local, remote, 81, "preadmit-actor", "spot"),
           std::nullopt, unadmitted_timeout));
     }
-    source.expect_peer (remote);
     assert (source.connect_peer (target.endpoint (), remote));
     const auto deadline = std::chrono::steady_clock::now () + 2s;
     while ((join ? !join->await_ready () : completed.wait_for (0ms) != std::future_status::ready)
@@ -4517,6 +4596,10 @@ void verify_unadmitted_route (bool repeat_hello)
 int main (int argc, char **argv)
 {
     zlink::framework::completion_owner_t completion_owner;
+    if (argc == 2 && std::string_view (argv[1]) == "--bound-session-missing-descriptor") {
+        verify_bound_session_bind_missing_descriptor_is_unavailable_without_blocking ();
+        return 0;
+    }
     if (argc == 2 && std::string_view (argv[1]) == "--request-submit-cost") {
         verify_node_request_submit_cost ();
         return 0;
@@ -4629,6 +4712,7 @@ int main (int argc, char **argv)
     verify_durable_attempt_waits_for_admit (protocol::command::actorJoin);
     verify_actor_create_command_49_roundtrip ();
     verify_bound_session_close_reply_grammar ();
+    verify_bound_session_bind_missing_descriptor_is_unavailable_without_blocking ();
     verify_bound_session_bind_retries_until_route_is_admitted ();
     verify_bound_session_bind_exposes_only_accepted_attempt ();
     verify_bound_session_bind_unadmitted_deadline_fails_both_stages ();

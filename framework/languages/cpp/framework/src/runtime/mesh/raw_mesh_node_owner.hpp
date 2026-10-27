@@ -155,8 +155,6 @@ class raw_mesh_node_owner_t
     bool disconnect_peer (const std::vector<std::uint8_t> &expected_routing_id,
                           const std::string &endpoint) noexcept;
     void expect_peer (service_node_descriptor_t expected_descriptor);
-    bool has_peer_descriptor (const std::vector<std::uint8_t> &node_routing_id,
-                              std::uint64_t lifecycle_generation) const;
     // The auto-connect owner's per-peer reconcile request (MeshNode 7.1).
     using peer_reconcile_t = std::function<void (const std::vector<std::uint8_t> &)>;
     void configure_peer_reconcile (peer_reconcile_t request);

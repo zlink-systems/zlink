@@ -780,19 +780,6 @@ void raw_mesh_node_owner_t::expect_peer (service_node_descriptor_t expected_desc
       .get ();
 }
 
-bool raw_mesh_node_owner_t::has_peer_descriptor (const std::vector<std::uint8_t> &node_routing_id,
-                                                 std::uint64_t lifecycle_generation) const
-{
-    return _lane.run_sync ([&] {
-        const auto expected = _expected_peers.find (node_routing_id);
-        if (expected != _expected_peers.end ()
-            && expected->second.lifecycle_generation == lifecycle_generation)
-            return true;
-        const auto peer = _topology.peer (node_routing_id);
-        return peer && peer->descriptor.lifecycle_generation == lifecycle_generation;
-    });
-}
-
 void raw_mesh_node_owner_t::configure_peer_reconcile (peer_reconcile_t request)
 {
     std::lock_guard lifecycle_lock (_lifecycle_mutex);
@@ -2032,6 +2019,23 @@ task_t<bool> raw_mesh_node_owner_t::request_bound_session_bind (
     }
     if (timeout <= std::chrono::milliseconds::zero ()) {
         throw std::invalid_argument ("bound Session bind request timeout must be positive");
+    }
+
+    const auto target_routing_id = actor_owner_routing_id;
+    const auto target_generation = record.actor.target_node_generation;
+    const auto has_descriptor =
+      co_await _lane.run_task ([this, target_routing_id, target_generation] {
+          const auto expected = _expected_peers.find (target_routing_id);
+          if (expected != _expected_peers.end ()
+              && expected->second.lifecycle_generation == target_generation)
+              return true;
+          const auto peer = _topology.peer (target_routing_id);
+          return peer && peer->descriptor.lifecycle_generation == target_generation;
+      });
+    if (!has_descriptor) {
+        throw framework_exception_t (
+          framework_error_kind_t::unavailable,
+          "Remote Actor session binding owner descriptor is unavailable");
     }
 
     const auto deadline = foundation::operation_registry_t::clock_t::now () + timeout;
