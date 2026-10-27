@@ -39,6 +39,7 @@ public sealed class ServiceWireSessionRelocationCodecTests
             [
                 sourceRid,
                 1UL,
+                1UL,
                 null,
                 new[] { Systems.Zlink.Message.From(malformed) },
                 malformed,
@@ -85,7 +86,11 @@ public sealed class ServiceWireSessionRelocationCodecTests
             Coordinator = seal.Coordinator with { NodeRid = sourceRid },
             Actor = seal.Actor with { TargetNodeRid = sourceRid },
         };
-        node.ProcessSessionRelocationSeal(seal.Coordinator.NodeRid, seal);
+        node.ProcessSessionRelocationSeal(
+            seal.Coordinator.NodeRid,
+            seal.Coordinator.NodeGeneration,
+            seal
+        );
         var drop = Assert.Single(
             events.Where(item =>
                 Equals(item.GetTagItem("packet_name"), "sessionRelocationSeal")
