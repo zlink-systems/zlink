@@ -46,6 +46,262 @@ final class ZLinkStateLaneTest {
     }
 
     @Test
+    void contendedSynchronousTurnsRunOnTheirWaitingCallersInFifoOrder() throws Exception {
+        var executorCalls = new AtomicInteger();
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            var lane =
+                    new ZLinkStateLane(
+                            command -> {
+                                executorCalls.incrementAndGet();
+                                executor.execute(command);
+                            });
+            var published = observePublications(lane);
+            var entered = new CompletableFuture<Void>();
+            var release = new CompletableFuture<Void>();
+            var active = new AtomicInteger();
+            var overlap = new AtomicBoolean();
+            var order = new ArrayList<Integer>();
+            var callers = new ArrayList<java.util.concurrent.Future<Boolean>>();
+            var owner =
+                    executor.submit(
+                            () ->
+                                    lane.awaitTurn(
+                                            () -> {
+                                                active.incrementAndGet();
+                                                entered.complete(null);
+                                                release.join();
+                                                active.decrementAndGet();
+                                                return null;
+                                            }));
+            try {
+                entered.get(5, TimeUnit.SECONDS);
+                for (int index = 0; index < 16; index++) {
+                    int turn = index;
+                    callers.add(
+                            executor.submit(
+                                    () -> {
+                                        var caller = Thread.currentThread();
+                                        return lane.awaitTurn(
+                                                () -> {
+                                                    if (active.incrementAndGet() != 1)
+                                                        overlap.set(true);
+                                                    order.add(turn);
+                                                    boolean sameThread =
+                                                            caller == Thread.currentThread();
+                                                    active.decrementAndGet();
+                                                    return sameThread;
+                                                });
+                                    }));
+                    assertTrue(published.tryAcquire(5, TimeUnit.SECONDS));
+                }
+                var closed = lane.closeAsync().toCompletableFuture();
+                assertFalse(closed.isDone());
+                release.complete(null);
+                owner.get(5, TimeUnit.SECONDS);
+                for (var caller : callers) {
+                    assertTrue(
+                            caller.get(5, TimeUnit.SECONDS), "turn left its waiting caller thread");
+                }
+                closed.get(5, TimeUnit.SECONDS);
+                assertEquals(java.util.stream.IntStream.range(0, 16).boxed().toList(), order);
+                assertFalse(overlap.get());
+                assertEquals(0, active.get());
+                assertEquals(0, executorCalls.get());
+                assertThrows(IllegalStateException.class, () -> lane.awaitTurn(() -> null));
+            } finally {
+                release.complete(null);
+            }
+        }
+    }
+
+    @Test
+    void pendingAsyncTurnHandsOffToCallersAndMixedTurnsKeepFifo() throws Exception {
+        var scheduled = new java.util.concurrent.LinkedBlockingQueue<Runnable>();
+        var executorCalls = new AtomicInteger();
+        var lane =
+                new ZLinkStateLane(
+                        command -> {
+                            executorCalls.incrementAndGet();
+                            scheduled.add(command);
+                        });
+        var published = observePublications(lane);
+        var pending = new CompletableFuture<Void>();
+        assertTrue(lane.tryPost(() -> pending));
+        assertTrue(published.tryAcquire(5, TimeUnit.SECONDS));
+        scheduled.remove().run();
+        var order = new ArrayList<Integer>();
+        var firstEntered = new CompletableFuture<Void>();
+        var releaseFirst = new CompletableFuture<Void>();
+        var lastEntered = new CompletableFuture<Void>();
+        var releaseLast = new CompletableFuture<Void>();
+        try (var callers = Executors.newVirtualThreadPerTaskExecutor()) {
+            var first =
+                    callers.submit(
+                            () -> {
+                                var caller = Thread.currentThread();
+                                return lane.awaitTurn(
+                                        () -> {
+                                            order.add(1);
+                                            firstEntered.complete(null);
+                                            releaseFirst.join();
+                                            return caller == Thread.currentThread();
+                                        });
+                            });
+            try {
+                assertTrue(published.tryAcquire(5, TimeUnit.SECONDS));
+                var async = lane.runAsync(() -> order.add(2));
+                var nowOrQueue = lane.runNowOrQueue(() -> order.add(3));
+                assertTrue(
+                        lane.tryPost(
+                                () -> {
+                                    order.add(4);
+                                    return CompletableFuture.completedFuture(null);
+                                }));
+                assertTrue(published.tryAcquire(3, 5, TimeUnit.SECONDS));
+                var last =
+                        callers.submit(
+                                () -> {
+                                    var caller = Thread.currentThread();
+                                    return lane.awaitTurn(
+                                            () -> {
+                                                order.add(5);
+                                                lastEntered.complete(null);
+                                                releaseLast.join();
+                                                return caller == Thread.currentThread();
+                                            });
+                                });
+                assertTrue(published.tryAcquire(5, TimeUnit.SECONDS));
+                var closed = lane.closeAsync().toCompletableFuture();
+                pending.complete(null);
+                firstEntered.get(5, TimeUnit.SECONDS);
+                assertEquals(
+                        1, executorCalls.get(), "pending async must grant the caller directly");
+                assertTrue(scheduled.isEmpty());
+                assertFalse(closed.isDone());
+                releaseFirst.complete(null);
+                assertTrue(first.get(5, TimeUnit.SECONDS));
+                var drain = scheduled.poll(5, TimeUnit.SECONDS);
+                assertTrue(drain != null);
+                drain.run();
+                lastEntered.get(5, TimeUnit.SECONDS);
+                assertFalse(closed.isDone());
+                releaseLast.complete(null);
+                assertTrue(last.get(5, TimeUnit.SECONDS));
+                closed.get(5, TimeUnit.SECONDS);
+                async.toCompletableFuture().get(5, TimeUnit.SECONDS);
+                nowOrQueue.toCompletableFuture().get(5, TimeUnit.SECONDS);
+                assertEquals(List.of(1, 2, 3, 4, 5), order);
+                assertEquals(2, executorCalls.get());
+                assertTrue(scheduled.isEmpty());
+            } finally {
+                pending.complete(null);
+                releaseFirst.complete(null);
+                releaseLast.complete(null);
+                Runnable remaining;
+                while ((remaining = scheduled.poll()) != null) remaining.run();
+            }
+        }
+    }
+
+    @Test
+    void synchronousTurnsPreserveFailuresAndRejectReentryAfterHandoff() throws Exception {
+        var cause = new IllegalArgumentException("turn failed");
+        var nested = new CompletionException(cause);
+        for (Throwable failure :
+                List.of(
+                        cause,
+                        new AssertionError("turn failed"),
+                        new CancellationException("turn cancelled"),
+                        nested,
+                        new CompletionException(nested))) {
+            var lane = new ZLinkStateLane();
+            var published = observePublications(lane);
+            var pending = new CompletableFuture<Void>();
+            assertTrue(lane.tryPost(() -> pending));
+            assertTrue(published.tryAcquire(5, TimeUnit.SECONDS));
+            try (var callers = Executors.newVirtualThreadPerTaskExecutor()) {
+                var result =
+                        callers.submit(
+                                () -> {
+                                    var thrown =
+                                            assertThrows(
+                                                    Throwable.class,
+                                                    () ->
+                                                            lane.awaitTurn(
+                                                                    () -> {
+                                                                        assertSame(
+                                                                                lane,
+                                                                                ZLinkStateLane
+                                                                                        .current());
+                                                                        assertThrows(
+                                                                                IllegalStateException
+                                                                                        .class,
+                                                                                () ->
+                                                                                        lane
+                                                                                                .awaitTurn(
+                                                                                                        () ->
+                                                                                                                null));
+                                                                        if (failure
+                                                                                instanceof
+                                                                                Error error)
+                                                                            throw error;
+                                                                        throw (RuntimeException)
+                                                                                failure;
+                                                                    }));
+                                    assertSame(null, ZLinkStateLane.current());
+                                    return thrown;
+                                });
+                try {
+                    assertTrue(published.tryAcquire(5, TimeUnit.SECONDS));
+                    var following =
+                            callers.submit(
+                                    () -> {
+                                        var caller = Thread.currentThread();
+                                        boolean sameOwner =
+                                                lane.awaitTurn(
+                                                        () ->
+                                                                caller == Thread.currentThread()
+                                                                        && lane.isOnLane());
+                                        assertSame(null, ZLinkStateLane.current());
+                                        return sameOwner;
+                                    });
+                    assertTrue(published.tryAcquire(5, TimeUnit.SECONDS));
+                    pending.complete(null);
+                    Throwable expected =
+                            failure instanceof CompletionException wrapped
+                                    ? wrapped.getCause()
+                                    : failure;
+                    assertSame(expected, result.get(5, TimeUnit.SECONDS));
+                    assertTrue(following.get(5, TimeUnit.SECONDS));
+                    assertEquals(42, lane.awaitTurn(() -> 42));
+                    assertFalse(lane.isOnLane());
+                    lane.closeAsync().toCompletableFuture().get(5, TimeUnit.SECONDS);
+                } finally {
+                    pending.complete(null);
+                }
+            }
+        }
+    }
+
+    private static java.util.concurrent.Semaphore observePublications(ZLinkStateLane lane)
+            throws Exception {
+        var published = new java.util.concurrent.Semaphore(0);
+        var mailbox = ZLinkStateLane.class.getDeclaredField("mailbox");
+        mailbox.setAccessible(true);
+        mailbox.set(
+                lane,
+                new java.util.concurrent.ConcurrentLinkedQueue<Object>() {
+                    @Override
+                    public boolean add(Object turn) {
+                        boolean added = super.add(turn);
+                        published.release();
+                        return added;
+                    }
+                });
+        return published;
+    }
+
+    @Test
     void concurrentFirstSubmissionsKeepOneTurnOwnerAndCloseDrainsEveryTurn() throws Exception {
         var lane = new ZLinkStateLane();
         int producers = 16;

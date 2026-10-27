@@ -774,9 +774,6 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
                 RoutingId sourceNodeRid, Long requestSequence, byte[] command);
     }
 
-    /** Marks a node that can carry command 40's required reply leg. */
-    interface CanonicalRelocationPrepareRequestReplySupport {}
-
     @FunctionalInterface
     interface ActorLeftHandler {
         CompletionStage<Void> handle(
