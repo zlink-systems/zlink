@@ -190,11 +190,7 @@ final class InstanceSpotColdActivationTest {
             var repositoryField = sourceHost.getClass().getDeclaredField("userSpotLocationStore");
             repositoryField.setAccessible(true);
             var original = repositoryField.get(sourceHost);
-            var queueField = sourceHost.getClass().getDeclaredField("applicationJobQueue");
-            queueField.setAccessible(true);
-            var applicationJobQueue =
-                    (systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue)
-                            queueField.get(sourceHost);
+            var applicationJobQueue = sourceOptions.registration().applicationJobQueue();
             var observer =
                     (ZLinkLocationRepository)
                             java.lang.reflect.Proxy.newProxyInstance(

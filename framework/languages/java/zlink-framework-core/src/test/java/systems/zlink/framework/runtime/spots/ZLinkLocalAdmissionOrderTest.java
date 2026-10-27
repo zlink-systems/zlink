@@ -13,7 +13,6 @@ import systems.zlink.framework.actors.ZLinkActorFactory;
 import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess;
-import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
 import systems.zlink.framework.spots.ZLinkEntrySpot;
 import systems.zlink.framework.spots.ZLinkEntrySpotContext;
@@ -71,12 +70,7 @@ final class ZLinkLocalAdmissionOrderTest {
                     .submit()
                     .toCompletableFuture()
                     .get(5, TimeUnit.SECONDS);
-            var hostField = runtime.getClass().getDeclaredField("spots");
-            hostField.setAccessible(true);
-            var host = hostField.get(runtime);
-            var queueField = host.getClass().getDeclaredField("applicationJobQueue");
-            queueField.setAccessible(true);
-            var queue = (ZLinkApplicationJobQueue) queueField.get(host);
+            var queue = options.registration().applicationJobQueue();
             var submissions = new java.util.ArrayList<CompletableFuture<?>>();
             try (var held =
                     queue.acquire(

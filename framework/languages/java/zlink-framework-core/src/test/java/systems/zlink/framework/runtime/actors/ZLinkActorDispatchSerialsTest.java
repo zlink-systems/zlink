@@ -464,7 +464,8 @@ final class ZLinkActorDispatchSerialsTest {
     @Test
     void teardownRetargetDoesNotCreateUnusedTargetQueue() throws Exception {
         ZLinkActorDispatchTarget source = actorTarget();
-        ZLinkActorDispatchTarget target = actorTarget();
+        ZLinkStateLane targetState = new ZLinkStateLane();
+        ZLinkActorDispatchTarget target = actorTarget(targetState);
         AtomicReference<ZLinkActorDispatchTarget> owner = new AtomicReference<>(source);
         ZLinkActorDispatchSerials dispatches = dispatches(owner);
         dispatches.prepareAsync("actor-1").toCompletableFuture().join();
@@ -483,9 +484,6 @@ final class ZLinkActorDispatchSerialsTest {
         assertSame(source, claim.target());
         Field queuesField = ZLinkSpotSerialExecutor.class.getDeclaredField("actorQueues");
         queuesField.setAccessible(true);
-        Field laneField = ZLinkSpotSerialExecutor.class.getDeclaredField("stateLane");
-        laneField.setAccessible(true);
-        ZLinkStateLane targetState = (ZLinkStateLane) laneField.get(target);
         var targetQueues = (java.util.Map<?, ?>) queuesField.get(target);
         try {
             assertTrue(
@@ -530,10 +528,21 @@ final class ZLinkActorDispatchSerialsTest {
 
     @Test
     void prepareAsyncDoesNotBlockWhenMetadataOwnerIsBusy() throws Exception {
-        ZLinkActorDispatchSerials dispatches = new ZLinkActorDispatchSerials();
-        Field field = ZLinkActorDispatchSerials.class.getDeclaredField("stateLane");
-        field.setAccessible(true);
-        ZLinkStateLane lane = (ZLinkStateLane) field.get(dispatches);
+        ZLinkStateLane lane = new ZLinkStateLane();
+        ZLinkActorDispatchSerials dispatches =
+                new ZLinkActorDispatchSerials(
+                        ZLinkDeferredActorJoinScope.legacyRuntimeScope(), null, null, lane);
+        lane.runAsync(
+                        () -> {
+                            assertTrue(
+                                    dispatches
+                                            .prepareAsync("owner-reentry")
+                                            .toCompletableFuture()
+                                            .isCompletedExceptionally());
+                            return null;
+                        })
+                .toCompletableFuture()
+                .get(5, TimeUnit.SECONDS);
         CompletableFuture<Void> entered = new CompletableFuture<>();
         CompletableFuture<Void> release = new CompletableFuture<>();
         lane.runAsync(
@@ -843,14 +852,12 @@ final class ZLinkActorDispatchSerialsTest {
 
     @Test
     void identityRemovalDuringSpotCloseWaitsForCloseCompletion() throws Exception {
-        var spot = (ZLinkSpotSerialExecutor) actorTarget();
+        ZLinkStateLane lane = new ZLinkStateLane();
+        var spot = (ZLinkSpotSerialExecutor) actorTarget(lane);
         var release = new CompletableFuture<Void>();
         try {
             var activation =
                     spot.claimActorQueue("actor-1").toCompletableFuture().get(3, TimeUnit.SECONDS);
-            var laneField = ZLinkSpotSerialExecutor.class.getDeclaredField("stateLane");
-            laneField.setAccessible(true);
-            var lane = (ZLinkStateLane) laneField.get(spot);
             var entered = new CompletableFuture<Void>();
             var held =
                     lane.runAsync(
@@ -955,14 +962,12 @@ final class ZLinkActorDispatchSerialsTest {
 
     @Test
     void retainedCommitWaitsForBusySpotOwnerWithoutBlockingCaller() throws Exception {
-        ZLinkSpotSerialExecutor spot = (ZLinkSpotSerialExecutor) actorTarget();
+        ZLinkStateLane lane = new ZLinkStateLane();
+        ZLinkSpotSerialExecutor spot = (ZLinkSpotSerialExecutor) actorTarget(lane);
         AtomicReference<ZLinkActorDispatchTarget> owner = new AtomicReference<>(spot);
         ZLinkActorDispatchSerials dispatches = dispatches(owner);
         var seal =
                 spot.trySealActorRelocation("actor-1").toCompletableFuture().join().orElseThrow();
-        Field laneField = ZLinkSpotSerialExecutor.class.getDeclaredField("stateLane");
-        laneField.setAccessible(true);
-        ZLinkStateLane lane = (ZLinkStateLane) laneField.get(spot);
         CompletableFuture<Void> entered = new CompletableFuture<>();
         CompletableFuture<Void> release = new CompletableFuture<>();
         assertTrue(
@@ -1381,6 +1386,16 @@ final class ZLinkActorDispatchSerialsTest {
                 Runnable::run,
                 ZLinkUserSpotExecutionMode.PER_ACTOR,
                 false);
+    }
+
+    private static ZLinkActorDispatchTarget actorTarget(ZLinkStateLane stateLane) {
+        return new ZLinkSpotSerialExecutor(
+                new ZLinkSerialExecutionQueue(Runnable::run, ZLinkExecutionLanePolicy.spot()),
+                new ZLinkSerialExecutionQueue(Runnable::run, ZLinkExecutionLanePolicy.spot()),
+                Runnable::run,
+                ZLinkUserSpotExecutionMode.PER_ACTOR,
+                false,
+                stateLane);
     }
 
     private static void closeSpotExecutor(ZLinkSpotSerialExecutor executor) throws Exception {
