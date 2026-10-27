@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Reflection;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Hosting;
@@ -1835,12 +1834,8 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
     [Fact]
     public async Task Deadline_Force_Stop_Continues_When_Actor_Registry_Owner_Is_Busy()
     {
-        var registry = new ZLinkActorSessionRegistry();
-        var lane = Assert.IsType<ZLinkStateLane>(
-            typeof(ZLinkActorSessionRegistry)
-                .GetField("_lane", BindingFlags.Instance | BindingFlags.NonPublic)!
-                .GetValue(registry)
-        );
+        var lane = new ZLinkStateLane();
+        var registry = new ZLinkActorSessionRegistry(lane: lane);
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var owner = Task.Run(async () =>

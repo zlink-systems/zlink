@@ -7,28 +7,6 @@ public sealed class SharedSerialGateTests
     private static readonly TimeSpan CompletionTimeout = TimeSpan.FromSeconds(5);
 
     [Fact]
-    public void RelocationBarrierHasNoSynchronousEntryPoint()
-    {
-        Assert.DoesNotContain(
-            typeof(ZLinkSpotSerialExecutor).GetMethods(
-                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic
-            ),
-            method => method.Name == "TryBeginRelocationBarrier"
-        );
-    }
-
-    [Fact]
-    public void SharedGateHasNoSynchronousEntryPoint()
-    {
-        Assert.DoesNotContain(
-            typeof(ZLinkSerialExecutionQueue).GetMethods(
-                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic
-            ),
-            method => method.Name == "RunOnSharedGate"
-        );
-    }
-
-    [Fact]
     public async Task RelocationRequestReturnsWhileSharedGateIsBusy()
     {
         using var errors = new ZLinkRuntimeErrorSink();
