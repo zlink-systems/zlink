@@ -49,7 +49,7 @@ class raw_dealer_port_t
              std::optional<std::chrono::steady_clock::time_point> deadline = {});
     std::optional<raw_message_t> try_receive ();
     void close ();
-    std::size_t expire_requests (std::chrono::steady_clock::time_point now);
+    task_t<std::size_t> expire_requests (std::chrono::steady_clock::time_point now);
     std::optional<std::chrono::steady_clock::time_point> next_request_deadline () const;
 
   private:

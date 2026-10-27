@@ -220,7 +220,7 @@ std::optional<raw_message_t> raw_dealer_port_t::try_receive ()
     return parts;
 }
 
-std::size_t raw_dealer_port_t::expire_requests (std::chrono::steady_clock::time_point now)
+task_t<std::size_t> raw_dealer_port_t::expire_requests (std::chrono::steady_clock::time_point now)
 {
     return _requests->expire (now);
 }

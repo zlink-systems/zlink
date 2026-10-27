@@ -202,7 +202,7 @@ class raw_mesh_node_owner_t
     bool reply_failure (const service_mailbox_record_t &request,
                         std::uint32_t terminal_result,
                         std::uint32_t failure_code);
-    std::size_t expire_requests (foundation::operation_registry_t::clock_t::time_point now);
+    task_t<std::size_t> expire_requests (foundation::operation_registry_t::clock_t::time_point now);
     task_t<std::optional<std::uint64_t>> next_operation_sequence_async ();
     using local_operation_reservation_t =
       std::pair<foundation::call_id_t, std::shared_ptr<detail::backend::raw_route_port_t>>;

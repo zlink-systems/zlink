@@ -793,9 +793,11 @@ TEST (ZLinkFrameworkApplicationJobQueue, LocalRequestTerminalRemovesPermitWaiter
                 ASSERT_TRUE (native->transport ().fail_local_operation (
                   operation.id, foundation::operation_terminal_t::cancelled));
         } else {
-            EXPECT_EQ (
-              8u, native->transport ().expire_requests (
-                    foundation::operation_registry_t::clock_t::now () + std::chrono::seconds (2)));
+            EXPECT_EQ (8u, native->transport ()
+                             .expire_requests (foundation::operation_registry_t::clock_t::now ()
+                                               + std::chrono::seconds (2))
+                             .result ()
+                             .value ());
         }
         for (const auto &operation : operations)
             EXPECT_FALSE (operation.completion->task ().result ());

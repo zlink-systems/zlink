@@ -2841,7 +2841,7 @@ void verify_actor_create_does_not_replay_after_reciprocal_handover ()
     while (completion.wait_for (0ms) != std::future_status::ready
            && std::chrono::steady_clock::now () < deadline) {
         pump ();
-        (void) source.expire_requests (std::chrono::steady_clock::now ());
+        (void) source.expire_requests (std::chrono::steady_clock::now ()).result ().value ();
         no_replay ();
     }
     assert (completion.wait_for (0ms) == std::future_status::ready);

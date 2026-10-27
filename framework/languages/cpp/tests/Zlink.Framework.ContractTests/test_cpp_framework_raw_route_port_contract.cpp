@@ -340,7 +340,7 @@ void verify_writable_request_timeout_remains_deadline_exceeded ()
            && std::chrono::steady_clock::now () < deadline) {
         zlink::poll_event_t event;
         (void) source_poller.wait (&event, 1, raw_route_fixture_poll_interval);
-        port.expire_requests (std::chrono::steady_clock::now ());
+        port.expire_requests (std::chrono::steady_clock::now ()).result ().value ();
     }
     assert (pending.await_ready ());
     assert (!pending.result ());
@@ -738,7 +738,7 @@ void verify_backpressured_send_waits_for_admission ()
     while (std::chrono::steady_clock::now () < held_until) {
         zlink::poll_event_t event;
         (void) source_poller.wait (&event, 1, raw_route_fixture_poll_interval);
-        source_port.expire_requests (std::chrono::steady_clock::now ());
+        source_port.expire_requests (std::chrono::steady_clock::now ()).result ().value ();
     }
     assert (request.await_ready ());
     observed.get ();
@@ -1031,7 +1031,7 @@ static void verify_request_deadline_preserves_timeout_boundary ()
                                                              "request deadline expired"));
       });
     auto pending = operation.task ();
-    requests.expire (*requests.next_deadline ());
+    requests.expire (*requests.next_deadline ()).result ().value ();
     const auto expired = pending.result ();
     assert (!expired);
     assert (expired.error_kind () == framework_error_kind_t::deadline_exceeded);

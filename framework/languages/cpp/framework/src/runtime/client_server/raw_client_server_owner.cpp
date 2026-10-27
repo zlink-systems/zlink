@@ -1238,8 +1238,11 @@ task_t<mesh::service_liveness_tick_t> raw_client_server_client_t::tick_liveness 
   mesh::service_liveness_registry_t::clock_t::time_point now)
 {
     const auto result = co_await _lane.run_task ([this, now] {
-        if (_port)
-            _port->expire_requests (now);
+        if (_port) {
+            const auto visit = _port->next_request_deadline ();
+            if (visit && *visit <= now)
+                (void) _port->expire_requests (now);
+        }
         return _liveness.tick (now);
     });
     const auto port = co_await _lane.run_task ([this] { return _port; });

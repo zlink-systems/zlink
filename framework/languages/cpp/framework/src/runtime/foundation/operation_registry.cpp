@@ -64,7 +64,8 @@ class operation_registry_state_t : public std::enable_shared_from_this<operation
                before_dispatch_t before_dispatch,
                std::optional<operation_terminal_t> request_terminal = {});
     bool unregister (const call_id_t &id);
-    std::size_t expire (clock_t::time_point now);
+    task_t<std::size_t> expire (clock_t::time_point now);
+    std::size_t expire_on_owner (clock_t::time_point now);
     // An already reserved visit survives terminal removal, including the last entry.
     std::optional<clock_t::time_point> next_deadline () const;
     std::size_t shutdown ();
@@ -628,17 +629,45 @@ operation_registry_state_t::fail_target (const std::vector<std::uint8_t> &target
     return failed;
 }
 
-std::size_t operation_registry_state_t::expire (clock_t::time_point now)
+task_t<std::size_t> operation_registry_state_t::expire (clock_t::time_point now)
 {
-    const auto reserved = next_deadline ();
-    if (!reserved || now < *reserved)
-        return 0;
-    if (_owner && runtime::state_lane_t::current () != _owner) {
-        std::lock_guard lock (_mutex);
-        if (!_closed)
-            (void) _owner->try_post ([self = shared_from_this (), now] { self->expire (now); });
-        return 0;
+    if (!_owner || runtime::state_lane_t::current () == _owner)
+        return task_t<std::size_t> (result_t<std::size_t>::success (expire_on_owner (now)));
+
+    auto completion = std::make_shared<task_completion_source_t<std::size_t>> ();
+    auto task = completion->task ();
+    auto deliver = [completion, dispatcher = detail::borrow_completion_dispatcher ()] (
+                     result_t<std::size_t> result) {
+        detail::dispatch_completion (
+          [completion, result = std::move (result)] () mutable {
+              completion->complete (std::move (result));
+          },
+          false, completion.get (), dispatcher);
+    };
+    // C1 serializes admission with close, so a closed registry never touches
+    // its borrowed lane. TryPost cannot run the turn inline under this mutex.
+    std::lock_guard lock (_mutex);
+    if (_closed
+        || !_owner->try_post (
+          [self = shared_from_this (), now, deliver] {
+              try {
+                  deliver (result_t<std::size_t>::success (self->expire_on_owner (now)));
+              }
+              catch (...) {
+                  deliver (detail::current_exception_result<std::size_t> ());
+              }
+          },
+          [deliver] (std::exception_ptr error) {
+              deliver (detail::result_access_t::failure<std::size_t> (std::move (error)));
+          })) {
+        deliver (result_t<std::size_t>::failure (framework_error_kind_t::shutting_down,
+                                                 "operation registry owner is closed"));
     }
+    return task;
+}
+
+std::size_t operation_registry_state_t::expire_on_owner (clock_t::time_point now)
+{
     operation_completion_chain_t completions;
     {
         std::unique_lock lock (_mutex);
@@ -851,7 +880,7 @@ bool operation_registry_t::unregister (const call_id_t &id)
     return _state->unregister (std::move (id));
 }
 
-std::size_t operation_registry_t::expire (clock_t::time_point now)
+task_t<std::size_t> operation_registry_t::expire (clock_t::time_point now)
 {
     return _state->expire (std::move (now));
 }

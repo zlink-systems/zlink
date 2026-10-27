@@ -294,7 +294,7 @@ class channel_native_client_t
                       current->socket->disconnect (endpoint);
               }
           });
-        _transport->start_monitoring (_runtime, _channel_name);
+        _transport->start_monitoring (_runtime, _channel_name, owner);
     }
 
     ~channel_native_client_t () { close (); }
@@ -450,16 +450,21 @@ class channel_native_client_t
 
         // The one poller of this DEALER: waiting on it drains the binding
         // completions; monitor events are diagnostics only (server 05 §5).
-        void start_monitoring (channel_runtime_t runtime, std::string channel_name)
+        void start_monitoring (channel_runtime_t runtime,
+                               std::string channel_name,
+                               runtime::state_lane_t &owner)
         {
-            monitor_thread = std::thread ([this, runtime = std::move (runtime),
+            monitor_thread = std::thread ([this, &owner, runtime = std::move (runtime),
                                            channel_name = std::move (channel_name)] () mutable {
                 while (!monitor_stop.load (std::memory_order_acquire)) {
                     try {
                         const auto now = std::chrono::steady_clock::now ();
                         if (const auto visit = port->next_request_deadline ();
-                            visit && *visit <= now)
-                            port->expire_requests (now);
+                            visit && *visit <= now) {
+                            if (!owner.try_post (
+                                  [port = port, now] { (void) port->expire_requests (now); }))
+                                break;
+                        }
                         auto wait = std::chrono::milliseconds (50);
                         if (const auto visit = port->next_request_deadline ())
                             wait = std::min (

@@ -273,6 +273,8 @@ void verify_node_request_submit_cost ()
             }
             assert (!callback_called);
             assert (source.expire_requests (foundation::operation_registry_t::clock_t::now ())
+                      .result ()
+                      .value ()
                     == 0);
             std::fprintf (stderr,
                           "node request target=%zu ready=%d copied=%zu borrowed=%zu observed=%zu\n",
@@ -685,7 +687,7 @@ void verify_bound_session_bind_does_not_replay_after_route_change ()
     });
     const auto pump = [&] {
         const auto now = mesh::service_liveness_registry_t::clock_t::now ();
-        (void) source.expire_requests (now);
+        (void) source.expire_requests (now).result ().value ();
         (void) source.observe_routes ();
         (void) target.observe_routes ();
         (void) await_task (source.pump_one (now));
@@ -752,7 +754,7 @@ void verify_bound_session_bind_unadmitted_deadline_fails_both_stages ()
     assert (!admitted.await_ready () && !request.await_ready ());
     const auto deadline = std::chrono::steady_clock::now () + 500ms;
     while (!request.await_ready () && std::chrono::steady_clock::now () < deadline) {
-        (void) source.expire_requests (std::chrono::steady_clock::now ());
+        (void) source.expire_requests (std::chrono::steady_clock::now ()).result ().value ();
         std::this_thread::yield ();
     }
     assert (request.await_ready () && admitted.await_ready ());
@@ -790,7 +792,7 @@ void verify_bound_session_bind_permanent_absence_is_bounded ()
     const auto deadline = started + 500ms;
     while (completion.wait_for (0ms) != std::future_status::ready
            && std::chrono::steady_clock::now () < deadline) {
-        (void) source.expire_requests (std::chrono::steady_clock::now ());
+        (void) source.expire_requests (std::chrono::steady_clock::now ()).result ().value ();
         std::this_thread::yield ();
     }
     assert (completion.wait_for (0ms) == std::future_status::ready);
@@ -993,7 +995,7 @@ void verify_actor_create_readiness_deadline_is_timed_out ()
     const auto deadline = submitted_at + 500ms;
     while (completion.wait_for (0ms) != std::future_status::ready
            && std::chrono::steady_clock::now () < deadline) {
-        (void) source.expire_requests (std::chrono::steady_clock::now ());
+        (void) source.expire_requests (std::chrono::steady_clock::now ()).result ().value ();
         std::this_thread::yield ();
     }
     assert (completion.wait_for (0ms) == std::future_status::ready);
@@ -3405,7 +3407,7 @@ void verify_actor_join_waits_for_admit_without_replay ()
         source.expect_peer (remote);
         const auto pump = [&] {
             const auto now = std::chrono::steady_clock::now ();
-            (void) source.expire_requests (now);
+            (void) source.expire_requests (now).result ().value ();
             (void) source.observe_routes ();
             (void) target.observe_routes ();
             assert (await_task (source.pump_one (now))
@@ -3516,7 +3518,7 @@ void verify_actor_join_durable_terminals ()
     auto expiring = source.request_actor_join (remote.node_routing_id, request, std::nullopt, 50ms);
     const auto expiry_deadline = started + 500ms;
     while (!expiring.await_ready () && std::chrono::steady_clock::now () < expiry_deadline) {
-        (void) source.expire_requests (std::chrono::steady_clock::now ());
+        (void) source.expire_requests (std::chrono::steady_clock::now ()).result ().value ();
         std::this_thread::yield ();
     }
     assert (expiring.await_ready ());
@@ -3554,7 +3556,7 @@ void verify_actor_join_durable_terminals ()
     const auto completion_deadline = admitted_at + 500ms;
     while (!admitted.await_ready () && std::chrono::steady_clock::now () < completion_deadline) {
         const auto now = std::chrono::steady_clock::now ();
-        (void) source.expire_requests (now);
+        (void) source.expire_requests (now).result ().value ();
         (void) source.observe_routes ();
         (void) await_task (source.pump_one (now));
     }
@@ -4247,7 +4249,7 @@ void verify_durable_attempt_waits_for_admit (protocol::command kind)
     const auto deadline = std::chrono::steady_clock::now () + 2s;
     while ((join ? !join->await_ready () : completed.wait_for (0ms) != std::future_status::ready)
            && std::chrono::steady_clock::now () < deadline) {
-        (void) source.expire_requests (std::chrono::steady_clock::now ());
+        (void) source.expire_requests (std::chrono::steady_clock::now ()).result ().value ();
         const auto pumped = await_task (target.pump_one (std::chrono::steady_clock::now ()));
         assert (pumped != mesh::raw_mesh_pump_result_t::protocol_error);
         assert (
@@ -4346,7 +4348,7 @@ void verify_prepare_does_not_replay_on_selected_route ()
     assert (target.connect_peer (source.endpoint (), local));
     while (!pending.await_ready () && std::chrono::steady_clock::now () < deadline) {
         const auto now = std::chrono::steady_clock::now ();
-        (void) source.expire_requests (now);
+        (void) source.expire_requests (now).result ().value ();
         (void) await_task (source.pump_one (now));
         (void) await_task (target.pump_one (now));
         assert (

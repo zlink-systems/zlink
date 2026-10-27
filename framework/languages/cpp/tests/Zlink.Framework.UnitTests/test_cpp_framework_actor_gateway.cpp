@@ -6799,8 +6799,11 @@ int local_relay_preserves_handoff_request_route (bool has_original_operation,
         if (expire_native) {
             const auto original_operation = native_operation.id;
             const auto original_reply_route = record.reply_route_id;
-            if (fixture.reply_host->transport ().expire_requests (
-                  registered_before + std::chrono::seconds (30) - operation_clock_t::duration (1))
+            if (fixture.reply_host->transport ()
+                    .expire_requests (registered_before + std::chrono::seconds (30)
+                                      - operation_clock_t::duration (1))
+                    .result ()
+                    .value ()
                   != 0
                 || native_completion.await_ready ())
                 return 14;
@@ -6809,7 +6812,7 @@ int local_relay_preserves_handoff_request_route (bool has_original_operation,
             const auto expiry_time =
               registered_after + std::chrono::seconds (30) + std::chrono::milliseconds (1);
             const auto expiry_count =
-              fixture.reply_host->transport ().expire_requests (expiry_time);
+              fixture.reply_host->transport ().expire_requests (expiry_time).result ().value ();
             if (expiry_count != 1) {
                 std::cerr << "native deadline expiry count=" << expiry_count
                           << " registration_span_ns="
@@ -6839,7 +6842,11 @@ int local_relay_preserves_handoff_request_route (bool has_original_operation,
                        && native_terminals->load (std::memory_order_acquire) == 1
                        && fixture.probe->calls.load (std::memory_order_acquire) == 0
                        && spots.cleanup_expired_actor_admissions_at (expired_at) == 0
-                       && fixture.reply_host->transport ().expire_requests (expiry_time) == 0
+                       && fixture.reply_host->transport ()
+                              .expire_requests (expiry_time)
+                              .result ()
+                              .value ()
+                            == 0
                        && node->lane.run ([&] { return node->pending_handoff_requests.empty (); })
                             .get ()
                      ? 0

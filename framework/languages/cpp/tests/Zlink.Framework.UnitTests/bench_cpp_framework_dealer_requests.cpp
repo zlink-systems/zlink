@@ -18,8 +18,16 @@ template <typename Port> void visit_deadlines (Port &port)
 {
     // Older main owns a per-request scheduler; the revised port exposes the
     // management visit normally driven by its runtime owner.
-    if constexpr (requires { port.expire_requests (std::chrono::steady_clock::now ()); })
-        port.expire_requests (std::chrono::steady_clock::now ());
+    if constexpr (requires { port.next_request_deadline (); }) {
+        const auto now = std::chrono::steady_clock::now ();
+        const auto visit = port.next_request_deadline ();
+        if (visit && *visit <= now) {
+            if constexpr (requires { port.expire_requests (now).result (); })
+                (void) port.expire_requests (now).result ().value ();
+            else
+                port.expire_requests (now);
+        }
+    }
 }
 
 template <typename Port> zlink::poll_event_flag_t poll_events (Port &port)

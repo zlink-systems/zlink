@@ -1654,10 +1654,9 @@ bool raw_mesh_node_owner_t::reply_failure (const service_mailbox_record_t &reque
       std::move (parts));
 }
 
-std::size_t
+task_t<std::size_t>
 raw_mesh_node_owner_t::expire_requests (foundation::operation_registry_t::clock_t::time_point now)
 {
-    static_cast<void> (now);
     return _operations->expire (now);
 }
 

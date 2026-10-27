@@ -93,7 +93,7 @@ class operation_registry_t
                before_dispatch_t before_dispatch,
                std::optional<operation_terminal_t> request_terminal = {});
     bool unregister (const call_id_t &id);
-    std::size_t expire (clock_t::time_point now);
+    task_t<std::size_t> expire (clock_t::time_point now);
     // An already reserved visit survives terminal removal, including the last entry.
     std::optional<clock_t::time_point> next_deadline () const;
     std::size_t shutdown ();
