@@ -2,7 +2,6 @@ package systems.zlink.framework.runtime.channels;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
@@ -16,7 +15,6 @@ import systems.zlink.framework.ZLinkMessageContext;
 import systems.zlink.framework.channels.ZLinkSendHandler;
 import systems.zlink.framework.runtime.internal.configuration.ZLinkCodecRegistration;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
-import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerInstanceOwner;
 import systems.zlink.framework.runtime.messaging.ZLinkStringMessageSerializer;
 
 import java.util.List;
@@ -111,60 +109,24 @@ final class ZLinkChannelHandlerUnfilteredLifecycleTest {
         assertEquals(1, probe.dependenciesClosed);
     }
 
-    @ParameterizedTest
-    @ValueSource(booleans = {false, true})
-    void handlerFailureKeepsFailedCleanupReachable(boolean synchronous) {
-        var probe = new Probe();
-        var handlerFailure = new IllegalStateException("handler failed");
-        var destroyFailure = new IllegalStateException("destroy failed");
-        probe.destroyFailure = destroyFailure;
-        if (synchronous) probe.handlerFailure = handlerFailure;
-        else probe.completion.completeExceptionally(handlerFailure);
-
-        var completed = dispatch(probe, null);
-        var observed =
-                assertThrows(
-                        CompletionException.class, () -> completed.toCompletableFuture().join());
-
-        assertSame(handlerFailure, observed.getCause());
-        var pending = ZLinkHandlerInstanceOwner.pendingRelease(observed);
-        assertNotNull(pending);
-        assertSame(destroyFailure, pending.getCause());
-        assertEquals(1, probe.destroyCalls);
-        assertEquals(1, probe.closeCalls);
-        probe.destroyFailure = null;
-        pending.close();
-        pending.close();
-        assertEquals(2, probe.destroyCalls);
-        assertEquals(1, probe.closeCalls);
-        assertEquals(1, probe.dependenciesClosed);
-    }
-
     @Test
-    void destructionFailureRetainsOwnershipUntilRetrySucceeds() {
+    void destructionFailureIsReportedOnceWithoutRetry() {
         var probe = new Probe();
         var destroyFailure = new IllegalStateException("destroy failed");
         probe.destroyFailure = destroyFailure;
         probe.completion.complete(null);
         var completed = dispatch(probe, null);
-        var observed =
-                assertThrows(
-                        CompletionException.class, () -> completed.toCompletableFuture().join());
-        assertSame(destroyFailure, observed.getCause());
-        var pending = ZLinkHandlerInstanceOwner.pendingRelease(observed);
-        assertNotNull(pending);
+        assertSame(destroyFailure, failureOf(completed));
         assertEquals(1, probe.destroyCalls);
         assertEquals(1, probe.closeCalls);
-        probe.destroyFailure = null;
-        pending.close();
-        pending.close();
-        assertEquals(2, probe.destroyCalls);
+        assertSame(destroyFailure, failureOf(completed));
+        assertEquals(1, probe.destroyCalls);
         assertEquals(1, probe.closeCalls);
         assertEquals(1, probe.dependenciesClosed);
     }
 
     @Test
-    void creationFailureKeepsScopeCleanupFailureAndRetryOwnership() {
+    void creationFailureReportsScopeCleanupFailureWithoutRetry() {
         var probe = new Probe();
         var createFailure = new IllegalStateException("create failed");
         var closeFailure = new IllegalStateException("scope close failed");
@@ -179,16 +141,9 @@ final class ZLinkChannelHandlerUnfilteredLifecycleTest {
         assertSame(createFailure, observed.getCause());
         assertEquals(1, createFailure.getSuppressed().length);
         assertSame(closeFailure, createFailure.getSuppressed()[0]);
-        var pending = ZLinkHandlerInstanceOwner.pendingRelease(observed);
-        assertNotNull(pending);
         assertEquals(0, probe.destroyCalls);
         assertEquals(1, probe.closeCalls);
-        probe.closeFailure = null;
-        pending.close();
-        pending.close();
-        assertEquals(0, probe.destroyCalls);
-        assertEquals(2, probe.closeCalls);
-        assertEquals(2, probe.dependenciesClosed);
+        assertEquals(1, probe.dependenciesClosed);
     }
 
     @ParameterizedTest
@@ -281,10 +236,7 @@ final class ZLinkChannelHandlerUnfilteredLifecycleTest {
                 public void destroy(Object instance) {
                     assertSame(handler, instance);
                     destroyCalls++;
-                    if (destroyCalls == 1) assertEquals(0, dependenciesClosed);
-                    else
-                        assertEquals(
-                                1, dependenciesClosed, "retry follows the successful scope close");
+                    assertEquals(0, dependenciesClosed);
                     if (destroyFailure != null) throw destroyFailure;
                     if (destroyError != null) throw destroyError;
                 }

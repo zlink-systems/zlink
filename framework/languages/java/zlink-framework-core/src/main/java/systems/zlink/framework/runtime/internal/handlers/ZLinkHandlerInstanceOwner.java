@@ -3,14 +3,10 @@ package systems.zlink.framework.runtime.internal.handlers;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 
 import java.util.ArrayList;
-import java.util.Collections;
-import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Set;
-import java.util.concurrent.CompletionException;
 import java.util.function.Supplier;
 
 /** Owns handler instances for one Framework lifecycle boundary. */
@@ -54,44 +50,22 @@ public final class ZLinkHandlerInstanceOwner implements AutoCloseable {
         try {
             return activation.create(handlerType);
         } catch (RuntimeException | Error failure) {
-            PendingRelease pending;
+            RuntimeException cleanupFailure;
             try {
-                pending = release(activation, null, true);
+                cleanupFailure = release(activation, null, true);
             } catch (Error closeFailure) {
                 failure.addSuppressed(closeFailure);
                 throw failure;
             }
-            if (pending == null) throw failure;
-            failure.addSuppressed(pending.failure());
-            if (failure instanceof Error error) throw error;
-            throw new PendingRelease(
-                    activation, null, pending.closeScope, (RuntimeException) failure);
+            if (cleanupFailure != null) failure.addSuppressed(cleanupFailure);
+            throw failure;
         }
     }
 
-    /** Successful single-instance release needs no ownership record. */
+    /** Releases a single dispatch handler once; cleanup failures are terminal. */
     public static void closeSingle(ZLinkHandlerActivator.Activation activation, Object handler) {
-        PendingRelease pending = release(activation, handler, true);
-        if (pending != null) throw pending;
-    }
-
-    /**
-     * Finds failed cleanup ownership in a dispatch failure, including when the handler also failed.
-     */
-    public static PendingRelease pendingRelease(Throwable failure) {
-        return findPendingRelease(failure, Collections.newSetFromMap(new IdentityHashMap<>()));
-    }
-
-    private static PendingRelease findPendingRelease(Throwable failure, Set<Throwable> seen) {
-        if (failure == null || !seen.add(failure)) return null;
-        if (failure instanceof PendingRelease pending) return pending;
-        PendingRelease pending = findPendingRelease(failure.getCause(), seen);
-        if (pending != null) return pending;
-        for (Throwable suppressed : failure.getSuppressed()) {
-            pending = findPendingRelease(suppressed, seen);
-            if (pending != null) return pending;
-        }
-        return null;
+        RuntimeException failure = release(activation, handler, true);
+        if (failure != null) throw failure;
     }
 
     /**
@@ -108,14 +82,14 @@ public final class ZLinkHandlerInstanceOwner implements AutoCloseable {
                     RuntimeException firstFailure = null;
                     for (int index = releases.size() - 1; index >= 0; index--) {
                         Map.Entry<Class<?>, Object> entry = releases.get(index);
-                        PendingRelease pending = release(activation, entry.getValue(), false);
-                        if (pending == null) instances.remove(entry.getKey());
-                        else firstFailure = addFailure(firstFailure, pending.failure());
+                        RuntimeException failure = release(activation, entry.getValue(), false);
+                        if (failure == null) instances.remove(entry.getKey());
+                        else firstFailure = addFailure(firstFailure, failure);
                     }
                     if (activation != null && !activationClosed) {
-                        PendingRelease pending = release(activation, null, true);
-                        if (pending == null) activationClosed = true;
-                        else firstFailure = addFailure(firstFailure, pending.failure());
+                        RuntimeException failure = release(activation, null, true);
+                        if (failure == null) activationClosed = true;
+                        else firstFailure = addFailure(firstFailure, failure);
                     }
                     if (firstFailure != null) throw firstFailure;
                     return null;
@@ -123,13 +97,12 @@ public final class ZLinkHandlerInstanceOwner implements AutoCloseable {
     }
 
     /** The one destroy/close success decision for both ownership shapes. */
-    private static PendingRelease release(
+    private static RuntimeException release(
             ZLinkHandlerActivator.Activation activation, Object handler, boolean closeScope) {
         Throwable failure = null;
         if (handler != null) {
             try {
                 activation.destroy(handler);
-                handler = null;
             } catch (RuntimeException | Error destroyFailure) {
                 failure = destroyFailure;
             }
@@ -137,53 +110,12 @@ public final class ZLinkHandlerInstanceOwner implements AutoCloseable {
         if (closeScope) {
             try {
                 activation.close();
-                closeScope = false;
             } catch (RuntimeException | Error closeFailure) {
                 failure = addFailure(failure, closeFailure);
             }
         }
         if (failure instanceof Error error) throw error;
-        return failure == null
-                ? null
-                : new PendingRelease(activation, handler, closeScope, (RuntimeException) failure);
-    }
-
-    /** A failed release is its own retry handle; successful dispatches never create one. */
-    public static final class PendingRelease extends CompletionException implements AutoCloseable {
-        private final ZLinkHandlerActivator.Activation activation;
-        private Object handler;
-        private boolean closeScope;
-
-        private PendingRelease(
-                ZLinkHandlerActivator.Activation activation,
-                Object handler,
-                boolean closeScope,
-                RuntimeException failure) {
-            super(failure);
-            this.activation = activation;
-            this.handler = handler;
-            this.closeScope = closeScope;
-        }
-
-        private RuntimeException failure() {
-            return (RuntimeException) getCause();
-        }
-
-        @Override
-        public Throwable fillInStackTrace() {
-            return this;
-        }
-
-        @Override
-        public void close() {
-            PendingRelease pending = release(activation, handler, closeScope);
-            handler = pending == null ? null : pending.handler;
-            closeScope = pending != null && pending.closeScope;
-            if (pending != null) {
-                if (pending.failure() != failure()) addSuppressed(pending.failure());
-                throw this;
-            }
-        }
+        return (RuntimeException) failure;
     }
 
     private static <T extends Throwable> T addFailure(T first, T failure) {

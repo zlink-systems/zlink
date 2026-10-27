@@ -254,9 +254,7 @@ public final class ZLinkSerialTurnAllocationTest {
                                         "systems.zlink.framework.runtime.internal.execution.ZLinkStateLane"))
                             unfilteredOwnerContainers++;
                         if (allocatedClass.equals(
-                                        "systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerInstanceOwner$SingleActivation")
-                                || allocatedClass.equals(
-                                        "systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerInstanceOwner$PendingRelease"))
+                                "systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerInstanceOwner$SingleActivation"))
                             unfilteredActivations++;
                     }
                     if (allocatedClass.equals("[Ljava.lang.Object;")) {
