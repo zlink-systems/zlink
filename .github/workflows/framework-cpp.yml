@@ -58,6 +58,9 @@ env:
   APT_CACHE_DIR: ${{ github.workspace }}/.cache/framework-cpp/apt
   VCPKG_INSTALLED_DIR: ${{ github.workspace }}/.cache/framework-cpp/vcpkg-installed
   ZLINK_LOCAL_PACKAGE_ROOT: ${{ github.workspace }}/.artifacts/framework-cpp-ci
+  # GitHub-hosted runners have 4 cores; the self-hosted build PC has 20 shared by
+  # up to six concurrent jobs.
+  BUILD_PARALLEL: ${{ vars.ZLINK_CPP_BUILD_PARALLEL || '2' }}
 
 jobs:
   framework-cpp:
@@ -137,7 +140,7 @@ jobs:
             -DBUILD_BENCHMARKS=OFF \
             -DWITH_DOCS=OFF
           cmake --build "${RUNNER_TEMP}/framework-cpp-core-build" \
-            --parallel 2 --target install
+            --parallel "${BUILD_PARALLEL}" --target install
 
       - name: Build the checkout C++ binding package
         env:
@@ -157,7 +160,7 @@ jobs:
             -DCMAKE_TOOLCHAIN_FILE="${GITHUB_WORKSPACE}/.github/workflows/framework-cpp-system-toolchain.cmake" \
             -DZLINK_FRAMEWORK_CPP_BUILD_SAMPLES=OFF \
             -DZLINK_FRAMEWORK_CPP_BUILD_CROSS_LANGUAGE=OFF
-          cmake --build --preset linux-ninja-release --parallel 2
+          cmake --build --preset linux-ninja-release --parallel "${BUILD_PARALLEL}"
 
       - name: Run Framework C++ unit and contract tests
         working-directory: framework/languages/cpp
@@ -269,7 +272,7 @@ jobs:
             -CorePackagePrefix "${{ steps.core.outputs.prefix }}" `
             -VcpkgInstalledDir $env:VCPKG_INSTALLED_DIR `
             -Configuration Release `
-            -Parallel 2 `
+            -Parallel $env:BUILD_PARALLEL `
             -IncludeTests
           Add-Content -LiteralPath $env:GITHUB_ENV -Value "FRAMEWORK_CPP_BUILD_DIR=$buildDir"
 
