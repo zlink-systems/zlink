@@ -68,7 +68,7 @@ class flow_context_t
     class scope_t
     {
       public:
-        explicit scope_t (std::optional<flow_value_t> value) : _previous (slot ())
+        explicit scope_t (std::optional<flow_value_t> value) : _previous (std::move (slot ()))
         {
             slot () = std::move (value);
         }
