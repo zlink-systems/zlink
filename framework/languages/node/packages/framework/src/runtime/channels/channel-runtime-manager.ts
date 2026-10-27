@@ -1,3 +1,5 @@
+import { RequestRuntime } from '../foundation/request-runtime';
+import type { PendingOperation } from '../foundation/operation-registry';
 import type { ZLinkMeshDispatchAdmission } from '../admission';
 import {
   prepareZLinkRequestReply,
@@ -47,6 +49,7 @@ import {
 } from '../host/application-job-queue';
 
 export class ZLinkChannelRuntimeManager {
+  private readonly requests: RequestRuntime;
   private readonly registration: ZLinkFrameworkRegistration;
   private readonly sockets: ZLinkChannelSocketRegistry;
   private readonly spotRoutes: ZLinkSpotRouteDispatchStrategy;
@@ -61,6 +64,7 @@ export class ZLinkChannelRuntimeManager {
     options: ZLinkChannelRuntimeManagerOptions = {}
   ) {
     this.registration = registration;
+    this.requests = options.requests ?? new RequestRuntime();
     const applicationJobQueue =
       options.applicationJobQueue ??
       new ApplicationJobQueue(resolveApplicationJobQueueConfiguration());
@@ -83,6 +87,7 @@ export class ZLinkChannelRuntimeManager {
     );
     const spotRouteBridges = new Map<string, ZLinkBackendSpotRouteBridge>();
     this.spotRoutes = new ZLinkSpotRouteDispatchStrategy({
+      requests: this.requests,
       registration,
       sockets: this.sockets,
       codecs,
@@ -90,7 +95,12 @@ export class ZLinkChannelRuntimeManager {
       localSpotRouteDispatcher: options.localSpotRouteDispatcher,
       flowCreationEnabled: () => dispatchServices.flowCreationEnabled()
     });
-    this.outbound = new ZLinkChannelOutboundOperations(this.sockets, codecs, dispatchServices);
+    this.outbound = new ZLinkChannelOutboundOperations(
+      this.sockets,
+      codecs,
+      dispatchServices,
+      this.requests
+    );
     this.lifecycle = new ZLinkChannelRuntimeLifecycle({
       registration,
       adapter,
@@ -258,7 +268,8 @@ export class ZLinkChannelRuntimeManager {
     timeoutMs: number | undefined,
     signal?: AbortSignal,
     metadata?: ReadonlyMap<string, string>,
-    onAdmitted?: () => void
+    onAdmitted?: () => void,
+    requestOperation?: PendingOperation<unknown>
   ): ZLinkRequestResult<TReply> {
     try {
       const pending = this.outbound.request<TReply>(
@@ -268,7 +279,8 @@ export class ZLinkChannelRuntimeManager {
         timeoutMs,
         signal,
         metadata,
-        onAdmitted
+        onAdmitted,
+        requestOperation
       );
       return prepareZLinkRequestReply(pending, identityRequestReply);
     } catch (error) {
@@ -315,7 +327,8 @@ export class ZLinkChannelRuntimeManager {
     timeoutMs: number | undefined,
     signal?: AbortSignal,
     metadata?: ReadonlyMap<string, string>,
-    onAdmitted?: () => void
+    onAdmitted?: () => void,
+    requestOperation?: PendingOperation<unknown>
   ): Promise<TReply> {
     return this.outbound.routeRequest<TReply>(
       routerChannelId,
@@ -325,7 +338,8 @@ export class ZLinkChannelRuntimeManager {
       timeoutMs,
       signal,
       metadata,
-      onAdmitted
+      onAdmitted,
+      requestOperation
     );
   }
 
@@ -345,7 +359,8 @@ export class ZLinkChannelRuntimeManager {
     timeoutMs: number | undefined,
     signal?: AbortSignal,
     metadata?: ReadonlyMap<string, string>,
-    onAdmitted?: () => void
+    onAdmitted?: () => void,
+    requestOperation?: PendingOperation<unknown>
   ): Promise<TReply> {
     return this.spotRoutes.routeRequestToSpot<TReply>(
       spotRouteTarget,
@@ -354,7 +369,8 @@ export class ZLinkChannelRuntimeManager {
       timeoutMs,
       signal,
       metadata,
-      onAdmitted
+      onAdmitted,
+      requestOperation
     );
   }
 
@@ -365,7 +381,8 @@ export class ZLinkChannelRuntimeManager {
     request: unknown,
     timeoutMs: number | undefined,
     signal?: AbortSignal,
-    onAdmitted?: () => void
+    onAdmitted?: () => void,
+    requestOperation?: PendingOperation<unknown>
   ): Promise<TReply> {
     return this.spotRoutes.routeRequestFromSpotToSpot<TReply>(
       sourceSpot,
@@ -374,7 +391,8 @@ export class ZLinkChannelRuntimeManager {
       request,
       timeoutMs,
       signal,
-      onAdmitted
+      onAdmitted,
+      requestOperation
     );
   }
 
@@ -400,7 +418,8 @@ export class ZLinkChannelRuntimeManager {
     request: Message,
     timeoutMs: number | undefined,
     signal?: AbortSignal,
-    onAdmitted?: () => void
+    onAdmitted?: () => void,
+    requestOperation?: PendingOperation<unknown>
   ): Promise<readonly Message[]> {
     return this.spotRoutes.routeRequestRawFromSpotToSpot(
       sourceSpot,
@@ -408,7 +427,8 @@ export class ZLinkChannelRuntimeManager {
       request,
       timeoutMs,
       signal,
-      onAdmitted
+      onAdmitted,
+      requestOperation
     );
   }
 
@@ -417,14 +437,16 @@ export class ZLinkChannelRuntimeManager {
     request: Message,
     timeoutMs: number | undefined,
     signal?: AbortSignal,
-    onAdmitted?: () => void
+    onAdmitted?: () => void,
+    requestOperation?: PendingOperation<unknown>
   ): Promise<readonly Message[]> {
     return this.spotRoutes.routeRequestRawToSpot(
       spotRouteTarget,
       request,
       timeoutMs,
       signal,
-      onAdmitted
+      onAdmitted,
+      requestOperation
     );
   }
 
@@ -437,6 +459,7 @@ export class ZLinkChannelRuntimeManager {
   }
 
   async dispose(signal?: AbortSignal): Promise<void> {
+    this.requests.close();
     await this.lifecycle.dispose(signal);
   }
 }
@@ -452,6 +475,7 @@ function splitMonitoringSocketSourceName(sourceName: string): readonly [string, 
 }
 
 export interface ZLinkChannelRuntimeManagerOptions {
+  readonly requests?: RequestRuntime;
   readonly listenerRecords?: ZLinkListenerRecords;
   readonly internalRouteSendHandlers?: ReadonlyMap<string, ZLinkRouteRuntimeSendHandler>;
   readonly internalRouteRequestHandlers?: ReadonlyMap<string, ZLinkRouteRuntimeRequestHandler>;

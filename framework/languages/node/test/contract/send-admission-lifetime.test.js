@@ -4,7 +4,10 @@ const test = require('node:test');
 const zlink = require('@zlink-systems/zlink');
 const framework = require('../../packages/framework/dist/internal');
 const { wrapSocket } = require('../../packages/framework/dist/runtime/backend/node/node-socket-backend-adapter');
-const { submitBindingPublish, submitBindingRequest } = require('../../packages/framework/dist/runtime/backend/node/node-backend-adapter-support');
+const {
+  submitBindingPublish,
+  submitBindingRequest: submitOwnedBindingRequest
+} = require('../../packages/framework/dist/runtime/backend/node/node-backend-adapter-support');
 
 const OLD_SEND_TIMEOUT_MULTIPLE_MS = 3100;
 
@@ -109,3 +112,15 @@ test('backpressured request timeout observes late reply and closes each native m
   await delay(0);
   assert.equal(closes, 1);
 });
+
+function submitBindingRequest(operation, parts, timeoutMs) {
+  const {
+    RequestRuntime
+  } = require('../../packages/framework/dist/runtime/foundation/request-runtime');
+  const requests = new RequestRuntime();
+  return requests
+    .request(timeoutMs, undefined, (entry) =>
+      submitOwnedBindingRequest(operation, parts, timeoutMs, undefined, undefined, entry)
+    )
+    .finally(() => requests.close());
+}
