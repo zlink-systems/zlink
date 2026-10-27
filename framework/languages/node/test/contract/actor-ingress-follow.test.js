@@ -23,8 +23,7 @@ const {
   ZLinkBufferMessage: Message
 } = require('../../packages/framework/dist/runtime/backend/runtime-message');
 const {
-  prepareZLinkRequestReply,
-  identityRequestReply
+  ZLinkRequestResult
 } = require('../../packages/framework/dist/runtime/messaging/request-result');
 const protocol = require('../../packages/framework/dist/runtime/streams/protocol');
 const {
@@ -142,9 +141,8 @@ function fixture() {
     routedTransport: {
       sendToSpot: (_route, payload) => deliver(payload),
       requestToSpot: (_route, payload) =>
-        prepareZLinkRequestReply(
-          deliver(payload).then((response) => ({ ok: true, response })),
-          identityRequestReply
+        new ZLinkRequestResult().observe(
+          deliver(payload).then((response) => ({ ok: true, response }))
         )
     }
   });
@@ -243,27 +241,28 @@ function fixture() {
       invalidateActorRoute() {}
     }),
     completionTableProvider: () => ({
-      async submit(submit) {
+      submit(submit) {
         submit();
-        const response = await terminal;
-        return {
-          terminalResult: 0,
-          failureErrno: 0,
-          parts: [
-            Message.from(
-              protocol.encodeStreamFrame(
-                {
-                  kind: protocol.ZLinkStreamMessageKind.Response,
-                  codec: protocol.ZLinkStreamCodec.Json,
-                  flags: 0,
-                  name: 'Ping',
-                  metadata: new Map()
-                },
-                Buffer.from(JSON.stringify(response))
+        return new ZLinkRequestResult().observe(
+          terminal.then((response) => ({
+            terminalResult: 0,
+            failureErrno: 0,
+            parts: [
+              Message.from(
+                protocol.encodeStreamFrame(
+                  {
+                    kind: protocol.ZLinkStreamMessageKind.Response,
+                    codec: protocol.ZLinkStreamCodec.Json,
+                    flags: 0,
+                    name: 'Ping',
+                    metadata: new Map()
+                  },
+                  Buffer.from(JSON.stringify(response))
+                )
               )
-            )
-          ]
-        };
+            ]
+          }))
+        );
       }
     })
   });
@@ -398,13 +397,12 @@ for (const updated of [false, true]) {
         primaryMeshNode: { status: () => ({ routingId: 'session-owner' }) }
       }),
       routeTransport: {
-        request: (_channel, _node, _name, payload) =>
-          prepareZLinkRequestReply(
+        request: (entry, _channel, _node, _name, payload) =>
+          entry.observe(
             receiver.receiveRemoteActorPacketRelay(payload, {
               meshName: 'mesh',
               sourceNodeRid: 'session-owner'
-            }),
-            identityRequestReply
+            })
           )
       }
     });
