@@ -32,6 +32,15 @@ internal sealed class GatedTaskScheduler : TaskScheduler
         Schedule(task);
     }
 
+    internal Task ReleaseNextAsync()
+    {
+        Task task;
+        lock (_tasks)
+            task = _tasks.Dequeue();
+        Schedule(task);
+        return task;
+    }
+
     internal void Release() => _ = ReleaseAsync();
 
     internal Task ReleaseAsync()
