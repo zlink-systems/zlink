@@ -238,11 +238,15 @@ Records in an owner queue are taken and run by application workers.
 
 | Stage | What the worker does | So that |
 |---|---|---|
-| W1 acquire | Takes an owner from the ready set and acquires that owner's [execution gate](../00-foundation/02-glossary.en.md#execution-gate) ([Handler Turn "6"](02-handler-turn-and-execution-gate.en.md#6-the-trap-in-acquiring-processing-authority-implementation), ["11"](02-handler-turn-and-execution-gate.en.md#11-making-the-two-synchronization-points-cheap-implementation)). | Without contention the gate is acquired with one atomic operation. |
+| W1 acquire | Takes an owner from the ready set and, if the owner has one, acquires its [execution gate](../00-foundation/02-glossary.en.md#execution-gate) ([Handler Turn "6"](02-handler-turn-and-execution-gate.en.md#6-the-trap-in-acquiring-processing-authority-implementation), ["11"](02-handler-turn-and-execution-gate.en.md#11-making-the-two-synchronization-points-cheap-implementation)). | Without contention the gate is acquired with one atomic operation. |
 | W2 decode | Deserialises the typed payload once ([Payload Ownership "6"](05-payload-ownership-and-codec.en.md#6-when-deserialization-happens)). | Nothing is deserialised before the execution right is held. |
-| W3 run | Invokes the handler. The permit is returned right before the handler's first instruction. If the handler suspends or `Yield`s, resumption follows [Handler Turn "3"](02-handler-turn-and-execution-gate.en.md#3-gate-and-claim-on-yield). | An `await` inside the handler never re-acquires the permit. |
+| W3 run | Invokes the handler. The permit is returned right before the handler's first instruction. Ordinary asynchronous resumption follows the turn-retention rule of [Handler Turn §2](02-handler-turn-and-execution-gate.en.md#execution-gate); only resumption after an eligible `Yield` follows [Handler Turn "3"](02-handler-turn-and-execution-gate.en.md#3-gate-and-claim-on-yield). | An `await` inside the handler never re-acquires the permit. |
 | W4 reply | After the handler completed, in that turn context, encodes the reply payload and starts the binding's reply operation right there. Never hands it to another execution resource. | The reply path has no Framework execution-resource switch. |
-| W5 next | Within the time budget ([Handler Turn "9"](02-handler-turn-and-execution-gate.en.md#9-time-budget-and-batch-processing-implementation)) processes the same owner's next record; otherwise releases the gate and moves to the next owner. | One owner cannot monopolise a worker. |
+| W5 next | Within the time budget ([Handler Turn "9"](02-handler-turn-and-execution-gate.en.md#9-time-budget-and-batch-processing-implementation)) processes the same owner's next record; otherwise releases the gate if one is held and moves to the next owner. | One owner cannot monopolise a worker. |
+
+A Node or ChannelName owner without a gate starts handlers in owner-queue FIFO order, and the next
+record does not wait for the preceding handler's terminal completion. When the W3 handler suspends,
+the worker proceeds to W5; W4 reply runs after that handler completes, in that handler's turn context.
 
 **The Framework creates no separate dispatch task or supervisor wrapper per record; it reuses the
 shared workers' drain.** Creating a task, future or virtual thread per request and registering it with a
