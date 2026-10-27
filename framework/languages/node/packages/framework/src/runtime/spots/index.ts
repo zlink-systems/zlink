@@ -1,3 +1,4 @@
+import { DEFAULT_REQUEST_TIMEOUT_MS } from '../../contracts/Configuration/Registration';
 import { encodeActorReply } from '../actors/actor-reply';
 import { boundSessionErrorPayload } from '../streams/bound-session-response-target';
 import { RELOCATED_REQUEST_OWNED_BY_REQUESTER } from '../actors/actor-handoff';
@@ -164,6 +165,7 @@ export {
 export { ZLinkPublicSpotManager, type ZLinkPublicSpotManagerOptions } from './spot-manager-public';
 
 export interface ZLinkSpotManagerOptions {
+  readonly defaultRequestTimeoutMs?: number;
   readonly spotFactories: readonly Type<ZLinkSpot>[];
   readonly instanceSpotFactories?: ReadonlyMap<
     string,
@@ -1159,14 +1161,15 @@ export class DefaultZLinkSpotManager {
     beginAuthority: (
       onCommitted: () => void
     ) => Promise<import('../locations/spot-location-claims').ZLinkInstanceClosingAuthority>,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    deadline?: Date
   ): Promise<boolean> {
     return await this.closeWithReason(
       meshName,
       spotId,
       signal,
       ZLinkSpotCloseReason.ExplicitClose,
-      undefined,
+      deadline,
       beginAuthority
     );
   }
@@ -1222,6 +1225,11 @@ export class DefaultZLinkSpotManager {
     >,
     contextActivation?: ZLinkSpotActivation
   ): Promise<boolean> {
+    if (reason === ZLinkSpotCloseReason.ExplicitClose) {
+      deadline ??= new Date(
+        Date.now() + (this.options.defaultRequestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS)
+      );
+    }
     requireMeshName(meshName);
     const key = `${meshName}\0${String(spotId)}`;
     let operation = this.closeOperations.get(key);
