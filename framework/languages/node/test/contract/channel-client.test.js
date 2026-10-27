@@ -1029,7 +1029,7 @@ test('RouteMesh ready remote weight-zero channel reports Unavailable for send an
     assert.equal(runtime.topology.admit({ ...runtime.topology.localDescriptor(),
       nodeRoutingId: remoteRid, advertisedEndpoint: 'tcp://127.0.0.1:1',
       objectRole: 'server', channels: [{ name: 'zero-channel', weight: 0 }]
-    }, connectionId), 'admitted');
+    }, connectionId, undefined, undefined, serviceWire.M6aServiceWireCommand.admit), 'admitted');
     runtime.liveness.admit(remoteRid, connectionId, 0);
     const [probe] = runtime.liveness.tick(0).probes;
     assert.equal(runtime.liveness.acknowledge(remoteRid, connectionId, probe.probeId, 0), true);
@@ -1072,7 +1072,7 @@ for (const state of ['preparing', 'stopped', 'error', 'retiring', 'draining']) {
       const current = runtime.topology.localDescriptor();
       // Channel messaging §2: the snapshot must describe a remote target.
       assert.equal(runtime.topology.admit({ ...current, nodeRoutingId: 'remote-selection',
-        advertisedEndpoint: 'tcp://127.0.0.1:1', state }, 'remote-connection'), 'admitted');
+        advertisedEndpoint: 'tcp://127.0.0.1:1', state }, 'remote-connection', undefined, undefined, serviceWire.M6aServiceWireCommand.admit), 'admitted');
       const unavailable = state === 'retiring' || state === 'draining';
       const payload = { packetName: 'Notice', contentType: 'application/json', payload: Buffer.from('{}') };
       assert.equal(await runtime.sendToChannel('api', payload), unavailable ? zlink.SubmitResult.NotConnected : zlink.SubmitResult.NotFound);

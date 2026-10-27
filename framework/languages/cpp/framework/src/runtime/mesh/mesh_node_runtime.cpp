@@ -1962,14 +1962,14 @@ void mesh_node_runtime_t::connect_peer (const zlink::routing_id_t &expected_rout
         return;
     _peer_connection_intent_lane
       .run ([&] {
-          if (const auto existing = _peer_connection_intents.find (endpoint);
-              existing != _peer_connection_intents.end ())
-              return;
           const auto submitted =
             _node->connect_peer (endpoint, expected_routing_id, expected_lifecycle_generation,
                                  std::move (security_identity), automatic);
-          if (submitted)
-              _peer_connection_intents.emplace (endpoint, next_connection_intent_id ());
+          if (submitted) {
+              const auto [intent, inserted] = _peer_connection_intents.try_emplace (endpoint);
+              if (inserted)
+                  intent->second = next_connection_intent_id ();
+          }
       })
       .get ();
 }
@@ -1980,10 +1980,11 @@ void mesh_node_runtime_t::connect_peer (const std::string &endpoint, std::string
         return;
     _peer_connection_intent_lane
       .run ([&] {
-          if (_peer_connection_intents.contains (endpoint))
-              return;
-          if (_node->connect_peer (endpoint))
-              _peer_connection_intents.emplace (endpoint, next_connection_intent_id ());
+          if (_node->connect_peer (endpoint)) {
+              const auto [intent, inserted] = _peer_connection_intents.try_emplace (endpoint);
+              if (inserted)
+                  intent->second = next_connection_intent_id ();
+          }
       })
       .get ();
     static_cast<void> (security_identity);

@@ -422,13 +422,19 @@ test('application payload encoding writes an offset Uint8Array into one owned fr
 test('topology snapshots fence reconnect and exclude retiring placement targets', () => {
   const topology = new ServiceTopologyRegistry(descriptor('local'));
   const peer = { ...descriptor('peer'), state: 'serving' as const };
-  assert.equal(topology.admit(peer, 'connection-a'), 'admitted');
+  assert.equal(
+    topology.admit(peer, 'connection-a', undefined, undefined, M6aServiceWireCommand.admit),
+    'admitted'
+  );
   assert.equal(topology.selectChannel('alpha')?.descriptor.nodeRoutingId, 'peer');
   assert.equal(topology.selectPlacement()?.descriptor.nodeRoutingId, 'peer');
 
   // An admission on the route Core selected after connection-a replaces it; a
   // late disconnect of the replaced route does not remove the new admission.
-  assert.equal(topology.admit(peer, 'connection-b'), 'admitted');
+  assert.equal(
+    topology.admit(peer, 'connection-b', undefined, undefined, M6aServiceWireCommand.admit),
+    'admitted'
+  );
   assert.equal(topology.disconnect('peer', 'connection-a'), false);
   assert.equal(topology.peer('peer')?.connectionId, 'connection-b');
 
@@ -516,7 +522,10 @@ test('channel selection excludes admitted peers until the caller confirms readin
     channels: [{ name: 'alpha', weight: 0 }]
   });
   const peer = { ...descriptor('peer'), state: 'serving' as const };
-  assert.equal(topology.admit(peer, 'connection-a'), 'admitted');
+  assert.equal(
+    topology.admit(peer, 'connection-a', undefined, undefined, M6aServiceWireCommand.admit),
+    'admitted'
+  );
 
   assert.equal(
     topology.selectChannel('alpha', () => false),
@@ -541,7 +550,10 @@ test('object placement excludes admitted peers until the caller confirms readine
     state: 'serving' as const,
     protocolCapabilities: [SERVICE_WIRE_REQUIRED_CAPABILITY, 'object-type:quest']
   };
-  assert.equal(topology.admit(peer, 'connection-a'), 'admitted');
+  assert.equal(
+    topology.admit(peer, 'connection-a', undefined, undefined, M6aServiceWireCommand.admit),
+    'admitted'
+  );
   assert.equal(
     topology.selectObjectPlacement('quest', () => false),
     undefined
@@ -746,7 +758,8 @@ test('raw runtime admits a discovered same-RID replacement only after its exact 
         endpoint: string;
         securityIdentity: string;
         lifecycleGeneration: bigint;
-      }
+      },
+      command?: number
     ): string;
   };
   internal.router = {
@@ -761,7 +774,10 @@ test('raw runtime admits a discovered same-RID replacement only after its exact 
       disconnectedEndpoints.push(endpoint);
     }
   };
-  assert.equal(runtime.topology.admit(old, oldConnection), 'admitted');
+  assert.equal(
+    runtime.topology.admit(old, oldConnection, undefined, undefined, M6aServiceWireCommand.admit),
+    'admitted'
+  );
   runtime.liveness.admit(old.nodeRoutingId, oldConnection, 1);
   const oldProbe = runtime.liveness.tick(1).probes[0]!;
   assert.equal(
@@ -783,7 +799,16 @@ test('raw runtime admits a discovered same-RID replacement only after its exact 
   assert.equal(runtime.isPeerRouteReady(old.nodeRoutingId, old.lifecycleGeneration), true);
 
   const expected = internal.expectedPeers.get(old.nodeRoutingId)!;
-  assert.equal(internal.admitPeer(replacement, replacementConnection, 2, expected), 'admitted');
+  assert.equal(
+    internal.admitPeer(
+      replacement,
+      replacementConnection,
+      2,
+      expected,
+      M6aServiceWireCommand.admit
+    ),
+    'admitted'
+  );
   assert.equal(
     runtime.topology.peer(old.nodeRoutingId)?.descriptor.lifecycleGeneration,
     replacement.lifecycleGeneration
@@ -924,9 +949,18 @@ test('public weights preserve boundaries, descriptor revisions, ratios, and capa
     placementWeight: 10_000,
     activeCapacityUsed: 10_000
   };
-  assert.equal(topology.admit(low, 'low-1'), 'admitted');
-  assert.equal(topology.admit(high, 'high-1'), 'admitted');
-  assert.equal(topology.admit(full, 'full-1'), 'admitted');
+  assert.equal(
+    topology.admit(low, 'low-1', undefined, undefined, M6aServiceWireCommand.admit),
+    'admitted'
+  );
+  assert.equal(
+    topology.admit(high, 'high-1', undefined, undefined, M6aServiceWireCommand.admit),
+    'admitted'
+  );
+  assert.equal(
+    topology.admit(full, 'full-1', undefined, undefined, M6aServiceWireCommand.admit),
+    'admitted'
+  );
 
   const channelCounts = new Map<string, number>();
   const placementCounts = new Map<string, number>();
@@ -953,7 +987,10 @@ test('public weights preserve boundaries, descriptor revisions, ratios, and capa
         state: 'serving',
         channels: [{ name: 'alpha', weight: 100 }]
       },
-      'balanced-a-1'
+      'balanced-a-1',
+      undefined,
+      undefined,
+      M6aServiceWireCommand.admit
     ),
     'admitted'
   );
@@ -964,7 +1001,10 @@ test('public weights preserve boundaries, descriptor revisions, ratios, and capa
         state: 'serving',
         channels: [{ name: 'alpha', weight: 100 }]
       },
-      'balanced-b-1'
+      'balanced-b-1',
+      undefined,
+      undefined,
+      M6aServiceWireCommand.admit
     ),
     'admitted'
   );
@@ -1471,6 +1511,7 @@ test('raw admission keeps Object Client-only pairs out of liveness and records N
     left.connectPeer(rightDescriptor.advertisedEndpoint, rightDescriptor);
     await pollUntil(async () => {
       await left.observeSelectedRoutes();
+      await right.observeSelectedRoutes();
       await left.announceExpectedPeers();
       await right.pumpOne();
       await left.pumpOne();
@@ -1557,6 +1598,7 @@ test('raw runtime admits peers and completes node/channel requests once', async 
     left.connectPeer(rightDescriptor.advertisedEndpoint, rightDescriptor);
     await pollUntil(async () => {
       await left.observeSelectedRoutes();
+      await right.observeSelectedRoutes();
       await left.announceExpectedPeers();
       await right.pumpOne();
       await left.pumpOne();
@@ -1685,6 +1727,7 @@ test('terminal reply completion progresses while ordinary job flow is saturated'
     left.connectPeer(rightDescriptor.advertisedEndpoint, rightDescriptor);
     await pollUntil(async () => {
       await left.observeSelectedRoutes();
+      await right.observeSelectedRoutes();
       await left.announceExpectedPeers();
       await right.pumpOne();
       await left.pumpOne();
@@ -1819,12 +1862,13 @@ test('normal receive pump carries application and liveness traffic on one route'
     left.connectPeer(rightDescriptor.advertisedEndpoint, rightDescriptor);
     await pollUntil(async () => {
       await left.observeSelectedRoutes();
+      await right.observeSelectedRoutes();
       await left.announceExpectedPeers();
       await right.pumpOne();
       await left.pumpOne();
       return (
-        left.topology.peer(rightDescriptor.nodeRoutingId) !== undefined &&
-        right.topology.peer(leftDescriptor.nodeRoutingId) !== undefined
+        left.isPeerRouteReady(rightDescriptor.nodeRoutingId) &&
+        right.isPeerRouteReady(leftDescriptor.nodeRoutingId)
       );
     });
 
@@ -1974,8 +2018,12 @@ test('bilateral endpoint requests keep liveness progressing after re-admission',
     assert.equal(right.topology.disconnect(rid, peer.connectionId), true);
     const now = performance.now();
     assert.equal(
-      right.topology.admit(peer.descriptor, peer.connectionId, undefined, () =>
-        right.liveness.admit(rid, connectionId, now)
+      right.topology.admit(
+        peer.descriptor,
+        peer.connectionId,
+        undefined,
+        () => right.liveness.admit(rid, connectionId, now),
+        M6aServiceWireCommand.admit
       ),
       'admitted'
     );
@@ -2100,6 +2148,7 @@ test('remote channel requests preserve successful and failed terminal results', 
     source.connectPeer(peerDescriptor.advertisedEndpoint, peerDescriptor);
     await pollUntil(async () => {
       await source.observeSelectedRoutes();
+      await peer.observeSelectedRoutes();
       await source.announceExpectedPeers();
       await peer.pumpOne();
       await source.pumpOne();
@@ -2239,10 +2288,13 @@ test('channel send projects absent routes and propagates other admission failure
       descriptor: { ...descriptor('m6a-transport-source'), state: 'serving', channels: [] }
     });
     try {
-      runtime.topology.selectChannel = () => ({
-        descriptor: { ...descriptor('m6a-transport-target'), state: 'serving' as const },
-        connectionId: 'transport-target-connection'
-      });
+      runtime.topology.admit(
+        { ...descriptor('m6a-transport-target'), state: 'serving' as const },
+        'transport-target-connection',
+        undefined,
+        undefined,
+        M6aServiceWireCommand.admit
+      );
       (runtime as unknown as { router: Pick<ZLinkRawRouterPort, 'submitSend'> }).router = {
         submitSend() {
           return { result: SubmitResult.Backpressured, admitted: Promise.reject(cause) };

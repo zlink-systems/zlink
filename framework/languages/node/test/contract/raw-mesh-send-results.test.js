@@ -53,7 +53,7 @@ function fixture() {
     fail(error) { failure = error; },
     enqueue(rid, parts) { received.push({ sourceRid: rid, sourceRoute: Buffer.from(rid), routeGeneration: 1n, parts, close() {} }); },
     async admit(rid) {
-      this.enqueue(rid, [wire.encodeRouteMeshAdmission(wire.M6aServiceWireCommand.hello, descriptor(rid))]);
+      this.enqueue(rid, [wire.encodeRouteMeshAdmission(wire.M6aServiceWireCommand.admit, descriptor(rid))]);
       assert.equal(await runtime.pumpOne(0), 'infrastructure');
       assert.ok(runtime.topology.peer(rid));
     },

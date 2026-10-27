@@ -2,11 +2,14 @@
 #pragma once
 #include <cstddef>
 #include <array>
+#include <atomic>
 #include <optional>
 #include <string>
 #include <utility>
 namespace zlink::framework::tests
 {
+extern std::atomic_bool tracking_process_allocations;
+extern std::atomic<std::size_t> process_allocation_count;
 extern thread_local bool tracking_allocations;
 extern thread_local std::optional<std::size_t> allocations_before_failure;
 extern thread_local std::size_t tracked_allocation_count;
