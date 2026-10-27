@@ -487,8 +487,13 @@ export class ZLinkFrameworkRuntimeHost
       },
       relay: (actor, header, payload) =>
         this.boundSessionRelay.actorPackets.relayActorPacket(actor, header, payload),
-      notifyDisconnected: (actor, signal, binding) =>
-        this.boundSessionRelay.actorPackets.notifyBoundActorDisconnected(actor, signal, binding)
+      notifyDisconnected: (actor, signal, binding, authorityFence) =>
+        this.boundSessionRelay.actorPackets.notifyBoundActorDisconnected(
+          actor,
+          signal,
+          binding,
+          authorityFence
+        )
     });
     this.actorHandoff = new ZLinkActorHandoffCoordinator({
       routedTransport: this.routeTransport,

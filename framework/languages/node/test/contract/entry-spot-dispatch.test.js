@@ -32,7 +32,7 @@ function entryActorRuntime(resolveActor) {
     resolveActor,
     async commitActorTransaction(_actor, onJoined) { await onJoined(); },
     async destroyActor() {},
-    async routePacket() {
+    routePacket() {
       return { handled: false };
     }
   };
@@ -373,7 +373,7 @@ test('Entry Spot materializes a remotely returning actor with its original Entry
         }
       },
       async destroyActor() {},
-      async routePacket() { return { handled: false }; }
+      routePacket() { return { handled: false }; }
     },
     actorTransferRuntime: {
       async materializeRoutedActor(actorId, actorType, adapterKey, state, actorEntryNodeRid) {

@@ -4036,14 +4036,13 @@ test('one-way remote Actor relay releases its Session frame before a deferred Jo
         return { spotId: 'game-room' };
       }
     }),
-    spotManager: () => ({
-      async dispatchRoutedActorPacket(_origin) {
+    spotNodeRuntime: () => ({
+      async dispatchEntryActorPacket(_origin) {
         handlerStarted();
         await handlerCanFinish;
         handlerFinished = true;
       }
     }),
-    spotNodeRuntime: () => undefined,
     detachedTaskRunner: {
       runDetached(_taskName, callback) {
         detachedDispatch = callback();
@@ -7599,6 +7598,11 @@ test('service-wire relocation replaces a learned source packet route before the 
     })
   });
   Object.assign(targetHostMesh, {
+    async dispatchEntryActorPacket(origin, actorId, parts, response, bound, ref) {
+      const result = await targetHost.entryActorRuntime.routePacket(actorId, parts, response, bound, ref, origin);
+      assert.equal(result.handled, true);
+      return result.response;
+    },
     primaryMeshNode: {
       status: () => ({ routingId: zlink.RoutingId.from('target') })
     }
@@ -7953,6 +7957,12 @@ test('runtime host completes local bound actor request without native SessionRel
       return { joined: true };
     }
   });
+
+  host.spotNodeRuntime.dispatchEntryActorPacket = async (origin, actorId, parts, response, bound, ref) => {
+    const result = await host.entryActorRuntime.routePacket(actorId, parts, response, bound, ref, origin);
+    assert.equal(result.handled, true);
+    return result.response;
+  };
 
   const context = host.streamBindingRuntime.createSessionContext(stream);
   const actor = await context.actors.bind(actorRef);
