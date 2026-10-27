@@ -1192,6 +1192,17 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     LABELS "framework-unit;framework-foundation;operation;resource"
     TIMEOUT 30)
   zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_registry_no_hop
+    COMMAND test_cpp_framework_operation_registry --registry-no-hop
+    LABELS "framework-contract;operation;resource"
+    TIMEOUT 30)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_registry_no_global_thread
+    COMMAND test_cpp_framework_operation_registry --no-global-registry-thread
+    LABELS "framework-contract;operation;resource"
+    TIMEOUT 30)
+
+  zlink_framework_cpp_add_test(
     NAME test_cpp_framework_request_deadline_index_contract
     COMMAND test_cpp_framework_operation_registry --request-deadline
     LABELS "framework-contract;operation;resource"

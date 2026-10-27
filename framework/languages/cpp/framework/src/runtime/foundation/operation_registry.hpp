@@ -38,6 +38,8 @@ using call_id_t = runtime::call_id_t;
 struct operation_completion_item_t;
 struct operation_registry_drain_state_t;
 
+struct operation_registry_state_t;
+
 class operation_registry_t
 {
   public:
@@ -55,7 +57,9 @@ class operation_registry_t
     std::optional<request_identity_t> request_identity (call_id_t id, call_id_t operation) const;
 
     operation_registry_t ();
-    // Owners without a dedicated management loop use the shared deadline worker.
+    operation_registry_t (const operation_registry_t &) = delete;
+    operation_registry_t &operator= (const operation_registry_t &) = delete;
+    // The scheduler posts management visits to the existing owner lane.
     static std::shared_ptr<operation_registry_t> create_scheduled (runtime::state_lane_t &owner);
     explicit operation_registry_t (now_t now, std::function<void ()> deadline_changed = {});
     explicit operation_registry_t (runtime::state_lane_t &owner,
@@ -97,53 +101,7 @@ class operation_registry_t
     std::size_t index_size () const;
 
   private:
-    using id_hash_t = runtime::call_id_hash_t;
-
-    static constexpr std::size_t deadline_slot_count = 256;
-    static constexpr auto deadline_tick_duration = std::chrono::milliseconds (1);
-
-    struct pending_t
-    {
-        std::unique_ptr<operation_completion_item_t> completion;
-        std::vector<std::uint8_t> target_routing_id;
-        call_id_t id;
-        clock_t::time_point deadline;
-        std::size_t deadline_slot = 0;
-        pending_t *deadline_previous = nullptr;
-        pending_t *deadline_next = nullptr;
-        std::optional<request_identity_t> request;
-    };
-
-    bool take (const call_id_t &id, std::unique_ptr<operation_completion_item_t> &completion);
-    bool index_deadline (const call_id_t &id, clock_t::time_point deadline, pending_t &pending);
-    void unindex_deadline (pending_t &pending) noexcept;
-    void reserve_deadline_visit (std::weak_ptr<operation_registry_t> self);
-
-    template <typename Work> decltype (auto) on_owner (Work &&work) const
-    {
-        if (runtime::state_lane_t::current () == &_owner)
-            return work ();
-        return _owner.run_sync (std::forward<Work> (work));
-    }
-
-    std::unique_ptr<runtime::state_lane_t> _owned_lane;
-    runtime::state_lane_t &_owner;
-    std::shared_ptr<operation_registry_drain_state_t> _drain_state;
-    mutable std::mutex _mutex;
-    std::unordered_map<call_id_t, pending_t *, id_hash_t> _pending;
-    const now_t _now;
-    const clock_t::time_point _deadline_origin;
-    std::function<void ()> _deadline_changed;
-    std::shared_ptr<detail::deadline_state_t> _deadline_visit;
-    std::array<pending_t *, deadline_slot_count> _deadline_heads{};
-    std::array<pending_t *, deadline_slot_count> _deadline_tails{};
-    std::size_t _index_size = 0;
-    // The owner's single reservation is also the polling resource's wake snapshot.
-    std::atomic<clock_t::duration::rep> _next_visit{clock_t::duration::max ().count ()};
-    clock_t::time_point _visit_next;
-    std::size_t _visit_slot = deadline_slot_count;
-    pending_t *_deadline_cursor = nullptr;
-    bool _closed = false;
+    std::shared_ptr<operation_registry_state_t> _state;
 };
 
 } // namespace zlink::framework::runtime::foundation

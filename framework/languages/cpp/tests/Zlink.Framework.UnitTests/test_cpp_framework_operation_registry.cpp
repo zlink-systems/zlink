@@ -25,6 +25,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <fstream>
+#include <filesystem>
 #include <stdexcept>
 #include <thread>
 
@@ -587,6 +588,7 @@ void verify_request_deadline_index_contract ()
     assert (direct.register_operation (
       {1004, 1}, registry_t::clock_t::time_point::max (), [] (auto, auto) {}, {}, {}, {},
       direct_cancel.get_token ()));
+    lane.run_sync ([] {});
     const auto reserved_direct = direct.next_deadline ();
     std::latch entered (1), release (1);
     std::thread blocked ([&] {
@@ -606,6 +608,7 @@ void verify_request_deadline_index_contract ()
     assert (taken && pending == 0 && unchanged && idle_expired == 0);
     assert (direct.index_size () == 1);
     direct.shutdown ();
+    lane.run_sync ([] {});
     std::shared_ptr<registry_t> late;
     {
         runtime::offload_executor_t late_executor;
@@ -664,8 +667,62 @@ void verify_scheduled_deadline_visits (bool drive_visits = true)
     registry.reset ();
 }
 
+void verify_no_global_registry_thread ()
+{
+#ifdef __linux__
+    const auto threads = [] {
+        return std::distance (std::filesystem::directory_iterator ("/proc/self/task"),
+                              std::filesystem::directory_iterator{});
+    };
+    const auto before = threads ();
+    foundation::operation_registry_t registry;
+    assert (threads () == before);
+#endif
+}
+
+void verify_registration_does_not_wait_for_owner ()
+{
+    runtime::offload_executor_t executor;
+    runtime::state_lane_t lane (executor);
+    auto registry = std::make_unique<foundation::operation_registry_t> (lane);
+    std::latch entered (1), release (1);
+    std::atomic_bool returned{false};
+    std::size_t stopped = 0;
+    assert (lane.try_post ([&] {
+        entered.count_down ();
+        release.wait ();
+    }));
+    entered.wait ();
+    std::thread caller ([&] {
+        assert (registry->register_operation (
+          {2001, 1}, foundation::operation_registry_t::clock_t::now (), [] (auto, auto) {}));
+        assert (registry->contains ({2001, 1}));
+        (void) registry->expire (foundation::operation_registry_t::clock_t::now ());
+        (void) registry->index_size ();
+        stopped = registry->shutdown ();
+        registry.reset (); // Posted index and cleanup turns retain their own state.
+        returned.store (true, std::memory_order_release);
+    });
+    const bool independent = wait_until ([&] { return returned.load (std::memory_order_acquire); });
+    release.count_down ();
+    caller.join ();
+    lane.run_sync ([] {});
+    assert (independent);
+    assert (stopped == 1);
+    std::cout << "registry_no_hop owner_blocked_register_expire_index_shutdown=1\n";
+}
+
 int main (int argc, char **argv)
 {
+    if (argc == 2 && std::string_view (argv[1]) == "--no-global-registry-thread") {
+        verify_no_global_registry_thread ();
+        return 0;
+    }
+    if (argc == 2 && std::string_view (argv[1]) == "--registry-no-hop") {
+        zlink::framework::completion_owner_t owner;
+        verify_registration_does_not_wait_for_owner ();
+        return 0;
+    }
     if (argc == 2 && std::string_view (argv[1]) == "--scheduled-deadline-visits") {
         verify_scheduled_deadline_visits ();
         return 0;
