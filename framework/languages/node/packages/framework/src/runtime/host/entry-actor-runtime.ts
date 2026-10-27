@@ -1,3 +1,6 @@
+import type { ApplicationJobOrigin } from '../application-jobs/contracts';
+import type { ZLinkActorRequestTerminal } from '../spots/spot-actor-packet-dispatch';
+import type { ZLinkMessageFollowOrigin } from '../foundation/service-runtime-contracts';
 import type { ActorRef, ZLinkActor } from '../../contracts';
 import type { Message } from '../../contracts/Common/Message';
 import type { ZLinkBackendActorRef, ZLinkBackendSpotNode } from '../backend';
@@ -84,13 +87,16 @@ export class ZLinkEntryActorRuntimeService implements ZLinkEntryActorRuntime {
     await this.requireActorManager().destroyActor(node, entryNodeRid, actor, signal);
   }
 
-  async routePacket(
+  routePacket(
     actorId: string,
     parts: readonly Message[],
     returnResponse?: boolean,
     remoteBoundSessionTarget?: ZLinkRemoteBoundSessionTarget,
-    fallbackActorRef?: ActorRef
-  ): Promise<{ readonly handled: boolean; readonly response?: unknown }> {
+    fallbackActorRef?: ActorRef,
+    origin: ApplicationJobOrigin = 'remote',
+    requestTerminal?: ZLinkActorRequestTerminal,
+    messageFollowOrigin?: ZLinkMessageFollowOrigin
+  ): { readonly handled: boolean; readonly response?: unknown } {
     const spotManager = this.options.spotManager();
     const spotId = this.options.actorManager()?.getState(actorId)?.spotId;
     if (spotId === undefined || spotManager === undefined) {
@@ -98,14 +104,16 @@ export class ZLinkEntryActorRuntimeService implements ZLinkEntryActorRuntime {
     }
     return {
       handled: true,
-      response: await spotManager.dispatchRoutedActorPacket(
-        'remote',
+      response: spotManager.dispatchRoutedActorPacket(
+        origin,
         spotId,
         actorId,
         parts,
         returnResponse,
         remoteBoundSessionTarget,
-        fallbackActorRef
+        fallbackActorRef,
+        requestTerminal,
+        messageFollowOrigin
       )
     };
   }
