@@ -1,0 +1,20 @@
+name: Framework format main dependency cache
+
+# Path filters on this main-only entry point do not suppress merge-queue checks.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "framework/languages/cpp/vcpkg.json"
+      - "**/packages.lock.json"
+      - "**/Directory.Packages.props"
+      - "**/gradle/libs.versions.toml"
+      - "**/*.gradle*"
+      - "**/package-lock.json"
+
+permissions:
+  contents: read
+
+jobs:
+  warm-cache:
+    uses: ./.github/workflows/framework-format.yml
