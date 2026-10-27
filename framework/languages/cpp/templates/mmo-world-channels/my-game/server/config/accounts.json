@@ -1,0 +1,16 @@
+{
+  "Id": "accounts",
+  "HttpEndpoint": "http://127.0.0.1:0",
+  "Worlds": [
+    {
+      "worldId": "A",
+      "name": "World A",
+      "sessionEndpoint": "tcp://127.0.0.1:0"
+    },
+    {
+      "worldId": "B",
+      "name": "World B",
+      "sessionEndpoint": "tcp://127.0.0.1:0"
+    }
+  ]
+}
