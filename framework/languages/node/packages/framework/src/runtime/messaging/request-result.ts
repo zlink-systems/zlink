@@ -1,3 +1,4 @@
+import type { PendingOperation } from '../foundation/operation-registry';
 import { currentFlowContext, runWithFlow } from '../diagnostics/flow-context';
 import type { ZLinkRequest } from '../../contracts/Handlers/Attributes';
 
@@ -15,6 +16,7 @@ const ADMITTED_PROPERTY: PropertyDescriptor = {
 
 /** Transport preparation is separate from typed result delivery. */
 export interface ZLinkRequestResult<TReply> {
+  readonly operation?: PendingOperation<TReply>;
   readonly pending: Promise<unknown>;
   decode(value: unknown): TReply;
   readonly mapFailure: (error: unknown) => unknown;
@@ -98,23 +100,24 @@ export function createZLinkRequest<TReply>(
   let pending: Promise<TReply>;
   try {
     const result = start(confirm);
-    pending = result.pending.then(
-      (value) => {
-        try {
-          const reply = result.decode(value);
-          admission.confirm();
-          return reply;
-        } catch (error) {
-          admission.fail(error);
-          throw error;
-        }
-      },
-      (error: unknown) => {
-        const failure = requestFailure(result, error);
-        admission.fail(failure);
-        throw failure;
+    const onValue = (value: unknown): TReply => {
+      try {
+        const reply = result.decode(value);
+        admission.confirm();
+        return reply;
+      } catch (error) {
+        admission.fail(error);
+        throw error;
       }
-    );
+    };
+    const onFailure = (error: unknown): never => {
+      const failure = requestFailure(result, error);
+      admission.fail(failure);
+      throw failure;
+    };
+    if (result.operation !== undefined && result.operation.mapCaller(onValue, onFailure)) {
+      pending = result.operation.promise;
+    } else pending = result.pending.then(onValue, onFailure);
   } catch (error) {
     admission.fail(error);
     pending = Promise.reject(error);
