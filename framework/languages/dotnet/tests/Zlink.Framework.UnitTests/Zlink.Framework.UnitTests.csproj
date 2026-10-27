@@ -114,6 +114,7 @@
         <Compile Include="Runtime/ProtobufNativePayloadTests.cs"/>
         <Compile Include="Runtime/MeshMailboxReadinessTests.cs"/>
         <Compile Include="Runtime/MeshPermitHandoffTests.cs"/>
+        <Compile Include="Runtime/IsolatedTestProcess.cs"/>
         <Compile Include="Runtime/MeshReceiveWakeTests.cs"/>
         <Compile Include="Runtime/ReceiveClaimCostTests.cs"/>
         <Compile Include="Runtime/MeshReplyPayloadOwnershipTests.cs"/>
