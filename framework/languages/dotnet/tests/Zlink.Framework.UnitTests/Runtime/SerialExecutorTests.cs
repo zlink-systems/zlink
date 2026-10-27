@@ -3139,6 +3139,80 @@ public sealed class SerialExecutorTests
     }
 
     [Fact]
+    public async Task CompleteFollowsMailboxWhenPlacementReturnsToStandalone()
+    {
+        using var errors = new ZLinkRuntimeErrorSink();
+        var failures = new ConcurrentQueue<Exception>();
+        errors.UnhandledCallbackException += failures.Enqueue;
+        var runner = new ZLinkRuntimeTaskRunner(errors, CancellationToken.None);
+        await using var parent = new ZLinkSerialExecutionQueue(
+            runner,
+            errors,
+            CancellationToken.None,
+            ZLinkExecutionLanePolicy.Default,
+            sharedGate: true
+        );
+        await using var mailbox = new ZLinkSerialExecutionQueue(
+            runner,
+            errors,
+            CancellationToken.None
+        );
+        mailbox.BindExecutionOwner(() => parent);
+        var warm = await mailbox.PostAsync(
+            static _ => ValueTask.CompletedTask,
+            CancellationToken.None
+        );
+        await warm.Completion.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(mailbox.HasSharedConsumer);
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        mailbox.BindExecutionOwner(() =>
+        {
+            entered.Set();
+            release.Wait();
+            return null;
+        });
+        var placement = Task.Run(async () => await mailbox.ReleaseExecutionPlacementAsync());
+        Exception? completionFailure = null;
+        var completing = new Thread(() =>
+        {
+            try
+            {
+                mailbox.Complete();
+            }
+            catch (Exception exception)
+            {
+                completionFailure = exception;
+            }
+        });
+        try
+        {
+            Assert.True(entered.Wait(TimeSpan.FromSeconds(5)));
+            completing.Start();
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                        (completing.ThreadState & System.Threading.ThreadState.WaitSleepJoin) != 0,
+                    TimeSpan.FromSeconds(5)
+                )
+            );
+        }
+        finally
+        {
+            release.Set();
+            if ((completing.ThreadState & System.Threading.ThreadState.Unstarted) == 0)
+                completing.Join();
+        }
+        await placement.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Null(completionFailure);
+        await mailbox.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.False(mailbox.HasSharedConsumer);
+        Assert.Empty(failures);
+        await parent.DisposeAsync();
+        await runner.StopAsync();
+    }
+
+    [Fact]
     public async Task ReadinessAfterQueueTerminationDoesNotRecreateProcessResources()
     {
         using var errors = new ZLinkRuntimeErrorSink();
@@ -3155,25 +3229,23 @@ public sealed class SerialExecutorTests
             CancellationToken.None
         );
         await work.Completion.WaitAsync(TimeSpan.FromSeconds(5));
+        var source = typeof(ZLinkSerialExecutionQueue).GetField(
+            "_drainSource",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic
+        )!;
+        Assert.NotNull(source.GetValue(queue));
         await queue.DisposeAsync();
-        ZLinkProcessExecutionPool.ReceiveSource? receiver = null;
-        var factoryCalls = 0;
         try
         {
+            Assert.Null(source.GetValue(queue));
             for (var index = 0; index < 16; index++)
-                queue.NotifyReadiness();
-            receiver = ZLinkProcessExecutionPool.CreateReceiveSource(() =>
             {
-                Interlocked.Increment(ref factoryCalls);
-                return Systems.Zlink.Zlink.CreatePoller();
-            });
-            await receiver.ResumeAsync();
-            Assert.Equal(1, factoryCalls);
+                queue.NotifyReadiness();
+                Assert.Null(source.GetValue(queue));
+            }
         }
         finally
         {
-            if (receiver is not null)
-                await receiver.DisposeAsync();
             await queue.ReleaseExecutionSourceAsync();
             await runner.StopAsync();
         }
