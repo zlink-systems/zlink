@@ -104,6 +104,7 @@ class mesh_node_host_service_t final : public hosted_service_t, public hosted_se
       location_write_intent_t intent = location_write_intent_t::new_claim);
 
   private:
+    friend struct mesh_node_host_service_test_access_t;
     struct actor_destroy_callback_gate_t;
     struct node_receive_role_t;
 

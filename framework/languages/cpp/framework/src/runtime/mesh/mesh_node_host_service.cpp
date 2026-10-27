@@ -3433,10 +3433,15 @@ std::optional<task_t<result_t<void>>> mesh_node_host_service_t::dispatch_applica
   const dispatch_options_t &dispatch_options,
   serial_execution_queue_t::async_completion_t application_completed)
 {
-    if (record.retain_mailbox_reservation)
+    const bool stateful_owner = owner.owner_kind != host::owner_kind_t::node
+                                && owner.owner_kind != host::owner_kind_t::channel;
+    if (stateful_owner && record.retain_mailbox_reservation)
         record.retain_mailbox_reservation ();
-    application_dispatch_terminal_owner_t terminal (node, record.complete_stateful_dispatch,
-                                                    record.release_mailbox_reservation);
+    // Node and ChannelName claims end at handoff; their handler terminal owns
+    // application completion, independently of the next FIFO record's entry.
+    application_dispatch_terminal_owner_t terminal (
+      node, record.complete_stateful_dispatch,
+      stateful_owner ? record.release_mailbox_reservation : std::function<void ()>{});
     std::shared_ptr<application_dispatch_terminal_owner_t> deferred_terminal;
     try {
         // A draining runtime admits no new application work, whatever the target
@@ -3470,9 +3475,7 @@ std::optional<task_t<result_t<void>>> mesh_node_host_service_t::dispatch_applica
           record.before_application_handler, application_completed);
         trace_mesh_application ("framework-dispatch", record, parts.size (),
                                 handled ? "handled" : "not-handled");
-        if (!handled && decoded_header.value ()
-            && (owner.owner_kind == host::owner_kind_t::node
-                || owner.owner_kind == host::owner_kind_t::channel)) {
+        if (!handled && decoded_header.value () && !stateful_owner) {
             detail::mesh_record_dispatcher_t dispatcher (
               *services, *serializers, registration->handlers, *filters, dispatch_options,
               record.before_application_handler);
@@ -3492,7 +3495,7 @@ std::optional<task_t<result_t<void>>> mesh_node_host_service_t::dispatch_applica
                       if (application_completed)
                           application_completed ([] {});
                   });
-                return pending;
+                return std::nullopt;
             }
         }
         if (!terminal_deferred) {

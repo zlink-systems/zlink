@@ -30,6 +30,25 @@
 #include <thread>
 #include <tuple>
 
+namespace zlink::framework::runtime
+{
+struct mesh_node_host_service_test_access_t
+{
+    static auto dispatch (
+      const std::shared_ptr<detail::mesh_node_runtime_t> &node,
+      const std::shared_ptr<detail::mesh_node_builder_state_t> &registration,
+      const host::ready_record_t &owner, const host::receive_record_t &record,
+      std::vector<zlink::message_t> parts, service_provider_t &services,
+      serializer_registry_t &serializers, const handler_registry_t &filters,
+      serial_execution_queue_t::async_completion_t completed)
+    {
+        return mesh_node_host_service_t::dispatch_application (
+          node, registration, owner, record, std::move (parts), false,
+          &services, &serializers, &filters, {}, std::move (completed));
+    }
+};
+} // namespace zlink::framework::runtime
+
 namespace
 {
 using namespace zlink::framework;
@@ -171,6 +190,125 @@ TEST (RoutePayloadOwnership, SuspendedOwnerKeepsTheClaimCursorBeforeItsNextRecor
         ASSERT_TRUE (task->result ());
     EXPECT_EQ (calls_before_resume, 1);
     EXPECT_EQ (calls, 2);
+}
+
+struct fifo_route_handler_t
+{
+    task_completion_source_t<void> resume_first;
+    std::vector<int> starts;
+    task_t<int> request (const int &value, const route_message_context_t &)
+    {
+        starts.push_back (value);
+        if (value == 1)
+            co_await resume_first.task ();
+        co_return value;
+    }
+};
+
+void verify_mesh_owner_handoff (bool channel)
+{
+    auto registration = test::runtime_failure_fixture<detail::mesh_node_builder_state_t> ("mesh");
+    auto node = std::make_shared<detail::mesh_node_runtime_t> (registration);
+    auto options = test::runtime_failure_options (runtime::mesh::raw_mesh_node_options_t{
+      .descriptor = {"cursor", {'c'}, 1, 1, "tcp://127.0.0.1:0", {},
+                     runtime::mesh::service_node_state_t::preparing}});
+    auto host = std::make_shared<runtime::host::public_host_runtime_t> (
+      runtime::host::host_options_t{std::move (options)});
+    service_collection_t collection;
+    collection.add_singleton<fifo_route_handler_t> ();
+    auto services = collection.build_provider ();
+    serializer_registry_t serializers;
+    handler_registry_t filters;
+    registration->handlers.on_request<fifo_route_handler_t, int, int> (
+      "mesh", "fifo", &fifo_route_handler_t::request);
+    auto &handler = services.get_required<fifo_route_handler_t> ();
+    auto &mailbox = host->transport ().mailbox ();
+    const auto kind = channel ? runtime::host::owner_kind_t::channel
+                              : runtime::host::owner_kind_t::node;
+    const auto owner = runtime::mesh::service_mailbox_t::application_owner (kind, "mesh");
+    int entries = 0;
+    std::atomic_int replies{0};
+    std::atomic_int terminals{0};
+    std::promise<void> all_completed;
+    auto completed = all_completed.get_future ();
+    const auto enqueue = [&] (int value) {
+        runtime::mesh::service_mailbox_record_t queued;
+        queued.owner = owner;
+        queued.domain = runtime::mesh::service_mailbox_domain_t::application;
+        queued.before_application_handler = [&] { ++entries; };
+        queued.application = std::make_shared<runtime::host::local_application_dispatch_t> ();
+        auto &application = *queued.application;
+        application.owner.owner_kind = kind;
+        application.owner.channel_name = "mesh";
+        application.owner.domain = runtime::host::ready_domain_t::application;
+        application.record.kind = channel ? runtime::host::record_kind_t::channel_request
+                                          : runtime::host::record_kind_t::node_request;
+        application.record.channel_name = "mesh";
+        application.record.domain = runtime::host::ready_domain_t::application;
+        application.record.source_node_rid = zlink::routing_id_t::from ("source");
+        application.record.reply_token.host = host;
+        application.record.reply_token.local_reply = [&] (const auto &) { ++replies; return true; };
+        runtime::messaging::envelope_header_t header;
+        header.kind = runtime::messaging::message_kind_t::request;
+        header.channel_name = "mesh";
+        header.message_name = "fifo";
+        application.parts = runtime::messaging::envelope_codec_t{}
+          .encode_raw_body_parts (header, zlink::message_t::from (std::to_string (value)))
+          .take_items ();
+        node->application_work_enqueued ();
+        EXPECT_TRUE (mailbox.try_enqueue (std::move (queued)));
+    };
+    const auto drain = [&] {
+        const detail::ambient_context_scope_t infrastructure (nullptr, nullptr, {}, false, true);
+        return host->dispatch_application_owner (
+          owner,
+          [&] (const auto &ready, const auto &record, auto parts) {
+              return runtime::mesh_node_host_service_test_access_t::dispatch (
+                node, registration, ready, record, std::move (parts), services, serializers, filters,
+                [&] (auto finish_turn) {
+                    finish_turn ();
+                    if (++terminals == 3)
+                        all_completed.set_value ();
+                });
+          }, [&] { node->application_work_started (); },
+          [&] { node->application_work_finished (); });
+    };
+    enqueue (1);
+    enqueue (2);
+    auto first_claim = drain ();
+    const auto starts_in_first_claim = handler.starts;
+    enqueue (3);
+    auto second_claim = drain ();
+    const auto starts_before_first_terminal = handler.starts;
+    const auto active_before_first_terminal = node->active_application_callbacks ();
+    const auto entries_before_first_terminal = entries;
+    const auto replies_before_first_terminal = replies.load ();
+    // Cleanup must also complete the pre-fix pending claim before reporting RED.
+    handler.resume_first.complete (result_t<void>::success ());
+    if (auto pending = std::get_if<task_t<std::size_t>> (&first_claim))
+        EXPECT_TRUE (pending->result ());
+    if (auto pending = std::get_if<task_t<std::size_t>> (&second_claim))
+        EXPECT_TRUE (pending->result ());
+    (void) drain ();
+    ASSERT_EQ (completed.wait_for (std::chrono::seconds (2)), std::future_status::ready);
+    EXPECT_EQ (starts_in_first_claim, (std::vector<int>{1, 2}));
+    EXPECT_EQ (starts_before_first_terminal, (std::vector<int>{1, 2, 3}));
+    EXPECT_EQ (active_before_first_terminal, 1u);
+    EXPECT_EQ (entries_before_first_terminal, 3);
+    EXPECT_EQ (replies_before_first_terminal, 2);
+    EXPECT_EQ (node->active_application_callbacks (), 0u);
+    EXPECT_EQ (node->pending_application_callbacks (), 0u);
+    EXPECT_EQ (replies.load (), 3);
+}
+
+TEST (RoutePayloadOwnership, ChannelOwnerStartsFIFOAcrossClaimsBeforeFirstHandlerTerminal)
+{
+    verify_mesh_owner_handoff (true);
+}
+
+TEST (RoutePayloadOwnership, NodeOwnerStartsFIFOAcrossClaimsBeforeFirstHandlerTerminal)
+{
+    verify_mesh_owner_handoff (false);
 }
 
 struct ready_route_handler_t
