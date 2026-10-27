@@ -1376,6 +1376,40 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                                     )
                                     .ConfigureAwait(false);
                         }
+                        catch (ZLinkFrameworkException failure)
+                            when (failure.Kind
+                                    is ZLinkFrameworkErrorKind.NotFound
+                                        or ZLinkFrameworkErrorKind.Unavailable
+                                && stage.RemoteJoinRequest is not null
+                                && stage.RemoteJoinRecovery is not null
+                            )
+                        {
+                            await runtime
+                                .DeliverFailedTransferredActorJoinAsync(
+                                    stage.ActorState,
+                                    ZLinkFrameworkRuntime.CreateCanonicalRoutedActorCompletion(
+                                        stage.RemoteJoinRequest,
+                                        stage.RemoteJoinRecovery.TargetSpotId,
+                                        stage.RemoteJoinRecovery
+                                    ),
+                                    failure,
+                                    cancellationToken
+                                )
+                                .ConfigureAwait(false);
+                            if (
+                                stage.TryBeginSettledCleanup(() =>
+                                    lease.Slot.TryRemoveStage(stage)
+                                ) is
+                                { } previousPhase
+                            )
+                                _ = RegisterTargetAbortLocked(
+                                    key,
+                                    lease.Slot,
+                                    stage,
+                                    previousPhase
+                                );
+                            return;
+                        }
                         catch (ZLinkRelocationTargetSettledException)
                         {
                             //  Location runtime §10: the authority settled
@@ -2132,6 +2166,12 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                     State = ZLinkActorAuthorityState.Ready,
                     CurrentSpotId = savedRecovery.TargetSpotId,
                     CurrentSpotGeneration = savedRecovery.TargetSpotGeneration,
+                    CurrentSpotKind = StringComparer.Ordinal.Equals(
+                        savedRecovery.TargetSpotId,
+                        runtime.GetSpotNodeRuntime(prepare.Target.NodeRid).EntrySpotId
+                    )
+                        ? ZLinkSpotKind.Entry
+                        : ZLinkSpotKind.User,
                     OwnerId = prepare.Target.OwnerId,
                     OwnerLeaseGeneration = prepare.Target.OwnerLeaseGeneration,
                     NodeRid = prepare.Target.NodeRid,
