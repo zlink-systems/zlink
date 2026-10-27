@@ -80,7 +80,8 @@ Missing this structure breaks in the following two ways.
 ## 2. Execution Gate — The Owner's Processing Order
 
 A [handler turn](../00-foundation/02-glossary.en.md#handler-turn) is the execution interval from
-acquiring a gate to run a handler until releasing that authority.
+starting one handler through its terminal completion. For an owner with a gate, it starts by
+acquiring the gate and ends when that authority is released.
 
 - **Actor payloads are submitted to that Actor's queue regardless of execution mode.** Keeping
   queues separate from execution authority preserves each Actor's waiting order and relocation work.
@@ -93,10 +94,14 @@ acquiring a gate to run a handler until releasing that authority.
   different Actors to progress independently.
 - **In `PerActor`, Spot work and each timer use separate gates.** Sharing one gate between two
   timers would make different timers wait on each other.
-- **Node handlers, [ChannelName](../00-foundation/02-glossary.en.md#channelname) handlers, each
-  Spot, and each Actor process records in the order of their applicable gate.** An ordinary async
-  terminal keeps that authority through its completion continuation, so the next application record
-  cannot overlap the current handler's state access.
+- **Each Spot and each Actor process records in the order of their applicable gate.** An ordinary
+  async terminal keeps that authority through its completion continuation, so the next application
+  record cannot overlap the current handler's state access.
+- **Node handlers and [ChannelName](../00-foundation/02-glossary.en.md#channelname) handlers have no
+  execution gate.** Each record's handler turn is independent. These handlers hold no state; state
+  that must persist is owned by Spots and Actors. Records start their handlers in the order
+  received, and the next record does not wait for the previous handler to complete. The same handler runs concurrently for several records, so the
+  application owns synchronization of any application state shared between handlers.
 - **Two application turns on the same gate never run concurrently.** `Yield` transfers authority
   as specified in [§3](#yield-gate-and-claim); [§16](#yield-call-eligibility) specifies availability
   by execution mode and call.

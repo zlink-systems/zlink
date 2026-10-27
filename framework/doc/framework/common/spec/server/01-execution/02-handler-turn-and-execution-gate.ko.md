@@ -75,8 +75,9 @@ flowchart TB
 <a id="execution-gate"></a>
 ## 2. Execution gate — owner 처리 순서
 
-Gate를 얻어 handler를 실행하고 그 권한을 반납하기까지의 실행 구간을
-[handler turn](../00-foundation/02-glossary.ko.md#handler-turn)이라고 한다.
+Handler 하나를 시작해 terminal completion까지 실행하는 구간을
+[handler turn](../00-foundation/02-glossary.ko.md#handler-turn)이라고 한다. Gate가 있는 owner에서는
+gate를 얻어 시작하고 그 권한을 반납할 때 끝난다.
 
 - **Actor payload는 실행 mode와 무관하게 해당 Actor queue에 제출한다.** Actor별 대기
   순서와 이동할 때 보관할 작업을 구분하기 위해 queue와 실행 권한을 분리한다.
@@ -89,10 +90,14 @@ Gate를 얻어 handler를 실행하고 그 권한을 반납하기까지의 실�
   서로 다른 Actor의 실행을 독립적으로 진행하기 위한 범위다.
 - **`PerActor`의 Spot 작업과 각 timer는 각각 별도 gate를 사용한다.** Timer 두 개를 같은
   gate로 묶으면 서로 다른 timer가 서로를 기다리게 된다.
-- **Node handler, [ChannelName](../00-foundation/02-glossary.ko.md#channelname) handler,
-  각 Spot과 각 Actor는 자신에게 적용되는 gate의 순서로 record를 처리한다.**
+- **각 Spot과 각 Actor는 자신에게 적용되는 gate의 순서로 record를 처리한다.**
   일반 비동기 terminal은 완료 continuation까지 그 권한을 유지하므로 다음 application
   record가 현재 handler의 상태 접근과 겹치지 않는다.
+- **Node handler와 [ChannelName](../00-foundation/02-glossary.ko.md#channelname) handler에는
+  execution gate가 없다.** Handler turn은 record마다 독립이다. 이 handler는 상태를 갖지
+  않으며, 유지할 상태는 Spot·Actor가 소유한다. Record는 받은 순서대로 handler를 시작하고,
+  다음 record는 앞 handler의 완료를 기다리지 않는다. 같은 handler가 여러 record에서 동시에 진행되므로, handler 사이에서
+  공유하는 application 상태의 동기화는 application이 소유한다.
 - **같은 gate의 application turn 두 개를 동시에 실행하지 않는다.** `Yield`의 권한
   이전은 [§3](#yield-gate-and-claim)을 따르며, 실행 mode와 call별 제공 범위는
   [§16](#yield-call-eligibility)에서 확인한다.
