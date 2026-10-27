@@ -24,6 +24,7 @@ fi
 source "$SCRIPT_DIR/../redis-common.sh"
 source "$SCRIPT_DIR/../sample-build-common.sh"
 zlink_cpp_sample_prepare_build
+zlink_cpp_sample_log_step "build"
 cmake --build "$BUILD_DIR" --parallel 2 --target \
   sample_cpp_framework_bingo_api \
   sample_cpp_framework_bingo_matchmaking \
@@ -33,7 +34,7 @@ cmake --build "$BUILD_DIR" --parallel 2 --target \
   $(zlink_cpp_sample_framework_test_targets \
     test_cpp_framework_sample_parity \
     zlink_cpp_framework_mesh_node_vertical_test \
-    test_cpp_framework_actor_gateway) >/dev/null
+    test_cpp_framework_actor_gateway)
 
 if [[ ! -x "$BIN_DIR/sample_cpp_framework_bingo_api" && -x "$BIN_DIR/linux-ninja-debug/sample_cpp_framework_bingo_api" ]]; then
   BIN_DIR="$BIN_DIR/linux-ninja-debug"
@@ -211,6 +212,7 @@ if ! command -v docker >/dev/null 2>&1; then
   echo "Docker is required to run the Bingo sample." >&2
   exit 1
 fi
+zlink_cpp_sample_log_step "Redis start"
 zlink_redis_start_scoped_assign REDIS_CONTAINER redis_port \
   "zlink-redis-cpp-sample-bingo" "redis:7-alpine"
 BINGO_REDIS_ENDPOINT="127.0.0.1:${redis_port}"
@@ -281,7 +283,9 @@ start_server() {
   # marker while preserving both streams in the failure bundle.
   stdbuf -oL -eL "$binary" "$@" >"$LOG_DIR/${name}.stdout.log" \
     2>"$LOG_DIR/${name}.trace.log" &
-  PIDS+=("$!")
+  local pid=$!
+  PIDS+=("$pid")
+  zlink_cpp_sample_log_step "process start: $name pid=$pid"
 }
 
 start_server matchmaking "$MATCHMAKING_BIN" --config="$CONFIG_DIR/matchmaking.json"
