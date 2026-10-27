@@ -1,3 +1,4 @@
+#include <zlink/json.hpp>
 #include "../Shared/contracts.hpp"
 
 #include <zlink/http_client.hpp>
@@ -24,16 +25,18 @@ struct import_response_t
     int imported = 0;
 };
 
-inline void from_json (const nlohmann::json &json, weight_response_t &value)
+template <> struct zlink::json::dto_traits<weight_response_t>
 {
-    value.channel = json.value ("channel", "");
-    value.weight = json.value ("weight", 0);
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("channel", &weight_response_t::channel),
+      zlink::json::field ("weight", &weight_response_t::weight)};
+};
 
-inline void from_json (const nlohmann::json &json, import_response_t &value)
+template <> struct zlink::json::dto_traits<import_response_t>
 {
-    value.imported = json.value ("imported", 0);
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("imported", &import_response_t::imported)};
+};
 
 const char *kind_name (fw::framework_error_kind_t kind)
 {
