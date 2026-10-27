@@ -156,8 +156,11 @@ result_t<std::vector<std::uint8_t>> to_packet_payload (const TMessage &message, 
 template <typename TMessage>
 result_t<std::vector<std::uint8_t>> to_packet_payload (const TMessage &message, ...)
 {
-    const auto bytes = zlink::detail::json_profile::dump (nlohmann::json (message));
-    return result_t<std::vector<std::uint8_t>>::success ({bytes.begin (), bytes.end ()});
+    std::string error;
+    const auto bytes = zlink::detail::json_profile::try_encode (message, &error);
+    if (!bytes)
+        return result_t<std::vector<std::uint8_t>>::failure (error_code_t::send_failed, error);
+    return result_t<std::vector<std::uint8_t>>::success ({bytes->begin (), bytes->end ()});
 }
 
 template <typename TMessage>
@@ -183,13 +186,17 @@ auto apply_packet_payload (TMessage &message,
                            const std::vector<std::uint8_t> &payload,
                            int) -> decltype (from_stream_payload (codec, payload, message), bool ())
 {
+    if constexpr (std::same_as<decltype (from_stream_payload (codec, payload, message)), bool>) {
+        return from_stream_payload (codec, payload, message);
+    } else {
 #if !ZLINK_HAS_EXCEPTIONS
-    if (codec == codec_t::json
-        && !zlink::detail::json_profile::try_parse (payload.begin (), payload.end ()))
-        return false;
+        if (codec == codec_t::json
+            && !zlink::detail::json_profile::try_parse (payload.begin (), payload.end ()))
+            return false;
 #endif
-    from_stream_payload (codec, payload, message);
-    return true;
+        from_stream_payload (codec, payload, message);
+        return true;
+    }
 }
 
 template <typename TMessage>
@@ -213,17 +220,12 @@ auto apply_packet_payload (TMessage &message,
 template <typename TMessage>
 bool apply_packet_payload (TMessage &message, const std::vector<std::uint8_t> &payload, ...)
 {
-#if ZLINK_HAS_EXCEPTIONS
-    message = zlink::detail::json_profile::parse (payload.begin (), payload.end ())
-                .template get<TMessage> ();
-    return true;
-#else
-    const auto parsed = zlink::detail::json_profile::try_parse (payload.begin (), payload.end ());
+    auto parsed =
+      zlink::detail::json_profile::try_decode<TMessage> (payload.begin (), payload.end ());
     if (!parsed)
         return false;
-    message = parsed->template get<TMessage> ();
+    message = std::move (*parsed);
     return true;
-#endif
 }
 
 /* Decodes a wire payload into TMessage and reports a failure by value. A
