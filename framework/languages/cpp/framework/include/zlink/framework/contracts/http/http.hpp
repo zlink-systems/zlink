@@ -14,6 +14,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <typeindex>
 #include <typeinfo>
@@ -84,6 +85,109 @@ struct http_request_t
     std::string content_type;
     std::string remote_endpoint;
 };
+
+namespace detail
+{
+template <typename T> bool normalize_http_uri_value (const std::string &text, std::string &out)
+{
+    if constexpr (zlink::detail::json_profile::optional_type<T>::value) {
+        return normalize_http_uri_value<
+          typename zlink::detail::json_profile::optional_type<T>::value_type> (text, out);
+    } else if constexpr (std::is_same_v<T, bool>) {
+        if (text != "true" && text != "false")
+            return false;
+        out = text;
+        return true;
+    } else if constexpr (std::is_integral_v<T>) {
+        T value{};
+        const auto parsed = std::from_chars (text.data (), text.data () + text.size (), value);
+        if (parsed.ec != std::errc{} || parsed.ptr != text.data () + text.size ())
+            return false;
+        auto encoded = zlink::detail::json_profile::try_encode (value);
+        if (!encoded)
+            return false;
+        out = std::move (*encoded);
+        return true;
+    } else if constexpr (std::is_floating_point_v<T>) {
+        T value{};
+        const auto parsed = std::from_chars (text.data (), text.data () + text.size (), value,
+                                             std::chars_format::general);
+        if (parsed.ec != std::errc{} || parsed.ptr != text.data () + text.size ())
+            return false;
+        auto encoded = zlink::detail::json_profile::try_encode (value);
+        if (!encoded)
+            return false;
+        out = std::move (*encoded);
+        return true;
+    } else {
+        return zlink::detail::json_profile::write_string (text, out, nullptr);
+    }
+}
+
+template <typename T>
+std::string bind_typed_http_uri (const http_request_t &http, const std::string &body)
+{
+    std::string error;
+    const std::string_view binding_body = body.empty () ? std::string_view ("{}") : body;
+    auto binding =
+      zlink::detail::json_profile::try_parse (binding_body.begin (), binding_body.end (), &error);
+    if (!binding)
+        throw framework_exception_t (framework_error_kind_t::protocol_error,
+                                     error.empty () ? "invalid HTTP JSON body" : error);
+    if (!binding->is_object ())
+        throw framework_exception_t (framework_error_kind_t::protocol_error,
+                                     "HTTP JSON body must be an object");
+    if constexpr (zlink::detail::json_profile::has_dto<T>) {
+        std::apply (
+          [&] (auto... field) {
+              (
+                [&] {
+                    const std::string name (field.name);
+                    const auto route = http.route_values.find (name);
+                    const auto query = http.query_values.find (name);
+                    const auto *text = route != http.route_values.end ()   ? &route->second
+                                       : query != http.query_values.end () ? &query->second
+                                                                           : nullptr;
+                    if (!text)
+                        return;
+                    using member =
+                      zlink::detail::json_profile::member_type<decltype (field.member)>;
+                    std::string value_text;
+                    if (!normalize_http_uri_value<typename member::value> (*text, value_text))
+                        throw framework_exception_t (framework_error_kind_t::protocol_error,
+                                                     std::string (route != http.route_values.end ()
+                                                                    ? "invalid route "
+                                                                    : "invalid query ")
+                                                       + name);
+                    error.clear ();
+                    auto value = zlink::detail::json_profile::try_parse (value_text.begin (),
+                                                                         value_text.end (), &error);
+                    if (!value)
+                        throw framework_exception_t (framework_error_kind_t::protocol_error,
+                                                     error.empty () ? "invalid HTTP URI value"
+                                                                    : error);
+                    (*binding)[name] = std::move (*value);
+                }(),
+                ...);
+          },
+          zlink::json::dto_traits<T>::fields);
+        error.clear ();
+        auto encoded = zlink::detail::json_profile::try_encode (*binding, &error);
+        if (!encoded)
+            throw framework_exception_t (framework_error_kind_t::protocol_error,
+                                         error.empty () ? "invalid HTTP JSON body" : error);
+        return std::move (*encoded);
+    } else {
+        for (const auto &[key, value] : http.query_values) {
+            (*binding)[key] = value;
+        }
+        for (const auto &[key, value] : http.route_values) {
+            (*binding)[key] = value;
+        }
+        return binding->dump ();
+    }
+}
+} // namespace detail
 
 struct http_response_t
 {
@@ -607,7 +711,8 @@ class http_options_builder_t
                     using request_type = typename THandler::request_type;
                     using reply_type = typename THandler::reply_type;
                     const auto request = serializers->template get<request_type> ().deserialize (
-                      encoded_payload_t::from_string (body));
+                      encoded_payload_t::from_string (
+                        detail::bind_typed_http_uri<request_type> (http, body)));
                     validate_request (request, context);
                     auto handler_result = invoke_typed_handler (handler, request, http, context);
                     co_return co_await resolve_handler_response<reply_type> (
@@ -658,7 +763,7 @@ class http_options_builder_t
         if (_serializers->contains (std::type_index (typeid (T)))) {
             return;
         }
-        if constexpr (detail::is_json_serializer_compatible_v<T>) {
+        if constexpr (zlink::detail::json_profile::is_json_candidate<T> ()) {
             _serializers->template add<T> (
               [] (const T &value) {
                   //  from_raw only borrows the message buffer, and the
