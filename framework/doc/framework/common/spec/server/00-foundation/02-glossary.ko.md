@@ -922,7 +922,7 @@ Application은 owner RID나 endpoint를 지정하지 않는다.
 <a id="handler-turn"></a>
 ### Handler turn
 
-Handler 하나를 시작해 terminal completion까지 실행하는 구간이다. Spot·Actor·Session은 execution gate를 얻어 시작하고 그 권한을 반납할 때 끝난다. Node·Channel handler에는 gate가 없으며 turn은 record마다 독립이다([실행 계약 §2](../01-execution/02-handler-turn-and-execution-gate.ko.md#execution-gate)).
+Handler가 실행되는 구간이다. 경계는 [실행 계약 §2·§3](../01-execution/02-handler-turn-and-execution-gate.ko.md#execution-gate)이 정한다.
 
 | 항목 | 내용 |
 |---|---|

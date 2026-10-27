@@ -973,7 +973,7 @@ A runtime mechanism that assigns execution authority so callbacks in one scope d
 <a id="handler-turn"></a>
 ### Handler Turn
 
-The interval from starting one handler through its terminal completion. Spots, Actors, and Sessions start it by acquiring an execution gate and end it by releasing that authority. Node and Channel handlers have no gate, and each record's turn is independent ([execution contract §2](../01-execution/02-handler-turn-and-execution-gate.en.md#execution-gate)).
+The interval in which a handler runs. Its boundaries are defined by [execution contract §2–§3](../01-execution/02-handler-turn-and-execution-gate.en.md#execution-gate).
 
 | Item | Content |
 |---|---|

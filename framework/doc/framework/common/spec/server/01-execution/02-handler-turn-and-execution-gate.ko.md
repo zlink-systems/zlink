@@ -75,9 +75,10 @@ flowchart TB
 <a id="execution-gate"></a>
 ## 2. Execution gate — owner 처리 순서
 
-Handler 하나를 시작해 terminal completion까지 실행하는 구간을
-[handler turn](../00-foundation/02-glossary.ko.md#handler-turn)이라고 한다. Gate가 있는 owner에서는
-gate를 얻어 시작하고 그 권한을 반납할 때 끝난다.
+[Handler turn](../00-foundation/02-glossary.ko.md#handler-turn)은 다음 구간이다.
+Gate가 있는 실행 범위에서는 gate 획득부터 반납까지이며, `Yield` 뒤 continuation은 새 turn에서
+실행한다. Gate가 없는 Node·ChannelName handler에서는 record의 handler 시작부터 terminal
+completion까지다.
 
 - **Actor payload는 실행 mode와 무관하게 해당 Actor queue에 제출한다.** Actor별 대기
   순서와 이동할 때 보관할 작업을 구분하기 위해 queue와 실행 권한을 분리한다.
@@ -265,7 +266,7 @@ Actor Join은 [01. Submit과 완료](01-submit-and-completion.ko.md)의 terminat
 실행 권한은 앞선 작업의 완료에 다음 작업을 잇는 방식으로도, lock과 대기열로도 만들 수
 있다. 언어에 맞는 쪽을 사용한다. 다만 구현 방식에 따라오는 제약이 있다.
 
-**가져오기는 배타권 획득을 겸한다.** 한 owner당 처리 권한은 동시에 하나만 존재한다.
+**가져오기는 배타권 획득을 겸한다.** Gate가 있는 owner당 처리 권한은 동시에 하나만 존재한다.
 처리 권한마다 재사용 없는 번호를 붙여 늦은 완료가 자기 것인지 판단한다 — 이 fencing
 번호는 내부 확인 조건이다.
 

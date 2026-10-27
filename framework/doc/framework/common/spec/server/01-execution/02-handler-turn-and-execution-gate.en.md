@@ -79,9 +79,10 @@ Missing this structure breaks in the following two ways.
 <a id="execution-gate"></a>
 ## 2. Execution Gate — The Owner's Processing Order
 
-A [handler turn](../00-foundation/02-glossary.en.md#handler-turn) is the execution interval from
-starting one handler through its terminal completion. For an owner with a gate, it starts by
-acquiring the gate and ends when that authority is released.
+A [handler turn](../00-foundation/02-glossary.en.md#handler-turn) is the following interval. For a
+scope with a gate, it extends from gate acquisition to release, and a continuation after `Yield`
+runs in a new turn. For a Node or ChannelName handler without a gate, it extends from the record's
+handler start through terminal completion.
 
 - **Actor payloads are submitted to that Actor's queue regardless of execution mode.** Keeping
   queues separate from execution authority preserves each Actor's waiting order and relocation work.
@@ -291,7 +292,7 @@ fits the language. But each implementation approach comes with its own
 constraints.
 
 **Acquiring it also acquires exclusivity.** Only one processing
-authority per owner exists at a time. Each processing authority is given a
+authority per owner with a gate exists at a time. Each processing authority is given a
 non-reusable number used to decide whether a late completion belongs to
 it — this fencing number is an internal confirmation condition.
 
