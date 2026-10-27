@@ -25,9 +25,10 @@ class client_call_codec_t
                      std::string message_name,
                      std::chrono::milliseconds timeout = std::chrono::milliseconds (0),
                      std::optional<std::string> topic = std::nullopt,
-                     std::optional<std::string> source = std::nullopt) const;
+                     std::optional<std::string> source = std::nullopt,
+                     std::string content_type = zlink::detail::json_profile::content_type) const;
 
-    message_parts_t encode_payload_parts (envelope_header_t header,
+    message_parts_t encode_payload_parts (envelope_header_t &&header,
                                           serialized_payload_t serialized) const
     {
         header.content_type = std::move (serialized.content_type);
@@ -44,7 +45,9 @@ class client_call_codec_t
                                             serializer_registry_t &serializers,
                                             TEncodePayload &&encode_payload) const
     {
-        auto header = create_envelope (message_kind_t::command, channel_name, packet_name);
+        auto header =
+          create_envelope (message_kind_t::command, channel_name, packet_name,
+                           std::chrono::milliseconds (0), std::nullopt, std::nullopt, {});
         header.metadata = metadata;
         detail::message_flow_tracer_t (dispatch).trace (message_flow_outcome_t::sent, [&] {
             return message_flow_event_t{message_flow_outcome_t::sent,
