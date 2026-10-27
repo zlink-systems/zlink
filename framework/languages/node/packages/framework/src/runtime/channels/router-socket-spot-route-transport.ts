@@ -101,7 +101,8 @@ export class ZLinkRouterSocketSpotRouteTransport {
           closeMessages
         );
       },
-      existing
+      existing,
+      closeMessages
     );
   }
 }

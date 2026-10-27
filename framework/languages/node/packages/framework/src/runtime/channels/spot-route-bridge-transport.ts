@@ -99,7 +99,8 @@ export class ZLinkSpotRouteBridgeTransport {
           closeMessages
         );
       },
-      existing
+      existing,
+      closeMessages
     );
   }
 

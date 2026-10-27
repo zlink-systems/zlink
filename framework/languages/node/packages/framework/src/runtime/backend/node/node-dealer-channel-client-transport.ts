@@ -1,7 +1,7 @@
-import { waitRequestReply } from '../../messaging/request-deadline';
 import { RequestRuntime } from '../../foundation/request-runtime';
 import {
   prepareZLinkRequestReply,
+  identityRequestReply,
   rejectZLinkRequestReply,
   type ZLinkRequestResult
 } from '../../messaging/request-result';
@@ -68,6 +68,11 @@ export class ZLinkDealerChannelClientTransport implements ZLinkChannelClientTran
     metadata: ReadonlyMap<string, string> = EMPTY_METADATA,
     onAdmitted?: () => void
   ): ZLinkRequestResult<TReply> {
+    try {
+      throwIfAborted(signal);
+    } catch (error) {
+      return rejectZLinkRequestReply(error);
+    }
     const requestOperation = this.requests.begin(timeoutMs, signal);
     try {
       throwIfAborted(signal);
@@ -95,11 +100,7 @@ export class ZLinkDealerChannelClientTransport implements ZLinkChannelClientTran
         },
         'channel request'
       );
-      const observed = this.requests.run(requestOperation, () =>
-        waitRequestReply(pending, 'Channel request', requestOperation, undefined, (parts) => {
-          for (const part of parts) part.close();
-        })
-      );
+      const observed = this.requests.run(requestOperation, () => pending, closeReply);
       return prepareZLinkRequestReply(observed, (reply) => {
         try {
           return decodeChannelReply<TReply>(reply);
@@ -109,7 +110,10 @@ export class ZLinkDealerChannelClientTransport implements ZLinkChannelClientTran
       });
     } catch (error) {
       requestOperation.fail(error);
-      return rejectZLinkRequestReply(error);
+      return prepareZLinkRequestReply(
+        requestOperation.promise as Promise<TReply>,
+        identityRequestReply
+      );
     }
   }
 
@@ -154,4 +158,8 @@ export class ZLinkDealerChannelClientTransport implements ZLinkChannelClientTran
     throwIfAborted(signal);
     return this.tryPublish(channelName, topic, packetName, event, metadata);
   }
+}
+
+function closeReply(parts: readonly { close(): void }[]): void {
+  for (const part of parts) part.close();
 }

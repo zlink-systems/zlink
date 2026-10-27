@@ -117,7 +117,8 @@ export class ZLinkSpotNodeRouteTransport {
           closeMessages
         );
       },
-      existing
+      existing,
+      closeMessages
     );
   }
 }

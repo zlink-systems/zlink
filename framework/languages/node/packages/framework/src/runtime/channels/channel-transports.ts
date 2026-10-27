@@ -65,6 +65,7 @@ import type {
 import {
   ZLinkChannelMessageKind,
   decodeChannelReply,
+  closeMessages,
   encodeChannelEnvelopeParts,
   newChannelCorrelationId,
   type ZLinkChannelEnvelopeCodecRegistry
@@ -480,6 +481,21 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
     onAdmitted: (() => void) | undefined,
     existing?: PendingOperation<unknown>
   ): ZLinkRequestResult<TReply> {
+    if (existing === undefined)
+      return this.requests.prepare(timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS, signal, (entry) =>
+        this.requestScoped<TReply>(
+          meshName,
+          targetNodeRid,
+          packetName,
+          request,
+          timeoutMs,
+          signal,
+          metadata,
+          onAdmitted,
+          entry
+        )
+      );
+
     let node: ZLinkBackendMeshNode | undefined;
     const requestOperation = this.requests.begin(
       timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
@@ -498,13 +514,13 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
             timeoutMs,
             signal,
             metadata,
-            onAdmitted
+            onAdmitted,
+            requestOperation
           ),
           identityRequestReply
         );
       }
     } catch (error) {
-      requestOperation.fail(error);
       return rejectZLinkRequestReply(error);
     }
     const correlationId = newChannelCorrelationId();
@@ -716,6 +732,21 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
     onAdmitted: (() => void) | undefined,
     existing?: PendingOperation<unknown>
   ): ZLinkRequestResult<TReply> {
+    if (existing === undefined)
+      return this.requests.prepare(timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS, signal, (entry) =>
+        this.requestToChannelScoped<TReply>(
+          meshName,
+          channelName,
+          packetName,
+          request,
+          timeoutMs,
+          signal,
+          metadata,
+          onAdmitted,
+          entry
+        )
+      );
+
     const requestOperation = this.requests.begin(
       timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
       signal,
@@ -751,7 +782,6 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
             requestOperation
           );
         } catch (error) {
-          requestOperation.fail(error);
           pending = Promise.reject(error);
         }
       }
@@ -895,6 +925,17 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
     request: unknown,
     options: ZLinkSpotRoutedRequestOptions
   ): ZLinkRequestResult<TReply> {
+    if (options.requestOperation === undefined)
+      return this.requests.prepare(
+        options.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+        options.signal,
+        (entry) =>
+          this.requestToSpotScoped<TReply>(spotRouteTarget, request, {
+            ...options,
+            requestOperation: entry
+          })
+      );
+
     const requestOperation = this.requests.begin(
       options.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
       options.signal,
@@ -967,7 +1008,6 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
           requestOperation
         );
       } catch (error) {
-        requestOperation.fail(error);
         completionPromise = Promise.reject(error);
       }
       return prepareZLinkRequestReply(
@@ -1134,7 +1174,8 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
           requestOperation
         );
       },
-      options.requestOperation
+      options.requestOperation,
+      closeMessages
     );
   }
 

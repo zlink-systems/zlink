@@ -1,3 +1,4 @@
+import { waitRequestReply } from '../../messaging/request-deadline';
 import { constants as osConstants } from 'node:os';
 import type { PendingOperation } from '../../foundation/operation-registry';
 import { remainingRequestTimeout, requestTerminalError } from '../../messaging/request-deadline';
@@ -202,19 +203,22 @@ export async function submitBindingRequest(
     current ??= operation.message(Buffer.alloc(0));
     if (timeoutMs !== undefined) {
       current = current.timeout(
-        remainingRequestTimeout('Request', pending.deadlineMs) ?? timeoutMs
+        Math.min(timeoutMs, remainingRequestTimeout('Request', pending.deadlineMs) ?? timeoutMs)
       );
     }
     const physical = bindingRequestReply(current.submit(), recordReceived, onAdmitted);
+    const caller = pending.hasObserver()
+      ? waitRequestReply(physical, 'Request', pending, undefined, closeBindingReply)
+      : (pending.promise as Promise<readonly unknown[]>);
     void physical.then(
       (parts) => {
-        if (!pending.complete(parts)) closeBindingReply(parts);
+        if (!pending.reply(parts) && caller === pending.promise) closeBindingReply(parts);
       },
-      (error) => pending.fail(translateBindingResultError(error))
+      (error) => pending.replyFailure(translateBindingResultError(error))
     );
-    return (await pending.promise) as readonly unknown[];
+    return await caller;
   } catch (error) {
-    pending.fail(translateBindingResultError(error));
+    pending.replyFailure(translateBindingResultError(error));
     throw requestTerminalError('Request', translateBindingResultError(error));
   }
 }

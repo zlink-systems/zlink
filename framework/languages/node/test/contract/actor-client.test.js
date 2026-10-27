@@ -7,7 +7,6 @@ const {
 } = require('../../packages/framework/dist/runtime/messaging/submission-result');
 const { Message, RequestResult } = require('@zlink-systems/zlink');
 const { SubmitResult } = require('../../packages/framework/dist/runtime/backend/runtime-values');
-const { ZLinkAbortError } = require('../../packages/framework/dist/runtime/abort');
 const { createHook } = require('node:async_hooks');
 const { waitActorReply } = require('../../packages/framework/dist/runtime/actors/actor-request-deadline');
 
@@ -959,7 +958,10 @@ test('Store abort during actor resolution observes its rejected result', async (
     nodeProvider: () => ({ requestToActor() { assert.fail('aborted Store cannot submit'); } }),
     completionTableProvider: () => undefined, locationResolver: () => resolver
   });
-  await assert.rejects(client.requestToActor('actor-1', new ActorAsk('ping')).timeout(20).submit(controller.signal), ZLinkAbortError);
+  await assert.rejects(
+    client.requestToActor('actor-1', new ActorAsk('ping')).timeout(20).submit(controller.signal),
+    (error) => error === controller.signal.reason
+  );
   await new Promise(setImmediate);
   assert.equal(require('node:events').getEventListeners(controller.signal, 'abort').length, 0);
 });
@@ -1031,7 +1033,7 @@ for (const stage of ['route', 'handoff', 'native']) {
       return register.apply(this, args);
     });
     const request = client.requestToActor('actor-1', new ActorAsk('ping')).timeout(20).submit(controller.signal);
-    const terminal = assert.rejects(request, error => stage === 'native' ? error === controller.signal.reason : error instanceof ZLinkAbortError);
+    const terminal = assert.rejects(request, (error) => error === controller.signal.reason);
     await entered;
     controller.abort();
     await terminal;
@@ -1074,7 +1076,10 @@ test('actor request without a deadline remains cancellable during handoff', asyn
     locationResolver: () => createResolver(),
     handoffCapture: () => { started(); return blocked; }
   });
-  const terminal = assert.rejects(client.requestToActor('actor-1', new ActorAsk('ping')).submit(controller.signal), ZLinkAbortError);
+  const terminal = assert.rejects(
+    client.requestToActor('actor-1', new ActorAsk('ping')).submit(controller.signal),
+    (error) => error === controller.signal.reason
+  );
   await entered;
   controller.abort();
   await terminal;

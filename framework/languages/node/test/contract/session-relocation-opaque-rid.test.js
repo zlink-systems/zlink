@@ -93,19 +93,26 @@ async function relocationHarness(ids, nativeBinding = false, hooks = {}) {
   );
   if (nativeBinding) {
     sessionService.lookupActor = (_node, actorId) =>
-      backend.observeStateful(OperationKind.ActorLookup, {
-        ...new (require('../../packages/framework/dist/runtime/foundation/operation-registry').OperationRegistry)().register(
-          1000
-        ),
-        promise: Promise.resolve({
-          terminalResult: RequestResult.Ok,
-          failureCode: 0,
-          kindData: {
-            kind: 'actorLookupCompletion',
-            location: { actor: { actorId, generation: 5n, nodeRid: ids.source } }
+      backend.observeStateful(
+        OperationKind.ActorLookup,
+        Object.assign(
+          Object.create(
+            new (require('../../packages/framework/dist/runtime/foundation/operation-registry').OperationRegistry)().register(
+              1000
+            )
+          ),
+          {
+            promise: Promise.resolve({
+              terminalResult: RequestResult.Ok,
+              failureCode: 0,
+              kindData: {
+                kind: 'actorLookupCompletion',
+                location: { actor: { actorId, generation: 5n, nodeRid: ids.source } }
+              }
+            })
           }
-        })
-      });
+        )
+      );
   }
   const context = host.streamBindingRuntime.createSessionContext(stream);
   const actorId = hooks.actorId ?? 'opaque-relocation-actor';

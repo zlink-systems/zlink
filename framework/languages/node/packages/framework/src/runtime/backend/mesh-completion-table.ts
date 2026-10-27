@@ -1,5 +1,5 @@
 import { requestTerminalError } from '../messaging/request-deadline';
-import type { OperationHandle } from '../foundation/operation-registry';
+import { OperationCancelledError, type OperationHandle } from '../foundation/operation-registry';
 import { ZLinkBufferMessage as Message } from './runtime-message';
 import type { Message as ZLinkMessage } from '../../contracts/Common/Message';
 import type {
@@ -165,6 +165,11 @@ export class ZLinkMeshCompletionTable {
     signal?: AbortSignal,
     requestOperation?: OperationHandle<unknown>
   ): Promise<ZLinkMeshCompletion> {
+    if (requestOperation?.promise !== undefined && !requestOperation.isPending()) {
+      return requestOperation.promise.then(() => {
+        throw new OperationCancelledError(requestOperation.id, 'Request is already terminal.');
+      });
+    }
     if (this.isDisposed()) {
       requestOperation?.takeFailure(new Error('Mesh completion table is disposed.'));
       return Promise.reject(new Error('Mesh completion table is disposed.'));
@@ -217,7 +222,7 @@ export class ZLinkMeshCompletionTable {
         if (signal?.aborted === true) slot.abort();
       } catch (error) {
         if (slot.generation !== generation || slot.resolve !== resolve) return;
-        if (slot.operation !== undefined && !slot.operation.takeFailure(error)) return;
+        if (slot.operation !== undefined && !slot.operation.replyFailure(error)) return;
         this.releaseSlot(index);
         reject(error);
       }
@@ -257,7 +262,7 @@ export class ZLinkMeshCompletionTable {
     };
     if (slot.operation === undefined) deliver();
     else {
-      slot.operation.complete(record);
+      slot.operation.reply(record);
       deliver();
     }
   }

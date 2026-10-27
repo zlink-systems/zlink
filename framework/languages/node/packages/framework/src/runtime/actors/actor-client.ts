@@ -246,11 +246,8 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
       const deadlineMs = requestOperation.deadlineMs;
       const deadlineUnixMs =
         effectiveTimeoutMs === undefined ? undefined : Date.now() + effectiveTimeoutMs;
-      const route = await waitActorReply(
-        this.resolveActorRoute(actorId, signal, deadlineMs, requestOperation),
-        actorId,
-        requestOperation
-      );
+      const route = await this.resolveActorRoute(actorId, signal, deadlineMs, requestOperation);
+      if (!requestOperation.isPending()) return requestOperation.promise as Promise<TReply>;
       if (
         waitPolicy === 'async' &&
         sourceSpotId !== undefined &&

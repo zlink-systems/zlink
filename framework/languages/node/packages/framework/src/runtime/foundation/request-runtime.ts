@@ -7,10 +7,19 @@ import {
   type PendingOperation
 } from './operation-registry';
 import { createAbortError } from '../abort';
+import {
+  identityRequestReply,
+  rejectZLinkRequestReply,
+  type ZLinkRequestResult
+} from '../messaging/request-result';
 
 /** Owns the request entries and deadline visits of one runtime instance. */
 export class RequestRuntime {
-  readonly registry = new OperationRegistry<unknown, unknown>(undefined, () => this.schedule());
+  readonly registry = new OperationRegistry<unknown, unknown>(
+    undefined,
+    () => this.schedule(),
+    (reason) => requestTerminalError('Request', reason)
+  );
   private timer?: NodeJS.Timeout;
   private dueMs = Number.POSITIVE_INFINITY;
 
@@ -24,38 +33,83 @@ export class RequestRuntime {
       timeoutMs ?? 0,
       timeoutMs === undefined ? 'sender' : 'registry'
     );
-    const cancel = () => operation.fail(signal?.reason ?? createAbortError());
-    const detach = () => signal?.removeEventListener('abort', cancel);
-    void operation.promise.then(detach, detach);
-    if (signal?.aborted === true) cancel();
-    else signal?.addEventListener('abort', cancel, { once: true });
+    operation.setSignal(signal);
     return operation as PendingOperation<T>;
   }
 
-  async run<T>(pending: PendingOperation<unknown>, work: () => Promise<T>): Promise<T> {
+  run<T>(
+    pending: PendingOperation<unknown>,
+    work: () => Promise<T> | ZLinkRequestResult<T>,
+    discardLateResult?: (value: T) => void
+  ): Promise<T> {
+    if (!pending.isPending()) return pending.promise as Promise<T>;
+    pending.deferCompletion();
     try {
-      if (!pending.isPending()) {
-        await pending.promise;
-        throw new OperationCancelledError(pending.id, 'Request is already terminal.');
-      }
-      const value = await work();
-      pending.complete(value);
-      return value;
+      const result = work();
+      const prepared = 'pending' in result ? result : undefined;
+      const source = prepared?.pending ?? (result as Promise<T>);
+      void source.then(
+        (value) => {
+          let reply: T;
+          try {
+            reply = prepared === undefined ? (value as T) : prepared.decode(value);
+          } catch (error) {
+            pending.fail(requestTerminalError('Request', error));
+            return;
+          }
+          if (!pending.complete(reply)) discardLateResult?.(reply);
+        },
+        (error) => {
+          let failure = error;
+          if (prepared !== undefined) {
+            try {
+              failure = prepared.mapFailure(error);
+            } catch (mapped) {
+              failure = mapped;
+            }
+          }
+          pending.fail(requestTerminalError('Request', failure));
+        }
+      );
     } catch (error) {
-      const terminal = requestTerminalError('Request', error);
-      pending.fail(terminal);
-      throw terminal;
+      pending.fail(requestTerminalError('Request', error));
     }
+
+    return pending.promise as Promise<T>;
   }
 
   request<T>(
     timeoutMs: number | undefined,
     signal: AbortSignal | undefined,
     work: (pending: PendingOperation<unknown>) => Promise<T>,
-    existing?: PendingOperation<unknown>
+    existing?: PendingOperation<unknown>,
+    discardLateResult?: (value: T) => void
   ): Promise<T> {
+    if (existing !== undefined) {
+      if (!existing.isPending())
+        return existing.promise.then<T>(() => {
+          throw new OperationCancelledError(existing.id, 'Request is already terminal.');
+        });
+      return work(existing);
+    }
     const pending = this.begin(timeoutMs, signal, existing);
-    return this.run(pending, () => work(pending));
+    return this.run(pending, () => work(pending), discardLateResult);
+  }
+
+  prepare<T>(
+    timeoutMs: number | undefined,
+    signal: AbortSignal | undefined,
+    build: (pending: PendingOperation<unknown>) => ZLinkRequestResult<T>
+  ): ZLinkRequestResult<T> {
+    if (signal?.aborted === true) return rejectZLinkRequestReply(createAbortError());
+    const operation = this.begin(timeoutMs, signal);
+    const pending = this.run(operation, () => build(operation));
+    return {
+      pending,
+      decode: identityRequestReply<T>,
+      mapFailure: identityRequestReply,
+      operation: operation as PendingOperation<T>
+    };
   }
 
   observe<T, R = T>(

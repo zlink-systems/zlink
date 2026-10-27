@@ -639,7 +639,7 @@ export class ServiceTerminalOperationRegistry<T, Context = unknown> {
   }
 
   reply(id: bigint, value: T, terminalContextRetentionMs = 0): boolean {
-    return this.operations.complete(id, value, terminalContextRetentionMs);
+    return this.operations.reply(id, value, terminalContextRetentionMs);
   }
 
   fail(id: bigint, error: unknown): boolean {

@@ -368,8 +368,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     onAdmitted?: () => void,
     requestOperation?: PendingOperation<unknown>
   ): MeshOperationId {
-    return this.observeStateful(
-      OperationKind.InstanceSpotRequest,
+    return this.observeStatefulRequest(OperationKind.InstanceSpotRequest, requestOperation, () =>
       this.requireStateful().requestToMissingInstanceSpotFrame(
         target,
         encodeMultipartApplicationFrame(parts),
@@ -1303,8 +1302,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     onAdmitted?: () => void,
     requestOperation?: PendingOperation<unknown>
   ): MeshOperationId {
-    return this.observeStateful(
-      OperationKind.InstanceSpotRequest,
+    return this.observeStatefulRequest(OperationKind.InstanceSpotRequest, requestOperation, () =>
       this.requireStateful().requestToInstanceSpot(
         route,
         encodeMultipart(parts),
@@ -1470,8 +1468,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       readonly routeFence?: import('../../foundation/service-stateful-wire-codec').ServiceActorRouteFence;
     }
   ): MeshOperationId {
-    return this.observeStateful(
-      OperationKind.ActorRequest,
+    return this.observeStatefulRequest(OperationKind.ActorRequest, options?.requestOperation, () =>
       this.requireStateful().requestToActor(
         actor,
         encodeMultipart(parts),
@@ -1515,8 +1512,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       readonly onAdmitted?: () => void;
     }
   ): MeshOperationId {
-    return this.observeStateful(
-      OperationKind.ActorRequest,
+    return this.observeStatefulRequest(OperationKind.ActorRequest, options?.requestOperation, () =>
       this.requireStateful().requestToActor(
         target,
         encodeMultipart(parts),
@@ -1593,8 +1589,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     onAdmitted?: () => void,
     requestOperation?: PendingOperation<unknown>
   ): MeshOperationId {
-    return this.observeStateful(
-      OperationKind.SpotRequest,
+    return this.observeStatefulRequest(OperationKind.SpotRequest, requestOperation, () =>
       this.requireStateful().requestToSpot(
         source.ref.spotId,
         target,
@@ -1815,37 +1810,53 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   }
 
   /**
-   * The raw registry takes a remote request's terminal and hands it here,
-   * where the Framework completion owner receives it in the same turn.
+   * Publishes native results after submission returns and the completion slot has its id.
+   * A caller-owned entry is completed after the result is mapped.
    */
   private readonly requestObserver: RawServiceRequestObserver = {
     operationCompleted: (id, result, operationKind) =>
-      this.deliverCompletion({ high: 1n, low: id }, operationKind ?? 0, result),
+      queueMicrotask(() =>
+        this.deliverCompletion({ high: 1n, low: id }, operationKind ?? 0, result)
+      ),
     operationFailed: (id, error, operationKind) =>
-      this.deliverCompletion({ high: 1n, low: id }, operationKind ?? 0, requestFailureResult(error))
+      queueMicrotask(() =>
+        this.deliverCompletion(
+          { high: 1n, low: id },
+          operationKind ?? 0,
+          requestFailureResult(error)
+        )
+      )
   };
 
   private observedOperation(
     pending: RawServiceObservedRequest,
     operationKind: number
   ): MeshOperationSubmission {
-    return pending.promise === undefined
-      ? this.requestSubmission({ high: 1n, low: pending.id }, pending)
-      : this.observeCompletion(pending.id, operationKind, pending.promise, pending);
+    const id = { high: 1n, low: pending.id };
+    if (pending.promise !== undefined && !pending.hasObserver()) {
+      void pending.promise.then(
+        (result) => this.deliverCompletion(id, operationKind, result),
+        (error) => this.deliverCompletion(id, operationKind, requestFailureResult(error))
+      );
+    }
+    return this.requestSubmission(id, pending);
   }
 
-  private observeCompletion(
-    low: bigint,
-    operationKind: number,
-    promise: Promise<RawServiceRequestResult>,
-    requestOperation: RawServiceObservedRequest
+  private observeStatefulRequest(
+    kind: number,
+    entry: PendingOperation<unknown> | undefined,
+    submit: () => ServiceStatefulPendingOperation
   ): MeshOperationSubmission {
-    const id = { high: 1n, low };
-    void promise.then(
-      (result) => this.deliverCompletion(id, operationKind, result),
-      (error) => this.deliverCompletion(id, operationKind, requestFailureResult(error))
-    );
-    return this.requestSubmission(id, requestOperation);
+    if (entry === undefined) return this.observeStateful(kind, submit());
+    const id = { high: ZLINK_NATIVE_CORRELATION_OPERATION_NAMESPACE, low: entry.id };
+    entry.setObserver({
+      operationCompleted: (_operationId, value) =>
+        queueMicrotask(() => this.deliverCompletion(id, kind, value as ServiceStatefulResult)),
+      operationFailed: (_operationId, error) =>
+        queueMicrotask(() => this.deliverCompletion(id, kind, requestFailureResult(error)))
+    });
+    submit();
+    return this.requestSubmission(id, entry);
   }
 
   private observeStateful(
@@ -1862,7 +1873,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
 
   private requestSubmission(
     id: MeshOperationId,
-    requestOperation: RawServiceObservedRequest
+    requestOperation: RawServiceObservedRequest | PendingOperation<unknown>
   ): MeshOperationSubmission {
     return Object.defineProperty({ ...id }, 'requestOperation', {
       value: requestOperation,

@@ -225,3 +225,133 @@ test('binding consumes the supplied entry across async admission without registe
   await new Promise(setImmediate);
   owner.close();
 });
+
+test('caller deadline takes an entry while work awaits an unwrapped promise', async (t) => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 0 });
+  t.mock.method(performance, 'now', () => Date.now());
+  const owner = new RequestRuntime();
+  const work = deferred();
+  let terminal;
+  const caller = owner.request(25, undefined, async () => await work.promise);
+  const observed = caller.then(
+    (value) => {
+      terminal = value;
+    },
+    (error) => {
+      terminal = error;
+    }
+  );
+  try {
+    t.mock.timers.tick(25);
+    await new Promise(setImmediate);
+    assert.equal(terminal?.kind, ZLinkFrameworkErrorKind.DeadlineExceeded);
+    assert.equal(owner.registry.size, 0);
+  } finally {
+    work.resolve('late');
+    await observed;
+    owner.close();
+  }
+});
+
+test('registered handles share prototype methods and are the registry entry', async () => {
+  const registry = new OperationRegistry();
+  const pending = registry.register(1000);
+  const observedId = registry.registerObserved(1000, {
+    operationCompleted() {},
+    operationFailed() {}
+  });
+  const observed = registry.handle(observedId);
+  assert.equal(registry.handle(pending.id), pending);
+  assert.equal(registry.handle(observedId), observed);
+  for (const method of [
+    'complete',
+    'fail',
+    'takeFailure',
+    'isPending',
+    'setFailureDispatcher',
+    'clearFailureDispatcher'
+  ]) {
+    assert.equal(Object.hasOwn(pending, method), false);
+    assert.equal(pending[method], observed[method]);
+  }
+  registry.complete(pending.id, 'reply');
+  registry.complete(observedId, 'reply');
+  assert.equal(await pending.promise, 'reply');
+});
+
+for (const terminal of ['cancel', 'close'])
+  test(`entry caller ends unwrapped work on ${terminal} and disposes its late result`, async () => {
+    const owner = new RequestRuntime();
+    const controller = new AbortController();
+    const pending = owner.begin(1000, controller.signal);
+    const work = deferred();
+    let closes = 0;
+    const caller = owner.run(
+      pending,
+      () => work.promise,
+      (value) => value.close()
+    );
+    assert.equal(caller, pending.promise);
+    const reason = new Error(terminal);
+    const failed = assert.rejects(caller, (error) => error === reason);
+    if (terminal === 'cancel') controller.abort(reason);
+    else owner.close(reason);
+    await failed;
+    work.resolve({
+      close() {
+        closes++;
+      }
+    });
+    await new Promise(setImmediate);
+    assert.equal(closes, 1);
+    assert.equal(owner.registry.size, 0);
+    owner.close();
+  });
+
+test('native stage notification leaves the caller entry pending until work completes', async (t) => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 0 });
+  t.mock.method(performance, 'now', () => Date.now());
+  const owner = new RequestRuntime();
+  const work = deferred();
+  const caller = owner.request(25, undefined, async (entry) => {
+    entry.reply('native stage');
+    await work.promise;
+    return 'decoded reply';
+  });
+  assert.equal(owner.registry.size, 1);
+  const terminal = assert.rejects(caller, { kind: ZLinkFrameworkErrorKind.DeadlineExceeded });
+  t.mock.timers.tick(25);
+  await terminal;
+  work.resolve();
+  await new Promise(setImmediate);
+  assert.equal(owner.registry.size, 0);
+  owner.close();
+});
+
+test('caller close disposes a stage result already queued for work', async () => {
+  const owner = new RequestRuntime();
+  const stage = deferred();
+  let closes = 0;
+  const pending = owner.begin(1000);
+  const caller = owner.run(
+    pending,
+    async () => await waitRequestReply(stage.promise, 'stage', pending),
+    (parts) => {
+      for (const part of parts) part.close();
+    }
+  );
+  const reason = new Error('closed after stage notification');
+  const failed = assert.rejects(caller, (error) => error === reason);
+  stage.resolve([
+    {
+      close() {
+        closes++;
+      }
+    }
+  ]);
+  await Promise.resolve();
+  owner.close(reason);
+  await failed;
+  await new Promise(setImmediate);
+  assert.equal(closes, 1);
+});

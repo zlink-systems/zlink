@@ -1,4 +1,3 @@
-import { waitRequestReply } from '../messaging/request-deadline';
 import { RequestRuntime } from '../foundation/request-runtime';
 import type { PendingOperation } from '../foundation/operation-registry';
 import type { RoutingId } from '../../contracts';
@@ -57,7 +56,7 @@ export class ZLinkLocalSpotRouteTransport {
           signal,
           requestOperation
         });
-        return waitRequestReply(pending, 'Local Spot request', requestOperation);
+        return pending;
       },
       existing
     );

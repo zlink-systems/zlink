@@ -443,13 +443,13 @@ export class RawServiceMeshRuntime {
     const pending = this.operations.register(Number(remaining));
     const check = () => {
       if (this.isPeerRouteReady(nodeRoutingId, lifecycleGeneration)) {
-        pending.complete({ terminalResult: RequestResult.Ok, failureCode: 0 });
+        pending.reply({ terminalResult: RequestResult.Ok, failureCode: 0 });
       }
     };
     const unsubscribe = this.observePeerRouteChanged((rid) => {
       if (rid === nodeRoutingId) check();
     });
-    const abort = () => pending.fail(signal?.reason);
+    const abort = () => pending.replyFailure(signal?.reason);
     signal?.addEventListener('abort', abort, { once: true });
     try {
       if (signal?.aborted === true) abort();
@@ -707,27 +707,21 @@ export class RawServiceMeshRuntime {
     operationKind: number | undefined,
     requestOperation?: PendingOperation<unknown>
   ): RawServiceObservedRequest {
-    if (requestOperation !== undefined)
+    if (requestOperation !== undefined) {
+      if (observer !== undefined)
+        requestOperation.setObserver(
+          observer as import('./operation-registry').OperationObserver<unknown, unknown>,
+          operationKind
+        );
       return requestOperation as PendingOperation<RawServiceRequestResult>;
+    }
     return observer === undefined
       ? this.operations.register(timeoutMs)
       : this.observedRequest(this.operations.registerObserved(timeoutMs, observer, operationKind));
   }
 
   private observedRequest(id: bigint): RawServiceObservedRequest {
-    return {
-      id,
-      clearFailureDispatcher: (dispatcher) =>
-        this.operations.clearFailureDispatcher(id, dispatcher),
-      deadlineMs: this.operations.deadline(id),
-      takeFailure: (reason) => this.operations.takeFailure(id, reason),
-      setFailureDispatcher: (dispatcher) => {
-        this.operations.setFailureDispatcher(id, dispatcher);
-      },
-      complete: (value) => this.operations.complete(id, value),
-      fail: (error) => this.operations.fail(id, error),
-      isPending: () => this.operations.isPending(id)
-    };
+    return this.operations.handle(id);
   }
 
   /**
@@ -738,13 +732,14 @@ export class RawServiceMeshRuntime {
     pending: RawServiceObservedRequest,
     result: RawServiceRequestResult
   ): void {
-    if (pending.promise === undefined) queueMicrotask(() => pending.complete(result));
-    else pending.complete(result);
+    if (pending.promise === undefined || pending.hasObserver())
+      queueMicrotask(() => pending.reply(result));
+    else pending.reply(result);
   }
 
   private failRequest(pending: RawServiceObservedRequest, error: unknown): void {
-    if (pending.promise === undefined) queueMicrotask(() => pending.fail(error));
-    else pending.fail(error);
+    if (pending.promise === undefined) queueMicrotask(() => pending.replyFailure(error));
+    else pending.replyFailure(error);
   }
 
   private selectChannelTarget(channelName: string): RawServiceChannelTargetSelection {
@@ -1605,8 +1600,14 @@ export class RawServiceMeshRuntime {
       // The local admission path aborts its capacity wait on the terminal
       // Promise, so a local request always keeps the Promise entry.
       const pending =
-        (requestOperation as PendingOperation<RawServiceRequestResult> | undefined) ??
-        this.operations.register(timeoutMs);
+        requestOperation === undefined
+          ? this.operations.register(timeoutMs)
+          : (this.registerRequest(
+              timeoutMs,
+              observer,
+              operationKind,
+              requestOperation
+            ) as PendingOperation<RawServiceRequestResult>);
       const parts = [header, encodedPayload];
       const capacityStop = new AbortController();
       void pending.promise.finally(() => capacityStop.abort()).catch(() => undefined);
@@ -1629,7 +1630,7 @@ export class RawServiceMeshRuntime {
             sourceRoutingId: this.descriptor.nodeRoutingId,
             correlation,
             localReply: (terminalResult, failureCode, reply) =>
-              pending.complete({
+              pending.reply({
                 terminalResult,
                 failureCode,
                 ...(reply === undefined ? {} : { payload: reply })
@@ -1638,7 +1639,7 @@ export class RawServiceMeshRuntime {
           });
           if (!accepted) {
             applicationJob.close();
-            pending.complete({
+            pending.reply({
               terminalResult: RequestResult.NotConnected,
               failureCode: 0
             });
@@ -1648,7 +1649,7 @@ export class RawServiceMeshRuntime {
         } finally {
           applicationJobOwner.close();
         }
-      })().catch((error) => pending.fail(error));
+      })().catch((error) => pending.replyFailure(error));
       return pending;
     }
     const pending = this.registerRequest(timeoutMs, observer, operationKind, requestOperation);
@@ -1692,17 +1693,17 @@ export class RawServiceMeshRuntime {
               terminalResult: reply.terminalResult,
               failureCode: reply.failureCode
             };
-            pending.complete(
+            pending.reply(
               reply.terminalResult === 0
                 ? { ...result, payload: decodeApplicationPayloadView(replyParts[1]!) }
                 : result
             );
           } catch (error) {
-            pending.fail(error);
+            pending.replyFailure(error);
           }
         },
         (error) => {
-          pending.fail(error);
+          pending.replyFailure(error);
         },
         selectedPeer.liveness?.recordReceived,
         onAdmitted,

@@ -1910,7 +1910,7 @@ test('route raw SPOT request aborts its wait without resubmitting', async () => 
 
   await waitUntil(() => attempts > 0);
   abort.abort();
-  await assert.rejects(pending, /The operation was aborted/);
+  await assert.rejects(pending, (error) => error === abort.signal.reason);
   const attemptsAtAbort = attempts;
   await new Promise((resolve) => setTimeout(resolve, 30));
   assert.equal(attempts, attemptsAtAbort);
@@ -1938,11 +1938,11 @@ test('source Spot raw request aborts after native submission and closes a late r
   }, request, 1000, abort.signal);
 
   abort.abort();
-  await assert.rejects(pending, /The operation was aborted/);
+  await assert.rejects(pending, (error) => error === abort.signal.reason);
   let closeCount = 0;
   const lateReply = { close() { closeCount += 1; } };
   complete([lateReply]);
-  await new Promise(( resolve ) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
   assert.equal(closeCount, 1);
   request.close();
 });

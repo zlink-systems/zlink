@@ -116,7 +116,8 @@ export class ZLinkSourceSpotRouter {
           closeMessages
         );
       },
-      existing
+      existing,
+      closeMessages
     );
   }
 }

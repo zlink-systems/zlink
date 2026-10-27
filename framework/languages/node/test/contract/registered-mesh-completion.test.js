@@ -34,10 +34,11 @@ function harness(table, checkSlot = true) {
     close() {
       this.mailbox.close();
     },
-    requestToNode() {
+    requestToNode(_target, _parts, _timeout, _admitted, observer, kind) {
       if (checkSlot)
         assert.equal(table.pendingCount, 1, 'completion slot exists before transport submission');
-      return { ...entry, promise };
+      void promise.then((value) => observer.operationCompleted(entry.id, value, kind));
+      return Object.assign(Object.create(entry), { promise: undefined });
     }
   };
   return { backend, resolve, entry, ready: () => ready };
