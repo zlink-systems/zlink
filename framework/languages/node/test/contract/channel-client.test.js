@@ -55,34 +55,30 @@ test.afterEach(async () => {
   await new Promise((resolve) => setTimeout(resolve, 0));
 });
 
-test('pending channel requests keep the Node event loop alive until they settle', async () => {
-  const originalSetTimeout = global.setTimeout;
-  const originalClearTimeout = global.clearTimeout;
-  let keepalive;
-  let cleared;
-  let resolveReply;
-  const reply = new Promise(( resolve ) => {
-    resolveReply = resolve;
+test('runtime-owned requests share one referenced management handle', async (t) => {
+  const {
+    RequestRuntime
+  } = require('../../packages/framework/dist/runtime/foundation/request-runtime');
+  const owner = new RequestRuntime();
+  let release;
+  const reply = new Promise((resolve) => {
+    release = resolve;
   });
-  global.setTimeout = (callback, delay) => {
-    assert.equal(delay, 0x7fffffff);
-    keepalive = { callback, delay, ref: true };
-    return keepalive;
-  };
-  global.clearTimeout = ( timer ) => {
-    cleared = timer;
-  };
-  try {
-    const pending = keepChannelRequestAlive(reply);
-    assert.equal(keepalive.ref, true);
-    assert.equal(cleared, undefined);
-    resolveReply('reply');
-    assert.equal(await pending, 'reply');
-    assert.equal(cleared, keepalive);
-  } finally {
-    global.setTimeout = originalSetTimeout;
-    global.clearTimeout = originalClearTimeout;
-  }
+  const before = process.getActiveResourcesInfo().filter((type) => type === 'Timeout').length;
+  const timer = t.mock.method(globalThis, 'setTimeout');
+  const pending = Array.from({ length: 1000 }, () => owner.request(60_000, undefined, () => reply));
+  assert.equal(
+    process.getActiveResourcesInfo().filter((type) => type === 'Timeout').length,
+    before + 1
+  );
+  assert.equal(timer.mock.callCount(), 1);
+  release('reply');
+  await Promise.all(pending);
+  assert.equal(
+    process.getActiveResourcesInfo().filter((type) => type === 'Timeout').length,
+    before
+  );
+  owner.close();
 });
 
 test('two in-process ClientServer nodes deliver a delayed reply to an awaited client request', async () => {
@@ -1972,28 +1968,88 @@ test('route channel request propagates binding route rejection', async () => {
   assert.equal(router.requestAttempts, 1);
 });
 
-test('route channel request delegates its timeout to the binding Promise', async () => {
-  const router = fakeRouteRouter({ acceptWithoutReply: true });
-  const manager = new framework.ZLinkChannelRuntimeManager(
-    framework.createFrameworkRegistration({
-      routeChannels: [{
-        routerChannelId: 'room.route',
-        bind: 'inproc://session-route',
-        routingId: 'session-node'
-      }]
-    }),
-    fakeChannelAdapter({ dealer: fakeBackpressuredDealer(), router }),
-    fakeContext()
-  );
-
-  await assert.rejects(
-    manager.routeRequest(
-      'room.route', 'play-node', 'EnsurePlayerActorReq', { actorId: 'player-1' }, 30
-    ),
-    /binding request timed out/
-  );
-  assert.equal(router.requestAttempts, 1);
-});
+for (const first of ['Framework visit', 'binding timeout']) {
+  test(`route request deadline has one terminal when ${first} wins`, async (t) => {
+    // Submit and completion §9 and §10.1: one deadline and one entry own timeout.
+    t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 0 });
+    try {
+      t.mock.method(performance, 'now', () => Date.now());
+      const {
+        OperationRegistry
+      } = require('../../packages/framework/dist/runtime/foundation/operation-registry');
+      const {
+        translateBindingResultError
+      } = require('../../packages/framework/dist/runtime/backend/node/node-backend-adapter-support');
+      const originalFail = OperationRegistry.prototype.fail;
+      let terminals = 0,
+        registry;
+      t.mock.method(OperationRegistry.prototype, 'fail', function (id, error) {
+        const won = originalFail.call(this, id, error);
+        if (won) terminals++;
+        return won;
+      });
+      const register = OperationRegistry.prototype.register;
+      t.mock.method(OperationRegistry.prototype, 'register', function (...args) {
+        registry = this;
+        return register.apply(this, args);
+      });
+      let entered;
+      const submitted = new Promise((resolve) => {
+        entered = resolve;
+      });
+      let rejectBinding;
+      const binding = new Promise((_, reject) => {
+        rejectBinding = reject;
+      });
+      const router = fakeRouteRouter();
+      router.request = function () {
+        this.requestAttempts++;
+        entered();
+        return binding;
+      };
+      const manager = new framework.ZLinkChannelRuntimeManager(
+        framework.createFrameworkRegistration({
+          routeChannels: [{
+            routerChannelId: 'room.route',
+            bind: 'inproc://session-route',
+            routingId: 'session-node'
+          }]
+        }),
+        fakeChannelAdapter({ dealer: fakeBackpressuredDealer(), router }),
+        fakeContext()
+      );
+      const pending = manager.routeRequest(
+        'room.route', 'play-node', 'EnsurePlayerActorReq', { actorId: 'player-1' }, 30
+      );
+      let observed = 0;
+      const terminal = assert.rejects(pending, (error) => {
+        observed++;
+        return error.kind === framework.ZLinkFrameworkErrorKind.DeadlineExceeded;
+      });
+      await submitted;
+      const nativeTimeout = translateBindingResultError(
+        new zlink.RequestError(zlink.RequestResult.TimedOut, 110)
+      );
+      if (first === 'Framework visit') {
+        t.mock.timers.tick(30);
+        await terminal;
+        rejectBinding(nativeTimeout);
+      } else {
+        t.mock.timers.setTime(30);
+        rejectBinding(nativeTimeout);
+        await terminal;
+        t.mock.timers.tick(0);
+      }
+      await Promise.resolve();
+      assert.equal(router.requestAttempts, 1);
+      assert.equal(registry.size, 0);
+      assert.equal(terminals, 1);
+      assert.equal(observed, 1);
+    } finally {
+      t.mock.timers.reset();
+    }
+  });
+}
 
 test('route channel with SPOT acceptance starts one route receive loop for shared router frames', async () => {
   const router = fakeRouteRouter();

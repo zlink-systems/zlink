@@ -1,3 +1,6 @@
+import type { MeshOperationSubmission } from '../mesh-completion-table';
+import type { RequestRuntime } from '../../foundation/request-runtime';
+import type { PendingOperation } from '../../foundation/operation-registry';
 import { routingIdsEqual } from '../../routing-id';
 import { requestDurableService } from '../../foundation/durable-service-request';
 import { encodeRoutingIdStorageHex, toBackendRoutingId } from '../../routing-id';
@@ -151,10 +154,6 @@ const UNSTARTED_DIAGNOSTIC_ENDPOINT = 'inproc://not-started';
 const MULTIPART_PACKET_NAME = SERVICE_FRAMEWORK_MULTIPART_PACKET_NAME;
 const MULTIPART_CONTENT_TYPE = SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE;
 const MAX_DRAIN_RECORDS = 64;
-// The maintenance timer runs at the nearest management deadline and never
-// sooner than this. Only the binding readable handler admits receive work;
-// this timer never probes the socket.
-const MESH_BACKEND_MAINTENANCE_INTERVAL_MS = 1;
 /** The longest single timer delay Node accepts. */
 const MESH_BACKEND_MAINTENANCE_MAX_DELAY_MS = 2 ** 31 - 1;
 // Spec 08 §4.2 bounds the combined turn. Raw gets one equal share; stateful
@@ -365,7 +364,8 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     deadlineUnixMs: bigint,
     sourceSpotId?: string,
     metadata?: ReadonlyMap<string, string>,
-    onAdmitted?: () => void
+    onAdmitted?: () => void,
+    requestOperation?: PendingOperation<unknown>
   ): MeshOperationId {
     return this.observeStateful(
       OperationKind.InstanceSpotRequest,
@@ -375,7 +375,8 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
         deadlineUnixMs,
         sourceSpotId,
         metadata === undefined ? undefined : encodeServiceMetadataFrame(metadata),
-        onAdmitted
+        onAdmitted,
+        requestOperation
       )
     );
   }
@@ -398,6 +399,13 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     this.advertiseHost = host;
   }
 
+  private requests?: RequestRuntime;
+
+  setRequestRuntime(requests: RequestRuntime): void {
+    this.requireNotStarted();
+    this.requests = requests;
+  }
+
   start(): void {
     if (this.runtime !== undefined) return;
     if (this.closed) throw new Error('MeshNode is closed.');
@@ -405,6 +413,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       throw new Error('MeshNode bind endpoint is not configured.');
     const descriptor = this.createDescriptor();
     const runtime = new RawServiceMeshRuntime({
+      requests: this.requests,
       onPendingOperationsChanged: this.onPendingOperationsChanged,
       descriptor,
       resolveAdvertisedEndpoint: (boundEndpoint) => this.resolveAdvertisedEndpoint(boundEndpoint),
@@ -444,7 +453,8 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       runtime,
       descriptor.nodeRoutingId,
       descriptor.lifecycleGeneration,
-      this.onPendingOperationsChanged
+      this.onPendingOperationsChanged,
+      this.requests
     );
     if (this.dispatchErrors !== undefined) {
       this.stateful.setDispatchErrorReporter(this.dispatchErrors, this.meshName);
@@ -741,6 +751,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     frames: readonly Uint8Array[],
     options?: {
       readonly timeoutMs?: number;
+      readonly requestOperation?: PendingOperation<unknown>;
       readonly signal?: AbortSignal;
       readonly onSubmitted?: (signal: AbortSignal) => Promise<void>;
     }
@@ -759,7 +770,11 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   requestToNode(
     targetRid: unknown,
     parts: MessageLike | readonly MessageLike[],
-    options?: { readonly timeoutMs?: number; readonly onAdmitted?: () => void }
+    options?: {
+      readonly timeoutMs?: number;
+      readonly requestOperation?: PendingOperation<unknown>;
+      readonly onAdmitted?: () => void;
+    }
   ): MeshOperationId {
     const pending = this.requireRuntime().requestToNode(
       String(targetRid),
@@ -767,7 +782,8 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       options?.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
       options?.onAdmitted,
       this.requestObserver,
-      OperationKind.NodeRequest
+      OperationKind.NodeRequest,
+      options?.requestOperation
     );
     return this.observedOperation(pending, OperationKind.NodeRequest);
   }
@@ -788,7 +804,11 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   requestToChannel(
     channelName: string,
     parts: MessageLike | readonly MessageLike[],
-    options?: { readonly timeoutMs?: number; readonly onAdmitted?: () => void }
+    options?: {
+      readonly timeoutMs?: number;
+      readonly requestOperation?: PendingOperation<unknown>;
+      readonly onAdmitted?: () => void;
+    }
   ): MeshOperationId {
     const pending = this.requireRuntime().requestToChannel(
       channelName,
@@ -796,7 +816,8 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       options?.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
       options?.onAdmitted,
       this.requestObserver,
-      OperationKind.ChannelRequest
+      OperationKind.ChannelRequest,
+      options?.requestOperation
     );
     return this.observedOperation(pending, OperationKind.ChannelRequest);
   }
@@ -1261,7 +1282,8 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     sourceSpotId?: string,
     metadata?: ReadonlyMap<string, string>,
     instanceIntent = false,
-    onAdmitted?: () => void
+    onAdmitted?: () => void,
+    requestOperation?: PendingOperation<unknown>
   ): MeshOperationId {
     return this.observeStateful(
       OperationKind.InstanceSpotRequest,
@@ -1272,7 +1294,8 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
         sourceSpotId,
         metadata === undefined ? undefined : encodeServiceMetadataFrame(metadata),
         instanceIntent,
-        onAdmitted
+        onAdmitted,
+        requestOperation
       )
     );
   }
@@ -1424,6 +1447,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     parts: MessageLike | readonly MessageLike[],
     options?: {
       readonly timeoutMs?: number;
+      readonly requestOperation?: PendingOperation<unknown>;
       readonly onAdmitted?: () => void;
       readonly routeFence?: import('../../foundation/service-stateful-wire-codec').ServiceActorRouteFence;
     }
@@ -1437,7 +1461,8 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
         undefined,
         undefined,
         options?.onAdmitted,
-        options?.routeFence
+        options?.routeFence,
+        options?.requestOperation
       )
     );
   }
@@ -1466,7 +1491,11 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     source: ZLinkBackendActorRef,
     target: ZLinkBackendActorRef,
     parts: MessageLike | readonly MessageLike[],
-    options?: { readonly timeoutMs?: number; readonly onAdmitted?: () => void }
+    options?: {
+      readonly timeoutMs?: number;
+      readonly requestOperation?: PendingOperation<unknown>;
+      readonly onAdmitted?: () => void;
+    }
   ): MeshOperationId {
     return this.observeStateful(
       OperationKind.ActorRequest,
@@ -1476,7 +1505,9 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
         options?.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
         source,
         undefined,
-        options?.onAdmitted
+        options?.onAdmitted,
+        undefined,
+        options?.requestOperation
       )
     );
   }
@@ -1541,7 +1572,8 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     target: ServiceDirectSpotRouteFence,
     parts: MessageLike | readonly MessageLike[],
     timeoutMs: number,
-    onAdmitted?: () => void
+    onAdmitted?: () => void,
+    requestOperation?: PendingOperation<unknown>
   ): MeshOperationId {
     return this.observeStateful(
       OperationKind.SpotRequest,
@@ -1550,7 +1582,8 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
         target,
         encodeMultipart(parts),
         timeoutMs,
-        onAdmitted
+        onAdmitted,
+        requestOperation
       )
     );
   }
@@ -1629,22 +1662,17 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   /**
    * Arms the one maintenance timer for the nearest management deadline
    * (spec 08 §4.2): request expiry, liveness, or a pending peer handshake.
-   * An earlier deadline re-arms it; a later one keeps the armed time.
+   * The timer follows changes to the index visit or the other management deadlines.
    */
   private scheduleMaintenance(): void {
     if (this.closed) return;
     const nowMs = performance.now();
-    const dueMs = Math.max(
-      nowMs + MESH_BACKEND_MAINTENANCE_INTERVAL_MS,
-      Math.min(
-        this.runtime?.nextMaintenanceDeadlineMs(nowMs) ?? Number.POSITIVE_INFINITY,
-        this.stateful?.nextMaintenanceDeadlineMs() ?? Number.POSITIVE_INFINITY
-      )
+    const dueMs = Math.min(
+      this.runtime?.nextMaintenanceDeadlineMs(nowMs) ?? Number.POSITIVE_INFINITY,
+      this.stateful?.nextMaintenanceDeadlineMs() ?? Number.POSITIVE_INFINITY
     );
     if (dueMs === Number.POSITIVE_INFINITY) {
-      if (this.maintenanceTimer !== undefined) clearTimeout(this.maintenanceTimer);
-      this.maintenanceTimer = undefined;
-      this.maintenanceDueMs = dueMs;
+      this.maintenanceTimer?.unref();
       return;
     }
     if (this.maintenanceTimer === undefined || dueMs < this.maintenanceDueMs) {
@@ -1782,35 +1810,46 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   private observedOperation(
     pending: RawServiceObservedRequest,
     operationKind: number
-  ): MeshOperationId {
+  ): MeshOperationSubmission {
     return pending.promise === undefined
-      ? { high: 1n, low: pending.id }
-      : this.observeCompletion(pending.id, operationKind, pending.promise);
+      ? this.requestSubmission({ high: 1n, low: pending.id }, pending)
+      : this.observeCompletion(pending.id, operationKind, pending.promise, pending);
   }
 
   private observeCompletion(
     low: bigint,
     operationKind: number,
-    promise: Promise<RawServiceRequestResult>
-  ): MeshOperationId {
+    promise: Promise<RawServiceRequestResult>,
+    requestOperation: RawServiceObservedRequest
+  ): MeshOperationSubmission {
     const id = { high: 1n, low };
     void promise.then(
       (result) => this.deliverCompletion(id, operationKind, result),
       (error) => this.deliverCompletion(id, operationKind, requestFailureResult(error))
     );
-    return id;
+    return this.requestSubmission(id, requestOperation);
   }
 
   private observeStateful(
     operationKind: number,
     pending: ServiceStatefulPendingOperation
-  ): MeshOperationId {
+  ): MeshOperationSubmission {
     const id = { high: ZLINK_NATIVE_CORRELATION_OPERATION_NAMESPACE, low: pending.id };
     void pending.promise.then(
       (result) => this.deliverCompletion(id, operationKind, result),
       (error) => this.deliverCompletion(id, operationKind, requestFailureResult(error))
     );
-    return id;
+    return this.requestSubmission(id, pending);
+  }
+
+  private requestSubmission(
+    id: MeshOperationId,
+    requestOperation: RawServiceObservedRequest
+  ): MeshOperationSubmission {
+    return Object.defineProperty({ ...id }, 'requestOperation', {
+      value: requestOperation,
+      configurable: true
+    });
   }
 
   private deliverCompletion(
@@ -1933,6 +1972,7 @@ class RawServiceSpot implements ServiceSpot {
     options?: {
       readonly flags?: number;
       readonly timeoutMs?: number;
+      readonly requestOperation?: PendingOperation<unknown>;
       readonly onAdmitted?: () => void;
     }
   ): MeshOperationId {
@@ -1970,6 +2010,7 @@ class RawServiceSpot implements ServiceSpot {
     parts: MessageLike | readonly MessageLike[],
     options?: {
       readonly timeoutMs?: number;
+      readonly requestOperation?: PendingOperation<unknown>;
       readonly onAdmitted?: () => void;
       readonly routeFence?: ServiceDirectSpotRouteFence;
       readonly entrySpot?: boolean;
@@ -1990,7 +2031,8 @@ class RawServiceSpot implements ServiceSpot {
       routeFence,
       parts,
       options?.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
-      options?.onAdmitted
+      options?.onAdmitted,
+      options?.requestOperation
     );
   }
 

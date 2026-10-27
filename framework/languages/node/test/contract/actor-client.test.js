@@ -53,11 +53,9 @@ function actorLocation(actorId = 'actor-1', generation = 1n, meshName = 'play-me
 
 function createResolver(resolve = ({ actorId }) => actorLocation(actorId)) {
   return {
-    async resolveDirectActorRoute(actorId, signal, deadlineMs) {
+    async resolveDirectActorRoute(actorId, signal, deadlineMs, requestOperation) {
       // This adapter has no cache: its complete resolution is an external wait.
-      const route = await waitActorReply(
-        Promise.resolve().then(() => resolve({ actorId }, signal)), actorId, deadlineMs, signal
-      );
+      const route = await Promise.resolve().then(() => resolve({ actorId }, signal));
       return route === undefined
         ? { kind: 'missing' }
         : { kind: 'ready', route };
@@ -198,7 +196,16 @@ for (const vector of actorErrorFixture.cases) {
   });
 }
 
-test('cached actor request allocates no deadline timer or race promise', async t => {
+test('cached actor requests share each reserved management visit and idle stops after one empty visit', async (t) => {
+  // Submit and completion §10.1 (PR #2889): an existing reservation survives an empty index.
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 0 });
+  t.mock.method(performance, 'now', () => Date.now());
+  const {
+    OperationRegistry
+  } = require('../../packages/framework/dist/runtime/foundation/operation-registry');
+  const expire = t.mock.method(OperationRegistry.prototype, 'expire');
+  const startedAt = performance.now();
+  const scheduled = t.mock.method(globalThis, 'setTimeout');
   const resolver = createStoreResolver({
     kind: 'snapshot', allocation: {
       objectKind: 'actor', state: 'active', stableType: 'Player',
@@ -225,9 +232,17 @@ test('cached actor request allocates no deadline timer or race promise', async t
       assert.equal(await client.requestToActor('actor-1', new ActorAsk('ping')).timeout(1000).submit(), 'pong');
     }
   } finally { hook.disable(); }
-  console.log(`cached_actor_requests=100 timers=${timers} races=${race.mock.callCount()} promises=${promises}`);
-  assert.equal(timers, 0);
+  console.log(
+    `cached_actor_requests=100 management_timers=${scheduled.mock.callCount()} native_timeout_resources=${timers} races=${race.mock.callCount()} promises=${promises}`
+  );
+  assert.ok(scheduled.mock.callCount() <= Math.floor((performance.now() - startedAt) / 256) + 1);
   assert.equal(race.mock.callCount(), 0);
+  const beforeIdle = expire.mock.callCount();
+  t.mock.timers.tick(256);
+  assert.ok(expire.mock.callCount() - beforeIdle <= 1);
+  const afterEmptyVisit = expire.mock.callCount();
+  t.mock.timers.tick(10 * 256);
+  assert.equal(expire.mock.callCount(), afterEmptyVisit);
 });
 
 const operationId = Object.freeze({ high: 1n, low: 2n });
@@ -796,8 +811,9 @@ test('direct actor resolver maps a missing authority snapshot to NotFound', asyn
   );
 });
 
-test('actor client deadline ends its pending request while a Message Follow relay remains live', async t => {
+test('actor client deadline ends its pending request while a Message Follow relay remains live', async (t) => {
   t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 0 });
+  t.after(() => t.mock.timers.runAll());
   t.mock.method(performance, 'now', () => Date.now());
   const route = actorLocation();
   let completeRelay;
@@ -870,8 +886,9 @@ test('actor client deadline ends its pending request while a Message Follow rela
   }
 });
 
-test('actor request deadline ends the caller wait before a slow route returns', async t => {
+test('actor request deadline ends the caller wait before a slow route returns', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 0 });
+  t.after(() => t.mock.timers.runAll());
   t.mock.method(performance, 'now', () => Date.now());
   let resolveRoute;
   const route = new Promise(resolve => { resolveRoute = resolve; });
@@ -947,8 +964,9 @@ test('Store abort during actor resolution observes its rejected result', async (
   assert.equal(require('node:events').getEventListeners(controller.signal, 'abort').length, 0);
 });
 
-test('actor handoff expiry uses the request DeadlineExceeded terminal kind', async t => {
+test('actor handoff expiry uses the request DeadlineExceeded terminal kind', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 0 });
+  t.after(() => t.mock.timers.runAll());
   t.mock.method(performance, 'now', () => Date.now());
   let reply;
   const captured = new Promise(resolve => { reply = resolve; });
@@ -970,9 +988,10 @@ test('actor handoff expiry uses the request DeadlineExceeded terminal kind', asy
 });
 
 for (const stage of ['route', 'handoff', 'native']) {
-  test(`actor request cancellation ends the ${stage} wait and removes its listener`, async t => {
+  test(`actor request cancellation ends the ${stage} wait and removes its listener`, async (t) => {
     t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 0 });
-  t.mock.method(performance, 'now', () => Date.now());
+    t.after(() => t.mock.timers.runAll());
+    t.mock.method(performance, 'now', () => Date.now());
     const { getEventListeners } = require('node:events');
     const controller = new AbortController();
     let release;
@@ -1001,7 +1020,16 @@ for (const stage of ['route', 'handoff', 'native']) {
       handoffCapture: stage === 'handoff' ? () => { started(); return blocked; } : undefined
     });
     const scheduled = t.mock.method(globalThis, 'setTimeout');
-    const clear = t.mock.method(globalThis, 'clearTimeout');
+    const cleared = t.mock.method(globalThis, 'clearTimeout');
+    const {
+      OperationRegistry
+    } = require('../../packages/framework/dist/runtime/foundation/operation-registry');
+    const owners = new Set();
+    const register = OperationRegistry.prototype.register;
+    t.mock.method(OperationRegistry.prototype, 'register', function (...args) {
+      owners.add(this);
+      return register.apply(this, args);
+    });
     const request = client.requestToActor('actor-1', new ActorAsk('ping')).timeout(20).submit(controller.signal);
     const terminal = assert.rejects(request, error => stage === 'native' ? error === controller.signal.reason : error instanceof ZLinkAbortError);
     await entered;
@@ -1010,11 +1038,18 @@ for (const stage of ['route', 'handoff', 'native']) {
     assert.equal(routeSignal, controller.signal);
     if (stage === 'native') assert.equal(nativeSignal, controller.signal);
     assert.equal(getEventListeners(controller.signal, 'abort').length, 0);
-    assert.deepEqual(
-      clear.mock.calls.map(call => call.arguments[0]),
-      scheduled.mock.calls.map(call => call.result),
-      'every actual wait releases its deadline timer'
+    for (const registry of owners) assert.equal(registry.entries.size, 0);
+    // Submit and completion §10.1 (PR #2889) preserves an already reserved empty visit.
+    const reservedAtIdle = scheduled.mock.callCount();
+    assert.equal(
+      cleared.mock.calls.filter((call) => call.arguments[0] === scheduled.mock.calls[0]?.result)
+        .length,
+      0
     );
+    t.mock.timers.tick(256);
+    assert.equal(scheduled.mock.callCount(), reservedAtIdle);
+    t.mock.timers.tick(2560);
+    assert.equal(scheduled.mock.callCount(), reservedAtIdle);
     if (stage === 'route') {
       release(actorLocation());
       await new Promise(setImmediate);
@@ -1046,31 +1081,36 @@ test('actor request without a deadline remains cancellable during handoff', asyn
   release('late');
 });
 
-test('actor request clears its sole deadline timer after route failure and success', async t => {
-  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 0 });
-  t.mock.method(performance, 'now', () => Date.now());
-  const clear = t.mock.method(globalThis, 'clearTimeout');
+test('actor route failure and success release their shared deadline registry entries', async (t) => {
+  const {
+    OperationRegistry
+  } = require('../../packages/framework/dist/runtime/foundation/operation-registry');
+  const register = OperationRegistry.prototype.register;
+  const owners = new Set();
+  t.mock.method(OperationRegistry.prototype, 'register', function (...args) {
+    owners.add(this);
+    return register.apply(this, args);
+  });
   const cause = new Error('route failed');
   const failed = createActorClient({
     nodeProvider: () => undefined, completionTableProvider: () => undefined,
     locationResolver: () => createResolver(() => { throw cause; })
   });
   await assert.rejects(failed.requestToActor('actor-1', new ActorAsk('ping')).timeout(20).submit(), error => error === cause);
-  assert.equal(clear.mock.callCount(), 1);
+  for (const registry of owners) assert.equal(registry.size, 0);
   const ready = createActorClient({
     nodeProvider: () => ({ requestToActor() { return operationId; } }),
     completionTableProvider: () => completionTable(RequestResult.Ok, createReplyFrame('pong')),
     locationResolver: () => createResolver()
   });
   assert.equal(await ready.requestToActor('actor-1', new ActorAsk('ping')).timeout(20).submit(), 'pong');
-  assert.equal(clear.mock.callCount(), 2);
-  t.mock.timers.tick(20);
-  await new Promise(setImmediate);
+  assert.ok(owners.size > 0);
+  for (const registry of owners) assert.equal(registry.entries.size, 0);
 });
 
-
-test('actor native deadline preserves one terminal and releases the lower completion listener', async t => {
+test('actor native deadline preserves one terminal and releases the lower completion listener', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 0 });
+  t.after(() => t.mock.timers.runAll());
   t.mock.method(performance, 'now', () => Date.now());
   const { getEventListeners } = require('node:events');
   const backend = require('../../packages/framework/dist/runtime/backend');
@@ -1131,9 +1171,11 @@ for (const [phase, expectedKind] of [
   });
 }
 
-
 test('Actor route infrastructure admission cannot complete the user request admission', async () => {
-  const { submitBindingRequest } = require('../../packages/framework/dist/runtime/backend/node/node-backend-adapter-support');
+  const {
+    submitBindingRequest,
+    bindingRequestReply
+  } = require('../../packages/framework/dist/runtime/backend/node/node-backend-adapter-support');
   let releaseRoute;
   let admitUser;
   let replyUser;
@@ -1148,33 +1190,48 @@ test('Actor route infrastructure admission cannot complete the user request admi
   const unusedStore = {};
   const resolver = new framework.ZLinkStoreLocationResolvers({
     stores: {
-      authorityStore: { async readAuthority() {
-        // The real common binding consumer runs inside the stock route resolver's
-        // authority-store lookup. It does not submit the user's Actor packet.
-        await submitBindingRequest(bindingOperation({
-          result: SubmitResult.Ok, admitted: Promise.resolve(), reply: Promise.resolve([])
-        }), [], undefined);
-        await routeGate;
-        return {
-          kind: 'snapshot', allocation: {
-            objectKind: 'actor', state: 'active', stableType: 'Player',
-            descriptor: { meshName: 'play-mesh', rid: 'node-a' }, descriptorLifecycleGeneration: 7n
-          }, payload: Buffer.alloc(0), objectGeneration: 1n, ownerId: 'owner-a',
-          ownerLeaseGeneration: 3n, authorityOwnerGeneration: 4n, storeVersion: { value: 'v1' }
-        };
-      } }, locationStore: unusedStore, peerStore: unusedStore, spotStore: unusedStore,
-      actorStore: unusedStore, routeStore: unusedStore
+      authorityStore: {
+        async readAuthority() {
+          // The real common binding consumer runs inside the stock route resolver's
+          // authority-store lookup. It does not submit the user's Actor packet.
+          await bindingRequestReply({
+            result: SubmitResult.Ok, admitted: Promise.resolve(), reply: Promise.resolve([])
+          });
+          await routeGate;
+          return {
+            kind: 'snapshot', allocation: {
+              objectKind: 'actor', state: 'active', stableType: 'Player',
+              descriptor: { meshName: 'play-mesh', rid: 'node-a' }, descriptorLifecycleGeneration: 7n
+            }, payload: Buffer.alloc(0), objectGeneration: 1n, ownerId: 'owner-a',
+            ownerLeaseGeneration: 3n, authorityOwnerGeneration: 4n, storeVersion: { value: 'v1' }
+          };
+        }
+      },
+      locationStore: unusedStore,
+      peerStore: unusedStore,
+      spotStore: unusedStore,
+      actorStore: unusedStore,
+      routeStore: unusedStore
     },
     leaseTracker: { async remainingOwnerTokenLeaseMs() { return 10000; } }
   });
   const client = createActorClient({
     locationResolver: () => resolver,
-    nodeProvider: () => ({ requestToActor(_actor, _parts, options) {
-      userBinding = submitBindingRequest(bindingOperation({
-        result: SubmitResult.Backpressured, admitted: userAdmission, reply: userReply
-      }), [], undefined, undefined, options.onAdmitted);
-      return operationId;
-    } }),
+    nodeProvider: () => ({
+      requestToActor(_actor, _parts, options) {
+        userBinding = submitBindingRequest(
+          bindingOperation({
+            result: SubmitResult.Backpressured, admitted: userAdmission, reply: userReply
+          }),
+          [],
+          undefined,
+          undefined,
+          options.onAdmitted,
+          options.requestOperation
+        );
+        return operationId;
+      }
+    }),
     completionTableProvider: () => ({ async submit(start) {
       start();
       return { terminalResult: RequestResult.Ok, failureErrno: 0, parts: await userBinding };

@@ -1,12 +1,18 @@
+import { RequestRuntime } from '../foundation/request-runtime';
+import type { PendingOperation } from '../foundation/operation-registry';
+import { waitRequestReply } from '../messaging/request-deadline';
 import type { Message } from '../../contracts/Common/Message';
 import type { ZLinkBackendSpot } from '../backend/contracts';
 import type { ZLinkSpotRouteTarget } from '../spots/spot-routing-internal';
-import { awaitWithAbort, throwIfAborted } from '../abort';
+import { throwIfAborted } from '../abort';
 import { closeMessages, ZLinkChannelMessageKind } from './channel-envelope';
 import { decodeSpotDirectReply, encodeSpotDirectEnvelope } from './spot-direct-envelope';
 
 export class ZLinkSourceSpotRouter {
-  constructor(private readonly defaultRequestTimeoutMs: number | undefined) {}
+  constructor(
+    private readonly defaultRequestTimeoutMs: number | undefined,
+    private readonly requests = new RequestRuntime()
+  ) {}
 
   async request<TReply>(
     sourceSpot: ZLinkBackendSpot,
@@ -15,33 +21,46 @@ export class ZLinkSourceSpotRouter {
     request: unknown,
     timeoutMs: number | undefined,
     signal?: AbortSignal,
-    onAdmitted?: () => void
+    onAdmitted?: () => void,
+    existing?: PendingOperation<unknown>
   ): Promise<TReply> {
-    throwIfAborted(signal);
-    const parts = [
-      encodeSpotDirectEnvelope(
-        ZLinkChannelMessageKind.Request,
-        target.routerChannelId,
-        packetName,
-        request
-      )
-    ] as readonly Message[];
-    const operation = sourceSpot.requestToSpot(
-      target.targetNodeRid,
-      target.spotId,
-      parts,
+    return this.requests.request(
       timeoutMs ?? this.defaultRequestTimeoutMs,
-      onAdmitted
+      signal,
+      async (requestOperation) => {
+        throwIfAborted(signal);
+        const parts = [
+          encodeSpotDirectEnvelope(
+            ZLinkChannelMessageKind.Request,
+            target.routerChannelId,
+            packetName,
+            request
+          )
+        ] as readonly Message[];
+        const operation = sourceSpot.requestToSpot(
+          target.targetNodeRid,
+          target.spotId,
+          parts,
+          timeoutMs ?? this.defaultRequestTimeoutMs,
+          onAdmitted,
+          requestOperation
+        );
+        const replyParts = await waitRequestReply(
+          operation,
+          'Spot request',
+          requestOperation,
+          undefined,
+          closeMessages
+        );
+        try {
+          return decodeSpotDirectReply<TReply>(replyParts);
+        } finally {
+          closeMessages(replyParts);
+          closeMessages(parts);
+        }
+      },
+      existing
     );
-    const replyParts = await awaitWithAbort(operation, signal, () => {
-      void operation.then(closeMessages, () => undefined);
-    });
-    try {
-      return decodeSpotDirectReply<TReply>(replyParts);
-    } finally {
-      closeMessages(replyParts);
-      closeMessages(parts);
-    }
   }
 
   async send(
@@ -73,18 +92,31 @@ export class ZLinkSourceSpotRouter {
     request: Message,
     timeoutMs: number | undefined,
     signal?: AbortSignal,
-    onAdmitted?: () => void
+    onAdmitted?: () => void,
+    existing?: PendingOperation<unknown>
   ): Promise<readonly Message[]> {
-    throwIfAborted(signal);
-    const operation = sourceSpot.requestToSpot(
-      target.targetNodeRid,
-      target.spotId,
-      request,
+    return this.requests.request(
       timeoutMs ?? this.defaultRequestTimeoutMs,
-      onAdmitted
+      signal,
+      async (requestOperation) => {
+        throwIfAborted(signal);
+        const operation = sourceSpot.requestToSpot(
+          target.targetNodeRid,
+          target.spotId,
+          request,
+          timeoutMs ?? this.defaultRequestTimeoutMs,
+          onAdmitted,
+          requestOperation
+        );
+        return await waitRequestReply(
+          operation,
+          'Spot request',
+          requestOperation,
+          undefined,
+          closeMessages
+        );
+      },
+      existing
     );
-    return await awaitWithAbort(operation, signal, () => {
-      void operation.then(closeMessages, () => undefined);
-    });
   }
 }

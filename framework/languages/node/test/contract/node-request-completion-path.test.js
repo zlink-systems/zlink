@@ -177,6 +177,11 @@ test('registry and liveness report their next management deadline', () => {
   assert.equal(registry.nextDeadlineMs(), 100);
   now.value = 100;
   assert.equal(registry.expire(100, Number.POSITIVE_INFINITY), 0);
+  // Spec 01 §10.1: L=100, R=256; the remaining deadline is outside L+R.
+  assert.equal(registry.nextDeadlineMs(), Math.min(500, 100 + 256));
+  now.value = 356;
+  assert.equal(registry.expire(356, Number.POSITIVE_INFINITY), 0);
+  assert.equal(registry.isPending(late.id), true);
   assert.equal(registry.nextDeadlineMs(), 500);
   registry.close();
 
@@ -277,7 +282,6 @@ test('binding reply ownership and the remote terminal share one Promise continua
     hook.disable();
   }
 });
-
 
 for (const failureAt of ['binding', 'protocol', 'submit', 'admission', 'receive', 'retain', 'terminal']) {
   test(`remote terminal observes ${failureAt} failure without a rejected internal continuation`, async (t) => {

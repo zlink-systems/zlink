@@ -1,3 +1,5 @@
+import { waitRequestReply } from '../../messaging/request-deadline';
+import { RequestRuntime } from '../../foundation/request-runtime';
 import {
   prepareZLinkRequestReply,
   rejectZLinkRequestReply,
@@ -23,7 +25,8 @@ const EMPTY_METADATA: ReadonlyMap<string, string> = new Map();
 export class ZLinkDealerChannelClientTransport implements ZLinkChannelClientTransport {
   constructor(
     private readonly dealer: DealerSocket,
-    private readonly publisher?: PubSocket
+    private readonly publisher?: PubSocket,
+    private readonly requests = new RequestRuntime()
   ) {}
 
   async send(
@@ -65,6 +68,7 @@ export class ZLinkDealerChannelClientTransport implements ZLinkChannelClientTran
     metadata: ReadonlyMap<string, string> = EMPTY_METADATA,
     onAdmitted?: () => void
   ): ZLinkRequestResult<TReply> {
+    const requestOperation = this.requests.begin(timeoutMs, signal);
     try {
       throwIfAborted(signal);
       const operation = runWithOutboundFlow(true, () =>
@@ -87,17 +91,16 @@ export class ZLinkDealerChannelClientTransport implements ZLinkChannelClientTran
       if (timeoutMs !== undefined) operation.timeout(timeoutMs);
       const pending = submitRequestOperation(
         {
-          submit: () =>
-            bindingRequestReply(
-              operation.submit(),
-              timeoutMs === undefined ? undefined : performance.now() + timeoutMs,
-              undefined,
-              onAdmitted
-            )
+          submit: () => bindingRequestReply(operation.submit(), undefined, onAdmitted)
         },
         'channel request'
       );
-      return prepareZLinkRequestReply(pending, (reply) => {
+      const observed = this.requests.run(requestOperation, () =>
+        waitRequestReply(pending, 'Channel request', requestOperation, undefined, (parts) => {
+          for (const part of parts) part.close();
+        })
+      );
+      return prepareZLinkRequestReply(observed, (reply) => {
         try {
           return decodeChannelReply<TReply>(reply);
         } finally {
@@ -105,6 +108,7 @@ export class ZLinkDealerChannelClientTransport implements ZLinkChannelClientTran
         }
       });
     } catch (error) {
+      requestOperation.fail(error);
       return rejectZLinkRequestReply(error);
     }
   }

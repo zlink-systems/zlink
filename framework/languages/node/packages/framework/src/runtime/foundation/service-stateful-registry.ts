@@ -619,7 +619,10 @@ export const RELOCATION_REPLY_RETENTION_MS = 24 * 60 * 60 * 1_000;
 export class ServiceTerminalOperationRegistry<T, Context = unknown> {
   private readonly operations: OperationRegistry<T, Context>;
 
-  constructor(operations = new OperationRegistry<T, Context>()) {
+  constructor(
+    operations = new OperationRegistry<T, Context>(),
+    private readonly release = () => operations.close('Stateful runtime closed.')
+  ) {
     this.operations = operations;
   }
 
@@ -629,6 +632,10 @@ export class ServiceTerminalOperationRegistry<T, Context = unknown> {
     context?: Context
   ): PendingOperation<T> {
     return this.operations.register(timeoutMs, timeoutOwner, context);
+  }
+
+  setContext(id: bigint, context: Context): void {
+    this.operations.setContext(id, context);
   }
 
   reply(id: bigint, value: T, terminalContextRetentionMs = 0): boolean {
@@ -664,7 +671,7 @@ export class ServiceTerminalOperationRegistry<T, Context = unknown> {
   }
 
   close(): void {
-    this.operations.close('Stateful runtime closed.');
+    this.release();
   }
 
   failAll(reason: unknown): void {

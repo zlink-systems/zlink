@@ -59,13 +59,16 @@ function bindFixture(request) {
   backend.setCompletionHandler((terminal, materialize) => completions.complete(terminal, materialize));
   const service = backend.createStreamSessionService({});
   // Location resolution succeeds before the bind transport scenario starts.
-  service.lookupActor = () => backend.observeStateful(OperationKind.ActorLookup, {
-    id: 100n,
-    promise: Promise.resolve({
-      terminalResult: RequestResult.Ok, failureCode: 0,
-      kindData: { kind: 'actorLookupCompletion', location: { actor } }
-    })
-  });
+  service.lookupActor = () =>
+    backend.observeStateful(OperationKind.ActorLookup, {
+      ...new (require('../../packages/framework/dist/runtime/foundation/operation-registry').OperationRegistry)().register(
+        1000
+      ),
+      promise: Promise.resolve({
+        terminalResult: RequestResult.Ok, failureCode: 0,
+        kindData: { kind: 'actorLookupCompletion', location: { actor } }
+      })
+    });
   let bindCalls = 0;
   let deadline;
   const bindActor = service.bindActor.bind(service);

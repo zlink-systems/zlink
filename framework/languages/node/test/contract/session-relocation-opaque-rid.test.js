@@ -94,7 +94,9 @@ async function relocationHarness(ids, nativeBinding = false, hooks = {}) {
   if (nativeBinding) {
     sessionService.lookupActor = (_node, actorId) =>
       backend.observeStateful(OperationKind.ActorLookup, {
-        id: 100n,
+        ...new (require('../../packages/framework/dist/runtime/foundation/operation-registry').OperationRegistry)().register(
+          1000
+        ),
         promise: Promise.resolve({
           terminalResult: RequestResult.Ok,
           failureCode: 0,
