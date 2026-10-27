@@ -450,6 +450,10 @@ export class ZLinkRuntimeMetrics {
     safe(() => this.registry.upDown.get(name)?.add(value, attributes));
   }
 
+  recordSpotCount(meshName: string, kind: 'entry' | 'user' | 'instance', delta: number): void {
+    this.change(METRIC_NAMES.SpotCount, delta, { mesh_name: meshName, spot_kind: kind });
+  }
+
   duration(
     name: HistogramName | string,
     seconds: number,
