@@ -13,6 +13,7 @@ import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
 import systems.zlink.framework.runtime.configuration.ZLinkDispatchOptionsRegistration;
 import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
+import systems.zlink.framework.runtime.internal.ZLinkCompletionBridge;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResult;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot;
@@ -44,7 +45,9 @@ final class ZLinkSpotDirectCompletionDispatchTest {
     @Test
     void remoteReplyReusesTheRegisteredCompletionTurn() throws Exception {
         try (var registry = new ZLinkServiceOperationRegistry()) {
-            var operation = registry.<ZLinkBackendReceived>register(REGISTRY_TIMEOUT);
+            var operation =
+                    ZLinkCompletionBridge.await(
+                            registry.<ZLinkBackendReceived>register(REGISTRY_TIMEOUT));
             var outbound = outbound();
             var observed = new CountDownLatch(1);
             var closed = new CountDownLatch(1);

@@ -2,6 +2,7 @@ package systems.zlink.framework.runtime.internal.service;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
@@ -12,6 +13,8 @@ import org.junit.jupiter.api.Test;
 
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.runtime.internal.ZLinkCompletionBridge;
+import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -29,8 +32,285 @@ import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.LockSupport;
 
 final class ZLinkServiceOperationRegistryTest {
+    @Test
+    void replyTakenBeforeDispatchCannotBeOverwrittenByCallerCancellation() throws Exception {
+        try (var registry = new ZLinkServiceOperationRegistry(new ManualMaintenance())) {
+            UUID id = ZLinkServiceOperationIds.next();
+            var result =
+                    registry.<String>submitTerminal(
+                            id, Duration.ofHours(1), terminal -> null, ignored -> {});
+            int workers = ForkJoinPool.getCommonPoolParallelism();
+            var occupied = new CountDownLatch(workers);
+            var release = new CountDownLatch(1);
+            for (int worker = 0; worker < workers; worker++)
+                ForkJoinPool.commonPool()
+                        .execute(
+                                () -> {
+                                    occupied.countDown();
+                                    await(release);
+                                });
+            try {
+                assertTrue(occupied.await(5, TimeUnit.SECONDS));
+                assertTrue(registry.complete(id, "reply"));
+                assertEquals(0, registry.pendingCount());
+                assertFalse(result.isDone(), "dispatcher delivery is held by the occupied pool");
+                assertFalse(result.cancel(false), "the reply already took C1 terminal authority");
+            } finally {
+                release.countDown();
+            }
+            assertEquals("reply", result.get(5, TimeUnit.SECONDS));
+        }
+    }
+
+    @Test
+    void cancellationWhileOwnerRegistrationIsQueuedPreventsSubmission() throws Exception {
+        try (var registry = new ZLinkServiceOperationRegistry(new ManualMaintenance())) {
+            var entered = new CountDownLatch(1);
+            var release = new CountDownLatch(1);
+            var lane = ownerLane(registry);
+            var submissions = new AtomicInteger();
+            lane.runAsync(
+                    () -> {
+                        entered.countDown();
+                        await(release);
+                    });
+            try {
+                assertTrue(entered.await(5, TimeUnit.SECONDS));
+                var receiver =
+                        ZLinkServiceOperationRegistry.<String>prepareOperation(
+                                ZLinkServiceOperationIds.next());
+                var registration =
+                        lane.runAsync(
+                                () ->
+                                        registry.submitTerminal(
+                                                receiver.id(),
+                                                Duration.ofHours(1),
+                                                terminal -> {
+                                                    submissions.incrementAndGet();
+                                                    return null;
+                                                },
+                                                ignored -> {},
+                                                receiver));
+                assertTrue(receiver.cancel(false));
+                release.countDown();
+                registration.toCompletableFuture().get(5, TimeUnit.SECONDS);
+                assertTrue(receiver.isCancelled());
+                assertEquals(0, submissions.get());
+                assertEquals(0, registry.pendingCount());
+            } finally {
+                release.countDown();
+            }
+        }
+    }
+
+    @Test
+    void cancellationDuringRegistrationHandoffPreventsSubmission() throws Exception {
+        var entered = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
+        var armed = new java.util.concurrent.atomic.AtomicBoolean();
+        var submissions = new AtomicInteger();
+        try (var registry =
+                new ZLinkServiceOperationRegistry(
+                        new ManualMaintenance(),
+                        new IllegalStateException("closed"),
+                        () -> {
+                            if (armed.get()
+                                    && StackWalker.getInstance()
+                                            .walk(
+                                                    frames ->
+                                                            frames.anyMatch(
+                                                                    frame ->
+                                                                            frame.getMethodName()
+                                                                                    .equals(
+                                                                                            "registerEntry")))) {
+                                entered.countDown();
+                                await(release);
+                            }
+                            return 0;
+                        })) {
+            var receiver =
+                    ZLinkServiceOperationRegistry.<String>prepareOperation(
+                            ZLinkServiceOperationIds.next());
+            armed.set(true);
+            var registration =
+                    ownerLane(registry)
+                            .runAsync(
+                                    () ->
+                                            registry.submitTerminal(
+                                                    receiver.id(),
+                                                    Duration.ofHours(1),
+                                                    terminal -> {
+                                                        submissions.incrementAndGet();
+                                                        return null;
+                                                    },
+                                                    ignored -> {},
+                                                    receiver));
+            try {
+                assertTrue(entered.await(5, TimeUnit.SECONDS));
+                assertTrue(receiver.cancel(false), "handoff does not drop cancellation");
+            } finally {
+                release.countDown();
+            }
+            registration.toCompletableFuture().get(5, TimeUnit.SECONDS);
+            assertTrue(receiver.isCancelled());
+            assertEquals(0, submissions.get());
+            assertEquals(0, registry.pendingCount());
+            assertEquals(1, wheelEntryCount(registry));
+            ZLinkCompletionBridge.await(registry.expire(TimeUnit.MILLISECONDS.toNanos(256)));
+            assertEquals(0, wheelEntryCount(registry));
+        } finally {
+            release.countDown();
+        }
+    }
+
+    @Test
+    void rejectedOwnerRegistrationCompletesThePreparedReceiver() throws Exception {
+        var registry = new ZLinkServiceOperationRegistry(new ManualMaintenance());
+        {
+            ownerLane(registry).closeAsync().toCompletableFuture().get(5, TimeUnit.SECONDS);
+            var receiver =
+                    ZLinkServiceOperationRegistry.<String>prepareOperation(
+                            ZLinkServiceOperationIds.next());
+            registry.submitTerminal(
+                    receiver.id(), Duration.ofHours(1), terminal -> null, ignored -> {}, receiver);
+            var failure =
+                    assertThrows(
+                            java.util.concurrent.ExecutionException.class,
+                            () -> receiver.get(5, TimeUnit.SECONDS));
+            assertInstanceOf(IllegalStateException.class, failure.getCause());
+        }
+    }
+
+    @Test
+    void hugeTimeoutDoesNotExpireWhenTheRelativeNanosecondDeadlineWraps() {
+        AtomicLong clock = new AtomicLong();
+        try (var registry =
+                new ZLinkServiceOperationRegistry(
+                        new ManualMaintenance(), new IllegalStateException("closed"), clock::get)) {
+            clock.set(TimeUnit.MILLISECONDS.toNanos(1));
+            var request =
+                    ZLinkCompletionBridge.await(
+                            registry.register(Duration.ofSeconds(Long.MAX_VALUE)));
+            clock.set(TimeUnit.MILLISECONDS.toNanos(257));
+            assertEquals(0, ZLinkCompletionBridge.await(registry.expire(clock.get())));
+            assertFalse(request.isDone());
+            assertEquals(1, registry.pendingCount());
+        }
+    }
+
+    @Test
+    void cancellationRemovesOneThousandPendingRequestsWithoutOwnerCleanupTurns() {
+        var maintenance = new ManualMaintenance();
+        try (var registry = new ZLinkServiceOperationRegistry(maintenance)) {
+            var requests = new ArrayList<ZLinkServiceOperationRegistry.Operation<Object>>();
+            for (int request = 0; request < 1_000; request++)
+                requests.add(ZLinkCompletionBridge.await(registry.register(Duration.ofHours(1))));
+            assertEquals(1_000, registry.pendingCount());
+            for (var request : requests) assertTrue(request.cancel(false));
+            assertEquals(0, registry.pendingCount());
+            assertEquals(1, maintenance.starts);
+        }
+    }
+
+    @Test
+    void retainedReservationDoesNotReadTheClockAgain() throws Exception {
+        AtomicLong clock = new AtomicLong();
+        AtomicInteger reads = new AtomicInteger();
+        var maintenance = new ManualMaintenance();
+        try (var registry =
+                new ZLinkServiceOperationRegistry(
+                        maintenance,
+                        new IllegalStateException("closed"),
+                        () -> {
+                            reads.incrementAndGet();
+                            return clock.get();
+                        })) {
+            var first = ZLinkCompletionBridge.await(registry.register(Duration.ofSeconds(30)));
+            assertTrue(registry.complete(first.id(), 1));
+            int before = reads.get();
+            var second = ZLinkCompletionBridge.await(registry.register(Duration.ofSeconds(30)));
+            assertEquals(
+                    2,
+                    reads.get() - before,
+                    "deadline capture and index insertion read time; a retained visit needs no"
+                            + " clock read");
+            assertTrue(registry.complete(second.id(), 2));
+        }
+    }
+
+    @Test
+    void registrationKeepsDeadlineWhileWaitingForOwner() throws Exception {
+        AtomicLong clock = new AtomicLong();
+        var maintenance = new ManualMaintenance();
+        var registry =
+                new ZLinkServiceOperationRegistry(
+                        maintenance, new IllegalStateException("closed"), clock::get);
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        var lane = ownerLane(registry);
+        lane.runAsync(
+                () -> {
+                    entered.countDown();
+                    await(release);
+                });
+        try {
+            assertTrue(entered.await(1, TimeUnit.SECONDS));
+            var registered = registry.register(Duration.ofMillis(10));
+            clock.set(TimeUnit.MILLISECONDS.toNanos(20));
+            release.countDown();
+            var request = ZLinkCompletionBridge.await(registered);
+            assertEquals(1, ZLinkCompletionBridge.await(registry.expire(clock.get())));
+            assertThrows(CompletionException.class, request::join);
+            assertEquals(0, registry.pendingCount());
+        } finally {
+            release.countDown();
+            registry.close();
+        }
+    }
+
+    @Test
+    void longDeadlineSlotsDoNotAdvanceManagementVisits() throws Exception {
+        AtomicLong clock = new AtomicLong();
+        var maintenance = new ManualMaintenance();
+        try (var registry =
+                new ZLinkServiceOperationRegistry(
+                        maintenance, new IllegalStateException("closed"), clock::get)) {
+            for (int request = 0; request < 1_000; request++)
+                ZLinkCompletionBridge.await(registry.register(Duration.ofMillis(10_000 + request)));
+            var tick = ZLinkServiceOperationRegistry.class.getDeclaredField("maintenanceTick");
+            tick.setAccessible(true);
+            assertEquals(256, tick.getLong(registry));
+            clock.set(TimeUnit.MILLISECONDS.toNanos(256));
+            assertEquals(0, ZLinkCompletionBridge.await(registry.expire(clock.get())));
+            assertEquals(1_000, registry.pendingCount());
+        }
+    }
+
+    @Test
+    void completedLongDeadlineEntriesLeaveTheIndexWithinOneRotation() throws Exception {
+        AtomicLong clock = new AtomicLong();
+        var maintenance = new ManualMaintenance();
+        try (var registry =
+                new ZLinkServiceOperationRegistry(
+                        maintenance, new IllegalStateException("closed"), clock::get)) {
+            for (int request = 0; request < 1_000; request++) {
+                var operation =
+                        ZLinkCompletionBridge.await(
+                                registry.register(Duration.ofMillis(10_000 + request)));
+                assertTrue(registry.complete(operation.id(), request));
+            }
+            assertEquals(0, registry.pendingCount());
+            clock.set(TimeUnit.MILLISECONDS.toNanos(256));
+            ZLinkCompletionBridge.await(registry.expire(clock.get()));
+            var heads = ZLinkServiceOperationRegistry.class.getDeclaredField("deadlineHeads");
+            heads.setAccessible(true);
+            for (Object entry : (Object[]) heads.get(registry)) assertNull(entry);
+        }
+    }
+
     @Test
     void repeatedCloseReturnsWhileTheFirstCloseJoinsMaintenance() throws Exception {
         CountDownLatch workerExited = new CountDownLatch(1);
@@ -51,7 +331,7 @@ final class ZLinkServiceOperationRegistryTest {
                             worker.set(thread);
                             return thread;
                         });
-        registry.register(Duration.ofHours(1));
+        ZLinkCompletionBridge.await(registry.register(Duration.ofHours(1)));
         Thread firstClose = Thread.ofPlatform().start(registry::close);
         Thread repeatedClose = null;
         try {
@@ -67,7 +347,8 @@ final class ZLinkServiceOperationRegistryTest {
             assertTrue(firstClose.isAlive());
             assertEquals(0, registry.pendingCount());
             assertThrows(
-                    IllegalStateException.class, () -> registry.register(Duration.ofSeconds(1)));
+                    IllegalStateException.class,
+                    () -> ZLinkCompletionBridge.await(registry.register(Duration.ofSeconds(1))));
         } finally {
             releaseWorker.countDown();
             firstClose.join();
@@ -80,11 +361,8 @@ final class ZLinkServiceOperationRegistryTest {
     @Test
     void maintenanceParksWithoutClockPollingAndCloseJoinsItsWorker() throws Exception {
         AtomicReference<Thread> worker = new AtomicReference<>();
-        AtomicReference<ZLinkServiceOperationRegistry> owner = new AtomicReference<>();
-        AtomicReference<Object> gate = new AtomicReference<>();
         AtomicLong clock = new AtomicLong();
         AtomicInteger clockReads = new AtomicInteger();
-        CountDownLatch emptyWait = new CountDownLatch(1);
         var registry =
                 new ZLinkServiceOperationRegistry(
                         command -> {
@@ -95,41 +373,33 @@ final class ZLinkServiceOperationRegistryTest {
                         new IllegalStateException("closed"),
                         () -> {
                             clockReads.incrementAndGet();
-                            if (Thread.currentThread() == worker.get()
-                                    && Thread.holdsLock(gate.get())
-                                    && owner.get().pendingCount() == 0) {
-                                emptyWait.countDown();
-                            }
                             return clock.get();
                         });
-        owner.set(registry);
-        var gateField = ZLinkServiceOperationRegistry.class.getDeclaredField("gate");
-        gateField.setAccessible(true);
-        gate.set(gateField.get(registry));
+        var lane = ownerLane(registry);
         try (registry) {
             assertNull(worker.get());
-            synchronized (gate.get()) {
-                var first = registry.register(Duration.ofMillis(1));
-                clock.set(TimeUnit.MILLISECONDS.toNanos(2));
-                assertTrue(registry.discard(first.id()));
-            }
-            assertTrue(emptyWait.await(1, TimeUnit.SECONDS));
-            int idleReads;
-            synchronized (gate.get()) {
-                // The worker signalled while holding this monitor. Acquiring it proves
-                // that its next action released the monitor through the empty-wheel wait.
-                idleReads = clockReads.get();
-            }
-            for (int tick = 0; tick < 1_000; tick++)
-                clock.addAndGet(TimeUnit.MILLISECONDS.toNanos(1));
-            synchronized (gate.get()) {
-                assertEquals(idleReads, clockReads.get());
-            }
-            ZLinkServiceOperationRegistry.Operation<Object> second;
-            synchronized (gate.get()) {
-                second = registry.register(Duration.ofMillis(1));
-                clock.addAndGet(TimeUnit.MILLISECONDS.toNanos(2));
-            }
+            lane.awaitTurn(
+                    () -> {
+                        var first =
+                                ZLinkCompletionBridge.await(
+                                        registry.register(Duration.ofMillis(1)));
+                        clock.set(TimeUnit.MILLISECONDS.toNanos(2));
+                        assertTrue(registry.discard(first.id()));
+                        return null;
+                    });
+            parkedIndefinitely(worker.get(), registry);
+            int idleReads = clockReads.get();
+            clock.addAndGet(TimeUnit.SECONDS.toNanos(1));
+            assertEquals(idleReads, clockReads.get());
+            var second =
+                    lane.awaitTurn(
+                            () -> {
+                                var operation =
+                                        ZLinkCompletionBridge.await(
+                                                registry.register(Duration.ofMillis(1)));
+                                clock.addAndGet(TimeUnit.MILLISECONDS.toNanos(2));
+                                return operation;
+                            });
             assertTrue(
                     assertThrows(
                                             java.util.concurrent.ExecutionException.class,
@@ -159,18 +429,20 @@ final class ZLinkServiceOperationRegistryTest {
                             if (Thread.currentThread() == worker.get()) observed.get().countDown();
                             return clock.get();
                         });
-        var gateField = ZLinkServiceOperationRegistry.class.getDeclaredField("gate");
-        gateField.setAccessible(true);
-        Object gate = gateField.get(registry);
+        var lane = ownerLane(registry);
         try (registry) {
-            var later = registry.register(Duration.ofMillis(255));
+            var later = ZLinkCompletionBridge.await(registry.register(Duration.ofMillis(255)));
             assertTrue(firstWait.await(1, TimeUnit.SECONDS));
-            ZLinkServiceOperationRegistry.Operation<Object> earlier;
-            synchronized (gate) {
-                observed.set(nextWait);
-                earlier = registry.register(Duration.ofNanos(1));
-                clock.set(TimeUnit.MILLISECONDS.toNanos(2));
-            }
+            var earlier =
+                    lane.awaitTurn(
+                            () -> {
+                                observed.set(nextWait);
+                                var operation =
+                                        ZLinkCompletionBridge.await(
+                                                registry.register(Duration.ofNanos(1)));
+                                clock.set(TimeUnit.MILLISECONDS.toNanos(2));
+                                return operation;
+                            });
             assertTrue(nextWait.await(1, TimeUnit.SECONDS));
             assertTrue(
                     assertThrows(
@@ -193,12 +465,12 @@ final class ZLinkServiceOperationRegistryTest {
                         maintenance,
                         new IllegalStateException("closed"),
                         () -> clock.getAndAdd(TimeUnit.MICROSECONDS.toNanos(10)))) {
-            var first = registry.register(Duration.ofMillis(1));
+            var first = ZLinkCompletionBridge.await(registry.register(Duration.ofMillis(1)));
             assertTrue(registry.discard(first.id()));
             clock.set(Duration.ofDays(365).toNanos());
-            var next = registry.register(Duration.ofMillis(1));
+            var next = ZLinkCompletionBridge.await(registry.register(Duration.ofMillis(1)));
             clock.addAndGet(TimeUnit.MILLISECONDS.toNanos(2));
-            assertEquals(1, registry.expire(clock.get()));
+            assertEquals(1, ZLinkCompletionBridge.await(registry.expire(clock.get())));
             assertTrue(
                     assertThrows(CompletionException.class, next::join).getCause()
                             instanceof TimeoutException);
@@ -216,7 +488,7 @@ final class ZLinkServiceOperationRegistryTest {
                             worker.set(thread);
                             return thread;
                         })) {
-            registry.register(Duration.ofHours(1));
+            ZLinkCompletionBridge.await(registry.register(Duration.ofHours(1)));
             Thread.currentThread().interrupt();
             try {
                 registry.close();
@@ -245,7 +517,9 @@ final class ZLinkServiceOperationRegistryTest {
                     rejected,
                     assertThrows(
                             IllegalStateException.class,
-                            () -> registry.register(Duration.ofSeconds(1))));
+                            () ->
+                                    ZLinkCompletionBridge.await(
+                                            registry.register(Duration.ofSeconds(1)))));
             assertEquals(0, registry.pendingCount());
         }
     }
@@ -254,7 +528,7 @@ final class ZLinkServiceOperationRegistryTest {
     void requestMaintenanceUsesOneWorkerWithoutScheduledTimers() {
         var maintenance = new ManualMaintenance();
         try (var registry = new ZLinkServiceOperationRegistry(maintenance)) {
-            var request = registry.register(Duration.ofHours(1));
+            var request = ZLinkCompletionBridge.await(registry.register(Duration.ofHours(1)));
             assertEquals(1, maintenance.starts);
             registry.discard(request.id());
         }
@@ -271,11 +545,11 @@ final class ZLinkServiceOperationRegistryTest {
             var send = registry.submitSend(() -> binding);
             // The first full wheel revolution shares slot zero with an unindexed SEND slot.
             Duration timeout = Duration.ofMillis(256);
-            var request = registry.register(timeout);
+            var request = ZLinkCompletionBridge.await(registry.register(timeout));
             binding.complete(null);
             assertNull(send.toCompletableFuture().join());
             assertEquals(1, registry.pendingCount());
-            assertEquals(1, registry.expire(timeout.toNanos()));
+            assertEquals(1, ZLinkCompletionBridge.await(registry.expire(timeout.toNanos())));
             assertTrue(
                     assertThrows(CompletionException.class, request::join).getCause()
                             instanceof TimeoutException);
@@ -284,12 +558,13 @@ final class ZLinkServiceOperationRegistryTest {
     }
 
     @Test
-    void sendOnlyRegistryNeverSchedulesMaintenance() {
+    void sendOnlyRegistryNeverSchedulesMaintenance() throws Exception {
         var maintenance = new ManualMaintenance();
         try (var registry = new ZLinkServiceOperationRegistry(maintenance)) {
             assertEquals(0, maintenance.starts);
             var binding = new CompletableFuture<Void>();
             var send = registry.submitSend(() -> binding);
+            ownerLane(registry).runAsync(() -> {}).toCompletableFuture().get(1, TimeUnit.SECONDS);
             assertEquals(1, registry.pendingCount());
             assertEquals(0, maintenance.starts);
             binding.complete(null);
@@ -308,25 +583,27 @@ final class ZLinkServiceOperationRegistryTest {
                         maintenance, new IllegalStateException("closed"), clock::get);
         try (registry) {
             assertEquals(0, maintenance.starts);
-            var first = registry.register(Duration.ofNanos(10));
+            var first = ZLinkCompletionBridge.await(registry.register(Duration.ofNanos(10)));
             assertEquals(1, maintenance.starts);
             clock.set(109);
-            registry.expire(clock.get());
+            ZLinkCompletionBridge.await(registry.expire(clock.get()));
             assertFalse(first.isDone());
             clock.set(110);
-            registry.expire(clock.get());
+            ZLinkCompletionBridge.await(registry.expire(clock.get()));
             assertFalse(first.isDone());
             clock.set(100 + TimeUnit.MILLISECONDS.toNanos(1));
-            registry.expire(clock.get());
+            ZLinkCompletionBridge.await(registry.expire(clock.get()));
             assertTrue(
                     assertThrows(CompletionException.class, first::join).getCause()
                             instanceof TimeoutException);
-            var second = registry.register(Duration.ofNanos(10));
+            var second = ZLinkCompletionBridge.await(registry.register(Duration.ofNanos(10)));
             assertEquals(1, maintenance.starts);
             assertTrue(registry.discard(second.id()));
         }
         assertEquals(1, maintenance.starts);
-        assertThrows(IllegalStateException.class, () -> registry.register(Duration.ofSeconds(1)));
+        assertThrows(
+                IllegalStateException.class,
+                () -> ZLinkCompletionBridge.await(registry.register(Duration.ofSeconds(1))));
         assertEquals(1, maintenance.starts);
     }
 
@@ -339,20 +616,21 @@ final class ZLinkServiceOperationRegistryTest {
                         maintenance, new IllegalStateException("closed"), clock::get)) {
             var binding = new CompletableFuture<Void>();
             var send = registry.submitSend(() -> binding);
-            var request = registry.register(Duration.ofNanos(10));
+            var request = ZLinkCompletionBridge.await(registry.register(Duration.ofNanos(10)));
             assertTrue(send.toCompletableFuture().cancel(false));
             assertFalse(binding.isDone());
             assertEquals(2, registry.pendingCount());
             clock.set(110);
-            assertEquals(0, registry.expire(clock.get()));
+            assertEquals(0, ZLinkCompletionBridge.await(registry.expire(clock.get())));
             clock.set(100 + TimeUnit.MILLISECONDS.toNanos(1));
-            assertEquals(1, registry.expire(clock.get()));
+            assertEquals(1, ZLinkCompletionBridge.await(registry.expire(clock.get())));
             assertTrue(
                     assertThrows(CompletionException.class, request::join).getCause()
                             instanceof TimeoutException);
             assertEquals(1, registry.pendingCount());
             assertFalse(send.toCompletableFuture().isDone());
-            var cancelledRequest = registry.register(Duration.ofNanos(10));
+            var cancelledRequest =
+                    ZLinkCompletionBridge.await(registry.register(Duration.ofNanos(10)));
             assertTrue(cancelledRequest.cancel(false));
             assertThrows(CancellationException.class, cancelledRequest::join);
             assertEquals(1, registry.pendingCount());
@@ -384,21 +662,21 @@ final class ZLinkServiceOperationRegistryTest {
     }
 
     @Test
-    void lateSendTerminalCannotCompleteReusedSlot() throws Exception {
+    void lateSendTerminalCannotCompleteAnotherRegistration() throws Exception {
         var maintenance = new ManualMaintenance();
         try (var registry = new ZLinkServiceOperationRegistry(maintenance)) {
             var oldBinding = new CompletableFuture<Void>();
             var old = registry.submitSend(() -> oldBinding);
-            var active = ZLinkServiceOperationRegistry.class.getDeclaredField("activeHead");
-            active.setAccessible(true);
-            var oldEntry = active.get(registry);
-            var idField = oldEntry.getClass().getDeclaredField("id");
-            idField.setAccessible(true);
-            var oldId = (UUID) idField.get(oldEntry);
+            ownerLane(registry).runAsync(() -> {}).toCompletableFuture().get(1, TimeUnit.SECONDS);
+            var pendingField = ZLinkServiceOperationRegistry.class.getDeclaredField("pending");
+            pendingField.setAccessible(true);
+            var pending = (java.util.Map<?, ?>) pendingField.get(registry);
+            var oldId = (UUID) pending.keySet().iterator().next();
             assertTrue(registry.discard(oldId));
             var nextBinding = new CompletableFuture<Void>();
             var next = registry.submitSend(() -> nextBinding);
-            assertSame(oldEntry, active.get(registry));
+            ownerLane(registry).runAsync(() -> {}).toCompletableFuture().get(1, TimeUnit.SECONDS);
+            assertNotEquals(oldId, pending.keySet().iterator().next());
             oldBinding.complete(null);
             assertEquals(1, registry.pendingCount());
             assertFalse(next.toCompletableFuture().isDone());
@@ -410,21 +688,21 @@ final class ZLinkServiceOperationRegistryTest {
     }
 
     @Test
-    void sendTerminalCallbackRunsOnDispatcherOutsideRegistryGate() throws Exception {
+    void sendTerminalCallbackRunsOnDispatcherOutsideOwnerTurn() throws Exception {
         var maintenance = new ManualMaintenance();
         try (var registry = new ZLinkServiceOperationRegistry(maintenance)) {
             var binding = new CompletableFuture<Void>();
             var send = registry.submitSend(() -> binding);
-            var gateField = ZLinkServiceOperationRegistry.class.getDeclaredField("gate");
-            gateField.setAccessible(true);
-            var gate = gateField.get(registry);
+            var lane = ownerLane(registry);
             var callback =
                     send.thenRun(
                             () -> {
                                 assertSame(ForkJoinPool.commonPool(), ForkJoinTask.getPool());
                                 assertTrue(ZLinkServiceCompletionDispatcher.isCurrentCompletion());
-                                assertFalse(Thread.holdsLock(gate));
-                                var request = registry.register(Duration.ofSeconds(1));
+                                assertFalse(lane.isOnLane());
+                                var request =
+                                        ZLinkCompletionBridge.await(
+                                                registry.register(Duration.ofSeconds(1)));
                                 assertTrue(registry.discard(request.id()));
                             });
             binding.complete(null);
@@ -489,10 +767,112 @@ final class ZLinkServiceOperationRegistryTest {
     @Test
     void registrationUsesTheCallerResultAsItsHandle() {
         try (var registry = new ZLinkServiceOperationRegistry()) {
-            var operation = registry.register(java.time.Duration.ofSeconds(5));
+            var operation =
+                    ZLinkCompletionBridge.await(registry.register(java.time.Duration.ofSeconds(5)));
             org.junit.jupiter.api.Assertions.assertSame(operation, operation.completion());
             registry.discard(operation.id());
         }
+    }
+
+    @Test
+    void completedDeadlinesAreReleasedWithinOneWheelRotation() throws Exception {
+        AtomicLong clock = new AtomicLong();
+        int completedRequests = 32;
+        try (var registry =
+                new ZLinkServiceOperationRegistry(
+                        new ManualMaintenance(), new IllegalStateException("closed"), clock::get)) {
+            for (int index = 0; index < completedRequests; index++) {
+                var operation =
+                        ZLinkCompletionBridge.await(registry.register(Duration.ofSeconds(30)));
+                assertTrue(registry.complete(operation.id(), null));
+            }
+            assertEquals(0, registry.pendingCount());
+            assertEquals(0, ZLinkCompletionBridge.await(registry.expire(clock.get())));
+            clock.set(TimeUnit.MILLISECONDS.toNanos(256));
+            assertEquals(0, ZLinkCompletionBridge.await(registry.expire(clock.get())));
+            assertEquals(0, wheelEntryCount(registry));
+        }
+    }
+
+    @Test
+    void closeReleasesCompletedDeadlineReferences() throws Exception {
+        var registry = new ZLinkServiceOperationRegistry(new ManualMaintenance());
+        try {
+            var completed = ZLinkCompletionBridge.await(registry.register(Duration.ofSeconds(30)));
+            ZLinkCompletionBridge.await(registry.register(Duration.ofSeconds(30)));
+            assertEquals(2, registry.pendingCount());
+            assertEquals(2, wheelEntryCount(registry));
+            assertTrue(registry.complete(completed.id(), null));
+            assertEquals(1, registry.pendingCount());
+            registry.close();
+            assertTrue(registry.isClosed());
+            assertEquals(0, registry.pendingCount());
+            assertEquals(0, wheelEntryCount(registry));
+            var tails = ZLinkServiceOperationRegistry.class.getDeclaredField("deadlineTails");
+            tails.setAccessible(true);
+            for (Object tail : (Object[]) tails.get(registry)) assertNull(tail);
+            var cursor = ZLinkServiceOperationRegistry.class.getDeclaredField("deadlineCursor");
+            cursor.setAccessible(true);
+            assertNull(cursor.get(registry));
+        } finally {
+            registry.close();
+        }
+    }
+
+    @Test
+    void maintenanceTerminatesWhenItsOwnerLaneRejectsTheVisit() throws Exception {
+        AtomicLong clock = new AtomicLong();
+        var owner = new ZLinkStateLane();
+        var registry =
+                new ZLinkServiceOperationRegistry(
+                        owner,
+                        new IllegalStateException("closed"),
+                        () -> new TimeoutException("expired"),
+                        clock::get);
+        var operation = ZLinkCompletionBridge.await(registry.register(Duration.ofSeconds(30)));
+        var field = ZLinkServiceOperationRegistry.class.getDeclaredField("maintenance");
+        field.setAccessible(true);
+        Thread worker = (Thread) field.get(registry);
+        try {
+            ZLinkCompletionBridge.await(owner.closeAsync());
+            clock.set(TimeUnit.SECONDS.toNanos(30));
+            LockSupport.unpark(worker);
+            worker.join(TimeUnit.SECONDS.toMillis(1));
+            assertFalse(worker.isAlive(), "rejected maintenance must terminate");
+        } finally {
+            // The RED revision parks forever after rejection; release this test's worker.
+            worker.interrupt();
+            worker.join(TimeUnit.SECONDS.toMillis(1));
+            registry.discard(operation.id());
+        }
+    }
+
+    private static int wheelEntryCount(ZLinkServiceOperationRegistry registry) throws Exception {
+        return ZLinkCompletionBridge.await(
+                ownerLane(registry)
+                        .runAsync(
+                                () -> {
+                                    try {
+                                        var heads =
+                                                ZLinkServiceOperationRegistry.class
+                                                        .getDeclaredField("deadlineHeads");
+                                        heads.setAccessible(true);
+                                        int count = 0;
+                                        for (Object entry : (Object[]) heads.get(registry)) {
+                                            while (entry != null) {
+                                                count++;
+                                                var next =
+                                                        entry.getClass()
+                                                                .getDeclaredField("deadlineNext");
+                                                next.setAccessible(true);
+                                                entry = next.get(entry);
+                                            }
+                                        }
+                                        return count;
+                                    } catch (ReflectiveOperationException failure) {
+                                        throw new AssertionError(failure);
+                                    }
+                                }));
     }
 
     @Test
@@ -506,10 +886,15 @@ final class ZLinkServiceOperationRegistryTest {
             for (int index = 0; index < 100; index++) {
                 int timeout = (index * 37 % 100) + 1;
                 operations.add(
-                        registry.register(
-                                new UUID(index % 2, index + 1), Duration.ofMillis(timeout)));
+                        ZLinkCompletionBridge.await(
+                                registry.register(
+                                        new UUID(index % 2, index + 1),
+                                        Duration.ofMillis(timeout))));
             }
-            assertEquals(50, registry.expire(TimeUnit.MILLISECONDS.toNanos(50)));
+            assertEquals(
+                    50,
+                    ZLinkCompletionBridge.await(
+                            registry.expire(TimeUnit.MILLISECONDS.toNanos(50))));
             for (int index = 0; index < operations.size(); index++) {
                 int timeout = (index * 37 % 100) + 1;
                 if (timeout <= 50)
@@ -517,7 +902,10 @@ final class ZLinkServiceOperationRegistryTest {
                             CompletionException.class, operations.get(index).completion()::join);
                 else assertFalse(operations.get(index).completion().isDone());
             }
-            assertEquals(50, registry.expire(TimeUnit.MILLISECONDS.toNanos(100)));
+            assertEquals(
+                    50,
+                    ZLinkCompletionBridge.await(
+                            registry.expire(TimeUnit.MILLISECONDS.toNanos(100))));
             assertEquals(0, registry.pendingCount());
         }
     }
@@ -537,13 +925,15 @@ final class ZLinkServiceOperationRegistryTest {
                             return new TimeoutException("expired");
                         },
                         clock::get)) {
-            var first = registry.register(Duration.ofMillis(1));
-            var removed = registry.register(Duration.ofMillis(1));
-            var last = registry.register(Duration.ofMillis(1));
+            var first = ZLinkCompletionBridge.await(registry.register(Duration.ofMillis(1)));
+            var removed = ZLinkCompletionBridge.await(registry.register(Duration.ofMillis(1)));
+            var last = ZLinkCompletionBridge.await(registry.register(Duration.ofMillis(1)));
 
-            assertEquals(1, registry.expire(TimeUnit.MILLISECONDS.toNanos(1)));
+            assertEquals(
+                    1,
+                    ZLinkCompletionBridge.await(registry.expire(TimeUnit.MILLISECONDS.toNanos(1))));
             assertTrue(registry.discard(removed.id()));
-            assertEquals(1, registry.expire(clock.get()));
+            assertEquals(1, ZLinkCompletionBridge.await(registry.expire(clock.get())));
             assertEquals(0, registry.pendingCount());
             assertThrows(CompletionException.class, first.completion()::join);
             assertThrows(CompletionException.class, last.completion()::join);
@@ -565,23 +955,26 @@ final class ZLinkServiceOperationRegistryTest {
                         () -> clock.getAndAdd(step.get()))) {
             List<ZLinkServiceOperationRegistry.Operation<Object>> later = new ArrayList<>();
             for (int index = 0; index < 8; index++)
-                later.add(registry.register(Duration.ofMillis(257)));
-            var due = registry.register(Duration.ofMillis(1));
+                later.add(ZLinkCompletionBridge.await(registry.register(Duration.ofMillis(257))));
+            var due = ZLinkCompletionBridge.await(registry.register(Duration.ofMillis(1)));
             // §4.2: every slot visit, a rounds-only one included, reads the management budget
             // counted from entry; four reads exhaust it.
             step.set(budget / 4);
             long tick = TimeUnit.MILLISECONDS.toNanos(1);
 
-            assertEquals(0, registry.expire(tick));
+            assertEquals(0, ZLinkCompletionBridge.await(registry.expire(tick)));
             assertFalse(due.completion().isDone());
             int turns = 1;
-            while (registry.expire(tick) == 0) assertTrue(++turns < 9);
+            while (ZLinkCompletionBridge.await(registry.expire(tick)) == 0) assertTrue(++turns < 9);
             assertThrows(CompletionException.class, due.completion()::join);
             assertEquals(8, registry.pendingCount());
             for (var operation : later) assertFalse(operation.completion().isDone());
 
             step.set(0);
-            assertEquals(8, registry.expire(TimeUnit.MILLISECONDS.toNanos(257)));
+            assertEquals(
+                    8,
+                    ZLinkCompletionBridge.await(
+                            registry.expire(TimeUnit.MILLISECONDS.toNanos(257))));
             assertEquals(0, registry.pendingCount());
         }
     }
@@ -593,15 +986,18 @@ final class ZLinkServiceOperationRegistryTest {
         try (var registry =
                 new ZLinkServiceOperationRegistry(
                         maintenance, new IllegalStateException("closed"), clock::get)) {
-            var first = registry.register(Duration.ofNanos(10));
-            var second = registry.register(Duration.ofNanos(10));
+            var first = ZLinkCompletionBridge.await(registry.register(Duration.ofNanos(10)));
+            var second = ZLinkCompletionBridge.await(registry.register(Duration.ofNanos(10)));
 
             assertEquals(1, maintenance.starts);
             // The factory captures the worker; this test drives every expiry turn.
             // Hot-path E3: timer-wheel deadlines expire at the next 1ms tick, never early.
-            assertEquals(0, registry.expire(109));
-            assertEquals(0, registry.expire(110));
-            assertEquals(2, registry.expire(100 + TimeUnit.MILLISECONDS.toNanos(1)));
+            assertEquals(0, ZLinkCompletionBridge.await(registry.expire(109)));
+            assertEquals(0, ZLinkCompletionBridge.await(registry.expire(110)));
+            assertEquals(
+                    2,
+                    ZLinkCompletionBridge.await(
+                            registry.expire(100 + TimeUnit.MILLISECONDS.toNanos(1))));
             assertEquals(0, registry.pendingCount());
             assertTrue(
                     assertThrows(CompletionException.class, first.completion()::join).getCause()
@@ -622,16 +1018,16 @@ final class ZLinkServiceOperationRegistryTest {
         try (var registry =
                 new ZLinkServiceOperationRegistry(
                         maintenance, new IllegalStateException("closed"), clock::get)) {
-            var operation = registry.register(timeout);
+            var operation = ZLinkCompletionBridge.await(registry.register(timeout));
             long deadline = origin + timeout.toNanos();
 
             assertTrue(deadline < 0);
-            assertEquals(0, registry.expire(Long.MAX_VALUE));
+            assertEquals(0, ZLinkCompletionBridge.await(registry.expire(Long.MAX_VALUE)));
             assertFalse(operation.completion().isDone());
-            assertEquals(0, registry.expire(deadline - 1));
+            assertEquals(0, ZLinkCompletionBridge.await(registry.expire(deadline - 1)));
             assertFalse(operation.completion().isDone());
             clock.set(deadline + 1);
-            assertEquals(1, registry.expire(clock.get()));
+            assertEquals(1, ZLinkCompletionBridge.await(registry.expire(clock.get())));
             assertTrue(
                     assertThrows(CompletionException.class, operation.completion()::join).getCause()
                             instanceof TimeoutException);
@@ -646,12 +1042,23 @@ final class ZLinkServiceOperationRegistryTest {
         try (var registry =
                 new ZLinkServiceOperationRegistry(
                         maintenance, new IllegalStateException("closed"), clock::get)) {
-            var operation = registry.register(Duration.ofMillis(513));
+            var operation = ZLinkCompletionBridge.await(registry.register(Duration.ofMillis(513)));
             // Hot-path E3: occupied-slot visits preserve the remaining wheel rounds.
-            assertEquals(0, registry.expire(TimeUnit.MILLISECONDS.toNanos(1)));
-            assertEquals(0, registry.expire(TimeUnit.MILLISECONDS.toNanos(257)));
-            assertEquals(0, registry.expire(TimeUnit.MILLISECONDS.toNanos(512)));
-            assertEquals(1, registry.expire(TimeUnit.MILLISECONDS.toNanos(513)));
+            assertEquals(
+                    0,
+                    ZLinkCompletionBridge.await(registry.expire(TimeUnit.MILLISECONDS.toNanos(1))));
+            assertEquals(
+                    0,
+                    ZLinkCompletionBridge.await(
+                            registry.expire(TimeUnit.MILLISECONDS.toNanos(257))));
+            assertEquals(
+                    0,
+                    ZLinkCompletionBridge.await(
+                            registry.expire(TimeUnit.MILLISECONDS.toNanos(512))));
+            assertEquals(
+                    1,
+                    ZLinkCompletionBridge.await(
+                            registry.expire(TimeUnit.MILLISECONDS.toNanos(513))));
             assertThrows(CompletionException.class, operation.completion()::join);
         }
     }
@@ -660,8 +1067,8 @@ final class ZLinkServiceOperationRegistryTest {
     void registrationsDoNotCreateAdditionalScheduledTasks() {
         var maintenance = new ManualMaintenance();
         try (var registry = new ZLinkServiceOperationRegistry(maintenance)) {
-            for (int index = 0; index < 100; index++) {
-                var operation = registry.register(Duration.ofHours(1));
+            for (int index = 0; index < 1_000; index++) {
+                var operation = ZLinkCompletionBridge.await(registry.register(Duration.ofHours(1)));
                 assertTrue(registry.discard(operation.id()));
             }
 
@@ -670,54 +1077,32 @@ final class ZLinkServiceOperationRegistryTest {
     }
 
     @Test
-    void closeProgressesWhileSubmissionWaits() throws Exception {
+    void closeProgressesWhileBindingCompletionWaits() throws Exception {
         var closeFailure =
                 new ZLinkFrameworkException(
                         ZLinkFrameworkErrorKind.SHUTTING_DOWN, "channel runtime is closed");
-        CountDownLatch submissionEntered = new CountDownLatch(1);
-        CountDownLatch releaseSubmission = new CountDownLatch(1);
-        CountDownLatch closeStarted = new CountDownLatch(1);
-        CountDownLatch closeReturned = new CountDownLatch(1);
-        AtomicReference<CompletableFuture<String>> submittedResult = new AtomicReference<>();
-        AtomicReference<String> discarded = new AtomicReference<>();
-        CompletableFuture<String> transport = new CompletableFuture<>();
+        var discarded = new AtomicReference<String>();
+        var transport = new CompletableFuture<String>();
         try (var registry = new ZLinkServiceOperationRegistry(closeFailure)) {
-            Thread submitter =
-                    Thread.ofPlatform()
-                            .start(
-                                    () ->
-                                            submittedResult.set(
-                                                    registry.submit(
-                                                            ZLinkServiceOperationIds.next(),
-                                                            Duration.ofHours(1),
-                                                            () -> {
-                                                                submissionEntered.countDown();
-                                                                await(releaseSubmission);
-                                                                return transport;
-                                                            },
-                                                            discarded::set)));
-            assertTrue(submissionEntered.await(1, TimeUnit.SECONDS));
-            Thread closer =
+            var result =
+                    registry.submit(
+                            ZLinkServiceOperationIds.next(),
+                            Duration.ofHours(1),
+                            () -> transport,
+                            discarded::set);
+            var closeReturned = new CountDownLatch(1);
+            var closer =
                     Thread.ofPlatform()
                             .start(
                                     () -> {
-                                        closeStarted.countDown();
                                         registry.close();
                                         closeReturned.countDown();
                                     });
-            assertTrue(closeStarted.await(1, TimeUnit.SECONDS));
-            // Spec 04 §3: Framework admission must not block terminal progress.
-            try {
-                assertTrue(closeReturned.await(1, TimeUnit.SECONDS));
-            } finally {
-                releaseSubmission.countDown();
-            }
-            submitter.join();
+            assertTrue(closeReturned.await(1, TimeUnit.SECONDS));
             closer.join();
-
-            CompletionException closed =
-                    assertThrows(CompletionException.class, submittedResult.get()::join);
-            assertSame(closeFailure, closed.getCause());
+            assertSame(
+                    closeFailure, assertThrows(CompletionException.class, result::join).getCause());
+            assertFalse(transport.isDone());
             assertTrue(transport.complete("late reply"));
             assertEquals("late reply", discarded.get());
             assertEquals(0, registry.pendingCount());
@@ -762,43 +1147,25 @@ final class ZLinkServiceOperationRegistryTest {
     }
 
     @Test
-    void expiryProgressesWhileSubmissionWaits() throws Exception {
-        var entered = new CountDownLatch(1);
-        var release = new CountDownLatch(1);
+    void expiryProgressesWhileBindingCompletionWaits() {
         var transport = new CompletableFuture<String>();
-        try (var workers = Executors.newFixedThreadPool(2);
-                var registry =
-                        new ZLinkServiceOperationRegistry(
-                                new ManualMaintenance(),
-                                new IllegalStateException("closed"),
-                                () -> 0L)) {
-            var submission =
-                    workers.submit(
-                            () ->
-                                    registry.submit(
-                                            ZLinkServiceOperationIds.next(),
-                                            Duration.ofNanos(1),
-                                            () -> {
-                                                entered.countDown();
-                                                await(release);
-                                                return transport;
-                                            },
-                                            ignored -> {}));
-            try {
-                assertTrue(entered.await(1, TimeUnit.SECONDS));
-                // Hot-path E3: expiry runs at the first 1ms timer-wheel tick after the deadline.
-                var expiry =
-                        workers.submit(() -> registry.expire(TimeUnit.MILLISECONDS.toNanos(1)));
-                assertEquals(1, expiry.get(1, TimeUnit.SECONDS));
-                assertEquals(0, registry.pendingCount());
-            } finally {
-                release.countDown();
-            }
-            var terminal =
-                    assertThrows(
-                            CompletionException.class,
-                            () -> submission.get(1, TimeUnit.SECONDS).join());
-            assertTrue(terminal.getCause() instanceof TimeoutException);
+        try (var registry =
+                new ZLinkServiceOperationRegistry(
+                        new ManualMaintenance(), new IllegalStateException("closed"), () -> 0L)) {
+            var result =
+                    registry.submit(
+                            ZLinkServiceOperationIds.next(),
+                            Duration.ofNanos(1),
+                            () -> transport,
+                            ignored -> {});
+            assertEquals(
+                    1,
+                    ZLinkCompletionBridge.await(registry.expire(TimeUnit.MILLISECONDS.toNanos(1))));
+            assertEquals(0, registry.pendingCount());
+            assertFalse(transport.isDone());
+            assertTrue(
+                    assertThrows(CompletionException.class, result::join).getCause()
+                            instanceof TimeoutException);
         }
     }
 
@@ -832,16 +1199,22 @@ final class ZLinkServiceOperationRegistryTest {
         try (var registry = new ZLinkServiceOperationRegistry()) {
             UUID firstId = new UUID(Long.MIN_VALUE, 7);
             UUID secondId = new UUID(Long.MAX_VALUE, 7);
-            var first = registry.register(firstId, Duration.ofSeconds(1));
+            var first =
+                    ZLinkCompletionBridge.await(registry.register(firstId, Duration.ofSeconds(1)));
             assertSame(firstId, first.id());
             assertThrows(
                     IllegalArgumentException.class,
-                    () -> registry.register(firstId, Duration.ofSeconds(1)));
+                    () ->
+                            ZLinkCompletionBridge.await(
+                                    registry.register(firstId, Duration.ofSeconds(1))));
             assertThrows(
                     IllegalArgumentException.class,
-                    () -> registry.register(new UUID(0, 0), Duration.ofSeconds(1)));
+                    () ->
+                            ZLinkCompletionBridge.await(
+                                    registry.register(new UUID(0, 0), Duration.ofSeconds(1))));
             assertEquals(1, registry.pendingCount());
-            var second = registry.register(secondId, Duration.ofSeconds(1));
+            var second =
+                    ZLinkCompletionBridge.await(registry.register(secondId, Duration.ofSeconds(1)));
             assertTrue(registry.complete(secondId, "second"));
             assertTrue(registry.complete(firstId, "first"));
             assertEquals("first", first.completion().join());
@@ -852,11 +1225,10 @@ final class ZLinkServiceOperationRegistryTest {
     @Test
     void pendingEntryDoesNotAllocateAnExceptionForASuccessfulRequest() throws Exception {
         try (var registry = new ZLinkServiceOperationRegistry()) {
-            var operation = registry.register(Duration.ofSeconds(1));
-            var lookup =
-                    ZLinkServiceOperationRegistry.class.getDeclaredMethod("findEntry", UUID.class);
-            lookup.setAccessible(true);
-            Object entry = lookup.invoke(registry, operation.id());
+            var operation = ZLinkCompletionBridge.await(registry.register(Duration.ofSeconds(1)));
+            var pendingField = ZLinkServiceOperationRegistry.class.getDeclaredField("pending");
+            pendingField.setAccessible(true);
+            Object entry = ((java.util.Map<?, ?>) pendingField.get(registry)).get(operation.id());
             for (var field : entry.getClass().getDeclaredFields()) {
                 if (Throwable.class.isAssignableFrom(field.getType())) {
                     field.setAccessible(true);
@@ -873,9 +1245,10 @@ final class ZLinkServiceOperationRegistryTest {
         try (var registry = new ZLinkServiceOperationRegistry()) {
             UUID id = UUID.randomUUID();
             for (int index = 0; index < 256; index++) {
-                var old = registry.register(id, Duration.ofSeconds(5));
+                var old = ZLinkCompletionBridge.await(registry.register(id, Duration.ofSeconds(5)));
                 assertTrue(registry.discard(id));
-                var current = registry.register(id, Duration.ofSeconds(5));
+                var current =
+                        ZLinkCompletionBridge.await(registry.register(id, Duration.ofSeconds(5)));
                 assertFalse(old.completion().cancel(false));
                 assertEquals(1, registry.pendingCount());
                 assertFalse(current.completion().isDone());
@@ -888,7 +1261,7 @@ final class ZLinkServiceOperationRegistryTest {
     void firstTerminalPathWinsAndDetachesDeadline() {
         try (ZLinkServiceOperationRegistry registry = new ZLinkServiceOperationRegistry()) {
             ZLinkServiceOperationRegistry.Operation<String> operation =
-                    registry.register(Duration.ofSeconds(1));
+                    ZLinkCompletionBridge.await(registry.register(Duration.ofSeconds(1)));
             assertTrue(registry.complete(operation.id(), "reply"));
             assertFalse(
                     registry.completeExceptionally(
@@ -901,7 +1274,7 @@ final class ZLinkServiceOperationRegistryTest {
     @Test
     void invalidFailureDoesNotConsumeThePendingOperation() {
         try (ZLinkServiceOperationRegistry registry = new ZLinkServiceOperationRegistry()) {
-            var operation = registry.register(Duration.ofSeconds(1));
+            var operation = ZLinkCompletionBridge.await(registry.register(Duration.ofSeconds(1)));
 
             assertThrows(
                     NullPointerException.class,
@@ -916,7 +1289,7 @@ final class ZLinkServiceOperationRegistryTest {
     void timeoutCompletesExactlyOnce() throws Exception {
         try (ZLinkServiceOperationRegistry registry = new ZLinkServiceOperationRegistry()) {
             ZLinkServiceOperationRegistry.Operation<String> operation =
-                    registry.register(Duration.ofMillis(10));
+                    ZLinkCompletionBridge.await(registry.register(Duration.ofMillis(10)));
             CompletionException failure =
                     assertThrows(
                             CompletionException.class,
@@ -931,7 +1304,8 @@ final class ZLinkServiceOperationRegistryTest {
         try (ZLinkServiceOperationRegistry registry = new ZLinkServiceOperationRegistry()) {
             List<UUID> pending = new ArrayList<>();
             for (int index = 0; index <= 4_096; index++) {
-                pending.add(registry.register(Duration.ofSeconds(1)).id());
+                pending.add(
+                        ZLinkCompletionBridge.await(registry.register(Duration.ofSeconds(1))).id());
             }
             assertEquals(4_097, registry.pendingCount());
             pending.forEach(registry::discard);
@@ -941,7 +1315,7 @@ final class ZLinkServiceOperationRegistryTest {
     @Test
     void cancellationAtomicallyTakesTheOperationBeforeClose() {
         try (ZLinkServiceOperationRegistry registry = new ZLinkServiceOperationRegistry()) {
-            var operation = registry.register(Duration.ofSeconds(1));
+            var operation = ZLinkCompletionBridge.await(registry.register(Duration.ofSeconds(1)));
             AtomicInteger callbacks = new AtomicInteger();
             // The terminal runs on the completion lane (spec 01 §11). join()
             // on the source stage returns when the source completes, not
@@ -975,6 +1349,7 @@ final class ZLinkServiceOperationRegistryTest {
             CompletableFuture<String> caller =
                     registry.submit(
                             UUID.randomUUID(), Duration.ofSeconds(1), () -> binding, ignored -> {});
+            ownerLane(registry).runAsync(() -> {}).toCompletableFuture().get(1, TimeUnit.SECONDS);
             assertTrue(caller.cancel(false));
             assertTrue(bindingCancelled.await(1, TimeUnit.SECONDS));
             registry.close();
@@ -986,7 +1361,7 @@ final class ZLinkServiceOperationRegistryTest {
     @Test
     void terminalCompletionRunsOnANewTurnOutsideTheRegistryGate() {
         try (ZLinkServiceOperationRegistry registry = new ZLinkServiceOperationRegistry()) {
-            var operation = registry.register(Duration.ofSeconds(1));
+            var operation = ZLinkCompletionBridge.await(registry.register(Duration.ofSeconds(1)));
             var callbackThread = new CompletableFuture<Thread>();
             var completionPool = new AtomicReference<ForkJoinPool>();
             var completionContext = new AtomicReference<Boolean>();
@@ -1017,11 +1392,13 @@ final class ZLinkServiceOperationRegistryTest {
             List<UUID> firstIds = new ArrayList<>();
             List<UUID> secondIds = new ArrayList<>();
             for (int index = 0; index <= 2_048; index++) {
-                firstIds.add(first.register(Duration.ofHours(1)).id());
-                secondIds.add(second.register(Duration.ofHours(1)).id());
+                firstIds.add(ZLinkCompletionBridge.await(first.register(Duration.ofHours(1))).id());
+                secondIds.add(
+                        ZLinkCompletionBridge.await(second.register(Duration.ofHours(1))).id());
             }
 
-            UUID admittedAfterFormerLimit = second.register(Duration.ofHours(1)).id();
+            UUID admittedAfterFormerLimit =
+                    ZLinkCompletionBridge.await(second.register(Duration.ofHours(1))).id();
             firstIds.forEach(id -> assertTrue(first.discard(id)));
             secondIds.forEach(id -> assertTrue(second.discard(id)));
             assertTrue(second.discard(admittedAfterFormerLimit));
@@ -1032,7 +1409,7 @@ final class ZLinkServiceOperationRegistryTest {
     void runningCallbackDoesNotCapFurtherRegistrations() throws Exception {
         try (ZLinkServiceOperationRegistry first = new ZLinkServiceOperationRegistry();
                 ZLinkServiceOperationRegistry second = new ZLinkServiceOperationRegistry()) {
-            var running = first.register(Duration.ofHours(1));
+            var running = ZLinkCompletionBridge.await(first.register(Duration.ofHours(1)));
             CountDownLatch callbackEntered = new CountDownLatch(1);
             CountDownLatch releaseCallback = new CountDownLatch(1);
             running.completion()
@@ -1047,13 +1424,13 @@ final class ZLinkServiceOperationRegistryTest {
                             });
             List<UUID> pending = new ArrayList<>();
             for (int index = 1; index <= 4_096; index++) {
-                pending.add(second.register(Duration.ofHours(1)).id());
+                pending.add(ZLinkCompletionBridge.await(second.register(Duration.ofHours(1))).id());
             }
 
             try {
                 assertTrue(first.complete(running.id(), "reply"));
                 assertTrue(callbackEntered.await(1, TimeUnit.SECONDS));
-                pending.add(second.register(Duration.ofHours(1)).id());
+                pending.add(ZLinkCompletionBridge.await(second.register(Duration.ofHours(1))).id());
                 pending.forEach(id -> assertTrue(second.discard(id)));
                 pending.clear();
             } finally {
@@ -1076,7 +1453,8 @@ final class ZLinkServiceOperationRegistryTest {
             var delivered = new AtomicInteger();
             for (int index = 0; index < 3; index++) {
                 boolean first = index == 0;
-                var operation = registry.<String>register(Duration.ofHours(1));
+                var operation =
+                        ZLinkCompletionBridge.await(registry.<String>register(Duration.ofHours(1)));
                 operations.add(operation);
                 callbacks.add(
                         operation.handle(
@@ -1125,7 +1503,7 @@ final class ZLinkServiceOperationRegistryTest {
     @Test
     void acceptedTerminalCompletesWithoutWakingMaintenance() {
         try (ZLinkServiceOperationRegistry registry = new ZLinkServiceOperationRegistry()) {
-            var operation = registry.register(Duration.ofHours(1));
+            var operation = ZLinkCompletionBridge.await(registry.register(Duration.ofHours(1)));
 
             assertTrue(registry.complete(operation.id(), "reply"));
             assertEquals("reply", operation.completion().orTimeout(1, TimeUnit.SECONDS).join());
@@ -1147,7 +1525,9 @@ final class ZLinkServiceOperationRegistryTest {
                 List<ZLinkServiceOperationRegistry.Operation<Integer>> pending = new ArrayList<>();
                 for (int index = 0; index < operationsPerProducer; index++) {
                     int expected = producer * operationsPerProducer + index;
-                    var operation = registry.<Integer>register(Duration.ofHours(1));
+                    var operation =
+                            ZLinkCompletionBridge.await(
+                                    registry.<Integer>register(Duration.ofHours(1)));
                     callbacks.add(
                             operation.thenAccept(
                                     value -> {
@@ -1205,6 +1585,26 @@ final class ZLinkServiceOperationRegistryTest {
                     starts++;
                 }
             };
+        }
+    }
+
+    private static systems.zlink.framework.runtime.internal.execution.ZLinkStateLane ownerLane(
+            ZLinkServiceOperationRegistry registry) throws Exception {
+        var field = ZLinkServiceOperationRegistry.class.getDeclaredField("owner");
+        field.setAccessible(true);
+        return (systems.zlink.framework.runtime.internal.execution.ZLinkStateLane)
+                field.get(registry);
+    }
+
+    private static void parkedIndefinitely(Thread worker, Object blocker) throws Exception {
+        var tick = ZLinkServiceOperationRegistry.class.getDeclaredField("maintenanceTick");
+        tick.setAccessible(true);
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (tick.getLong(blocker) >= 0
+                || worker.getState() != Thread.State.WAITING
+                || java.util.concurrent.locks.LockSupport.getBlocker(worker) != blocker) {
+            if (System.nanoTime() - deadline >= 0) throw new AssertionError("worker did not park");
+            Thread.yield();
         }
     }
 }
