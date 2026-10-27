@@ -2009,12 +2009,14 @@ class spot_node_runtime_t
       actor_context_t actor_context = {},
       std::uint64_t completion_operation_id_high = 0,
       std::uint64_t completion_operation_id_low = 0,
-      std::function<void (std::function<void (result_t<void>)>)> *source_leave = nullptr);
-    task_t<actor_join_reply_t>
-    join_remote_actor_to_spot_erased (const actor_ref_t &actor_ref,
-                                      spot_id_t spot_id,
-                                      const zlink::message_t &request,
-                                      actor_context_t actor_context = {});
+      std::function<void (std::function<void (result_t<void>)>)> *source_leave = nullptr,
+      std::optional<std::chrono::steady_clock::time_point> deadline = std::nullopt);
+    task_t<actor_join_reply_t> join_remote_actor_to_spot_erased (
+      const actor_ref_t &actor_ref,
+      spot_id_t spot_id,
+      const zlink::message_t &request,
+      actor_context_t actor_context = {},
+      std::optional<std::chrono::steady_clock::time_point> deadline = std::nullopt);
     // Completes when the target Spot's admission lifecycle item completes.
     task_t<spot_actor_join_result_t>
     admit_remote_actor_to_spot (std::string transfer_id,
@@ -2266,7 +2268,8 @@ class spot_node_runtime_t
       const zlink::message_t &request,
       const std::optional<zlink::message_t> &actor_snapshot,
       actor_context_t actor_context,
-      std::function<void (std::function<void (result_t<void>)>)> *source_leave = nullptr);
+      std::function<void (std::function<void (result_t<void>)>)> *source_leave = nullptr,
+      std::optional<std::chrono::steady_clock::time_point> deadline = std::nullopt);
     task_t<std::optional<zlink::message_t>>
     relay_actor_packet (const actor_ref_t &actor_ref,
                         actor_context_t actor_context,
@@ -2424,7 +2427,8 @@ class spot_node_runtime_t
       const std::string &local_node_rid,
       service_provider_t &services,
       serializer_registry_t &serializers,
-      std::function<void (std::function<void (result_t<void>)>)> *source_leave);
+      std::function<void (std::function<void (result_t<void>)>)> *source_leave,
+      std::optional<std::chrono::steady_clock::time_point> deadline);
     // The runtime value lives in the coroutine frame; the call copies its inputs.
     static task_t<bool>
     materialize_relocation_state_in (spot_node_runtime_t self,
@@ -2471,17 +2475,18 @@ class spot_node_runtime_t
                                                                 std::type_index actor_type,
                                                                 spot_id_t spot_id,
                                                                 const actor_ref_t &actor_ref);
-    task_t<std::function<void (std::function<void (result_t<void>)>)>>
-    commit_accepted_actor_join (const std::string &key,
-                                spot_context_t &context,
-                                const actor_ref_t &committed,
-                                std::type_index actor_type,
-                                void *actor,
-                                const spot_actor_admission_callbacks_t &admission,
-                                bool create_entry_actor,
-                                const zlink::message_t &create_request,
-                                std::string operation_id,
-                                bool &authority_committed);
+    task_t<std::function<void (std::function<void (result_t<void>)>)>> commit_accepted_actor_join (
+      const std::string &key,
+      spot_context_t &context,
+      const actor_ref_t &committed,
+      std::type_index actor_type,
+      void *actor,
+      const spot_actor_admission_callbacks_t &admission,
+      bool create_entry_actor,
+      const zlink::message_t &create_request,
+      std::string operation_id,
+      bool &authority_committed,
+      std::optional<std::chrono::steady_clock::time_point> deadline = std::nullopt);
     task_t<void> replay_actor_handoff_batch (actor_ref_t actor_ref,
                                              std::vector<handoff_packet_t> backlog,
                                              service_provider_t services,
