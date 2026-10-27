@@ -36,6 +36,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.function.BiConsumer;
 import java.util.function.BooleanSupplier;
 import java.util.function.Supplier;
+import java.util.function.UnaryOperator;
 
 final class ZLinkJavaSocketSupport {
     private ZLinkJavaSocketSupport() {}
@@ -110,7 +111,8 @@ final class ZLinkJavaSocketSupport {
                 admission,
                 requestAdmission,
                 (parts, failure) -> completeReply(result, parts, failure),
-                result);
+                result,
+                failure -> failure);
         return result;
     }
 
@@ -121,16 +123,18 @@ final class ZLinkJavaSocketSupport {
             Runnable admission,
             CompletableFuture<Void> requestAdmission,
             BiConsumer<List<Message>, Throwable> terminal) {
-        return observeReply(submission, deadlineNanos, admission, requestAdmission, terminal, null);
+        return observeReply(
+                submission, deadlineNanos, admission, requestAdmission, terminal, null, null);
     }
 
-    private static CompletionStage<List<Message>> observeReply(
+    static CompletionStage<List<Message>> observeReply(
             RequestSubmission submission,
             long deadlineNanos,
             Runnable admission,
             CompletableFuture<Void> requestAdmission,
             BiConsumer<List<Message>, Throwable> terminal,
-            CompletableFuture<List<Message>> standalone) {
+            CompletableFuture<?> standalone,
+            UnaryOperator<Throwable> timeoutFailure) {
         SubmitResult submitResult = submission.result();
         CompletionStage<List<Message>> bindingReply = submission.reply();
         CompletionStage<Void> admitted = null;
@@ -165,7 +169,9 @@ final class ZLinkJavaSocketSupport {
                             .schedule(
                                     () -> {
                                         standalone.completeExceptionally(
-                                                new ZlinkRequestException(RequestResult.TIMED_OUT));
+                                                timeoutFailure.apply(
+                                                        new ZlinkRequestException(
+                                                                RequestResult.TIMED_OUT)));
                                     },
                                     Math.max(0L, deadlineNanos - System.nanoTime()),
                                     TimeUnit.NANOSECONDS);
