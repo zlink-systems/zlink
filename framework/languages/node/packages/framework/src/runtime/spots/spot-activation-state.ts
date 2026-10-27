@@ -19,6 +19,7 @@ import { ZLinkSpotSerialTurnExecutor } from './spot-serial-turn-executor';
 import { ZLinkSpotSerialExecutor, type ZLinkActorPacketTurnDispatch } from './spot-serial-executor';
 import type { ZLinkSpotTimerRegistry } from './spot-timer';
 import type { ZLinkSpotActorJoinDispatch } from './spot-actor-join-dispatch';
+import type { ZLinkSpotActorPacketDispatch } from './spot-actor-packet-dispatch';
 import { ZLinkExecutionBarrier, type ZLinkExecutionBarrierSeal } from '../execution';
 import type { ZLinkTimerRelocationState } from './spot-timer';
 
@@ -71,6 +72,7 @@ export class ZLinkSpotActivation {
   readonly nativeSpot?: ZLinkBackendSpot;
   readonly executionBarrier: ZLinkExecutionBarrier;
   actorDispatch?: ZLinkSpotActorJoinDispatch;
+  actorPacketDispatch?: ZLinkSpotActorPacketDispatch;
 
   private readonly joinedActors = new Map<string, ZLinkActor>();
   private readonly departedActorIds = new Set<string>();
