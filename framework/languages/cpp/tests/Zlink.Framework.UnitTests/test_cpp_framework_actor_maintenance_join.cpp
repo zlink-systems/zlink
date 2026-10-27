@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+#include <zlink/json.hpp>
 #include "../support/stateful_object_sync.hpp"
 #include "../support/manual_internal_scheduler.hpp"
 #include <zlink/framework.hpp>
@@ -427,43 +428,107 @@ struct move_t
     static constexpr const char *packet_name = "maintenance-join-move";
     std::string target;
 };
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE (move_t, target)
+}
+
+template <> struct zlink::json::dto_traits<move_t>
+{
+    static constexpr auto fields = std::tuple{zlink::json::field ("target", &move_t::target)};
+};
+
+namespace
+{
+
 struct probe_t
 {
     static constexpr const char *packet_name = "maintenance-join-probe";
     int value{};
 };
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE (probe_t, value)
+}
+
+template <> struct zlink::json::dto_traits<probe_t>
+{
+    static constexpr auto fields = std::tuple{zlink::json::field ("value", &probe_t::value)};
+};
+
+namespace
+{
+
 struct close_session_t
 {
     static constexpr const char *packet_name = "bound-session-close";
     int value{};
 };
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE (close_session_t, value)
+}
+
+template <> struct zlink::json::dto_traits<close_session_t>
+{
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("value", &close_session_t::value)};
+};
+
+namespace
+{
+
 struct ready_t
 {
     static constexpr const char *packet_name = "maintenance-join-ready";
     int value{};
 };
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE (ready_t, value)
+}
+
+template <> struct zlink::json::dto_traits<ready_t>
+{
+    static constexpr auto fields = std::tuple{zlink::json::field ("value", &ready_t::value)};
+};
+
+namespace
+{
+
 struct view_request_t
 {
     static constexpr const char *packet_name = "maintenance-join-view-request";
     int value{};
 };
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE (view_request_t, value)
+}
+
+template <> struct zlink::json::dto_traits<view_request_t>
+{
+    static constexpr auto fields = std::tuple{zlink::json::field ("value", &view_request_t::value)};
+};
+
+namespace
+{
+
 struct view_t
 {
     static constexpr const char *packet_name = "maintenance-join-view";
     int instance{};
 };
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE (view_t, instance)
+}
+
+template <> struct zlink::json::dto_traits<view_t>
+{
+    static constexpr auto fields = std::tuple{zlink::json::field ("instance", &view_t::instance)};
+};
+
+namespace
+{
+
 struct record_t
 {
     static constexpr const char *packet_name = "maintenance-join-record";
     int value{};
 };
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE (record_t, value)
+}
+
+template <> struct zlink::json::dto_traits<record_t>
+{
+    static constexpr auto fields = std::tuple{zlink::json::field ("value", &record_t::value)};
+};
+
+namespace
+{
+
 class actor_t final : public fw::actor_t
 {
   public:
@@ -2221,7 +2286,7 @@ void local_join_backlog (backlog_case_t scenario)
         header.message_name = probe_t::packet_name;
         header.content_type = "application/json";
         auto encoded = fw::detail::encode_actor_packet (
-          header, zlink::message_t::from (nlohmann::json (probe_t{-1}).dump ()));
+          header, zlink::message_t::from (zlink::detail::json_profile::encode (probe_t{-1})));
         namespace wire = fw::runtime::protocol;
         wire::frozen_application_record_t frozen;
         frozen.kind = wire::frozen_record_kind_t::actor_send;
@@ -2315,8 +2380,9 @@ void local_join_backlog (backlog_case_t scenario)
                     fw::runtime::protocol::decode_application_parts (payload));
                   const auto body = fw::runtime::messaging::envelope_codec_t{}.decode_body (parts);
                   ASSERT_TRUE (body);
-                  durable_payloads.push_back (
-                    nlohmann::json::parse (body.value ().to_string ()).get<probe_t> ().value);
+                  durable_payloads.push_back (zlink::detail::json_profile::decode_value<probe_t> (
+                                                nlohmann::json::parse (body.value ().to_string ()))
+                                                .value);
               });
         }
         std::sort (durable_payloads.begin (), durable_payloads.end ());
@@ -7255,7 +7321,6 @@ TEST (ActorMaintenanceJoin, MissingAfterTargetCommitAndDestroyDoesNotCompleteOnS
 
 } // namespace
 
-
 namespace deferred_join_reservation_probe
 {
 namespace fw = zlink::framework;
@@ -7943,7 +8008,7 @@ TEST (ActorMaintenanceJoin, CanonicalReplayMaterializesBodyWithoutInvocationCach
     header.content_type = "application/json";
     wire::application_payload_t::multipart_t parts;
     parts.push_back (fw::runtime::messaging::envelope_codec_t{}.encode_header (header));
-    parts.push_back (zlink::message_t::from (nlohmann::json (record_t{73}).dump ()));
+    parts.push_back (zlink::message_t::from (zlink::detail::json_profile::encode (record_t{73})));
     wire::frozen_application_record_t frozen;
     frozen.kind = wire::frozen_record_kind_t::actor_send;
     frozen.body = wire::frozen_actor_application_body_t{
