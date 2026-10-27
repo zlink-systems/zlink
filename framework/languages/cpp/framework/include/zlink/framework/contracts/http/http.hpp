@@ -14,6 +14,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <typeindex>
 #include <typeinfo>
@@ -127,7 +128,7 @@ template <typename T>
 std::string bind_typed_http_uri (const http_request_t &http, const std::string &body)
 {
     std::string error;
-    const std::string binding_body = body.empty () ? "{}" : body;
+    const std::string_view binding_body = body.empty () ? std::string_view ("{}") : body;
     auto binding =
       zlink::detail::json_profile::try_parse (binding_body.begin (), binding_body.end (), &error);
     if (!binding)
