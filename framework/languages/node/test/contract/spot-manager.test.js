@@ -1108,6 +1108,7 @@ test('Host Instance Close without Reincarnate releases the closed generation thr
 });
 
 test('Instance context close returns after activation completion', async () => {
+  const quiescenceEntered = createDeferred();
   const releaseQuiescence = createDeferred();
   const events = [];
   let durableCloseCalls = 0;
@@ -1116,12 +1117,12 @@ test('Instance context close returns after activation completion', async () => {
   const manager = new framework.DefaultZLinkSpotManager({
     detachedTaskRunner: detachedTaskRunner,
     spotFactories: [],
-    instanceSpotFactories: new Map([[
-      'test.mesh',
-      new Map([['deferred', DeferredCloseInstanceSpot]])
-    ]]),
+    instanceSpotFactories: new Map([
+      ['test.mesh', new Map([['deferred', DeferredCloseInstanceSpot]])]
+    ]),
     instanceSpotApplicationQuiescenceProvider: async () => {
       events.push('wait-for-terminal');
+      quiescenceEntered.resolve();
       await releaseQuiescence.promise;
     },
     async beginInstanceClosingAuthority(_meshName, _spotId, onCommitted) {
@@ -1134,18 +1135,27 @@ test('Instance context close returns after activation completion', async () => {
 
   await manager.materializeInstance('test.mesh', 'deferred', spotId, 1n);
   let closeResult = Symbol('pending');
-  const operation = manager.executeOnSpot(
-    DeferredCloseInstanceSpot,
-    spotId,
-    async (spot) => {
-      closeResult = spot.context.close();
-      assert.equal(closeResult instanceof Promise, true);
-      events.push('close-returned');
-    }
-  );
+  const operation = manager.executeOnSpot(DeferredCloseInstanceSpot, spotId, async (spot) => {
+    closeResult = spot.context.close();
+    assert.equal(closeResult instanceof Promise, true);
+    events.push('close-returned');
+  });
 
   await operation;
   assert.equal(closeResult instanceof Promise, true);
+  let closeResultSettled = false;
+  const closeSettlement = closeResult.then(
+    (result) => {
+      closeResultSettled = true;
+      return result;
+    },
+    (error) => {
+      closeResultSettled = true;
+      throw error;
+    }
+  );
+  await quiescenceEntered.promise;
+  assert.equal(closeResultSettled, false);
   assert.equal(durableCloseCalls, 0);
   assert.deepEqual(events, ['close-returned', 'wait-for-terminal']);
 
@@ -1161,7 +1171,7 @@ test('Instance context close returns after activation completion', async () => {
   assert.equal(events.includes('later-lifecycle'), false);
 
   releaseQuiescence.resolve();
-  assert.equal(await closeResult, true);
+  assert.equal(await closeSettlement, true);
   await laterLifecycleRejected;
   await waitFor(() => durableCloseCalls === 1);
   assert.equal(await manager.find('test.mesh', spotId), null);
@@ -2357,7 +2367,7 @@ test('ZLinkSpotManager replies routed actor request dispatch errors', async () =
     const errorEvents = dispatchEvents.filter((event) => event.outcome === 'failed');
     assert.equal(errorEvents.length, 1);
     assert.equal(errorEvents[0].surface, 'actor');
-    assert.equal(errorEvents[0].reason, 'no_handler');
+    assert.equal(errorEvents[0].reason, 'stale_target');
     assert.equal(errorEvents[0].action, 'reply_error');
   } finally {
     for (const part of requestParts) {
