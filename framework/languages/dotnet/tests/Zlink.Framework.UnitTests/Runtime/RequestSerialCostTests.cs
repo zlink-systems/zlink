@@ -222,7 +222,10 @@ public sealed class RequestSerialCostTests(ITestOutputHelper output)
             output.WriteLine(
                 $"direct reply decode {actual / Iterations} B/op; reply owner control {baseline / Iterations} B/op"
             );
-            Assert.Equal(baseline, actual);
+            // The claim is per operation. The smallest object adds at least
+            // Iterations * 24 bytes, while a one-time runtime allocation inside
+            // the window does not change the per-operation value.
+            Assert.Equal(baseline / Iterations, actual / Iterations);
             accepted++;
         }
         Assert.True(accepted > 0);
