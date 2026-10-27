@@ -45,7 +45,7 @@ test('activation count changes do not publish descriptors, while weight changes 
   await manager.statePublication;
   assert.equal(writes.length, 1);
   assert.equal(
-    manager.publishedMeshNodeDescriptors.get('game').descriptorRevision,
+    manager.meshNodeDescriptor('game').descriptorRevision,
     initialRevision
   );
 
