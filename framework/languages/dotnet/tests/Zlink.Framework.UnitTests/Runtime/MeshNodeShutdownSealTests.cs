@@ -921,7 +921,6 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
                     objectRole: (byte)ZLinkMeshNodeObjectRole.Server
                 )
             );
-            await scheduler.Queued;
             await WaitUntilAsync(() =>
                 node.Peers().Any(candidate => candidate.RoutingId == peerRid)
             );
@@ -929,7 +928,7 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
             scheduler.Release();
 
             await ReceiveAdmitAsync(peer);
-            await WaitUntilAsync(() => node.Status().AdmittedPeerCount == 1);
+            Assert.Equal(0U, node.Status().AdmittedPeerCount);
             await lane.RunAsync(() => routes.Apply([new RouterRoute(peerRid, generation)]));
         }
         finally
@@ -967,8 +966,14 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
             );
 
         await SendAsync(peer, Descriptor(ServiceWireConstants.Command.Hello));
+        using var initialAdmission = await RawMeshPeerAdmission.CompleteAsync(
+            peer,
+            MeshName,
+            $"inproc://idempotent-peer-{suffix}",
+            7,
+            3
+        );
         await WaitUntilAsync(() => node.Status().AdmittedPeerCount == 1);
-        await ReceiveAdmitAsync(peer);
         var admitted = Assert.Single(node.Peers());
         Assert.Equal(1UL, monitor.Status().PeerAdmitted);
 
@@ -1028,7 +1033,14 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
             );
 
         await SendAsync(peer, Hello());
-        await ReceiveAdmitAsync(peer);
+        using var initialAdmission = await RawMeshPeerAdmission.CompleteAsync(
+            peer,
+            MeshName,
+            $"inproc://same-connection-peer-{suffix}",
+            7,
+            3
+        );
+        await WaitUntilAsync(() => node.Status().AdmittedPeerCount == 1);
         var admitted = Assert.Single(node.Peers());
 
         // The first Hello consumed the only READY candidate. The same physical
@@ -1086,15 +1098,17 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
             )
                 peer.Send().Message(hello).Submit();
 
-            // MeshNode §7.1: accepting the Hello records the peer as admitted
-            // before the Admit is submitted. A late transport READY must preserve
-            // that admission.
-            Assert.True(
-                SpinWait.SpinUntil(
-                    () => node.Status().AdmittedPeerCount == 1,
-                    TimeSpan.FromSeconds(5)
-                )
+            // Complete admission before releasing the retained transport observation.
+            await scheduler.Queued.WaitAsync(TimeSpan.FromSeconds(2));
+            await scheduler.ReleaseNextAsync();
+            using var initialAdmission = await RawMeshPeerAdmission.CompleteAsync(
+                peer,
+                MeshName,
+                $"inproc://late-ready-peer-{suffix}",
+                7,
+                3
             );
+            await WaitUntilAsync(() => node.Status().AdmittedPeerCount == 1);
             var pending = Assert.Single(node.Peers());
             await transportMonitor!.ReadyCaptured;
             transportMonitor.ReleaseReady();
@@ -1108,16 +1122,10 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
             Assert.Equal(pending.LastChangedMs, afterReady.LastChangedMs);
             Assert.Equal(1U, node.Status().AdmittedPeerCount);
 
-            // Update follows the Admit on the same socket. It makes a discarded
-            // Admit observable as the wrong first admission record. Admission
-            // starts liveness, so probes may arrive between them. Await the
-            // released scheduler batch before blocking on its socket output.
+            // The descriptor UPDATE follows the completed admission on the same route.
+            // Await the released scheduler batch before reading its socket output.
             node.PublishDraining();
             await scheduler.ReleaseAsync();
-            Assert.Equal(
-                ServiceWireConstants.Command.Admit,
-                await ReceiveAdmissionCommandAsync(peer)
-            );
             Assert.Equal(
                 ServiceWireConstants.Command.Update,
                 await ReceiveAdmissionCommandAsync(peer)
@@ -1188,7 +1196,7 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
                 objectRole: (byte)ZLinkMeshNodeObjectRole.Server
             )
         );
-        // With no outbound intent, only the inbound Hello queries this gate.
+        // The inbound admission turn observes the shutdown gate.
         await sealObserved.Task.WaitAsync(TimeSpan.FromSeconds(2));
 
         if (sealedForShutdown)
@@ -1202,17 +1210,23 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
         }
         else
         {
-            await ReceiveAdmitAsync(peer);
+            using var initialAdmission = await RawMeshPeerAdmission.CompleteAsync(
+                peer,
+                MeshName,
+                $"inproc://inbound-peer-{suffix}",
+                7,
+                3
+            );
+            await WaitUntilAsync(() => node.Status().AdmittedPeerCount == 1);
             Assert.Equal(1U, node.Status().AdmittedPeerCount);
             Assert.Equal(MeshPeerState.Admitted, Assert.Single(node.Peers()).State);
             Assert.Equal(1UL, monitor.Status().PeerAdmitted);
         }
     }
 
-    // MeshNode §7.1: the accepting side records the peer as admitted before it submits
-    // the Admit. A peer that has received its Admit is therefore already counted.
+    // Transport liveness §5: local ADMIT submission does not establish send readiness.
     [Fact]
-    public async Task InboundHello_RecordsThePeerAsAdmittedBeforeItsAdmitArrives()
+    public async Task InboundHello_CountsOnlyPeersWhoseRemoteAdmitArrived()
     {
         const int peerCount = 32;
         await using var context = Systems.Zlink.Zlink.CreateContext();
@@ -1252,8 +1266,16 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
             );
             for (var received = 1; received <= peerCount; received++)
             {
-                await ReceiveAdmitAsync(peers[received - 1]);
-                Assert.True(node.Status().AdmittedPeerCount >= (uint)received);
+                Assert.Equal((uint)(received - 1), node.Status().AdmittedPeerCount);
+                using var initialAdmission = await RawMeshPeerAdmission.CompleteAsync(
+                    peers[received - 1],
+                    MeshName,
+                    $"inproc://admit-order-peer-{received - 1}-{suffix}",
+                    7,
+                    3
+                );
+                await WaitUntilAsync(() => node.Status().AdmittedPeerCount == (uint)received);
+                Assert.Equal((uint)received, node.Status().AdmittedPeerCount);
             }
         }
         finally
@@ -1293,7 +1315,14 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
             );
 
         await SendAsync(peer, Descriptor(ServiceWireConstants.Command.Hello, 3, 1));
-        await ReceiveAdmitAsync(peer);
+        using var initialAdmission = await RawMeshPeerAdmission.CompleteAsync(
+            peer,
+            MeshName,
+            $"inproc://update-peer-{suffix}",
+            7,
+            3
+        );
+        await WaitUntilAsync(() => node.Status().AdmittedPeerCount == 1);
         Assert.Equal(1UL, monitor.Status().PeerAdmitted);
         gate.ClaimShutdown();
         node.PublishDraining();
