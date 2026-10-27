@@ -755,6 +755,104 @@ void verify_publication_allocation_failure ()
     assert (rejected >= 4 && accepted > 0);
 }
 
+void verify_shutdown_cleanup_owner_lifetime ()
+{
+    struct held_executor_t final : runtime::offload_executor_t
+    {
+        std::latch entered{1}, release{1};
+        std::size_t submissions = 0;
+        bool try_submit_internal (std::function<void ()> work) override
+        {
+            ++submissions;
+            return offload_executor_t::try_submit_internal ([this, work = std::move (work)] {
+                entered.count_down ();
+                release.wait ();
+                work ();
+            });
+        }
+    };
+    struct release_scope_t
+    {
+        std::latch &release;
+        ~release_scope_t () { release.count_down (); }
+    };
+    using registry_t = foundation::operation_registry_t;
+    // An empty registry has no cleanup turn and needs no completion owner.
+    {
+        held_executor_t executor;
+        runtime::state_lane_t lane (executor);
+        registry_t registry (lane);
+        const release_scope_t release{executor.release};
+        assert (registry.shutdown () == 0);
+        assert (executor.submissions == 0);
+        auto next = lane.run_task ([] { return true; });
+        assert (next.await_ready () && next.result ().value ());
+    }
+    zlink::framework::completion_owner_t completion_owner;
+    // A nonempty index still cleans up in FIFO order before the next turn.
+    {
+        held_executor_t executor;
+        runtime::state_lane_t lane (executor);
+        registry_t registry (lane);
+        lane.run_sync ([&] {
+            assert (registry.register_operation (
+              {2004, 1}, registry_t::clock_t::time_point::max (), [] (auto terminal, auto) {
+                  assert (terminal == foundation::operation_terminal_t::shutdown);
+              }));
+        });
+        assert (registry.index_size () == 1);
+        assert (registry.shutdown () == 1);
+        executor.entered.wait ();
+        assert (executor.submissions == 1 && registry.index_size () == 1);
+        auto next = [&] {
+            const release_scope_t release{executor.release};
+            auto task = lane.run_task ([&] { return registry.index_size (); });
+            assert (!task.await_ready ());
+            return task;
+        }();
+        assert (next.result ().value () == 0);
+    }
+    // A settled request has no pending completion but still owns indexed storage.
+    {
+        held_executor_t executor;
+        runtime::state_lane_t lane (executor);
+        registry_t registry (lane);
+        lane.run_sync ([&] {
+            assert (registry.register_operation ({2004, 3}, registry_t::clock_t::time_point::max (),
+                                                 [] (auto, auto) { assert (false); }));
+        });
+        assert (registry.unregister ({2004, 3}));
+        assert (registry.size () == 0 && registry.index_size () == 1);
+        assert (registry.shutdown () == 0);
+        executor.entered.wait ();
+        auto next = [&] {
+            const release_scope_t release{executor.release};
+            return lane.run_task ([&] { return registry.index_size (); });
+        }();
+        assert (next.result ().value () == 0);
+    }
+    // Zero indexed entries can still have a publication queued ahead of cleanup.
+    {
+        held_executor_t executor;
+        runtime::state_lane_t lane (executor);
+        registry_t registry (lane);
+        assert (registry.register_operation (
+          {2004, 2}, registry_t::clock_t::time_point::max (), [] (auto terminal, auto) {
+              assert (terminal == foundation::operation_terminal_t::shutdown);
+          }));
+        executor.entered.wait ();
+        assert (registry.index_size () == 0);
+        assert (registry.shutdown () == 1);
+        auto next = [&] {
+            const release_scope_t release{executor.release};
+            return lane.run_task ([&] { return registry.index_size (); });
+        }();
+        assert (next.result ().value () == 0);
+    }
+    std::cout
+      << "shutdown_cleanup empty_posts=0 indexed_fifo=1 retired_fifo=1 publication_fifo=1\n";
+}
+
 void verify_expiry_reports_owner_result ()
 {
     using namespace std::chrono_literals;
@@ -821,6 +919,10 @@ void verify_expiry_reports_owner_result ()
 
 int main (int argc, char **argv)
 {
+    if (argc == 2 && std::string_view (argv[1]) == "--shutdown-cleanup-owner") {
+        verify_shutdown_cleanup_owner_lifetime ();
+        return 0;
+    }
     if (argc == 2 && std::string_view (argv[1]) == "--expiry-owner-result") {
         verify_expiry_reports_owner_result ();
         return 0;

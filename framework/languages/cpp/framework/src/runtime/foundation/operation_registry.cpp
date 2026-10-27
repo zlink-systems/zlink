@@ -745,17 +745,20 @@ std::size_t operation_registry_state_t::shutdown ()
                 if (pending.completion)
                     completions.append (take_completion (pending), operation_terminal_t::shutdown);
             }
-            if (_owner && runtime::state_lane_t::current () != _owner) {
-                // FIFO follows every accepted index publication. The state, including
-                // retired entries, outlives the public registry until cleanup finishes.
-                (void) _owner->try_post ([self = shared_from_this ()] {
-                    std::lock_guard lock (self->_mutex);
-                    self->clear_deadlines ();
-                });
-                // A closing lane may reject cleanup while its final turn runs.
-                // The last state reference then clears storage in the destructor.
-            } else {
-                clear_deadlines ();
+            // Entries also own storage for publications not yet indexed on the lane.
+            if (!_entries.empty ()) {
+                if (_owner && runtime::state_lane_t::current () != _owner) {
+                    // FIFO follows every accepted index publication. The state, including
+                    // retired entries, outlives the public registry until cleanup finishes.
+                    (void) _owner->try_post ([self = shared_from_this ()] {
+                        std::lock_guard lock (self->_mutex);
+                        self->clear_deadlines ();
+                    });
+                    // A closing lane may reject cleanup while its final turn runs.
+                    // The last state reference then clears storage in the destructor.
+                } else {
+                    clear_deadlines ();
+                }
             }
         }
     }
