@@ -1,3 +1,5 @@
+import type { PendingOperation } from '../../foundation/operation-registry';
+import type { RequestRuntime } from '../../foundation/request-runtime';
 import type {
   RequestResult,
   SubmitResult,
@@ -72,6 +74,7 @@ export type ZLinkBackendRequestSourceAcceptance = (
   | Promise<import('../../locations/request-source-resolver').ZLinkRequestSourceFence | undefined>;
 
 export interface ZLinkBackendMeshNode {
+  setRequestRuntime?(requests: RequestRuntime): void;
   acceptRelocatedActorTerminal?(
     operation: { readonly high: bigint; readonly low: bigint },
     replyRouteId: bigint,
@@ -146,7 +149,8 @@ export interface ZLinkBackendMeshNode {
     deadlineUnixMs: bigint,
     sourceSpotId?: string,
     metadata?: ReadonlyMap<string, string>,
-    onAdmitted?: () => void
+    onAdmitted?: () => void,
+    requestOperation?: PendingOperation<unknown>
   ): MeshOperationId;
   sendToInstanceSpot(
     route: ServiceInstanceRouteFence,
@@ -162,7 +166,8 @@ export interface ZLinkBackendMeshNode {
     sourceSpotId?: string,
     metadata?: ReadonlyMap<string, string>,
     instanceIntent?: boolean,
-    onAdmitted?: () => void
+    onAdmitted?: () => void,
+    requestOperation?: PendingOperation<unknown>
   ): MeshOperationId;
   registerUserSpotOperationHandler(handler: ServiceUserSpotOperationHandler): void;
   requestUserSpotCreate(
@@ -247,6 +252,7 @@ export interface ZLinkBackendMeshNode {
     frames: readonly Uint8Array[],
     options?: {
       readonly timeoutMs?: number;
+      readonly requestOperation?: PendingOperation<unknown>;
       readonly signal?: AbortSignal;
       readonly onSubmitted?: (signal: AbortSignal) => Promise<void>;
     }
@@ -257,6 +263,7 @@ export interface ZLinkBackendMeshNode {
     options?: {
       flags?: number;
       timeoutMs?: number;
+      readonly requestOperation?: PendingOperation<unknown>;
       applicationMetadata?: Buffer;
       onAdmitted?: () => void;
     }
@@ -272,6 +279,7 @@ export interface ZLinkBackendMeshNode {
     options?: {
       flags?: number;
       timeoutMs?: number;
+      readonly requestOperation?: PendingOperation<unknown>;
       applicationMetadata?: Buffer;
       onAdmitted?: () => void;
     }
@@ -407,6 +415,7 @@ export interface ZLinkBackendMeshNode {
     options?: {
       flags?: number;
       timeoutMs?: number;
+      readonly requestOperation?: PendingOperation<unknown>;
       applicationMetadata?: Buffer;
       onAdmitted?: () => void;
       routeFence?: import('../../foundation/service-stateful-wire-codec').ServiceActorRouteFence;
@@ -425,6 +434,7 @@ export interface ZLinkBackendMeshNode {
     options?: {
       flags?: number;
       timeoutMs?: number;
+      readonly requestOperation?: PendingOperation<unknown>;
       applicationMetadata?: Buffer;
       onAdmitted?: () => void;
     }
@@ -553,7 +563,8 @@ export interface ZLinkBackendDealerSocket extends ZLinkBackendConnectableSocket 
   request(
     message: Message | readonly Message[],
     timeoutMs?: number,
-    onAdmitted?: () => void
+    onAdmitted?: () => void,
+    requestOperation?: PendingOperation<unknown>
   ): Promise<readonly Message[]>;
   recv(flags?: ZLinkBackendRecvFlags): Received | undefined;
 }
@@ -571,7 +582,10 @@ export interface ZLinkBackendSendOperation {
 export interface ZLinkBackendRequestOperation {
   message(message: MessageLike): ZLinkBackendRequestOperation;
   timeout(timeoutMs: number): ZLinkBackendRequestOperation;
-  submit(onAdmitted?: () => void): Promise<readonly Message[]>;
+  submit(
+    onAdmitted?: () => void,
+    requestOperation?: PendingOperation<unknown>
+  ): Promise<readonly Message[]>;
 }
 
 export interface ZLinkBackendRouterSocket extends ZLinkBackendConnectableSocket {
@@ -590,7 +604,8 @@ export interface ZLinkBackendRouterSocket extends ZLinkBackendConnectableSocket 
     routingId: RoutingId,
     message: Message | readonly Message[],
     timeoutMs?: number,
-    onAdmitted?: () => void
+    onAdmitted?: () => void,
+    requestOperation?: PendingOperation<unknown>
   ): Promise<readonly Message[]>;
   sendToSpot(
     targetNodeRid: RoutingId,
@@ -603,7 +618,8 @@ export interface ZLinkBackendRouterSocket extends ZLinkBackendConnectableSocket 
     targetSpotId: RoutingId,
     parts: readonly Message[],
     timeoutMs?: number,
-    onAdmitted?: () => void
+    onAdmitted?: () => void,
+    requestOperation?: PendingOperation<unknown>
   ): Promise<readonly Message[]>;
   disconnectPeer(routingId: RoutingId): void;
   reply(routingId: RoutingId, replyToken: unknown): ZLinkBackendReplyOperation;
@@ -761,7 +777,8 @@ export interface ZLinkBackendSpot extends ZLinkBackendObject {
     channelName: string,
     payload: Message | readonly Message[],
     timeoutMs?: number,
-    onAdmitted?: () => void
+    onAdmitted?: () => void,
+    requestOperation?: PendingOperation<unknown>
   ): Promise<readonly Message[]>;
   sendToChannel(channelName: string, payload: Message | readonly Message[]): Promise<void>;
   publish(
@@ -779,7 +796,8 @@ export interface ZLinkBackendSpot extends ZLinkBackendObject {
     spotId: RoutingId,
     payload: Message | readonly Message[],
     timeoutMs?: number,
-    onAdmitted?: () => void
+    onAdmitted?: () => void,
+    requestOperation?: PendingOperation<unknown>
   ): Promise<readonly Message[]>;
   dispose(): Promise<void>;
 }

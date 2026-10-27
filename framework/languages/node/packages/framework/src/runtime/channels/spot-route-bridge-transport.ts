@@ -1,3 +1,6 @@
+import { RequestRuntime } from '../foundation/request-runtime';
+import type { PendingOperation } from '../foundation/operation-registry';
+import { waitRequestReply } from '../messaging/request-deadline';
 import type { Message } from '../../contracts/Common/Message';
 import type { ZLinkBackendSpotRouteBridge } from '../backend/contracts';
 import { ZLinkConfigurationException } from '../configuration';
@@ -8,12 +11,12 @@ import {
   type ZLinkChannelEnvelopeCodecRegistry
 } from './channel-envelope';
 import { appendParts } from './channel-multipart';
-import { awaitWithAbort } from '../abort';
 
 export class ZLinkSpotRouteBridgeTransport {
   constructor(
     private readonly bridges: ReadonlyMap<string, ZLinkBackendSpotRouteBridge>,
-    private readonly defaultRequestTimeoutMs: number | undefined
+    private readonly defaultRequestTimeoutMs: number | undefined,
+    private readonly requests = new RequestRuntime()
   ) {}
 
   has(routerChannelId: string): boolean {
@@ -38,24 +41,36 @@ export class ZLinkSpotRouteBridgeTransport {
     codecs: ZLinkChannelEnvelopeCodecRegistry | undefined,
     timeoutMs: number | undefined,
     signal?: AbortSignal,
-    onAdmitted?: () => void
+    onAdmitted?: () => void,
+    existing?: PendingOperation<unknown>
   ): Promise<TReply> {
-    const bridge = this.requireBridge(target.routerChannelId);
-    const operation = appendParts(
-      bridge.request(target.routerChannelId, target.targetNodeRid, target.spotId),
-      parts
-    )
-      .timeout(timeoutMs ?? 0)
-      .submit(onAdmitted);
-    const replyParts = await awaitWithAbort(operation, signal, () => {
-      void operation.then(closeMessages, () => undefined);
-    });
-    try {
-      return decodeChannelReply<TReply>(replyParts, codecs);
-    } finally {
-      closeMessages(replyParts);
-      closeMessages(parts);
-    }
+    return this.requests.request(
+      timeoutMs ?? this.defaultRequestTimeoutMs,
+      signal,
+      async (requestOperation) => {
+        const bridge = this.requireBridge(target.routerChannelId);
+        const operation = appendParts(
+          bridge.request(target.routerChannelId, target.targetNodeRid, target.spotId),
+          parts
+        )
+          .timeout(timeoutMs ?? 0)
+          .submit(onAdmitted, requestOperation);
+        const replyParts = await waitRequestReply(
+          operation,
+          'Spot request',
+          requestOperation,
+          undefined,
+          closeMessages
+        );
+        try {
+          return decodeChannelReply<TReply>(replyParts, codecs);
+        } finally {
+          closeMessages(replyParts);
+          closeMessages(parts);
+        }
+      },
+      existing
+    );
   }
 
   requestRaw(
@@ -63,17 +78,30 @@ export class ZLinkSpotRouteBridgeTransport {
     request: Message,
     timeoutMs: number | undefined,
     signal?: AbortSignal,
-    onAdmitted?: () => void
+    onAdmitted?: () => void,
+    existing?: PendingOperation<unknown>
   ): Promise<readonly Message[]> {
-    const bridge = this.requireBridge(target.routerChannelId);
-    const operation = bridge
-      .request(target.routerChannelId, target.targetNodeRid, target.spotId)
-      .message(request)
-      .timeout(timeoutMs ?? this.defaultRequestTimeoutMs ?? 0)
-      .submit(onAdmitted);
-    return awaitWithAbort(operation, signal, () => {
-      void operation.then(closeMessages, () => undefined);
-    });
+    return this.requests.request(
+      timeoutMs ?? this.defaultRequestTimeoutMs,
+      signal,
+      async (requestOperation) => {
+        const bridge = this.requireBridge(target.routerChannelId);
+        const operation = bridge
+          .request(target.routerChannelId, target.targetNodeRid, target.spotId)
+          .message(request)
+          .timeout(timeoutMs ?? this.defaultRequestTimeoutMs ?? 0)
+          .submit(onAdmitted, requestOperation);
+        return waitRequestReply(
+          operation,
+          'Spot request',
+          requestOperation,
+          undefined,
+          closeMessages
+        );
+      },
+      existing,
+      closeMessages
+    );
   }
 
   private requireBridge(routerChannelId: string): ZLinkBackendSpotRouteBridge {
