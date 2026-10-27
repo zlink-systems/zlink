@@ -502,20 +502,7 @@ public final class ZLinkLocationAutoConnectHost implements AutoCloseable {
             if (current == null || !current.targetKey().equals(target.key())) {
                 return true;
             }
-            if (manualEndpoints.contains(target.endpoint())) {
-                RoutingId fallbackRid = manualExpectedRids.get(target.endpoint());
-                try {
-                    node.replacePeerConnection(
-                            target.endpoint(),
-                            fallbackRid,
-                            0,
-                            fallbackRid == null ? null : fallbackRid.toString());
-                } catch (ZLinkPeerIntentClosePendingException pending) {
-                    return false;
-                }
-            } else {
-                node.removePeerConnection(current.intentId());
-            }
+            node.removePeerConnection(current.intentId());
             connectionIntents.remove(target.endpoint(), current);
             return true;
         }
