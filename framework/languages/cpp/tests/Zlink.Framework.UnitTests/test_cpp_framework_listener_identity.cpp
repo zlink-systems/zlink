@@ -48,7 +48,7 @@ class no_op_stream_session_t final : public framework::packet_stream_session_t
 
     framework::task_t<void> on_packet (framework::stream_t &,
                                        const framework::session_message_context_t &,
-                                       const zlink::message_t &) override
+                                       const zlink::framework::message_t &) override
     {
         co_return;
     }
