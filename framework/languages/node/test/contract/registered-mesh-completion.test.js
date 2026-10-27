@@ -14,6 +14,10 @@ const {
 } = require('../../packages/framework/dist/runtime/foundation/service-runtime-contracts');
 
 function harness(table, checkSlot = true) {
+  const entry =
+    new (require('../../packages/framework/dist/runtime/foundation/operation-registry').OperationRegistry)().register(
+      1000
+    );
   let resolve;
   const promise = new Promise((done) => {
     resolve = done;
@@ -30,13 +34,14 @@ function harness(table, checkSlot = true) {
     close() {
       this.mailbox.close();
     },
-    requestToNode() {
+    requestToNode(_target, _parts, _timeout, _admitted, observer, kind) {
       if (checkSlot)
         assert.equal(table.pendingCount, 1, 'completion slot exists before transport submission');
-      return { id: 7n, promise };
+      void promise.then((value) => observer.operationCompleted(entry.id, value, kind));
+      return Object.assign(Object.create(entry), { promise: undefined });
     }
   };
-  return { backend, resolve, ready: () => ready };
+  return { backend, resolve, entry, ready: () => ready };
 }
 
 test('registered completion reaches its caller with the infrastructure pump stopped', async (t) => {
@@ -73,12 +78,14 @@ for (const terminal of ['cancel', 'close']) {
     );
     const reason = new Error(terminal);
     const rejected = assert.rejects(pending, (error) => error === reason);
+    const entryRejected = assert.rejects(h.entry.promise, (error) => error === reason);
     if (terminal === 'cancel') controller.abort(reason);
     else {
       await h.backend.close();
       table.dispose(reason);
     }
     await rejected;
+    await entryRejected;
     h.resolve({ terminalResult: 0, failureCode: 0 });
     for (let i = 0; i < 8; i++) await Promise.resolve();
     assert.equal(table.pendingCount, 0);
