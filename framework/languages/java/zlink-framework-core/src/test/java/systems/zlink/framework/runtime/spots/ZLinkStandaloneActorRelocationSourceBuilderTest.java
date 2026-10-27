@@ -800,6 +800,18 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
                                     yield (AutoCloseable) () -> {};
                                 }
                                 case "status" -> status;
+                                case "requestCanonicalRelocationPrepare" -> {
+                                    byte[] encoded = ((byte[]) arguments[1]).clone();
+                                    var reply =
+                                            peer.get()
+                                                    .apply(
+                                                            localRid,
+                                                            1L,
+                                                            Byte.toUnsignedInt(encoded[3]),
+                                                            encoded);
+                                    ((CompletableFuture<Void>) arguments[3]).complete(null);
+                                    yield reply;
+                                }
                                 case "sendCanonicalRelocationControl" ->
                                         peer.get()
                                                 .apply(

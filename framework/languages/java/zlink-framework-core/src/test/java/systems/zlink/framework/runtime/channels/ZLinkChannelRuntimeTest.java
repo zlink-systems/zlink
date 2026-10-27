@@ -722,6 +722,131 @@ final class ZLinkChannelRuntimeTest {
     }
 
     @Test
+    void routedSpotSendWaitsBeyondDefaultRequestTimeoutForAdmission() throws Exception {
+        DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
+        options.setDefaultRequestTimeout(Duration.ofMillis(30));
+        ZLinkLegacyTopology.addRouteMeshChannel(options, "play.route")
+                .enableServer("inproc://play-route");
+        FakeChannelBackendAdapter backend = new FakeChannelBackendAdapter();
+        backend.bridge.pendingSend = new CompletableFuture<>();
+        CountDownLatch submitted = new CountDownLatch(1);
+        backend.bridge.onSend = submitted::countDown;
+        try (ZLinkChannelRuntime runtime =
+                new ZLinkChannelRuntime(
+                        backend,
+                        options.registration(),
+                        new ZLinkJsonMessageSerializer(),
+                        handlers())) {
+            runtime.registerSpotRouteBridgeOwner(() -> backend.spotNode);
+            CompletableFuture<Void> send =
+                    runtime.sendToSpot("room-spot", new TestRequest("hello"))
+                            .submit()
+                            .toCompletableFuture();
+            assertTrue(submitted.await(1, TimeUnit.SECONDS));
+            try {
+                assertThrows(TimeoutException.class, () -> send.get(200, TimeUnit.MILLISECONDS));
+            } finally {
+                backend.bridge.pendingSend.complete(null);
+            }
+            send.get(1, TimeUnit.SECONDS);
+            assertTrue(backend.bridge.lastAttemptParts.stream().allMatch(Message::empty));
+        }
+    }
+
+    @Test
+    void routedSpotPendingSendCompletesUnavailableWhenRouteDisappears() throws Exception {
+        DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
+        options.setDefaultRequestTimeout(Duration.ofSeconds(1));
+        ZLinkLegacyTopology.addRouteMeshChannel(options, "play.route")
+                .enableServer("inproc://play-route");
+        FakeChannelBackendAdapter backend = new FakeChannelBackendAdapter();
+        backend.bridge.pendingSend = new CompletableFuture<>();
+        CountDownLatch submitted = new CountDownLatch(1);
+        backend.bridge.onSend = submitted::countDown;
+        try (ZLinkChannelRuntime runtime =
+                new ZLinkChannelRuntime(
+                        backend,
+                        options.registration(),
+                        new ZLinkJsonMessageSerializer(),
+                        handlers())) {
+            runtime.registerSpotRouteBridgeOwner(() -> backend.spotNode);
+            CompletableFuture<Void> send =
+                    runtime.sendToSpot("room-spot", new TestRequest("hello"))
+                            .submit()
+                            .toCompletableFuture();
+            assertTrue(submitted.await(1, TimeUnit.SECONDS));
+            backend.bridge.pendingSend.completeExceptionally(
+                    new ZlinkSubmitException(SubmitResult.NOT_CONNECTED));
+            ExecutionException completion =
+                    assertThrows(ExecutionException.class, () -> send.get(1, TimeUnit.SECONDS));
+            ZLinkFrameworkException failure =
+                    assertInstanceOf(ZLinkFrameworkException.class, completion.getCause());
+            assertEquals(ZLinkFrameworkErrorKind.UNAVAILABLE, failure.kind());
+            assertTrue(backend.bridge.lastAttemptParts.stream().allMatch(Message::empty));
+        }
+    }
+
+    @Test
+    void routedSpotPendingSendCompletesShuttingDownWhenRuntimeCloses() throws Exception {
+        DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
+        options.setDefaultRequestTimeout(Duration.ofSeconds(1));
+        ZLinkLegacyTopology.addRouteMeshChannel(options, "play.route")
+                .enableServer("inproc://play-route");
+        FakeChannelBackendAdapter backend = new FakeChannelBackendAdapter();
+        backend.bridge.pendingSend = new CompletableFuture<>();
+        CountDownLatch submitted = new CountDownLatch(1);
+        backend.bridge.onSend = submitted::countDown;
+        try (ZLinkChannelRuntime runtime =
+                new ZLinkChannelRuntime(
+                        backend,
+                        options.registration(),
+                        new ZLinkJsonMessageSerializer(),
+                        handlers())) {
+            runtime.registerSpotRouteBridgeOwner(() -> backend.spotNode);
+            CompletableFuture<Void> send =
+                    runtime.sendToSpot("room-spot", new TestRequest("hello"))
+                            .submit()
+                            .toCompletableFuture();
+            assertTrue(submitted.await(1, TimeUnit.SECONDS));
+            runtime.beginClose();
+            ExecutionException completion =
+                    assertThrows(ExecutionException.class, () -> send.get(1, TimeUnit.SECONDS));
+            ZLinkFrameworkException failure =
+                    assertInstanceOf(ZLinkFrameworkException.class, completion.getCause());
+            assertEquals(ZLinkFrameworkErrorKind.SHUTTING_DOWN, failure.kind());
+            backend.bridge.pendingSend.complete(null);
+            assertTrue(backend.bridge.lastAttemptParts.stream().allMatch(Message::empty));
+        }
+    }
+
+    @Test
+    void routedSpotRequestStillHonorsTimeout() throws Exception {
+        DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
+        options.setDefaultRequestTimeout(Duration.ofMillis(30));
+        ZLinkLegacyTopology.addRouteMeshChannel(options, "play.route")
+                .enableServer("inproc://play-route");
+        FakeChannelBackendAdapter backend = new FakeChannelBackendAdapter();
+        backend.bridge.completeRequests = false;
+        try (ZLinkChannelRuntime runtime =
+                new ZLinkChannelRuntime(
+                        backend,
+                        options.registration(),
+                        new ZLinkJsonMessageSerializer(),
+                        handlers())) {
+            runtime.registerSpotRouteBridgeOwner(() -> backend.spotNode);
+            var request =
+                    runtime.requestToSpot("room-spot", new TestRequest("hello"))
+                            .submit(TestReply.class)
+                            .toCompletableFuture();
+            ExecutionException completion =
+                    assertThrows(ExecutionException.class, () -> request.get(1, TimeUnit.SECONDS));
+            ZLinkFrameworkException failure =
+                    assertInstanceOf(ZLinkFrameworkException.class, completion.getCause());
+            assertEquals(ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED, failure.kind());
+        }
+    }
+
+    @Test
     void routedSpotSendRegistersLifecycleBeforeFirstAttemptAndClosesPayloads() {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         options.setDefaultRequestTimeout(Duration.ofSeconds(1));
@@ -2922,6 +3047,7 @@ final class ZLinkChannelRuntimeTest {
         CountDownLatch firstDrainFailed;
         CountDownLatch nextDrainAfterFailure;
         boolean acceptSends = true;
+        CompletableFuture<Void> pendingSend;
         int sendAttempts;
         Runnable onSend;
         List<Message> lastAttemptParts = List.of();
@@ -2940,6 +3066,9 @@ final class ZLinkChannelRuntimeTest {
             recordBridgeCall(channelName, targetNodeRid, targetSpotId, parts);
             if (onSend != null) {
                 onSend.run();
+            }
+            if (pendingSend != null) {
+                return pendingSend;
             }
             return acceptSends
                     ? CompletableFuture.completedFuture(null)
