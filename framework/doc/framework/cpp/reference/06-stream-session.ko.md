@@ -53,7 +53,7 @@ header framing과 queue admission을 끝낸 뒤 packet마다 호출한다. Hands
 ```cpp
 co_await stream
   .write_packet(zlink::framework::message_t::from(server_tick_t{tick_number}))
-  .submit();
+  .async();
 ```
 
 **옵션.** `stream_send_call_t`가 제공하는 modifier는 다음과 같다.
@@ -84,7 +84,7 @@ request에 답할 때는 `reply_packet`을 사용한다.
 ```cpp
 co_await stream
   .reply_packet(zlink::framework::message_t::from(get_player_state_result_t{state}))
-  .submit();
+  .async();
 ```
 
 **옵션.** `stream_write_call_t`가 제공하는 modifier는 다음과 같다.

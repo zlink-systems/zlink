@@ -52,7 +52,7 @@
   - 필요 시 GitHub Release 생성
   - 필요 시 npm/PyPI/NuGet/Maven publish
 
-필요 계정/시크릿: `doc/building/release-accounts.ko.md`
+필요 계정/시크릿: 내부 문서(비공개 저장소 zlink-systems/docs의 `zlink/building/release-accounts.ko.md`)
 
 ## 4. Conan
 

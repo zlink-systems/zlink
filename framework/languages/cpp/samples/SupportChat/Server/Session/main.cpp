@@ -8,6 +8,8 @@
 #include <zlink/framework.hpp>
 #include <zlink/locations/redis.hpp>
 
+#include <nlohmann/json.hpp>
+
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -41,7 +43,7 @@ class supportchat_session_t final : public packet_stream_session_t
     // --8<-- [start:doc-sc-session-dispatch]
     task_t<void> on_packet (stream_t &stream,
                             const session_message_context_t &dispatch,
-                            const zlink::message_t &payload) override
+                            const zlink::framework::message_t &payload) override
     {
         if (dispatch.packet_name == authenticate_req_t::packet_name) {
             /* 인증은 API 서버가 소유한다(공통 sample spec §11). Session은 access token을
@@ -49,7 +51,7 @@ class supportchat_session_t final : public packet_stream_session_t
             auto verified = co_await _channels
                               .request ("supportchat.api",
                                         authenticate_user_req_t{
-                                          payload.parse_json<authenticate_req_t> ().access_token})
+                                          payload.decode<authenticate_req_t> ().access_token})
                               .async<authenticate_user_res_t> ();
             if (!verified.accepted) {
                 throw framework_exception_t (framework_error_kind_t::rejected,
@@ -70,11 +72,11 @@ class supportchat_session_t final : public packet_stream_session_t
             _identity_display_name = authenticated.display_name;
             _identity_role = authenticated.role;
             // --8<-- [end:doc-sc-session-auth]
-            stream.reply_packet (zlink::message_t::from_json (authenticated)).async ();
+            stream.reply_packet (zlink::framework::message_t::from (authenticated)).async ();
             co_return;
         }
         if (dispatch.packet_name == join_conversation_req_t::packet_name) {
-            const auto request = payload.parse_json<join_conversation_req_t> ();
+            const auto request = payload.decode<join_conversation_req_t> ();
             if (request.conversation_id.empty ()) {
                 throw framework_exception_t (framework_error_kind_t::protocol_error,
                                              "JoinConversationReq is missing conversationId");
@@ -85,9 +87,9 @@ class supportchat_session_t final : public packet_stream_session_t
             }
             auto reply = co_await actor.relay_request (std::string (dispatch.packet_name), payload)
                            .async ();
-            auto joined = reply.parse_json<join_conversation_res_t> ();
+            auto joined = reply.decode<join_conversation_res_t> ();
             joined.actor_id = std::string (actor.actor_id ());
-            stream.reply_packet (zlink::message_t::from_json (joined)).async ();
+            stream.reply_packet (zlink::framework::message_t::from (joined)).async ();
             co_return;
         }
         // --8<-- [start:doc-sc-actor-relay]

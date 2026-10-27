@@ -1,0 +1,27 @@
+import { readFileSync } from 'node:fs';
+export const NODE_CONFIG = Symbol('MyGame.NodeConfig');
+export interface NodeConfig {
+  id: string;
+  redisEndpoint: string;
+  keyPrefix: string;
+  meshEndpoint: string;
+  streamEndpoint: string | null;
+  tableCapacity?: number;
+}
+export function readConfig(path: string): NodeConfig {
+  const value = JSON.parse(readFileSync(path, 'utf8')) as NodeConfig;
+  for (const key of ['id', 'redisEndpoint', 'keyPrefix', 'meshEndpoint'] as const) {
+    if (typeof value[key] !== 'string' || !value[key]) throw new Error(`Invalid config ${key}`);
+  }
+  if (
+    value.streamEndpoint !== null &&
+    (typeof value.streamEndpoint !== 'string' || !value.streamEndpoint)
+  )
+    throw new Error('Invalid streamEndpoint');
+  if (
+    value.tableCapacity !== undefined &&
+    (!Number.isInteger(value.tableCapacity) || value.tableCapacity < 0)
+  )
+    throw new Error('Table capacity must be a nonnegative integer');
+  return value;
+}
