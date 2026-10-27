@@ -6092,6 +6092,11 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations (
     static_assert (
       std::is_nothrow_move_constructible_v<std::shared_ptr<mesh::service_mailbox_claim_t>>);
     auto claim = std::move (first_claim);
+    const auto release_claim = [this] (mesh::service_mailbox_claim_t *owned) {
+        (void) _transport->mailbox ().release (*owned);
+    };
+    std::unique_ptr<mesh::service_mailbox_claim_t, decltype (release_claim)> claim_owner (
+      claim.get (), release_claim);
     std::shared_ptr<zlink::framework::location_repository_t> store;
     user_spot_materializer_t materializer;
     user_spot_closer_t user_spot_closer;
@@ -7290,15 +7295,17 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations (
         }
         co_return;
     };
-    do {
+    while (claim) {
         co_await dispatch_batch (claim);
-        (void) _transport->mailbox ().release (*claim);
+        claim_owner.reset ();
         if (infrastructure_budget.exhausted ())
             break;
         claim.reset ();
-    } while ((claim = _transport->mailbox ().try_claim (
-                mesh::service_mailbox_domain_t::infrastructure,
-                dispatch_limits::receive_batch_messages, dispatch_limits::receive_batch_bytes)));
+        claim = _transport->mailbox ().try_claim (mesh::service_mailbox_domain_t::infrastructure,
+                                                  dispatch_limits::receive_batch_messages,
+                                                  dispatch_limits::receive_batch_bytes);
+        claim_owner.reset (claim.get ());
+    }
     co_return count;
 }
 
