@@ -3749,13 +3749,12 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
             delivery.remoteBoundSessionTarget,
             delivery.fallbackActorRef
           );
-          return captured === undefined
-            ? undefined
-            : captured.then((response) => ({ handled: true, response }));
+          return captured === undefined ? undefined : { handled: true, response: captured };
         }
       });
       try {
         return await dispatch.dispatch(
+          undefined,
           'remote',
           actorId,
           parts,

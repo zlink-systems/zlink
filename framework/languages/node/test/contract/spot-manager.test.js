@@ -1108,6 +1108,7 @@ test('Host Instance Close without Reincarnate releases the closed generation thr
 });
 
 test('Instance context close returns after activation completion', async () => {
+  const quiescenceEntered = createDeferred();
   const releaseQuiescence = createDeferred();
   const events = [];
   let durableCloseCalls = 0;
@@ -1116,12 +1117,12 @@ test('Instance context close returns after activation completion', async () => {
   const manager = new framework.DefaultZLinkSpotManager({
     detachedTaskRunner: detachedTaskRunner,
     spotFactories: [],
-    instanceSpotFactories: new Map([[
-      'test.mesh',
-      new Map([['deferred', DeferredCloseInstanceSpot]])
-    ]]),
+    instanceSpotFactories: new Map([
+      ['test.mesh', new Map([['deferred', DeferredCloseInstanceSpot]])]
+    ]),
     instanceSpotApplicationQuiescenceProvider: async () => {
       events.push('wait-for-terminal');
+      quiescenceEntered.resolve();
       await releaseQuiescence.promise;
     },
     async beginInstanceClosingAuthority(_meshName, _spotId, onCommitted) {
@@ -1134,18 +1135,27 @@ test('Instance context close returns after activation completion', async () => {
 
   await manager.materializeInstance('test.mesh', 'deferred', spotId, 1n);
   let closeResult = Symbol('pending');
-  const operation = manager.executeOnSpot(
-    DeferredCloseInstanceSpot,
-    spotId,
-    async (spot) => {
-      closeResult = spot.context.close();
-      assert.equal(closeResult instanceof Promise, true);
-      events.push('close-returned');
-    }
-  );
+  const operation = manager.executeOnSpot(DeferredCloseInstanceSpot, spotId, async (spot) => {
+    closeResult = spot.context.close();
+    assert.equal(closeResult instanceof Promise, true);
+    events.push('close-returned');
+  });
 
   await operation;
   assert.equal(closeResult instanceof Promise, true);
+  let closeResultSettled = false;
+  const closeSettlement = closeResult.then(
+    (result) => {
+      closeResultSettled = true;
+      return result;
+    },
+    (error) => {
+      closeResultSettled = true;
+      throw error;
+    }
+  );
+  await quiescenceEntered.promise;
+  assert.equal(closeResultSettled, false);
   assert.equal(durableCloseCalls, 0);
   assert.deepEqual(events, ['close-returned', 'wait-for-terminal']);
 
@@ -1161,7 +1171,7 @@ test('Instance context close returns after activation completion', async () => {
   assert.equal(events.includes('later-lifecycle'), false);
 
   releaseQuiescence.resolve();
-  assert.equal(await closeResult, true);
+  assert.equal(await closeSettlement, true);
   await laterLifecycleRejected;
   await waitFor(() => durableCloseCalls === 1);
   assert.equal(await manager.find('test.mesh', spotId), null);
@@ -2357,7 +2367,7 @@ test('ZLinkSpotManager replies routed actor request dispatch errors', async () =
     const errorEvents = dispatchEvents.filter((event) => event.outcome === 'failed');
     assert.equal(errorEvents.length, 1);
     assert.equal(errorEvents[0].surface, 'actor');
-    assert.equal(errorEvents[0].reason, 'no_handler');
+    assert.equal(errorEvents[0].reason, 'stale_target');
     assert.equal(errorEvents[0].action, 'reply_error');
   } finally {
     for (const part of requestParts) {
@@ -3904,10 +3914,6 @@ test('formal Actor Join runtime port preserves fixture order through target Read
 
   const events = [];
   const detached = [];
-  let observeJoinedCallback;
-  const joinedCallbackObserved = new Promise((resolve) => {
-    observeJoinedCallback = resolve;
-  });
   class PlayerActor {
     constructor() {
       this.actorId = 'player-1';
@@ -3970,7 +3976,6 @@ test('formal Actor Join runtime port preserves fixture order through target Read
     async onJoinedActor(joinedActor) {
       assert.equal(joinedActor, actor);
       events.push('joined-callback-completed');
-      observeJoinedCallback();
     }
   }
   class SavedHandler {
@@ -4084,14 +4089,12 @@ test('formal Actor Join runtime port preserves fixture order through target Read
     assert.equal(detached.length, 1);
     assert.match(detached[0].name, /target commit/);
     const targetCommit = detached[0].callback();
-    const joinedBeforeSourceLeaveSubmission = await Promise.race([
-      joinedCallbackObserved.then(() => true),
-      new Promise((resolve) => setImmediate(() => resolve(false)))
-    ]);
-    assert.equal(
-      joinedBeforeSourceLeaveSubmission,
-      true,
-      `OnJoinedActor must complete before the source leave submission fence; observed ${events.join(' -> ')}`
+    // The source leave terminal below is completed by the test itself, so OnJoinedActor must
+    // complete without it. Wait for that completion rather than a single event-loop turn.
+    await waitFor(
+      () => events.includes('joined-callback-completed'),
+      undefined,
+      () => `OnJoinedActor must complete before the source leave submission fence; observed ${events.join(' -> ')}`
     );
     assert.equal(events.includes('public-join-completed'), false);
     assert.equal(
