@@ -1,0 +1,19 @@
+<Project>
+  <!-- Visual Studio generators do not use CMake compiler launchers. MSBuild
+       imports this file for the Framework build and invokes sccache per source. -->
+  <PropertyGroup>
+    <CLToolExe>sccache-cl.cmd</CLToolExe>
+    <CLToolPath>$(MSBuildThisFileDirectory)</CLToolPath>
+    <MultiProcCL>true</MultiProcCL>
+    <EnforceProcessCountAcrossBuilds>true</EnforceProcessCountAcrossBuilds>
+    <MultiProcMaxCount>2</MultiProcMaxCount>
+    <TrackFileAccess>false</TrackFileAccess>
+  </PropertyGroup>
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <DebugInformationFormat>OldStyle</DebugInformationFormat>
+      <MultiProcessorCompilation>false</MultiProcessorCompilation>
+    </ClCompile>
+  </ItemDefinitionGroup>
+</Project>
+
