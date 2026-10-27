@@ -384,6 +384,12 @@
       "5d9a6561c5f0fdcb9b45ac526e9e44dbcc4d91d81edc8ba4cdca36a3b3569683": 1
     }
   },
+  "zlink-framework-core/src/test/java/systems/zlink/framework/runtime/channels/ZLinkHandlerPreparationTest.java": {
+    "reason": "공개 동작 관찰로 바꾸려면 handler 준비 결과와 서비스 조회 횟수를 공개 활성화 경로에서 세는 fixture가 필요하다. 후속 작업은 #2309에서 이어서 처리한다.",
+    "accesses": {
+      "e9107d3c5e52282601ccfeceaf7baf04b8fab7964321032113ead6fec9d8cfa0": 1
+    }
+  },
   "zlink-framework-core/src/test/java/systems/zlink/framework/runtime/channels/ZLinkNodeSubmitTurnTest.java": {
     "reason": "공개 동작 관찰로 바꾸려면 backend socket·scheduler·종료 executor를 생성 시 주입하고 공개 submit·shutdown 결과로 수신 순서와 실패를 확인하는 fixture가 필요하다. 후속 작업은 #2309에서 이어서 처리한다.",
     "accesses": {

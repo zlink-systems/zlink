@@ -4506,7 +4506,7 @@ test('spot actor dispatch rejects malformed JSON as PayloadDecodeFailed before i
   })));
 
   await assert.rejects(
-    () => dispatch.dispatch('remote', 'alice', [header, zlink.Message.from(Buffer.from('{'))]),
+    () => dispatch.dispatch(undefined, 'remote', 'alice', [header, zlink.Message.from(Buffer.from('{'))]),
     (error) => error instanceof framework.ZLinkFrameworkException
       && error.kind === framework.ZLinkFrameworkErrorKind.ProtocolError
   );
@@ -4550,7 +4550,7 @@ test('spot actor dispatch rejects a missing handler before payload deserializati
   const payload = zlink.Message.from(Buffer.from('{not-json'));
 
   await assert.rejects(
-    () => dispatch.dispatch('remote', 'alice', [header, payload]),
+    () => dispatch.dispatch(undefined, 'remote', 'alice', [header, payload]),
     (error) => error instanceof framework.ZLinkFrameworkException
       && error.kind === framework.ZLinkFrameworkErrorKind.NotFound
   );
@@ -4611,7 +4611,7 @@ test('queued bound-session Actor request reports DeadlineExceeded before handler
       await blocked;
     });
     await started;
-    const queued = mailbox.execute(() => dispatch.dispatch('remote',
+    const queued = mailbox.execute(() => dispatch.dispatch(undefined, 'remote',
       'alice',
       [header, payload],
       false
@@ -4694,7 +4694,7 @@ test('Message Follow replay keeps its captured Session route packet-scoped', asy
   };
 
   try {
-    await dispatch.dispatch('remote',
+    await dispatch.dispatch(undefined, 'remote',
       'alice',
       [header, payload],
       false,
@@ -4753,7 +4753,7 @@ test('spot actor dispatch selects the decoder from the packet codec header', asy
   })));
   const payload = zlink.Message.from(Buffer.from('not-json'));
 
-  await dispatch.dispatch('remote', 'alice', [header, payload]);
+  await dispatch.dispatch(undefined, 'remote', 'alice', [header, payload]);
 
   assert.equal(deserializeCalls, 1);
   assert.deepEqual(received, [{ packed: 'not-json' }]);
@@ -5221,6 +5221,6 @@ function createEntryActorRuntime(resolveActor, destroyActor = async () => {}) {
     resolveActor,
     async commitActorTransaction(_actor, onJoined) { await onJoined(); },
     destroyActor,
-    async routePacket() { return { handled: false }; }
+    routePacket() { return { handled: false }; }
   };
 }
