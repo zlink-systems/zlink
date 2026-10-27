@@ -120,6 +120,10 @@ final class ZLinkChannelCallRuntime {
                 ZLinkFlowOrigin.APPLICATION, flow.captureEnabled());
     }
 
+    CompletionStage<Void> submitSend(Supplier<CompletionStage<Void>> admitted) {
+        return operations.submitSend(admitted);
+    }
+
     <T> CompletableFuture<T> submit(
             Duration timeout,
             Supplier<? extends CompletionStage<T>> submission,

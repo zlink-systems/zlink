@@ -1346,46 +1346,35 @@ public final class ZLinkChannelRuntime
             long authorityOwnerGeneration,
             long ownerLeaseGeneration,
             List<Message> spotParts) {
-        return sockets.submitToSpot(
-                routerChannelId,
-                targetNodeRid,
-                spotRouteBridgeOwner,
-                null,
-                defaultRequestTimeout,
-                (bridge, resolvedTimeout) -> {
-                    Duration timeout = effectiveRouteTimeout(resolvedTimeout);
-                    return callRuntime.submit(
-                            timeout,
-                            () -> {
-                                CompletableFuture<Void> result = new CompletableFuture<>();
-                                ZLinkSpotRouteBridgeDispatcher.submitSend(
-                                        bridge,
-                                        routerChannelId,
-                                        targetNodeRid,
-                                        targetSpotId,
-                                        copyMessages(spotParts),
-                                        result);
-                                return result;
-                            },
-                            ignored -> {});
-                },
-                (node, resolvedTimeout) -> {
-                    Duration timeout = effectiveRouteTimeout(resolvedTimeout);
-                    return callRuntime.submit(
-                            timeout,
-                            () ->
-                                    ZLinkSpotRouterNodeDispatcher.send(
+        return callRuntime.submitSend(
+                () ->
+                        sockets.submitToSpot(
+                                routerChannelId,
+                                targetNodeRid,
+                                spotRouteBridgeOwner,
+                                null,
+                                null,
+                                (bridge, ignoredTimeout) -> {
+                                    CompletableFuture<Void> result = new CompletableFuture<>();
+                                    ZLinkSpotRouteBridgeDispatcher.submitSend(
+                                            bridge,
                                             routerChannelId,
-                                            node,
                                             targetNodeRid,
                                             targetSpotId,
-                                            targetSpotGeneration,
-                                            authorityOwnerGeneration,
-                                            ownerLeaseGeneration,
-                                            spotParts,
-                                            timeout),
-                            ignored -> {});
-                });
+                                            copyMessages(spotParts),
+                                            result);
+                                    return result;
+                                },
+                                (node, ignoredTimeout) ->
+                                        ZLinkSpotRouterNodeDispatcher.send(
+                                                routerChannelId,
+                                                node,
+                                                targetNodeRid,
+                                                targetSpotId,
+                                                targetSpotGeneration,
+                                                authorityOwnerGeneration,
+                                                ownerLeaseGeneration,
+                                                spotParts)));
     }
 
     public CompletionStage<List<Message>> requestToSpotViaRouterChannel(
