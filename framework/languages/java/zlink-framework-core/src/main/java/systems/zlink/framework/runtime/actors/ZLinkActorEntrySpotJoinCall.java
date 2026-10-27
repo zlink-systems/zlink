@@ -90,6 +90,10 @@ final class ZLinkActorEntrySpotJoinCall implements ZLinkActorJoinCall {
     }
 
     CompletionStage<ZLinkActorJoinOutcome> execute() {
+        return execute(System.nanoTime() + timeout.toNanos());
+    }
+
+    private CompletionStage<ZLinkActorJoinOutcome> execute(long deadlineNanos) {
         rejectSameGateWait();
         Message requestPart = Message.from(request);
         try {
@@ -103,7 +107,8 @@ final class ZLinkActorEntrySpotJoinCall implements ZLinkActorJoinCall {
                                                     .joinLocalActor(
                                                             context.actor(),
                                                             target.spotId(),
-                                                            requestPart)
+                                                            requestPart,
+                                                            deadlineNanos)
                                                     .thenApply(
                                                             result ->
                                                                     ZLinkActorJoinResults.decode(
@@ -213,7 +218,7 @@ final class ZLinkActorEntrySpotJoinCall implements ZLinkActorJoinCall {
         try (var ignored =
                 systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext
                         .enterApplicationExecution(null)) {
-            return ZLinkSerialExecutionQueue.yieldCurrent(bounded.execute())
+            return ZLinkSerialExecutionQueue.yieldCurrent(bounded.execute(deadlineNanos))
                     .handle(
                             (result, error) -> {
                                 if (error != null) {

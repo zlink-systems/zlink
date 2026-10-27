@@ -363,6 +363,18 @@ final class ZLinkLocationLifecycleTest {
                 return CompletableFuture.failedFuture(
                         new IllegalStateException("store internal failure"));
             if (forceConflict) {
+                if (membershipFailure == null)
+                    rows.put(
+                            key,
+                            new ZLinkAuthoritySnapshot(
+                                    "actor-concurrent",
+                                    current.payload(),
+                                    current.objectGeneration(),
+                                    current.authorityOwnerGeneration(),
+                                    current.ownerId(),
+                                    current.ownerLeaseGeneration(),
+                                    current.allocation(),
+                                    current.storeNow()));
                 return CompletableFuture.completedFuture(
                         new ZLinkAuthorityConflict(current, membershipFailure));
             }

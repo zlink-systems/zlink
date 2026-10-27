@@ -310,12 +310,7 @@ final class ZLinkProviderAuthorityRepository {
         return provider.read(rowKey, opaqueCancellation)
                 .thenCompose(
                         read -> {
-                            if (!(read instanceof ZLinkStoreReadFound found)
-                                    || !(expectation instanceof ZLinkAuthorityExpectFound expected)
-                                    || !found.value()
-                                            .version()
-                                            .value()
-                                            .equals(expected.storeVersion())) {
+                            if (!(read instanceof ZLinkStoreReadFound found)) {
                                 return projectRead(read, opaqueCancellation)
                                         .thenApply(visible -> new ZLinkAuthorityConflict(visible));
                             }
@@ -324,6 +319,19 @@ final class ZLinkProviderAuthorityRepository {
                                     || (!(mutation instanceof ZLinkAuthorityRestore)
                                             && current.allocation().state()
                                                     != ZLinkPlacementAllocationState.ACTIVE)) {
+                                return projectRead(read, opaqueCancellation)
+                                        .thenApply(
+                                                visible ->
+                                                        new ZLinkAuthorityConflict(
+                                                                visible,
+                                                                ZLinkFrameworkErrorKind
+                                                                        .UNAVAILABLE));
+                            }
+                            if (!(expectation instanceof ZLinkAuthorityExpectFound expected)
+                                    || !found.value()
+                                            .version()
+                                            .value()
+                                            .equals(expected.storeVersion())) {
                                 return projectRead(read, opaqueCancellation)
                                         .thenApply(visible -> new ZLinkAuthorityConflict(visible));
                             }
@@ -421,7 +429,9 @@ final class ZLinkProviderAuthorityRepository {
                                                 if (!live) {
                                                     return completed(
                                                             new ZLinkAuthorityConflict(
-                                                                    toRead(read)));
+                                                                    toRead(read),
+                                                                    ZLinkFrameworkErrorKind
+                                                                            .UNAVAILABLE));
                                                 }
                                                 if (reincarnatePayload != null) {
                                                     return nextPair(conditions, opaqueCancellation)
@@ -1651,11 +1661,14 @@ final class ZLinkProviderAuthorityRepository {
                                     .thenCompose(
                                             live ->
                                                     live && readyPayload != null
-                                                            ? requireSpotMembership(
-                                                                    current.payload(),
-                                                                    readyPayload,
-                                                                    conditions,
-                                                                    cancellation)
+                                                            ? spotMembershipFailure(
+                                                                            current.payload(),
+                                                                            readyPayload,
+                                                                            conditions,
+                                                                            cancellation)
+                                                                    .thenApply(
+                                                                            failure ->
+                                                                                    failure == null)
                                                             : completed(live))
                                     .thenCompose(
                                             live -> {
@@ -3526,15 +3539,6 @@ final class ZLinkProviderAuthorityRepository {
                         });
     }
 
-    private CompletionStage<Boolean> requireSpotMembership(
-            byte[] previousPayload,
-            byte[] payload,
-            List<ZLinkStoreCondition> conditions,
-            systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
-        return spotMembershipFailure(previousPayload, payload, conditions, cancellation)
-                .thenApply(failure -> failure == null);
-    }
-
     private CompletionStage<ZLinkFrameworkErrorKind> spotMembershipFailure(
             byte[] previousPayload,
             byte[] payload,
@@ -3730,11 +3734,12 @@ final class ZLinkProviderAuthorityRepository {
                     valid.thenCompose(
                             previous ->
                                     previous
-                                            ? requireSpotMembership(
-                                                    previousPayload,
-                                                    participant.authorityPayload(),
-                                                    conditions,
-                                                    cancellation)
+                                            ? spotMembershipFailure(
+                                                            previousPayload,
+                                                            participant.authorityPayload(),
+                                                            conditions,
+                                                            cancellation)
+                                                    .thenApply(failure -> failure == null)
                                             : completed(false));
         }
         return valid;

@@ -4857,7 +4857,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
 
     @SuppressWarnings({"rawtypes", "unchecked"})
     private CompletionStage<ZLinkSpotActorJoinResult> joinLocalActor(
-            ZLinkActor actor, String targetSpotId, Message requestPart) {
+            ZLinkActor actor, String targetSpotId, Message requestPart, long deadlineNanos) {
         SpotActivation targetActivation = spotLifecycle.spotActivationFor(targetSpotId);
         EntrySpotActivation targetEntry =
                 targetActivation == null ? entrySpotActivationFor(targetSpotId) : null;
@@ -4920,7 +4920,10 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                         if (targetSurface instanceof ZLinkSpot<?> target) {
                                             commit =
                                                     runtime.commitJoinedLocation(
-                                                                    actor, actorRef, targetSpotId)
+                                                                    actor,
+                                                                    actorRef,
+                                                                    targetSpotId,
+                                                                    deadlineNanos)
                                                             .thenRun(
                                                                     () ->
                                                                             runtime
@@ -4939,7 +4942,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                             entry.spotId(),
                                                             routeMeshNodesByName
                                                                     .get(actor.context().meshName())
-                                                                    .lifecycleGeneration());
+                                                                    .lifecycleGeneration(),
+                                                            deadlineNanos);
                                         }
                                         return ZLinkSerialExecutionQueue.yieldCurrent(commit)
                                                 .thenRun(
@@ -5640,7 +5644,11 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             try (Message request = Message.from(new byte[0]);
                     var ignored = ZLinkSuspendInvocationContext.enterApplicationExecution(null)) {
                 return ZLinkSerialExecutionQueue.yieldCurrent(
-                        joinLocalActor(actor, entry.context.spotId(), request)
+                        joinLocalActor(
+                                        actor,
+                                        entry.context.spotId(),
+                                        request,
+                                        System.nanoTime() + defaultRequestTimeout.toNanos())
                                 .thenApply(result -> (Void) null));
             }
         } catch (RuntimeException ex) {

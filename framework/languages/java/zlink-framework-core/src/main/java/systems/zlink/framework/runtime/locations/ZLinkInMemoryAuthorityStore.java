@@ -107,18 +107,20 @@ final class ZLinkInMemoryAuthorityStore {
                 () -> {
                     Instant now = clock.instant();
                     Row current = rows.get(key);
-                    if (!matches(current, expectation)
-                            || current == null
-                            || current.allocation.state() != ZLinkPlacementAllocationState.ACTIVE) {
+                    if (!matches(current, expectation) || current == null) {
                         return completed(
                                 new ZLinkAuthorityConflict(
                                         current == null
                                                 ? new ZLinkAuthorityMissing(now)
                                                 : snapshot(current, now)));
                     }
-                    if (!(mutation instanceof ZLinkAuthorityRestore)
-                            && !ownerLeaseIsLive.test(current.owner)) {
-                        return completed(new ZLinkAuthorityConflict(snapshot(current, now)));
+                    if (current.allocation.state() != ZLinkPlacementAllocationState.ACTIVE
+                            || (!(mutation instanceof ZLinkAuthorityRestore)
+                                    && !ownerLeaseIsLive.test(current.owner))) {
+                        return completed(
+                                new ZLinkAuthorityConflict(
+                                        snapshot(current, now),
+                                        ZLinkFrameworkErrorKind.UNAVAILABLE));
                     }
                     if (mutation instanceof ZLinkAuthorityDelete) {
                         adjustActive(current.allocation, current.allocation.capacityBundle(), -1);
@@ -130,7 +132,7 @@ final class ZLinkInMemoryAuthorityStore {
                             return completed(new ZLinkAuthorityConflict(snapshot(current, now)));
                         }
                         var membershipFailure =
-                                spotMembershipFailure(current.payload, restore.payload());
+                                spotMembershipFailure(current.payload, restore.payload(), null);
                         if (membershipFailure != null)
                             return completed(
                                     new ZLinkAuthorityConflict(
@@ -155,7 +157,8 @@ final class ZLinkInMemoryAuthorityStore {
                                     current.payload,
                                     reincarnatePayload != null
                                             ? reincarnatePayload
-                                            : ((ZLinkAuthorityPut) mutation).payload());
+                                            : ((ZLinkAuthorityPut) mutation).payload(),
+                                    null);
                     if (membershipFailure != null)
                         return completed(
                                 new ZLinkAuthorityConflict(
@@ -223,15 +226,10 @@ final class ZLinkInMemoryAuthorityStore {
                 });
     }
 
-    private boolean spotMembershipIsCurrent(byte[] previousPayload, byte[] payload) {
-        return spotMembershipFailure(previousPayload, payload) == null;
-    }
-
-    private ZLinkFrameworkErrorKind spotMembershipFailure(byte[] previousPayload, byte[] payload) {
+    private ZLinkFrameworkErrorKind spotMembershipFailure(
+            byte[] previousPayload, byte[] payload, AggregateState owningAggregate) {
         var actor = new ZLinkActorAuthorityPayloadCodec().decode(payload);
-        if (actor.isEmpty()
-                || actor.get().currentSpotKind()
-                        != systems.zlink.framework.spots.ZLinkSpotKind.USER.value()) return null;
+        if (actor.isEmpty()) return null;
         var membership = actor.get();
         var previous = new ZLinkActorAuthorityPayloadCodec().decode(previousPayload);
         if (previous.isPresent()
@@ -240,6 +238,11 @@ final class ZLinkInMemoryAuthorityStore {
                 && previous.get().currentSpotId().equals(membership.currentSpotId())
                 && previous.get().currentSpotGeneration() == membership.currentSpotGeneration())
             return null;
+        if (owningAggregate == null
+                && participantIsPrepared(ZLinkAuthorityKeyCodec.actor(membership.actorId())))
+            return ZLinkFrameworkErrorKind.UNAVAILABLE;
+        if (membership.currentSpotKind()
+                != systems.zlink.framework.spots.ZLinkSpotKind.USER.value()) return null;
         Row target = rows.get(ZLinkAuthorityKeyCodec.spot(membership.currentSpotId()));
         if (target == null) return ZLinkFrameworkErrorKind.NOT_FOUND;
         if (target.objectGeneration != membership.currentSpotGeneration()
@@ -550,7 +553,7 @@ final class ZLinkInMemoryAuthorityStore {
                 current.allocation.stableType())) {
             return ZLinkObjectCommitResult.STALE;
         }
-        if (!spotMembershipIsCurrent(current.payload, readyPayload))
+        if (spotMembershipFailure(current.payload, readyPayload, null) != null)
             return ZLinkObjectCommitResult.STALE;
         if (!hasCounterRoom(revision, 1)) {
             return ZLinkObjectCommitResult.GENERATION_EXHAUSTED;
@@ -867,10 +870,11 @@ final class ZLinkInMemoryAuthorityStore {
                                 continue;
                             }
                         }
-                        if (!spotMembershipIsCurrent(
-                                rows.get(participant.authorityKey()).payload,
-                                participant.authorityPayload()))
-                            return completed(ZLinkAggregateCommitResult.STALE);
+                        if (spotMembershipFailure(
+                                        rows.get(participant.authorityKey()).payload,
+                                        participant.authorityPayload(),
+                                        state)
+                                != null) return completed(ZLinkAggregateCommitResult.STALE);
                     }
                     int ownerGenerationCount =
                             Math.toIntExact(

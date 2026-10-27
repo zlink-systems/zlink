@@ -28,6 +28,404 @@ import java.util.concurrent.CompletionException;
 final class ZLinkEndedSpotRecreationTest {
     @ParameterizedTest
     @CsvSource({
+        "memory,revision", "provider,revision",
+        "memory,actor-generation", "provider,actor-generation",
+        "memory,actor-state", "provider,actor-state",
+        "memory,actor-owner", "provider,actor-owner",
+        "memory,missing", "provider,missing",
+        "memory,spot-generation", "provider,spot-generation",
+        "memory,prepared", "provider,prepared",
+        "memory,actor-prepared", "provider,actor-prepared",
+        "memory,many-conflicts", "provider,many-conflicts",
+        "memory,not-ready", "provider,not-ready",
+        "memory,expired", "provider,expired",
+        "memory,lease-generation", "provider,lease-generation",
+        "memory,deadline", "provider,deadline",
+        "memory,cancelled-read", "provider,cancelled-read",
+        "memory,cancelled-write", "provider,cancelled-write",
+        "memory,exhausted", "provider,exhausted",
+        "memory,store-error", "provider,store-error"
+    })
+    void lifecycleRebuildsOnlyWhileJoinRemainsEligible(String backend, String condition) {
+        var fixture =
+                fixture(
+                        backend,
+                        ZLinkPlacementObjectKind.USER_SPOT,
+                        ZLinkServiceAuthorityPayloadCodec.State.READY);
+        var actor = member(fixture, "conflict-actor", false);
+        var spot = read(fixture, fixture.key);
+        assertNotEquals(actor.objectGeneration(), spot.objectGeneration());
+        byte[] localSpot =
+                new ZLinkServiceAuthorityPayloadCodec()
+                        .encodeUser(
+                                ZLinkServiceAuthorityPayloadCodec.State.READY,
+                                "room",
+                                "ended-spot",
+                                fixture.oldOwner.ownerId(),
+                                fixture.oldOwner.leaseGeneration(),
+                                "mesh",
+                                fixture.newDescriptor.rid(),
+                                1);
+        assertInstanceOf(
+                ZLinkAuthorityStored.class,
+                fixture.store
+                        .compareExchange(
+                                fixture.key,
+                                new ZLinkAuthorityExpectFound(spot.storeVersion()),
+                                new ZLinkAuthorityPut(localSpot),
+                                () -> false)
+                        .toCompletableFuture()
+                        .join());
+        var attempts = new java.util.concurrent.atomic.AtomicInteger();
+        var expired = new java.util.concurrent.atomic.AtomicBoolean();
+        ZLinkLocationRepository injected =
+                (ZLinkLocationRepository)
+                        java.lang.reflect.Proxy.newProxyInstance(
+                                ZLinkLocationRepository.class.getClassLoader(),
+                                new Class<?>[] {ZLinkLocationRepository.class},
+                                (proxy, method, args) -> {
+                                    if (condition.equals("cancelled-read")
+                                            && method.getName().equals("read")) {
+                                        expired.set(true);
+                                        throw new java.util.concurrent.CancellationException(
+                                                "provider read observed deadline");
+                                    }
+
+                                    if (method.getName().equals("compareExchange")
+                                            && attempts.getAndIncrement()
+                                                    < (condition.equals("many-conflicts")
+                                                            ? 65
+                                                            : 1)) {
+                                        var current = read(fixture, actor.authorityKey());
+                                        if (condition.equals("cancelled-write")) {
+                                            expired.set(true);
+                                            return java.util.concurrent.CompletableFuture
+                                                    .failedFuture(
+                                                            new java.util.concurrent
+                                                                    .CancellationException(
+                                                                    "provider write observed deadline"));
+                                        }
+
+                                        if (condition.equals("exhausted"))
+                                            return java.util.concurrent.CompletableFuture
+                                                    .completedFuture(
+                                                            new ZLinkAuthorityGenerationExhausted());
+                                        if (condition.equals("store-error"))
+                                            return java.util.concurrent.CompletableFuture
+                                                    .failedFuture(
+                                                            new IllegalStateException(
+                                                                    "store internal error"));
+                                        if (condition.equals("deadline")) expired.set(true);
+                                        else if (condition.equals("actor-owner"))
+                                            fixture.store
+                                                    .releaseOwnerLease(fixture.newOwner)
+                                                    .toCompletableFuture()
+                                                    .join();
+                                        else if (condition.equals("actor-prepared")) {
+                                            assertInstanceOf(
+                                                    ZLinkAggregatePrepared.class,
+                                                    fixture.store
+                                                            .prepareAggregate(
+                                                                    new ZLinkAggregatePrepareRequest(
+                                                                            new java.util.UUID(
+                                                                                    0, 42),
+                                                                            1,
+                                                                            List.of(
+                                                                                    new ZLinkAggregateParticipant(
+                                                                                            actor
+                                                                                                    .authorityKey(),
+                                                                                            current
+                                                                                                    .objectGeneration(),
+                                                                                            current
+                                                                                                    .authorityOwnerGeneration(),
+                                                                                            current
+                                                                                                    .storeVersion(),
+                                                                                            ZLinkAuthorityGenerationTransition
+                                                                                                    .PRESERVE,
+                                                                                            current
+                                                                                                    .payload(),
+                                                                                            new byte
+                                                                                                    [0])),
+                                                                            new byte[32],
+                                                                            new ZLinkMeshNodeDescriptorKey(
+                                                                                    "mesh",
+                                                                                    fixture
+                                                                                            .newDescriptor
+                                                                                            .rid()),
+                                                                            1,
+                                                                            ZLinkPlacementCapacityBundle
+                                                                                    .actor(0),
+                                                                            fixture.newOwner),
+                                                                    () -> false)
+                                                            .toCompletableFuture()
+                                                            .join());
+                                        } else if (condition.startsWith("actor-")) {
+                                            byte[] payload =
+                                                    condition.equals("actor-state")
+                                                            ? new ZLinkActorAuthorityPayloadCodec()
+                                                                    .encode(
+                                                                            ZLinkActorAuthorityPayloadCodec
+                                                                                    .State.CREATING,
+                                                                            "player",
+                                                                            "conflict-actor",
+                                                                            "entry",
+                                                                            1,
+                                                                            1,
+                                                                            fixture.newOwner
+                                                                                    .ownerId(),
+                                                                            fixture.newOwner
+                                                                                    .leaseGeneration(),
+                                                                            "mesh",
+                                                                            fixture.newDescriptor
+                                                                                    .rid(),
+                                                                            1)
+                                                            : current.payload();
+                                            assertInstanceOf(
+                                                    ZLinkAuthorityStored.class,
+                                                    fixture.store
+                                                            .compareExchange(
+                                                                    actor.authorityKey(),
+                                                                    new ZLinkAuthorityExpectFound(
+                                                                            current.storeVersion()),
+                                                                    condition.equals(
+                                                                                    "actor-generation")
+                                                                            ? ZLinkAuthorityMutation
+                                                                                    .reincarnate(
+                                                                                            payload)
+                                                                            : new ZLinkAuthorityPut(
+                                                                                    payload),
+                                                                    () -> false)
+                                                            .toCompletableFuture()
+                                                            .join());
+                                        } else {
+                                            var target = read(fixture, fixture.key);
+                                            if (condition.equals("expired")
+                                                    || condition.equals("lease-generation")) {
+                                                fixture.store
+                                                        .releaseOwnerLease(fixture.oldOwner)
+                                                        .toCompletableFuture()
+                                                        .join();
+                                                if (condition.equals("lease-generation"))
+                                                    fixture.store
+                                                            .claimOwnerLease(
+                                                                    fixture.oldOwner.ownerId(),
+                                                                    Duration.ofMinutes(5))
+                                                            .toCompletableFuture()
+                                                            .join();
+                                            } else {
+                                                if (condition.equals("prepared")) {
+                                                    assertInstanceOf(
+                                                            ZLinkAggregatePrepared.class,
+                                                            fixture.store
+                                                                    .prepareAggregate(
+                                                                            new ZLinkAggregatePrepareRequest(
+                                                                                    new java.util
+                                                                                            .UUID(
+                                                                                            0, 41),
+                                                                                    1,
+                                                                                    List.of(
+                                                                                            new ZLinkAggregateParticipant(
+                                                                                                    fixture.key,
+                                                                                                    target
+                                                                                                            .objectGeneration(),
+                                                                                                    target
+                                                                                                            .authorityOwnerGeneration(),
+                                                                                                    target
+                                                                                                            .storeVersion(),
+                                                                                                    ZLinkAuthorityGenerationTransition
+                                                                                                            .PRESERVE,
+                                                                                                    target
+                                                                                                            .payload(),
+                                                                                                    new byte
+                                                                                                            [0])),
+                                                                                    new byte[32],
+                                                                                    new ZLinkMeshNodeDescriptorKey(
+                                                                                            "mesh",
+                                                                                            fixture
+                                                                                                    .newDescriptor
+                                                                                                    .rid()),
+                                                                                    1,
+                                                                                    ZLinkPlacementCapacityBundle
+                                                                                            .actor(
+                                                                                                    0),
+                                                                                    fixture.newOwner),
+                                                                            () -> false)
+                                                                    .toCompletableFuture()
+                                                                    .join());
+                                                } else {
+                                                    var mutation =
+                                                            condition.equals("missing")
+                                                                    ? new ZLinkAuthorityDelete()
+                                                                    : condition.equals(
+                                                                                    "spot-generation")
+                                                                            ? ZLinkAuthorityMutation
+                                                                                    .reincarnate(
+                                                                                            localSpot)
+                                                                            : new ZLinkAuthorityPut(
+                                                                                    condition
+                                                                                                    .equals(
+                                                                                                            "not-ready")
+                                                                                            ? new ZLinkServiceAuthorityPayloadCodec()
+                                                                                                    .encodeUser(
+                                                                                                            ZLinkServiceAuthorityPayloadCodec
+                                                                                                                    .State
+                                                                                                                    .CLOSING,
+                                                                                                            "room",
+                                                                                                            "ended-spot",
+                                                                                                            fixture
+                                                                                                                    .oldOwner
+                                                                                                                    .ownerId(),
+                                                                                                            fixture
+                                                                                                                    .oldOwner
+                                                                                                                    .leaseGeneration(),
+                                                                                                            "mesh",
+                                                                                                            fixture
+                                                                                                                    .newDescriptor
+                                                                                                                    .rid(),
+                                                                                                            1)
+                                                                                            : localSpot);
+                                                    assertFalse(
+                                                            fixture.store
+                                                                            .compareExchange(
+                                                                                    fixture.key,
+                                                                                    new ZLinkAuthorityExpectFound(
+                                                                                            target
+                                                                                                    .storeVersion()),
+                                                                                    mutation,
+                                                                                    () -> false)
+                                                                            .toCompletableFuture()
+                                                                            .join()
+                                                                    instanceof
+                                                                    ZLinkAuthorityConflict);
+                                                }
+                                            }
+                                        }
+                                        return java.util.concurrent.CompletableFuture
+                                                .completedFuture(
+                                                        new ZLinkAuthorityConflict(current));
+                                    }
+                                    try {
+                                        return method.invoke(fixture.store, args);
+                                    } catch (java.lang.reflect.InvocationTargetException failure) {
+                                        throw failure.getCause();
+                                    }
+                                });
+        try (var runtime =
+                        new ZLinkLocationRuntime(
+                                ZLinkRegisteredLocationStores.fromUnified(injected),
+                                fixture.newOwner.ownerId(),
+                                Duration.ofSeconds(30),
+                                Duration.ofSeconds(5));
+                var lifecycle = new ZLinkLocationLifecycle(runtime)) {
+            lifecycle
+                    .setActorRef(
+                            "player",
+                            "conflict-actor",
+                            new systems.zlink.framework.actors.ActorRef(
+                                    "conflict-actor",
+                                    actor.objectGeneration(),
+                                    "mesh",
+                                    fixture.newDescriptor.rid()))
+                    .toCompletableFuture()
+                    .join();
+            var joined =
+                    lifecycle.notifyActorJoinedSpot(
+                            "player", "conflict-actor", "mesh", "ended-spot", expired::get);
+            if (condition.equals("revision") || condition.equals("many-conflicts")) {
+                joined.toCompletableFuture().join();
+                assertEquals(condition.equals("many-conflicts") ? 66 : 2, attempts.get());
+                var committed =
+                        new ZLinkActorAuthorityPayloadCodec()
+                                .decode(read(fixture, actor.authorityKey()).payload())
+                                .orElseThrow();
+                assertEquals("ended-spot", committed.currentSpotId());
+                assertEquals(spot.objectGeneration(), committed.currentSpotGeneration());
+            } else {
+                var failure =
+                        assertThrows(
+                                        CompletionException.class,
+                                        () -> joined.toCompletableFuture().join())
+                                .getCause();
+                var expected =
+                        switch (condition) {
+                            case "actor-generation" -> ZLinkFrameworkErrorKind.INVALID_OPERATION;
+                            case "missing" -> ZLinkFrameworkErrorKind.NOT_FOUND;
+                            case "deadline", "cancelled-read", "cancelled-write" ->
+                                    ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED;
+                            case "exhausted", "store-error" ->
+                                    ZLinkFrameworkErrorKind.INTERNAL_FAILURE;
+                            default -> ZLinkFrameworkErrorKind.UNAVAILABLE;
+                        };
+                assertEquals(
+                        expected,
+                        failure instanceof ZLinkFrameworkException typed
+                                ? typed.kind()
+                                : ZLinkFrameworkErrorKind.INTERNAL_FAILURE);
+                assertEquals(
+                        "entry",
+                        new ZLinkActorAuthorityPayloadCodec()
+                                .decode(read(fixture, actor.authorityKey()).payload())
+                                .orElseThrow()
+                                .currentSpotId());
+            }
+        }
+    }
+
+    @ParameterizedTest
+    @CsvSource({"provider,false", "memory,false", "provider,true", "memory,true"})
+    void lifecycleRejectsActorGenerationAsInvalidOperation(String backend, boolean entry) {
+        var fixture =
+                fixture(
+                        backend,
+                        ZLinkPlacementObjectKind.USER_SPOT,
+                        ZLinkServiceAuthorityPayloadCodec.State.READY);
+        var actor = member(fixture, "stale-actor", false);
+        assertNotEquals(actor.objectGeneration(), fixture.reservation.objectGeneration());
+        try (var runtime =
+                        new ZLinkLocationRuntime(
+                                ZLinkRegisteredLocationStores.fromUnified(fixture.store),
+                                fixture.newOwner.ownerId(),
+                                Duration.ofSeconds(30),
+                                Duration.ofSeconds(5));
+                var lifecycle = new ZLinkLocationLifecycle(runtime)) {
+            lifecycle
+                    .setActorRef(
+                            "player",
+                            "stale-actor",
+                            new systems.zlink.framework.actors.ActorRef(
+                                    "stale-actor",
+                                    actor.objectGeneration() + 1,
+                                    "mesh",
+                                    fixture.newDescriptor.rid()))
+                    .toCompletableFuture()
+                    .join();
+            var failure =
+                    assertThrows(
+                                    CompletionException.class,
+                                    () ->
+                                            (entry
+                                                            ? lifecycle.notifyActorMovedToEntrySpot(
+                                                                    "player",
+                                                                    "stale-actor",
+                                                                    fixture.newDescriptor.rid(),
+                                                                    "entry",
+                                                                    19)
+                                                            : lifecycle.notifyActorJoinedSpot(
+                                                                    "player",
+                                                                    "stale-actor",
+                                                                    "mesh",
+                                                                    "ended-spot"))
+                                                    .toCompletableFuture()
+                                                    .join())
+                            .getCause();
+            assertEquals(
+                    ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                    assertInstanceOf(ZLinkFrameworkException.class, failure).kind());
+        }
+    }
+
+    @ParameterizedTest
+    @CsvSource({
         "provider,missing",
         "memory,missing",
         "provider,generation",
