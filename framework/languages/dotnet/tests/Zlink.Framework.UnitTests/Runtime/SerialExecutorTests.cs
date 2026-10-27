@@ -3212,6 +3212,127 @@ public sealed class SerialExecutorTests
         await runner.StopAsync();
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task SerialExecutionQueue_CompleteSurvivesTerminalPlacementRelease(bool overlap)
+    {
+        using var errors = new ZLinkRuntimeErrorSink();
+        var failures = new ConcurrentQueue<Exception>();
+        errors.UnhandledCallbackException += failures.Enqueue;
+        var runner = new ZLinkRuntimeTaskRunner(errors, CancellationToken.None);
+        await using var parent = new ZLinkSerialExecutionQueue(
+            runner,
+            errors,
+            CancellationToken.None,
+            ZLinkExecutionLanePolicy.Default,
+            sharedGate: true
+        );
+        await using var mailbox = new ZLinkSerialExecutionQueue(
+            runner,
+            errors,
+            CancellationToken.None
+        );
+        ZLinkSerialExecutionQueue? owner = parent;
+        mailbox.BindExecutionOwner(() => Volatile.Read(ref owner));
+        var handlerEntered = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var releaseHandler = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        using var placementEntered = new ManualResetEventSlim();
+        using var releasePlacement = new ManualResetEventSlim();
+        Exception? completionFailure = null;
+        Thread? completing = null;
+        ZLinkSerialWorkItem? work = null;
+        try
+        {
+            var warm = await mailbox.PostAsync(
+                static _ => ValueTask.CompletedTask,
+                CancellationToken.None
+            );
+            await warm.Completion.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.True(mailbox.HasSharedConsumer);
+
+            work = await mailbox.PostAsync(
+                async _ =>
+                {
+                    handlerEntered.TrySetResult();
+                    await releaseHandler.Task.ConfigureAwait(false);
+                    Volatile.Write(ref owner, null);
+                },
+                CancellationToken.None
+            );
+            await handlerEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+            if (overlap)
+            {
+                mailbox.BindExecutionOwner(() =>
+                {
+                    placementEntered.Set();
+                    releasePlacement.Wait();
+                    return null;
+                });
+            }
+
+            releaseHandler.TrySetResult();
+            if (overlap)
+            {
+                Assert.True(placementEntered.Wait(TimeSpan.FromSeconds(5)));
+                completing = new Thread(() =>
+                {
+                    try
+                    {
+                        mailbox.Complete();
+                    }
+                    catch (Exception exception)
+                    {
+                        completionFailure = exception;
+                    }
+                });
+                completing.Start();
+                Assert.True(
+                    SpinWait.SpinUntil(
+                        () =>
+                            (completing.ThreadState & System.Threading.ThreadState.WaitSleepJoin)
+                            != 0,
+                        TimeSpan.FromSeconds(5)
+                    ),
+                    "Complete must wait while terminal placement is being redirected."
+                );
+                releasePlacement.Set();
+                Assert.True(completing.Join(TimeSpan.FromSeconds(5)));
+            }
+            else
+            {
+                await work.Completion.WaitAsync(TimeSpan.FromSeconds(5));
+                mailbox.Complete();
+            }
+
+            await work.Completion.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Null(completionFailure);
+            Assert.False(mailbox.HasSharedConsumer);
+            await mailbox.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Empty(failures);
+        }
+        finally
+        {
+            releaseHandler.TrySetResult();
+            releasePlacement.Set();
+            if (work is not null)
+                await work.Completion.WaitAsync(TimeSpan.FromSeconds(5));
+            if (
+                completing is not null
+                && completing.ThreadState != System.Threading.ThreadState.Unstarted
+            )
+                completing.Join(TimeSpan.FromSeconds(5));
+            await mailbox.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+            await parent.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+            await runner.StopAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        }
+    }
+
     [Fact]
     public async Task ReadinessAfterQueueTerminationDoesNotRecreateProcessResources()
     {
