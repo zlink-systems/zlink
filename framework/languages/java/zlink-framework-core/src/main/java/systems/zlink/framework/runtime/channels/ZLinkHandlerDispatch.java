@@ -9,6 +9,8 @@ import java.util.function.Consumer;
 import java.util.function.Supplier;
 
 final class ZLinkHandlerDispatch {
+    private static final CompletableFuture<Void> STARTED = CompletableFuture.completedFuture(null);
+
     private ZLinkHandlerDispatch() {}
 
     static CompletionStage<Void> enqueue(
@@ -55,7 +57,7 @@ final class ZLinkHandlerDispatch {
         } catch (RuntimeException | Error failure) {
             result.completeExceptionally(failure);
         }
-        return CompletableFuture.completedFuture(null);
+        return STARTED;
     }
 
     private static CompletionStage<Void> observe(
