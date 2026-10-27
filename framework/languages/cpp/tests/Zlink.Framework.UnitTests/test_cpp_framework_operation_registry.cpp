@@ -624,8 +624,56 @@ void verify_request_deadline_index_contract ()
               << " pending=0 index=0 owner_blocked_take=1\n";
 }
 
+void verify_scheduled_deadline_visits (bool drive_visits = true)
+{
+    using namespace std::chrono_literals;
+    using registry_t = foundation::operation_registry_t;
+    zlink::framework::completion_owner_t completion_owner;
+    runtime::offload_executor_t executor (1, "deadline-visit-test");
+    auto lane = std::make_unique<runtime::state_lane_t> (executor);
+    auto registry =
+      drive_visits ? registry_t::create_scheduled (*lane) : std::make_shared<registry_t> (*lane);
+    std::promise<foundation::operation_terminal_t> early_promise;
+    auto early = early_promise.get_future ();
+    std::promise<foundation::operation_terminal_t> later_promise;
+    auto later = later_promise.get_future ();
+    const auto now = registry_t::clock_t::now ();
+    assert (registry->register_operation (
+      id (201), now + 5s, [&] (auto terminal, auto) { later_promise.set_value (terminal); }));
+    assert (registry->register_operation (
+      id (202), now + 20ms, [&] (auto terminal, auto) { early_promise.set_value (terminal); }));
+    // No receive pump, explicit expire call or owner turn drives the deadline.
+    assert (early.wait_for (1s) == std::future_status::ready);
+    assert (early.get () == foundation::operation_terminal_t::timed_out);
+    assert (registry_t::clock_t::now () >= now + 20ms);
+    assert (registry->contains (id (201)));
+    assert (registry->complete (id (201), {}));
+    assert (later.get () == foundation::operation_terminal_t::completed);
+    assert (wait_until ([&] { return !registry->next_deadline (); }));
+    assert (registry->size () == 0 && registry->index_size () == 0);
+
+    std::promise<foundation::operation_terminal_t> close_promise;
+    auto closed = close_promise.get_future ();
+    assert (registry->register_operation (
+      id (203), registry_t::clock_t::now () + 5s,
+      [&] (auto terminal, auto) { close_promise.set_value (terminal); }));
+    assert (registry->shutdown () == 1);
+    assert (closed.get () == foundation::operation_terminal_t::shutdown);
+    // A cancelled worker reservation must not access a destroyed borrowed lane.
+    lane.reset ();
+    registry.reset ();
+}
+
 int main (int argc, char **argv)
 {
+    if (argc == 2 && std::string_view (argv[1]) == "--scheduled-deadline-visits") {
+        verify_scheduled_deadline_visits ();
+        return 0;
+    }
+    if (argc == 2 && std::string_view (argv[1]) == "--scheduled-deadline-visits-red") {
+        verify_scheduled_deadline_visits (false);
+        return 0;
+    }
     if (argc == 2 && std::string_view (argv[1]) == "--request-deadline") {
         zlink::framework::completion_owner_t owner;
         verify_request_deadline_index_contract ();
@@ -1032,5 +1080,6 @@ int main (int argc, char **argv)
     assert (expiry_batch_registry.size () == 0);
     assert (wait_until (
       [&] { return expired_batch_callbacks.load (std::memory_order_acquire) == operation_count; }));
+    verify_scheduled_deadline_visits ();
     return 0;
 }

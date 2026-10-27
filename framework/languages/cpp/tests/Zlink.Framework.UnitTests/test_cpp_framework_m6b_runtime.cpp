@@ -1502,9 +1502,23 @@ void verify_remote_bound_session_bind_returns_terminal_fences ()
     assert (invalidations == 1);
     assert (route_resolutions - initial_route_resolutions == 0);
 
-    // The route snapshot exists but its owner route cannot be used. Routing
-    // spec 08 §2 ends that operation as Unavailable; error model §5 reserves
-    // DeadlineExceeded for an admitted request whose reply misses its deadline.
+    // A known owner descriptor may wait for ADMIT without an ingress pump.
+    auto pending_descriptor = target_descriptor;
+    pending_descriptor.node_routing_id =
+      zlink::routing_id_t::from ("pending-bound-session-target").to_bytes ();
+    source.native_node ().transport ().expect_peer (pending_descriptor);
+    auto pending_route = route;
+    pending_route.node_rid = zlink::routing_id_t::from ("pending-bound-session-target");
+    const auto preadmit_deadline =
+      source
+        .bind_application_actor_session (
+          actor, zlink::routing_id_t::from ("bound-session-before-admit"), 1, pending_route, 20ms)
+        .result ();
+    assert (!preadmit_deadline);
+    assert (preadmit_deadline.error_kind () == framework_error_kind_t::deadline_exceeded);
+
+    // The route snapshot has no known owner descriptor. Routing spec 08 §2
+    // ends this invalid target as Unavailable before readiness waiting.
     const runtime::spot_address_t disconnected_route{
       "m6b-mesh", zlink::routing_id_t::from ("unconnected-bound-session-target"),
       {},         0,
@@ -1523,7 +1537,7 @@ void verify_remote_bound_session_bind_returns_terminal_fences ()
     assert (route_resolutions - initial_route_resolutions == 0);
 
     // The connected route admits this request, but the target withholds its
-    // reply. Only this post-admission deadline expiry is DeadlineExceeded.
+    // reply. Its post-admission deadline expiry is also DeadlineExceeded.
     auto withheld = std::async (std::launch::async, [&] {
         return source
           .bind_application_actor_session (

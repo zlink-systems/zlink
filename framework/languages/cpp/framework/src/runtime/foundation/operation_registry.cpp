@@ -6,6 +6,7 @@
 #include "runtime/execution/task_result.hpp"
 
 #include <zlink/framework/contracts/dispatch/task.hpp>
+#include <zlink/framework/detail/deadline_scheduler.hpp>
 
 #include <algorithm>
 #include <atomic>
@@ -144,6 +145,43 @@ void post_completions (operation_completion_chain_t completions) noexcept
 
 operation_registry_t::operation_registry_t () : operation_registry_t (&clock_t::now)
 {
+}
+
+std::shared_ptr<operation_registry_t>
+operation_registry_t::create_scheduled (runtime::state_lane_t &owner)
+{
+    auto registry = std::make_shared<operation_registry_t> (owner);
+    registry->_deadline_changed = [self = std::weak_ptr{registry}] {
+        if (const auto active = self.lock ())
+            active->reserve_deadline_visit (self);
+    };
+    return registry;
+}
+
+void operation_registry_t::reserve_deadline_visit (std::weak_ptr<operation_registry_t> self)
+{
+    // Registration, management and shutdown serialize this reservation on C2's lane.
+    if (_deadline_visit)
+        _deadline_visit->cancelled.store (true, std::memory_order_release);
+    _deadline_visit.reset ();
+    const auto at = next_deadline ();
+    if (!at)
+        return;
+    auto visit = std::make_shared<detail::deadline_state_t> ();
+    _deadline_visit = visit;
+    detail::deadline_scheduler_t::instance ().schedule (*at, visit, [self, visit] {
+        if (const auto active = self.lock ()) {
+            // Serialize lane admission with close using the existing C1 mutex.
+            // Once closed, a delayed scheduler callback cannot touch the borrowed lane.
+            std::lock_guard lock (active->_mutex);
+            if (!active->_closed)
+                (void) active->_owner.try_post ([active, visit] {
+                    if (active->_deadline_visit != visit)
+                        return;
+                    (void) active->expire (clock_t::now ());
+                });
+        }
+    });
 }
 
 operation_registry_t::operation_registry_t (now_t now, std::function<void ()> deadline_changed) :
@@ -468,7 +506,7 @@ std::size_t operation_registry_t::expire (clock_t::time_point now)
                 continue;
             }
             if (_now () - started >= runtime::dispatch_limits::receive_batch_time)
-                return;
+                break;
             auto *current = _deadline_cursor;
             _deadline_cursor = current->deadline_next;
             std::unique_ptr<operation_completion_item_t> completion;
@@ -490,10 +528,14 @@ std::size_t operation_registry_t::expire (clock_t::time_point now)
             else
                 _visit_next = std::min (_visit_next, current->deadline);
         }
-        _next_visit.store (_index_size ? _visit_next.time_since_epoch ().count ()
-                                       : clock_t::duration::max ().count (),
-                           std::memory_order_release);
-        _visit_slot = deadline_slot_count;
+        if (_visit_slot == deadline_slot_count) {
+            _next_visit.store (_index_size ? _visit_next.time_since_epoch ().count ()
+                                           : clock_t::duration::max ().count (),
+                               std::memory_order_release);
+        }
+        // The same index also resumes a budgeted, still-due cursor.
+        if (_deadline_visit && _deadline_changed)
+            _deadline_changed ();
     });
     const auto expired = completions.size;
     post_completions (std::move (completions));
@@ -548,6 +590,11 @@ std::size_t operation_registry_t::shutdown ()
         _next_visit.store (clock_t::duration::max ().count (), std::memory_order_release);
         _visit_slot = deadline_slot_count;
         _deadline_cursor = nullptr;
+        if (_deadline_visit) {
+            _deadline_visit->cancelled.store (true, std::memory_order_release);
+            _deadline_visit.reset ();
+            detail::deadline_scheduler_t::instance ().wake ();
+        }
         _deadline_changed = {};
     });
     post_completions (std::move (completions));

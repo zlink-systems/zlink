@@ -378,8 +378,7 @@ raw_mesh_node_owner_t::raw_mesh_node_owner_t (raw_mesh_node_options_t options,
     _topology (_options.descriptor, _options.metric_channel_names, &_liveness),
     _mailbox (),
     _request_metrics (std::make_shared<mesh_request_metrics_t> (_options.descriptor.mesh_name)),
-    _operations (std::make_shared<foundation::operation_registry_t> (
-      _lane, &foundation::operation_registry_t::clock_t::now, [this] { signal_activity (); }))
+    _operations (foundation::operation_registry_t::create_scheduled (_lane))
 {
     if (!_options.runtime_failures)
         throw std::invalid_argument ("A host runtime failure collector is required");
@@ -779,6 +778,19 @@ void raw_mesh_node_owner_t::expect_peer (service_node_descriptor_t expected_desc
                                             expected_descriptor);
       })
       .get ();
+}
+
+bool raw_mesh_node_owner_t::has_peer_descriptor (const std::vector<std::uint8_t> &node_routing_id,
+                                                 std::uint64_t lifecycle_generation) const
+{
+    return _lane.run_sync ([&] {
+        const auto expected = _expected_peers.find (node_routing_id);
+        if (expected != _expected_peers.end ()
+            && expected->second.lifecycle_generation == lifecycle_generation)
+            return true;
+        const auto peer = _topology.peer (node_routing_id);
+        return peer && peer->descriptor.lifecycle_generation == lifecycle_generation;
+    });
 }
 
 void raw_mesh_node_owner_t::configure_peer_reconcile (peer_reconcile_t request)
@@ -3744,11 +3756,6 @@ bool raw_mesh_node_owner_t::wait_for_activity (std::chrono::milliseconds timeout
     std::shared_ptr<detail::backend::raw_route_port_t> port;
     try {
         auto next_activity = _liveness.next_activity ();
-        const auto next_operation_deadline = _operations->next_deadline ();
-        if (next_operation_deadline
-            && (!next_activity || *next_operation_deadline < *next_activity)) {
-            next_activity = next_operation_deadline;
-        }
         if (next_activity) {
             const auto now = foundation::operation_registry_t::clock_t::now ();
             const auto remaining =

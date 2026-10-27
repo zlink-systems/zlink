@@ -25,6 +25,10 @@
 namespace zlink::framework
 {
 struct location_owner_token_t;
+namespace detail
+{
+struct deadline_state_t;
+}
 }
 
 namespace zlink::framework::runtime::foundation
@@ -51,6 +55,8 @@ class operation_registry_t
     std::optional<request_identity_t> request_identity (call_id_t id, call_id_t operation) const;
 
     operation_registry_t ();
+    // Owners without a dedicated management loop use the shared deadline worker.
+    static std::shared_ptr<operation_registry_t> create_scheduled (runtime::state_lane_t &owner);
     explicit operation_registry_t (now_t now, std::function<void ()> deadline_changed = {});
     explicit operation_registry_t (runtime::state_lane_t &owner,
                                    now_t now = &clock_t::now,
@@ -111,6 +117,7 @@ class operation_registry_t
     bool take (const call_id_t &id, std::unique_ptr<operation_completion_item_t> &completion);
     bool index_deadline (const call_id_t &id, clock_t::time_point deadline, pending_t &pending);
     void unindex_deadline (pending_t &pending) noexcept;
+    void reserve_deadline_visit (std::weak_ptr<operation_registry_t> self);
 
     template <typename Work> decltype (auto) on_owner (Work &&work) const
     {
@@ -127,6 +134,7 @@ class operation_registry_t
     const now_t _now;
     const clock_t::time_point _deadline_origin;
     std::function<void ()> _deadline_changed;
+    std::shared_ptr<detail::deadline_state_t> _deadline_visit;
     std::array<pending_t *, deadline_slot_count> _deadline_heads{};
     std::array<pending_t *, deadline_slot_count> _deadline_tails{};
     std::size_t _index_size = 0;
