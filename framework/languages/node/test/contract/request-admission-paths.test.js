@@ -37,7 +37,12 @@ for (const path of [
     const admission = deferred();
     const reply = deferred();
     const submitted = deferred();
-    const start = (onAdmitted) => {
+    const {
+      RequestRuntime
+    } = require('../../packages/framework/dist/runtime/foundation/request-runtime');
+    const requests = new RequestRuntime();
+    const start = (onAdmitted, requestOperation) => {
+      const entry = requests.begin(undefined, undefined, requestOperation);
       const pending = submitBindingRequest(
         {
           message() {
@@ -52,7 +57,8 @@ for (const path of [
         [],
         undefined,
         undefined,
-        onAdmitted
+        onAdmitted,
+        entry
       );
       submitted.resolve();
       return pending;
@@ -64,7 +70,10 @@ for (const path of [
       requestToChannel: (_mesh, _channel, _packet, _request, _timeout, _signal, _metadata, onAdmitted) =>
         prepareZLinkRequestReply(start(onAdmitted), () => 'reply'),
       requestToSpot: (_target, _request, options) =>
-        prepareZLinkRequestReply(start(options.onAdmitted), () => 'reply'),
+        prepareZLinkRequestReply(
+          start(options.onAdmitted, options.requestOperation),
+          () => 'reply'
+        ),
       requestRawToSpot: (_target, _request, options) => start(options.onAdmitted)
     };
     const registration = framework.createFrameworkRegistration({
@@ -141,9 +150,7 @@ for (const path of [
     const pending = call.submit();
     let admitted = false;
     let replied = false;
-    void pending.admitted.then(() => {
-      admitted = true;
-    });
+    void pending.admitted.then(() => { admitted = true; });
     const terminal = pending.then((value) => {
       replied = true;
       return value;
@@ -246,7 +253,6 @@ test('Instance activation public request observes existing remote submission adm
     await terminal;
   }
 });
-
 
 test('public routed local Spot request observes serial queue acceptance before handler reply', async () => {
   const { ZLinkRoutedSpotPacketDispatch } = require('../../packages/framework/dist/runtime/spots/spot-routed-spot-packet-dispatch');
