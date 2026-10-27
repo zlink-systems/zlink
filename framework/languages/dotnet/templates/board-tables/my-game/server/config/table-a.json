@@ -1,0 +1,7 @@
+{
+  "Id": "tableA",
+  "StreamEndpoint": null,
+  "RedisEndpoint": "127.0.0.1:6379",
+  "MeshEndpoint": "tcp://127.0.0.1:0",
+  "KeyPrefix": "my-game-tables:"
+}
