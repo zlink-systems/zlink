@@ -2412,11 +2412,12 @@ int main ()
 
     zlink::framework::detail::route_channel_runtime_t route_runtime ("game.route");
     const auto target_node = zlink::routing_id_t::from (std::string ("remote-node"));
+    // Submit §3: this registered runtime has not started accepting admission.
     auto disconnected_send =
       route_runtime.submit_send (target_node, "event", event_t{77}, serializers);
     if (disconnected_send
         || disconnected_send.error_kind ()
-             != zlink::framework::framework_error_kind_t::unavailable) {
+             != zlink::framework::framework_error_kind_t::shutting_down) {
         return 33;
     }
     route_runtime.start ();
@@ -2453,15 +2454,59 @@ int main ()
         return 37;
     }
     const std::string target_spot = "remote-spot";
+    auto spot_request_builder = zlink::framework::test::runtime_failure_builder ();
+    spot_request_builder.route_channel ("spot.route").connect ("tcp://spot-route-peer:7500");
+    auto spot_request_manager =
+      zlink::framework::detail::channel_runtime_manager_t::from (spot_request_builder);
+    spot_request_manager.initialize_route_channels (spot_request_builder);
+    auto &spot_backend_runtime = spot_request_manager.get_route_channel ("spot.route");
+    auto spot_request_resolver = std::make_shared<test_spot_address_resolver_t> ();
+    spot_request_resolver->set (target_spot, zlink::framework::runtime::spot_address_t{
+                                               "spot.route", target_node, target_spot});
+    zlink::framework::detail::channel_runtime_t::from (spot_request_builder.message_bus ())
+      .bind_spot_address_resolver (spot_request_resolver);
+    auto spot_request_client = spot_request_builder.route_client (serializers);
+    zlink::framework::task_completion_source_t<
+      zlink::framework::runtime::messaging::message_parts_t>
+      spot_reply_source;
+    auto spot_admitted = std::make_shared<zlink::framework::task_completion_source_t<void>> ();
+    spot_admitted->complete (zlink::framework::result_t<void>::success ());
+    bool spot_request_input_matches = false;
+    spot_backend_runtime.set_request_backend (
+      [&] (const auto &target, const auto &spot, const auto &parts, auto) {
+          const auto body = envelope_codec.decode_body (parts);
+          spot_request_input_matches =
+            target == target_node && spot == target_spot && body
+            && serializers.get<request_t> ()
+                   .deserialize (zlink::framework::detail::encoded_payload_from_raw (body.value ()))
+                   .value
+                 == 79;
+          return zlink::framework::request_task_t<
+            zlink::framework::runtime::messaging::message_parts_t> (spot_reply_source.task (),
+                                                                    spot_admitted);
+      });
     auto spot_request =
-      route_runtime.request_to_spot_parts (target_node, target_spot, request_parts);
-    if (!spot_request || route_runtime.pending_request_count () != 2
-        || route_runtime.outbound_packets ().back ().target_spot_id != target_spot) {
+      spot_request_client.request_to_spot (target_spot, request_t{79}).async<reply_t> ();
+    if (!spot_request_input_matches || spot_request.await_ready ()
+        || route_runtime.pending_request_count () != 1
+        || spot_backend_runtime.pending_request_count () != 0
+        || spot_backend_runtime.outbound_packets ().back ().target_spot_id != target_spot) {
         return 38;
     }
-    zlink::framework::detail::route_channel_runtime_t spot_backend_runtime ("spot.route");
-    spot_backend_runtime.start ();
-    spot_backend_runtime.connect ("tcp://spot-route-peer:7500");
+    zlink::framework::runtime::messaging::envelope_header_t spot_reply_header;
+    spot_reply_header.kind = zlink::framework::runtime::messaging::message_kind_t::response;
+    spot_reply_header.channel_name = "spot.route";
+    spot_reply_header.message_name = request_t::packet_name;
+    const reply_t spot_reply_value{79};
+    spot_reply_source.complete (
+      zlink::framework::result_t<zlink::framework::runtime::messaging::message_parts_t>::success (
+        envelope_codec.encode_parts (spot_reply_header, std::type_index (typeid (reply_t)),
+                                     &spot_reply_value, serializers)));
+    const auto spot_request_result = spot_request.result ();
+    if (!spot_request_result || spot_request_result.value ().value != 79
+        || spot_backend_runtime.pending_request_count () != 0) {
+        return 384;
+    }
     int spot_backend_sends = 0;
     int spot_backend_requests = 0;
     spot_backend_runtime.set_send_backend (
@@ -2475,32 +2520,51 @@ int main ()
           ++spot_backend_sends;
           return zlink::framework::result_t<void>::success ();
       });
+    auto spot_request_budget =
+      std::chrono::duration_cast<std::chrono::milliseconds> (std::chrono::seconds (30));
+    auto spot_request_started = std::chrono::steady_clock::now ();
     spot_backend_runtime.set_request_backend (
       [&] (const zlink::routing_id_t &target, const std::optional<std::string> &spot,
            const zlink::framework::runtime::messaging::message_parts_t &parts,
            std::chrono::milliseconds timeout) {
+          const auto minimum_remaining = std::chrono::duration_cast<std::chrono::milliseconds> (
+            spot_request_started + spot_request_budget - std::chrono::steady_clock::now ());
           if (target != target_node || spot != target_spot || parts.size () == 0
-              || (timeout != std::chrono::seconds (30)
-                  && timeout != std::chrono::milliseconds (25))) {
+              || timeout <= std::chrono::milliseconds::zero () || timeout > spot_request_budget
+              || timeout < minimum_remaining) {
               return zlink::framework::
                 result_t<zlink::framework::runtime::messaging::message_parts_t>::failure (
                   zlink::framework::framework_error_kind_t::internal_failure,
                   "unexpected spot request backend input");
           }
           ++spot_backend_requests;
-          return zlink::framework::result_t<
-            zlink::framework::runtime::messaging::message_parts_t>::success (parts);
+          auto header = envelope_codec.decode_header (parts).value ();
+          header.kind = zlink::framework::runtime::messaging::message_kind_t::response;
+          auto body = envelope_codec.decode_body (parts).value ();
+          return zlink::framework::result_t<zlink::framework::runtime::messaging::message_parts_t>::
+            success (envelope_codec.encode_raw_body_parts (std::move (header), std::move (body)));
       });
     if (!spot_backend_runtime.submit_spot_send_parts (target_node, target_spot, request_parts)
+           .result ()
         || spot_backend_sends != 1) {
         return 380;
     }
-    if (!spot_backend_runtime.request_to_spot_parts (target_node, target_spot, request_parts)
+    spot_request_started = std::chrono::steady_clock::now ();
+    const auto spot_backend_public_reply =
+      spot_request_client.request_to_spot (target_spot, request_t{79})
+        .async<request_t> ()
+        .result ();
+    if (!spot_backend_public_reply || spot_backend_public_reply.value ().value != 79
         || spot_backend_requests != 1 || spot_backend_runtime.pending_request_count () != 0) {
         return 381;
     }
-    auto spot_backend_reply = spot_backend_runtime.request_reply_spot_parts (
-      target_node, target_spot, request_parts, std::chrono::milliseconds (25));
+    spot_request_budget = std::chrono::milliseconds (25);
+    spot_request_started = std::chrono::steady_clock::now ();
+    auto spot_backend_reply = spot_backend_runtime
+                                .request_reply_spot_parts (target_node, target_spot, request_parts,
+                                                           std::chrono::steady_clock::now ()
+                                                             + std::chrono::milliseconds (25))
+                                .result ();
     if (!spot_backend_reply || spot_backend_reply.value ().size () != request_parts.size ()
         || spot_backend_requests != 2 || spot_backend_runtime.pending_request_count () != 0) {
         return 382;
@@ -2523,15 +2587,18 @@ int main ()
           return zlink::framework::result_t<
             zlink::framework::runtime::messaging::message_parts_t>::success (parts);
       });
-    auto auto_backend_reply = auto_backend_runtime.request_reply_parts (
-      target_node, request_parts, std::chrono::milliseconds (25));
+    auto auto_backend_reply =
+      auto_backend_runtime
+        .request_reply_parts (target_node, request_parts, std::chrono::milliseconds (25))
+        .result ()
+        .value ();
     if (!auto_backend_reply || auto_backend_reply.value ().size () != request_parts.size ()
         || auto_backend_requests != 1 || auto_backend_runtime.list_connections ().size () != 0) {
         return 383;
     }
 
     if (!route_runtime.complete_request (route_request.value ())
-        || route_runtime.pending_request_count () != 1) {
+        || route_runtime.pending_request_count () != 0) {
         return 39;
     }
     route_runtime.stop ();
@@ -3566,26 +3633,21 @@ int main ()
         }
     }
     std::promise<void> delayed_backend_entered;
-    std::promise<void> release_delayed_backend;
+    zlink::framework::task_completion_source_t<
+      zlink::framework::runtime::messaging::message_parts_t>
+      delayed_backend_reply;
     auto delayed_backend_entered_future = delayed_backend_entered.get_future ();
-    auto release_delayed_backend_future = release_delayed_backend.get_future ().share ();
     // The observer owns the flag: the task may complete after an early return.
     auto delayed_completed = std::make_shared<std::atomic_bool> (false);
     public_route.set_request_backend (
-      [&delayed_backend_entered, release_delayed_backend_future, &envelope_codec, &serializers] (
+      [&delayed_backend_entered, &delayed_backend_reply] (
         const zlink::routing_id_t &, const std::optional<std::string> &,
-        const zlink::framework::runtime::messaging::message_parts_t &, std::chrono::milliseconds)
-        -> zlink::framework::result_t<zlink::framework::runtime::messaging::message_parts_t> {
+        const zlink::framework::runtime::messaging::message_parts_t &, std::chrono::milliseconds) {
           delayed_backend_entered.set_value ();
-          release_delayed_backend_future.wait ();
-          zlink::framework::runtime::messaging::envelope_header_t reply_header;
-          reply_header.kind = zlink::framework::runtime::messaging::message_kind_t::response;
-          reply_header.channel_name = "public.route";
-          reply_header.message_name = request_t::packet_name;
-          reply_t reply{451};
-          return zlink::framework::result_t<zlink::framework::runtime::messaging::message_parts_t>::
-            success (envelope_codec.encode_parts (reply_header, std::type_index (typeid (reply_t)),
-                                                  &reply, serializers));
+          return zlink::framework::request_task_t<
+            zlink::framework::runtime::messaging::message_parts_t> (
+            delayed_backend_reply.task (),
+            std::make_shared<zlink::framework::task_completion_source_t<void>> ());
       });
     auto delayed_task =
       public_route_client
@@ -3604,7 +3666,15 @@ int main ()
     if (delayed_completed->load ()) {
         return 64;
     }
-    release_delayed_backend.set_value ();
+    zlink::framework::runtime::messaging::envelope_header_t delayed_reply_header;
+    delayed_reply_header.kind = zlink::framework::runtime::messaging::message_kind_t::response;
+    delayed_reply_header.channel_name = "public.route";
+    delayed_reply_header.message_name = request_t::packet_name;
+    reply_t delayed_reply_value{451};
+    delayed_backend_reply.complete (
+      zlink::framework::result_t<zlink::framework::runtime::messaging::message_parts_t>::success (
+        envelope_codec.encode_parts (delayed_reply_header, std::type_index (typeid (reply_t)),
+                                     &delayed_reply_value, serializers)));
     auto delayed_reply = delayed_task.result ();
     /* complete() publishes the result and then schedules the observers, so
      * result() can return before the observer ran. Wait for the observation
@@ -3720,9 +3790,8 @@ int main ()
         return 149;
     }
 
-    // A route client released while its request is pending leaves its last reference to the
-    // request operation, which completes on a route-client worker. Releasing that reference on
-    // the worker must not wait for the worker's own work; runtime teardown drains route work.
+    // A released route client keeps the selected operation alive through physical completion.
+    // Completion and subsequent runtime teardown must finish without waiting for one another.
     {
         auto released_builder = std::make_unique<zlink::framework::zlink_builder_t> (
           zlink::framework::test::runtime_failure_builder ());
@@ -3737,27 +3806,21 @@ int main ()
         released_manager.initialize_route_channels (*released_builder);
         auto &released_route = released_manager.get_route_channel ("released.route");
         std::promise<void> released_backend_entered;
-        std::promise<void> release_backend;
-        auto backend_released = release_backend.get_future ().share ();
+        zlink::framework::task_completion_source_t<
+          zlink::framework::runtime::messaging::message_parts_t>
+          released_backend_reply;
+        zlink::framework::runtime::messaging::message_parts_t released_parts;
         released_route.set_request_backend (
-          [&released_backend_entered, backend_released, &envelope_codec,
-           &serializers] (const zlink::routing_id_t &, const std::optional<std::string> &,
-                          const zlink::framework::runtime::messaging::message_parts_t &parts,
-                          std::chrono::milliseconds)
-            -> zlink::framework::result_t<zlink::framework::runtime::messaging::message_parts_t> {
+          [&released_backend_entered, &released_backend_reply,
+           &released_parts] (const zlink::routing_id_t &, const std::optional<std::string> &,
+                             const zlink::framework::runtime::messaging::message_parts_t &parts,
+                             std::chrono::milliseconds) {
+              released_parts = parts;
               released_backend_entered.set_value ();
-              backend_released.wait ();
-              auto header = envelope_codec.decode_header (parts);
-              zlink::framework::runtime::messaging::envelope_header_t reply_header;
-              reply_header.kind = zlink::framework::runtime::messaging::message_kind_t::response;
-              reply_header.channel_name = "released.route";
-              reply_header.message_name = header.value ().message_name;
-              reply_header.content_type = header.value ().content_type;
-              reply_t reply{7};
-              return zlink::framework::
-                result_t<zlink::framework::runtime::messaging::message_parts_t>::success (
-                  envelope_codec.encode_parts (reply_header, std::type_index (typeid (reply_t)),
-                                               &reply, serializers));
+              return zlink::framework::request_task_t<
+                zlink::framework::runtime::messaging::message_parts_t> (
+                released_backend_reply.task (),
+                std::make_shared<zlink::framework::task_completion_source_t<void>> ());
           });
         std::optional<zlink::framework::request_task_t<reply_t>> released_request;
         {
@@ -3774,7 +3837,18 @@ int main ()
             != std::future_status::ready) {
             return 152;
         }
-        release_backend.set_value ();
+        auto released_header = envelope_codec.decode_header (released_parts);
+        zlink::framework::runtime::messaging::envelope_header_t released_reply_header;
+        released_reply_header.kind = zlink::framework::runtime::messaging::message_kind_t::response;
+        released_reply_header.channel_name = "released.route";
+        released_reply_header.message_name = released_header.value ().message_name;
+        released_reply_header.content_type = released_header.value ().content_type;
+        reply_t released_reply_value{7};
+        released_backend_reply.complete (
+          zlink::framework::result_t<zlink::framework::runtime::messaging::message_parts_t>::
+            success (envelope_codec.encode_parts (released_reply_header,
+                                                  std::type_index (typeid (reply_t)),
+                                                  &released_reply_value, serializers)));
         auto released_reply = released_request->result ();
         released_request.reset ();
         if (!released_reply || released_reply.value ().value != 7) {
@@ -3783,7 +3857,7 @@ int main ()
         auto teardown =
           std::async (std::launch::async, [&released_builder] { released_builder.reset (); });
         if (teardown.wait_for (std::chrono::seconds (5)) != std::future_status::ready) {
-            // The route worker is waiting for itself; the process cannot unwind.
+            // Teardown did not finish; the process cannot unwind.
             std::_Exit (154);
         }
     }
