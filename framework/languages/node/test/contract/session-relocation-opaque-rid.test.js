@@ -933,8 +933,8 @@ for (const binding of ['absent', 'same', 'successor']) {
       actorManager: () => ({
         getState: () => ({ boundSession: currentBinding, spotId: 'spot', actor: {} })
       }),
-      spotManager: () => ({
-        async dispatchRoutedActorPacket(origin, _spotId, actorId, parts) {
+      spotNodeRuntime: () => ({
+        async dispatchEntryActorPacket(origin, actorId, parts) {
           const state = new framework.ZLinkActorRuntimeState(actorId);
           if (currentBinding !== undefined)
             state.installBoundSessionBinding({
@@ -954,7 +954,7 @@ for (const binding of ['absent', 'same', 'successor']) {
             onDisconnectActor: async () => {
               callbacks++;
             }
-          }).dispatch(origin, actorId, parts);
+          }).dispatch(undefined, origin, actorId, parts);
         }
       })
     });
