@@ -235,8 +235,7 @@ connector_state_t::connector_state_t (connector_options_t options) :
     options (std::move (options)),
     runtime (acquire_shared_runtime ()),
     io_context (runtime->operation->io_context ()),
-    write_strand (boost::asio::make_strand (io_context)),
-    delivery_strand (boost::asio::make_strand (runtime->callback->io_context ()))
+    write_strand (boost::asio::make_strand (io_context))
 {
 }
 
@@ -463,18 +462,33 @@ bool callback_scope_t::running_callback_of (const connector_state_t &state) noex
     return running_callbacks_of == &state;
 }
 
-void run_on_delivery_strand (std::shared_ptr<connector_state_t> state,
-                             std::function<void ()> callback)
+/* After terminal close operations finish, callbacks run in the same operation
+ * context. Close completion does not wait for callback completion (SC §7). */
+class close_delivery_scope_t
 {
-    // The callback runs on the shared callback runner, never on the calling
-    // thread. Deliveries are frequently started from the connector's own read
-    // pump; running user code there lets a slow or blocking callback starve
-    // the pump (and deadlock when the callback waits on a later inbound frame).
-    boost::asio::post (state->delivery_strand, [state, callback = std::move (callback)] () mutable {
-        callback_scope_t scope (*state);
-        invoke_user_callback (*state, "connector callback failed", callback);
-    });
-}
+  public:
+    explicit close_delivery_scope_t (connector_state_t &state) : state (state), previous (current)
+    {
+        current = this;
+    }
+    ~close_delivery_scope_t () { current = previous; }
+
+    void deliver ()
+    {
+        current = previous;
+        callback_scope_t scope (state);
+        for (auto &callback : callbacks) {
+            invoke_user_callback (state, "connector callback failed", callback);
+        }
+    }
+
+    connector_state_t &state;
+    std::vector<std::function<void ()>> callbacks;
+    inline static thread_local close_delivery_scope_t *current = nullptr;
+
+  private:
+    close_delivery_scope_t *previous;
+};
 
 void schedule_delivery (std::shared_ptr<connector_state_t> state,
                         std::function<void ()> callback,
@@ -484,7 +498,13 @@ void schedule_delivery (std::shared_ptr<connector_state_t> state,
         return;
     }
     if (state->options.dispatch_mode == dispatch_mode_t::immediate) {
-        run_on_delivery_strand (std::move (state), std::move (callback));
+        auto *closing = close_delivery_scope_t::current;
+        if (closing && &closing->state == state.get ()) {
+            closing->callbacks.push_back (std::move (callback));
+            return;
+        }
+        callback_scope_t scope (*state);
+        invoke_user_callback (*state, "connector callback failed", callback);
         return;
     }
     if (!callbacks) {
@@ -516,23 +536,22 @@ void publish_error (connector_state_t &state, error_t error) noexcept
         return;
     }
     auto shared = state.shared_from_this ();
-    auto callbacks =
-      registered_handler_count (shared, &connector_state_t::error_handlers, handler_ids);
-    schedule_delivery (
-      shared,
-      [state = shared, handler_ids = std::move (handler_ids), error = std::move (error)] {
-          for (const auto &entry :
-               registered_handlers (*state, &connector_state_t::error_handlers, handler_ids)) {
-              /* An error handler's own failure is not reported to the error
-           * handlers again. */
-              try {
-                  entry.handler (error);
+    for (const auto id : handler_ids) {
+        schedule_delivery (
+          shared,
+          [state = shared, id, error] {
+              for (const auto &entry :
+                   registered_handlers (*state, &connector_state_t::error_handlers, {id})) {
+                  try {
+                      entry.handler (error);
+                  }
+                  catch (...) {
+                      // Error handler failures are not reported recursively.
+                  }
               }
-              catch (...) {
-              }
-          }
-      },
-      std::move (callbacks));
+          },
+          registered_handler_count (shared, &connector_state_t::error_handlers, {id}));
+    }
 }
 
 void close_bound_actors (const std::shared_ptr<connector_state_t> &state)
@@ -561,16 +580,9 @@ void schedule_actor_delivery (const std::shared_ptr<connector_state_t> &state,
                               std::vector<std::uint64_t> handler_ids,
                               std::shared_ptr<actor_t> actor)
 {
-    auto callbacks = registered_handler_count (state, registry, handler_ids);
-    schedule_delivery (
-      state,
-      [state, registry, handler_ids = std::move (handler_ids), actor = std::move (actor)] {
-          for (const auto &entry : registered_handlers (*state, registry, handler_ids)) {
-              invoke_user_callback (*state, "Actor lifecycle callback failed",
-                                    [&] { entry.handler (actor); });
-          }
-      },
-      std::move (callbacks));
+    schedule_handler_deliveries (
+      state, registry, handler_ids,
+      [actor = std::move (actor)] (const auto &handler) { handler (actor); });
 }
 
 void publish_stream_error (const std::shared_ptr<void> &state, error_t error)
@@ -718,18 +730,6 @@ std::vector<std::uint64_t> capture_reply_hook_ids (const std::shared_ptr<void> &
     return registered_handler_ids_locked (state->reply_received_handlers);
 }
 
-void run_reply_received (const std::shared_ptr<void> &state_handle,
-                         const reply_received_context_t &context,
-                         const std::vector<std::uint64_t> &handler_ids)
-{
-    auto state = state_from (state_handle);
-    for (const auto &entry :
-         registered_handlers (*state, &connector_state_t::reply_received_handlers, handler_ids)) {
-        invoke_user_callback (*state, "reply received hook failed",
-                              [&] { entry.handler (context); });
-    }
-}
-
 void schedule_reply_received (const std::shared_ptr<void> &state_handle,
                               reply_received_context_t context)
 {
@@ -738,20 +738,29 @@ void schedule_reply_received (const std::shared_ptr<void> &state_handle,
     if (handler_ids.empty ()) {
         return;
     }
-    auto callbacks =
-      registered_handler_count (state, &connector_state_t::reply_received_handlers, handler_ids);
-    schedule_delivery (
-      state,
-      [state_handle, handler_ids = std::move (handler_ids), context = std::move (context)] {
-          run_reply_received (state_handle, context, handler_ids);
-      },
-      std::move (callbacks));
+    schedule_reply_received (state_handle, std::move (context), handler_ids);
+}
+
+void schedule_reply_received (const std::shared_ptr<void> &state_handle,
+                              reply_received_context_t context,
+                              const std::vector<std::uint64_t> &handler_ids)
+{
+    const auto state = state_from (state_handle);
+    schedule_handler_deliveries (
+      state, &connector_state_t::reply_received_handlers, handler_ids,
+      [context = std::move (context)] (const auto &handler) { handler (context); });
 }
 
 void post_runtime_operation (const std::shared_ptr<connector_state_t> &state,
                              std::function<void ()> operation)
 {
     state->runtime->operation->post (std::move (operation));
+}
+
+void post_wait_callback (const std::shared_ptr<connector_state_t> &state,
+                         std::function<void ()> callback)
+{
+    state->runtime->callback->post (std::move (callback));
 }
 
 void post_connect_operation (const std::shared_ptr<connector_state_t> &state,
@@ -874,32 +883,11 @@ bool change_state (std::shared_ptr<connector_state_t> state,
         std::cerr << '\n';
     }
     connection_state_changed_t changed{previous, next, error, close_reason};
-    if (!state_handler_ids.empty () || !disconnected_handler_ids.empty ()) {
-        auto state_callbacks =
-          registered_handler_count (state, &connector_state_t::state_handlers, state_handler_ids);
-        auto disconnected_callbacks = registered_handler_count (
-          state, &connector_state_t::disconnected_handlers, disconnected_handler_ids);
-        schedule_delivery (
-          state,
-          [state, state_handler_ids = std::move (state_handler_ids),
-           disconnected_handler_ids = std::move (disconnected_handler_ids),
-           changed = std::move (changed)] {
-              for (const auto &entry : registered_handlers (
-                     *state, &connector_state_t::state_handlers, state_handler_ids)) {
-                  invoke_user_callback (*state, "connection state handler failed",
-                                        [&] { entry.handler (changed); });
-              }
-              for (const auto &entry : registered_handlers (
-                     *state, &connector_state_t::disconnected_handlers, disconnected_handler_ids)) {
-                  invoke_user_callback (*state, "disconnected handler failed",
-                                        [&] { entry.handler (changed.close_reason); });
-              }
-          },
-          [state_callbacks = std::move (state_callbacks),
-           disconnected_callbacks = std::move (disconnected_callbacks)] {
-              return state_callbacks () + disconnected_callbacks ();
-          });
-    }
+    schedule_handler_deliveries (state, &connector_state_t::state_handlers, state_handler_ids,
+                                 [changed] (const auto &handler) { handler (changed); });
+    schedule_handler_deliveries (
+      state, &connector_state_t::disconnected_handlers, disconnected_handler_ids,
+      [changed] (const auto &handler) { handler (changed.close_reason); });
     // Publish the state-change notifications after the lifecycle delivery is
     // queued. A caller that observes the new state can then dispatch the full
     // callback set for that transition.
@@ -1117,6 +1105,19 @@ std::size_t connector_t::pending_dispatch_count () const
     {
         std::lock_guard<std::mutex> lock (state->transport_mutex);
         packets = 0;
+        if (state->dispatch_cursor) {
+            std::lock_guard<std::mutex> delivery_lock (state->delivery_mutex);
+            std::lock_guard<std::mutex> lifecycle_lock (state->lifecycle_mutex);
+            const auto &cursor = *state->dispatch_cursor;
+            const auto found = state->packet_handlers.find (cursor.envelope.packet.name);
+            if (found != state->packet_handlers.end ()) {
+                for (auto i = cursor.next_handler; i < cursor.handlers.size (); ++i) {
+                    const auto id = cursor.handlers[i].id;
+                    packets += std::any_of (found->second.begin (), found->second.end (),
+                                            [id] (const auto &entry) { return entry.id == id; });
+                }
+            }
+        }
         for (const auto &envelope : state->dispatch_queue) {
             if (detail::packet_handler_count (*state, envelope) > 0) {
                 ++packets;
@@ -1196,8 +1197,10 @@ begin_connect_attempt (const std::shared_ptr<detail::connector_state_t> &state,
         state->reconnect_scheduled = false;
         state->reconnect_timer.reset ();
     } else if (state->connect_attempt_active || state->reconnect_scheduled) {
-        state->lifecycle_changed.wait (
-          lock, [&] { return !state->connect_attempt_active && !state->reconnect_scheduled; });
+        state->lifecycle_changed.wait (lock, [&] {
+            return state->close_requested.load ()
+                   || (!state->connect_attempt_active && !state->reconnect_scheduled);
+        });
         const auto error = state->last_disconnect_error;
         completed_attempt =
           result_t<void>::failure (error ? error->code : error_code_t::disconnected,
@@ -1543,12 +1546,13 @@ namespace
  * transport is never written. The peer is not waited for: a write already in
  * progress is abandoned with the socket and its operation fails with the
  * others. The state and disconnect callbacks this close produces follow the
- * dispatch mode like every other callback: Immediate posts them to the
- * delivery strand, Manual leaves them to the next pump. The close work does
+ * dispatch mode like every other callback: Immediate runs them directly,
+ * Manual leaves them to the next pump. The close work does
  * not wait for them, so a handler that never finishes does not hold it. */
 void run_close_work (const std::shared_ptr<detail::connector_state_t> &state,
                      std::shared_ptr<detail::stream_connection_t> connection)
 {
+    detail::close_delivery_scope_t deliveries (*state);
     std::shared_ptr<boost::asio::steady_timer> reconnect_timer;
     std::shared_ptr<detail::transport_connect_control_t> connect_control;
     {
@@ -1588,6 +1592,7 @@ void run_close_work (const std::shared_ptr<detail::connector_state_t> &state,
         state->close_completed = true;
     }
     state->lifecycle_changed.notify_all ();
+    deliveries.deliver ();
 }
 
 /* One close work per connector. The close that sets close_requested starts
@@ -1605,17 +1610,13 @@ result_t<void> close_state (std::shared_ptr<detail::connector_state_t> state)
             connection = std::move (state->connection);
         }
     }
-    if (detail::callback_scope_t::running_callback_of (*state)) {
-        if (starts) {
-            detail::post_connect_operation (
-              state, [state, connection = std::move (connection)] () mutable {
-                  run_close_work (state, std::move (connection));
-              });
-        }
-        return result_t<void>::success ();
-    }
     if (starts) {
-        run_close_work (state, std::move (connection));
+        detail::post_runtime_operation (state,
+                                        [state, connection = std::move (connection)] () mutable {
+                                            run_close_work (state, std::move (connection));
+                                        });
+    }
+    if (detail::callback_scope_t::running_callback_of (*state)) {
         return result_t<void>::success ();
     }
     std::unique_lock<std::mutex> lock (state->lifecycle_mutex);
