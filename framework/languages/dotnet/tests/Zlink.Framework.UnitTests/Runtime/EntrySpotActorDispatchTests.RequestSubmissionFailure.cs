@@ -41,12 +41,13 @@ public sealed partial class EntrySpotActorDispatchTests
                 ).Handle
             );
             var payload = new ProbeRouteMessage("stopped");
-            IZLinkSendCall MakeSend() => path switch
-            {
-                "channel" => route.SendToChannel("entry", payload),
-                "node" => route.SendToNode("entry", RoutingId.From("target-node"), payload),
-                _ => new ZLinkRouteSpotSendCall<ProbeRouteMessage>(runtime, target, payload),
-            };
+            IZLinkSendCall MakeSend() =>
+                path switch
+                {
+                    "channel" => route.SendToChannel("entry", payload),
+                    "node" => route.SendToNode("entry", RoutingId.From("target-node"), payload),
+                    _ => new ZLinkRouteSpotSendCall<ProbeRouteMessage>(runtime, target, payload),
+                };
             var send = MakeSend();
             IZLinkRequestCall call = path switch
             {
