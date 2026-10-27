@@ -105,6 +105,7 @@
         <Compile Include="Runtime/SourceMembershipLeaveCompletionTests.cs"/>
         <Compile Include="Runtime/ActorRemoteJoinRecoveryCodecBoundaryTests.cs"/>
         <Compile Include="Runtime/ActorHandoffTests.cs"/>
+        <Compile Include="Runtime/ActorHandoffDrainTests.cs"/>
         <Compile Include="Runtime/JoinCallbackSendTests.cs"/>
         <Compile Include="Runtime/ActorJoinPrewarmRegistryTests.cs"/>
         <Compile Include="Runtime/ActorHandlerActivationTests.cs"/>
@@ -113,6 +114,7 @@
         <Compile Include="Runtime/ProtobufNativePayloadTests.cs"/>
         <Compile Include="Runtime/MeshMailboxReadinessTests.cs"/>
         <Compile Include="Runtime/MeshPermitHandoffTests.cs"/>
+        <Compile Include="Runtime/IsolatedTestProcess.cs"/>
         <Compile Include="Runtime/MeshReceiveWakeTests.cs"/>
         <Compile Include="Runtime/ReceiveClaimCostTests.cs"/>
         <Compile Include="Runtime/MeshReplyPayloadOwnershipTests.cs"/>
@@ -121,7 +123,10 @@
         <Compile Include="Runtime/MeshChannelSelectionHotPathTests.cs"/>
         <Compile Include="Runtime/EnvelopeHeaderCacheHotPathTests.cs"/>
         <Compile Include="Runtime/MeshApplicationWorkerTests.cs"/>
+        <Compile Include="Runtime/MeshReceiveHandoffTests.cs"/>
         <Compile Include="Runtime/MeshWorkerWaitCostTests.cs"/>
+        <Compile Include="Runtime/ReceiveSourceDeadlineTests.cs"/>
+        <Compile Include="Runtime/ReceiveBatchRearmTests.cs"/>
         <Compile Include="Runtime/SmallStateOwnershipMechanismTests.cs"/>
         <Compile Include="Runtime/ActorBoundSessionRelayTests.cs"/>
         <Compile Include="Runtime/ApplicationJobQueueTests.cs"/>
@@ -271,6 +276,7 @@
         <Compile Include="Runtime/RouteChangeProxy.cs"/>
         <Compile Include="Runtime/RelocationTargetShutdownTests.cs"/>
         <Compile Include="Runtime/SpotCloseConformanceTests.cs"/>
+        <Compile Include="Runtime/SpotCloseConformanceTests.Closing.cs"/>
         <Compile Include="Runtime/SpotCloseAdmissionSealTests.cs"/>
         <Compile Include="Runtime/RelocationTreeParallelIoTests.cs"/>
         <Compile Include="Runtime/StandaloneActorRelocationRuntimeTests.cs"/>

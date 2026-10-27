@@ -3,7 +3,7 @@
 # is a defect to fix (AGENTS.md section 4.1).
 #
 # PRs to main are squash-merged so a merged fix is one commit that Mergify can
-# backport. A PR labelled `backport-0.30.2` then gets a backport PR to the release
+# backport. A PR labelled `backport-0.30.3` then gets a backport PR to the release
 # branch, which enters the release queue by itself and merges after the same checks.
 queue_rules:
   - name: default
@@ -42,11 +42,11 @@ merge_protections_settings:
             - head~=^mergify/bp/
 
 pull_request_rules:
-  - name: backport merged fixes to the 0.30.2 release branch
+  - name: backport merged fixes to the 0.30.3 release branch
     conditions:
       - merged
-      - label=backport-0.30.2
+      - label=backport-0.30.3
     actions:
       backport:
         branches:
-          - release/framework-0.30.2
+          - release/framework-0.30.3

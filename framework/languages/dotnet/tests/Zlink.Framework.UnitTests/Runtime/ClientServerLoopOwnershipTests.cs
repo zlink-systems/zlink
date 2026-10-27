@@ -6,7 +6,7 @@ using Zlink.Framework.Runtime.Locations;
 
 namespace Zlink.Framework.UnitTests;
 
-// A blocking ClientServer loop owns a dedicated thread and the socket it receives on
+// ClientServer sources share the process receive role and retain socket ownership
 // (#1769, #1745). The default ThreadPool settings stay unchanged here.
 public sealed class ClientServerLoopOwnershipTests
 {
@@ -115,6 +115,40 @@ public sealed class ClientServerLoopOwnershipTests
             await clientRuntime.StopAsync(CancellationToken.None);
             if (stop is null)
                 await serverRuntime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public async Task StoppingOneHostContextLeavesAnotherHostsChannelsReceiving()
+    {
+        var store = new ZLinkInMemoryProviderLocationStore();
+        var first = CreateHost(store);
+        using var second = CreateHost(store);
+        Task? firstStop = null;
+        try
+        {
+            await Task.WhenAll(first.StartAsync(), second.StartAsync())
+                .WaitAsync(TimeSpan.FromSeconds(60));
+            var client = second.Services.GetRequiredService<IZLinkRouteClient>();
+            var before = await client
+                .RequestToChannel(Channels[0], new Ping(1, Channels[0]))
+                .Timeout(TimeSpan.FromSeconds(10))
+                .Async<Pong>();
+            Assert.Equal(new Pong(1, Channels[0]), before);
+            firstStop = first.StopAsync();
+            await firstStop.WaitAsync(TimeSpan.FromSeconds(60));
+            first.Dispose();
+            var after = await client
+                .RequestToChannel(Channels[0], new Ping(2, Channels[0]))
+                .Timeout(TimeSpan.FromSeconds(10))
+                .Async<Pong>();
+            Assert.Equal(new Pong(2, Channels[0]), after);
+        }
+        finally
+        {
+            await Task.WhenAll(firstStop ?? first.StopAsync(), second.StopAsync())
+                .WaitAsync(TimeSpan.FromSeconds(60));
+            first.Dispose();
         }
     }
 

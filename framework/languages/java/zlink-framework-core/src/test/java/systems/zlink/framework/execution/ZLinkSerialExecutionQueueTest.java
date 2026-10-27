@@ -45,6 +45,67 @@ final class ZLinkSerialExecutionQueueTest {
     private static final long LIFECYCLE_GATE_WAIT_SECONDS = 3;
 
     @Test
+    void lifecycleAdmissionObservesPrecedingTransitionCommit() throws Exception {
+        for (boolean started : new boolean[] {false, true}) {
+            for (boolean commits : new boolean[] {false, true}) {
+                CountingExecutor executor = new CountingExecutor();
+                ZLinkSerialExecutionQueue queue =
+                        new ZLinkSerialExecutionQueue(executor, ZLinkExecutionLanePolicy.spot());
+                AtomicBoolean committed = new AtomicBoolean();
+                AtomicInteger calls = new AtomicInteger();
+                CompletableFuture<Void> release = new CompletableFuture<>();
+                var close =
+                        queue.enqueueLifecycleTransition(
+                                () ->
+                                        release.thenCompose(
+                                                ignored -> {
+                                                    committed.set(commits);
+                                                    return commits
+                                                            ? queue.commitLifecycleTransition()
+                                                            : CompletableFuture.completedFuture(
+                                                                    null);
+                                                }),
+                                ignored -> CompletableFuture.completedFuture(null),
+                                committed::get,
+                                ignored -> false);
+                if (started) executor.take().run();
+                var admission =
+                        queue.enqueueLifecycleAdmission(
+                                        () -> {
+                                            calls.incrementAndGet();
+                                            return CompletableFuture.completedFuture(null);
+                                        })
+                                .toCompletableFuture();
+                assertFalse(admission.isDone());
+                if (!started) executor.take().run();
+                release.complete(null);
+                executor.runUntil(
+                        CompletableFuture.allOf(
+                                close.toCompletableFuture(),
+                                admission.handle((ignored, failure) -> null)));
+                if (commits) {
+                    var failure =
+                            assertThrows(
+                                    ExecutionException.class,
+                                    () -> admission.get(3, TimeUnit.SECONDS));
+                    assertEquals(
+                            systems.zlink.framework.errors.ZLinkFrameworkErrorKind.NOT_FOUND,
+                            assertInstanceOf(
+                                            systems.zlink.framework.errors.ZLinkFrameworkException
+                                                    .class,
+                                            failure.getCause())
+                                    .kind());
+                    assertEquals(0, calls.get());
+                } else {
+                    admission.get(3, TimeUnit.SECONDS);
+                    assertEquals(1, calls.get());
+                }
+                queue.close();
+            }
+        }
+    }
+
+    @Test
     void managedCompletionWithInlineExecutorLeavesTheForeignPhysicalFrame() throws Exception {
         var owner = new ZLinkSerialExecutionQueue(Runnable::run, ZLinkExecutionLanePolicy.spot());
         var foreign = new ZLinkSerialExecutionQueue();

@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+#include "../support/stateful_object_sync.hpp"
 #include "allocation_counter.hpp"
 #include "runtime/stateful/public_host_runtime.hpp"
 #include "runtime/stateful/raw_stateful_dispatch.hpp"
@@ -16,6 +17,8 @@
 #include <atomic>
 #include <cstdio>
 #include <thread>
+
+using zlink::framework::test::begin_reserved_object;
 
 namespace zlink::framework::runtime::host
 {
@@ -311,7 +314,7 @@ struct stateful_spot_fixture_t
         object = {stateful::object_kind_t::user_spot, "stateful",           fence.object_generation,
                   fence.authority_owner_generation,   descriptor.mesh_name, "n"};
         const auto created =
-          runtime->objects ().begin_reserved_object (object, "framework.spot", {});
+          begin_reserved_object (runtime->objects (), object, "framework.spot", {});
         EXPECT_EQ (created.error, stateful::stateful_error_t::none);
         EXPECT_EQ (runtime->objects ().commit_create (created.attempt),
                    stateful::stateful_error_t::none);
@@ -424,6 +427,472 @@ TEST (LocalEnqueueAllocations, StatefulOwnerClaimWithoutQueuedTurnNeedsNoContinu
                  dispatch_cost.bytes, dispatch_cost.largest, result_storage.largest);
     EXPECT_LE (object_cost.largest, result_storage.largest);
     EXPECT_LE (dispatch_cost.largest, result_storage.largest);
+}
+
+TEST (LocalEnqueueAllocations, RecordedAuthorityUsesOnlyReadyResultStorage)
+{
+    using namespace fw;
+    using namespace fw::runtime;
+    using authority_t = std::optional<stateful::accepted_record_authority_t>;
+    auto runtime = make_host ();
+    const auto lease =
+      std::make_shared<const location_owner_token_t> (location_owner_token_t{"local-owner", 3});
+    stateful::accepted_record_authority_query_t query;
+    query.target = {stateful::object_kind_t::user_spot, "spot", 1, 1, "local-allocation", "n"};
+    query.source_node_routing_id = {'n'};
+    query.source_node_generation = 1;
+    query.target_node_routing_id = {'n'};
+    query.target_node_generation = 1;
+    query.source_original = mesh::local_request_source_t{lease, {}};
+    const authority_t expected =
+      stateful::accepted_record_authority_t{{lease->owner_id, 3, {'n'}, 1}, 3};
+    const auto storage = tests::measure_allocations ([&] {
+        const task_t<authority_t> result (result_t<authority_t>::success (expected));
+        EXPECT_TRUE (result.await_ready ());
+    });
+    const auto input = tests::measure_allocations ([&] {
+        const auto copy = query;
+        EXPECT_EQ (copy.target, query.target);
+    });
+    const auto resolve = [&] {
+        auto result = runtime->accepted_record_authority (query, lease);
+        ASSERT_TRUE (result.await_ready ());
+        const auto &authority = result.result ().value ();
+        ASSERT_TRUE (authority.has_value ());
+        EXPECT_EQ (authority->source.owner_id, lease->owner_id);
+        EXPECT_EQ (authority->source.node_routing_id, query.source_node_routing_id);
+        EXPECT_EQ (authority->target_owner_lease_generation, 3u);
+    };
+    resolve ();
+    const auto measured = tests::measure_allocations (resolve);
+    std::printf ("recorded authority: allocations=%zu bytes=%zu largest=%zu; ready storage=%zu\n",
+                 measured.count, measured.bytes, measured.largest, storage.largest);
+    EXPECT_LE (measured.largest, storage.largest);
+    EXPECT_LE (measured.count, storage.count + input.count);
+    EXPECT_LE (measured.bytes, storage.bytes + input.bytes);
+}
+
+TEST (LocalEnqueueAllocations, ReadyAuthorityResolverAddsOnlyItsLaneResult)
+{
+    using namespace fw;
+    using namespace fw::runtime;
+    using authority_t = std::optional<stateful::accepted_record_authority_t>;
+    auto runtime = make_host ();
+    const stateful::object_ref_t object{
+      stateful::object_kind_t::user_spot, "spot", 1, 1, "local-allocation", "n"};
+    protocol::spot_message_header_t header;
+    header.target = {object.key, 1, {'n'}, 1, 1, 3};
+    unsigned calls = 0;
+    const stateful::accepted_record_authority_resolver_t resolver = [&] (const auto &) {
+        ++calls;
+        return task_t<authority_t> (result_t<authority_t>::success (
+          stateful::accepted_record_authority_t{{"source", 2, {'s'}, 1}, 3}));
+    };
+    runtime->configure_stateful_dispatch (resolver);
+    stateful::raw_stateful_dispatch_t direct (runtime->objects (), runtime->transport (), resolver);
+    auto &wrapped = host::public_host_runtime_test_access_t::stateful_dispatch (*runtime);
+    const auto resolve = [&] (stateful::raw_stateful_dispatch_t &dispatch) {
+        const auto previous_calls = calls;
+        auto result =
+          dispatch.accepted_spot_authority (object, header, {'s'}, 1, std::nullopt, std::nullopt);
+        ASSERT_TRUE (result.await_ready ());
+        const auto &authority = result.result ().value ();
+        EXPECT_EQ (authority.first, stateful::stateful_error_t::none);
+        ASSERT_TRUE (authority.second.has_value ());
+        EXPECT_EQ (authority.second->source.owner_id, "source");
+        EXPECT_EQ (authority.second->target_owner_lease_generation, 3u);
+        EXPECT_EQ (calls - previous_calls, 1u);
+    };
+    resolve (direct);
+    resolve (wrapped);
+    const auto baseline = tests::measure_allocations ([&] { resolve (direct); });
+    const auto lane_result = tests::measure_allocations ([] {
+        const task_t<authority_t> result (result_t<authority_t>::success (std::nullopt));
+        EXPECT_TRUE (result.await_ready ());
+    });
+    const auto measured = tests::measure_allocations ([&] { resolve (wrapped); });
+    std::printf ("authority resolver: direct=%zu/%zu lane=%zu/%zu wrapped=%zu/%zu\n",
+                 baseline.count, baseline.bytes, lane_result.count, lane_result.bytes,
+                 measured.count, measured.bytes);
+    EXPECT_LE (measured.count, baseline.count + lane_result.count);
+    EXPECT_LE (measured.bytes, baseline.bytes + lane_result.bytes);
+}
+
+TEST (LocalEnqueueAllocations, PendingAuthorityResolverKeepsItsInputAndErrorClassification)
+{
+    using namespace fw;
+    using namespace fw::runtime;
+    using authority_t = std::optional<stateful::accepted_record_authority_t>;
+    for (unsigned outcome = 0; outcome != 4; ++outcome) {
+        auto runtime = make_host ();
+        task_completion_source_t<authority_t> completion;
+        unsigned calls = 0;
+        const stateful::accepted_record_authority_query_t *observed = nullptr;
+        runtime->configure_stateful_dispatch (
+          [&] (const stateful::accepted_record_authority_query_t &query) {
+              ++calls;
+              observed = &query;
+              return completion.task ();
+          });
+        auto &dispatch = host::public_host_runtime_test_access_t::stateful_dispatch (*runtime);
+        // The original arguments are gone while the configured resolver still awaits.
+        auto pending = [&] {
+            const stateful::object_ref_t object{stateful::object_kind_t::user_spot,
+                                                "spot-with-owned-query-storage",
+                                                1,
+                                                1,
+                                                "local-allocation",
+                                                "n"};
+            protocol::spot_message_header_t header;
+            header.target = {object.key, 1, {'n'}, 1, 1, 3};
+            return dispatch.accepted_spot_authority (object, header, {'s'}, 1, std::nullopt,
+                                                     std::nullopt);
+        }();
+        ASSERT_FALSE (pending.await_ready ());
+        ASSERT_EQ (calls, 1u);
+        ASSERT_NE (observed, nullptr);
+        EXPECT_EQ (observed->target.key, "spot-with-owned-query-storage");
+        EXPECT_EQ (observed->source_node_routing_id, std::vector<std::uint8_t>{'s'});
+        if (outcome == 0)
+            completion.complete (result_t<authority_t>::success (
+              stateful::accepted_record_authority_t{{"source", 2, {'s'}, 1}, 3}));
+        else if (outcome == 3)
+            completion.complete (detail::result_access_t::failure<authority_t> (
+              std::make_exception_ptr (detail::make_boundary_exception (
+                detail::boundary_error_t::stale_generation, "pending stale generation"))));
+        else
+            completion.complete (result_t<authority_t>::failure (
+              outcome == 1 ? framework_error_kind_t::unavailable
+                           : framework_error_kind_t::internal_failure,
+              "pending authority failure"));
+        const auto terminal = pending.result_for (std::chrono::seconds (5));
+        ASSERT_TRUE (terminal.has_value ());
+        if (outcome == 2) {
+            EXPECT_FALSE (*terminal);
+            EXPECT_EQ (terminal->error_kind (), framework_error_kind_t::internal_failure);
+        } else {
+            ASSERT_TRUE (*terminal);
+            EXPECT_EQ (terminal->value ().first, outcome == 0 ? stateful::stateful_error_t::none
+                                                 : outcome == 3
+                                                   ? stateful::stateful_error_t::conflict
+                                                   : stateful::stateful_error_t::unavailable);
+            EXPECT_EQ (terminal->value ().second.has_value (), outcome == 0);
+        }
+        EXPECT_EQ (calls, 1u);
+    }
+}
+
+TEST (LocalEnqueueAllocations, PendingRecordedSourceKeepsItsInputAndFailure)
+{
+    using namespace fw;
+    using namespace fw::runtime;
+    using descriptor_t = std::shared_ptr<const mesh_node_descriptor_t>;
+    for (const bool fail : {false, true}) {
+        auto runtime = make_host ();
+        const auto lookup = std::make_shared<mesh::request_source_lookup_state_t> ();
+        unsigned starts = 0;
+        lookup->start = [&] (const auto &) { ++starts; };
+        auto pending = [&] {
+            stateful::accepted_record_authority_query_t query;
+            query.target = {
+              stateful::object_kind_t::user_spot, "spot", 1, 1, "local-allocation", "n"};
+            query.target_node_routing_id = {'n'};
+            query.target_node_generation = 1;
+            query.source_node_routing_id = {'s'};
+            query.source_node_generation = 7;
+            query.source_original = lookup;
+            return runtime->accepted_record_authority (
+              std::move (query),
+              std::make_shared<const location_owner_token_t> (location_owner_token_t{"target", 3}));
+        }();
+        ASSERT_FALSE (pending.await_ready ());
+        EXPECT_EQ (starts, 1u);
+        if (fail)
+            lookup->completion.complete (result_t<descriptor_t>::failure (
+              framework_error_kind_t::unavailable, "pending source failure"));
+        else {
+            auto source = std::make_shared<mesh_node_descriptor_t> ();
+            source->owner_id = "source";
+            source->lease_generation = 2;
+            lookup->completion.complete (result_t<descriptor_t>::success (std::move (source)));
+        }
+        const auto terminal = pending.result_for (std::chrono::seconds (5));
+        ASSERT_TRUE (terminal.has_value ());
+        if (fail) {
+            EXPECT_FALSE (*terminal);
+            EXPECT_EQ (terminal->error_kind (), framework_error_kind_t::unavailable);
+        } else {
+            ASSERT_TRUE (*terminal);
+            ASSERT_TRUE (terminal->value ().has_value ());
+            EXPECT_EQ (terminal->value ()->source.owner_id, "source");
+            EXPECT_EQ (terminal->value ()->source.node_routing_id, std::vector<std::uint8_t>{'s'});
+            EXPECT_EQ (terminal->value ()->source.node_generation, 7u);
+            EXPECT_EQ (terminal->value ()->target_owner_lease_generation, 3u);
+        }
+        EXPECT_EQ (starts, 1u);
+    }
+}
+
+TEST (LocalEnqueueAllocations, IdleActorNotificationAddsOnlyMailboxAndClaimStorage)
+{
+    using namespace fw;
+    using namespace fw::runtime;
+    stateful_spot_fixture_t fixture (serial_lane_policy_t::spot_wide ());
+    auto &runtime = fixture.runtime;
+    auto &objects = runtime->objects ();
+    auto &dispatch = host::public_host_runtime_test_access_t::stateful_dispatch (*runtime);
+    const auto idle = [&] {
+        auto pending = runtime->dispatch_ready ([] (const auto &, const auto &, auto) {});
+        ASSERT_TRUE (pending.await_ready ());
+        EXPECT_EQ (pending.result ().value (), 0u);
+    };
+    const auto inventory = [&] {
+        auto pending = objects.inventory_async ();
+        ASSERT_TRUE (pending.await_ready ());
+        const auto owners = pending.await_resume ();
+        EXPECT_FALSE (owners.empty ());
+    };
+    idle ();
+    inventory ();
+    const auto empty = tests::measure_allocations (idle);
+    const auto inventory_before = tests::measure_allocations (inventory);
+    auto actor = runtime->create_actor ("player", "actor");
+    const auto owners = objects.inventory_async ().result ().value ();
+    const auto found = std::find_if (owners.begin (), owners.end (), [] (const auto &owner) {
+        return owner.owner.kind == stateful::object_kind_t::actor && owner.owner.key == "actor";
+    });
+    ASSERT_NE (found, owners.end ());
+    const auto object = found->owner;
+    idle ();
+    inventory ();
+    const auto inventory_after = tests::measure_allocations (inventory);
+    const auto measured = tests::measure_allocations (idle);
+    // Calibrate the owning APIs and the callback's captured input on this ABI.
+    // Forwarding their ready result must not add another coroutine or result state.
+    const auto claim = tests::measure_allocations ([&] {
+        std::function<void ()> before;
+        std::string stable_type;
+        const auto result = dispatch.try_claim (object, &before, &stable_type);
+        EXPECT_EQ (result.first, stateful::stateful_error_t::none);
+        EXPECT_FALSE (result.second.has_value ());
+    });
+    const auto notification = tests::measure_allocations ([&] {
+        auto pending = runtime->transport ().mailbox ().notify_stateful_ready (
+          object.key, [weak = runtime->weak_from_this (), object] (const auto &callback) {
+              return weak.lock () && !object.key.empty () && static_cast<bool> (callback);
+          });
+        ASSERT_TRUE (pending.await_ready ());
+        EXPECT_FALSE (pending.result ().value ());
+    });
+    const auto result = tests::measure_allocations ([] {
+        const task_t<bool> ready (result_t<bool>::success (false));
+        EXPECT_TRUE (ready.await_ready ());
+    });
+    const auto expected_count =
+      empty.count + inventory_after.count + claim.count + notification.count + result.count;
+    const auto expected_bytes =
+      empty.bytes + inventory_after.bytes + claim.bytes + notification.bytes + result.bytes;
+    std::printf ("idle Actor notification: actual=%zu/%zu expected=%zu/%zu; "
+                 "inventory delta=%zu/%zu claim=%zu/%zu mailbox=%zu/%zu result=%zu/%zu\n",
+                 measured.count, measured.bytes, expected_count - inventory_before.count,
+                 expected_bytes - inventory_before.bytes,
+                 inventory_after.count - inventory_before.count,
+                 inventory_after.bytes - inventory_before.bytes, claim.count, claim.bytes,
+                 notification.count, notification.bytes, result.count, result.bytes);
+    EXPECT_LE (measured.count + inventory_before.count, expected_count);
+    EXPECT_LE (measured.bytes + inventory_before.bytes, expected_bytes);
+}
+
+TEST (LocalEnqueueAllocations, IdleManagementDoesNotAllocateInfrastructureBatchStorage)
+{
+    using namespace fw;
+    using namespace fw::runtime;
+    auto runtime = make_host ();
+    std::array<unsigned, 8> seen{};
+    std::size_t seen_count = 0;
+    runtime->configure_message_follow_handler ([&] (const auto &notice) {
+        ASSERT_LT (seen_count, seen.size ());
+        seen[seen_count++] = notice.queued_messages;
+    });
+    const auto enqueue = [&] (unsigned sequence) {
+        const protocol::spot_route_fence_t source{"source", 1, {'n'}, 1, 1, 1};
+        const protocol::spot_route_fence_t target{"target", 1, {'n'}, 1, 1, 1};
+        const protocol::message_follow_notice_t notice{source, target,        1, sequence,
+                                                       1,      {1, sequence}, 0};
+        mesh::service_mailbox_record_t record;
+        record.domain = mesh::service_mailbox_domain_t::infrastructure;
+        record.owner = "management";
+        record.source_routing_id = {'n'};
+        record.source_node_generation = 1;
+        record.parts.push_back (zlink::message_t::from (protocol::encode_message_follow (notice)));
+        ASSERT_TRUE (runtime->transport ().mailbox ().try_enqueue (std::move (record)));
+    };
+    std::array<tests::allocation_event_t, 256> events{};
+    const auto drain = [&] (std::size_t expected_records) {
+        tests::allocation_event_log_t log{events.data (), events.size ()};
+        const auto previous = tests::allocation_event_log;
+        tests::allocation_event_log = &log;
+        const auto measured = tests::measure_allocations ([&] {
+            auto task = runtime->dispatch_ready ([] (const auto &, const auto &, auto) {}, false);
+            ASSERT_TRUE (task.await_ready ());
+            EXPECT_EQ (task.result ().value (), expected_records);
+        });
+        tests::allocation_event_log = previous;
+        EXPECT_FALSE (log.overflow);
+        const auto largest_count =
+          std::count_if (events.begin (), events.begin () + log.count,
+                         [&] (const auto &event) { return event.size == measured.largest; });
+        EXPECT_EQ (runtime->transport ().mailbox ().pending_messages (
+                     mesh::service_mailbox_domain_t::infrastructure),
+                   0u);
+        return std::pair{measured, largest_count};
+    };
+    (void) drain (0);
+    enqueue (1);
+    (void) drain (1);
+    seen_count = 0;
+    const auto [idle, idle_largest_count] = drain (0);
+    enqueue (2);
+    const auto [single, single_largest_count] = drain (1);
+    enqueue (3);
+    enqueue (4);
+    const auto [multiple, multiple_largest_count] = drain (2);
+    ASSERT_EQ (seen_count, 3u);
+    EXPECT_EQ (seen[0], 2u);
+    EXPECT_EQ (seen[1], 3u);
+    EXPECT_EQ (seen[2], 4u);
+    std::printf ("management allocation count/bytes/largest: idle=%zu/%zu/%zu "
+                 "one record=%zu/%zu/%zu two records=%zu/%zu/%zu; largest counts=%zu/%zu/%zu\n",
+                 idle.count, idle.bytes, idle.largest, single.count, single.bytes, single.largest,
+                 multiple.count, multiple.bytes, multiple.largest,
+                 static_cast<std::size_t> (idle_largest_count),
+                 static_cast<std::size_t> (single_largest_count),
+                 static_cast<std::size_t> (multiple_largest_count));
+    // The actual cold batch supplies the frame-size baseline on this ABI.
+    // An empty management turn must not allocate that record-processing storage.
+    EXPECT_LT (idle.largest, single.largest);
+    EXPECT_LE (idle.bytes + single.largest, single.bytes);
+    EXPECT_EQ (single.largest, multiple.largest);
+    EXPECT_EQ (single_largest_count, 1);
+    EXPECT_EQ (multiple_largest_count, 1);
+}
+
+TEST (LocalEnqueueAllocations, NativeSpotPublicationMovesCanonicalRecordStorage)
+{
+    using namespace fw;
+    using namespace fw::runtime;
+    struct reply_probe_t
+    {
+        std::size_t *copies;
+        std::size_t *calls;
+        std::array<unsigned char, 128> storage{};
+        reply_probe_t (std::size_t &copy_count, std::size_t &call_count) :
+            copies (&copy_count), calls (&call_count)
+        {
+        }
+        reply_probe_t (const reply_probe_t &other) :
+            copies (other.copies), calls (other.calls), storage (other.storage)
+        {
+            ++*copies;
+        }
+        reply_probe_t (reply_probe_t &&) = default;
+        bool operator() (const std::vector<zlink::message_t> &) const
+        {
+            ++*calls;
+            return true;
+        }
+    };
+    auto runtime = make_host ();
+    const std::string spot_id (97, 's');
+    const stateful::object_ref_t object{
+      stateful::object_kind_t::user_spot, spot_id, 1, 1, "local-allocation", "n"};
+    runtime->configure_stateful_dispatch ([] (const auto &) {
+        return task_t<std::optional<stateful::accepted_record_authority_t>> (
+          result_t<std::optional<stateful::accepted_record_authority_t>>::success (
+            stateful::accepted_record_authority_t{{"source", 1, {'n'}, 1}, 1}));
+    });
+    const auto created = begin_reserved_object (runtime->objects (), object, "framework.spot", {});
+    ASSERT_EQ (created.error, stateful::stateful_error_t::none);
+    ASSERT_EQ (runtime->objects ().commit_create (created.attempt),
+               stateful::stateful_error_t::none);
+    offload_executor_t worker (1, "native-copy-test");
+    auto gate = std::make_shared<serial_execution_queue_t> (
+      worker, serial_execution_queue_options_t{}, serial_execution_queue_t::error_handler_t{},
+      serial_lane_policy_t::spot_wide ());
+    runtime->configure_relocation_gate ([gate] (const auto &) {
+        return task_t<std::shared_ptr<serial_execution_queue_t>> (
+          result_t<std::shared_ptr<serial_execution_queue_t>>::success (gate));
+    });
+    runtime->start ();
+    auto application = std::make_shared<host::local_application_dispatch_t> ();
+    application->owner.owner_kind = host::owner_kind_t::spot;
+    application->owner.spot_id = spot_id;
+    application->owner.channel_name = std::string (127, 'c');
+    auto &record = application->record;
+    record.kind = host::record_kind_t::spot_request;
+    record.operation_id = {1, 55};
+    record.source_node_rid = zlink::routing_id_t::from ("n");
+    record.spot_route = protocol::spot_route_fence_t{spot_id, 1, {'n'}, 1, 1, 1};
+    record.reply_route_id = 55;
+    record.channel_name = std::string (131, 'd');
+    record.topic = std::string (137, 't');
+    std::size_t copies = 0, replies = 0;
+    record.reply_token.host = runtime;
+    record.reply_token.local_reply = reply_probe_t (copies, replies);
+    application->parts.push_back (zlink::message_t::from ("payload"));
+    const auto token_storage = tests::measure_allocations ([&] {
+        const auto token = record.reply_token;
+        EXPECT_TRUE (static_cast<bool> (token.local_reply));
+    });
+    copies = 0;
+    {
+        const auto token = record.reply_token;
+        EXPECT_TRUE (static_cast<bool> (token.local_reply));
+    }
+    const auto token_copies = copies;
+    ASSERT_EQ (token_copies, 1u);
+    mesh::service_mailbox_record_t original;
+    original.owner = mesh::service_mailbox_t::application_owner (application->owner);
+    original.domain = mesh::service_mailbox_domain_t::application;
+    original.source_routing_id = {'n'};
+    original.source_node_generation = 1;
+    original.correlation = 55;
+    original.operation = std::pair<std::uint64_t, std::uint64_t>{1, 55};
+    original.application = std::move (application);
+    ASSERT_TRUE (runtime->transport ().mailbox ().try_enqueue (std::move (original)));
+    copies = 0;
+    std::size_t handled = 0;
+    const auto measured = tests::measure_allocations ([&] {
+        auto drained =
+          runtime->dispatch_ready ([&] (const auto &owner, const auto &received, auto parts) {
+              ++handled;
+              EXPECT_EQ (owner.spot_id, spot_id);
+              EXPECT_EQ (owner.channel_name.size (), 127u);
+              EXPECT_EQ (received.channel_name.size (), 131u);
+              EXPECT_EQ (received.topic.size (), 137u);
+              EXPECT_EQ (received.operation_id.low, 55u);
+              ASSERT_TRUE (received.application_record);
+              ASSERT_TRUE (static_cast<bool> (received.reply_token.local_reply));
+              EXPECT_TRUE (received.reply_token.local_reply (parts));
+              received.application_record->release_native_claim ();
+          });
+        EXPECT_EQ (drained.result ().value (), 1u);
+    });
+    EXPECT_EQ (handled, 1u);
+    EXPECT_EQ (replies, 1u);
+    EXPECT_EQ (runtime->transport ().mailbox ().pending_messages (
+                 mesh::service_mailbox_domain_t::application),
+               0u);
+    EXPECT_EQ (
+      runtime->transport ().mailbox ().pending_bytes (mesh::service_mailbox_domain_t::application),
+      0u);
+    std::printf ("native canonical record: drain=%zu/%zu callback copies=%zu "
+                 "token baseline copies=%zu allocation=%zu/%zu\n",
+                 measured.count, measured.bytes, copies, token_copies, token_storage.count,
+                 token_storage.bytes);
+    EXPECT_EQ (copies, token_copies);
+    runtime->close ();
+    worker.drain ();
 }
 
 TEST (LocalEnqueueAllocations, StatefulSpotDrainRecordContinuationStaysWithinRecordStorage)
@@ -560,6 +1029,8 @@ TEST (LocalEnqueueAllocations, StatefulSpotDrainAdmitsOnceAndStaysOnIdleGateCall
         ASSERT_TRUE (count.has_value ());
         EXPECT_EQ (count->value (), 1u);
         EXPECT_EQ (handled, 1u);
+        EXPECT_TRUE (ready);
+        EXPECT_EQ (off_caller, 0u);
         // The native publication asks the gate; the owner claim does not ask it again.
         EXPECT_EQ (fixture.gate_lookups->load () - lookups_before, 1u);
         const auto idle_before = fixture.gate_lookups->load ();
@@ -578,3 +1049,104 @@ TEST (LocalEnqueueAllocations, StatefulSpotDrainAdmitsOnceAndStaysOnIdleGateCall
     }
 }
 } // namespace
+
+TEST (LocalEnqueueAllocations, ReadyNativePublicationMovesFinalIdentityStorage)
+{
+    using namespace fw;
+    using namespace fw::runtime;
+    auto runtime = make_host ();
+    const stateful::object_ref_t object{
+      stateful::object_kind_t::user_spot, std::string (197, 'k'), 1, 1, "local-allocation", "n"};
+    runtime->configure_stateful_dispatch ([] (const auto &) {
+        return task_t<std::optional<stateful::accepted_record_authority_t>> (
+          result_t<std::optional<stateful::accepted_record_authority_t>>::success (
+            stateful::accepted_record_authority_t{{"source", 1, {'n'}, 1}, 1}));
+    });
+    const auto created = begin_reserved_object (runtime->objects (), object, "framework.spot", {});
+    ASSERT_EQ (created.error, stateful::stateful_error_t::none);
+    ASSERT_EQ (runtime->objects ().commit_create (created.attempt),
+               stateful::stateful_error_t::none);
+    const protocol::spot_route_fence_t route{object.key, 1, {'n'}, 1, 1, 1};
+    const auto key_storage = tests::measure_allocations ([&] {
+        const auto copied = object.key;
+        EXPECT_EQ (copied, object.key);
+    });
+    protocol::spot_message_header_t identity_header;
+    identity_header.target = route;
+    auto reused_route = route;
+    const auto required_copies = tests::count_allocations (
+      [&] {
+          // The projection and its ready result, plus admission's result, are
+          // required even if their allocation size shares this ABI's string bucket.
+          auto target = std::make_shared<serial_application_target_t> ();
+          const task_t<std::shared_ptr<serial_application_target_t>> prepared (
+            result_t<std::shared_ptr<serial_application_target_t>>::success (target));
+          const task_t<bool> admitted (result_t<bool>::success (true));
+          EXPECT_TRUE (prepared.await_ready ());
+          EXPECT_TRUE (admitted.await_ready ());
+          reused_route = identity_header.target;
+          const serial_application_record_t::spot_identity_t identity{std::move (identity_header),
+                                                                      {}};
+          EXPECT_EQ (identity.header.target.spot_id, object.key);
+      },
+      key_storage.largest);
+    std::size_t publication_begin = 0;
+    runtime->configure_relocation_gate (
+      {}, [&] (std::string, std::optional<protocol::spot_route_fence_t>) {
+          if (tests::allocation_event_log)
+              publication_begin = tests::allocation_event_log->count;
+          return task_t<std::shared_ptr<serial_application_target_t>> (
+            result_t<std::shared_ptr<serial_application_target_t>>::success (
+              std::make_shared<serial_application_target_t> ()));
+      });
+    const auto drain = [&] () {
+        auto application = std::make_shared<host::local_application_dispatch_t> ();
+        application->owner.owner_kind = host::owner_kind_t::spot;
+        application->owner.spot_id = object.key;
+        application->record.kind = host::record_kind_t::spot_send;
+        application->record.source_node_rid = zlink::routing_id_t::from ("n");
+        application->record.operation_id = {1, 9};
+        application->record.spot_route = route;
+        application->parts.push_back (zlink::message_t::from ("payload"));
+        mesh::service_mailbox_record_t original;
+        original.owner = mesh::service_mailbox_t::application_owner (application->owner);
+        const auto owner = original.owner;
+        original.domain = mesh::service_mailbox_domain_t::application;
+        original.application = std::move (application);
+        EXPECT_TRUE (runtime->transport ().mailbox ().try_enqueue (std::move (original)));
+        std::array<tests::allocation_event_t, 256> events{};
+        tests::allocation_event_log_t log{events.data (), events.size ()};
+        const auto previous_log = tests::allocation_event_log;
+        tests::allocation_event_log = &log;
+        unsigned handled = 0;
+        const auto cost = tests::measure_allocations ([&] {
+            auto pending = runtime->dispatch_application_owner (
+              owner,
+              [&] (const auto &, const auto &received, auto) {
+                  ++handled;
+                  const auto copied = std::count_if (
+                    events.begin () + publication_begin, events.begin () + log.count,
+                    [&] (const auto &event) { return event.size == key_storage.largest; });
+                  std::printf ("publication key-sized allocations=%zu required=%zu storage=%zu\n",
+                               static_cast<std::size_t> (copied), required_copies,
+                               key_storage.largest);
+                  EXPECT_LE (static_cast<std::size_t> (copied), required_copies);
+                  if (received.application_record)
+                      received.application_record->release_native_claim ();
+              },
+              [] {}, [] {});
+            EXPECT_TRUE (pending.await_ready ());
+            EXPECT_TRUE (pending.result ().value ());
+        });
+        tests::allocation_event_log = previous_log;
+        EXPECT_FALSE (log.overflow);
+        EXPECT_EQ (handled, 1u);
+        EXPECT_EQ (runtime->transport ().mailbox ().pending_messages (
+                     mesh::service_mailbox_domain_t::application),
+                   0u);
+        std::printf ("ready native owner count=%zu bytes=%zu\n", cost.count, cost.bytes);
+    };
+    drain ();
+    drain ();
+    runtime->close ();
+}

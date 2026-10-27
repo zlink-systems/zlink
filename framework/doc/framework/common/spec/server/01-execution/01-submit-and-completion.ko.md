@@ -237,7 +237,9 @@ admission 한 곳에서 한다.
   만들지 않는다.
 - 대상 RID의 Core 선택 route가 있고 그 route의 service admission이 끝났으면 남은 timeout으로 binding request를
   한 번 시작한다. 그 route와 무관한 다른 physical 연결의 실패는 이 route를 무효로 만들지 않으며, 이미 준비된
-  route를 쓰는 새 request를 과거 실패만으로 거부하지 않는다.
+  route를 쓰는 새 request를 과거 실패만으로 거부하지 않는다. 이 준비 판정은 관찰자가 이미 반영한 상태를 읽는 것으로
+  끝나며, 연결 상태 snapshot은 `ZLINK_POLLCONNECT`가 준비됐을 때만 읽는다. 아래 대기·기준값 처리는 준비되지 않은
+  request에만 적용한다.
 - 선택 route가 없고 대상 endpoint의 [연결 상태](../../../../../../../core/doc/spec/core/socket/README.ko.md#zlink_socket_connection_attempts_snapshot)가 `ATTEMPT_FAILED`이면
   즉시 `Unavailable`로 끝낸다. Core가 재연결하는 중이어도 기다리지 않는다.
 - 연결 상태가 `CONNECTING`이거나, 유효 descriptor는 있으나 Core 연결 행이 아직 없거나, Core 연결은 있으나 선택

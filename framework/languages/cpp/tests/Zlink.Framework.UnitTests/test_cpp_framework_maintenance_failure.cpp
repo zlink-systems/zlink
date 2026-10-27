@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+#include "../support/stateful_object_sync.hpp"
 #include "runtime/stateful/stateful_object_runtime.hpp"
 #include "runtime/spots/actor_transfer_coordinator.hpp"
 #include "runtime/stateful/public_host_runtime.hpp"
@@ -9,6 +10,8 @@
 #include <cstdlib>
 #include <new>
 #include <string>
+
+using zlink::framework::test::begin_reserved_object;
 
 namespace
 {
@@ -79,7 +82,7 @@ TEST (MaintenanceFailure, NativeInventoryFailureReleasesSourceSeal)
     for (std::size_t index = 0; index < inventory_count; ++index) {
         const st::object_ref_t object{
           st::object_kind_t::actor, std::to_string (index), 1, 1, "mesh", "source"};
-        const auto created = objects.begin_reserved_object (object, "actor", {});
+        const auto created = begin_reserved_object (objects, object, "actor", {});
         ASSERT_EQ (created.error, st::stateful_error_t::none);
         ASSERT_EQ (objects.commit_create (created.attempt), st::stateful_error_t::none);
     }

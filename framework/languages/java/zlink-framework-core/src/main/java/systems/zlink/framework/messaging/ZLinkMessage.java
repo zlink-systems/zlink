@@ -4,6 +4,7 @@ import systems.zlink.framework.ZLinkEncodedPayload;
 import systems.zlink.framework.ZLinkMessageSerializer;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.runtime.internal.messaging.ZLinkEncodedPayloadAccess;
 
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
@@ -69,7 +70,11 @@ public final class ZLinkMessage {
         Objects.requireNonNull(payload, "payload");
         Objects.requireNonNull(serializer, "serializer");
         return new ZLinkMessage(
-                null, payload, serializer, ZLinkMessage.class, payload.bytes().length == 0);
+                null,
+                payload,
+                serializer,
+                ZLinkMessage.class,
+                ZLinkEncodedPayloadAccess.borrow(payload).length == 0);
     }
 
     public boolean isEmpty() {

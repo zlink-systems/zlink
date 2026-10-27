@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Systems.Zlink.Framework.Runtime.Protocol;
+using Zlink.Framework.Runtime.Service;
 
 namespace Zlink.Framework.UnitTests.Runtime;
 
@@ -69,6 +70,180 @@ public sealed class GeneratedServiceWireCommandCodecConformanceTests
         }
         Assert.Equal(value, ServiceWireCodec.DecodeU64(bytes, Context).Value);
         Assert.Equal(bytes, ServiceWireCodec.EncodeU64(new(value), Context));
+    }
+
+    [Fact]
+    public void Stateful_generated_codec_allocates_only_output_storage()
+    {
+        using var fixture = ReadJson("golden/stateful-message-v1.json");
+        var frames = fixture
+            .RootElement.GetProperty("valid")[0]
+            .GetProperty("framesHex")
+            .EnumerateArray()
+            .Select(value => Convert.FromHexString(value.GetString()!))
+            .ToArray();
+        var decoded = ServiceWireCodec.DecodeSpotSend21(frames, Context);
+        var outputBytes = Allocated(() =>
+            new[] { new byte[frames[0].Length], new byte[frames[1].Length] }
+        );
+        var encodeBytes = Allocated(() => ServiceWireCodec.EncodeSpotSend21(decoded, Context));
+        // Decode owns the RID and payload bytes, and the decoded text strings.
+        var decodeOutputBytes =
+            Allocated(() => new byte[decoded.TargetSpot.TargetNodeRid.Value.Length])
+            + Allocated(() => new byte[decoded.Payload.Payload.Value.Length])
+            + Allocated(() => new string('x', decoded.SourceSpotId.Value.Length))
+            + Allocated(() => new string('x', decoded.TargetSpot.Spot.SpotId.Value.Length))
+            + Allocated(() => new string('x', decoded.Payload.PacketName.Value.Length))
+            + Allocated(() => new string('x', decoded.Payload.ContentType.Value.Length));
+        var decodeBytes = Allocated(() => ServiceWireCodec.DecodeSpotSend21(frames, Context));
+        Assert.True(encodeBytes <= outputBytes, $"encode={encodeBytes}, output={outputBytes}");
+        Assert.True(
+            decodeBytes <= decodeOutputBytes,
+            $"decode={decodeBytes}, output={decodeOutputBytes}"
+        );
+    }
+
+    [Fact]
+    public void Metadata_encoder_allocates_output_and_one_uniqueness_set()
+    {
+        using var fixture = ReadJson("golden/stateful-message-v1.json");
+        var bytes = Convert.FromHexString(
+            fixture.RootElement.GetProperty("valid")[1].GetProperty("framesHex")[1].GetString()!
+        );
+        var value = ServiceWireCodec.DecodeMetadataFrame(bytes, Context);
+        var expected =
+            Allocated(() => new byte[bytes.Length])
+            + Allocated(() => new HashSet<string>(value.Entries.Count, StringComparer.Ordinal));
+        var actual = Allocated(() => ServiceWireCodec.EncodeMetadataFrame(value, Context));
+        Assert.True(actual <= expected, $"metadata encode={actual}, output and set={expected}");
+        Assert.Equal(bytes, ServiceWireCodec.EncodeMetadataFrame(value, Context));
+        Assert.Throws<InvalidDataException>(() =>
+            ServiceWireCodec.EncodeMetadataFrame(new([value.Entries[0], value.Entries[0]]), Context)
+        );
+    }
+
+    [Theory]
+    [InlineData(21)]
+    [InlineData(22)]
+    [InlineData(24)]
+    [InlineData(25)]
+    public void Stateful_runtime_header_allocates_only_retained_storage(int command)
+    {
+        using var fixture = ReadJson("golden/stateful-message-v1.json");
+        foreach (var vector in fixture.RootElement.GetProperty("valid").EnumerateArray())
+        {
+            if (vector.GetProperty("commandId").GetInt32() != command)
+                continue;
+            var header = Convert.FromHexString(vector.GetProperty("framesHex")[0].GetString()!);
+            Assert.True(
+                ZLinkServiceWireCodec.TryDecodeStateful(header, "mesh", out var record, out _)
+            );
+            byte[] Encode() =>
+                command < 24
+                    ? ZLinkServiceWireCodec.EncodeSpot(
+                        record.Command,
+                        record.Correlation,
+                        record.OperationId,
+                        record.SourceSpotId,
+                        record.TargetSpotId,
+                        record.TargetSpotGeneration,
+                        record.TargetNodeRid,
+                        record.TargetNodeGeneration,
+                        record.AuthorityOwnerGeneration,
+                        record.OwnerLeaseGeneration,
+                        record.HasMetadata,
+                        record.MessageFollowHopCount
+                    )
+                    : ZLinkServiceWireCodec.EncodeActor(
+                        record.Command,
+                        record.Correlation,
+                        record.OperationId,
+                        record.TargetActor,
+                        record.TargetNodeRid,
+                        record.TargetNodeGeneration,
+                        record.AuthorityOwnerGeneration,
+                        record.OwnerLeaseGeneration,
+                        record.HasMetadata,
+                        record.MessageFollowHopCount,
+                        record.SourceActor
+                    );
+            Assert.Equal(header, Encode());
+            var encodeOutput = Allocated(() => new byte[header.Length]);
+            var encode = Allocated(Encode);
+            var source =
+                command < 24 ? record.SourceSpotId : record.SourceActor?.ActorId ?? string.Empty;
+            var target = command < 24 ? record.TargetSpotId : record.TargetActor.ActorId;
+            var decodeOutput =
+                Allocated(() => new byte[record.TargetNodeRid.Size])
+                + Allocated(() => new string('x', source.Length))
+                + Allocated(() => new string('x', target.Length));
+            var decode = Allocated(() =>
+            {
+                ZLinkServiceWireCodec.TryDecodeStateful(header, "mesh", out var value, out _);
+                return value;
+            });
+            Assert.True(
+                encode <= encodeOutput,
+                $"command={command}, encode={encode}, output={encodeOutput}"
+            );
+            Assert.True(
+                decode <= decodeOutput,
+                $"command={command}, decode={decode}, output={decodeOutput}"
+            );
+        }
+    }
+
+    [Fact]
+    public void Stateful_header_preserves_maximum_utf8_fields()
+    {
+        var source = new string('é', 127);
+        var target = new string('가', 85);
+        var rid = RoutingId.From(new byte[byte.MaxValue]);
+        var header = ZLinkServiceWireCodec.EncodeSpot(
+            ServiceWireConstants.Command.SpotSend,
+            0,
+            new(2, 3),
+            source,
+            target,
+            5,
+            rid,
+            6,
+            7,
+            8,
+            false
+        );
+        Assert.True(ZLinkServiceWireCodec.TryDecodeStateful(header, "mesh", out var value, out _));
+        Assert.Equal(source, value.SourceSpotId);
+        Assert.Equal(target, value.TargetSpotId);
+        Assert.Equal(rid, value.TargetNodeRid);
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            ZLinkServiceWireCodec.EncodeSpot(
+                ServiceWireConstants.Command.SpotSend,
+                0,
+                new(2, 3),
+                source + "é",
+                target,
+                5,
+                rid,
+                6,
+                7,
+                8,
+                false
+            )
+        );
+    }
+
+    private static long Allocated<T>(Func<T> action)
+    {
+        for (var index = 0; index < 1000; index++)
+            action();
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        T last = default!;
+        for (var index = 0; index < 1000; index++)
+            last = action();
+        var bytes = GC.GetAllocatedBytesForCurrentThread() - before;
+        GC.KeepAlive(last);
+        return bytes / 1000;
     }
 
     [Fact]
@@ -424,7 +599,7 @@ public sealed class GeneratedServiceWireCommandCodecConformanceTests
         });
         Assert.Equal(
             chunks.SelectMany(item => Convert.FromHexString(item.GetString()!)).ToArray(),
-            ServiceWireCodec.EncodeLogicalRelocationEnvelopeV1(complete, ContextFor(vector))
+            ServiceWireCodec.EncodeLogicalRelocationEnvelopeV1(complete.Value, ContextFor(vector))
         );
     }
 
@@ -714,7 +889,7 @@ public sealed class GeneratedServiceWireCommandCodecConformanceTests
     private static ServiceWireCodec.DescriptorExtension Descriptor(JsonElement input)
     {
         T? Optional<T>(string name, Func<JsonElement, T> create)
-            where T : class =>
+            where T : struct =>
             input.TryGetProperty(name, out var value) && value.ValueKind != JsonValueKind.Null
                 ? create(value)
                 : null;

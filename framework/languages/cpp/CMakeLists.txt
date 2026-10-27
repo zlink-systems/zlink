@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(zlink_framework_cpp VERSION 0.30.2 LANGUAGES C CXX)
+project(zlink_framework_cpp VERSION 0.30.3 LANGUAGES C CXX)
 add_compile_definitions($<$<CONFIG:Debug>:ZLINK_FRAMEWORK_DEBUG_WAIT_GUARD>)
 set(ZLINK_FRAMEWORK_CPP_DIR "${CMAKE_CURRENT_LIST_DIR}")
 include("${ZLINK_FRAMEWORK_CPP_DIR}/cmake/zlink-cpp-project-defaults.cmake")
@@ -1463,6 +1463,14 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     zlink::framework
     zlink::stream_connector
     Threads::Threads)
+  get_target_property(_zlink_connect_count_binding_type zlink::cpp TYPE)
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND
+      _zlink_connect_count_binding_type STREQUAL "STATIC_LIBRARY")
+    target_compile_definitions(zlink_cpp_framework_mesh_node_vertical_test PRIVATE
+      ZLINK_TEST_CONNECT_COUNT)
+    target_link_options(zlink_cpp_framework_mesh_node_vertical_test PRIVATE
+      -Wl,--wrap=zlink_connect -Wl,--wrap=zlink_disconnect)
+  endif()
   zlink_framework_cpp_add_boost_headers(
     zlink_cpp_framework_mesh_node_vertical_test)
   zlink_framework_cpp_add_test(
@@ -1470,6 +1478,11 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     COMMAND zlink_cpp_framework_mesh_node_vertical_test
     LABELS "framework-unit;framework-zlink;framework-zlink-channel;framework-zlink-spot;framework-zlink-actor-gateway"
     TIMEOUT 30)
+  zlink_framework_cpp_add_test(
+    NAME zlink_cpp_framework_connect_intent_test
+    COMMAND zlink_cpp_framework_mesh_node_vertical_test --connect-intent
+    LABELS "framework-contract"
+    TIMEOUT 10)
 
   find_package(GTest QUIET)
   if(NOT GTest_FOUND)
@@ -2449,8 +2462,10 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   add_zlink_framework_test(
     test_cpp_framework_actor_header_allocations
     tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_header_allocations.cpp
-    "framework-unit;framework-regression;messaging")
+    "framework-unit;framework-regression;messaging;stream")
   target_use_zlink_gtest_main(test_cpp_framework_actor_header_allocations)
+  target_include_directories(test_cpp_framework_actor_header_allocations PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   target_sources(test_cpp_framework_actor_header_allocations PRIVATE
     tests/support/allocation_counter.cpp)
   add_zlink_framework_test(
@@ -2470,6 +2485,15 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_sources(test_cpp_framework_local_enqueue_allocations PRIVATE
     tests/support/allocation_counter.cpp)
   target_include_directories(test_cpp_framework_local_enqueue_allocations PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  add_zlink_framework_test(
+    test_cpp_framework_owner_inventory
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_owner_inventory.cpp
+    "framework-unit;framework-regression;messaging")
+  target_use_zlink_gtest_main(test_cpp_framework_owner_inventory)
+  target_sources(test_cpp_framework_owner_inventory PRIVATE
+    tests/support/allocation_counter.cpp)
+  target_include_directories(test_cpp_framework_owner_inventory PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   add_zlink_framework_test(
     test_cpp_framework_messaging

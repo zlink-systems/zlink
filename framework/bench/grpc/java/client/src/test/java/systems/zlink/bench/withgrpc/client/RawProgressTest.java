@@ -17,6 +17,8 @@ import systems.zlink.contracts.sockets.RecvFlags;
 import systems.zlink.contracts.sockets.RouterSocket;
 
 import java.nio.charset.StandardCharsets;
+import java.net.InetSocketAddress;
+import com.sun.net.httpserver.HttpServer;
 import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
@@ -25,71 +27,80 @@ import java.util.concurrent.atomic.AtomicBoolean;
 /** Real socket coverage for uncapped progress and phase-local poller ownership. */
 public final class RawProgressTest {
     public static void main(String[] args) throws Exception {
-        BenchOptions options =
-                new BenchOptions(
-                        new String[] {
-                            "--scenario", "request-backpressure", "--implementation", "zlink-java",
-                            "--run-id", "raw-progress-test", "--cell-id", "raw-progress-test",
-                            "--trigger-url", "http://127.0.0.1:1", "--stats-url",
-                                    "http://127.0.0.1:2",
-                            "--target-stats-url", "http://127.0.0.1:3"
-                        });
-        String endpoint = "inproc://raw-progress-test";
-        String peer = "raw-progress-server";
-        AtomicBoolean running = new AtomicBoolean(true);
-        CompletableFuture<Void> serverDone = new CompletableFuture<>();
-        try (Context context = Zlink.createContext();
-                RouterSocket server = context.createRouterSocket()) {
-            server.setRoutingId(RoutingId.from(peer.getBytes(StandardCharsets.US_ASCII)));
-            server.options().mandatory(true);
-            server.bind(endpoint);
-            Thread.ofPlatform()
-                    .name("raw-progress-test-server")
-                    .start(
-                            () -> {
-                                try {
-                                    serve(server, running);
-                                    serverDone.complete(null);
-                                } catch (Exception error) {
-                                    serverDone.completeExceptionally(error);
-                                }
+        HttpServer stats = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        stats.createContext("/bench/", exchange -> {
+            byte[] body = "{\"received\":0,\"errors\":0}".getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, body.length);
+            try (var output = exchange.getResponseBody()) { output.write(body); }
+        });
+        stats.start();
+        try {
+            BenchOptions options =
+                    new BenchOptions(
+                            new String[] {
+                                "--scenario", "request-backpressure", "--implementation", "zlink-java",
+                                "--run-id", "raw-progress-test", "--cell-id", "raw-progress-test",
+                                "--trigger-url", "http://127.0.0.1:1", "--stats-url",
+                                        "http://127.0.0.1:2",
+                                "--target-stats-url", "http://127.0.0.1:" + stats.getAddress().getPort()
                             });
-            try (RawStack stack =
-                    RawStack.create(context, options, "raw-progress-client", peer, endpoint)) {
-                BenchDrivers drivers = new BenchDrivers(options);
-                RawStack.RawOperation request = stack.request();
-                drivers.waitForRouteReady(request, 1024);
-                BenchHttpApplication.Trigger trigger =
-                        new BenchHttpApplication.Trigger(
-                                options.runIdText,
-                                options.cellId,
-                                options.scenario,
-                                1024,
-                                "warmup",
-                                200,
-                                options.requestWindow,
-                                options.sendConcurrency);
-                drivers.runWarmup(trigger, request);
-                BenchHttpApplication.Counters first = drivers.counters();
-                check(
-                        first.peakInFlight() >= 2,
-                        "the next request must be submitted while the first reply is held");
-                checkDrained(first);
+            String endpoint = "inproc://raw-progress-test";
+            String peer = "raw-progress-server";
+            AtomicBoolean running = new AtomicBoolean(true);
+            CompletableFuture<Void> serverDone = new CompletableFuture<>();
+            try (Context context = Zlink.createContext();
+                    RouterSocket server = context.createRouterSocket()) {
+                server.setRoutingId(RoutingId.from(peer.getBytes(StandardCharsets.US_ASCII)));
+                server.options().mandatory(true);
+                server.bind(endpoint);
+                Thread.ofPlatform()
+                        .name("raw-progress-test-server")
+                        .start(
+                                () -> {
+                                    try {
+                                        serve(server, running);
+                                        serverDone.complete(null);
+                                    } catch (Exception error) {
+                                        serverDone.completeExceptionally(error);
+                                    }
+                                });
+                try (RawStack stack =
+                        RawStack.create(context, options, "raw-progress-client", peer, endpoint)) {
+                    BenchDrivers drivers = new BenchDrivers(options);
+                    RawStack.RawOperation request = stack.request();
+                    drivers.waitForRouteReady(request, 1024);
+                    BenchHttpApplication.Trigger trigger =
+                            new BenchHttpApplication.Trigger(
+                                    options.runIdText,
+                                    "raw-progress-test",
+                                    options.scenario,
+                                    1024,
+                                    "warmup",
+                                    200,
+                                    options.requestWindow,
+                                    options.sendConcurrency);
+                    drivers.runWarmup(trigger, request);
+                    BenchHttpApplication.Counters first = drivers.counters();
+                    check(
+                            first.peakInFlight() >= 2,
+                            "the next request must be submitted while the first reply is held");
+                    checkDrained(first);
 
-                // RawStack owns the completion poller for its lifetime. Serial
-                // calls use the same await path as the measured phases.
-                check(
-                        request.await(
-                                request.invoke(1024, BenchMetricHeader.PHASE_WARMUP, 100_000),
-                                Duration.ofSeconds(2)),
-                        "serial request did not complete");
-                drivers.runWarmup(trigger, request);
-                checkDrained(drivers.counters());
-            } finally {
-                running.set(false);
-                serverDone.get(2, TimeUnit.SECONDS);
+                    // RawStack owns the completion poller for its lifetime. Serial
+                    // calls use the same await path as the measured phases.
+                    check(
+                            request.await(
+                                    request.invoke(1024, BenchMetricHeader.PHASE_WARMUP, 100_000),
+                                    Duration.ofSeconds(2)),
+                            "serial request did not complete");
+                    drivers.runWarmup(trigger, request);
+                    checkDrained(drivers.counters());
+                } finally {
+                    running.set(false);
+                    serverDone.get(2, TimeUnit.SECONDS);
+                }
             }
-        }
+        } finally { stats.stop(0); }
         System.out.println("JAVA_RAW_PROGRESS_OK");
     }
 
