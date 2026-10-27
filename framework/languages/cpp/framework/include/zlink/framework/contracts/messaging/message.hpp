@@ -123,19 +123,12 @@ class message_t
     {
         message_t wrapped;
         auto raw_payload = std::make_shared<raw_payload_state_t> ();
-        raw_payload->message = std::move (message);
-        raw_payload->encoded = detail::encoded_payload_from_raw (raw_payload->message);
+        raw_payload->encoded = detail::encoded_payload_from_raw (std::move (message));
+        wrapped._decode = std::shared_ptr<decode_state_t> (raw_payload, &raw_payload->decode);
         wrapped._raw_payload = std::move (raw_payload);
-        wrapped._decode = std::make_shared<decode_state_t> ();
         wrapped._serializers = serializers;
         return wrapped;
     }
-
-    struct raw_payload_state_t
-    {
-        zlink::message_t message;
-        encoded_payload_t encoded;
-    };
 
     struct decode_state_t
     {
@@ -144,6 +137,12 @@ class message_t
         std::type_index type{typeid (void)};
         std::shared_ptr<const void> value;
         std::exception_ptr failure;
+    };
+
+    struct raw_payload_state_t
+    {
+        encoded_payload_t encoded;
+        decode_state_t decode;
     };
 
     template <typename TValue>
