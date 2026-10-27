@@ -139,8 +139,8 @@ class channel_host_service_t::server_loop_t
             apply_runtime_options ();
             drain_monitor_events ();
             const auto now = mesh::service_liveness_registry_t::clock_t::now ();
-            (void) _source->tick_liveness (now).result ().value ();
-            auto next = _source->next_liveness_activity_task ().result ().value ();
+            (void) _source->tick_liveness_owned (now);
+            auto next = _source->next_liveness_activity_owned ();
             const auto remaining = [&] {
                 return next
                          ? std::max (std::chrono::milliseconds::zero (),
@@ -182,9 +182,8 @@ class channel_host_service_t::server_loop_t
                     bytes += part.size ();
                 budget.account (bytes);
                 if (auto control = _source->consume_control (_received)) {
-                    (void) control->result ().value ();
                     _received.close ();
-                    next = _source->next_liveness_activity_task ().result ().value ();
+                    next = _source->next_liveness_activity_owned ();
                 } else {
                     if (next && _received.routing_id ()) {
                         mesh::service_mailbox_record_t record{};
@@ -200,7 +199,7 @@ class channel_host_service_t::server_loop_t
                 next_permit = (**permit).take ();
             }
             if (!activity.empty ())
-                _source->record_application_activity (activity).result ().value ();
+                _source->record_application_activity (activity);
         }
         if (_handler_executor)
             _handler_executor->drain ();
@@ -446,12 +445,12 @@ class channel_host_service_t::server_loop_t
         }
         _router->options ().peer_weight (
           zlink::peer_weight_t::value (static_cast<std::uint32_t> (std::min (*peer_weight, 100))));
-        auto descriptor = _source->descriptor ();
+        auto descriptor = _source->descriptor_owned ();
         if (descriptor.descriptor_revision == std::numeric_limits<std::uint64_t>::max ())
             throw std::overflow_error ("ClientServer descriptor revision is exhausted");
         ++descriptor.descriptor_revision;
         descriptor.weight = static_cast<std::uint32_t> (*peer_weight);
-        _source->update_descriptor (std::move (descriptor));
+        _source->update_descriptor_owned (std::move (descriptor));
         _applied_peer_weight = *peer_weight;
     }
 
@@ -471,7 +470,7 @@ class channel_host_service_t::server_loop_t
             if (!event) {
                 return;
             }
-            _source->observe_monitor_event (*event).result ().value ();
+            _source->observe_monitor_event (*event);
             const auto kind = detail::map_socket_monitor_event (event->event);
             if (!kind) {
                 continue;

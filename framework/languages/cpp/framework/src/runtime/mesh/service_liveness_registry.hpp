@@ -14,6 +14,11 @@
 #include <string>
 #include <vector>
 
+namespace zlink::framework::runtime::client_server
+{
+class raw_client_server_server_t;
+}
+
 namespace zlink::framework::runtime::mesh
 {
 
@@ -100,6 +105,27 @@ class service_liveness_registry_t
     std::size_t size () const;
 
   private:
+    // The raw server already serializes these operations in its receive owner
+    // (manual) or raw state lane (automatic). Re-entering a registry lane would
+    // add a second owner for exactly the same private state.
+    friend class client_server::raw_client_server_server_t;
+    connection_t admit_owned (std::vector<std::uint8_t> node_routing_id,
+                              std::vector<std::uint8_t> connection_id,
+                              clock_t::time_point now);
+    bool disconnect_owned (const std::vector<std::uint8_t> &node_routing_id,
+                           const std::vector<std::uint8_t> &connection_id);
+    bool acknowledge_owned (const std::vector<std::uint8_t> &node_routing_id,
+                            std::span<const std::uint8_t> connection_id,
+                            std::uint64_t probe_id,
+                            clock_t::time_point now);
+    std::optional<service_probe_t>
+    acknowledge_probe_owned (const std::vector<std::uint8_t> &node_routing_id,
+                             std::span<const std::uint8_t> connection_id,
+                             std::uint64_t probe_id) const;
+    service_liveness_tick_t tick_owned (clock_t::time_point now);
+    std::optional<clock_t::time_point> next_activity_owned () const;
+    static std::optional<clock_t::time_point> activity_from_due (clock_t::rep next);
+
     struct byte_vector_less_t
     {
         bool operator() (const std::vector<std::uint8_t> &left,
@@ -112,7 +138,7 @@ class service_liveness_registry_t
     mutable runtime::state_lane_t _lane;
     std::map<std::vector<std::uint8_t>, connection_t, byte_vector_less_t> _peers;
     std::uint64_t _next_probe_id = 1;
-    // Earliest instant a peer or admission retry can be due, written on the lane. A receive only
+    // Earliest instant a peer or admission retry can be due, written by its owner. A receive only
     // moves a deadline later, so the value stays an early bound. unknown_due
     // asks the next tick or next_activity to recompute it.
     static constexpr clock_t::rep unknown_due = std::numeric_limits<clock_t::rep>::min ();
@@ -120,7 +146,7 @@ class service_liveness_registry_t
     std::optional<clock_t::time_point> _admission_activity;
     static constexpr clock_t::rep never_due = std::numeric_limits<clock_t::rep>::max ();
     mutable std::atomic<clock_t::rep> _next_due{unknown_due};
-    void publish_next_due_on_lane () const;
+    void publish_next_due_owned () const;
 };
 
 } // namespace zlink::framework::runtime::mesh

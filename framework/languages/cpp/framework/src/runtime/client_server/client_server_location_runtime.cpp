@@ -1032,8 +1032,7 @@ task_t<bool> client_server_location_runtime_t::publish_servers_task (location_wr
     }
     bool published = true;
     for (auto &[channel_name, server] : _servers) {
-        const auto weight_override =
-          co_await _channel_runtime.server_peer_weight_override_task (channel_name);
+        const auto weight_override = _channel_runtime.server_peer_weight_override (channel_name);
         const auto weight = weight_override.value_or (server->capability.service_weight);
         const auto state = current_state (*_locations);
         const bool new_owner =

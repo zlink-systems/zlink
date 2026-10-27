@@ -253,7 +253,8 @@ class channel_runtime_state_t
      * route client reference can be released on one of its workers. */
     std::shared_ptr<runtime::offload_executor_t> route_client_executor;
     std::map<std::string, route_handler_registry_t> route_handlers;
-    std::map<std::string, int> server_peer_weight_overrides;
+    std::shared_ptr<const std::map<std::string, int>> server_peer_weight_overrides =
+      std::make_shared<const std::map<std::string, int>> ();
     std::function<void ()> server_options_changed;
     std::map<std::string, std::uint64_t> weighted_discovery_cursors;
     std::map<std::string, std::string> last_discovery_request_endpoints;
@@ -428,7 +429,6 @@ class channel_runtime_t
     void set_server_weight (const std::string &channel_name, int value);
     void bind_server_options_changed (std::function<void ()> notify);
     std::optional<int> server_peer_weight_override (const std::string &channel_name) const;
-    task_t<std::optional<int>> server_peer_weight_override_task (std::string channel_name) const;
 
     static channel_runtime_t from (const message_bus_t &bus);
 

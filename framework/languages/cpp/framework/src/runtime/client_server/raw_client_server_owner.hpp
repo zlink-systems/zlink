@@ -128,11 +128,17 @@ class raw_client_server_server_t
     std::optional<zlink::poll_event_flag_t> poll (std::chrono::milliseconds timeout,
                                                   bool accept_application_receive = true);
     void signal_activity () noexcept;
-    std::optional<task_t<client_server_pump_result_t>>
-    consume_control (const zlink::received_t &received);
-    task_t<void>
-    record_application_activity (const std::vector<received_application_record_t> &records);
-    task_t<void> observe_monitor_event (const zlink::monitor_event_t &event);
+    std::optional<client_server_pump_result_t> consume_control (const zlink::received_t &received);
+    void record_application_activity (const std::vector<received_application_record_t> &records);
+    void observe_monitor_event (const zlink::monitor_event_t &event);
+    // Caller owns the receive state: the manual ingress thread, or an
+    // automatic transport turn already serialized by this raw owner's lane.
+    protocol::client_server_server_admission_t descriptor_owned () const;
+    void update_descriptor_owned (protocol::client_server_server_admission_t descriptor);
+    mesh::service_liveness_tick_t
+    tick_liveness_owned (mesh::service_liveness_registry_t::clock_t::time_point now);
+    std::optional<mesh::service_liveness_registry_t::clock_t::time_point>
+    next_liveness_activity_owned () const;
     void close ();
     std::string endpoint () const;
     protocol::client_server_server_admission_t descriptor () const;
@@ -166,8 +172,10 @@ class raw_client_server_server_t
                         const framework_exception_t &error);
 
   private:
-    bool record_application_activity_in_lane (const received_application_record_t &received);
-    task_t<client_server_pump_result_t>
+    std::size_t
+    drain_monitor_events_owned (mesh::service_liveness_registry_t::clock_t::time_point now);
+    bool record_application_activity_in_owner (const received_application_record_t &received);
+    client_server_pump_result_t
     process_control_received (detail::backend::raw_received_t received,
                               mesh::service_liveness_registry_t::clock_t::time_point now);
     task_t<client_server_pump_result_t> enqueue_application_record (

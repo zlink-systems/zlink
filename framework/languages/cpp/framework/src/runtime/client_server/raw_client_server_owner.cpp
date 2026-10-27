@@ -341,7 +341,12 @@ protocol::client_server_server_admission_t raw_client_server_server_t::descripto
 task_t<protocol::client_server_server_admission_t>
 raw_client_server_server_t::descriptor_task () const
 {
-    return _lane.run_task ([this] { return _options.descriptor; });
+    return _lane.run_task ([this] { return descriptor_owned (); });
+}
+
+protocol::client_server_server_admission_t raw_client_server_server_t::descriptor_owned () const
+{
+    return _options.descriptor;
 }
 
 void raw_client_server_server_t::update_descriptor (
@@ -353,24 +358,28 @@ void raw_client_server_server_t::update_descriptor (
 task_t<void> raw_client_server_server_t::update_descriptor_task (
   protocol::client_server_server_admission_t descriptor)
 {
-    co_await _lane.run_task ([this, descriptor = std::move (descriptor)] () mutable {
-        if (descriptor.channel_name != _options.descriptor.channel_name
-            || descriptor.server_routing_id != _options.descriptor.server_routing_id
-            || descriptor.lifecycle_generation != _options.descriptor.lifecycle_generation
-            || descriptor.security_identity != _options.descriptor.security_identity
-            || descriptor.advertised_endpoint != _options.descriptor.advertised_endpoint
-            || descriptor.descriptor_revision <= _options.descriptor.descriptor_revision) {
-            throw std::invalid_argument (
-              "ClientServer descriptor update violates its immutable fence");
-        }
-        // Keep channel_name's storage immutable for the receive path off the lane.
-        _options.descriptor.descriptor_revision = descriptor.descriptor_revision;
-        _options.descriptor.weight = descriptor.weight;
-        _options.descriptor.state = descriptor.state;
-        _options.descriptor.effective_max_message_bytes = descriptor.effective_max_message_bytes;
-        _descriptor_update_pending = true;
-        return true;
+    return _lane.run_task ([this, descriptor = std::move (descriptor)] () mutable {
+        update_descriptor_owned (std::move (descriptor));
     });
+}
+
+void raw_client_server_server_t::update_descriptor_owned (
+  protocol::client_server_server_admission_t descriptor)
+{
+    if (descriptor.channel_name != _options.descriptor.channel_name
+        || descriptor.server_routing_id != _options.descriptor.server_routing_id
+        || descriptor.lifecycle_generation != _options.descriptor.lifecycle_generation
+        || descriptor.security_identity != _options.descriptor.security_identity
+        || descriptor.advertised_endpoint != _options.descriptor.advertised_endpoint
+        || descriptor.descriptor_revision <= _options.descriptor.descriptor_revision) {
+        throw std::invalid_argument ("ClientServer descriptor update violates its immutable fence");
+    }
+    // Keep channel_name's storage immutable for the receive path off the lane.
+    _options.descriptor.descriptor_revision = descriptor.descriptor_revision;
+    _options.descriptor.weight = descriptor.weight;
+    _options.descriptor.state = descriptor.state;
+    _options.descriptor.effective_max_message_bytes = descriptor.effective_max_message_bytes;
+    _descriptor_update_pending = true;
 }
 
 mesh::service_mailbox_t &raw_client_server_server_t::mailbox () noexcept
@@ -387,17 +396,20 @@ std::size_t raw_client_server_server_t::drain_monitor_events (
 task_t<std::size_t> raw_client_server_server_t::drain_monitor_events_task (
   mesh::service_liveness_registry_t::clock_t::time_point now)
 {
+    return _lane.run_task ([this, now] { return drain_monitor_events_owned (now); });
+}
+
+std::size_t raw_client_server_server_t::drain_monitor_events_owned (
+  mesh::service_liveness_registry_t::clock_t::time_point now)
+{
     static_cast<void> (now);
     std::size_t count = 0;
     for (;;) {
-        const auto event = co_await _lane.run_task ([this] {
-            if (!_monitor || !_monitor->valid ()) {
-                return std::optional<zlink::monitor_event_t>{};
-            }
-            return _monitor->recv (zlink::recv_flags_t::dontwait);
-        });
+        if (!_monitor || !_monitor->valid ())
+            return count;
+        const auto event = _monitor->recv (zlink::recv_flags_t::dontwait);
         if (!event) {
-            co_return count;
+            return count;
         }
         ++count;
         trace_client_server_lazy ("server-monitor-event", [&] {
@@ -406,14 +418,14 @@ task_t<std::size_t> raw_client_server_server_t::drain_monitor_events_task (
                    + " value=" + std::to_string (event->value) + " local=" + event->local_addr
                    + " remote=" + event->remote_addr;
         });
-        co_await observe_monitor_event (*event);
+        observe_monitor_event (*event);
     }
 }
 
-task_t<void> raw_client_server_server_t::observe_monitor_event (const zlink::monitor_event_t &event)
+void raw_client_server_server_t::observe_monitor_event (const zlink::monitor_event_t &event)
 {
     if (!event.routing_id) {
-        co_return;
+        return;
     }
     const auto client = event.routing_id->to_bytes ();
     if (event.event == zlink::monitor_event::connection_ready) {
@@ -421,26 +433,25 @@ task_t<void> raw_client_server_server_t::observe_monitor_event (const zlink::mon
             return "channel=" + _options.descriptor.channel_name
                    + " client=" + routing_id_label (client);
         });
-        co_await _lane.run_task ([this, client] {
-            // The monitor value is a ready-count, not a physical connection
-            // identity.  The route id is the stable identity available at
-            // this framework boundary.
-            _connections.try_emplace (client, nullptr);
-            return true;
-        });
+
+        // The monitor value is a ready-count, not a physical connection
+        // identity.  The route id is the stable identity available at
+        // this framework boundary.
+        _connections.try_emplace (client, nullptr);
+
     } else if (event.event == zlink::monitor_event::disconnected) {
         trace_client_server_lazy ("server-disconnected", [&] {
             return "channel=" + _options.descriptor.channel_name
                    + " client=" + routing_id_label (client);
         });
-        (void) co_await _lane.run_task ([this, client] {
-            const auto found = _connections.find (client);
-            if (found == _connections.end ())
-                return false;
-            const auto connection = std::move (found->second);
-            _connections.erase (found);
-            return connection && _liveness.disconnect (client, connection->connection_id);
-        });
+
+        const auto found = _connections.find (client);
+        if (found == _connections.end ())
+            return;
+        const auto connection = std::move (found->second);
+        _connections.erase (found);
+        if (connection)
+            (void) _liveness.disconnect_owned (client, connection->connection_id);
     }
 }
 
@@ -519,10 +530,12 @@ task_t<client_server_pump_result_t> raw_client_server_server_t::pump_one (
         }
         co_return client_server_pump_result_t::protocol_error;
     }
-    co_return co_await process_control_received (std::move (*received), now);
+    co_return co_await _lane.run_task ([this, received = std::move (*received), now] () mutable {
+        return process_control_received (std::move (received), now);
+    });
 }
 
-std::optional<task_t<client_server_pump_result_t>>
+std::optional<client_server_pump_result_t>
 raw_client_server_server_t::consume_control (const zlink::received_t &received)
 {
     if (received.parts ().empty ()
@@ -535,7 +548,7 @@ raw_client_server_server_t::consume_control (const zlink::received_t &received)
                                      mesh::service_liveness_registry_t::clock_t::now ());
 }
 
-task_t<client_server_pump_result_t> raw_client_server_server_t::process_control_received (
+client_server_pump_result_t raw_client_server_server_t::process_control_received (
   detail::backend::raw_received_t received,
   mesh::service_liveness_registry_t::clock_t::time_point now)
 {
@@ -549,7 +562,7 @@ task_t<client_server_pump_result_t> raw_client_server_server_t::process_control_
             //  without a request sequence cannot be answered and is a
             //  protocol error.
             if (received.parts.size () != 1 || !received.reply_token) {
-                co_return client_server_pump_result_t::protocol_error;
+                return client_server_pump_result_t::protocol_error;
             }
             const auto client = protocol::decode_client_server_client_admission (
               protocol::message_bytes (received.parts.front ()), protocol::command::hello);
@@ -562,84 +575,72 @@ task_t<client_server_pump_result_t> raw_client_server_server_t::process_control_
                 || client.security_identity != _options.descriptor.security_identity) {
                 const detail::backend::raw_message_t reject_message{protocol::encode_reject (3)};
                 (void) _port->reply (received, reject_message);
-                co_return client_server_pump_result_t::infrastructure;
+                return client_server_pump_result_t::infrastructure;
             }
-            co_await _lane.run_task ([this, &received, now] {
-                _connections.insert_or_assign (
-                  received.source_routing_id,
-                  _liveness.admit (received.source_routing_id,
-                                   detail::backend::route_connection_id (received.route_generation),
-                                   now));
-                return true;
-            });
+
+            _connections.insert_or_assign (
+              received.source_routing_id,
+              _liveness.admit_owned (
+                received.source_routing_id,
+                detail::backend::route_connection_id (received.route_generation), now));
+
             const detail::backend::raw_message_t admit_message{
               protocol::encode_client_server_server_admission (protocol::command::admit,
                                                                _options.descriptor)};
             const auto admitted = _port->reply (received, admit_message);
             if (!admitted) {
-                co_return client_server_pump_result_t::protocol_error;
+                return client_server_pump_result_t::protocol_error;
             }
             trace_client_server_lazy ("server-admit-sent", [&] {
                 return "channel=" + _options.descriptor.channel_name
                        + " client=" + routing_id_label (received.source_routing_id)
                        + " endpoint=" + _options.descriptor.advertised_endpoint;
             });
-            co_return client_server_pump_result_t::infrastructure;
+            return client_server_pump_result_t::infrastructure;
         }
-        const auto connection = co_await _lane.run_task ([this, &received, now] {
-            const auto found = _connections.find (received.source_routing_id);
-            if (found != _connections.end () && found->second) {
-                if (detail::backend::is_route_connection (found->second->connection_id,
-                                                          received.route_generation))
-                    found->second->record_received (now);
-                return std::optional<std::vector<std::uint8_t>>{
-                  detail::backend::route_connection_id (received.route_generation)};
-            }
-            return std::optional<std::vector<std::uint8_t>>{};
-        });
-        if (!connection)
-            co_return client_server_pump_result_t::protocol_error;
+        const auto found = _connections.find (received.source_routing_id);
+        if (found == _connections.end () || !found->second)
+            return client_server_pump_result_t::protocol_error;
+        if (detail::backend::is_route_connection (found->second->connection_id,
+                                                  received.route_generation))
+            found->second->record_received (now);
+        const auto connection = detail::backend::route_connection_id (received.route_generation);
         if (header.kind == protocol::command::livenessProbe
             || header.kind == protocol::command::livenessAck) {
             if (received.parts.size () != 1) {
-                co_return client_server_pump_result_t::protocol_error;
+                return client_server_pump_result_t::protocol_error;
             }
             const auto liveness =
               protocol::decode_liveness (protocol::message_bytes (received.parts.front ()));
             if (liveness.kind == protocol::command::livenessProbe) {
-                const auto acknowledged =
-                  co_await _lane.run_task ([this, &received, &connection, &liveness] {
-                      return _liveness.acknowledge_probe (received.source_routing_id, *connection,
-                                                          liveness.probe_id);
-                  });
+                const auto acknowledged = _liveness.acknowledge_probe_owned (
+                  received.source_routing_id, connection, liveness.probe_id);
                 const detail::backend::raw_message_t ack_message{
                   protocol::encode_liveness (protocol::command::livenessAck, liveness.probe_id)};
                 if (!acknowledged)
-                    co_return client_server_pump_result_t::protocol_error;
+                    return client_server_pump_result_t::protocol_error;
                 //  A request-framed probe is acknowledged on its reply leg;
                 //  a raw probe keeps the raw routed ACK.
                 if (received.reply_token) {
                     if (!_port->reply (received, ack_message))
-                        co_return client_server_pump_result_t::protocol_error;
+                        return client_server_pump_result_t::protocol_error;
                 } else {
                     observe_control_submission (
                       _port->submit_send (received.source_routing_id, ack_message),
                       _options.runtime_failures);
                 }
             } else {
-                (void) co_await _lane.run_task ([this, &received, &connection, &liveness, now] {
-                    return _liveness.acknowledge (received.source_routing_id, *connection,
-                                                  liveness.probe_id, now);
-                });
+                (void) _liveness.acknowledge_owned (received.source_routing_id, connection,
+                                                    liveness.probe_id, now);
             }
-            co_return client_server_pump_result_t::infrastructure;
+            return client_server_pump_result_t::infrastructure;
         }
         //  Any other service-wire command is not valid on a ClientServer
         //  connection (application records ride the channel envelope).
-        co_return client_server_pump_result_t::protocol_error;
+        return client_server_pump_result_t::protocol_error;
     }
     catch (const protocol::service_wire_error_t &) {
-        co_return client_server_pump_result_t::protocol_error;
+        return client_server_pump_result_t::protocol_error;
     }
 }
 
@@ -685,7 +686,7 @@ task_t<client_server_pump_result_t> raw_client_server_server_t::enqueue_applicat
     co_return co_await enqueue_application_records (one, dispatch_options);
 }
 
-bool raw_client_server_server_t::record_application_activity_in_lane (
+bool raw_client_server_server_t::record_application_activity_in_owner (
   const received_application_record_t &received)
 {
     const auto peer = _connections.find (received.record.source_routing_id);
@@ -697,13 +698,11 @@ bool raw_client_server_server_t::record_application_activity_in_lane (
     return true;
 }
 
-task_t<void> raw_client_server_server_t::record_application_activity (
+void raw_client_server_server_t::record_application_activity (
   const std::vector<received_application_record_t> &records)
 {
-    co_await _lane.run_task ([this, &records] {
-        for (const auto &received : records)
-            (void) record_application_activity_in_lane (received);
-    });
+    for (const auto &received : records)
+        (void) record_application_activity_in_owner (received);
 }
 
 task_t<client_server_pump_result_t> raw_client_server_server_t::enqueue_application_records (
@@ -716,7 +715,7 @@ task_t<client_server_pump_result_t> raw_client_server_server_t::enqueue_applicat
         std::vector<client_server_pump_result_t> results;
         results.reserve (records.size ());
         for (auto &received : records) {
-            if (!record_application_activity_in_lane (received)) {
+            if (!record_application_activity_in_owner (received)) {
                 results.push_back (client_server_pump_result_t::protocol_error);
             } else if (_mailbox.try_enqueue (
                          std::move (received.record), [&received, dispatch_options] {
@@ -808,48 +807,46 @@ task_t<client_server_pump_result_t> raw_client_server_server_t::enqueue_applicat
 task_t<mesh::service_liveness_tick_t> raw_client_server_server_t::tick_liveness (
   mesh::service_liveness_registry_t::clock_t::time_point now)
 {
-    auto prepared = co_await _lane.run_task ([this, now] {
-        struct prepared_t
-        {
-            mesh::service_liveness_tick_t result;
-            std::shared_ptr<detail::backend::raw_route_port_t> port;
-            std::optional<protocol::client_server_server_admission_t> update;
-            std::vector<std::vector<std::uint8_t>> clients;
-        } value{_liveness.tick (now), _port, std::nullopt, {}};
-        if (_descriptor_update_pending) {
-            value.update = _options.descriptor;
-            value.clients.reserve (_connections.size ());
+    return _lane.run_task ([this, now] { return tick_liveness_owned (now); });
+}
+
+mesh::service_liveness_tick_t raw_client_server_server_t::tick_liveness_owned (
+  mesh::service_liveness_registry_t::clock_t::time_point now)
+{
+    auto tick = _liveness.tick_owned (now);
+    if (_descriptor_update_pending) {
+        _descriptor_update_pending = false;
+        if (_port) {
+            const detail::backend::raw_message_t update{
+              protocol::encode_client_server_server_admission (protocol::command::update,
+                                                               _options.descriptor)};
             for (const auto &[client, connection] : _connections)
                 if (connection)
-                    value.clients.push_back (client);
-            _descriptor_update_pending = false;
-        }
-        return value;
-    });
-    if (prepared.port) {
-        if (prepared.update) {
-            const detail::backend::raw_message_t update_message{
-              protocol::encode_client_server_server_admission (protocol::command::update,
-                                                               *prepared.update)};
-            for (const auto &client : prepared.clients)
-                observe_control_submission (prepared.port->submit_send (client, update_message),
-                                            _options.runtime_failures);
-        }
-        for (const auto &probe : prepared.result.probes) {
-            const detail::backend::raw_message_t probe_message{
-              protocol::encode_liveness (protocol::command::livenessProbe, probe.probe_id)};
-            observe_control_submission (
-              prepared.port->submit_send (probe.node_routing_id, probe_message),
-              _options.runtime_failures);
+                    observe_control_submission (_port->submit_send (client, update),
+                                                _options.runtime_failures);
         }
     }
-    co_return prepared.result;
+    if (_port) {
+        for (const auto &probe : tick.probes) {
+            const detail::backend::raw_message_t message{
+              protocol::encode_liveness (protocol::command::livenessProbe, probe.probe_id)};
+            observe_control_submission (_port->submit_send (probe.node_routing_id, message),
+                                        _options.runtime_failures);
+        }
+    }
+    return tick;
 }
 
 task_t<std::optional<mesh::service_liveness_registry_t::clock_t::time_point>>
 raw_client_server_server_t::next_liveness_activity_task () const
 {
-    return _lane.run_task ([this] { return _liveness.next_activity (); });
+    return _lane.run_task ([this] { return next_liveness_activity_owned (); });
+}
+
+std::optional<mesh::service_liveness_registry_t::clock_t::time_point>
+raw_client_server_server_t::next_liveness_activity_owned () const
+{
+    return _liveness.next_activity_owned ();
 }
 
 task_t<bool> raw_client_server_server_t::reply (const mesh::service_mailbox_record_t &request,

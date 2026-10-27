@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #include "../support/runtime_failure_fixture.hpp"
 #include "test_completion_poller_driver.hpp"
+#include "test_runtime_options_owner_pause.hpp"
 #include "runtime/channels/channel_host_service.hpp"
 #include "runtime/channels/channel_runtime.hpp"
 #include "runtime/dispatch/application_job_queue.hpp"
@@ -21,6 +22,7 @@
 #include <iostream>
 #include <sstream>
 #include <vector>
+#include <future>
 
 namespace
 {
@@ -539,4 +541,27 @@ TEST (ManualIngressWait, SuspendedHandlersReturnWorkersBeforeTerminal)
     handler->release.complete (fw::result_t<void>::success ());
     source.host->stop ();
     EXPECT_EQ (workers + 1, handler->scopes_closed.load ());
+}
+
+TEST (ManualIngressWait, PendingStateTaskKeepsTransportPollProgressing)
+{
+    manual_source_t source;
+    ASSERT_TRUE (observe_until ([] { return waits.size () >= 2; }));
+    auto runtime = fw::detail::channel_runtime_t::from (source.builder.message_bus ());
+    fw::test::runtime_options_owner_pause_t pause (runtime, "manual-wait", 37);
+    ASSERT_TRUE (pause.wait_until_entered (2s));
+    std::size_t before;
+    {
+        std::lock_guard lock (observed_mutex);
+        before = waits.size ();
+    }
+    zlink::router_socket_t client (*source.context);
+    client.set_routing_id (zlink::routing_id_t::from ("manual-state-blocked-client"));
+    client.connect (source.endpoint);
+    // A connection monitor event wakes the old poll while a real state-lane
+    // turn is held on the state executor. The receive owner must return to the
+    // public poller instead of awaiting a configuration or raw-state task.
+    EXPECT_TRUE (observe_until ([&] { return waits.size () > before; }))
+      << "a pending state-lane task blocked the receive owner before its next transport poll";
+    EXPECT_TRUE (pause.still_paused ());
 }

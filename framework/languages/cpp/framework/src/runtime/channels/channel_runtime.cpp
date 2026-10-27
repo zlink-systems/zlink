@@ -900,7 +900,14 @@ void channel_runtime_t::set_server_weight (const std::string &channel_name, int 
         throw std::invalid_argument ("service weight must be in range 0..10000");
     _state->lane
       .run_checked ([&] {
-          _state->server_peer_weight_overrides.insert_or_assign (channel_name, value);
+          auto overrides =
+            std::make_shared<std::map<std::string, int>> (*std::atomic_load_explicit (
+              &_state->server_peer_weight_overrides, std::memory_order_acquire));
+          overrides->insert_or_assign (channel_name, value);
+          std::atomic_store_explicit (
+            &_state->server_peer_weight_overrides,
+            std::shared_ptr<const std::map<std::string, int>> (std::move (overrides)),
+            std::memory_order_release);
           if (_state->server_options_changed)
               _state->server_options_changed ();
       })
@@ -921,18 +928,10 @@ void channel_runtime_t::bind_server_options_changed (std::function<void ()> noti
 std::optional<int>
 channel_runtime_t::server_peer_weight_override (const std::string &channel_name) const
 {
-    return server_peer_weight_override_task (channel_name).result ().value ();
-}
-
-task_t<std::optional<int>>
-channel_runtime_t::server_peer_weight_override_task (std::string channel_name) const
-{
-    return _state->lane.run_task ([state = _state, channel_name = std::move (channel_name)] {
-        const auto found = state->server_peer_weight_overrides.find (channel_name);
-        if (found == state->server_peer_weight_overrides.end ())
-            return std::optional<int>{};
-        return std::optional<int>{found->second};
-    });
+    const auto overrides =
+      std::atomic_load_explicit (&_state->server_peer_weight_overrides, std::memory_order_acquire);
+    const auto found = overrides->find (channel_name);
+    return found == overrides->end () ? std::optional<int>{} : std::optional<int>{found->second};
 }
 
 channel_runtime_t channel_runtime_t::from (const message_bus_t &bus)

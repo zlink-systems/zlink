@@ -2,6 +2,7 @@
 
 #include "runtime/channels/channel_packet_dispatcher.hpp"
 #include "runtime/dispatch/offload_executor.hpp"
+#include "test_runtime_options_owner_pause.hpp"
 
 #include <zlink/framework.hpp>
 
@@ -156,4 +157,31 @@ TEST (ManualDispatchOwner, PendingTerminalRetainsDrainWithoutOccupyingWorker)
         EXPECT_TRUE (terminal_observed->load (std::memory_order_acquire));
         EXPECT_TRUE (worker.drained ());
     }
+}
+
+TEST (ManualDispatchOwner, RuntimeOptionReadDoesNotWaitForStateOwner)
+{
+    using namespace std::chrono_literals;
+    fw::zlink_builder_t builder;
+    auto runtime = fw::detail::channel_runtime_t::from (builder.message_bus ());
+    auto received = std::make_shared<std::promise<std::optional<int>>> ();
+    auto result = received->get_future ();
+    std::jthread reader;
+    {
+        fw::test::runtime_options_owner_pause_t pause (runtime, "manual", 37);
+        ASSERT_TRUE (pause.wait_until_entered (2s));
+        reader = std::jthread ([runtime, received] {
+            try {
+                received->set_value (runtime.server_peer_weight_override ("manual"));
+            }
+            catch (...) {
+                received->set_exception (std::current_exception ());
+            }
+        });
+        EXPECT_EQ (std::future_status::ready, result.wait_for (2s))
+          << "receive option read waited for the occupied state owner";
+        EXPECT_TRUE (pause.still_paused ());
+    }
+    reader.join ();
+    EXPECT_EQ (std::optional<int> (37), result.get ());
 }
