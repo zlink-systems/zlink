@@ -129,7 +129,7 @@ class operation_registry_state_t : public std::enable_shared_from_this<operation
     // The owner's single reservation is also the polling resource's wake snapshot.
     std::atomic<clock_t::duration::rep> _next_visit{clock_t::duration::max ().count ()};
     // Minimum deadline found in the current budgeted scan, not the published wake.
-    clock_t::time_point _visit_next;
+    clock_t::time_point _scan_minimum_deadline;
     std::size_t _visit_slot = deadline_slot_count;
     pending_t *_deadline_cursor = nullptr;
     bool _closed = false;
@@ -458,7 +458,7 @@ bool operation_registry_state_t::index_deadline (const call_id_t &id,
         : std::min (deadline, *reserved);
     _next_visit.store (next.time_since_epoch ().count (), std::memory_order_release);
     if (_visit_slot < deadline_slot_count)
-        _visit_next = std::min (_visit_next, deadline);
+        _scan_minimum_deadline = std::min (_scan_minimum_deadline, deadline);
     return !reserved || next < *reserved;
 }
 
@@ -647,7 +647,7 @@ std::size_t operation_registry_state_t::expire (clock_t::time_point now)
             return 0;
         const auto started = _now ();
         if (_visit_slot == deadline_slot_count) {
-            _visit_next =
+            _scan_minimum_deadline =
               now + deadline_tick_duration * static_cast<int> (deadline_slot_count);
             _visit_slot = 0;
             _deadline_cursor = _deadline_heads[0];
@@ -673,10 +673,10 @@ std::size_t operation_registry_state_t::expire (clock_t::time_point now)
             if (!live)
                 unindex_deadline (*current);
             else
-                _visit_next = std::min (_visit_next, current->deadline);
+                _scan_minimum_deadline = std::min (_scan_minimum_deadline, current->deadline);
         }
         if (_visit_slot == deadline_slot_count) {
-            _next_visit.store (_index_size ? _visit_next.time_since_epoch ().count ()
+            _next_visit.store (_index_size ? _scan_minimum_deadline.time_since_epoch ().count ()
                                            : clock_t::duration::max ().count (),
                                std::memory_order_release);
         }
