@@ -127,7 +127,7 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
 - 바인딩·framework 전체 범위는 `scripts/gate/{bindings-gate,framework-gate,cross-language-e2e}.sh <tag>`로
   돌리고 결과는 `zlink-work/gates/<tag>/results.txt`에서 본다. 새 worktree가 gate까지 돌 수 있게
   되는 절차(머신 설치 한 번, 로컬 패키지 링크, `rebuild-dev → gate`)는
-  [`doc/principal/dev/worktree-setup.ko.md`](doc/principal/dev/worktree-setup.ko.md)가 소유한다.
+  내부 문서(비공개 저장소 zlink-systems/docs의 `zlink/dev/worktree-setup.ko.md`)가 소유한다.
   gate는 한 번에 하나만 돌리되 머신 부하와 관계없이 진행한다. 시스템은 부하 아래에서도 동작해야
   하므로, 부하에서 깨지는 테스트는 시험이나 제품의 결함으로 보고 원인을 고친다. 단독 재실행 통과를
   판정 근거로 쓰지 않으며, timeout·허용치를 늘리거나 단언을 약하게 하지 않는다.
@@ -166,7 +166,7 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
 - **작업 진행 방식(2026-09-10부터)**: 모든 작업은 GitHub Issue로 등록하고, Issue마다 브랜치
   `<area>/<issue번호>-<slug>` + worktree에서 작업한 뒤 PR로 main에 넣는다. main은 PR로만 바뀐다
   (문서만 바꾸는 수정도 같다. 예외는 릴리스 태그뿐이다). Milestone은 릴리스, Project 보드는
-  진행 상태. 상세는 [`doc/principal/dev/development-workflow.ko.md`](doc/principal/dev/development-workflow.ko.md)가
+  진행 상태. 상세는 내부 문서(비공개 저장소 zlink-systems/docs의 `zlink/dev/development-workflow.ko.md`)가
   소유한다.
 - 브랜치·commit·push·merge는 사용자가 명시적으로 요청할 때만 하고, 작업 branch는 Issue 브랜치
   규칙을 따른다(`AGENTS.md` §1).
@@ -189,22 +189,10 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
   secret). 언어별 순서는 Core(`core/vX.Y.Z` 태그 + `build.yml` dispatch) → binding
   (`<language>/vX.Y.N`) → framework(`framework-<language>/vA.B.C`)이며, 워크플로우·트리거·
   채널·확인 명령은 [`doc/building/release-pipeline.ko.md`](doc/building/release-pipeline.ko.md)가
-  소유한다. 계정·secret은 [`doc/building/release-accounts.ko.md`](doc/building/release-accounts.ko.md),
+  소유한다. 계정·secret은 내부 문서(비공개 저장소 zlink-systems/docs의 `zlink/building/release-accounts.ko.md`),
   ConanCenter·vcpkg는 PR 방식([`doc/building/pr-drafts/`](doc/building/pr-drafts/)).
 - 지원 플랫폼은 linux-x64·linux-arm64·macos-arm64·windows-x64 넷이다. Intel Mac은
   Core부터 지원하지 않으며 CI matrix·prebuild에 넣지 않는다.
 - 릴리스 뒤 baseline worktree를 새 태그로 갱신한다.
 
-## 9. 에이전트 운영 관례
-
-- 규칙 본문: [`AGENTS.md`](AGENTS.md)(전역), 디렉터리별 `AGENTS.md`(세부). 문서 작성은
-  [`doc/AGENTS.md`](doc/AGENTS.md).
-- 큰 작업은 모듈 경계로 나눠 병렬 투입한다. 하나의 job은 **원인 하나, 1.5시간 상한**으로 두고,
-  상한 안에 근본 수정이 없으면 실증한 사실과 후보를 요약에 적고 종료한다. 한 job에 여러 원인과
-  리팩토링을 묶지 않는다.
-- job은 gate·perf 측정을 스스로 반복하지 않는다. 감독자가 job 종료 뒤 gate를 한 번 돌리고,
-  diff를 직접 읽은 뒤 파일을 명시해 커밋한다(`git add -A` 금지).
-- job 하나에 Issue 하나·worktree 하나·브랜치 하나를 준다(`-C <worktree>`). job은 그 브랜치에만
-  커밋하고 push·PR·merge는 감독자가 한다(`doc/principal/dev/development-workflow.ko.md` §4).
-- job은 `doc/**`, `core/doc/**`, `hotpath_reference.json`, `scripts/local-package/**`를 수정·실행하지
-  않는다. 스펙 변경이 필요하면 BLOCKERS로 보고하고 감독자가 별도 커밋한다.
+내부 운영 절차는 비공개 저장소 zlink-systems/docs의 `zlink/AGENTS.md`가 소유한다(`AGENTS.md` 머리 참고).
