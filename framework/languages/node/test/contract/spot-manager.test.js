@@ -2357,7 +2357,7 @@ test('ZLinkSpotManager replies routed actor request dispatch errors', async () =
     const errorEvents = dispatchEvents.filter((event) => event.outcome === 'failed');
     assert.equal(errorEvents.length, 1);
     assert.equal(errorEvents[0].surface, 'actor');
-    assert.equal(errorEvents[0].reason, 'no_handler');
+    assert.equal(errorEvents[0].reason, 'stale_target');
     assert.equal(errorEvents[0].action, 'reply_error');
   } finally {
     for (const part of requestParts) {
