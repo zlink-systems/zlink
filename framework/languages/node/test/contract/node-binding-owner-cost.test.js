@@ -115,7 +115,11 @@ for (const kind of ['Router', 'Dealer']) {
   });
 }
 
-test('service and Dealer request boundaries retain one Framework Promise allocation', async (t) => {
+// Spec 01 §9·§10.1: the Framework entry owns the one request deadline and request-specific
+// timers are gone. The binding reply Promise cannot be settled first by the Framework, so a
+// request keeps two Promises: the caller terminal and the late-reply reaction that closes
+// replies after the terminal (#2894 tracks a callback reply path that removes the second).
+test('service and Dealer request boundaries allocate at most two Framework Promises', async (t) => {
   const {
     RawServiceMeshRuntime
   } = require('../../packages/framework/dist/runtime/foundation/raw-service-mesh-runtime');
@@ -153,7 +157,10 @@ test('service and Dealer request boundaries retain one Framework Promise allocat
       } finally {
         hook.disable();
       }
-      assert.equal(promises, 1, `${name} must reuse the binding reply reaction Promise`);
+      assert.ok(
+        promises <= 2,
+        `${name} allocated ${promises} Promises; the caller terminal and the late-reply reaction are the limit`
+      );
       assert.deepEqual(await pending, []);
     }
   } finally {
