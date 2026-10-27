@@ -2499,8 +2499,11 @@ int main ()
         || spot_backend_requests != 1 || spot_backend_runtime.pending_request_count () != 0) {
         return 381;
     }
-    auto spot_backend_reply = spot_backend_runtime.request_reply_spot_parts (
-      target_node, target_spot, request_parts, std::chrono::milliseconds (25));
+    auto spot_backend_reply = spot_backend_runtime
+                                .request_reply_spot_parts (target_node, target_spot, request_parts,
+                                                           std::chrono::steady_clock::now ()
+                                                             + std::chrono::milliseconds (25))
+                                .result ();
     if (!spot_backend_reply || spot_backend_reply.value ().size () != request_parts.size ()
         || spot_backend_requests != 2 || spot_backend_runtime.pending_request_count () != 0) {
         return 382;

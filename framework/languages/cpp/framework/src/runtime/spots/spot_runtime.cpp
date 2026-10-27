@@ -4226,6 +4226,7 @@ spot_context_t::erased_request_call_t spot_context_t::request_to_erased (node_ri
               return request_task_t<zlink::message_t> (result_t<zlink::message_t>::failure (
                 framework_error_kind_t::protocol_error, "SPOT context is not configured"));
           }
+          const auto request_started = std::chrono::steady_clock::now ();
           try {
               if (auto route_channel_name = optional_spot_route_channel_name (state)) {
                   detail::channel_runtime_manager_t manager (state->channel_runtime);
@@ -4236,33 +4237,38 @@ spot_context_t::erased_request_call_t spot_context_t::request_to_erased (node_ri
                   auto parts = encode_spot_route_parts (runtime::messaging::message_kind_t::request,
                                                         *route_channel_name, submitted_packet_name,
                                                         payload, effective_timeout, metadata);
-                  auto reply = runtime.request_reply_spot_parts (
+                  auto pending = runtime.request_reply_spot_parts (
                     zlink::routing_id_t::from (std::string (node_rid.value ())), spot_id,
-                    std::move (parts), effective_timeout);
-                  if (!reply) {
-                      if (reply.error_kind () == framework_error_kind_t::not_found) {
-                          report_spot_dispatch_error (
-                            state->node, dispatch_error_surface_t::spot_route,
-                            dispatch_message_kind_t::request,
-                            dispatch_error_reason_t::handler_missing,
-                            dispatch_error_action_t::reply_error, submitted_packet_name,
-                            *route_channel_name, std::string (spot_id), std::nullopt,
-                            reply.error () ? std::make_exception_ptr (*reply.error ())
-                                           : std::exception_ptr{});
-                      }
-                      return request_task_t<zlink::message_t> (
-                        detail::propagate_failure<zlink::message_t> (reply,
-                                                                     "SPOT route request failed"));
-                  }
-                  runtime::messaging::envelope_codec_t envelope;
-                  auto body = envelope.decode_body (reply.value ());
-                  if (!body) {
-                      return request_task_t<zlink::message_t> (result_t<zlink::message_t>::failure (
-                        body.error_kind (), body.error () ? body.error ()->what ()
-                                                          : "SPOT route reply body decode failed"));
-                  }
-                  return request_task_t<zlink::message_t> (
-                    result_t<zlink::message_t>::success (body.value ()));
+                    std::move (parts), request_started + effective_timeout);
+                  return detail::project_request_reply<zlink::message_t> (
+                    pending,
+                    [state, submitted_packet_name, route_channel_name = *route_channel_name,
+                     spot_id] (const result_t<runtime::messaging::message_parts_t> &reply)
+                      -> result_t<zlink::message_t> {
+                        if (!reply) {
+                            if (reply.error_kind () == framework_error_kind_t::not_found) {
+                                report_spot_dispatch_error (
+                                  state->node, dispatch_error_surface_t::spot_route,
+                                  dispatch_message_kind_t::request,
+                                  dispatch_error_reason_t::handler_missing,
+                                  dispatch_error_action_t::reply_error, submitted_packet_name,
+                                  route_channel_name, std::string (spot_id), std::nullopt,
+                                  reply.error () ? std::make_exception_ptr (*reply.error ())
+                                                 : std::exception_ptr{});
+                            }
+                            return detail::propagate_failure<zlink::message_t> (
+                              reply, "SPOT route request failed");
+                        }
+                        runtime::messaging::envelope_codec_t envelope;
+                        auto body = envelope.decode_body (reply.value ());
+                        if (!body) {
+                            return result_t<zlink::message_t>::failure (
+                              body.error_kind (), body.error ()
+                                                    ? body.error ()->what ()
+                                                    : "SPOT route reply body decode failed");
+                        }
+                        return result_t<zlink::message_t>::success (body.value ());
+                    });
               }
               auto native = state->native_spot.lock ();
               if (!native) {

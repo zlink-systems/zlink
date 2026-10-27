@@ -43,6 +43,9 @@ class route_channel_runtime_t
       std::chrono::milliseconds)>;
 
     explicit route_channel_runtime_t (std::string router_channel_id);
+    ~route_channel_runtime_t ();
+    route_channel_runtime_t (const route_channel_runtime_t &) = delete;
+    route_channel_runtime_t &operator= (const route_channel_runtime_t &) = delete;
 
     const std::string &router_channel_id () const noexcept;
     void routing_id (zlink::routing_id_t routing_id);
@@ -74,7 +77,7 @@ class route_channel_runtime_t
     {
         runtime::messaging::client_call_codec_t codec;
         auto header = codec.create_envelope (runtime::messaging::message_kind_t::command,
-                                             _router_channel_id, std::move (packet_name));
+                                             router_channel_id (), std::move (packet_name));
         return submit_send_parts (target_node_rid,
                                   codec.encode_envelope_parts (header, message, serializers));
     }
@@ -87,8 +90,9 @@ class route_channel_runtime_t
                                             std::chrono::milliseconds timeout)
     {
         runtime::messaging::client_call_codec_t codec;
-        auto header = codec.create_envelope (runtime::messaging::message_kind_t::request,
-                                             _router_channel_id, std::move (packet_name), timeout);
+        auto header =
+          codec.create_envelope (runtime::messaging::message_kind_t::request, router_channel_id (),
+                                 std::move (packet_name), timeout);
         return submit_request_parts (target_node_rid,
                                      codec.encode_envelope_parts (header, request, serializers));
     }
@@ -112,12 +116,11 @@ class route_channel_runtime_t
                                                    const std::string &target_spot_id,
                                                    runtime::messaging::message_parts_t parts);
 
-    result_t<runtime::messaging::message_parts_t>
+    request_task_t<runtime::messaging::message_parts_t>
     request_reply_spot_parts (const zlink::routing_id_t &target_node_rid,
                               const std::string &target_spot_id,
                               runtime::messaging::message_parts_t parts,
-                              std::chrono::milliseconds timeout,
-                              std::shared_ptr<task_completion_source_t<void>> admitted = {});
+                              std::chrono::steady_clock::time_point deadline);
 
     result_t<void> complete_request (std::uint64_t request_seq);
     void set_send_backend (send_backend_t backend);
@@ -129,30 +132,36 @@ class route_channel_runtime_t
                                           std::chrono::milliseconds timeout) const;
 
   private:
-    route_outbound_packet_t &append_outbound_unlocked (const zlink::routing_id_t &target_node_rid,
-                                                       std::optional<std::string> target_spot_id,
-                                                       runtime::messaging::message_parts_t parts,
-                                                       std::optional<std::uint64_t> request_seq);
+    struct state_t;
+    static request_task_t<runtime::messaging::message_parts_t>
+    request_backend_parts (const std::shared_ptr<state_t> &_state,
+                           const zlink::routing_id_t &target_node_rid,
+                           std::optional<std::string> target_spot_id,
+                           runtime::messaging::message_parts_t parts,
+                           std::chrono::steady_clock::time_point deadline);
+    static route_outbound_packet_t &
+    append_outbound_unlocked (const std::shared_ptr<state_t> &_state,
+                              const zlink::routing_id_t &target_node_rid,
+                              std::optional<std::string> target_spot_id,
+                              runtime::messaging::message_parts_t parts,
+                              std::optional<std::uint64_t> request_seq);
     result_t<std::uint64_t> register_request_unlocked (const zlink::routing_id_t &target_node_rid,
                                                        std::optional<std::string> target_spot_id,
                                                        runtime::messaging::message_parts_t parts);
-    result_t<void> ensure_connected () const;
-    std::string _router_channel_id;
-    runtime::offload_executor_t _lane_executor;
-    mutable runtime::state_lane_t _lane{_lane_executor};
-    std::optional<zlink::routing_id_t> _routing_id;
-    std::chrono::milliseconds _default_request_timeout{
-      runtime::configuration::default_request_timeout};
-    std::string _bind_endpoint;
-    std::vector<std::string> _manual_connections;
-    bool _running = false;
-    route_connection_set_t _connections;
-    std::set<std::string> _ready_peer_rids;
-    channel_pending_requests_t _pending_requests;
-    std::vector<route_outbound_packet_t> _outbound_packets;
-    send_backend_t _send_backend;
-    request_backend_t _request_backend;
-    std::mutex _send_backend_mutex;
+    static result_t<void> ensure_connected (const std::shared_ptr<state_t> &_state);
+    static request_task_t<runtime::messaging::message_parts_t>
+    request_reply_spot_parts_owned (std::shared_ptr<state_t> state,
+                                    zlink::routing_id_t target_node_rid,
+                                    std::string target_spot_id,
+                                    runtime::messaging::message_parts_t parts,
+                                    std::chrono::steady_clock::time_point deadline);
+    static task_t<void> wait_until_ready (std::shared_ptr<state_t> state,
+                                          std::optional<zlink::routing_id_t> target,
+                                          std::chrono::steady_clock::time_point deadline);
+    static std::optional<result_t<void>>
+    ready_unlocked (const state_t &state, const std::optional<zlink::routing_id_t> &target);
+    void notify_state_changed ();
+    std::shared_ptr<state_t> _state;
 };
 
 } // namespace zlink::framework::detail
