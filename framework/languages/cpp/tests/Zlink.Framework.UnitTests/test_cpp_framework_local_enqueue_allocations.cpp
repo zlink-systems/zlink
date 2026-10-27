@@ -1137,8 +1137,13 @@ TEST (LocalEnqueueAllocations, ReadyNativePublicationMovesFinalIdentityStorage)
                   return std::nullopt;
               },
               [] {}, [] {});
-            ASSERT_TRUE (std::holds_alternative<bool> (pending));
-            EXPECT_TRUE (std::get<bool> (pending));
+            if (const auto *ready = std::get_if<bool> (&pending)) {
+                EXPECT_TRUE (*ready);
+            } else {
+                auto &task = std::get<task_t<std::size_t>> (pending);
+                EXPECT_TRUE (task.await_ready ());
+                EXPECT_TRUE (task.result ().value ());
+            }
         });
         tests::allocation_event_log = previous_log;
         EXPECT_FALSE (log.overflow);
