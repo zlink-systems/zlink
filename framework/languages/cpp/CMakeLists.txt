@@ -2144,8 +2144,10 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   add_zlink_framework_test(
     test_cpp_framework_shared_serial_turn
     tests/Zlink.Framework.UnitTests/test_cpp_framework_shared_serial_turn.cpp
-    "framework-unit;framework-regression;execution;actor-join")
+    "framework-unit;framework-contract;framework-regression;execution;actor-join" contract)
   target_use_zlink_gtest_main(test_cpp_framework_shared_serial_turn)
+  target_include_directories(test_cpp_framework_shared_serial_turn PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   add_zlink_framework_test(
     test_cpp_framework_serializer_registry
     tests/Zlink.Framework.UnitTests/test_cpp_framework_serializer_registry.cpp
@@ -2434,6 +2436,12 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     test_cpp_framework_stream_framework
     tests/Zlink.Framework.UnitTests/test_cpp_framework_stream_framework.cpp
     "framework-integration;framework-regression;framework-zlink;framework-zlink-stream;stream")
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_binding_submission_order
+    COMMAND test_cpp_framework_stream_framework --binding-submission-order
+    LABELS "framework-unit;framework-contract;stream;stream-session"
+    TIER contract
+    TIMEOUT 30)
   target_link_libraries(test_cpp_framework_stream_framework PRIVATE
     opentelemetry-cpp::metrics
     zlink::stream_connector)
