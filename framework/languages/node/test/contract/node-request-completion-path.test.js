@@ -152,7 +152,7 @@ for (const method of ['requestToNode', 'requestToChannel']) {
       }
     };
     const peer = { descriptor: { nodeRoutingId: 'target' } };
-    runtime.topology.admittedPeer = () => peer;
+    runtime.topology.readyPeer = () => peer;
     runtime.topology.selectChannel = () => peer;
     runtime.isPeerRouteReady = () => true;
     const observer = {
