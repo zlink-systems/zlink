@@ -1646,3 +1646,104 @@ TEST (ZLinkFrameworkApplicationJobQueue, SupplyArrivingAfterTakeSurvivesConsumed
     EXPECT_EQ (0u, queue->snapshot ().permits_in_use);
     EXPECT_EQ (0u, queue->snapshot ().capacity_waiters);
 }
+
+// The fallback keeps this behavior probe executable against the pre-batch request owner.
+template <typename Request>
+void check_supply_request_rotation_budget (queue_t &queue, Request &request)
+{
+    using namespace std::chrono_literals;
+    if constexpr (requires {
+                      request.take_batch (queue, 0ms, std::function<void ()>{},
+                                          queue_t::origin_t::remote, 64);
+                  }) {
+        auto result = request.take_batch (queue, 0ms, {}, queue_t::origin_t::remote, 64);
+        ASSERT_TRUE (result);
+        ASSERT_TRUE (*result);
+        EXPECT_EQ (64u, queue.snapshot ().permits_in_use);
+        std::size_t count = 0;
+        while (auto permit = (**result).take ())
+            ++count;
+        EXPECT_EQ (64u, count);
+    } else {
+        auto result = request.take (queue, 0ms, {}, queue_t::origin_t::remote);
+        ASSERT_TRUE (result);
+        ASSERT_TRUE (*result);
+        EXPECT_EQ (64u, queue.snapshot ().permits_in_use);
+    }
+}
+
+TEST (ApplicationJobQueue, SupplyRequestReservesWholeReceiveRotation)
+{
+    auto configuration = limit_one_configuration ();
+    configuration.effective_max_queued_application_jobs = 64;
+    queue_t queue (configuration);
+    queue_t::supply_request_t request;
+    check_supply_request_rotation_budget (queue, request);
+    EXPECT_EQ (0u, queue.snapshot ().permits_in_use);
+    EXPECT_EQ (0u, queue.snapshot ().capacity_waiters);
+}
+
+TEST (ApplicationJobQueue, SupplyRequestSingleProjectionKeepsPendingAndStopBoundaries)
+{
+    using namespace std::chrono_literals;
+    queue_t queue (limit_one_configuration ());
+    queue_t::supply_request_t request;
+    auto first = request.take (queue, 0ms, {}, queue_t::origin_t::remote);
+    ASSERT_TRUE (first);
+    ASSERT_TRUE (*first);
+    EXPECT_EQ (1u, queue.snapshot ().permits_in_use);
+
+    EXPECT_FALSE (request.take (queue, 0ms, {}, queue_t::origin_t::remote));
+    EXPECT_EQ (1u, queue.snapshot ().capacity_waiters);
+    EXPECT_FALSE (request.take (queue, 0ms, {}, queue_t::origin_t::remote));
+    EXPECT_EQ (1u, queue.snapshot ().capacity_waiters);
+    first.reset ();
+    auto resumed = request.take (queue, 0ms, {}, queue_t::origin_t::remote);
+    ASSERT_TRUE (resumed);
+    ASSERT_TRUE (*resumed);
+    EXPECT_EQ (1u, queue.snapshot ().permits_in_use);
+    EXPECT_EQ (0u, queue.snapshot ().capacity_waiters);
+    resumed.reset ();
+    queue.stop ();
+    auto stopped = request.take (queue, 0ms, {}, queue_t::origin_t::remote);
+    ASSERT_TRUE (stopped);
+    EXPECT_FALSE (*stopped);
+    EXPECT_EQ (0u, queue.snapshot ().permits_in_use);
+    EXPECT_EQ (0u, queue.snapshot ().capacity_waiters);
+}
+
+TEST (ApplicationJobQueue, SupplyRequestBatchReturnsPartialReservationAndOnePendingWaiter)
+{
+    using namespace std::chrono_literals;
+    auto configuration = limit_one_configuration ();
+    configuration.effective_max_queued_application_jobs = 5;
+    queue_t queue (configuration);
+    queue_t::supply_request_t request;
+    auto occupied = queue.try_reserve_supply_batch (2);
+    auto partial = request.take_batch (queue, 0ms, {}, queue_t::origin_t::remote, 64);
+    ASSERT_TRUE (partial);
+    ASSERT_TRUE (*partial);
+    EXPECT_EQ (5u, queue.snapshot ().permits_in_use);
+    std::vector<queue_t::permit_t> claimed;
+    for (;;) {
+        auto permit = (**partial).take ();
+        if (!permit)
+            break;
+        claimed.push_back (std::move (permit));
+    }
+    EXPECT_EQ (3u, claimed.size ());
+    EXPECT_FALSE (request.take_batch (queue, 0ms, {}, queue_t::origin_t::remote, 64));
+    EXPECT_FALSE (request.take_batch (queue, 0ms, {}, queue_t::origin_t::remote, 64));
+    EXPECT_EQ (1u, queue.snapshot ().capacity_waiters);
+    occupied = {};
+    auto resumed = request.take_batch (queue, 0ms, {}, queue_t::origin_t::remote, 64);
+    ASSERT_TRUE (resumed);
+    ASSERT_TRUE (*resumed);
+    EXPECT_EQ (0u, queue.snapshot ().capacity_waiters);
+    EXPECT_EQ (5u, queue.snapshot ().permits_in_use);
+    resumed.reset ();
+    claimed.clear ();
+    partial.reset ();
+    EXPECT_EQ (0u, queue.snapshot ().permits_in_use);
+    EXPECT_EQ (0u, queue.snapshot ().capacity_waiters);
+}

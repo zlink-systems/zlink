@@ -11,6 +11,7 @@
 #include "runtime/channels/socket_monitor_event.hpp"
 #include "runtime/backend/raw_binding_adapter.hpp"
 #include "runtime/dispatch/dispatch_limits.hpp"
+#include "runtime/dispatch/receive_batch_budget.hpp"
 #include "runtime/dispatch/offload_executor.hpp"
 #include "runtime/diagnostics/dispatch_error_reporter.hpp"
 #include "runtime/diagnostics/message_flow_tracer.hpp"
@@ -138,27 +139,32 @@ class channel_host_service_t::server_loop_t
             if (readiness.slot != 1 || (revents & pollin) == 0) {
                 continue;
             }
-            /* Permit before receive (Application job queue §3). While the
-             * supply is pending the loop keeps its management work: monitor
-             * events and replies (messaging hot path I1). */
-            auto permit =
-              _supply.take (*_application_jobs, channel_poll_interval, {},
-                            zlink::framework::runtime::application_job_queue_t::origin_t::remote);
+            auto permit = _supply.take_batch (
+              *_application_jobs, channel_poll_interval, {},
+              application_job_queue_t::origin_t::remote,
+              static_cast<std::uint32_t> (dispatch_limits::receive_batch_messages));
             if (!permit) {
                 drain_monitor_events ();
                 continue;
             }
             if (!*permit)
                 break;
-            const int rc = _router->recv (_received, zlink::recv_flags_t::dontwait);
-            if (rc == static_cast<int> (zlink::recv_result_t::no_data)) {
-                continue;
+            // Reserve this rotation before claiming any ordinary record.
+            receive_batch_budget_t budget;
+            auto next_permit = (**permit).take ();
+            while (next_permit && budget.can_receive ()
+                   && !_stop->load (std::memory_order_acquire)) {
+                const int rc = _router->recv (_received, zlink::recv_flags_t::dontwait);
+                if (rc != static_cast<int> (zlink::recv_result_t::ok))
+                    break;
+                std::size_t bytes = 0;
+                for (const auto &part : _received.parts ())
+                    bytes += part.size ();
+                budget.account (bytes);
+                dispatch_async (std::make_shared<zlink::received_t> (std::move (_received)),
+                                std::move (next_permit));
+                next_permit = (**permit).take ();
             }
-            if (rc != static_cast<int> (zlink::recv_result_t::ok)) {
-                continue;
-            }
-            dispatch_async (std::make_shared<zlink::received_t> (std::move (_received)),
-                            std::move (**permit));
         }
         if (_handler_executor) {
             _handler_executor->drain ();
