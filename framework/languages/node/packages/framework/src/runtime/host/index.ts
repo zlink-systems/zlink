@@ -2677,7 +2677,8 @@ export class ZLinkFrameworkRuntimeHost
                       spot.meshName,
                       spot.spotId,
                       beginAuthority,
-                      closeSignal
+                      closeSignal,
+                      new Date(Number(record.deadlineUnixMs))
                     ),
                   signal,
                   (spot) => local.isSpotClosing(spot.meshName, spot.spotId)
