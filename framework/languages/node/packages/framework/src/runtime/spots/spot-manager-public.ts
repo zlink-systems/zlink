@@ -96,6 +96,7 @@ export class ZLinkPublicSpotManager implements ZLinkSpotManager {
   }
 
   async close(spot: SpotRef, signal?: AbortSignal): Promise<boolean> {
+    const deadline = new Date(Date.now() + this.options.defaultTimeoutMs);
     const resolved = await this.options.coordinator.resolveCloseTarget(spot, signal);
     if (resolved === undefined) return false;
     const current = resolved.spot;
@@ -107,7 +108,8 @@ export class ZLinkPublicSpotManager implements ZLinkSpotManager {
             local.meshName,
             local.spotId,
             beginAuthority,
-            signal
+            signal,
+            deadline
           ),
         signal
       );
@@ -136,7 +138,7 @@ export class ZLinkPublicSpotManager implements ZLinkSpotManager {
           authorityOwnerGeneration: snapshot.authorityOwnerGeneration,
           expectedStoreVersion: snapshot.storeVersion.value
         },
-        deadlineUnixMs: BigInt(Date.now() + timeoutMs)
+        deadlineUnixMs: BigInt(deadline.getTime())
       },
       timeoutMs
     );

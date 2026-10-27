@@ -13366,16 +13366,21 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
 
     private void DisconnectTransport(Peer peer, RoutingId physicalRoutingId)
     {
+        lock (_socketGate)
+        {
+            if (!physicalRoutingId.IsEmpty)
+                DisconnectPhysicalPeer(_socket!, physicalRoutingId);
+            ZLinkFrameworkDebugLog.SpotDiscovery(
+                $"mesh_peer_transport_disconnect local={_routingId} peer={peer.RoutingId} mode=rid physical={physicalRoutingId}"
+            );
+        }
+    }
+
+    internal static void DisconnectPhysicalPeer(IRouterSocket socket, RoutingId physicalRoutingId)
+    {
         try
         {
-            lock (_socketGate)
-            {
-                if (!physicalRoutingId.IsEmpty)
-                    _socket!.DisconnectRid(physicalRoutingId);
-                ZLinkFrameworkDebugLog.SpotDiscovery(
-                    $"mesh_peer_transport_disconnect local={_routingId} peer={peer.RoutingId} mode=rid physical={physicalRoutingId}"
-                );
-            }
+            socket.DisconnectRid(physicalRoutingId);
         }
         catch (ZlinkConnectException error)
             when (error.Result == ZlinkConnectException.ErrorCode.NotFound) { }

@@ -284,17 +284,20 @@ public sealed class SerialExecutorTests
                 GC.KeepAlive(new Func<CancellationToken, ValueTask>(callback.Invoke));
             }
             Baseline();
-            var before = GC.GetAllocatedBytesForCurrentThread();
-            for (var i = 0; i < count; i++)
-                Baseline();
-            var admissionStorage = GC.GetAllocatedBytesForCurrentThread() - before;
-            before = GC.GetAllocatedBytesForCurrentThread();
-            for (var i = 0; i < count; i++)
-                pending[i + 2] = executor
-                    .ExecuteActorAsync("actor-cost", operation, state, CancellationToken.None)
-                    .AsTask();
-            var actual = GC.GetAllocatedBytesForCurrentThread() - before;
-            Assert.Equal(admissionStorage, actual);
+            MeasureWithoutGarbageCollection(() =>
+            {
+                var before = GC.GetAllocatedBytesForCurrentThread();
+                for (var i = 0; i < count; i++)
+                    Baseline();
+                var admissionStorage = GC.GetAllocatedBytesForCurrentThread() - before;
+                before = GC.GetAllocatedBytesForCurrentThread();
+                for (var i = 0; i < count; i++)
+                    pending[i + 2] = executor
+                        .ExecuteActorAsync("actor-cost", operation, state, CancellationToken.None)
+                        .AsTask();
+                var actual = GC.GetAllocatedBytesForCurrentThread() - before;
+                Assert.Equal(admissionStorage, actual);
+            });
         }
         finally
         {
@@ -345,14 +348,17 @@ public sealed class SerialExecutorTests
         Func<CancellationToken, ValueTask> callback = static _ => ValueTask.CompletedTask;
         Func<ReadOnlyMemory<byte>> factory = static () => ReadOnlyMemory<byte>.Empty;
         _ = new ZLinkSerialWorkItem(callback, acceptedPayloadFactory: factory);
-        var before = GC.GetAllocatedBytesForCurrentThread();
-        for (var i = 0; i < count; i++)
-            GC.KeepAlive(new ZLinkSerialWorkItem(callback));
-        var baseline = GC.GetAllocatedBytesForCurrentThread() - before;
-        before = GC.GetAllocatedBytesForCurrentThread();
-        for (var i = 0; i < count; i++)
-            GC.KeepAlive(new ZLinkSerialWorkItem(callback, acceptedPayloadFactory: factory));
-        Assert.Equal(baseline, GC.GetAllocatedBytesForCurrentThread() - before);
+        MeasureWithoutGarbageCollection(() =>
+        {
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            for (var i = 0; i < count; i++)
+                GC.KeepAlive(new ZLinkSerialWorkItem(callback));
+            var baseline = GC.GetAllocatedBytesForCurrentThread() - before;
+            before = GC.GetAllocatedBytesForCurrentThread();
+            for (var i = 0; i < count; i++)
+                GC.KeepAlive(new ZLinkSerialWorkItem(callback, acceptedPayloadFactory: factory));
+            Assert.Equal(baseline, GC.GetAllocatedBytesForCurrentThread() - before);
+        });
     }
 
     [Fact]
@@ -386,14 +392,17 @@ public sealed class SerialExecutorTests
                     Baseline();
                     Actual();
                 }
-                var before = GC.GetAllocatedBytesForCurrentThread();
-                for (var i = 0; i < 1000; i++)
-                    Baseline();
-                var ambientStorage = GC.GetAllocatedBytesForCurrentThread() - before;
-                before = GC.GetAllocatedBytesForCurrentThread();
-                for (var i = 0; i < 1000; i++)
-                    Actual();
-                Assert.Equal(ambientStorage, GC.GetAllocatedBytesForCurrentThread() - before);
+                MeasureWithoutGarbageCollection(() =>
+                {
+                    var before = GC.GetAllocatedBytesForCurrentThread();
+                    for (var i = 0; i < 1000; i++)
+                        Baseline();
+                    var ambientStorage = GC.GetAllocatedBytesForCurrentThread() - before;
+                    before = GC.GetAllocatedBytesForCurrentThread();
+                    for (var i = 0; i < 1000; i++)
+                        Actual();
+                    Assert.Equal(ambientStorage, GC.GetAllocatedBytesForCurrentThread() - before);
+                });
             }
             catch (Exception exception)
             {
@@ -464,17 +473,20 @@ public sealed class SerialExecutorTests
         }
         Baseline();
         Assert.False(executor.HasRelocationBarrier);
-        var before = GC.GetAllocatedBytesForCurrentThread();
-        for (var i = 0; i < 1000; i++)
-            Baseline();
-        var expected = GC.GetAllocatedBytesForCurrentThread() - before;
-        before = GC.GetAllocatedBytesForCurrentThread();
-        var hasBarrier = false;
-        for (var i = 0; i < 1000; i++)
-            hasBarrier |= executor.HasRelocationBarrier;
-        var actual = GC.GetAllocatedBytesForCurrentThread() - before;
-        Assert.False(hasBarrier);
-        Assert.Equal(expected, actual);
+        MeasureWithoutGarbageCollection(() =>
+        {
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            for (var i = 0; i < 1000; i++)
+                Baseline();
+            var expected = GC.GetAllocatedBytesForCurrentThread() - before;
+            before = GC.GetAllocatedBytesForCurrentThread();
+            var hasBarrier = false;
+            for (var i = 0; i < 1000; i++)
+                hasBarrier |= executor.HasRelocationBarrier;
+            var actual = GC.GetAllocatedBytesForCurrentThread() - before;
+            Assert.False(hasBarrier);
+            Assert.Equal(expected, actual);
+        });
     }
 
     [Fact]
@@ -487,10 +499,13 @@ public sealed class SerialExecutorTests
             CancellationToken.None
         );
         queue.PublishDrain(null);
-        var before = GC.GetAllocatedBytesForCurrentThread();
-        for (var i = 0; i < 1000; i++)
-            queue.PublishDrain(null);
-        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+        MeasureWithoutGarbageCollection(() =>
+        {
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            for (var i = 0; i < 1000; i++)
+                queue.PublishDrain(null);
+            Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+        });
     }
 
     [Fact]
@@ -503,10 +518,13 @@ public sealed class SerialExecutorTests
             CancellationToken.None
         );
         queue.SchedulePendingWork();
-        var before = GC.GetAllocatedBytesForCurrentThread();
-        for (var i = 0; i < 1000; i++)
-            queue.SchedulePendingWork();
-        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+        MeasureWithoutGarbageCollection(() =>
+        {
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            for (var i = 0; i < 1000; i++)
+                queue.SchedulePendingWork();
+            Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+        });
     }
 
     [Fact]
@@ -522,14 +540,17 @@ public sealed class SerialExecutorTests
             baseline.RunAsync(static value => value, true).GetAwaiter().GetResult();
         }
         Baseline();
-        var before = GC.GetAllocatedBytesForCurrentThread();
-        for (var i = 0; i < 1000; i++)
-            Baseline();
-        var laneStorage = GC.GetAllocatedBytesForCurrentThread() - before;
-        before = GC.GetAllocatedBytesForCurrentThread();
-        for (var i = 0; i < 1000; i++)
-            gate.TryInvoke(reply);
-        Assert.Equal(laneStorage, GC.GetAllocatedBytesForCurrentThread() - before);
+        MeasureWithoutGarbageCollection(() =>
+        {
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            for (var i = 0; i < 1000; i++)
+                Baseline();
+            var laneStorage = GC.GetAllocatedBytesForCurrentThread() - before;
+            before = GC.GetAllocatedBytesForCurrentThread();
+            for (var i = 0; i < 1000; i++)
+                gate.TryInvoke(reply);
+            Assert.Equal(laneStorage, GC.GetAllocatedBytesForCurrentThread() - before);
+        });
     }
 
     [Fact]
@@ -559,18 +580,21 @@ public sealed class SerialExecutorTests
             await entered.Task;
             Assert.True(queue.TryPost(callback, out _));
             GC.KeepAlive(new ZLinkSerialWorkItem(callback));
-            var before = GC.GetAllocatedBytesForCurrentThread();
-            for (var i = 0; i < 1000; i++)
-                GC.KeepAlive(new ZLinkSerialWorkItem(callback));
-            var storage = GC.GetAllocatedBytesForCurrentThread() - before;
-            before = GC.GetAllocatedBytesForCurrentThread();
-            var admitted = 0;
-            for (var i = 0; i < 1000; i++)
-                if (queue.TryPost(callback, out _))
-                    admitted++;
-            var admissionStorage = GC.GetAllocatedBytesForCurrentThread() - before;
-            Assert.Equal(1000, admitted);
-            Assert.Equal(storage, admissionStorage);
+            MeasureWithoutGarbageCollection(() =>
+            {
+                var before = GC.GetAllocatedBytesForCurrentThread();
+                for (var i = 0; i < 1000; i++)
+                    GC.KeepAlive(new ZLinkSerialWorkItem(callback));
+                var storage = GC.GetAllocatedBytesForCurrentThread() - before;
+                before = GC.GetAllocatedBytesForCurrentThread();
+                var admitted = 0;
+                for (var i = 0; i < 1000; i++)
+                    if (queue.TryPost(callback, out _))
+                        admitted++;
+                var admissionStorage = GC.GetAllocatedBytesForCurrentThread() - before;
+                Assert.Equal(1000, admitted);
+                Assert.Equal(storage, admissionStorage);
+            });
         }
         finally
         {
@@ -768,14 +792,17 @@ public sealed class SerialExecutorTests
             for (var i = 0; i < items.Length; i++)
                 Assert.True(queue.TryPost(static _ => ValueTask.CompletedTask, out items[i]));
             GC.KeepAlive(Baseline(queue, release));
-            var before = GC.GetAllocatedBytesForCurrentThread();
-            for (var i = 0; i < items.Length; i++)
-                GC.KeepAlive(Baseline(queue, release));
-            var stateStorage = GC.GetAllocatedBytesForCurrentThread() - before;
-            before = GC.GetAllocatedBytesForCurrentThread();
-            for (var i = 0; i < items.Length; i++)
-                items[i].AddTerminalRelease(release);
-            Assert.Equal(stateStorage, GC.GetAllocatedBytesForCurrentThread() - before);
+            MeasureWithoutGarbageCollection(() =>
+            {
+                var before = GC.GetAllocatedBytesForCurrentThread();
+                for (var i = 0; i < items.Length; i++)
+                    GC.KeepAlive(Baseline(queue, release));
+                var stateStorage = GC.GetAllocatedBytesForCurrentThread() - before;
+                before = GC.GetAllocatedBytesForCurrentThread();
+                for (var i = 0; i < items.Length; i++)
+                    items[i].AddTerminalRelease(release);
+                Assert.Equal(stateStorage, GC.GetAllocatedBytesForCurrentThread() - before);
+            });
         }
         finally
         {
@@ -856,15 +883,19 @@ public sealed class SerialExecutorTests
         try
         {
             await entered.Task;
-            var before = GC.GetAllocatedBytesForCurrentThread();
-            GC.KeepAlive(
-                new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)
-            );
-            var signalStorage = GC.GetAllocatedBytesForCurrentThread() - before;
-            before = GC.GetAllocatedBytesForCurrentThread();
-            var drained = queue.ApplicationDrained;
-            var observedStorage = GC.GetAllocatedBytesForCurrentThread() - before;
-            Assert.Equal(signalStorage, observedStorage);
+            var drained = Task.CompletedTask;
+            MeasureWithoutGarbageCollection(() =>
+            {
+                var before = GC.GetAllocatedBytesForCurrentThread();
+                GC.KeepAlive(
+                    new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)
+                );
+                var signalStorage = GC.GetAllocatedBytesForCurrentThread() - before;
+                before = GC.GetAllocatedBytesForCurrentThread();
+                drained = queue.ApplicationDrained;
+                var observedStorage = GC.GetAllocatedBytesForCurrentThread() - before;
+                Assert.Equal(signalStorage, observedStorage);
+            });
             Assert.Same(drained, queue.ApplicationDrained);
             Assert.False(drained.IsCompleted);
             release.TrySetResult();
@@ -3108,6 +3139,80 @@ public sealed class SerialExecutorTests
     }
 
     [Fact]
+    public async Task CompleteFollowsMailboxWhenPlacementReturnsToStandalone()
+    {
+        using var errors = new ZLinkRuntimeErrorSink();
+        var failures = new ConcurrentQueue<Exception>();
+        errors.UnhandledCallbackException += failures.Enqueue;
+        var runner = new ZLinkRuntimeTaskRunner(errors, CancellationToken.None);
+        await using var parent = new ZLinkSerialExecutionQueue(
+            runner,
+            errors,
+            CancellationToken.None,
+            ZLinkExecutionLanePolicy.Default,
+            sharedGate: true
+        );
+        await using var mailbox = new ZLinkSerialExecutionQueue(
+            runner,
+            errors,
+            CancellationToken.None
+        );
+        mailbox.BindExecutionOwner(() => parent);
+        var warm = await mailbox.PostAsync(
+            static _ => ValueTask.CompletedTask,
+            CancellationToken.None
+        );
+        await warm.Completion.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(mailbox.HasSharedConsumer);
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        mailbox.BindExecutionOwner(() =>
+        {
+            entered.Set();
+            release.Wait();
+            return null;
+        });
+        var placement = Task.Run(async () => await mailbox.ReleaseExecutionPlacementAsync());
+        Exception? completionFailure = null;
+        var completing = new Thread(() =>
+        {
+            try
+            {
+                mailbox.Complete();
+            }
+            catch (Exception exception)
+            {
+                completionFailure = exception;
+            }
+        });
+        try
+        {
+            Assert.True(entered.Wait(TimeSpan.FromSeconds(5)));
+            completing.Start();
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                        (completing.ThreadState & System.Threading.ThreadState.WaitSleepJoin) != 0,
+                    TimeSpan.FromSeconds(5)
+                )
+            );
+        }
+        finally
+        {
+            release.Set();
+            if ((completing.ThreadState & System.Threading.ThreadState.Unstarted) == 0)
+                completing.Join();
+        }
+        await placement.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Null(completionFailure);
+        await mailbox.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.False(mailbox.HasSharedConsumer);
+        Assert.Empty(failures);
+        await parent.DisposeAsync();
+        await runner.StopAsync();
+    }
+
+    [Fact]
     public async Task ReadinessAfterQueueTerminationDoesNotRecreateProcessResources()
     {
         using var errors = new ZLinkRuntimeErrorSink();
@@ -3124,25 +3229,23 @@ public sealed class SerialExecutorTests
             CancellationToken.None
         );
         await work.Completion.WaitAsync(TimeSpan.FromSeconds(5));
+        var source = typeof(ZLinkSerialExecutionQueue).GetField(
+            "_drainSource",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic
+        )!;
+        Assert.NotNull(source.GetValue(queue));
         await queue.DisposeAsync();
-        ZLinkProcessExecutionPool.ReceiveSource? receiver = null;
-        var factoryCalls = 0;
         try
         {
+            Assert.Null(source.GetValue(queue));
             for (var index = 0; index < 16; index++)
-                queue.NotifyReadiness();
-            receiver = ZLinkProcessExecutionPool.CreateReceiveSource(() =>
             {
-                Interlocked.Increment(ref factoryCalls);
-                return Systems.Zlink.Zlink.CreatePoller();
-            });
-            await receiver.ResumeAsync();
-            Assert.Equal(1, factoryCalls);
+                queue.NotifyReadiness();
+                Assert.Null(source.GetValue(queue));
+            }
         }
         finally
         {
-            if (receiver is not null)
-                await receiver.DisposeAsync();
             await queue.ReleaseExecutionSourceAsync();
             await runner.StopAsync();
         }
@@ -3407,6 +3510,31 @@ public sealed class SerialExecutorTests
             }
         }
     }
+
+    private static void MeasureWithoutGarbageCollection(Action measurement)
+    {
+        // Background GC can charge unused allocation-context space to this thread's counter.
+        // Keep exact byte assertions, but exclude GC accounting changes from both intervals.
+        // UnitTests disables parallel test execution; setup and warmup precede this region.
+        // This reserves heap space, not an allowance in the allocation assertion.
+        Assert.True(GC.TryStartNoGCRegion(NoGcMeasurementReservationBytes));
+        try
+        {
+            measurement();
+        }
+        catch
+        {
+            // Keep the measurement failure; end the region only while it is still active.
+            if (System.Runtime.GCSettings.LatencyMode == System.Runtime.GCLatencyMode.NoGCRegion)
+                GC.EndNoGCRegion();
+            throw;
+        }
+        // A collection or an exhausted reservation must fail the test, not discard a sample.
+        GC.EndNoGCRegion();
+    }
+
+    // Larger than every measured loop (1,000 iterations, a few hundred KB).
+    private const long NoGcMeasurementReservationBytes = 16 * 1024 * 1024;
 
     private static ZlinkStreamHeader CreateHeader(string name)
     {
