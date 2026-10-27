@@ -239,10 +239,12 @@ Counter 3개(`flow_pause_applied_total`, `flow_resume_applied_total`,
 있다는 뜻이다. 이 bit와 `CONNECTION_READY` event의 `value`는 같은 ready logical peer count 하나를
 원천으로 한다 — snapshot을 위해 socket 종류별로 따로 계산한 ready 값을 두지 않는다.
 
-- `CONNECTION_READY_EDGE` event를 받은 뒤 조회한 snapshot은, 그 사이 같은 source에 not-ready 전이가
-  없었다면 `READY`를 포함한다.
-- `READY`는 logical connection이 성립했다는 사실만 나타낸다. SUB·XSUB·XPUB에서 구독 message가
-  실제로 전달되기 시작하는 시점은 이 bit가 나타내지 않으며, 구독 전파 규칙을 따른다.
+- `ZLINK_MONITOR_EVENT_FLAG_CONNECTION_READY_EDGE` flag가 설정된 `CONNECTION_READY` event를 받은 뒤
+  조회한 snapshot은, 해당 ready 전이의 commit부터 snapshot의 `READY` 판정까지 같은 source에 not-ready
+  전이가 없었다면 `READY`를 포함한다.
+- `READY`는 logical connection의 성립을 나타낸다. SUB·XSUB·XPUB의 구독 message 전파나 구독한 data의
+  전달 시작을 보장하지 않으며, 구독 동작은 [XSUB §2](socket/05-xsub.ko.md#2-구독-동작), publisher의 구독
+  이벤트와 수동 관리는 [XPUB §2](socket/04-xpub.ko.md#2-구독-이벤트-흐름)를 따른다.
 
 ## 7. 타입과 상수
 

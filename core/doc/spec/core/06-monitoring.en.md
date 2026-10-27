@@ -253,10 +253,13 @@ follows the boundary in [§6.3](#63-byte-and-pending-diagnostic-fields).
 peer. This bit and the `value` of the `CONNECTION_READY` event come from one ready-logical-peer count —
 there is no separate per-socket-type ready value computed only for the snapshot.
 
-- A snapshot taken after a `CONNECTION_READY_EDGE` event includes `READY` unless the same source made
-  a not-ready transition in between.
-- `READY` only states that a logical connection is established. It does not state when subscription
-  messages start to flow on SUB, XSUB, or XPUB; that follows the subscription propagation rules.
+- After receiving a `CONNECTION_READY` event with `ZLINK_MONITOR_EVENT_FLAG_CONNECTION_READY_EDGE` set,
+  a subsequent snapshot includes `READY` if the same source has made no not-ready transition between
+  committing that ready transition and evaluating `READY` for the snapshot.
+- `READY` indicates that a logical connection is established. It does not guarantee
+  subscription-message propagation or the start of subscribed-data delivery on SUB, XSUB, or XPUB.
+  Subscription behavior follows [XSUB §2](socket/05-xsub.en.md#2-subscription-behavior); publisher-side
+  subscription events and manual management follow [XPUB §2](socket/04-xpub.en.md#2-subscription-event-flow).
 
 ## 7. Types and Constants
 
