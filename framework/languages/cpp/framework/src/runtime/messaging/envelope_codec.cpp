@@ -615,35 +615,36 @@ class header_sax_t final : public nlohmann::json_sax<nlohmann::json>
     using string_t = nlohmann::json::string_t;
     using binary_t = nlohmann::json::binary_t;
 
-    static header_member_t member (const std::string &name)
+    static header_member_t member (std::string_view name)
     {
-        if (name == "kind")
+        using namespace std::string_view_literals;
+        if (name == "kind"sv)
             return header_member_t::kind;
-        if (name == "channelName")
+        if (name == "channelName"sv)
             return header_member_t::channel_name;
-        if (name == "messageName")
+        if (name == "messageName"sv)
             return header_member_t::message_name;
-        if (name == "contentType")
+        if (name == "contentType"sv)
             return header_member_t::content_type;
-        if (name == "correlationId")
+        if (name == "correlationId"sv)
             return header_member_t::correlation_id;
-        if (name == "deadline")
+        if (name == "deadline"sv)
             return header_member_t::deadline;
-        if (name == "topic")
+        if (name == "topic"sv)
             return header_member_t::topic;
-        if (name == "errorCode")
+        if (name == "errorCode"sv)
             return header_member_t::error_code;
-        if (name == "errorMessage")
+        if (name == "errorMessage"sv)
             return header_member_t::error_message;
-        if (name == "source")
+        if (name == "source"sv)
             return header_member_t::source;
-        if (name == "flowId")
+        if (name == "flowId"sv)
             return header_member_t::flow_id;
-        if (name == "flowOrigin")
+        if (name == "flowOrigin"sv)
             return header_member_t::flow_origin;
-        if (name == "formatMarker")
+        if (name == "formatMarker"sv)
             return header_member_t::format_marker;
-        if (name == "metadata")
+        if (name == "metadata"sv)
             return header_member_t::metadata;
         return header_member_t::none;
     }

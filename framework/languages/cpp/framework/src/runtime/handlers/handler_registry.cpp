@@ -140,32 +140,29 @@ task_t<zlink::message_t> invoke_filter_level (std::shared_ptr<const filter_list_
                                                                  std::move (context), terminal);
                                });
 
-    const auto downstream =
-      next_state->lane
-        .run ([&] {
-            if (next_state->duplicate) {
-                throw framework_exception_t (framework_error_kind_t::invalid_operation,
-                                             "handler filter next may be invoked at most once");
-            }
-            if (!next_state->called) {
-                if (is_request_dispatch (context.dispatch_kind)) {
-                    throw framework_exception_t (
-                      framework_error_kind_t::rejected,
-                      "handler filter rejected the request without invoking next");
-                }
-                return result_t<zlink::message_t>::success (zlink::message_t{});
-            }
-            if (!next_state->downstream) {
+    const auto downstream = next_state->lane.run_sync ([&] {
+        if (next_state->duplicate) {
+            throw framework_exception_t (framework_error_kind_t::invalid_operation,
+                                         "handler filter next may be invoked at most once");
+        }
+        if (!next_state->called) {
+            if (is_request_dispatch (context.dispatch_kind)) {
                 throw framework_exception_t (
-                  framework_error_kind_t::internal_failure,
-                  "handler filter returned before its continuation completed");
+                  framework_error_kind_t::rejected,
+                  "handler filter rejected the request without invoking next");
             }
-            if (!*next_state->downstream) {
-                throw *next_state->downstream->error ();
-            }
-            return *next_state->downstream;
-        })
-        .get ();
+            return result_t<zlink::message_t>::success (zlink::message_t{});
+        }
+        if (!next_state->downstream) {
+            throw framework_exception_t (
+              framework_error_kind_t::internal_failure,
+              "handler filter returned before its continuation completed");
+        }
+        if (!*next_state->downstream) {
+            throw *next_state->downstream->error ();
+        }
+        return *next_state->downstream;
+    });
     co_return downstream.value ();
 }
 
