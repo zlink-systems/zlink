@@ -88,8 +88,10 @@ class core_context_listener_t final : public testing::EmptyTestEventListener
         std::cout << "[ CONTEXTS ] " << test.test_suite_name () << '.' << test.name ()
                   << " before=" << _before << " after=" << counts.contexts
                   << " threads=" << counts.threads << std::endl;
-        for (const auto &thread : counts.core_threads)
-            std::cout << "[ CORE THREAD ] " << thread << std::endl;
+        if (counts.contexts != _baseline) {
+            for (const auto &thread : counts.core_threads)
+                std::cout << "[ CORE THREAD ] " << thread << std::endl;
+        }
         EXPECT_EQ (counts.contexts, _baseline) << "Core contexts survived test teardown";
     }
 
