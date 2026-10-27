@@ -990,6 +990,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   target_link_libraries(test_cpp_framework_submit_result_contract PRIVATE
+    zlink_framework
     zlink::framework_provider_abstractions
     zlink::cpp
     opentelemetry-cpp::api

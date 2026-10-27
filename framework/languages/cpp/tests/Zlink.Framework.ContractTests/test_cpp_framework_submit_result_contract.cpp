@@ -20,6 +20,7 @@ static_assert (
 
 int main ()
 {
+    zlink::framework::completion_owner_t completion_owner;
     const zlink::submit_error_t capacity_refusal (zlink::submit_result_t::backpressured, EAGAIN);
     for (const bool completion_failure : {false, true}) {
         const auto capacity_error = messaging::map_request_result_exception (

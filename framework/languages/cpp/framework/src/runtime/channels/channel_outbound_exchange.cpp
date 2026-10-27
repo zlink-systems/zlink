@@ -1,7 +1,8 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 
 #include "runtime/channels/channel_outbound_exchange.hpp"
-#include "runtime/messaging/request_deadline.hpp"
+#include "runtime/backend/raw_dealer_port.hpp"
+#include "runtime/eventing/runtime_wake_timer.hpp"
 #include "runtime/backend/raw_binding_adapter.hpp"
 
 #include "runtime/channels/channel_runtime_manager.hpp"
@@ -270,24 +271,25 @@ class channel_native_client_t
                              const channel_capability_snapshot_t &client,
                              channel_runtime_t runtime,
                              std::shared_ptr<zlink::context_t> core_context,
-                             detail::channel_runtime_bundle_t &connections) :
+                             detail::channel_runtime_bundle_t &connections,
+                             runtime::state_lane_t &owner) :
         _channel_name (std::move (channel_name)),
         _runtime (std::move (runtime)),
         _connections (connections),
-        _transport (std::make_shared<transport_t> (client, std::move (core_context)))
+        _transport (std::make_shared<transport_t> (client, std::move (core_context), owner))
     {
         const std::weak_ptr<transport_t> transport = _transport;
         _connections.attach_manual_connections (
           [transport] (const std::string &endpoint) {
               if (auto current = transport.lock ()) {
-                  std::lock_guard lock (current->mutex);
+                  std::lock_guard lock (*current->mutex);
                   if (current->socket)
                       current->socket->connect (endpoint);
               }
           },
           [transport] (const std::string &endpoint) {
               if (auto current = transport.lock ()) {
-                  std::lock_guard lock (current->mutex);
+                  std::lock_guard lock (*current->mutex);
                   if (current->socket)
                       current->socket->disconnect (endpoint);
               }
@@ -299,18 +301,6 @@ class channel_native_client_t
 
     request_task_t<runtime::messaging::message_parts_t>
     request (const runtime::messaging::message_parts_t &parts, std::chrono::milliseconds timeout)
-    {
-        std::optional<std::chrono::steady_clock::time_point> caller_deadline;
-        // task_t starts eagerly: request_native writes this snapshot before
-        // its first suspension and never accesses the reference after that.
-        auto operation = request_native (parts, timeout, caller_deadline);
-        return runtime::messaging::with_request_deadline (std::move (operation), caller_deadline);
-    }
-
-    request_task_t<runtime::messaging::message_parts_t>
-    request_native (const runtime::messaging::message_parts_t &parts,
-                    std::chrono::milliseconds timeout,
-                    std::optional<std::chrono::steady_clock::time_point> &caller_deadline)
     {
         const auto deadline = std::chrono::steady_clock::now () + timeout;
         if (_closed.load (std::memory_order_acquire)) {
@@ -327,7 +317,6 @@ class channel_native_client_t
                   detail::boundary_error_t::disconnected,
                   "channel client has no connected server endpoint");
             }
-            std::optional<detail::backend::request_submission_stages_t> pending;
             std::shared_ptr<transport_t> transport;
             {
                 std::lock_guard lock (_mutex);
@@ -337,38 +326,14 @@ class channel_native_client_t
                 }
                 transport = _transport;
             }
-            // Core owns peer readiness and weight admission for this DEALER:
-            // submit now and map its typed terminal.
-            const auto request_timeout = timeout;
-            {
-                zlink::message_t request_header = parts[0];
-                zlink::message_t request_body = parts[1];
-                std::lock_guard client_lock (_mutex);
-                if (_closed.load (std::memory_order_acquire) || _transport != transport) {
-                    co_return detail::boundary_failure<runtime::messaging::message_parts_t> (
-                      detail::boundary_error_t::shutdown, "channel native client is closed");
-                }
-                std::lock_guard transport_lock (transport->mutex);
-                if (!transport->socket) {
-                    co_return detail::boundary_failure<runtime::messaging::message_parts_t> (
-                      detail::boundary_error_t::shutdown, "channel native client is closed");
-                }
-                pending.emplace (detail::backend::submit_request_once (
-                  [&] {
-                      return transport->socket->request ()
-                        .message (request_header)
-                        .message (request_body)
-                        .timeout (request_timeout)
-                        .async ();
-                  },
-                  deadline));
-                caller_deadline = pending->caller_deadline;
-            }
-            if (pending->admission)
-                co_await std::move (*pending->admission);
-            co_await detail::request_admitted_t{};
-            auto reply = co_await std::move (pending->reply);
-            co_return runtime::messaging::message_parts_t (std::move (reply));
+            auto admitted = co_await detail::request_admission_source_t{};
+            std::vector<zlink::message_t> messages{parts[0], parts[1]};
+            auto reply = co_await transport->port->request (std::move (messages), timeout, {},
+                                                            admitted, deadline);
+            if (reply.terminal != zlink::request_result_t::ok)
+                throw runtime::messaging::map_request_result_exception (reply.terminal,
+                                                                        "channel request");
+            co_return runtime::messaging::message_parts_t (std::move (reply.parts));
         }
         catch (const std::exception &) {
             const auto mapped = map_native_exception ();
@@ -412,7 +377,7 @@ class channel_native_client_t
                     throw detail::make_boundary_exception (detail::boundary_error_t::shutdown,
                                                            "channel native client is closed");
                 }
-                std::lock_guard transport_lock (transport->mutex);
+                std::lock_guard transport_lock (*transport->mutex);
                 if (!transport->socket) {
                     throw detail::make_boundary_exception (detail::boundary_error_t::shutdown,
                                                            "channel native client is closed");
@@ -460,7 +425,8 @@ class channel_native_client_t
     struct transport_t
     {
         transport_t (const channel_capability_snapshot_t &client,
-                     std::shared_ptr<zlink::context_t> context) :
+                     std::shared_ptr<zlink::context_t> context,
+                     runtime::state_lane_t &owner) :
             context (std::move (context)),
             socket (std::make_unique<zlink::dealer_socket_t> (*this->context))
         {
@@ -473,9 +439,11 @@ class channel_native_client_t
                                             | zlink::monitor_event::connection_ready
                                             | zlink::monitor_event::disconnected);
             monitor_poller.add (monitor, zlink::poll_event_flag_t::pollin, 1);
-            monitor_poller.add (
-              *socket, zlink::poll_event_flag_t::pollout | zlink::poll_event_flag_t::pollcompletion,
-              2);
+            wake.attach (monitor_poller);
+            port = std::make_shared<detail::backend::raw_dealer_port_t> (
+              *socket, mutex, &monitor_poller, 2, &owner, [this] { wake.signal (); });
+            monitor_poller.modify (*socket, zlink::poll_event_flag_t::pollout
+                                              | zlink::poll_event_flag_t::pollcompletion);
         }
 
         ~transport_t () { close (); }
@@ -488,10 +456,23 @@ class channel_native_client_t
                                            channel_name = std::move (channel_name)] () mutable {
                 while (!monitor_stop.load (std::memory_order_acquire)) {
                     try {
+                        const auto now = std::chrono::steady_clock::now ();
+                        if (const auto visit = port->next_request_deadline ();
+                            visit && *visit <= now)
+                            port->expire_requests (now);
+                        auto wait = std::chrono::milliseconds (50);
+                        if (const auto visit = port->next_request_deadline ())
+                            wait = std::min (
+                              wait, std::max (std::chrono::milliseconds::zero (),
+                                              std::chrono::ceil<std::chrono::milliseconds> (
+                                                *visit - std::chrono::steady_clock::now ())));
                         zlink::poll_event_t poll_event;
-                        if (monitor_poller.wait (&poll_event, 1, std::chrono::milliseconds (50))
-                              != 1
-                            || poll_event.slot != 1
+                        const auto count = monitor_poller.wait (&poll_event, 1, wait);
+                        if (count == 1 && wake.is_event (poll_event)) {
+                            wake.consume ();
+                            continue;
+                        }
+                        if (count != 1 || poll_event.slot != 1
                             || (static_cast<short> (poll_event.revents)
                                 & static_cast<short> (zlink::poll_event_flag_t::pollin))
                                  == 0) {
@@ -517,11 +498,14 @@ class channel_native_client_t
         void close ()
         {
             monitor_stop.store (true, std::memory_order_release);
+            wake.signal ();
             if (monitor_thread.joinable ()) {
                 monitor_thread.join ();
             }
-            const std::lock_guard lock (mutex);
+            port->close ();
+            const std::lock_guard lock (*mutex);
             if (socket) {
+                wake.detach ();
                 monitor_poller.close ();
                 monitor.close ();
                 socket->close ();
@@ -533,9 +517,11 @@ class channel_native_client_t
         std::unique_ptr<zlink::dealer_socket_t> socket;
         zlink::socket_monitor_t monitor;
         zlink::poller_t monitor_poller;
+        runtime::eventing::runtime_wake_timer_t wake;
+        std::shared_ptr<std::mutex> mutex = std::make_shared<std::mutex> ();
+        std::shared_ptr<detail::backend::raw_dealer_port_t> port;
         std::atomic_bool monitor_stop{false};
         std::thread monitor_thread;
-        std::mutex mutex;
     };
 
     std::string _channel_name;
@@ -1006,7 +992,8 @@ channel_outbound_exchange_t::submit_request (std::string channel_name,
                     slot = std::make_shared<channel_native_client_t> (
                       channel_name, *client, runtime, state->core_context,
                       detail::channel_runtime_manager_t (state).get_or_create_client_bundle (
-                        channel_name));
+                        channel_name),
+                      state->lane);
                 }
                 return result_t<std::shared_ptr<channel_native_client_t>>::success (slot);
             });
@@ -1170,7 +1157,8 @@ channel_outbound_exchange_t::submit_send (std::string channel_name,
                     slot = std::make_shared<channel_native_client_t> (
                       channel_name, *client, channel_runtime_t (state), state->core_context,
                       detail::channel_runtime_manager_t (state).get_or_create_client_bundle (
-                        channel_name));
+                        channel_name),
+                      state->lane);
                 }
                 return slot;
             });
