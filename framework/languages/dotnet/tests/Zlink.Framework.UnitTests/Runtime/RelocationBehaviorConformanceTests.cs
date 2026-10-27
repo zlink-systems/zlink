@@ -2546,6 +2546,7 @@ internal sealed class RelocationBehaviorTrace
     internal Action<IZLinkEntrySpotContext>? ConfigureEntry { get; init; }
     internal int OrdinarySendCount;
     internal int OrdinarySendBatchSize { get; init; }
+    internal Func<ValueTask>? BeforeTargetAdmissionReply { get; set; }
     internal Func<BehaviorActor, ValueTask>? OnTargetJoined { get; set; }
     internal Func<ValueTask>? OnTargetClosing { get; set; }
     internal Func<BehaviorActor, ValueTask>? OnPublicJoinCompleted { get; set; }
@@ -3185,14 +3186,16 @@ internal sealed class BehaviorTargetSpot(IZLinkSpotContext context, RelocationBe
         CancellationToken cancellationToken
     ) => ValueTask.FromResult(ZLinkSpotCreateResponse.Accept());
 
-    public ValueTask<ZLinkSpotActorJoinResult> OnActorJoinAsync(
+    public async ValueTask<ZLinkSpotActorJoinResult> OnActorJoinAsync(
         string actorId,
         ZLinkMessage request,
         CancellationToken cancellationToken
     )
     {
+        if (trace.BeforeTargetAdmissionReply is { } beforeReply)
+            await beforeReply();
         trace.Record("targetAdmissionReplied");
-        return ValueTask.FromResult(ZLinkSpotActorJoinResult.Accept(request));
+        return ZLinkSpotActorJoinResult.Accept(request);
     }
 
     public async ValueTask OnJoinedActorAsync(
