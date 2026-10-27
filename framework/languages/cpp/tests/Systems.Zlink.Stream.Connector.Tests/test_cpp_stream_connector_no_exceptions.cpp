@@ -65,6 +65,7 @@ int main ()
               ++callbacks;
       });
     (void) connector.dispatch ();
+    (void) connector.dispatch ();
     if (request || request.error_code () != error_code_t::send_failed || errors != 1
         || callbacks != 1)
         return 4;
