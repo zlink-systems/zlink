@@ -311,13 +311,13 @@ final class ZLinkJavaRawMeshNodeShutdownSealTest {
             // concurrent peers()/send caller could hit lies inside one
             // dispatch turn, so sampling readiness from outside cannot
             // pin it deterministically.
-            var field =
-                    ZLinkJavaRawMeshNode.class.getDeclaredField("admissionControlReadyConnections");
+            var field = ZLinkServiceTopologyRegistry.class.getDeclaredField("readyConnections");
             field.setAccessible(true);
+            var topology = (ZLinkServiceTopologyRegistry) field(right, "topology");
             @SuppressWarnings("unchecked")
             var readiness =
-                    new RecordingReadiness((java.util.Map<RoutingId, String>) field.get(right));
-            field.set(right, readiness);
+                    new RecordingReadiness((java.util.Map<RoutingId, String>) field.get(topology));
+            field.set(topology, readiness);
             for (int command :
                     new int[] {
                         ServiceWireConstants.COMMAND_HELLO,
@@ -327,7 +327,7 @@ final class ZLinkJavaRawMeshNodeShutdownSealTest {
                 long marked = readiness.marks(left.routingId());
                 // Same descriptor, same selected connection: an idempotent
                 // admission (mesh-node §7.1). Its completion re-marks the
-                // connection (Admit received, or the Admit reply sent).
+                // connection while preserving the received ADMIT.
                 sendAdmission(left, right, command);
                 await(() -> readiness.marks(left.routingId()) > marked);
                 assertEquals(

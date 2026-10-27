@@ -38,17 +38,18 @@ final class ZLinkJavaRawMeshNodeRouteEndTest {
                         topology.admit(
                                 descriptor(peerRid),
                                 connectionId,
-                                ServiceWireConstants.COMMAND_HELLO));
+                                ServiceWireConstants.COMMAND_ADMIT));
                 var liveness = (ZLinkServiceLivenessRegistry) field(node, "liveness");
                 liveness.admit(peerRid, connectionId, 0);
                 long probeId = liveness.tick(0).probes().getFirst().probeId();
                 assertTrue(liveness.acknowledge(peerRid, connectionId, probeId, 1));
-                Map<RoutingId, String> ready = mapField(node, "admissionControlReadyConnections");
-                ready.put(peerRid, connectionId);
                 Map<RoutingId, ZLinkJavaRawMeshNode.HelloExchange> announced =
                         mapField(node, "helloExchanges");
                 var exchange =
-                        new ZLinkJavaRawMeshNode.HelloExchange(admittedGeneration, null, null);
+                        new ZLinkJavaRawMeshNode.HelloExchange(
+                                admittedGeneration,
+                                java.util.concurrent.CompletableFuture.completedFuture(null),
+                                null);
                 announced.put(peerRid, exchange);
                 setField(node, "selectedRoutes", Map.of(peerRid, endedGeneration));
 
@@ -60,7 +61,8 @@ final class ZLinkJavaRawMeshNodeRouteEndTest {
                 assertEquals(retained, topology.peer(peerRid).isPresent());
                 // 05-transport-liveness.ko.md:228 (§5): ACK does not own Ready.
                 assertEquals(retained, liveness.connection(peerRid) != null);
-                assertEquals(retained ? connectionId : null, ready.get(peerRid));
+                assertEquals(
+                        retained, topology.peer(peerRid).filter(topology::isReady).isPresent());
                 assertEquals(retained ? exchange : null, announced.get(peerRid));
                 setField(node, "router", null);
             }
