@@ -53,6 +53,8 @@
         <Compile Include="Runtime/BoundSessionDisconnectTests.cs"/>
         <Compile Include="Runtime/BoundSessionReplacementCloseTests.cs"/>
         <Compile Include="AssemblyInfo.cs"/>
+        <Compile Include="Support/PerCallAllocation.cs"/>
+        <Compile Include="Support/PerCallAllocationTests.cs"/>
         <Compile Include="Runtime/InstanceReadyAdmissionTests.cs"/>
         <Compile Include="Runtime/SessionFailureClassificationTests.cs"/>
         <Compile Include="Runtime/SpotShutdownExecutionTests.cs"/>
