@@ -1,11 +1,11 @@
 using Microsoft.Extensions.DependencyInjection;
 using Zlink.Framework.Runtime.Backend.Contracts;
 using Zlink.Framework.Runtime.Channels;
-using Zlink.Framework.Runtime.Messaging;
-using Zlink.Framework.Runtime.Service;
 using Zlink.Framework.Runtime.Dispatch;
 using Zlink.Framework.Runtime.Host;
 using Zlink.Framework.Runtime.Locations;
+using Zlink.Framework.Runtime.Messaging;
+using Zlink.Framework.Runtime.Service;
 
 namespace Zlink.Framework.UnitTests.Runtime;
 
