@@ -133,12 +133,14 @@ int main ()
         auto packet_subscription =
           named_connector.on<std::string> (name, [] (const message_t<std::string> &) {});
         check (packet_subscription.active () == !blank, "R4 fixture subscription result");
-        (void) named_connector.dispatch ();
+        while (named_connector.pending_dispatch_count () != 0)
+            (void) named_connector.dispatch ();
         check (rejected_events == (blank ? 2 : 0), "R4 fixture validation events");
         auto actor_subscription =
           fixture_actor->on<std::string> (name, [] (const message_t<std::string> &) {});
         check (actor_subscription.active () == !blank, "R4 fixture actor subscription result");
-        (void) named_connector.dispatch ();
+        while (named_connector.pending_dispatch_count () != 0)
+            (void) named_connector.dispatch ();
         check (rejected_events == (blank ? 3 : 0), "R4 fixture actor validation event");
     }
     check (fixture_rows != 0, "R4 fixture contains cases");
@@ -151,7 +153,8 @@ int main ()
     auto invalid_packet_subscription =
       named_connector.on<std::string> ("", [] (const message_t<std::string> &) {});
     check (!invalid_packet_subscription.active (), "R4 rejected subscription inactive");
-    (void) named_connector.dispatch ();
+    while (named_connector.pending_dispatch_count () != 0)
+        (void) named_connector.dispatch ();
     check (invalid_name_events == 2, "R4 rejected count and on publish ValidationFailed");
     invalid_name_subscription.unsubscribe ();
     check (named_connector.wait_for (" \t\r\n", std::chrono::milliseconds (10)).error_code ()
@@ -172,11 +175,13 @@ int main ()
     auto named_completion = named_drained.get_future ();
     boost::asio::post (named_state->write_strand, [&] { named_drained.set_value (); });
     named_completion.wait ();
-    (void) named_connector.dispatch ();
+    while (named_connector.pending_dispatch_count () != 0)
+        (void) named_connector.dispatch ();
     check (named_failures == 1 && named_connection->writes == 0,
            "R06 static empty name not replaced by compiler name");
     named_connector.send (packet_t{.name = "", .payload = {3}}).submit ();
-    (void) named_connector.dispatch ();
+    while (named_connector.pending_dispatch_count () != 0)
+        (void) named_connector.dispatch ();
     check (named_failures == 2, "R06 raw empty send name rejected");
     auto raw_request = named_connector.request (packet_t{.name = "", .payload = {4}})
                          .timeout (std::chrono::milliseconds (10))
