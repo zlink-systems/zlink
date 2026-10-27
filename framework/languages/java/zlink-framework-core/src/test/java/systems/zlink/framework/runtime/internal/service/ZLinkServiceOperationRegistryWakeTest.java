@@ -187,7 +187,8 @@ public final class ZLinkServiceOperationRegistryWakeTest {
             }
             serialReturns = returns.get() - before;
             System.out.printf(
-                    "serial requests=1000 completed=1000 wait_returns=%d expire_calls=%d upper_bound=2%n",
+                    "serial requests=1000 completed=1000 wait_returns=%d expire_calls=%d"
+                            + " upper_bound=2%n",
                     serialReturns, expires.get());
             // Let the already reserved visit occur, then observe indefinite idle.
             int beforeVisit = returns.get();
@@ -225,15 +226,21 @@ public final class ZLinkServiceOperationRegistryWakeTest {
             var lane =
                     (systems.zlink.framework.runtime.internal.execution.ZLinkStateLane)
                             ownerField.get(registry);
+            int beforeEarlier = returns.get();
             var earlier =
                     lane.awaitTurn(
                             () -> {
                                 var request =
                                         ZLinkCompletionBridge.await(
                                                 registry.register(Duration.ofNanos(1)));
+                                // The transformed park has no real timeout. Exercise the
+                                // worker parking before virtual time advances, then wake it.
+                                awaitReturns(beforeEarlier + 1);
+                                parked();
                                 clock.addAndGet(TimeUnit.MILLISECONDS.toNanos(2));
                                 return request;
                             });
+            java.util.concurrent.locks.LockSupport.unpark(worker.get());
             try {
                 earlier.get(5, TimeUnit.SECONDS);
                 throw new AssertionError("deadline did not expire");
@@ -249,7 +256,98 @@ public final class ZLinkServiceOperationRegistryWakeTest {
         if (serialReturns > 2)
             throw new AssertionError("serial wait returns=" + serialReturns + " > 2");
         queuedVisitDoesNotMultiplyOnRegistrationWakeups();
+        reservedEmptyVisitRunsOnce();
+        serialRequestsAcrossRotations();
         System.out.println("PASS");
+    }
+
+    private static void reservedEmptyVisitRunsOnce() throws Exception {
+        worker.set(null);
+        AtomicLong clock = new AtomicLong();
+        try (var registry =
+                new ZLinkServiceOperationRegistry(
+                        command -> {
+                            Thread thread = new Thread(command, "empty-reserved-visit");
+                            worker.set(thread);
+                            return thread;
+                        },
+                        new IllegalStateException("closed"),
+                        clock::get)) {
+            blocker = registry;
+            var request = ZLinkCompletionBridge.await(registry.register(Duration.ofSeconds(30)));
+            parked();
+            if (!registry.complete(request.id(), 1)) throw new AssertionError("reply lost");
+            request.get(5, TimeUnit.SECONDS);
+            // Drain stale entries before the worker's booked visit, without changing its
+            // reservation.
+            clock.set(TimeUnit.MILLISECONDS.toNanos(1));
+            ZLinkCompletionBridge.await(registry.expire(clock.get()));
+            var tick = ZLinkServiceOperationRegistry.class.getDeclaredField("maintenanceTick");
+            tick.setAccessible(true);
+            if (tick.getLong(registry) != 256)
+                throw new AssertionError("reserved empty visit cancelled");
+            int before = expires.get();
+            clock.set(TimeUnit.MILLISECONDS.toNanos(256));
+            java.util.concurrent.locks.LockSupport.unpark(worker.get());
+            awaitIdle(registry, tick);
+            int emptyVisits = expires.get() - before;
+            if (emptyVisits != 1) throw new AssertionError("empty visits=" + emptyVisits);
+            clock.addAndGet(TimeUnit.SECONDS.toNanos(5));
+            parked();
+            if (expires.get() - before != 1) throw new AssertionError("empty visit repeated");
+            System.out.printf("empty_index reserved_visits=%d subsequent_visits=0%n", emptyVisits);
+        }
+    }
+
+    private static void awaitIdle(
+            ZLinkServiceOperationRegistry registry, java.lang.reflect.Field tick) throws Exception {
+        long guard = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (tick.getLong(registry) != -1) {
+            if (System.nanoTime() - guard >= 0)
+                throw new AssertionError("maintenance did not become idle");
+            Thread.yield();
+        }
+        parked();
+    }
+
+    private static void serialRequestsAcrossRotations() throws Exception {
+        worker.set(null);
+        AtomicLong clock = new AtomicLong();
+        try (var registry =
+                new ZLinkServiceOperationRegistry(
+                        command -> {
+                            Thread thread = new Thread(command, "serial-rotation-visits");
+                            worker.set(thread);
+                            return thread;
+                        },
+                        new IllegalStateException("closed"),
+                        clock::get)) {
+            blocker = registry;
+            var tick = ZLinkServiceOperationRegistry.class.getDeclaredField("maintenanceTick");
+            tick.setAccessible(true);
+            int reservations = 0;
+            int before = expires.get();
+            for (int index = 0; index < 1_000; index++) {
+                if (tick.getLong(registry) == -1) reservations++;
+                var request =
+                        ZLinkCompletionBridge.await(
+                                registry.<Integer>register(Duration.ofSeconds(30)));
+                parked();
+                if (!registry.complete(request.id(), index)) throw new AssertionError("reply lost");
+                if (request.get(5, TimeUnit.SECONDS) != index)
+                    throw new AssertionError("wrong reply");
+                clock.addAndGet(TimeUnit.MILLISECONDS.toNanos(1));
+                if (clock.get() >= TimeUnit.MILLISECONDS.toNanos(tick.getLong(registry))) {
+                    java.util.concurrent.locks.LockSupport.unpark(worker.get());
+                    awaitIdle(registry, tick);
+                }
+            }
+            int rotations = (1_000 + 255) / 256;
+            if (reservations > rotations) throw new AssertionError("reservations=" + reservations);
+            System.out.printf(
+                    "serial_elapsed_ms=1000 requests=1000 reservations=%d rotations=%d visits=%d%n",
+                    reservations, rotations, expires.get() - before);
+        }
     }
 
     private static void queuedVisitDoesNotMultiplyOnRegistrationWakeups() throws Exception {

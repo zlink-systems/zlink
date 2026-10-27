@@ -216,6 +216,32 @@ final class ZLinkServiceOperationRegistryTest {
     }
 
     @Test
+    void retainedReservationDoesNotReadTheClockAgain() throws Exception {
+        AtomicLong clock = new AtomicLong();
+        AtomicInteger reads = new AtomicInteger();
+        var maintenance = new ManualMaintenance();
+        try (var registry =
+                new ZLinkServiceOperationRegistry(
+                        maintenance,
+                        new IllegalStateException("closed"),
+                        () -> {
+                            reads.incrementAndGet();
+                            return clock.get();
+                        })) {
+            var first = ZLinkCompletionBridge.await(registry.register(Duration.ofSeconds(30)));
+            assertTrue(registry.complete(first.id(), 1));
+            int before = reads.get();
+            var second = ZLinkCompletionBridge.await(registry.register(Duration.ofSeconds(30)));
+            assertEquals(
+                    2,
+                    reads.get() - before,
+                    "deadline capture and index insertion read time; a retained visit needs no"
+                            + " clock read");
+            assertTrue(registry.complete(second.id(), 2));
+        }
+    }
+
+    @Test
     void registrationKeepsDeadlineWhileWaitingForOwner() throws Exception {
         AtomicLong clock = new AtomicLong();
         var maintenance = new ManualMaintenance();

@@ -576,7 +576,10 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
     private void reserveMaintenanceVisit(Entry<?> entry) {
         if (deadlineSweepEndTick >= 0)
             deadlineNextVisitTick = Math.min(deadlineNextVisitTick, entry.deadlineTick);
-        if (maintenanceTick == VISIT_IN_FLIGHT) return;
+        // Keep the booked visit even if completion has emptied the index. Only that visit
+        // decides whether to stop; a later deadline cannot move it or needs another clock read.
+        if (maintenanceTick == VISIT_IN_FLIGHT
+                || maintenanceTick >= 0 && entry.deadlineTick >= maintenanceTick) return;
         long nowTick = (nanoTime.getAsLong() - deadlineOrigin) / DEADLINE_TICK_NANOS;
         if (maintenanceTick < 0) maintenanceVisitedTick = nowTick;
         long horizon = maintenanceVisitedTick + DEADLINE_SLOTS;
