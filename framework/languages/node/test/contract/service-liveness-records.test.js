@@ -15,7 +15,7 @@ test('transport liveness section 5 makes an admitted handshake Ready before any 
   liveness.admit('peer', 'pair', 0);
   const runtime = {
     topology: {
-      admittedPeer: () => ({ connectionId: 'pair', descriptor: { lifecycleGeneration: 7n } })
+      readyPeer: () => ({ connectionId: 'pair', descriptor: { lifecycleGeneration: 7n } })
     },
     liveness
   };
