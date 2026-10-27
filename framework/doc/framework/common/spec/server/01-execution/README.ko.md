@@ -12,7 +12,8 @@ title: "Execution"
 ## 1. Execution이 다루는 범위
 
 Application이 Messaging·Worker call을 submit하면, 그 call은 source-local admission을
-거쳐 target owner의 queue에 들어가고, execution gate 순서에 따라 handler가 실행되며,
+거쳐 target owner의 queue에 들어가고, [Handler turn과 execution gate §2](02-handler-turn-and-execution-gate.ko.md#execution-gate)가
+정한 시작 순서와 동시 실행 범위로 handler가 실행되며,
 reply·timeout·cancellation·shutdown 가운데 먼저 확정된 결과로 완료된다. 이 주제는 이
 경로 전체 — submit부터 완료까지 — 를 다룬다.
 
