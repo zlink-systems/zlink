@@ -4,7 +4,7 @@
 
 This page summarizes **where** (GitHub Actions workflow), **how** (trigger and authentication), and
 **to where** (public channel) each zlink component is built and released. Procedures live in the
-[packaging guide](./packaging.md); accounts and secrets in [release accounts](./release-accounts.md).
+[packaging guide](./packaging.md); accounts and secrets in internal document (`zlink/building/release-accounts.md` in the private repository zlink-systems/docs).
 Every release runs in GitHub Actions; nothing is published from a local machine.
 
 ## 1. Release path per component
@@ -192,7 +192,7 @@ defect to fix.
 
 ## 10. Related records
 
-- [Release accounts and secrets](./release-accounts.md)
+- internal document (`zlink/building/release-accounts.md` in the private repository zlink-systems/docs)
 - [Packaging procedure](./packaging.md)
 - [Release notes](./release-notes/)
 - [PR drafts](./pr-drafts/) — ConanCenter #30935, vcpkg #53846

@@ -11,3 +11,6 @@
 - 64-bit 정수는 범위를 확인한 10진 문자열로, enum은 선언한 이름의 문자열로 전송합니다. 이전의 정수 number와 enum ordinal 입력은 거부합니다.
 - 기본 typed JSON에서 nlohmann `to_json`·`from_json` callback의 자동 대체 경로를 제거하였습니다.
 - 기존 callback의 wire 이름과 public member를 `field(name, &T::member)`로 옮기고, enum 이름과 값을 `enum_value(value, name)`으로 선언하십시오. 모든 field는 required이며 nullable field에는 `std::optional`을 사용하십시오.
+- `stream_t::write_packet(const zlink::message_t&)`와 `reply_packet(const zlink::message_t&)` raw overload를 제거했습니다. `zlink::framework::message_t::from(value)`로 typed payload를 전달하십시오.
+- `packet_stream_session_t::on_packet` payload를 `const zlink::framework::message_t&`로 변경했습니다. 받은 encoded 값은 `payload.decode<T>()`로 읽거나 그대로 전달할 수 있습니다.
+- `session_actor_t::relay`·`relay_request` 입력을 `const zlink::framework::message_t&`로 변경했습니다. `relay_request_call_t` 결과도 encoded `zlink::framework::message_t`입니다.

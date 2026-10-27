@@ -11,3 +11,6 @@
 - 64-bit integers use range-checked decimal strings, and enums use declared name strings. Previous integer number tokens and enum ordinals are rejected.
 - Default typed JSON no longer falls back to nlohmann `to_json` or `from_json` callbacks.
 - To migrate, move wire names and public members to `field(name, &T::member)`, and declare enum mappings with `enum_value(value, name)`. Every field is required; use `std::optional` for nullable fields.
+- Removed the raw `stream_t::write_packet(const zlink::message_t&)` and `reply_packet(const zlink::message_t&)` overloads. Pass typed payloads with `zlink::framework::message_t::from(value)`.
+- Changed the `packet_stream_session_t::on_packet` payload to `const zlink::framework::message_t&`. Read the received encoded value with `payload.decode<T>()` or forward it unchanged.
+- Changed `session_actor_t::relay` and `relay_request` inputs to `const zlink::framework::message_t&`. The `relay_request_call_t` result is also an encoded `zlink::framework::message_t`.

@@ -2103,13 +2103,13 @@ int main (int argc, char **argv)
       public_headers_do_not_expose_runtime_dependencies (root / "connector/engines/axmol/include");
     ok &= location_store_public_surface_hides_domain_repositories (root);
     ok &= sample_application_code_uses_message_codec (root);
-    ok &= file_contains (root / "samples/Bingo/Shared/Contracts/stream_message_codec.hpp",
-                         "codec_traits<authenticate_res_t>::encode (response)");
-    ok &= file_contains (root / "samples/Bingo/Shared/Contracts/stream_message_codec.hpp",
-                         "zlink::message_t::from (");
+    ok &= file_does_not_contain (
+      root / "samples/Bingo/Server/Session/Sessions/Handlers/authenticate_session_handler.hpp",
+      "stream_message_codec.hpp",
+      "Bingo session replies must use the Framework serializer registry");
     ok &= file_contains (
       root / "samples/Bingo/Server/Session/Sessions/Handlers/authenticate_session_handler.hpp",
-      "encode_authenticate_response (reply_payload)");
+      "message_t::from (reply_payload)");
     ok &= sample_code_does_not_read_the_environment (root);
     ok &= runner_generated_config_files_are_private_and_cleaned (root);
     ok &= cpp_runners_prefer_the_selected_build_directory (root);
