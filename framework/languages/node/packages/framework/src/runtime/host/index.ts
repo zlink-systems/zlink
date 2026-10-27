@@ -1,3 +1,5 @@
+import { ZLinkFrameworkException, ZLinkFrameworkErrorKind } from '../../contracts';
+import { RequestRuntime } from '../foundation/request-runtime';
 import { ZLinkProviderRelocationRepository } from '../locations/relocation-blob';
 import type { ApplicationJobOrigin } from '../application-jobs/contracts';
 import { currentApplicationJobOrigin } from '../application-jobs/application-job-queue-scope';
@@ -330,6 +332,7 @@ export class ZLinkFrameworkRuntimeHost
   readonly routeMeshRuntimeOptions = new DefaultZLinkRouteMeshRuntimeOptions(
     () => this.spotNodeRuntime
   );
+  private readonly requests = new RequestRuntime();
   readonly routeTransport: ZLinkRuntimeRouteTransport;
   readonly spotAddressTransport: ZLinkHostSpotAddressTransport;
   readonly spotPublisherTransport = new ZLinkRuntimeSpotPublisherTransport(
@@ -407,9 +410,11 @@ export class ZLinkFrameworkRuntimeHost
       (meshName, sourceNodeRid, parts) => this.submitLocalMeshRoute(meshName, sourceNodeRid, parts),
       this.metrics,
       () => this.flowCreationEnabled(),
-      () => this.createDispatchErrorReporter(this.runtimeOrPreStartErrorSink).flow
+      () => this.createDispatchErrorReporter(this.runtimeOrPreStartErrorSink).flow,
+      this.requests
     );
     this.spotAddressTransport = new ZLinkHostSpotAddressTransport({
+      requests: this.requests,
       resolver: () => this.createLocationSpotRouteResolver(),
       routed: this.routeTransport,
       meshNames: () =>
@@ -482,6 +487,7 @@ export class ZLinkFrameworkRuntimeHost
         )
     });
     this.actorHandoff = new ZLinkActorHandoffCoordinator({
+      requests: this.requests,
       routedTransport: this.routeTransport,
       messageFollowDurationMs: options.registration.locations.options.messageFollowDurationMs,
       requestTimeoutMs: options.registration.requestTimeoutMs,
@@ -1467,11 +1473,12 @@ export class ZLinkFrameworkRuntimeHost
         channelAdapter,
         context,
         this.options.providerResolver,
-        { ...this.createChannelRuntimeOptions(), listenerRecords }
+        { ...this.createChannelRuntimeOptions(), listenerRecords, requests: this.requests }
       );
       this.channelRuntime = channelRuntime;
       channelRuntime.prepareMeshDispatch(this.executionState.taskRunner);
       spotNodeRuntime = new ZLinkSpotNodeRuntimeManager({
+        requests: this.requests,
         ...this.createSpotNodeRuntimeOptions(context, dispatchErrors),
         listenerRecords
       });
@@ -1569,6 +1576,9 @@ export class ZLinkFrameworkRuntimeHost
   }
 
   async stop(): Promise<void> {
+    this.requests.close(
+      new ZLinkFrameworkException(ZLinkFrameworkErrorKind.ShuttingDown, 'Host stopped.')
+    );
     await this.runWithShutdownDeadline(DEFAULT_HOST_CONTROL_TIMEOUT_MS, async () =>
       this.runLifecycle(() => this.stopCore())
     );
@@ -2733,6 +2743,7 @@ export class ZLinkFrameworkRuntimeHost
 
   private actorRuntimeOptionsFactory(): ZLinkActorRuntimeOptionsFactory {
     return new ZLinkActorRuntimeOptionsFactory({
+      requests: this.requests,
       terminateActorActivation: (actor, terminal) =>
         this.spotNodeRuntime?.terminateActorActivation(actor, terminal) ?? terminal(),
       registration: this.options.registration,
