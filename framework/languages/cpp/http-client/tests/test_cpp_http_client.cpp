@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: Apache-2.0 */
+#include <zlink/json.hpp>
 
 #include <zlink/http_client.hpp>
 
@@ -236,22 +237,30 @@ class recording_execution_turn_t final : public zlink::http_client::execution_tu
     bool _yield_claimed = false;
 };
 
-void to_json (nlohmann::json &json, const create_game_request_t &value)
-{
-    json = nlohmann::json{{"name", value.name}};
 }
 
-void from_json (const nlohmann::json &json, create_game_reply_t &value)
+template <> struct zlink::json::dto_traits<create_game_request_t>
 {
-    value.method = json.at ("method").get<std::string> ();
-    value.name = json.at ("name").get<std::string> ();
-}
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("name", &create_game_request_t::name)};
+};
 
-void from_json (const nlohmann::json &json, header_echo_reply_t &value)
+template <> struct zlink::json::dto_traits<create_game_reply_t>
 {
-    value.defaultHeader = json.at ("defaultHeader").get<std::string> ();
-    value.overrideHeader = json.at ("overrideHeader").get<std::string> ();
-}
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("method", &create_game_reply_t::method),
+                 zlink::json::field ("name", &create_game_reply_t::name)};
+};
+
+template <> struct zlink::json::dto_traits<header_echo_reply_t>
+{
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("defaultHeader", &header_echo_reply_t::defaultHeader),
+                 zlink::json::field ("overrideHeader", &header_echo_reply_t::overrideHeader)};
+};
+
+namespace
+{
 
 std::string gzip_compress (const std::string &payload)
 {

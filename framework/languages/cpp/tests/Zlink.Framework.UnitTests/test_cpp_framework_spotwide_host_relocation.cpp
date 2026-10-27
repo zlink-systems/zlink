@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+#include <zlink/json.hpp>
 #include <zlink/framework.hpp>
 #include "runtime/locations/in_memory_store_providers.hpp"
 #include "runtime/locations/authority_key_codec.hpp"
@@ -29,7 +30,16 @@ struct enter_t
     static constexpr const char *packet_name = "spotwide-enter";
     std::string spot;
 };
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE (enter_t, spot)
+}
+
+template <> struct zlink::json::dto_traits<enter_t>
+{
+    static constexpr auto fields = std::tuple{zlink::json::field ("spot", &enter_t::spot)};
+};
+
+namespace
+{
+
 struct where_t
 {
     static constexpr const char *packet_name = "spotwide-where";
@@ -37,14 +47,32 @@ struct where_t
     std::string node;
     std::string handler;
 };
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE (where_t, spot, node, handler)
+}
+
+template <> struct zlink::json::dto_traits<where_t>
+{
+    static constexpr auto fields = std::tuple{zlink::json::field ("spot", &where_t::spot),
+                                              zlink::json::field ("node", &where_t::node),
+                                              zlink::json::field ("handler", &where_t::handler)};
+};
+
+namespace
+{
 
 struct prefix_t
 {
     static constexpr const char *packet_name = "spot-abort-prefix";
     int value;
 };
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE (prefix_t, value)
+}
+
+template <> struct zlink::json::dto_traits<prefix_t>
+{
+    static constexpr auto fields = std::tuple{zlink::json::field ("value", &prefix_t::value)};
+};
+
+namespace
+{
 
 struct joins_t
 {
