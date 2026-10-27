@@ -369,7 +369,7 @@ test('backend managed DONTWAIT Spot send surfaces terminal binding failure', asy
   );
 });
 
-test('RouteMesh runtime weight changes reject invalid values as configuration errors', () => {
+test('RouteMesh runtime weight changes reject invalid values as configuration errors', async () => {
   const registration = framework.createFrameworkRegistrationWithBuilder((builder) => {
     builder.addRouteMesh('game')
       .channel('events')
@@ -377,12 +377,15 @@ test('RouteMesh runtime weight changes reject invalid values as configuration er
       .setWeight(100);
   });
   const calls = [];
-  const manager = Object.create(framework.ZLinkSpotNodeRuntimeManager.prototype);
-  manager.options = { registration };
-  manager.meshNodes = new Map([['game', {
+  const manager = await createPublisherRuntime('game', {}, {
+    registration, errorSink: failUnexpectedRuntimeTask, detachedTaskRunner
+  }, {
+    addChannelName() {},
     setPlacementWeight() { calls.push('placement'); },
     setChannelWeight() { calls.push('channel'); }
-  }]]);
+  });
+  // Startup applies configured channel weight; observe only rejected updates.
+  calls.length = 0;
 
   for (const invalid of [-1, 10_001, 1.5, Number.NaN]) {
     assert.throws(
@@ -404,31 +407,25 @@ test('MeshNode descriptors keep an explicit Spot stable type instead of adding a
       .objects().server()
       .addSpotFactory('game.room', ConfiguredRoomSpot, (factory) => factory.disableRelocation());
   });
-  const manager = new framework.ZLinkSpotNodeRuntimeManager({
-    errorSink: failUnexpectedRuntimeTask,
-    detachedTaskRunner: detachedTaskRunner,
-    registration
-  });
-  manager.meshNodes.set('game', {
+  const manager = await createPublisherRuntime('game', {}, {
+    errorSink: failUnexpectedRuntimeTask, detachedTaskRunner, registration
+  }, {
     status: () => ({
-      routingId: 'game-node',
-      lifecycleGeneration: 1n,
+      routingId: 'game-node', lifecycleGeneration: 1n,
       localEndpoint: 'tcp://127.0.0.1:9400'
     })
   });
   let published;
-  manager.locationAutoConnect = {
-    runtime: {
-      currentOwnerToken: { ownerId: 'owner-a', leaseGeneration: 1n },
-      writeMeshNode: async (descriptor) => {
-        published = descriptor;
-        return {
-          status: framework.ZLinkLocationWriteStatus.Stored,
-          updatedAt: new Date()
-        };
-      }
+  manager.configureLocationAutoConnect({
+    currentOwnerToken: { ownerId: 'owner-a', leaseGeneration: 1n },
+    writeMeshNode: async (descriptor) => {
+      published = descriptor;
+      return {
+        status: framework.ZLinkLocationWriteStatus.Stored,
+        updatedAt: new Date()
+      };
     }
-  };
+  }, {}, {});
 
   await manager.publishMeshNodeState(framework.ZLinkFrameworkRuntimeState.Serving);
 
@@ -448,31 +445,25 @@ test('Object Server descriptor publishes an Entry Spot ID without application En
       .objects().server()
       .addActorFactory('player', PlayerActorFactory, (factory) => factory.disableRelocation());
   });
-  const manager = new framework.ZLinkSpotNodeRuntimeManager({
-    errorSink: failUnexpectedRuntimeTask,
-    detachedTaskRunner: detachedTaskRunner,
-    registration
-  });
-  manager.meshNodes.set('game', {
+  const manager = await createPublisherRuntime('game', {}, {
+    errorSink: failUnexpectedRuntimeTask, detachedTaskRunner, registration
+  }, {
     status: () => ({
-      routingId: 'game-node',
-      lifecycleGeneration: 1n,
+      routingId: 'game-node', lifecycleGeneration: 1n,
       localEndpoint: 'tcp://127.0.0.1:9400'
     })
   });
   let published;
-  manager.locationAutoConnect = {
-    runtime: {
-      currentOwnerToken: { ownerId: 'owner-a', leaseGeneration: 1n },
-      writeMeshNode: async (descriptor) => {
-        published = descriptor;
-        return {
-          status: framework.ZLinkLocationWriteStatus.Stored,
-          updatedAt: new Date()
-        };
-      }
+  manager.configureLocationAutoConnect({
+    currentOwnerToken: { ownerId: 'owner-a', leaseGeneration: 1n },
+    writeMeshNode: async (descriptor) => {
+      published = descriptor;
+      return {
+        status: framework.ZLinkLocationWriteStatus.Stored,
+        updatedAt: new Date()
+      };
     }
-  };
+  }, {}, {});
 
   assert.equal(registration.spotNodes.get('game').entrySpotType, undefined);
   await manager.publishMeshNodeState(framework.ZLinkFrameworkRuntimeState.Serving);
