@@ -6,8 +6,21 @@ using Zlink.Framework.Runtime.Spots;
 
 namespace Zlink.Framework.UnitTests.Runtime;
 
-public sealed class SubmitAdmissionRuntimeTests
+public sealed class SubmitAdmissionRuntimeTests : IAsyncLifetime
 {
+    private readonly Zlink.Framework.Runtime.Execution.ZLinkStateLane _deadlineLane = new();
+    private ZLinkRequestDeadlineIndex? _deadlines;
+    private ZLinkRequestDeadlineIndex Deadlines => _deadlines ??= new(_deadlineLane);
+
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
+    {
+        if (_deadlines is not null)
+            await _deadlines.DisposeAsync();
+        await _deadlineLane.DisposeAsync();
+    }
+
     public static async Task<double[]> MeasureBackpressuredSubmission(int iterations)
     {
         using var process = System.Diagnostics.Process.GetCurrentProcess();
@@ -123,7 +136,7 @@ public sealed class SubmitAdmissionRuntimeTests
             .GetMethods(flags)
             .Single(method =>
                 method.Name == "CreateOperation"
-                && method.GetParameters().Length == 6
+                && method.GetParameters().Length == 7
                 && method.GetParameters()[1].ParameterType == typeof(MeshOperationId)
             );
         object?[] arguments =
@@ -134,9 +147,16 @@ public sealed class SubmitAdmissionRuntimeTests
             null,
             awaited,
             null,
+            null,
         ];
         create.Invoke(node, arguments);
         var pending = arguments[3]!;
+        // Capture the caller task before terminal delivery clears the index's
+        // reference to its dispatcher receiver (spec 01 §10.1).
+        var receiver = pending.GetType().GetProperty("AwaitedCompletion", flags)!.GetValue(pending);
+        var callerTask = receiver is null
+            ? null
+            : (Task)receiver.GetType().GetProperty("Task")!.GetValue(receiver)!;
         try
         {
             await (Task)
@@ -154,11 +174,7 @@ public sealed class SubmitAdmissionRuntimeTests
                     )!;
             if (awaited)
             {
-                var completion = pending
-                    .GetType()
-                    .GetProperty("AwaitedCompletion", flags)!
-                    .GetValue(pending)!;
-                var task = (Task)completion.GetType().GetProperty("Task")!.GetValue(completion)!;
+                var task = callerTask!;
                 var failure = await Assert.ThrowsAsync<ZlinkSubmitException>(() => task);
                 Assert.Same(expected, failure);
                 Assert.Null(terminal);
@@ -233,6 +249,8 @@ public sealed class SubmitAdmissionRuntimeTests
                     typeof(CancellationToken),
                     typeof(ZLinkServiceLiveness),
                     typeof(ZLinkRequestAdmission),
+                    typeof(TimeSpan?),
+                    typeof(MeshOperationId),
                 ]
             )!;
             var request =
@@ -248,6 +266,8 @@ public sealed class SubmitAdmissionRuntimeTests
                             default(CancellationToken),
                             null,
                             null,
+                            null,
+                            default(MeshOperationId),
                         ]
                     )!;
             var failure = await Assert.ThrowsAsync<ZlinkSubmitException>(() => request.AsTask());
@@ -954,6 +974,185 @@ public sealed class SubmitAdmissionRuntimeTests
         return admitted;
     }
 
+    [Fact]
+    public async Task TransportThousandHwmRequestsCreateNoDeadlineTimers()
+    {
+        using var pair = new AdmissionPair();
+        using var setup = new CancellationTokenSource();
+        SendSubmission blocked = default;
+        for (var sequence = 0; sequence < 32; sequence++)
+        {
+            using var filler = Message.From(AdmissionPair.Payload(sequence));
+            blocked = pair.Client.Send().Message(filler).Async(setup.Token);
+            if (blocked.Result == SubmitResult.Backpressured)
+                break;
+        }
+        Assert.Equal(SubmitResult.Backpressured, blocked.Result);
+        var warmup = await Deadlines.RegisterAsync(TimeSpan.FromSeconds(5));
+        warmup.Entry.Fail(new OperationCanceledException());
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => warmup.Completion);
+        var timers = Timer.ActiveCount;
+        var requests =
+            new List<Zlink.Framework.Contracts.Channels.ZLinkRequest<IReadOnlyList<Message>>>();
+        for (var index = 0; index < 1000; index++)
+        {
+            using var payload = Message.From("blocked request");
+            requests.Add(
+                StartPublicRequest(
+                    pair.Client.Request().Message(payload).Timeout(TimeSpan.FromSeconds(5))
+                )
+            );
+        }
+        Console.WriteLine(
+            $"hwm_requests=1000 timers_before={timers} timers_after={Timer.ActiveCount}"
+        );
+        Assert.Equal(timers, Timer.ActiveCount);
+        Assert.Equal(1000, Deadlines.PendingCount);
+        await Deadlines.DisposeAsync();
+        foreach (var request in requests)
+        {
+            await Assert.ThrowsAsync<ZLinkFrameworkException>(() => request.AsTask());
+            await Assert.ThrowsAsync<ZLinkFrameworkException>(() => request.Admitted.AsTask());
+        }
+        Assert.Equal(0, Deadlines.PendingCount);
+        setup.Cancel();
+    }
+
+    [Fact]
+    public async Task TransportResolveAndHwmConsumeOneAbsoluteEntryDeadline()
+    {
+        using var pair = new AdmissionPair();
+        using var setup = new CancellationTokenSource();
+        SendSubmission blocked = default;
+        for (var i = 0; i < 32; i++)
+        {
+            using var filler = Message.From(AdmissionPair.Payload(i));
+            blocked = pair.Client.Send().Message(filler).Async(setup.Token);
+            if (blocked.Result == SubmitResult.Backpressured)
+                break;
+        }
+        Assert.Equal(SubmitResult.Backpressured, blocked.Result);
+        var time = new ControllableTimeProvider();
+        await using var lane = new Zlink.Framework.Runtime.Execution.ZLinkStateLane();
+        await using var index = new ZLinkRequestDeadlineIndex(lane, time);
+        var changed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var submitted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var route = new ZLinkPeerRouteObservation(1, 0, changed.Task);
+        var started = time.GetTimestamp();
+        var remainingAtSubmit = TimeSpan.Zero;
+        var call = index.RunAsync(
+            TimeSpan.FromSeconds(1),
+            CancellationToken.None,
+            (entry, terminal) =>
+                ZLinkDurableRequest
+                    .RequestAsync<IReadOnlyList<Message>>(
+                        [],
+                        started,
+                        TimeSpan.FromSeconds(1),
+                        (_, remaining, token) =>
+                        {
+                            remainingAtSubmit = remaining;
+                            using var payload = Message.From("resolved-hwm-request");
+                            var request = ZLinkRequestSubmissionOutcome.SubmitAndAwaitReplyAsync(
+                                pair.Client.Request().Message(payload).Timeout(remaining),
+                                remaining,
+                                token
+                            );
+                            submitted.SetResult();
+                            return new(request);
+                        },
+                        CancellationToken.None,
+                        () => route,
+                        time,
+                        terminal: terminal
+                    )
+                    .AsTask()
+        );
+        Assert.Equal(1, time.ActiveTimerCount);
+        time.AdvanceMonotonic(TimeSpan.FromMilliseconds(600));
+        route = new(1, 1, new TaskCompletionSource().Task);
+        changed.SetResult();
+        await submitted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(TimeSpan.FromMilliseconds(400), remainingAtSubmit);
+        time.AdvanceMonotonic(TimeSpan.FromMilliseconds(400) - TimeSpan.FromTicks(1));
+        Assert.False(call.IsCompleted);
+        time.AdvanceMonotonic(TimeSpan.FromTicks(1));
+        var error = await Assert.ThrowsAsync<ZlinkRequestException>(() =>
+            call.WaitAsync(TimeSpan.FromSeconds(5))
+        );
+        Assert.Equal(ZlinkRequestException.ErrorCode.TimedOut, error.Result);
+        Assert.Equal(0, index.PendingCount);
+        Assert.Equal(1, time.ActiveTimerCount);
+        setup.Cancel();
+    }
+
+    [Fact]
+    public void NativeRequestPathHasNoCtsCreationSites()
+    {
+        var flags =
+            System.Reflection.BindingFlags.Static
+            | System.Reflection.BindingFlags.Instance
+            | System.Reflection.BindingFlags.Public
+            | System.Reflection.BindingFlags.NonPublic;
+        var opcodes = typeof(System.Reflection.Emit.OpCodes)
+            .GetFields()
+            .Where(field => field.FieldType == typeof(System.Reflection.Emit.OpCode))
+            .Select(field => (System.Reflection.Emit.OpCode)field.GetValue(null)!)
+            .ToDictionary(code => unchecked((ushort)code.Value));
+        var types = new[]
+        {
+            typeof(ZLinkRequestSubmissionOutcome),
+            typeof(ZLinkRequestDeadlineIndex),
+        }.SelectMany(type => new[] { type }.Concat(type.GetNestedTypes(flags)));
+        var creationSites = 0;
+        foreach (var method in types.SelectMany(type => type.GetMethods(flags)))
+        {
+            var il = method.GetMethodBody()?.GetILAsByteArray();
+            if (il is null)
+                continue;
+            for (var offset = 0; offset < il.Length; )
+            {
+                ushort value = il[offset++];
+                if (value == 0xfe)
+                    value = (ushort)(0xfe00 | il[offset++]);
+                var opcode = opcodes[value];
+                if (
+                    opcode == System.Reflection.Emit.OpCodes.Call
+                    || opcode == System.Reflection.Emit.OpCodes.Newobj
+                )
+                {
+                    var called = method.Module.ResolveMethod(BitConverter.ToInt32(il, offset));
+                    if (
+                        called?.DeclaringType == typeof(CancellationTokenSource)
+                        && (
+                            called.IsConstructor
+                            || called.Name
+                                == nameof(CancellationTokenSource.CreateLinkedTokenSource)
+                        )
+                    )
+                        creationSites++;
+                }
+                offset += opcode.OperandType switch
+                {
+                    System.Reflection.Emit.OperandType.InlineNone => 0,
+                    System.Reflection.Emit.OperandType.ShortInlineBrTarget
+                    or System.Reflection.Emit.OperandType.ShortInlineI
+                    or System.Reflection.Emit.OperandType.ShortInlineVar => 1,
+                    System.Reflection.Emit.OperandType.InlineVar => 2,
+                    System.Reflection.Emit.OperandType.InlineI8
+                    or System.Reflection.Emit.OperandType.InlineR => 8,
+                    System.Reflection.Emit.OperandType.InlineSwitch => 4
+                        + 4 * BitConverter.ToInt32(il, offset),
+                    _ => 4,
+                };
+            }
+        }
+        Console.WriteLine($"native_request_cts_creation_sites={creationSites}");
+        Assert.Equal(0, creationSites);
+    }
+
     private sealed class FixedSubmissionOperation(RequestSubmission submission)
         : RequestSubmitOperation
     {
@@ -966,7 +1165,7 @@ public sealed class SubmitAdmissionRuntimeTests
         public RequestSubmission Async(CancellationToken cancellationToken = default) => submission;
     }
 
-    private static Zlink.Framework.Contracts.Channels.ZLinkRequest<
+    private Zlink.Framework.Contracts.Channels.ZLinkRequest<
         IReadOnlyList<Message>
     > StartPublicRequest(
         RequestSubmitOperation operation,
@@ -980,7 +1179,8 @@ public sealed class SubmitAdmissionRuntimeTests
                 operation,
                 timeout ?? TimeSpan.FromSeconds(5),
                 cancellationToken,
-                requestAdmission: admission
+                requestAdmission: admission,
+                deadlines: Deadlines
             )
         ));
 

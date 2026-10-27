@@ -56,6 +56,8 @@ public sealed class DirectRequestWaitCostTests
                 typeof(CancellationToken),
                 typeof(ZLinkServiceLiveness),
                 typeof(ZLinkRequestAdmission),
+                typeof(TimeSpan?),
+                typeof(MeshOperationId),
             ]
         )!;
         using var waits = new SubmissionWaitListener();
@@ -84,6 +86,8 @@ public sealed class DirectRequestWaitCostTests
                                     default(CancellationToken),
                                     null,
                                     null,
+                                    null,
+                                    default(MeshOperationId),
                                 ]
                             )!;
                 }
@@ -148,15 +152,18 @@ public sealed class DirectRequestWaitCostTests
             typeof(CancellationToken),
             typeof(ZLinkServiceLiveness),
             typeof(ZLinkRequestAdmission),
+            typeof(TimeSpan?),
+            typeof(MeshOperationId),
         };
         var forwarding = nodeType.GetMethod("RequestDirectWireAsync", flags, signature)!;
         var submitting = nodeType.GetMethod(
-            "RequestDirectWireAsync",
+            "SubmitNativeWireAsync",
             flags,
             signature
+                .Take(6)
                 .Take(3)
                 .Concat(new[] { typeof(Task).MakeByRefType() })
-                .Concat(signature.Skip(3))
+                .Concat(signature.Take(6).Skip(3))
                 .ToArray()
         )!;
         object?[] Arguments(bool includeAdmission)
@@ -172,6 +179,11 @@ public sealed class DirectRequestWaitCostTests
             arguments.Add(cancellation.Token);
             arguments.Add(null);
             arguments.Add(null);
+            if (!includeAdmission)
+            {
+                arguments.Add(null);
+                arguments.Add(default(MeshOperationId));
+            }
             return arguments.ToArray();
         }
         try
@@ -184,10 +196,11 @@ public sealed class DirectRequestWaitCostTests
             Assert.IsAssignableFrom<OperationCanceledException>(synchronous.InnerException);
             var pending =
                 (ValueTask<IReadOnlyList<Message>>)forwarding.Invoke(node, Arguments(false))!;
-            Assert.True(pending.IsCanceled);
+            // §10.1 requires dispatch through the logical entry. Terminal status
+            // is checked after delivery, rather than before its dispatcher turn.
             var task = pending.AsTask();
-            Assert.Equal(TaskStatus.Canceled, task.Status);
             var failure = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => task);
+            Assert.Equal(TaskStatus.Canceled, task.Status);
             Assert.Equal(cancellation.Token, failure.CancellationToken);
         }
         finally
@@ -211,6 +224,8 @@ public sealed class DirectRequestWaitCostTests
                 typeof(CancellationToken),
                 typeof(ZLinkServiceLiveness),
                 typeof(ZLinkRequestAdmission),
+                typeof(TimeSpan?),
+                typeof(MeshOperationId),
             ]
         )!;
         var pending =
@@ -224,11 +239,13 @@ public sealed class DirectRequestWaitCostTests
                         CancellationToken.None,
                         null,
                         null,
+                        null,
+                        default(MeshOperationId),
                     ]
                 )!;
         var task = pending.AsTask();
-        Assert.Equal(TaskStatus.Faulted, task.Status);
         await Assert.ThrowsAsync<ObjectDisposedException>(() => task);
+        Assert.Equal(TaskStatus.Faulted, task.Status);
     }
 
     private sealed class SubmissionWaitListener : EventListener

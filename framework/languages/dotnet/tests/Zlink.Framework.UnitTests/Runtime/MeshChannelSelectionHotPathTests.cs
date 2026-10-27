@@ -198,7 +198,7 @@ public sealed class MeshChannelSelectionHotPathTests
 
     private delegate ValueTask<(RoutingId TargetRid, RoutingId PhysicalRid)> WaitForTarget(
         string channel,
-        TimeSpan timeout,
+        Task terminal,
         CancellationToken cancellationToken
     );
 
@@ -210,13 +210,14 @@ public sealed class MeshChannelSelectionHotPathTests
         var peer = AddReadyPeer(node);
         var select = Method<SelectTarget>(node, "TrySelectChannelTarget");
         var wait = Method<WaitForTarget>(node, "WaitForChannelTargetAsync");
+        var terminal = new TaskCompletionSource().Task;
         using var cancellation = new CancellationTokenSource();
 
         // Warm both existing selector paths, including JIT and AsyncLocal state.
         for (var index = 0; index < 256; index++)
         {
             select("worker");
-            wait("worker", TimeSpan.FromMinutes(1), cancellation.Token).GetAwaiter().GetResult();
+            wait("worker", terminal, cancellation.Token).GetAwaiter().GetResult();
         }
 
         const int iterations = 1024;
@@ -226,7 +227,7 @@ public sealed class MeshChannelSelectionHotPathTests
         var synchronousBytes = GC.GetAllocatedBytesForCurrentThread() - start;
         start = GC.GetAllocatedBytesForCurrentThread();
         for (var index = 0; index < iterations; index++)
-            wait("worker", TimeSpan.FromMinutes(1), cancellation.Token).GetAwaiter().GetResult();
+            wait("worker", terminal, cancellation.Token).GetAwaiter().GetResult();
         var requestBytes = GC.GetAllocatedBytesForCurrentThread() - start;
 
         // A linked CTS plus its deadline timer cannot fit in this allowance.
@@ -238,7 +239,7 @@ public sealed class MeshChannelSelectionHotPathTests
         );
 
         cancellation.Cancel();
-        var selected = await wait("worker", TimeSpan.FromMinutes(1), cancellation.Token);
+        var selected = await wait("worker", terminal, cancellation.Token);
         Assert.Equal(peer.RoutingId, selected.TargetRid);
         Assert.Equal(peer.PhysicalRoutingId, selected.PhysicalRid);
     }
@@ -251,7 +252,8 @@ public sealed class MeshChannelSelectionHotPathTests
         var peer = AddReadyPeer(node);
         var originalPhysical = peer.PhysicalRoutingId;
         var wait = Method<WaitForTarget>(node, "WaitForChannelTargetAsync");
-        var selected = await wait("worker", TimeSpan.FromSeconds(1), CancellationToken.None);
+        var terminal = new TaskCompletionSource().Task;
+        var selected = await wait("worker", terminal, CancellationToken.None);
 
         peer.PhysicalRoutingId = RoutingId.From("replacement-physical");
         Field<ZLinkMeshChannelSelection>(node, "_channelSelection")
@@ -259,7 +261,7 @@ public sealed class MeshChannelSelectionHotPathTests
 
         Assert.Equal(peer.RoutingId, selected.TargetRid);
         Assert.Equal(originalPhysical, selected.PhysicalRid);
-        var next = await wait("worker", TimeSpan.FromSeconds(1), CancellationToken.None);
+        var next = await wait("worker", terminal, CancellationToken.None);
         Assert.Equal(peer.PhysicalRoutingId, next.PhysicalRid);
     }
 
@@ -417,14 +419,25 @@ public sealed class MeshChannelSelectionHotPathTests
         await using var node = new ZLinkManagedMeshNode(context, "selection");
         node.ConnectPeer("inproc://selection-not-started", RoutingId.From("pending-peer"));
         var wait = Method<WaitForTarget>(node, "WaitForChannelTargetAsync");
+        var terminal = new TaskCompletionSource().Task;
         using var cancellation = new CancellationTokenSource();
         cancellation.Cancel();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
-            wait("worker", TimeSpan.FromSeconds(1), cancellation.Token).AsTask()
+            wait("worker", terminal, cancellation.Token).AsTask()
         );
 
         var timeout = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
-            wait("worker", TimeSpan.FromTicks(1), CancellationToken.None)
+            // §10.1: the entry owner supplies expiry; the selector only propagates it.
+            wait(
+                    "worker",
+                    Task.FromException(
+                        new ZLinkFrameworkException(
+                            ZLinkFrameworkErrorKind.DeadlineExceeded,
+                            "Entry deadline expired."
+                        )
+                    ),
+                    CancellationToken.None
+                )
                 .AsTask()
                 .WaitAsync(TimeSpan.FromSeconds(3))
         );
