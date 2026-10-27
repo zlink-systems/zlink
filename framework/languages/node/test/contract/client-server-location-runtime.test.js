@@ -1978,8 +1978,10 @@ function readyWaitClient(t, channelTimeoutMs = 60_000, sendTimeoutMs) {
   };
 }
 
-test('ClientServer request readiness is bounded by its whole request budget', async ( t ) => {
-  t.mock.timers.enable({ apis: ['setTimeout'] });
+test('ClientServer request readiness is bounded by its whole request budget', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 0 });
+  t.after(() => t.mock.timers.runAll());
+  t.mock.method(performance, 'now', () => Date.now());
   const { request, dealer, sockets } = readyWaitClient(t);
   const submitted = t.mock.method(dealer, 'request');
   const pending = request(5);
@@ -2323,7 +2325,6 @@ test('ClientServer admission and disconnect publish after their facts change', a
   await sockets.dispose();
 });
 
-
 test('automatic ClientServer admission preserves opaque server RID byte identity', async () => {
   const store = new internal.ZLinkInMemoryLocationStore();
   const localRuntime = new internal.ZLinkLocationRuntime({
@@ -2366,4 +2367,58 @@ test('automatic ClientServer admission preserves opaque server RID byte identity
     await discovery?.stop();
     await localRuntime.stop();
   }
+});
+
+test('ClientServer readiness and HWM admission retain one logical request entry', async (t) => {
+  const {
+    OperationRegistry
+  } = require('../../packages/framework/dist/runtime/foundation/operation-registry');
+  const {
+    waitRequestReply
+  } = require('../../packages/framework/dist/runtime/messaging/request-deadline');
+  const {
+    bindingRequestReply
+  } = require('../../packages/framework/dist/runtime/backend/node/node-backend-adapter-support');
+  const register = t.mock.method(OperationRegistry.prototype, 'register');
+  const { request, dealer, admit } = readyWaitClient(t);
+  let enter, releaseAdmission, releaseReply;
+  const entered = new Promise((resolve) => {
+    enter = resolve;
+  });
+  const admitted = new Promise((resolve) => {
+    releaseAdmission = resolve;
+  });
+  const reply = new Promise((resolve) => {
+    releaseReply = resolve;
+  });
+  let entry, parts;
+  dealer.request = (requestParts, _timeout, _admitted, pending) => {
+    entry = pending;
+    parts = requestParts;
+    enter();
+    return waitRequestReply(
+      bindingRequestReply({ result: zlink.SubmitResult.Backpressured, admitted, reply }),
+      'Channel request',
+      pending
+    );
+  };
+  const pending = request(1000);
+  assert.equal(register.mock.callCount(), 1);
+  admit();
+  await entered;
+  assert.equal(register.mock.callCount(), 1);
+  assert.equal(entry.isPending(), true);
+  releaseAdmission();
+  const messages = parts.map(( part ) => zlink.Message.from(part));
+  try {
+    const header = channelEnvelope.decodeChannelHeader(messages);
+    releaseReply(
+      channelEnvelope.encodeChannelReplyParts(header, { found: true }).map(( part ) => zlink.Message.from(part))
+    );
+  } finally {
+    channelEnvelope.closeMessages(messages);
+  }
+  assert.deepEqual(await pending, { found: true });
+  assert.equal(register.mock.callCount(), 1);
+  assert.equal(entry.isPending(), false);
 });
