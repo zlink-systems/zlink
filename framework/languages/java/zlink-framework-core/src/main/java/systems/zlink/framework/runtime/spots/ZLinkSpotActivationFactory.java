@@ -235,6 +235,11 @@ final class ZLinkSpotActivationFactory {
     }
 
     CompletionStage<Void> initializeRelocation(SpotActivation activation) {
+        return activation.context.continueActivationPreparation(
+                () -> initializeRelocationInPreparation(activation));
+    }
+
+    private CompletionStage<Void> initializeRelocationInPreparation(SpotActivation activation) {
         return activation
                 .context
                 .runTimerRelocationInitialization(
