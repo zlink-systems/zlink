@@ -266,8 +266,26 @@ struct overlap_request_t
     bool fail;
     std::string payload;
 };
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE (overlap_send_t, id, fail, payload)
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE (overlap_request_t, id, fail, payload)
+} // namespace
+
+template <> struct zlink::json::dto_traits<overlap_send_t>
+{
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("id", &overlap_send_t::id),
+                 zlink::json::field ("fail", &overlap_send_t::fail),
+                 zlink::json::field ("payload", &overlap_send_t::payload)};
+};
+
+template <> struct zlink::json::dto_traits<overlap_request_t>
+{
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("id", &overlap_request_t::id),
+                 zlink::json::field ("fail", &overlap_request_t::fail),
+                 zlink::json::field ("payload", &overlap_request_t::payload)};
+};
+
+namespace
+{
 
 struct overlap_scope_t
 {
@@ -533,7 +551,7 @@ void verify_client_server_terminal_overlap_matrix (int selected = -1)
                         std::optional<overlap_wire_reply_t> second;
                         const auto submit = [&] (bool request, int id, bool fail, auto &result) {
                             const auto payload = std::string (4096, static_cast<char> ('0' + id));
-                            const nlohmann::json body = overlap_send_t{id, fail, payload};
+                            auto body = zlink::message_t::from_json (overlap_send_t{id, fail, payload});
                             const auto header =
                               nlohmann::json{
                                 {"formatMarker", 242},
@@ -548,14 +566,14 @@ void verify_client_server_terminal_overlap_matrix (int selected = -1)
                                 result.emplace (await_overlap_wire_reply (
                                   batch.source.request ()
                                     .message (zlink::message_t::from (header))
-                                    .message (zlink::message_t::from (body.dump ()))
+                                    .message (std::move (body))
                                     .timeout (5s)
                                     .async ()
                                     .reply));
                             else
                                 assert (batch.source.send ()
                                           .message (zlink::message_t::from (header))
-                                          .message (zlink::message_t::from (body.dump ()))
+                                          .message (std::move (body))
                                           .async ()
                                           .result
                                         == ZLINK_SUBMIT_OK);
