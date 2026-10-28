@@ -325,6 +325,7 @@ void offload_executor_t::worker_loop ()
                 work.work (work.cancellation ? work.cancellation->get_token () : std::stop_token{});
             }
         });
+        work.work = nullptr;
 
         {
             std::lock_guard lock (_mutex);
