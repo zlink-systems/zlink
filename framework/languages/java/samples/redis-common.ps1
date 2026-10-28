@@ -388,10 +388,19 @@ function Invoke-ZlinkSampleGradleBuild {
         [int]$LockTimeoutSeconds = 600
     )
 
+    # One checkout shares Gradle output; different checkouts use different locks.
+    # The key matches the bash runners: first 16 hex digits of SHA-256 over the
+    # checkout root as printed by git.
+    $checkoutRoot = (& git -C $PSScriptRoot rev-parse --show-toplevel 2>$null)
+    if (-not $checkoutRoot) { $checkoutRoot = (Resolve-Path $PSScriptRoot).Path }
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    $checkoutKey = -join ($sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($checkoutRoot.Trim())) |
+        Select-Object -First 8 | ForEach-Object { $_.ToString("x2") })
     $lockPath = Join-Path ([System.IO.Path]::GetTempPath()) `
-        "zlink-framework-java-kotlin-sample-gradle.lock"
+        "zlink-framework-java-kotlin-sample-gradle-$checkoutKey.lock"
     $deadline = [DateTime]::UtcNow.AddSeconds($LockTimeoutSeconds)
     $lockStream = $null
+    $waitReported = $false
     while ($null -eq $lockStream) {
         try {
             $lockStream = [System.IO.File]::Open(
@@ -402,6 +411,10 @@ function Invoke-ZlinkSampleGradleBuild {
         } catch [System.IO.IOException] {
             if ([DateTime]::UtcNow -ge $deadline) {
                 throw "Timed out waiting for the shared Java/Kotlin Gradle build lock: $lockPath"
+            }
+            if (-not $waitReported) {
+                [Console]::Error.WriteLine("[$((Get-Date).ToString('o'))] gradle lock wait: $lockPath")
+                $waitReported = $true
             }
             Start-Sleep -Milliseconds 100
         }

@@ -398,35 +398,6 @@ bool system_route_path_exists (const http_options_snapshot_t &options, const std
            || (options.liveness_path && *options.liveness_path == path);
 }
 
-std::string bind_http_request_body (const std::string &body,
-                                    const std::map<std::string, std::string> &route_values,
-                                    const std::map<std::string, std::string> &query_values)
-{
-    nlohmann::json json = nlohmann::json::object ();
-    if (!body.empty ()) {
-        try {
-            json = nlohmann::json::parse (body);
-            if (!json.is_object ()) {
-                throw framework_exception_t (framework_error_kind_t::protocol_error,
-                                             "HTTP JSON body must be an object");
-            }
-        }
-        catch (const framework_exception_t &) {
-            throw;
-        }
-        catch (const std::exception &ex) {
-            throw framework_exception_t (framework_error_kind_t::protocol_error, ex.what ());
-        }
-    }
-    for (const auto &[key, value] : query_values) {
-        json[key] = value;
-    }
-    for (const auto &[key, value] : route_values) {
-        json[key] = value;
-    }
-    return json.dump ();
-}
-
 std::map<std::string, std::string> copy_headers (const http::request<http::string_body> &request)
 {
     std::map<std::string, std::string> headers;
@@ -709,17 +680,13 @@ void invoke_matched_route (http::response<http::string_body> &response,
             context_short_circuit = true;
             response.body () = *context.response_body;
         } else {
-            std::string bound_body = request.body ();
-            if (match.route->validates_json_content_type) {
+            if (match.route->validates_json_content_type)
                 validate_json_content_type (request, context);
-                bound_body =
-                  bind_http_request_body (request.body (), match.route_values, match.query_values);
-            }
             const auto http_request =
               make_http_request (context, request, match.route_values, match.query_values);
             auto route_result =
               http_route_invoker_access_t::invoke (handler_executor, *match.route, request_services,
-                                                   context, http_request, bound_body)
+                                                   context, http_request, request.body ())
                 .result ();
             if (!route_result) {
                 throw *route_result.error ();

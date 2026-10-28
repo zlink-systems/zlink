@@ -3,7 +3,6 @@ package systems.zlink.framework.runtime.channels;
 import systems.zlink.framework.ZLinkHandlerFilter;
 import systems.zlink.framework.ZLinkHandlerFilterContext;
 import systems.zlink.framework.ZLinkHandlerFilterNext;
-import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerInstanceOwner;
 
 import java.util.List;
@@ -41,7 +40,6 @@ final class ZLinkFilterPipeline {
                         @SuppressWarnings("unchecked")
                         ZLinkHandlerFilter filter =
                                 (ZLinkHandlerFilter) handlers.instance(filterType);
-                        ZLinkApplicationJobContext.beforeFirstApplicationInstruction();
                         return Objects.requireNonNull(
                                 filter.invoke(context, currentNext), "filter stage");
                     };

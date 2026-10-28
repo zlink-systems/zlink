@@ -45,6 +45,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 
 namespace zlink::framework::runtime::host
@@ -1047,7 +1048,8 @@ public_host_runtime_t::public_host_runtime_t (host_options_t options) :
      * relocation replay wire; the host outlives the coordinator it owns. */
     _relocation_wire->set_flow_capture_provider ([this] { return capture_flow (); });
     const auto &descriptor = _options.mesh.descriptor;
-    _relocation_metrics = std::make_shared<runtime::relocation_metrics_t> ();
+    _relocation_metrics =
+      std::make_shared<runtime::relocation_metrics_t> (_options.mesh.metric_provider);
     // This host's own object record is not a new target selection: the node placement weight
     // belongs to Framework placement (MeshNode §5.1), so the local candidate keeps the default
     // weight and weight 0 never blocks this node's own objects such as its Entry Spot.
@@ -1329,20 +1331,22 @@ void public_host_runtime_t::configure_late_session_route_update (
 
 void public_host_runtime_t::start ()
 {
-    auto population_metrics = _lifecycle_configuration_lane
-                                .run ([&] {
-                                    if (_started || _closing) {
-                                        return task_t<void> (result_t<void>::success ());
-                                    }
-                                    auto configured = _objects.configure_population_metrics (
-                                      _options.mesh.descriptor.mesh_name);
-                                    auto owner = std::make_unique<completion_owner_t> ();
-                                    _transport->start ();
-                                    _completion_owner = std::move (owner);
-                                    _started = true;
-                                    return configured;
-                                })
-                                .get ();
+    auto population_metrics =
+      _lifecycle_configuration_lane
+        .run ([&] {
+            if (_started || _closing) {
+                return task_t<void> (result_t<void>::success ());
+            }
+            _instance_activation_metrics.connect (_options.mesh.metric_provider);
+            auto configured = _objects.configure_population_metrics (
+              _options.mesh.descriptor.mesh_name, _options.mesh.metric_provider);
+            auto owner = std::make_unique<completion_owner_t> ();
+            _transport->start ();
+            _completion_owner = std::move (owner);
+            _started = true;
+            return configured;
+        })
+        .get ();
     population_metrics.result ().value ();
 }
 
@@ -1679,7 +1683,7 @@ void public_host_runtime_t::configure_instance_spot_operations (
           for (const auto &type : materializer.metric_types)
               _instance_admission_metrics.emplace (
                 type, std::make_shared<runtime::instance_spot_admission_metrics_t> (
-                        _options.mesh.descriptor.mesh_name, type));
+                        _options.mesh.descriptor.mesh_name, type, _options.mesh.metric_provider));
           _instance_spot_materializer =
             std::make_shared<const instance_spot_activation_materializer_t> (
               std::move (materializer));
@@ -3010,12 +3014,10 @@ public_host_runtime_t::resolve_spot_route_fence (zlink::routing_id_t target_node
 {
     spot_route_fence_resolver_t resolver;
     std::shared_ptr<zlink::framework::location_repository_t> store;
-    _lifecycle_configuration_lane
-      .run ([&] {
-          resolver = _spot_route_fence_resolver;
-          store = _user_spot_store;
-      })
-      .get ();
+    _lifecycle_configuration_lane.run_sync ([&] {
+        resolver = _spot_route_fence_resolver;
+        store = _user_spot_store;
+    });
     if (resolver) {
         auto resolved = co_await await_result (
           resolver (target_node_rid, target_spot_id, target_spot_generation));
@@ -3183,38 +3185,52 @@ public_host_runtime_t::request_to_node (const zlink::routing_id_t &target,
                                         std::vector<zlink::message_t> parts,
                                         pending_operation_t &operation,
                                         std::chrono::milliseconds timeout)
-{
+try {
     operation.prepare_for_registration ();
     operation.id = next_operation ();
     const auto host = shared_from_this ();
-    const auto accepted = co_await _transport->request_to_node (
-      target.to_bytes (), encode_application (std::move (parts)), timeout,
-      [host, operation] (foundation::operation_terminal_t terminal,
-                         zlink::message_t payload) mutable {
-          host->complete_operation (operation, operation_kind_t::none, terminal,
-                                    std::move (payload));
-      });
-    if (!accepted) {
-        //  Spec 32-framework-error-model:76-77 -- a target this runtime has
-        //  never admitted (absent from the live peer table) does not exist
-        //  from the requester's perspective and must complete NotFound, not
-        //  Unavailable. `submitted(false)` below collapses every rejected
-        //  request_to_node into `not_connected` (-> Unavailable via
-        //  boundary_error_t::disconnected, see call_facade_runtime.cpp), but
-        //  that is only correct for a target that WAS reachable and merely
-        //  is not right now. service_topology_registry_t has no "known but
-        //  currently unreachable" state distinct from "not a peer" --
-        //  disconnect() erases the peer entry outright -- so any target
-        //  absent from the live peer table is, by this runtime's own model,
-        //  simply a target that does not exist. Matches Java's
-        //  ZLinkJavaRawSpotNode.classifyNodeSendTarget (peerState absent ->
-        //  TARGET_NOT_FOUND, i.e. NotFound) and Node's
-        //  raw-service-mesh-runtime.ts knownTarget gate (unknown RID ->
-        //  RequestResult.NotFound).
-        if (!_transport->topology ().peer (target.to_bytes ()))
-            co_return zlink::submit_result_t::not_found;
-    }
-    co_return submitted (accepted);
+    auto target_bytes = target.to_bytes ();
+    auto accepted =
+      _transport->request_to_node (target_bytes, encode_application (std::move (parts)), timeout,
+                                   [host, operation] (foundation::operation_terminal_t terminal,
+                                                      zlink::message_t payload) mutable {
+                                       host->complete_operation (operation, operation_kind_t::none,
+                                                                 terminal, std::move (payload));
+                                   });
+    auto classify = [host, target_bytes = std::move (target_bytes)] (const result_t<bool> &result) {
+        if (!result)
+            return detail::result_access_t::failure<zlink::submit_result_t> (result.exception ());
+        const auto accepted = result.value ();
+        if (!accepted) {
+            //  Spec 32-framework-error-model:76-77 -- a target this runtime has
+            //  never admitted (absent from the live peer table) does not exist
+            //  from the requester's perspective and must complete NotFound, not
+            //  Unavailable. `submitted(false)` below collapses every rejected
+            //  request_to_node into `not_connected` (-> Unavailable via
+            //  boundary_error_t::disconnected, see call_facade_runtime.cpp), but
+            //  that is only correct for a target that WAS reachable and merely
+            //  is not right now. service_topology_registry_t has no "known but
+            //  currently unreachable" state distinct from "not a peer" --
+            //  disconnect() erases the peer entry outright -- so any target
+            //  absent from the live peer table is, by this runtime's own model,
+            //  simply a target that does not exist. Matches Java's
+            //  ZLinkJavaRawSpotNode.classifyNodeSendTarget (peerState absent ->
+            //  TARGET_NOT_FOUND, i.e. NotFound) and Node's
+            //  raw-service-mesh-runtime.ts knownTarget gate (unknown RID ->
+            //  RequestResult.NotFound).
+            if (!host->_transport->topology ().peer (target_bytes))
+                return result_t<zlink::submit_result_t>::success (
+                  zlink::submit_result_t::not_found);
+        }
+        return result_t<zlink::submit_result_t>::success (submitted (accepted));
+    };
+    if (accepted.await_ready ())
+        return task_t<zlink::submit_result_t> (classify (accepted.result ()));
+    return detail::project_task_terminal<zlink::submit_result_t> (accepted, std::move (classify));
+}
+catch (...) {
+    return task_t<zlink::submit_result_t> (
+      detail::current_exception_result<zlink::submit_result_t> ());
 }
 
 task_t<zlink::submit_result_t>
@@ -5944,6 +5960,62 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation_core (
 
 task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
 {
+    try {
+        const auto now = std::chrono::steady_clock::now ();
+        if (relocation_management_due (now)) {
+            std::vector<pending_relocation_assembly_t> expired_relocation_assemblies;
+            _relocation_session_terminal_lane
+              .run ([&] {
+                  for (auto pending = _relocation_assemblies.begin ();
+                       pending != _relocation_assemblies.end ();) {
+                      if (pending->second.expires_at > now) {
+                          ++pending;
+                          continue;
+                      }
+                      expired_relocation_assemblies.push_back (std::move (pending->second));
+                      pending = _relocation_assemblies.erase (pending);
+                  }
+              })
+              .get ();
+            for (const auto &expired : expired_relocation_assemblies)
+                reply_relocation_assembly_failure (
+                  expired, protocol::framework_error_code::relocationDataLost);
+            poll_relocation_target_attempts ();
+            flush_pending_session_relocation_seals ();
+            _relocation_session_terminal_lane
+              .run ([this] { publish_relocation_next_due_on_lane (); })
+              .get ();
+        }
+        receive_batch_budget_t infrastructure_budget;
+        auto claim = _transport->mailbox ().try_claim (
+          mesh::service_mailbox_domain_t::infrastructure, dispatch_limits::receive_batch_messages,
+          dispatch_limits::receive_batch_bytes);
+        if (!claim)
+            return task_t<std::size_t> (result_t<std::size_t>::success (0));
+        try {
+            return dispatch_user_spot_operations (std::move (claim), infrastructure_budget);
+        }
+        catch (...) {
+            // The coroutine takes the claim in its first instruction. If its
+            // frame or promise cannot be created, this scope still owns it.
+            (void) _transport->mailbox ().release (*claim);
+            throw;
+        }
+    }
+    catch (...) {
+        return task_t<std::size_t> (detail::current_exception_result<std::size_t> ());
+    }
+}
+
+task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations (
+  std::shared_ptr<mesh::service_mailbox_claim_t> &&first_claim,
+  receive_batch_budget_t infrastructure_budget)
+{
+    // task_t starts synchronously. Own the claim before any suspension; the
+    // reference parameter is never read again after this transfer.
+    static_assert (
+      std::is_nothrow_move_constructible_v<std::shared_ptr<mesh::service_mailbox_claim_t>>);
+    auto claim = std::move (first_claim);
     std::shared_ptr<zlink::framework::location_repository_t> store;
     user_spot_materializer_t materializer;
     user_spot_closer_t user_spot_closer;
@@ -5954,53 +6026,20 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
     bound_session_operations_t bound_session_operations;
     std::function<void (const protocol::session_relocation_route_t &)>
       late_session_route_update_reporter;
-    // The configured operations are read only when an infrastructure record
-    // needs them; a rotation without one takes no configuration turn.
-    bool configuration_loaded = false;
-    const auto load_configuration = [&] {
-        if (configuration_loaded)
-            return;
-        configuration_loaded = true;
-        _lifecycle_configuration_lane
-          .run ([&] {
-              store = _user_spot_store;
-              materializer = _user_spot_materializer;
-              user_spot_closer = _user_spot_closer;
-              actor_create_target = _actor_create_target;
-              actor_join_target = _actor_join_target;
-              session_route_owner_resolver = _session_route_owner_resolver;
-              message_follow_handler = _message_follow_handler;
-              bound_session_operations = _bound_session_operations;
-              late_session_route_update_reporter = _late_session_route_update_reporter;
-          })
-          .get ();
-    };
-    const auto now = std::chrono::steady_clock::now ();
-    if (relocation_management_due (now)) {
-        std::vector<pending_relocation_assembly_t> expired_relocation_assemblies;
-        _relocation_session_terminal_lane
-          .run ([&] {
-              for (auto pending = _relocation_assemblies.begin ();
-                   pending != _relocation_assemblies.end ();) {
-                  if (pending->second.expires_at > now) {
-                      ++pending;
-                      continue;
-                  }
-                  expired_relocation_assemblies.push_back (std::move (pending->second));
-                  pending = _relocation_assemblies.erase (pending);
-              }
-          })
-          .get ();
-        for (const auto &expired : expired_relocation_assemblies)
-            reply_relocation_assembly_failure (expired,
-                                               protocol::framework_error_code::relocationDataLost);
-        poll_relocation_target_attempts ();
-        flush_pending_session_relocation_seals ();
-        _relocation_session_terminal_lane.run ([this] { publish_relocation_next_due_on_lane (); })
-          .get ();
-    }
+    _lifecycle_configuration_lane
+      .run ([&] {
+          store = _user_spot_store;
+          materializer = _user_spot_materializer;
+          user_spot_closer = _user_spot_closer;
+          actor_create_target = _actor_create_target;
+          actor_join_target = _actor_join_target;
+          session_route_owner_resolver = _session_route_owner_resolver;
+          message_follow_handler = _message_follow_handler;
+          bound_session_operations = _bound_session_operations;
+          late_session_route_update_reporter = _late_session_route_update_reporter;
+      })
+      .get ();
     std::size_t count = 0;
-    receive_batch_budget_t infrastructure_budget;
     // Record-processing storage belongs to a claimed infrastructure batch.
     const auto dispatch_batch =
       [&] (const std::shared_ptr<mesh::service_mailbox_claim_t> &claim) -> task_t<void> {
@@ -7175,15 +7214,21 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
         }
         co_return;
     };
-    while (auto claim = _transport->mailbox ().try_claim (
-             mesh::service_mailbox_domain_t::infrastructure,
-             dispatch_limits::receive_batch_messages, dispatch_limits::receive_batch_bytes)) {
-        load_configuration ();
-        co_await dispatch_batch (claim);
-        (void) _transport->mailbox ().release (*claim);
+    do {
+        {
+            const auto release_claim = [this] (mesh::service_mailbox_claim_t *owned) {
+                (void) _transport->mailbox ().release (*owned);
+            };
+            const std::unique_ptr<mesh::service_mailbox_claim_t, decltype (release_claim)>
+              claim_owner (claim.get (), release_claim);
+            co_await dispatch_batch (claim);
+        }
         if (infrastructure_budget.exhausted ())
             break;
-    }
+        claim.reset ();
+    } while ((claim = _transport->mailbox ().try_claim (
+                mesh::service_mailbox_domain_t::infrastructure,
+                dispatch_limits::receive_batch_messages, dispatch_limits::receive_batch_bytes)));
     co_return count;
 }
 
@@ -7199,7 +7244,7 @@ bool public_host_runtime_t::dispatch_bound_session_send (
         || mailbox_record.source_node_generation != record.actor.target_node_generation)
         return false;
     bound_session_operations_t operations;
-    _lifecycle_configuration_lane.run ([&] { operations = _bound_session_operations; }).get ();
+    _lifecycle_configuration_lane.run_sync ([&] { operations = _bound_session_operations; });
     if (!operations.capture_send && !operations.send)
         return false;
     const auto application = protocol::decode_application_payload (
@@ -8127,17 +8172,14 @@ public_host_runtime_t::dispatch_application_claim (
                     record.source_session_sequence =
                       mailbox_record.bound_session_source->session_sequence;
                 }
-                const auto actor_type = _spot_actor_index_lane
-                                          .run ([&] {
-                                              std::string actor_type;
-                                              const auto found =
-                                                _actors.find (actor.target.actor_id);
-                                              if (found != _actors.end ()) {
-                                                  actor_type = found->second.first;
-                                              }
-                                              return actor_type;
-                                          })
-                                          .get ();
+                const auto actor_type = _spot_actor_index_lane.run_sync ([&] {
+                    std::string actor_type;
+                    const auto found = _actors.find (actor.target.actor_id);
+                    if (found != _actors.end ()) {
+                        actor_type = found->second.first;
+                    }
+                    return actor_type;
+                });
                 owner.actor = ::zlink::framework::detail::actor_ref_access_t::make (
                   node_rid_t::from_string (status ().routing_id ().to_string ()),
                   std::move (actor_type), actor.target.actor_id, actor.target.object_generation);
@@ -8496,7 +8538,7 @@ public_host_runtime_t::prepare_local_completion (pending_operation_t &operation)
     return _transport->prepare_local_operation_async ();
 }
 
-void public_host_runtime_t::register_local_completion (
+std::chrono::steady_clock::time_point public_host_runtime_t::register_local_completion (
   pending_operation_t &operation,
   const mesh::raw_mesh_node_owner_t::local_operation_reservation_t &reservation,
   std::chrono::milliseconds timeout,
@@ -8511,8 +8553,9 @@ void public_host_runtime_t::register_local_completion (
     result->record.operation_id = reservation.first;
     result->record.source_node_rid =
       zlink::routing_id_t::from (_options.mesh.descriptor.node_routing_id);
+    const auto deadline = foundation::operation_registry_t::clock_t::now () + timeout;
     const auto registered = _transport->register_prepared_local_operation (
-      reservation, foundation::operation_registry_t::clock_t::now () + timeout,
+      reservation, deadline,
       [source, result, completion = std::move (completion),
        incomplete] (foundation::operation_terminal_t terminal, zlink::message_t payload) mutable {
           std::string terminal_message;
@@ -8571,6 +8614,7 @@ void public_host_runtime_t::register_local_completion (
                                      "Operation completion registry is closed");
     operation.id = reservation.first;
     operation.local_result = result;
+    return deadline;
 }
 
 
@@ -8616,12 +8660,13 @@ public_host_runtime_t::begin_local_actor_join (const actor_ref_t &actor,
     task_t<zlink::submit_result_t> dispatch{
       result_t<zlink::submit_result_t>::success (zlink::submit_result_t::terminated)};
     std::exception_ptr failure;
+    std::optional<std::chrono::steady_clock::time_point> operation_deadline;
     try {
         co_await _lifecycle_configuration_lane.run_task ([&] {
             if (!_started || _closing)
                 return;
             try {
-                register_local_completion (
+                operation_deadline = register_local_completion (
                   operation, *reservation, timeout, {},
                   [host = shared_from_this (), membership,
                    cleanup = local_request_wait_cleanup (waiter)] {
@@ -8678,6 +8723,7 @@ public_host_runtime_t::begin_local_actor_join (const actor_ref_t &actor,
             record.domain = ready_domain_t::application;
             record.operation_id = operation.id;
             record.operation_kind = operation_kind_t::actor_join;
+            record.operation_deadline = operation_deadline;
             record.source_node_rid = status ().routing_id ();
             record.actor_control = actor_control_t{lifecycle_kind_t::joined, actor};
             record.reply_token.local_actor_join = [weak, operation, actor_type, membership] (

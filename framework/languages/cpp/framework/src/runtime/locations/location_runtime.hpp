@@ -215,6 +215,12 @@ class location_runtime_t
         _monitoring = std::move (monitoring);
     }
 
+    const std::shared_ptr<framework::detail::monitoring_runtime_state_t> &
+    monitoring () const noexcept
+    {
+        return _monitoring;
+    }
+
     task_t<void> register_metric_scope (std::string kind, std::string name)
     {
         return _lane.run_task ([this, kind = std::move (kind), name = std::move (name)] () mutable {

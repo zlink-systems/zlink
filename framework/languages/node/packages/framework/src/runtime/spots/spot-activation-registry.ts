@@ -13,7 +13,6 @@ import {
   createInternalFrameworkException
 } from '../framework-errors-internal';
 import type { ZLinkSpotActivation } from './spot-activation-state';
-import { ZLinkSpotLifecycleMetrics } from './spot-lifecycle-metrics';
 import type { ZLinkLocalSpotCreateResult } from './spot-manager-internal-contracts';
 const DEFAULT_ACTIVE_ACTIVATION_BATCH_SIZE = 64;
 
@@ -44,11 +43,12 @@ export class ZLinkSpotActivationRegistry {
   private readonly closing = new Map<string, ZLinkSpotCloseOperation>();
   private readonly failedClose = new Set<string>();
   private readonly emptyWaiters = new Set<() => void>();
-  private readonly lifecycleMetrics: ZLinkSpotLifecycleMetrics;
   private activeScan: Iterator<ZLinkSpotActivation> | undefined;
 
-  constructor(metrics?: import('../diagnostics').ZLinkRuntimeMetrics) {
-    this.lifecycleMetrics = new ZLinkSpotLifecycleMetrics(metrics);
+  constructor(private readonly metrics?: import('../diagnostics').ZLinkRuntimeMetrics) {}
+
+  private recordPopulation(activation: ZLinkSpotActivation, delta: number): void {
+    this.metrics?.recordSpotCount(activation.meshName, activation.domain.kind, delta);
   }
 
   allocateSpotId(meshName: string): RoutingId {
@@ -99,7 +99,11 @@ export class ZLinkSpotActivationRegistry {
 
   finishClose(meshName: string, spotId: RoutingId): void {
     const key = spotActivationKey(meshName, spotId);
-    if (this.activations.delete(key)) this.lifecycleMetrics.closed('user');
+    const activation = this.activations.get(key);
+    if (activation !== undefined) {
+      this.activations.delete(key);
+      this.recordPopulation(activation, -1);
+    }
     this.staged.delete(key);
     this.failedClose.delete(key);
     this.resolveEmptyWaiters();
@@ -172,7 +176,7 @@ export class ZLinkSpotActivationRegistry {
     }
     if (existing === undefined) {
       this.activations.set(key, activation);
-      this.lifecycleMetrics.opened('user');
+      this.recordPopulation(activation, 1);
     }
     return this.staged.has(key) ? undefined : activation;
   }
@@ -197,7 +201,7 @@ export class ZLinkSpotActivationRegistry {
     this.activations.delete(key);
     this.staged.delete(key);
     this.failedClose.delete(key);
-    this.lifecycleMetrics.closed('user');
+    this.recordPopulation(activation, -1);
     this.resolveEmptyWaiters();
     return activation;
   }
@@ -240,7 +244,7 @@ export class ZLinkSpotActivationRegistry {
           if (completed || resourcesReleased(activation)) {
             this.activations.delete(key);
             this.staged.delete(key);
-            this.lifecycleMetrics.closed('user');
+            this.recordPopulation(activation, -1);
             this.failedClose.delete(key);
           } else {
             this.failedClose.add(key);

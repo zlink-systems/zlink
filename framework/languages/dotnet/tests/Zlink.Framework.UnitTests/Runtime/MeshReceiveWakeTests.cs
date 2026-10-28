@@ -23,6 +23,9 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
             return;
         await using var context = Systems.Zlink.Zlink.CreateContext();
         var poller = new ControlledReceivePoller { CaptureIdleWait = true };
+        // Pool bootstrap can wait while monitor registration is still queued.
+        // Measure the configured node's idle wait, preserving the same deadline assertion.
+        poller.CanObserveIdleWait = () => poller.MonitorRegistered.Task.IsCompleted;
         await using var node = new ZLinkManagedMeshNode(
             context,
             "idle-wait",
@@ -294,30 +297,42 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
             }
             const int iterations = 1000;
             var calls = router.Calls;
-            var start = GC.GetAllocatedBytesForCurrentThread();
-            for (var index = 0; index < iterations; index++)
-            {
-                router.Remaining = 1;
-                do node.DrainRawSocket(CancellationToken.None);
-                while (router.Remaining != 0);
-            }
-            var actual = GC.GetAllocatedBytesForCurrentThread() - start;
-            Assert.Equal(iterations, router.Accepted - 128);
-            Assert.True(router.Calls - calls >= iterations);
-            // Match the number of receipt containers the bounded drain really
-            // attempted; no platform-specific object size is embedded here.
-            start = GC.GetAllocatedBytesForCurrentThread();
-            for (var index = 0; index < router.Calls - calls; index++)
-            {
-                using var receipt = Received.Create();
-                if (index < iterations)
-                    _ = receipt.Parts;
-                _ = receipt.RoutingId;
-            }
-            var baseline = GC.GetAllocatedBytesForCurrentThread() - start;
+            var receiptsPerDrain = new int[iterations];
+            var drains = 0;
+            // Alternating windows give both sides the same JIT tiering state.
+            var (actual, baseline) = PerCallAllocation.MinWindowPair(
+                index =>
+                {
+                    drains++;
+                    var before = router.Calls;
+                    router.Remaining = 1;
+                    do node.DrainRawSocket(CancellationToken.None);
+                    while (router.Remaining != 0);
+                    receiptsPerDrain[index] = router.Calls - before;
+                },
+                // Match the number of receipt containers each bounded drain really
+                // attempted; no platform-specific object size is embedded here.
+                index =>
+                {
+                    for (
+                        var receiptIndex = 0;
+                        receiptIndex < receiptsPerDrain[index];
+                        receiptIndex++
+                    )
+                    {
+                        using var receipt = Received.Create();
+                        if (receiptIndex == 0)
+                            _ = receipt.Parts;
+                        _ = receipt.RoutingId;
+                    }
+                },
+                iterations
+            );
+            Assert.Equal(drains, router.Accepted - 128);
+            Assert.True(router.Calls - calls >= drains);
             Assert.True(
                 actual == baseline,
-                $"ingress={actual}B, receipt baseline={baseline}B, excess={actual - baseline}B/{iterations}"
+                $"ingress={actual}B, receipt baseline={baseline}B, excess={actual - baseline}B/window"
             );
         }
         finally
@@ -328,9 +343,11 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
         }
     }
 
-    // Spec 08 §4.2: a receive rotation runs its management work once. With no
-    // peer activity due, that work is the two uncontended node turns that read
-    // liveness and operation deadlines; it creates no empty result container.
+    // Supervisor ruling for #2758: adapting this contract to spec 01 §10.1 is
+    // classification A. After the reserved empty visit (if any), spec 01 §10.1
+    // requires zero idle operation-owner turns. This node starts without a reservation. The
+    // allocation baseline therefore includes only liveness's existing turn.
+    // The second phase adds one turn and must fail that same cost assertion.
     [Fact]
     public async Task IdleReceiveRotationManagementAddsNoAllocationBeyondItsNodeTurns()
     {
@@ -338,13 +355,24 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
         const int iterations = 1000;
         var poller = new ControlledReceivePoller();
         await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var operationLane = new ZLinkStateLane();
         var node = new ZLinkManagedMeshNode(
             context,
             "idle-rotation-allocation",
-            receivePollerFactory: () => poller
+            receivePollerFactory: () => poller,
+            operationLane: operationLane
         );
         node.SetRoutingId(RoutingId.From("idle-rotation-allocation"));
         await using var lane = new ZLinkStateLane();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var occupied = operationLane.RunAsync(async () =>
+        {
+            entered.SetResult();
+            await release.Task;
+        });
+        await entered.Task;
+        var addTurn = false;
         long actual = 0;
         long baseline = 0;
         var rotations = 0;
@@ -352,13 +380,17 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
         SemaphoreSlim rotated = new(0);
         // The window opens after the controlled poller returns and closes before
         // its next wait, so it holds only the node's own rotation.
-        poller.AfterWait = () => last = GC.GetAllocatedBytesForCurrentThread();
+        poller.AfterWait = () =>
+        {
+            last = GC.GetAllocatedBytesForCurrentThread();
+            if (addTurn)
+                _ = lane.RunAsync(static value => value, 0).GetAwaiter().GetResult();
+        };
         poller.BeforeWait = () =>
         {
             var now = GC.GetAllocatedBytesForCurrentThread();
             var measured = now - last;
             var start = GC.GetAllocatedBytesForCurrentThread();
-            _ = lane.RunAsync(static value => value, 0).GetAwaiter().GetResult();
             _ = lane.RunAsync(static value => value, 0).GetAwaiter().GetResult();
             var control = GC.GetAllocatedBytesForCurrentThread() - start;
             if (rotations > warmup)
@@ -387,9 +419,23 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
                 actual == baseline,
                 $"idle rotation={actual}B, node turns={baseline}B, excess={actual - baseline}B/{iterations}"
             );
+            addTurn = true;
+            actual = baseline = 0;
+            rotations = 0;
+            for (var index = 0; index < warmup + iterations; index++)
+            {
+                node.SignalReceiveOwner();
+                Assert.True(await rotated.WaitAsync(CompletionBound));
+            }
+            Assert.Throws<Xunit.Sdk.TrueException>(() => Assert.True(actual == baseline));
+            output.WriteLine(
+                $"negative control: extra owner turn actual={actual}B baseline={baseline}B"
+            );
         }
         finally
         {
+            release.SetResult();
+            await occupied;
             var shutdown = node.DisposeAsync();
             poller.ReleaseWait();
             await shutdown;
@@ -460,10 +506,11 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
             var ready = new TaskCompletionSource(
                 TaskCreationOptions.RunContinuationsAsynchronously
             );
-            long actual = 0;
-            long baseline = 0;
+            var actualSamples = new List<long>();
+            var baselineSamples = new List<long>();
             long lastActual = 0;
             long lastBaseline = 0;
+            var lastPaused = false;
             var samples = 0;
             var key = MeshMailboxKey.ForNode(MeshReadyDomains.Application);
             var readyMap = new ConcurrentDictionary<MeshMailboxKey, bool>();
@@ -489,6 +536,7 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
                 )
                     throw new InvalidOperationException("Baseline mailbox refused the record.");
                 lastBaseline = GC.GetAllocatedBytesForCurrentThread() - start;
+                lastPaused = GC.GetTotalPauseDuration() != router.RecordPause;
                 samples++;
                 ready.TrySetResult();
                 return domains;
@@ -501,10 +549,11 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
             {
                 Assert.Equal(SubmitResult.Ok, source.SendToNode(targetRid, [payload]));
                 await ready.Task.WaitAsync(CompletionBound);
-                if (index >= warmup)
+                // A sample that overlapped a GC pause can carry a retired allocation context.
+                if (index >= warmup && !lastPaused)
                 {
-                    actual += lastActual;
-                    baseline += lastBaseline;
+                    actualSamples.Add(lastActual);
+                    baselineSamples.Add(lastBaseline);
                 }
                 Assert.False(
                     target.DrainReady(MeshReadyDomains.Application, readyBatch, RecvFlags.DontWait)
@@ -527,12 +576,14 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
                 );
             }
             Assert.Equal(warmup + iterations, samples);
+            var actual = PerCallAllocation.MinWindow(actualSamples);
+            var baseline = PerCallAllocation.MinWindow(baselineSamples);
             output.WriteLine(
-                $"node ingress={actual}B, lane + owner baseline={baseline}B, excess={actual - baseline}B/{iterations}"
+                $"node ingress={actual}B, lane + owner baseline={baseline}B, excess={actual - baseline}B/window"
             );
             Assert.True(
                 actual == baseline,
-                $"node ingress={actual}B, lane + owner baseline={baseline}B, excess={actual - baseline}B/{iterations}"
+                $"node ingress={actual}B, lane + owner baseline={baseline}B, excess={actual - baseline}B/window"
             );
         }
         finally
@@ -605,6 +656,7 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
         internal IRouterSocket Inner => inner;
         internal bool ReceiveRealRecords;
         internal long RecordStart;
+        internal TimeSpan RecordPause;
         internal int Remaining;
         internal int Calls;
         internal int Accepted;
@@ -633,6 +685,7 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
                     if (head.Length >= 5 && head[3] == (byte)ServiceWireConstants.Command.NodeSend)
                     {
                         _ = result.RoutingId;
+                        RecordPause = GC.GetTotalPauseDuration();
                         RecordStart = GC.GetAllocatedBytesForCurrentThread();
                     }
                 }
@@ -728,6 +781,7 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
         internal bool FailRearm { get; init; }
         internal bool RespectTimeoutAfterWake { get; init; }
         internal bool CaptureIdleWait { get; init; }
+        internal Func<bool>? CanObserveIdleWait { get; set; }
         internal readonly TaskCompletionSource MonitorRegistered = new(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
@@ -761,8 +815,9 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
             {
                 // Zero-time turns apply startup registrations and pending wakes.
                 // Observe the first blocking wait, preserving even a finite deadline.
-                if (timeout != TimeSpan.Zero)
+                if (timeout != TimeSpan.Zero && (CanObserveIdleWait?.Invoke() ?? true))
                     IdleWait.TrySetResult(timeout);
+                BeforeWait?.Invoke();
                 return _inner.Wait(destination, timeout);
             }
             if (++_waitCount == 1)

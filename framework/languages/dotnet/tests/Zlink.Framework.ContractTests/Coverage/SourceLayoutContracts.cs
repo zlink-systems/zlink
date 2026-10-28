@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Text.RegularExpressions;
 using Systems.Zlink.Stream.Connector.Contracts;
 using Zlink.Framework.Contracts.Codecs;
 using Zlink.Framework.Contracts.Errors;
@@ -10,6 +11,66 @@ namespace Zlink.Framework.ContractTests.Coverage;
 
 public sealed class SourceLayoutContracts
 {
+    // 이 목록은 private 접근 시험을 공개 동작 관찰로 옮길 때 줄어들기만 해야 합니다.
+    private static readonly string[] LegacyNonPublicReflectionFiles =
+    [
+        "Zlink.Framework.UnitTests/Configuration/Registration/Monitoring.cs",
+        "Zlink.Framework.UnitTests/Runtime/ClientServerClientAckTests.cs",
+        "Zlink.Framework.UnitTests/Runtime/ClientServerLivenessLaneTests.cs",
+        "Zlink.Framework.UnitTests/Runtime/DescriptorOwnerLeaseSelectionTests.cs",
+        "Zlink.Framework.UnitTests/Runtime/DurableSenderRuntimeTests.cs",
+        "Zlink.Framework.UnitTests/Runtime/EntrySpotActorDispatchTests.cs",
+        "Zlink.Framework.UnitTests/Runtime/EnvelopeHeaderCacheHotPathTests.cs",
+        "Zlink.Framework.UnitTests/Runtime/ErrorReplyWireConvergenceTests.cs",
+        "Zlink.Framework.UnitTests/Runtime/LogicalMulticastSubmitTests.cs",
+        "Zlink.Framework.UnitTests/Runtime/MeshChannelSelectionHotPathTests.cs",
+        "Zlink.Framework.UnitTests/Runtime/MeshLivenessDisconnectContractTests.cs",
+        "Zlink.Framework.UnitTests/Runtime/MeshLivenessPhysicalCloseTests.cs",
+        "Zlink.Framework.UnitTests/Runtime/MeshMailboxReadinessTests.cs",
+        "Zlink.Framework.UnitTests/Runtime/MeshMonitorHotPathTests.cs",
+        "Zlink.Framework.UnitTests/Runtime/MeshNodeHelloSubmissionTests.cs",
+        "Zlink.Framework.UnitTests/Runtime/MeshNodeLifecycleStateTests.cs",
+        "Zlink.Framework.UnitTests/Runtime/MeshNodeShutdownSealTests.cs",
+        "Zlink.Framework.UnitTests/Runtime/MeshPermitHandoffTests.cs",
+        "Zlink.Framework.UnitTests/Runtime/RawPortCloseFailureTests.cs",
+        "Zlink.Framework.UnitTests/Runtime/RelocationBehaviorConformanceTests.cs",
+        "Zlink.Framework.UnitTests/Runtime/RelocationSourceRestoreTests.cs",
+        "Zlink.Framework.UnitTests/Runtime/RelocationTargetShutdownTests.cs",
+        "Zlink.Framework.UnitTests/Runtime/SameNodeActorJoinTests.cs",
+        "Zlink.Framework.UnitTests/Runtime/SerialExecutorTests.cs",
+        "Zlink.Framework.UnitTests/Runtime/ServiceRuntimeFoundationTests.cs",
+        "Zlink.Framework.UnitTests/Runtime/ServiceWireSessionRelocationCodecTests.cs",
+        "Zlink.Framework.UnitTests/Runtime/SessionActorCoordinatorTests.cs",
+        "Zlink.Framework.UnitTests/Runtime/SessionFailureClassificationTests.cs",
+        "Zlink.Framework.UnitTests/Runtime/StatefulServiceRuntimeTests.cs",
+        "Zlink.Framework.UnitTests/Runtime/SubmitAdmissionRuntimeTests.cs",
+    ];
+
+    private static readonly string[] RemovedRuntimeMethods =
+    [
+        "RecoverCanonicalRemoteJoinCompletionAsync",
+        "RunDeferredJoinCompletionRecoveryAsync",
+        "RecoverPublishedRelocationsAsync",
+        "TryBeginRelocationBarrier",
+        "RunOnSharedGate",
+        "EncodeRelocationAck",
+        "TryDecodeRelocationAck",
+        "EncodeRelocationComplete",
+        "TryDecodeRelocationComplete",
+        "EncodeRelocationReserved",
+        "TryDecodeRelocationReserved",
+        "EncodeRelocationSeal",
+        "TryDecodeRelocationSeal",
+        "EncodeSessionRelocationRouted",
+        "TryDecodeSessionRelocationRouted",
+    ];
+
+    private static readonly string[] RemovedRuntimeTypes =
+    [
+        "SessionRelocationRoutedRecord",
+        "SessionRelocationRouteResult",
+    ];
+
     private static readonly string[] ServerContractAreas =
     [
         "Actors",
@@ -71,6 +132,46 @@ public sealed class SourceLayoutContracts
             .ToArray();
 
         Assert.Empty(unexpectedSharedSources);
+    }
+
+    [Fact]
+    public void Tests_do_not_use_nonpublic_member_reflection()
+    {
+        var tests = Path.Combine(FindRepositoryRoot(), "framework/languages/dotnet/tests");
+        var forbidden = new Regex(
+            string.Concat("BindingFlags\\s*\\.\\s*", "NonPublic"),
+            RegexOptions.CultureInvariant
+        );
+        var matches = Directory
+            .EnumerateFiles(tests, "*.cs", SearchOption.AllDirectories)
+            .Where(path => !IsBuildOutput(path))
+            .Where(path => forbidden.IsMatch(File.ReadAllText(path)))
+            .Select(path => Path.GetRelativePath(tests, path).Replace('\\', '/'))
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.Equal(LegacyNonPublicReflectionFiles, matches);
+    }
+
+    [Fact]
+    public void Removed_runtime_methods_and_types_are_absent_from_source()
+    {
+        var runtime = Path.Combine(
+            FindRepositoryRoot(),
+            "framework/languages/dotnet/src/Zlink.Framework/Runtime"
+        );
+        var source = string.Join(
+            Environment.NewLine,
+            Directory
+                .EnumerateFiles(runtime, "*.cs", SearchOption.AllDirectories)
+                .Where(path => !IsBuildOutput(path))
+                .Select(File.ReadAllText)
+        );
+
+        foreach (var method in RemovedRuntimeMethods)
+            Assert.DoesNotMatch($@"\b{Regex.Escape(method)}\s*\(", source);
+        foreach (var type in RemovedRuntimeTypes)
+            Assert.DoesNotMatch($@"\b(?:class|record|struct)\s+{Regex.Escape(type)}\b", source);
     }
 
     [Fact]

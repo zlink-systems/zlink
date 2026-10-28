@@ -391,16 +391,32 @@ class application_job_queue_t
                                                      std::function<void ()> notify,
                                                      origin_t origin)
         {
+            auto batch = take_batch (queue, wait, std::move (notify), origin, 1);
+            if (!batch)
+                return std::nullopt;
+            if (!*batch)
+                return std::optional<std::optional<permit_t>> (std::in_place, std::nullopt);
+            return std::optional<permit_t> ((**batch).take ());
+        }
+
+        std::optional<std::optional<permit_batch_t>> take_batch (application_job_queue_t &queue,
+                                                                 std::chrono::milliseconds wait,
+                                                                 std::function<void ()> notify,
+                                                                 origin_t origin,
+                                                                 std::uint32_t requested)
+        {
             if (!_supply.valid ()) {
-                auto filled = std::make_shared<std::promise<std::optional<permit_t>>> ();
+                if (auto available = queue.try_reserve_supply_batch (requested))
+                    return std::optional<permit_batch_t> (std::move (available));
+                auto filled = std::make_shared<std::promise<std::optional<permit_batch_t>>> ();
                 _supply = filled->get_future ();
-                _waiter = queue.wait_for_supply (
-                  [filled, notify = std::move (notify)] (std::optional<permit_t> permit) {
+                _waiter = queue.wait_for_supply_batch (
+                  [filled, notify = std::move (notify)] (std::optional<permit_batch_t> permit) {
                       filled->set_value (std::move (permit));
                       if (notify)
                           notify ();
                   },
-                  origin);
+                  origin, requested);
             }
             if (_supply.wait_for (wait) != std::future_status::ready)
                 return std::nullopt;
@@ -410,7 +426,7 @@ class application_job_queue_t
 
       private:
         waiter_t _waiter;
-        std::future<std::optional<permit_t>> _supply;
+        std::future<std::optional<permit_batch_t>> _supply;
     };
 
     explicit application_job_queue_t (application_job_queue_configuration_t configuration,

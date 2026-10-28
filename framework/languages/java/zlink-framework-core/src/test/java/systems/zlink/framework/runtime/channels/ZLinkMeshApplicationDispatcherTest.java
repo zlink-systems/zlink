@@ -2,7 +2,6 @@ package systems.zlink.framework.runtime.channels;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -42,7 +41,6 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
@@ -357,7 +355,12 @@ final class ZLinkMeshApplicationDispatcherTest {
             mesh.channelName("flow-profile")
                     .server()
                     .addRequestHandler(FlowChannelRequestHandler.class, String.class, String.class);
-            ZLinkFrameworkRegistration framework = new ZLinkFrameworkRegistration();
+            var workers = new ZLinkManualDispatchExecutor();
+            var options =
+                    new systems.zlink.framework.runtime.configuration
+                            .DefaultZLinkFrameworkOptions();
+            options.useHandlerExecutor(workers);
+            var framework = options.registration();
             framework.dispatchOptions().messageFlow(ZLinkMessageFlowLogMode.NORMAL);
             ZLinkMeshApplicationDispatcher dispatcher =
                     new ZLinkMeshApplicationDispatcher(
@@ -368,16 +371,20 @@ final class ZLinkMeshApplicationDispatcherTest {
                             (token, parts) -> {});
 
             dispatcher.accept(recordWithFlow());
+            workers.drain();
             FlowChannelRequestHandler.received.get(2, TimeUnit.SECONDS);
             dispatcher.accept(recordWithFlow());
+            workers.drain();
             assertEquals(
                     2L,
                     traces.stream().filter(line -> line.contains("phase=admitted")).count(),
                     traces.toString());
             assertEquals(
-                    1L,
+                    2L,
                     traces.stream().filter(line -> line.contains("phase=dispatched")).count(),
                     traces.toString());
+            assertFalse(repliedTrace.isDone());
+            assertEquals(0, terminalCount.get());
             FlowChannelRequestHandler.release.complete(null);
             repliedTrace.get(2, TimeUnit.SECONDS);
             for (String phase : List.of("received", "admitted", "dispatched", "replied")) {
@@ -574,6 +581,208 @@ final class ZLinkMeshApplicationDispatcherTest {
         assertEquals(false, NodeHandler.received.isDone());
     }
 
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource({
+        "false,false,false,false,false", "false,false,true,false,false",
+                "false,true,false,false,false", "false,true,true,false,false",
+        "true,false,false,false,false", "true,false,true,false,false",
+                "true,true,false,false,false", "true,true,true,false,false",
+        "false,false,false,true,false", "false,false,true,true,false",
+                "false,true,false,true,false", "false,true,true,true,false",
+        "true,false,false,true,false", "true,false,true,true,false", "true,true,false,true,false",
+                "true,true,true,true,false",
+        "false,false,false,true,true", "false,true,false,true,true", "true,false,true,true,true",
+                "true,true,true,true,true"
+    })
+    void sameNamespaceStartsNextBeforePriorTerminal(
+            boolean channel,
+            boolean firstRequest,
+            boolean secondRequest,
+            boolean nextBatch,
+            boolean failFirst)
+            throws Exception {
+        var probe = new NamespaceProbe();
+        var activations = new ZLinkTrackingHandlerActivator();
+        namespaceProbe = probe;
+        var workers = new ZLinkManualDispatchExecutor();
+        var options =
+                new systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions();
+        options.useHandlerExecutor(workers);
+        var framework = options.registration();
+        framework.inboundDispatch().setMaxQueuedApplicationJobs(2);
+        var mesh = new MeshNodeRegistration("game");
+        mesh.listen("inproc://namespace-start-order");
+        if (channel) {
+            var server = mesh.channelName("play").server();
+            server.addSendHandler(NamespaceSend.class, String.class);
+            server.addRequestHandler(NamespaceRequest.class, String.class, String.class);
+        } else {
+            mesh.addRouteSendHandler(NamespaceRouteSend.class, String.class);
+            mesh.addRouteRequestHandler(NamespaceRouteRequest.class, String.class, String.class);
+        }
+        var drains = new ZLinkMeshDrainCoordinator(List.of("game"));
+        var dispatcher =
+                new ZLinkMeshApplicationDispatcher(
+                        mesh,
+                        new ZLinkStringMessageSerializer(),
+                        framework,
+                        activations,
+                        (token, parts) -> {
+                            throw new AssertionError("unexpected native reply");
+                        },
+                        drains);
+        var firstRelease = new CompletableFuture<Void>();
+        var secondRelease = new CompletableFuture<Void>();
+        var firstReply = new CompletableFuture<String>();
+        var secondReply = new CompletableFuture<String>();
+        try {
+            var firstOwned =
+                    submitNamespaceRecord(
+                            dispatcher,
+                            framework,
+                            channel,
+                            firstRequest,
+                            "first",
+                            firstReply,
+                            firstRelease);
+            if (nextBatch) {
+                workers.drain();
+                assertEquals(List.of("first"), probe.starts);
+            }
+            submitNamespaceRecord(
+                    dispatcher,
+                    framework,
+                    channel,
+                    secondRequest,
+                    "second",
+                    secondReply,
+                    secondRelease);
+            workers.drain();
+            secondRelease.get(2, TimeUnit.SECONDS);
+            if (secondRequest) secondReply.get(2, TimeUnit.SECONDS);
+            assertEquals(List.of("first", "second"), probe.starts);
+            assertEquals(List.of("second"), probe.completions);
+            assertFalse(firstRelease.isDone());
+            assertEquals("first", firstOwned.parts().getLast().toUtf8String());
+            assertEquals(2, activations.opened.get());
+            assertEquals(1, activations.closed.get());
+            assertFalse(firstReply.isDone());
+            assertEquals(0, framework.applicationJobQueue().snapshot().permitsInUse());
+            var stopping = drains.sealAndAwaitZero("game").toCompletableFuture();
+            assertFalse(stopping.isDone());
+            if (failFirst)
+                probe.release.completeExceptionally(
+                        new IllegalStateException("namespace-terminal-failure"));
+            else probe.release.complete(null);
+            workers.drain();
+            firstRelease.get(2, TimeUnit.SECONDS);
+            if (firstRequest)
+                assertEquals(
+                        failFirst ? "error:INTERNAL_FAILURE" : "first-reply",
+                        firstReply.get(2, TimeUnit.SECONDS));
+            stopping.get(2, TimeUnit.SECONDS);
+            assertEquals(List.of("second", "first"), probe.completions);
+            assertEquals(2, activations.closed.get());
+        } finally {
+            probe.release.complete(null);
+            workers.drain();
+            namespaceProbe = null;
+        }
+    }
+
+    private static ZLinkMeshDispatchRecord submitNamespaceRecord(
+            ZLinkMeshApplicationDispatcher dispatcher,
+            ZLinkFrameworkRegistration framework,
+            boolean channel,
+            boolean request,
+            String value,
+            CompletableFuture<String> reply,
+            CompletableFuture<Void> released) {
+        var kind =
+                channel
+                        ? (request ? RecordKind.CHANNEL_REQUEST : RecordKind.CHANNEL_SEND)
+                        : (request ? RecordKind.NODE_REQUEST : RecordKind.NODE_SEND);
+        var base =
+                record(
+                        kind,
+                        channel ? "play" : null,
+                        value,
+                        Map.of(),
+                        null,
+                        request
+                                ? parts -> {
+                                    var failure = ZLinkFrameworkErrorReply.failure(parts);
+                                    reply.complete(
+                                            failure == null
+                                                    ? parts.getLast().toUtf8String()
+                                                    : "error:" + failure.kind());
+                                }
+                                : null);
+        var permit =
+                framework
+                        .applicationJobQueue()
+                        .acquire(
+                                systems.zlink.framework.runtime.internal.dispatch
+                                        .ZLinkApplicationJobQueue.Origin.LOCAL)
+                        .toCompletableFuture()
+                        .join();
+        var owned =
+                new ZLinkMeshDispatchRecord(
+                        base.owner(),
+                        base.receive(),
+                        base.parts(),
+                        base.frameworkReply(),
+                        () -> assertTrue(released.complete(null)));
+        try (var scope =
+                systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext.enter(
+                        permit)) {
+            dispatcher.accept(owned);
+        } finally {
+            permit.abandonReservation();
+        }
+        return owned;
+    }
+
+    private static volatile NamespaceProbe namespaceProbe;
+
+    private static final class NamespaceProbe {
+        final List<String> starts = new CopyOnWriteArrayList<>();
+        final List<String> completions = new CopyOnWriteArrayList<>();
+        final CompletableFuture<Void> release = new CompletableFuture<>();
+
+        CompletionStage<String> invoke(String value) {
+            starts.add(value);
+            return (value.equals("first") ? release : CompletableFuture.<Void>completedFuture(null))
+                    .whenComplete((ignored, error) -> completions.add(value))
+                    .thenApply(ignored -> value + "-reply");
+        }
+    }
+
+    public static final class NamespaceSend implements ZLinkSendHandler<String> {
+        public CompletionStage<Void> handle(String value, ZLinkMessageContext context) {
+            return namespaceProbe.invoke(value).thenApply(ignored -> null);
+        }
+    }
+
+    public static final class NamespaceRequest implements ZLinkRequestHandler<String, String> {
+        public CompletionStage<String> handle(String value, ZLinkMessageContext context) {
+            return namespaceProbe.invoke(value);
+        }
+    }
+
+    public static final class NamespaceRouteSend implements ZLinkRouteSendHandler<String> {
+        public CompletionStage<Void> handle(String value, ZLinkRouteMessageContext context) {
+            return namespaceProbe.invoke(value).thenApply(ignored -> null);
+        }
+    }
+
+    public static final class NamespaceRouteRequest
+            implements ZLinkRouteRequestHandler<String, String> {
+        public CompletionStage<String> handle(String value, ZLinkRouteMessageContext context) {
+            return namespaceProbe.invoke(value);
+        }
+    }
+
     @Test
     void localNodeSendOwnsPayloadAndCompletesAdmissionBeforeHandler() throws Exception {
         MeshNodeRegistration mesh = new MeshNodeRegistration("game");
@@ -608,9 +817,13 @@ final class ZLinkMeshApplicationDispatcherTest {
         mesh.listen("inproc://mesh-local-node-capacity");
         mesh.configureRouterSocket().setReceiveHighWaterMark(1);
         mesh.addRouteSendHandler(GatedNodeHandler.class, String.class);
-        ZLinkFrameworkRegistration framework = new ZLinkFrameworkRegistration();
+        var workers = new ZLinkManualDispatchExecutor();
+        var options =
+                new systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions();
+        options.useHandlerExecutor(workers);
+        var framework = options.registration();
         framework.inboundDispatch().setMaxQueuedApplicationJobs(1);
-        ZLinkMeshApplicationDispatcher dispatcher =
+        var dispatcher =
                 new ZLinkMeshApplicationDispatcher(
                         mesh,
                         new ZLinkStringMessageSerializer(),
@@ -619,22 +832,29 @@ final class ZLinkMeshApplicationDispatcherTest {
                         (token, parts) -> {
                             throw new AssertionError("send dispatch must not reply");
                         });
-
-        assertEquals(0, submitLocal(dispatcher, "String", "active"));
-        GatedNodeHandler.started.get(2, TimeUnit.SECONDS);
-        assertEquals(0, submitLocal(dispatcher, "String", "pending"));
-        CompletionStage<Integer> waiting = submitLocalAsync(dispatcher, "String", "waiting");
-        assertFalse(waiting.toCompletableFuture().isDone());
-        var snapshot = framework.applicationJobQueue().snapshot();
-        assertEquals(1, snapshot.queuedApplicationJobs());
-        assertEquals(1, snapshot.capacityWaiters());
-
-        GatedNodeHandler.release.complete(null);
-
-        assertEquals(0, waiting.toCompletableFuture().get(2, TimeUnit.SECONDS));
-        assertEquals(3, GatedNodeHandler.threeCompleted.get(2, TimeUnit.SECONDS));
-        assertInstanceOf(ExecutorService.class, framework.handlerExecutor()).close();
-        assertEquals(0, framework.applicationJobQueue().snapshot().permitsInUse());
+        try {
+            assertEquals(0, submitLocal(dispatcher, "String", "queued"));
+            CompletionStage<Integer> waiting = submitLocalAsync(dispatcher, "String", "waiting");
+            assertFalse(GatedNodeHandler.started.isDone());
+            assertFalse(waiting.toCompletableFuture().isDone());
+            var snapshot = framework.applicationJobQueue().snapshot();
+            assertEquals(1, snapshot.queuedApplicationJobs());
+            assertEquals(1, snapshot.capacityWaiters());
+            workers.drain();
+            assertEquals(0, waiting.toCompletableFuture().get(2, TimeUnit.SECONDS));
+            var third = submitLocalAsync(dispatcher, "String", "third");
+            workers.drain();
+            assertEquals(0, third.toCompletableFuture().get(2, TimeUnit.SECONDS));
+            workers.drain();
+            assertFalse(GatedNodeHandler.release.isDone());
+            assertEquals(0, GatedNodeHandler.completedCount.get());
+            assertEquals(0, framework.applicationJobQueue().snapshot().permitsInUse());
+            GatedNodeHandler.release.complete(null);
+            assertEquals(3, GatedNodeHandler.threeCompleted.get(2, TimeUnit.SECONDS));
+        } finally {
+            GatedNodeHandler.release.complete(null);
+            workers.drain();
+        }
     }
 
     @Test

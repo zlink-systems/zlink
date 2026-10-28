@@ -5,6 +5,8 @@ namespace Zlink.Framework.Runtime.Messaging;
 // replay before decoding, including rejected and malformed terminal replies.
 internal static class ZLinkDurableRequest
 {
+    private static readonly Task CancellationOnly = new TaskCompletionSource().Task;
+
     internal static async ValueTask<TReply> RequestAsync<TReply>(
         IReadOnlyList<ReadOnlyMemory<byte>> wire,
         long startTimestamp,
@@ -18,7 +20,8 @@ internal static class ZLinkDurableRequest
         CancellationToken cancellationToken,
         Func<ZLinkPeerRouteObservation> observeRoute,
         TimeProvider? timeProvider = null,
-        ZLinkRequestAdmission? requestAdmission = null
+        ZLinkRequestAdmission? requestAdmission = null,
+        Task? terminal = null
     )
     {
         timeProvider ??= TimeProvider.System;
@@ -29,27 +32,42 @@ internal static class ZLinkDurableRequest
             cancellationToken.ThrowIfCancellationRequested();
             var remaining = timeout - timeProvider.GetElapsedTime(startTimestamp);
             if (remaining <= TimeSpan.Zero)
+            {
+                // The entry's owner confirms expiration. A consumed stage budget
+                // prevents another submit but does not independently take terminal authority.
+                if (terminal is not null)
+                    await terminal.ConfigureAwait(false);
+                else if (cancellationToken.CanBeCanceled)
+                    await CancellationOnly.WaitAsync(cancellationToken).ConfigureAwait(false);
                 throw Exhausted(admitted || requestAdmission?.IsAdmitted == true, lastFailure);
+            }
             var route = observeRoute();
             if (route.ReadyGeneration == 0)
             {
                 try
                 {
-                    using var readiness = new ZLinkRequestCompletion<bool>(cancellationToken);
-                    _ = ObserveReadinessAsync(
-                        route.Changed.WaitAsync(remaining, timeProvider, cancellationToken),
-                        readiness
-                    );
-                    await readiness.Task.ConfigureAwait(false);
+                    var wait = route.Changed.WaitAsync(cancellationToken);
+                    if (terminal is null)
+                        await wait.ConfigureAwait(false);
+                    else
+                    {
+                        var ready = await Task.WhenAny(wait, terminal).ConfigureAwait(false);
+                        await ready.ConfigureAwait(false);
+                        if (ReferenceEquals(ready, terminal))
+                            throw Exhausted(admitted, lastFailure);
+                    }
                 }
-                catch (TimeoutException)
+                catch (OperationCanceledException)
                 {
-                    throw Exhausted(admitted || requestAdmission?.IsAdmitted == true, lastFailure);
+                    await Task.CompletedTask.ConfigureAwait(ConfigureAwaitOptions.ForceYielding);
+                    throw;
                 }
                 continue;
             }
             try
             {
+                // This source has no deadline. It is the binding contract's
+                // generation-retirement signal, not the logical timeout owner.
                 using var attempt = CancellationTokenSource.CreateLinkedTokenSource(
                     cancellationToken
                 );
@@ -57,7 +75,19 @@ internal static class ZLinkDurableRequest
                 var reply = submit(wire, remaining, attempt.Token).AsTask();
                 while (!reply.IsCompleted)
                 {
-                    await Task.WhenAny(reply, route.Changed).ConfigureAwait(false);
+                    if (terminal is null)
+                        await Task.WhenAny(reply, route.Changed).ConfigureAwait(false);
+                    else
+                    {
+                        var observed = await Task.WhenAny(reply, route.Changed, terminal)
+                            .ConfigureAwait(false);
+                        if (ReferenceEquals(observed, terminal))
+                        {
+                            _ = DiscardLateReplyAsync(reply);
+                            await terminal.ConfigureAwait(false);
+                            throw Exhausted(admitted, lastFailure);
+                        }
+                    }
                     if (reply.IsCompleted)
                         break;
                     var next = observeRoute();
@@ -88,19 +118,16 @@ internal static class ZLinkDurableRequest
         }
     }
 
-    private static async Task ObserveReadinessAsync(
-        Task changed,
-        ZLinkRequestCompletion<bool> completion
-    )
+    private static async Task DiscardLateReplyAsync<T>(Task<T> reply)
     {
         try
         {
-            await changed.ConfigureAwait(false);
-            completion.Complete(true);
+            if (await reply.ConfigureAwait(false) is IReadOnlyList<Message> parts)
+                ZLinkMessageParts.DisposeAll(parts);
         }
         catch (Exception error)
         {
-            completion.Fail(error);
+            ZLinkFrameworkDebugLog.TaskFailure("durable-late-reply", error);
         }
     }
 

@@ -107,14 +107,16 @@ class RegionRelocation final : public fx::spot_relocation_adapter_t<Region>
   public:
     fx::task_t<std::vector<std::byte>> capture (Region &region, std::stop_token) override
     {
-        const auto payload = zlink::message_t::from_json (region.positions.capture ());
-        co_return std::vector<std::byte> (payload.bytes ().begin (), payload.bytes ().end ());
+        const auto snapshot = region.positions.capture ();
+        const auto payload = fx::serializer_registry_t{}.get<PositionsSnapshot> ().serialize (snapshot);
+        const auto bytes = payload.bytes ();
+        co_return std::vector<std::byte> (bytes.begin (), bytes.end ());
     }
     fx::task_t<void>
     restore (Region &region, std::vector<std::byte> payload, std::stop_token) override
     {
-        region.positions.restore (zlink::message_t::from (std::span<const std::byte> (payload))
-                                    .parse_json<PositionsSnapshot> ());
+        region.positions.restore (fx::serializer_registry_t{}.get<PositionsSnapshot> ().deserialize (
+          fx::encoded_payload_t::from_bytes (std::span<const std::byte> (payload))));
         co_return;
     }
 };

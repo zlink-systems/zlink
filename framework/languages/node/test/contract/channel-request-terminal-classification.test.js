@@ -1,3 +1,4 @@
+const { createPublisherRuntime } = require('./fixtures/publisher-runtime');
 const assert = require('node:assert/strict');
 const test = require('node:test');
 
@@ -340,7 +341,7 @@ test('raw router and dealer requests consume the binding admission stage once', 
   assert.equal(replyReads, 4);
 });
 
-test('Logical Multicast preserves source refusal and zero-recipient statuses', () => {
+test('Logical Multicast preserves source refusal and zero-recipient statuses', async () => {
   const { SubmitResult } = require('../../packages/framework/dist/runtime/backend/runtime-values');
   const {
     ZLinkSubmitStatus
@@ -348,20 +349,20 @@ test('Logical Multicast preserves source refusal and zero-recipient statuses', (
   const {
     ZLinkSpotNodeRuntimeManager
   } = require('../../packages/framework/dist/runtime/spots/spot-node-runtime-manager');
-  const manager = new ZLinkSpotNodeRuntimeManager({
+  const managerOptions = {
     detachedTaskRunner: {},
     errorSink: { reportRuntimeTaskException() { assert.fail('unexpected runtime task error'); } }
-  });
+  };
   for (const [result, expected] of [
     [SubmitResult.NotAdmitted, ZLinkSubmitStatus.Backpressured],
     [SubmitResult.Backpressured, ZLinkSubmitStatus.Backpressured],
     [SubmitResult.NotFound, ZLinkSubmitStatus.Submitted]
   ]) {
-    manager.publishers.set('test.mesh', {
+    const manager = await createPublisherRuntime('test.mesh', {
       publish() {
         throw new ZLinkBackendResultError('submit', result);
       }
-    });
+    }, managerOptions);
     assert.equal(
       manager.tryPublish('test.mesh', 'events', 'topic', 'PublicationEvent', { value: 1 }).status,
       expected

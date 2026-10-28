@@ -1,3 +1,4 @@
+const { rawMeshBinding } = require('./fixtures/raw-mesh-binding');
 const assert = require('node:assert/strict');
 const test = require('node:test');
 
@@ -21,15 +22,16 @@ const {
   encodeApplicationPayload
 } = require('../../packages/framework/dist/runtime/foundation/service-wire-m6a-codec');
 
-function createRuntime() {
-  return new RawServiceMeshRuntime({
+function createRuntime(bindingPort) {
+  const runtime = new RawServiceMeshRuntime({
+    bindingPort,
     applicationJobQueue: new ApplicationJobQueue(
       resolveApplicationJobQueueConfiguration({ maxQueuedApplicationJobs: 16n }, () => 1n)
     ),
     descriptor: {
       meshName: 'mesh',
       nodeRoutingId: 'source',
-      advertisedEndpoint: 'tcp://127.0.0.1:1',
+      advertisedEndpoint: 'tcp://127.0.0.1:0',
       channels: [],
       state: 'serving',
       securityIdentity: 'test',
@@ -45,6 +47,8 @@ function createRuntime() {
       pendingCapacityUsed: 0
     }
   });
+  if (bindingPort) runtime.start();
+  return runtime;
 }
 
 function payload() {
@@ -97,7 +101,7 @@ test('an observed request decided inside the call reaches the completion slot af
 });
 
 test('an observed remote request registers once without a registry Promise', async () => {
-  const runtime = createRuntime();
+
   let promiseRegistrations = 0;
   let observedRegistrations = 0;
   const register = OperationRegistry.prototype.register;
@@ -111,11 +115,10 @@ test('an observed remote request registers once without a registry Promise', asy
     return registerObserved.apply(this, args);
   };
   let replyParts;
-  runtime.router = {
-    request(_target, parts) {
-      replyParts = parts;
-    }
-  };
+  const { bindingPort } = rawMeshBinding({
+    request(_target, parts) { replyParts = parts; }
+  });
+  const runtime = createRuntime(bindingPort);
   runtime.topology.readyPeer = () => ({ descriptor: { nodeRoutingId: 'target' } });
   runtime.isPeerRouteReady = () => true;
   try {
@@ -208,9 +211,8 @@ function runtimeWithBinding(t, submit) {
     }));
     return socket;
   });
-  const runtime = createRuntime();
   const host = new ZLinkNodeRawBindingPort(context).createHost();
-  runtime.router = host.createRouter();
+  const runtime = createRuntime({ createHost: () => host });
   runtime.topology.readyPeer = () => ({ descriptor: { nodeRoutingId: 'target' } });
   t.after(() => {
     runtime.mailbox.close();
@@ -333,7 +335,7 @@ for (const failureAt of ['binding', 'protocol', 'submit', 'admission', 'receive'
     if (failureAt === 'terminal') assert.equal(events[0].value.terminalResult, 0);
     else if (failureAt === 'protocol') assert.equal(events[0].error.name, 'ServiceWireProtocolError');
     else assert.equal(events[0].error, failure);
-    assert.equal(runtime.operations.size, 0);
+    assert.equal(runtime.pendingOperationCount, 0);
     assert.equal(closes, ['protocol'].includes(failureAt) ? 1 : ['receive', 'retain', 'terminal'].includes(failureAt) ? 2 : 0);
   });
 }

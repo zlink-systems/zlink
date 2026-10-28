@@ -473,23 +473,41 @@ struct traced_reply_t
     int value{};
 };
 
-template <typename T>
-    requires (std::is_same_v<T, event_t> || std::is_same_v<T, request_t>
-              || std::is_same_v<T, reply_t> || std::is_same_v<T, traced_event_t>
-              || std::is_same_v<T, traced_request_t> || std::is_same_v<T, traced_reply_t>)
-void to_json (nlohmann::json &json, const T &value)
-{
-    json = value.value;
 }
 
-template <typename T>
-    requires (std::is_same_v<T, event_t> || std::is_same_v<T, request_t>
-              || std::is_same_v<T, reply_t> || std::is_same_v<T, traced_event_t>
-              || std::is_same_v<T, traced_request_t> || std::is_same_v<T, traced_reply_t>)
-void from_json (const nlohmann::json &json, T &value)
+template <> struct zlink::json::dto_traits<event_t>
 {
-    value.value = json.get<int> ();
-}
+    static constexpr auto fields = std::tuple{zlink::json::field ("value", &event_t::value)};
+};
+
+template <> struct zlink::json::dto_traits<request_t>
+{
+    static constexpr auto fields = std::tuple{zlink::json::field ("value", &request_t::value)};
+};
+
+template <> struct zlink::json::dto_traits<reply_t>
+{
+    static constexpr auto fields = std::tuple{zlink::json::field ("value", &reply_t::value)};
+};
+
+template <> struct zlink::json::dto_traits<traced_event_t>
+{
+    static constexpr auto fields = std::tuple{zlink::json::field ("value", &traced_event_t::value)};
+};
+
+template <> struct zlink::json::dto_traits<traced_request_t>
+{
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("value", &traced_request_t::value)};
+};
+
+template <> struct zlink::json::dto_traits<traced_reply_t>
+{
+    static constexpr auto fields = std::tuple{zlink::json::field ("value", &traced_reply_t::value)};
+};
+
+namespace
+{
 
 class resolver_t final : public zlink::framework::runtime::spot_address_resolver_t
 {
@@ -2849,6 +2867,7 @@ static void verify_activation_failure_terminal (bool local,
                               .descriptor_revision = 1,
                               .advertised_endpoint = "tcp://127.0.0.1:0"},
                .runtime_failures = std::make_shared<rt::runtime_failure_collector_t> ()}};
+    options.mesh.metric_provider = metrics.api ();
     options.mesh.dispatch.message_flow (fw::message_flow_log_mode_t::normal);
     std::vector<fw::message_flow_event_t> events;
     std::vector<fw::message_dispatch_error_event_t> errors;

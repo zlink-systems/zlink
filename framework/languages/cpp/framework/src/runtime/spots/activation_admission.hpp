@@ -25,12 +25,13 @@ namespace zlink::framework::detail
 class activation_admission_t : public std::enable_shared_from_this<activation_admission_t>
 {
   public:
-    void configure_metrics (std::string mesh_name)
+    void configure_metrics (std::string mesh_name,
+                            runtime::metric_provider_t provider = runtime::noop_metric_provider ())
     {
         if (_active_metric || _limit_metric)
             return;
         _metric_mesh = std::move (mesh_name);
-        auto provider = opentelemetry::metrics::Provider::GetMeterProvider ();
+        _metric_provider = provider;
         if (dynamic_cast<opentelemetry::metrics::NoopMeterProvider *> (provider.get ()))
             return;
         auto meter = provider->GetMeter ("zlink.framework");
@@ -152,6 +153,7 @@ class activation_admission_t : public std::enable_shared_from_this<activation_ad
         auto &admission = *static_cast<activation_admission_t *> (context);
         observe (result, admission, admission.limit ());
     }
+    runtime::metric_provider_t _metric_provider;
     std::string _metric_mesh;
     opentelemetry::nostd::shared_ptr<opentelemetry::metrics::ObservableInstrument> _active_metric;
     opentelemetry::nostd::shared_ptr<opentelemetry::metrics::ObservableInstrument> _limit_metric;

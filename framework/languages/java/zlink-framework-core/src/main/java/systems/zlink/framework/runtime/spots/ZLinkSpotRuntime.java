@@ -1210,15 +1210,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                 });
     }
 
-    @Override
-    boolean spotCloseCommitted(DefaultSpotContext context) {
-        SpotActivation activation = spotLifecycle.spotActivationFor(context.spotId());
-        return activation != null
-                && activation.context == context
-                && activation.existingCloseCoordinator() != null
-                && activation.existingCloseCoordinator().committed();
-    }
-
     private record CloseIntent(
             String meshName,
             ZLinkInternalMeshNode source,
@@ -3142,7 +3133,15 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         String key =
                 systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec.spot(
                         envelope.targetSpotId());
-        return store.read(key, () -> System.currentTimeMillis() >= envelope.deadlineUnixMs())
+        // A provider may throw cancellation before returning its stage.
+        return CompletableFuture.completedFuture(key)
+                .thenCompose(
+                        value ->
+                                store.read(
+                                        value,
+                                        () ->
+                                                System.currentTimeMillis()
+                                                        >= envelope.deadlineUnixMs()))
                 .thenCompose(
                         read -> {
                             if (!(read instanceof ZLinkAuthoritySnapshot snapshot)
@@ -3244,7 +3243,12 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                                     + " stored activation");
                                                 return read;
                                             });
-                        });
+                        })
+                .exceptionallyCompose(
+                        failure ->
+                                CompletableFuture.failedFuture(
+                                        instanceSpotActivationFailure(
+                                                failure, envelope.deadlineUnixMs())));
     }
 
     private CompletionStage<
@@ -3581,7 +3585,12 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                                                     });
                                                                 });
                                             });
-                        });
+                        })
+                .exceptionallyCompose(
+                        failure ->
+                                CompletableFuture.failedFuture(
+                                        instanceSpotActivationFailure(
+                                                failure, envelope.deadlineUnixMs())));
     }
 
     private CompletionStage<Void> completeInstanceActivation(
@@ -3774,10 +3783,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                     restoreFirst) {
         long remaining = deadlineUnixMs - System.currentTimeMillis();
         if (remaining <= 0)
-            return CompletableFuture.failedFuture(
-                    new ZLinkFrameworkException(
-                            ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
-                            "Instance activation deadline expired"));
+            return CompletableFuture.failedFuture(instanceSpotActivationDeadlineFailure(null));
         return activateInstanceSpotTargetCore(
                         meshName, factory, route, backendSpot, deadlineUnixMs, restoreFirst)
                 .toCompletableFuture()
@@ -3785,11 +3791,30 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                 .exceptionallyCompose(
                         failure ->
                                 CompletableFuture.failedFuture(
-                                        failure instanceof java.util.concurrent.TimeoutException
-                                                ? new ZLinkFrameworkException(
-                                                        ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
-                                                        "Instance activation deadline expired")
-                                                : failure));
+                                        unwrapCompletion(failure)
+                                                        instanceof
+                                                        java.util.concurrent.TimeoutException
+                                                ? instanceSpotActivationDeadlineFailure(
+                                                        unwrapCompletion(failure))
+                                                : instanceSpotActivationFailure(
+                                                        failure, deadlineUnixMs)));
+    }
+
+    private Throwable instanceSpotActivationFailure(Throwable failure, long deadlineUnixMs) {
+        Throwable cause = unwrapCompletion(failure);
+        if (cause instanceof java.util.concurrent.CancellationException
+                && !closing
+                && System.currentTimeMillis() >= deadlineUnixMs) {
+            return instanceSpotActivationDeadlineFailure(cause);
+        }
+        return cause;
+    }
+
+    private static ZLinkFrameworkException instanceSpotActivationDeadlineFailure(Throwable cause) {
+        return new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+                "Instance activation deadline expired",
+                cause);
     }
 
     private CompletionStage<Void> activateInstanceSpotTargetCore(
@@ -4870,7 +4895,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
 
     @SuppressWarnings({"rawtypes", "unchecked"})
     private CompletionStage<ZLinkSpotActorJoinResult> joinLocalActor(
-            ZLinkActor actor, String targetSpotId, Message requestPart) {
+            ZLinkActor actor, String targetSpotId, Message requestPart, long deadlineNanos) {
         SpotActivation targetActivation = spotLifecycle.spotActivationFor(targetSpotId);
         EntrySpotActivation targetEntry =
                 targetActivation == null ? entrySpotActivationFor(targetSpotId) : null;
@@ -4933,7 +4958,10 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                         if (targetSurface instanceof ZLinkSpot<?> target) {
                                             commit =
                                                     runtime.commitJoinedLocation(
-                                                                    actor, actorRef, targetSpotId)
+                                                                    actor,
+                                                                    actorRef,
+                                                                    targetSpotId,
+                                                                    deadlineNanos)
                                                             .thenRun(
                                                                     () ->
                                                                             runtime
@@ -4952,7 +4980,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                             entry.spotId(),
                                                             routeMeshNodesByName
                                                                     .get(actor.context().meshName())
-                                                                    .lifecycleGeneration());
+                                                                    .lifecycleGeneration(),
+                                                            deadlineNanos);
                                         }
                                         return ZLinkSerialExecutionQueue.yieldCurrent(commit)
                                                 .thenRun(
@@ -5653,7 +5682,11 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             try (Message request = Message.from(new byte[0]);
                     var ignored = ZLinkSuspendInvocationContext.enterApplicationExecution(null)) {
                 return ZLinkSerialExecutionQueue.yieldCurrent(
-                        joinLocalActor(actor, entry.context.spotId(), request)
+                        joinLocalActor(
+                                        actor,
+                                        entry.context.spotId(),
+                                        request,
+                                        System.nanoTime() + defaultRequestTimeout.toNanos())
                                 .thenApply(result -> (Void) null));
             }
         } catch (RuntimeException ex) {

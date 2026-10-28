@@ -40,6 +40,57 @@ final class ZLinkActorJoinLifecycleAdmissionTest {
     private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(1);
     static final long COMPLETION_SECONDS = 5;
 
+    @Test
+    void admissionReadsCommittedCloseAtExecution() throws Exception {
+        try (var fixture = new Fixture<>(Room.class)) {
+            var entered = new CompletableFuture<Void>();
+            var release = new CompletableFuture<Void>();
+            var coordinator =
+                    fixture.activation.closeCoordinator(
+                            () ->
+                                    new ZLinkSpotCloseCoordinator(
+                                            () -> CompletableFuture.completedFuture(true),
+                                            List.of(),
+                                            failure -> fail(failure)));
+            var predecessor =
+                    fixture.activation.context.enqueueLifecycle(
+                            () -> {
+                                entered.complete(null);
+                                return systems.zlink.framework.execution.ZLinkSerialExecutionQueue
+                                        .manageCurrentInTurn(release)
+                                        .thenRun(coordinator::markCommitted);
+                            });
+            entered.get(COMPLETION_SECONDS, TimeUnit.SECONDS);
+            var admission =
+                    fixture.activation
+                            .context
+                            .enqueueJoinLifecycle(
+                                    () -> {
+                                        fail("Join ran after committed Close");
+                                        return CompletableFuture.completedFuture(null);
+                                    })
+                            .toCompletableFuture();
+            try {
+                assertFalse(admission.isDone());
+                release.complete(null);
+                predecessor.toCompletableFuture().get(COMPLETION_SECONDS, TimeUnit.SECONDS);
+                var failure =
+                        assertThrows(
+                                ExecutionException.class,
+                                () -> admission.get(COMPLETION_SECONDS, TimeUnit.SECONDS));
+                assertEquals(
+                        systems.zlink.framework.errors.ZLinkFrameworkErrorKind.NOT_FOUND,
+                        assertInstanceOf(
+                                        systems.zlink.framework.errors.ZLinkFrameworkException
+                                                .class,
+                                        failure.getCause())
+                                .kind());
+            } finally {
+                release.complete(null);
+            }
+        }
+    }
+
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
     void localAndCanonicalCallbacksShareTheWholeLifecycleTurn(boolean canonicalFirst)
@@ -273,9 +324,7 @@ final class ZLinkActorJoinLifecycleAdmissionTest {
             host = (ZLinkSpotRuntime) framework.spotManager();
             activation = host.spotLifecycle().spotActivationFor("room-a");
             room = roomType.cast(activation.spot());
-            var jobsField = ZLinkSpotRuntime.class.getDeclaredField("applicationJobQueue");
-            jobsField.setAccessible(true);
-            jobs = (ZLinkApplicationJobQueue) jobsField.get(host);
+            jobs = options.registration().applicationJobQueue();
             var backend =
                     (ZLinkInternalSpotNode)
                             Proxy.newProxyInstance(

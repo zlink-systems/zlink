@@ -21,6 +21,7 @@
 #include <nlohmann/json.hpp>
 #include <algorithm>
 #include <atomic>
+#include <cassert>
 #include <limits>
 #include <stdexcept>
 #include <string_view>
@@ -35,6 +36,12 @@ using detail::stream_message_kind_t;
 
 namespace detail
 {
+
+void restore_session_stream_on_lane (const std::shared_ptr<actor_gateway_state_t> &state,
+                                     const std::string &actor_id,
+                                     const std::string &session_id,
+                                     std::uint64_t binding_token,
+                                     actor_session_binding_snapshot_t snapshot);
 
 class bound_session_delivery_fence_t
 {
@@ -181,13 +188,32 @@ void trace_detached_bound_session_send_failure (
     });
 }
 
+void observe_bound_session_write (
+  const std::shared_ptr<detail::actor_gateway_state_t> &state,
+  std::string actor_id,
+  task_t<void> task,
+  std::shared_ptr<detail::bound_session_delivery_fence_t> fence = {})
+{
+    auto running = std::make_shared<task_t<void>> (std::move (task));
+    detail::observe_task_terminal (
+      *running, [running, state, actor_id = std::move (actor_id),
+                 fence = std::move (fence)] (const result_t<void> &terminal) {
+          if (fence)
+              fence->complete (terminal);
+          if (!terminal)
+              trace_detached_bound_session_send_failure (
+                state, actor_id, "accepted=true detached=true",
+                message_flow_reason_t::target_closed, nullptr, nullptr);
+      });
+}
+
 bool drain_bound_session_sends (
   const std::shared_ptr<detail::actor_gateway_state_t> &state,
   const detail::actor_gateway_state_t::bound_session_send_queue_key_t &queue_key,
   const std::string &actor_id)
 {
     for (;;) {
-        const auto pending = state->sync (
+        auto pending = state->sync (
           [&] () -> std::optional<detail::actor_gateway_state_t::pending_bound_session_send_t> {
               const auto found = state->pending_bound_session_sends.find (queue_key);
               if (found == state->pending_bound_session_sends.end () || found->second.empty ()) {
@@ -201,10 +227,9 @@ bool drain_bound_session_sends (
           });
         if (!pending)
             return true;
-        auto completion_fence = pending->completion_fence;
+        auto completion = std::move (pending->completion);
         if (detail::submit_blocking_call ([state, queue_key, actor_id,
-                                           pending = std::move (*pending),
-                                           completion_fence] () mutable {
+                                           pending = std::move (*pending), completion] () mutable {
                 try {
                     /* One stage event per program point: the former
                        * offload_sender_begin/send_bound_session_enter pair
@@ -217,7 +242,7 @@ bool drain_bound_session_sends (
                       std::make_shared<std::function<task_t<result_t<void>> ()>> (
                         std::move (pending.dispatch)),
                       [state, queue_key, actor_id,
-                       completion_fence] (const result_t<result_t<void>> &terminal) {
+                       completion] (const result_t<result_t<void>> &terminal) {
                           detail::trace_detached_bound_session_send_stage (
                             state, actor_id, "detached_delivery_complete",
                             [&] { return terminal && terminal.value () ? "ok" : "failed"; },
@@ -228,16 +253,16 @@ bool drain_bound_session_sends (
                                 message_flow_reason_t::target_closed, nullptr,
                                 queue_key.session_rid ? &*queue_key.session_rid : nullptr);
                           }
-                          if (completion_fence) {
+                          if (completion) {
                               if (terminal && terminal.value ()) {
-                                  completion_fence->complete (result_t<void>::success ());
+                                  completion (result_t<void>::success ());
                               } else if (!terminal) {
-                                  completion_fence->complete (result_t<void>::failure (
+                                  completion (result_t<void>::failure (
                                     terminal.error_kind (), terminal.error () != nullptr
                                                               ? terminal.error ()->what ()
                                                               : "bound Session delivery failed"));
                               } else {
-                                  completion_fence->complete (
+                                  completion (
                                     result_t<void>::failure (terminal.value ().error_kind (),
                                                              terminal.value ().error () != nullptr
                                                                ? terminal.value ().error ()->what ()
@@ -248,8 +273,8 @@ bool drain_bound_session_sends (
                       });
                 }
                 catch (...) {
-                    if (completion_fence) {
-                        completion_fence->complete (
+                    if (completion) {
+                        completion (
                           result_t<void>::failure (framework_error_kind_t::internal_failure,
                                                    "bound Session delivery raised an exception"));
                     }
@@ -266,31 +291,57 @@ bool drain_bound_session_sends (
           state, actor_id, "accepted=false executor_stopping=true",
           message_flow_reason_t::target_closed, nullptr,
           queue_key.session_rid ? &*queue_key.session_rid : nullptr);
-        if (completion_fence) {
-            completion_fence->complete (
-              result_t<void>::failure (framework_error_kind_t::shutting_down,
-                                       "bound Session delivery executor is stopping"));
+        if (completion) {
+            completion (result_t<void>::failure (framework_error_kind_t::shutting_down,
+                                                 "bound Session delivery executor is stopping"));
         }
         // The executor refused this head. Drop it and continue so the Actor's
         // per-session FIFO cannot remain permanently marked active.
     }
 }
 
-bool enqueue_bound_session_send (
+bool enqueue_bound_session_send_owned (
+  const std::shared_ptr<detail::actor_gateway_state_t> &state,
+  const detail::actor_gateway_state_t::bound_session_send_queue_key_t &queue_key,
+  detail::actor_gateway_state_t::pending_bound_session_send_t pending)
+{
+    auto &queue = state->pending_bound_session_sends[queue_key];
+    queue.push_back (std::move (pending));
+    return state->active_bound_session_sends.insert (queue_key).second;
+}
+
+result_t<void> enqueue_bound_session_send (
   const std::shared_ptr<detail::actor_gateway_state_t> &state,
   const detail::actor_gateway_state_t::bound_session_send_queue_key_t &queue_key,
   const std::string &actor_id,
-  detail::actor_gateway_state_t::pending_bound_session_send_t pending)
+  detail::actor_gateway_state_t::pending_bound_session_send_t pending,
+  std::optional<std::uint64_t> stream_binding_token)
 {
-    const auto start_drain = state->sync ([&] {
-        auto &queue = state->pending_bound_session_sends[queue_key];
-        queue.push_back (std::move (pending));
-        return state->active_bound_session_sends.insert (queue_key).second;
+    const auto admission = state->sync ([&] () -> result_t<bool> {
+        if (stream_binding_token) {
+            const auto current = state->actors_by_id.find (actor_id);
+            if (current == state->actors_by_id.end () || !current->second.bound
+                || current->second.binding_token != *stream_binding_token)
+                return detail::boundary_failure<bool> (detail::boundary_error_t::disconnected,
+                                                       "actor session is disconnected");
+        }
+        return result_t<bool>::success (
+          enqueue_bound_session_send_owned (state, queue_key, std::move (pending)));
     });
+    if (!admission) {
+        auto failure = detail::result_access_t::failure<void> (admission.exception ());
+        if (pending.completion)
+            pending.completion (failure);
+        return failure;
+    }
     detail::trace_detached_bound_session_send_stage (
       state, actor_id, "fifo_accepted", [] { return "accepted"; }, nullptr,
       queue_key.session_rid ? &*queue_key.session_rid : nullptr);
-    return !start_drain || drain_bound_session_sends (state, queue_key, actor_id);
+    if (!admission.value () || drain_bound_session_sends (state, queue_key, actor_id))
+        return result_t<void>::success ();
+    return detail::boundary_failure<void> (
+      detail::boundary_error_t::timed_out,
+      "bound Session detached send queue did not accept the push");
 }
 
 detail::actor_gateway_state_t::bound_session_send_queue_key_t
@@ -304,6 +355,21 @@ bound_session_send_queue_key (const std::string &actor_id,
             route.binding_generation,
             route.binding_token,
             false};
+}
+
+detail::actor_gateway_state_t::bound_session_send_queue_key_t
+bound_session_send_queue_key (const std::string &actor_id, const detail::actor_record_t &record)
+{
+    if (record.bound_session_route)
+        return bound_session_send_queue_key (actor_id, *record.bound_session_route);
+    return {actor_id,
+            {},
+            record.source_session_rid
+              ? std::optional<std::string> (record.source_session_rid->to_hex ())
+              : std::nullopt,
+            record.source_binding_generation,
+            0,
+            true};
 }
 
 void drain_session_relay (const std::shared_ptr<detail::actor_gateway_state_t> &state,
@@ -876,6 +942,8 @@ bound_session_send_call_t bound_session_t::send_erased (std::string packet_name,
           framework_error_kind_t::not_configured, "bound session does not reference an actor")));
     }
     std::shared_ptr<detail::bound_session_sink_t> sink;
+    std::optional<std::uint64_t> stream_binding_token;
+    bool local_submission = false;
     std::shared_ptr<detail::bound_session_delivery_fence_t> completion_fence;
     detail::actor_gateway_state_t::bound_session_sender_t remote_sender;
     stream_header_t header;
@@ -925,20 +993,12 @@ bound_session_send_call_t bound_session_t::send_erased (std::string packet_name,
             const auto found_sink = _state->bound_session_sinks.find (actor_id);
             if (found_sink != _state->bound_session_sinks.end ())
                 sink = found_sink->second;
-            if (found->second.bound_session_route) {
-                const auto &route = *found->second.bound_session_route;
-                queue_key = bound_session_send_queue_key (actor_id, route);
-            } else {
-                queue_key = {
-                  actor_id,
-                  {},
-                  found->second.source_session_rid
-                    ? std::optional<std::string> (found->second.source_session_rid->to_hex ())
-                    : std::nullopt,
-                  found->second.source_binding_generation,
-                  0,
-                  true};
-            }
+            local_submission =
+              found->second.bound_session_stream_sink || !found->second.bound_session_route;
+            if (!local_submission)
+                queue_key = bound_session_send_queue_key (actor_id, found->second);
+            if (found->second.bound_session_stream_sink)
+                stream_binding_token = found->second.binding_token;
         }
         return std::nullopt;
     });
@@ -956,14 +1016,41 @@ bound_session_send_call_t bound_session_t::send_erased (std::string packet_name,
       [state = _state, queue_key = std::move (queue_key), actor_id, sink = std::move (sink),
        remote_sender = std::move (remote_sender), actor_ref = *_actor_ref,
        expected_binding_generation = _expected_binding_generation, header = std::move (header),
-       payload, codec, completion_fence = std::move (completion_fence)] (
+       payload, codec, stream_binding_token, local_submission,
+       completion_fence = std::move (completion_fence)] (
         const std::string &name, const send_call_t::metadata_map_t &) mutable -> task_t<void> {
-          // One-way submit accepts into the Framework-owned per-binding FIFO.
-          // Sink coroutines are eager, so even constructing one on the Actor
-          // handler stack could otherwise enter native ROUTER admission and
-          // retain the serial turn until relocation sealing or timeout.
           if (completion_fence && !completion_fence->try_add ())
               completion_fence.reset ();
+          if (sink && local_submission) {
+              std::optional<task_t<void>> pending;
+              const auto admitted = state->sync ([&] () -> result_t<void> {
+                  const auto current = state->actors_by_id.find (actor_id);
+                  const auto current_sink = state->bound_session_sinks.find (actor_id);
+                  if (current == state->actors_by_id.end () || !current->second.bound
+                      || current_sink == state->bound_session_sinks.end ()
+                      || current_sink->second != sink
+                      || (stream_binding_token
+                          && current->second.binding_token != *stream_binding_token))
+                      return detail::boundary_failure<void> (detail::boundary_error_t::disconnected,
+                                                             "actor session is disconnected");
+                  pending.emplace ((*sink) (name, codec, payload));
+                  return result_t<void>::success ();
+              });
+              if (!admitted) {
+                  if (completion_fence)
+                      completion_fence->complete (admitted);
+                  return task_t<void> (admitted);
+              }
+              observe_bound_session_write (state, actor_id, std::move (*pending),
+                                           std::move (completion_fence));
+              return task_t<void> (result_t<void>::success ());
+          }
+          // Remote native admission can wait; it must remain outside this lane.
+          std::function<void (result_t<void>)> complete;
+          if (completion_fence)
+              complete = [completion_fence] (result_t<void> terminal) {
+                  completion_fence->complete (std::move (terminal));
+              };
           const auto submitted = enqueue_bound_session_send (
             state, queue_key, actor_id,
             {[sink, remote_sender, actor_ref, expected_binding_generation, header, payload, codec,
@@ -984,12 +1071,10 @@ bound_session_send_call_t bound_session_t::send_erased (std::string packet_name,
                                                         error.what ());
                  }
              },
-             completion_fence});
-          if (!submitted) {
-              return task_t<void> (detail::boundary_failure<void> (
-                detail::boundary_error_t::timed_out,
-                "bound Session detached send queue did not accept the push"));
-          }
+             std::move (complete)},
+            stream_binding_token);
+          if (!submitted)
+              return task_t<void> (submitted);
           return task_t<void> (result_t<void>::success ());
       }));
 }
@@ -1617,11 +1702,10 @@ task_t<void> session_actor_t::notify_disconnected ()
         std::function<std::optional<runtime::stateful::stream_binding_t> (const actor_ref_t &,
                                                                           std::uint64_t)>
           capture;
-        {
-            const std::lock_guard lock (_binding_context->mutex);
+        _state->sync ([&] {
             capture = _binding_context->disconnect_snapshot;
             cleanup = _binding_context->disconnect_cleanup;
-        }
+        });
         if (capture)
             snapshot = capture (_ref, _binding_token);
     }
@@ -1761,7 +1845,6 @@ std::vector<session_actor_t> session_actor_manager_t::bound () const
         return {};
     std::vector<std::pair<std::uint16_t, session_actor_t>> bindings;
     {
-        const std::lock_guard binding_lock (_binding_context->mutex);
         bindings = _state->sync ([&] {
             std::vector<std::pair<std::uint16_t, session_actor_t>> current;
             current.reserve (_binding_context->actor_tokens.size ());
@@ -1794,16 +1877,15 @@ std::optional<session_actor_t> session_actor_manager_t::find (std::string actor_
 {
     std::uint64_t session_binding_token = 0;
     std::string session_id;
-    if (_binding_context) {
-        const std::lock_guard binding_lock (_binding_context->mutex);
-        const auto binding = _binding_context->actor_tokens.find (actor_id);
-        if (binding == _binding_context->actor_tokens.end ()
-            || !_binding_context->ready_actors.contains (actor_id))
-            return std::nullopt;
-        session_binding_token = binding->second;
-        session_id = _binding_context->session_id;
-    }
     return _state->sync ([&] () -> std::optional<session_actor_t> {
+        if (_binding_context) {
+            const auto binding = _binding_context->actor_tokens.find (actor_id);
+            if (binding == _binding_context->actor_tokens.end ()
+                || !_binding_context->ready_actors.contains (actor_id))
+                return std::nullopt;
+            session_binding_token = binding->second;
+            session_id = _binding_context->session_id;
+        }
         const auto found = _state->actors_by_id.find (actor_id);
         if (found == _state->actors_by_id.end () || !found->second.bound
             || found->second.disconnected
@@ -1854,11 +1936,9 @@ result_t<session_actor_t> session_actor_manager_t::get_or_create_erased (
   std::string actor_type, std::string actor_id, std::optional<zlink::message_t> request)
 {
     std::string current_session_id;
-    if (_binding_context) {
-        const std::lock_guard binding_lock (_binding_context->mutex);
-        current_session_id = _binding_context->session_id;
-    }
     const auto existing = _state->sync ([&] () -> std::optional<result_t<session_actor_t>> {
+        if (_binding_context)
+            current_session_id = _binding_context->session_id;
         const auto found = _state->actors_by_id.find (actor_id);
         if (found != _state->actors_by_id.end ()) {
             const bool bound_to_other_session =
@@ -1974,193 +2054,207 @@ request_call_t<session_actor_t> session_actor_manager_t::bind_or_get (actor_ref_
           return manager.bind_current_session (actor_ref, true);
       });
 }
-
 request_task_t<session_actor_t>
 session_actor_manager_t::bind_current_session (actor_ref_t actor_ref, bool reuse_current)
 {
     const auto state = _state;
     const auto binding_context = _binding_context;
     const auto actor_id = std::string (actor_ref.actor_id ().value ());
-    const auto publish_without_stream = [state, actor_id, actor_ref] {
-        state->sync ([&] {
+    bool without_stream = false;
+    bool reused = false;
+    std::uint64_t token = 0;
+    std::uint16_t actor_slot = 0;
+    std::optional<stream_t> stream;
+    std::string session_id;
+    std::function<request_task_t<void> (actor_ref_t, std::uint64_t, std::uint16_t,
+                                        std::function<void ()>)>
+      native_binder;
+    stream_codec_t codec = stream_codec_t::message_pack;
+    std::optional<std::uint64_t> previous_context_token;
+    bool previous_ready = false;
+    bool had_previous_stream = false;
+    std::weak_ptr<detail::stream_state_t> previous_stream;
+    struct publication_t
+    {
+        std::optional<detail::actor_session_binding_snapshot_t> previous;
+        std::optional<task_t<void>> submitted;
+    };
+    auto publication = std::make_shared<publication_t> ();
+    state->sync ([&] {
+        without_stream = !binding_context || !binding_context->stream;
+        if (without_stream) {
             auto found = state->actors_by_id.find (actor_id);
             if (found == state->actors_by_id.end ()) {
                 state->actors_by_id.emplace (actor_id, detail::actor_record_t{actor_ref, true, {}});
                 return;
             }
-            if (!actor_types_compatible (found->second.ref, actor_ref)) {
+            if (!actor_types_compatible (found->second.ref, actor_ref))
                 throw framework_exception_t (framework_error_kind_t::type_mismatch,
                                              "actor id is already bound to another type");
-            }
-            if (found->second.ref.object_generation () != actor_ref.object_generation ()) {
+            if (found->second.ref.object_generation () != actor_ref.object_generation ())
                 throw framework_exception_t (framework_error_kind_t::invalid_operation,
                                              "actor generation changed during Session binding");
-            }
             found->second.ref = merge_actor_type (actor_ref, found->second.ref);
             found->second.bound = true;
             found->second.disconnected.reset ();
-        });
-    };
-    if (!binding_context) {
-        publish_without_stream ();
-        co_await detail::request_admitted_t{};
-        co_return session_actor_t (state, actor_ref, 0);
-    }
-    std::unique_lock binding_lock (binding_context->mutex);
-    if (!binding_context->stream) {
-        binding_lock.unlock ();
-        publish_without_stream ();
-        co_await detail::request_admitted_t{};
-        co_return session_actor_t (state, actor_ref, 0);
-    }
-    {
+            return;
+        }
+        session_id = binding_context->session_id;
         const auto current = binding_context->actor_tokens.find (actor_id);
         const auto bound_stream = binding_context->actor_streams.find (actor_id);
+        const auto record = state->actors_by_id.find (actor_id);
         if (current != binding_context->actor_tokens.end ()
             && binding_context->ready_actors.contains (actor_id)
             && bound_stream != binding_context->actor_streams.end ()
-            && bound_stream->second.lock () == binding_context->stream_state) {
-            bool current_binding_matches = false;
-            {
-                current_binding_matches = state->sync ([&] {
-                    const auto record = state->actors_by_id.find (actor_id);
-                    return record != state->actors_by_id.end () && record->second.bound
-                           && !record->second.disconnected
-                           && record->second.binding_session_id == binding_context->session_id
-                           && record->second.binding_token == current->second
-                           && record->second.ref.object_generation ()
-                                == actor_ref.object_generation ();
-                });
-            }
-            if (current_binding_matches) {
-                const auto token = current->second;
-                binding_lock.unlock ();
-                co_await detail::request_admitted_t{};
-                co_return session_actor_t (state, actor_ref, token, binding_context);
-            }
+            && bound_stream->second.lock () == binding_context->stream_state
+            && record != state->actors_by_id.end () && record->second.bound
+            && !record->second.disconnected && record->second.binding_session_id == session_id
+            && record->second.binding_token == current->second
+            && record->second.ref.object_generation () == actor_ref.object_generation ()) {
+            token = current->second;
+            reused = true;
+            return;
         }
-    }
-    (void) reuse_current;
-    if (binding_context->next_actor_slot > std::numeric_limits<std::uint16_t>::max ()) {
-        throw framework_exception_t (framework_error_kind_t::invalid_operation,
-                                     "Session Actor slots are exhausted");
-    }
-    const auto actor_slot = static_cast<std::uint16_t> (binding_context->next_actor_slot++);
-    std::uint64_t token;
-    token = state->sync ([&] {
+        (void) reuse_current;
+        if (binding_context->next_actor_slot > std::numeric_limits<std::uint16_t>::max ())
+            throw framework_exception_t (framework_error_kind_t::invalid_operation,
+                                         "Session Actor slots are exhausted");
         if (state->next_binding_token == 0
-            || state->next_binding_token == std::numeric_limits<std::uint64_t>::max ()) {
+            || state->next_binding_token == std::numeric_limits<std::uint64_t>::max ())
             throw framework_exception_t (framework_error_kind_t::invalid_operation,
                                          "Session binding generation is exhausted");
-        }
-        return state->next_binding_token++;
+        actor_slot = static_cast<std::uint16_t> (binding_context->next_actor_slot++);
+        token = state->next_binding_token++;
+        if (current != binding_context->actor_tokens.end ())
+            previous_context_token = current->second;
+        previous_ready = binding_context->ready_actors.contains (actor_id);
+        had_previous_stream = bound_stream != binding_context->actor_streams.end ();
+        if (had_previous_stream)
+            previous_stream = bound_stream->second;
+        stream = binding_context->stream;
+        native_binder = binding_context->native_binder;
+        codec = binding_context->codec;
+        binding_context->actor_tokens[actor_id] = token;
+        binding_context->ready_actors.erase (actor_id);
+        binding_context->actor_streams[actor_id] = binding_context->stream_state;
     });
-    const auto prior_context_token = binding_context->actor_tokens.find (actor_id);
-    const auto previous_context_token = prior_context_token == binding_context->actor_tokens.end ()
-                                          ? std::optional<std::uint64_t>{}
-                                          : std::make_optional (prior_context_token->second);
-    const auto previous_ready = binding_context->ready_actors.contains (actor_id);
-    const auto prior_stream = binding_context->actor_streams.find (actor_id);
-    const auto had_previous_stream = prior_stream != binding_context->actor_streams.end ();
-    const auto previous_stream =
-      had_previous_stream ? prior_stream->second : std::weak_ptr<detail::stream_state_t>{};
-    binding_context->actor_tokens[actor_id] = token;
-    binding_context->ready_actors.erase (actor_id);
-    binding_context->actor_streams[actor_id] = binding_context->stream_state;
-    std::optional<detail::actor_session_binding_snapshot_t> previous;
-    try {
-        previous = detail::actor_gateway_runtime_t (state).bind_session_stream (
-          actor_id, *binding_context->stream, binding_context->codec, binding_context->session_id,
-          token, actor_ref, actor_slot);
-        auto native_binder = binding_context->native_binder;
-        binding_lock.unlock ();
-        if (native_binder) {
-            co_await detail::request_submission (native_binder (actor_ref, token, actor_slot));
-        } else {
-            const auto payload =
-              detail::stream_runtime_t::encode_actor_bound_payload (actor_slot, actor_id);
-            stream_header_t header (stream_message_kind_t::control, stream_codec_t::raw,
-                                    stream_header_flags_t::none, std::nullopt, "$zlink.actor.bound",
-                                    {});
-            binding_context->stream
-              ->write_packet_with_header (std::move (header), zlink::message_t::from (std::string (
-                                                                payload.begin (), payload.end ())))
-              .async ()
-              .result ()
-              .value ();
-        }
+    if (without_stream || reused) {
         co_await detail::request_admitted_t{};
-        binding_lock.lock ();
-        const auto current = binding_context->actor_tokens.find (actor_id);
-        if (current != binding_context->actor_tokens.end () && current->second == token) {
-            binding_context->ready_actors.insert (actor_id);
-        }
+        co_return session_actor_t (state, actor_ref, token,
+                                   without_stream ? nullptr : binding_context);
+    }
+    try {
+        auto publish_stream = [state, actor_ref, actor_slot, token, actor_id, publication,
+                               stream = *stream, codec, session_id] {
+            publication->previous = detail::actor_gateway_runtime_t::bind_session_stream_owned (
+              state, actor_id, stream, codec, session_id, token, actor_ref, actor_slot,
+              [state, stream, actor_slot, actor_id, publication] () mutable {
+                  const auto payload =
+                    detail::stream_runtime_t::encode_actor_bound_payload (actor_slot, actor_id);
+                  stream_header_t header (stream_message_kind_t::control, stream_codec_t::raw,
+                                          stream_header_flags_t::none, std::nullopt,
+                                          "$zlink.actor.bound", {});
+                  publication->submitted.emplace (
+                    stream
+                      .write_packet_with_header (
+                        std::move (header),
+                        zlink::message_t::from (std::string (payload.begin (), payload.end ())))
+                      .async ());
+              });
+        };
+        if (native_binder)
+            co_await detail::request_submission (
+              native_binder (actor_ref, token, actor_slot, std::move (publish_stream)));
+        else
+            state->sync (publish_stream);
+        if (publication->submitted)
+            observe_bound_session_write (state, actor_id, std::move (*publication->submitted));
+        const auto registrar = state->sync ([&] { return state->bound_session_registrar; });
+        if (registrar)
+            registrar (actor_ref).value ();
+        co_await detail::request_admitted_t{};
+        state->sync ([&] {
+            const auto current = binding_context->actor_tokens.find (actor_id);
+            if (current != binding_context->actor_tokens.end () && current->second == token)
+                binding_context->ready_actors.insert (actor_id);
+        });
     }
     catch (...) {
-        if (!binding_lock.owns_lock ())
-            binding_lock.lock ();
-        const auto current = binding_context->actor_tokens.find (actor_id);
-        if (current != binding_context->actor_tokens.end () && current->second == token) {
-            if (previous_context_token) {
+        state->sync ([&] {
+            const auto current = binding_context->actor_tokens.find (actor_id);
+            if (current == binding_context->actor_tokens.end () || current->second != token)
+                return;
+            if (previous_context_token)
                 current->second = *previous_context_token;
-            } else {
+            else
                 binding_context->actor_tokens.erase (current);
-            }
-        }
-        if (previous_ready) {
-            binding_context->ready_actors.insert (actor_id);
-        } else {
-            binding_context->ready_actors.erase (actor_id);
-        }
-        if (had_previous_stream) {
-            binding_context->actor_streams[actor_id] = previous_stream;
-        } else {
-            binding_context->actor_streams.erase (actor_id);
-        }
-        if (previous) {
-            detail::actor_gateway_runtime_t (state).restore_session_stream (
-              actor_id, binding_context->session_id, token, std::move (*previous));
-        }
+            if (previous_ready)
+                binding_context->ready_actors.insert (actor_id);
+            else
+                binding_context->ready_actors.erase (actor_id);
+            if (had_previous_stream)
+                binding_context->actor_streams[actor_id] = previous_stream;
+            else
+                binding_context->actor_streams.erase (actor_id);
+            if (publication->previous)
+                detail::restore_session_stream_on_lane (state, actor_id, session_id, token,
+                                                        std::move (*publication->previous));
+        });
         throw;
     }
-    binding_lock.unlock ();
     co_return session_actor_t (state, actor_ref, token, binding_context);
 }
 
 void detail::session_actor_manager_access_t::attach (session_actor_manager_t &manager,
                                                      stream_t stream)
 {
-    stream._state->actors.store (&manager, std::memory_order_release);
-    const std::lock_guard lock (manager._binding_context->mutex);
-    manager._binding_context->session_id = stream.session_id ();
-    manager._binding_context->stream_state = stream._state;
-    manager._binding_context->stream = std::move (stream);
+    manager._state->sync ([&] {
+        stream._state->actors.store (&manager, std::memory_order_release);
+        manager._binding_context->session_id = stream.session_id ();
+        manager._binding_context->stream_state = stream._state;
+        manager._binding_context->stream = std::move (stream);
+    });
 }
 
 void detail::session_actor_manager_access_t::set_codec (session_actor_manager_t &manager,
                                                         stream_codec_t codec)
 {
-    const std::lock_guard lock (manager._binding_context->mutex);
-    manager._binding_context->codec = codec;
+    manager._state->sync ([&] { manager._binding_context->codec = codec; });
 }
 
 void detail::session_actor_manager_access_t::bind_native (
   session_actor_manager_t &manager,
   std::function<request_task_t<void> (actor_ref_t, std::uint64_t, std::uint16_t)> binder)
 {
-    const std::lock_guard lock (manager._binding_context->mutex);
-    manager._binding_context->native_binder = std::move (binder);
+    bind_native (manager,
+                 [state = manager._state, binder = std::move (binder)] (
+                   actor_ref_t actor, std::uint64_t generation, std::uint16_t slot,
+                   std::function<void ()> publish) mutable -> request_task_t<void> {
+                     co_await detail::request_submission (
+                       binder (std::move (actor), generation, slot));
+                     state->sync (publish);
+                 });
+}
+
+void detail::session_actor_manager_access_t::bind_native (
+  session_actor_manager_t &manager,
+  std::function<request_task_t<void> (
+    actor_ref_t, std::uint64_t, std::uint16_t, std::function<void ()>)> binder)
+{
+    manager._state->sync ([&] { manager._binding_context->native_binder = std::move (binder); });
 }
 
 void detail::session_actor_manager_access_t::bind_native (
   session_actor_manager_t &manager, std::function<task_t<void> (actor_ref_t, std::uint64_t)> binder)
 {
     bind_native (manager,
-                 [binder = std::move (binder)] (actor_ref_t actor, std::uint64_t generation,
-                                                std::uint16_t) mutable -> request_task_t<void> {
+                 [state = manager._state, binder = std::move (binder)] (
+                   actor_ref_t actor, std::uint64_t generation, std::uint16_t,
+                   std::function<void ()> publish) mutable -> request_task_t<void> {
                      auto pending = binder (std::move (actor), generation);
                      co_await detail::request_admitted_t{};
                      co_await pending;
+                     state->sync (publish);
                  });
 }
 
@@ -2170,14 +2264,9 @@ detail::session_actor_manager_access_t::find_slot (session_actor_manager_t &mana
 {
     if (actor_slot == 0 || !manager._binding_context)
         return std::nullopt;
-    std::string session_id;
-    std::set<std::string> ready_actors;
-    {
-        const std::lock_guard lock (manager._binding_context->mutex);
-        session_id = manager._binding_context->session_id;
-        ready_actors = manager._binding_context->ready_actors;
-    }
     return manager._state->sync ([&] () -> std::optional<session_actor_t> {
+        const auto &session_id = manager._binding_context->session_id;
+        const auto &ready_actors = manager._binding_context->ready_actors;
         for (const auto &[_, actor] : manager._state->actors_by_id) {
             if (ready_actors.contains (std::string (actor.ref.actor_id ().value ())) && actor.bound
                 && !actor.disconnected && actor.binding_session_id == session_id
@@ -2196,9 +2285,10 @@ void detail::session_actor_manager_access_t::bind_disconnect (
                                                                     std::uint64_t)> snapshot,
   std::function<task_t<void> (runtime::stateful::stream_binding_t)> cleanup)
 {
-    const std::lock_guard lock (manager._binding_context->mutex);
-    manager._binding_context->disconnect_snapshot = std::move (snapshot);
-    manager._binding_context->disconnect_cleanup = std::move (cleanup);
+    manager._state->sync ([&] {
+        manager._binding_context->disconnect_snapshot = std::move (snapshot);
+        manager._binding_context->disconnect_cleanup = std::move (cleanup);
+    });
 }
 
 void detail::session_actor_manager_access_t::disconnect (session_actor_manager_t &manager) noexcept
@@ -2222,22 +2312,6 @@ task_t<void> detail::session_actor_manager_access_t::disconnect_async (
     }
     std::map<std::string, std::uint64_t> bindings;
     std::string session_id;
-    {
-        const std::lock_guard lock (binding_context->mutex);
-        bindings = binding_context->actor_tokens;
-        binding_context->actor_tokens.clear ();
-        binding_context->ready_actors.clear ();
-        binding_context->actor_streams.clear ();
-        session_id = binding_context->session_id;
-        if (binding_context->stream) {
-            binding_context->stream->_state->actors.store (nullptr, std::memory_order_release);
-        }
-        binding_context->stream.reset ();
-        binding_context->stream_state.reset ();
-        binding_context->native_binder = {};
-        binding_context->disconnect_snapshot = {};
-        binding_context->disconnect_cleanup = {};
-    }
     struct issued_disconnect_t
     {
         std::uint16_t slot;
@@ -2251,6 +2325,20 @@ task_t<void> detail::session_actor_manager_access_t::disconnect_async (
     std::vector<issued_disconnect_t> issued;
     issued.reserve (bindings.size ());
     state->sync ([&] {
+        bindings = binding_context->actor_tokens;
+        binding_context->actor_tokens.clear ();
+        binding_context->ready_actors.clear ();
+        binding_context->actor_streams.clear ();
+        session_id = binding_context->session_id;
+        if (binding_context->stream) {
+            binding_context->stream->_state->actors.store (nullptr, std::memory_order_release);
+        }
+        binding_context->stream.reset ();
+        binding_context->stream_state.reset ();
+        binding_context->native_binder = {};
+        binding_context->disconnect_snapshot = {};
+        binding_context->disconnect_cleanup = {};
+
         for (const auto &[actor_id, token] : bindings) {
             const auto found = state->actors_by_id.find (actor_id);
             if (found == state->actors_by_id.end ()
@@ -2298,7 +2386,6 @@ task_t<void> detail::session_actor_manager_access_t::disconnect_async (
 
 namespace zlink::framework::detail
 {
-
 namespace
 {
 
@@ -2824,6 +2911,106 @@ result_t<void> actor_gateway_runtime_t::destroy_actor_on_lane (const actor_ref_t
     return result_t<void>::success ();
 }
 
+prepared_session_stream_t actor_gateway_runtime_t::prepare_session_stream_on_lane (
+  const std::shared_ptr<actor_gateway_state_t> &state,
+  const std::string &actor_id,
+  stream_t stream,
+  stream_codec_t codec,
+  const std::string &session_id,
+  std::uint64_t binding_token,
+  const std::optional<actor_ref_t> &actor_ref,
+  std::uint16_t actor_slot)
+{
+    prepared_session_stream_t prepared;
+    prepared.previous =
+      bind_session_stream_owned (state, actor_id, std::move (stream), codec, session_id,
+                                 binding_token, actor_ref, actor_slot, {});
+    prepared.actor = state->actors_by_id.at (actor_id).ref;
+    prepared.registrar = state->bound_session_registrar;
+    return prepared;
+}
+
+actor_session_binding_snapshot_t actor_gateway_runtime_t::bind_session_stream_owned (
+  const std::shared_ptr<actor_gateway_state_t> &state,
+  const std::string &actor_id,
+  stream_t stream,
+  stream_codec_t codec,
+  const std::string &session_id,
+  std::uint64_t binding_token,
+  const std::optional<actor_ref_t> &actor_ref,
+  std::uint16_t actor_slot,
+  const std::function<void ()> &publish)
+{
+    assert (state->lane.is_on_lane ());
+    actor_session_binding_snapshot_t previous;
+
+    auto found = state->actors_by_id.find (actor_id);
+    if (found != state->actors_by_id.end ()) {
+        previous.record = found->second;
+    }
+    if (const auto sink = state->bound_session_sinks.find (actor_id);
+        sink != state->bound_session_sinks.end ()) {
+        previous.sink = sink->second;
+    }
+    if (found == state->actors_by_id.end ()) {
+        if (!actor_ref || ::zlink::framework::detail::actor_ref_access_t::empty (*actor_ref)) {
+            throw framework_exception_t (framework_error_kind_t::not_found,
+                                         "actor record is missing during Session binding");
+        }
+        found = state->actors_by_id
+                  .emplace (actor_id, actor_record_t{.ref = *actor_ref,
+                                                     .bound = false,
+                                                     .disconnected = actor_disconnect_terminal ()})
+                  .first;
+    } else if (actor_ref) {
+        if (!actor_types_compatible (found->second.ref, *actor_ref)) {
+            throw framework_exception_t (framework_error_kind_t::type_mismatch,
+                                         "actor id is already bound to another type");
+        }
+        if (found->second.ref.object_generation () != actor_ref->object_generation ()) {
+            throw framework_exception_t (framework_error_kind_t::invalid_operation,
+                                         "actor generation changed during Session binding");
+        }
+        found->second.ref = merge_actor_type (*actor_ref, found->second.ref);
+    }
+    if (found->second.bound_session_route)
+        found->second.bound_session_route->binding_token = binding_token;
+
+    try {
+        if (publish)
+            publish ();
+    }
+    catch (...) {
+        if (previous.record)
+            found->second = *previous.record;
+        else
+            state->actors_by_id.erase (found);
+        throw;
+    }
+    found->second.bound = true;
+    found->second.disconnected.reset ();
+    found->second.bound_session_codec = codec;
+    found->second.bound_session_stream_sink = true;
+    found->second.binding_session_id = session_id;
+    found->second.binding_token = binding_token;
+    found->second.next_session_relay_sequence = 1;
+    found->second.actor_slot = actor_slot;
+    found->second.bound_stream = stream;
+    state->bound_session_sinks[actor_id] = std::make_shared<detail::bound_session_sink_t> (
+      [stream = std::move (stream), actor_slot] (std::string packet_name,
+                                                 stream_codec_t payload_codec,
+                                                 const zlink::message_t &payload) mutable {
+          stream_header_t header (stream_message_kind_t::send, payload_codec,
+                                  stream_header_flags_t::none, std::nullopt,
+                                  std::move (packet_name));
+          if (actor_slot != 0)
+              header.with_actor_slot (actor_slot);
+          return stream.write_packet_with_header (std::move (header), payload).async ();
+      });
+
+    return previous;
+}
+
 actor_session_binding_snapshot_t
 actor_gateway_runtime_t::bind_session_stream (std::string actor_id,
                                               stream_t stream,
@@ -2833,84 +3020,22 @@ actor_gateway_runtime_t::bind_session_stream (std::string actor_id,
                                               std::optional<actor_ref_t> actor_ref,
                                               std::uint16_t actor_slot)
 {
-    actor_session_binding_snapshot_t previous;
-    std::optional<actor_ref_t> registered_actor;
-    actor_gateway_state_t::bound_session_registrar_t registrar;
-    _state->sync ([&] {
-        auto found = _state->actors_by_id.find (actor_id);
-        if (found != _state->actors_by_id.end ()) {
-            previous.record = found->second;
-        }
-        if (const auto sink = _state->bound_session_sinks.find (actor_id);
-            sink != _state->bound_session_sinks.end ()) {
-            previous.sink = sink->second;
-        }
-        if (found == _state->actors_by_id.end ()) {
-            if (!actor_ref || ::zlink::framework::detail::actor_ref_access_t::empty (*actor_ref)) {
-                throw framework_exception_t (framework_error_kind_t::not_found,
-                                             "actor record is missing during Session binding");
-            }
-            found =
-              _state->actors_by_id
-                .emplace (actor_id, actor_record_t{.ref = *actor_ref,
-                                                   .bound = false,
-                                                   .disconnected = actor_disconnect_terminal ()})
-                .first;
-        } else if (actor_ref) {
-            if (!actor_types_compatible (found->second.ref, *actor_ref)) {
-                throw framework_exception_t (framework_error_kind_t::type_mismatch,
-                                             "actor id is already bound to another type");
-            }
-            if (found->second.ref.object_generation () != actor_ref->object_generation ()) {
-                throw framework_exception_t (framework_error_kind_t::invalid_operation,
-                                             "actor generation changed during Session binding");
-            }
-            found->second.ref = merge_actor_type (*actor_ref, found->second.ref);
-        }
-        found->second.bound = true;
-        found->second.disconnected.reset ();
-        found->second.bound_session_codec = codec;
-        found->second.bound_session_stream_sink = true;
-        registered_actor = found->second.ref;
-        found->second.binding_session_id = session_id;
-        found->second.binding_token = binding_token;
-        found->second.next_session_relay_sequence = 1;
-        found->second.actor_slot = actor_slot;
-        found->second.bound_stream = stream;
-        _state->bound_session_sinks[actor_id] = std::make_shared<detail::bound_session_sink_t> (
-          [stream = std::move (stream), actor_slot] (std::string packet_name,
-                                                     stream_codec_t payload_codec,
-                                                     const zlink::message_t &payload) mutable {
-              stream_header_t header (stream_message_kind_t::send, payload_codec,
-                                      stream_header_flags_t::none, std::nullopt,
-                                      std::move (packet_name));
-              if (actor_slot != 0)
-                  header.with_actor_slot (actor_slot);
-              try {
-                  stream.write_packet_with_header (std::move (header), payload)
-                    .async ()
-                    .result ()
-                    .value ();
-                  return task_t<void> (result_t<void>::success ());
-              }
-              catch (const framework_exception_t &error) {
-                  return task_t<void> (detail::result_access_t::failure<void> (error));
-              }
-          });
-        registrar = _state->bound_session_registrar;
+    auto prepared = _state->sync ([&] {
+        return prepare_session_stream_on_lane (_state, actor_id, std::move (stream), codec,
+                                               session_id, binding_token, actor_ref, actor_slot);
     });
-    if (registrar && registered_actor
-        && !::zlink::framework::detail::actor_ref_access_t::empty (*registered_actor)) {
-        auto registered = registrar (*registered_actor);
+    if (prepared.registrar && prepared.actor && !actor_ref_access_t::empty (*prepared.actor)) {
+        auto registered = prepared.registrar (*prepared.actor);
         if (!registered) {
-            restore_session_stream (actor_id, session_id, binding_token, std::move (previous));
+            restore_session_stream (actor_id, session_id, binding_token,
+                                    std::move (prepared.previous));
             throw framework_exception_t (registered.error_kind (),
                                          registered.error ()
                                            ? registered.error ()->what ()
                                            : "bound session route registration failed");
         }
     }
-    return previous;
+    return std::move (prepared.previous);
 }
 
 result_t<void> actor_gateway_runtime_t::bind_session_route (
@@ -3089,7 +3214,6 @@ record_bound_session_route_on_lane (const std::shared_ptr<actor_gateway_state_t>
             transition.previous = found->second.bound_session_route;
         transition.changed = true;
     }
-    transition.current = route;
     auto relay_source = route.session_rid;
     auto sink =
       state->bound_session_sender
@@ -3117,8 +3241,11 @@ record_bound_session_route_on_lane (const std::shared_ptr<actor_gateway_state_t>
     found->second.bound = true;
     found->second.disconnected.reset ();
     found->second.bound_session_route = std::move (route);
-    if (sink)
+    if (sink && !found->second.bound_session_stream_sink)
         state->bound_session_sinks.at (actor_id) = std::move (sink);
+    if (found->second.bound_session_stream_sink)
+        found->second.bound_session_route->binding_token = found->second.binding_token;
+    transition.current = *found->second.bound_session_route;
     if (publish) {
         found->second.source_session_rid = std::move (relay_source);
         found->second.source_binding_generation =
@@ -3355,7 +3482,7 @@ void actor_gateway_runtime_t::unbind_session_stream (std::string actor_id,
 {
     std::optional<stream_t> stream;
     std::uint16_t actor_slot = 0;
-    detail::actor_gateway_state_t::bound_session_send_queue_key_t queue_key;
+    std::optional<task_t<void>> submitted;
     _state->sync ([&] {
         auto found = _state->actors_by_id.find (actor_id);
         if (found != _state->actors_by_id.end ()) {
@@ -3366,20 +3493,6 @@ void actor_gateway_runtime_t::unbind_session_stream (std::string actor_id,
             }
             stream = found->second.bound_stream;
             actor_slot = found->second.actor_slot;
-            if (found->second.bound_session_route) {
-                const auto &route = *found->second.bound_session_route;
-                queue_key = bound_session_send_queue_key (actor_id, route);
-            } else {
-                queue_key = {
-                  actor_id,
-                  {},
-                  found->second.source_session_rid
-                    ? std::optional<std::string> (found->second.source_session_rid->to_hex ())
-                    : std::nullopt,
-                  found->second.source_binding_generation,
-                  0,
-                  true};
-            }
             found->second.bound_session_stream_sink = false;
             found->second.bound_session_route.reset ();
             found->second.binding_session_id.clear ();
@@ -3390,33 +3503,40 @@ void actor_gateway_runtime_t::unbind_session_stream (std::string actor_id,
             found->second.disconnected = actor_disconnect_terminal (found->second.disconnected);
         }
         _state->bound_session_sinks.erase (actor_id);
+        if (stream && actor_slot != 0 && !stream->_state->closed.load (std::memory_order_acquire)) {
+            const auto payload = stream_runtime_t::encode_actor_unbound_payload (actor_slot);
+            stream_header_t header (stream_message_kind_t::control, stream_codec_t::raw,
+                                    stream_header_flags_t::none, std::nullopt,
+                                    "$zlink.actor.unbound", {});
+            submitted.emplace (stream
+                                 ->write_packet_with_header (std::move (header),
+                                                             zlink::message_t::from (std::string (
+                                                               payload.begin (), payload.end ())))
+                                 .async ());
+        }
     });
-    if (stream && actor_slot != 0 && !stream->_state->closed.load (std::memory_order_acquire)) {
-        const auto payload = stream_runtime_t::encode_actor_unbound_payload (actor_slot);
-        stream_header_t header (stream_message_kind_t::control, stream_codec_t::raw,
-                                stream_header_flags_t::none, std::nullopt, "$zlink.actor.unbound",
-                                {});
-        auto submit_unbound = [stream = std::move (*stream), header = std::move (header),
-                               payload] () mutable -> task_t<result_t<void>> {
-            try {
-                stream
-                  .write_packet_with_header (
-                    std::move (header),
-                    zlink::message_t::from (std::string (payload.begin (), payload.end ())))
-                  .async ()
-                  .result ()
-                  .value ();
-                co_return result_t<void>::success ();
-            }
-            catch (const framework_exception_t &error) {
-                co_return detail::result_access_t::failure<void> (error);
-            }
-        };
-        (void) enqueue_bound_session_send (
-          _state, queue_key, actor_id,
-          detail::actor_gateway_state_t::pending_bound_session_send_t{std::move (submit_unbound),
-                                                                      {}});
-    }
+    if (submitted)
+        observe_bound_session_write (_state, actor_id, std::move (*submitted));
+}
+
+void restore_session_stream_on_lane (const std::shared_ptr<actor_gateway_state_t> &state,
+                                     const std::string &actor_id,
+                                     const std::string &session_id,
+                                     std::uint64_t binding_token,
+                                     actor_session_binding_snapshot_t snapshot)
+{
+    const auto current = state->actors_by_id.find (actor_id);
+    if (current == state->actors_by_id.end () || current->second.binding_token != binding_token
+        || current->second.binding_session_id != session_id)
+        return;
+    if (snapshot.record)
+        current->second = std::move (*snapshot.record);
+    else
+        state->actors_by_id.erase (current);
+    if (snapshot.sink)
+        state->bound_session_sinks[actor_id] = std::move (snapshot.sink);
+    else
+        state->bound_session_sinks.erase (actor_id);
 }
 
 void actor_gateway_runtime_t::restore_session_stream (std::string actor_id,
@@ -3425,18 +3545,8 @@ void actor_gateway_runtime_t::restore_session_stream (std::string actor_id,
                                                       actor_session_binding_snapshot_t snapshot)
 {
     _state->sync ([&] {
-        const auto current = _state->actors_by_id.find (actor_id);
-        if (current == _state->actors_by_id.end () || current->second.binding_token != binding_token
-            || current->second.binding_session_id != session_id)
-            return;
-        if (snapshot.record)
-            current->second = std::move (*snapshot.record);
-        else
-            _state->actors_by_id.erase (current);
-        if (snapshot.sink)
-            _state->bound_session_sinks[actor_id] = std::move (snapshot.sink);
-        else
-            _state->bound_session_sinks.erase (actor_id);
+        restore_session_stream_on_lane (_state, actor_id, session_id, binding_token,
+                                        std::move (snapshot));
     });
 }
 
@@ -3447,6 +3557,7 @@ actor_gateway_runtime_t::dispatch_bound_session_send (const actor_ref_t &actor_r
                                                       const zlink::message_t &payload) const
 {
     std::shared_ptr<detail::bound_session_sink_t> sink;
+    std::optional<task_t<void>> submitted;
     const auto admitted = _state->sync ([&] () -> result_t<void> {
         const auto actor_id = std::string (actor_ref.actor_id ().value ());
         const auto found = _state->actors_by_id.find (actor_id);
@@ -3479,11 +3590,15 @@ actor_gateway_runtime_t::dispatch_bound_session_send (const actor_ref_t &actor_r
                                             "actor session stream is not bound");
         }
         sink = found_sink->second;
+        if (found->second.bound_session_stream_sink || !found->second.bound_session_route)
+            submitted.emplace ((*sink) (std::move (packet_name), codec, payload));
         return result_t<void>::success ();
     });
     if (!admitted)
         return admitted;
-    auto sent = (*sink) (std::move (packet_name), codec, payload).result ();
+    if (!submitted)
+        submitted.emplace ((*sink) (std::move (packet_name), codec, payload));
+    auto sent = submitted->result ();
     if (!sent) {
         return result_t<void>::failure (sent.error_kind (),
                                         sent.error () ? sent.error ()->what ()
@@ -3506,6 +3621,7 @@ actor_gateway_runtime_t::admit_bound_session_delivery (const actor_ref_t &actor_
     std::string resolution;
     std::optional<zlink::routing_id_t> traced_session_rid;
     std::optional<zlink::routing_id_t> admitted_session_rid;
+    std::uint64_t binding_token = 0;
     _state->sync ([&] {
         const auto found_sink = _state->bound_session_sinks.find (actor_id);
         if (found_sink != _state->bound_session_sinks.end ())
@@ -3515,6 +3631,9 @@ actor_gateway_runtime_t::admit_bound_session_delivery (const actor_ref_t &actor_
             admitted_session_rid = actor->second.bound_session_route->session_rid;
             if (trace_resolution)
                 traced_session_rid = admitted_session_rid;
+        }
+        if (sink && actor != _state->actors_by_id.end ()) {
+            binding_token = actor->second.binding_token;
         }
         if (trace_resolution)
             resolution = "owner_admitted=true expected_binding_generation="
@@ -3535,33 +3654,45 @@ actor_gateway_runtime_t::admit_bound_session_delivery (const actor_ref_t &actor_
     }
     return admitted_bound_session_delivery_t{
       [actor_gateway = *this, state = _state, actor_id, sink = std::move (sink),
-       admitted_session_rid = std::move (admitted_session_rid)] (
+       admitted_session_rid = std::move (admitted_session_rid), binding_token] (
         std::string packet_name, stream_codec_t codec, const zlink::message_t &payload) {
+          std::optional<task_t<void>> submitted;
+          const auto admitted = state->sync ([&] () -> result_t<void> {
+              const auto current = state->actors_by_id.find (actor_id);
+              if (current == state->actors_by_id.end () || !current->second.bound
+                  || current->second.binding_token != binding_token)
+                  return detail::boundary_failure<void> (detail::boundary_error_t::disconnected,
+                                                         "actor session is disconnected");
+              actor_gateway.trace_bound_session_send_stage (
+                actor_id, "session_node_stream_write_submit", [] { return "begin"; },
+                admitted_session_rid ? &*admitted_session_rid : nullptr);
+              if (current->second.bound_session_stream_sink || !current->second.bound_session_route)
+                  submitted.emplace ((*sink) (std::move (packet_name), codec, payload));
+              return result_t<void>::success ();
+          });
+          if (!admitted)
+              return admitted;
+          if (!submitted)
+              submitted.emplace ((*sink) (std::move (packet_name), codec, payload));
+          auto terminal = submitted->result ();
           const auto *session_rid = admitted_session_rid ? &*admitted_session_rid : nullptr;
           actor_gateway.trace_bound_session_send_stage (
-            actor_id, "session_node_stream_write_submit", [] { return "begin"; }, session_rid);
-          auto sent = (*sink) (std::move (packet_name), codec, payload).result ();
-          if (!sent) {
-              //  The error kind alone does not name a site: `unavailable` is returned from several
-              //  places in the STREAM host. Carry the message so a trace identifies which one.
-              actor_gateway.trace_bound_session_send_stage (
-                actor_id, "session_node_stream_write_terminal",
-                [&] {
-                    return "failed error_kind="
-                           + std::to_string (static_cast<int> (sent.error_kind ()))
-                           + " error=" + (sent.error () ? sent.error ()->what () : "none");
-                },
-                session_rid);
+            actor_id, "session_node_stream_write_terminal",
+            [&] () -> std::string {
+                //  The error kind alone does not name a site: `unavailable` is returned from several
+                //  places in the STREAM host. Carry the message so a trace identifies which one.
+                if (terminal)
+                    return "ok";
+                return "failed error_kind="
+                       + std::to_string (static_cast<int> (terminal.error_kind ()))
+                       + " error=" + (terminal.error () ? terminal.error ()->what () : "none");
+            },
+            session_rid);
+          if (!terminal)
               trace_detached_bound_session_send_failure (
                 state, actor_id, "session_node_stream_write_terminal failed",
                 message_flow_reason_t::target_closed, session_rid, nullptr);
-              return result_t<void>::failure (
-                sent.error_kind (),
-                sent.error () ? sent.error ()->what () : "actor bound session dispatch failed");
-          }
-          actor_gateway.trace_bound_session_send_stage (
-            actor_id, "session_node_stream_write_terminal", [] { return "ok"; }, session_rid);
-          return result_t<void>::success ();
+          return terminal;
       }};
 }
 

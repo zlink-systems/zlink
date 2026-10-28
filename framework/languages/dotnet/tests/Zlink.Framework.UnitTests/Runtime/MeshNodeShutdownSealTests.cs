@@ -56,14 +56,20 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
                 )!
         );
 
-        // Hot-path E3: a timer wheel rounds deadlines up to the next 1ms occupied tick.
-        // §4.2: the rotation's expiry turn also returns the next wait bound.
-        Assert.Equal(TimeSpan.FromMilliseconds(11), expire.Invoke(node, null));
+        // Approved §10.1 schedules the earliest absolute deadline in L+R,
+        // rather than a rounds-only slot. It must never expire before that value.
+        Assert.Equal(
+            TimeSpan.FromMilliseconds(10) + TimeSpan.FromTicks(1),
+            expire.Invoke(node, null)
+        );
         clock.Timestamp = 9 * TimeSpan.TicksPerMillisecond;
-        Assert.Equal(TimeSpan.FromMilliseconds(2), expire.Invoke(node, null));
+        Assert.Equal(
+            TimeSpan.FromMilliseconds(1) + TimeSpan.FromTicks(1),
+            expire.Invoke(node, null)
+        );
         Assert.Equal(2, count.GetValue(operations));
         clock.Timestamp = 10 * TimeSpan.TicksPerMillisecond;
-        Assert.Equal(TimeSpan.FromMilliseconds(1), expire.Invoke(node, null));
+        Assert.Equal(TimeSpan.FromTicks(1), expire.Invoke(node, null));
         Assert.Equal(2, count.GetValue(operations));
         clock.Timestamp = 11 * TimeSpan.TicksPerMillisecond;
         Assert.Equal(TimeSpan.FromMilliseconds(9), expire.Invoke(node, null));
@@ -200,6 +206,545 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
         Assert.Equal(0, deadline.Count);
     }
 
+    [Fact]
+    public async Task RequestTerminal_TakesWithoutEnteringTheOperationLane()
+    {
+        await using var lane = new ZLinkStateLane();
+        await using var fixture = new NativeDeadlineRequest(operationLane: lane);
+        await fixture.Ready.WaitAsync(TimeSpan.FromSeconds(5));
+        using var cancellation = new CancellationTokenSource();
+        var pending = fixture.Request(TimeSpan.FromMinutes(1), cancellation.Token).AsTask();
+        using var received = Received.Create();
+        Assert.True(fixture.Server.Recv(received));
+        Assert.Equal(1, fixture.Node.PendingOperationCount);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var occupied = lane.RunAsync(async () =>
+        {
+            entered.SetResult();
+            await release.Task;
+        });
+        await entered.Task;
+        try
+        {
+            cancellation.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                pending.WaitAsync(TimeSpan.FromSeconds(5))
+            );
+            Assert.Equal(0, fixture.Node.PendingOperationCount);
+            Assert.False(occupied.IsCompleted);
+        }
+        finally
+        {
+            release.SetResult();
+            await occupied;
+        }
+    }
+
+    [Fact]
+    public async Task RequestDeadline_IncludesTimeWaitingForTheOperationOwner()
+    {
+        var clock = new OperationDeadlineClock();
+        await using var lane = new ZLinkStateLane();
+        await using var fixture = new NativeDeadlineRequest(clock, lane);
+        await fixture.Ready.WaitAsync(TimeSpan.FromSeconds(5));
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var occupied = lane.RunAsync(async () =>
+        {
+            entered.SetResult();
+            await release.Task;
+        });
+        await entered.Task;
+        var sampled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var requestThread = 0;
+        var reads = 0;
+        clock.TimestampRead = () =>
+        {
+            if (
+                Environment.CurrentManagedThreadId == Volatile.Read(ref requestThread)
+                && ++reads == 2
+            )
+                sampled.TrySetResult();
+        };
+        var pending = Task.Run(async () =>
+        {
+            Volatile.Write(ref requestThread, Environment.CurrentManagedThreadId);
+            return await fixture.Request(TimeSpan.FromMilliseconds(10));
+        });
+        try
+        {
+            await sampled.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            clock.Timestamp = 20 * TimeSpan.TicksPerMillisecond;
+        }
+        finally
+        {
+            clock.TimestampRead = null;
+            release.SetResult();
+            await occupied;
+        }
+        fixture.Node.SignalReceiveOwner();
+        var error = await Assert.ThrowsAsync<ZlinkRequestException>(() =>
+            pending.WaitAsync(TimeSpan.FromSeconds(5))
+        );
+        Assert.Equal(ZlinkRequestException.ErrorCode.TimedOut, error.Result);
+        Assert.Equal(0, fixture.Node.PendingOperationCount);
+    }
+
+    [Fact]
+    public void RequestIndex_ThousandEntriesUseNoRequestTimersAndReleaseCompletedReferences()
+    {
+        var rotation = ZLinkRequestDeadlineIndex.DefaultRotation.Ticks;
+        var index = new ZLinkDeadlineIndex<DeadlineEntry>(rotation);
+        var before = Timer.ActiveCount;
+        var references = RegisterCompletedEntries(index);
+        Assert.True(Timer.ActiveCount <= before);
+        var visited = 0;
+        index.Visit(
+            rotation,
+            (_, _) =>
+            {
+                visited++;
+                return false;
+            },
+            static () => false,
+            () => rotation
+        );
+        Assert.Equal(1000, visited);
+        Assert.Null(index.Head);
+        Assert.Equal(long.MaxValue, index.NextVisit);
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+        Assert.All(references, reference => Assert.False(reference.TryGetTarget(out _)));
+        var next = new DeadlineEntry(rotation + 1);
+        index.Register(next, rotation);
+        visited = 0;
+        index.Visit(
+            rotation + 1,
+            (_, _) =>
+            {
+                visited++;
+                return false;
+            },
+            static () => false,
+            () => rotation + 1
+        );
+        Assert.Equal(1, visited);
+        Assert.Null(index.Head);
+        output.WriteLine(
+            "request_count=1000 request_timers=0 completed_references=0 next_visit_completed_entries=0"
+        );
+    }
+
+    [System.Runtime.CompilerServices.MethodImpl(
+        System.Runtime.CompilerServices.MethodImplOptions.NoInlining
+    )]
+    private static WeakReference<DeadlineEntry>[] RegisterCompletedEntries(
+        ZLinkDeadlineIndex<DeadlineEntry> index
+    )
+    {
+        var references = new WeakReference<DeadlineEntry>[1000];
+        for (var i = 0; i < references.Length; i++)
+        {
+            var entry = new DeadlineEntry(TimeSpan.FromMinutes(1).Ticks);
+            index.Register(entry, 0);
+            references[i] = new(entry);
+        }
+        return references;
+    }
+
+    [Fact]
+    public async Task RequestIndex_DoesNotEnterOwnerBeforeNextVisit()
+    {
+        await using var lane = new ZLinkStateLane();
+        await using var fixture = new NativeDeadlineRequest(operationLane: lane);
+        await fixture.Ready.WaitAsync(TimeSpan.FromSeconds(5));
+        var admission = new ZLinkRequestAdmission();
+        var pending = fixture
+            .Request(TimeSpan.FromMinutes(1), requestAdmission: admission)
+            .AsTask();
+        output.WriteLine($"before_receive admitted={admission.IsAdmitted} status={pending.Status}");
+        Assert.False(
+            pending.IsCompleted,
+            $"request status={pending.Status} failure={pending.Exception}"
+        );
+        using var received = Received.Create();
+        try
+        {
+            Assert.True(fixture.Server.Recv(received));
+        }
+        catch
+        {
+            output.WriteLine(
+                $"receive_failed admitted={admission.IsAdmitted} status={pending.Status} failure={pending.Exception}"
+            );
+            throw;
+        }
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var occupied = lane.RunAsync(async () =>
+        {
+            entered.SetResult();
+            await release.Task;
+        });
+        await entered.Task;
+        try
+        {
+            var firstWait = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously
+            );
+            fixture.Poller.BeforeWait = () => firstWait.TrySetResult();
+            fixture.Node.SignalReceiveOwner();
+            await firstWait.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            var nextWait = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously
+            );
+            fixture.Poller.BeforeWait = () => nextWait.TrySetResult();
+            fixture.Node.SignalReceiveOwner();
+            await nextWait.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(1, fixture.Node.PendingOperationCount);
+            Assert.False(pending.IsCompleted);
+            Assert.False(occupied.IsCompleted);
+            using var reply = Message.From("reply-while-operation-owner-is-busy");
+            received.Reply().Message(reply).Submit();
+            var parts = await pending.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(
+                "reply-while-operation-owner-is-busy",
+                System.Text.Encoding.UTF8.GetString(Assert.Single(parts).AsReadOnlySpan())
+            );
+            ZLinkMessageParts.DisposeAll(parts);
+            Assert.Equal(0, fixture.Node.PendingOperationCount);
+            Assert.False(occupied.IsCompleted);
+        }
+        finally
+        {
+            fixture.Poller.BeforeWait = null;
+            release.SetResult();
+            await occupied;
+        }
+    }
+
+    [Fact]
+    public async Task ActorCallerCancellation_RemovesTheFrameworkEntryImmediately()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new ZLinkManagedMeshNode(context, MeshName);
+        await using var wrapper =
+            new Zlink.Framework.Runtime.Backend.DotNet.Wrappers.ZLinkBackendSpotNodeWrapper(node);
+        using var canceled = new CancellationTokenSource();
+        canceled.Cancel();
+        var part = Message.From("request");
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            wrapper
+                .RequestToActorAsync(
+                    new Zlink.Framework.Runtime.Backend.Contracts.ZLinkBackendActorRef(
+                        RoutingId.From("target"),
+                        "actor",
+                        1
+                    ),
+                    [part],
+                    TimeSpan.FromMinutes(1),
+                    canceled.Token
+                )
+                .AsTask()
+        );
+        Assert.Equal(0, node.PendingOperationCount);
+    }
+
+    [Fact]
+    public async Task RequestIndex_ThousandExpiriesUseOneManagementTurn()
+    {
+        const int requestCount = 1000;
+        var clock = new OperationDeadlineClock();
+        await using var lane = new ZLinkStateLane();
+        await using var fixture = new NativeDeadlineRequest(clock, lane);
+        await fixture.Ready.WaitAsync(TimeSpan.FromSeconds(5));
+        var timeout = TimeSpan.FromMinutes(1);
+        var pending = new Task<IReadOnlyList<Message>>[requestCount];
+        for (var i = 0; i < pending.Length; i++)
+        {
+            pending[i] = fixture.Request(timeout).AsTask();
+            Assert.False(
+                pending[i].IsCompleted,
+                $"request={i} status={pending[i].Status} failure={pending[i].Exception}"
+            );
+        }
+        Assert.Equal(requestCount, fixture.Node.PendingOperationCount);
+        Assert.All(
+            pending,
+            request =>
+                Assert.False(
+                    request.IsCompleted,
+                    $"status={request.Status} failure={request.Exception}"
+                )
+        );
+        Task<int>? interposedRead = null;
+        using var queued = new ManualResetEventSlim();
+        var observedFirstExpiry = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        clock.TimestampRead = () =>
+        {
+            if (fixture.Node.PendingOperationCount != requestCount - 1)
+                return;
+            clock.TimestampRead = null;
+            using (ExecutionContext.SuppressFlow())
+                interposedRead = Task.Run(async () =>
+                {
+                    var read = lane.RunAsync(() => fixture.Node.PendingOperationCount);
+                    queued.Set();
+                    return await read;
+                });
+            observedFirstExpiry.TrySetResult(queued.Wait(TimeSpan.FromSeconds(5)));
+        };
+        try
+        {
+            clock.Timestamp = timeout.Ticks;
+            fixture.Node.SignalReceiveOwner();
+            Assert.True(await observedFirstExpiry.Task.WaitAsync(TimeSpan.FromSeconds(5)));
+            Assert.NotNull(interposedRead);
+            Assert.Equal(0, await interposedRead.WaitAsync(TimeSpan.FromSeconds(5)));
+            foreach (var request in pending)
+            {
+                var failure = await Assert.ThrowsAsync<ZlinkRequestException>(() =>
+                    request.WaitAsync(TimeSpan.FromSeconds(5))
+                );
+                Assert.Equal(ZlinkRequestException.ErrorCode.TimedOut, failure.Result);
+            }
+            Assert.Equal(0, fixture.Node.PendingOperationCount);
+            output.WriteLine(
+                "request_count=1000 first_expiry_pending=999 interposed_owner_read=0 expiry_management_turns=1"
+            );
+        }
+        finally
+        {
+            clock.TimestampRead = null;
+        }
+    }
+
+    [Fact]
+    public async Task RequestShutdown_CompletesManagedCallersBeforeDispatcherDrain()
+    {
+        await using var fixture = new NativeDeadlineRequest();
+        await fixture.Ready.WaitAsync(TimeSpan.FromSeconds(5));
+        var pending = fixture.Request(TimeSpan.FromMinutes(1)).AsTask();
+        using var received = Received.Create();
+        Assert.True(fixture.Server.Recv(received));
+        Assert.Equal(1, fixture.Node.PendingOperationCount);
+        Assert.False(fixture.Node.Completions.CompletionDrained.IsCompleted);
+        fixture.Node.CloseSubmissions();
+        var error = await Assert.ThrowsAsync<ZLinkRequestTerminalException>(() =>
+            pending.WaitAsync(TimeSpan.FromSeconds(5))
+        );
+        Assert.Equal(RequestResult.Terminated, error.Result);
+        await fixture.Node.Completions.CompletionDrained.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(0, fixture.Node.PendingOperationCount);
+    }
+
+    [Fact]
+    public void RequestIndex_UsesAbsoluteWindowAndDoesNotVisitRoundsOnlySlots()
+    {
+        var index = new ZLinkDeadlineIndex<DeadlineEntry>(
+            ZLinkRequestDeadlineIndex.DefaultRotation.Ticks
+        );
+        var first = new DeadlineEntry(TimeSpan.FromMilliseconds(1000).Ticks);
+        index.Register(first, 0);
+        Assert.Equal(TimeSpan.FromMilliseconds(256).Ticks, index.NextVisit);
+        var now = TimeSpan.FromMilliseconds(232).Ticks;
+        Assert.Equal(TimeSpan.FromMilliseconds(24).Ticks, index.NextVisit - now);
+        now = TimeSpan.FromMilliseconds(256).Ticks;
+        index.Visit(
+            now,
+            static (entry, at) => entry.AbsoluteDeadline > at,
+            static () => false,
+            () => now
+        );
+        var second = new DeadlineEntry(TimeSpan.FromMilliseconds(756).Ticks);
+        index.Register(second, now);
+        Assert.Equal(TimeSpan.FromMilliseconds(256).Ticks, index.NextVisit - now);
+        index.Register(new DeadlineEntry(TimeSpan.FromMilliseconds(276).Ticks), now);
+        Assert.Equal(TimeSpan.FromMilliseconds(20).Ticks, index.NextVisit - now);
+        now = TimeSpan.FromMilliseconds(276).Ticks;
+        index.Visit(
+            now,
+            static (entry, at) => entry.AbsoluteDeadline > at,
+            static () => false,
+            () => now
+        );
+        Assert.Equal(TimeSpan.FromMilliseconds(256).Ticks, index.NextVisit - now);
+        Assert.Same(first, index.Head);
+        Assert.Same(second, first.DeadlineNext);
+        Assert.Null(second.DeadlineNext);
+    }
+
+    [Fact]
+    public void RequestIndex_ThousandRegistrationsDoNotEnumerateTheIndex()
+    {
+        var index = new ZLinkDeadlineIndex<DeadlineEntry>(
+            ZLinkRequestDeadlineIndex.DefaultRotation.Ticks
+        );
+        var entries = new DeadlineEntry[1000];
+        for (var i = 0; i < entries.Length; i++)
+        {
+            entries[i] = new DeadlineEntry(TimeSpan.FromMinutes(1).Ticks);
+            index.Register(entries[i], 0);
+        }
+        Assert.True(entries.Sum(entry => entry.LinkReads) <= 2 * entries.Length);
+        // Control input: traversing the old entries for each registration must exceed the linear bound.
+        for (var i = 0; i < entries.Length; i++)
+        for (var at = 0; at < i; at++)
+            _ = entries[at].DeadlineNext;
+        Assert.True(entries.Sum(entry => entry.LinkReads) > 2 * entries.Length);
+        output.WriteLine(
+            "concurrent_pending=1000 registration_index_traversals=0 traversal_control_rejected=true"
+        );
+    }
+
+    [Fact]
+    public void RequestIndex_ReplyRetainsReservationUntilTheManagementVisit()
+    {
+        var index = new ZLinkDeadlineIndex<DeadlineEntry>(
+            ZLinkRequestDeadlineIndex.DefaultRotation.Ticks
+        );
+        var first = new DeadlineEntry(TimeSpan.FromMilliseconds(10).Ticks);
+        index.Register(first, 0);
+        index.Remove(first);
+        Assert.Null(index.Head);
+        Assert.Equal(TimeSpan.FromMilliseconds(10).Ticks, index.NextVisit);
+        index.Register(new DeadlineEntry(TimeSpan.FromMilliseconds(1000).Ticks), 0);
+        Assert.Equal(TimeSpan.FromMilliseconds(10).Ticks, index.NextVisit);
+        var now = TimeSpan.FromMilliseconds(10).Ticks;
+        index.Visit(
+            now,
+            static (entry, at) => entry.AbsoluteDeadline > at,
+            static () => false,
+            () => now
+        );
+        Assert.Equal(ZLinkRequestDeadlineIndex.DefaultRotation.Ticks, index.NextVisit - now);
+    }
+
+    [Fact]
+    public void RequestIndex_EmptyAtVisitStopsAndRegistrationStartsANewWindow()
+    {
+        var index = new ZLinkDeadlineIndex<DeadlineEntry>(
+            ZLinkRequestDeadlineIndex.DefaultRotation.Ticks
+        );
+        index.Register(new DeadlineEntry(TimeSpan.FromMilliseconds(257).Ticks), 0);
+        var now = TimeSpan.FromMilliseconds(256).Ticks;
+        index.Visit(
+            now,
+            static (entry, at) => entry.AbsoluteDeadline > at,
+            static () => false,
+            () => now
+        );
+        Assert.Equal(TimeSpan.FromMilliseconds(1).Ticks, index.NextVisit - now);
+        now = TimeSpan.FromMilliseconds(257).Ticks;
+        index.Visit(
+            now,
+            static (entry, at) => entry.AbsoluteDeadline > at,
+            static () => false,
+            () => now
+        );
+        Assert.Equal(long.MaxValue, index.NextVisit);
+        now = TimeSpan.FromMilliseconds(10_000).Ticks;
+        index.Visit(
+            now,
+            static (entry, at) => entry.AbsoluteDeadline > at,
+            static () => false,
+            () => now
+        );
+        Assert.Equal(long.MaxValue, index.NextVisit);
+        index.Register(new DeadlineEntry(now + TimeSpan.FromMilliseconds(50).Ticks), now);
+        Assert.Equal(TimeSpan.FromMilliseconds(50).Ticks, index.NextVisit - now);
+    }
+
+    private sealed class DeadlineEntry(long deadline) : IZLinkDeadlineEntry<DeadlineEntry>
+    {
+        private DeadlineEntry? _next;
+        private DeadlineEntry? _previous;
+        internal int LinkReads;
+        public long AbsoluteDeadline => deadline;
+        public DeadlineEntry? DeadlineNext
+        {
+            get
+            {
+                LinkReads++;
+                return _next;
+            }
+            set => _next = value;
+        }
+        public DeadlineEntry? DeadlinePrevious
+        {
+            get
+            {
+                LinkReads++;
+                return _previous;
+            }
+            set => _previous = value;
+        }
+    }
+
+    private sealed class NativeDeadlineRequest : IAsyncDisposable
+    {
+        private readonly IContext _context = Systems.Zlink.Zlink.CreateContext();
+        internal readonly IRouterSocket Server;
+        internal readonly ZLinkManagedMeshNode Node;
+        internal readonly MeshReceiveWakeTests.ControlledReceivePoller Poller;
+        internal readonly Task Ready;
+        private readonly RoutingId _target = RoutingId.From("deadline-target");
+
+        internal NativeDeadlineRequest(
+            TimeProvider? clock = null,
+            ZLinkStateLane? operationLane = null
+        )
+        {
+            Server = _context.CreateRouterSocket();
+            Server.SetRoutingId(_target);
+            Server.Options.ReceiveTimeout = TimeSpan.FromSeconds(5);
+            Poller = new MeshReceiveWakeTests.ControlledReceivePoller { CaptureIdleWait = true };
+            Poller.CanObserveIdleWait = () => Poller.MonitorRegistered.Task.IsCompleted;
+            var endpoint = $"inproc://deadline-request-{Guid.NewGuid():N}";
+            Node = new ZLinkManagedMeshNode(
+                _context,
+                MeshName,
+                deadlineTimeProvider: clock ?? new OperationDeadlineClock(),
+                operationLane: operationLane,
+                receivePollerFactory: () => Poller
+            );
+            Node.SetRoutingId(RoutingId.From("deadline-source"));
+            Node.SetBind(endpoint);
+            Node.Start();
+            Ready = Poller.MonitorRegistered.Task;
+            Server.Connect(endpoint);
+            using var poller = Systems.Zlink.Zlink.CreatePoller();
+            poller.Add(Server, PollEventFlags.PollRoute | PollEventFlags.PollCompletion, 1);
+            var events = new PollEvent[1];
+            while (Server.RoutesSnapshot().Count == 0)
+                Assert.True(poller.Wait(events, TimeSpan.FromSeconds(5)) > 0);
+        }
+
+        internal ValueTask<IReadOnlyList<Message>> Request(
+            TimeSpan timeout,
+            CancellationToken token = default,
+            ZLinkRequestAdmission? requestAdmission = null
+        ) =>
+            Node.RequestDirectWireAsync(
+                _target,
+                new ReadOnlyMemory<byte>[] { "request"u8.ToArray() },
+                timeout,
+                token,
+                requestAdmission: requestAdmission
+            );
+
+        public async ValueTask DisposeAsync()
+        {
+            await Node.DisposeAsync();
+            Server.Dispose();
+            _context.Dispose();
+        }
+    }
+
     private sealed class OperationDeadlineAccess
     {
         private const System.Reflection.BindingFlags Flags =
@@ -248,7 +793,7 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
         {
             var identity = (MeshOperationId)
                 operation.GetType().GetProperty("OperationId", Flags)!.GetValue(operation)!;
-            return (bool)TakeMethod.Invoke(_node, [identity.Low, null, true])!;
+            return (bool)TakeMethod.Invoke(_node, [identity.Low, null])!;
         }
 
         internal CancellationToken Token(object operation) =>
@@ -257,7 +802,7 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
     }
 
     [Fact]
-    public async Task OperationDeadline_PreservesRoundsAndResumesABudgetedSlot()
+    public async Task OperationDeadline_PreservesAbsoluteDeadlineAndResumesABudgetedVisit()
     {
         var clock = new OperationDeadlineClock();
         await using var context = Systems.Zlink.Zlink.CreateContext();
@@ -283,7 +828,7 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
             null,
         ];
         Assert.True((bool)begin.Invoke(node, longRegistration)!);
-        // Hot-path E3: occupied-slot visits cannot expire an entry with remaining rounds.
+        // §10.1: skipped rotations cannot expire an entry before its absolute deadline.
         foreach (var tick in new[] { 1, 257, 512 })
         {
             clock.Timestamp = tick * TimeSpan.TicksPerMillisecond;
@@ -325,7 +870,7 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
     }
 
     [Fact]
-    public async Task OperationDeadline_RoundsOnlyVisitsYieldAtTheBudgetAndResumeFromTheCursor()
+    public async Task OperationDeadline_VisitsBeyondWindowYieldAtTheBudgetAndResumeFromTheCursor()
     {
         var clock = new OperationDeadlineClock();
         await using var context = Systems.Zlink.Zlink.CreateContext();
@@ -382,6 +927,7 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
     {
         internal long Timestamp;
         internal long Step;
+        internal Action? TimestampRead;
         public override long TimestampFrequency => TimeSpan.TicksPerSecond;
 
         // Each read advances the clock by Step.
@@ -389,6 +935,7 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
         {
             var timestamp = Timestamp;
             Timestamp += Step;
+            TimestampRead?.Invoke();
             return timestamp;
         }
 
@@ -418,7 +965,7 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
                 method.Name == "TryRemoveOperation"
                 && method.GetParameters()[0].ParameterType == typeof(ulong)
             );
-        object?[] terminal = [identity.Low, null, false];
+        object?[] terminal = [identity.Low, null];
         Assert.True((bool)take.Invoke(node, terminal)!);
         type.GetMethod("RemoveManagedOperation", flags)!.Invoke(node, [pending]);
         var token = (CancellationToken)pendingType.GetProperty("Token", flags)!.GetValue(pending)!;
@@ -921,7 +1468,6 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
                     objectRole: (byte)ZLinkMeshNodeObjectRole.Server
                 )
             );
-            await scheduler.Queued;
             await WaitUntilAsync(() =>
                 node.Peers().Any(candidate => candidate.RoutingId == peerRid)
             );
@@ -929,7 +1475,7 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
             scheduler.Release();
 
             await ReceiveAdmitAsync(peer);
-            await WaitUntilAsync(() => node.Status().AdmittedPeerCount == 1);
+            Assert.Equal(0U, node.Status().AdmittedPeerCount);
             await lane.RunAsync(() => routes.Apply([new RouterRoute(peerRid, generation)]));
         }
         finally
@@ -967,8 +1513,14 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
             );
 
         await SendAsync(peer, Descriptor(ServiceWireConstants.Command.Hello));
+        using var initialAdmission = await RawMeshPeerAdmission.CompleteAsync(
+            peer,
+            MeshName,
+            $"inproc://idempotent-peer-{suffix}",
+            7,
+            3
+        );
         await WaitUntilAsync(() => node.Status().AdmittedPeerCount == 1);
-        await ReceiveAdmitAsync(peer);
         var admitted = Assert.Single(node.Peers());
         Assert.Equal(1UL, monitor.Status().PeerAdmitted);
 
@@ -1028,7 +1580,14 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
             );
 
         await SendAsync(peer, Hello());
-        await ReceiveAdmitAsync(peer);
+        using var initialAdmission = await RawMeshPeerAdmission.CompleteAsync(
+            peer,
+            MeshName,
+            $"inproc://same-connection-peer-{suffix}",
+            7,
+            3
+        );
+        await WaitUntilAsync(() => node.Status().AdmittedPeerCount == 1);
         var admitted = Assert.Single(node.Peers());
 
         // The first Hello consumed the only READY candidate. The same physical
@@ -1086,15 +1645,17 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
             )
                 peer.Send().Message(hello).Submit();
 
-            // MeshNode §7.1: accepting the Hello records the peer as admitted
-            // before the Admit is submitted. A late transport READY must preserve
-            // that admission.
-            Assert.True(
-                SpinWait.SpinUntil(
-                    () => node.Status().AdmittedPeerCount == 1,
-                    TimeSpan.FromSeconds(5)
-                )
+            // Complete admission before releasing the retained transport observation.
+            await scheduler.Queued.WaitAsync(TimeSpan.FromSeconds(2));
+            await scheduler.ReleaseNextAsync();
+            using var initialAdmission = await RawMeshPeerAdmission.CompleteAsync(
+                peer,
+                MeshName,
+                $"inproc://late-ready-peer-{suffix}",
+                7,
+                3
             );
+            await WaitUntilAsync(() => node.Status().AdmittedPeerCount == 1);
             var pending = Assert.Single(node.Peers());
             await transportMonitor!.ReadyCaptured;
             transportMonitor.ReleaseReady();
@@ -1108,16 +1669,10 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
             Assert.Equal(pending.LastChangedMs, afterReady.LastChangedMs);
             Assert.Equal(1U, node.Status().AdmittedPeerCount);
 
-            // Update follows the Admit on the same socket. It makes a discarded
-            // Admit observable as the wrong first admission record. Admission
-            // starts liveness, so probes may arrive between them. Await the
-            // released scheduler batch before blocking on its socket output.
+            // The descriptor UPDATE follows the completed admission on the same route.
+            // Await the released scheduler batch before reading its socket output.
             node.PublishDraining();
             await scheduler.ReleaseAsync();
-            Assert.Equal(
-                ServiceWireConstants.Command.Admit,
-                await ReceiveAdmissionCommandAsync(peer)
-            );
             Assert.Equal(
                 ServiceWireConstants.Command.Update,
                 await ReceiveAdmissionCommandAsync(peer)
@@ -1188,7 +1743,7 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
                 objectRole: (byte)ZLinkMeshNodeObjectRole.Server
             )
         );
-        // With no outbound intent, only the inbound Hello queries this gate.
+        // The inbound admission turn observes the shutdown gate.
         await sealObserved.Task.WaitAsync(TimeSpan.FromSeconds(2));
 
         if (sealedForShutdown)
@@ -1202,17 +1757,23 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
         }
         else
         {
-            await ReceiveAdmitAsync(peer);
+            using var initialAdmission = await RawMeshPeerAdmission.CompleteAsync(
+                peer,
+                MeshName,
+                $"inproc://inbound-peer-{suffix}",
+                7,
+                3
+            );
+            await WaitUntilAsync(() => node.Status().AdmittedPeerCount == 1);
             Assert.Equal(1U, node.Status().AdmittedPeerCount);
             Assert.Equal(MeshPeerState.Admitted, Assert.Single(node.Peers()).State);
             Assert.Equal(1UL, monitor.Status().PeerAdmitted);
         }
     }
 
-    // MeshNode §7.1: the accepting side records the peer as admitted before it submits
-    // the Admit. A peer that has received its Admit is therefore already counted.
+    // Transport liveness §5: local ADMIT submission does not establish send readiness.
     [Fact]
-    public async Task InboundHello_RecordsThePeerAsAdmittedBeforeItsAdmitArrives()
+    public async Task InboundHello_CountsOnlyPeersWhoseRemoteAdmitArrived()
     {
         const int peerCount = 32;
         await using var context = Systems.Zlink.Zlink.CreateContext();
@@ -1252,8 +1813,16 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
             );
             for (var received = 1; received <= peerCount; received++)
             {
-                await ReceiveAdmitAsync(peers[received - 1]);
-                Assert.True(node.Status().AdmittedPeerCount >= (uint)received);
+                Assert.Equal((uint)(received - 1), node.Status().AdmittedPeerCount);
+                using var initialAdmission = await RawMeshPeerAdmission.CompleteAsync(
+                    peers[received - 1],
+                    MeshName,
+                    $"inproc://admit-order-peer-{received - 1}-{suffix}",
+                    7,
+                    3
+                );
+                await WaitUntilAsync(() => node.Status().AdmittedPeerCount == (uint)received);
+                Assert.Equal((uint)received, node.Status().AdmittedPeerCount);
             }
         }
         finally
@@ -1293,7 +1862,14 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
             );
 
         await SendAsync(peer, Descriptor(ServiceWireConstants.Command.Hello, 3, 1));
-        await ReceiveAdmitAsync(peer);
+        using var initialAdmission = await RawMeshPeerAdmission.CompleteAsync(
+            peer,
+            MeshName,
+            $"inproc://update-peer-{suffix}",
+            7,
+            3
+        );
+        await WaitUntilAsync(() => node.Status().AdmittedPeerCount == 1);
         Assert.Equal(1UL, monitor.Status().PeerAdmitted);
         gate.ClaimShutdown();
         node.PublishDraining();
