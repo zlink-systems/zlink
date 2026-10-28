@@ -19,7 +19,6 @@ import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.messaging.Message;
 
 import java.lang.reflect.Field;
-import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 import java.net.URI;
 import java.nio.ByteBuffer;
@@ -300,7 +299,7 @@ final class ZLinkStreamConnectorTest {
                                                                     .header())
                                                     .name();
                                     if (name.equals("first")) {
-                                        reentrantSend.set(invokeSendFrame(connector, "second"));
+                                        reentrantSend.set(sendEmptyPayload(connector, "second"));
                                         firstWriteReturned.set(true);
                                     } else {
                                         secondSawFirstReturn.set(firstWriteReturned.get());
@@ -310,7 +309,7 @@ final class ZLinkStreamConnectorTest {
         setField(lifecycle, "connection", transport);
         setField(lifecycle, "state", ZLinkStreamConnectionState.CONNECTED);
 
-        CompletionStage<Void> first = invokeSendFrame(connector, "first");
+        CompletionStage<Void> first = sendEmptyPayload(connector, "first");
         first.toCompletableFuture().join();
         reentrantSend.get().toCompletableFuture().join();
 
@@ -737,7 +736,7 @@ final class ZLinkStreamConnectorTest {
                         () -> {
                             entering.countDown();
                             try {
-                                invokeSendFrame(connector, "stale").toCompletableFuture().join();
+                                sendEmptyPayload(connector, "stale").toCompletableFuture().join();
                             } catch (Throwable ex) {
                                 failure.set(ex);
                             }
@@ -764,24 +763,15 @@ final class ZLinkStreamConnectorTest {
         ConnectorTestAwait.await(connector.close());
     }
 
-    private static CompletionStage<Void> invokeSendFrame(
-            DefaultZLinkStreamConnector connector, String name) throws Exception {
-        Method method =
-                DefaultZLinkStreamConnector.class.getDeclaredMethod(
-                        "sendFrame", ZLinkStreamWireProtocol.Header.class, byte[].class);
-        method.setAccessible(true);
-        return (CompletionStage<Void>)
-                method.invoke(
-                        connector,
-                        new ZLinkStreamWireProtocol.Header(
-                                ZLinkStreamWireProtocol.KIND_SEND,
-                                ZLinkStreamWireProtocol.CODEC_RAW,
-                                0,
-                                null,
-                                name,
-                                Map.of(),
-                                null),
-                        new byte[0]);
+    private static CompletionStage<Void> sendEmptyPayload(
+            DefaultZLinkStreamConnector connector, String name) {
+        var payload = payload(name, "");
+        try {
+            return connector.send(payload).submit();
+        } finally {
+            // submit() encodes the payload into its own frame bytes before it returns.
+            payload.payload().close();
+        }
     }
 
     private static void setField(Object target, String name, Object value) throws Exception {
