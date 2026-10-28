@@ -1,6 +1,7 @@
 #pragma once
 #include "domain.hpp"
 #include "server/shared/http_lobby_contracts.hpp"
+#include <zlink/json.hpp>
 #include <set>
 
 namespace MyGame
@@ -10,23 +11,11 @@ struct RosterSnapshot
     std::optional<std::string> matchId{};
     std::vector<std::string> members{};
 };
-inline void to_json (nlohmann::json &j, const RosterSnapshot &value)
-{
-    j = nlohmann::json::object ();
-    j["matchId"] = detail::to_nullable_json (value.matchId);
-    j["members"] = value.members;
-}
-inline void from_json (const nlohmann::json &j, RosterSnapshot &value)
-{
-    detail::from_nullable_json (j.at ("matchId"), value.matchId);
-    j.at ("members").get_to (value.members);
-}
 
 struct HttpRoomSnapshot
 {
     RoomSnapshot game{};
     RosterSnapshot roster{};
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (HttpRoomSnapshot, game, roster)
 };
 
 class RoomRoster
@@ -81,3 +70,22 @@ class RoomRoster
     std::set<std::string> members_{};
 };
 }
+
+namespace zlink::json
+{
+template <> struct dto_traits<::MyGame::HttpRoomSnapshot>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("game", &::MyGame::HttpRoomSnapshot::game),
+      zlink::json::field ("roster", &::MyGame::HttpRoomSnapshot::roster)
+    };
+};
+
+template <> struct dto_traits<::MyGame::RosterSnapshot>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("matchId", &::MyGame::RosterSnapshot::matchId),
+      zlink::json::field ("members", &::MyGame::RosterSnapshot::members)
+    };
+};
+} // namespace zlink::json

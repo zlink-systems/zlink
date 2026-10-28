@@ -14,7 +14,7 @@ class Town final : public fx::spot_t<Player>
     TownView view () const
     {
         TownView result{
-          context_.spot_id (), config_.Id, {state.players.begin (), state.players.end ()}, {}};
+          context_.spot_id (), config_.Id, state.players, {}};
         for (const auto &[id, party] : state.parties)
             result.parties.push_back (party.view ());
         return result;
@@ -70,7 +70,7 @@ class Town final : public fx::spot_t<Player>
         if (request.playerId != id || ChannelRules::validate (request.channel)
             || Names::town_id (request.channel) != context_.spot_id ())
             co_return fx::spot_actor_join_result_t::reject ();
-        state.players.emplace (id);
+        insert_sorted_unique (state.players, id);
         co_return fx::spot_actor_join_result_t::accept ();
     }
     fx::task_t<void> on_actor_joined (Player &) override { co_await broadcast (); }
@@ -169,7 +169,7 @@ class Town final : public fx::spot_t<Player>
             co_return;
         }
         for (const auto &member : members)
-            if (state.players.contains (member))
+            if (std::binary_search (state.players.begin (), state.players.end (), member))
                 co_await actors_.send (fx::actor_id_t (member), JoinDungeon{id, run_id}).async ();
     }
     fx::task_t<void> run_started (const RunStarted &message)
@@ -240,13 +240,17 @@ class TownRelocation final : public fx::spot_relocation_adapter_t<Town>
   public:
     fx::task_t<std::vector<std::byte>> capture (Town &town, std::stop_token) override
     {
-        const auto payload = zlink::message_t::from_json (town.state);
-        co_return std::vector<std::byte> (payload.bytes ().begin (), payload.bytes ().end ());
+        const auto payload = fx::serializer_registry_t{}
+                               .get<TownState> ()
+                               .serialize (town.state);
+        const auto bytes = payload.bytes ();
+        co_return std::vector<std::byte> (bytes.begin (), bytes.end ());
     }
     fx::task_t<void> restore (Town &town, std::vector<std::byte> payload, std::stop_token) override
     {
-        town.state =
-          zlink::message_t::from (std::span<const std::byte> (payload)).parse_json<TownState> ();
+        auto state = fx::serializer_registry_t{}.get<TownState> ().deserialize (
+          fx::encoded_payload_t::from_bytes (std::span<const std::byte> (payload)));
+        town.state = std::move (state);
         co_return;
     }
 };
