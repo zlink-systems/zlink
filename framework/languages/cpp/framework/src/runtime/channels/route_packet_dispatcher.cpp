@@ -157,10 +157,12 @@ route_packet_dispatcher_t::dispatch_send (const route_received_packet_t &receive
                     header);
         return result_t<std::optional<route_dispatch_reply_t>>::success (std::nullopt);
     }
-    if (_handlers == nullptr || _services == nullptr || _serializers == nullptr
-        || _handlers->find (_router_channel_id, runtime::messaging::message_kind_t::command,
-                            header.message_name)
-             == nullptr) {
+    const auto *handler =
+      _handlers != nullptr
+        ? _handlers->resolve (_router_channel_id, runtime::messaging::message_kind_t::command,
+                              header.message_name)
+        : nullptr;
+    if (handler == nullptr || _services == nullptr || _serializers == nullptr) {
         dispatch_error_reporter_t (_dispatch_options).report_lazy ([&] {
             auto event =
               message_dispatch_error_event_t{dispatch_error_surface_t::route_mesh_channel,
@@ -212,21 +214,20 @@ route_packet_dispatcher_t::dispatch_send (const route_received_packet_t &receive
     auto context =
       make_route_message_context (_router_channel_id, received.source_node_rid, header);
     const auto &filters = _filters != nullptr ? *_filters : empty_handler_filters ();
-    auto before = _before_application_handler;
-    if (message_flow_tracer_t (_dispatch_options)
-          .enabled_for (message_flow_outcome_t::dispatched)) {
-        before = [this, &received, &header] {
-            if (_before_application_handler)
-                _before_application_handler ();
-            trace_flow (message_flow_outcome_t::dispatched, dispatch_message_kind_t::send, received,
-                        header);
-        };
-    }
+    const auto before_with_trace = [this, &received, &header] {
+        if (_before_application_handler)
+            _before_application_handler ();
+        trace_flow (message_flow_outcome_t::dispatched, dispatch_message_kind_t::send, received,
+                    header);
+    };
+    const handler_start_callback_ref_t before =
+      message_flow_tracer_t (_dispatch_options).enabled_for (message_flow_outcome_t::dispatched)
+        ? handler_start_callback_ref_t (before_with_trace)
+        : handler_start_callback_ref_t (_before_application_handler);
 
     auto dispatched = _invoker
-                        .invoke_send (*_handlers, filters, _send_dispatch_kind, _router_channel_id,
-                                      header.message_name, *_services, *_serializers, body.value (),
-                                      context, std::move (before))
+                        .invoke_send (*handler, filters, _send_dispatch_kind, *_services,
+                                      *_serializers, body.value (), context, before)
                         .result ();
     if (!dispatched) {
         dispatch_error_reporter_t (_dispatch_options).report_lazy ([&] {
@@ -281,10 +282,12 @@ route_packet_dispatcher_t::dispatch_request (const route_received_packet_t &rece
             reply.value ())});
     }
 
-    if (_handlers == nullptr || _services == nullptr || _serializers == nullptr
-        || _handlers->find (_router_channel_id, runtime::messaging::message_kind_t::request,
-                            header.message_name)
-             == nullptr) {
+    const auto *handler =
+      _handlers != nullptr
+        ? _handlers->resolve (_router_channel_id, runtime::messaging::message_kind_t::request,
+                              header.message_name)
+        : nullptr;
+    if (handler == nullptr || _services == nullptr || _serializers == nullptr) {
         framework_exception_t error (framework_error_kind_t::not_found,
                                      "No routed request handler is registered for '"
                                        + _router_channel_id + ":" + header.message_name + "'.");
@@ -301,21 +304,20 @@ route_packet_dispatcher_t::dispatch_request (const route_received_packet_t &rece
     auto context =
       make_route_message_context (_router_channel_id, received.source_node_rid, header);
     const auto &filters = _filters != nullptr ? *_filters : empty_handler_filters ();
-    auto before = _before_application_handler;
-    if (message_flow_tracer_t (_dispatch_options)
-          .enabled_for (message_flow_outcome_t::dispatched)) {
-        before = [this, &received, &header] {
-            if (_before_application_handler)
-                _before_application_handler ();
-            trace_flow (message_flow_outcome_t::dispatched, dispatch_message_kind_t::request,
-                        received, header);
-        };
-    }
+    const auto before_with_trace = [this, &received, &header] {
+        if (_before_application_handler)
+            _before_application_handler ();
+        trace_flow (message_flow_outcome_t::dispatched, dispatch_message_kind_t::request, received,
+                    header);
+    };
+    const handler_start_callback_ref_t before =
+      message_flow_tracer_t (_dispatch_options).enabled_for (message_flow_outcome_t::dispatched)
+        ? handler_start_callback_ref_t (before_with_trace)
+        : handler_start_callback_ref_t (_before_application_handler);
 
     auto reply = _invoker
-                   .invoke_request (*_handlers, filters, _request_dispatch_kind, _router_channel_id,
-                                    header.message_name, *_services, *_serializers, body.value (),
-                                    context, std::move (before))
+                   .invoke_request (*handler, filters, _request_dispatch_kind, *_services,
+                                    *_serializers, body.value (), context, before)
                    .result ();
     if (!reply) {
         framework_exception_t error (reply.error_kind (), reply.error ()
