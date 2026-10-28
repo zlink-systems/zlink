@@ -116,9 +116,6 @@ for (const kind of ['Router', 'Dealer']) {
 }
 
 test('service and Dealer request boundaries retain one Framework Promise allocation', async (t) => {
-  const {
-    RawServiceMeshRuntime
-  } = require('../../packages/framework/dist/runtime/foundation/raw-service-mesh-runtime');
   const context = zlink.createContext();
   const submission = { result: zlink.SubmitResult.Ok, admitted: Promise.resolve(), reply: Promise.resolve([]) };
   for (const kind of ['Router', 'Dealer']) {
@@ -135,9 +132,9 @@ test('service and Dealer request boundaries retain one Framework Promise allocat
     });
   }
   const host = new ZLinkNodeRawBindingPort(context).createHost();
-  const runtime = Object.create(RawServiceMeshRuntime.prototype);
-  runtime.router = host.createRouter();
-  runtime.topology = { admittedPeer() { return undefined; } };
+  const { rawMeshFixture } = require('./fixtures/raw-mesh-binding');
+  const router = host.createRouter();
+  const { runtime } = rawMeshFixture({}, { request: router.request.bind(router) });
   const dealer = host.createDealer();
   try {
     for (const [name, request] of [
@@ -157,6 +154,7 @@ test('service and Dealer request boundaries retain one Framework Promise allocat
       assert.deepEqual(await pending, []);
     }
   } finally {
+    runtime.close();
     host.close();
     context.close();
   }
