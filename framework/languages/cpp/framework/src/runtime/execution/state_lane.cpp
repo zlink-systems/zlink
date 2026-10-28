@@ -25,7 +25,8 @@ state_lane_t::~state_lane_t ()
     }
 }
 
-bool state_lane_t::try_post (std::function<void ()> work)
+bool state_lane_t::try_post (std::function<void ()> work,
+                             std::function<void (std::exception_ptr)> abandon)
 {
     if (!work) {
         throw std::invalid_argument ("state lane work is empty");
@@ -34,7 +35,9 @@ bool state_lane_t::try_post (std::function<void ()> work)
     if (_closed.load (std::memory_order_acquire)) {
         return false;
     }
-    if (!enqueue (std::move (work), [] (std::exception_ptr) {}))
+    if (!abandon)
+        abandon = [] (std::exception_ptr) {};
+    if (!enqueue (std::move (work), std::move (abandon)))
         return false;
     schedule_drain (false);
     return true;

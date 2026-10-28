@@ -17,10 +17,14 @@ namespace
 {
 thread_local bool tracking = false;
 thread_local unsigned mutex_locks = 0;
+thread_local pthread_mutex_t *last_mutex = nullptr;
+thread_local pthread_mutex_t *registry_mutex = nullptr;
+thread_local unsigned registry_mutex_locks = 0;
 
 template <typename Action> unsigned count_locks (Action &&action)
 {
     mutex_locks = 0;
+    registry_mutex_locks = 0;
     tracking = true;
     std::forward<Action> (action) ();
     tracking = false;
@@ -31,8 +35,12 @@ template <typename Action> unsigned count_locks (Action &&action)
 extern "C" int __real_pthread_mutex_lock (pthread_mutex_t *);
 extern "C" int __wrap_pthread_mutex_lock (pthread_mutex_t *mutex)
 {
-    if (tracking)
+    if (tracking) {
         ++mutex_locks;
+        last_mutex = mutex;
+        if (mutex == registry_mutex)
+            ++registry_mutex_locks;
+    }
     return __real_pthread_mutex_lock (mutex);
 }
 
@@ -101,9 +109,19 @@ int main ()
             const std::lock_guard lock (calibration);
         }
     });
+    // size() takes only the Registry C1 mutex. Identify it through the existing
+    // pthread wrapper, then prove that the probe observes a real Registry read.
+    assert (count_locks ([&] { assert (source.pending_operation_count () == 0); }) == 1);
+    registry_mutex = last_mutex;
+    assert (registry_mutex != nullptr);
+    assert (count_locks ([&] { assert (source.pending_operation_count () == 0); }) == 1);
+    assert (registry_mutex_locks == 1);
     const auto repeated_close_locks = count_locks ([&] { source.close (); });
-    std::fprintf (stderr,
-                  "close publication locks observed=%u turns=%u disposal=%u publication=%u\n",
-                  repeated_close_locks, close_turn_locks, disposal_locks, publication_locks);
+    std::fprintf (
+      stderr,
+      "close publication locks observed=%u turns=%u disposal=%u publication=%u registry=%u\n",
+      repeated_close_locks, close_turn_locks, disposal_locks, publication_locks,
+      registry_mutex_locks);
+    assert (registry_mutex_locks == 0);
     assert (repeated_close_locks == close_turn_locks + disposal_locks + publication_locks);
 }
