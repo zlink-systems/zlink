@@ -7,15 +7,54 @@ internal static class ZLinkRequestSubmissionOutcome
         TimeSpan timeout,
         CancellationToken cancellationToken = default,
         Service.ZLinkServiceLiveness? receiveAdmission = null,
-        ZLinkRequestAdmission? requestAdmission = null
-    ) =>
-        SubmitAndAwaitReplyAsync(
+        ZLinkRequestAdmission? requestAdmission = null,
+        ZLinkRequestDeadlineIndex? deadlines = null
+    )
+    {
+        if (deadlines is not null)
+            return SubmitIndexedAsync(
+                operation,
+                timeout,
+                cancellationToken,
+                receiveAdmission,
+                requestAdmission,
+                deadlines
+            );
+        return SubmitAndAwaitReplyAsync(
             operation,
             timeout,
             out _,
             cancellationToken,
             receiveAdmission,
             requestAdmission
+        );
+    }
+
+    private static Task<IReadOnlyList<Message>> SubmitIndexedAsync(
+        RequestSubmitOperation operation,
+        TimeSpan timeout,
+        CancellationToken token,
+        Service.ZLinkServiceLiveness? admission,
+        ZLinkRequestAdmission? requestAdmission,
+        ZLinkRequestDeadlineIndex deadlines
+    ) =>
+        deadlines.RunAsync(
+            timeout,
+            token,
+            (entry, completion) =>
+            {
+                var remaining = entry.Remaining;
+                if (!entry.IsPending || remaining <= TimeSpan.Zero)
+                    return completion;
+                return SubmitAndAwaitReplyAsync(
+                    operation,
+                    remaining,
+                    out _,
+                    token,
+                    admission,
+                    requestAdmission
+                );
+            }
         );
 
     internal static Task<IReadOnlyList<Message>> SubmitAndAwaitReplyAsync(
@@ -27,39 +66,17 @@ internal static class ZLinkRequestSubmissionOutcome
         ZLinkRequestAdmission? requestAdmission = null
     )
     {
-        var started = System.Diagnostics.Stopwatch.GetTimestamp();
-        // Binding owns the reply timeout and caller cancellation. Only an
-        // initial admission wait needs the Framework's end-to-end budget.
         var submission = operation.Async(cancellationToken);
-        // Spec 08 §3 E4: the result classification decides whether the
-        // binding admission is consumed. Only a backpressured request hands
-        // its admission to a caller that orders later frames after it.
         if (!ZLinkBindingSubmissionOutcome.RequiresAdmission(submission.Result, requestAdmission))
         {
             nativeAdmission = Task.CompletedTask;
             return submission.Reply;
         }
-
         var admitted = requestAdmission is null
             ? submission.Admitted
             : ObserveAdmissionAsync(submission.Admitted, requestAdmission);
         nativeAdmission = admitted;
-        var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        try
-        {
-            return AwaitWithDeadlineAsync(
-                AwaitAdmissionAndReplyAsync(admitted, submission.Reply),
-                deadline,
-                cancellationToken,
-                CancelAtDeadlineAsync(deadline, timeout, started),
-                receiveAdmission
-            );
-        }
-        catch
-        {
-            deadline.Dispose();
-            throw;
-        }
+        return AwaitAdmissionAndReplyAsync(admitted, submission.Reply);
     }
 
     private static async Task ObserveAdmissionAsync(
@@ -71,93 +88,32 @@ internal static class ZLinkRequestSubmissionOutcome
         requestAdmission?.Complete();
     }
 
-    // .NET timers truncate fractional milliseconds. A remaining request
-    // budget must reach its last millisecond before the timer expires.
-    internal static TimeSpan TimerDueTime(TimeSpan timeout) =>
-        TimeSpan.FromMilliseconds(Math.Ceiling(timeout.TotalMilliseconds));
-
-    private static async Task<IReadOnlyList<Message>> AwaitWithDeadlineAsync(
-        Task<IReadOnlyList<Message>> completion,
-        CancellationTokenSource deadline,
-        CancellationToken cancellationToken,
-        Task deadlineTimer,
-        Service.ZLinkServiceLiveness? receiveAdmission
-    )
-    {
-        using (deadline)
-        {
-            // The existing request completion owner releases late replies and
-            // prevents cancellation callbacks from re-entering a state lane.
-            using var callerCompletion = new ZLinkRequestCompletion<IReadOnlyList<Message>>(
-                deadline.Token,
-                discardResult: ZLinkMessageParts.DisposeAll,
-                receiveAdmission: receiveAdmission
-            );
-            _ = ObserveCompletionAsync(completion, callerCompletion);
-            try
-            {
-                return await callerCompletion.Task.ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
-            {
-                throw new ZlinkRequestException(ZlinkRequestException.ErrorCode.TimedOut);
-            }
-            finally
-            {
-                await deadline.CancelAsync().ConfigureAwait(false);
-                await deadlineTimer.ConfigureAwait(false);
-            }
-        }
-    }
-
-    private static async Task CancelAtDeadlineAsync(
-        CancellationTokenSource deadline,
-        TimeSpan timeout,
-        long started
-    )
-    {
-        var token = deadline.Token;
-        try
-        {
-            while (true)
-            {
-                token.ThrowIfCancellationRequested();
-                var remaining = timeout - System.Diagnostics.Stopwatch.GetElapsedTime(started);
-                if (remaining <= TimeSpan.Zero)
-                {
-                    await deadline.CancelAsync().ConfigureAwait(false);
-                    return;
-                }
-                await Task.Delay(TimerDueTime(remaining), token).ConfigureAwait(false);
-            }
-        }
-        catch (OperationCanceledException) when (token.IsCancellationRequested)
-        {
-            // The request's caller or completion ended the existing deadline wait.
-        }
-    }
-
-    private static async Task ObserveCompletionAsync(
-        Task<IReadOnlyList<Message>> completion,
-        ZLinkRequestCompletion<IReadOnlyList<Message>> callerCompletion
-    )
-    {
-        try
-        {
-            callerCompletion.Complete(await completion.ConfigureAwait(false));
-        }
-        catch (Exception error)
-        {
-            callerCompletion.Fail(error);
-        }
-    }
-
     private static async Task<IReadOnlyList<Message>> AwaitAdmissionAndReplyAsync(
         Task admitted,
         Task<IReadOnlyList<Message>> reply
     )
     {
-        await admitted.ConfigureAwait(false);
+        try
+        {
+            await admitted.ConfigureAwait(false);
+        }
+        catch
+        {
+            _ = DiscardReplyAsync(reply);
+            throw;
+        }
         return await reply.ConfigureAwait(false);
+    }
+
+    private static async Task DiscardReplyAsync(Task<IReadOnlyList<Message>> reply)
+    {
+        try
+        {
+            ZLinkMessageParts.DisposeAll(await reply.ConfigureAwait(false));
+        }
+        catch (Exception error)
+        {
+            ZLinkFrameworkDebugLog.TaskFailure("unadmitted-late-reply", error);
+        }
     }
 }
