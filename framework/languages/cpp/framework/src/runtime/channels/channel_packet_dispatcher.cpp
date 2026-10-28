@@ -51,11 +51,26 @@ result_t<runtime::messaging::message_parts_t> channel_packet_dispatcher_t::dispa
   const handler_registry_t &handlers,
   std::function<void ()> before_application_handler) const
 {
+    return dispatch_server_message_in_handler (std::move (channel_name), parts, services,
+                                               serializers, handlers,
+                                               std::move (before_application_handler))
+      .result ();
+}
+
+task_t<runtime::messaging::message_parts_t>
+channel_packet_dispatcher_t::dispatch_server_message_in_handler (
+  std::string channel_name,
+  const runtime::messaging::message_parts_t &parts,
+  service_provider_t &services,
+  serializer_registry_t &serializers,
+  const handler_registry_t &handlers,
+  std::function<void ()> before_application_handler) const
+{
     runtime::messaging::envelope_codec_t codec;
     message_flow_tracer_t flow (_runtime.dispatch_options_ref ());
     auto header = codec.decode_header (parts, flow.flow_tracing ());
     if (!header) {
-        return detail::propagate_failure<runtime::messaging::message_parts_t> (
+        co_return detail::propagate_failure<runtime::messaging::message_parts_t> (
           header, "channel envelope header decode failed");
     }
     const auto inbound_kind = [&] {
@@ -124,20 +139,28 @@ result_t<runtime::messaging::message_parts_t> channel_packet_dispatcher_t::dispa
             framework_exception_t error (body.error_kind (), body.error ()
                                                                ? body.error ()->what ()
                                                                : "channel body decode failed");
-            return result_t<runtime::messaging::message_parts_t>::success (
+            co_return result_t<runtime::messaging::message_parts_t>::success (
               writer.reply_raw_envelope (
                 writer.create_error_header (std::move (channel_name), header.value (), error),
                 zlink::message_t::from ("")));
         }
-        return detail::propagate_failure<runtime::messaging::message_parts_t> (
+        co_return detail::propagate_failure<runtime::messaging::message_parts_t> (
           body, "channel body decode failed");
     }
 
     if (header.value ().kind == runtime::messaging::message_kind_t::request) {
-        auto reply = _runtime.dispatch_request (
-          channel_name, header.value ().topic.value_or (""), header.value ().message_name, services,
-          serializers, handlers, body.value (),
-          make_inbound_context (channel_name, header.value (), before_application_handler));
+        auto reply = result_t<zlink::message_t>::failure (framework_error_kind_t::internal_failure,
+                                                          "channel request failed");
+        try {
+            reply =
+              result_t<zlink::message_t>::success (co_await _runtime.dispatch_request_in_handler (
+                channel_name, header.value ().topic.value_or (""), header.value ().message_name,
+                services, serializers, handlers, body.value (),
+                make_inbound_context (channel_name, header.value (), before_application_handler)));
+        }
+        catch (const framework_exception_t &error) {
+            reply = detail::result_access_t::failure<zlink::message_t> (error);
+        }
         channel_reply_writer_t writer;
         if (!reply) {
             framework_exception_t error (reply.error_kind (), reply.error ()
@@ -159,7 +182,7 @@ result_t<runtime::messaging::message_parts_t> channel_packet_dispatcher_t::dispa
                                                         ? std::make_exception_ptr (*reply.error ())
                                                         : std::exception_ptr{}};
             });
-            return result_t<runtime::messaging::message_parts_t>::success (
+            co_return result_t<runtime::messaging::message_parts_t>::success (
               writer.reply_raw_envelope (
                 writer.create_error_header (std::move (channel_name), header.value (), error),
                 zlink::message_t::from ("")));
@@ -183,18 +206,25 @@ result_t<runtime::messaging::message_parts_t> channel_packet_dispatcher_t::dispa
                         event.flow_origin = header.value ().flow_origin;
                         return event;
                     });
-        return result_t<runtime::messaging::message_parts_t>::success (writer.reply_raw_envelope (
-          writer.create_reply_header (runtime::messaging::message_kind_t::response,
-                                      std::move (channel_name), header.value ()),
-          reply.value ()));
+        co_return result_t<runtime::messaging::message_parts_t>::success (
+          writer.reply_raw_envelope (
+            writer.create_reply_header (runtime::messaging::message_kind_t::response,
+                                        std::move (channel_name), header.value ()),
+            reply.value ()));
     }
 
     if (header.value ().kind == runtime::messaging::message_kind_t::command
         || header.value ().kind == runtime::messaging::message_kind_t::publish) {
-        auto result = _runtime.dispatch_send (
-          channel_name, header.value ().topic.value_or (""), header.value ().message_name, services,
-          serializers, handlers, body.value (),
-          make_inbound_context (channel_name, header.value (), before_application_handler));
+        auto result = result_t<void>::success ();
+        try {
+            static_cast<void> (co_await _runtime.dispatch_send_in_handler (
+              channel_name, header.value ().topic.value_or (""), header.value ().message_name,
+              services, serializers, handlers, body.value (),
+              make_inbound_context (channel_name, header.value (), before_application_handler)));
+        }
+        catch (const framework_exception_t &error) {
+            result = detail::result_access_t::failure<void> (error);
+        }
         if (!result) {
             dispatch_error_reporter_t (_runtime.dispatch_options_ref ()).report_lazy ([&] {
                 return message_dispatch_error_event_t{dispatch_error_surface_t::channel,
@@ -212,7 +242,7 @@ result_t<runtime::messaging::message_parts_t> channel_packet_dispatcher_t::dispa
                                                         ? std::make_exception_ptr (*result.error ())
                                                         : std::exception_ptr{}};
             });
-            return result_t<runtime::messaging::message_parts_t>::success (
+            co_return result_t<runtime::messaging::message_parts_t>::success (
               runtime::messaging::message_parts_t{});
         }
         if (inbound_kind != dispatch_message_kind_t::publish) {
@@ -236,11 +266,11 @@ result_t<runtime::messaging::message_parts_t> channel_packet_dispatcher_t::dispa
                             return event;
                         });
         }
-        return result_t<runtime::messaging::message_parts_t>::success (
+        co_return result_t<runtime::messaging::message_parts_t>::success (
           runtime::messaging::message_parts_t{});
     }
 
-    return result_t<runtime::messaging::message_parts_t>::failure (
+    co_return result_t<runtime::messaging::message_parts_t>::failure (
       framework_error_kind_t::protocol_error, "unsupported channel message kind");
 }
 
