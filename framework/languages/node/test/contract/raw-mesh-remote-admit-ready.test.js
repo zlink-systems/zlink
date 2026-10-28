@@ -35,6 +35,7 @@ function descriptor(nodeRoutingId) {
 
 function fixture(deferred) {
   const sent = [];
+  const received = [];
   const requested = [];
   let complete;
   const runtime = new RawServiceMeshRuntime({
@@ -44,6 +45,7 @@ function fixture(deferred) {
     bindingPort: {
       createHost: () => ({
         createRouter: () => ({
+          receive: () => received.shift(),
           setRoutingId() {},
           setReceiveFlowState() {},
           setReadableHandler() {},
@@ -81,23 +83,19 @@ function fixture(deferred) {
     requested,
     hellos: () => sent.filter((command) => command === wire.M6aServiceWireCommand.hello).length,
     async completeHello() {
-      const pending = [...runtime.controlSends.values()].find(
-        (exchange) => exchange.hello !== undefined
-      )?.task;
       complete?.();
-      await pending;
+      await new Promise(setImmediate);
     },
     receive(command) {
-      return runtime.processReceived(
-        {
-          sourceRid: 'peer',
-          sourceRoute: Buffer.from('peer'),
-          routeGeneration: 11n,
-          parts: [wire.encodeRouteMeshAdmission(command, descriptor('peer'))],
-          close() {}
-        },
-        performance.now()
-      );
+      received.push({
+        sourceRid: 'peer', sourceRoute: Buffer.from('peer'), routeGeneration: 11n,
+        parts: [wire.encodeRouteMeshAdmission(command, descriptor('peer'))], close() {}
+      });
+      return runtime.pumpOne();
+    },
+    receiveRecord(record) {
+      received.push(record);
+      return runtime.pumpOne();
     }
   };
 }
@@ -112,9 +110,9 @@ for (const deferred of [false, true]) {
     let now = 1000;
     t.mock.method(performance, 'now', () => now);
     const f = fixture(deferred);
-    const backend = Object.create(ZLinkNodeRawMeshBackend.prototype);
-    backend.runtime = f.runtime;
-    backend.peerIntents = new Map();
+    const backend = new ZLinkNodeRawMeshBackend(
+      'hello-cadence', 'local', {}, undefined, undefined, undefined, undefined, { raw: f.runtime }
+    );
     const readyTransitions = [];
     const unobserve = f.runtime.observePeerRouteChanged(() => {
       if (f.runtime.isPeerRouteReady('peer')) readyTransitions.push(true);
@@ -234,7 +232,7 @@ test('local HELLO admission permits inbound liveness before remote ADMIT', async
     await f.receive(wire.M6aServiceWireCommand.hello);
     assert.equal(f.runtime.isPeerRouteReady('peer'), false);
     assert.equal(
-      await f.runtime.processReceived(
+      await f.receiveRecord(
         {
           sourceRid: 'peer',
           sourceRoute: Buffer.from('peer'),
@@ -246,8 +244,7 @@ test('local HELLO admission permits inbound liveness before remote ADMIT', async
             })
           ],
           close() {}
-        },
-        performance.now()
+        }
       ),
       'infrastructure'
     );

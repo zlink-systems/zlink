@@ -24,18 +24,11 @@ for (const sameContext of [false, true]) {
 
     // The old ingress is held before replacement; its rejection is observed
     // immediately so retirement cannot become an unhandled rejection.
-    let ingressHeld;
-    const held = new Promise((resolve) => {
-      ingressHeld = resolve;
-    });
-    const waitForSealRelease = registry.waitForSealReleaseCore.bind(registry);
-    registry.waitForSealReleaseCore = (...args) => {
-      const wait = waitForSealRelease(...args);
-      ingressHeld();
-      return wait;
-    };
-    const oldIngress = assert.rejects(registry.acceptWhenReady('actor', 'old-token'));
-    await held;
+    let ingressSettled = false;
+    const pendingIngress = registry.acceptWhenReady('actor', 'old-token');
+    const oldIngress = assert.rejects(pendingIngress).then(() => { ingressSettled = true; });
+    await new Promise(setImmediate);
+    assert.equal(ingressSettled, false, 'sealed ingress must remain pending before replacement');
     const successor = sameContext ? oldContext : context('new-session');
     await registry.replace(await registry.route('actor'), successor, actor(2n), 'new-token');
     const route = await registry.route('actor');
