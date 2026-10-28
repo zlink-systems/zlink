@@ -445,7 +445,23 @@ export interface ServiceUserSpotOperationHandler {
 export class ServiceStatefulRuntime {
   [inspectRuntime]() {
     return Object.freeze({
-      canonicalActorJoinHandoffs: this.canonicalActorJoinHandoffs.size
+      canonicalActorJoinHandoffs: this.canonicalActorJoinHandoffs.size,
+      spotRoutes: this.spotRoutes.size,
+      instanceRoute: (spotId: string) => {
+        const route = this.instanceIntents.get(spotId)?.route;
+        return route === undefined ? undefined : Object.freeze({ ...route });
+      },
+      directSpotRoute: (spotId: string) => {
+        const route = this.directSpotRoutes.get(directSpotKey(spotId));
+        return route === undefined
+          ? undefined
+          : Object.freeze({ ...route, spot: Object.freeze({ ...route.spot }) });
+      },
+      spotMessageFollow: Object.freeze(
+        [...this.spotMessageFollow.values()].map((state) =>
+          Object.freeze({ queuedCount: state.queuedCount, queuedBytes: state.queuedBytes })
+        )
+      )
     });
   }
 
