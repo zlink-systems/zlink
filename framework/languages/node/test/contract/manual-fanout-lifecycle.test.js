@@ -24,7 +24,7 @@ test('manual fanout ignores a stale termination callback after reconnecting the 
   );
   assert.deepEqual(handle.listConnections(), [endpoint]);
 
-  runtime.lifecycle.startSubscriberReceivers(runtime.taskRunner);
+  runtime.lifecycle.start(runtime.taskRunner);
   assert.equal(attempts.length, 1);
 
   attempts[0].callbacks.onTerminated('disconnect');
@@ -72,7 +72,7 @@ test('manual fanout closes the socket when receive-loop stop fails and permits a
   );
   assert.deepEqual(handle.listConnections(), [endpoint]);
 
-  runtime.lifecycle.startSubscriberReceivers(runtime.taskRunner);
+  runtime.lifecycle.start(runtime.taskRunner);
   handle.disconnect(endpoint);
   await flush();
   await flush();
@@ -106,7 +106,7 @@ test('manual fanout reconnects after a monitor termination even when loop cleanu
   const subscriber = runtime.registration.channels.get('events').subscriber;
   endpointConnections(subscriber, subscriber.manualConnections);
 
-  runtime.lifecycle.startSubscriberReceivers(runtime.taskRunner);
+  runtime.lifecycle.start(runtime.taskRunner);
   attempts[0].callbacks.onTerminated('disconnect');
   await flush();
   await flush();
@@ -136,7 +136,7 @@ test('manual fanout reconnects one endpoint without closing another endpoint', a
   const handle = endpointConnections(subscriber, subscriber.manualConnections);
   assert.deepEqual(handle.listConnections(), [firstEndpoint, secondEndpoint]);
 
-  runtime.lifecycle.startSubscriberReceivers(runtime.taskRunner);
+  runtime.lifecycle.start(runtime.taskRunner);
   assert.equal(attempts.length, 2);
   attempts.find(({ endpoint }) => endpoint === firstEndpoint).callbacks.onTerminated('disconnect');
   await flush();
@@ -164,7 +164,7 @@ test('manual fanout detaches a retained handle even when no endpoint was active'
   const subscriber = runtime.registration.channels.get('events').subscriber;
   const handle = endpointConnections(subscriber, subscriber.manualConnections);
 
-  runtime.lifecycle.startSubscriberReceivers(runtime.taskRunner);
+  runtime.lifecycle.start(runtime.taskRunner);
   assert.equal(attempts.length, 0);
   await runtime.lifecycle.dispose();
 
@@ -196,7 +196,7 @@ test('manual fanout dispose waits for an in-flight endpoint transition', async (
   };
 
   try {
-    runtime.lifecycle.startSubscriberReceivers(runtime.taskRunner);
+    runtime.lifecycle.start(runtime.taskRunner);
     handle.disconnect(endpoint);
     await stopStartedPromise;
 
@@ -271,6 +271,8 @@ function createLifecycle({
     }
   };
   const sockets = {
+    startLocalClientServerConnections() {},
+    startManualClientServerConnections() {},
     openFanoutSubscriberConnection(channelName, connectionId, remoteEndpoint, callbacks) {
       const subscriber = {
         setChannelName() {},
@@ -305,7 +307,6 @@ function createLifecycle({
     spotRoutes: {},
     spotRouteBridges: new Map()
   });
-  lifecycle.taskRunner = taskRunner;
   return { lifecycle, registration, taskRunner };
 }
 
