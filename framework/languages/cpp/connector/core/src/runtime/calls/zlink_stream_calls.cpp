@@ -415,14 +415,7 @@ void cancel_timer (const std::shared_ptr<boost::asio::steady_timer> &timer)
     }
 }
 
-/* stream-connector §7·§10.1.1: every result of an asynchronous wait - a match
- * of a queued packet, a match of a newly arrived packet, the timeout and the
- * release when the connection ends - runs on the delivery strand in both
- * dispatch modes. A wait is not a registered callback, so Manual needs no pump
- * for it; and it never runs on the read pump, so a wait callback that makes a
- * synchronous request does not hold the reads that complete that request. The
- * synchronous wait_for alone resolves its promise where the result is decided
- * (pending_wait_t::deliver_direct). */
+// Unregistered waits (§7) use a separate runner so blocked callbacks cannot stop transport reads.
 void deliver_wait_result (const std::shared_ptr<connector_state_t> &state,
                           pending_wait_t wait,
                           result_t<packet_t> result)
@@ -435,9 +428,11 @@ void deliver_wait_result (const std::shared_ptr<connector_state_t> &state,
         callback (std::move (result));
         return;
     }
-    run_on_delivery_strand (
-      state, [callback = std::move (callback), result = std::move (result)] () mutable {
-          callback (std::move (result));
+    post_wait_callback (
+      state, [state, callback = std::move (callback), result = std::move (result)] () mutable {
+          callback_scope_t scope (*state);
+          invoke_user_callback (*state, "wait callback failed",
+                                [&] { callback (std::move (result)); });
       });
 }
 
@@ -691,12 +686,6 @@ void schedule_request_pump (std::shared_ptr<connector_state_t> state);
 
 /* Selects the handlers and consumes one packet in the same dispatch step.
  * A packet with no recipient remains available to a later handler or wait. */
-struct selected_packet_t
-{
-    dispatch_envelope_t envelope;
-    std::vector<packet_handler_entry_t> handlers;
-};
-
 std::optional<selected_packet_t> take_dispatchable_locked (connector_state_t &state,
                                                            std::uint64_t through_arrival,
                                                            std::uint64_t after_arrival = 0)
@@ -748,9 +737,7 @@ void route_inbound_packet (std::shared_ptr<connector_state_t> state, dispatch_en
                              result_t<packet_t>::success (std::move (envelope.packet)));
         return;
     }
-    if (state->options.dispatch_mode == dispatch_mode_t::immediate) {
-        deliver_queued_to_handlers (state);
-    }
+    deliver_queued_to_handlers (state);
 }
 
 void enqueue_async_write (std::shared_ptr<connector_state_t> state,
@@ -1272,27 +1259,24 @@ void start_next_async_write (std::shared_ptr<connector_state_t> state)
 
 } // namespace
 
-/* Immediate: a handler registered for packets already queued receives them on
- * the delivery strand, as it would have on arrival (stream-connector §10). */
+/* Immediate invokes queued handlers directly on receipt or late registration. */
 void deliver_queued_to_handlers (const std::shared_ptr<connector_state_t> &state)
 {
     if (state->options.dispatch_mode != dispatch_mode_t::immediate) {
         return;
     }
-    run_on_delivery_strand (state, [state] {
-        for (;;) {
-            std::optional<selected_packet_t> packet;
-            {
-                std::lock_guard<std::mutex> lock (state->transport_mutex);
-                packet =
-                  take_dispatchable_locked (*state, std::numeric_limits<std::uint64_t>::max ());
-            }
-            if (!packet) {
-                return;
-            }
-            dispatch_packet (*state, packet->envelope, packet->handlers);
+    callback_scope_t scope (*state);
+    for (;;) {
+        std::optional<selected_packet_t> packet;
+        {
+            std::lock_guard<std::mutex> lock (state->transport_mutex);
+            packet = take_dispatchable_locked (*state, std::numeric_limits<std::uint64_t>::max ());
         }
-    });
+        if (!packet) {
+            return;
+        }
+        dispatch_packet (*state, packet->envelope, packet->handlers);
+    }
 }
 
 /* An injected packet takes the same route as one the read pump received. */
@@ -1656,50 +1640,89 @@ void submit_request_async (std::shared_ptr<void> state_handle,
 
 result_t<void> dispatch_pending (std::shared_ptr<connector_state_t> state)
 {
-    std::deque<delivery_t> deliveries;
     const auto through_arrival = state->next_arrival.load () - 1;
     /* The read pump is the only socket reader (stream-connector §5.2): it
-   * decides every inbound frame's kind and queues the pushes that a Manual
-   * pump runs here. */
+     * classifies inbound frames and queues pushes for the Manual pump. */
     callback_scope_t scope (*state);
-    {
-        std::lock_guard<std::mutex> lock (state->delivery_mutex);
-        while (!state->delivery_queue.empty ()
-               && state->delivery_queue.front ().arrival <= through_arrival) {
-            deliveries.push_back (std::move (state->delivery_queue.front ()));
-            state->delivery_queue.pop_front ();
-        }
-    }
-    /* Both queues use the same arrival sequence. A lifecycle callback that
-   * arrived after a packet cannot run before that packet in Manual mode. */
-    std::uint64_t passed_arrival = 0;
-    while (true) {
-        std::optional<selected_packet_t> packet;
+    for (;;) {
+        std::optional<delivery_t> delivery;
+        std::optional<selected_packet_t> completed_packet;
+        std::function<void (const dispatch_envelope_t &)> handler;
+        const dispatch_envelope_t *envelope = nullptr;
         {
-            std::lock_guard<std::mutex> lock (state->transport_mutex);
-            const auto limit = deliveries.empty ()
-                                 ? through_arrival
-                                 : std::min (through_arrival, deliveries.front ().arrival - 1);
-            packet = take_dispatchable_locked (*state, limit, passed_arrival);
+            std::lock_guard<std::mutex> transport_lock (state->transport_mutex);
+            std::lock_guard<std::mutex> delivery_lock (state->delivery_mutex);
+            // Finish the selected packet before comparing the two arrival queues.
+            if (!state->dispatch_cursor) {
+                const auto limit =
+                  state->delivery_queue.empty ()
+                    ? through_arrival
+                    : std::min (through_arrival, state->delivery_queue.front ().arrival - 1);
+                state->dispatch_cursor = take_dispatchable_locked (*state, limit);
+            }
+            if (state->dispatch_cursor) {
+                auto &cursor = *state->dispatch_cursor;
+                std::lock_guard<std::mutex> lifecycle_lock (state->lifecycle_mutex);
+                const auto found = state->packet_handlers.find (cursor.envelope.packet.name);
+                while (cursor.next_handler < cursor.handlers.size ()) {
+                    auto &entry = cursor.handlers[cursor.next_handler++];
+                    if (found != state->packet_handlers.end ()
+                        && std::any_of (
+                          found->second.begin (), found->second.end (),
+                          [&] (const auto &registered) { return registered.id == entry.id; })) {
+                        handler = std::move (entry.handler);
+                        ++cursor.active_callbacks;
+                        envelope = &cursor.envelope;
+                        break;
+                    }
+                }
+                if (cursor.next_handler == cursor.handlers.size ()
+                    && cursor.active_callbacks == 0) {
+                    completed_packet = std::move (state->dispatch_cursor);
+                    state->dispatch_cursor.reset ();
+                } else if (!handler) {
+                    // Another pump still uses this packet. Return without waiting.
+                    break;
+                }
+            } else if (!state->delivery_queue.empty ()
+                       && state->delivery_queue.front ().arrival <= through_arrival) {
+                // A lifecycle delivery cannot overtake an earlier dispatchable packet.
+                delivery = std::move (state->delivery_queue.front ());
+                state->delivery_queue.pop_front ();
+            } else {
+                break;
+            }
         }
-        if (!packet && deliveries.empty ()) {
+        if (handler) {
+            // Keep the packet stable when another pump selects its last handler.
+            struct cursor_callback_scope_t
+            {
+                connector_state_t &state;
+                ~cursor_callback_scope_t ()
+                {
+                    std::optional<selected_packet_t> completed;
+                    {
+                        std::lock_guard<std::mutex> transport_lock (state.transport_mutex);
+                        std::lock_guard<std::mutex> delivery_lock (state.delivery_mutex);
+                        auto &cursor = *state.dispatch_cursor;
+                        if (--cursor.active_callbacks == 0
+                            && cursor.next_handler == cursor.handlers.size ()) {
+                            completed = std::move (state.dispatch_cursor);
+                            state.dispatch_cursor.reset ();
+                        }
+                    }
+                }
+            } release{*state};
+            invoke_user_callback (*state, "packet callback failed", [&] { handler (*envelope); });
             break;
         }
-        if (!packet) {
-            auto delivery = std::move (deliveries.front ());
-            deliveries.pop_front ();
-            /* A packet with no recipient before this callback remains for the
-             * next Manual pump even if the callback registers its handler. */
-            passed_arrival = delivery.arrival - 1;
-            if (delivery.run) {
-                invoke_user_callback (*state, "connector callback failed", delivery.run);
-            }
+        if (!delivery || (delivery->callbacks && delivery->callbacks () == 0)) {
             continue;
         }
-        invoke_user_callback (*state, "packet callback failed", [&] {
-            dispatch_packet (*state, packet->envelope, packet->handlers);
-        });
-        passed_arrival = packet->envelope.arrival;
+        if (delivery->run) {
+            invoke_user_callback (*state, "connector callback failed", delivery->run);
+            break;
+        }
     }
     return result_t<void>::success ();
 }

@@ -287,6 +287,66 @@ ZLINK_EXPORT zlink_recv_result_t zlink_router_recv (
   size_t *part_count_out_,
   zlink_recv_flags_t flags_);
 
+typedef enum zlink_connection_attempt_state_t
+{
+    ZLINK_CONNECTION_CONNECTING = 0,    /* 아직 성공·실패 결과가 없다 */
+    ZLINK_CONNECTION_CONNECTED = 1,     /* 이 등록의 Core 연결이 준비되어 있다 */
+    ZLINK_CONNECTION_ATTEMPT_FAILED = 2 /* 준비된 연결이 없고 최근 시도가 실패했다 */
+} zlink_connection_attempt_state_t;
+
+typedef enum zlink_connection_failure_kind_t
+{
+    ZLINK_CONNECTION_FAILURE_NONE = 0,
+    ZLINK_CONNECTION_FAILURE_REFUSED = 1, /* 상대가 연결을 거부했다(ECONNREFUSED 등) */
+    ZLINK_CONNECTION_FAILURE_ENDPOINT_MISSING = 2, /* IPC 경로가 없다(ENOENT) */
+    ZLINK_CONNECTION_FAILURE_TIMED_OUT = 3,   /* Core의 connect·handshake 기한이 지났다 */
+    ZLINK_CONNECTION_FAILURE_UNREACHABLE = 4, /* network·host에 닿지 않는다 */
+    ZLINK_CONNECTION_FAILURE_NAME_RESOLUTION = 5, /* 주소 해석에 실패했다 */
+    ZLINK_CONNECTION_FAILURE_AUTH_FAILED = 6,     /* TLS 인증이 실패했다 */
+    ZLINK_CONNECTION_FAILURE_PROTOCOL_FAILED = 7, /* Core protocol·TLS·WS handshake가 실패했다 */
+    ZLINK_CONNECTION_FAILURE_CONNECTION_LOST = 8, /* 준비된 연결이 끝났다 */
+    ZLINK_CONNECTION_FAILURE_OTHER = 9
+} zlink_connection_failure_kind_t;
+
+typedef enum zlink_connection_failure_stage_t
+{
+    ZLINK_CONNECTION_STAGE_NONE = 0,
+    ZLINK_CONNECTION_STAGE_RESOLVE = 1,
+    ZLINK_CONNECTION_STAGE_TRANSPORT = 2,
+    ZLINK_CONNECTION_STAGE_TLS = 3,
+    ZLINK_CONNECTION_STAGE_WEBSOCKET = 4,
+    ZLINK_CONNECTION_STAGE_CORE_HANDSHAKE = 5,
+    ZLINK_CONNECTION_STAGE_ESTABLISHED = 6
+} zlink_connection_failure_stage_t;
+
+typedef struct zlink_connection_failure_t
+{
+    uint32_t kind;              /* zlink_connection_failure_kind_t */
+    uint32_t stage;             /* zlink_connection_failure_stage_t */
+    int32_t normalized_errno;   /* 진단용. 0이면 없음 */
+    uint32_t disconnect_reason; /* CONNECTION_LOST일 때 Monitoring의 disconnect reason */
+} zlink_connection_failure_t;
+
+typedef struct zlink_connection_attempt_t
+{
+    size_t endpoint_offset;   /* endpoint_bytes_out_ 안의 시작 위치 */
+    size_t endpoint_length;   /* NUL을 뺀 UTF-8 byte 수 */
+    uint64_t intent_id;       /* 0이 아닌 opaque 값. 동등성만 비교한다 */
+    uint64_t revision;        /* 0이 아닌 opaque 값. 동등성만 비교한다 */
+    uint64_t last_failure_id; /* 실패가 없으면 0. 동등성만 비교한다 */
+    uint32_t state;           /* zlink_connection_attempt_state_t */
+    zlink_connection_failure_t last_failure;
+} zlink_connection_attempt_t;
+
+ZLINK_EXPORT zlink_config_result_t
+zlink_socket_connection_attempts_snapshot (void *s_,
+                                           zlink_connection_attempt_t *attempts_out_,
+                                           size_t capacity_,
+                                           size_t *attempt_count_out_,
+                                           char *endpoint_bytes_out_,
+                                           size_t endpoint_bytes_capacity_,
+                                           size_t *endpoint_bytes_required_out_);
+
 typedef struct zlink_router_route_t
 {
     zlink_routing_id_t rid;

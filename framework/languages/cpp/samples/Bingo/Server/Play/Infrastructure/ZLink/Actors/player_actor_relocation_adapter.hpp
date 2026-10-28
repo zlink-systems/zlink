@@ -32,8 +32,11 @@ class player_actor_relocation_adapter_t final : public actor_relocation_adapter_
   public:
     task_t<std::vector<std::byte>> capture (player_actor_t &actor, std::stop_token) override
     {
-        const auto message = zlink::message_t::from_json (player_actor_state_t{
-          actor.display_name, actor.destroy_after_entry_spot_join, actor.disconnected});
+        const auto message = zlink::message_t::from (
+          nlohmann::json (player_actor_state_t{actor.display_name,
+                                               actor.destroy_after_entry_spot_join,
+                                               actor.disconnected})
+            .dump ());
         co_return std::vector<std::byte> (message.bytes ().begin (), message.bytes ().end ());
     }
 
@@ -42,7 +45,7 @@ class player_actor_relocation_adapter_t final : public actor_relocation_adapter_
     {
         const auto message = zlink::message_t::from (
           std::span<const std::byte> (payload.data (), payload.size ()));
-        auto restored = message.parse_json<player_actor_state_t> ();
+        auto restored = message.parse_json<nlohmann::json> ().get<player_actor_state_t> ();
         actor.display_name = std::move (restored.display_name);
         actor.destroy_after_entry_spot_join = restored.destroy_after_entry_spot_join;
         actor.disconnected = restored.disconnected;

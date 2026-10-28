@@ -1,4 +1,6 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+#include <nlohmann/json.hpp>
+#include <zlink/json.hpp>
 
 #include <zlink/framework.hpp>
 #include <zlink/http_client.hpp>
@@ -499,6 +501,14 @@ struct number_http_handler_t
     }
 };
 
+struct json_http_handler_t
+{
+    using request_type = nlohmann::json;
+    using reply_type = nlohmann::json;
+
+    reply_type handle (const request_type &request) { return request; }
+};
+
 struct response_game_http_handler_t
 {
     using request_type = create_game_http_handler_t::request_type;
@@ -613,83 +623,43 @@ struct raw_async_http_handler_t
     }
 };
 
-int parse_required_int_field (const nlohmann::json &json, const char *field, const char *message)
-{
-    try {
-        const auto text = json.at (field).get<std::string> ();
-        std::size_t consumed = 0;
-        const auto parsed = std::stoi (text, &consumed);
-        if (consumed == text.size ()) {
-            return parsed;
-        }
-    }
-    catch (const std::exception &) {
-    }
-    throw zlink::framework::framework_exception_t (
-      zlink::framework::framework_error_kind_t::protocol_error, message);
 }
 
-void to_json (nlohmann::json &json, const create_game_http_handler_t::request_type &value)
+template <> struct zlink::json::dto_traits<create_game_http_handler_t::request_type>
 {
-    json = nlohmann::json{{"id", value.id},
-                          {"name", value.name},
-                          {"filter", value.filter},
-                          {"correlationId", value.correlationId}};
-}
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("id", &create_game_http_handler_t::request_type::id),
+                 zlink::json::field ("name", &create_game_http_handler_t::request_type::name),
+                 zlink::json::field ("filter", &create_game_http_handler_t::request_type::filter),
+                 zlink::json::field ("correlationId",
+                                     &create_game_http_handler_t::request_type::correlationId)};
+};
 
-void from_json (const nlohmann::json &json, create_game_http_handler_t::request_type &value)
+template <> struct zlink::json::dto_traits<create_game_http_handler_t::reply_type>
 {
-    if (json.contains ("id")) {
-        value.id = json.at ("id").get<std::string> ();
-    }
-    if (json.contains ("name")) {
-        value.name = json.at ("name").get<std::string> ();
-    }
-    if (json.contains ("filter")) {
-        value.filter = json.at ("filter").get<std::string> ();
-    }
-    if (json.contains ("correlationId")) {
-        value.correlationId = json.at ("correlationId").get<std::string> ();
-    }
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("id", &create_game_http_handler_t::reply_type::id),
+      zlink::json::field ("name", &create_game_http_handler_t::reply_type::name),
+      zlink::json::field ("filter", &create_game_http_handler_t::reply_type::filter),
+      zlink::json::field ("correlationId", &create_game_http_handler_t::reply_type::correlationId)};
+};
 
-void to_json (nlohmann::json &json, const create_game_http_handler_t::reply_type &value)
+template <> struct zlink::json::dto_traits<number_http_handler_t::request_type>
 {
-    json = nlohmann::json{{"id", value.id},
-                          {"name", value.name},
-                          {"filter", value.filter},
-                          {"correlationId", value.correlationId}};
-}
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("id", &number_http_handler_t::request_type::id),
+                 zlink::json::field ("page", &number_http_handler_t::request_type::page)};
+};
 
-void from_json (const nlohmann::json &json, create_game_http_handler_t::reply_type &value)
+template <> struct zlink::json::dto_traits<number_http_handler_t::reply_type>
 {
-    value.id = json.value ("id", "");
-    value.name = json.value ("name", "");
-    value.filter = json.value ("filter", "");
-    value.correlationId = json.value ("correlationId", "");
-}
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("id", &number_http_handler_t::reply_type::id),
+                 zlink::json::field ("page", &number_http_handler_t::reply_type::page)};
+};
 
-void to_json (nlohmann::json &json, const number_http_handler_t::request_type &value)
+namespace
 {
-    json = nlohmann::json{{"id", std::to_string (value.id)}, {"page", std::to_string (value.page)}};
-}
-
-void from_json (const nlohmann::json &json, number_http_handler_t::request_type &value)
-{
-    value.id = parse_required_int_field (json, "id", "invalid route id");
-    value.page = parse_required_int_field (json, "page", "invalid query page");
-}
-
-void to_json (nlohmann::json &json, const number_http_handler_t::reply_type &value)
-{
-    json = nlohmann::json{{"id", value.id}, {"page", value.page}};
-}
-
-void from_json (const nlohmann::json &json, number_http_handler_t::reply_type &value)
-{
-    value.id = json.value ("id", 0);
-    value.page = json.value ("page", 0);
-}
 
 struct correlation_middleware_t
 {
@@ -760,12 +730,18 @@ struct health_http_reply_t
     std::string liveness;
 };
 
-void from_json (const nlohmann::json &json, health_http_reply_t &value)
-{
-    value.status = json.value ("status", "");
-    value.readiness = json.value ("readiness", "");
-    value.liveness = json.value ("liveness", "");
 }
+
+template <> struct zlink::json::dto_traits<health_http_reply_t>
+{
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("status", &health_http_reply_t::status),
+                 zlink::json::field ("readiness", &health_http_reply_t::readiness),
+                 zlink::json::field ("liveness", &health_http_reply_t::liveness)};
+};
+
+namespace
+{
 
 zlink::http_client::client_t
 make_app_host_test_client (std::string base_url,
@@ -1007,6 +983,7 @@ bool verify_source_waiter_host_ownership (bool completion_first = false,
         return zlink::http_client::client_t::create (url)
           .timeout (2s)
           .get ("/wait")
+          .body (source_wait_http_handler_t::request_type{})
           .submit<source_wait_http_handler_t::reply_type> ();
     };
     auto first_request = std::async (std::launch::async, request, first_url);
@@ -1362,6 +1339,7 @@ int main (int test_argc, char **test_argv)
           .map_put<create_game_http_handler_t> ("/games/{id}")
           .map_delete<create_game_http_handler_t> ("/games/{id}")
           .map_get<number_http_handler_t> ("/numbers/{id}")
+          .map_put<json_http_handler_t> ("/json/{id}")
           .map_get<response_game_http_handler_t> ("/response-games/{id}")
           .map_get<response_context_http_handler_t> ("/response-context-games/{id}")
           .map_get<request_task_http_handler_t> ("/request-task-games/{id}")
@@ -1411,18 +1389,30 @@ int main (int test_argc, char **test_argv)
       http_client.post ("/games")
         .body (create_game_http_handler_t::request_type{.name = "after-nested"})
         .submit<create_game_http_handler_t::reply_type> ();
-    const auto get_result =
-      http_client.get ("/games/1?filter=active").submit<create_game_http_handler_t::reply_type> ();
+    const auto get_result = http_client.get ("/games/1?filter=active")
+                              .body (create_game_http_handler_t::request_type{})
+                              .submit<create_game_http_handler_t::reply_type> ();
     const auto number_get_result =
       http_client.get ("/numbers/41?page=2").submit<number_http_handler_t::reply_type> ();
+    const auto number_route_query_collision_result =
+      http_client.get ("/numbers/51?id=99&page=3")
+        .body (number_http_handler_t::request_type{.id = 12, .page = 4})
+        .submit<number_http_handler_t::reply_type> ();
+    const auto non_dto_binding_result =
+      http_client.put ("/json/route-id?id=query-id&query=query-value")
+        .body (nlohmann::json{{"bodyOnly", "body"}, {"id", "body-id"}, {"query", "body-query"}})
+        .submit_raw ();
     const auto response_object_result =
       http_client.get ("/response-games/9?filter=direct&name=object")
+        .body (create_game_http_handler_t::request_type{})
         .submit<create_game_http_handler_t::reply_type> ();
     const auto response_context_result =
       http_client.get ("/response-context-games/10?filter=context&name=object")
+        .body (create_game_http_handler_t::request_type{})
         .submit<create_game_http_handler_t::reply_type> ();
     const auto request_task_result =
       http_client.get ("/request-task-games/13?filter=request&name=task")
+        .body (create_game_http_handler_t::request_type{})
         .submit<create_game_http_handler_t::reply_type> ();
     const auto raw_result = http_client.post ("/raw/42?mode=echo")
                               .header ("content-type", "text/plain")
@@ -1433,9 +1423,12 @@ int main (int test_argc, char **test_argv)
                                     .body (std::string ("raw body"))
                                     .submit_raw ();
     const auto secure_get_result = http_client.get ("/secure-games/7")
+                                     .body (create_game_http_handler_t::request_type{})
                                      .header ("authorization", "Bearer test-token")
                                      .submit<create_game_http_handler_t::reply_type> ();
-    const auto unauthorized_get_result = http_client.get ("/secure-games/7").submit_raw ();
+    const auto unauthorized_get_result = http_client.get ("/secure-games/7")
+                                           .body (create_game_http_handler_t::request_type{})
+                                           .submit_raw ();
     const auto put_result = http_client.put ("/games/1")
                               .body (create_game_http_handler_t::request_type{
                                 .id = "body-id", .name = "put", .filter = "body-filter"})
@@ -1445,8 +1438,9 @@ int main (int test_argc, char **test_argv)
         .body (create_game_http_handler_t::request_type{
           .id = "body-id", .name = "put", .filter = "body-filter"})
         .submit<create_game_http_handler_t::reply_type> ();
-    const auto delete_result =
-      http_client.delete_ ("/games/1").submit<create_game_http_handler_t::reply_type> ();
+    const auto delete_result = http_client.delete_ ("/games/1")
+                                 .body (create_game_http_handler_t::request_type{})
+                                 .submit<create_game_http_handler_t::reply_type> ();
     const auto method_mismatch_result =
       http_client.post ("/games/1")
         .body (create_game_http_handler_t::request_type{.name = "wrong-method"})
@@ -1456,6 +1450,8 @@ int main (int test_argc, char **test_argv)
                                              .header ("X-Correlation-Id", "corr-invalid-json")
                                              .body (std::string ("not-an-object"))
                                              .submit_raw ();
+    const auto invalid_json_array_result =
+      http_client.post ("/games").body (std::string ("[1,2]")).submit_raw ();
     const auto route_parse_failure_result =
       http_client.get ("/numbers/not-a-number?page=2").submit_raw ();
     const auto query_parse_failure_result = http_client.get ("/numbers/41?page=bad").submit_raw ();
@@ -1508,8 +1504,9 @@ int main (int test_argc, char **test_argv)
       http_client.post ("/injected-games")
         .body (create_game_http_handler_t::request_type{.name = "handler"})
         .submit<create_game_http_handler_t::reply_type> ();
-    const auto short_circuit_result =
-      http_client.get ("/games/blocked").submit<create_game_http_handler_t::reply_type> ();
+    const auto short_circuit_result = http_client.get ("/games/blocked")
+                                        .body (create_game_http_handler_t::request_type{})
+                                        .submit<create_game_http_handler_t::reply_type> ();
     const auto health_result = http_client.get ("/health").submit<health_http_reply_t> ();
     const auto liveness_result = http_client.get ("/live").submit<health_http_reply_t> ();
     const bool keep_alive_ok = http_keep_alive_round_trip (http_bound_url);
@@ -1539,6 +1536,19 @@ int main (int test_argc, char **test_argv)
     if (!number_get_result || number_get_result.value ().body.id != 41
         || number_get_result.value ().body.page != 2) {
         return 46;
+    }
+    if (!number_route_query_collision_result
+        || number_route_query_collision_result.value ().body.id != 51
+        || number_route_query_collision_result.value ().body.page != 3) {
+        return 49;
+    }
+    if (!non_dto_binding_result || non_dto_binding_result.value ().status != 200) {
+        return 50;
+    }
+    const auto non_dto_body = nlohmann::json::parse (non_dto_binding_result.value ().body);
+    if (non_dto_body.at ("id") != "route-id" || non_dto_body.at ("query") != "query-value"
+        || non_dto_body.at ("bodyOnly") != "body") {
+        return 51;
     }
     if (!response_object_result || response_object_result.value ().status != 202
         || response_object_result.value ().body.id != "9"
@@ -1600,6 +1610,12 @@ int main (int test_argc, char **test_argv)
         || invalid_json_shape_result.value ().body.find ("corr-invalid-json") == std::string::npos
         || invalid_json_shape_result.value ().headers.at ("x-middleware-after") != "seen") {
         return 22;
+    }
+    if (!invalid_json_array_result || invalid_json_array_result.value ().status != 400
+        || invalid_json_array_result.value ().body.find ("protocol_error") == std::string::npos
+        || invalid_json_array_result.value ().body.find ("HTTP JSON body must be an object")
+             == std::string::npos) {
+        return 52;
     }
     if (!route_parse_failure_result || route_parse_failure_result.value ().status != 400
         || route_parse_failure_result.value ().body.find ("protocol_error") == std::string::npos

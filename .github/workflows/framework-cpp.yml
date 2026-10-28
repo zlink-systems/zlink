@@ -194,6 +194,8 @@ jobs:
 
   framework-cpp-windows:
     name: win-x64 / Framework C++ unit and contract tests
+    # Windows runs on schedule, manual and release runs; merge-queue batches check Linux only.
+    if: ${{ !startsWith(github.ref_name, 'mergify/merge-queue/') }}
     # Same rule as the Linux job, with its own variable.
     runs-on: ${{ vars.ZLINK_CPP_WINDOWS_RUNNER && fromJSON(vars.ZLINK_CPP_WINDOWS_RUNNER) || 'windows-2022' }}
     env:
@@ -304,6 +306,9 @@ jobs:
         shell: pwsh
         run: |
           $buildDir = Join-Path $env:RUNNER_TEMP "framework-cpp-windows-build"
+          # A self-hosted runner keeps RUNNER_TEMP between jobs; a cache from another
+          # source or vcpkg root makes configure fail. sccache keeps the compile reuse.
+          if (Test-Path -LiteralPath $buildDir) { Remove-Item -LiteralPath $buildDir -Recurse -Force }
           .\framework\languages\cpp\build-windows.ps1 `
             -BuildDir $buildDir `
             -LocalPackageRoot $env:ZLINK_LOCAL_PACKAGE_ROOT `

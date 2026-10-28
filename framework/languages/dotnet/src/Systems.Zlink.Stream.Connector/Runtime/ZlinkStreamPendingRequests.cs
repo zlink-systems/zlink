@@ -7,6 +7,11 @@ internal sealed class ZlinkStreamPendingRequests
     private readonly ConcurrentDictionary<ulong, PendingRequest> _pending = new();
     private long _nextRequestSeq;
 
+    internal ZlinkStreamPendingRequests(ulong lastRequestSeq = 0)
+    {
+        _nextRequestSeq = unchecked((long)lastRequestSeq);
+    }
+
     public PendingRequest Create(string packetName)
     {
         var requestSeq = NextRequestSeq();

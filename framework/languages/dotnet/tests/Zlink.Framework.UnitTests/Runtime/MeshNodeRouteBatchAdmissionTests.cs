@@ -59,15 +59,15 @@ public sealed partial class EntrySpotActorDispatchTests
             )
         );
         var replies = new ConcurrentDictionary<string, TaskCompletionSource<string>>();
-        // "first" and "queued" share the drain channel queue, so "queued" starts
-        // only after "first" returns. "second" runs on its own channel queue.
+        // Both accepted records start on the same Channel before drain seals admissions.
         var dispatch = dispatcher
             .DispatchBatchAsync(
-                [Record("drain", "first"), Record("drain", "queued"), Record("other", "second")],
+                [Record("drain", "first"), Record("drain", "second")],
                 CancellationToken.None
             )
             .AsTask();
         Task? drained = null;
+        Task? rejectedDispatch = null;
         try
         {
             await gates.Entered("first").WaitAsync(BatchAdmissionGuard);
@@ -76,12 +76,15 @@ public sealed partial class EntrySpotActorDispatchTests
             runtime.SealApplicationAdmissionsForDrain(CancellationToken.None);
             drained = runtime.WaitForAcceptedOperationsForDrainAsync();
             Assert.False(drained.IsCompleted, "Drain ignored two running records of the batch.");
+            rejectedDispatch = dispatcher
+                .DispatchBatchAsync([Record("drain", "queued")], CancellationToken.None)
+                .AsTask();
+            Assert.Equal("shutting_down", await Reply("queued").WaitAsync(BatchAdmissionGuard));
+            await rejectedDispatch.WaitAsync(BatchAdmissionGuard);
+            Assert.False(gates.Entered("queued").IsCompleted);
 
             gates.Release("first");
             Assert.Equal("first", await Reply("first").WaitAsync(BatchAdmissionGuard));
-            // The queued record starts after the seal, inside the admitted batch.
-            Assert.Equal("shutting_down", await Reply("queued").WaitAsync(BatchAdmissionGuard));
-            Assert.False(gates.Entered("queued").IsCompleted);
             Assert.False(drained.IsCompleted, "Drain ignored the record that is still running.");
 
             gates.Release("second");
@@ -93,7 +96,10 @@ public sealed partial class EntrySpotActorDispatchTests
         {
             gates.Release("first");
             gates.Release("second");
+            gates.Release("queued");
             await dispatch.WaitAsync(BatchAdmissionGuard);
+            if (rejectedDispatch is not null)
+                await rejectedDispatch.WaitAsync(BatchAdmissionGuard);
             await runner.StopAsync();
             await host.StopAsync();
         }

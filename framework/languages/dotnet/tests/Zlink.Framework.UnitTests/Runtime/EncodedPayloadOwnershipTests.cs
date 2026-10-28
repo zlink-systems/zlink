@@ -36,16 +36,15 @@ public sealed class EncodedPayloadOwnershipTests(ITestOutputHelper output)
         var ownedBuffer = new byte[16 * 1024];
         _ = ZLinkEncodedPayload.FromOwned(ownedBuffer);
 
-        var before = GC.GetAllocatedBytesForCurrentThread();
         var observedBytes = 0;
-        for (var index = 0; index < iterations; index++)
-            observedBytes += ZLinkEncodedPayload.FromOwned(ownedBuffer).Bytes.Length;
-        var ownedAllocated = GC.GetAllocatedBytesForCurrentThread() - before;
-
-        before = GC.GetAllocatedBytesForCurrentThread();
-        for (var index = 0; index < iterations; index++)
-            observedBytes += ZLinkEncodedPayload.From(ownedBuffer).Bytes.Length;
-        var copiedAllocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        var ownedAllocated = PerCallAllocation.MinWindow(
+            () => observedBytes += ZLinkEncodedPayload.FromOwned(ownedBuffer).Bytes.Length,
+            iterations
+        );
+        var copiedAllocated = PerCallAllocation.MinWindow(
+            () => observedBytes += ZLinkEncodedPayload.From(ownedBuffer).Bytes.Length,
+            iterations
+        );
 
         GC.KeepAlive(observedBytes);
         output.WriteLine(
@@ -54,7 +53,7 @@ public sealed class EncodedPayloadOwnershipTests(ITestOutputHelper output)
         );
         Assert.True(ownedAllocated < 1_024, $"owned_allocated={ownedAllocated}");
         Assert.True(
-            copiedAllocated >= ownedBuffer.Length * iterations,
+            copiedAllocated >= (long)ownedBuffer.Length * iterations,
             $"copied_allocated={copiedAllocated}"
         );
     }

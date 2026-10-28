@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+#include <zlink/json.hpp>
 #include "../support/runtime_failure_fixture.hpp"
 
 #include <zlink/framework.hpp>
@@ -221,17 +222,46 @@ struct request_t
     static constexpr const char *packet_name = "profile.lookup";
     int value{};
 };
+}
+
+template <> struct zlink::json::dto_traits<request_t>
+{
+    static constexpr auto fields = std::tuple{zlink::json::field ("value", &request_t::value)};
+};
+
+namespace
+{
+
 
 struct reply_t
 {
     int value{};
 };
+}
+
+template <> struct zlink::json::dto_traits<reply_t>
+{
+    static constexpr auto fields = std::tuple{zlink::json::field ("value", &reply_t::value)};
+};
+
+namespace
+{
 
 struct event_t
 {
     static constexpr const char *packet_name = "profile.changed.event";
     int value{};
 };
+}
+
+template <> struct zlink::json::dto_traits<event_t>
+{
+    static constexpr auto fields = std::tuple{zlink::json::field ("value", &event_t::value)};
+};
+
+namespace
+{
+
 
 struct outer_route_request_t
 {
@@ -244,18 +274,51 @@ struct inner_route_request_t
     static constexpr const char *packet_name = "inner";
     int value{};
 };
+}
+
+template <> struct zlink::json::dto_traits<inner_route_request_t>
+{
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("value", &inner_route_request_t::value)};
+};
+
+namespace
+{
+
 
 struct api_hop_request_t
 {
     static constexpr const char *packet_name = "api-hop";
     int value{};
 };
+}
+
+template <> struct zlink::json::dto_traits<api_hop_request_t>
+{
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("value", &api_hop_request_t::value)};
+};
+
+namespace
+{
+
 
 struct missing_probe_request_t
 {
     static constexpr const char *packet_name = "missing.request";
     int value{};
 };
+}
+
+template <> struct zlink::json::dto_traits<missing_probe_request_t>
+{
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("value", &missing_probe_request_t::value)};
+};
+
+namespace
+{
+
 
 class local_handler_t
 {
@@ -1340,16 +1403,6 @@ int main ()
         return 404;
     }
 
-    zlink::framework::route_send_call_t unbound_route_send (
-      "event", zlink::framework::route_send_call_t::async_submit_fn_t{});
-    /* One-way terminal rule again (04-async-execution-policy.ko.md §1.3): the unbound send
-     * call reports its admission failure on the returned task_t<void>. */
-    const auto unbound_route_send_result = unbound_route_send.async ().result ();
-    if (unbound_route_send_result
-        || unbound_route_send_result.error_kind ()
-             != zlink::framework::framework_error_kind_t::protocol_error) {
-        return 408;
-    }
     zlink::framework::channel_request_call_t unbound_route_request ("request", nullptr, {});
     const auto unbound_route_request_result = unbound_route_request.async<reply_t> ().result ();
     if (unbound_route_request_result
@@ -3700,12 +3753,22 @@ int main ()
         return 73;
     }
     std::atomic_int route_submit_attempts{0};
-    zlink::framework::route_send_call_t one_shot_route (
+    auto one_shot_builder = zlink::framework::test::runtime_failure_builder ();
+    auto one_shot_runtime =
+      zlink::framework::detail::channel_runtime_t::from (one_shot_builder.message_bus ());
+    one_shot_runtime.bind_serializers (serializers);
+    one_shot_runtime.bind_mesh_node_transport (
       "one-shot",
-      [&] (const std::string &, const zlink::framework::route_send_call_t::metadata_map_t &) {
+      [&] (const zlink::routing_id_t &, zlink::framework::runtime::messaging::message_parts_t) {
           ++route_submit_attempts;
-          return zlink::framework::result_t<void>::success ();
-      });
+          return zlink::framework::task_t<zlink::framework::result_t<void>> (
+            zlink::framework::result_t<zlink::framework::result_t<void>>::success (
+              zlink::framework::result_t<void>::success ()));
+      },
+      {});
+    auto one_shot_route =
+      one_shot_builder.route_client (serializers)
+        .send_to_node ("one-shot", zlink::routing_id_t::from ("one-shot-node"), event_t{1});
     auto copied_route = one_shot_route;
     one_shot_route.async ().result ().value ();
     bool copied_route_rejected = false;
