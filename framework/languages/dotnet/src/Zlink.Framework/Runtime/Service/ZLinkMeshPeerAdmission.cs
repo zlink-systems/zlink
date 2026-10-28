@@ -18,7 +18,7 @@ internal sealed class ZLinkMeshSelectedRoutes
 {
     private Dictionary<RoutingId, ulong> _routes = [];
 
-    internal IEnumerable<RoutingId> RoutingIds => _routes.Keys;
+    internal Dictionary<RoutingId, ulong>.KeyCollection RoutingIds => _routes.Keys;
 
     /// <summary>
     /// The observed route generation of the RID, or 0 when the RID has no
