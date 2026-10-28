@@ -212,6 +212,7 @@ struct command_t
         struct
         {
             std::string *endpoint;
+            uint64_t intent_id;
         } term_endpoint;
 
         //  Transfers the ownership of the closed socket
