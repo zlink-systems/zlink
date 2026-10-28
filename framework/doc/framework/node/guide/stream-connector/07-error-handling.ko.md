@@ -66,7 +66,7 @@ const errors = connector.onErrorReceived(error => {
 
 | 코드 | 의미 |
 |---|---|
-| `disconnected` | 연결이 없거나 끊겼다 |
+| `Disconnected` | 연결이 없거나 끊겼다 |
 | `ConfigurationError` | 구성이 잘못됐다. endpoint scheme과 transport 충돌, 환경이 지원하지 않는 transport 등 |
 | `ValidationFailed` | 전송 전 검증, option 값 범위 검증, 대기 표면의 관측 조건이 어긋났다 |
 | `RequestTimeout` | 응답을 기다리다 시간이 초과됐다 |
@@ -96,16 +96,16 @@ const errors = connector.onErrorReceived(error => {
 | `ConfigurationError` · `ValidationFailed` | 실패 | 유지 | 하지 않는다 |
 | `RequestTimeout` | 그 request만 실패 | 유지 | 하지 않는다 |
 | `ConnectTimeout` · `TlsValidationFailed` | 연결 실패 | 끊김 | 시도 정책을 적용한다 |
-| `disconnected` — transport 끊김 | 진행 중인 호출 실패 | 끊김, 종료 사유는 transport 오류 | 켜져 있으면 적용한다 |
-| 종료로 생긴 `disconnected` | 진행 중인 호출 실패 | 종료, 종료 사유는 client가 닫음 | 하지 않는다 |
+| `Disconnected` — transport 끊김 | 진행 중인 호출 실패 | 끊김, 종료 사유는 transport 오류 | 켜져 있으면 적용한다 |
+| 종료로 생긴 `Disconnected` | 진행 중인 호출 실패 | 종료, 종료 사유는 client가 닫음 | 하지 않는다 |
 | `SendFailed` — request sequence 고갈 | 그 호출만 실패 | 유지 | 하지 않는다 |
-| `SendFailed` — transport 쓰기 실패 | 그 쓰기의 호출만 `SendFailed`로 실패하고 나머지 진행 중인 호출은 `disconnected`로 실패 | 종료, 종료 사유는 `TransportError` | 켜져 있으면 적용한다 |
+| `SendFailed` — transport 쓰기 실패 | 그 쓰기의 호출만 `SendFailed`로 실패하고 나머지 진행 중인 호출은 `Disconnected`로 실패 | 종료, 종료 사유는 `TransportError` | 켜져 있으면 적용한다 |
 | `FrameDecodeFailed`(frame·header) · `FrameTooLarge` | 그 frame을 전달하지 않고 대기 중인 request를 실패시킴 | 종료, 종료 사유는 프로토콜 오류 | 켜져 있으면 적용한다 |
 | `CompressionFailed` | 그 송신만 실패 | 유지 | 하지 않는다 |
 | `DecompressionFailed` | 그 수신 packet 또는 대기 중인 request만 실패 | 유지 | 하지 않는다 |
 | `UserCallbackFailed` · `RemoteError` | 오류 이벤트나 관련 호출로 전달 | 유지 | 하지 않는다 |
 
-연결이 끝나서 실패하는 진행 중인 호출은 원인과 관계없이 `disconnected`로 실패하고, 원인은 종료 사유로
+연결이 끝나서 실패하는 진행 중인 호출은 원인과 관계없이 `Disconnected`로 실패하고, 원인은 종료 사유로
 남는다. transport 쓰기 실패로 연결이 끝나면 그 쓰기의 호출만 `SendFailed`로 실패한다.
 종료 사유를 읽는 방법은 [연결 생명주기](06-lifecycle.ko.md)가 다룬다.
 
