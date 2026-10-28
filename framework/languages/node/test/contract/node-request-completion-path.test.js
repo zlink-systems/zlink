@@ -1,4 +1,5 @@
 const { ZLinkRequestResult } = require('../../packages/framework/dist/runtime/messaging/request-result');
+const { rawMeshBinding } = require('./fixtures/raw-mesh-binding');
 const assert = require('node:assert/strict');
 const test = require('node:test');
 
@@ -22,15 +23,16 @@ const {
   encodeApplicationPayload
 } = require('../../packages/framework/dist/runtime/foundation/service-wire-m6a-codec');
 
-function createRuntime() {
-  return new RawServiceMeshRuntime({
-    applicationJobQueue: new ApplicationJobQueue(
-      resolveApplicationJobQueueConfiguration({ maxQueuedApplicationJobs: 16n }, () => 1n)
-    ),
+function createRuntime(bindingPort, applicationJobQueue = new ApplicationJobQueue(
+  resolveApplicationJobQueueConfiguration({ maxQueuedApplicationJobs: 16n }, () => 1n)
+)) {
+  const runtime = new RawServiceMeshRuntime({
+    bindingPort,
+    applicationJobQueue,
     descriptor: {
       meshName: 'mesh',
       nodeRoutingId: 'source',
-      advertisedEndpoint: 'tcp://127.0.0.1:1',
+      advertisedEndpoint: 'tcp://127.0.0.1:0',
       channels: [],
       state: 'serving',
       securityIdentity: 'test',
@@ -46,6 +48,8 @@ function createRuntime() {
       pendingCapacityUsed: 0
     }
   });
+  if (bindingPort) runtime.start();
+  return runtime;
 }
 
 function payload() {
@@ -97,8 +101,8 @@ test('an observed request decided inside the call reaches the completion slot af
   runtime.mailbox.close();
 });
 
-test('an observed remote request registers its Framework deadline without a Promise', async () => {
-  const runtime = createRuntime();
+test('an observed remote request registers once without a registry Promise', async () => {
+
   let promiseRegistrations = 0;
   let observedRegistrations = 0;
   const register = OperationRegistry.prototype.register;
@@ -112,11 +116,10 @@ test('an observed remote request registers its Framework deadline without a Prom
     return registerObserved.apply(this, args);
   };
   let replyParts;
-  runtime.router = {
-    request(_target, parts) {
-      replyParts = parts;
-    }
-  };
+  const { bindingPort } = rawMeshBinding({
+    request(_target, parts) { replyParts = parts; }
+  });
+  const runtime = createRuntime(bindingPort);
   runtime.topology.readyPeer = () => ({ descriptor: { nodeRoutingId: 'target' } });
   runtime.isPeerRouteReady = () => true;
   try {
@@ -141,16 +144,16 @@ test('an observed remote request registers its Framework deadline without a Prom
 for (const method of ['requestToNode', 'requestToChannel']) {
   test(`observed remote ${method} expires through Framework maintenance exactly once`, (t) => {
     t.mock.method(performance, 'now', () => 100);
-    const runtime = createRuntime();
     const events = [];
     let failBinding;
     let submissions = 0;
-    runtime.router = {
+    const { bindingPort } = rawMeshBinding({
       request(_target, _parts, _timeout, _reply, fail) {
         submissions++;
         failBinding = fail;
       }
-    };
+    });
+    const runtime = createRuntime(bindingPort);
     const peer = { descriptor: { nodeRoutingId: 'target' } };
     runtime.topology.readyPeer = () => peer;
     runtime.topology.selectChannel = () => peer;
@@ -163,7 +166,7 @@ for (const method of ['requestToNode', 'requestToChannel']) {
       const pending = runtime[method]('target', payload(), 10, undefined, observer, 7, new ZLinkRequestResult());
       assert.equal(submissions, 1);
       assert.equal(runtime.pendingOperationCount, 1);
-      assert.equal(runtime.operations.nextDeadlineMs(), 110);
+      assert.equal(runtime.nextMaintenanceDeadlineMs(performance.now()), 110);
       assert.equal(runtime.expireOperations(109, Infinity), 0);
       assert.equal(events.length, 0);
       assert.equal(runtime.expireOperations(110, Infinity), 1);
@@ -176,7 +179,7 @@ for (const method of ['requestToNode', 'requestToChannel']) {
       assert.equal(runtime.expireOperations(120, Infinity), 0);
       assert.equal(events.length, 1);
     } finally {
-      runtime.operations.close();
+      runtime.close();
       runtime.mailbox.close();
     }
   });
@@ -254,9 +257,8 @@ function runtimeWithBinding(t, submit) {
     }));
     return socket;
   });
-  const runtime = createRuntime();
   const host = new ZLinkNodeRawBindingPort(context).createHost();
-  runtime.router = host.createRouter();
+  const runtime = createRuntime({ createHost: () => host });
   runtime.topology.readyPeer = () => ({ descriptor: { nodeRoutingId: 'target' } });
   t.after(() => {
     runtime.mailbox.close();
@@ -393,7 +395,7 @@ for (const failureAt of ['binding', 'protocol', 'submit', 'admission', 'receive'
     if (failureAt === 'terminal') assert.equal(events[0].value.terminalResult, 0);
     else if (failureAt === 'protocol') assert.equal(events[0].error.name, 'ServiceWireProtocolError');
     else assert.equal(events[0].error, failure);
-    assert.equal(runtime.operations.size, 0);
+    assert.equal(runtime.pendingOperationCount, 0);
     assert.equal(closes, ['protocol'].includes(failureAt) ? 1 : ['receive', 'retain', 'terminal'].includes(failureAt) ? 2 : 0);
   });
 }
@@ -401,24 +403,21 @@ for (const failureAt of ['binding', 'protocol', 'submit', 'admission', 'receive'
 
 for (const terminal of ['deadline', 'cancel', 'shutdown']) {
   test(`generic local request releases its capacity wait on ${terminal} through the shared entry`, async () => {
-    const runtime = createRuntime();
+    const applicationJobQueue = new ApplicationJobQueue(
+      resolveApplicationJobQueueConfiguration({ maxQueuedApplicationJobs: 16n }, () => 1n)
+    );
+    const runtime = createRuntime(undefined, applicationJobQueue);
     const table = new ZLinkMeshCompletionTable();
     const occupied = [];
-    for (let i = 0; i < 16; i++) occupied.push(await runtime.applicationJobQueue.acquire(undefined, 'remote'));
+    for (let i = 0; i < 16; i++) occupied.push(await applicationJobQueue.acquire(undefined, 'remote'));
     const controller = new AbortController();
     const { ZLinkNodeRawMeshBackend } = require('../../packages/framework/dist/runtime/backend/node/node-raw-mesh-backend');
-    const backend = new ZLinkNodeRawMeshBackend('mesh', 'source', {});
+    const backend = new ZLinkNodeRawMeshBackend('mesh', 'source', {}, undefined, undefined, undefined, undefined, { raw: runtime });
     backend.setCompletionTable(table);
-    const observer = backend.requestObserver;
     try {
       const framework = require('../../packages/framework/dist/internal');
       const { ZLinkBackendResultError, RequestResult } = require('../../packages/framework/dist/runtime/backend/runtime-values');
-      let entry;
-      const node = { requestToNode(_target, _parts, options) {
-        entry = options.requestEntry;
-        const operation = runtime.requestToNode('source', payload(), 1000, options.onAdmitted, observer, 1, entry);
-        return { high: 1n, low: operation.id };
-      } };
+      const node = backend;
       const transport = new framework.ZLinkRuntimeRouteTransport(
         () => undefined, undefined,
         () => ({ meshNode: () => node, meshCompletionTable: () => table }),
@@ -431,8 +430,8 @@ for (const terminal of ['deadline', 'cancel', 'shutdown']) {
       const failure = Promise.allSettled([reply, reply.admitted]);
       assert.equal(runtime.pendingOperationCount, 1);
       assert.equal(table.pendingCount, 1, table.pendingCount === 0 ? String((await failure)[0].reason) : 'pending terminal');
-      assert.equal(runtime.applicationJobQueue.snapshot().capacityWaiters, 1n);
-      if (terminal === 'deadline') assert.equal(runtime.expireOperations(runtime.operations.nextDeadlineMs(), Infinity), 1);
+      assert.equal(applicationJobQueue.snapshot().capacityWaiters, 1n);
+      if (terminal === 'deadline') assert.equal(runtime.expireOperations(runtime.nextMaintenanceDeadlineMs(performance.now()), Infinity), 1);
       else if (terminal === 'cancel') controller.abort(new DOMException('cancel local capacity wait', 'AbortError'));
       else table.dispose(new ZLinkBackendResultError('request', RequestResult.Terminated));
       const stages = await failure;
@@ -445,7 +444,7 @@ for (const terminal of ['deadline', 'cancel', 'shutdown']) {
       await new Promise(resolve => setImmediate(resolve));
       assert.equal(table.pendingCount, 0);
       assert.equal(runtime.pendingOperationCount, 0);
-      assert.equal(runtime.applicationJobQueue.snapshot().capacityWaiters, 0n);
+      assert.equal(applicationJobQueue.snapshot().capacityWaiters, 0n);
       assert.equal(runtime.mailbox.pendingMessages('application'), 0);
     } finally {
       table.dispose(); runtime.close();

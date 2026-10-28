@@ -1,3 +1,4 @@
+const { createMeshHost } = require('./fixtures/mesh-host');
 const { createRelayHost } = require('./fixtures/relay-host');
 const { observeZLinkRequestReply, ZLinkRequestResult, identityRequestReply } = require('../../packages/framework/dist/runtime/messaging/request-result');
 const assert = require('node:assert/strict');
@@ -1946,10 +1947,10 @@ test('initial managed stream remote bind deadline failure does not leave a provi
 test('runtime host bound session uses local stream route before native SessionRelay', async () => {
   const actorRef = { nodeRid: 'node-a', actorId: 'actor-native', generation: 7n };
   const nativeSends = [];
-  const host = new framework.ZLinkFrameworkRuntimeHost({
+  const { host, meshRuntime: hostMesh } = createMeshHost({
     registration: framework.createFrameworkRegistration()
   });
-  host.spotNodeRuntime = {
+  Object.assign(hostMesh, {
     primaryMeshNode: {
       status: () => ({ routingId: zlink.RoutingId.from('node-local') }),
       sendActorBoundSession(actor, bindingGeneration, parts, flags) {
@@ -1963,7 +1964,7 @@ test('runtime host bound session uses local stream route before native SessionRe
       },
       async closeActorBoundSession() {}
     }
-  };
+  });
 
   const stream = recordingStream('session-native', 'rid-native');
   const context = host.streamBindingRuntime.createSessionContext(stream);
@@ -1989,14 +1990,14 @@ test('runtime host local actor falls back to native SessionRelay when no JavaScr
   const actorRef = { nodeRid: 'node-a', actorId: 'actor-native', generation: 7n };
   const nativeSends = [];
   const routeCalls = [];
-  const host = new framework.ZLinkFrameworkRuntimeHost({
+  const { host, meshRuntime: hostMesh } = createMeshHost({
     registration: framework.createFrameworkRegistration()
   });
   host.routeTransport.send = (routerChannelId, targetNodeRid, packetName, message, signal) => {
     routeCalls.push({ routerChannelId, targetNodeRid, packetName, message, signal });
     return Promise.resolve({ ok: true });
   };
-  host.spotNodeRuntime = {
+  Object.assign(hostMesh, {
     primaryMeshNode: {
       status: () => ({ routingId: zlink.RoutingId.from('node-local') }),
       sendActorBoundSession(actor, bindingGeneration, parts, flags) {
@@ -2010,7 +2011,7 @@ test('runtime host local actor falls back to native SessionRelay when no JavaScr
       },
       async closeActorBoundSession() {}
     }
-  };
+  });
   host.setActorManager({
     getState(actorId) {
       return actorId === actorRef.actorId
@@ -2050,10 +2051,10 @@ test('native bound-session send awaits binding admission without Framework retry
   const admission = new Promise((resolve) => {
     releaseAdmission = resolve;
   });
-  const host = new framework.ZLinkFrameworkRuntimeHost({
+  const { host, meshRuntime: hostMesh } = createMeshHost({
     registration: framework.createFrameworkRegistration()
   });
-  host.spotNodeRuntime = {
+  Object.assign(hostMesh, {
     primaryMeshNode: {
       status: () => ({ routingId: zlink.RoutingId.from('node-local') }),
       sendActorBoundSession() {
@@ -2061,7 +2062,7 @@ test('native bound-session send awaits binding admission without Framework retry
         return admission;
       }
     }
-  };
+  });
   host.setActorManager({
     getState() {
       return {
@@ -2094,10 +2095,10 @@ test('native bound-session send does not add an abort owner after binding admiss
   const admission = new Promise((resolve) => {
     releaseAdmission = resolve;
   });
-  const host = new framework.ZLinkFrameworkRuntimeHost({
+  const { host, meshRuntime: hostMesh } = createMeshHost({
     registration: framework.createFrameworkRegistration()
   });
-  host.spotNodeRuntime = {
+  Object.assign(hostMesh, {
     primaryMeshNode: {
       status: () => ({ routingId: zlink.RoutingId.from('node-local') }),
       sendActorBoundSession() {
@@ -2105,7 +2106,7 @@ test('native bound-session send does not add an abort owner after binding admiss
         return admission;
       }
     }
-  };
+  });
   host.setActorManager({
     getState() {
       return {
@@ -2134,7 +2135,7 @@ test('native bound-session send propagates binding admission failure without ret
   const actorRef = { nodeRid: 'node-a', actorId: 'actor-native-timeout', generation: 7n };
   let attempts = 0;
   const bindingFailure = new Error('binding admission timed out');
-  const host = new framework.ZLinkFrameworkRuntimeHost({
+  const { host, meshRuntime: hostMesh } = createMeshHost({
     registration: framework.createFrameworkRegistration({
       spotNodes: {
         play: {
@@ -2146,7 +2147,7 @@ test('native bound-session send propagates binding admission failure without ret
       }
     })
   });
-  host.spotNodeRuntime = {
+  Object.assign(hostMesh, {
     primaryMeshName: 'play',
     primaryMeshNode: {
       status: () => ({ routingId: zlink.RoutingId.from('node-local') }),
@@ -2155,7 +2156,7 @@ test('native bound-session send propagates binding admission failure without ret
         return Promise.reject(bindingFailure);
       }
     }
-  };
+  });
   host.setActorManager({
     getState() {
       return {
@@ -2185,7 +2186,7 @@ test('runtime host bound session uses routed Session target before native Sessio
   const sessionSpotId = zlink.RoutingId.from('session-entry');
   const nativeSends = [];
   const routeCalls = [];
-  const host = new framework.ZLinkFrameworkRuntimeHost({
+  const { host, meshRuntime: hostMesh } = createMeshHost({
     registration: framework.createFrameworkRegistration()
   });
   host.routeTransport.submitInfrastructure = async (
@@ -2204,7 +2205,7 @@ test('runtime host bound session uses routed Session target before native Sessio
     });
     return { ok: true };
   };
-  host.spotNodeRuntime = {
+  Object.assign(hostMesh, {
     primaryMeshNode: {
       status: () => ({ routingId: zlink.RoutingId.from('node-local') }),
       sendActorBoundSession(actor, parts, flags) {
@@ -2213,7 +2214,7 @@ test('runtime host bound session uses routed Session target before native Sessio
       },
       async closeActorBoundSession() {}
     }
-  };
+  });
   host.setActorManager({
     getState(actorId) {
       return actorId === actorRef.actorId
@@ -2249,14 +2250,14 @@ test('runtime host local Actor uses its remote Session owner before native deliv
   const actorRef = { nodeRid: 'node-local', actorId: 'actor-native-bound', generation: 7n };
   const nativeSends = [];
   const routeCalls = [];
-  const host = new framework.ZLinkFrameworkRuntimeHost({
+  const { host, meshRuntime: hostMesh } = createMeshHost({
     registration: framework.createFrameworkRegistration()
   });
   host.routeTransport.submitInfrastructure = async (...args) => {
     routeCalls.push(args);
     return { status: ZLinkSubmitStatus.Submitted };
   };
-  host.spotNodeRuntime = {
+  Object.assign(hostMesh, {
     primaryMeshNode: {
       status: () => ({ routingId: zlink.RoutingId.from('node-local') }),
       sendActorBoundSession(actor, bindingGeneration, parts, flags) {
@@ -2265,7 +2266,7 @@ test('runtime host local Actor uses its remote Session owner before native deliv
       },
       async closeActorBoundSession() {}
     }
-  };
+  });
   host.setActorManager({
     getState(actorId) {
       return actorId === actorRef.actorId
@@ -2304,14 +2305,14 @@ test('runtime host local relocated Actor pushes to its Session owner without wai
   const actorRef = { nodeRid: 'node-local', actorId: 'actor-sealed-bound', generation: 7n };
   const nativeSends = [];
   const routeCalls = [];
-  const host = new framework.ZLinkFrameworkRuntimeHost({
+  const { host, meshRuntime: hostMesh } = createMeshHost({
     registration: framework.createFrameworkRegistration()
   });
   host.routeTransport.submitInfrastructure = async (...args) => {
     routeCalls.push(args);
     return { status: ZLinkSubmitStatus.Submitted };
   };
-  host.spotNodeRuntime = {
+  Object.assign(hostMesh, {
     primaryMeshNode: {
       status: () => ({ routingId: zlink.RoutingId.from('node-local') }),
       sendActorBoundSession(actor, bindingGeneration, parts, flags) {
@@ -2320,7 +2321,7 @@ test('runtime host local relocated Actor pushes to its Session owner without wai
       },
       async closeActorBoundSession() {}
     }
-  };
+  });
   host.setActorManager({
     getState(actorId) {
       return actorId === actorRef.actorId
@@ -2361,14 +2362,14 @@ test('runtime host bound session disconnect awaits the native close terminal for
   const nativeDisconnects = [];
   const registration = framework.createFrameworkRegistration();
   registration.requestTimeoutMs = 1234;
-  const host = new framework.ZLinkFrameworkRuntimeHost({ registration });
+  const { host, meshRuntime: hostMesh } = createMeshHost({ registration });
   host.routeTransport.requestRawToSpot = () =>
     assert.fail('close must use command 54, not a forged disconnect notification');
   let finishClose;
   const closed = new Promise((resolve) => {
     finishClose = resolve;
   });
-  host.spotNodeRuntime = {
+  Object.assign(hostMesh, {
     primaryMeshCompletions: {
        submit(start, _signal, resultOwner = new ZLinkRequestResult()) {
 return resultOwner.observe((async () => {
@@ -2385,7 +2386,7 @@ return resultOwner.observe((async () => {
         return { high: 1n, low: 1n };
       }
     }
-  };
+  });
   host.setActorManager({
     getState: () => ({
       nativeActorRef: actorRef,
@@ -2594,7 +2595,7 @@ test('runtime host local spot join preserves routed Session target for stream-bo
     sessionOwnerLeaseGeneration: 1n,
     bindingGeneration: 3n
   };
-  const host = new framework.ZLinkFrameworkRuntimeHost({
+  const { host, meshRuntime: hostMesh } = createMeshHost({
     registration: framework.createFrameworkRegistration()
   });
   const manager = new framework.DefaultZLinkActorManager(
@@ -2604,7 +2605,7 @@ test('runtime host local spot join preserves routed Session target for stream-bo
     detachedTaskRunner
   );
   host.setActorManager(manager);
-  host.spotNodeRuntime = {
+  Object.assign(hostMesh, {
     primaryMeshNode: {
       status: () => ({ routingId: zlink.RoutingId.from('node-local') }),
       status: () => ({ routingId: zlink.RoutingId.from('play-node') }),
@@ -2615,7 +2616,7 @@ test('runtime host local spot join preserves routed Session target for stream-bo
         return { nodeRid: zlink.RoutingId.from('play-node'), actorId, generation: 1n };
       }
     }
-  };
+  });
 
   await manager.getOrCreateWithNativeRef('actor-routed-local-join', 'player', actorRef);
   manager.getState('actor-routed-local-join').installBoundSessionBinding(remoteTarget);
@@ -2633,7 +2634,7 @@ test('runtime host local spot join preserves routed Session target for stream-bo
 test('runtime host local actor uses its current routed session target', async () => {
   const actorRef = { nodeRid: 'node-a', actorId: 'actor-native', generation: 7n };
   const routed = [];
-  const host = new framework.ZLinkFrameworkRuntimeHost({
+  const { host, meshRuntime: hostMesh } = createMeshHost({
     registration: framework.createFrameworkRegistration()
   });
   host.routeTransport.submitInfrastructure = async (
@@ -2646,7 +2647,7 @@ test('runtime host local actor uses its current routed session target', async ()
     return { ok: true };
   };
   host.streamBindingRuntime = new framework.ZLinkStreamBindingRuntime({ actorBindTimeoutMs: 100 });
-  host.spotNodeRuntime = {
+  Object.assign(hostMesh, {
     primaryMeshNode: {
       status: () => ({ routingId: zlink.RoutingId.from('node-local') }),
       sendActorBoundSession() {
@@ -2654,7 +2655,7 @@ test('runtime host local actor uses its current routed session target', async ()
       },
       async closeActorBoundSession() {}
     }
-  };
+  });
   host.setActorManager({
     getState(actorId) {
       return actorId === actorRef.actorId
@@ -2689,11 +2690,11 @@ test('runtime host local actor uses its current routed session target', async ()
 test('local actor push preserves native target-not-found after its remote session route is removed', async () => {
   const actorRef = { nodeRid: 'actor-node', actorId: 'actor-disconnected-local', generation: 1n };
   let nativeAttempts = 0;
-  const host = new framework.ZLinkFrameworkRuntimeHost({
+  const { host, meshRuntime: hostMesh } = createMeshHost({
     registration: framework.createFrameworkRegistration()
   });
   host.streamBindingRuntime = new framework.ZLinkStreamBindingRuntime({ actorBindTimeoutMs: 1 });
-  host.spotNodeRuntime = {
+  Object.assign(hostMesh, {
     primaryMeshNode: {
       status: () => ({ routingId: zlink.RoutingId.from('node-local') }),
       sendActorBoundSession() {
@@ -2701,7 +2702,7 @@ test('local actor push preserves native target-not-found after its remote sessio
         return zlink.SubmitResult.NotFound;
       }
     }
-  };
+  });
   host.setActorManager({
     getState() {
       return {
@@ -4536,10 +4537,10 @@ test('production command 36 is sent by binding identity after owner lifecycle fi
 
   const serviceSubmitResults = [];
   let ownerLifecycle = { locationGeneration: 11n, ownerLeaseGeneration: 13n };
-  const senderHost = new framework.ZLinkFrameworkRuntimeHost({
+  const { host: senderHost, meshRuntime: senderHostMesh } = createMeshHost({
     registration: framework.createFrameworkRegistration()
   });
-  senderHost.spotNodeRuntime = {
+  Object.assign(senderHostMesh, {
     primaryMeshNode: {
       status: () => ({
         routingId: zlink.RoutingId.from('actor-node'),
@@ -4556,7 +4557,7 @@ test('production command 36 is sent by binding identity after owner lifecycle fi
       },
       async closeActorBoundSession() {}
     }
-  };
+  });
   senderHost.setActorManager({
     getState(requestedActorId) {
       return requestedActorId === actorId
@@ -6666,7 +6667,7 @@ test('Actor binding owner turn uses the three-value Actor fence independently of
   assert.equal(state.ownsLocation, false);
   let localRetireCalls = 0;
   const host = Object.create(framework.ZLinkFrameworkRuntimeHost.prototype);
-  host.actorManager = { getState: () => state };
+  host.setActorManager({ getState: () => state });
   host.spotNodeRuntime = {
     meshNode: () => ({
       status: () => ({ routingId: actor.nodeRid, lifecycleGeneration: 5n }),
@@ -6954,7 +6955,7 @@ test('runtime host actor packet target lets local joined actors use native gatew
 });
 
 test('runtime host same-node Actor Join uses local admission and membership commit', async () => {
-  const host = new framework.ZLinkFrameworkRuntimeHost({
+  const { host, meshRuntime: hostMesh } = createMeshHost({
     registration: framework.createFrameworkRegistration()
   });
   const actorRid = zlink.RoutingId.from('local-node');
@@ -6962,7 +6963,7 @@ test('runtime host same-node Actor Join uses local admission and membership comm
   const actorRef = { nodeRid: actorRid, actorId: 'actor-local-room', generation: 4n };
   let location = { actor: actorRef, spotId: actorRid, spotGeneration: 1n, membershipEpoch: 2n };
   const events = [];
-  host.spotNodeRuntime = {
+  Object.assign(hostMesh, {
     primaryMeshNode: {
       status: () => ({ routingId: actorRid, lifecycleGeneration: 1n }),
       actorLookup: () => location,
@@ -6982,8 +6983,8 @@ test('runtime host same-node Actor Join uses local admission and membership comm
         return actorRef;
       }
     }
-  };
-  host.spotManager = {
+  });
+  host.setSpotManager({
     async admitActorJoin(spotId, actor, request, commit, _signal, sourceLeave, contentType) {
       assert.equal(spotId.toHex(), roomRid.toHex());
       assert.equal(actor.context.actorId, 'actor-local-room');
@@ -6995,7 +6996,7 @@ test('runtime host same-node Actor Join uses local admission and membership comm
       await sourceLeave();
       return { accepted: true, reply: zlink.Message.from('joined') };
     }
-  };
+  });
   host.createLocationSpotRouteResolver = () => ({
     async resolve(spotId) {
       assert.equal(spotId, 'room-1');
@@ -7278,7 +7279,7 @@ test('runtime host relays bound remote actor request through route channel and c
   };
   const routeRequests = [];
   const stream = recordingStream('session-remote-actor', 'session-node');
-  const host = new framework.ZLinkFrameworkRuntimeHost({
+  const { host, meshRuntime: hostMesh } = createMeshHost({
     registration: framework.createFrameworkRegistration({
       routeChannels: [{ routerChannelId: 'room.route' }],
       spotNodes: {
@@ -7288,12 +7289,12 @@ test('runtime host relays bound remote actor request through route channel and c
       }
     })
   });
-  host.spotNodeRuntime = {
+  Object.assign(hostMesh, {
     primaryMeshNode: {
       status: () => ({ routingId: zlink.RoutingId.from('node-local') }),
       routingId: 'session-node'
     }
-  };
+  });
   host.setActorManager({
     getState(actorId) {
       assert.equal(actorId, 'actor-remote');
@@ -7400,16 +7401,16 @@ test('runtime host relays bound remote actor request through route channel and c
 test('M1 bound Actor request uses its stored Session route without a per-message Location resolve', async () => {
   const actorId = 'actor-stored-session-route';
   const stream = recordingStream('session-stored-route', 'session-owner');
-  const host = new framework.ZLinkFrameworkRuntimeHost({
+  const { host, meshRuntime: hostMesh } = createMeshHost({
     registration: framework.createFrameworkRegistration({
       routeChannels: [{ routerChannelId: 'play.route' }]
     })
   });
-  host.spotNodeRuntime = {
+  Object.assign(hostMesh, {
     primaryMeshNode: {
       status: () => ({ routingId: zlink.RoutingId.from('session-owner') })
     }
-  };
+  });
   host.setActorManager({
     getState(requestedActorId) {
       assert.equal(requestedActorId, actorId);
@@ -7632,7 +7633,7 @@ test('service-wire relocation replaces a learned source packet route before the 
     }
   });
   const targetRequestSequences = [];
-  targetHost.spotManager = {
+  targetHost.setSpotManager({
     async dispatchRoutedActorPacket(
       _origin,
       spotId,
@@ -7658,7 +7659,7 @@ test('service-wire relocation replaces a learned source packet route before the 
         fallbackActorRef
       );
     }
-  };
+  });
   targetHost.routeTransport.submitInfrastructure = async (
     _routerChannelId,
     targetNodeRid,
@@ -7840,7 +7841,7 @@ test('runtime host relays bound remote actor send through route channel without 
   const actorRef = { nodeRid: 'play-node', actorId: 'actor-remote-send', generation: 8n };
   const routeSends = [];
   const stream = recordingStream('session-remote-actor-send', 'session-node');
-  const host = new framework.ZLinkFrameworkRuntimeHost({
+  const { host, meshRuntime: hostMesh } = createMeshHost({
     registration: framework.createFrameworkRegistration({
       routeChannels: [{ routerChannelId: 'room.route' }],
       spotNodes: {
@@ -7850,12 +7851,12 @@ test('runtime host relays bound remote actor send through route channel without 
       }
     })
   });
-  host.spotNodeRuntime = {
+  Object.assign(hostMesh, {
     primaryMeshNode: {
       status: () => ({ routingId: zlink.RoutingId.from('node-local') }),
       routingId: 'session-node'
     }
-  };
+  });
   host.setActorManager({
     getState(actorId) {
       assert.equal(actorId, 'actor-remote-send');
@@ -7943,15 +7944,15 @@ test('runtime host completes local bound actor request without native SessionRel
   });
   state.setNativeActorRef(actorRef);
   state.setJoinedSpot('play-node');
-  const host = new framework.ZLinkFrameworkRuntimeHost({
+  const { host, meshRuntime: hostMesh } = createMeshHost({
     registration: framework.createFrameworkRegistration()
   });
-  host.spotNodeRuntime = {
+  Object.assign(hostMesh, {
     primaryMeshNode: {
       status: () => ({ routingId: zlink.RoutingId.from('play-node') }),
       routingId: 'play-node'
     }
-  };
+  });
   host.setActorManager({
     getState(actorId) {
       assert.equal(actorId, actorRef.actorId);

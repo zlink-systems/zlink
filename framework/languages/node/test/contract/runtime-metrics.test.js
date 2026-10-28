@@ -1,4 +1,5 @@
 const { ZLinkRequestResult } = require('../../packages/framework/dist/runtime/messaging/request-result');
+const { createMeshHost } = require('./fixtures/mesh-host');
 'use strict';
 
 const { mapZLinkRequestReply } = require('../../packages/framework/dist/runtime/messaging/request-result');
@@ -554,11 +555,11 @@ return resultOwner.observe((async () => {
 
 test('host capacity metrics use the repository observation rather than the publication descriptor', () => {
   const registration = framework.createFrameworkRegistrationWithBuilder(builder => builder.addRouteMesh('metric-mesh').objects().server());
-  const host = new framework.ZLinkFrameworkRuntimeHost({ registration });
+  const { host, meshRuntime: hostMesh } = createMeshHost({ registration });
   host.routeMeshCoordinator.snapshot = () => ({ peers: [], channels: [], readyPeerCount: 0 });
   const zero = { active: 0, reserved: 0, limit: 12 };
   const descriptor = { rid: 'metric-node', populationCapacity: { actors: zero, spots: zero, spotTypes: [] } };
-  host.spotNodeRuntime = { meshNodeDescriptor: () => descriptor };
+  Object.assign(hostMesh, { meshNodeDescriptor: () => descriptor });
   let confirmed;
   host.locationOwner.stores = { locationStore: { confirmedCapacity(key, limits) {
     assert.deepEqual(key, { meshName: 'metric-mesh', rid: 'metric-node' });

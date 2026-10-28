@@ -59,9 +59,14 @@ internal sealed partial class ZLinkInMemoryLocationStore
         if (
             spot.ObjectGeneration != actor.CurrentSpotGeneration
             || spot.Allocation.ObjectKind != ZLinkPlacementObjectKind.UserSpot
+            || spot.Allocation.State != ZLinkPlacementAllocationState.Active
+            || !ZLinkUserSpotAuthorityPayloadCodec.TryDecode(spot.Payload.Span, out var target)
+            || target.State != ZLinkUserSpotAuthorityState.Ready
         )
             return ZLinkFrameworkErrorKind.Unavailable;
         var participant = aggregate?.Participants.SingleOrDefault(p => p.Key == key);
+        if (participant is null && IsAuthorityInPreparedAggregate(key))
+            return ZLinkFrameworkErrorKind.Unavailable;
         var token =
             participant?.OwnerTransition == ZLinkAuthorityGenerationTransition.NewOwner
                 ? aggregate!.TargetOwner
@@ -187,7 +192,10 @@ internal sealed partial class ZLinkInMemoryLocationStore
                     current is null
                         ? new ZLinkAuthorityReadResult.Missing(now)
                         : new ZLinkAuthorityReadResult.Found(current with { StoreNow = now })
-                );
+                )
+                {
+                    MembershipFailure = ZLinkFrameworkErrorKind.Unavailable,
+                };
             }
             if (MembershipCommitFailure(put.Payload, current, now) is { } membershipFailure)
                 return new ZLinkAuthorityCompareExchangeResult.Conflict(

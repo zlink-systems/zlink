@@ -331,6 +331,352 @@ public sealed class LocationLifecycleTests
         Assert.False(await node.ActorOwnership.OwnsActorAsync(Actor(ActorId)));
     }
 
+    [Theory]
+    [InlineData("sourceExpired", false)]
+    [InlineData("sourceExpired", true)]
+    [InlineData("missing", false)]
+    [InlineData("missing", true)]
+    [InlineData("spotGeneration", false)]
+    [InlineData("spotGeneration", true)]
+    [InlineData("closing", false)]
+    [InlineData("closing", true)]
+    [InlineData("expired", false)]
+    [InlineData("expired", true)]
+    [InlineData("leaseGeneration", false)]
+    [InlineData("leaseGeneration", true)]
+    [InlineData("prepared", false)]
+    [InlineData("prepared", true)]
+    public async Task Actor_Join_Preserves_Store_Membership_Failure(string scenario, bool provider)
+    {
+        await using var fixture = await LifecycleFixture.CreateAsync(provider);
+        var node = await fixture.NodeAsync("node-a");
+        await CreateTrackedActorAsync(node);
+        var targetOwner = await fixture.NodeAsync("node-b");
+        var spot = await PublishReadySpotAsync(fixture, targetOwner, "join-target", 7);
+        var key = ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey("join-target");
+        var actorKey = ZLinkActorAuthorityPayloadCodec.AuthorityKey(ActorId);
+        var before = Assert
+            .IsType<ZLinkAuthorityReadResult.Found>(
+                await fixture.Store.ReadAuthorityAsync(actorKey)
+            )
+            .Snapshot;
+        Assert.NotEqual(before.ObjectGeneration, spot.ObjectGeneration);
+        if (scenario == "missing")
+            Assert.IsType<ZLinkAuthorityCompareExchangeResult.Deleted>(
+                await fixture.Store.CompareExchangeAuthorityAsync(
+                    key,
+                    spot.StoreVersion,
+                    new ZLinkAuthorityMutation.Delete()
+                )
+            );
+        if (scenario == "closing")
+        {
+            Assert.True(
+                ZLinkUserSpotAuthorityPayloadCodec.TryDecode(spot.Payload.Span, out var ready)
+            );
+            Assert.IsType<ZLinkAuthorityCompareExchangeResult.Stored>(
+                await fixture.Store.CompareExchangeAuthorityAsync(
+                    key,
+                    spot.StoreVersion,
+                    new ZLinkAuthorityMutation.Put(
+                        ZLinkUserSpotAuthorityPayloadCodec.Encode(
+                            ready with
+                            {
+                                State = ZLinkUserSpotAuthorityState.Closing,
+                            }
+                        ),
+                        ZLinkAuthorityGenerationTransition.Preserve,
+                        null,
+                        null
+                    )
+                )
+            );
+        }
+        if (scenario == "sourceExpired")
+            await fixture.Store.ReleaseOwnerLeaseAsync(node.Runtime.OwnerToken);
+        if (scenario is "expired" or "leaseGeneration")
+            await fixture.Store.ReleaseOwnerLeaseAsync(targetOwner.Runtime.OwnerToken);
+        if (scenario == "leaseGeneration")
+            Assert.IsType<ZLinkOwnerLeaseClaimResult.Claimed>(
+                await fixture.Store.ClaimOwnerLeaseAsync(
+                    targetOwner.Runtime.OwnerId,
+                    TimeSpan.FromSeconds(30)
+                )
+            );
+        if (scenario == "prepared")
+        {
+            var descriptor = (
+                await fixture.Store.ListMeshNodesAsync(MeshName, default)
+            ).Items.Single(d => d.Rid == targetOwner.NodeRid);
+            Assert.IsType<ZLinkAggregatePrepareResult.Prepared>(
+                await fixture.Store.PrepareAggregateAsync(
+                    new ZLinkAggregatePrepareRequest(
+                        Guid.NewGuid(),
+                        1,
+                        [
+                            new ZLinkAggregateParticipant(
+                                key,
+                                spot.StoreVersion,
+                                ZLinkAuthorityGenerationTransition.NewOwner,
+                                spot.Payload,
+                                ReadOnlyMemory<byte>.Empty
+                            ),
+                        ],
+                        System.Security.Cryptography.SHA256.HashData([1]),
+                        new ZLinkMeshNodeDescriptorKey(MeshName, targetOwner.NodeRid),
+                        descriptor.LifecycleGeneration,
+                        spot.Allocation.Capacity,
+                        targetOwner.Runtime.OwnerToken
+                    )
+                )
+            );
+        }
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(1));
+        var failure = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+            await node.ActorOwnership.NotifyActorJoinedSpotAsync(
+                ActorId,
+                "join-target",
+                spot.ObjectGeneration + (scenario == "spotGeneration" ? 1UL : 0UL),
+                cancellationToken: deadline.Token,
+                expectedActorRef: new ActorRef(
+                    ActorId,
+                    before.ObjectGeneration,
+                    MeshName,
+                    node.NodeRid
+                )
+            )
+        );
+        Assert.Equal(
+            scenario == "missing"
+                ? ZLinkFrameworkErrorKind.NotFound
+                : ZLinkFrameworkErrorKind.Unavailable,
+            failure.Kind
+        );
+        Assert.Equal(
+            before.StoreVersion,
+            Assert
+                .IsType<ZLinkAuthorityReadResult.Found>(
+                    await fixture.Store.ReadAuthorityAsync(actorKey)
+                )
+                .Snapshot.StoreVersion
+        );
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task Actor_Join_Uses_Caller_Actor_Identity(bool provider, bool wrongGeneration)
+    {
+        await using var fixture = await LifecycleFixture.CreateAsync(provider);
+        var node = await fixture.NodeAsync("node-a");
+        await CreateTrackedActorAsync(node);
+        var spot = await PublishReadySpotAsync(fixture, node, "join-target", 7);
+        var key = ZLinkActorAuthorityPayloadCodec.AuthorityKey(ActorId);
+        var before = Assert
+            .IsType<ZLinkAuthorityReadResult.Found>(await fixture.Store.ReadAuthorityAsync(key))
+            .Snapshot;
+        Assert.NotEqual(before.ObjectGeneration, spot.ObjectGeneration);
+        var expected = new ActorRef(
+            ActorId,
+            before.ObjectGeneration + (wrongGeneration ? 1UL : 0UL),
+            MeshName,
+            node.NodeRid
+        );
+        async Task Join() =>
+            await node.ActorOwnership.NotifyActorJoinedSpotAsync(
+                ActorId,
+                "join-target",
+                spot.ObjectGeneration,
+                expectedActorRef: expected
+            );
+        if (wrongGeneration)
+        {
+            var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(Join);
+            Assert.Equal(ZLinkFrameworkErrorKind.InvalidOperation, error.Kind);
+            Assert.Equal(
+                before.StoreVersion,
+                Assert
+                    .IsType<ZLinkAuthorityReadResult.Found>(
+                        await fixture.Store.ReadAuthorityAsync(key)
+                    )
+                    .Snapshot.StoreVersion
+            );
+        }
+        else
+            await Join();
+    }
+
+    [Theory]
+    [InlineData("priorRevision", false)]
+    [InlineData("priorRevision", true)]
+    [InlineData("authorityRevision", false)]
+    [InlineData("authorityRevision", true)]
+    [InlineData("revision", false)]
+    [InlineData("revision", true)]
+    [InlineData("generation", false)]
+    [InlineData("generation", true)]
+    [InlineData("owner", false)]
+    [InlineData("owner", true)]
+    [InlineData("membership", false)]
+    [InlineData("membership", true)]
+    [InlineData("moving", false)]
+    [InlineData("moving", true)]
+    [InlineData("exhausted", false)]
+    [InlineData("exhausted", true)]
+    [InlineData("deadline", false)]
+    [InlineData("deadline", true)]
+    public async Task Actor_Join_Conflict_Revalidates_Identity_And_Eligibility(
+        string scenario,
+        bool provider
+    )
+    {
+        await using var fixture = await LifecycleFixture.CreateAsync(provider);
+        var controlled = new ControlledActorStore(fixture.Store);
+        var node = await fixture.NodeAsync("node-a", controlled);
+        await CreateTrackedActorAsync(node);
+        var spot = await PublishReadySpotAsync(fixture, node, "join-target", 7);
+        var key = ZLinkActorAuthorityPayloadCodec.AuthorityKey(ActorId);
+        var original = Assert
+            .IsType<ZLinkAuthorityReadResult.Found>(await fixture.Store.ReadAuthorityAsync(key))
+            .Snapshot;
+        Assert.NotEqual(original.ObjectGeneration, spot.ObjectGeneration);
+        if (scenario == "priorRevision")
+            Assert.IsType<ZLinkAuthorityCompareExchangeResult.Stored>(
+                await fixture.Store.CompareExchangeAuthorityAsync(
+                    key,
+                    original.StoreVersion,
+                    new ZLinkAuthorityMutation.Put(
+                        original.Payload,
+                        ZLinkAuthorityGenerationTransition.Preserve,
+                        null,
+                        null
+                    )
+                )
+            );
+        using var deadline = new CancellationTokenSource();
+        var calls = 0;
+        controlled.BeforeRenew = async (authorityKey, ct) =>
+        {
+            calls++;
+            if (scenario == "priorRevision")
+                return null;
+            if (scenario == "exhausted")
+                return new ZLinkAuthorityCompareExchangeResult.GenerationExhausted();
+            if (scenario == "deadline")
+            {
+                if (calls == 6)
+                    deadline.Cancel();
+                return new ZLinkAuthorityCompareExchangeResult.Conflict(
+                    await fixture.Store.ReadAuthorityAsync(authorityKey, ct)
+                );
+            }
+            if (scenario == "revision")
+            {
+                if (calls > 6)
+                    return null;
+                var descriptor = (
+                    await fixture.Store.ListMeshNodesAsync(MeshName, default)
+                ).Items.Single();
+                Assert.Equal(
+                    ZLinkLocationWriteStatus.Stored,
+                    (
+                        await fixture.Store.UpdateMeshNodeAsync(
+                            descriptor with
+                            {
+                                DescriptorRevision = descriptor.DescriptorRevision + 1,
+                            },
+                            ZLinkLocationWriteIntent.Renew
+                        )
+                    ).Status
+                );
+            }
+            else
+            {
+                controlled.BeforeRenew = null;
+                Assert.True(
+                    ZLinkActorAuthorityPayloadCodec.TryDecode(
+                        original.Payload.Span,
+                        out var payload
+                    )
+                );
+                var changed = scenario switch
+                {
+                    "owner" => payload with { NodeGeneration = payload.NodeGeneration + 1 },
+                    "membership" => payload with
+                    {
+                        CurrentSpotGeneration = payload.CurrentSpotGeneration + 1,
+                    },
+                    "moving" => payload with { State = ZLinkActorAuthorityState.Creating },
+                    _ => payload,
+                };
+                Assert.IsType<ZLinkAuthorityCompareExchangeResult.Stored>(
+                    await fixture.Store.CompareExchangeAuthorityAsync(
+                        key,
+                        original.StoreVersion,
+                        new ZLinkAuthorityMutation.Put(
+                            ZLinkActorAuthorityPayloadCodec.Encode(changed),
+                            scenario == "generation"
+                                ? ZLinkAuthorityGenerationTransition.Reincarnate
+                                : ZLinkAuthorityGenerationTransition.Preserve,
+                            null,
+                            null
+                        )
+                    )
+                );
+            }
+            return new ZLinkAuthorityCompareExchangeResult.Conflict(
+                await fixture.Store.ReadAuthorityAsync(key, ct)
+            );
+        };
+        async Task Join() =>
+            await node.ActorOwnership.NotifyActorJoinedSpotAsync(
+                ActorId,
+                "join-target",
+                spot.ObjectGeneration,
+                deadline.Token
+            );
+        if (scenario is "revision" or "priorRevision")
+        {
+            await Join();
+            Assert.Equal(scenario == "revision" ? 7 : 1, calls);
+            Assert.True(
+                ZLinkActorAuthorityPayloadCodec.TryDecode(
+                    (
+                        Assert.IsType<ZLinkAuthorityReadResult.Found>(
+                            await fixture.Store.ReadAuthorityAsync(key)
+                        )
+                    )
+                        .Snapshot
+                        .Payload
+                        .Span,
+                    out var joined
+                )
+            );
+            Assert.Equal("join-target", joined.CurrentSpotId);
+        }
+        else if (scenario == "deadline")
+        {
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(Join);
+            Assert.Equal(6, calls);
+        }
+        else
+        {
+            var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(Join);
+            Assert.Equal(
+                scenario switch
+                {
+                    "generation" => ZLinkFrameworkErrorKind.InvalidOperation,
+                    "exhausted" => ZLinkFrameworkErrorKind.InternalFailure,
+                    _ => ZLinkFrameworkErrorKind.Unavailable,
+                },
+                error.Kind
+            );
+            Assert.Equal(1, calls);
+        }
+    }
+
     [Fact]
     public async Task Actor_Failed_Renew_Does_Not_Become_The_Base_Of_The_Next_Write()
     {
@@ -545,47 +891,7 @@ public sealed class LocationLifecycleTests
                 return ValueTask.CompletedTask;
             }
         );
-        var sourceSnapshot = Assert
-            .IsType<ZLinkAuthorityReadResult.Found>(
-                await fixture.Store.ReadAuthorityAsync(
-                    ZLinkActorAuthorityPayloadCodec.AuthorityKey(ActorId)
-                )
-            )
-            .Snapshot;
-        Assert.True(
-            ZLinkActorAuthorityPayloadCodec.TryDecodeRelocating(
-                sourceSnapshot.Payload.Span,
-                out var sourceAuthority
-            )
-        );
-        var targetOwner = nodeB.Runtime.OwnerToken;
-        var targetPayload = ZLinkActorAuthorityPayloadCodec.Encode(
-            sourceAuthority with
-            {
-                NodeRid = nodeB.NodeRid,
-                NodeGeneration = 1,
-                OwnerId = targetOwner.OwnerId,
-                OwnerLeaseGeneration = checked((ulong)targetOwner.LeaseGeneration),
-            }
-        );
-
-        Assert.IsType<ZLinkAuthorityCompareExchangeResult.Stored>(
-            await fixture.Store.CompareExchangeAuthorityAsync(
-                ZLinkActorAuthorityPayloadCodec.AuthorityKey(ActorId),
-                sourceSnapshot.StoreVersion,
-                new ZLinkAuthorityMutation.Put(
-                    targetPayload,
-                    ZLinkAuthorityGenerationTransition.NewOwner,
-                    targetOwner,
-                    sourceSnapshot.Allocation with
-                    {
-                        Descriptor = new ZLinkMeshNodeDescriptorKey(MeshName, nodeB.NodeRid),
-                        DescriptorLifecycleGeneration = 1,
-                    },
-                    sourceSnapshot.AuthorityOwnerGeneration + 1
-                )
-            )
-        );
+        var (sourceSnapshot, sourceAuthority) = await TransferActorOwnerAsync(fixture, nodeB);
 
         await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
             await nodeA.ActorOwnership.NotifyActorJoinedSpotAsync(
@@ -652,12 +958,7 @@ public sealed class LocationLifecycleTests
 
         // Node B fences the row away (unplanned takeover). Node A only
         // learns about it when its next write comes back IgnoredStale.
-        var takeover = await AuthorityLocationTestFixture.PublishActorAsync(
-            fixture.Store,
-            InMemoryLocationStoreTests.Actor(nodeB.Runtime.OwnerId),
-            replace: true
-        );
-        Assert.NotNull(takeover);
+        await TransferActorOwnerAsync(fixture, nodeB);
 
         var stale = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
             await nodeA.ActorOwnership.NotifyActorJoinedSpotAsync(
@@ -700,11 +1001,7 @@ public sealed class LocationLifecycleTests
                 completed.TrySetResult();
             }
         );
-        await AuthorityLocationTestFixture.PublishActorAsync(
-            fixture.Store,
-            InMemoryLocationStoreTests.Actor(nodeB.Runtime.OwnerId),
-            replace: true
-        );
+        await TransferActorOwnerAsync(fixture, nodeB);
 
         await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
             await nodeA.ActorOwnership.NotifyActorJoinedSpotAsync(
@@ -861,6 +1158,55 @@ public sealed class LocationLifecycleTests
         Assert.Null(activation.ExistingLocation);
     }
 
+    private static async Task<(
+        ZLinkAuthoritySnapshot Snapshot,
+        ZLinkActorAuthorityPayload Payload
+    )> TransferActorOwnerAsync(LifecycleFixture fixture, LifecycleNode nodeB)
+    {
+        var sourceSnapshot = Assert
+            .IsType<ZLinkAuthorityReadResult.Found>(
+                await fixture.Store.ReadAuthorityAsync(
+                    ZLinkActorAuthorityPayloadCodec.AuthorityKey(ActorId)
+                )
+            )
+            .Snapshot;
+        Assert.True(
+            ZLinkActorAuthorityPayloadCodec.TryDecodeRelocating(
+                sourceSnapshot.Payload.Span,
+                out var sourceAuthority
+            )
+        );
+        var targetOwner = nodeB.Runtime.OwnerToken;
+        var targetPayload = ZLinkActorAuthorityPayloadCodec.Encode(
+            sourceAuthority with
+            {
+                NodeRid = nodeB.NodeRid,
+                NodeGeneration = 1,
+                OwnerId = targetOwner.OwnerId,
+                OwnerLeaseGeneration = checked((ulong)targetOwner.LeaseGeneration),
+            }
+        );
+
+        Assert.IsType<ZLinkAuthorityCompareExchangeResult.Stored>(
+            await fixture.Store.CompareExchangeAuthorityAsync(
+                ZLinkActorAuthorityPayloadCodec.AuthorityKey(ActorId),
+                sourceSnapshot.StoreVersion,
+                new ZLinkAuthorityMutation.Put(
+                    targetPayload,
+                    ZLinkAuthorityGenerationTransition.NewOwner,
+                    targetOwner,
+                    sourceSnapshot.Allocation with
+                    {
+                        Descriptor = new ZLinkMeshNodeDescriptorKey(MeshName, nodeB.NodeRid),
+                        DescriptorLifecycleGeneration = 1,
+                    },
+                    sourceSnapshot.AuthorityOwnerGeneration + 1
+                )
+            )
+        );
+        return (sourceSnapshot, sourceAuthority);
+    }
+
     private static async ValueTask<ZLinkAuthoritySnapshot> PublishReadySpotAsync(
         LifecycleFixture fixture,
         LifecycleNode node,
@@ -899,7 +1245,7 @@ public sealed class LocationLifecycleTests
         private readonly List<LifecycleNode> _nodes = [];
 
         private LifecycleFixture(
-            ZLinkInMemoryLocationStore store,
+            IZLinkLocationRepository store,
             ManualTimeProvider time,
             ZLinkLocationOptions options
         )
@@ -909,16 +1255,18 @@ public sealed class LocationLifecycleTests
             Options = options;
         }
 
-        public ZLinkInMemoryLocationStore Store { get; }
+        public IZLinkLocationRepository Store { get; }
 
         public ManualTimeProvider Time { get; }
 
         public ZLinkLocationOptions Options { get; }
 
-        public static Task<LifecycleFixture> CreateAsync()
+        public static Task<LifecycleFixture> CreateAsync(bool provider = false)
         {
             var time = new ManualTimeProvider();
-            var store = new ZLinkInMemoryLocationStore(time);
+            IZLinkLocationRepository store = provider
+                ? new ZLinkProviderLocationRepository(new ZLinkInMemoryProviderLocationStore(time))
+                : new ZLinkInMemoryLocationStore(time);
             var options = new ZLinkLocationOptions
             {
                 // Keep the lease snapshot maximally fresh so expiry is
@@ -1094,12 +1442,18 @@ public sealed class LocationLifecycleTests
         public ZLinkActorOwnershipCoordinator ActorOwnership => Lifecycle.ActorOwnership;
     }
 
-    private sealed class ControlledActorStore(ZLinkInMemoryLocationStore inner)
+    private sealed class ControlledActorStore(IZLinkLocationRepository inner)
         : ZLinkLocationStoreTestDouble
     {
         public int RejectNewClaimCount { get; set; }
 
         public bool RejectNextRenew { get; set; }
+
+        public Func<
+            ZLinkAuthorityKey,
+            CancellationToken,
+            ValueTask<ZLinkAuthorityCompareExchangeResult?>
+        >? BeforeRenew { get; set; }
 
         public TaskCompletionSource? RenewGate { get; init; }
 
@@ -1147,14 +1501,14 @@ public sealed class LocationLifecycleTests
                 }
             )
             {
+                if (
+                    BeforeRenew is not null
+                    && await BeforeRenew(key, cancellationToken) is { } injected
+                )
+                    return injected;
                 RenewStarted.TrySetResult();
                 if (RenewGate is not null)
                     await RenewGate.Task.WaitAsync(cancellationToken);
-                // A rejection has to outlast the renew retry budget. Clearing
-                // the flag after one attempt models a transient compare-exchange
-                // race, which the coordinator is required to rebase and retry,
-                // so the renew would succeed and the rejected membership would
-                // reach the committed base.
                 if (RejectNextRenew)
                 {
                     return new ZLinkAuthorityCompareExchangeResult.Conflict(
@@ -1197,7 +1551,23 @@ public sealed class LocationLifecycleTests
         public override ValueTask<ZLinkAuthorityReadResult> ReadAuthorityAsync(
             ZLinkAuthorityKey key,
             CancellationToken cancellationToken = default
-        ) => inner.ReadAuthorityAsync(key, cancellationToken);
+        ) => ReadCurrentAsync(key, cancellationToken);
+
+        private async ValueTask<ZLinkAuthorityReadResult> ReadCurrentAsync(
+            ZLinkAuthorityKey key,
+            CancellationToken cancellationToken
+        )
+        {
+            var result = await inner.ReadAuthorityAsync(key, cancellationToken);
+            return RejectNextRenew && result is ZLinkAuthorityReadResult.Found found
+                ? new ZLinkAuthorityReadResult.Found(
+                    found.Snapshot with
+                    {
+                        OwnerId = found.Snapshot.OwnerId + "-changed",
+                    }
+                )
+                : result;
+        }
 
         public override ValueTask<ZLinkAuthorityScanResult> ListAuthoritiesAsync(
             string prefix,

@@ -1,13 +1,25 @@
 #pragma once
 #include "server/lobby/domain.hpp"
 #include "server/instance/domain.hpp"
+#include <algorithm>
 #include <regex>
 #include <iostream>
+#include "test_json.hpp"
+
+namespace test_json_morpg_lobby_domain
+{
+template <class T> inline T state_roundtrip (const T &value)
+{
+    return decode<T> (nlohmann::json::parse (encode (value)));
+}
+} // namespace test_json_morpg_lobby_domain
 namespace MyGame::E2E {
 inline void domain_checks() {
     int count = 0;
     const auto check = [&](bool value, const std::string &name) { if (!value) throw std::runtime_error("Domain check failed: " + name); ++count; };
-    const auto snap = [](const auto &v) { return nlohmann::json(v).dump(); };
+    const auto snap = [](const auto &v) {
+        return test_json_morpg_lobby_domain::encode (v);
+    };
     const auto party = [](RunPhase phase = RunPhase::Forming) {
         PartyState p; p.partyId = new_id("party-"); p.members = {"leader", "member"}; p.ready = {"leader", "member"}; p.phase = phase;
         if (phase != RunPhase::Forming) p.runId = new_id("run-"); return p;
@@ -18,9 +30,9 @@ inline void domain_checks() {
     for (const auto phase : {RunPhase::Forming, RunPhase::Preparing, RunPhase::Entering, RunPhase::Active, RunPhase::Completed}) {
         auto p = party(phase); auto before = snap(p);
         check(p.enter("member") == Rejection::not_leader && snap(p) == before, "non-leader unchanged");
-        p.ready.erase("member"); before = snap(p);
+        std::erase (p.ready, "member"); before = snap(p);
         check(p.enter("leader") == Rejection::not_ready && snap(p) == before, "not-ready unchanged");
-        p.ready.insert("member"); auto old = p.runId;
+        MyGame::insert_sorted_unique (p.ready, "member"); auto old = p.runId;
         check(p.enter("leader").empty(), "leader");
         check(phase == RunPhase::Forming || phase == RunPhase::Completed ? p.phase == RunPhase::Preparing && p.runId != old : p.phase == phase && p.runId == old, "entry");
         old = p.runId; check(p.enter("leader").empty() && p.runId == old, "repeated entry");
@@ -35,7 +47,7 @@ inline void domain_checks() {
         check(p.completed(p.runId.value_or("")).empty() == (phase == RunPhase::Active || phase == RunPhase::Completed), "completed table");
         p = party(phase); p.leave("member");
         check((std::ranges::find(p.members, "member") != p.members.end()) == (phase != RunPhase::Forming), "leave");
-        check(snap(nlohmann::json(p).get<PartyState>()) == snap(p), "party snapshot");
+        check(snap(test_json_morpg_lobby_domain::state_roundtrip (p)) == snap(p), "party state");
         DungeonState d; d.phase = phase; before = snap(d);
         check(d.advance().empty() == (phase == RunPhase::Active), "advance table");
         check(phase == RunPhase::Active || snap(d) == before, "rejected advance unchanged");
@@ -57,7 +69,7 @@ inline void domain_checks() {
     check(!d.join("member") && d.phase == RunPhase::Active, "started idempotent");
     for (std::int64_t stage = 1; stage <= Names::final_stage; ++stage) check(d.advance().empty() && d.stage == stage && d.phase == (stage == Names::final_stage ? RunPhase::Completed : RunPhase::Active), "stage");
     snapshot = snap(d); check(d.advance() == Rejection::run_not_active && snap(d) == snapshot, "completed unchanged");
-    check(snap(nlohmann::json(d).get<DungeonState>()) == snapshot, "dungeon snapshot");
+    check(snap(test_json_morpg_lobby_domain::state_roundtrip (d)) == snapshot, "dungeon state");
     for (const auto stage : {std::int64_t(-1), Names::maximum_integer, Names::maximum_integer + 1, std::numeric_limits<std::int64_t>::max()}) {
         d = {}; d.stage = stage; d.phase = RunPhase::Active; snapshot = snap(d);
         check(d.advance() == Rejection::integer_out_of_range && snap(d) == snapshot, "integer boundary");
@@ -65,13 +77,15 @@ inline void domain_checks() {
     auto arrivals = party(RunPhase::Entering); auto arrival_snapshot = snap(arrivals);
     check(arrivals.arrived("wrong", "member") == Rejection::run_mismatch && snap(arrivals) == arrival_snapshot, "arrival run mismatch");
     check(arrivals.arrived(*arrivals.runId, "outsider") == Rejection::run_mismatch && snap(arrivals) == arrival_snapshot, "arrival roster mismatch");
-    check(arrivals.arrived(*arrivals.runId, "member").empty() && arrivals.entered.contains("member"), "arrival recorded");
+    check(arrivals.arrived(*arrivals.runId, "member").empty() &&
+            std::binary_search(arrivals.entered.begin(), arrivals.entered.end(), "member"),
+          "arrival recorded");
     arrival_snapshot = snap(arrivals);
     check(arrivals.arrived(*arrivals.runId, "member").empty() && snap(arrivals) == arrival_snapshot, "arrival idempotent");
-    check(snap(nlohmann::json(arrivals).get<PartyState>()) == arrival_snapshot, "arrival snapshot");
+    check(snap(test_json_morpg_lobby_domain::state_roundtrip (arrivals)) == arrival_snapshot, "arrival state");
     arrivals.phase = RunPhase::Completed;
     check(arrivals.enter("leader").empty() && arrivals.entered.empty(), "new run clears arrivals");
-    const auto view = nlohmann::json(party().view());
+    const auto view = test_json_morpg_lobby_domain::object (party().view());
     check(view.at("runId").is_null() && view.at("phase") == "Forming", "enum null JSON");
     std::cout << "Domain checks: " << count << "/" << count << " passed" << std::endl;
 }
