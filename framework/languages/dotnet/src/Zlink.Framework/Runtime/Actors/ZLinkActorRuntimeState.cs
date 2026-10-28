@@ -13,7 +13,8 @@ internal sealed class ZLinkActorRuntimeState(
     ZLinkBoundedIngressAdmission? sourceIngressAdmission = null,
     TimeSpan? sessionBindingTombstoneRetention = null,
     int maxSessionBindingTombstones = 1_024,
-    IServiceProvider? services = null
+    IServiceProvider? services = null,
+    ZLinkActorSerialExecutor? dispatchMailbox = null
 )
 {
     private readonly ZLinkActorId _actorId = actorId;
@@ -22,7 +23,7 @@ internal sealed class ZLinkActorRuntimeState(
         2
     );
     private static readonly AsyncLocal<DispatchOwnership?> AmbientDispatch = new();
-    private readonly ZLinkActorSerialExecutor _dispatchMailbox = new();
+    private readonly ZLinkActorSerialExecutor _dispatchMailbox = dispatchMailbox ?? new();
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly ZLinkStateLane _lane = new();
     private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
@@ -56,7 +57,8 @@ internal sealed class ZLinkActorRuntimeState(
         ZLinkBoundedIngressAdmission? sourceIngressAdmission = null,
         TimeSpan? sessionBindingTombstoneRetention = null,
         int maxSessionBindingTombstones = 1_024,
-        IServiceProvider? services = null
+        IServiceProvider? services = null,
+        ZLinkActorSerialExecutor? dispatchMailbox = null
     )
         : this(
             ZLinkActorId.FromBoundary(actorId, nameof(actorId)),
@@ -65,7 +67,8 @@ internal sealed class ZLinkActorRuntimeState(
             sourceIngressAdmission,
             sessionBindingTombstoneRetention,
             maxSessionBindingTombstones,
-            services
+            services,
+            dispatchMailbox
         ) { }
 
     public string ActorId => _actorId.Value;

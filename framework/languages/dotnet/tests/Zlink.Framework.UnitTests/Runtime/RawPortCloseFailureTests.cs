@@ -48,13 +48,7 @@ public sealed class RawPortCloseFailureTests
         var proxy = (CloseFailureProxy)(object)wrapped;
         proxy.Inner = context;
         proxy.BlockClose = true;
-        var backend = new ZLinkDotNetBackendRuntimeContext();
-        var field = typeof(ZLinkDotNetBackendRuntimeContext).GetField(
-            "_context",
-            BindingFlags.Instance | BindingFlags.NonPublic
-        )!;
-        ((IContext)field.GetValue(backend)!).Dispose();
-        field.SetValue(backend, wrapped);
+        var backend = new ZLinkDotNetBackendRuntimeContext(wrapped);
         var first = backend.DisposeAsync().AsTask();
         await proxy.CloseAttempted.Task.WaitAsync(TimeSpan.FromSeconds(5));
         var second = backend.DisposeAsync().AsTask();
@@ -347,13 +341,7 @@ public sealed class RawPortCloseFailureTests
         var proxy = (CloseFailureProxy)(object)wrapped;
         proxy.Inner = context;
         proxy.FailClose = true;
-        var backend = new ZLinkDotNetBackendRuntimeContext();
-        var field = typeof(ZLinkDotNetBackendRuntimeContext).GetField(
-            "_context",
-            BindingFlags.Instance | BindingFlags.NonPublic
-        )!;
-        ((IContext)field.GetValue(backend)!).Dispose();
-        field.SetValue(backend, wrapped);
+        var backend = new ZLinkDotNetBackendRuntimeContext(wrapped);
         Assert.Same(
             proxy.Failure,
             await Assert.ThrowsAsync<InvalidOperationException>(async () =>
