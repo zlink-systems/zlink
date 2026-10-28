@@ -261,13 +261,13 @@ final class ZLinkJavaRawMeshNodeCanonicalActorJoinTest {
         // Error model §2.1 sends InvalidOperation without a cause as invalidState/none.
         assertArrayEquals(
                 new int[] {111, 0},
-                ZLinkJavaRawMeshNode.canonicalActorJoinFailurePair(
+                ZLinkJavaRawMeshNode.relayedFailurePair(
                         new ZLinkFrameworkException(
                                 ZLinkFrameworkErrorKind.INVALID_OPERATION,
                                 "attempt was superseded")));
         assertArrayEquals(
                 new int[] {105, 13},
-                ZLinkJavaRawMeshNode.canonicalActorJoinFailurePair(
+                ZLinkJavaRawMeshNode.relayedFailurePair(
                         new ZLinkFrameworkException(
                                 ZLinkFrameworkErrorKind.UNAVAILABLE,
                                 "route or store is unavailable")));
@@ -277,7 +277,7 @@ final class ZLinkJavaRawMeshNodeCanonicalActorJoinTest {
                         .INTERNAL_ERROR
                         .toFrameworkErrorKind(13));
         int[] unrelatedInvalidOperation =
-                ZLinkJavaRawMeshNode.canonicalActorJoinFailurePair(
+                ZLinkJavaRawMeshNode.relayedFailurePair(
                         new ZLinkFrameworkException(
                                 ZLinkFrameworkErrorKind.INVALID_OPERATION,
                                 "an unrelated invalid operation"));
