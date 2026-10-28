@@ -28,9 +28,9 @@ bool poller_index_from_user_data (void *user_data_, size_t item_count_, size_t *
 
 namespace
 {
-const unsigned short public_readiness_bits =
-  ZLINK_POLLIN | ZLINK_POLLOUT | ZLINK_POLLERR | ZLINK_POLLPRI
-  | ZLINK_POLLCOMPLETION | ZLINK_POLLROUTE;
+const unsigned short public_readiness_bits = ZLINK_POLLIN | ZLINK_POLLOUT | ZLINK_POLLERR
+                                             | ZLINK_POLLPRI | ZLINK_POLLCOMPLETION
+                                             | ZLINK_POLLROUTE | ZLINK_POLLCONNECT;
 
 int validate_defined_event_bits (short events_)
 {
@@ -44,8 +44,8 @@ int validate_defined_event_bits (short events_)
 }
 }
 
-int validate_socket_poller_event_mask (short events_, bool is_monitor_,
-                                       bool allow_completion_, bool allow_route_)
+int validate_socket_poller_event_mask (
+  short events_, bool is_monitor_, bool allow_completion_, bool allow_route_, bool allow_connect_)
 {
     if (validate_defined_event_bits (events_) != 0)
         return -1;
@@ -59,6 +59,10 @@ int validate_socket_poller_event_mask (short events_, bool is_monitor_,
         return -1;
     }
     if ((events_ & ZLINK_POLLROUTE) != 0 && !allow_route_) {
+        errno = ENOTSUP;
+        return -1;
+    }
+    if ((events_ & ZLINK_POLLCONNECT) != 0 && !allow_connect_) {
         errno = ENOTSUP;
         return -1;
     }
@@ -77,7 +81,7 @@ int validate_fd_poller_event_mask (short events_)
         errno = EINVAL;
         return -1;
     }
-    if ((events_ & ZLINK_POLLROUTE) != 0) {
+    if ((events_ & (ZLINK_POLLROUTE | ZLINK_POLLCONNECT)) != 0) {
         errno = ENOTSUP;
         return -1;
     }

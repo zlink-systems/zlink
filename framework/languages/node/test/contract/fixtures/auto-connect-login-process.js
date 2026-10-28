@@ -1,4 +1,3 @@
-const net = require('node:net');
 const { Module } = require('@nestjs/common');
 const { NestFactory } = require('@nestjs/core');
 const n = require('../../../packages/nestjs/dist');
@@ -26,15 +25,7 @@ class SessionFactory {
     };
   }
 }
-async function unusedPort() {
-  const s = net.createServer();
-  await new Promise((r) => s.listen(0, '127.0.0.1', r));
-  const port = s.address().port;
-  await new Promise((r) => s.close(r));
-  return port;
-}
 async function main() {
-  const port = await unusedPort();
   const b = n.zlinkFramework().options({ locations: { useInMemoryStores: true } });
   b.configureDispatch().messageFlow('normal');
   b.addRouteMesh('lobby-mesh')
@@ -43,7 +34,7 @@ async function main() {
     .objects()
     .server()
     .addSpotFactory('lobby', Lobby, (f) => f.disableRelocation());
-  b.addStreamNode('gateway').bind(`ws://127.0.0.1:${port}`).registerSession(SessionFactory);
+  b.addStreamNode('gateway').bind('ws://127.0.0.1:0').registerSession(SessionFactory);
   class App {}
   Module({ imports: [n.ZLinkModule.forRoot(b.build())], providers: [Lobby, SessionFactory] })(App);
   console.log('START', process.env.NODE_ENV);
@@ -55,7 +46,8 @@ async function main() {
   try {
     console.log('HOST READY');
     spots = app.get(n.ZLINK_SPOT_MANAGER);
-    client = c.zlinkStreamConnectorFactory.create({ endpoint: `ws://127.0.0.1:${port}` });
+    const { endpoint } = app.get(n.ZLINK_FRAMEWORK_RUNTIME).getListenerStatus('stream', 'gateway');
+    client = c.zlinkStreamConnectorFactory.create({ endpoint });
     await client.connect();
     const auth = await client.request({ token: 'demo' }).packetName('AuthenticateReq').submit();
     require('node:assert/strict').deepEqual(auth, { authenticated: true });

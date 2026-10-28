@@ -50,9 +50,9 @@ public sealed class MeshChannelSelectionHotPathTests
             BindingFlags.Instance | BindingFlags.NonPublic
         )!;
         process.Invoke(node, [rid, 1UL, ServiceWireConstants.Command.Hello, admission, null]);
-        // MeshNode §7.1: accepting the Hello records the peer as admitted.
+        // Transport liveness §5: local registration does not establish send readiness.
         Assert.Equal(
-            ZLinkRouteMeshTargetClassification.ReadyEligible,
+            ZLinkRouteMeshTargetClassification.Unknown,
             node.ClassifyLiveRouterTarget(rid)
         );
         AssertDirectPeerPublished(node, rid);
@@ -220,14 +220,14 @@ public sealed class MeshChannelSelectionHotPathTests
         }
 
         const int iterations = 1024;
-        var start = GC.GetAllocatedBytesForCurrentThread();
-        for (var index = 0; index < iterations; index++)
-            select("worker");
-        var synchronousBytes = GC.GetAllocatedBytesForCurrentThread() - start;
-        start = GC.GetAllocatedBytesForCurrentThread();
-        for (var index = 0; index < iterations; index++)
-            wait("worker", TimeSpan.FromMinutes(1), cancellation.Token).GetAwaiter().GetResult();
-        var requestBytes = GC.GetAllocatedBytesForCurrentThread() - start;
+        var synchronousBytes = PerCallAllocation.MinWindow(() => select("worker"), iterations);
+        var requestBytes = PerCallAllocation.MinWindow(
+            () =>
+                wait("worker", TimeSpan.FromMinutes(1), cancellation.Token)
+                    .GetAwaiter()
+                    .GetResult(),
+            iterations
+        );
 
         // A linked CTS plus its deadline timer cannot fit in this allowance.
         // The reference path performs the same selector and peer lookup.
@@ -340,28 +340,32 @@ public sealed class MeshChannelSelectionHotPathTests
                 SendFlags.None,
                 ReadOnlyMemory<byte>.Empty
             );
-            var start = GC.GetAllocatedBytesForCurrentThread();
-            node.Publish(
-                "publisher",
-                "observer",
-                "off",
-                [payload],
-                SendFlags.None,
-                ReadOnlyMemory<byte>.Empty
+            var offBytes = PerCallAllocation.MinWindow(
+                () =>
+                    node.Publish(
+                        "publisher",
+                        "observer",
+                        "off",
+                        [payload],
+                        SendFlags.None,
+                        ReadOnlyMemory<byte>.Empty
+                    ),
+                64
             );
-            var offBytes = GC.GetAllocatedBytesForCurrentThread() - start;
 
             registration.DispatchOptions.Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
-            start = GC.GetAllocatedBytesForCurrentThread();
-            node.Publish(
-                "publisher",
-                "observer",
-                "normal",
-                [payload],
-                SendFlags.None,
-                ReadOnlyMemory<byte>.Empty
+            var normalBytes = PerCallAllocation.MinWindow(
+                () =>
+                    node.Publish(
+                        "publisher",
+                        "observer",
+                        "normal",
+                        [payload],
+                        SendFlags.None,
+                        ReadOnlyMemory<byte>.Empty
+                    ),
+                64
             );
-            var normalBytes = GC.GetAllocatedBytesForCurrentThread() - start;
             Assert.True(
                 normalBytes > offBytes,
                 $"Diagnostics Off allocated {offBytes} bytes; Normal allocated {normalBytes} bytes."

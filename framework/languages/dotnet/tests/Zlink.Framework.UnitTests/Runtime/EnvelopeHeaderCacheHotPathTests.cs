@@ -24,24 +24,26 @@ public sealed class EnvelopeHeaderCacheHotPathTests(Xunit.Abstractions.ITestOutp
             using var encoded = ZLinkEnvelopeCodec.EncodeHeader(header);
         }
         const int iterations = 1024;
-        var start = GC.GetAllocatedBytesForCurrentThread();
-        for (var index = 0; index < iterations; index++)
-        {
-            using var direct = Message.From(bytes);
-        }
-        var directBytes = GC.GetAllocatedBytesForCurrentThread() - start;
-        start = GC.GetAllocatedBytesForCurrentThread();
-        for (var index = 0; index < iterations; index++)
-        {
-            using var encoded = ZLinkEnvelopeCodec.EncodeHeader(header);
-        }
-        var encodedBytes = GC.GetAllocatedBytesForCurrentThread() - start;
+        var directBytes = PerCallAllocation.MinWindow(
+            () =>
+            {
+                using var direct = Message.From(bytes);
+            },
+            iterations
+        );
+        var encodedBytes = PerCallAllocation.MinWindow(
+            () =>
+            {
+                using var encoded = ZLinkEnvelopeCodec.EncodeHeader(header);
+            },
+            iterations
+        );
         output.WriteLine(
             $"request={request}: header={encodedBytes / iterations} B/message, native={directBytes / iterations} B/message"
         );
         Assert.True(
             encodedBytes <= directBytes + iterations * 16L,
-            $"Warm encoding allocated {encodedBytes} bytes; owned Message allocated {directBytes} bytes."
+            $"Warm encoding allocated {encodedBytes} B per {iterations} calls; owned Message allocated {directBytes} B."
         );
     }
 
@@ -200,6 +202,77 @@ public sealed class EnvelopeHeaderCacheHotPathTests(Xunit.Abstractions.ITestOutp
     }
 
     [Fact]
+    public void HeaderEnumValidationMatchesTheDefinedValues()
+    {
+        var kinds = Enum.GetValues<ZLinkMessageKind>();
+        var kindValues = kinds
+            .Select(static kind => (int)kind)
+            .Concat(Enumerable.Range(-1, 258))
+            .Append(int.MinValue)
+            .Append(int.MaxValue)
+            .Distinct();
+        foreach (var value in kindValues)
+        {
+            var kind = (ZLinkMessageKind)value;
+            var header = Header("kind-validation") with
+            {
+                FormatMarker = 242,
+                Kind = kind,
+                CorrelationId = "validation",
+                ErrorCode = kind == ZLinkMessageKind.Error ? "error" : null,
+            };
+            AssertValidation(header, kinds.Contains(kind));
+            if (
+                kind
+                is not (
+                    ZLinkMessageKind.Request
+                    or ZLinkMessageKind.Response
+                    or ZLinkMessageKind.Error
+                )
+            )
+                AssertValidation(header with { CorrelationId = null }, kinds.Contains(kind));
+        }
+
+        var origins = Enum.GetValues<ZLinkFlowOrigin>();
+        for (var value = 0; value <= byte.MaxValue; value++)
+        {
+            var origin = (ZLinkFlowOrigin)value;
+            var header = Header("origin-validation") with
+            {
+                FormatMarker = 242,
+                FlowId = "0194f5a0-1234-7000-8000-000000000001",
+                FlowOrigin = origin,
+            };
+            var valid = origins.Contains(origin);
+            AssertValidation(header, valid);
+            Assert.Equal(valid ? header.FlowId : null, ZLinkEnvelopeCodec.ValidFlow(header).FlowId);
+        }
+
+        static void AssertValidation(ZLinkEnvelopeHeader header, bool valid)
+        {
+            using var wire = Message.From(ZLinkEnvelopeCodec.EncodeProtocolJsonBytes(header));
+            if (valid)
+            {
+                using var encoded = ZLinkEnvelopeCodec.EncodeHeader(header);
+                Assert.Equal(header.Kind, ZLinkEnvelopeCodec.DecodeHeader(wire).Kind);
+                Assert.Equal(
+                    header.FlowOrigin,
+                    ZLinkEnvelopeCodec.DecodeHeader(encoded).FlowOrigin
+                );
+            }
+            else
+            {
+                Assert.Throws<ZLinkEnvelopeProtocolException>(() =>
+                    ZLinkEnvelopeCodec.EncodeHeader(header)
+                );
+                Assert.Throws<ZLinkEnvelopeProtocolException>(() =>
+                    ZLinkEnvelopeCodec.DecodeHeader(wire)
+                );
+            }
+        }
+    }
+
+    [Fact]
     public void DynamicHeaderEncodingDoesNotAllocateAManagedBufferProportionalToValues()
     {
         var small = Header("dynamic-allocation") with { CorrelationId = "small" };
@@ -211,18 +284,20 @@ public sealed class EnvelopeHeaderCacheHotPathTests(Xunit.Abstractions.ITestOutp
         }
 
         const int iterations = 128;
-        var start = GC.GetAllocatedBytesForCurrentThread();
-        for (var index = 0; index < iterations; index++)
-        {
-            using var encoded = ZLinkEnvelopeCodec.EncodeHeader(small);
-        }
-        var smallBytes = GC.GetAllocatedBytesForCurrentThread() - start;
-        start = GC.GetAllocatedBytesForCurrentThread();
-        for (var index = 0; index < iterations; index++)
-        {
-            using var encoded = ZLinkEnvelopeCodec.EncodeHeader(large);
-        }
-        var largeBytes = GC.GetAllocatedBytesForCurrentThread() - start;
+        var smallBytes = PerCallAllocation.MinWindow(
+            () =>
+            {
+                using var encoded = ZLinkEnvelopeCodec.EncodeHeader(small);
+            },
+            iterations
+        );
+        var largeBytes = PerCallAllocation.MinWindow(
+            () =>
+            {
+                using var encoded = ZLinkEnvelopeCodec.EncodeHeader(large);
+            },
+            iterations
+        );
 
         Assert.True(
             largeBytes <= smallBytes + iterations * 16L,

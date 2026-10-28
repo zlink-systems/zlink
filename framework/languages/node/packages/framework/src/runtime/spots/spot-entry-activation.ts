@@ -71,7 +71,6 @@ import type {
   ZLinkSpotActorHandoffRuntime,
   ZLinkSpotBoundSessionRuntime
 } from './spot-runtime-ports';
-import { ZLinkSpotLifecycleMetrics } from './spot-lifecycle-metrics';
 
 interface ZLinkEntrySpotActivationOptions {
   readonly admission?: import('../admission').ZLinkRuntimeAdmissionGate;
@@ -112,7 +111,6 @@ export class ZLinkEntrySpotActivation {
   private readonly handlers: DefaultZLinkSpotHandlerRegistry;
   private readonly outbound: DefaultZLinkSpotOutbound;
   private readonly workerRuntime: ZLinkWorkerRuntime;
-  private readonly lifecycleMetrics: ZLinkSpotLifecycleMetrics;
   private readonly packetDispatch: ZLinkRoutedSpotPacketDispatch;
   private readonly actorPacketDispatch: ZLinkSpotActorPacketDispatch;
   private initialized = false;
@@ -152,7 +150,6 @@ export class ZLinkEntrySpotActivation {
       options.metrics,
       () => options.dispatchErrors?.flow.flowCreationEnabled() ?? true
     );
-    this.lifecycleMetrics = new ZLinkSpotLifecycleMetrics(options.metrics);
     this.workerRuntime = options.workerRuntime ?? new ZLinkWorkerRuntime();
     this.context = createEntrySpotContext({
       spotId: String(options.nativeSpot.routingId),
@@ -310,7 +307,7 @@ export class ZLinkEntrySpotActivation {
     await this.serial.execute(() => this.entrySpot.onInitialize?.());
     this.attachActorJoinDispatch();
     this.initialized = true;
-    this.lifecycleMetrics.opened('entry');
+    this.options.metrics?.recordSpotCount(this.options.spotNodeName, 'entry', 1);
   }
 
   async dispose(deadline?: Date): Promise<void> {
@@ -344,7 +341,7 @@ export class ZLinkEntrySpotActivation {
       await this.options.nativeSpot.dispose();
     });
     if (this.initialized) {
-      this.lifecycleMetrics.closed('entry');
+      this.options.metrics?.recordSpotCount(this.options.spotNodeName, 'entry', -1);
     }
     if (errors.length === 1) throw errors[0];
     if (errors.length > 1) throw new AggregateError(errors, 'Entry Spot cleanup failed.');

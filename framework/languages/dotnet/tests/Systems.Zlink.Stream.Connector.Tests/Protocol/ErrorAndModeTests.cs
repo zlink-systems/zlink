@@ -1,6 +1,5 @@
 using System.Net;
 using System.Net.Sockets;
-using System.Reflection;
 using Systems.Zlink.Stream.Connector.Contracts;
 using Systems.Zlink.Stream.Connector.Runtime;
 using Systems.Zlink.Stream.Connector.Runtime.Protocol.Compression;
@@ -12,10 +11,7 @@ public sealed partial class StreamConnectorTests
     [Fact]
     public void ExhaustedRequestSequenceFailsWithoutReusingAnEarlierValue()
     {
-        var requests = new ZlinkStreamPendingRequests();
-        typeof(ZlinkStreamPendingRequests)
-            .GetField("_nextRequestSeq", BindingFlags.Instance | BindingFlags.NonPublic)!
-            .SetValue(requests, -2L);
+        var requests = new ZlinkStreamPendingRequests(lastRequestSeq: ulong.MaxValue - 1);
 
         Assert.Equal(ulong.MaxValue, requests.Create("last.request").RequestSeq.Value);
         var exception = Assert.Throws<ZlinkStreamException>(() => requests.Create("next.request"));

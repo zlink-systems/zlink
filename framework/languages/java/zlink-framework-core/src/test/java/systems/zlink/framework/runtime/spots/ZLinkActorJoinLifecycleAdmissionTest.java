@@ -324,9 +324,7 @@ final class ZLinkActorJoinLifecycleAdmissionTest {
             host = (ZLinkSpotRuntime) framework.spotManager();
             activation = host.spotLifecycle().spotActivationFor("room-a");
             room = roomType.cast(activation.spot());
-            var jobsField = ZLinkSpotRuntime.class.getDeclaredField("applicationJobQueue");
-            jobsField.setAccessible(true);
-            jobs = (ZLinkApplicationJobQueue) jobsField.get(host);
+            jobs = options.registration().applicationJobQueue();
             var backend =
                     (ZLinkInternalSpotNode)
                             Proxy.newProxyInstance(

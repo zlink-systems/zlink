@@ -61,7 +61,6 @@ class spot_context_state_t;
 class spot_context_access_t;
 class actor_dispatch_admission_token_t;
 struct mesh_node_builder_state_t;
-void drain_spot_node_executors (spot_node_builder_state_t &node);
 void visit_spot_node_dispatch_queues (
   spot_node_builder_state_t &node,
   const std::function<void (runtime::serial_execution_queue_t &)> &visitor);
@@ -1233,7 +1232,6 @@ class spot_context_t
         void *, void *, serializer_registry_t &, const timer_tick_t &)> handler_invoker);
     task_t<bool> close_erased ();
 
-    friend void detail::drain_spot_node_executors (detail::spot_node_builder_state_t &node);
     friend void detail::visit_spot_node_dispatch_queues (
       detail::spot_node_builder_state_t &node,
       const std::function<void (runtime::serial_execution_queue_t &)> &visitor);

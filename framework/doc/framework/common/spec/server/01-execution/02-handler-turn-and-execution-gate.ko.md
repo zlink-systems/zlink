@@ -75,8 +75,10 @@ flowchart TB
 <a id="execution-gate"></a>
 ## 2. Execution gate — owner 처리 순서
 
-Gate를 얻어 handler를 실행하고 그 권한을 반납하기까지의 실행 구간을
-[handler turn](../00-foundation/02-glossary.ko.md#handler-turn)이라고 한다.
+[Handler turn](../00-foundation/02-glossary.ko.md#handler-turn)은 다음 구간이다.
+Gate가 있는 실행 범위에서는 gate 획득부터 반납까지이며, `Yield` 뒤 continuation은 새 turn에서
+실행한다. Gate가 없는 Node·ChannelName handler에서는 record의 handler 시작부터 terminal
+completion까지다.
 
 - **Actor payload는 실행 mode와 무관하게 해당 Actor queue에 제출한다.** Actor별 대기
   순서와 이동할 때 보관할 작업을 구분하기 위해 queue와 실행 권한을 분리한다.
@@ -89,10 +91,16 @@ Gate를 얻어 handler를 실행하고 그 권한을 반납하기까지의 실�
   서로 다른 Actor의 실행을 독립적으로 진행하기 위한 범위다.
 - **`PerActor`의 Spot 작업과 각 timer는 각각 별도 gate를 사용한다.** Timer 두 개를 같은
   gate로 묶으면 서로 다른 timer가 서로를 기다리게 된다.
-- **Node handler, [ChannelName](../00-foundation/02-glossary.ko.md#channelname) handler,
-  각 Spot과 각 Actor는 자신에게 적용되는 gate의 순서로 record를 처리한다.**
+- **각 Spot과 각 Actor는 자신에게 적용되는 gate의 순서로 record를 처리한다.**
   일반 비동기 terminal은 완료 continuation까지 그 권한을 유지하므로 다음 application
   record가 현재 handler의 상태 접근과 겹치지 않는다.
+- **Node handler와 [ChannelName](../00-foundation/02-glossary.ko.md#channelname) handler에는
+  execution gate가 없다.** Handler turn은 record마다 독립이다. 이 handler는 상태를 갖지
+  않으며, 유지할 상태는 Spot·Actor가 소유한다. Record는 받은 순서대로 handler를 시작하고,
+  다음 record는 앞 handler의 완료를 기다리지 않는다. 여기서 시작은 그 record의 filter·handler
+  pipeline 진입이다. 앞 record의 filter가 비동기로 기다리는 동안에도 다음 record의 pipeline은
+  진입할 수 있으므로, filter 뒤 handler 본문의 진입 순서는 정하지 않는다. 같은 handler가 여러 record에서 동시에 진행되므로, handler 사이에서
+  공유하는 application 상태의 동기화는 application이 소유한다.
 - **같은 gate의 application turn 두 개를 동시에 실행하지 않는다.** `Yield`의 권한
   이전은 [§3](#yield-gate-and-claim)을 따르며, 실행 mode와 call별 제공 범위는
   [§16](#yield-call-eligibility)에서 확인한다.
@@ -260,7 +268,7 @@ Actor Join은 [01. Submit과 완료](01-submit-and-completion.ko.md)의 terminat
 실행 권한은 앞선 작업의 완료에 다음 작업을 잇는 방식으로도, lock과 대기열로도 만들 수
 있다. 언어에 맞는 쪽을 사용한다. 다만 구현 방식에 따라오는 제약이 있다.
 
-**가져오기는 배타권 획득을 겸한다.** 한 owner당 처리 권한은 동시에 하나만 존재한다.
+**가져오기는 배타권 획득을 겸한다.** Gate가 있는 owner당 처리 권한은 동시에 하나만 존재한다.
 처리 권한마다 재사용 없는 번호를 붙여 늦은 완료가 자기 것인지 판단한다 — 이 fencing
 번호는 내부 확인 조건이다.
 

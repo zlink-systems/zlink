@@ -40,37 +40,6 @@ using clock_t_ = std::chrono::steady_clock;
 namespace
 {
 
-class completion_signal_t
-{
-  public:
-    void notify (size_t slot)
-    {
-        {
-            std::lock_guard<std::mutex> lock (_mutex);
-            _completed.push_back (slot);
-        }
-        _ready.notify_one ();
-    }
-
-    void take_completed (std::vector<size_t> &completed)
-    {
-        std::lock_guard<std::mutex> lock (_mutex);
-        completed.assign (_completed.begin (), _completed.end ());
-        _completed.clear ();
-    }
-
-    void wait_until (clock_t_::time_point deadline)
-    {
-        std::unique_lock<std::mutex> lock (_mutex);
-        _ready.wait_until (lock, deadline, [&] { return !_completed.empty (); });
-    }
-
-  private:
-    std::mutex _mutex;
-    std::condition_variable _ready;
-    std::deque<size_t> _completed;
-};
-
 
 struct options_t
 {
@@ -176,7 +145,6 @@ struct counters_t
 class driver_t
 {
   public:
-    static constexpr int unlimited_request_window = 0;
     virtual ~driver_t () = default;
     virtual int request_window () const = 0;
     std::function<void ()> boundary;
@@ -832,7 +800,7 @@ class framework_driver_t final : public driver_t
 
     framework_driver_t (const options_t &options, int window, bool command) :
         _options (options),
-        _window (command ? unlimited_request_window : window),
+        _window (window),
         _command (command),
         _host (std::vector<int>{}, bench_http_callback_t{})
     {
@@ -944,24 +912,23 @@ class framework_driver_t final : public driver_t
         auto completion_signal = std::make_shared<completion_signal_t> ();
         const auto hard_stop = deadline + std::chrono::milliseconds (_options.drain_bound_ms);
         const auto can_submit = [&] (clock_t_::time_point now) {
-            const bool admission_ready = [&] {
-                if constexpr (std::is_void_v<T>)
-                    return in_flight == 0;
-                else
-                    return !preceding_admission || preceding_admission->await_ready ();
-            }();
-            return now < deadline && admission_ready
-                   && (_window == unlimited_request_window
-                       || in_flight < static_cast<size_t> (_window));
+            return can_submit_framework_task<T> (now, deadline, in_flight, _window, [&] {
+                return !preceding_admission || preceding_admission->await_ready ();
+            });
         };
         do {
             close_window (deadline);
+            completed_slots.clear ();
+            if (in_flight != 0 || !std::is_void_v<T>)
+                completion_signal->take_completed (completed_slots);
             // Admission sequences submits; the pattern window bounds replies.
             if (can_submit (clock_t_::now ())) {
-                const auto sent = now_ns ();
+                uint64_t sent = 0;
+                if constexpr (!std::is_void_v<T>)
+                    sent = now_ns ();
                 auto payload = make_payload (size, phase);
                 counters.enter ();
-                ++counters.submitted;
+                counters.submitted.fetch_add (1, std::memory_order_relaxed);
                 size_t slot = 0;
                 if (free_slots.empty ()) {
                     slot = pending.size ();
@@ -979,12 +946,10 @@ class framework_driver_t final : public driver_t
                       });
                 }
                 pending[slot].emplace (std::move (submission), sent, _seq - 1);
-                fw::detail::observe_task_completion (
-                  pending[slot]->task,
-                  [completion_signal, slot] (const auto &) { completion_signal->notify (slot); });
+                completion_signal->notify (pending[slot]->task, slot, completed_slots,
+                                           completion_signal);
                 ++in_flight;
             }
-            completion_signal->take_completed (completed_slots);
             for (const size_t slot : completed_slots) {
                 if (slot == admission_notification)
                     continue;
@@ -1005,9 +970,12 @@ class framework_driver_t final : public driver_t
                     }
                 }
                 if (valid) {
-                    ++counters.completed;
-                    if (latency)
-                        latency->add_us (static_cast<double> (now_ns () - item.sent_ns) / 1000.0);
+                    counters.completed.fetch_add (1, std::memory_order_relaxed);
+                    if constexpr (!std::is_void_v<T>) {
+                        if (latency)
+                            latency->add_us (static_cast<double> (now_ns () - item.sent_ns)
+                                             / 1000.0);
+                    }
                 } else {
                     if (result)
                         counters.record_error ("ValidationError",
@@ -1048,7 +1016,7 @@ int pattern_window (const std::string &pattern)
     if (pattern == "request-window")
         return 100;
     if (pattern == "request-backpressure")
-        return 0;
+        return unlimited_request_window;
     if (pattern == "send-saturation")
         return 8;
     throw std::runtime_error ("unknown pattern: " + pattern);
