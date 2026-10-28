@@ -17,7 +17,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-/** Counts views retained or duplicated for the owned header bytes, excluding codec output. */
+/** Counts temporary header buffer views separately from the owned wire bytes. */
 public final class ZLinkEnvelopePartViewAllocationTest {
     private static final int SENDS = 100;
     private static final byte[] BODY = new byte[1024];
@@ -146,7 +146,12 @@ public final class ZLinkEnvelopePartViewAllocationTest {
                 recording.stop();
                 recording.dump(file);
             }
-            long arrays = 0, views = 0, copies = 0, controlArrays = 0, controlViews = 0;
+            long arrays = 0,
+                    views = 0,
+                    writerViews = 0,
+                    copies = 0,
+                    controlArrays = 0,
+                    controlViews = 0;
             Map<String, Long> copyObjects = new HashMap<>();
             try (var events = new RecordingFile(file)) {
                 while (events.hasMoreEvents()) {
@@ -177,6 +182,9 @@ public final class ZLinkEnvelopePartViewAllocationTest {
                     if (control && type.equals("java.nio.HeapByteBuffer")) controlViews++;
                     if (send && envelope && type.equals("[B")) arrays++;
                     if (send
+                            && ZLinkChannelEnvelope.class.getName().equals(allocationOwner)
+                            && type.equals("java.nio.HeapByteBuffer")) writerViews++;
+                    if (send
                             && ZLinkFrameworkMultipartView.class.getName().equals(allocationOwner)
                             && type.equals("java.nio.HeapByteBuffer")) views++;
                     if (send && copy) {
@@ -186,12 +194,21 @@ public final class ZLinkEnvelopePartViewAllocationTest {
                 }
             }
             System.out.printf(
-                    "sends=%d headerArrays=%d retainedViews=%d payloadCopies=%d controlArrays=%d controlViews=%d copyObjects=%s%n",
-                    SENDS, arrays, views, copies, controlArrays, controlViews, copyObjects);
+                    "sends=%d headerArrays=%d retainedViews=%d writerViews=%d payloadCopies=%d controlArrays=%d controlViews=%d copyObjects=%s%n",
+                    SENDS,
+                    arrays,
+                    views,
+                    writerViews,
+                    copies,
+                    controlArrays,
+                    controlViews,
+                    copyObjects);
             assertEquals(SENDS, controlArrays);
             assertEquals(SENDS, controlViews);
+            assertEquals(SENDS, arrays, "one owned header byte array is retained for each send");
             assertEquals(SENDS, copies, "one payload copy into the final native frame");
             assertEquals(0, views, "retained header bytes need no temporary heap buffer");
+            assertEquals(0, writerViews, "header bytes need no temporary heap buffer for encoding");
         } finally {
             Files.deleteIfExists(file);
         }
