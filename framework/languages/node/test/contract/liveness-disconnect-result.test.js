@@ -20,6 +20,58 @@ const {
   DEFAULT_SERVICE_PEER_TIMEOUT_MS
 } = require('../../packages/framework/dist/runtime/foundation/service-liveness-registry');
 
+function reportError(t, error, prefix) {
+  t.diagnostic(`${prefix}: ${error?.stack ?? String(error)}`);
+  if (error instanceof AggregateError) {
+    error.errors.forEach((inner, index) => reportError(t, inner, `${prefix}.errors[${index}]`));
+  }
+}
+
+function closeResources(t, resources, failures) {
+  for (const close of resources) {
+    try {
+      close();
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  if (failures.length !== 0) {
+    failures.forEach((error, index) => reportError(t, error, `failures[${index}]`));
+    throw new AggregateError(failures, 'liveness test or resource cleanup failed');
+  }
+}
+
+test('cleanup attempts every independent resource and reports nested failures', () => {
+  const first = new AggregateError([
+    new AggregateError([new Error('native close failed')], 'socket close failed')
+  ], 'host close failed');
+  const second = new Error('context close failed');
+  const primary = new Error('test failed');
+  const closed = [];
+  const diagnostics = [];
+  assert.throws(
+    () => closeResources({ diagnostic: (value) => diagnostics.push(value) }, [
+      () => {
+        closed.push('host');
+        throw first;
+      },
+      () => { closed.push('source'); },
+      () => {
+        closed.push('context');
+        throw second;
+      }
+    ], [primary]),
+    (error) => {
+      assert.deepEqual(error.errors, [primary, first, second]);
+      return true;
+    }
+  );
+  assert.deepEqual(closed, ['host', 'source', 'context']);
+  assert.ok(diagnostics.some((value) => value.startsWith(
+    'failures[1].errors[0].errors[0]: Error: native close failed'
+  )));
+});
+
 function peer(rid, context, clock) {
   let router;
   const port = new ZLinkNodeRawBindingPort(context);
@@ -78,6 +130,7 @@ for (const injectBindingFailure of [false, true]) {
     const source = peer('source', context, clock);
     const expired = peer('expired', context, clock);
     let healthy;
+    const failures = [];
     try {
       source.raw.connectPeerByRoutingId(expired.router.localEndpoint(), 'expired');
       await until(
@@ -86,10 +139,10 @@ for (const injectBindingFailure of [false, true]) {
         'initial native handshake'
       );
       if (injectBindingFailure) {
-        // Inject the binding result at the disconnect boundary. The logical
-        // admission remains until that call succeeds or reports NOT_FOUND.
+        // Physical disconnect failure must preserve the error after admission ends.
         const bindingFailure = new zlink.ConnectError(zlink.ConnectResult.InternalError, 156);
         const disconnect = t.mock.method(source.router, 'disconnectRid', () => {
+          assert.equal(source.raw.isPeerRouteReady('expired'), false);
           throw bindingFailure;
         });
         assert.throws(
@@ -97,7 +150,7 @@ for (const injectBindingFailure of [false, true]) {
           (error) => error === bindingFailure && error.result === zlink.ConnectResult.InternalError
         );
         assert.equal(disconnect.mock.calls.length, 1);
-        assert.equal(source.raw.isPeerRouteReady('expired'), true);
+        assert.equal(source.raw.isPeerRouteReady('expired'), false);
       } else {
         // No receive rotation runs between the physical removal and expiry.
         // Core owns the result; the retained logical admission still expires.
@@ -142,11 +195,15 @@ for (const injectBindingFailure of [false, true]) {
           'both receive owners deliver subsequent sends'
         );
       }
+    } catch (error) {
+      failures.push(error);
     } finally {
-      healthy?.raw.close();
-      expired.raw.close();
-      source.raw.close();
-      context.close();
+      closeResources(t, [
+        () => healthy?.raw.close(),
+        () => expired.raw.close(),
+        () => source.raw.close(),
+        () => context.close()
+      ], failures);
     }
   });
 }

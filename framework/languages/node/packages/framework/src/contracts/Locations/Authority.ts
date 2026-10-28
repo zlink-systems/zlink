@@ -1,3 +1,4 @@
+import type { ZLinkFrameworkErrorKind } from '../Errors';
 import type { RoutingId } from '../Common';
 import type { ZLinkMeshNodeDescriptorKey } from './Keys';
 import type { ZLinkLocationOwnerToken } from './Writes';
@@ -93,7 +94,12 @@ export type ZLinkAuthorityCompareExchangeResult =
       readonly storeVersion: ZLinkAuthorityStoreVersion;
       readonly storeNow: Date;
     }
-  | { readonly kind: 'conflict'; readonly current: ZLinkAuthorityReadResult }
+  | {
+      readonly kind: 'conflict';
+      readonly current: ZLinkAuthorityReadResult;
+      readonly membershipFailure?:
+        ZLinkFrameworkErrorKind.NotFound | ZLinkFrameworkErrorKind.Unavailable;
+    }
   | { readonly kind: 'generationExhausted' };
 
 export interface ZLinkAuthorityEntry {

@@ -12,6 +12,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include "zlink.h"
 
 namespace zlink
 {
@@ -158,6 +159,10 @@ class i_asio_transport
     //  Check if this transport requires a handshake phase.
     //  TCP: false, SSL: true, WebSocket: true
     virtual bool requires_handshake () const { return false; }
+    virtual uint32_t connection_attempt_handshake_stage () const
+    {
+        return ZLINK_CONNECTION_STAGE_CORE_HANDSHAKE;
+    }
 
     //  Start async handshake for transports that require it (SSL, WebSocket).
     //  For TCP, this is a no-op that immediately calls handler with success.

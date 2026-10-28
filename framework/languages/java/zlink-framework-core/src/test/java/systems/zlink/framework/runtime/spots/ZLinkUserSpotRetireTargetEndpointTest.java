@@ -41,6 +41,7 @@ import systems.zlink.framework.runtime.locations.ZLinkServiceAuthorityPayloadCod
 import systems.zlink.framework.runtime.messaging.ZLinkJsonMessageSerializer;
 import systems.zlink.framework.spots.ZLinkSpot;
 import systems.zlink.framework.spots.ZLinkSpotContext;
+import systems.zlink.framework.testutil.PerCallAllocation;
 
 import java.lang.reflect.Proxy;
 import java.time.Duration;
@@ -171,7 +172,7 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
             long successBytes = replayAllocatedBytes(success);
             long failureBytes = replayAllocatedBytes(failed);
             assertTrue(
-                    successBytes < packetName.length,
+                    successBytes < (long) packetName.length * REPLAYS_PER_WINDOW,
                     "Off must not decode or copy the diagnostic packet name: " + successBytes);
             assertEquals(
                     successBytes,
@@ -179,19 +180,24 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                     "Off must add zero diagnostic allocations for a failed replay");
             registration.dispatchOptions().messageFlow(ZLinkMessageFlowLogMode.ERRORS);
             assertTrue(
-                    replayAllocatedBytes(failed) > failureBytes + packetName.length,
+                    replayAllocatedBytes(failed)
+                            > failureBytes + (long) packetName.length * REPLAYS_PER_WINDOW,
                     "enabled diagnostics must construct the packet name and failure report");
         }
     }
 
+    private static final int REPLAYS_PER_WINDOW = 32;
+    private static final int REPLAY_WINDOWS = 8;
+
     private static long replayAllocatedBytes(Runnable operation) {
-        var bean =
-                (com.sun.management.ThreadMXBean)
-                        java.lang.management.ManagementFactory.getThreadMXBean();
-        long threadId = Thread.currentThread().threadId();
-        long before = bean.getThreadAllocatedBytes(threadId);
-        operation.run();
-        return bean.getThreadAllocatedBytes(threadId) - before;
+        return PerCallAllocation.minWindow(
+                () -> {
+                    operation.run();
+                    return null;
+                },
+                REPLAYS_PER_WINDOW,
+                0,
+                REPLAY_WINDOWS);
     }
 
     @Test

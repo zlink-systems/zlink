@@ -19,12 +19,11 @@ queue_rules:
       - base=main
       - label=merge-queue
       - -draft
-    merge_conditions: &framework_checks
+    merge_conditions:
       - check-success=dotnet-release-gate
       - check-success=node-release-gate
-      - check-success=Compare Linux and Windows Java results
+      - check-success=linux-x64 / Java 25
       - check-success=Framework C++ unit and contract tests
-      - check-success=win-x64 / Framework C++ unit and contract tests
       - check-success=Framework source format
   - name: release
     batch_size: 8
@@ -33,7 +32,15 @@ queue_rules:
       - base~=^release/
       - head~=^mergify/bp/
       - -draft
-    merge_conditions: *framework_checks
+    # Release branches keep the Windows checks; main batches verify Linux only and
+    # Windows runs daily on main and in the release gate.
+    merge_conditions:
+      - check-success=dotnet-release-gate
+      - check-success=node-release-gate
+      - check-success=Compare Linux and Windows Java results
+      - check-success=Framework C++ unit and contract tests
+      - check-success=win-x64 / Framework C++ unit and contract tests
+      - check-success=Framework source format
 
 # A PR labelled `merge-queue`, and every Mergify backport PR to a release branch,
 # enters the queue by itself. Commenting `@mergifyio queue` also queues a PR.
