@@ -2555,6 +2555,11 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_link_libraries(test_cpp_framework_runtime_metrics PRIVATE opentelemetry-cpp::metrics)
   target_include_directories(test_cpp_framework_runtime_metrics PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_stopped_population_retirement
+    COMMAND test_cpp_framework_runtime_metrics --stopped-population-retirement
+    LABELS "framework-unit;framework-regression;framework-observability;metrics"
+    TIMEOUT 30)
   add_zlink_framework_test(
     test_cpp_framework_mesh_metrics
     tests/Zlink.Framework.UnitTests/test_cpp_framework_mesh_metrics.cpp
