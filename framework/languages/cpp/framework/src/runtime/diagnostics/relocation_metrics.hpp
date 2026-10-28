@@ -21,9 +21,9 @@ inline const char *metric_object_kind (stateful::object_kind_t kind) noexcept
 class relocation_metrics_t
 {
   public:
-    relocation_metrics_t ()
+    explicit relocation_metrics_t (metric_provider_t provider = noop_metric_provider ())
     {
-        auto provider = opentelemetry::metrics::Provider::GetMeterProvider ();
+        _provider = provider;
         if (dynamic_cast<opentelemetry::metrics::NoopMeterProvider *> (provider.get ()))
             return;
         auto meter = provider->GetMeter ("zlink.framework");
@@ -59,6 +59,7 @@ class relocation_metrics_t
     }
 
   private:
+    metric_provider_t _provider;
     opentelemetry::nostd::unique_ptr<opentelemetry::metrics::Counter<double>> _timeout;
     opentelemetry::nostd::unique_ptr<opentelemetry::metrics::Histogram<double>> _interruption,
       _resume, _convergence;

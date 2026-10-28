@@ -138,7 +138,7 @@ void population_retirement_orders_after_pending_configuration ()
     require (objects.commit_create (created.attempt) == stateful::stateful_error_t::none,
              "Actor commit failed");
     auto release = stateful::stateful_object_runtime_test_access_t::hold_lane (objects);
-    auto configured = objects.configure_population_metrics ("population-mesh");
+    auto configured = objects.configure_population_metrics ("population-mesh", provider.api ());
     auto retirement = objects.retire_population_metrics_async ();
     const bool ordered = !retirement.await_ready ();
     release.set_value ();
@@ -153,8 +153,8 @@ void activation_metrics_configured_once ()
 {
     metric_test::provider_t provider;
     auto admission = std::make_shared<detail::activation_admission_t> ();
-    admission->configure_metrics ("first-mesh");
-    admission->configure_metrics ("second-mesh");
+    admission->configure_metrics ("first-mesh", provider.api ());
+    admission->configure_metrics ("second-mesh", provider.api ());
     require (admission->try_enter ("actor:test"), "activation was rejected");
     require (point (provider, "zlink.object.activation.active", {{"mesh_name", "first-mesh"}}) == 1,
              "reconfiguration replaced the activation callback owner");
@@ -168,6 +168,7 @@ void host_lifecycle ()
 {
     metric_test::provider_t provider;
     auto app = app_t::create ();
+    app.use_metric_provider (provider.api ());
     require (point (provider, "zlink.host.state", {{"state", "preparing"}}) == 1,
              "host Preparing state missing");
     const auto relocation = app.relocate ({}).result ().value ();
@@ -196,6 +197,7 @@ void serving_relocated_stopped ()
 {
     metric_test::provider_t provider;
     auto app = app_t::create ();
+    app.use_metric_provider (provider.api ());
     struct runner_t
     {
         app_t &app;
@@ -425,6 +427,7 @@ void provider_failure_preserves_shutdown ()
              "unavailable meter changed the missing-member result");
     node.close ();
     auto app = app_t::create ();
+    app.use_metric_provider (opentelemetry::metrics::Provider::GetMeterProvider ());
     require (app.shutdown (1s).result ().value ().outcome == termination_outcome_t::stopped,
              "unavailable meter changed host Shutdown result");
 }
