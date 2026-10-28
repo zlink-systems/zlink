@@ -1,3 +1,4 @@
+import { inspectRuntime } from '../../packages/framework/src/runtime/internal-observation';
 import assert from 'node:assert/strict';
 import net from 'node:net';
 import { test } from 'node:test';
@@ -1785,12 +1786,7 @@ test('terminal reply completion progresses while ordinary job flow is saturated'
     );
     assert.equal(result.terminalResult, 0);
     assert.equal(Buffer.from(result.payload!.payload).toString(), 'reply');
-    const livenessPeers = (
-      left.liveness as unknown as {
-        peers: Map<string, { deadlineMs: number }>;
-      }
-    ).peers;
-    assert.ok(livenessPeers.get('m6a-r6-right')!.deadlineMs >= submittedAt + 15_000);
+    assert.ok(left.topology.admittedPeer('m6a-r6-right')!.liveness!.deadlineMs >= submittedAt + 15_000);
     //  The ordinary job flow stayed saturated the whole time: the reply
     //  terminal did not consume (or wait for) an application permit.
     assert.equal(leftJobs.snapshot().capacityWaiters, 1n);
@@ -1884,13 +1880,10 @@ test('normal receive pump carries application and liveness traffic on one route'
     const before = performance.now() + 10;
     const probe = await left.tickLiveness(before);
     assert.equal(probe.probes.length, 1);
-    const leftLiveness = left.liveness as unknown as {
-      peers: Map<string, { outstandingProbe?: bigint }>;
-    };
     await pollUntil(async () => {
       await right.pumpOne();
       await left.pumpOne();
-      return leftLiveness.peers.get(rightDescriptor.nodeRoutingId)?.outstandingProbe === undefined;
+      return left.topology.admittedPeer(rightDescriptor.nodeRoutingId)?.liveness?.outstandingProbe === undefined;
     });
     assert.equal(right.mailbox.pendingMessages('application'), 1);
 
@@ -2326,9 +2319,7 @@ test('completion send admission applies only to operations with a reply route', 
 });
 
 function observedRouteConnection(runtime: RawServiceMeshRuntime, nodeRoutingId: string): string {
-  const generation = (
-    runtime as unknown as { selectedRoutes: Map<string, bigint> }
-  ).selectedRoutes.get(nodeRoutingId);
+  const generation = runtime[inspectRuntime](nodeRoutingId).selectedRouteGeneration;
   assert.notEqual(generation, undefined);
   return `route:${generation!.toString()}`;
 }

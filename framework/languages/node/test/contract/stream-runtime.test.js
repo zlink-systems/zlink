@@ -1,3 +1,4 @@
+const { rawMeshFixture } = require('./fixtures/raw-mesh-binding');
 const { createRelayMeshHost } = require('./fixtures/relay-host');
 const { createMeshHost } = require('./fixtures/mesh-host');
 const { createRelayHost } = require('./fixtures/relay-host');
@@ -4862,13 +4863,16 @@ test('command 36 refused as not current is traced with the closed flow vocabular
 
 test('actual raw command 36 from an authenticated peer is admitted by the current binding alone', async () => {
   const actorId = 'actor-command36-authenticated-source';
-  const raw = new RawServiceMeshRuntime({
+  const { runtime: raw, records } = rawMeshFixture({
     descriptor: testServiceNodeDescriptor('session-owner', 4n),
-    bindingPort: {},
     applicationJobQueue: new ApplicationJobQueue(resolveApplicationJobQueueConfiguration())
-  });
-  assert.equal(raw.admitPeer(testServiceNodeDescriptor('source', 4n), 1n, 0), 'admitted');
-  assert.equal(raw.admitPeer(testServiceNodeDescriptor('target', 5n), 2n, 0), 'admitted');
+  }, { submitSend: () => ({ result: SubmitResult.Ok, admitted: Promise.resolve() }) });
+  for (const [peer, generation, route] of [['source', 4n, 1n], ['target', 5n, 2n]]) {
+    records.push({ sourceRid: peer, sourceRoute: Buffer.from(peer), routeGeneration: route,
+      parts: [serviceWire.encodeRouteMeshAdmission(serviceWire.M6aServiceWireCommand.hello, testServiceNodeDescriptor(peer, generation))], close() {} });
+    assert.equal(await raw.pumpOne(0), 'infrastructure');
+    assert.equal(raw.topology.peer(peer).descriptor.lifecycleGeneration, generation);
+  }
   const serviceRuntime = withTestSessionOwners(
     new ServiceStatefulRuntime(raw, 'session-owner', 4n)
   );
@@ -4909,17 +4913,11 @@ test('actual raw command 36 from an authenticated peer is admitted by the curren
     contentType: 'application/json',
     payload: Buffer.from('{"accepted":true}')
   });
-  const ingress = (sourceRid) =>
-    raw.processReceived(
-      {
-        sourceRid,
-        routeGeneration: sourceRid === 'source' ? 1n : 2n,
-        sourceRoute: Buffer.from(sourceRid),
-        parts: [header, payload]
-      },
-      0,
-      false
-    );
+  const ingress = (sourceRid) => {
+    records.push({ sourceRid, routeGeneration: sourceRid === 'source' ? 1n : 2n,
+      sourceRoute: Buffer.from(sourceRid), parts: [header, payload], close() {} });
+    return raw.pumpOne(0);
+  };
 
   // The transport boundary authenticated both peers. Which peer produced the
   // push is not compared with the header's Actor route (Session-Actor binding
@@ -6646,25 +6644,23 @@ test('Actor binding owner turn uses the three-value Actor fence independently of
   state.setOwnerLeaseGeneration(10n);
   assert.equal(state.ownsLocation, false);
   let localRetireCalls = 0;
-  const host = Object.create(framework.ZLinkFrameworkRuntimeHost.prototype);
+  const { host, meshRuntime, relay } = createRelayMeshHost({
+    registration: framework.createFrameworkRegistration()
+  });
   host.setActorManager({ getState: () => state });
-  host.spotNodeRuntime = {
+  Object.assign(meshRuntime, {
     meshNode: () => ({
       status: () => ({ routingId: actor.nodeRid, lifecycleGeneration: 5n }),
       peers: () => {
         throw new Error('bind approval must not re-read the peer projection');
       }
     })
-  };
-  host.boundSessionRelay = {
-    boundSessions: {
-      resolveRemoteBoundSessionTarget: () => ({
-        routerChannelId: 'room.route',
-        targetNodeRid: 'session-node',
-        spotId: 'session-entry'
-      })
-    }
-  };
+  });
+  relay.boundSessions.resolveRemoteBoundSessionTarget = () => ({
+    routerChannelId: 'room.route',
+    targetNodeRid: 'session-node',
+    spotId: 'session-entry'
+  });
   host.streamBindingRuntime = {
     async retireRemoteBinding() {
       localRetireCalls += 1;
