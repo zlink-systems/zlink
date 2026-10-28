@@ -1,3 +1,4 @@
+const { createMeshHost } = require('./fixtures/mesh-host');
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const { resolveModuleProviders } = require('./helpers/nestjs-test-utils');
@@ -19,7 +20,7 @@ const nestjs = require('../../packages/nestjs/dist');
 for (const emptyFirstPage of [true, false]) {
   test(`Actor placement consumes continuation after ${emptyFirstPage ? 'empty page' : 'candidate and preserves Store failure'}`, async () => {
     const provider = new framework.ZLinkInMemoryProviderLocationStore();
-    const host = new framework.ZLinkFrameworkRuntimeHost({
+    const { host, meshRuntime: hostMesh } = createMeshHost({
       registration: framework.createFrameworkRegistration({
         locations: { storeInstance: provider },
         spotNodes: { play: { router: { bind: 'tcp://local-play', routingId: 'node-a' }, objectRole: 'client' } }
@@ -44,7 +45,7 @@ for (const emptyFirstPage of [true, false]) {
       return { items: emptyFirstPage ? [] : [descriptor], continuationToken: 'next' };
     };
     host.createPublicSpotManager({});
-    host.spotNodeRuntime = { meshNode: () => ({ status: () => ({ routingId: 'node-a', lifecycleGeneration: 1n }) }) };
+    Object.assign(hostMesh, { meshNode: () => ({ status: () => ({ routingId: 'node-a', lifecycleGeneration: 1n }) }) });
     const signal = new AbortController().signal;
     const select = () => host.actorPlacement.options.target('play', 'SessionActor', signal);
     if (emptyFirstPage) {
@@ -368,7 +369,7 @@ test('direct host stop uses one existing default deadline for a pending provider
 });
 
 test('actor handoff source fence uses the Actor mesh node and rejects a cross-mesh RID', () => {
-  const host = new framework.ZLinkFrameworkRuntimeHost({
+  const { host, meshRuntime: hostMesh } = createMeshHost({
     registration: framework.createFrameworkRegistration()
   });
   const primaryStatus = {
@@ -406,13 +407,13 @@ test('actor handoff source fence uses the Actor mesh node and rejects a cross-me
       currentOwnerToken: { ownerId: 'owner-b', leaseGeneration: 5n }
     }
   };
-  host.spotNodeRuntime = {
+  Object.assign(hostMesh, {
     primaryMeshNode: { status: () => primaryStatus },
     meshNode(meshName) {
       return meshName === 'mesh-b' ? { status: () => actorStatus } : undefined;
     }
-  };
-  host.actorManager = { getState: actorId => states.get(actorId) };
+  });
+  host.setActorManager({ getState: actorId => states.get(actorId) });
 
   host.actorHandoff.begin('actor-b', 7n);
   assert.deepEqual(host.actorHandoff.activeSourceOwner('actor-b'), {

@@ -22,7 +22,7 @@ test('Shutdown awaits Draining publication then runs callbacks and cleanup witho
     },
     async cleanupOwner() { events.push('owner-cleanup'); }
   };
-  host.spotManager = { async drainForShutdown() { events.push('spot-callbacks-and-cleanup'); } };
+  host.setSpotManager({ async drainForShutdown() { events.push('spot-callbacks-and-cleanup'); } });
   host.stop = async () => { events.push('stop'); };
 
   const shutdown = host.shutdown({ deadlineMs: 500 });
@@ -60,7 +60,7 @@ for (const failure of ['publication-false', 'publication-throw', 'owner-cleanup'
         throw cause;
       }
     };
-    host.spotManager = { async drainForShutdown() {} };
+    host.setSpotManager({ async drainForShutdown() {} });
     host.stop = async () => { stops++; };
     const operation = failure === 'owner-cleanup' ? 'cleanupOwnerForDrain' : 'publishHostDraining';
     const original = host[operation].bind(host);
