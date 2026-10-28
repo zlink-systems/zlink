@@ -24,7 +24,7 @@ function scenario(t, ownerUsable) {
     canDispatchLocalMeshRoute: () => true,
     dispatchLocalMeshRoute: dispatch
   };
-  host.spotManager = { dispatchMeshActor: dispatchAdmitted, dispatchMeshInstance: dispatchAdmitted };
+  host.setSpotManager({ dispatchMeshActor: dispatchAdmitted, dispatchMeshInstance: dispatchAdmitted });
   t.mock.method(host.serviceRelocation, 'tryHandleControl', () => false);
   t.mock.method(host, 'dispatchMeshSpotRecord', dispatchAdmitted);
   return { host, ownerReads: () => ownerReads, dispatched: () => dispatched, setOwnerUsable: value => { ownerUsable = value; } };
@@ -184,7 +184,7 @@ for (const entry of [true, false]) {
     test(`Node Actor relay checks owner at actual callback (entry=${entry}, usable=${ownerUsable})`, async t => {
       const s = scenario(t, ownerUsable);
       const endpoint = await actorEndpoint(t, s, entry);
-      s.host.actorManager = { getState: () => entry ? undefined : { spotId: 'room' } };
+      s.host.setActorManager({ getState: () => entry ? undefined : { spotId: 'room' } });
       s.host.spotNodeRuntime = { dispatchEntryActorPacket: endpoint.dispatch };
       s.host.spotManager.dispatchRoutedActorPacket = (origin, _spot, ...args) => endpoint.dispatch(origin, ...args);
       const parts = actorParts();
@@ -244,7 +244,7 @@ for (const entry of [true, false]) {
 
 test('Actor relay bind acknowledgement stays independent of owner lease', async t => {
   const s = scenario(t, false);
-  s.host.actorManager = { getState: () => ({ nativeActorRef: { actorId: 'actor' } }) };
+  s.host.setActorManager({ getState: () => ({ nativeActorRef: { actorId: 'actor' } }) });
   const payload = relayWire.encodeRemoteActorPacketRelayPayload({
     actorId: 'actor',
     header: protocol.encodeStreamHeader({
@@ -266,7 +266,7 @@ test('Actor relay bind acknowledgement stays independent of owner lease', async 
 test('Actor relay disconnect cleanup survives expired owner and mesh seal', async t => {
   const s = scenario(t, false);
   s.host.admission.seal('mesh');
-  s.host.actorManager = { getState: () => undefined };
+  s.host.setActorManager({ getState: () => undefined });
   let disconnects = 0;
   s.host.spotNodeRuntime = { dispatchEntryActorPacket: async () => { disconnects++; } };
   const payload = relayWire.encodeRemoteActorPacketRelayPayload({

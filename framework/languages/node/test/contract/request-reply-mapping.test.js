@@ -1,3 +1,5 @@
+const { ZLinkBufferMessage } = require('../../packages/framework/dist/runtime/backend/runtime-message');
+const { encodeChannelEnvelopeParts } = require('../../packages/framework/dist/runtime/channels/channel-envelope');
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const { createHook } = require('node:async_hooks');
@@ -6,6 +8,8 @@ const {
   createZLinkRequest, prepareZLinkRequestReply, identityRequestReply
 } = require('../../packages/framework/dist/runtime/messaging/request-result');
 
+class Probe {}
+
 function deferred() {
   let resolve, reject;
   const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
@@ -13,7 +17,19 @@ function deferred() {
 }
 
 function fixture() {
-  const source = deferred();
+  const terminal = deferred();
+  const source = {
+    ...terminal,
+    resolve(value) {
+      terminal.resolve({ terminalResult: 0, failureErrno: 0,
+        parts: encodeChannelEnvelopeParts(2 /* Response */, 'mesh', 'Reply', value, undefined, undefined, undefined, '11111111111111111111111111111111')
+          .map(part => ZLinkBufferMessage.from(part)) });
+    }
+  };
+  const codec = {
+    serialize: value => ZLinkBufferMessage.from(JSON.stringify(value)),
+    deserialize: message => JSON.parse(Buffer.from(message.data()).toString())
+  };
   const node = {
     requestToNode: () => ({ high: 1n, low: 1n }),
     requestToChannel: () => ({ high: 1n, low: 1n })
@@ -22,15 +38,13 @@ function fixture() {
   const transport = new framework.ZLinkRuntimeRouteTransport(
     () => undefined, undefined,
     () => ({ meshNode: () => node, meshCompletionTable: () => table }),
-    undefined, undefined, undefined, undefined, () => false
+    { serializers: new Map([['application/json', codec]]) }, undefined, undefined, undefined, () => false
   );
-  transport.encodeMessage = () => [];
-  transport.decodeMeshReply = (_mesh, value) => value;
   const registration = framework.createFrameworkRegistration({
     spotNodes: { mesh: { router: { bind: 'tcp://127.0.0.1:0' } } }
   });
   const client = new framework.DefaultZLinkRouteClient(registration, transport);
-  return { source, transport, node, client };
+  return { source, transport, node, client, codec };
 }
 
 // Spec 08 E5 and Submit §11 require one new caller turn. Typed decode and
@@ -47,7 +61,7 @@ test('typed completion and public admission execute one result reaction', async 
   let request;
   try {
     capture = true;
-    request = f.client.requestToNode('mesh', 'peer', {}).submit();
+    request = f.client.requestToNode('mesh', 'peer', new Probe()).submit();
     capture = false;
     f.source.resolve('reply');
     assert.equal(await request, 'reply');
@@ -63,9 +77,9 @@ for (const cause of ['decode', 'submission', 'encode']) {
       ? new framework.ZLinkBackendResultError(
         'submit', framework.SubmitResult.Terminated, 0, { phase: 'submit' })
       : new Error(cause);
-    if (cause === 'decode') f.transport.decodeMeshReply = () => { throw error; };
-    if (cause === 'encode') f.transport.encodeMessage = () => { throw error; };
-    const request = f.client.requestToNode('mesh', 'peer', {}).submit();
+    if (cause === 'decode') f.codec.deserialize = () => { throw error; };
+    if (cause === 'encode') f.codec.serialize = () => { throw error; };
+    const request = f.client.requestToNode('mesh', 'peer', new Probe()).submit();
     const observed = Promise.allSettled([request, request.admitted]);
     if (cause === 'submission') f.source.reject(error);
     else f.source.resolve('reply');
@@ -94,8 +108,8 @@ for (const target of ['node', 'channel']) {
     ]) {
       const f = fixture();
       const request = target === 'node'
-        ? f.client.requestToNode('mesh', 'peer', {}).submit()
-        : createZLinkRequest((admitted) => f.transport.requestToChannel('mesh', 'channel', undefined, {}, 1000, undefined, undefined, admitted));
+        ? f.client.requestToNode('mesh', 'peer', new Probe()).submit()
+        : createZLinkRequest((admitted) => f.transport.requestToChannel('mesh', 'channel', 'Probe', {}, 1000, undefined, undefined, admitted));
       const observed = Promise.allSettled([request, request.admitted]);
       f.source.reject(failure);
       const outcomes = await observed;
@@ -109,8 +123,8 @@ for (const target of ['node', 'channel']) {
     const f = fixture();
     const error = new Error('unclassified submission');
     const request = target === 'node'
-      ? f.client.requestToNode('mesh', 'peer', {}).submit()
-      : createZLinkRequest((admitted) => f.transport.requestToChannel('mesh', 'channel', undefined, {}, 1000, undefined, undefined, admitted));
+      ? f.client.requestToNode('mesh', 'peer', new Probe()).submit()
+      : createZLinkRequest((admitted) => f.transport.requestToChannel('mesh', 'channel', 'Probe', {}, 1000, undefined, undefined, admitted));
     const observed = Promise.allSettled([request, request.admitted]);
     f.source.reject(error);
     const outcomes = await observed;
@@ -139,11 +153,11 @@ for (const throws of [false, true]) {
 test('typed decode and caller run after terminal publication returns', async () => {
   const f = fixture();
   let publishing = true;
-  f.transport.decodeMeshReply = (_mesh, value) => {
+  f.codec.deserialize = message => {
     assert.equal(publishing, false);
-    return value;
+    return JSON.parse(Buffer.from(message.data()).toString());
   };
-  const request = f.client.requestToNode('mesh', 'peer', {}).submit();
+  const request = f.client.requestToNode('mesh', 'peer', new Probe()).submit();
   f.source.resolve('reply');
   publishing = false;
   assert.equal(await request, 'reply');
@@ -191,9 +205,8 @@ test('channel synchronous completion submission failure records the original met
     },
     () => false
   );
-  transport.encodeMessage = () => [];
   const request = createZLinkRequest((admitted) =>
-    transport.requestToChannel('mesh', 'channel', undefined, {}, 1000, undefined, undefined, admitted));
+    transport.requestToChannel('mesh', 'channel', 'Probe', {}, 1000, undefined, undefined, admitted));
   const outcomes = await Promise.allSettled([request, request.admitted]);
   assert.equal(outcomes[0].reason, error);
   assert.equal(outcomes[1].reason, error);
