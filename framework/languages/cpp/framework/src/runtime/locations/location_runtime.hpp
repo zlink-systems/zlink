@@ -1054,8 +1054,8 @@ class location_runtime_t
       std::make_shared<const owner_lease_snapshot_t> ()};
     mutable std::optional<std::string> _last_error;
     mutable std::vector<std::shared_ptr<descriptor_publication_t>> _descriptor_publications;
-    offload_executor_t _lane_executor;
-    mutable state_lane_t _lane{_lane_executor};
+
+    mutable state_lane_t _lane;
 };
 
 } // namespace zlink::framework::runtime

@@ -102,10 +102,12 @@ bool discovery_expectation_matches (const service_node_descriptor_t &expected,
 } // namespace
 
 service_topology_registry_t::service_topology_registry_t (
+  runtime::state_lane_t &lane,
   service_node_descriptor_t local,
   std::vector<std::string> metric_channel_names,
   service_liveness_registry_t *liveness_owner,
   metric_provider_t provider) :
+    _lane (lane),
     _metric_provider (provider),
     _topology (std::make_shared<std::shared_ptr<const topology_state_t>> (
       std::make_shared<const topology_state_t> (std::move (local)))),
@@ -224,25 +226,27 @@ service_topology_registry_t::publish_local_snapshot (service_node_descriptor_t d
 std::pair<service_node_descriptor_t, std::vector<admitted_peer_t>>
 service_topology_registry_t::publish_draining_snapshot ()
 {
-    auto publication =
-      _lane
-        .run ([this] {
-            auto descriptor =
-              std::atomic_load_explicit (_topology.get (), std::memory_order_acquire)->local;
-            std::function<void ()> changed;
-            if (descriptor.state != service_node_state_t::draining) {
-                if (descriptor.descriptor_revision == std::numeric_limits<std::uint64_t>::max ())
-                    throw std::overflow_error ("service descriptor revision is exhausted");
-                descriptor.state = service_node_state_t::draining;
-                ++descriptor.descriptor_revision;
-                changed = publish_local_on_lane (descriptor);
-            }
-            return std::tuple{std::move (descriptor), peers_on_lane (), std::move (changed)};
-        })
-        .get ();
+    auto publication = _lane.run ([this] { return publish_draining_on_lane (); }).get ();
     if (std::get<2> (publication))
         std::get<2> (publication) ();
     return {std::move (std::get<0> (publication)), std::move (std::get<1> (publication))};
+}
+
+
+std::tuple<service_node_descriptor_t, std::vector<admitted_peer_t>, std::function<void ()>>
+service_topology_registry_t::publish_draining_on_lane ()
+{
+    auto descriptor =
+      std::atomic_load_explicit (_topology.get (), std::memory_order_acquire)->local;
+    std::function<void ()> changed;
+    if (descriptor.state != service_node_state_t::draining) {
+        if (descriptor.descriptor_revision == std::numeric_limits<std::uint64_t>::max ())
+            throw std::overflow_error ("service descriptor revision is exhausted");
+        descriptor.state = service_node_state_t::draining;
+        ++descriptor.descriptor_revision;
+        changed = publish_local_on_lane (descriptor);
+    }
+    return std::tuple{std::move (descriptor), peers_on_lane (), std::move (changed)};
 }
 
 
@@ -331,91 +335,8 @@ service_topology_registry_t::admit_impl (service_node_descriptor_t descriptor,
     const auto result =
       _lane
         .run ([&, this] {
-            const auto topology =
-              std::atomic_load_explicit (_topology.get (), std::memory_order_acquire);
-            if (descriptor.mesh_name != topology->local.mesh_name) {
-                return std::pair{peer_admission_result_t::mesh_mismatch, std::function<void ()>{}};
-            }
-            if (descriptor.node_routing_id == topology->local.node_routing_id) {
-                return std::pair{peer_admission_result_t::invalid_descriptor,
-                                 std::function<void ()>{}};
-            }
-            if (expected_descriptor != nullptr
-                && !discovery_expectation_matches (*expected_descriptor, descriptor)) {
-                return std::pair{peer_admission_result_t::stale_descriptor,
-                                 std::function<void ()>{}};
-            }
-            const auto admitted = topology->peers.find (descriptor.node_routing_id);
-            const auto not_required = _not_required_peers.find (descriptor.node_routing_id);
-            const auto *current = admitted != topology->peers.end () ? &admitted->second.descriptor
-                                  : not_required != _not_required_peers.end ()
-                                    ? &not_required->second
-                                    : nullptr;
-            if ((current == nullptr
-                 || descriptor.lifecycle_generation != current->lifecycle_generation)
-                && (command == protocol::command::update
-                    || (current != nullptr && expected_descriptor == nullptr))) {
-                return std::pair{peer_admission_result_t::stale_descriptor,
-                                 std::function<void ()>{}};
-            }
-            if (current != nullptr
-                && descriptor.lifecycle_generation == current->lifecycle_generation
-                && (descriptor.descriptor_revision < current->descriptor_revision
-                    || (descriptor.descriptor_revision == current->descriptor_revision
-                        && *current != descriptor)
-                    || (descriptor.descriptor_revision > current->descriptor_revision
-                        && (command != protocol::command::update
-                            || !immutable_fields_match (*current, descriptor))))) {
-                return std::pair{peer_admission_result_t::stale_descriptor,
-                                 std::function<void ()>{}};
-            }
-            if (route_mesh_connection_not_required (topology->local, descriptor)) {
-                auto next = std::make_shared<topology_state_t> (*topology);
-                auto key = descriptor.node_routing_id;
-                next->peers.erase (key);
-                _not_required_peers.insert_or_assign (std::move (key), std::move (descriptor));
-                ++_topology_version;
-                auto changed = publish_topology (std::move (next));
-                rebuild_channel_selections ();
-                return std::pair{peer_admission_result_t::not_required, std::move (changed)};
-            }
-
-            service_liveness_registry_t::connection_t connection =
-              admitted != topology->peers.end () && admitted->second.connection_id == connection_id
-                ? admitted->second.liveness
-                : nullptr;
-            if (_liveness_owner) {
-                if (!connection)
-                    connection =
-                      _liveness_owner->admit (descriptor.node_routing_id, connection_id, now);
-                connection->record_received (now);
-            }
-            const bool ready =
-              command == protocol::command::admit
-              || (admitted != topology->peers.end ()
-                  && admitted->second.connection_id == connection_id && admitted->second.ready);
-            const bool same_admission = admitted != topology->peers.end ()
-                                        && admitted->second.connection_id == connection_id
-                                        && admitted->second.descriptor == descriptor;
-            if (same_admission && admitted->second.ready == ready) {
-                return std::pair{peer_admission_result_t::duplicate_connection,
-                                 std::function<void ()>{}};
-            }
-
-            auto next = std::make_shared<topology_state_t> (*topology);
-            _not_required_peers.erase (descriptor.node_routing_id);
-            auto key = descriptor.node_routing_id;
-            ++_topology_version;
-            const auto admission_epoch =
-              same_admission ? admitted->second.admission_epoch : _topology_version;
-            next->peers.insert_or_assign (
-              std::move (key), admitted_peer_t{std::move (descriptor), std::move (connection_id),
-                                               admission_epoch, ready, std::move (connection)});
-            auto changed = publish_topology (std::move (next));
-            rebuild_channel_selections ();
-            return std::pair{same_admission ? peer_admission_result_t::duplicate_connection
-                                            : peer_admission_result_t::admitted,
-                             std::move (changed)};
+            return admit_on_lane (std::move (descriptor), std::move (connection_id),
+                                  expected_descriptor, now, command);
         })
         .get ();
     if (result.second)
@@ -423,31 +344,122 @@ service_topology_registry_t::admit_impl (service_node_descriptor_t descriptor,
     return result.first;
 }
 
+std::pair<peer_admission_result_t, std::function<void ()>>
+service_topology_registry_t::admit_on_lane (service_node_descriptor_t descriptor,
+                                            std::vector<std::uint8_t> connection_id,
+                                            const service_node_descriptor_t *expected_descriptor,
+                                            service_liveness_registry_t::clock_t::time_point now,
+                                            protocol::command command)
+{
+    if (!valid_descriptor (descriptor) || connection_id.empty ())
+        return {peer_admission_result_t::invalid_descriptor, {}};
+    const auto topology = std::atomic_load_explicit (_topology.get (), std::memory_order_acquire);
+    if (descriptor.mesh_name != topology->local.mesh_name) {
+        return std::pair{peer_admission_result_t::mesh_mismatch, std::function<void ()>{}};
+    }
+    if (descriptor.node_routing_id == topology->local.node_routing_id) {
+        return std::pair{peer_admission_result_t::invalid_descriptor, std::function<void ()>{}};
+    }
+    if (expected_descriptor != nullptr
+        && !discovery_expectation_matches (*expected_descriptor, descriptor)) {
+        return std::pair{peer_admission_result_t::stale_descriptor, std::function<void ()>{}};
+    }
+    const auto admitted = topology->peers.find (descriptor.node_routing_id);
+    const auto not_required = _not_required_peers.find (descriptor.node_routing_id);
+    const auto *current = admitted != topology->peers.end () ? &admitted->second.descriptor
+                          : not_required != _not_required_peers.end () ? &not_required->second
+                                                                       : nullptr;
+    if ((current == nullptr || descriptor.lifecycle_generation != current->lifecycle_generation)
+        && (command == protocol::command::update
+            || (current != nullptr && expected_descriptor == nullptr))) {
+        return std::pair{peer_admission_result_t::stale_descriptor, std::function<void ()>{}};
+    }
+    if (current != nullptr && descriptor.lifecycle_generation == current->lifecycle_generation
+        && (descriptor.descriptor_revision < current->descriptor_revision
+            || (descriptor.descriptor_revision == current->descriptor_revision
+                && *current != descriptor)
+            || (descriptor.descriptor_revision > current->descriptor_revision
+                && (command != protocol::command::update
+                    || !immutable_fields_match (*current, descriptor))))) {
+        return std::pair{peer_admission_result_t::stale_descriptor, std::function<void ()>{}};
+    }
+    if (route_mesh_connection_not_required (topology->local, descriptor)) {
+        auto next = std::make_shared<topology_state_t> (*topology);
+        auto key = descriptor.node_routing_id;
+        next->peers.erase (key);
+        _not_required_peers.insert_or_assign (std::move (key), std::move (descriptor));
+        ++_topology_version;
+        auto changed = publish_topology (std::move (next));
+        rebuild_channel_selections ();
+        return std::pair{peer_admission_result_t::not_required, std::move (changed)};
+    }
+
+    service_liveness_registry_t::connection_t connection =
+      admitted != topology->peers.end () && admitted->second.connection_id == connection_id
+        ? admitted->second.liveness
+        : nullptr;
+    if (_liveness_owner) {
+        if (!connection)
+            connection =
+              _liveness_owner->admit_owned (descriptor.node_routing_id, connection_id, now);
+        connection->record_received (now);
+    }
+    const bool ready =
+      command == protocol::command::admit
+      || (admitted != topology->peers.end () && admitted->second.connection_id == connection_id
+          && admitted->second.ready);
+    const bool same_admission = admitted != topology->peers.end ()
+                                && admitted->second.connection_id == connection_id
+                                && admitted->second.descriptor == descriptor;
+    if (same_admission && admitted->second.ready == ready) {
+        return std::pair{peer_admission_result_t::duplicate_connection, std::function<void ()>{}};
+    }
+
+    auto next = std::make_shared<topology_state_t> (*topology);
+    _not_required_peers.erase (descriptor.node_routing_id);
+    auto key = descriptor.node_routing_id;
+    ++_topology_version;
+    const auto admission_epoch =
+      same_admission ? admitted->second.admission_epoch : _topology_version;
+    next->peers.insert_or_assign (std::move (key),
+                                  admitted_peer_t{std::move (descriptor), std::move (connection_id),
+                                                  admission_epoch, ready, std::move (connection)});
+    auto changed = publish_topology (std::move (next));
+    rebuild_channel_selections ();
+    return std::pair{same_admission ? peer_admission_result_t::duplicate_connection
+                                    : peer_admission_result_t::admitted,
+                     std::move (changed)};
+}
+
+
 bool service_topology_registry_t::disconnect (const std::vector<std::uint8_t> &node_routing_id,
                                               const std::vector<std::uint8_t> &connection_id)
 {
     auto changed =
-      _lane
-        .run ([&, this] {
-            const auto topology =
-              std::atomic_load_explicit (_topology.get (), std::memory_order_acquire);
-            std::function<void ()> changed;
-            const auto found = topology->peers.find (node_routing_id);
-            if (found == topology->peers.end () || found->second.connection_id != connection_id) {
-                return std::pair{false, std::move (changed)};
-            }
-            auto next = std::make_shared<topology_state_t> (*topology);
-            next->peers.erase (node_routing_id);
-            ++_topology_version;
-            changed = publish_topology (std::move (next));
-            rebuild_channel_selections ();
-            return std::pair{true, std::move (changed)};
-        })
-        .get ();
+      _lane.run ([&, this] { return disconnect_on_lane (node_routing_id, connection_id); }).get ();
     if (changed.second)
         changed.second ();
     return changed.first;
 }
+
+std::pair<bool, std::function<void ()>>
+service_topology_registry_t::disconnect_on_lane (const std::vector<std::uint8_t> &node_routing_id,
+                                                 const std::vector<std::uint8_t> &connection_id)
+{
+    const auto topology = std::atomic_load_explicit (_topology.get (), std::memory_order_acquire);
+    std::function<void ()> changed;
+    const auto found = topology->peers.find (node_routing_id);
+    if (found == topology->peers.end () || found->second.connection_id != connection_id) {
+        return std::pair{false, std::move (changed)};
+    }
+    auto next = std::make_shared<topology_state_t> (*topology);
+    next->peers.erase (node_routing_id);
+    ++_topology_version;
+    changed = publish_topology (std::move (next));
+    rebuild_channel_selections ();
+    return std::pair{true, std::move (changed)};
+}
+
 
 std::vector<admitted_peer_t> service_topology_registry_t::peers () const
 {
