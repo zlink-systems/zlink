@@ -125,13 +125,14 @@ class RoomRelocation final : public fx::spot_relocation_adapter_t<Room>
     fx::task_t<std::vector<std::byte>> capture (Room &room, std::stop_token) override
     {
         const HttpRoomSnapshot snapshot{room.state.capture (), room.roster.capture ()};
-        const auto payload = zlink::message_t::from_json (snapshot);
-        co_return std::vector<std::byte> (payload.bytes ().begin (), payload.bytes ().end ());
+        const auto payload = fx::serializer_registry_t{}.get<HttpRoomSnapshot> ().serialize (snapshot);
+        const auto bytes = payload.bytes ();
+        co_return std::vector<std::byte> (bytes.begin (), bytes.end ());
     }
     fx::task_t<void> restore (Room &room, std::vector<std::byte> payload, std::stop_token) override
     {
-        const auto snapshot = zlink::message_t::from (std::span<const std::byte> (payload))
-                                .template parse_json<HttpRoomSnapshot> ();
+        const auto snapshot = fx::serializer_registry_t{}.get<HttpRoomSnapshot> ().deserialize (
+          fx::encoded_payload_t::from_bytes (std::span<const std::byte> (payload)));
         room.roster.restore (snapshot.roster);
         room.state.restore (snapshot.game);
         co_return;

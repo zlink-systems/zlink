@@ -136,10 +136,6 @@ jobs:
       fail-fast: false
       matrix:
         target:
-          - name: win-x64
-            runner: windows-latest
-            rid: win-x64
-            core_platform: windows-x64
           - name: linux-x64
             runner: ubuntu-24.04
             rid: linux-x64
@@ -152,6 +148,8 @@ jobs:
             runner: macos-15
             rid: osx-arm64
             core_platform: macos-arm64
+        # Windows runs on schedule, manual and release runs; merge-queue batches check Linux only.
+        include: ${{ fromJSON(startsWith(github.ref_name, 'mergify/merge-queue/') && '[]' || '[{"target":{"name":"win-x64","runner":"windows-latest","rid":"win-x64","core_platform":"windows-x64"}}]') }}
 
     steps:
       - name: Checkout repository

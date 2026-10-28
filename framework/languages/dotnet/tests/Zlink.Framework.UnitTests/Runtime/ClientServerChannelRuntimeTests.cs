@@ -14,6 +14,189 @@ namespace Zlink.Framework.UnitTests;
 
 public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutputHelper output)
 {
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(false, false, true)]
+    [InlineData(false, true, false)]
+    [InlineData(false, true, true)]
+    [InlineData(true, false, false)]
+    [InlineData(true, false, true)]
+    [InlineData(true, true, false)]
+    [InlineData(true, true, true)]
+    public async Task Server_Same_Channel_Second_Completes_While_First_Awaits(
+        bool automatic,
+        bool firstRequest,
+        bool secondRequest
+    )
+    {
+        var probe = new ChannelTurnProbe();
+        var store = new ZLinkInMemoryProviderLocationStore();
+        var services = new ServiceCollection();
+        services.AddSingleton(probe);
+        services.AddScoped<ChannelTurnScope>();
+        services.AddZLinkFramework(options =>
+        {
+            if (automatic)
+                options.AddLocationStore(store);
+            options
+                .AddClientServerChannel("work")
+                .Server()
+                .Listen(0)
+                .AddSendHandler<ChannelTurnHandler, ChannelTurnMessage>()
+                .AddRequestHandler<ChannelTurnHandler, ChannelTurnMessage, EchoReply>();
+        });
+        await using var server = services.BuildServiceProvider();
+        var serverRuntime = server.GetRequiredService<ZLinkFrameworkRuntime>();
+        var serverLocations = automatic ? server.GetRequiredService<ZLinkLocationRuntime>() : null;
+        if (serverLocations is not null)
+            await serverLocations.StartAsync(RoutingId.From("turn-server"));
+        await serverRuntime.StartAsync(CancellationToken.None);
+        var serverState = await serverRuntime.EnsureStartedStateAsync(CancellationToken.None);
+        var endpoint = (
+            await GetServerBundle(serverState, "work").ClientServerServer!.ReadAsync()
+        ).AdvertisedEndpoint;
+        await using var client = automatic ? CreateAutomaticClient(store) : CreateClient(endpoint);
+        var clientRuntime = client.GetRequiredService<ZLinkFrameworkRuntime>();
+        var clientLocations = automatic ? client.GetRequiredService<ZLinkLocationRuntime>() : null;
+        var serverDiscovery = automatic
+            ? server.GetRequiredService<ZLinkLocationAutoConnectHost>()
+            : null;
+        var clientDiscovery = automatic
+            ? client.GetRequiredService<ZLinkLocationAutoConnectHost>()
+            : null;
+        if (clientLocations is not null)
+            await clientLocations.StartAsync(RoutingId.From("turn-client"));
+        await clientRuntime.StartAsync(CancellationToken.None);
+        Task<EchoReply>? firstReply = null;
+        try
+        {
+            if (serverDiscovery is not null)
+                await serverDiscovery.StartAsync(serverState);
+            if (clientDiscovery is not null)
+                await clientDiscovery.StartAsync(
+                    await clientRuntime.EnsureStartedStateAsync(CancellationToken.None)
+                );
+            var route = client.GetRequiredService<IZLinkRouteClient>();
+            if (firstRequest)
+                firstReply = route
+                    .RequestToChannel("work", new ChannelTurnMessage("first"))
+                    .Async<EchoReply>()
+                    .AsTask();
+            else
+                await route.SendToChannel("work", new ChannelTurnMessage("first")).Async();
+            await probe.FirstStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Task<EchoReply>? secondReply = null;
+            if (secondRequest)
+                secondReply = route
+                    .RequestToChannel("work", new ChannelTurnMessage("second"))
+                    .Async<EchoReply>()
+                    .AsTask();
+            else
+                await route.SendToChannel("work", new ChannelTurnMessage("second")).Async();
+            await probe.SecondCompleted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            if (secondReply is not null)
+                Assert.Equal(
+                    "second",
+                    (await secondReply.WaitAsync(TimeSpan.FromSeconds(5))).Value
+                );
+            Assert.Equal(new[] { "first", "second" }, probe.Starts.ToArray());
+            Assert.Equal(new[] { "second" }, probe.Completions.ToArray());
+            Assert.DoesNotContain("first", probe.DisposedScopes);
+            Assert.False(probe.FirstCompleted.Task.IsCompleted);
+            if (firstReply is not null)
+                Assert.False(firstReply.IsCompleted);
+            probe.Release.TrySetResult();
+            await probe.FirstCompleted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            if (firstReply is not null)
+                Assert.Equal("first", (await firstReply.WaitAsync(TimeSpan.FromSeconds(5))).Value);
+            Assert.Equal(new[] { "second", "first" }, probe.Completions.ToArray());
+        }
+        finally
+        {
+            probe.Release.TrySetResult();
+            if (clientDiscovery is not null)
+                await clientDiscovery.StopAsync();
+            if (serverDiscovery is not null)
+                await serverDiscovery.StopAsync();
+            await clientRuntime.StopAsync(CancellationToken.None);
+            await serverRuntime.StopAsync(CancellationToken.None);
+            if (clientLocations is not null)
+                await clientLocations.StopAsync();
+            if (serverLocations is not null)
+                await serverLocations.StopAsync();
+        }
+        Assert.Equal(new[] { "first", "second" }, probe.DisposedScopes.Order().ToArray());
+    }
+
+    private sealed record ChannelTurnMessage(string Value);
+
+    private sealed class ChannelTurnProbe
+    {
+        internal ConcurrentQueue<string> Starts { get; } = new();
+        internal ConcurrentQueue<string> Completions { get; } = new();
+        internal ConcurrentQueue<string> DisposedScopes { get; } = new();
+        internal TaskCompletionSource FirstStarted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource FirstCompleted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource SecondCompleted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource Release { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+    }
+
+    private sealed class ChannelTurnScope(ChannelTurnProbe probe) : IDisposable
+    {
+        internal string Value { get; set; } = "unset";
+        internal bool Disposed { get; private set; }
+
+        public void Dispose()
+        {
+            Assert.False(Disposed);
+            Disposed = true;
+            probe.DisposedScopes.Enqueue(Value);
+        }
+    }
+
+    private sealed class ChannelTurnHandler(ChannelTurnProbe probe, ChannelTurnScope scope)
+        : IZLinkSendHandler<ChannelTurnMessage>,
+            IZLinkRequestHandler<ChannelTurnMessage, EchoReply>
+    {
+        public ValueTask HandleAsync(
+            ChannelTurnMessage message,
+            IZLinkMessageContext context,
+            CancellationToken cancellationToken
+        ) => HandleTurnAsync(message);
+
+        async ValueTask<EchoReply> IZLinkRequestHandler<ChannelTurnMessage, EchoReply>.HandleAsync(
+            ChannelTurnMessage message,
+            IZLinkMessageContext context,
+            CancellationToken cancellationToken
+        )
+        {
+            await HandleTurnAsync(message);
+            return new EchoReply(message.Value);
+        }
+
+        private async ValueTask HandleTurnAsync(ChannelTurnMessage message)
+        {
+            scope.Value = message.Value;
+            probe.Starts.Enqueue(message.Value);
+            Assert.False(scope.Disposed);
+            if (message.Value == "first")
+            {
+                probe.FirstStarted.TrySetResult();
+                await probe.Release.Task;
+            }
+            Assert.False(scope.Disposed);
+            probe.Completions.Enqueue(message.Value);
+            if (message.Value == "second")
+                probe.SecondCompleted.TrySetResult();
+            else
+                probe.FirstCompleted.TrySetResult();
+        }
+    }
+
     private const string AdmissionTestServerHost = "127.0.0.1";
 
     [Fact]
@@ -363,11 +546,515 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
         Assert.Equal(0, time.WallReads);
     }
 
+    [Fact]
+    public async Task ThousandReadinessRequestsUseOneOwnerTimerAndDeadline()
+    {
+        var time = new ReadinessTimeProvider();
+        await using var client = new ZLinkClientServerClientRuntime(
+            "work",
+            null!,
+            null!,
+            null!,
+            CancellationToken.None,
+            new ZLinkRuntimeErrorSink(),
+            new ZLinkRuntimeTaskRunner(new ZLinkRuntimeErrorSink(), CancellationToken.None),
+            timeProvider: time
+        );
+        var calls = Enumerable
+            .Range(0, 1000)
+            .Select(_ =>
+                client.RequestAsync([], TimeSpan.FromSeconds(1), CancellationToken.None).AsTask()
+            )
+            .ToArray();
+        Assert.Equal(1000, client.PendingRequestCount);
+        Assert.Equal(1, time.TimerCreations);
+        time.AdvanceMonotonic(TimeSpan.FromSeconds(1));
+        foreach (var call in calls)
+        {
+            var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
+                call.WaitAsync(TimeSpan.FromSeconds(5))
+            );
+            Assert.Equal(ZLinkFrameworkErrorKind.DeadlineExceeded, error.Kind);
+        }
+        Assert.Equal(0, client.PendingRequestCount);
+        Assert.Equal(1, time.TimerCreations);
+    }
+
+    [Fact]
+    public async Task DeadlineRegistrationAndDisposalYieldToABusyOwnerLane()
+    {
+        var time = new ReadinessTimeProvider();
+        await using var lane = new Zlink.Framework.Runtime.Execution.ZLinkStateLane();
+        await using var index = new Zlink.Framework.Runtime.Messaging.ZLinkRequestDeadlineIndex(
+            lane,
+            time
+        );
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var occupied = lane.RunAsync(async () =>
+        {
+            entered.SetResult();
+            await release.Task;
+        });
+        await entered.Task;
+        // F2-a: neither registration nor disposal may synchronously wait for this owner.
+        var registering = index.RegisterAsync(TimeSpan.FromMilliseconds(10));
+        Assert.False(registering.IsCompleted);
+        time.AdvanceMonotonic(TimeSpan.FromMilliseconds(10));
+        release.SetResult();
+        await occupied;
+        var request = await registering;
+        time.AdvanceMonotonic(TimeSpan.Zero);
+        await lane.RunAsync(static () => { });
+        var error = await Assert.ThrowsAsync<ZlinkRequestException>(() => request.Completion);
+        Assert.Equal(ZlinkRequestException.ErrorCode.TimedOut, error.Result);
+        Assert.Equal(0, index.PendingCount);
+        entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        occupied = lane.RunAsync(async () =>
+        {
+            entered.SetResult();
+            await release.Task;
+        });
+        await entered.Task;
+        var closing = index.DisposeAsync();
+        Assert.False(closing.IsCompleted);
+        release.SetResult();
+        await occupied;
+        await closing;
+    }
+
+    [Fact]
+    public async Task RequestSourcePartsAreReleasedWhenRegistrationIsRejected()
+    {
+        using var errors = new ZLinkRuntimeErrorSink();
+        var client = new ZLinkClientServerClientRuntime(
+            "work",
+            null!,
+            null!,
+            null!,
+            CancellationToken.None,
+            errors,
+            new ZLinkRuntimeTaskRunner(errors, CancellationToken.None)
+        );
+        await client.DisposeAsync();
+        var part = Message.From("rejected-registration");
+        await Assert.ThrowsAsync<ObjectDisposedException>(() =>
+            client.RequestAsync([part], TimeSpan.FromSeconds(1), CancellationToken.None).AsTask()
+        );
+        Assert.Throws<ObjectDisposedException>(() => part.Size);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RequestSourcePartsAreReleasedWhenCancellationPreventsProduction(
+        bool cancelDuringCall
+    )
+    {
+        using var errors = new ZLinkRuntimeErrorSink();
+        await using var client = new ZLinkClientServerClientRuntime(
+            "work",
+            null!,
+            null!,
+            null!,
+            CancellationToken.None,
+            errors,
+            new ZLinkRuntimeTaskRunner(errors, CancellationToken.None)
+        );
+        using var cancellation = new CancellationTokenSource();
+        if (cancelDuringCall)
+            client.StateChanged += () => cancellation.Cancel();
+        else
+            cancellation.Cancel();
+        var part = Message.From("canceled-production");
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            client.RequestAsync([part], TimeSpan.FromSeconds(1), cancellation.Token).AsTask()
+        );
+        Assert.True(
+            SpinWait.SpinUntil(
+                () =>
+                {
+                    try
+                    {
+                        _ = part.Size;
+                        return false;
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                        return true;
+                    }
+                },
+                TimeSpan.FromSeconds(5)
+            )
+        );
+        Assert.Equal(0, client.PendingRequestCount);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RequestSourcePartsRemainOwnedUntilProductionEnds(bool cancelWhileProducing)
+    {
+        await using var lane = new Zlink.Framework.Runtime.Execution.ZLinkStateLane();
+        await using var index = new Zlink.Framework.Runtime.Messaging.ZLinkRequestDeadlineIndex(
+            lane
+        );
+        using var cancellation = new CancellationTokenSource();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var nativeReply = new TaskCompletionSource<IReadOnlyList<Message>>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var part = Message.From("source-owned-until-native-finishes");
+        var pending = index.RunAsync(
+            TimeSpan.FromSeconds(5),
+            cancellation.Token,
+            (_, _) =>
+            {
+                entered.SetResult();
+                return nativeReply.Task;
+            },
+            sourceParts: [part]
+        );
+        await entered.Task;
+        if (cancelWhileProducing)
+        {
+            cancellation.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pending);
+            Assert.True(part.Size > 0);
+        }
+        var reply = Message.From("native-reply");
+        nativeReply.SetResult([reply]);
+        if (!cancelWhileProducing)
+        {
+            var received = await pending;
+            Assert.Same(reply, Assert.Single(received));
+            reply.Dispose();
+        }
+        Assert.True(
+            SpinWait.SpinUntil(
+                () =>
+                {
+                    try
+                    {
+                        _ = part.Size;
+                        return false;
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                        return true;
+                    }
+                },
+                TimeSpan.FromSeconds(5)
+            )
+        );
+        Assert.Throws<ObjectDisposedException>(() => reply.Size);
+        Assert.Equal(0, index.PendingCount);
+    }
+
+    [Fact]
+    public async Task RequestSourcePartsAreReleasedAfterProducerWaitIsCanceled()
+    {
+        await using var lane = new Zlink.Framework.Runtime.Execution.ZLinkStateLane();
+        await using var index = new Zlink.Framework.Runtime.Messaging.ZLinkRequestDeadlineIndex(
+            lane
+        );
+        using var cancellation = new CancellationTokenSource();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var part = Message.From("readiness-wait");
+        var pending = index.RunAsync(
+            TimeSpan.FromSeconds(5),
+            cancellation.Token,
+            (_, completion) =>
+            {
+                entered.SetResult();
+                return completion;
+            },
+            sourceParts: [part]
+        );
+        await entered.Task;
+        cancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pending);
+        Assert.True(
+            SpinWait.SpinUntil(
+                () =>
+                {
+                    try
+                    {
+                        _ = part.Size;
+                        return false;
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                        return true;
+                    }
+                },
+                TimeSpan.FromSeconds(5)
+            )
+        );
+        Assert.Equal(0, index.PendingCount);
+    }
+
+    [Fact]
+    public async Task RequestSourcePartsAreReleasedAfterDeadlineWaitingForRegistration()
+    {
+        var time = new ReadinessTimeProvider();
+        await using var lane = new Zlink.Framework.Runtime.Execution.ZLinkStateLane();
+        await using var index = new Zlink.Framework.Runtime.Messaging.ZLinkRequestDeadlineIndex(
+            lane,
+            time
+        );
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var occupied = lane.RunAsync(async () =>
+        {
+            entered.SetResult();
+            await release.Task;
+        });
+        await entered.Task;
+        var producing = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var remaining = TimeSpan.MaxValue;
+        var part = Message.From("deadline-during-registration");
+        var pending = index.RunAsync(
+            TimeSpan.FromMilliseconds(10),
+            CancellationToken.None,
+            (entry, completion) =>
+            {
+                remaining = entry.Remaining;
+                producing.SetResult();
+                return completion;
+            },
+            sourceParts: [part]
+        );
+        Assert.False(pending.IsCompleted);
+        time.AdvanceMonotonic(TimeSpan.FromMilliseconds(10));
+        release.SetResult();
+        await occupied;
+        await producing.Task;
+        Assert.True(remaining <= TimeSpan.Zero);
+        time.AdvanceMonotonic(TimeSpan.Zero);
+        var error = await Assert.ThrowsAsync<ZlinkRequestException>(() => pending);
+        Assert.Equal(ZlinkRequestException.ErrorCode.TimedOut, error.Result);
+        Assert.True(
+            SpinWait.SpinUntil(
+                () =>
+                {
+                    try
+                    {
+                        _ = part.Size;
+                        return false;
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                        return true;
+                    }
+                },
+                TimeSpan.FromSeconds(5)
+            )
+        );
+        Assert.Equal(0, index.PendingCount);
+    }
+
+    [Fact]
+    public async Task RequestSourcePartsAreReleasedWhenDeadlineCreationFails()
+    {
+        var time = new ReadinessTimeProvider();
+        await using var lane = new ZLinkStateLane();
+        await using var index = new ZLinkRequestDeadlineIndex(lane, time);
+        var failure = new InvalidOperationException("request-entry-clock-failure");
+        time.TimestampFailure = failure;
+        var part = Message.From("entry-construction-failure");
+        Assert.Same(
+            failure,
+            Assert.Throws<InvalidOperationException>(() =>
+            {
+                _ = index.RunAsync(
+                    TimeSpan.FromSeconds(1),
+                    CancellationToken.None,
+                    static (_, _) => Task.FromResult<IReadOnlyList<Message>>([]),
+                    sourceParts: [part]
+                );
+            })
+        );
+        Assert.Throws<ObjectDisposedException>(() => part.Size);
+        Assert.Equal(0, index.PendingCount);
+        time.TimestampFailure = null;
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RequestRegistrationRollsBackWhenTimerChangeFails(bool anotherRequestIsPending)
+    {
+        var time = new ReadinessTimeProvider();
+        await using var lane = new ZLinkStateLane();
+        await using var index = new ZLinkRequestDeadlineIndex(lane, time);
+        var existing = anotherRequestIsPending
+            ? await index.RegisterAsync(TimeSpan.FromSeconds(1))
+            : default;
+        var failure = new InvalidOperationException("request-registration-timer-failure");
+        time.ChangeFailure = failure;
+        var produced = 0;
+        var part = Message.From("registration-rollback");
+        var pending = index.RunAsync(
+            TimeSpan.FromMilliseconds(10),
+            CancellationToken.None,
+            (_, _) =>
+            {
+                produced++;
+                return Task.FromResult<IReadOnlyList<Message>>([]);
+            },
+            sourceParts: [part]
+        );
+        Assert.Same(failure, await Assert.ThrowsAsync<InvalidOperationException>(() => pending));
+        Assert.Equal(anotherRequestIsPending ? 1 : 0, index.PendingCount);
+        Assert.Equal(0, produced);
+        Assert.Throws<ObjectDisposedException>(() => part.Size);
+        time.ChangeFailure = null;
+        if (!anotherRequestIsPending)
+            existing = await index.RegisterAsync(TimeSpan.FromMilliseconds(10));
+        // A failed earlier registration neither replaces the old timer nor suppresses the next one.
+        time.AdvanceMonotonic(
+            anotherRequestIsPending ? TimeSpan.FromSeconds(1) : TimeSpan.FromMilliseconds(10)
+        );
+        await lane.RunAsync(static () => { });
+        var timedOut = await Assert.ThrowsAsync<ZlinkRequestException>(() => existing.Completion);
+        Assert.Equal(ZlinkRequestException.ErrorCode.TimedOut, timedOut.Result);
+        Assert.Equal(0, index.PendingCount);
+        time.AdvanceMonotonic(TimeSpan.FromSeconds(1));
+        await lane.RunAsync(static () => { });
+        await index.DisposeAsync();
+        Assert.Same(failure, pending.Exception!.InnerException);
+        Assert.Equal(0, index.PendingCount);
+    }
+
+    [Fact]
+    public async Task RequestSourcePartsAreReleasedWhenOwnerTimestampFailsAfterEntryCreation()
+    {
+        var time = new ReadinessTimeProvider();
+        await using var lane = new ZLinkStateLane();
+        await using var index = new ZLinkRequestDeadlineIndex(lane, time);
+        var failure = new InvalidOperationException("owner-registration-clock-failure");
+        time.TimestampFailure = failure;
+        time.SuccessfulTimestampReadsBeforeFailure = 1;
+        var part = Message.From("owner-clock-failure");
+        var pending = index.RunAsync(
+            TimeSpan.FromSeconds(1),
+            CancellationToken.None,
+            static (_, _) => Task.FromResult<IReadOnlyList<Message>>([]),
+            sourceParts: [part]
+        );
+        Assert.Same(failure, await Assert.ThrowsAsync<InvalidOperationException>(() => pending));
+        Assert.Throws<ObjectDisposedException>(() => part.Size);
+        Assert.Equal(0, index.PendingCount);
+        time.TimestampFailure = null;
+        await index.DisposeAsync();
+        Assert.Equal(0, index.PendingCount);
+    }
+
+    [Fact]
+    public async Task DeadlineTimerFailureUsesTheRuntimeFailureReporter()
+    {
+        var time = new ReadinessTimeProvider();
+        await using var lane = new Zlink.Framework.Runtime.Execution.ZLinkStateLane();
+        using var errors = new ZLinkRuntimeErrorSink();
+        var reported = new TaskCompletionSource<Exception>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        errors.UnhandledCallbackException += error => reported.TrySetResult(error);
+        await using var index = new Zlink.Framework.Runtime.Messaging.ZLinkRequestDeadlineIndex(
+            lane,
+            time,
+            errors
+        );
+        var request = await index.RegisterAsync(TimeSpan.FromMilliseconds(10));
+        var failure = new InvalidOperationException("deadline-visit-clock-failure");
+        time.TimestampFailure = failure;
+        time.AdvanceMonotonic(TimeSpan.FromMilliseconds(10));
+        Assert.Same(failure, await reported.Task.WaitAsync(TimeSpan.FromSeconds(5)));
+        request.Entry.Complete([]);
+        await request.Completion;
+    }
+
+    [Fact]
+    public async Task CompletedRequestKeepsReservedVisitUntilEmptyVisit()
+    {
+        var time = new ReadinessTimeProvider();
+        await using var lane = new Zlink.Framework.Runtime.Execution.ZLinkStateLane();
+        await using var index = new Zlink.Framework.Runtime.Messaging.ZLinkRequestDeadlineIndex(
+            lane,
+            time
+        );
+        var request = await index.RegisterAsync(TimeSpan.FromMilliseconds(10));
+        request.Entry.Complete([]);
+        await request.Completion;
+        var next = await index.RegisterAsync(TimeSpan.FromSeconds(1));
+        // Spec 01 §10.1 (PR #2889): retain reservations until a visit; stop after an empty visit.
+        Assert.Equal(1, time.Schedules);
+        next.Entry.Complete([]);
+        await next.Completion;
+        time.AdvanceMonotonic(TimeSpan.FromMilliseconds(10));
+        await lane.RunAsync(static () => { });
+        Assert.Equal(1, time.Visits);
+        Assert.Equal(1, time.Schedules);
+        time.AdvanceMonotonic(TimeSpan.FromSeconds(1));
+        await lane.RunAsync(static () => { });
+        Assert.Equal(1, time.Visits);
+    }
+
+    [Fact]
+    public async Task SerialRequestsRetainReservedVisitAndStopAfterOneEmptyVisit()
+    {
+        var time = new ReadinessTimeProvider();
+        await using var lane = new Zlink.Framework.Runtime.Execution.ZLinkStateLane();
+        await using var index = new Zlink.Framework.Runtime.Messaging.ZLinkRequestDeadlineIndex(
+            lane,
+            time
+        );
+        // Spec 01 §10.1 (PR #2889): retain reservations until a visit; stop after an empty visit.
+        for (var i = 0; i < 1000; i++)
+        {
+            var request = await index.RegisterAsync(TimeSpan.FromMilliseconds(1000));
+            request.Entry.Complete([]);
+            await request.Completion;
+            time.AdvanceMonotonic(TimeSpan.FromMilliseconds(1));
+            await lane.RunAsync(static () => { });
+        }
+        Assert.Equal(0, index.PendingCount);
+        var rotations = (int)(time.GetTimestamp() / TimeSpan.FromMilliseconds(256).Ticks);
+        Assert.InRange(time.Schedules, 1, rotations + 1);
+        var visits = time.Visits;
+        time.AdvanceMonotonic(TimeSpan.FromMilliseconds(256));
+        await lane.RunAsync(static () => { });
+        Assert.InRange(time.Visits - visits, 0, 1);
+        var idleVisits = time.Visits;
+        var idleSchedules = time.Schedules;
+        for (var i = 0; i < 4; i++)
+        {
+            time.AdvanceMonotonic(TimeSpan.FromMilliseconds(256));
+            await lane.RunAsync(static () => { });
+        }
+        Assert.Equal(idleVisits, time.Visits);
+        Assert.Equal(idleSchedules, time.Schedules);
+        output.WriteLine(
+            $"serial_requests=1000 rotations={rotations} schedules={time.Schedules} trailing_empty_visits={idleVisits - visits} subsequent_visits={time.Visits - idleVisits}"
+        );
+        var resumed = await index.RegisterAsync(TimeSpan.FromMilliseconds(1000));
+        Assert.Equal(idleSchedules + 1, time.Schedules);
+        resumed.Entry.Complete([]);
+        await resumed.Completion;
+    }
+
     private sealed class ReadinessTimeProvider : TimeProvider
     {
         private readonly ControllableTimeProvider _time = new();
         private DateTimeOffset _wall = DateTimeOffset.UnixEpoch;
         internal int WallReads { get; private set; }
+        internal int TimerCreations { get; private set; }
+        internal int Schedules { get; private set; }
+        internal int Visits { get; private set; }
         public override long TimestampFrequency => _time.TimestampFrequency;
 
         public override DateTimeOffset GetUtcNow()
@@ -376,14 +1063,59 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
             return _wall;
         }
 
-        public override long GetTimestamp() => _time.GetTimestamp();
+        internal Exception? TimestampFailure { get; set; }
+        internal int SuccessfulTimestampReadsBeforeFailure { get; set; }
+        internal Exception? ChangeFailure { get; set; }
+
+        public override long GetTimestamp()
+        {
+            if (TimestampFailure is { } error)
+            {
+                if (SuccessfulTimestampReadsBeforeFailure == 0)
+                    throw error;
+                SuccessfulTimestampReadsBeforeFailure--;
+            }
+            return _time.GetTimestamp();
+        }
 
         public override ITimer CreateTimer(
             TimerCallback callback,
             object? state,
             TimeSpan dueTime,
             TimeSpan period
-        ) => _time.CreateTimer(callback, state, dueTime, period);
+        )
+        {
+            TimerCreations++;
+            return new ObservedTimer(
+                this,
+                _time.CreateTimer(
+                    s =>
+                    {
+                        Visits++;
+                        callback(s);
+                    },
+                    state,
+                    dueTime,
+                    period
+                )
+            );
+        }
+
+        private sealed class ObservedTimer(ReadinessTimeProvider owner, ITimer inner) : ITimer
+        {
+            public bool Change(TimeSpan dueTime, TimeSpan period)
+            {
+                if (owner.ChangeFailure is { } error)
+                    throw error;
+                if (dueTime != Timeout.InfiniteTimeSpan)
+                    owner.Schedules++;
+                return inner.Change(dueTime, period);
+            }
+
+            public void Dispose() => inner.Dispose();
+
+            public ValueTask DisposeAsync() => inner.DisposeAsync();
+        }
 
         internal void AdvanceMonotonic(TimeSpan delta) => _time.AdvanceMonotonic(delta);
 
@@ -2345,13 +3077,17 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
 
         const int iterations = 1000;
         var matches = 0;
-        var start = GC.GetAllocatedBytesForCurrentThread();
-        for (var index = 0; index < iterations; index++)
-            if (ZLinkClientServerControlProtocol.IsControl(parts))
-                matches++;
-        var allocated = GC.GetAllocatedBytesForCurrentThread() - start;
+        var allocated = PerCallAllocation.MinWindow(
+            _ =>
+            {
+                if (ZLinkClientServerControlProtocol.IsControl(parts))
+                    matches++;
+            },
+            iterations,
+            beforeWindow: _ => matches = 0
+        );
 
-        output.WriteLine($"IsControl length={length} prefix={prefix}: {allocated} B/{iterations}");
+        output.WriteLine($"IsControl length={length} prefix={prefix}: {allocated} B/window");
         Assert.Equal(prefix && length >= 3 ? iterations : 0, matches);
         Assert.True(message.AsReadOnlySpan().SequenceEqual(bytes));
         Assert.Equal(0, allocated);
@@ -2384,19 +3120,23 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
 
         const int iterations = 1000;
         var matches = 0;
-        var start = GC.GetAllocatedBytesForCurrentThread();
-        for (var index = 0; index < iterations; index++)
-        {
-            if (ZLinkClientServerControlProtocol.TryDecodeLivenessProbe(probes, out var probeId))
-                matches += probeId == 11 ? 1 : 0;
-            if (ZLinkClientServerControlProtocol.TryDecodeLivenessAck(acks, out var ackId))
-                matches += ackId == 11 ? 1 : 0;
-            if (ZLinkClientServerControlProtocol.TryDecodeReject(rejects, out var reason))
-                matches += reason == 1 ? 1 : 0;
-        }
-        var allocated = GC.GetAllocatedBytesForCurrentThread() - start;
+        var allocated = PerCallAllocation.MinWindow(
+            _ =>
+            {
+                if (
+                    ZLinkClientServerControlProtocol.TryDecodeLivenessProbe(probes, out var probeId)
+                )
+                    matches += probeId == 11 ? 1 : 0;
+                if (ZLinkClientServerControlProtocol.TryDecodeLivenessAck(acks, out var ackId))
+                    matches += ackId == 11 ? 1 : 0;
+                if (ZLinkClientServerControlProtocol.TryDecodeReject(rejects, out var reason))
+                    matches += reason == 1 ? 1 : 0;
+            },
+            iterations,
+            beforeWindow: _ => matches = 0
+        );
 
-        output.WriteLine($"Control readers valid={valid}: {allocated} B/{iterations}");
+        output.WriteLine($"Control readers valid={valid}: {allocated} B/window");
         Assert.Equal(valid ? iterations * 3 : 0, matches);
         Assert.Equal(0, allocated);
     }

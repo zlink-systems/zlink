@@ -778,6 +778,9 @@ final class ZLinkClientServerM6ARuntimeTest {
                                 getClass().getClassLoader(),
                                 new Class<?>[] {ZLinkBackendDealerSocket.class},
                                 (proxy, method, arguments) -> {
+                                    if (method.isDefault() && method.getName().equals("requestTo"))
+                                        return java.lang.reflect.InvocationHandler.invokeDefault(
+                                                proxy, method, arguments);
                                     switch (method.getName()) {
                                         case "request" -> {
                                             assertEquals(Duration.ofSeconds(1), arguments[1]);
@@ -1024,29 +1027,28 @@ final class ZLinkClientServerM6ARuntimeTest {
                 Proxy.newProxyInstance(
                         ZLinkBackendDealerSocket.class.getClassLoader(),
                         new Class<?>[] {ZLinkBackendDealerSocket.class},
-                        (proxy, method, arguments) ->
-                                switch (method.getName()) {
-                                    case "name" -> name;
-                                    case "receiveAdmission" -> receiveAdmission.get();
-                                    case "setReceiveAdmission" -> {
-                                        receiveAdmission.set((Runnable) arguments[0]);
-                                        yield null;
-                                    }
-                                    case "equals" -> proxy == arguments[0];
-                                    case "hashCode" -> System.identityHashCode(proxy);
-                                    case "close",
-                                            "connect",
-                                            "disconnect",
-                                            "bind",
-                                            "setChannelName" ->
-                                            null;
-                                    case "send" -> CompletableFuture.completedFuture(null);
-                                    case "request" -> new CompletableFuture<ZLinkBackendReceived>();
-                                    case "recv" -> null;
-                                    default ->
-                                            throw new UnsupportedOperationException(
-                                                    method.getName());
-                                });
+                        (proxy, method, arguments) -> {
+                            if (method.isDefault() && method.getName().equals("requestTo"))
+                                return java.lang.reflect.InvocationHandler.invokeDefault(
+                                        proxy, method, arguments);
+                            return switch (method.getName()) {
+                                case "name" -> name;
+                                case "receiveAdmission" -> receiveAdmission.get();
+                                case "setReceiveAdmission" -> {
+                                    receiveAdmission.set((Runnable) arguments[0]);
+                                    yield null;
+                                }
+                                case "equals" -> proxy == arguments[0];
+                                case "hashCode" -> System.identityHashCode(proxy);
+                                case "close", "connect", "disconnect", "bind", "setChannelName" ->
+                                        null;
+                                case "send" -> CompletableFuture.completedFuture(null);
+                                case "request" -> new CompletableFuture<ZLinkBackendReceived>();
+                                case "recv" -> null;
+                                default ->
+                                        throw new UnsupportedOperationException(method.getName());
+                            };
+                        });
     }
 
     private static ZLinkBackendDealerSocket admittingDealer(
@@ -1056,41 +1058,40 @@ final class ZLinkClientServerM6ARuntimeTest {
                 Proxy.newProxyInstance(
                         ZLinkBackendDealerSocket.class.getClassLoader(),
                         new Class<?>[] {ZLinkBackendDealerSocket.class},
-                        (proxy, method, arguments) ->
-                                switch (method.getName()) {
-                                    case "name" -> name;
-                                    case "receiveAdmission" -> receiveAdmission.get();
-                                    case "setReceiveAdmission" -> {
-                                        receiveAdmission.set((Runnable) arguments[0]);
-                                        yield null;
-                                    }
-                                    case "equals" -> proxy == arguments[0];
-                                    case "hashCode" -> System.identityHashCode(proxy);
-                                    case "close",
-                                            "connect",
-                                            "disconnect",
-                                            "bind",
-                                            "setChannelName" ->
-                                            null;
-                                    case "request" -> {
-                                        Message response =
-                                                Message.from(
-                                                        ZLinkClientServerServiceWire.encodeAdmit(
-                                                                descriptor, Integer.MAX_VALUE));
-                                        yield CompletableFuture.completedFuture(
-                                                new ZLinkBackendReceived(
-                                                        ZLinkBackendRequestResult.OK,
-                                                        Optional.empty(),
-                                                        Optional.empty(),
-                                                        Optional.empty(),
-                                                        List.of(response)));
-                                    }
-                                    case "send" -> CompletableFuture.completedFuture(null);
-                                    case "recv" -> null;
-                                    default ->
-                                            throw new UnsupportedOperationException(
-                                                    method.getName());
-                                });
+                        (proxy, method, arguments) -> {
+                            if (method.isDefault() && method.getName().equals("requestTo"))
+                                return java.lang.reflect.InvocationHandler.invokeDefault(
+                                        proxy, method, arguments);
+                            return switch (method.getName()) {
+                                case "name" -> name;
+                                case "receiveAdmission" -> receiveAdmission.get();
+                                case "setReceiveAdmission" -> {
+                                    receiveAdmission.set((Runnable) arguments[0]);
+                                    yield null;
+                                }
+                                case "equals" -> proxy == arguments[0];
+                                case "hashCode" -> System.identityHashCode(proxy);
+                                case "close", "connect", "disconnect", "bind", "setChannelName" ->
+                                        null;
+                                case "request" -> {
+                                    Message response =
+                                            Message.from(
+                                                    ZLinkClientServerServiceWire.encodeAdmit(
+                                                            descriptor, Integer.MAX_VALUE));
+                                    yield CompletableFuture.completedFuture(
+                                            new ZLinkBackendReceived(
+                                                    ZLinkBackendRequestResult.OK,
+                                                    Optional.empty(),
+                                                    Optional.empty(),
+                                                    Optional.empty(),
+                                                    List.of(response)));
+                                }
+                                case "send" -> CompletableFuture.completedFuture(null);
+                                case "recv" -> null;
+                                default ->
+                                        throw new UnsupportedOperationException(method.getName());
+                            };
+                        });
     }
 
     private static final class SingleDescriptorStore extends ZLinkLocationStoreTestAdapter {
@@ -1176,30 +1177,33 @@ final class ZLinkClientServerM6ARuntimeTest {
                 Proxy.newProxyInstance(
                         ZLinkBackendRouterSocket.class.getClassLoader(),
                         new Class<?>[] {ZLinkBackendRouterSocket.class},
-                        (proxy, method, arguments) ->
-                                switch (method.getName()) {
-                                    case "name" -> "router";
-                                    case "maxMessageSize" -> 4096L;
-                                    case "peerWeight" -> 100;
-                                    case "lastEndpoint" -> "tcp://127.0.0.1:7001";
-                                    case "close",
-                                            "connect",
-                                            "disconnect",
-                                            "bind",
-                                            "setChannelName",
-                                            "setRoutingId",
-                                            "setConnectRoutingId",
-                                            "setProbe",
-                                            "setMaxMessageSize",
-                                            "setPeerWeight",
-                                            "reply" ->
-                                            null;
-                                    case "send", "request" -> false;
-                                    case "recv" -> null;
-                                    default ->
-                                            throw new UnsupportedOperationException(
-                                                    method.getName());
-                                });
+                        (proxy, method, arguments) -> {
+                            if (method.isDefault() && method.getName().equals("requestTo"))
+                                return java.lang.reflect.InvocationHandler.invokeDefault(
+                                        proxy, method, arguments);
+                            return switch (method.getName()) {
+                                case "name" -> "router";
+                                case "maxMessageSize" -> 4096L;
+                                case "peerWeight" -> 100;
+                                case "lastEndpoint" -> "tcp://127.0.0.1:7001";
+                                case "close",
+                                        "connect",
+                                        "disconnect",
+                                        "bind",
+                                        "setChannelName",
+                                        "setRoutingId",
+                                        "setConnectRoutingId",
+                                        "setProbe",
+                                        "setMaxMessageSize",
+                                        "setPeerWeight",
+                                        "reply" ->
+                                        null;
+                                case "send", "request" -> false;
+                                case "recv" -> null;
+                                default ->
+                                        throw new UnsupportedOperationException(method.getName());
+                            };
+                        });
     }
 
     private static ZLinkMonitoringBackendAdapter immediateReadyMonitoringAdapter() {

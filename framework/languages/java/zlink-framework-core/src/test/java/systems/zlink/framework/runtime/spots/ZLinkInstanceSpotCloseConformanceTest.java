@@ -56,6 +56,53 @@ final class ZLinkInstanceSpotCloseConformanceTest {
     private static Observation current;
 
     @Test
+    void instancePopulationIsOneAfterCreationAndZeroAfterRelease() throws Exception {
+        String spotId = "java-instance-metric-" + UUID.randomUUID();
+        Observation observation = new Observation(false, false);
+        observation.closingRelease.complete(null);
+        current = observation;
+        var options = new DefaultZLinkFrameworkOptions();
+        options.addLocationStore(new ObservedStore(spotId, observation));
+        options.addRelocationStore(new systems.zlink.framework.runtime.InMemoryRelocationStore());
+        options.addRouteMesh(MESH)
+                .listen("tcp://127.0.0.1:0")
+                .setRoutingId(RoutingId.from(spotId))
+                .objects()
+                .server()
+                .addEntrySpot(Entry.class)
+                .addInstanceSpotFactory(
+                        TYPE, Instance.class, factory -> factory.disableRelocation());
+        var tags = Map.of("mesh_name", MESH, "spot_kind", "instance");
+        try (var metrics =
+                systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetricProbe
+                        .install()) {
+            try (var runtime =
+                    ZLinkFrameworkRuntimeTestAccess.start(options, new CapturingBackend())) {
+                awaitServing(runtime);
+                runtime.route()
+                        .requestToSpot(spotId, new InitialProbe())
+                        .instanceSpot(TYPE)
+                        .inMesh(MESH)
+                        .timeout(WAIT)
+                        .submit(Reply.class)
+                        .toCompletableFuture()
+                        .get(WAIT.toSeconds(), TimeUnit.SECONDS);
+                assertEquals(1, metrics.observable("zlink.spot.count", tags));
+                runtime.route()
+                        .sendToSpot(spotId, new CloseProbe())
+                        .instanceSpot(TYPE)
+                        .inMesh(MESH)
+                        .submit()
+                        .toCompletableFuture()
+                        .get(WAIT.toSeconds(), TimeUnit.SECONDS);
+                assertTrue(observation.closeResult.get(WAIT.toSeconds(), TimeUnit.SECONDS));
+                assertEquals(0, metrics.observable("zlink.spot.count", tags));
+            }
+            assertEquals(0, metrics.observable("zlink.spot.count", tags));
+        }
+    }
+
+    @Test
     void readyCommitRebuildsSharedCapacityConflictWithoutReinitializing() throws Exception {
         String spotId = "java-instance-ready-conflict-" + UUID.randomUUID();
         Observation observation = new Observation(false, false);

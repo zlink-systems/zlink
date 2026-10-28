@@ -1,3 +1,4 @@
+const { inspectRuntime } = require('../../packages/framework/dist/runtime/internal-observation');
 const routingIds = require('../../packages/framework/dist/runtime/routing-id');
 const assert = require('node:assert/strict');
 const test = require('node:test');
@@ -17,6 +18,15 @@ const {
 const {
   OperationRegistry
 } = require('../../packages/framework/dist/runtime/foundation/operation-registry');
+
+function deliver(runtime, sourceNodeRid, frames) {
+  return runtime.tryHandleControl('mesh', {
+    sourceNodeRid,
+    parts: (Array.isArray(frames) ? frames : [frames]).map((frame) => ({
+      data: () => Buffer.from(frame), close() {}
+    }))
+  });
+}
 
 function fixture(targetRid = 'C', expired = false, sourceRid = 'A', flowEnabled = false) {
   let submitted;
@@ -94,6 +104,7 @@ function fixture(targetRid = 'C', expired = false, sourceRid = 'A', flowEnabled 
   };
   const node = {
     status: () => ({ routingId: sourceRid, lifecycleGeneration: 7n }),
+    sendInfrastructureControl: (rid, bytes) => sendAck(rid, bytes),
     acceptRelocatedActorTerminal: (...args) => requester.acceptRelocatedActorTerminal(...args)
   };
   const receiver = new ZLinkHostServiceRelocationRuntime({
@@ -109,24 +120,29 @@ function fixture(targetRid = 'C', expired = false, sourceRid = 'A', flowEnabled 
   });
   const target = new ZLinkHostServiceRelocationRuntime({
     registration: { messageSerializers: undefined },
+    meshNode: () => targetNode,
     flowCreationEnabled: () => flowEnabled,
     locationStore: () => store,
     liveDescriptors: async () => descriptors
   });
   const relays = [];
   const acks = [];
-  target.sendInfrastructureControl = async (_mesh, rid, parts) => {
+  const targetNode = {
+    sendInfrastructureControl() { throw new Error('terminal relay requires multipart frames'); },
+    sendInfrastructureControlFrames: (rid, parts) => sendRelay(rid, parts)
+  };
+  const sendRelay = async (rid, parts) => {
     assert.equal(routingIds.routingIdsEqual(rid, sourceRid), true);
     const relay = wire.decodeMaintenanceReplyRelay(parts);
     relays.push(relay);
-    await receiver.handleReplyRelay('mesh', relay, targetRid);
+    await deliver(receiver, targetRid, parts);
     return SubmitResult.Ok;
   };
-  receiver.sendInfrastructureControl = async (_mesh, rid, bytes) => {
+  const sendAck = async (rid, bytes) => {
     assert.equal(rid, targetRid);
     const ack = wire.decodeMaintenanceReplyRelayAck(bytes);
     acks.push(ack);
-    await target.acceptReplyRelayAck('mesh', ack, sourceRid);
+    await deliver(target, sourceRid, bytes);
     return SubmitResult.Ok;
   };
   const packet = {
@@ -161,6 +177,7 @@ function fixture(targetRid = 'C', expired = false, sourceRid = 'A', flowEnabled 
   };
   return {
     requester,
+    targetNode,
     pending,
     operation,
     source,
@@ -236,10 +253,10 @@ for (const targetRid of ['C', 'D']) {
       assert.deepEqual(f.leaseReads, ['owner-A']);
       assert.deepEqual(f.acks[0].requestSource, f.source);
       assert.equal(f.acks[0].status, 'terminalReceived');
-      await f.receiver.handleReplyRelay('mesh', f.relays[0], targetRid);
+      await deliver(f.receiver, targetRid, wire.encodeMaintenanceReplyRelay(f.relays[0]));
       assert.equal(f.acks[1].status, 'alreadyTerminal');
-      await f.target.acceptReplyRelayAck('mesh', f.acks[0], 'A');
-      assert.equal(f.target.pendingReplyRelays.size, 0);
+      await deliver(f.target, 'A', wire.encodeMaintenanceReplyRelayAck(f.acks[0]));
+      assert.equal(f.target[inspectRuntime]().pendingReplyRelays, 0);
       assert.equal(f.requester.pendingOperationCount, 0);
       assert.equal(
         f.requester.acceptRelocatedActorTerminal(
@@ -272,7 +289,7 @@ test('command 33 and 46 preserve the original requester binary RID', async () =>
     assert.equal((await f.pending.promise).terminalResult, RequestResult.Ok);
     assert.equal(routingIds.encodeRoutingIdStorageHex(f.acks[0].requestSource.nodeRid), 'ff');
     assert.equal(f.acks[0].status, 'terminalReceived');
-    assert.equal(f.target.pendingReplyRelays.size, 0);
+    assert.equal(f.target[inspectRuntime]().pendingReplyRelays, 0);
   } finally {
     f.requester.close();
   }
@@ -295,7 +312,7 @@ test('the target clears an expired original source lease without consulting B', 
     assert.equal(delivery, 'sourceLeaseExpired');
     assert.deepEqual(f.leaseReads, ['owner-A']);
     assert.equal(f.relays.length, 0);
-    assert.equal(f.target.pendingReplyRelays.size, 0);
+    assert.equal(f.target[inspectRuntime]().pendingReplyRelays, 0);
   } finally {
     const closed = assert.rejects(f.pending.promise);
     f.requester.close();
@@ -309,7 +326,7 @@ test('the target rejects an ACK whose original source generation changed', async
   const admission = new Promise((resolve) => {
     sent = resolve;
   });
-  f.target.sendInfrastructureControl = async () => {
+  f.targetNode.sendInfrastructureControlFrames = async () => {
     sent();
     return SubmitResult.Ok;
   };
@@ -328,17 +345,17 @@ test('the target rejects an ACK whose original source generation changed', async
   const rejected = assert.rejects(delivery, /durable source fence/);
   try {
     await admission;
-    await f.target.acceptReplyRelayAck(
-      'mesh',
-      {
+    await deliver(
+      f.target,
+      'A',
+      wire.encodeMaintenanceReplyRelayAck({
         ...request,
         requestSource: { ...f.source, nodeGeneration: 8n },
         status: 'terminalReceived'
-      },
-      'A'
+      })
     );
     await rejected;
-    assert.equal(f.target.pendingReplyRelays.size, 0);
+    assert.equal(f.target[inspectRuntime]().pendingReplyRelays, 0);
   } finally {
     const closed = assert.rejects(f.pending.promise);
     f.requester.close();
@@ -370,8 +387,9 @@ for (const local of [false, true]) {
     });
     const job = { close() {} };
     const owner = { takeInitial: () => job, close() {} };
+    let ingressHandler;
     const raw = {
-      setServiceIngress() {},
+      setServiceIngress(handler) { ingressHandler = handler; },
       topology: { peer: () => ({ descriptor: { lifecycleGeneration: 7n } }) },
       mailbox: {
         tryEnqueue(record) {
@@ -423,7 +441,7 @@ for (const local of [false, true]) {
           parts: [
             wire.encodeActorHeader(
               'actorRequest',
-              runtime.tryActorFence(actor),
+              { actor, targetNodeGeneration: 8n, authorityOwnerGeneration: 1n, ownerLeaseGeneration: 1n },
               91n,
               undefined,
               undefined,
@@ -436,7 +454,7 @@ for (const local of [false, true]) {
             })
           ]
         };
-        assert.equal(await runtime.ingress(ingress), 'application');
+        assert.equal(await ingressHandler(ingress), 'application');
         assert.equal(reads, 0);
         assert.equal(
           await queued.sourcePreparationOwner.prepareDispatch(queued, new AbortController().signal),

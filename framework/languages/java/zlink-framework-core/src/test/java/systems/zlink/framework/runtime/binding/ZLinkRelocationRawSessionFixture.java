@@ -44,7 +44,8 @@ public final class ZLinkRelocationRawSessionFixture implements AutoCloseable {
             peer.connect(endpoint);
             peerPort.send(peer, localRid, List.of(new byte[] {1})).toCompletableFuture().join();
             assertTrue(port.waitForReadable(router, Duration.ofSeconds(1)));
-            try (var inbound = port.receiveNow(router).orElseThrow()) {
+            try (var inbound = port.receiveNow(router)) {
+                assertNotNull(inbound);
                 assertEquals(peerRid, inbound.source());
             }
             var topology = new ZLinkServiceTopologyRegistry(descriptor(localRid, 17));
@@ -65,7 +66,8 @@ public final class ZLinkRelocationRawSessionFixture implements AutoCloseable {
 
     public void assertFirstPush() {
         assertTrue(peerPort.waitForReadable(peer, Duration.ofSeconds(1)));
-        try (var inbound = peerPort.receiveNow(peer).orElseThrow()) {
+        try (var inbound = peerPort.receiveNow(peer)) {
+            assertNotNull(inbound);
             assertEquals(2, inbound.frames().size());
             var sent =
                     new ZLinkServiceM6BWireCodec()

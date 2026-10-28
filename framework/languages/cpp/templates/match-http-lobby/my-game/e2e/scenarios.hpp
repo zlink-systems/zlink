@@ -4,6 +4,8 @@
 #include <future>
 #include <thread>
 
+#include "test_json.hpp"
+
 namespace MyGame::E2E
 {
 inline MatchResponse match_http (const std::string &endpoint, const std::string &player)
@@ -36,7 +38,7 @@ inline MatchResponse match_http (const std::string &endpoint, const std::string 
     io.run ();
     require (!failure, "HTTP match transport failed: " + failure.message ());
     require (response.result () == http::status::ok, "HTTP match failed: " + response.body ());
-    return nlohmann::json::parse (response.body ()).get<MatchResponse> ();
+    return test_json_match_http_domain::decode<MatchResponse> (nlohmann::json::parse (response.body ()));
 }
 
 inline const PlayerView &player_view (const RoomView &view, const std::string &id)
@@ -315,7 +317,6 @@ inline void input_scenario (Client &a, Client &b)
                    Rejection::integer_out_of_range,
                    &other);
 }
-
 
 inline ActionRejected reject_move (Pair &pair, Client &mover, double dx, double dy,
                                    std::int64_t sequence, const std::string &reason)

@@ -437,9 +437,7 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
                         message ->
                                 host.dispatchQueuedInstanceMessage(
                                         this, (ZLinkBackendReceived) message),
-                        () ->
-                                existingCloseCoordinator() != null
-                                        && existingCloseCoordinator().committed())
+                        this::hasCommittedClose)
                 .whenComplete(
                         (ignored, failure) -> {
                             if (failure != null) result.completeExceptionally(failure);

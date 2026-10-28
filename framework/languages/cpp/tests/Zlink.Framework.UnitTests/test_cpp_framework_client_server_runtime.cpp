@@ -1,9 +1,11 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+#include <zlink/json.hpp>
 #include "../support/runtime_failure_fixture.hpp"
 
 #include "runtime/client_server/raw_client_server_owner.hpp"
 #include "runtime/client_server/client_server_location_runtime.hpp"
 #include "runtime/client_server/client_server_failure_mapper.hpp"
+#include "runtime/dispatch/coroutine_executor.hpp"
 #include "runtime/channels/channel_runtime.hpp"
 #include "runtime/diagnostics/listener_status_registry.hpp"
 #include "runtime/diagnostics/dispatch_options_access.hpp"
@@ -44,6 +46,13 @@ namespace zlink::framework::runtime::client_server
 // Reaches the two steps of one status query so a test can order two queries between them.
 struct client_server_location_runtime_test_access_t
 {
+    static task_t<void> drain (client_server_location_runtime_t &runtime,
+                               std::shared_ptr<raw_client_server_server_t> server)
+    {
+        return handler_coroutine_executor ().submit<void> (
+          [&runtime, server] { return runtime.drain_server_owner (server, "overlap"); });
+    }
+
     static client_server_channel_snapshot_t
     query_projection (const client_server_location_runtime_t &runtime, std::string channel_name)
     {
@@ -76,14 +85,15 @@ struct network_probe_message_t
     static constexpr const char *packet_name = "metadata.send";
 };
 
-void to_json (nlohmann::json &json, const network_probe_message_t &)
-{
-    json = nlohmann::json::object ();
 }
 
-void from_json (const nlohmann::json &, network_probe_message_t &)
+template <> struct zlink::json::dto_traits<network_probe_message_t>
 {
-}
+    static constexpr auto fields = std::tuple{};
+};
+
+namespace
+{
 
 struct network_probe_handler_t
 {
@@ -142,25 +152,29 @@ struct owner_gate_request_t
 {
     static constexpr const char *packet_name = "owner-gate.request";
 };
-void to_json (nlohmann::json &json, const owner_gate_request_t &)
-{
-    json = nlohmann::json::object ();
 }
-void from_json (const nlohmann::json &, owner_gate_request_t &)
+
+template <> struct zlink::json::dto_traits<owner_gate_request_t>
 {
-}
+    static constexpr auto fields = std::tuple{};
+};
+
+namespace
+{
 
 struct owner_gate_send_t
 {
     static constexpr const char *packet_name = "owner-gate.send";
 };
-void to_json (nlohmann::json &json, const owner_gate_send_t &)
-{
-    json = nlohmann::json::object ();
 }
-void from_json (const nlohmann::json &, owner_gate_send_t &)
+
+template <> struct zlink::json::dto_traits<owner_gate_send_t>
 {
-}
+    static constexpr auto fields = std::tuple{};
+};
+
+namespace
+{
 
 struct owner_gate_request_handler_t
 {
@@ -196,13 +210,15 @@ struct other_owner_request_t
 {
     static constexpr const char *packet_name = "other-owner.request";
 };
-void to_json (nlohmann::json &json, const other_owner_request_t &)
-{
-    json = nlohmann::json::object ();
 }
-void from_json (const nlohmann::json &, other_owner_request_t &)
+
+template <> struct zlink::json::dto_traits<other_owner_request_t>
 {
-}
+    static constexpr auto fields = std::tuple{};
+};
+
+namespace
+{
 
 struct other_owner_request_handler_t
 {
@@ -215,13 +231,15 @@ struct budget_owner_send_t
 {
     static constexpr const char *packet_name = "budget-owner.send";
 };
-void to_json (nlohmann::json &json, const budget_owner_send_t &)
-{
-    json = nlohmann::json::object ();
 }
-void from_json (const nlohmann::json &, budget_owner_send_t &)
+
+template <> struct zlink::json::dto_traits<budget_owner_send_t>
 {
-}
+    static constexpr auto fields = std::tuple{};
+};
+
+namespace
+{
 
 struct budget_owner_send_handler_t
 {
@@ -233,6 +251,419 @@ struct budget_owner_send_handler_t
     }
     inline static std::atomic_int calls{0};
 };
+
+struct overlap_send_t
+{
+    static constexpr const char *packet_name = "overlap.send";
+    int id;
+    bool fail;
+    std::string payload;
+};
+struct overlap_request_t
+{
+    static constexpr const char *packet_name = "overlap.request";
+    int id;
+    bool fail;
+    std::string payload;
+};
+} // namespace
+
+template <> struct zlink::json::dto_traits<overlap_send_t>
+{
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("id", &overlap_send_t::id),
+                 zlink::json::field ("fail", &overlap_send_t::fail),
+                 zlink::json::field ("payload", &overlap_send_t::payload)};
+};
+
+template <> struct zlink::json::dto_traits<overlap_request_t>
+{
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("id", &overlap_request_t::id),
+                 zlink::json::field ("fail", &overlap_request_t::fail),
+                 zlink::json::field ("payload", &overlap_request_t::payload)};
+};
+
+namespace
+{
+
+struct overlap_scope_t
+{
+    overlap_scope_t () { ++live; }
+    ~overlap_scope_t ()
+    {
+        ++destroyed;
+        --live;
+    }
+    inline static std::atomic_int live{0};
+    inline static std::atomic_int destroyed{0};
+    int marker = 73;
+};
+struct overlap_state_t
+{
+    inline static std::mutex mutex;
+    inline static std::vector<int> starts;
+    inline static std::vector<int> pipeline_starts;
+    inline static bool filter_wait = false;
+    inline static std::vector<int> completions;
+    inline static zlink::framework::task_completion_source_t<void> release;
+    inline static std::atomic_int errors{0};
+
+    static zlink::framework::task_t<void> run (int id,
+                                               bool fail,
+                                               const std::string &payload,
+                                               overlap_scope_t &scope,
+                                               const zlink::framework::message_context_t &context)
+    {
+        {
+            std::lock_guard lock (mutex);
+            starts.push_back (id);
+        }
+        if (id == 1)
+            co_await release.task ();
+        assert (scope.marker == 73);
+        assert (context.channel_name == "overlap");
+        assert (context.correlation_id == std::to_string (id));
+        assert (payload == std::string (4096, static_cast<char> ('0' + id)));
+        {
+            std::lock_guard lock (mutex);
+            completions.push_back (id);
+        }
+        if (fail)
+            throw zlink::framework::framework_exception_t (
+              zlink::framework::framework_error_kind_t::internal_failure, "overlap terminal");
+        co_return;
+    }
+};
+struct overlap_filter_t
+{
+    explicit overlap_filter_t (overlap_scope_t &scope) : scope (scope) {}
+    overlap_scope_t &scope;
+    zlink::framework::task_t<void>
+    invoke (const zlink::framework::handler_filter_context_t &context,
+            zlink::framework::handler_next_t next)
+    {
+        assert (context.correlation_id);
+        const auto turn = std::stoi (*context.correlation_id);
+        {
+            std::lock_guard lock (overlap_state_t::mutex);
+            overlap_state_t::pipeline_starts.push_back (turn);
+        }
+        assert (scope.marker == 73);
+        if (turn == 1 && overlap_state_t::filter_wait)
+            co_await overlap_state_t::release.task ();
+        assert (scope.marker == 73);
+        co_await next ();
+    }
+};
+struct overlap_send_handler_t
+{
+    using message_type = overlap_send_t;
+    explicit overlap_send_handler_t (overlap_scope_t &scope) : scope (scope) {}
+    zlink::framework::task_t<void> handle (const overlap_send_t &message,
+                                           const zlink::framework::message_context_t &context)
+    {
+        co_await overlap_state_t::run (message.id, message.fail, message.payload, scope, context);
+    }
+    overlap_scope_t &scope;
+};
+struct overlap_request_handler_t
+{
+    using request_type = overlap_request_t;
+    using reply_type = std::string;
+    explicit overlap_request_handler_t (overlap_scope_t &scope) : scope (scope) {}
+    zlink::framework::task_t<std::string>
+    handle (const overlap_request_t &message, const zlink::framework::message_context_t &context)
+    {
+        co_await overlap_state_t::run (message.id, message.fail, message.payload, scope, context);
+        co_return message.payload;
+    }
+    overlap_scope_t &scope;
+};
+
+// The fixture observes native wire replies on its own explicit poller. Its
+// coroutine has no Framework continuation scheduler or application turn.
+struct overlap_wire_reply_t
+{
+    using value_t = std::vector<zlink::message_t>;
+    struct promise_type
+    {
+        std::promise<value_t> completion;
+        overlap_wire_reply_t get_return_object () { return {completion.get_future ()}; }
+        std::suspend_never initial_suspend () noexcept { return {}; }
+        std::suspend_never final_suspend () noexcept { return {}; }
+        void return_value (value_t value) { completion.set_value (std::move (value)); }
+        void unhandled_exception () { completion.set_exception (std::current_exception ()); }
+    };
+    std::future<value_t> completion;
+    bool await_ready () { return completion.wait_for (0ms) == std::future_status::ready; }
+    std::optional<zlink::framework::result_t<value_t>>
+    result_for (std::chrono::milliseconds timeout)
+    {
+        if (completion.wait_for (timeout) != std::future_status::ready)
+            return std::nullopt;
+        return zlink::framework::result_t<value_t>::success (completion.get ());
+    }
+};
+overlap_wire_reply_t
+await_overlap_wire_reply (zlink::async_result_t<std::vector<zlink::message_t>> pending)
+{
+    co_return co_await std::move (pending);
+}
+
+struct overlap_batch_t
+{
+    using jobs_t = zlink::framework::runtime::application_job_queue_t;
+    std::shared_ptr<zlink::context_t> context = std::make_shared<zlink::context_t> ();
+    std::shared_ptr<client_server::raw_client_server_server_t> server;
+    zlink::dealer_socket_t source{*context};
+    std::unique_ptr<zlink::framework::test::completion_poller_driver_t> completions;
+    std::shared_ptr<jobs_t> jobs;
+
+    overlap_batch_t ()
+    {
+        const std::string endpoint = "tcp://127.0.0.1:*";
+        protocol::client_server_server_admission_t descriptor{
+          "overlap", bytes ("overlap-server"),
+          1,         1,
+          100,       zlink::framework::runtime::mesh::service_node_state_t::serving,
+          "default", 16 * 1024 * 1024,
+          endpoint};
+        client_server::raw_client_server_server_options_t options{descriptor};
+        options.runtime_failures =
+          std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ();
+        server = std::make_shared<client_server::raw_client_server_server_t> (options, context);
+        server->mailbox ().bind_application_dispatch ({}, [] (const std::string &) {});
+        server->start ();
+        source.options ().linger (0ms);
+        source.set_routing_id (zlink::routing_id_t::from ("overlap-peer"));
+        completions = std::make_unique<zlink::framework::test::completion_poller_driver_t> (source);
+        source.connect (server->endpoint ());
+        auto admission = await_overlap_wire_reply (
+          source.request ()
+            .message (zlink::message_t::from (protocol::encode_client_server_client_admission (
+              protocol::command::hello, {"overlap", "default", 16 * 1024 * 1024})))
+            .timeout (5s)
+            .async ()
+            .reply);
+        const auto deadline = std::chrono::steady_clock::now () + 5s;
+        while (!admission.await_ready () && std::chrono::steady_clock::now () < deadline) {
+            const auto now = std::chrono::steady_clock::now ();
+            (void) server->drain_monitor_events (now);
+            (void) server->pump_one (now).result ().value ();
+            std::this_thread::sleep_for (1ms);
+        }
+        auto admitted = admission.result_for (5s);
+        assert (admitted);
+        (void) admitted->value ();
+        zlink::framework::runtime::application_job_queue_configuration_t config;
+        config.effective_max_queued_application_jobs = 8;
+        jobs = std::make_shared<jobs_t> (config);
+    }
+
+    void receive (std::size_t count)
+    {
+        std::vector<client_server::received_application_record_t> received;
+        const auto deadline = std::chrono::steady_clock::now () + 5s;
+        while (received.size () < count && std::chrono::steady_clock::now () < deadline) {
+            auto permit = jobs->try_reserve_supply ();
+            assert (permit);
+            const auto now = std::chrono::steady_clock::now ();
+            (void) server->drain_monitor_events (now);
+            (void) server
+              ->pump_one (now, std::make_shared<jobs_t::permit_t> (std::move (*permit)), nullptr,
+                          &received)
+              .result ()
+              .value ();
+            if (received.size () < count)
+                std::this_thread::sleep_for (1ms);
+        }
+        assert (received.size () == count);
+        assert (server->enqueue_application_records (received).result ().value ()
+                == client_server::client_server_pump_result_t::application);
+        assert (server->mailbox ().pending_messages (
+                  zlink::framework::runtime::mesh::service_mailbox_domain_t::application)
+                == count);
+    }
+
+    ~overlap_batch_t () { server->close (); }
+};
+
+void verify_client_server_terminal_overlap_matrix (int selected = -1)
+{
+    int scenario = 0;
+    for (bool filter_wait : {false, true})
+        for (bool first_request : {false, true})
+            for (bool second_request : {false, true})
+                for (bool next_turn : {false, true})
+                    for (bool fail_first : {false, true}) {
+                        const auto current = scenario++;
+                        if (selected != -1 && selected != current)
+                            continue;
+                        std::printf (
+                          "overlap case %d: %s -> %s, %s, first %s, filter %s\n", current,
+                          first_request ? "request" : "send", second_request ? "request" : "send",
+                          next_turn ? "next batch" : "same batch",
+                          fail_first ? "failure" : "success", filter_wait ? "await" : "inline");
+                        std::fflush (stdout);
+                        {
+                            std::lock_guard lock (overlap_state_t::mutex);
+                            overlap_state_t::starts.clear ();
+                            overlap_state_t::pipeline_starts.clear ();
+                            overlap_state_t::completions.clear ();
+                        }
+                        overlap_state_t::filter_wait = filter_wait;
+                        overlap_state_t::release = {};
+                        overlap_state_t::errors = 0;
+                        overlap_scope_t::destroyed = 0;
+                        assert (overlap_scope_t::live == 0);
+                        auto app = zlink::framework::app_t::create ();
+                        app.add_zlink_framework ([] (auto &options) {
+                            options.services ().template add_scoped<overlap_scope_t> ();
+                            options.template use_filter<overlap_filter_t> ();
+                            options.handlers ()
+                              .group ("overlap")
+                              .template add<overlap_request_handler_t> ()
+                              .template add_send<overlap_send_handler_t> ();
+                            zlink::framework::detail::dispatch_options_access_t::
+                              set_dispatch_error_observer_for_tests (
+                                options.configure_dispatch (), [] (const auto &event) {
+                                    if (event.channel_name == "overlap")
+                                        ++overlap_state_t::errors;
+                                });
+                            auto channel = options.add_client_server_channel ("overlap");
+                            channel.server ().listen ().add_handler_group ("overlap");
+                            channel.client ();
+                        });
+                        auto provider = app.advanced ().services ().build_provider ();
+                        auto &runtime =
+                          provider.get_required<zlink::framework::client_server_runtime_t> ();
+                        std::thread app_thread ([&] { (void) app.run (0, nullptr); });
+                        const auto wait = [] (auto predicate) {
+                            const auto deadline = std::chrono::steady_clock::now () + 5s;
+                            while (!predicate () && std::chrono::steady_clock::now () < deadline)
+                                std::this_thread::sleep_for (1ms);
+                            assert (predicate ());
+                        };
+                        wait ([&] { return runtime.is_ready ("overlap"); });
+                        overlap_batch_t batch;
+                        std::optional<overlap_wire_reply_t> first;
+                        std::optional<overlap_wire_reply_t> second;
+                        const auto submit = [&] (bool request, int id, bool fail, auto &result) {
+                            const auto payload = std::string (4096, static_cast<char> ('0' + id));
+                            auto body =
+                              zlink::message_t::from_json (overlap_send_t{id, fail, payload});
+                            const auto header =
+                              nlohmann::json{
+                                {"formatMarker", 242},
+                                {"kind", request ? 1 : 3},
+                                {"channelName", "overlap"},
+                                {"messageName", request ? "overlap.request" : "overlap.send"},
+                                {"contentType", "application/json"},
+                                {"correlationId", std::to_string (id)},
+                                {"metadata", nlohmann::json::object ()}}
+                                .dump ();
+                            if (request)
+                                result.emplace (await_overlap_wire_reply (
+                                  batch.source.request ()
+                                    .message (zlink::message_t::from (header))
+                                    .message (std::move (body))
+                                    .timeout (5s)
+                                    .async ()
+                                    .reply));
+                            else
+                                assert (batch.source.send ()
+                                          .message (zlink::message_t::from (header))
+                                          .message (std::move (body))
+                                          .async ()
+                                          .result
+                                        == ZLINK_SUBMIT_OK);
+                        };
+                        auto &implementation =
+                          dynamic_cast<client_server::client_server_location_runtime_t &> (runtime);
+                        const auto drain = [&] (std::size_t count) {
+                            batch.receive (count);
+                            auto turn =
+                              client_server::client_server_location_runtime_test_access_t::drain (
+                                implementation, batch.server);
+                            const auto drained = turn.result_for (5s);
+                            assert (drained && *drained);
+                            assert (batch.server->mailbox ().pending_messages (
+                                      zlink::framework::runtime::mesh::service_mailbox_domain_t::
+                                        application)
+                                    == 0);
+                        };
+                        submit (first_request, 1, fail_first, first);
+                        if (next_turn) {
+                            drain (1);
+                            wait ([] {
+                                std::lock_guard lock (overlap_state_t::mutex);
+                                return overlap_state_t::pipeline_starts == std::vector<int>{1};
+                            });
+                        }
+                        submit (second_request, 2, false, second);
+                        drain (next_turn ? 1 : 2);
+                        wait ([] {
+                            std::lock_guard lock (overlap_state_t::mutex);
+                            return overlap_state_t::completions == std::vector<int>{2};
+                        });
+                        {
+                            std::lock_guard lock (overlap_state_t::mutex);
+                            assert ((overlap_state_t::pipeline_starts == std::vector<int>{1, 2}));
+                            assert (
+                              overlap_state_t::starts
+                              == (filter_wait ? std::vector<int>{2} : std::vector<int>{1, 2}));
+                        }
+                        if (second) {
+                            auto reply = second->result_for (5s);
+                            assert (reply);
+                            assert (*reply);
+                            assert (reply->value ().size () == 2);
+                            assert (nlohmann::json::parse (reply->value ()[1].to_string ())
+                                      .get<std::string> ()
+                                    == std::string (4096, '2'));
+                        }
+                        if (first)
+                            assert (!first->result_for (20ms));
+                        wait ([] { return overlap_scope_t::live == 1; });
+                        assert (overlap_scope_t::destroyed == 1);
+                        // A filter waiting before next() has not entered its handler yet.
+                        const auto queued_permits = filter_wait ? 1u : 0u;
+                        wait (
+                          [&] { return batch.jobs->snapshot ().permits_in_use == queued_permits; });
+                        assert (batch.jobs->snapshot ().queued_application_jobs == queued_permits);
+                        auto shutdown = app.shutdown ();
+                        assert (!shutdown.result_for (20ms));
+                        overlap_state_t::release.complete (
+                          zlink::framework::result_t<void>::success ());
+                        assert (shutdown.result_for (5s));
+                        app_thread.join ();
+                        {
+                            std::lock_guard lock (overlap_state_t::mutex);
+                            assert ((overlap_state_t::completions == std::vector<int>{2, 1}));
+                            assert (
+                              overlap_state_t::starts
+                              == (filter_wait ? std::vector<int>{2, 1} : std::vector<int>{1, 2}));
+                        }
+                        if (first) {
+                            auto reply = first->result_for (5s);
+                            assert (reply && *reply && reply->value ().size () == 2);
+                            auto header = zlink::framework::runtime::messaging::envelope_codec_t{}
+                                            .decode_header (reply->value ()[0]);
+                            assert (header);
+                            assert ((header.value ().kind
+                                     == zlink::framework::runtime::messaging::message_kind_t::error)
+                                    == fail_first);
+                            if (!fail_first)
+                                assert (nlohmann::json::parse (reply->value ()[1].to_string ())
+                                          .get<std::string> ()
+                                        == std::string (4096, '1'));
+                        }
+                        assert (overlap_scope_t::live == 0 && overlap_scope_t::destroyed == 2);
+                        assert (overlap_state_t::errors == (fail_first ? 1 : 0));
+                        assert (batch.jobs->snapshot ().permits_in_use == 0);
+                    }
+}
 
 void verify_client_server_owner_gate_and_budget ()
 {
@@ -298,8 +729,14 @@ void verify_client_server_owner_gate_and_budget ()
       channels.request_to_channel ("owner-gate-b", other_owner_request_t{}).async<std::string> ();
     const auto other_result = other.result_for (5s);
     assert (other_result && other_result->value () == "other");
-    assert (owner_gate_request_handler_t::starts.load (std::memory_order_acquire) == 1);
-    assert (owner_gate_send_handler_t::calls.load (std::memory_order_acquire) == 0);
+    const auto early_second = second.result_for (5s);
+    assert (early_second && early_second->value () == "second");
+    assert (!first.result_for (20ms));
+    assert (owner_gate_request_handler_t::starts.load (std::memory_order_acquire) == 2);
+    while (owner_gate_send_handler_t::calls.load (std::memory_order_acquire) == 0
+           && std::chrono::steady_clock::now () < deadline)
+        std::this_thread::sleep_for (1ms);
+    assert (owner_gate_send_handler_t::calls.load (std::memory_order_acquire) == 1);
 
     using phase_t = zlink::framework::message_flow_outcome_t;
     for (;;) {
@@ -319,7 +756,7 @@ void verify_client_server_owner_gate_and_budget ()
         assert (
           std::count_if (events.begin (), events.end (),
                          [] (const auto &event) { return event.outcome == phase_t::dispatched; })
-          == 1);
+          == 3);
     }
 
     constexpr int budget_records = 24;
@@ -364,7 +801,7 @@ void verify_client_server_owner_gate_and_budget ()
     owner_gate_request_handler_t::first.reset ();
 }
 
-void verify_client_server_stop_drains_budget_remainder ()
+void verify_client_server_stop_waits_for_record_terminal ()
 {
     owner_gate_request_handler_t::starts.store (0);
     owner_gate_request_handler_t::finished.store (0);
@@ -402,12 +839,11 @@ void verify_client_server_stop_drains_budget_remainder ()
     constexpr int queued_records = 24;
     for (int i = 0; i < queued_records; ++i)
         assert (channels.send ("owner-gate-a", owner_gate_send_t{}).async ().result ());
-    while (framework.status ().capacity.application_job_queue.queued_application_jobs
-             < queued_records
+    while (owner_gate_send_handler_t::calls.load (std::memory_order_acquire) < queued_records
            && std::chrono::steady_clock::now () < deadline)
         std::this_thread::sleep_for (1ms);
-    assert (framework.status ().capacity.application_job_queue.queued_application_jobs
-            >= queued_records);
+    assert (owner_gate_send_handler_t::calls.load (std::memory_order_acquire) == queued_records);
+    assert (framework.status ().capacity.application_job_queue.permits_in_use == 0);
 
     auto shutdown = app.shutdown ();
     assert (!shutdown.result_for (20ms));
@@ -443,25 +879,29 @@ struct metadata_request_t
 {
     static constexpr const char *packet_name = "metadata.request";
 };
-void to_json (nlohmann::json &json, const metadata_request_t &)
-{
-    json = nlohmann::json::object ();
 }
-void from_json (const nlohmann::json &, metadata_request_t &)
+
+template <> struct zlink::json::dto_traits<metadata_request_t>
 {
-}
+    static constexpr auto fields = std::tuple{};
+};
+
+namespace
+{
 
 struct metadata_empty_request_t
 {
     static constexpr const char *packet_name = "metadata.empty-request";
 };
-void to_json (nlohmann::json &json, const metadata_empty_request_t &)
-{
-    json = nlohmann::json::object ();
 }
-void from_json (const nlohmann::json &, metadata_empty_request_t &)
+
+template <> struct zlink::json::dto_traits<metadata_empty_request_t>
 {
-}
+    static constexpr auto fields = std::tuple{};
+};
+
+namespace
+{
 
 struct metadata_empty_request_handler_t
 {
@@ -619,6 +1059,25 @@ void verify_invalid_metadata_never_dispatches (const std::string &endpoint)
             assert (metadata_request_handler_t::calls.load () == calls);
         }
     }
+    const auto calls = metadata_request_handler_t::calls.load ();
+    const auto malformed = await_metadata_wire_reply (source.request ()
+                                                        .message (zlink::message_t::from ("{"))
+                                                        .message (zlink::message_t::from ("{}"))
+                                                        .timeout (5s)
+                                                        .async ()
+                                                        .reply)
+                             .result ();
+    assert (malformed && malformed.value ().size () == 2);
+    const auto fallback = zlink::framework::runtime::messaging::envelope_codec_t{}.decode_header (
+      malformed.value ().front (), false);
+    assert (fallback
+            && fallback.value ().kind
+                 == zlink::framework::runtime::messaging::message_kind_t::error);
+    assert (fallback.value ().channel_name == "metadata");
+    assert (fallback.value ().content_type
+            == zlink::framework::runtime::messaging::envelope_codec_t::default_content_type);
+    assert (malformed.value ()[1].to_string () == "null");
+    assert (metadata_request_handler_t::calls.load () == calls);
 }
 
 void verify_invalid_metadata_is_a_protocol_error ()
@@ -1897,9 +2356,13 @@ void verify_fanout_first_observation_is_complete ()
 
 } // namespace
 
-int main ()
+int main (int argc, char **argv)
 {
     zlink::framework::completion_owner_t completion_owner;
+    if (argc == 3 && std::string (argv[1]) == "--terminal-overlap") {
+        verify_client_server_terminal_overlap_matrix (std::stoi (argv[2]));
+        return 0;
+    }
     verify_zero_weight_target_stays_ready ();
     verify_first_observation_contains_current_status ();
     verify_reconnecting_target_status ();
@@ -1915,7 +2378,8 @@ int main ()
     verify_client_server_metadata_snapshot ();
     verify_client_server_send_does_not_wait_on_infrastructure_worker ();
     verify_client_server_owner_gate_and_budget ();
-    verify_client_server_stop_drains_budget_remainder ();
+    verify_client_server_terminal_overlap_matrix ();
+    verify_client_server_stop_waits_for_record_terminal ();
     verify_empty_server_receive_turn_has_no_progress ();
     verify_server_receive_turn_reads_queued_records ();
     verify_seal_between_receive_and_admission_counts_no_accepted_job ();

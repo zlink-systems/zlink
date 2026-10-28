@@ -1,6 +1,15 @@
+const { inspectRuntime } = require('../../packages/framework/dist/runtime/internal-observation');
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const framework = require('../../packages/framework/dist/internal');
+const wire = require('../../packages/framework/dist/runtime/foundation/service-stateful-wire-codec');
+
+function deliverCutover(runtime, meshName, cutover) {
+  const bytes = wire.encodeMaintenanceRelocationControl(cutover);
+  return runtime.tryHandleControl(meshName, {
+    sourceNodeRid: 'source', parts: [{ data: () => bytes, close() {} }]
+  });
+}
 const {
   ZLinkHostServiceRelocationRuntime
 } = require('../../packages/framework/dist/runtime/host/service-relocation-host-runtime');
@@ -126,7 +135,7 @@ function targetFixture(runtime = new ZLinkHostServiceRelocationRuntime({}), mesh
     store,
     authority,
     finalize: () => runtime.beginTargetFinalize(meshName, '0:17:1', stage),
-    cutover: () => runtime.handleOneWayControl(meshName, cutover, 'source')
+    cutover: () => deliverCutover(runtime, meshName, cutover)
   };
 }
 
@@ -165,7 +174,7 @@ for (const warningStarted of [false, true]) {
         assert.equal(fixture.stage.cutoverReceived, false);
         assert.equal(fixture.events.filter((event) => event === 'abort').length, 1);
         assert.equal(fixture.events.includes('cas'), false);
-        assert.equal(fixture.runtime.targetStages.size, 0);
+        assert.equal(fixture.runtime[inspectRuntime]().targetStages, 0);
         await fixture.cutover();
         assert.equal(fixture.events.includes('cas'), false);
         read.resolve({ kind: 'source' });
@@ -202,7 +211,8 @@ test(
     const fixture = targetFixture();
     const prepare = fixture.stage.offer.prepare;
     await assert.rejects(
-      fixture.runtime.handleOneWayControl(
+      deliverCutover(
+        fixture.runtime,
         'mesh',
         {
           ...prepare,
@@ -210,8 +220,7 @@ test(
           senderRole: 'source',
           boundaryRecordCount: 0n,
           boundaryChecksumCrc32c: 1
-        },
-        'source'
+        }
       ),
       /boundary confirmation mismatch/
     );
@@ -320,7 +329,7 @@ test('a Shutdown-sealed target rejects a new PREPARE with ShuttingDown before st
       return true;
     }
   );
-  assert.equal(runtime.targetStages.size, 0);
+  assert.equal(runtime[inspectRuntime]().targetStages, 0);
 });
 
 test('an open target does not report ShuttingDown for a new PREPARE', async () => {

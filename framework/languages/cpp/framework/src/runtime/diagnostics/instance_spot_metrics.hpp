@@ -22,9 +22,12 @@ enum class instance_spot_activation_outcome_t
 class instance_spot_metrics_t
 {
   public:
-    explicit instance_spot_metrics_t (std::string mesh_name) : _mesh_name (std::move (mesh_name))
+    explicit instance_spot_metrics_t (std::string mesh_name) : _mesh_name (std::move (mesh_name)) {}
+    void connect (metric_provider_t provider)
     {
-        auto provider = opentelemetry::metrics::Provider::GetMeterProvider ();
+        _activations = {};
+        _duration = {};
+        _provider = provider;
         if (dynamic_cast<opentelemetry::metrics::NoopMeterProvider *> (provider.get ()))
             return;
         auto meter = provider->GetMeter ("zlink.framework");
@@ -80,6 +83,7 @@ class instance_spot_metrics_t
         }
         return "rejected";
     }
+    metric_provider_t _provider;
     const std::string _mesh_name;
     opentelemetry::nostd::unique_ptr<opentelemetry::metrics::Counter<double>> _activations;
     opentelemetry::nostd::unique_ptr<opentelemetry::metrics::Histogram<double>> _duration;
@@ -94,10 +98,12 @@ class instance_spot_admission_metrics_t
         spot_type,
         closing
     };
-    instance_spot_admission_metrics_t (std::string mesh, std::string type) :
+    instance_spot_admission_metrics_t (std::string mesh,
+                                       std::string type,
+                                       metric_provider_t provider = noop_metric_provider ()) :
+        _provider (provider),
         _tags{{"mesh_name", std::move (mesh)}, {"instance_spot_type", std::move (type)}}
     {
-        auto provider = opentelemetry::metrics::Provider::GetMeterProvider ();
         if (dynamic_cast<opentelemetry::metrics::NoopMeterProvider *> (provider.get ()))
             return;
         auto meter = provider->GetMeter ("zlink.framework");
@@ -163,6 +169,7 @@ class instance_spot_admission_metrics_t
         observe_value (result, metrics, metrics._pending_bytes.load (std::memory_order_relaxed));
     }
     using tags_t = std::map<std::string, std::string>;
+    metric_provider_t _provider;
     tags_t _tags;
     std::array<tags_t, 4> _reasons;
     std::atomic<std::uint64_t> _pending_messages{0}, _pending_bytes{0};

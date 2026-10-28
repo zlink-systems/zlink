@@ -248,7 +248,10 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
                                             .equals(context.actorRef().nodeRid())) {
                                         return services.actors()
                                                 .joinLocalActor(
-                                                        context.actor(), spotId, requestPart)
+                                                        context.actor(),
+                                                        spotId,
+                                                        requestPart,
+                                                        deadlineNanos)
                                                 .thenApply(
                                                         result ->
                                                                 ZLinkActorJoinResults.decode(
@@ -277,7 +280,8 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
                                                                     .thenCompose(
                                                                             ignored ->
                                                                                     decodeJoinResultAsync(
-                                                                                            result)));
+                                                                                            result,
+                                                                                            deadlineNanos)));
                                 })
                         .whenComplete((result, failure) -> requestPart.close())
                         .whenComplete((result, failure) -> traceJoinReplyReceived(failure)));
@@ -510,7 +514,7 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
     }
 
     private CompletionStage<ZLinkActorJoinOutcome> decodeJoinResultAsync(
-            ZLinkBackendActorJoinResult result) {
+            ZLinkBackendActorJoinResult result, long deadlineNanos) {
         ZLinkActorJoinOutcome decoded = decodeJoinResult(result);
         if (decoded instanceof ZLinkActorJoinOutcome.Rejected) {
             return CompletableFuture.completedFuture(decoded);
@@ -518,7 +522,7 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
         return entryTarget
                 ? CompletableFuture.completedFuture(decoded)
                 : services.locationRenewal()
-                        .renew(context.actor(), context.joinedSpotId())
+                        .renew(context.actor(), context.joinedSpotId(), deadlineNanos)
                         .thenApply(ignored -> decoded);
     }
 
@@ -875,7 +879,7 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
 
     @FunctionalInterface
     interface ActorJoinedLocationRenewal {
-        CompletionStage<Void> renew(ZLinkActor actor, String spotId);
+        CompletionStage<Void> renew(ZLinkActor actor, String spotId, long deadlineNanos);
     }
 
     @FunctionalInterface

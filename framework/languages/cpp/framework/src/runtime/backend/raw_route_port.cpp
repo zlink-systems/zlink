@@ -144,7 +144,6 @@ raw_send_submission_t raw_route_port_t::submit_send (const raw_bytes_t &target_r
     try {
         if (target_routing_id.empty () || parts.empty ())
             throw std::invalid_argument ("raw route send requires a target and message parts");
-        auto messages = materialize_binding_parts (std::move (parts));
         if (trace) {
             try {
                 trace ("router_admission_submit", "begin");
@@ -177,9 +176,10 @@ raw_send_submission_t raw_route_port_t::submit_send (const raw_bytes_t &target_r
             }
             auto operation =
               std::move (_socket->send (zlink::routing_id_t::from (target_routing_id)))
-                .message (messages[0]);
-            for (std::size_t index = 1; index < messages.size (); ++index) {
-                operation = std::move (operation).message (messages[index]);
+                .message (materialize_binding_part (std::move (parts[0])));
+            for (std::size_t index = 1; index < parts.size (); ++index) {
+                operation = std::move (operation).message (
+                  materialize_binding_part (std::move (parts[index])));
             }
             auto submission = std::move (operation).async ();
             pending = take_submission_admission (submission);
@@ -310,7 +310,6 @@ raw_route_port_t::request (const raw_bytes_t &target_routing_id,
             || timeout <= std::chrono::milliseconds::zero ()) {
             throw std::invalid_argument ("raw route request requires target, parts and timeout");
         }
-        auto messages = materialize_binding_parts (std::move (parts));
         std::optional<request_submission_stages_t> stages;
         {
             std::lock_guard lock (*_socket_mutex);
@@ -323,9 +322,10 @@ raw_route_port_t::request (const raw_bytes_t &target_routing_id,
                 admission = _request_receive_source (target_routing_id);
             auto operation =
               std::move (_socket->request (zlink::routing_id_t::from (target_routing_id)))
-                .message (messages[0]);
-            for (std::size_t index = 1; index < messages.size (); ++index) {
-                operation = std::move (operation).message (messages[index]);
+                .message (materialize_binding_part (std::move (parts[0])));
+            for (std::size_t index = 1; index < parts.size (); ++index) {
+                operation = std::move (operation).message (
+                  materialize_binding_part (std::move (parts[index])));
             }
             stages.emplace (submit_request_once (
               [&] { return std::move (operation).timeout (timeout).async (); }));
@@ -343,12 +343,12 @@ raw_route_port_t::request (const raw_bytes_t &target_routing_id,
     return result;
 }
 
-zlink::poll_event_flag_t raw_route_port_t::poll (std::chrono::milliseconds timeout,
-                                                 bool accept_application_receive)
+std::optional<zlink::poll_event_flag_t> raw_route_port_t::poll (std::chrono::milliseconds timeout,
+                                                                bool accept_application_receive)
 {
     std::lock_guard lock (_poller_mutex);
     if (_socket == nullptr)
-        return zlink::poll_event_flag_t::none;
+        return std::nullopt;
     zlink::poll_event_t events[3];
     const auto completion_events =
       zlink::poll_event_flag_t::pollout | zlink::poll_event_flag_t::pollcompletion;
@@ -387,9 +387,9 @@ zlink::poll_event_flag_t raw_route_port_t::poll (std::chrono::milliseconds timeo
             wake = true;
         }
     }
-    return readiness != zlink::poll_event_flag_t::none ? readiness
-           : wake                                      ? zlink::poll_event_flag_t::pollin
-                                                       : zlink::poll_event_flag_t::none;
+    if (readiness != zlink::poll_event_flag_t::none || wake || count != 0)
+        return readiness;
+    return std::nullopt;
 }
 
 void raw_route_port_t::signal_activity () noexcept
@@ -430,18 +430,23 @@ std::optional<raw_received_t> raw_route_port_t::receive_if_ready (zlink::poll_ev
 
 std::optional<raw_received_t> raw_route_port_t::try_receive ()
 {
-    return receive_if_ready (poll (std::chrono::milliseconds::zero ()));
+    return receive_if_ready (
+      poll (std::chrono::milliseconds::zero ()).value_or (zlink::poll_event_flag_t::none));
 }
 
 bool raw_route_port_t::reply (const raw_received_t &request, raw_message_t parts)
 {
-    if (request.source_routing_id.empty () || !request.reply_token || parts.empty ()) {
+    return reply (request, materialize_binding_parts (std::move (parts)));
+}
+
+bool raw_route_port_t::reply (const raw_received_t &request, std::vector<zlink::message_t> messages)
+{
+    if (request.source_routing_id.empty () || !request.reply_token || messages.empty ()) {
         throw std::invalid_argument ("raw route reply requires request context and message parts");
     }
     std::lock_guard lock (*_socket_mutex);
     if (_socket == nullptr)
         return false;
-    auto messages = materialize_binding_parts (std::move (parts));
     auto operation =
       std::move (_socket->reply (zlink::routing_id_t::from (request.source_routing_id),
                                  *request.reply_token))

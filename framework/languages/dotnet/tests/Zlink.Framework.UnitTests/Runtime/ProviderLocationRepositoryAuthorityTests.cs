@@ -525,6 +525,12 @@ public sealed class ProviderLocationRepositoryAuthorityTests
     [InlineData("missing", true)]
     [InlineData("differentSpotGeneration", false)]
     [InlineData("differentSpotGeneration", true)]
+    [InlineData("creating", false)]
+    [InlineData("creating", true)]
+    [InlineData("closing", false)]
+    [InlineData("closing", true)]
+    [InlineData("prepared", false)]
+    [InlineData("prepared", true)]
     [InlineData("live", false)]
     [InlineData("live", true)]
     [InlineData("expired", false)]
@@ -533,6 +539,8 @@ public sealed class ProviderLocationRepositoryAuthorityTests
     [InlineData("differentLeaseGeneration", false)]
     [InlineData("differentLeaseGeneration", true)]
     [InlineData("versionRace", false)]
+    [InlineData("revisionRace", false)]
+    [InlineData("notReadyRace", false)]
     public async Task UserSpotMembershipCommitOwnerLeaseFence(string scenario, bool inMemory)
     {
         var provider = new InspectAuthorityBatchLocationStore(
@@ -592,6 +600,53 @@ public sealed class ProviderLocationRepositoryAuthorityTests
                 ZLinkActorAuthorityPayloadCodec.Encode(previous)
             )
         );
+        Assert.NotEqual(spotReady.Snapshot.ObjectGeneration, actorReady.Snapshot.ObjectGeneration);
+        if (scenario is "creating" or "closing")
+        {
+            Assert.True(ZLinkUserSpotAuthorityPayloadCodec.TryDecode(spotPayload, out var decoded));
+            Assert.IsType<ZLinkAuthorityCompareExchangeResult.Stored>(
+                await repository.CompareExchangeAuthorityAsync(
+                    spot.Reservation.Key,
+                    spotReady.Snapshot.StoreVersion,
+                    new ZLinkAuthorityMutation.Put(
+                        ZLinkUserSpotAuthorityPayloadCodec.Encode(
+                            decoded with
+                            {
+                                State =
+                                    scenario == "creating"
+                                        ? ZLinkUserSpotAuthorityState.Creating
+                                        : ZLinkUserSpotAuthorityState.Closing,
+                            }
+                        ),
+                        ZLinkAuthorityGenerationTransition.Preserve,
+                        null,
+                        null
+                    )
+                )
+            );
+        }
+        if (scenario == "prepared")
+        {
+            var request = AggregateRequest(
+                [
+                    new ZLinkAggregateParticipant(
+                        spot.Reservation.Key,
+                        spotReady.Snapshot.StoreVersion,
+                        ZLinkAuthorityGenerationTransition.NewOwner,
+                        spotPayload,
+                        ReadOnlyMemory<byte>.Empty
+                    ),
+                ],
+                descriptor,
+                owner
+            ) with
+            {
+                Capacity = spotReady.Snapshot.Allocation.Capacity,
+            };
+            Assert.IsType<ZLinkAggregatePrepareResult.Prepared>(
+                await repository.PrepareAggregateAsync(request)
+            );
+        }
         if (scenario == "missing")
             Assert.IsType<ZLinkAuthorityCompareExchangeResult.Deleted>(
                 await repository.CompareExchangeAuthorityAsync(
@@ -604,7 +659,8 @@ public sealed class ProviderLocationRepositoryAuthorityTests
             await repository.ReleaseOwnerLeaseAsync(owner);
         if (scenario == "differentLeaseGeneration")
             _ = await ClaimAsync(repository, owner.OwnerId);
-        if (scenario is "race" or "versionRace")
+        var revisionConflicts = 0;
+        if (scenario is "race" or "versionRace" or "revisionRace" or "notReadyRace")
             provider.Inspect = async batch =>
             {
                 if (
@@ -618,6 +674,43 @@ public sealed class ProviderLocationRepositoryAuthorityTests
                         )
                 )
                     return;
+                if (scenario is "revisionRace" or "notReadyRace")
+                {
+                    revisionConflicts++;
+                    if (revisionConflicts == 6 || scenario == "notReadyRace")
+                        provider.Inspect = null;
+                    var current = Assert.IsType<ZLinkAuthorityReadResult.Found>(
+                        await repository.ReadAuthorityAsync(spot.Reservation.Key)
+                    );
+                    Assert.True(
+                        ZLinkUserSpotAuthorityPayloadCodec.TryDecode(
+                            current.Snapshot.Payload.Span,
+                            out var ready
+                        )
+                    );
+                    Assert.IsType<ZLinkAuthorityCompareExchangeResult.Stored>(
+                        await repository.CompareExchangeAuthorityAsync(
+                            spot.Reservation.Key,
+                            current.Snapshot.StoreVersion,
+                            new ZLinkAuthorityMutation.Put(
+                                ZLinkUserSpotAuthorityPayloadCodec.Encode(
+                                    ready with
+                                    {
+                                        NodeGeneration = ready.NodeGeneration + 1,
+                                        State =
+                                            scenario == "notReadyRace"
+                                                ? ZLinkUserSpotAuthorityState.Closing
+                                                : ready.State,
+                                    }
+                                ),
+                                ZLinkAuthorityGenerationTransition.Preserve,
+                                null,
+                                null
+                            )
+                        )
+                    );
+                    return;
+                }
                 provider.Inspect = null;
                 if (scenario == "race")
                     await repository.ReleaseOwnerLeaseAsync(owner);
@@ -649,14 +742,27 @@ public sealed class ProviderLocationRepositoryAuthorityTests
                 null
             )
         );
-        if (scenario == "live")
+        if (scenario is "live" or "revisionRace")
+        {
             Assert.IsType<ZLinkAuthorityCompareExchangeResult.Stored>(result);
+            if (scenario == "revisionRace")
+                Assert.Equal(6, revisionConflicts);
+        }
         else
         {
             var conflict = Assert.IsType<ZLinkAuthorityCompareExchangeResult.Conflict>(result);
             if (scenario == "missing")
                 Assert.Equal(ZLinkFrameworkErrorKind.NotFound, conflict.MembershipFailure);
-            if (scenario is "expired" or "differentLeaseGeneration" or "differentSpotGeneration")
+            if (
+                scenario
+                is "expired"
+                    or "differentLeaseGeneration"
+                    or "differentSpotGeneration"
+                    or "creating"
+                    or "closing"
+                    or "prepared"
+                    or "notReadyRace"
+            )
                 Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, conflict.MembershipFailure);
             var after = Assert.IsType<ZLinkAuthorityReadResult.Found>(
                 await repository.ReadAuthorityAsync(actor.Reservation.Key)

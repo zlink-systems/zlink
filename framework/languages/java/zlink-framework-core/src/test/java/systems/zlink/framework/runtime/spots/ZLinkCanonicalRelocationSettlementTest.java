@@ -976,6 +976,25 @@ final class ZLinkCanonicalRelocationSettlementTest {
                                                     .run();
                                             yield (AutoCloseable) () -> {};
                                         }
+                                        case "requestCanonicalRelocationPrepare" -> {
+                                            byte[] encoded = ((byte[]) args[1]).clone();
+                                            var reply =
+                                                    peer.get()
+                                                            .apply(
+                                                                    localRid,
+                                                                    1L,
+                                                                    Byte.toUnsignedInt(encoded[3]),
+                                                                    encoded);
+                                            ((CompletableFuture<Void>) args[3]).complete(null);
+                                            yield reply.thenApply(
+                                                    encodedReply -> {
+                                                        if (Byte.toUnsignedInt(encodedReply[3])
+                                                                == ServiceWireConstants
+                                                                        .COMMAND_RELOCATION_FAILED)
+                                                            failedReplies.incrementAndGet();
+                                                        return encodedReply;
+                                                    });
+                                        }
                                         case "sendCanonicalRelocationControl" -> {
                                             byte[] encoded = ((byte[]) args[1]).clone();
                                             int command = Byte.toUnsignedInt(encoded[3]);

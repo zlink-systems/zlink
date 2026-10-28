@@ -129,18 +129,18 @@ test('weighted selection keeps its cumulative state across descriptor updates', 
   assert.equal(topology.selectChannel('orders').descriptor.nodeRoutingId, 'node-b');
 });
 
-test('cycle selection materializes cumulative state only when candidates rebuild', () => {
+test('cycle selection materializes cumulative state only when candidates rebuild', (t) => {
   const candidates = [
     { id: 'A', value: 'A', weight: 5 },
     { id: 'B', value: 'B', weight: 1 }
   ];
   const selection = new SmoothWeightedSelection(() => candidates);
   let clears = 0;
-  const originalClear = selection.current.clear.bind(selection.current);
-  selection.current.clear = () => {
+  const originalClear = Map.prototype.clear;
+  t.mock.method(Map.prototype, 'clear', function () {
     clears += 1;
-    originalClear();
-  };
+    return originalClear.call(this);
+  });
 
   Array.from({ length: 12 }, () => selection.select());
   assert.equal(clears, 0);

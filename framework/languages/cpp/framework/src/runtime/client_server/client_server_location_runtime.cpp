@@ -28,7 +28,6 @@
 #include <cstdlib>
 #include <iostream>
 #include <limits>
-#include <random>
 #include <stdexcept>
 #include <string_view>
 #include <utility>
@@ -568,7 +567,8 @@ std::unique_ptr<mesh_runtime_observation_t> client_server_location_runtime_t::ob
 {
     if (channel_name.empty () || capacity == 0 || !observer)
         throw std::invalid_argument ("ClientServer observation requires a channel and callback");
-    auto value = std::make_shared<observer_t> (capacity, std::move (observer));
+    auto value =
+      std::make_shared<observer_t> (capacity, std::move (observer), _locations->monitoring ());
     value->start ();
     auto source = _lane
                     .run_checked ([this, &channel_name, &value] {
@@ -1033,8 +1033,7 @@ task_t<bool> client_server_location_runtime_t::publish_servers_task (location_wr
     }
     bool published = true;
     for (auto &[channel_name, server] : _servers) {
-        const auto weight_override =
-          co_await _channel_runtime.server_peer_weight_override_task (channel_name);
+        const auto weight_override = _channel_runtime.server_peer_weight_override (channel_name);
         const auto weight = weight_override.value_or (server->capability.service_weight);
         const auto state = current_state (*_locations);
         const bool new_owner =
@@ -1379,6 +1378,213 @@ client_server_location_runtime_t::run_worker_turn ()
     co_return snapshot;
 }
 
+task_t<void> client_server_location_runtime_t::dispatch_server_record (
+  std::shared_ptr<raw_client_server_server_t> owner, mesh::service_mailbox_record_t record)
+{
+    if (_stop->load (std::memory_order_acquire)) {
+        if (record.reply_token) {
+            const framework_exception_t error (
+              framework_error_kind_t::shutting_down,
+              "ClientServer is shutting down and rejects application work");
+            (void) co_await owner->reply (record, error);
+        }
+        co_return;
+    }
+    if (record.parts.size () != 2)
+        co_return;
+    std::optional<zlink::message_t> pending_reply;
+    std::optional<framework_exception_t> pending_failure_reply;
+    try {
+        /* Ingress validates the envelope and captures flow fields.
+         * The worker consumes its header and the native payload. */
+        auto &request_envelope = record.envelope_header;
+        const auto &message = record.parts[1];
+        detail::inbound_message_context_t inbound;
+        inbound.before_application_handler = record.before_application_handler;
+        inbound.message.channel_name = record.owner;
+        inbound.message.packet_name = request_envelope.message_name;
+        inbound.message.content_type = request_envelope.content_type;
+        inbound.message.metadata = message_metadata_t (std::move (request_envelope.metadata));
+        if (!request_envelope.correlation_id.empty ())
+            inbound.message.correlation_id = request_envelope.correlation_id;
+        detail::message_flow_tracer_t flow (_channel_runtime.dispatch_options_ref ());
+        auto flow_scope =
+          runtime::flow_context_t::enter (request_envelope.flow_id, request_envelope.flow_origin,
+                                          flow.mode (), flow_origin_t::inbound, std::nullopt);
+        if (flow.enabled_for (message_flow_outcome_t::dispatched)) {
+            inbound.before_application_handler = [before =
+                                                    std::move (inbound.before_application_handler),
+                                                  &flow, &request_envelope, &record] {
+                if (before)
+                    before ();
+                flow.trace (message_flow_outcome_t::dispatched,
+                            request_envelope.flow_id ? std::string_view (*request_envelope.flow_id)
+                                                     : std::string_view{},
+                            [&] {
+                                message_flow_event_t event{message_flow_outcome_t::dispatched,
+                                                           dispatch_error_surface_t::channel,
+                                                           request_envelope.kind
+                                                               == messaging::message_kind_t::request
+                                                             ? dispatch_message_kind_t::request
+                                                             : dispatch_message_kind_t::send,
+                                                           request_envelope.message_name,
+                                                           record.owner,
+                                                           std::nullopt,
+                                                           request_envelope.correlation_id,
+                                                           std::nullopt,
+                                                           std::nullopt,
+                                                           std::nullopt,
+                                                           std::nullopt};
+                                event.flow_id = request_envelope.flow_id;
+                                event.flow_origin = request_envelope.flow_origin;
+                                return event;
+                            });
+            };
+        }
+        auto scope = zlink::framework::detail::service_scope_t::create (
+          _services, zlink::framework::detail::service_scope_kind_t::handler_invocation);
+        if (record.reply_token) {
+            auto reply = co_await _channel_runtime.dispatch_request_on_handler_executor (
+              record.owner, {}, request_envelope.message_name, scope.provider (), *_serializers,
+              *_handlers, message, inbound);
+            if (reply) {
+                pending_reply.emplace (std::move (reply.value ()));
+            } else {
+                const framework_exception_t error (reply.error_kind (),
+                                                   reply.error () != nullptr
+                                                     ? reply.error ()->what ()
+                                                     : "ClientServer request handler failed");
+                report_client_server_dispatch_error (
+                  _channel_runtime.dispatch_options_ref (), record, request_envelope.message_name,
+                  dispatch_message_kind_t::request, dispatch_error_action_t::reply_error, error);
+                pending_failure_reply = error;
+            }
+        } else {
+            try {
+                co_await _channel_runtime.dispatch_send_on_handler_executor (
+                  record.owner, {}, request_envelope.message_name, scope.provider (), *_serializers,
+                  *_handlers, message, inbound);
+                flow.trace (message_flow_outcome_t::completed,
+                            request_envelope.flow_id ? std::string_view (*request_envelope.flow_id)
+                                                     : std::string_view{},
+                            [&] {
+                                message_flow_event_t event{message_flow_outcome_t::completed,
+                                                           dispatch_error_surface_t::channel,
+                                                           dispatch_message_kind_t::send,
+                                                           request_envelope.message_name,
+                                                           record.owner,
+                                                           std::nullopt,
+                                                           inbound.message.correlation_id,
+                                                           std::nullopt,
+                                                           std::nullopt,
+                                                           std::nullopt,
+                                                           std::nullopt};
+                                event.flow_id = request_envelope.flow_id;
+                                event.flow_origin = request_envelope.flow_origin;
+                                return event;
+                            });
+            }
+            catch (const framework_exception_t &error) {
+                report_client_server_dispatch_error (
+                  _channel_runtime.dispatch_options_ref (), record, request_envelope.message_name,
+                  dispatch_message_kind_t::send, dispatch_error_action_t::drop, error);
+            }
+        }
+    }
+    catch (const framework_exception_t &error) {
+        report_client_server_dispatch_error (
+          _channel_runtime.dispatch_options_ref (), record,
+          record.parts.size () > 1 ? zlink::framework::detail::diagnostic_decoded_value
+                                   : zlink::framework::detail::diagnostic_absent_value,
+          record.reply_token ? dispatch_message_kind_t::request : dispatch_message_kind_t::send,
+          record.reply_token ? dispatch_error_action_t::reply_error : dispatch_error_action_t::drop,
+          error);
+        if (record.reply_token) {
+            pending_reply.reset ();
+            pending_failure_reply = error;
+        }
+    }
+    catch (const std::exception &error) {
+        const framework_exception_t failure (framework_error_kind_t::internal_failure,
+                                             error.what ());
+        report_client_server_dispatch_error (
+          _channel_runtime.dispatch_options_ref (), record,
+          record.parts.size () > 1 ? zlink::framework::detail::diagnostic_decoded_value
+                                   : zlink::framework::detail::diagnostic_absent_value,
+          record.reply_token ? dispatch_message_kind_t::request : dispatch_message_kind_t::send,
+          record.reply_token ? dispatch_error_action_t::reply_error : dispatch_error_action_t::drop,
+          failure);
+        if (record.reply_token) {
+            pending_reply.reset ();
+            pending_failure_reply = failure;
+        }
+    }
+    catch (...) {
+        const framework_exception_t failure (framework_error_kind_t::internal_failure,
+                                             "ClientServer dispatch failed");
+        report_client_server_dispatch_error (
+          _channel_runtime.dispatch_options_ref (), record,
+          record.parts.size () > 1 ? zlink::framework::detail::diagnostic_decoded_value
+                                   : zlink::framework::detail::diagnostic_absent_value,
+          record.reply_token ? dispatch_message_kind_t::request : dispatch_message_kind_t::send,
+          record.reply_token ? dispatch_error_action_t::reply_error : dispatch_error_action_t::drop,
+          failure);
+        if (record.reply_token) {
+            pending_reply.reset ();
+            pending_failure_reply = failure;
+        }
+    }
+    if (pending_reply || pending_failure_reply) {
+        detail::message_flow_tracer_t flow (_channel_runtime.dispatch_options_ref ());
+        const auto &header = record.envelope_header;
+        flow.trace (message_flow_outcome_t::replied,
+                    header.flow_id ? std::string_view (*header.flow_id) : std::string_view{}, [&] {
+                        message_flow_event_t event{message_flow_outcome_t::replied,
+                                                   dispatch_error_surface_t::channel,
+                                                   header.kind == messaging::message_kind_t::request
+                                                     ? dispatch_message_kind_t::request
+                                                     : dispatch_message_kind_t::send,
+                                                   header.message_name,
+                                                   record.owner,
+                                                   std::nullopt,
+                                                   header.correlation_id,
+                                                   std::nullopt,
+                                                   std::nullopt,
+                                                   std::nullopt,
+                                                   std::nullopt};
+                        event.flow_id = header.flow_id;
+                        event.flow_origin = header.flow_origin;
+                        return event;
+                    });
+    }
+    try {
+        if (pending_reply)
+            (void) co_await owner->reply (
+              record, std::move (*pending_reply),
+              runtime::messaging::envelope_codec_t::default_content_type);
+        else if (pending_failure_reply)
+            (void) co_await owner->reply (record, *pending_failure_reply);
+    }
+    catch (...) {
+        detail::dispatch_error_reporter_t (_channel_runtime.dispatch_options_ref ())
+          .report_lazy ([&] {
+              return message_dispatch_error_event_t{dispatch_error_surface_t::channel,
+                                                    dispatch_message_kind_t::request,
+                                                    dispatch_error_reason_t::reply_path_missing,
+                                                    dispatch_error_action_t::drop,
+                                                    std::nullopt,
+                                                    record.owner,
+                                                    std::nullopt,
+                                                    std::nullopt,
+                                                    std::nullopt,
+                                                    std::nullopt,
+                                                    std::nullopt,
+                                                    std::current_exception ()};
+          });
+    }
+    co_return;
+}
+
 boost::asio::awaitable<result_t<void>> client_server_location_runtime_t::drain_server_owner (
   std::shared_ptr<raw_client_server_server_t> owner, std::string owner_name)
 {
@@ -1397,235 +1603,25 @@ boost::asio::awaitable<result_t<void>> client_server_location_runtime_t::drain_s
               });
             if (!active_claim)
                 break;
-            for (std::size_t index = 0; index < active_claim->claimed_messages; ++index) {
-                if (!original)
-                    continue;
-                auto &record = *original;
-                if (_stop->load (std::memory_order_acquire)) {
-                    if (record.reply_token) {
-                        const framework_exception_t error (
-                          framework_error_kind_t::shutting_down,
-                          "ClientServer is shutting down and rejects application work");
-                        (void) co_await runtime::await_task_result (owner->reply (record, error));
-                    }
-                    continue;
-                }
-                if (record.parts.size () != 2)
-                    continue;
-                std::optional<protocol::application_payload_t> pending_reply;
-                std::optional<framework_exception_t> pending_failure_reply;
-                try {
-                    /* Ingress validates the envelope and captures flow fields.
-                     * The worker consumes its header and the native payload. */
-                    auto &request_envelope = record.envelope_header;
-                    const auto &message = record.parts[1];
-                    detail::inbound_message_context_t inbound;
-                    inbound.before_application_handler = record.before_application_handler;
-                    inbound.message.channel_name = record.owner;
-                    inbound.message.packet_name = request_envelope.message_name;
-                    inbound.message.content_type = request_envelope.content_type;
-                    inbound.message.metadata =
-                      message_metadata_t (std::move (request_envelope.metadata));
-                    if (!request_envelope.correlation_id.empty ())
-                        inbound.message.correlation_id = request_envelope.correlation_id;
-                    detail::message_flow_tracer_t flow (_channel_runtime.dispatch_options_ref ());
-                    auto flow_scope = runtime::flow_context_t::enter (
-                      request_envelope.flow_id, request_envelope.flow_origin, flow.mode (),
-                      flow_origin_t::inbound, std::nullopt);
-                    if (flow.enabled_for (message_flow_outcome_t::dispatched)) {
-                        inbound.before_application_handler =
-                          [before = std::move (inbound.before_application_handler), &flow,
-                           &request_envelope, &record] {
-                              if (before)
-                                  before ();
-                              flow.trace (message_flow_outcome_t::dispatched,
-                                          request_envelope.flow_id
-                                            ? std::string_view (*request_envelope.flow_id)
-                                            : std::string_view{},
-                                          [&] {
-                                              message_flow_event_t event{
-                                                message_flow_outcome_t::dispatched,
-                                                dispatch_error_surface_t::channel,
-                                                request_envelope.kind
-                                                    == messaging::message_kind_t::request
-                                                  ? dispatch_message_kind_t::request
-                                                  : dispatch_message_kind_t::send,
-                                                request_envelope.message_name,
-                                                record.owner,
-                                                std::nullopt,
-                                                request_envelope.correlation_id,
-                                                std::nullopt,
-                                                std::nullopt,
-                                                std::nullopt,
-                                                std::nullopt};
-                                              event.flow_id = request_envelope.flow_id;
-                                              event.flow_origin = request_envelope.flow_origin;
-                                              return event;
-                                          });
-                          };
-                    }
-                    auto scope = zlink::framework::detail::service_scope_t::create (
-                      _services,
-                      zlink::framework::detail::service_scope_kind_t::handler_invocation);
-                    if (record.reply_token) {
-                        auto reply =
-                          co_await _channel_runtime.dispatch_request_on_handler_executor (
-                            record.owner, {}, request_envelope.message_name, scope.provider (),
-                            *_serializers, *_handlers, message, inbound);
-                        if (reply) {
-                            pending_reply.emplace (protocol::application_payload_t{
-                              request_envelope.message_name,
-                              std::string (
-                                runtime::messaging::envelope_codec_t::default_content_type),
-                              reply.value ().to_bytes ()});
-                        } else {
-                            const framework_exception_t error (
-                              reply.error_kind (), reply.error () != nullptr
-                                                     ? reply.error ()->what ()
-                                                     : "ClientServer request handler failed");
-                            report_client_server_dispatch_error (
-                              _channel_runtime.dispatch_options_ref (), record,
-                              request_envelope.message_name, dispatch_message_kind_t::request,
-                              dispatch_error_action_t::reply_error, error);
-                            pending_failure_reply = error;
-                        }
-                    } else {
-                        try {
-                            co_await _channel_runtime.dispatch_send_on_handler_executor (
-                              record.owner, {}, request_envelope.message_name, scope.provider (),
-                              *_serializers, *_handlers, message, inbound);
-                            flow.trace (message_flow_outcome_t::completed,
-                                        request_envelope.flow_id
-                                          ? std::string_view (*request_envelope.flow_id)
-                                          : std::string_view{},
-                                        [&] {
-                                            message_flow_event_t event{
-                                              message_flow_outcome_t::completed,
-                                              dispatch_error_surface_t::channel,
-                                              dispatch_message_kind_t::send,
-                                              request_envelope.message_name,
-                                              record.owner,
-                                              std::nullopt,
-                                              inbound.message.correlation_id,
-                                              std::nullopt,
-                                              std::nullopt,
-                                              std::nullopt,
-                                              std::nullopt};
-                                            event.flow_id = request_envelope.flow_id;
-                                            event.flow_origin = request_envelope.flow_origin;
-                                            return event;
-                                        });
-                        }
-                        catch (const framework_exception_t &error) {
-                            report_client_server_dispatch_error (
-                              _channel_runtime.dispatch_options_ref (), record,
-                              request_envelope.message_name, dispatch_message_kind_t::send,
-                              dispatch_error_action_t::drop, error);
-                        }
-                    }
-                }
-                catch (const framework_exception_t &error) {
-                    report_client_server_dispatch_error (
-                      _channel_runtime.dispatch_options_ref (), record,
-                      record.parts.size () > 1 ? zlink::framework::detail::diagnostic_decoded_value
-                                               : zlink::framework::detail::diagnostic_absent_value,
-                      record.reply_token ? dispatch_message_kind_t::request
-                                         : dispatch_message_kind_t::send,
-                      record.reply_token ? dispatch_error_action_t::reply_error
-                                         : dispatch_error_action_t::drop,
-                      error);
-                    if (record.reply_token) {
-                        pending_reply.reset ();
-                        pending_failure_reply = error;
-                    }
-                }
-                catch (const std::exception &error) {
-                    const framework_exception_t failure (framework_error_kind_t::internal_failure,
-                                                         error.what ());
-                    report_client_server_dispatch_error (
-                      _channel_runtime.dispatch_options_ref (), record,
-                      record.parts.size () > 1 ? zlink::framework::detail::diagnostic_decoded_value
-                                               : zlink::framework::detail::diagnostic_absent_value,
-                      record.reply_token ? dispatch_message_kind_t::request
-                                         : dispatch_message_kind_t::send,
-                      record.reply_token ? dispatch_error_action_t::reply_error
-                                         : dispatch_error_action_t::drop,
-                      failure);
-                    if (record.reply_token) {
-                        pending_reply.reset ();
-                        pending_failure_reply = failure;
-                    }
-                }
-                catch (...) {
-                    const framework_exception_t failure (framework_error_kind_t::internal_failure,
-                                                         "ClientServer dispatch failed");
-                    report_client_server_dispatch_error (
-                      _channel_runtime.dispatch_options_ref (), record,
-                      record.parts.size () > 1 ? zlink::framework::detail::diagnostic_decoded_value
-                                               : zlink::framework::detail::diagnostic_absent_value,
-                      record.reply_token ? dispatch_message_kind_t::request
-                                         : dispatch_message_kind_t::send,
-                      record.reply_token ? dispatch_error_action_t::reply_error
-                                         : dispatch_error_action_t::drop,
-                      failure);
-                    if (record.reply_token) {
-                        pending_reply.reset ();
-                        pending_failure_reply = failure;
-                    }
-                }
-                if (pending_reply || pending_failure_reply) {
-                    detail::message_flow_tracer_t flow (_channel_runtime.dispatch_options_ref ());
-                    const auto &header = record.envelope_header;
-                    flow.trace (message_flow_outcome_t::replied,
-                                header.flow_id ? std::string_view (*header.flow_id)
-                                               : std::string_view{},
-                                [&] {
-                                    message_flow_event_t event{
-                                      message_flow_outcome_t::replied,
-                                      dispatch_error_surface_t::channel,
-                                      header.kind == messaging::message_kind_t::request
-                                        ? dispatch_message_kind_t::request
-                                        : dispatch_message_kind_t::send,
-                                      header.message_name,
-                                      record.owner,
-                                      std::nullopt,
-                                      header.correlation_id,
-                                      std::nullopt,
-                                      std::nullopt,
-                                      std::nullopt,
-                                      std::nullopt};
-                                    event.flow_id = header.flow_id;
-                                    event.flow_origin = header.flow_origin;
-                                    return event;
-                                });
-                }
-                try {
-                    if (pending_reply)
-                        (void) co_await runtime::await_task_result (
-                          owner->reply (record, *pending_reply));
-                    else if (pending_failure_reply)
-                        (void) co_await runtime::await_task_result (
-                          owner->reply (record, *pending_failure_reply));
-                }
-                catch (...) {
-                    detail::dispatch_error_reporter_t (_channel_runtime.dispatch_options_ref ())
-                      .report_lazy ([&] {
-                          return message_dispatch_error_event_t{
-                            dispatch_error_surface_t::channel,
-                            dispatch_message_kind_t::request,
-                            dispatch_error_reason_t::reply_path_missing,
-                            dispatch_error_action_t::drop,
-                            std::nullopt,
-                            record.owner,
-                            std::nullopt,
-                            std::nullopt,
-                            std::nullopt,
-                            std::nullopt,
-                            std::nullopt,
-                            std::current_exception ()};
-                      });
-                }
+            {
+                std::lock_guard lock (_server_progress_mutex);
+                ++_active_application_drains;
             }
+            // The hot task enters the pipeline in FIFO order and owns the original
+            // through its reply terminal. The claim only reserves the FIFO prefix.
+            auto terminal = [&] {
+                // A suspended record retains its own flow through task continuations.
+                // Restore the drain context before entering the next pipeline.
+                runtime::flow_context_t::scope_t flow_scope (runtime::flow_context_t::current ());
+                return dispatch_server_record (owner, std::move (*original));
+            }();
+            detail::observe_task_terminal (terminal, [this] (const result_t<void> &result) {
+                if (!result)
+                    _channel_runtime.runtime_failures ()->report (result.exception ());
+                std::lock_guard lock (_server_progress_mutex);
+                if (--_active_application_drains == 0)
+                    _server_progress_changed.notify_all ();
+            });
             (void) mailbox.release (*active_claim);
             active_claim.reset ();
             if (std::chrono::steady_clock::now () >= deadline)
@@ -1650,9 +1646,7 @@ task_t<void> client_server_location_runtime_t::send (const std::string &channel_
 {
     auto selected = co_await select_ready (channel_name);
     const auto submitted = co_await selected->send (
-      protocol::application_payload_t{std::move (packet_name), std::move (content_type),
-                                      message.to_bytes ()},
-      std::move (metadata));
+      std::move (packet_name), std::move (content_type), std::move (message), std::move (metadata));
     if (submitted != zlink::submit_result_t::ok) {
         throw runtime::messaging::map_submit_result_exception (submitted,
                                                                "ClientServer send failed");
@@ -1683,10 +1677,9 @@ client_server_location_runtime_t::request (const std::string &channel_name,
     if (remaining <= std::chrono::milliseconds::zero ())
         co_return result_t<zlink::message_t>::failure (framework_error_kind_t::deadline_exceeded,
                                                        "ClientServer request deadline expired");
-    const auto completion = co_await detail::request_submission (selected->request (
-      protocol::application_payload_t{std::move (packet_name), std::move (content_type),
-                                      message.to_bytes ()},
-      remaining, std::move (metadata)));
+    auto completion = co_await detail::request_submission (
+      selected->request (std::move (packet_name), std::move (content_type), std::move (message),
+                         remaining, std::move (metadata)));
     if (completion.terminal != foundation::operation_terminal_t::completed) {
         co_return detail::result_access_t::failure<zlink::message_t> (
           client_server_operation_exception (completion.terminal, "ClientServer request"));
@@ -1698,7 +1691,7 @@ client_server_location_runtime_t::request (const std::string &channel_name,
         co_return detail::result_access_t::failure<zlink::message_t> (error);
     }
     /* The response envelope body is the reply payload as-is. */
-    co_return zlink::message_t::from (completion.payload);
+    co_return std::move (completion.payload);
 }
 
 task_t<std::shared_ptr<raw_client_server_client_t>> client_server_location_runtime_t::select_ready (
@@ -2041,18 +2034,6 @@ void client_server_location_runtime_t::stop_servers ()
           _server_pump_snapshot.clear ();
       })
       .get ();
-}
-
-std::uint64_t client_server_location_runtime_t::make_lifecycle_generation ()
-{
-    static std::atomic_uint64_t counter{1};
-    const auto random = (static_cast<std::uint64_t> (std::random_device{}()) << 32u)
-                        ^ static_cast<std::uint64_t> (std::random_device{}());
-    const auto time =
-      static_cast<std::uint64_t> (std::chrono::steady_clock::now ().time_since_epoch ().count ());
-    auto value = (random ^ time ^ counter.fetch_add (1))
-                 & static_cast<std::uint64_t> (std::numeric_limits<std::int64_t>::max ());
-    return value == 0 ? 1 : value;
 }
 
 std::uint32_t client_server_location_runtime_t::effective_max_message_bytes (

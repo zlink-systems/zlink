@@ -1949,6 +1949,31 @@ void zlink::asio_engine_t::error (error_reason_t reason_,
         disconnect_reason = ZLINK_DISCONNECT_TRANSPORT_ERROR;
     }
 
+    uint32_t stage = _connection_facade.handshaking ? ZLINK_CONNECTION_STAGE_CORE_HANDSHAKE
+                                                    : ZLINK_CONNECTION_STAGE_ESTABLISHED;
+    uint32_t kind = !_connection_facade.handshaking ? ZLINK_CONNECTION_FAILURE_CONNECTION_LOST
+                    : reason_ == timeout_error      ? ZLINK_CONNECTION_FAILURE_TIMED_OUT
+                                                    : ZLINK_CONNECTION_FAILURE_PROTOCOL_FAILED;
+    int normalized_error = reason_ == timeout_error ? ETIMEDOUT
+                           : handshake_error_
+                               && handshake_error_.category () != boost::system::generic_category ()
+                               && handshake_error_.category () != boost::system::system_category ()
+                             ? EPROTO
+                             : handshake_error_.value ();
+    if (_connection_facade.handshaking && transport () && transport ()->requires_handshake ()) {
+        if (_pipeline.handshake_pending || handshake_error_) {
+            stage = transport ()->connection_attempt_handshake_stage ();
+#if defined ZLINK_HAVE_ASIO_SSL
+            if (ssl_context_helper_t::is_authentication_failure (handshake_error_)) {
+                kind = ZLINK_CONNECTION_FAILURE_AUTH_FAILED;
+                normalized_error = EACCES;
+            }
+#endif
+        }
+    }
+    session->connection_attempt_failed (normalized_error, stage, kind,
+                                        static_cast<uint32_t> (disconnect_reason),
+                                        _endpoint_uri_pair.connection_id);
     emit_disconnected (disconnect_reason);
     session->flush ();
     unplug ();

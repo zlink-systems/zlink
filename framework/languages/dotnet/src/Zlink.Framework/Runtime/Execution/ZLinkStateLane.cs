@@ -38,6 +38,8 @@ internal sealed class ZLinkStateLane : IAsyncDisposable
     private ConcurrentQueue<LaneWork> Mailbox =>
         LazyInitializer.EnsureInitialized(ref _mailbox, static () => new());
 
+    internal int QueuedWorkCount => Volatile.Read(ref _mailbox)?.Count ?? 0;
+
     private bool HasQueuedWork => Volatile.Read(ref _mailbox) is { IsEmpty: false };
 
     private int _scheduled;
