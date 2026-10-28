@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+#include <zlink/json.hpp>
 #include "../support/runtime_failure_fixture.hpp"
 
 #include <zlink/framework.hpp>
@@ -39,15 +40,15 @@ struct gate_event_t
     int value{};
 };
 
-void to_json (nlohmann::json &json, const gate_event_t &event)
-{
-    json = nlohmann::json{{"value", event.value}};
 }
 
-void from_json (const nlohmann::json &json, gate_event_t &event)
+template <> struct zlink::json::dto_traits<gate_event_t>
 {
-    event.value = json.at ("value").get<int> ();
-}
+    static constexpr auto fields = std::tuple{zlink::json::field ("value", &gate_event_t::value)};
+};
+
+namespace
+{
 
 struct gate_state_t
 {

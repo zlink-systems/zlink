@@ -2,9 +2,9 @@
 #pragma once
 #include <cstddef>
 #include <array>
+#include <atomic>
 #include <optional>
 #include <string>
-#include <atomic>
 #include <utility>
 namespace zlink::framework::tests
 {

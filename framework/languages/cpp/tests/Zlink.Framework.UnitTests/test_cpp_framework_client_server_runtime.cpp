@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+#include <zlink/json.hpp>
 #include "../support/runtime_failure_fixture.hpp"
 
 #include "runtime/client_server/raw_client_server_owner.hpp"
@@ -84,14 +85,15 @@ struct network_probe_message_t
     static constexpr const char *packet_name = "metadata.send";
 };
 
-void to_json (nlohmann::json &json, const network_probe_message_t &)
-{
-    json = nlohmann::json::object ();
 }
 
-void from_json (const nlohmann::json &, network_probe_message_t &)
+template <> struct zlink::json::dto_traits<network_probe_message_t>
 {
-}
+    static constexpr auto fields = std::tuple{};
+};
+
+namespace
+{
 
 struct network_probe_handler_t
 {
@@ -150,25 +152,29 @@ struct owner_gate_request_t
 {
     static constexpr const char *packet_name = "owner-gate.request";
 };
-void to_json (nlohmann::json &json, const owner_gate_request_t &)
-{
-    json = nlohmann::json::object ();
 }
-void from_json (const nlohmann::json &, owner_gate_request_t &)
+
+template <> struct zlink::json::dto_traits<owner_gate_request_t>
 {
-}
+    static constexpr auto fields = std::tuple{};
+};
+
+namespace
+{
 
 struct owner_gate_send_t
 {
     static constexpr const char *packet_name = "owner-gate.send";
 };
-void to_json (nlohmann::json &json, const owner_gate_send_t &)
-{
-    json = nlohmann::json::object ();
 }
-void from_json (const nlohmann::json &, owner_gate_send_t &)
+
+template <> struct zlink::json::dto_traits<owner_gate_send_t>
 {
-}
+    static constexpr auto fields = std::tuple{};
+};
+
+namespace
+{
 
 struct owner_gate_request_handler_t
 {
@@ -204,13 +210,15 @@ struct other_owner_request_t
 {
     static constexpr const char *packet_name = "other-owner.request";
 };
-void to_json (nlohmann::json &json, const other_owner_request_t &)
-{
-    json = nlohmann::json::object ();
 }
-void from_json (const nlohmann::json &, other_owner_request_t &)
+
+template <> struct zlink::json::dto_traits<other_owner_request_t>
 {
-}
+    static constexpr auto fields = std::tuple{};
+};
+
+namespace
+{
 
 struct other_owner_request_handler_t
 {
@@ -223,13 +231,15 @@ struct budget_owner_send_t
 {
     static constexpr const char *packet_name = "budget-owner.send";
 };
-void to_json (nlohmann::json &json, const budget_owner_send_t &)
-{
-    json = nlohmann::json::object ();
 }
-void from_json (const nlohmann::json &, budget_owner_send_t &)
+
+template <> struct zlink::json::dto_traits<budget_owner_send_t>
 {
-}
+    static constexpr auto fields = std::tuple{};
+};
+
+namespace
+{
 
 struct budget_owner_send_handler_t
 {
@@ -850,25 +860,29 @@ struct metadata_request_t
 {
     static constexpr const char *packet_name = "metadata.request";
 };
-void to_json (nlohmann::json &json, const metadata_request_t &)
-{
-    json = nlohmann::json::object ();
 }
-void from_json (const nlohmann::json &, metadata_request_t &)
+
+template <> struct zlink::json::dto_traits<metadata_request_t>
 {
-}
+    static constexpr auto fields = std::tuple{};
+};
+
+namespace
+{
 
 struct metadata_empty_request_t
 {
     static constexpr const char *packet_name = "metadata.empty-request";
 };
-void to_json (nlohmann::json &json, const metadata_empty_request_t &)
-{
-    json = nlohmann::json::object ();
 }
-void from_json (const nlohmann::json &, metadata_empty_request_t &)
+
+template <> struct zlink::json::dto_traits<metadata_empty_request_t>
 {
-}
+    static constexpr auto fields = std::tuple{};
+};
+
+namespace
+{
 
 struct metadata_empty_request_handler_t
 {
