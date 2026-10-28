@@ -54,9 +54,7 @@ final class SpotManagerTest {
                 .addEntrySpot(DirectEntrySpot.class);
         try (ZLinkFrameworkRuntime runtime =
                 RuntimeTestSupport.startFramework(options, new ZLinkJavaBackendAdapterFactory())) {
-            var spotsField = ZLinkFrameworkRuntime.class.getDeclaredField("spots");
-            spotsField.setAccessible(true);
-            Object spots = spotsField.get(runtime);
+            Object spots = runtime.spotManager();
             var nodeField = spots.getClass().getDeclaredField("primaryNode");
             nodeField.setAccessible(true);
             var node =
@@ -236,7 +234,8 @@ final class SpotManagerTest {
                                         if (targetDelete && deleteFailures.get() == 1) {
                                             return CompletableFuture.failedFuture(
                                                     new IllegalStateException(
-                                                            "injected User authority release failure"));
+                                                            "injected User authority release"
+                                                                    + " failure"));
                                         }
                                     }
                                     try {
@@ -272,9 +271,7 @@ final class SpotManagerTest {
                                     .get(5, TimeUnit.SECONDS));
             CompletionStage<Boolean> resumed = runtime.spotManager().close(created.spot());
             secondFailure.get(5, TimeUnit.SECONDS);
-            var spotsField = ZLinkFrameworkRuntime.class.getDeclaredField("spots");
-            spotsField.setAccessible(true);
-            Object spots = spotsField.get(runtime);
+            Object spots = runtime.spotManager();
             var retainedField = spots.getClass().getDeclaredField("closingCoordinators");
             retainedField.setAccessible(true);
             Object retained =

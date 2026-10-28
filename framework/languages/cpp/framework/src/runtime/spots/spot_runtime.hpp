@@ -401,7 +401,9 @@ struct spot_create_call_state_t
     bool submitted = false;
 };
 
-void drain_spot_node_executors (spot_node_builder_state_t &node);
+void drain_spot_node_executors (
+  spot_node_builder_state_t &node,
+  std::chrono::steady_clock::time_point deadline = std::chrono::steady_clock::now ());
 
 void report_logical_multicast_failure (const std::shared_ptr<spot_node_builder_state_t> &state,
                                        std::string_view channel_name,
@@ -1084,10 +1086,10 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
     friend class ::zlink::framework::spot_handler_registry_t;
 
   private:
-    void settle_preparation_callbacks_core ()
+    void settle_admitted_callbacks_core ()
     {
-        if (preparation_callback_terminal && callback_depth == 0) {
-            auto terminal = std::exchange (preparation_callback_terminal, {});
+        if (admitted_callback_terminal && callback_depth == 0) {
+            auto terminal = std::exchange (admitted_callback_terminal, {});
             terminal->complete (result_t<void>::success ());
         }
     }
@@ -1105,6 +1107,17 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
     }
 
   public:
+    task_t<void> admitted_callbacks_terminal ()
+    {
+        return state_sync ([this] {
+            if (!admitted_callback_terminal)
+                admitted_callback_terminal = std::make_shared<task_completion_source_t<void>> ();
+            const auto terminal = admitted_callback_terminal;
+            settle_admitted_callbacks_core ();
+            return terminal->task ();
+        });
+    }
+
     task_t<void> complete_preparation (bool ready);
     task_t<void> discard_preparation (std::shared_ptr<service::spot_t> native,
                                       std::function<void ()> release_admitted_work = {});
@@ -1338,9 +1351,9 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
     // A token acquired in a node turn can therefore retain this depth through
     // queue wait, Yield, and handler terminal without a second owner claim.
     std::size_t callback_depth = 0;
-    // The failed preparation awaits the existing admitted-callback count.
+    // Preparation cleanup and node drain observe the same admitted-callback count.
     // Only the incarnation state lane registers and consumes this notification.
-    std::shared_ptr<task_completion_source_t<void>> preparation_callback_terminal;
+    std::shared_ptr<task_completion_source_t<void>> admitted_callback_terminal;
     // Close requests that merged into the running Close receive its result.
     std::vector<service::spot_close_done_t> merged_close_results;
 
@@ -1871,7 +1884,8 @@ class spot_node_runtime_t
     void cancel_timers () noexcept;
     void cancel_dispatch_waits () noexcept;
     void cancel_pending_dispatch () noexcept;
-    void cancel_pending_work () noexcept;
+    void cancel_pending_work (
+      std::chrono::steady_clock::time_point deadline = std::chrono::steady_clock::now ()) noexcept;
 
     /* Releases the native SPOT/actor handles this node created on its own
      * zlink context. The host service must call this before terminating the
@@ -1995,12 +2009,14 @@ class spot_node_runtime_t
       actor_context_t actor_context = {},
       std::uint64_t completion_operation_id_high = 0,
       std::uint64_t completion_operation_id_low = 0,
-      std::function<void (std::function<void (result_t<void>)>)> *source_leave = nullptr);
-    task_t<actor_join_reply_t>
-    join_remote_actor_to_spot_erased (const actor_ref_t &actor_ref,
-                                      spot_id_t spot_id,
-                                      const zlink::message_t &request,
-                                      actor_context_t actor_context = {});
+      std::function<void (std::function<void (result_t<void>)>)> *source_leave = nullptr,
+      std::optional<std::chrono::steady_clock::time_point> deadline = std::nullopt);
+    task_t<actor_join_reply_t> join_remote_actor_to_spot_erased (
+      const actor_ref_t &actor_ref,
+      spot_id_t spot_id,
+      const zlink::message_t &request,
+      actor_context_t actor_context = {},
+      std::optional<std::chrono::steady_clock::time_point> deadline = std::nullopt);
     // Completes when the target Spot's admission lifecycle item completes.
     task_t<spot_actor_join_result_t>
     admit_remote_actor_to_spot (std::string transfer_id,
@@ -2252,7 +2268,8 @@ class spot_node_runtime_t
       const zlink::message_t &request,
       const std::optional<zlink::message_t> &actor_snapshot,
       actor_context_t actor_context,
-      std::function<void (std::function<void (result_t<void>)>)> *source_leave = nullptr);
+      std::function<void (std::function<void (result_t<void>)>)> *source_leave = nullptr,
+      std::optional<std::chrono::steady_clock::time_point> deadline = std::nullopt);
     task_t<std::optional<zlink::message_t>>
     relay_actor_packet (const actor_ref_t &actor_ref,
                         actor_context_t actor_context,
@@ -2313,6 +2330,10 @@ class spot_node_runtime_t
     }
 
   private:
+    static task_t<std::optional<std::chrono::steady_clock::time_point>>
+    next_management_activity_on_lane_async (
+      std::shared_ptr<spot_node_builder_state_t> state,
+      std::optional<std::chrono::steady_clock::time_point> next);
     friend struct spot_node_runtime_test_access_t;
     result_t<bool> release_local_actor_on_lane (const actor_ref_t &actor_ref);
     static task_t<void>
@@ -2410,7 +2431,8 @@ class spot_node_runtime_t
       const std::string &local_node_rid,
       service_provider_t &services,
       serializer_registry_t &serializers,
-      std::function<void (std::function<void (result_t<void>)>)> *source_leave);
+      std::function<void (std::function<void (result_t<void>)>)> *source_leave,
+      std::optional<std::chrono::steady_clock::time_point> deadline);
     // The runtime value lives in the coroutine frame; the call copies its inputs.
     static task_t<bool>
     materialize_relocation_state_in (spot_node_runtime_t self,
@@ -2457,17 +2479,18 @@ class spot_node_runtime_t
                                                                 std::type_index actor_type,
                                                                 spot_id_t spot_id,
                                                                 const actor_ref_t &actor_ref);
-    task_t<std::function<void (std::function<void (result_t<void>)>)>>
-    commit_accepted_actor_join (const std::string &key,
-                                spot_context_t &context,
-                                const actor_ref_t &committed,
-                                std::type_index actor_type,
-                                void *actor,
-                                const spot_actor_admission_callbacks_t &admission,
-                                bool create_entry_actor,
-                                const zlink::message_t &create_request,
-                                std::string operation_id,
-                                bool &authority_committed);
+    task_t<std::function<void (std::function<void (result_t<void>)>)>> commit_accepted_actor_join (
+      const std::string &key,
+      spot_context_t &context,
+      const actor_ref_t &committed,
+      std::type_index actor_type,
+      void *actor,
+      const spot_actor_admission_callbacks_t &admission,
+      bool create_entry_actor,
+      const zlink::message_t &create_request,
+      std::string operation_id,
+      bool &authority_committed,
+      std::optional<std::chrono::steady_clock::time_point> deadline = std::nullopt);
     task_t<void> replay_actor_handoff_batch (actor_ref_t actor_ref,
                                              std::vector<handoff_packet_t> backlog,
                                              service_provider_t services,

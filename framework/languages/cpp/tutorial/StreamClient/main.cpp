@@ -1,3 +1,4 @@
+#include <zlink/json.hpp>
 #include "../Shared/contracts.hpp"
 
 #include <zlink/stream_connector.hpp>
@@ -65,26 +66,40 @@ struct receiving_stage_t
     static constexpr const char *packet_name = "ReceivingStage";
     std::string stage;
 };
-inline void from_json (const nlohmann::json &j, leaderboard_update_t &v)
-{
-    v.rank = j.at ("rank");
 }
-inline void from_json (const nlohmann::json &j, ready_t &v)
+
+template <> struct zlink::json::dto_traits<receiving_tutorial::leaderboard_update_t>
 {
-    v.stage = j.at ("stage");
-}
-inline void from_json (const nlohmann::json &j, match_found_t &v)
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("rank", &receiving_tutorial::leaderboard_update_t::rank)};
+};
+
+template <> struct zlink::json::dto_traits<receiving_tutorial::ready_t>
 {
-    v.match_id = j.at ("matchId");
-}
-inline void from_json (const nlohmann::json &j, order_changed_t &v)
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("stage", &receiving_tutorial::ready_t::stage)};
+};
+
+template <> struct zlink::json::dto_traits<receiving_tutorial::match_found_t>
 {
-    v.status = j.at ("status");
-}
-inline void to_json (nlohmann::json &j, const receiving_stage_t &v)
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("matchId", &receiving_tutorial::match_found_t::match_id)};
+};
+
+template <> struct zlink::json::dto_traits<receiving_tutorial::order_changed_t>
 {
-    j = {{"stage", v.stage}};
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("status", &receiving_tutorial::order_changed_t::status)};
+};
+
+template <> struct zlink::json::dto_traits<receiving_tutorial::receiving_stage_t>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("stage", &receiving_tutorial::receiving_stage_t::stage)};
+};
+
+namespace receiving_tutorial
+{
 
 inline void run (const std::string &endpoint)
 {
@@ -149,7 +164,6 @@ inline void run (const std::string &endpoint)
     require (connector.close (), "close");
 }
 }
-
 
 int main (int argc, char **argv)
 {

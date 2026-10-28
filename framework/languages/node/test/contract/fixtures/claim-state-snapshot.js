@@ -9,7 +9,12 @@ async function assertClaimState(batch, record) {
   batch.recordProbe = record;
   const chunks = [];
   try {
-    for await (const chunk of getHeapSnapshot()) chunks.push(chunk);
+    await new Promise((resolve, reject) => {
+      const stream = getHeapSnapshot();
+      stream.on('data', (chunk) => chunks.push(chunk));
+      stream.once('end', resolve);
+      stream.once('error', reject);
+    });
     const snapshot = JSON.parse(Buffer.concat(chunks).toString());
     const { nodes, edges, strings } = snapshot;
     const fields = snapshot.snapshot.meta.node_fields;

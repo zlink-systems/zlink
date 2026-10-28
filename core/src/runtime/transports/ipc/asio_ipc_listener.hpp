@@ -13,6 +13,7 @@
 
 #include "utils/fd.hpp"
 #include "core/own.hpp"
+#include "transports/asio/asio_listener_accept_policy.hpp"
 #include "core/io_object.hpp"
 
 namespace zlink
@@ -60,7 +61,7 @@ class asio_ipc_listener_t ZLINK_FINAL : public own_t, public io_object_t
 
     std::string _endpoint;
     size_t _accepting_count;
-    bool _terminating;
+    asio_listener_state_t _state;
     int _linger;
 
     bool _has_file;

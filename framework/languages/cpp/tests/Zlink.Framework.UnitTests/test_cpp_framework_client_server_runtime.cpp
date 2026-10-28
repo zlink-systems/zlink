@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+#include <zlink/json.hpp>
 #include "../support/runtime_failure_fixture.hpp"
 
 #include "runtime/client_server/raw_client_server_owner.hpp"
@@ -76,14 +77,15 @@ struct network_probe_message_t
     static constexpr const char *packet_name = "metadata.send";
 };
 
-void to_json (nlohmann::json &json, const network_probe_message_t &)
-{
-    json = nlohmann::json::object ();
 }
 
-void from_json (const nlohmann::json &, network_probe_message_t &)
+template <> struct zlink::json::dto_traits<network_probe_message_t>
 {
-}
+    static constexpr auto fields = std::tuple{};
+};
+
+namespace
+{
 
 struct network_probe_handler_t
 {
@@ -142,25 +144,29 @@ struct owner_gate_request_t
 {
     static constexpr const char *packet_name = "owner-gate.request";
 };
-void to_json (nlohmann::json &json, const owner_gate_request_t &)
-{
-    json = nlohmann::json::object ();
 }
-void from_json (const nlohmann::json &, owner_gate_request_t &)
+
+template <> struct zlink::json::dto_traits<owner_gate_request_t>
 {
-}
+    static constexpr auto fields = std::tuple{};
+};
+
+namespace
+{
 
 struct owner_gate_send_t
 {
     static constexpr const char *packet_name = "owner-gate.send";
 };
-void to_json (nlohmann::json &json, const owner_gate_send_t &)
-{
-    json = nlohmann::json::object ();
 }
-void from_json (const nlohmann::json &, owner_gate_send_t &)
+
+template <> struct zlink::json::dto_traits<owner_gate_send_t>
 {
-}
+    static constexpr auto fields = std::tuple{};
+};
+
+namespace
+{
 
 struct owner_gate_request_handler_t
 {
@@ -196,13 +202,15 @@ struct other_owner_request_t
 {
     static constexpr const char *packet_name = "other-owner.request";
 };
-void to_json (nlohmann::json &json, const other_owner_request_t &)
-{
-    json = nlohmann::json::object ();
 }
-void from_json (const nlohmann::json &, other_owner_request_t &)
+
+template <> struct zlink::json::dto_traits<other_owner_request_t>
 {
-}
+    static constexpr auto fields = std::tuple{};
+};
+
+namespace
+{
 
 struct other_owner_request_handler_t
 {
@@ -215,13 +223,15 @@ struct budget_owner_send_t
 {
     static constexpr const char *packet_name = "budget-owner.send";
 };
-void to_json (nlohmann::json &json, const budget_owner_send_t &)
-{
-    json = nlohmann::json::object ();
 }
-void from_json (const nlohmann::json &, budget_owner_send_t &)
+
+template <> struct zlink::json::dto_traits<budget_owner_send_t>
 {
-}
+    static constexpr auto fields = std::tuple{};
+};
+
+namespace
+{
 
 struct budget_owner_send_handler_t
 {
@@ -443,25 +453,29 @@ struct metadata_request_t
 {
     static constexpr const char *packet_name = "metadata.request";
 };
-void to_json (nlohmann::json &json, const metadata_request_t &)
-{
-    json = nlohmann::json::object ();
 }
-void from_json (const nlohmann::json &, metadata_request_t &)
+
+template <> struct zlink::json::dto_traits<metadata_request_t>
 {
-}
+    static constexpr auto fields = std::tuple{};
+};
+
+namespace
+{
 
 struct metadata_empty_request_t
 {
     static constexpr const char *packet_name = "metadata.empty-request";
 };
-void to_json (nlohmann::json &json, const metadata_empty_request_t &)
-{
-    json = nlohmann::json::object ();
 }
-void from_json (const nlohmann::json &, metadata_empty_request_t &)
+
+template <> struct zlink::json::dto_traits<metadata_empty_request_t>
 {
-}
+    static constexpr auto fields = std::tuple{};
+};
+
+namespace
+{
 
 struct metadata_empty_request_handler_t
 {
@@ -619,6 +633,25 @@ void verify_invalid_metadata_never_dispatches (const std::string &endpoint)
             assert (metadata_request_handler_t::calls.load () == calls);
         }
     }
+    const auto calls = metadata_request_handler_t::calls.load ();
+    const auto malformed = await_metadata_wire_reply (source.request ()
+                                                        .message (zlink::message_t::from ("{"))
+                                                        .message (zlink::message_t::from ("{}"))
+                                                        .timeout (5s)
+                                                        .async ()
+                                                        .reply)
+                             .result ();
+    assert (malformed && malformed.value ().size () == 2);
+    const auto fallback = zlink::framework::runtime::messaging::envelope_codec_t{}.decode_header (
+      malformed.value ().front (), false);
+    assert (fallback
+            && fallback.value ().kind
+                 == zlink::framework::runtime::messaging::message_kind_t::error);
+    assert (fallback.value ().channel_name == "metadata");
+    assert (fallback.value ().content_type
+            == zlink::framework::runtime::messaging::envelope_codec_t::default_content_type);
+    assert (malformed.value ()[1].to_string () == "null");
+    assert (metadata_request_handler_t::calls.load () == calls);
 }
 
 void verify_invalid_metadata_is_a_protocol_error ()

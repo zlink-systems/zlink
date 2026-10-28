@@ -38,7 +38,9 @@ SESSION_ACTOR_ROUTE="tcp://127.0.0.1:${PORTS[9]}"
 SUPPORT_ACTOR_ROUTE="tcp://127.0.0.1:${PORTS[10]}"
 API_SPOT_ROUTE="tcp://127.0.0.1:${PORTS[11]}"
 
-cmake --build "$BUILD_DIR" --parallel 4 --target sample_cpp_framework_supportchat_api sample_cpp_framework_supportchat_session sample_cpp_framework_supportchat_support sample_cpp_framework_supportchat_client >/dev/null
+zlink_cpp_sample_log_step "build"
+cmake --build "$BUILD_DIR" --parallel 4 --target sample_cpp_framework_supportchat_api sample_cpp_framework_supportchat_session sample_cpp_framework_supportchat_support sample_cpp_framework_supportchat_client
+zlink_cpp_sample_log_step "Redis start"
 zlink_redis_start_scoped_assign REDIS_CONTAINER_NAME redis_port "zlink-redis-cpp-sample-supportchat" "redis:7-alpine"
 REDIS_ENDPOINT="tcp://127.0.0.1:${redis_port}"
 REDIS_KEY_PREFIX="supportchat:$$:"
@@ -74,9 +76,14 @@ wait_minimum() {
   for _ in $(seq 1 "$WAIT_ATTEMPTS"); do actual="$(prefix_count "$prefix" "$@")"; [[ "$actual" -ge "$wanted" ]] && return 0; sleep "$WAIT_SECONDS"; done
   echo "expected $name at least $wanted time(s), found $actual" >&2; dump_logs; return 1
 }
-start_role() { local name="$1"; shift; stdbuf -oL -eL "$@" >"$LOG_DIR/$name.log" 2>&1 & PIDS+=("$!"); }
-remove_pid() { local target="$1" remaining=() pid; for pid in "${PIDS[@]}"; do [[ "$pid" == "$target" ]] || remaining+=("$pid"); done; PIDS=("${remaining[@]}"); }
-
+start_role() {
+  local name="$1"
+  shift
+  stdbuf -oL -eL "$@" >"$LOG_DIR/$name.log" 2>&1 &
+  local pid=$!
+  PIDS+=("$pid")
+  zlink_cpp_sample_log_step "process start: $name pid=$pid"
+}
 write_role_config api
 write_role_config session
 write_role_config support
@@ -109,7 +116,8 @@ wait_minimum "Active transition" "supportchat-conversation status=Active convers
 wait_minimum "WaitingForClose transition" "supportchat-conversation status=WaitingForClose conversation=" 1 "${SERVER_LOGS[@]}"
 wait_minimum "Closed transition" "supportchat-conversation status=Closed conversation=" 1 "${SERVER_LOGS[@]}"
 set +e; wait "$CLIENT_PID"; CLIENT_STATUS=$?; set -e
-remove_pid "$CLIENT_PID"
+zlink_cpp_sample_log_step "process exit: client status=$CLIENT_STATUS"
+zlink_cpp_sample_remove_pid "$CLIENT_PID"
 if [[ "$CLIENT_STATUS" -ne 0 ]]; then echo "SupportChat client exited with status $CLIENT_STATUS" >&2; dump_logs; exit 1; fi
 
 cleanup

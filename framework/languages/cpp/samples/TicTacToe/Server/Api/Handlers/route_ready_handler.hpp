@@ -6,6 +6,7 @@
 #include <zlink/framework.hpp>
 
 #include <nlohmann/json.hpp>
+#include <zlink/json.hpp>
 
 #include <string>
 
