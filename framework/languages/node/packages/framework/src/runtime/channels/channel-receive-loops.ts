@@ -30,10 +30,18 @@ import {
 export function createChannelApplicationDispatchQueue(): ZLinkSerialExecutionQueue {
   return new ZLinkSerialExecutionQueue(async (record: ZLinkSerialWorkRecord<unknown>) => {
     try {
-      record.resolve(await record.operation());
+      void Promise.resolve(record.operation()).then(
+        (value) => {
+          record.resolve(value);
+          record.release();
+        },
+        (error) => {
+          record.reject(error);
+          record.release();
+        }
+      );
     } catch (error) {
       record.reject(error);
-    } finally {
       record.release();
     }
   });
