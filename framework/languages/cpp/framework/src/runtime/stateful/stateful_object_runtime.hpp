@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <deque>
 #include <functional>
+#include <future>
 #include <map>
 #include <memory>
 #include <tuple>
@@ -297,7 +298,7 @@ class stateful_object_runtime_t
         });
     }
 
-    task_t<void> retire_population_metrics_async ();
+    std::future<void> retire_population_metrics_async ();
 
     using relocation_state_capture_t = std::function<task_t<frozen_object_state_t> (
       const object_ref_t &, const std::string &, std::stop_token)>;

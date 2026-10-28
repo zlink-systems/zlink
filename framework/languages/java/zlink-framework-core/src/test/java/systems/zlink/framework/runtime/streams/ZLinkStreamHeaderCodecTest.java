@@ -16,7 +16,7 @@ import java.util.Optional;
 
 final class ZLinkStreamHeaderCodecTest {
     @Test
-    void traceCorrelationDoesNotInventValueFromRequestSequence() throws Exception {
+    void traceCorrelationDoesNotInventValueFromRequestSequence() {
         ZLinkStreamHeader request =
                 new ZLinkStreamHeader(
                         ZLinkStreamMessageKind.REQUEST,
@@ -25,12 +25,7 @@ final class ZLinkStreamHeaderCodecTest {
                         Optional.of(7L),
                         "RequestWithoutCorrelation",
                         Map.of());
-        Class<?> correlations =
-                Class.forName("systems.zlink.framework.runtime.streams.ZLinkStreamCorrelations");
-        var method = correlations.getDeclaredMethod("forTrace", ZLinkStreamHeader.class);
-        method.setAccessible(true);
-
-        assertEquals(null, method.invoke(null, request));
+        assertEquals(null, ZLinkStreamCorrelations.forTrace(request));
     }
 
     @Test

@@ -56,7 +56,7 @@ int zlink::socket_base_t::monitor_snapshot (zlink_monitor_status_t *out_)
     bool application_pipe_seen = false;
     {
         scoped_lock_t lock (monitor_runtime ().sync);
-        if (monitor_ready_count () > 0)
+        if (monitor_runtime ().ready_count () > 0)
             out_->state_flags |= ZLINK_MONITOR_STATE_READY;
 
         for (size_t i = 0, size = endpoint_runtime ().attached_pipe_count (); i != size; ++i) {
@@ -204,11 +204,6 @@ void zlink::socket_base_t::reset_auto_hwm_admission_counters ()
     }
 }
 
-uint32_t zlink::socket_base_t::monitor_ready_count () const
-{
-    return monitor_runtime ().ready_count ();
-}
-
 #ifdef ZLINK_BUILD_TESTS
 uint32_t zlink::socket_base_t::test_monitor_ready_count () const
 {
@@ -216,12 +211,6 @@ uint32_t zlink::socket_base_t::test_monitor_ready_count () const
     return monitor_runtime ().ready_count ();
 }
 #endif
-
-bool zlink::socket_base_t::has_attached_pipes () const
-{
-    scoped_lock_t lock (monitor_runtime ().sync);
-    return endpoint_runtime ().has_attached_pipes ();
-}
 
 void zlink::socket_base_t::snapshot_attached_pipes (std::vector<pipe_t *> *out_)
 {

@@ -28,7 +28,6 @@
 #include <cstdlib>
 #include <iostream>
 #include <limits>
-#include <random>
 #include <stdexcept>
 #include <string_view>
 #include <utility>
@@ -1033,8 +1032,7 @@ task_t<bool> client_server_location_runtime_t::publish_servers_task (location_wr
     }
     bool published = true;
     for (auto &[channel_name, server] : _servers) {
-        const auto weight_override =
-          co_await _channel_runtime.server_peer_weight_override_task (channel_name);
+        const auto weight_override = _channel_runtime.server_peer_weight_override (channel_name);
         const auto weight = weight_override.value_or (server->capability.service_weight);
         const auto state = current_state (*_locations);
         const bool new_owner =
@@ -1393,7 +1391,7 @@ task_t<void> client_server_location_runtime_t::dispatch_server_record (
     }
     if (record.parts.size () != 2)
         co_return;
-    std::optional<protocol::application_payload_t> pending_reply;
+    std::optional<zlink::message_t> pending_reply;
     std::optional<framework_exception_t> pending_failure_reply;
     try {
         /* Ingress validates the envelope and captures flow fields.
@@ -1449,10 +1447,7 @@ task_t<void> client_server_location_runtime_t::dispatch_server_record (
               record.owner, {}, request_envelope.message_name, scope.provider (), *_serializers,
               *_handlers, message, inbound);
             if (reply) {
-                pending_reply.emplace (protocol::application_payload_t{
-                  request_envelope.message_name,
-                  std::string (runtime::messaging::envelope_codec_t::default_content_type),
-                  reply.value ().to_bytes ()});
+                pending_reply.emplace (std::move (reply.value ()));
             } else {
                 const framework_exception_t error (reply.error_kind (),
                                                    reply.error () != nullptr
@@ -1563,7 +1558,9 @@ task_t<void> client_server_location_runtime_t::dispatch_server_record (
     }
     try {
         if (pending_reply)
-            (void) co_await owner->reply (record, *pending_reply);
+            (void) co_await owner->reply (
+              record, std::move (*pending_reply),
+              runtime::messaging::envelope_codec_t::default_content_type);
         else if (pending_failure_reply)
             (void) co_await owner->reply (record, *pending_failure_reply);
     }
@@ -1648,9 +1645,7 @@ task_t<void> client_server_location_runtime_t::send (const std::string &channel_
 {
     auto selected = co_await select_ready (channel_name);
     const auto submitted = co_await selected->send (
-      protocol::application_payload_t{std::move (packet_name), std::move (content_type),
-                                      message.to_bytes ()},
-      std::move (metadata));
+      std::move (packet_name), std::move (content_type), std::move (message), std::move (metadata));
     if (submitted != zlink::submit_result_t::ok) {
         throw runtime::messaging::map_submit_result_exception (submitted,
                                                                "ClientServer send failed");
@@ -1681,10 +1676,9 @@ client_server_location_runtime_t::request (const std::string &channel_name,
     if (remaining <= std::chrono::milliseconds::zero ())
         co_return result_t<zlink::message_t>::failure (framework_error_kind_t::deadline_exceeded,
                                                        "ClientServer request deadline expired");
-    const auto completion = co_await detail::request_submission (selected->request (
-      protocol::application_payload_t{std::move (packet_name), std::move (content_type),
-                                      message.to_bytes ()},
-      remaining, std::move (metadata)));
+    auto completion = co_await detail::request_submission (
+      selected->request (std::move (packet_name), std::move (content_type), std::move (message),
+                         remaining, std::move (metadata)));
     if (completion.terminal != foundation::operation_terminal_t::completed) {
         co_return detail::result_access_t::failure<zlink::message_t> (
           client_server_operation_exception (completion.terminal, "ClientServer request"));
@@ -1696,7 +1690,7 @@ client_server_location_runtime_t::request (const std::string &channel_name,
         co_return detail::result_access_t::failure<zlink::message_t> (error);
     }
     /* The response envelope body is the reply payload as-is. */
-    co_return zlink::message_t::from (completion.payload);
+    co_return std::move (completion.payload);
 }
 
 task_t<std::shared_ptr<raw_client_server_client_t>> client_server_location_runtime_t::select_ready (
@@ -2039,18 +2033,6 @@ void client_server_location_runtime_t::stop_servers ()
           _server_pump_snapshot.clear ();
       })
       .get ();
-}
-
-std::uint64_t client_server_location_runtime_t::make_lifecycle_generation ()
-{
-    static std::atomic_uint64_t counter{1};
-    const auto random = (static_cast<std::uint64_t> (std::random_device{}()) << 32u)
-                        ^ static_cast<std::uint64_t> (std::random_device{}());
-    const auto time =
-      static_cast<std::uint64_t> (std::chrono::steady_clock::now ().time_since_epoch ().count ());
-    auto value = (random ^ time ^ counter.fetch_add (1))
-                 & static_cast<std::uint64_t> (std::numeric_limits<std::int64_t>::max ());
-    return value == 0 ? 1 : value;
 }
 
 std::uint32_t client_server_location_runtime_t::effective_max_message_bytes (

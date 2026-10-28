@@ -22,8 +22,7 @@ zlink::xpub_t::xpub_t (class ctx_t *parent_, uint32_t tid_, int sid_) :
     _manual (false),
     _send_last_pipe (false),
     _pending_pipes (),
-    _welcome_msg (),
-    _delivery_ready_peer_count (0)
+    _welcome_msg ()
 {
     _last_pipe = NULL;
     options.type = ZLINK_CORE_SOCKET_XPUB;
@@ -35,39 +34,6 @@ zlink::xpub_t::~xpub_t ()
     _welcome_msg.close ();
 }
 
-bool zlink::xpub_t::compute_delivery_ready_state () const
-{
-    return compute_delivery_ready_count () > 0;
-}
-
-void zlink::xpub_t::collect_ready_pipe (pipe_t *pipe_, std::set<pipe_t *> *out_)
-{
-    if (pipe_ && out_)
-        out_->insert (pipe_);
-}
-
-uint32_t zlink::xpub_t::compute_delivery_ready_count () const
-{
-    if (_subscriptions.num_prefixes () == 0)
-        return 0;
-
-    std::set<pipe_t *> ready_pipes;
-    _subscriptions.visit_values (&collect_ready_pipe, &ready_pipes);
-    return static_cast<uint32_t> (ready_pipes.size ());
-}
-
-void zlink::xpub_t::refresh_delivery_ready_state (const endpoint_uri_pair_t &endpoint_uri_pair_)
-{
-    LIBZLINK_UNUSED (endpoint_uri_pair_);
-    const uint32_t ready_count = compute_delivery_ready_count ();
-    _delivery_ready_peer_count.store (ready_count, std::memory_order_release);
-}
-
-uint32_t zlink::xpub_t::monitor_ready_count () const
-{
-    return _delivery_ready_peer_count.load (std::memory_order_acquire);
-}
-
 void zlink::xpub_t::xattach_pipe (pipe_t *pipe_, bool subscribe_to_all_, bool locally_initiated_)
 {
     LIBZLINK_UNUSED (locally_initiated_);
@@ -77,10 +43,8 @@ void zlink::xpub_t::xattach_pipe (pipe_t *pipe_, bool subscribe_to_all_, bool lo
 
     //  If subscribe_to_all_ is specified, the caller would like to subscribe
     //  to all data on this pipe, implicitly.
-    if (subscribe_to_all_) {
+    if (subscribe_to_all_)
         _subscriptions.add (NULL, 0, pipe_);
-        refresh_delivery_ready_state (pipe_->get_endpoint_pair ());
-    }
 
     // if welcome message exists, send a copy of it
     if (_welcome_msg.size () > 0) {
@@ -176,17 +140,11 @@ void zlink::xpub_t::xread_activated (pipe_t *pipe_)
         }
         msg.close ();
     }
-
-    if (pipe_)
-        refresh_delivery_ready_state (pipe_->get_endpoint_pair ());
-
 }
 
 void zlink::xpub_t::xwrite_activated (pipe_t *pipe_)
 {
     _dist.activated (pipe_);
-    if (pipe_)
-        refresh_delivery_ready_state (pipe_->get_endpoint_pair ());
 }
 
 int zlink::xpub_t::xsetsockopt (int option_, const void *optval_, size_t optvallen_)
@@ -285,8 +243,6 @@ static void stub (zlink::mtrie_t::prefix_t data_, size_t size_, void *arg_)
 
 void zlink::xpub_t::xpipe_terminated (pipe_t *pipe_)
 {
-    const endpoint_uri_pair_t endpoint_pair =
-      pipe_ ? pipe_->get_endpoint_pair () : endpoint_uri_pair_t ();
     if (_manual) {
         //  Remove the pipe from the trie and send corresponding manual
         //  unsubscriptions upstream.
@@ -309,7 +265,6 @@ void zlink::xpub_t::xpipe_terminated (pipe_t *pipe_)
     }
 
     _dist.pipe_terminated (pipe_);
-    refresh_delivery_ready_state (endpoint_pair);
 }
 
 void zlink::xpub_t::mark_as_matching (pipe_t *pipe_, xpub_t *self_)

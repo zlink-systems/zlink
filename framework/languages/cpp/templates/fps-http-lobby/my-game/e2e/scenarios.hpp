@@ -7,6 +7,8 @@
 #include <string_view>
 #include <thread>
 
+#include "test_json.hpp"
+
 namespace MyGame::E2E
 {
 inline const PlayerView &player (const RoomView &view, const Client &client)
@@ -74,7 +76,7 @@ inline MatchResponse match_http (const std::string &endpoint,
     require (!failure, "HTTP match transport failed: " + failure.message ());
     require (response.result () == http::status::ok,
              "HTTP match failed: " + response.body ());
-    return nlohmann::json::parse (response.body ()).get<MatchResponse> ();
+    return test_json_fps_http_domain::decode<MatchResponse> (nlohmann::json::parse (response.body ()));
 }
 
 inline MatchResponse match_pair (const std::string &endpoint,
