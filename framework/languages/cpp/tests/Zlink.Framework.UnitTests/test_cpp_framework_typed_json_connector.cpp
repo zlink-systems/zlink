@@ -48,10 +48,12 @@ int main ()
 {
     boost::asio::io_context io;
     tcp::acceptor acceptor (io, {boost::asio::ip::address_v4::loopback (), 0});
+    constexpr std::array invalid_fields{"state", "signed64", "unsigned64"};
+    constexpr int request_count = 3 + invalid_fields.size ();
     std::thread peer ([&] {
         tcp::socket socket (io);
         acceptor.accept (socket);
-        for (int i = 0; i < 4; ++i) {
+        for (int i = 0; i < request_count; ++i) {
             std::array<std::uint8_t, 6> prefix{};
             boost::asio::read (socket, boost::asio::buffer (prefix));
             auto hs = (prefix[0] << 8) | prefix[1];
@@ -70,9 +72,16 @@ int main ()
             if (i == 2)
                 payload =
                   R"({"state":"Closed","signed64":"-9223372036854775808","unsigned64":"18446744073709551615","int32":-2147483648})";
-            if (i == 3)
-                payload =
-                  R"({"state":99,"signed64":18446744073709551615,"unsigned64":-1,"int32":-2147483648})";
+            if (i >= 3) {
+                auto invalid = actual;
+                if (i == 3)
+                    invalid[invalid_fields[i - 3]] = 99;
+                else if (i == 4)
+                    invalid[invalid_fields[i - 3]] = std::numeric_limits<std::int64_t>::max ();
+                else
+                    invalid[invalid_fields[i - 3]] = std::numeric_limits<std::uint64_t>::max ();
+                payload = invalid.dump ();
+            }
             std::vector<std::uint8_t> header{0xF2, 3, 1, 1};
             header.insert (header.end (), request.begin () + 4, request.begin () + 12);
             header.push_back (0);
@@ -102,9 +111,17 @@ int main ()
     }
     connector.send (Dto{}).submit ();
     std::cout << "typed_send=submitted\n";
-    for (int i = 1; i < 4; ++i) {
+    for (int i = 1; i < request_count; ++i) {
         auto result = connector.request (Dto{}).submit<Dto> ();
-        assert (bool (result) == (i != 3));
+        assert (bool (result) == (i < 3));
+        if (result) {
+            assert (result.value ().state == Dto::Reason::Closed);
+            assert (result.value ().signed64 == Dto{}.signed64);
+            assert (result.value ().unsigned64 == Dto{}.unsigned64);
+        } else {
+            assert (result.error_code () == sc::error_code_t::frame_decode_failed);
+            std::cout << "invalid_field=" << invalid_fields[i - 3] << ' ';
+        }
         std::cout << "typed_request[" << i << "]=" << (result ? "accepted" : "rejected");
         if (result)
             std::cout << " state=" << static_cast<int> (result.value ().state)

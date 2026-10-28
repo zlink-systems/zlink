@@ -172,9 +172,13 @@ template <typename T, typename... Seen> consteval bool validate_type ()
 {
     if constexpr ((std::is_same_v<T, Seen> || ...))
         return true;
-    else if constexpr (std::is_same_v<T, nlohmann::json> || std::is_same_v<T, bool>
-                       || std::is_same_v<T, std::string> || std::is_same_v<T, float>
-                       || std::is_same_v<T, double> || std::is_same_v<T, std::vector<std::byte>>)
+    else if constexpr (std::is_same_v<T, nlohmann::json>) {
+        static_assert (sizeof...(Seen) == 0,
+                       "framework-json-v1: JSON DOM is only supported as a top-level payload");
+        return true;
+    } else if constexpr (std::is_same_v<T, bool> || std::is_same_v<T, std::string>
+                         || std::is_same_v<T, float> || std::is_same_v<T, double>
+                         || std::is_same_v<T, std::vector<std::byte>>)
         return true;
     else if constexpr (std::is_integral_v<T>) {
         static_assert (sizeof (T) <= 8, "framework-json-v1: unsupported integer width");

@@ -356,6 +356,24 @@ int main ()
     verify_goldens ();
     verify_boundaries ();
     namespace p = zlink::detail::json_profile;
+    const nlohmann::json dom{{"signed64", INT64_MAX}, {"unsigned64", UINT64_MAX}};
+    const auto dom_text = p::try_encode (dom);
+    assert (dom_text);
+    const auto dom_back = p::try_decode<nlohmann::json> (dom_text->begin (), dom_text->end ());
+    assert (dom_back && *dom_back == dom && (*dom_back)["signed64"].is_number_integer ()
+            && (*dom_back)["unsigned64"].is_number_unsigned ());
+    const auto dom_message = zlink::framework::codecs::json::make_message (dom);
+    assert (zlink::framework::codecs::json::parse_message<nlohmann::json> (dom_message) == dom);
+    for (const auto status : {state::Ready, state::Closed}) {
+        dto input{};
+        input.status = status;
+        const auto encoded = p::try_encode (input);
+        assert (encoded);
+        assert (nlohmann::json::parse (*encoded)["status"]
+                == (status == state::Ready ? "Ready" : "Closed"));
+        const auto decoded = p::try_decode<dto> (encoded->begin (), encoded->end ());
+        assert (decoded && decoded->status == status);
+    }
     dto d{INT64_MIN,    UINT64_MAX,       state::Closed,
           std::nullopt, {std::byte{255}}, {{"n", {1, INT64_MAX}}}};
     auto text = p::try_encode (d);
@@ -365,7 +383,8 @@ int main ()
             && wire["unsigned64"] == "18446744073709551615" && wire["status"] == "Closed"
             && wire["bytes"] == "/w==");
     auto result = p::try_decode<dto> (text->begin (), text->end ());
-    assert (result && result->signed64 == d.signed64 && result->nested == d.nested);
+    assert (result && result->signed64 == d.signed64 && result->nested == d.nested
+            && result->status == d.status);
 
     zlink::framework::serializer_registry_t registry;
     auto serializer = registry.get<dto> ();

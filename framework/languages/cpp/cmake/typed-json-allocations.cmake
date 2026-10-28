@@ -25,6 +25,7 @@ add_executable(test_cpp_framework_typed_json_allocations
   tests/Zlink.Framework.UnitTests/test_cpp_framework_typed_json_allocations.cpp
   tests/support/allocation_counter.cpp)
 target_link_libraries(test_cpp_framework_typed_json_allocations PRIVATE nlohmann_json::nlohmann_json)
+target_compile_features(test_cpp_framework_typed_json_allocations PRIVATE cxx_std_20)
 target_include_directories(test_cpp_framework_typed_json_allocations BEFORE PRIVATE
   "${_json_instrument_dir}" common/include tests/support)
 target_compile_definitions(test_cpp_framework_typed_json_allocations PRIVATE ZLINK_JSON_EXPECT_DOM_FREE)

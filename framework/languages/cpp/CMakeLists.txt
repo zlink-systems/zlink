@@ -959,7 +959,7 @@ endif()
 
 if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
   get_target_property(_typed_json_include nlohmann_json::nlohmann_json INTERFACE_INCLUDE_DIRECTORIES)
-  foreach(_case RANGE 0 11)
+  foreach(_case RANGE 0 15)
     add_test(NAME test_cpp_framework_typed_json_compile_fail_${_case}
       COMMAND ${CMAKE_COMMAND}
         -DCOMPILER=${CMAKE_CXX_COMPILER} -DCASE=${_case}
