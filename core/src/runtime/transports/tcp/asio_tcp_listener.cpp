@@ -56,7 +56,7 @@ zlink::asio_tcp_listener_t::asio_tcp_listener_t (io_thread_t *io_thread_,
     _acceptor (_io_context),
     _socket (socket_),
     _accepting_count (0),
-    _terminating (false),
+    _state (asio_listener_state_t::accepting),
     _linger (0)
 {
     LISTENER_DBG ("Constructor called, this=%p", static_cast<void *> (this));
@@ -130,7 +130,7 @@ void zlink::asio_tcp_listener_t::process_term (int linger_)
     LISTENER_DBG ("process_term called, linger=%d, accepting=%zu", linger_, _accepting_count);
 
     prepare_asio_listener_termination (
-      linger_, &_linger, _io_context, &_accepting_count,
+      linger_, &_linger, &_state, &_accepting_count,
       [this] () { process_release_endpoint (); },
       [this] (int linger_inner_) { own_t::process_term (linger_inner_); });
 }
@@ -153,15 +153,13 @@ void zlink::asio_tcp_listener_t::on_accept (
   const std::shared_ptr<boost::asio::ip::tcp::socket> &accept_socket_,
   const boost::system::error_code &ec)
 {
-    if (_accepting_count > 0)
-        --_accepting_count;
-
     LISTENER_DBG ("on_accept: ec=%s, terminating=%d, pending=%zu", ec.message ().c_str (),
-                  _terminating, _accepting_count);
+                  static_cast<int> (_state), _accepting_count);
 
     //  Never create a session from an accept queued before endpoint release.
-    if (cancel_asio_listener_accept_if_terminating (_terminating, accept_socket_, ec)) {
-        LISTENER_DBG ("on_accept: terminating, ignoring callback");
+    if (complete_asio_listener_accept (
+          _state, &_accepting_count, _linger, accept_socket_, ec,
+          [this] (int linger_) { own_t::process_term (linger_); })) {
         return;
     }
 
@@ -261,7 +259,8 @@ void zlink::asio_tcp_listener_t::create_engine (fd_t fd_)
 
 void zlink::asio_tcp_listener_t::process_release_endpoint ()
 {
-    _terminating = true;
+    if (_state == asio_listener_state_t::accepting)
+        _state = asio_listener_state_t::endpoint_released;
     LISTENER_DBG ("close called");
 
     close_asio_socket_if_open (_acceptor, [this] (fd_t fd) {
