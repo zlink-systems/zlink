@@ -7,22 +7,36 @@ const { inspectRuntime } = require('../../packages/framework/dist/runtime/intern
 const { ZLinkFrameworkRuntimeHost } = require('../../packages/framework/dist/runtime/host');
 const { ZLinkHostServiceRelocationRuntime } = require('../../packages/framework/dist/runtime/host/service-relocation-host-runtime');
 const { ServiceStatefulRuntime } = require('../../packages/framework/dist/runtime/foundation/service-stateful-runtime');
+const { ZLinkStoreLocationResolvers } = require('../../packages/framework/dist/runtime/locations/resolvers');
 const { ServiceDiscoveryRegistry } = require('../../packages/framework/dist/runtime/foundation/service-discovery-registry');
 const { ZLinkChannelSocketRegistry } = require('../../packages/framework/dist/runtime/channels/channel-socket-registry');
 const { createFrameworkRegistration } = require('../../packages/framework/dist/runtime/configuration');
 const { rawMeshFixture } = require('./fixtures/raw-mesh-binding');
 
+function assertReadOnlyValue(value) {
+  if (value === undefined || value === null || typeof value !== 'object') return;
+  assert.ok(Object.isFrozen(value));
+  for (const [field, item] of Object.entries(value)) {
+    assertReadOnlyValue(item);
+    assert.throws(() => { value[field] = 'changed'; }, TypeError);
+  }
+  if (Array.isArray(value)) assert.throws(() => { value.push('changed'); }, TypeError);
+}
+
 function assertValueSnapshot(owner) {
   const snapshot = owner[inspectRuntime]();
-  const expected = { ...snapshot };
-  assert.ok(Object.isFrozen(snapshot));
-  for (const [field, value] of Object.entries(snapshot)) {
-    assert.ok(value === undefined || ['number', 'bigint', 'string', 'boolean'].includes(typeof value), field);
-    assert.throws(() => { snapshot[field] = 'changed'; }, TypeError);
-  }
+  assertReadOnlyValue(snapshot);
   const next = owner[inspectRuntime]();
   assert.notStrictEqual(next, snapshot);
-  assert.deepEqual(next, expected);
+  for (const [field, value] of Object.entries(snapshot)) {
+    if (typeof value === 'function') {
+      // Query views return copied values, never a mutable registry entry.
+      assert.equal(value('missing'), undefined);
+      assert.equal(next[field]('missing'), undefined);
+    } else {
+      assert.deepEqual(next[field], value);
+    }
+  }
 }
 
 test('internal observers return frozen value copies and are absent from the public entry', () => {
@@ -36,6 +50,7 @@ test('internal observers return frozen value copies and are absent from the publ
       new ZLinkHostServiceRelocationRuntime({}),
       new ZLinkFrameworkRuntimeHost({ registration }),
       new ServiceDiscoveryRegistry(),
+      new ZLinkStoreLocationResolvers({ stores: {}, leaseTracker: {} }),
       new ZLinkChannelSocketRegistry(registration, {}, {})
     ];
     owners.forEach(assertValueSnapshot);
