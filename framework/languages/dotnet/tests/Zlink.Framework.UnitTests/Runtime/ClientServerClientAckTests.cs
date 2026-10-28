@@ -412,6 +412,8 @@ public sealed class ClientServerClientAckTests
 
     private sealed class AckFixture : IAsyncDisposable
     {
+        private readonly ZLinkStateLane _deadlineOwner = new();
+        private readonly Zlink.Framework.Runtime.Messaging.ZLinkRequestDeadlineIndex _deadlines;
         private readonly IContext _context = Systems.Zlink.Zlink.CreateContext();
         private readonly IPoller _completions = Systems.Zlink.Zlink.CreatePoller();
         internal readonly IRouterSocket Router;
@@ -447,6 +449,7 @@ public sealed class ClientServerClientAckTests
                 dealer.Send().Message(ready).Submit();
             using (var received = Received.Create())
                 Assert.True(Router.Recv(received));
+            _deadlines = new(_deadlineOwner);
             Connection = Activator.CreateInstance(
                 _type,
                 BindingFlags.Instance | BindingFlags.NonPublic,
@@ -463,6 +466,7 @@ public sealed class ClientServerClientAckTests
                     TimeProvider.System,
                     beforeReport is null ? Failures : new GatedReporter(Failures, beforeReport),
                     new ZLinkRuntimeTaskRunner(Failures, CancellationToken.None),
+                    _deadlines,
                 ],
                 culture: null
             )!;
@@ -572,7 +576,10 @@ public sealed class ClientServerClientAckTests
 
         public async ValueTask DisposeAsync()
         {
-            await ((IAsyncDisposable)Connection).DisposeAsync();
+            var close = ((IAsyncDisposable)Connection).DisposeAsync();
+            await _deadlines.DisposeAsync();
+            await close;
+            await _deadlineOwner.DisposeAsync();
             _completions.Dispose();
             Router.Dispose();
             _context.Dispose();
