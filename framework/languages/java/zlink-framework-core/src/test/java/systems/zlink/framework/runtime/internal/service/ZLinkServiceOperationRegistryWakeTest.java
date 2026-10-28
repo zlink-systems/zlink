@@ -195,9 +195,7 @@ public final class ZLinkServiceOperationRegistryWakeTest {
             clock.set(TimeUnit.MILLISECONDS.toNanos(100));
             java.util.concurrent.locks.LockSupport.unpark(worker.get());
             long guard = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
-            var tick = ZLinkServiceOperationRegistry.class.getDeclaredField("maintenanceTick");
-            tick.setAccessible(true);
-            while (tick.getLong(registry) >= 0) {
+            while (registry.maintenanceTickForTest() >= 0) {
                 if (System.nanoTime() - guard >= 0) throw new AssertionError("wheel did not drain");
                 Thread.yield();
             }
@@ -221,11 +219,7 @@ public final class ZLinkServiceOperationRegistryWakeTest {
             System.out.printf(
                     "long_deadline seconds=30 wait_returns=%d%n", returns.get() - idleBefore);
             if (!registry.discard(later.id())) throw new AssertionError("discard failed");
-            var ownerField = ZLinkServiceOperationRegistry.class.getDeclaredField("owner");
-            ownerField.setAccessible(true);
-            var lane =
-                    (systems.zlink.framework.runtime.internal.execution.ZLinkStateLane)
-                            ownerField.get(registry);
+            var lane = registry.ownerLaneForTest();
             int beforeEarlier = returns.get();
             var earlier =
                     lane.awaitTurn(
@@ -282,14 +276,12 @@ public final class ZLinkServiceOperationRegistryWakeTest {
             // reservation.
             clock.set(TimeUnit.MILLISECONDS.toNanos(1));
             ZLinkCompletionBridge.await(registry.expire(clock.get()));
-            var tick = ZLinkServiceOperationRegistry.class.getDeclaredField("maintenanceTick");
-            tick.setAccessible(true);
-            if (tick.getLong(registry) != 256)
+            if (registry.maintenanceTickForTest() != 256)
                 throw new AssertionError("reserved empty visit cancelled");
             int before = expires.get();
             clock.set(TimeUnit.MILLISECONDS.toNanos(256));
             java.util.concurrent.locks.LockSupport.unpark(worker.get());
-            awaitIdle(registry, tick);
+            awaitIdle(registry);
             int emptyVisits = expires.get() - before;
             if (emptyVisits != 1) throw new AssertionError("empty visits=" + emptyVisits);
             clock.addAndGet(TimeUnit.SECONDS.toNanos(5));
@@ -299,10 +291,9 @@ public final class ZLinkServiceOperationRegistryWakeTest {
         }
     }
 
-    private static void awaitIdle(
-            ZLinkServiceOperationRegistry registry, java.lang.reflect.Field tick) throws Exception {
+    private static void awaitIdle(ZLinkServiceOperationRegistry registry) throws Exception {
         long guard = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
-        while (tick.getLong(registry) != -1) {
+        while (registry.maintenanceTickForTest() != -1) {
             if (System.nanoTime() - guard >= 0)
                 throw new AssertionError("maintenance did not become idle");
             Thread.yield();
@@ -323,12 +314,10 @@ public final class ZLinkServiceOperationRegistryWakeTest {
                         new IllegalStateException("closed"),
                         clock::get)) {
             blocker = registry;
-            var tick = ZLinkServiceOperationRegistry.class.getDeclaredField("maintenanceTick");
-            tick.setAccessible(true);
             int reservations = 0;
             int before = expires.get();
             for (int index = 0; index < 1_000; index++) {
-                if (tick.getLong(registry) == -1) reservations++;
+                if (registry.maintenanceTickForTest() == -1) reservations++;
                 var request =
                         ZLinkCompletionBridge.await(
                                 registry.<Integer>register(Duration.ofSeconds(30)));
@@ -337,9 +326,10 @@ public final class ZLinkServiceOperationRegistryWakeTest {
                 if (request.get(5, TimeUnit.SECONDS) != index)
                     throw new AssertionError("wrong reply");
                 clock.addAndGet(TimeUnit.MILLISECONDS.toNanos(1));
-                if (clock.get() >= TimeUnit.MILLISECONDS.toNanos(tick.getLong(registry))) {
+                if (clock.get()
+                        >= TimeUnit.MILLISECONDS.toNanos(registry.maintenanceTickForTest())) {
                     java.util.concurrent.locks.LockSupport.unpark(worker.get());
-                    awaitIdle(registry, tick);
+                    awaitIdle(registry);
                 }
             }
             int rotations = (1_000 + 255) / 256;
@@ -368,11 +358,7 @@ public final class ZLinkServiceOperationRegistryWakeTest {
         try {
             var request = ZLinkCompletionBridge.await(registry.register(Duration.ofMillis(1)));
             parked();
-            var ownerField = ZLinkServiceOperationRegistry.class.getDeclaredField("owner");
-            ownerField.setAccessible(true);
-            var lane =
-                    (systems.zlink.framework.runtime.internal.execution.ZLinkStateLane)
-                            ownerField.get(registry);
+            var lane = registry.ownerLaneForTest();
             lane.runAsync(
                     () -> {
                         entered.countDown();
@@ -391,10 +377,9 @@ public final class ZLinkServiceOperationRegistryWakeTest {
                 awaitReturns(before + 1);
                 parked();
             }
-            var mailboxField = lane.getClass().getDeclaredField("mailbox");
-            mailboxField.setAccessible(true);
-            var mailbox = (java.util.Queue<?>) mailboxField.get(lane);
-            int queued = mailbox.size();
+            int queued =
+                    systems.zlink.framework.runtime.internal.execution.ZLinkStateLaneTestProbe
+                            .queuedTurnCount(lane);
             release.countDown();
             if (queued != 1)
                 throw new AssertionError("queued management visits=" + queued + " expected=1");

@@ -76,7 +76,21 @@ public final class ZLinkStateLane {
     }
 
     public ZLinkStateLane(Executor executor) {
+        this(executor, null);
+    }
+
+    ZLinkStateLane(ConcurrentLinkedQueue<WorkItem> mailbox) {
+        this(DEFAULT_EXECUTOR, mailbox);
+    }
+
+    ZLinkStateLane(Executor executor, ConcurrentLinkedQueue<WorkItem> mailbox) {
         this.executor = Objects.requireNonNull(executor, "executor");
+        this.mailbox = mailbox;
+    }
+
+    int queuedTurnCountForTest() {
+        var queue = mailbox;
+        return queue == null ? 0 : queue.size();
     }
 
     public static ZLinkStateLane current() {
@@ -406,7 +420,7 @@ public final class ZLinkStateLane {
     }
 
     @FunctionalInterface
-    private interface WorkItem {
+    interface WorkItem {
         CompletionStage<Void> run();
     }
 }

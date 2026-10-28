@@ -50,13 +50,14 @@ final class ZLinkStateLaneTest {
     void contendedSynchronousTurnsRunOnTheirWaitingCallersInFifoOrder() throws Exception {
         var executorCalls = new AtomicInteger();
         try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            var published = new java.util.concurrent.Semaphore(0);
             var lane =
                     new ZLinkStateLane(
                             command -> {
                                 executorCalls.incrementAndGet();
                                 executor.execute(command);
-                            });
-            var published = observePublications(lane);
+                            },
+                            publicationQueue(published));
             var entered = new CompletableFuture<Void>();
             var release = new CompletableFuture<Void>();
             var active = new AtomicInteger();
@@ -119,13 +120,14 @@ final class ZLinkStateLaneTest {
     void pendingAsyncTurnHandsOffToCallersAndMixedTurnsKeepFifo() throws Exception {
         var scheduled = new java.util.concurrent.LinkedBlockingQueue<Runnable>();
         var executorCalls = new AtomicInteger();
+        var published = new java.util.concurrent.Semaphore(0);
         var lane =
                 new ZLinkStateLane(
                         command -> {
                             executorCalls.incrementAndGet();
                             scheduled.add(command);
-                        });
-        var published = observePublications(lane);
+                        },
+                        publicationQueue(published));
         var pending = new CompletableFuture<Void>();
         assertTrue(lane.tryPost(() -> pending));
         assertTrue(published.tryAcquire(5, TimeUnit.SECONDS));
@@ -215,8 +217,8 @@ final class ZLinkStateLaneTest {
                         new CancellationException("turn cancelled"),
                         nested,
                         new CompletionException(nested))) {
-            var lane = new ZLinkStateLane();
-            var published = observePublications(lane);
+            var published = new java.util.concurrent.Semaphore(0);
+            var lane = new ZLinkStateLane(publicationQueue(published));
             var pending = new CompletableFuture<Void>();
             assertTrue(lane.tryPost(() -> pending));
             assertTrue(published.tryAcquire(5, TimeUnit.SECONDS));
@@ -284,22 +286,16 @@ final class ZLinkStateLaneTest {
         }
     }
 
-    private static java.util.concurrent.Semaphore observePublications(ZLinkStateLane lane)
-            throws Exception {
-        var published = new java.util.concurrent.Semaphore(0);
-        var mailbox = ZLinkStateLane.class.getDeclaredField("mailbox");
-        mailbox.setAccessible(true);
-        mailbox.set(
-                lane,
-                new java.util.concurrent.ConcurrentLinkedQueue<Object>() {
-                    @Override
-                    public boolean add(Object turn) {
-                        boolean added = super.add(turn);
-                        published.release();
-                        return added;
-                    }
-                });
-        return published;
+    private static java.util.concurrent.ConcurrentLinkedQueue<ZLinkStateLane.WorkItem>
+            publicationQueue(java.util.concurrent.Semaphore published) {
+        return new java.util.concurrent.ConcurrentLinkedQueue<ZLinkStateLane.WorkItem>() {
+            @Override
+            public boolean add(ZLinkStateLane.WorkItem turn) {
+                boolean added = super.add(turn);
+                published.release();
+                return added;
+            }
+        };
     }
 
     @Test

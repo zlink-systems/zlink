@@ -63,6 +63,14 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
                             .PeerState>
             receiveSource;
 
+    ZLinkStateLane stateLane() {
+        return stateLane;
+    }
+
+    ZLinkServiceOperationRegistry operationRegistry() {
+        return operations;
+    }
+
     void setReceiveSource(
             Function<
                             RoutingId,
@@ -88,8 +96,23 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
         this(context, false, stateLane);
     }
 
+    ZLinkJavaRawServicePort(
+            Context context,
+            ZLinkStateLane stateLane,
+            BiFunction<RouterSocket, Boolean, ZLinkJavaSocketReceivePoller> receivePollerFactory) {
+        this(context, false, stateLane, receivePollerFactory);
+    }
+
     private ZLinkJavaRawServicePort(
             Context context, boolean ownsContext, ZLinkStateLane stateLane) {
+        this(context, ownsContext, stateLane, DEFAULT_RECEIVE_POLLER);
+    }
+
+    private ZLinkJavaRawServicePort(
+            Context context,
+            boolean ownsContext,
+            ZLinkStateLane stateLane,
+            BiFunction<RouterSocket, Boolean, ZLinkJavaSocketReceivePoller> receivePollerFactory) {
         this(
                 context,
                 ownsContext,
@@ -98,7 +121,8 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
                         stateLane,
                         ZLinkOneWayCalls.failureForStatus(ZLinkOneWayCalls.SHUTDOWN),
                         ZLinkJavaSocketSupport::requestTimeout,
-                        System::nanoTime));
+                        System::nanoTime),
+                receivePollerFactory);
     }
 
     ZLinkJavaRawServicePort(

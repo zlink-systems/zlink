@@ -1,134 +1,114 @@
 package systems.zlink.framework.runtime.binding;
 
-import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertInstanceOf;
-import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.*;
 
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
+import systems.zlink.contracts.core.Context;
 import systems.zlink.contracts.core.RoutingId;
-import systems.zlink.contracts.core.Zlink;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.runtime.internal.calls.ZLinkBlockingCalls;
-import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
+import systems.zlink.framework.runtime.internal.execution.ZLinkStateLaneTestProbe;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceNodeDescriptor;
 
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Modifier;
+import java.lang.reflect.Proxy;
 import java.time.Duration;
 import java.util.List;
-import java.util.Queue;
+import java.util.Map;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeoutException;
-import java.util.concurrent.atomic.AtomicReference;
 
 final class ZLinkJavaRawMeshNodeLocalSubmissionTest {
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
     void rejectedLocalSubmissionReleasesMessages(boolean rejectTurn) throws Exception {
-        var copied = new AtomicReference<List<Message>>();
-        var laneReference = new AtomicReference<ZLinkStateLane>();
         var rejected = new RejectedExecutionException("source executor rejected submission");
-        var lane =
-                new ZLinkStateLane(
+        var submissionFinished = new java.util.concurrent.atomic.AtomicBoolean();
+        var mailbox =
+                new ZLinkStateLaneTestProbe.Mailbox(
                         command -> {
-                            try {
-                                copied.set(
-                                        capturedMessages(mailbox(laneReference.get()).element()));
-                            } catch (ReflectiveOperationException failure) {
-                                throw new AssertionError(failure);
-                            }
-                            if (rejectTurn) throw rejected;
+                            if (rejectTurn && !submissionFinished.get()) throw rejected;
                             command.run();
                         });
-        laneReference.set(lane);
-        try (var context = Zlink.createContext();
-                var node = new ZLinkJavaRawMeshNode(context, "mesh");
+        var lane = mailbox.lane();
+        var rid = RoutingId.from("local");
+        var descriptor =
+                new ZLinkServiceNodeDescriptor(
+                        "mesh",
+                        rid,
+                        1,
+                        1,
+                        "inproc://local-submission",
+                        List.of(),
+                        ZLinkServiceNodeDescriptor.State.SERVING,
+                        ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY,
+                        0,
+                        List.of(ZLinkServiceNodeDescriptor.REQUIRED_CAPABILITY),
+                        ZLinkServiceNodeDescriptor.ObjectRole.NONE,
+                        0,
+                        1,
+                        0,
+                        0,
+                        0);
+
+        var context =
+                (Context)
+                        Proxy.newProxyInstance(
+                                Context.class.getClassLoader(),
+                                new Class<?>[] {Context.class},
+                                (proxy, method, args) -> {
+                                    if (method.getName().equals("close")) return null;
+                                    throw new AssertionError(
+                                            "unexpected context call: " + method.getName());
+                                });
+        try (context;
+                var node =
+                        ZLinkJavaRawMeshNodeTesting.create(
+                                "mesh",
+                                new ZLinkJavaRawServicePort(context, lane),
+                                null,
+                                descriptor,
+                                null,
+                                Map.of(),
+                                Map.of(),
+                                Runnable::run);
                 var packet = Message.from("packet");
                 var body = Message.from("payload")) {
-            var originalLane = node.sourceTransportLane();
-            var laneField = ZLinkJavaRawMeshNode.class.getDeclaredField("transportStateLane");
-            laneField.setAccessible(true);
-            var descriptorField = ZLinkJavaRawMeshNode.class.getDeclaredField("localDescriptor");
-            descriptorField.setAccessible(true);
-            var rid = RoutingId.from("local");
-            descriptorField.set(
-                    node,
-                    new ZLinkServiceNodeDescriptor(
-                            "mesh",
-                            rid,
-                            1,
-                            1,
-                            "inproc://local-submission",
-                            List.of(),
-                            ZLinkServiceNodeDescriptor.State.SERVING,
-                            ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY,
-                            0,
-                            List.of(ZLinkServiceNodeDescriptor.REQUIRED_CAPABILITY),
-                            ZLinkServiceNodeDescriptor.ObjectRole.NONE,
-                            0,
-                            1,
-                            0,
-                            0,
-                            0));
-            var dispatch =
-                    ZLinkJavaRawMeshNode.class.getDeclaredMethod(
-                            "dispatchLocalInstanceSpot",
-                            ZLinkServiceM6BWireCodec.InstanceRoute.class,
-                            String.class,
-                            String.class,
-                            byte[].class,
-                            List.class,
-                            boolean.class,
-                            long.class,
-                            CompletableFuture.class);
-            dispatch.setAccessible(true);
-            laneField.set(node, lane);
+            var submission =
+                    node
+                    .new LocalInstanceSubmission(
+                            new ZLinkServiceM6BWireCodec.InstanceColdActivation(
+                                    rid,
+                                    1,
+                                    "spot",
+                                    "mesh",
+                                    "type",
+                                    "v1",
+                                    System.currentTimeMillis() + 10_000),
+                            null,
+                            null,
+                            List.of(packet, body),
+                            true,
+                            rejectTurn ? System.nanoTime() + Duration.ofSeconds(10).toNanos() : 0,
+                            null);
+            var copied = submission.copiedMessagesForTest();
             try {
                 CompletableFuture.runAsync(
                                 ZLinkBlockingCalls.infrastructureTask(
                                         () -> {
-                                            Callable<Object> invoke =
-                                                    () ->
-                                                            dispatch.invoke(
-                                                                    node,
-                                                                    new ZLinkServiceM6BWireCodec
-                                                                            .InstanceColdActivation(
-                                                                            rid,
-                                                                            1,
-                                                                            "spot",
-                                                                            "mesh",
-                                                                            "type",
-                                                                            "v1",
-                                                                            System
-                                                                                            .currentTimeMillis()
-                                                                                    + 10_000),
-                                                                    "type",
-                                                                    null,
-                                                                    null,
-                                                                    List.of(packet, body),
-                                                                    true,
-                                                                    rejectTurn
-                                                                            ? System.nanoTime()
-                                                                                    + Duration
-                                                                                            .ofSeconds(
-                                                                                                    10)
-                                                                                            .toNanos()
-                                                                            : 0,
-                                                                    null);
+                                            Callable<Object> invoke = submission::submit;
                                             if (rejectTurn) {
-                                                var failure =
+                                                assertSame(
+                                                        rejected,
                                                         assertThrows(
-                                                                InvocationTargetException.class,
-                                                                invoke::call);
-                                                assertEquals(rejected, failure.getCause());
+                                                                RejectedExecutionException.class,
+                                                                invoke::call));
                                             } else {
                                                 var stage =
                                                         assertInstanceOf(
@@ -145,8 +125,8 @@ final class ZLinkJavaRawMeshNodeLocalSubmissionTest {
                                             }
                                         }))
                         .join();
-                assertEquals(2, copied.get().size());
-                for (Message message : copied.get()) {
+                assertEquals(2, copied.size());
+                for (Message message : copied) {
                     assertThrows(
                             IllegalStateException.class,
                             message::refCount,
@@ -155,39 +135,12 @@ final class ZLinkJavaRawMeshNodeLocalSubmissionTest {
                 assertEquals("packet", packet.toUtf8String());
                 assertEquals("payload", body.toUtf8String());
             } finally {
-                laneField.set(node, originalLane);
-                Message.closeAll(copied.get());
-                mailbox(lane).clear();
-                lane.closeAsync().toCompletableFuture().join();
+                Message.closeAll(copied);
+                mailbox.clear();
+                submissionFinished.set(true);
             }
+        } finally {
+            lane.closeAsync().toCompletableFuture().join();
         }
-    }
-
-    private static Queue<?> mailbox(ZLinkStateLane lane) throws ReflectiveOperationException {
-        var field = ZLinkStateLane.class.getDeclaredField("mailbox");
-        field.setAccessible(true);
-        return (Queue<?>) field.get(lane);
-    }
-
-    // Inspect the queued supplier before the executor rejects it: these are the
-    // actual owned frames, rather than the caller's still-valid input messages.
-    private static List<Message> capturedMessages(Object captured)
-            throws ReflectiveOperationException {
-        if (captured instanceof List<?> list
-                && !list.isEmpty()
-                && list.getFirst() instanceof Message) {
-            for (Object part : list) assertInstanceOf(Message.class, part);
-            @SuppressWarnings("unchecked")
-            var messages = (List<Message>) list;
-            return messages;
-        }
-        if (captured == null || !captured.getClass().isSynthetic()) return null;
-        for (var field : captured.getClass().getDeclaredFields()) {
-            if (Modifier.isStatic(field.getModifiers())) continue;
-            field.setAccessible(true);
-            var messages = capturedMessages(field.get(captured));
-            if (messages != null) return messages;
-        }
-        return null;
     }
 }

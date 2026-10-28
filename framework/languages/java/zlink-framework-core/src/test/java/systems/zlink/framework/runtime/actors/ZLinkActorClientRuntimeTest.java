@@ -336,9 +336,7 @@ final class ZLinkActorClientRuntimeTest {
         assertFalse(ready.isDone(), "shared runtime readiness belongs to the runtime");
         ready.complete(null);
         assertEquals(0, attempts.get());
-        var field = ZLinkActorClientRuntime.class.getDeclaredField("runtimeReadyWaiters");
-        field.setAccessible(true);
-        assertEquals(0, ((java.util.concurrent.atomic.AtomicInteger) field.get(client)).get());
+        assertEquals(0, client.runtimeReadyWaiterCountForTest());
     }
 
     @Test
