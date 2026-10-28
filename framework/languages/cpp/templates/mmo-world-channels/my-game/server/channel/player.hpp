@@ -84,14 +84,16 @@ class PlayerRelocation final : public fx::actor_relocation_adapter_t<Player>
   public:
     fx::task_t<std::vector<std::byte>> capture (Player &actor, std::stop_token) override
     {
-        const auto payload = zlink::message_t::from_json (actor.gold.capture ());
-        co_return std::vector<std::byte> (payload.bytes ().begin (), payload.bytes ().end ());
+        const auto snapshot = actor.gold.capture ();
+        const auto payload = fx::serializer_registry_t{}.get<GoldSnapshot> ().serialize (snapshot);
+        const auto bytes = payload.bytes ();
+        co_return std::vector<std::byte> (bytes.begin (), bytes.end ());
     }
     fx::task_t<void>
     restore (Player &actor, std::vector<std::byte> payload, std::stop_token) override
     {
-        actor.gold.restore (zlink::message_t::from (std::span<const std::byte> (payload))
-                              .parse_json<GoldSnapshot> ());
+        actor.gold.restore (fx::serializer_registry_t{}.get<GoldSnapshot> ().deserialize (
+          fx::encoded_payload_t::from_bytes (std::span<const std::byte> (payload))));
         co_return;
     }
 };

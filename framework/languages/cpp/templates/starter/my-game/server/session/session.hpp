@@ -18,7 +18,7 @@ class Session final : public fx::packet_stream_session_t
     }
     fx::task_t<void> on_packet (fx::stream_t &,
                                 const fx::session_message_context_t &,
-                                const zlink::message_t &) override
+                                const zlink::framework::message_t &) override
     {
         throw std::invalid_argument ("No application packets are registered yet.");
         co_return;

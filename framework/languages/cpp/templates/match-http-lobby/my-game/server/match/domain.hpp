@@ -1,11 +1,13 @@
 #pragma once
 #include "server/shared/contracts.hpp"
+#include <zlink/json.hpp>
 #include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <functional>
 #include <limits>
 #include <optional>
+#include <tuple>
 #include <set>
 #include <string_view>
 
@@ -22,6 +24,24 @@ struct Combatant
     std::int64_t lastSequence = 0;
     std::optional<TimePoint> lastMoveAt;
     std::optional<TimePoint> lastShotAt;
+};
+struct CombatantSnapshot
+{
+    std::string playerId{};
+    double x{};
+    double y{};
+    int hp{};
+    std::int64_t lastSequence{};
+    std::optional<std::int64_t> moveBudgetRemainingMs{};
+    std::optional<std::int64_t> fireCooldownRemainingMs{};
+    bool operator== (const CombatantSnapshot &) const = default;
+};
+struct RoomSnapshot
+{
+    std::string phase = Game::playing_phase;
+    std::optional<std::string> winner{};
+    std::vector<CombatantSnapshot> players{};
+    bool operator== (const RoomSnapshot &) const = default;
 };
 struct RoomState
 {
@@ -163,69 +183,47 @@ struct RoomState
         return result;
     }
 
-    friend void to_json (nlohmann::json &j, const RoomState &state)
+    RoomSnapshot capture () const
     {
-        const auto now = state.clock_ ();
-        j = nlohmann::json{{"phase", state.phase ()},
-                           {"winner", state.winner ? nlohmann::json (*state.winner)
-                                                    : nlohmann::json (nullptr)},
-                           {"players", nlohmann::json::array ()}};
+        const auto now = clock_ ();
+        std::vector<CombatantSnapshot> snapshots;
+        snapshots.reserve (players.size ());
         const auto move_budget_ms = Game::max_step / Game::max_speed * 1000.0;
-        for (const auto &p : state.players) {
-            const auto move_remaining = state.remaining_ms (p.lastMoveAt, move_budget_ms, now);
+        for (const auto &p : players) {
+            const auto move_remaining = remaining_ms (p.lastMoveAt, move_budget_ms, now);
             const auto fire_remaining =
-              state.remaining_ms (p.lastShotAt, Game::fire_interval_ms, now);
-            j["players"].push_back (
-              {{"playerId", p.playerId}, {"x", p.x}, {"y", p.y}, {"hp", p.hp},
-               {"lastSequence", p.lastSequence},
-               {"moveBudgetRemainingMs", move_remaining ? nlohmann::json (*move_remaining)
-                                                        : nlohmann::json (nullptr)},
-               {"fireCooldownRemainingMs", fire_remaining ? nlohmann::json (*fire_remaining)
-                                                           : nlohmann::json (nullptr)}});
+              remaining_ms (p.lastShotAt, Game::fire_interval_ms, now);
+            snapshots.push_back ({p.playerId, p.x, p.y, p.hp, p.lastSequence, move_remaining,
+                                  fire_remaining});
         }
+        return {phase (), winner, std::move (snapshots)};
     }
 
-    friend void from_json (const nlohmann::json &j, RoomState &state)
+    void restore (const RoomSnapshot &snapshot)
     {
-        const auto phase = j.at ("phase").get<std::string> ();
-        const auto winner = j.at ("winner").is_null ()
-                              ? std::optional<std::string>{}
-                              : std::optional<std::string> (
-                                  j.at ("winner").get<std::string> ());
-        if (phase != (winner ? Game::finished_phase : Game::playing_phase))
+        if (snapshot.phase != (snapshot.winner ? Game::finished_phase : Game::playing_phase))
             throw std::invalid_argument ("Room snapshot phase differs from winner");
-        const auto &snapshot_players = j.at ("players");
-        if (!snapshot_players.is_array () || snapshot_players.size () > Game::players_per_room)
+        if (snapshot.players.size () > Game::players_per_room)
             throw std::invalid_argument ("Room snapshot player count is invalid");
 
-        const auto now = state.clock_ ();
+        const auto now = clock_ ();
         const auto move_budget_ms = Game::max_step / Game::max_speed * 1000.0;
-        std::vector<Combatant> players;
-        players.reserve (snapshot_players.size ());
-        for (const auto &item : snapshot_players) {
+        std::vector<Combatant> restored_players;
+        restored_players.reserve (snapshot.players.size ());
+        for (const auto &item : snapshot.players) {
             Combatant p;
-            p.playerId = item.at ("playerId").get<std::string> ();
-            p.x = item.at ("x").get<double> ();
-            p.y = item.at ("y").get<double> ();
-            p.hp = item.at ("hp").get<int> ();
-            p.lastSequence = item.at ("lastSequence").get<std::int64_t> ();
-            const auto move_remaining = item.at ("moveBudgetRemainingMs").is_null ()
-                                          ? std::optional<std::int64_t>{}
-                                          : std::optional<std::int64_t> (
-                                              item.at ("moveBudgetRemainingMs")
-                                                .get<std::int64_t> ());
-            const auto fire_remaining = item.at ("fireCooldownRemainingMs").is_null ()
-                                          ? std::optional<std::int64_t>{}
-                                          : std::optional<std::int64_t> (
-                                              item.at ("fireCooldownRemainingMs")
-                                                .get<std::int64_t> ());
-            p.lastMoveAt = state.restore_timestamp (move_remaining, move_budget_ms, now);
-            p.lastShotAt = state.restore_timestamp (
-              fire_remaining, static_cast<double> (Game::fire_interval_ms), now);
-            players.push_back (std::move (p));
+            p.playerId = item.playerId;
+            p.x = item.x;
+            p.y = item.y;
+            p.hp = item.hp;
+            p.lastSequence = item.lastSequence;
+            p.lastMoveAt = restore_timestamp (item.moveBudgetRemainingMs, move_budget_ms, now);
+            p.lastShotAt = restore_timestamp (
+              item.fireCooldownRemainingMs, static_cast<double> (Game::fire_interval_ms), now);
+            restored_players.push_back (std::move (p));
         }
-        state.players = std::move (players);
-        state.winner = winner;
+        players = std::move (restored_players);
+        winner = snapshot.winner;
     }
 
   private:
@@ -284,14 +282,12 @@ struct RosterSnapshot
 {
     std::optional<std::string> matchId;
     std::vector<std::string> members;
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (RosterSnapshot, matchId, members)
 };
 
 struct HttpRoomSnapshot
 {
-    RoomState Game;
+    RoomSnapshot Game;
     RosterSnapshot Roster;
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (HttpRoomSnapshot, Game, Roster)
 };
 
 class RoomRoster
@@ -345,3 +341,37 @@ class RoomRoster
     }
 };
 }
+
+namespace zlink::json
+{
+template <> struct dto_traits<::MyGame::CombatantSnapshot>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("playerId", &::MyGame::CombatantSnapshot::playerId),
+      zlink::json::field ("x", &::MyGame::CombatantSnapshot::x),
+      zlink::json::field ("y", &::MyGame::CombatantSnapshot::y),
+      zlink::json::field ("hp", &::MyGame::CombatantSnapshot::hp),
+      zlink::json::field ("lastSequence", &::MyGame::CombatantSnapshot::lastSequence),
+      zlink::json::field ("moveBudgetRemainingMs", &::MyGame::CombatantSnapshot::moveBudgetRemainingMs),
+      zlink::json::field ("fireCooldownRemainingMs", &::MyGame::CombatantSnapshot::fireCooldownRemainingMs)};
+};
+template <> struct dto_traits<::MyGame::RoomSnapshot>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("phase", &::MyGame::RoomSnapshot::phase),
+      zlink::json::field ("winner", &::MyGame::RoomSnapshot::winner),
+      zlink::json::field ("players", &::MyGame::RoomSnapshot::players)};
+};
+template <> struct dto_traits<::MyGame::RosterSnapshot>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("matchId", &::MyGame::RosterSnapshot::matchId),
+      zlink::json::field ("members", &::MyGame::RosterSnapshot::members)};
+};
+template <> struct dto_traits<::MyGame::HttpRoomSnapshot>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("Game", &::MyGame::HttpRoomSnapshot::Game),
+      zlink::json::field ("Roster", &::MyGame::HttpRoomSnapshot::Roster)};
+};
+} // namespace zlink::json

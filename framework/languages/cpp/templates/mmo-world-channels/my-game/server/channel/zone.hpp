@@ -1,12 +1,12 @@
 #pragma once
 #include "player.hpp"
+#include <zlink/json.hpp>
 #include <set>
 namespace MyGame
 {
 struct ZoneSnapshot
 {
     std::vector<std::string> playerIds;
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (ZoneSnapshot, playerIds)
 };
 
 class Zone final : public fx::spot_t<Player>
@@ -144,14 +144,26 @@ class ZoneRelocation final : public fx::spot_relocation_adapter_t<Zone>
   public:
     fx::task_t<std::vector<std::byte>> capture (Zone &spot, std::stop_token) override
     {
-        const auto payload = zlink::message_t::from_json (spot.capture ());
-        co_return std::vector<std::byte> (payload.bytes ().begin (), payload.bytes ().end ());
+        const auto snapshot = spot.capture ();
+        const auto payload = fx::serializer_registry_t{}.get<ZoneSnapshot> ().serialize (snapshot);
+        const auto bytes = payload.bytes ();
+        co_return std::vector<std::byte> (bytes.begin (), bytes.end ());
     }
     fx::task_t<void> restore (Zone &spot, std::vector<std::byte> payload, std::stop_token) override
     {
-        spot.restore (zlink::message_t::from (std::span<const std::byte> (payload))
-                        .parse_json<ZoneSnapshot> ());
+        spot.restore (fx::serializer_registry_t{}.get<ZoneSnapshot> ().deserialize (
+          fx::encoded_payload_t::from_bytes (std::span<const std::byte> (payload))));
         co_return;
     }
 };
 }
+
+namespace zlink::json
+{
+template <> struct dto_traits<::MyGame::ZoneSnapshot>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("playerIds", &::MyGame::ZoneSnapshot::playerIds)
+    };
+};
+} // namespace zlink::json

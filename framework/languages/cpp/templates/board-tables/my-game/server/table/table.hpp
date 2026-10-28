@@ -187,14 +187,15 @@ class TableRelocation final : public fx::spot_relocation_adapter_t<Table>
   public:
     fx::task_t<std::vector<std::byte>> capture (Table &table, std::stop_token) override
     {
-        const auto payload = zlink::message_t::from_json (table.state);
-        co_return std::vector<std::byte> (payload.bytes ().begin (), payload.bytes ().end ());
+        const auto payload = fx::serializer_registry_t{}.get<TableState> ().serialize (table.state);
+        const auto bytes = payload.bytes ();
+        co_return std::vector<std::byte> (bytes.begin (), bytes.end ());
     }
     fx::task_t<void>
     restore (Table &table, std::vector<std::byte> payload, std::stop_token) override
     {
-        table.state =
-          zlink::message_t::from (std::span<const std::byte> (payload)).parse_json<TableState> ();
+        table.state = fx::serializer_registry_t{}.get<TableState> ().deserialize (
+          fx::encoded_payload_t::from_bytes (std::span<const std::byte> (payload)));
         co_return;
     }
 };

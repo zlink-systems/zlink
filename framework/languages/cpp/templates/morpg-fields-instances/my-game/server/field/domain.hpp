@@ -1,5 +1,6 @@
 #pragma once
 #include "server/shared/contracts.hpp"
+#include <zlink/json.hpp>
 #include <algorithm>
 #include <functional>
 #include <map>
@@ -10,7 +11,6 @@ struct Position
 {
     double x = 0;
     bool operator== (const Position &) const = default;
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (Position, x)
 };
 struct FieldPlayerSnapshot
 {
@@ -19,26 +19,22 @@ struct FieldPlayerSnapshot
     std::int32_t remainingMs = 0;
     bool connected = true;
     bool operator== (const FieldPlayerSnapshot &) const = default;
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (FieldPlayerSnapshot, position, sequence, remainingMs, connected)
 };
 struct FieldPositionSnapshot
 {
     std::string fieldId;
     std::map<std::string, FieldPlayerSnapshot> players;
     std::map<std::string, EnterField> arrivals;
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (FieldPositionSnapshot, fieldId, players, arrivals)
 };
 struct FieldSnapshot
 {
     std::map<std::string, EnterField> visiblePlayers;
     FieldPositionSnapshot positions;
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (FieldSnapshot, visiblePlayers, positions)
 };
 struct FieldState
 {
     // Visibility is an application projection; PlayerState owns movement and party membership.
     std::map<std::string, EnterField> visiblePlayers;
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (FieldState, visiblePlayers)
 };
 struct MovementResult
 {
@@ -283,3 +279,47 @@ class FieldPositionDomain
     }
 };
 }
+
+namespace zlink::json
+{
+template <> struct dto_traits<::MyGame::Position>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("x", &::MyGame::Position::x)
+    };
+};
+
+template <> struct dto_traits<::MyGame::FieldPlayerSnapshot>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("position", &::MyGame::FieldPlayerSnapshot::position),
+      zlink::json::field ("sequence", &::MyGame::FieldPlayerSnapshot::sequence),
+      zlink::json::field ("remainingMs", &::MyGame::FieldPlayerSnapshot::remainingMs),
+      zlink::json::field ("connected", &::MyGame::FieldPlayerSnapshot::connected)
+    };
+};
+
+template <> struct dto_traits<::MyGame::FieldPositionSnapshot>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("fieldId", &::MyGame::FieldPositionSnapshot::fieldId),
+      zlink::json::field ("players", &::MyGame::FieldPositionSnapshot::players),
+      zlink::json::field ("arrivals", &::MyGame::FieldPositionSnapshot::arrivals)
+    };
+};
+
+template <> struct dto_traits<::MyGame::FieldSnapshot>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("visiblePlayers", &::MyGame::FieldSnapshot::visiblePlayers),
+      zlink::json::field ("positions", &::MyGame::FieldSnapshot::positions)
+    };
+};
+
+template <> struct dto_traits<::MyGame::FieldState>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("visiblePlayers", &::MyGame::FieldState::visiblePlayers)
+    };
+};
+} // namespace zlink::json
