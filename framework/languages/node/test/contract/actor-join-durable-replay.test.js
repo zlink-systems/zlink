@@ -1,3 +1,4 @@
+const { inspectRuntime } = require('../../packages/framework/dist/runtime/internal-observation');
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const framework = require('../../packages/framework/dist/internal');
@@ -93,7 +94,7 @@ for (const canonical of [true, false]) for (const entry of [true, false]) {
           const drift = attempt.at + attempt.timeoutMs - 1080.25;
           assert(drift >= 0 && drift < 1, 'each attempt consumes the whole remaining original deadline');
         }
-        assert.equal(fixture.runtime.canonicalActorJoinHandoffs.size, 0);
+        assert.equal(fixture.runtime[inspectRuntime]().canonicalActorJoinHandoffs, 0);
         now += 100;
         t.mock.timers.tick(100);
         await new Promise(resolve => setImmediate(resolve));
@@ -124,7 +125,7 @@ for (const admitted of [false, true]) {
       t.mock.timers.tick(80);
       await result;
       assert.equal(fixture.attempts.length, 1);
-      assert.equal(fixture.runtime.canonicalActorJoinHandoffs.size, 0);
+      assert.equal(fixture.runtime[inspectRuntime]().canonicalActorJoinHandoffs, 0);
     } finally { fixture.runtime.close(); }
   });
 }

@@ -1,3 +1,4 @@
+const { inspectRuntime } = require('../../packages/framework/dist/runtime/internal-observation');
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const {
@@ -53,6 +54,7 @@ function descriptor(nodeRoutingId) {
 
 function selectedRouteRuntime(routes, submit, options = {}) {
   const sent = [];
+  const records = [];
   const requested = [];
   const disconnected = [];
   const admissionsEnded = [];
@@ -89,13 +91,16 @@ function selectedRouteRuntime(routes, submit, options = {}) {
       requested.push(target);
       throw new ZLinkBackendResultError('request', RequestResult.Busy);
     },
-    receive: () => undefined,
+    receive: () => records.shift(),
     close() {}
   };
   const runtime = new RawServiceMeshRuntime({
     ...options,
     descriptor: descriptor('local'),
-    onPeerDisconnected: (rid) => admissionsEnded.push(rid),
+    onPeerDisconnected: (rid) => {
+      admissionsEnded.push(rid);
+      options.onPeerDisconnected?.(rid);
+    },
     applicationJobQueue: new ApplicationJobQueue(resolveApplicationJobQueueConfiguration()),
     bindingPort: { createHost: () => ({ createRouter: () => router, shutdown() {}, close() {} }) }
   });
@@ -108,12 +113,16 @@ function selectedRouteRuntime(routes, submit, options = {}) {
     disconnected,
     admissionsEnded,
     monitorOpened: () => monitorOpened,
-    processReceived: (record) =>
-      runtime.processReceived(
-        { ...record, sourceRoute: Buffer.from(record.sourceRid), close() {} },
-        performance.now(),
-        undefined
-      )
+    admit(peer, routeGeneration, nowMs) {
+      return this.processReceived({
+        sourceRid: peer.nodeRoutingId, routeGeneration,
+        parts: [wire.encodeRouteMeshAdmission(wire.M6aServiceWireCommand.hello, peer)]
+      }, nowMs);
+    },
+    processReceived(record, nowMs = performance.now()) {
+      records.push({ ...record, sourceRoute: Buffer.from(record.sourceRid), close() {} });
+      return runtime.pumpOne(nowMs);
+    }
   };
 }
 
@@ -258,12 +267,12 @@ test('route replacement retires a pending HELLO snapshot before its send complet
     );
     routes.clear();
     await h.runtime.observeSelectedRoutes();
-    assert.equal(h.runtime.controlSends.size, 0);
+    assert.equal(h.runtime[inspectRuntime]().pendingControlSends, 0);
   } finally {
     complete?.();
     h.runtime.close();
   }
-  assert.equal(h.runtime.controlSends.size, 0);
+  assert.equal(h.runtime[inspectRuntime]().pendingControlSends, 0);
 });
 
 test('RouteMesh admission follows the observed Core selected route (FW01)', async () => {
@@ -331,10 +340,10 @@ test('RouteMesh admission follows the observed Core selected route (FW01)', asyn
   }
 });
 
-test('liveness expiry ends admission and removes the physical target once', () => {
+test('liveness expiry ends admission and removes the physical target once', async () => {
   const h = selectedRouteRuntime(new Map([['peer', 11n]]));
   try {
-    assert.equal(h.runtime.admitPeer(descriptor('peer'), 11n, 0), 'admitted');
+    assert.equal(await h.admit(descriptor('peer'), 11n, 0), 'infrastructure');
     assert.deepEqual(h.runtime.tickLiveness(15000).timedOutNodes, ['peer']);
     assert.equal(h.runtime.topology.peer('peer'), undefined);
     assert.deepEqual(h.admissionsEnded, ['peer']);
@@ -347,10 +356,10 @@ test('liveness expiry ends admission and removes the physical target once', () =
   }
 });
 
-test('current receive refreshes liveness without removing the target', () => {
+test('current receive refreshes liveness without removing the target', async () => {
   const h = selectedRouteRuntime(new Map([['peer', 11n]]));
   try {
-    h.runtime.admitPeer(descriptor('peer'), 11n, 0);
+    assert.equal(await h.admit(descriptor('peer'), 11n, 0), 'infrastructure');
     h.runtime.topology.peer('peer').liveness.recordReceived(14000);
     assert.deepEqual(h.runtime.tickLiveness(15000).timedOutNodes, []);
     assert.ok(h.runtime.topology.peer('peer'));
@@ -363,13 +372,14 @@ test('current receive refreshes liveness without removing the target', () => {
 
 test('expiry notification can admit a replacement without closing its target', () => {
   const routes = new Map([['peer', 11n]]);
-  const h = selectedRouteRuntime(routes);
-  try {
-    h.runtime.admitPeer(descriptor('peer'), 11n, 0);
-    h.runtime.onPeerDisconnected = () => {
+  const h = selectedRouteRuntime(routes, undefined, {
+    onPeerDisconnected: () => {
       routes.set('peer', 12n);
       h.runtime.admitPeer(descriptor('peer'), 12n, 14000);
-    };
+    }
+  });
+  try {
+    h.runtime.admitPeer(descriptor('peer'), 11n, 0);
     h.runtime.tickLiveness(15000);
     assert.equal(routes.get('peer'), 12n);
     assert.equal(h.runtime.topology.peer('peer').connectionId, 'route:12');
@@ -384,17 +394,20 @@ test('native target removal settles pending admission once on liveness expiry', 
   context.options.autoHwmEnabled = false;
   const queue = new ApplicationJobQueue(resolveApplicationJobQueueConfiguration());
   let admissionEnds = 0;
+  const bindingHost = new ZLinkNodeRawBindingPort(context).createHost();
+  const createRouter = bindingHost.createRouter.bind(bindingHost);
+  let router;
+  bindingHost.createRouter = (...args) => (router = createRouter(...args));
   const runtime = new RawServiceMeshRuntime({
     descriptor: descriptor('local'),
     applicationJobQueue: queue,
     onPeerDisconnected: () => admissionEnds++,
-    bindingPort: new ZLinkNodeRawBindingPort(context)
+    bindingPort: { createHost: () => bindingHost }
   });
   const target = zlink.createDealerSocket(context);
   let monitor;
   try {
     runtime.start();
-    const router = runtime.router;
     const recordBytes = 65536;
     const recordHwm = BigInt(recordBytes + 64);
     router.socket.options.sendHwm = recordHwm;
@@ -410,7 +423,12 @@ test('native target removal settles pending admission once on liveness expiry', 
       await turn();
     }
     assert.ok(route);
-    assert.equal(runtime.admitPeer(descriptor('peer'), route.routeGeneration, 0), 'admitted');
+    const receive = router.receive.bind(router);
+    let hello = { sourceRid: 'peer', sourceRoute: Buffer.from('peer'), routeGeneration: route.routeGeneration,
+      parts: [wire.encodeRouteMeshAdmission(wire.M6aServiceWireCommand.hello, descriptor('peer'))], close() {} };
+    router.receive = () => { const record = hello; hello = undefined; return record; };
+    assert.equal(await runtime.pumpOne(0), 'infrastructure');
+    router.receive = receive;
     const pending = [];
     let terminal;
     let terminalCount = 0;
@@ -455,12 +473,12 @@ test('native target removal settles pending admission once on liveness expiry', 
   }
 });
 
-test('a retired liveness receipt cannot expire the replacement admission', () => {
+test('a retired liveness receipt cannot expire the replacement admission', async () => {
   const h = selectedRouteRuntime(new Map([['peer', 12n]]));
   try {
-    h.runtime.admitPeer(descriptor('peer'), 11n, 0);
+    assert.equal(await h.admit(descriptor('peer'), 11n, 0), 'infrastructure');
     const retired = h.runtime.topology.peer('peer').liveness;
-    h.runtime.admitPeer(descriptor('peer'), 12n, 14000);
+    assert.equal(await h.admit(descriptor('peer'), 12n, 14000), 'infrastructure');
     assert.equal(retired.isExpired(15000), true);
     assert.deepEqual(h.runtime.tickLiveness(15000).timedOutNodes, []);
     assert.equal(h.runtime.topology.peer('peer').connectionId, 'route:12');
@@ -517,13 +535,13 @@ for (const admittedGeneration of [undefined, 11n]) {
     const h = selectedRouteRuntime(new Map([['peer', 12n]]));
     let dispatches = 0;
     let replies = 0;
-    h.runtime.serviceIngress = () => {
+    h.runtime.setServiceIngress(() => {
       dispatches++;
       return 'infrastructure';
-    };
+    });
     try {
       if (admittedGeneration !== undefined)
-        h.runtime.admitPeer(descriptor('peer'), admittedGeneration, 0);
+        assert.equal(await h.admit(descriptor('peer'), admittedGeneration, 0), 'infrastructure');
       for (const parts of [
         [],
         [Buffer.alloc(0)],
@@ -660,14 +678,14 @@ test('peer route readiness wait uses existing admission notifications and remove
       parts: [Buffer.from(wire.encodeRouteMeshAdmission(wire.M6aServiceWireCommand.admit, peer))] });
     await ready;
     assert.equal(h.runtime.pendingOperationCount, 0);
-    assert.equal(h.runtime.peerRouteChanged.size, 0);
+    assert.equal(h.runtime[inspectRuntime]().peerRouteObservers, 0);
     // A different lifecycle must wait even when the RID has a ready route.
     const stale = h.runtime.waitForPeerRoute('peer', 2n, BigInt(Date.now() + 10000));
     const rejected = assert.rejects(stale, { name: 'OperationTimeoutError' });
     h.runtime.expireOperations(performance.now() + 20000, performance.now() + 1000);
     await rejected;
     assert.equal(h.runtime.pendingOperationCount, 0);
-    assert.equal(h.runtime.peerRouteChanged.size, 0);
+    assert.equal(h.runtime[inspectRuntime]().peerRouteObservers, 0);
   } finally { h.runtime.close(); }
 });
 
@@ -683,7 +701,7 @@ for (const terminal of ['deadline', 'cancel', 'close']) {
       if (terminal === 'close') h.runtime.close();
       await rejected;
       assert.equal(h.runtime.pendingOperationCount, 0);
-      assert.equal(h.runtime.peerRouteChanged.size, 0);
+      assert.equal(h.runtime[inspectRuntime]().peerRouteObservers, 0);
     } finally { h.runtime.close(); }
   });
 }
@@ -702,7 +720,7 @@ test('idle liveness maintenance does not enumerate routes or control sends', asy
     });
     assert.equal(h.runtime.tickLiveness(0).probes.length, 1);
     assert.equal(h.runtime.liveness.nextDeadlineMs(), 5000);
-    assert.equal(h.runtime.controlSends.size, 0);
+    assert.equal(h.runtime[inspectRuntime]().pendingControlSends, 0);
     const routes = t.mock.method(h.runtime.selectedRoutes, 'keys');
     const controls = t.mock.method(h.runtime.controlSends, 'values');
     const peers = t.mock.method(h.runtime.liveness.peers, Symbol.iterator);
@@ -733,10 +751,10 @@ for (const requestCount of [1, 64]) {
       });
       h.runtime.tickLiveness(0);
       t.mock.method(performance, 'now', () => 1000);
-      h.runtime.serviceIngress = () => {
+      h.runtime.setServiceIngress(() => {
         received++;
         return 'infrastructure';
-      };
+      });
       t.mock.method(h.router, 'receive', () =>
         received < requestCount
           ? {
@@ -914,7 +932,7 @@ test('a pending non-HELLO control with a current route waits for completion read
     assert.equal(attempts, 1);
     complete(true);
     await pending;
-    assert.equal(h.runtime.controlSends.size, 0);
+    assert.equal(h.runtime[inspectRuntime]().pendingControlSends, 0);
     assert.equal(h.runtime.nextMaintenanceDeadlineMs(now), Infinity);
   } finally {
     complete?.(true);
