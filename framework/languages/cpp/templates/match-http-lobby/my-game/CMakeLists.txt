@@ -15,7 +15,7 @@ foreach(role session match lobby)
   target_link_libraries(my-game-${role} PRIVATE MyGame.Shared zlink::framework zlink::framework_locations_redis)
 endforeach()
 add_executable(my-game-e2e e2e/main.cpp)
-target_link_libraries(my-game-e2e PRIVATE MyGame.Shared zlink::stream_connector)
+target_link_libraries(my-game-e2e PRIVATE MyGame.Shared zlink::stream_connector zlink::framework)
 set(game_targets my-game-session my-game-match my-game-lobby my-game-e2e)
 
 include(CTest)

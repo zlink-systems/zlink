@@ -579,6 +579,20 @@ struct observation_t
     // OnClosing waits until the scenario releases it, so the act observes a
     // Spot whose Close has committed Closing.
     bool on_closing_blocks = false;
+    std::optional<zf::spot_closing_context_t> closing_context;
+    std::stop_token cleanup_token;
+    zf::framework_runtime_t *shutdown_runtime = nullptr;
+    std::optional<std::chrono::system_clock::time_point> host_closing_deadline;
+    bool cleanup_stopped_at_invocation = false;
+    std::atomic_bool cleanup_seen_in_callback{false};
+    std::atomic_bool cleanup_context_preserved{false};
+    bool observe_entry_closing = false;
+    bool entry_closing_blocks = false;
+    std::optional<zf::spot_closing_context_t> entry_closing_context;
+    std::stop_token entry_cleanup_token;
+    bool entry_stopped_at_invocation = false;
+    std::atomic_bool entry_saw_cancellation{false};
+    zf::task_completion_source_t<void> entry_closing_released;
     std::promise<void> closing_entered;
     std::promise<zf::actor_join_completion_t> closing_join_completed;
     zf::task_completion_source_t<void> closing_released;
@@ -768,6 +782,26 @@ class close_entry_spot_t final : public zf::entry_spot_t<member_actor_t>
 
     zf::task_t<void> on_actor_joined (member_actor_t &) override { co_return; }
     zf::task_t<void> on_leave_actor (member_actor_t &) override { co_return; }
+    zf::task_t<void> on_closing (const zf::spot_closing_context_t &context,
+                                 std::stop_token cleanup) override
+    {
+        auto &observation = current ();
+        if (!observation.observe_entry_closing)
+            co_return;
+        {
+            std::lock_guard lock (observation.mutex);
+            observation.entry_closing_context = context;
+            observation.entry_cleanup_token = cleanup;
+            observation.entry_stopped_at_invocation = cleanup.stop_requested ();
+        }
+        std::stop_callback cancelled (cleanup, [&observation] {
+            observation.entry_saw_cancellation.store (true);
+            observation.entry_closing_released.complete (zf::result_t<void>::success ());
+        });
+        if (observation.entry_closing_blocks)
+            co_await observation.entry_closing_released.task ();
+    }
+
 
   private:
     zf::entry_spot_context_t _context;
@@ -889,18 +923,31 @@ class close_room_spot_t final : public zf::spot_t<member_actor_t>
         co_return;
     }
 
-    zf::task_t<void> on_closing (const zf::spot_closing_context_t &, std::stop_token) override
+    zf::task_t<void> on_closing (const zf::spot_closing_context_t &context,
+                                 std::stop_token cleanup) override
     {
         bool fail = false;
         bool blocks = false;
         {
             std::lock_guard lock (current ().mutex);
+            if (current ().shutdown_runtime)
+                current ().host_closing_deadline =
+                  current ().shutdown_runtime->status ().operation_deadline;
+            current ().closing_context = context;
+            current ().cleanup_token = cleanup;
+            current ().cleanup_stopped_at_invocation = cleanup.stop_requested ();
             ++current ().on_closing_calls;
             current ().order.push_back ("onClosing");
             current ().timer_calls_on_closing = current ().timer_calls;
             fail = current ().on_closing_throws;
             blocks = current ().on_closing_blocks;
         }
+        std::stop_callback cleanup_observer (cleanup, [observation = &current (), &context] {
+            observation->cleanup_seen_in_callback.store (true);
+            observation->cleanup_context_preserved.store (
+              observation->host_closing_deadline
+              && context.deadline == *observation->host_closing_deadline);
+        });
         if (blocks) {
             current ().closing_entered.set_value ();
             co_await current ().closing_released.task ();
@@ -1161,7 +1208,9 @@ class scenario_client_t final : public zf::hosted_service_t
 
     zf::task_t<void> start (zf::service_provider_t &services) override
     {
-        if (_scenario.at ("act") == "shutdownDuringClose") {
+        if (_scenario.at ("act") == "shutdownDuringClose"
+            || _scenario.at ("act") == "shutdownOnClosing"
+            || _scenario.at ("act") == "shutdownEntryClosing") {
             // Let host startup finish before requesting its terminal result.
             _worker = std::thread ([this, services] () mutable {
                 (void) wait_until ([&] { return _app->is_ready (); });
@@ -1402,6 +1451,70 @@ class scenario_client_t final : public zf::hosted_service_t
         std::optional<zf::spot_ref_t> ref;
         if (authority != "Missing")
             ref = create_room (services, spot_id);
+        if (act == "preCancelledClose") {
+            std::stop_source cancelled;
+            cancelled.request_stop ();
+            auto runtime =
+              zf::detail::spot_node_runtime_t::from (_app->advanced ().zlink (), mesh_name);
+            const auto result =
+              runtime
+                ->close_spot (zf::spot_id_t (spot_id), zf::spot_close_reason_t::explicit_close,
+                              std::chrono::system_clock::now () + 1s, cancelled.get_token ())
+                .result ();
+            actual["closeSucceeded"] = result && result.value ();
+            return;
+        }
+        if (act == "shutdownEntryClosing") {
+            current ().observe_entry_closing = true;
+            current ().entry_closing_blocks = given.value ("entryBlocks", false);
+            current ().shutdown_runtime = &services.get_required<zf::framework_runtime_t> ();
+            auto shutdown = _app->shutdown (500ms);
+            stopping = true;
+            const auto terminal = shutdown.result_for (3s);
+            {
+                std::lock_guard lock (current ().mutex);
+                const auto context = current ().entry_closing_context;
+                actual["entryDeadlinePreserved"] =
+                  context && current ().host_closing_deadline
+                  && context->deadline == *current ().host_closing_deadline;
+                actual["entryShutdownReason"] =
+                  context && context->reason == zf::spot_close_reason_t::host_shutdown;
+                actual["entrySharesCleanupToken"] =
+                  current ().cleanup_token == current ().entry_cleanup_token;
+                actual["entryStoppedAtInvocation"] = current ().entry_stopped_at_invocation;
+                actual["entryCleanupStopped"] = current ().entry_cleanup_token.stop_requested ();
+                actual["entrySawCancellation"] = current ().entry_saw_cancellation.load ();
+            }
+            current ().entry_closing_released.complete (zf::result_t<void>::success ());
+            actual["terminalObserved"] = terminal.has_value ();
+            actual["deadlineExceeded"] =
+              terminal && terminal->value ().reason == zf::termination_reason_t::deadline_exceeded;
+            return;
+        }
+        if (act == "shutdownOnClosing") {
+            current ().shutdown_runtime = &services.get_required<zf::framework_runtime_t> ();
+            auto shutdown = _app->shutdown (500ms);
+            stopping = true;
+            const auto terminal = shutdown.result_for (3s);
+            {
+                std::lock_guard lock (current ().mutex);
+                const auto context = current ().closing_context;
+                actual["deadlinePreserved"] =
+                  context && current ().host_closing_deadline
+                  && context->deadline == *current ().host_closing_deadline;
+                actual["shutdownReason"] =
+                  context && context->reason == zf::spot_close_reason_t::host_shutdown;
+                actual["stoppedAtInvocation"] = current ().cleanup_stopped_at_invocation;
+                actual["cleanupStopped"] = current ().cleanup_token.stop_requested ();
+                actual["callbackSawCancellation"] = current ().cleanup_seen_in_callback.load ();
+                actual["contextAliveAtCancellation"] = current ().cleanup_context_preserved.load ();
+            }
+            current ().closing_released.complete (zf::result_t<void>::success ());
+            actual["terminalObserved"] = terminal.has_value ();
+            actual["deadlineExceeded"] =
+              terminal && terminal->value ().reason == zf::termination_reason_t::deadline_exceeded;
+            return;
+        }
         if (act == "shutdownDuringClose") {
             // Hold the fenced release after local teardown has marked the Spot closed.
             // Shutdown must retain the authority until this existing Close settles.
@@ -2217,6 +2330,77 @@ TEST (ZLinkFrameworkSpotCloseConformance, GetOrCreateClosingDeadline)
       {"given", {{"authority", "Ready"}, {"onClosing", "blocks"}, {"deadlineExpires", true}}},
       {"act", "getOrCreateDuringClose"},
       {"expect", {{"deadlineExceeded", true}, {"closeSucceeded", true}}}});
+}
+
+TEST (ZLinkFrameworkSpotCloseConformance, PreCancelledCloseReportsOneClosingFailure)
+{
+    run_and_check (
+      nlohmann::json{{"name", "pre-cancelled-close"},
+                     {"given", {{"authority", "Ready"}}},
+                     {"act", "preCancelledClose"},
+                     {"expect",
+                      {{"closeSucceeded", true},
+                       {"onClosingCalls", 0},
+                       {"diagnostics", nlohmann::json::array ({"onClosingFailed"})}}}});
+}
+
+TEST (ZLinkFrameworkSpotCloseConformance, EntryShutdownPreservesDeadlineAndCleanupToken)
+{
+    run_and_check (nlohmann::json{{"name", "entry-shutdown-context"},
+                                  {"given", {{"authority", "Ready"}}},
+                                  {"act", "shutdownEntryClosing"},
+                                  {"expect",
+                                   {{"entryDeadlinePreserved", true},
+                                    {"entryShutdownReason", true},
+                                    {"entrySharesCleanupToken", true},
+                                    {"entryStoppedAtInvocation", false},
+                                    {"terminalObserved", true},
+                                    {"deadlineExceeded", false}}}});
+}
+
+TEST (ZLinkFrameworkSpotCloseConformance, EntryShutdownDeadlineCancelsCleanup)
+{
+    run_and_check (nlohmann::json{{"name", "entry-shutdown-cancellation"},
+                                  {"given", {{"authority", "Ready"}, {"entryBlocks", true}}},
+                                  {"act", "shutdownEntryClosing"},
+                                  {"expect",
+                                   {{"entryDeadlinePreserved", true},
+                                    {"entryShutdownReason", true},
+                                    {"entrySharesCleanupToken", true},
+                                    {"entryStoppedAtInvocation", false},
+                                    {"entryCleanupStopped", true},
+                                    {"entrySawCancellation", true},
+                                    {"terminalObserved", true},
+                                    {"deadlineExceeded", true}}}});
+}
+
+TEST (ZLinkFrameworkSpotCloseConformance, ShutdownPreservesClosingDeadline)
+{
+    run_and_check (nlohmann::json{{"name", "shutdown-closing-context"},
+                                  {"given", {{"authority", "Ready"}}},
+                                  {"act", "shutdownOnClosing"},
+                                  {"expect",
+                                   {{"deadlinePreserved", true},
+                                    {"shutdownReason", true},
+                                    {"stoppedAtInvocation", false},
+                                    {"terminalObserved", true},
+                                    {"deadlineExceeded", false}}}});
+}
+
+TEST (ZLinkFrameworkSpotCloseConformance, ShutdownDeadlineCancelsClosingCleanup)
+{
+    run_and_check (nlohmann::json{{"name", "shutdown-closing-cancellation"},
+                                  {"given", {{"authority", "Ready"}, {"onClosing", "blocks"}}},
+                                  {"act", "shutdownOnClosing"},
+                                  {"expect",
+                                   {{"deadlinePreserved", true},
+                                    {"shutdownReason", true},
+                                    {"stoppedAtInvocation", false},
+                                    {"cleanupStopped", true},
+                                    {"callbackSawCancellation", true},
+                                    {"contextAliveAtCancellation", true},
+                                    {"terminalObserved", true},
+                                    {"deadlineExceeded", true}}}});
 }
 
 TEST (ZLinkFrameworkSpotCloseConformance, ShutdownJoinsExplicitCloseBeforeOwnerCleanup)

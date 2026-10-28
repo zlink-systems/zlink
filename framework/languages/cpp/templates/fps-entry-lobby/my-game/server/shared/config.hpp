@@ -2,6 +2,7 @@
 #include "contracts.hpp"
 #include <fstream>
 #include <filesystem>
+#include <nlohmann/json.hpp>
 #include <optional>
 namespace MyGame
 {

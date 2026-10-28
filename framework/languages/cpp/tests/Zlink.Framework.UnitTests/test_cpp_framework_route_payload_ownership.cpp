@@ -5,6 +5,7 @@
 #include "runtime/mesh/mesh_node_host_service.hpp"
 #include <zlink/framework.hpp>
 #include "runtime/channels/route_handler_invoker.hpp"
+#include "runtime/channels/route_packet_dispatcher.hpp"
 #include "runtime/mesh/mesh_record_dispatcher.hpp"
 #include "runtime/diagnostics/dispatch_options_access.hpp"
 #include "runtime/spots/spot_runtime.hpp"
@@ -228,6 +229,308 @@ TEST (RoutePayloadOwnership, NodeSendProjectsDeferredTransportFailures)
     EXPECT_EQ (framework_error_kind_t::protocol_error, duplicate.result ().error_kind ());
 }
 
+struct route_boundary_handler_t
+{
+    int calls = 0;
+    void send (const int &, const route_message_context_t &) { ++calls; }
+    int request (const int &value, const route_message_context_t &)
+    {
+        ++calls;
+        return value;
+    }
+};
+
+TEST (RouteHandlerBoundary, ResolverDoesNotAllocateKeys)
+{
+    detail::route_handler_registry_t handlers;
+    const std::string mesh (2048, 'm');
+    const std::string packet (4096, 'p');
+    const std::string other_mesh (2048, 'x');
+    const std::string other_packet (4096, 'x');
+    handlers.on_send<route_boundary_handler_t, int> (mesh, packet, &route_boundary_handler_t::send);
+    const detail::route_handler_registry_t::entry_t *hit = nullptr;
+    const detail::route_handler_registry_t::entry_t *wrong_mesh = nullptr;
+    const detail::route_handler_registry_t::entry_t *wrong_packet = nullptr;
+    const detail::route_handler_registry_t::entry_t *wrong_kind = nullptr;
+    const auto allocations = tests::count_allocations ([&] {
+        hit = handlers.resolve (mesh, runtime::messaging::message_kind_t::command, packet);
+        wrong_mesh =
+          handlers.resolve (other_mesh, runtime::messaging::message_kind_t::command, packet);
+        wrong_packet =
+          handlers.resolve (mesh, runtime::messaging::message_kind_t::command, other_packet);
+        wrong_kind = handlers.resolve (mesh, runtime::messaging::message_kind_t::request, packet);
+    });
+    EXPECT_EQ (0u, allocations);
+    ASSERT_NE (nullptr, hit);
+    EXPECT_EQ (mesh, hit->descriptor.router_channel_id);
+    EXPECT_EQ (packet, hit->descriptor.packet_name);
+    EXPECT_EQ (nullptr, wrong_mesh);
+    EXPECT_EQ (nullptr, wrong_packet);
+    EXPECT_EQ (nullptr, wrong_kind);
+}
+
+struct copy_counting_permit_t
+{
+    int *copies;
+    int *calls;
+    std::array<std::byte, 1024> storage{};
+
+    copy_counting_permit_t (int &copy_count, int &call_count) :
+        copies (&copy_count), calls (&call_count)
+    {
+    }
+    copy_counting_permit_t (const copy_counting_permit_t &other) :
+        copies (other.copies), calls (other.calls)
+    {
+        ++*copies;
+    }
+    void operator() () const { ++*calls; }
+};
+
+TEST (RouteHandlerBoundary, DispatcherBorrowsPermitCallback)
+{
+    for (const auto mode : {message_flow_log_mode_t::off, message_flow_log_mode_t::normal}) {
+        for (const auto kind : {runtime::messaging::message_kind_t::command,
+                                runtime::messaging::message_kind_t::request}) {
+            SCOPED_TRACE (std::to_string (static_cast<int> (mode)) + ":"
+                          + std::to_string (static_cast<int> (kind)));
+            service_collection_t services;
+            services.add_singleton<route_boundary_handler_t> ();
+            auto provider = services.build_provider ();
+            auto &owner = provider.get_required<route_boundary_handler_t> ();
+            serializer_registry_t serializers;
+            detail::route_handler_registry_t handlers;
+            handlers.on_send<route_boundary_handler_t, int> ("mesh", "packet",
+                                                             &route_boundary_handler_t::send);
+            handlers.on_request<route_boundary_handler_t, int, int> (
+              "mesh", "packet", &route_boundary_handler_t::request);
+            detail::no_route_internal_packet_dispatcher_t internal;
+            int copies = 0;
+            int calls = 0;
+            int dispatched = 0;
+            std::function<void ()> permit = copy_counting_permit_t (copies, calls);
+            dispatch_options_t options;
+            options.message_flow (mode);
+            detail::dispatch_options_access_t::set_observer_for_tests (
+              options, [&] (const message_flow_event_t &event) {
+                  if (event.outcome == message_flow_outcome_t::dispatched) {
+                      ++dispatched;
+                      EXPECT_EQ (1, calls);
+                      EXPECT_EQ (0, owner.calls);
+                  }
+              });
+            detail::route_packet_dispatcher_t dispatcher (
+              "mesh", provider, serializers, handlers, internal, options, nullptr,
+              handler_dispatch_kind_t::node_direct_send,
+              handler_dispatch_kind_t::node_direct_request, permit);
+            runtime::messaging::envelope_header_t header;
+            header.kind = kind;
+            header.channel_name = "mesh";
+            header.message_name = "packet";
+            header.content_type = "application/json";
+            header.correlation_id = "01890a5d-ac96-774b-bcce-b302099a8057";
+            auto encoded = runtime::messaging::envelope_codec_t{}.encode_raw_body_parts (
+              header, zlink::message_t::from (std::string ("42")));
+            detail::route_received_packet_t received{zlink::routing_id_t::from ("source"), 1,
+                                                     std::move (encoded)};
+            copies = 0;
+            ASSERT_TRUE (dispatcher.dispatch (received, header));
+            EXPECT_EQ (0, copies);
+            EXPECT_EQ (1, calls);
+            EXPECT_EQ (1, owner.calls);
+            EXPECT_EQ (mode == message_flow_log_mode_t::off ? 0 : 1, dispatched);
+        }
+    }
+}
+
+TEST (RouteHandlerBoundary, DispatcherResolvesHandlerOnce)
+{
+    service_collection_t services;
+    services.add_singleton<route_boundary_handler_t> ();
+    auto provider = services.build_provider ();
+    serializer_registry_t serializers;
+    detail::route_handler_registry_t handlers;
+    const std::string packet (4096, 'p');
+    handlers.on_send<route_boundary_handler_t, int> ("mesh", packet,
+                                                     &route_boundary_handler_t::send);
+    detail::no_route_internal_packet_dispatcher_t internal;
+    detail::route_packet_dispatcher_t dispatcher ("mesh", provider, serializers, handlers,
+                                                  internal);
+    runtime::messaging::envelope_header_t header;
+    header.kind = runtime::messaging::message_kind_t::command;
+    header.channel_name = "mesh";
+    header.message_name = packet;
+    header.content_type = "application/json";
+    auto encoded = runtime::messaging::envelope_codec_t{}.encode_raw_body_parts (
+      header, zlink::message_t::from (std::string ("42")));
+    detail::route_received_packet_t received{zlink::routing_id_t::from ("source"), std::nullopt,
+                                             std::move (encoded)};
+    ASSERT_TRUE (dispatcher.dispatch (received, header));
+    // Only the header and context copy the packet name; lookup borrows both key strings.
+    const auto copies = tests::count_allocations (
+      [&] { EXPECT_TRUE (dispatcher.dispatch (received, header)); }, packet.size () + 1);
+    EXPECT_EQ (2u, copies);
+    EXPECT_EQ (2, provider.get_required<route_boundary_handler_t> ().calls);
+}
+
+TEST (RouteHandlerBoundary, DecodeFailureDoesNotReleasePermitForHandlerStart)
+{
+    service_collection_t services;
+    services.add_singleton<route_boundary_handler_t> ();
+    auto provider = services.build_provider ();
+    serializer_registry_t serializers;
+    bool released = false;
+    bool decoded = false;
+    serializers.add<int> ([] (const int &) { return encoded_payload_t{}; },
+                          [&] (const encoded_payload_t &) -> int {
+                              EXPECT_FALSE (released);
+                              decoded = true;
+                              throw framework_exception_t (framework_error_kind_t::protocol_error,
+                                                           "decode failed");
+                          },
+                          "application/json");
+    detail::route_handler_registry_t handlers;
+    handlers.on_send<route_boundary_handler_t, int> ("mesh", "packet",
+                                                     &route_boundary_handler_t::send);
+    handler_registry_t filters;
+    auto payload = zlink::message_t::from (std::string ("42"));
+    route_message_context_t context{{}, zlink::routing_id_t::from ("source")};
+    context.content_type = "application/json";
+    auto result = detail::route_handler_invoker_t{}
+                    .invoke_send (*handlers.resolve (
+                                    "mesh", runtime::messaging::message_kind_t::command, "packet"),
+                                  filters, handler_dispatch_kind_t::node_direct_send, provider,
+                                  serializers, payload, context, [&] { released = true; })
+                    .result ();
+    EXPECT_FALSE (result);
+    EXPECT_TRUE (decoded);
+    EXPECT_FALSE (released);
+    EXPECT_EQ (0, provider.get_required<route_boundary_handler_t> ().calls);
+}
+
+TEST (RouteHandlerBoundary, UnknownWireContentTypeIsProtocolError)
+{
+    service_collection_t services;
+    services.add_singleton<route_boundary_handler_t> ();
+    auto provider = services.build_provider ();
+    serializer_registry_t serializers;
+    detail::route_handler_registry_t handlers;
+    handlers.on_send<route_boundary_handler_t, int> ("mesh", "packet",
+                                                     &route_boundary_handler_t::send);
+    handler_registry_t filters;
+    auto payload = zlink::message_t::from (std::string ("42"));
+    route_message_context_t context{{}, zlink::routing_id_t::from ("source")};
+    context.content_type = "application/unregistered";
+    bool released = false;
+    auto result = detail::route_handler_invoker_t{}
+                    .invoke_send (*handlers.resolve (
+                                    "mesh", runtime::messaging::message_kind_t::command, "packet"),
+                                  filters, handler_dispatch_kind_t::node_direct_send, provider,
+                                  serializers, payload, context, [&] { released = true; })
+                    .result ();
+    ASSERT_FALSE (result);
+    EXPECT_EQ (framework_error_kind_t::protocol_error, result.error_kind ());
+    EXPECT_FALSE (released);
+    EXPECT_EQ (0, provider.get_required<route_boundary_handler_t> ().calls);
+}
+
+struct ordered_route_handler_t
+{
+    std::vector<int> *order;
+    void send (const int &value, const route_message_context_t &)
+    {
+        EXPECT_EQ (42, value);
+        order->push_back (4);
+    }
+    task_t<void> send_async (const int &value, const route_message_context_t &context)
+    {
+        send (value, context);
+        co_return;
+    }
+    int request (const int &value, const route_message_context_t &context)
+    {
+        send (value, context);
+        return value;
+    }
+    task_t<int> request_async (const int &value, const route_message_context_t &context)
+    {
+        co_return request (value, context);
+    }
+};
+
+TEST (RouteHandlerBoundary, TypedInvokersReleaseAfterResolveAndDecode)
+{
+    for (int form = 0; form != 4; ++form) {
+        for (int failure = 0; failure != 3; ++failure) {
+            SCOPED_TRACE (std::to_string (form) + ":" + std::to_string (failure));
+            std::vector<int> order;
+            service_collection_t services;
+            services.add_factory<ordered_route_handler_t> ([&] (service_provider_t &) {
+                order.push_back (1);
+                return std::make_unique<ordered_route_handler_t> (&order);
+            });
+            auto provider = services.build_provider ();
+            serializer_registry_t serializers;
+            serializers.add<int> (
+              [] (const int &value) {
+                  return encoded_payload_t::from_string (std::to_string (value));
+              },
+              [&] (const encoded_payload_t &) {
+                  order.push_back (2);
+                  if (failure == 1)
+                      throw framework_exception_t (framework_error_kind_t::protocol_error,
+                                                   "decode failed");
+                  return 42;
+              },
+              "application/x-route-test");
+            detail::route_handler_registry_t handlers;
+            handlers.on_send<ordered_route_handler_t, int> ("mesh", "sync-send",
+                                                            &ordered_route_handler_t::send);
+            handlers.on_send<ordered_route_handler_t, int> ("mesh", "async-send",
+                                                            &ordered_route_handler_t::send_async);
+            handlers.on_request<ordered_route_handler_t, int, int> (
+              "mesh", "sync-request", &ordered_route_handler_t::request);
+            handlers.on_request<ordered_route_handler_t, int, int> (
+              "mesh", "async-request", &ordered_route_handler_t::request_async);
+            const auto kind = form < 2 ? runtime::messaging::message_kind_t::command
+                                       : runtime::messaging::message_kind_t::request;
+            const std::array names{"sync-send", "async-send", "sync-request", "async-request"};
+            const auto *entry = handlers.resolve ("mesh", kind, names[form]);
+            ASSERT_NE (nullptr, entry);
+            auto message = zlink::message_t::from (std::string ("wire payload"));
+            route_message_context_t context{{}, zlink::routing_id_t::from ("source")};
+            context.content_type =
+              failure == 2 ? "application/unregistered" : "application/x-route-test";
+            handler_registry_t filters;
+            detail::route_handler_invoker_t invoker;
+            auto before = [&] { order.push_back (3); };
+            if (form < 2) {
+                const auto result =
+                  invoker
+                    .invoke_send (*entry, filters, handler_dispatch_kind_t::node_direct_send,
+                                  provider, serializers, message, context, before)
+                    .result ();
+                EXPECT_EQ (failure == 0, static_cast<bool> (result));
+                if (failure != 0)
+                    EXPECT_EQ (framework_error_kind_t::protocol_error, result.error_kind ());
+            } else {
+                const auto result =
+                  invoker
+                    .invoke_request (*entry, filters, handler_dispatch_kind_t::node_direct_request,
+                                     provider, serializers, message, context, before)
+                    .result ();
+                EXPECT_EQ (failure == 0, static_cast<bool> (result));
+                if (failure != 0)
+                    EXPECT_EQ (framework_error_kind_t::protocol_error, result.error_kind ());
+            }
+            const auto expected = failure == 0   ? std::vector<int>{1, 2, 3, 4}
+                                  : failure == 1 ? std::vector<int>{1, 2}
+                                                 : std::vector<int>{1};
+            EXPECT_EQ (expected, order);
+        }
+    }
+}
+
 TEST (RoutePayloadOwnership, SendBorrowsPayloadForTheAwaitedHandler)
 {
     service_collection_t services;
@@ -243,10 +546,13 @@ TEST (RoutePayloadOwnership, SendBorrowsPayloadForTheAwaitedHandler)
     const auto references = payload.ref_count ();
     detail::route_handler_invoker_t invoker;
     route_message_context_t context{{}, zlink::routing_id_t::from ("source")};
-    auto invoked = invoker
-                     .invoke_send (handlers, filters, handler_dispatch_kind_t::node_direct_send,
-                                   "mesh", "payload", provider, serializers, payload, context)
-                     .result ();
+    auto invoked =
+      invoker
+        .invoke_send (
+          *handlers.resolve ("mesh", runtime::messaging::message_kind_t::command, "payload"),
+          filters, handler_dispatch_kind_t::node_direct_send, provider, serializers, payload,
+          context)
+        .result ();
     ASSERT_TRUE (invoked);
     EXPECT_EQ (handler.references, references);
     EXPECT_EQ (payload.ref_count (), references);
@@ -270,8 +576,10 @@ TEST (RoutePayloadOwnership, RequestBorrowsPayloadForTheAwaitedHandler)
     route_message_context_t context{{}, zlink::routing_id_t::from ("source")};
     auto invoked =
       invoker
-        .invoke_request (handlers, filters, handler_dispatch_kind_t::node_direct_request, "mesh",
-                         "payload", provider, serializers, payload, context)
+        .invoke_request (
+          *handlers.resolve ("mesh", runtime::messaging::message_kind_t::request, "payload"),
+          filters, handler_dispatch_kind_t::node_direct_request, provider, serializers, payload,
+          context)
         .result ();
     ASSERT_TRUE (invoked);
     EXPECT_EQ (handler.references, references);
