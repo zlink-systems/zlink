@@ -177,10 +177,7 @@ final class ZLinkUserSpotOperationHandler
                                                         result.completeExceptionally(failure);
                                                     }
                                                     return null;
-                                                }),
-                        () ->
-                                activation.existingCloseCoordinator() != null
-                                        && activation.existingCloseCoordinator().committed())
+                                                }))
                 .whenComplete(
                         (ignored, failure) -> {
                             if (failure != null) {
