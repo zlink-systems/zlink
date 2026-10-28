@@ -69,7 +69,7 @@ const errors = connector.onErrorReceived(error => {
 
 | Code | Meaning |
 |---|---|
-| `disconnected` | There is no connection, or it dropped |
+| `Disconnected` | There is no connection, or it dropped |
 | `ConfigurationError` | The configuration is wrong — endpoint scheme against transport, a transport the runtime does not support |
 | `ValidationFailed` | A pre-send check, an option range check, or an observation condition of a wait surface did not hold |
 | `RequestTimeout` | The wait for an answer ran out of time |
@@ -102,16 +102,16 @@ handling.
 | `ConfigurationError` · `ValidationFailed` | fails | kept | no |
 | `RequestTimeout` | only that request fails | kept | no |
 | `ConnectTimeout` · `TlsValidationFailed` | connect fails | disconnected | applies the attempt policy |
-| `disconnected` — transport dropped | the call in progress fails | disconnected; the close reason is a transport error | applies it when enabled |
-| `disconnected` caused by close | the call in progress fails | closed; the close reason is client close | no |
+| `Disconnected` — transport dropped | the call in progress fails | disconnected; the close reason is a transport error | applies it when enabled |
+| `Disconnected` caused by close | the call in progress fails | closed; the close reason is client close | no |
 | `SendFailed` — request sequence exhausted | only that call fails | kept | no |
-| `SendFailed` — transport write failed | only that write's call fails with `SendFailed`; other calls in progress fail with `disconnected` | ends; close reason is `TransportError` | applies it when enabled |
+| `SendFailed` — transport write failed | only that write's call fails with `SendFailed`; other calls in progress fail with `Disconnected` | ends; close reason is `TransportError` | applies it when enabled |
 | `FrameDecodeFailed` (frame or header) · `FrameTooLarge` | the frame is not delivered and pending requests fail | ends; the close reason is a protocol error | applies it when enabled |
 | `CompressionFailed` | only that send fails | kept | no |
 | `DecompressionFailed` | only that received packet or pending request fails | kept | no |
 | `UserCallbackFailed` · `RemoteError` | delivered as an error event or to the related call | kept | no |
 
-A call in progress that fails because the connection ended fails with `disconnected` whatever ended
+A call in progress that fails because the connection ended fails with `Disconnected` whatever ended
 it, and the cause remains in the close reason. When a transport write failure ends the connection,
 only the call of that write fails with `SendFailed`. Reading the close reason is
 covered by [Connection Lifecycle](06-lifecycle.en.md).

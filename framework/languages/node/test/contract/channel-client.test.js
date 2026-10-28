@@ -1,3 +1,4 @@
+const { createMeshHost } = require('./fixtures/mesh-host');
 const { mapZLinkRequestReply, prepareZLinkRequestReply, identityRequestReply } = require('../../packages/framework/dist/runtime/messaging/request-result');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -4841,7 +4842,7 @@ test('ZLinkChannelRequestDispatcher submits error replies directly to the comple
 });
 
 test('self-RID RouteMesh waits on the shared application job queue without local backpressure', async () => {
-  const host = new framework.ZLinkFrameworkRuntimeHost({
+  const { host, meshRuntime: hostMesh } = createMeshHost({
     registration: framework.createFrameworkRegistration({
       applicationJobQueue: { maxQueuedApplicationJobs: 1n }
     })
@@ -4868,10 +4869,10 @@ test('self-RID RouteMesh waits on the shared application job queue without local
       if (handled === 1) await firstHandlerGate;
     }
   };
-  host.spotNodeRuntime = {
+  Object.assign(hostMesh, {
     meshNode: () => ({ status: () => ({ routingId: zlink.RoutingId.from('self-node') }) }),
     meshCompletionTable: () => undefined
-  };
+  });
 
   const first = host.routeTransport.submit('mesh', 'self-node', 'Notice', { sequence: 1 });
   assert.deepEqual(await first, { status: ZLinkSubmitStatus.Submitted });

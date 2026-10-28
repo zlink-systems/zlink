@@ -1,3 +1,4 @@
+const { createRelayHost } = require('./fixtures/relay-host');
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const framework = require('../../packages/framework/dist/internal');
@@ -30,7 +31,7 @@ const {
 } = require('../../packages/framework/dist/runtime/foundation/service-runtime-contracts');
 
 async function relocationHarness(ids, nativeBinding = false, hooks = {}) {
-  const host = new framework.ZLinkFrameworkRuntimeHost({
+  const { host, relay: hostRelay } = createRelayHost({
     registration: framework.createFrameworkRegistration()
   });
   if (hooks.notifyDisconnected)
@@ -76,8 +77,7 @@ async function relocationHarness(ids, nativeBinding = false, hooks = {}) {
       authorityOwnerGeneration: 11n,
       ownerLeaseGeneration: 13n
     });
-    backend = new ZLinkNodeRawMeshBackend('mesh', ids.owner, {});
-    backend.stateful = stateful;
+    backend = new ZLinkNodeRawMeshBackend('mesh', ids.owner, {}, undefined, undefined, undefined, undefined, { stateful });
     backend.setCompletionHandler((terminal, materialize) =>
       completions.complete(terminal, materialize)
     );
@@ -182,15 +182,15 @@ async function relocationHarness(ids, nativeBinding = false, hooks = {}) {
     boundSessionRelocation: {
       receiveSeal: async (value, signal, onInstalled) => {
         await hooks.beforeSeal?.();
-        return host.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationSeal(
+        return hostRelay.boundSessions.receiveServiceWireSessionRelocationSeal(
           value,
           signal,
           onInstalled
         );
       },
       receiveRoute: (value) =>
-        host.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationRoute(value),
-      clear: () => host.boundSessionRelay.boundSessions.clearServiceWireSessionRelocations()
+        hostRelay.boundSessions.receiveServiceWireSessionRelocationRoute(value),
+      clear: () => hostRelay.boundSessions.clearServiceWireSessionRelocations()
     }
   });
   const sent = [];
@@ -231,6 +231,7 @@ async function relocationHarness(ids, nativeBinding = false, hooks = {}) {
     state.boundSession.sessionRid = sessionService.bindings(ids.session)[0].sessionRid;
   return {
     host,
+    relay: hostRelay,
     stream,
     context,
     abort,
@@ -687,7 +688,7 @@ test('Session owner records each participant and rejects any changed command 42 
     session: 'session',
     target: 'target'
   });
-  const relay = h.host.boundSessionRelay.boundSessions;
+  const relay = h.relay.boundSessions;
   try {
     await h.seal();
     const request = h.sent[0];
@@ -770,7 +771,7 @@ test('bindingAbsent expires at the configured boundary and late 44 cannot touch 
     session: 'session',
     target: 'target'
   });
-  const relay = h.host.boundSessionRelay.boundSessions;
+  const relay = h.relay.boundSessions;
   try {
     const sealed = await h.seal();
     const request = h.sent[0];
@@ -842,7 +843,7 @@ test('command 42 with a stale owner lease is rejected after the previous closed 
     await h.commit(sealed);
     const stale = { ...h.sent[0], relocation: { high: 8n, low: 9n } };
     await assert.rejects(
-      h.host.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationSeal(stale),
+      h.relay.boundSessions.receiveServiceWireSessionRelocationSeal(stale),
       framework.ZLinkRemoteBoundSessionFenceError
     );
     const current = {
@@ -857,7 +858,7 @@ test('command 42 with a stale owner lease is rejected after the previous closed 
     };
     assert.equal(
       (
-        await h.host.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationSeal(
+        await h.relay.boundSessions.receiveServiceWireSessionRelocationSeal(
           current
         )
       ).sealResult,
@@ -944,8 +945,8 @@ for (const binding of ['absent', 'same', 'successor']) {
       actorManager: () => ({
         getState: () => ({ boundSession: currentBinding, spotId: 'spot', actor: {} })
       }),
-      spotManager: () => ({
-        async dispatchRoutedActorPacket(origin, _spotId, actorId, parts) {
+      spotNodeRuntime: () => ({
+        async dispatchEntryActorPacket(origin, actorId, parts) {
           const state = new framework.ZLinkActorRuntimeState(actorId);
           if (currentBinding !== undefined)
             state.installBoundSessionBinding({
@@ -965,7 +966,7 @@ for (const binding of ['absent', 'same', 'successor']) {
             onDisconnectActor: async () => {
               callbacks++;
             }
-          }).dispatch(origin, actorId, parts);
+          }).dispatch(undefined, origin, actorId, parts);
         }
       })
     });
@@ -1021,7 +1022,7 @@ for (const binding of ['absent', 'same', 'successor']) {
                 bindingGeneration: 7n
               };
       const absent =
-        await h.host.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationSeal(
+        await h.relay.boundSessions.receiveServiceWireSessionRelocationSeal(
           h.sent[0]
         );
       assert.equal(absent.sealResult, 'bindingAbsent');
@@ -1174,7 +1175,7 @@ test('retired active seal late 44 and expiry preserve a successor relocation', a
     session: 'session',
     target: 'target'
   });
-  const relay = h.host.boundSessionRelay.boundSessions;
+  const relay = h.relay.boundSessions;
   let successor;
   try {
     await h.seal();

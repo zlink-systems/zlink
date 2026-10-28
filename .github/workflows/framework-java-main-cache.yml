@@ -1,0 +1,16 @@
+name: Framework java main dependency cache
+
+# Path filters on this main-only entry point do not suppress merge-queue checks.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "**/gradle/libs.versions.toml"
+      - "**/*.gradle*"
+
+permissions:
+  contents: read
+
+jobs:
+  warm-cache:
+    uses: ./.github/workflows/framework-java.yml

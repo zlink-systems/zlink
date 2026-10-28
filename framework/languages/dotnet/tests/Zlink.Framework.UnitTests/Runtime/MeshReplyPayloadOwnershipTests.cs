@@ -1,4 +1,3 @@
-using System.Reflection;
 using System.Runtime.ExceptionServices;
 using System.Text;
 using Google.Protobuf;
@@ -130,14 +129,7 @@ public sealed class MeshReplyPayloadOwnershipTests
 
     private static ZLinkBackendRouteReceived Unpack(Message[] wire)
     {
-        var result = Invoke(
-            typeof(ZLinkManagedMeshNode).GetMethod(
-                "DecodeDirectApplicationReply",
-                BindingFlags.NonPublic | BindingFlags.Static
-            )!,
-            7UL,
-            wire
-        );
+        var result = ZLinkManagedMeshNode.DecodeDirectApplicationReply(7UL, wire);
         try
         {
             // This also rejects an eager unpack that already closed its native
@@ -149,8 +141,6 @@ public sealed class MeshReplyPayloadOwnershipTests
         {
             if (result is IDisposable owner)
                 owner.Dispose();
-            else if (result is IReadOnlyList<Message> parts)
-                ZLinkMessageParts.DisposeAll(parts);
             throw;
         }
     }
@@ -167,19 +157,6 @@ public sealed class MeshReplyPayloadOwnershipTests
             codecs,
             true
         );
-    }
-
-    private static object? Invoke(MethodInfo method, params object?[] arguments)
-    {
-        try
-        {
-            return method.Invoke(null, arguments);
-        }
-        catch (TargetInvocationException error) when (error.InnerException is not null)
-        {
-            ExceptionDispatchInfo.Capture(error.InnerException).Throw();
-            throw;
-        }
     }
 
     private static Message[] Wire(object value, Type type, ZLinkCodecRegistryBuilder? codecs = null)

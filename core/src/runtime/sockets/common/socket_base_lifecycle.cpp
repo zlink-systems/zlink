@@ -256,6 +256,9 @@ class command_drain_active_guard_t
 };
 
 #ifdef ZLINK_BUILD_TESTS
+std::atomic<zlink::async_mailbox_before_drain_test_hook_fn>
+  async_mailbox_before_drain_test_hook (NULL);
+std::atomic<void *> async_mailbox_before_drain_test_hook_userdata (NULL);
 std::atomic<zlink::async_owner_transition_test_hook_fn>
   async_owner_transition_test_hook (NULL);
 std::atomic<void *> async_owner_transition_test_hook_userdata (NULL);
@@ -285,6 +288,18 @@ void invoke_completion_pull_before_wait_test_hook ()
 }
 
 #ifdef ZLINK_BUILD_TESTS
+void zlink::test_set_async_mailbox_before_drain_hook (
+  async_mailbox_before_drain_test_hook_fn hook_, void *userdata_)
+{
+    if (!hook_) {
+        async_mailbox_before_drain_test_hook.store (NULL, std::memory_order_release);
+        async_mailbox_before_drain_test_hook_userdata.store (NULL, std::memory_order_release);
+        return;
+    }
+    async_mailbox_before_drain_test_hook_userdata.store (userdata_, std::memory_order_release);
+    async_mailbox_before_drain_test_hook.store (hook_, std::memory_order_release);
+}
+
 void zlink::test_set_async_owner_transition_hook (
   async_owner_transition_test_hook_fn hook_, void *userdata_)
 {
@@ -335,6 +350,13 @@ void zlink::socket_base_t::async_mailbox_handler (void *arg_)
     socket_base_t *self = static_cast<socket_base_t *> (arg_);
     socket_base_t *previous = async_mailbox_dispatch_socket_tls ();
     async_mailbox_dispatch_socket_tls () = self;
+#ifdef ZLINK_BUILD_TESTS
+    const async_mailbox_before_drain_test_hook_fn hook =
+      async_mailbox_before_drain_test_hook.load (std::memory_order_acquire);
+    if (hook)
+        hook (self, async_mailbox_before_drain_test_hook_userdata.load (
+                      std::memory_order_acquire));
+#endif
     self->process_async_mailbox ();
     async_mailbox_dispatch_socket_tls () = previous;
     self->dec_mailbox_ref ();
@@ -1244,18 +1266,6 @@ bool zlink::socket_base_t::stop_unowned_async_command_processing_at_idle ()
           async_owner_test_idle_stop_gate_held);
 #endif
 
-        // An empty mailbox can still owe a pipe termination acknowledgement.
-        // Keep its executor installed until the existing pipe lifecycle owner
-        // removes that pipe; the later ack must not require an application poll.
-        {
-            scoped_lock_t endpoint_lock (monitor_runtime ().sync);
-            const socket_endpoint_runtime_t &endpoints = endpoint_runtime ();
-            for (size_t i = 0; i != endpoints.attached_pipe_count (); ++i) {
-                const pipe_t *const pipe = endpoints.attached_pipe (i);
-                if (pipe && !pipe->is_lifecycle_active ())
-                    return false;
-            }
-        }
         mailbox_t *const mailbox = static_cast<mailbox_t *> (_mailbox);
         // Keep the owner gate across the final empty check, physical detach and
         // lifecycle publication. An acquire therefore either cancels the
@@ -1427,21 +1437,24 @@ void zlink::socket_base_t::process_term (int linger_)
     own_t::process_term (linger_);
 }
 
-void zlink::socket_base_t::process_term_endpoint (std::string *endpoint_)
+void zlink::socket_base_t::process_term_endpoint (std::string *endpoint_, uint64_t intent_id_)
 {
-    // Both sessions can end the same connect intent. Once its exact key is
-    // gone, a later command must not resolve its address to another intent.
-    if (endpoint_runtime ().endpoints.count (*endpoint_) != 0) {
-        std::vector<pipe_t *> terminating_pipes;
-        std::vector<pipe_t *> peer_progress_pipes;
-        std::vector<own_t *> bound_children;
-        // A failed connect names its own intent; a bind can share the URI.
-        term_endpoint_internal (endpoint_->c_str (), &terminating_pipes,
-                                &peer_progress_pipes, &bound_children,
-                                endpoint_type_connect);
-        zlink_assert (bound_children.empty ());
-        zlink_assert (terminating_pipes.empty ());
-        zlink_assert (peer_progress_pipes.empty ());
+    // A physical failure retires its children while retaining the logical
+    // registration. Its identity also fences a delayed command after reconnect.
+    const auto range = endpoint_runtime ().endpoints.equal_range (*endpoint_);
+    for (auto it = range.first; it != range.second; ++it) {
+        endpoint_pipe_t &entry = it->second;
+        if (entry.local_type != endpoint_type_connect || !entry.connection_attempt
+            || entry.connection_attempt->row.intent_id != intent_id_)
+            continue;
+        if (entry.transport_pair_state)
+            entry.transport_pair_state->disable_reconnect ();
+        if (entry.pipe)
+            entry.pipe->terminate (false);
+        if (entry.endpoint)
+            term_child (entry.endpoint);
+        entry.pipe = NULL;
+        entry.endpoint = NULL;
     }
     delete endpoint_;
 }
@@ -1454,7 +1467,8 @@ void zlink::socket_base_t::inproc_reconnect_task_main (void *arg_)
 
 bool zlink::socket_base_t::schedule_inproc_reconnect (
   const std::string &endpoint_,
-  const endpoint_uri_pair_t &endpoint_pair_)
+  const endpoint_uri_pair_t &endpoint_pair_,
+  const std::shared_ptr<connection_attempt_result_t> &attempt_)
 {
     if (options.reconnect_ivl <= 0 || is_terminating () || _ctx_terminated)
         return false;
@@ -1478,8 +1492,8 @@ bool zlink::socket_base_t::schedule_inproc_reconnect (
 
         socket_inproc_reconnect_runtime_t::pending_t::iterator inserted;
         try {
-            inserted = runtime.pending.insert (
-              std::make_pair (deadline, endpoint_));
+            inserted = runtime.pending.insert (std::make_pair (
+              deadline, socket_inproc_reconnect_runtime_t::pending_value_t (endpoint_, attempt_)));
         }
         catch (const std::bad_alloc &) {
             // The asynchronous disconnect path has no caller to which it can
@@ -1517,7 +1531,7 @@ void zlink::socket_base_t::process_scheduled_inproc_reconnects ()
 
     socket_inproc_reconnect_runtime_t &runtime =
       inproc_reconnect_runtime ();
-    control_runtime_t *const control = get_ctx ()->control_runtime ();
+    control_runtime_t *const control = get_ctx ()->control_runtime_if_started ();
     zlink_assert (control);
 
     // Extract and consume one preallocated queue node at a time. Unlike a
@@ -1554,9 +1568,14 @@ void zlink::socket_base_t::process_scheduled_inproc_reconnects ()
 
         zlink_assert (!due.empty ());
         try {
-            (void) connect_internal (due.mapped ().c_str (), false);
+            options.connection_attempt = due.mapped ().second;
+            if (!options.connection_attempt
+                || options.connection_attempt->registration != connection_attempt_result_t::removed)
+                (void) connect_internal (due.mapped ().first.c_str (), false);
+            options.connection_attempt.reset ();
         }
         catch (const std::bad_alloc &) {
+            options.connection_attempt.reset ();
             scoped_lock_t lock (runtime.sync);
             if (!runtime.stopping)
                 runtime.pending.insert (std::move (due));
@@ -1578,7 +1597,7 @@ bool zlink::socket_base_t::cancel_scheduled_inproc_reconnects (
     for (socket_inproc_reconnect_runtime_t::pending_t::iterator it =
            runtime.pending.begin ();
          it != runtime.pending.end ();) {
-        if (it->second == endpoint_) {
+        if (it->second.first == endpoint_) {
             cancelled = true;
             runtime.pending.erase (it++);
         } else
@@ -1588,7 +1607,7 @@ bool zlink::socket_base_t::cancel_scheduled_inproc_reconnects (
     if (runtime.task_id == 0)
         return cancelled;
 
-    control_runtime_t *const control = get_ctx ()->control_runtime ();
+    control_runtime_t *const control = get_ctx ()->control_runtime_if_started ();
     if (!control)
         return cancelled;
     if (runtime.pending.empty ()) {

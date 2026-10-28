@@ -27,7 +27,7 @@ class get_profile_http_handler_t
                          .request_to_channel ("profile", get_player_profile_t{player_id})
                          .async<player_profile_t> ();
 
-        co_return fw::http_response_t{200, nlohmann::json (profile).dump ()};
+        co_return fw::http_response_t{200, zlink::message_t::from_json (profile).to_string ()};
     }
 
   private:
@@ -74,7 +74,7 @@ class node_status_http_handler_t
                           "game", zlink::routing_id_t::from (node_rid), get_node_status_t{})
                         .async<node_status_t> ();
 
-        co_return fw::http_response_t{200, nlohmann::json (status).dump ()};
+        co_return fw::http_response_t{200, zlink::message_t::from_json (status).to_string ()};
     }
 
   private:
@@ -114,7 +114,8 @@ class publish_notice_http_handler_t
 
     fw::task_t<fw::http_response_t> handle (const fw::http_request_t &request)
     {
-        const auto notice = nlohmann::json::parse (request.body).get<maintenance_notice_t> ();
+        const auto notice = zlink::message_t::from (request.body)
+                              .parse_json<maintenance_notice_t> ();
 
         // Delivered to every subscriber. No recipient is named. The topic is what
         // a subscriber's handler listens on, and it defaults to the packet name.
@@ -138,7 +139,7 @@ class open_room_http_handler_t
 
     fw::task_t<fw::http_response_t> handle (const fw::http_request_t &request)
     {
-        const auto body = nlohmann::json::parse (request.body).get<open_room_t> ();
+        const auto body = zlink::message_t::from (request.body).parse_json<open_room_t> ();
 
         auto created = co_await _rooms
                          .create ("game-room") // Picks the factory and the candidate nodes.
@@ -165,7 +166,7 @@ class post_chat_http_handler_t
     fw::task_t<fw::http_response_t> handle (const fw::http_request_t &request)
     {
         const auto room_id = request.route_values.at ("roomId");
-        const auto message = nlohmann::json::parse (request.body).get<post_chat_t> ();
+        const auto message = zlink::message_t::from (request.body).parse_json<post_chat_t> ();
 
         // The id is enough; the Framework resolves where the room currently runs.
         co_await _routes.send_to_spot (room_id, message).async ();
@@ -192,7 +193,7 @@ class get_room_state_http_handler_t
                        .timeout (std::chrono::seconds (3))
                        .async<room_state_t> ();
 
-        co_return fw::http_response_t{200, nlohmann::json (state).dump ()};
+        co_return fw::http_response_t{200, zlink::message_t::from_json (state).to_string ()};
     }
 
   private:
@@ -210,7 +211,7 @@ class join_match_queue_http_handler_t
     fw::task_t<fw::http_response_t> handle (const fw::http_request_t &request)
     {
         const auto mode = request.route_values.at ("mode");
-        const auto body = nlohmann::json::parse (request.body).get<join_match_queue_t> ();
+        const auto body = zlink::message_t::from (request.body).parse_json<join_match_queue_t> ();
 
         // No create call: the first message for this id brings the queue into
         // being and is then handled by it.
@@ -220,7 +221,7 @@ class join_match_queue_http_handler_t
                         .timeout (std::chrono::seconds (3))
                         .async<match_queue_status_t> ();
 
-        co_return fw::http_response_t{200, nlohmann::json (status).dump ()};
+        co_return fw::http_response_t{200, zlink::message_t::from_json (status).to_string ()};
     }
 
   private:
@@ -291,7 +292,7 @@ class create_player_http_handler_t
     fw::task_t<fw::http_response_t> handle (const fw::http_request_t &request)
     {
         const auto player_id = request.route_values.at ("playerId");
-        const auto body = nlohmann::json::parse (request.body).get<create_player_t> ();
+        const auto body = zlink::message_t::from (request.body).parse_json<create_player_t> ();
 
         auto created = co_await _players.get_or_create (fw::actor_id_t (player_id), "player")
                          .in_mesh ("game")
@@ -299,12 +300,12 @@ class create_player_http_handler_t
                          .timeout (std::chrono::seconds (10))
                          .async ();
 
-        const auto state = std::holds_alternative<fw::actor_create_existing_t> (created)
-                             ? "existing"
-                           : std::holds_alternative<fw::actor_create_created_t> (created)
-                             ? "created"
-                             : "rejected";
-        co_return fw::http_response_t{200, nlohmann::json (state).dump ()};
+        const std::string state = std::holds_alternative<fw::actor_create_existing_t> (created)
+                                    ? "existing"
+                                  : std::holds_alternative<fw::actor_create_created_t> (created)
+                                    ? "created"
+                                    : "rejected";
+        co_return fw::http_response_t{200, zlink::message_t::from_json (state).to_string ()};
     }
 
   private:
@@ -321,7 +322,7 @@ class change_nickname_http_handler_t
     fw::task_t<fw::http_response_t> handle (const fw::http_request_t &request)
     {
         const auto player_id = request.route_values.at ("playerId");
-        const auto body = nlohmann::json::parse (request.body).get<change_nickname_t> ();
+        const auto body = zlink::message_t::from (request.body).parse_json<change_nickname_t> ();
 
         // Addressed by player id, like a room is by room id.
         co_await _players.send (fw::actor_id_t (player_id), body).async ();
@@ -348,7 +349,7 @@ class get_player_http_handler_t
                       .timeout (std::chrono::seconds (3))
                       .async<player_info_t> ();
 
-        co_return fw::http_response_t{200, nlohmann::json (info).dump ()};
+        co_return fw::http_response_t{200, zlink::message_t::from_json (info).to_string ()};
     }
 
   private:

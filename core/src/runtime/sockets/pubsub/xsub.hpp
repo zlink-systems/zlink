@@ -8,7 +8,6 @@
 #include "sockets/internal/dist.hpp"
 #include "sockets/internal/fq.hpp"
 #include "core/ctx_physical_queue_registry.hpp"
-#include <atomic>
 #include <string>
 #include <vector>
 #include "utils/trie.hpp"
@@ -51,7 +50,6 @@ class xsub_t : public socket_base_t
     void xwrite_activated (zlink::pipe_t *pipe_) ZLINK_FINAL;
     void xhiccuped (pipe_t *pipe_) ZLINK_FINAL;
     void xpipe_terminated (zlink::pipe_t *pipe_) ZLINK_FINAL;
-    uint32_t monitor_ready_count () const ZLINK_OVERRIDE;
 
   private:
     //  Check whether the message matches at least one subscription.
@@ -61,8 +59,6 @@ class xsub_t : public socket_base_t
     //  upstream.
     static void send_subscription (unsigned char *data_, size_t size_, void *arg_);
     int discard_filtered_message (zlink::msg_t *msg_, zlink::pipe_t *pipe_);
-    void refresh_delivery_ready_state (const endpoint_uri_pair_t &endpoint_uri_pair_);
-    uint32_t compute_delivery_ready_count () const;
     void snapshot_subscriptions (std::vector<subscription_descriptor_t> *out_) const;
 
     //  Fair queueing object for inbound pipes.
@@ -105,8 +101,6 @@ class xsub_t : public socket_base_t
     //  Bench-aligned SUB steady state subscribes to the empty prefix. In that
     //  state every first frame matches, so we can skip trie lookup on recv.
     bool _has_empty_subscription;
-
-    std::atomic<uint32_t> _delivery_ready_count;
 
     ZLINK_NON_COPYABLE_NOR_MOVABLE (xsub_t)
 };

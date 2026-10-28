@@ -23,6 +23,112 @@ public sealed class ActorHandoffTests : IAsyncLifetime
     public Task DisposeAsync() => _states.DisposeAsync().AsTask();
 
     [Fact]
+    public Task Empty_target_prefix_keeps_callback_send_behind_join_completion() =>
+        TargetPrefixKeepsCallbackSendBehindJoinCompletion(includePrefix: false);
+
+    [Fact]
+    public Task Nonempty_target_prefix_keeps_callback_send_behind_join_completion() =>
+        TargetPrefixKeepsCallbackSendBehindJoinCompletion(includePrefix: true);
+
+    private async Task TargetPrefixKeepsCallbackSendBehindJoinCompletion(bool includePrefix)
+    {
+        const string handoffId = "join-callback-send";
+        var state = _states.Track(new ZLinkActorRuntimeState("actor-1"));
+        Assert.True(
+            state.Handoff.Import(
+                CommitRequest(handoffId, includePrefix ? [HandoffFrame(1, 0)] : []),
+                out _
+            )
+        );
+        var prefixAdmitted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var releasePrefix = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var joinCompleted = false;
+        bool? completedWhenSendRan = null;
+        var prefixCompletions = new List<bool>();
+        var deliveries = new List<Task>();
+        var start = state.Handoff.TargetActivation;
+        var activation = ZLinkActorTargetActivation
+            .CompleteAsync(
+                static () => ValueTask.CompletedTask,
+                async () =>
+                {
+                    _ = state.Handoff.PrepareImportedReplay([]);
+                    _ = state.Handoff.AdmitDurablePrefix(
+                        handoffId,
+                        frame =>
+                        {
+                            var delivery = state.AdmitDurablePrefix([
+                                new ZLinkActorDurableRecord(
+                                    _ =>
+                                    {
+                                        state.Handoff.ClaimDurableFrame(frame);
+                                        prefixCompletions.Add(joinCompleted);
+                                        if (frame.RequestId == 2)
+                                            completedWhenSendRan = joinCompleted;
+                                        return ValueTask.CompletedTask;
+                                    },
+                                    ct => new ValueTask(start.WaitAsync(ct)),
+                                    OnWithdrawable: take => frame.Withdraw = take,
+                                    Ready: () => state.Handoff.DurablePrefixCanRun
+                                ),
+                            ])[0];
+                            deliveries.Add(delivery);
+                            return delivery;
+                        }
+                    );
+                    prefixAdmitted.SetResult();
+                    await releasePrefix.Task;
+                },
+                () =>
+                {
+                    joinCompleted = true;
+                    return ValueTask.CompletedTask;
+                },
+                static () => ValueTask.CompletedTask,
+                () =>
+                {
+                    state.Handoff.Complete(handoffId);
+                    return ValueTask.CompletedTask;
+                }
+            )
+            .AsTask();
+        try
+        {
+            await prefixAdmitted.Task;
+            Assert.False(start.IsCompleted);
+            using var body = Message.From("OnJoinedActor-send");
+            using var incoming = Frame(body, ActorRef("node-b", 1), "session-1", requestId: 2);
+            // The send was accepted during OnJoinedActor; its receive pump runs
+            // after prefix admission and before the public completion is queued.
+            var capture = state.Handoff.TryCapture(incoming);
+            if (capture == ZLinkActorHandoffCaptureResult.NotSealed)
+                await state.ExecuteDispatchAsync(
+                    _ =>
+                    {
+                        completedWhenSendRan = joinCompleted;
+                        return ValueTask.CompletedTask;
+                    },
+                    CancellationToken.None
+                );
+            else
+                Assert.Equal(ZLinkActorHandoffCaptureResult.Captured, capture);
+        }
+        finally
+        {
+            releasePrefix.TrySetResult();
+            await activation;
+        }
+        await Task.WhenAll(deliveries);
+        Assert.True(completedWhenSendRan);
+        Assert.All(prefixCompletions, completed => Assert.True(completed));
+        Assert.Equal(includePrefix ? 2 : 1, prefixCompletions.Count);
+    }
+
+    [Fact]
     public async Task Restored_source_prefix_remains_owned_by_the_next_relocation_barrier()
     {
         var state = _states.Track(new ZLinkActorRuntimeState("actor-1"));
@@ -319,14 +425,15 @@ public sealed class ActorHandoffTests : IAsyncLifetime
         var resolution = state.Handoff.RouteFrame(source, source);
         Assert.Equal(ZLinkActorFrameRoute.MessageFollow, resolution.Route);
         var route = Assert.IsType<ZLinkActorMessageFollowRoute>(resolution.MessageFollowRoute);
-        var validate =
-            typeof(Zlink.Framework.Runtime.Spots.ZLinkActorMessageFollowDispatcher).GetMethod(
-                "ValidateMessageFollowRoute",
-                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static
-            )!;
         try
         {
-            validate.Invoke(null, [route, default(ZLinkBackendActorRouteContext)]);
+            Assert.True(
+                Zlink.Framework.Runtime.Spots.ZLinkActorMessageFollowDispatcher.CanFollow(
+                    state,
+                    source,
+                    default
+                )
+            );
         }
         finally
         {

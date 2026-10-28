@@ -2,6 +2,7 @@
 #include "../support/runtime_failure_fixture.hpp"
 #include "../support/runtime_metric_contract.hpp"
 #include "runtime/diagnostics/runtime_metrics.hpp"
+#include "runtime/dispatch/completion_turn.hpp"
 #include "runtime/locations/provider_location_repository.hpp"
 #include "runtime/locations/in_memory_store_providers.hpp"
 #include "runtime/locations/actor_authority_payload.hpp"
@@ -13,12 +14,28 @@
 #include <zlink/framework.hpp>
 #include <cmath>
 #include <iostream>
+#include <latch>
+#include <string_view>
 #include <thread>
+
+namespace zlink::framework::runtime
+{
+struct state_lane_test_access_t
+{
+    static bool has_pending_work (state_lane_t &lane)
+    {
+        const std::lock_guard lock (lane._mailbox_mutex);
+        return !lane._mailbox.empty ();
+    }
+};
+} // namespace zlink::framework::runtime
 
 namespace zlink::framework::runtime::stateful
 {
 struct stateful_object_runtime_test_access_t
 {
+    static state_lane_t &lane (stateful_object_runtime_t &objects) { return objects._lane; }
+
     static std::promise<void> hold_lane (stateful_object_runtime_t &objects)
     {
         std::promise<void> release;
@@ -140,13 +157,60 @@ void population_retirement_orders_after_pending_configuration ()
     auto release = stateful::stateful_object_runtime_test_access_t::hold_lane (objects);
     auto configured = objects.configure_population_metrics ("population-mesh");
     auto retirement = objects.retire_population_metrics_async ();
-    const bool ordered = !retirement.await_ready ();
+    const bool ordered = retirement.wait_for (0ms) == std::future_status::timeout;
     release.set_value ();
-    retirement.result ().value ();
+    retirement.get ();
     configured.result ().value ();
     require (point (provider, "zlink.actor.count", {{"mesh_name", "population-mesh"}}) == 0,
              "retirement left a population counter from pending configuration");
     require (ordered, "retirement bypassed the pending object lane configuration");
+}
+
+void stopped_population_retirement ()
+{
+    metric_test::provider_t provider;
+    completion_owner_t owner;
+    auto objects = std::make_unique<stateful::stateful_object_runtime_t> ();
+    objects->configure_population_metrics ("stopped-population").result ().value ();
+    objects->replace_placement_candidates ({{.mesh_name = "stopped-population",
+                                             .node_id = "node",
+                                             .stable_types = {"player"},
+                                             .active_capacity = 10,
+                                             .pending_capacity = 10}});
+    const auto created = objects->begin_create ({.kind = stateful::object_kind_t::actor,
+                                                 .key = "actor",
+                                                 .stable_type = "player",
+                                                 .mesh_name = "stopped-population"});
+    require (created.status == stateful::create_status_t::reserved, "Actor reservation failed");
+    require (objects->commit_create (created.attempt) == stateful::stateful_error_t::none,
+             "Actor commit failed");
+    require (point (provider, "zlink.actor.count", {{"mesh_name", "stopped-population"}}) == 1,
+             "Actor population was not recorded before owner shutdown");
+
+    std::latch entered (1), release (1);
+    auto &lane = stateful::stateful_object_runtime_test_access_t::lane (*objects);
+    require (lane.try_post ([&] {
+        entered.count_down ();
+        release.wait ();
+    }),
+             "object lane is closed");
+    entered.wait ();
+    require (!state_lane_test_access_t::has_pending_work (lane),
+             "unexpected work precedes population teardown");
+    owner.close ();
+    require (detail::completion_dispatcher_worker_count () == 0,
+             "another completion owner masks stopped teardown");
+    // Teardown must enqueue behind this accepted turn without borrowing a new
+    // completion dispatcher. Only that enqueue releases the held predecessor.
+    std::jthread unblock ([&] {
+        while (!state_lane_test_access_t::has_pending_work (lane))
+            std::this_thread::yield ();
+        release.count_down ();
+    });
+    objects.reset ();
+    unblock.join ();
+    require (point (provider, "zlink.actor.count", {{"mesh_name", "stopped-population"}}) == 0,
+             "stopped object teardown did not retire Actor population");
 }
 
 void activation_metrics_configured_once ()
@@ -483,9 +547,17 @@ void contract_rejects_wrong_metadata ()
     std::cout << "negative contract: rejected wrong unit, kind, missing and extra labels\n";
 }
 } // namespace
-int main ()
+int main (int argc, char **argv)
 {
+    if (argc == 2 && std::string_view (argv[1]) == "--stopped-population-retirement") {
+        stopped_population_retirement ();
+        return 0;
+    }
     completion_owner_t completion_owner;
+    if (argc == 2 && std::string_view (argv[1]) == "--population-retirement") {
+        population_retirement_orders_after_pending_configuration ();
+        return 0;
+    }
     try {
         host_close_does_not_wait_for_population_retirement ();
         population_retirement_orders_after_pending_configuration ();

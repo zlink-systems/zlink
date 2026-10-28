@@ -143,6 +143,7 @@ using authority_scan_result_t = std::variant<authority_page_t, authority_scan_ex
 struct authority_put_t
 {
     std::vector<std::byte> payload;
+    std::optional<std::chrono::steady_clock::time_point> operation_deadline;
 };
 struct authority_reincarnate_t
 {
@@ -179,6 +180,7 @@ struct authority_deleted_t
 struct authority_conflict_t
 {
     authority_read_result_t current;
+    std::optional<framework_error_kind_t> membership_failure;
 };
 struct authority_generation_exhausted_t
 {

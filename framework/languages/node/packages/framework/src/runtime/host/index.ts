@@ -209,7 +209,7 @@ import {
   nodeEffectiveProcessorCount,
   resolveApplicationJobQueueConfiguration
 } from './application-job-queue';
-import { ZLinkBoundSessionRelay } from './bound-session-relay';
+import { ZLinkBoundSessionRelay, type ZLinkBoundSessionRelayOptions } from './bound-session-relay';
 import { ZLinkChannelRuntimeOptionsFactory } from './channel-runtime-options-factory';
 import { ZLinkEntryActorRuntimeService } from './entry-actor-runtime';
 import { HostCapacityStatusProjection } from './host-capacity-status';
@@ -304,7 +304,7 @@ export class ZLinkFrameworkRuntimeHost
   private readonly capacityStatus: HostCapacityStatusProjection;
   private readonly metricRegistrations: import('../diagnostics').ZLinkRuntimeMetricRegistration[] =
     [];
-  private readonly admission = new ZLinkRuntimeAdmissionGate(() => this.ownerAdmissionOpen());
+  private readonly admission: ZLinkRuntimeAdmissionGate;
   private readonly activationAdmission = new ZLinkActivationAdmission(
     (meshName) =>
       this.options.registration.spotNodes.get(meshName)?.activationConcurrencyLimit ??
@@ -350,6 +350,22 @@ export class ZLinkFrameworkRuntimeHost
     readonly options: ZLinkFrameworkRuntimeHostOptions,
     internalOptions?: unknown
   ) {
+    const factories = internalOptions as
+      | {
+          readonly spotNodeRuntime?: ZLinkSpotNodeRuntimeManager;
+          readonly createBoundSessionRelay?: (
+            options: ZLinkBoundSessionRelayOptions
+          ) => ZLinkBoundSessionRelay;
+          readonly createRouteMeshCoordinator?: (
+            options: ConstructorParameters<typeof ZLinkRouteMeshRuntimeCoordinator>[0]
+          ) => ZLinkRouteMeshRuntimeCoordinator;
+          readonly createAdmissionGate?: (ownerOpen: () => boolean) => ZLinkRuntimeAdmissionGate;
+        }
+      | undefined;
+    this.spotNodeRuntime = factories?.spotNodeRuntime;
+    this.admission = (
+      factories?.createAdmissionGate ?? ((ownerOpen) => new ZLinkRuntimeAdmissionGate(ownerOpen))
+    )(() => this.ownerAdmissionOpen());
     this.backendAdapterFactory = resolveBackendAdapterFactory(internalOptions);
     this.lifecycleSink = options.lifecycleSink;
     this.runtimeEventPublisher =
@@ -467,8 +483,13 @@ export class ZLinkFrameworkRuntimeHost
       },
       relay: (actor, header, payload) =>
         this.boundSessionRelay.actorPackets.relayActorPacket(actor, header, payload),
-      notifyDisconnected: (actor, signal, binding) =>
-        this.boundSessionRelay.actorPackets.notifyBoundActorDisconnected(actor, signal, binding)
+      notifyDisconnected: (actor, signal, binding, authorityFence) =>
+        this.boundSessionRelay.actorPackets.notifyBoundActorDisconnected(
+          actor,
+          signal,
+          binding,
+          authorityFence
+        )
     });
     this.actorHandoff = new ZLinkActorHandoffCoordinator({
       requests: this.requests,
@@ -663,7 +684,10 @@ export class ZLinkFrameworkRuntimeHost
       options.registration.messageSerializers
     );
     this.boundSessionFactory = new DefaultZLinkBoundSessionFactory(this.streamBindingRuntime);
-    this.boundSessionRelay = new ZLinkBoundSessionRelay({
+    const createBoundSessionRelay =
+      factories?.createBoundSessionRelay ??
+      ((relayOptions: ZLinkBoundSessionRelayOptions) => new ZLinkBoundSessionRelay(relayOptions));
+    this.boundSessionRelay = createBoundSessionRelay({
       requestTimeoutMs: options.registration.requestTimeoutMs,
       sessionRelocationSealTimeoutMs:
         options.registration.locations.options.sessionRelocationSealTimeoutMs ??
@@ -838,7 +862,10 @@ export class ZLinkFrameworkRuntimeHost
         ...options.registration.locations.options
       }.ownerLeaseTtlMs
     });
-    this.routeMeshCoordinator = new ZLinkRouteMeshRuntimeCoordinator({
+    this.routeMeshCoordinator = (
+      factories?.createRouteMeshCoordinator ??
+      ((meshOptions) => new ZLinkRouteMeshRuntimeCoordinator(meshOptions))
+    )({
       meshNames: [...options.registration.spotNodes.keys()],
       meshOptions: options.registration.spotNodes,
       meshNode: (meshName) => this.spotNodeRuntime?.meshNode(meshName),

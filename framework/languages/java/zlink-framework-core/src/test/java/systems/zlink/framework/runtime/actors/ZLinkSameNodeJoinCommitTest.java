@@ -126,7 +126,8 @@ final class ZLinkSameNodeJoinCommitTest {
             assertEquals(
                     originalEntry,
                     authority(store),
-                    "Entry return restores actual Entry id/generation/kind and preserves Actor authority");
+                    "Entry return restores actual Entry id/generation/kind and preserves Actor"
+                            + " authority");
 
             assertInstanceOf(
                     ZLinkActorJoinCompletion.Accepted.class,
@@ -144,10 +145,7 @@ final class ZLinkSameNodeJoinCommitTest {
                             join(runtime, ACTOR, new Join(TARGET, false, true)));
             assertEquals(ZLinkFrameworkErrorKind.UNAVAILABLE, failed.kind());
             assertEquals(List.of("admission", "store-failed", "completion"), EVENTS);
-
-            var spotsField = runtime.getClass().getDeclaredField("spots");
-            spotsField.setAccessible(true);
-            var spots = spotsField.get(runtime);
+            var spots = runtime.spotManager();
             var errorsField = spots.getClass().getDeclaredField("dispatchErrors");
             errorsField.setAccessible(true);
             var errors =

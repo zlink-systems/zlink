@@ -412,17 +412,18 @@ internal abstract partial class ZLinkSpotActivation
         await NotifyJoinedActorCoreAsync(actor, cancellationToken).ConfigureAwait(false);
         if (_runtime.LocationLifecycle is { } locations)
         {
-            var spotGeneration =
-                await locations
-                    .SpotLocations.GetTrackedGenerationAsync(RuntimeSpotId)
-                    .ConfigureAwait(false)
-                ?? 0;
             await locations
                 .ActorOwnership.NotifyActorJoinedSpotAsync(
                     actor.Context.ActorId,
                     SpotId,
-                    spotGeneration,
-                    cancellationToken
+                    ObjectGeneration,
+                    cancellationToken,
+                    new ActorRef(
+                        actor.Context.ActorId,
+                        actor.Context.ObjectGeneration,
+                        actor.Context.MeshName,
+                        NodeRid
+                    )
                 )
                 .ConfigureAwait(false);
         }
@@ -573,17 +574,18 @@ internal abstract partial class ZLinkSpotActivation
                         {
                             if (_runtime.LocationLifecycle is not { } locations)
                                 return;
-                            var spotGeneration =
-                                await locations
-                                    .SpotLocations.GetTrackedGenerationAsync(RuntimeSpotId)
-                                    .ConfigureAwait(false)
-                                ?? 0;
                             await locations
                                 .ActorOwnership.NotifyActorJoinedSpotAsync(
                                     actor.Context.ActorId,
                                     SpotId,
-                                    spotGeneration,
-                                    writeToken
+                                    ObjectGeneration,
+                                    writeToken,
+                                    new ActorRef(
+                                        actor.Context.ActorId,
+                                        actor.Context.ObjectGeneration,
+                                        actor.Context.MeshName,
+                                        NodeRid
+                                    )
                                 )
                                 .ConfigureAwait(false);
                             _runtime.LogActorHandoff(

@@ -16,6 +16,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorReceive
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerInstanceOwner;
+import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorOrigin;
 import systems.zlink.framework.spots.ZLinkEntrySpot;
 import systems.zlink.framework.spots.ZLinkEntrySpotContext;
 import systems.zlink.framework.spots.ZLinkIoWorkerTask;
@@ -919,12 +920,25 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
         return serials.finishActivationPreparation();
     }
 
+    CompletionStage<Void> continueActivationPreparation(Supplier<CompletionStage<Void>> operation) {
+        return serials.continueActivationPreparation(() -> runLifecycleExecution(operation));
+    }
+
     CompletionStage<Void> enqueueLifecycle(Supplier<CompletionStage<Void>> operation) {
         return serials.executeLifecycle(() -> runLifecycleExecution(operation));
     }
 
     CompletionStage<Void> enqueueJoinLifecycle(Supplier<CompletionStage<Void>> operation) {
-        return serials.enqueueSpotLifecycleAdmission(() -> runLifecycleExecution(operation));
+        return serials.enqueueSpotLifecycleAdmission(
+                () -> {
+                    if (host.spotCloseCommitted(this)) {
+                        return CompletableFuture.failedFuture(
+                                ZLinkFrameworkErrorOrigin.framework(
+                                        ZLinkFrameworkErrorKind.NOT_FOUND,
+                                        "Spot incarnation is closing (committed Close)"));
+                    }
+                    return runLifecycleExecution(operation);
+                });
     }
 
     CompletionStage<Void> enqueueClose(

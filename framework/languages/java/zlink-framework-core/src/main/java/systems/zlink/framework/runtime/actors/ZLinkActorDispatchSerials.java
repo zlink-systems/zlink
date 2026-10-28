@@ -36,7 +36,7 @@ final class ZLinkActorDispatchSerials {
     // Retain accepted Actor turns until retirement, including turns that still
     // belong to the source Spot after membership moves to another Spot.
     private final Map<String, QueuedTurn> actorTargets = new HashMap<>();
-    private final ZLinkStateLane stateLane = new ZLinkStateLane();
+    private final ZLinkStateLane stateLane;
     private final Map<String, TeardownSetup> teardowns = new HashMap<>();
     // A deferred Join barrier is queued on the Actor's dispatch target at
     // registration time, but a same-node Join re-targets the Actor to the
@@ -56,6 +56,16 @@ final class ZLinkActorDispatchSerials {
             Executor executor,
             Function<String, CompletionStage<ZLinkActorDispatchTarget.ActivationSnapshot>>
                     targetResolver) {
+        this(runtimeScope, executor, targetResolver, new ZLinkStateLane());
+    }
+
+    ZLinkActorDispatchSerials(
+            Object runtimeScope,
+            Executor executor,
+            Function<String, CompletionStage<ZLinkActorDispatchTarget.ActivationSnapshot>>
+                    targetResolver,
+            ZLinkStateLane stateLane) {
+        this.stateLane = Objects.requireNonNull(stateLane, "stateLane");
         this.runtimeScope = Objects.requireNonNull(runtimeScope, "runtimeScope");
         this.legacyTarget = createLegacyTarget(executor);
         this.targetResolver =
