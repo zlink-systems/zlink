@@ -110,8 +110,9 @@ application이 pump를 호출한 실행 문맥에서 실행된다. 게임 엔진
 없기 때문에 이 값이 기본이다.
 
 즉시 실행으로 바꾸면 pump 없이 receive 경로에서 실행된다. 이때 느린 handler는 receive 경로를
-막으므로 뒤따르는 수신 처리가 그만큼 늦어진다. CLI나 도구처럼 main thread 제약이 없는 곳에서
-사용한다.
+막으므로 뒤따르는 수신 처리가 그만큼 늦어진다. 같은 connector의 다음 수신(다른 packet, request의
+reply)을 handler 안에서 동기로 기다리면 그 수신을 처리할 경로가 handler에 막혀 끝나지 않는다. 그런
+기다림은 handler 밖에서 한다. CLI나 도구처럼 main thread 제약이 없는 곳에서 사용한다.
 
 두 설정의 차이와 등록·해제는 [packet 수신](05-receiving.ko.md)이 다룬다.
 
