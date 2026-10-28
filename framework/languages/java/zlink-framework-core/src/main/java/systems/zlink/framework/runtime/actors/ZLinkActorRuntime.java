@@ -160,7 +160,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
     @FunctionalInterface
     public interface LocalActorJoiner {
         CompletionStage<systems.zlink.framework.spots.ZLinkSpotActorJoinResult> join(
-                ZLinkActor actor, String spotId, Message request);
+                ZLinkActor actor, String spotId, Message request, long deadlineNanos);
     }
 
     @FunctionalInterface
@@ -249,7 +249,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
     private SourceActorLeaver sourceActorLeaver =
             ignored -> CompletableFuture.completedFuture(null);
     private LocalActorJoiner localActorJoiner =
-            (actor, spotId, request) ->
+            (actor, spotId, request, deadlineNanos) ->
                     CompletableFuture.failedFuture(
                             new ZLinkConfigurationException("local Actor Join is unavailable"));
     private Function<String, ZLinkSpot<?>> spotResolver = ignored -> null;
@@ -2092,6 +2092,15 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
 
     public CompletionStage<Void> commitJoinedLocation(
             ZLinkActor actor, ZLinkBackendActorRef targetActorRef, String spotId) {
+        return commitJoinedLocation(
+                actor, targetActorRef, spotId, System.nanoTime() + defaultRequestTimeout.toNanos());
+    }
+
+    public CompletionStage<Void> commitJoinedLocation(
+            ZLinkActor actor,
+            ZLinkBackendActorRef targetActorRef,
+            String spotId,
+            long deadlineNanos) {
         Objects.requireNonNull(targetActorRef, "targetActorRef");
         if (!actorRegistry.clearPendingTransfer(actor.context().actorId())) {
             return locations
@@ -2099,7 +2108,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                             actorRegistry.actorType(actor.context().actorId()),
                             actor.context().actorId(),
                             toPublicActorRef(targetActorRef, meshName))
-                    .thenCompose(ignored -> renewActorJoinedLocation(actor, spotId));
+                    .thenCompose(ignored -> renewActorJoinedLocation(actor, spotId, deadlineNanos));
         }
         String actorType = actorRegistry.actorType(actor.context().actorId());
         return locations
@@ -2115,7 +2124,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                                         actorType,
                                         actor.context().actorId(),
                                         toPublicActorRef(targetActorRef, meshName)))
-                .thenCompose(ignored -> renewActorJoinedLocation(actor, spotId));
+                .thenCompose(ignored -> renewActorJoinedLocation(actor, spotId, deadlineNanos));
     }
 
     public CompletionStage<Void> commitEntryLocation(
@@ -2123,6 +2132,20 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             RoutingId entryNodeRid,
             String entrySpotId,
             long entrySpotGeneration) {
+        return commitEntryLocation(
+                actor,
+                entryNodeRid,
+                entrySpotId,
+                entrySpotGeneration,
+                System.nanoTime() + defaultRequestTimeout.toNanos());
+    }
+
+    public CompletionStage<Void> commitEntryLocation(
+            ZLinkActor actor,
+            RoutingId entryNodeRid,
+            String entrySpotId,
+            long entrySpotGeneration,
+            long deadlineNanos) {
         DefaultActorContext context = requireContext(actor);
         String actorType = actorRegistry.actorType(actor.context().actorId());
         CompletionStage<Void> ownership =
@@ -2142,7 +2165,11 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                 .thenCompose(
                         ignored ->
                                 locations.actorMovedToEntrySpot(
-                                        actor, entryNodeRid, entrySpotId, entrySpotGeneration))
+                                        actor,
+                                        entryNodeRid,
+                                        entrySpotId,
+                                        entrySpotGeneration,
+                                        () -> System.nanoTime() - deadlineNanos >= 0))
                 .thenRun(() -> markJoinedEntrySpot(actor, context.actorRef(), entryNodeRid));
     }
 
@@ -2168,8 +2195,10 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                 actorRef.actorId(), actorRef.generation(), meshName, actorRef.nodeRid());
     }
 
-    private CompletionStage<Void> renewActorJoinedLocation(ZLinkActor actor, String spotId) {
-        return locations.actorJoinedSpot(actor, spotId);
+    private CompletionStage<Void> renewActorJoinedLocation(
+            ZLinkActor actor, String spotId, long deadlineNanos) {
+        return locations.actorJoinedSpot(
+                actor, spotId, () -> System.nanoTime() - deadlineNanos >= 0);
     }
 
     private CompletionStage<Void> renewActorMovedToEntrySpotLocation(
@@ -4081,7 +4110,13 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
 
     public CompletionStage<systems.zlink.framework.spots.ZLinkSpotActorJoinResult> joinLocalActor(
             ZLinkActor actor, String spotId, Message request) {
-        return localActorJoiner.join(actor, spotId, request);
+        return joinLocalActor(
+                actor, spotId, request, System.nanoTime() + defaultRequestTimeout.toNanos());
+    }
+
+    public CompletionStage<systems.zlink.framework.spots.ZLinkSpotActorJoinResult> joinLocalActor(
+            ZLinkActor actor, String spotId, Message request, long deadlineNanos) {
+        return localActorJoiner.join(actor, spotId, request, deadlineNanos);
     }
 
     public void setCreatedNotifier(CreatedNotifier createdNotifier) {
