@@ -1552,6 +1552,7 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
     {
         close_path_t path = close_path_t::not_executed;
         std::uint64_t token = 0;
+        const char *kind = nullptr;
         service::spot_close_begin_t authority_begin;
     };
 

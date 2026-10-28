@@ -10,7 +10,7 @@
 
 #include "runtime/foundation/operation_terminal.hpp"
 
-#include <opentelemetry/metrics/provider.h>
+#include "runtime/diagnostics/metric_provider.hpp"
 #include <opentelemetry/metrics/noop.h>
 
 #include <chrono>
@@ -43,9 +43,10 @@ enum class mesh_request_surface_t
 class mesh_request_metrics_t
 {
   public:
-    explicit mesh_request_metrics_t (std::string mesh_name) : _mesh_name (std::move (mesh_name))
+    explicit mesh_request_metrics_t (std::string mesh_name,
+                                     metric_provider_t provider = noop_metric_provider ()) :
+        _provider (provider), _mesh_name (std::move (mesh_name))
     {
-        auto provider = opentelemetry::metrics::Provider::GetMeterProvider ();
         if (dynamic_cast<opentelemetry::metrics::NoopMeterProvider *> (provider.get ()))
             return;
         auto meter = provider->GetMeter ("zlink.framework");
@@ -125,6 +126,7 @@ class mesh_request_metrics_t
         }
     }
 
+    metric_provider_t _provider;
     const std::string _mesh_name;
     opentelemetry::nostd::unique_ptr<opentelemetry::metrics::UpDownCounter<double>> _inflight;
     opentelemetry::nostd::unique_ptr<opentelemetry::metrics::Histogram<double>> _duration;
