@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+#include <zlink/json.hpp>
 
 #include <zlink/framework.hpp>
 #include <zlink/framework/version.hpp>
@@ -273,6 +274,36 @@ static_assert (has_submit<zlink::framework::stream_write_call_t>);
 static_assert (!has_callback_async<zlink::framework::stream_write_call_t, void>);
 static_assert (!has_submit<zlink::framework::route_send_call_t>);
 static_assert (!has_callback_async<zlink::framework::route_send_call_t, void>);
+// languages/cpp/interfaces/03-channel-messaging.ko.md §4 (route_client_t, route_send_call_t and
+// spot_*_call_t declarations): the calls expose metadata/option setters and terminals only, and
+// route_client_t is their only producer.
+using route_metadata_t = zlink::framework::route_send_call_t::metadata_map_t;
+static_assert (
+  !std::is_constructible_v<
+    zlink::framework::route_send_call_t,
+    std::string,
+    std::function<zlink::framework::task_t<void> (const std::string &, const route_metadata_t &)>>);
+static_assert (!std::is_constructible_v<
+               zlink::framework::route_send_call_t,
+               std::string,
+               std::function<zlink::framework::task_t<zlink::framework::result_t<void>> (
+                 const std::string &, const route_metadata_t &)>>);
+static_assert (!std::is_constructible_v<zlink::framework::route_send_call_t,
+                                        std::string,
+                                        std::function<zlink::framework::result_t<void> (
+                                          const std::string &, const route_metadata_t &)>>);
+static_assert (
+  !std::is_constructible_v<
+    zlink::framework::spot_send_call_t,
+    std::string,
+    std::function<zlink::framework::task_t<void> (const std::string &, const route_metadata_t &)>,
+    std::shared_ptr<zlink::framework::detail::spot_activation_intent_t>>);
+static_assert (
+  !std::is_constructible_v<zlink::framework::spot_request_call_t,
+                           std::string,
+                           zlink::framework::serializer_registry_t *,
+                           zlink::framework::channel_request_call_t::submit_fn_t,
+                           std::shared_ptr<zlink::framework::detail::spot_activation_intent_t>>);
 static_assert (!has_submit<zlink::framework::channel_request_call_t>);
 static_assert (has_typed_submit<zlink::framework::channel_request_call_t, std::uint64_t>);
 static_assert (has_typed_async<zlink::framework::channel_request_call_t, std::uint64_t>);
@@ -332,7 +363,7 @@ static_assert (
   std::is_same_v<decltype (std::declval<zlink::framework::fanout_publish_call_t &> ().async ()),
                  zlink::framework::task_t<void>>);
 static_assert (std::is_same_v<decltype (std::declval<zlink::framework::session_actor_t &> ().relay (
-                                std::declval<const zlink::message_t &> ())),
+                                std::declval<const zlink::framework::message_t &> ())),
                               zlink::framework::task_t<void>>);
 template <typename T>
 concept has_blocking_wait = requires (T value) { value.wait (); };
@@ -779,70 +810,60 @@ struct contract_context_instance_spot_t : public zlink::framework::instance_spot
     zlink::framework::instance_spot_context_t value;
 };
 
-void to_json (nlohmann::json &json, const named_request_t &value)
-{
-    json = nlohmann::json{{"value", value.value}};
 }
 
-void from_json (const nlohmann::json &json, named_request_t &value)
+template <> struct zlink::json::dto_traits<named_request_t>
 {
-    value.value = json.value ("value", 0);
-}
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("value", &named_request_t::value)};
+};
 
-void to_json (nlohmann::json &json, const named_context_request_t &value)
+template <> struct zlink::json::dto_traits<named_context_request_t>
 {
-    json = nlohmann::json{{"value", value.value}};
-}
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("value", &named_context_request_t::value)};
+};
 
-void from_json (const nlohmann::json &json, named_context_request_t &value)
+template <> struct zlink::json::dto_traits<named_reply_t>
 {
-    value.value = json.value ("value", 0);
-}
+    static constexpr auto fields = std::tuple{zlink::json::field ("value", &named_reply_t::value)};
+};
 
-void to_json (nlohmann::json &json, const named_reply_t &value)
+namespace
 {
-    json = nlohmann::json{{"value", value.value}};
-}
-
-void from_json (const nlohmann::json &json, named_reply_t &value)
-{
-    value.value = json.value ("value", 0);
-}
 
 std::vector<std::uint8_t> to_stream_payload (const named_request_t &value)
 {
-    const auto text = zlink::detail::json_profile::dump (nlohmann::json (value));
+    const auto text = zlink::detail::json_profile::encode (value);
     return {text.begin (), text.end ()};
 }
 
 void from_stream_payload (const std::vector<std::uint8_t> &message, named_request_t &value)
 {
-    value =
-      zlink::detail::json_profile::parse (message.begin (), message.end ()).get<named_request_t> ();
+    value = zlink::detail::json_profile::decode<named_request_t> (message.begin (), message.end ());
 }
 
 std::vector<std::uint8_t> to_stream_payload (const named_context_request_t &value)
 {
-    const auto text = zlink::detail::json_profile::dump (nlohmann::json (value));
+    const auto text = zlink::detail::json_profile::encode (value);
     return {text.begin (), text.end ()};
 }
 
 void from_stream_payload (const std::vector<std::uint8_t> &message, named_context_request_t &value)
 {
-    value = zlink::detail::json_profile::parse (message.begin (), message.end ())
-              .get<named_context_request_t> ();
+    value = zlink::detail::json_profile::decode<named_context_request_t> (message.begin (),
+                                                                          message.end ());
 }
 
 std::vector<std::uint8_t> to_stream_payload (const named_reply_t &value)
 {
-    const auto text = zlink::detail::json_profile::dump (nlohmann::json (value));
+    const auto text = zlink::detail::json_profile::encode (value);
     return {text.begin (), text.end ()};
 }
 
 void from_stream_payload (const std::vector<std::uint8_t> &message, named_reply_t &value)
 {
-    value =
-      zlink::detail::json_profile::parse (message.begin (), message.end ()).get<named_reply_t> ();
+    value = zlink::detail::json_profile::decode<named_reply_t> (message.begin (), message.end ());
 }
 
 struct named_send_handler_t
@@ -896,7 +917,7 @@ class named_session_t final : public zlink::framework::packet_stream_session_t
 
     zlink::framework::task_t<void> on_packet (zlink::framework::stream_t &,
                                               const zlink::framework::session_message_context_t &,
-                                              const zlink::message_t &) override
+                                              const zlink::framework::message_t &) override
     {
         return zlink::framework::task_t<void> (zlink::framework::result_t<void>::success ());
     }
@@ -932,7 +953,7 @@ static_assert (std::is_same_v<
                  std::declval<typed_session_handler_t &> (),
                  std::declval<zlink::framework::stream_t &> (),
                  std::declval<zlink::framework::serializer_registry_t &> (),
-                 std::declval<const zlink::message_t &> ())),
+                 std::declval<const zlink::framework::message_t &> ())),
                zlink::framework::task_t<void>>);
 
 struct typed_config_t
@@ -1007,7 +1028,6 @@ static_assert (
   !has_set_send_timeout_option<zlink::framework::client_server_channel_client_builder_t>);
 static_assert (has_set_send_timeout_option<zlink::framework::fanout_channel_builder_t>);
 
-
 static_assert (
   std::is_same_v<decltype (std::declval<zlink::framework::stream_write_call_t &> ().compress ()),
                  zlink::framework::stream_write_call_t &>);
@@ -1021,11 +1041,8 @@ static_assert (!has_create_scope<zlink::framework::service_provider_t>);
 static_assert (std::is_same_v<decltype (std::declval<zlink::framework::stream_t &> ().close ()),
                               zlink::framework::task_t<void>>);
 static_assert (std::is_same_v<decltype (std::declval<zlink::framework::stream_t &> ().write_packet (
-                                std::declval<const zlink::message_t &> ())),
+                                std::declval<const zlink::framework::message_t &> ())),
                               zlink::framework::stream_send_call_t>);
-static_assert (std::is_same_v<decltype (std::declval<zlink::framework::stream_t &> ().reply_packet (
-                                std::declval<const zlink::message_t &> ())),
-                              zlink::framework::stream_write_call_t>);
 static_assert (std::is_same_v<decltype (std::declval<zlink::framework::stream_t &> ().reply_packet (
                                 std::declval<const zlink::framework::message_t &> ())),
                               zlink::framework::stream_write_call_t>);
@@ -1503,11 +1520,11 @@ static_assert (!std::is_constructible_v<zlink::framework::actor_join_call_t,
                                         zlink::framework::actor_join_call_t::deferred_fn_t,
                                         zlink::framework::detail::deferred_barrier_reserver_t>);
 static_assert (std::is_same_v<decltype (std::declval<zlink::framework::session_actor_t &> ().relay (
-                                std::declval<const zlink::message_t &> ())),
+                                std::declval<const zlink::framework::message_t &> ())),
                               zlink::framework::task_t<void>>);
 static_assert (
   std::is_same_v<decltype (std::declval<zlink::framework::session_actor_t &> ().relay_request (
-                   std::declval<const zlink::message_t &> ())),
+                   std::declval<const zlink::framework::message_t &> ())),
                  zlink::framework::relay_request_call_t>);
 
 static_assert (std::is_same_v<decltype (std::declval<zlink::framework::mesh_node_builder_t &> ()

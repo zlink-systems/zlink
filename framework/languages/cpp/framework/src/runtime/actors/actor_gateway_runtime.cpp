@@ -21,6 +21,7 @@
 #include <nlohmann/json.hpp>
 #include <algorithm>
 #include <atomic>
+#include <cassert>
 #include <limits>
 #include <stdexcept>
 #include <string_view>
@@ -187,13 +188,32 @@ void trace_detached_bound_session_send_failure (
     });
 }
 
+void observe_bound_session_write (
+  const std::shared_ptr<detail::actor_gateway_state_t> &state,
+  std::string actor_id,
+  task_t<void> task,
+  std::shared_ptr<detail::bound_session_delivery_fence_t> fence = {})
+{
+    auto running = std::make_shared<task_t<void>> (std::move (task));
+    detail::observe_task_terminal (
+      *running, [running, state, actor_id = std::move (actor_id),
+                 fence = std::move (fence)] (const result_t<void> &terminal) {
+          if (fence)
+              fence->complete (terminal);
+          if (!terminal)
+              trace_detached_bound_session_send_failure (
+                state, actor_id, "accepted=true detached=true",
+                message_flow_reason_t::target_closed, nullptr, nullptr);
+      });
+}
+
 bool drain_bound_session_sends (
   const std::shared_ptr<detail::actor_gateway_state_t> &state,
   const detail::actor_gateway_state_t::bound_session_send_queue_key_t &queue_key,
   const std::string &actor_id)
 {
     for (;;) {
-        const auto pending = state->sync (
+        auto pending = state->sync (
           [&] () -> std::optional<detail::actor_gateway_state_t::pending_bound_session_send_t> {
               const auto found = state->pending_bound_session_sends.find (queue_key);
               if (found == state->pending_bound_session_sends.end () || found->second.empty ()) {
@@ -207,10 +227,9 @@ bool drain_bound_session_sends (
           });
         if (!pending)
             return true;
-        auto completion_fence = pending->completion_fence;
+        auto completion = std::move (pending->completion);
         if (detail::submit_blocking_call ([state, queue_key, actor_id,
-                                           pending = std::move (*pending),
-                                           completion_fence] () mutable {
+                                           pending = std::move (*pending), completion] () mutable {
                 try {
                     /* One stage event per program point: the former
                        * offload_sender_begin/send_bound_session_enter pair
@@ -223,7 +242,7 @@ bool drain_bound_session_sends (
                       std::make_shared<std::function<task_t<result_t<void>> ()>> (
                         std::move (pending.dispatch)),
                       [state, queue_key, actor_id,
-                       completion_fence] (const result_t<result_t<void>> &terminal) {
+                       completion] (const result_t<result_t<void>> &terminal) {
                           detail::trace_detached_bound_session_send_stage (
                             state, actor_id, "detached_delivery_complete",
                             [&] { return terminal && terminal.value () ? "ok" : "failed"; },
@@ -234,16 +253,16 @@ bool drain_bound_session_sends (
                                 message_flow_reason_t::target_closed, nullptr,
                                 queue_key.session_rid ? &*queue_key.session_rid : nullptr);
                           }
-                          if (completion_fence) {
+                          if (completion) {
                               if (terminal && terminal.value ()) {
-                                  completion_fence->complete (result_t<void>::success ());
+                                  completion (result_t<void>::success ());
                               } else if (!terminal) {
-                                  completion_fence->complete (result_t<void>::failure (
+                                  completion (result_t<void>::failure (
                                     terminal.error_kind (), terminal.error () != nullptr
                                                               ? terminal.error ()->what ()
                                                               : "bound Session delivery failed"));
                               } else {
-                                  completion_fence->complete (
+                                  completion (
                                     result_t<void>::failure (terminal.value ().error_kind (),
                                                              terminal.value ().error () != nullptr
                                                                ? terminal.value ().error ()->what ()
@@ -254,8 +273,8 @@ bool drain_bound_session_sends (
                       });
                 }
                 catch (...) {
-                    if (completion_fence) {
-                        completion_fence->complete (
+                    if (completion) {
+                        completion (
                           result_t<void>::failure (framework_error_kind_t::internal_failure,
                                                    "bound Session delivery raised an exception"));
                     }
@@ -272,31 +291,57 @@ bool drain_bound_session_sends (
           state, actor_id, "accepted=false executor_stopping=true",
           message_flow_reason_t::target_closed, nullptr,
           queue_key.session_rid ? &*queue_key.session_rid : nullptr);
-        if (completion_fence) {
-            completion_fence->complete (
-              result_t<void>::failure (framework_error_kind_t::shutting_down,
-                                       "bound Session delivery executor is stopping"));
+        if (completion) {
+            completion (result_t<void>::failure (framework_error_kind_t::shutting_down,
+                                                 "bound Session delivery executor is stopping"));
         }
         // The executor refused this head. Drop it and continue so the Actor's
         // per-session FIFO cannot remain permanently marked active.
     }
 }
 
-bool enqueue_bound_session_send (
+bool enqueue_bound_session_send_owned (
+  const std::shared_ptr<detail::actor_gateway_state_t> &state,
+  const detail::actor_gateway_state_t::bound_session_send_queue_key_t &queue_key,
+  detail::actor_gateway_state_t::pending_bound_session_send_t pending)
+{
+    auto &queue = state->pending_bound_session_sends[queue_key];
+    queue.push_back (std::move (pending));
+    return state->active_bound_session_sends.insert (queue_key).second;
+}
+
+result_t<void> enqueue_bound_session_send (
   const std::shared_ptr<detail::actor_gateway_state_t> &state,
   const detail::actor_gateway_state_t::bound_session_send_queue_key_t &queue_key,
   const std::string &actor_id,
-  detail::actor_gateway_state_t::pending_bound_session_send_t pending)
+  detail::actor_gateway_state_t::pending_bound_session_send_t pending,
+  std::optional<std::uint64_t> stream_binding_token)
 {
-    const auto start_drain = state->sync ([&] {
-        auto &queue = state->pending_bound_session_sends[queue_key];
-        queue.push_back (std::move (pending));
-        return state->active_bound_session_sends.insert (queue_key).second;
+    const auto admission = state->sync ([&] () -> result_t<bool> {
+        if (stream_binding_token) {
+            const auto current = state->actors_by_id.find (actor_id);
+            if (current == state->actors_by_id.end () || !current->second.bound
+                || current->second.binding_token != *stream_binding_token)
+                return detail::boundary_failure<bool> (detail::boundary_error_t::disconnected,
+                                                       "actor session is disconnected");
+        }
+        return result_t<bool>::success (
+          enqueue_bound_session_send_owned (state, queue_key, std::move (pending)));
     });
+    if (!admission) {
+        auto failure = detail::result_access_t::failure<void> (admission.exception ());
+        if (pending.completion)
+            pending.completion (failure);
+        return failure;
+    }
     detail::trace_detached_bound_session_send_stage (
       state, actor_id, "fifo_accepted", [] { return "accepted"; }, nullptr,
       queue_key.session_rid ? &*queue_key.session_rid : nullptr);
-    return !start_drain || drain_bound_session_sends (state, queue_key, actor_id);
+    if (!admission.value () || drain_bound_session_sends (state, queue_key, actor_id))
+        return result_t<void>::success ();
+    return detail::boundary_failure<void> (
+      detail::boundary_error_t::timed_out,
+      "bound Session detached send queue did not accept the push");
 }
 
 detail::actor_gateway_state_t::bound_session_send_queue_key_t
@@ -310,6 +355,21 @@ bound_session_send_queue_key (const std::string &actor_id,
             route.binding_generation,
             route.binding_token,
             false};
+}
+
+detail::actor_gateway_state_t::bound_session_send_queue_key_t
+bound_session_send_queue_key (const std::string &actor_id, const detail::actor_record_t &record)
+{
+    if (record.bound_session_route)
+        return bound_session_send_queue_key (actor_id, *record.bound_session_route);
+    return {actor_id,
+            {},
+            record.source_session_rid
+              ? std::optional<std::string> (record.source_session_rid->to_hex ())
+              : std::nullopt,
+            record.source_binding_generation,
+            0,
+            true};
 }
 
 void drain_session_relay (const std::shared_ptr<detail::actor_gateway_state_t> &state,
@@ -444,7 +504,8 @@ task_t<void> enqueue_session_relay (const std::shared_ptr<detail::actor_gateway_
     return task;
 }
 
-request_task_t<zlink::message_t> complete_session_actor_relay_request (
+template <typename TProjectReply>
+request_task_t<message_t> complete_session_actor_relay_request (
   std::shared_ptr<detail::actor_gateway_state_t> state,
   detail::actor_gateway_state_t::relay_dispatcher_t submit,
   actor_ref_t actor,
@@ -453,6 +514,7 @@ request_task_t<zlink::message_t> complete_session_actor_relay_request (
   zlink::message_t payload,
   std::optional<detail::bound_session_relay_source_t> relay_source,
   std::chrono::milliseconds timeout,
+  TProjectReply project_reply,
   std::shared_ptr<task_completion_source_t<void>> admitted = {})
 {
     if (admitted) {
@@ -487,7 +549,7 @@ request_task_t<zlink::message_t> complete_session_actor_relay_request (
         });
         throw missing_reply;
     }
-    co_return std::move (*dispatched);
+    co_return project_reply (std::move (*dispatched));
 }
 
 std::shared_ptr<task_completion_source_t<void>>
@@ -880,6 +942,8 @@ bound_session_send_call_t bound_session_t::send_erased (std::string packet_name,
           framework_error_kind_t::not_configured, "bound session does not reference an actor")));
     }
     std::shared_ptr<detail::bound_session_sink_t> sink;
+    std::optional<std::uint64_t> stream_binding_token;
+    bool local_submission = false;
     std::shared_ptr<detail::bound_session_delivery_fence_t> completion_fence;
     detail::actor_gateway_state_t::bound_session_sender_t remote_sender;
     stream_header_t header;
@@ -929,20 +993,12 @@ bound_session_send_call_t bound_session_t::send_erased (std::string packet_name,
             const auto found_sink = _state->bound_session_sinks.find (actor_id);
             if (found_sink != _state->bound_session_sinks.end ())
                 sink = found_sink->second;
-            if (found->second.bound_session_route) {
-                const auto &route = *found->second.bound_session_route;
-                queue_key = bound_session_send_queue_key (actor_id, route);
-            } else {
-                queue_key = {
-                  actor_id,
-                  {},
-                  found->second.source_session_rid
-                    ? std::optional<std::string> (found->second.source_session_rid->to_hex ())
-                    : std::nullopt,
-                  found->second.source_binding_generation,
-                  0,
-                  true};
-            }
+            local_submission =
+              found->second.bound_session_stream_sink || !found->second.bound_session_route;
+            if (!local_submission)
+                queue_key = bound_session_send_queue_key (actor_id, found->second);
+            if (found->second.bound_session_stream_sink)
+                stream_binding_token = found->second.binding_token;
         }
         return std::nullopt;
     });
@@ -960,14 +1016,41 @@ bound_session_send_call_t bound_session_t::send_erased (std::string packet_name,
       [state = _state, queue_key = std::move (queue_key), actor_id, sink = std::move (sink),
        remote_sender = std::move (remote_sender), actor_ref = *_actor_ref,
        expected_binding_generation = _expected_binding_generation, header = std::move (header),
-       payload, codec, completion_fence = std::move (completion_fence)] (
+       payload, codec, stream_binding_token, local_submission,
+       completion_fence = std::move (completion_fence)] (
         const std::string &name, const send_call_t::metadata_map_t &) mutable -> task_t<void> {
-          // One-way submit accepts into the Framework-owned per-binding FIFO.
-          // Sink coroutines are eager, so even constructing one on the Actor
-          // handler stack could otherwise enter native ROUTER admission and
-          // retain the serial turn until relocation sealing or timeout.
           if (completion_fence && !completion_fence->try_add ())
               completion_fence.reset ();
+          if (sink && local_submission) {
+              std::optional<task_t<void>> pending;
+              const auto admitted = state->sync ([&] () -> result_t<void> {
+                  const auto current = state->actors_by_id.find (actor_id);
+                  const auto current_sink = state->bound_session_sinks.find (actor_id);
+                  if (current == state->actors_by_id.end () || !current->second.bound
+                      || current_sink == state->bound_session_sinks.end ()
+                      || current_sink->second != sink
+                      || (stream_binding_token
+                          && current->second.binding_token != *stream_binding_token))
+                      return detail::boundary_failure<void> (detail::boundary_error_t::disconnected,
+                                                             "actor session is disconnected");
+                  pending.emplace ((*sink) (name, codec, payload));
+                  return result_t<void>::success ();
+              });
+              if (!admitted) {
+                  if (completion_fence)
+                      completion_fence->complete (admitted);
+                  return task_t<void> (admitted);
+              }
+              observe_bound_session_write (state, actor_id, std::move (*pending),
+                                           std::move (completion_fence));
+              return task_t<void> (result_t<void>::success ());
+          }
+          // Remote native admission can wait; it must remain outside this lane.
+          std::function<void (result_t<void>)> complete;
+          if (completion_fence)
+              complete = [completion_fence] (result_t<void> terminal) {
+                  completion_fence->complete (std::move (terminal));
+              };
           const auto submitted = enqueue_bound_session_send (
             state, queue_key, actor_id,
             {[sink, remote_sender, actor_ref, expected_binding_generation, header, payload, codec,
@@ -988,12 +1071,10 @@ bound_session_send_call_t bound_session_t::send_erased (std::string packet_name,
                                                         error.what ());
                  }
              },
-             completion_fence});
-          if (!submitted) {
-              return task_t<void> (detail::boundary_failure<void> (
-                detail::boundary_error_t::timed_out,
-                "bound Session detached send queue did not accept the push"));
-          }
+             std::move (complete)},
+            stream_binding_token);
+          if (!submitted)
+              return task_t<void> (submitted);
           return task_t<void> (result_t<void>::success ());
       }));
 }
@@ -1318,8 +1399,20 @@ result_t<std::uint64_t> session_actor_t::reserve_relay_sequence ()
 
 task_t<void> session_actor_t::relay_internal (detail::stream_header_t header,
                                               std::uint64_t relay_sequence,
-                                              const zlink::message_t &payload)
+                                              const message_t &message)
 {
+    if (!_state->serializers) {
+        return task_t<void> (result_t<void>::failure (
+          framework_error_kind_t::protocol_error, "actor relay requires a serializer registry"));
+    }
+    zlink::message_t payload;
+    try {
+        payload = detail::message_to_raw (message, *_state->serializers);
+    }
+    catch (const framework_exception_t &error) {
+        return task_t<void> (detail::result_access_t::failure<void> (error));
+    }
+
     detail::actor_gateway_state_t::relay_dispatcher_t dispatcher;
     detail::stream_header_t relay_header;
     std::optional<detail::bound_session_relay_source_t> relay_source;
@@ -1430,7 +1523,7 @@ task_t<void> session_actor_t::relay_internal (detail::stream_header_t header,
       });
 }
 
-task_t<void> session_actor_t::relay (const zlink::message_t &payload)
+task_t<void> session_actor_t::relay (const message_t &payload)
 {
     const auto header = detail::current_stream_relay_dispatch ();
     if (!header) {
@@ -1446,7 +1539,7 @@ task_t<void> session_actor_t::relay (const zlink::message_t &payload)
     return relay_internal (*header, sequence.value (), payload);
 }
 
-task_t<void> session_actor_t::relay (std::string packet_name, const zlink::message_t &payload)
+task_t<void> session_actor_t::relay (std::string packet_name, const message_t &payload)
 {
     auto header = detail::actor_relay_header (stream_message_kind_t::send, std::move (packet_name));
     const auto sequence = reserve_relay_sequence ();
@@ -1457,29 +1550,36 @@ task_t<void> session_actor_t::relay (std::string packet_name, const zlink::messa
     return relay_internal (std::move (header), sequence.value (), payload);
 }
 
-relay_request_call_t session_actor_t::relay_request (const zlink::message_t &payload)
+relay_request_call_t session_actor_t::relay_request (const message_t &payload)
 {
     const auto header = detail::current_stream_relay_dispatch ();
     if (!header) {
-        return relay_request_call_t (result_t<zlink::message_t>::failure (
+        return relay_request_call_t (result_t<message_t>::failure (
           framework_error_kind_t::protocol_error,
           "actor relay request requires current stream dispatch state"));
     }
     return relay_request_call_t (
       std::string (header->packet_name ()),
-      [actor = *this, header = *header,
-       payload] (const std::string &, std::chrono::milliseconds timeout,
-                 const request_call_t<zlink::message_t>::metadata_map_t &) mutable {
+      [actor = *this, header = *header, payload] (
+        const std::string &, std::chrono::milliseconds timeout,
+        const request_call_t<message_t>::metadata_map_t &) mutable -> request_task_t<message_t> {
           const auto relay_sequence = actor.reserve_relay_sequence ();
           if (!relay_sequence) {
-              return request_task_t<zlink::message_t> (detail::propagate_failure<zlink::message_t> (
+              return request_task_t<message_t> (detail::propagate_failure<message_t> (
                 relay_sequence, "actor relay request sequence failed"));
           }
-          return actor.relay_request_internal (header, relay_sequence.value (), payload, timeout);
+          if (!actor._state->serializers) {
+              return request_task_t<message_t> (result_t<message_t>::failure (
+                framework_error_kind_t::protocol_error,
+                "actor relay request requires a serializer registry"));
+          }
+          return actor.relay_request_internal (
+            header, relay_sequence.value (),
+            detail::message_to_raw (payload, *actor._state->serializers), timeout);
       });
 }
 
-request_task_t<zlink::message_t>
+request_task_t<message_t>
 session_actor_t::relay_request_internal (detail::stream_header_t header,
                                          std::uint64_t relay_sequence,
                                          zlink::message_t payload,
@@ -1489,44 +1589,44 @@ session_actor_t::relay_request_internal (detail::stream_header_t header,
     detail::stream_header_t relay_header;
     std::optional<detail::bound_session_relay_source_t> relay_source;
     bool offload_session_relay = false;
-    std::optional<result_t<zlink::message_t>> rejected;
+    std::optional<result_t<message_t>> rejected;
     _state->sync ([&] {
         if (::zlink::framework::detail::actor_ref_access_t::empty (_ref)) {
-            rejected = result_t<zlink::message_t>::failure (framework_error_kind_t::not_found,
-                                                            "session actor is not bound");
+            rejected = result_t<message_t>::failure (framework_error_kind_t::not_found,
+                                                     "session actor is not bound");
             return;
         }
         const auto found = _state->actors_by_id.find (std::string (_ref.actor_id ().value ()));
         if (found != _state->actors_by_id.end () && found->second.disconnected) {
-            rejected = detail::boundary_failure<zlink::message_t> (
-              detail::boundary_error_t::disconnected, "actor session is disconnected");
+            rejected = detail::boundary_failure<message_t> (detail::boundary_error_t::disconnected,
+                                                            "actor session is disconnected");
             return;
         }
         if (found == _state->actors_by_id.end ()) {
-            rejected = result_t<zlink::message_t>::failure (framework_error_kind_t::not_found,
-                                                            "actor route is not found");
+            rejected = result_t<message_t>::failure (framework_error_kind_t::not_found,
+                                                     "actor route is not found");
             return;
         }
         if (!found->second.bound) {
-            rejected = result_t<zlink::message_t>::failure (framework_error_kind_t::not_configured,
-                                                            "actor session is not bound");
+            rejected = result_t<message_t>::failure (framework_error_kind_t::not_configured,
+                                                     "actor session is not bound");
             return;
         }
         if (_binding_token != 0 && found->second.binding_token != _binding_token) {
-            rejected = result_t<zlink::message_t>::failure (framework_error_kind_t::not_configured,
-                                                            "actor session binding is stale");
+            rejected = result_t<message_t>::failure (framework_error_kind_t::not_configured,
+                                                     "actor session binding is stale");
             return;
         }
         if (found->second.ref.object_generation () != _ref.object_generation ()) {
-            rejected = result_t<zlink::message_t>::failure (
-              framework_error_kind_t::invalid_operation, "actor generation is stale");
+            rejected = result_t<message_t>::failure (framework_error_kind_t::invalid_operation,
+                                                     "actor generation is stale");
             return;
         }
         _ref = found->second.ref;
         if (!_state->relay_dispatcher) {
             _state->relayed_frames.push_back (detail::relayed_frame_t{_ref, header, payload});
-            rejected = result_t<zlink::message_t>::failure (
-              framework_error_kind_t::not_found, "actor relay dispatcher is not configured");
+            rejected = result_t<message_t>::failure (framework_error_kind_t::not_found,
+                                                     "actor relay dispatcher is not configured");
             return;
         }
         dispatcher = _state->relay_dispatcher;
@@ -1554,32 +1654,35 @@ session_actor_t::relay_request_internal (detail::stream_header_t header,
         }
     });
     if (rejected)
-        return request_task_t<zlink::message_t> (std::move (*rejected));
+        return request_task_t<message_t> (std::move (*rejected));
+    const auto project_reply = [serializers = _state->serializers] (zlink::message_t reply) {
+        return message_t::from_raw (std::move (reply), serializers);
+    };
     auto admitted = std::make_shared<task_completion_source_t<void>> ();
     if (!offload_session_relay) {
-        return request_task_t<zlink::message_t> (
-          complete_session_actor_relay_request (_state, std::move (dispatcher), _ref, context (),
-                                                std::move (relay_header), payload,
-                                                std::move (relay_source), timeout, admitted),
+        return request_task_t<message_t> (
+          complete_session_actor_relay_request (
+            _state, std::move (dispatcher), _ref, context (), std::move (relay_header), payload,
+            std::move (relay_source), timeout, project_reply, admitted),
           admitted);
     }
     auto actor_context = std::make_shared<actor_context_t> (context ());
-    return request_task_t<zlink::message_t> (
-      runtime::handler_coroutine_executor ().submit<zlink::message_t> (
+    return request_task_t<message_t> (
+      runtime::handler_coroutine_executor ().submit<message_t> (
         [state = _state, dispatcher = std::move (dispatcher), actor = _ref,
          actor_context = std::move (actor_context), relay_header = std::move (relay_header),
-         payload, relay_source = std::move (relay_source), timeout,
-         admitted] () mutable -> boost::asio::awaitable<result_t<zlink::message_t>> {
+         payload, relay_source = std::move (relay_source), timeout, admitted,
+         project_reply] () mutable -> boost::asio::awaitable<result_t<message_t>> {
             co_return co_await runtime::await_task_result (complete_session_actor_relay_request (
               std::move (state), std::move (dispatcher), std::move (actor),
               std::move (*actor_context), std::move (relay_header), payload,
-              std::move (relay_source), timeout, admitted));
+              std::move (relay_source), timeout, project_reply, admitted));
         }),
       admitted);
 }
 
 relay_request_call_t session_actor_t::relay_request (std::string packet_name,
-                                                     const zlink::message_t &payload)
+                                                     const message_t &payload)
 {
     const detail::stream_relay_dispatch_scope_t relay_scope (
       detail::actor_relay_header (stream_message_kind_t::request, std::move (packet_name)));
@@ -1951,7 +2054,6 @@ request_call_t<session_actor_t> session_actor_manager_t::bind_or_get (actor_ref_
           return manager.bind_current_session (actor_ref, true);
       });
 }
-
 request_task_t<session_actor_t>
 session_actor_manager_t::bind_current_session (actor_ref_t actor_ref, bool reuse_current)
 {
@@ -1964,12 +2066,19 @@ session_actor_manager_t::bind_current_session (actor_ref_t actor_ref, bool reuse
     std::uint16_t actor_slot = 0;
     std::optional<stream_t> stream;
     std::string session_id;
-    std::function<request_task_t<void> (actor_ref_t, std::uint64_t, std::uint16_t)> native_binder;
+    std::function<request_task_t<void> (
+      actor_ref_t, std::uint64_t, std::uint16_t, std::function<void ()>)> native_binder;
+    stream_codec_t codec = stream_codec_t::message_pack;
     std::optional<std::uint64_t> previous_context_token;
     bool previous_ready = false;
     bool had_previous_stream = false;
     std::weak_ptr<detail::stream_state_t> previous_stream;
-    detail::prepared_session_stream_t prepared;
+    struct publication_t
+    {
+        std::optional<detail::actor_session_binding_snapshot_t> previous;
+        std::optional<task_t<void>> submitted;
+    };
+    auto publication = std::make_shared<publication_t> ();
     state->sync ([&] {
         without_stream = !binding_context || !binding_context->stream;
         if (without_stream) {
@@ -2023,9 +2132,7 @@ session_actor_manager_t::bind_current_session (actor_ref_t actor_ref, bool reuse
             previous_stream = bound_stream->second;
         stream = binding_context->stream;
         native_binder = binding_context->native_binder;
-        prepared = detail::actor_gateway_runtime_t::prepare_session_stream_on_lane (
-          state, actor_id, *stream, binding_context->codec, session_id, token, actor_ref,
-          actor_slot);
+        codec = binding_context->codec;
         binding_context->actor_tokens[actor_id] = token;
         binding_context->ready_actors.erase (actor_id);
         binding_context->actor_streams[actor_id] = binding_context->stream_state;
@@ -2036,29 +2143,34 @@ session_actor_manager_t::bind_current_session (actor_ref_t actor_ref, bool reuse
                                    without_stream ? nullptr : binding_context);
     }
     try {
-        if (prepared.registrar && prepared.actor) {
-            const auto registered = prepared.registrar (*prepared.actor);
-            if (!registered)
-                throw framework_exception_t (registered.error_kind (),
-                                             registered.error ()
-                                               ? registered.error ()->what ()
-                                               : "bound session route registration failed");
-        }
-        if (native_binder) {
-            co_await detail::request_submission (native_binder (actor_ref, token, actor_slot));
-        } else {
-            const auto payload =
-              detail::stream_runtime_t::encode_actor_bound_payload (actor_slot, actor_id);
-            stream_header_t header (stream_message_kind_t::control, stream_codec_t::raw,
-                                    stream_header_flags_t::none, std::nullopt, "$zlink.actor.bound",
-                                    {});
-            stream
-              ->write_packet_with_header (std::move (header), zlink::message_t::from (std::string (
-                                                                payload.begin (), payload.end ())))
-              .async ()
-              .result ()
-              .value ();
-        }
+        auto publish_stream = [state, actor_ref, actor_slot, token, actor_id, publication,
+                               stream = *stream, codec, session_id] {
+            publication->previous = detail::actor_gateway_runtime_t::bind_session_stream_owned (
+              state, actor_id, stream, codec, session_id, token, actor_ref, actor_slot,
+              [state, stream, actor_slot, actor_id, publication] () mutable {
+                  const auto payload =
+                    detail::stream_runtime_t::encode_actor_bound_payload (actor_slot, actor_id);
+                  stream_header_t header (stream_message_kind_t::control, stream_codec_t::raw,
+                                          stream_header_flags_t::none, std::nullopt,
+                                          "$zlink.actor.bound", {});
+                  publication->submitted.emplace (
+                    stream
+                      .write_packet_with_header (
+                        std::move (header),
+                        zlink::message_t::from (std::string (payload.begin (), payload.end ())))
+                      .async ());
+              });
+        };
+        if (native_binder)
+            co_await detail::request_submission (
+              native_binder (actor_ref, token, actor_slot, std::move (publish_stream)));
+        else
+            state->sync (publish_stream);
+        if (publication->submitted)
+            observe_bound_session_write (state, actor_id, std::move (*publication->submitted));
+        const auto registrar = state->sync ([&] { return state->bound_session_registrar; });
+        if (registrar)
+            registrar (actor_ref).value ();
         co_await detail::request_admitted_t{};
         state->sync ([&] {
             const auto current = binding_context->actor_tokens.find (actor_id);
@@ -2083,8 +2195,9 @@ session_actor_manager_t::bind_current_session (actor_ref_t actor_ref, bool reuse
                 binding_context->actor_streams[actor_id] = previous_stream;
             else
                 binding_context->actor_streams.erase (actor_id);
-            detail::restore_session_stream_on_lane (state, actor_id, session_id, token,
-                                                    std::move (prepared.previous));
+            if (publication->previous)
+                detail::restore_session_stream_on_lane (
+                  state, actor_id, session_id, token, std::move (*publication->previous));
         });
         throw;
     }
@@ -2112,6 +2225,21 @@ void detail::session_actor_manager_access_t::bind_native (
   session_actor_manager_t &manager,
   std::function<request_task_t<void> (actor_ref_t, std::uint64_t, std::uint16_t)> binder)
 {
+    bind_native (manager,
+                 [state = manager._state, binder = std::move (binder)] (
+                   actor_ref_t actor, std::uint64_t generation, std::uint16_t slot,
+                   std::function<void ()> publish) mutable -> request_task_t<void> {
+                     co_await detail::request_submission (
+                       binder (std::move (actor), generation, slot));
+                     state->sync (publish);
+                 });
+}
+
+void detail::session_actor_manager_access_t::bind_native (
+  session_actor_manager_t &manager,
+  std::function<request_task_t<void> (
+    actor_ref_t, std::uint64_t, std::uint16_t, std::function<void ()>)> binder)
+{
     manager._state->sync ([&] { manager._binding_context->native_binder = std::move (binder); });
 }
 
@@ -2119,11 +2247,13 @@ void detail::session_actor_manager_access_t::bind_native (
   session_actor_manager_t &manager, std::function<task_t<void> (actor_ref_t, std::uint64_t)> binder)
 {
     bind_native (manager,
-                 [binder = std::move (binder)] (actor_ref_t actor, std::uint64_t generation,
-                                                std::uint16_t) mutable -> request_task_t<void> {
+                 [state = manager._state, binder = std::move (binder)] (
+                   actor_ref_t actor, std::uint64_t generation, std::uint16_t,
+                   std::function<void ()> publish) mutable -> request_task_t<void> {
                      auto pending = binder (std::move (actor), generation);
                      co_await detail::request_admitted_t{};
                      co_await pending;
+                     state->sync (publish);
                  });
 }
 
@@ -2255,7 +2385,6 @@ task_t<void> detail::session_actor_manager_access_t::disconnect_async (
 
 namespace zlink::framework::detail
 {
-
 namespace
 {
 
@@ -2792,13 +2921,34 @@ prepared_session_stream_t actor_gateway_runtime_t::prepare_session_stream_on_lan
   std::uint16_t actor_slot)
 {
     prepared_session_stream_t prepared;
+    prepared.previous = bind_session_stream_owned (
+      state, actor_id, std::move (stream), codec, session_id, binding_token, actor_ref, actor_slot, {});
+    prepared.actor = state->actors_by_id.at (actor_id).ref;
+    prepared.registrar = state->bound_session_registrar;
+    return prepared;
+}
+
+actor_session_binding_snapshot_t actor_gateway_runtime_t::bind_session_stream_owned (
+  const std::shared_ptr<actor_gateway_state_t> &state,
+  const std::string &actor_id,
+  stream_t stream,
+  stream_codec_t codec,
+  const std::string &session_id,
+  std::uint64_t binding_token,
+  const std::optional<actor_ref_t> &actor_ref,
+  std::uint16_t actor_slot,
+  const std::function<void ()> &publish)
+{
+    assert (state->lane.is_on_lane ());
+    actor_session_binding_snapshot_t previous;
+
     auto found = state->actors_by_id.find (actor_id);
     if (found != state->actors_by_id.end ()) {
-        prepared.previous.record = found->second;
+        previous.record = found->second;
     }
     if (const auto sink = state->bound_session_sinks.find (actor_id);
         sink != state->bound_session_sinks.end ()) {
-        prepared.previous.sink = sink->second;
+        previous.sink = sink->second;
     }
     if (found == state->actors_by_id.end ()) {
         if (!actor_ref || ::zlink::framework::detail::actor_ref_access_t::empty (*actor_ref)) {
@@ -2821,11 +2971,24 @@ prepared_session_stream_t actor_gateway_runtime_t::prepare_session_stream_on_lan
         }
         found->second.ref = merge_actor_type (*actor_ref, found->second.ref);
     }
+    if (found->second.bound_session_route)
+        found->second.bound_session_route->binding_token = binding_token;
+
+    try {
+        if (publish)
+            publish ();
+    }
+    catch (...) {
+        if (previous.record)
+            found->second = *previous.record;
+        else
+            state->actors_by_id.erase (found);
+        throw;
+    }
     found->second.bound = true;
     found->second.disconnected.reset ();
     found->second.bound_session_codec = codec;
     found->second.bound_session_stream_sink = true;
-    prepared.actor = found->second.ref;
     found->second.binding_session_id = session_id;
     found->second.binding_token = binding_token;
     found->second.next_session_relay_sequence = 1;
@@ -2840,19 +3003,10 @@ prepared_session_stream_t actor_gateway_runtime_t::prepare_session_stream_on_lan
                                   std::move (packet_name));
           if (actor_slot != 0)
               header.with_actor_slot (actor_slot);
-          try {
-              stream.write_packet_with_header (std::move (header), payload)
-                .async ()
-                .result ()
-                .value ();
-              return task_t<void> (result_t<void>::success ());
-          }
-          catch (const framework_exception_t &error) {
-              return task_t<void> (detail::result_access_t::failure<void> (error));
-          }
+          return stream.write_packet_with_header (std::move (header), payload).async ();
       });
-    prepared.registrar = state->bound_session_registrar;
-    return prepared;
+
+    return previous;
 }
 
 actor_session_binding_snapshot_t
@@ -3058,7 +3212,6 @@ record_bound_session_route_on_lane (const std::shared_ptr<actor_gateway_state_t>
             transition.previous = found->second.bound_session_route;
         transition.changed = true;
     }
-    transition.current = route;
     auto relay_source = route.session_rid;
     auto sink =
       state->bound_session_sender
@@ -3086,8 +3239,11 @@ record_bound_session_route_on_lane (const std::shared_ptr<actor_gateway_state_t>
     found->second.bound = true;
     found->second.disconnected.reset ();
     found->second.bound_session_route = std::move (route);
-    if (sink)
+    if (sink && !found->second.bound_session_stream_sink)
         state->bound_session_sinks.at (actor_id) = std::move (sink);
+    if (found->second.bound_session_stream_sink)
+        found->second.bound_session_route->binding_token = found->second.binding_token;
+    transition.current = *found->second.bound_session_route;
     if (publish) {
         found->second.source_session_rid = std::move (relay_source);
         found->second.source_binding_generation =
@@ -3324,7 +3480,7 @@ void actor_gateway_runtime_t::unbind_session_stream (std::string actor_id,
 {
     std::optional<stream_t> stream;
     std::uint16_t actor_slot = 0;
-    detail::actor_gateway_state_t::bound_session_send_queue_key_t queue_key;
+    std::optional<task_t<void>> submitted;
     _state->sync ([&] {
         auto found = _state->actors_by_id.find (actor_id);
         if (found != _state->actors_by_id.end ()) {
@@ -3335,20 +3491,6 @@ void actor_gateway_runtime_t::unbind_session_stream (std::string actor_id,
             }
             stream = found->second.bound_stream;
             actor_slot = found->second.actor_slot;
-            if (found->second.bound_session_route) {
-                const auto &route = *found->second.bound_session_route;
-                queue_key = bound_session_send_queue_key (actor_id, route);
-            } else {
-                queue_key = {
-                  actor_id,
-                  {},
-                  found->second.source_session_rid
-                    ? std::optional<std::string> (found->second.source_session_rid->to_hex ())
-                    : std::nullopt,
-                  found->second.source_binding_generation,
-                  0,
-                  true};
-            }
             found->second.bound_session_stream_sink = false;
             found->second.bound_session_route.reset ();
             found->second.binding_session_id.clear ();
@@ -3359,33 +3501,20 @@ void actor_gateway_runtime_t::unbind_session_stream (std::string actor_id,
             found->second.disconnected = actor_disconnect_terminal (found->second.disconnected);
         }
         _state->bound_session_sinks.erase (actor_id);
+        if (stream && actor_slot != 0 && !stream->_state->closed.load (std::memory_order_acquire)) {
+            const auto payload = stream_runtime_t::encode_actor_unbound_payload (actor_slot);
+            stream_header_t header (stream_message_kind_t::control, stream_codec_t::raw,
+                                    stream_header_flags_t::none, std::nullopt,
+                                    "$zlink.actor.unbound", {});
+            submitted.emplace (stream
+                                 ->write_packet_with_header (std::move (header),
+                                                             zlink::message_t::from (std::string (
+                                                               payload.begin (), payload.end ())))
+                                 .async ());
+        }
     });
-    if (stream && actor_slot != 0 && !stream->_state->closed.load (std::memory_order_acquire)) {
-        const auto payload = stream_runtime_t::encode_actor_unbound_payload (actor_slot);
-        stream_header_t header (stream_message_kind_t::control, stream_codec_t::raw,
-                                stream_header_flags_t::none, std::nullopt, "$zlink.actor.unbound",
-                                {});
-        auto submit_unbound = [stream = std::move (*stream), header = std::move (header),
-                               payload] () mutable -> task_t<result_t<void>> {
-            try {
-                stream
-                  .write_packet_with_header (
-                    std::move (header),
-                    zlink::message_t::from (std::string (payload.begin (), payload.end ())))
-                  .async ()
-                  .result ()
-                  .value ();
-                co_return result_t<void>::success ();
-            }
-            catch (const framework_exception_t &error) {
-                co_return detail::result_access_t::failure<void> (error);
-            }
-        };
-        (void) enqueue_bound_session_send (
-          _state, queue_key, actor_id,
-          detail::actor_gateway_state_t::pending_bound_session_send_t{std::move (submit_unbound),
-                                                                      {}});
-    }
+    if (submitted)
+        observe_bound_session_write (_state, actor_id, std::move (*submitted));
 }
 
 void restore_session_stream_on_lane (const std::shared_ptr<actor_gateway_state_t> &state,
@@ -3426,6 +3555,7 @@ actor_gateway_runtime_t::dispatch_bound_session_send (const actor_ref_t &actor_r
                                                       const zlink::message_t &payload) const
 {
     std::shared_ptr<detail::bound_session_sink_t> sink;
+    std::optional<task_t<void>> submitted;
     const auto admitted = _state->sync ([&] () -> result_t<void> {
         const auto actor_id = std::string (actor_ref.actor_id ().value ());
         const auto found = _state->actors_by_id.find (actor_id);
@@ -3458,11 +3588,15 @@ actor_gateway_runtime_t::dispatch_bound_session_send (const actor_ref_t &actor_r
                                             "actor session stream is not bound");
         }
         sink = found_sink->second;
+        if (found->second.bound_session_stream_sink || !found->second.bound_session_route)
+            submitted.emplace ((*sink) (std::move (packet_name), codec, payload));
         return result_t<void>::success ();
     });
     if (!admitted)
         return admitted;
-    auto sent = (*sink) (std::move (packet_name), codec, payload).result ();
+    if (!submitted)
+        submitted.emplace ((*sink) (std::move (packet_name), codec, payload));
+    auto sent = submitted->result ();
     if (!sent) {
         return result_t<void>::failure (sent.error_kind (),
                                         sent.error () ? sent.error ()->what ()
@@ -3485,6 +3619,7 @@ actor_gateway_runtime_t::admit_bound_session_delivery (const actor_ref_t &actor_
     std::string resolution;
     std::optional<zlink::routing_id_t> traced_session_rid;
     std::optional<zlink::routing_id_t> admitted_session_rid;
+    std::uint64_t binding_token = 0;
     _state->sync ([&] {
         const auto found_sink = _state->bound_session_sinks.find (actor_id);
         if (found_sink != _state->bound_session_sinks.end ())
@@ -3494,6 +3629,9 @@ actor_gateway_runtime_t::admit_bound_session_delivery (const actor_ref_t &actor_
             admitted_session_rid = actor->second.bound_session_route->session_rid;
             if (trace_resolution)
                 traced_session_rid = admitted_session_rid;
+        }
+        if (sink && actor != _state->actors_by_id.end ()) {
+            binding_token = actor->second.binding_token;
         }
         if (trace_resolution)
             resolution = "owner_admitted=true expected_binding_generation="
@@ -3514,33 +3652,45 @@ actor_gateway_runtime_t::admit_bound_session_delivery (const actor_ref_t &actor_
     }
     return admitted_bound_session_delivery_t{
       [actor_gateway = *this, state = _state, actor_id, sink = std::move (sink),
-       admitted_session_rid = std::move (admitted_session_rid)] (
+       admitted_session_rid = std::move (admitted_session_rid), binding_token] (
         std::string packet_name, stream_codec_t codec, const zlink::message_t &payload) {
+          std::optional<task_t<void>> submitted;
+          const auto admitted = state->sync ([&] () -> result_t<void> {
+              const auto current = state->actors_by_id.find (actor_id);
+              if (current == state->actors_by_id.end () || !current->second.bound
+                  || current->second.binding_token != binding_token)
+                  return detail::boundary_failure<void> (detail::boundary_error_t::disconnected,
+                                                         "actor session is disconnected");
+              actor_gateway.trace_bound_session_send_stage (
+                actor_id, "session_node_stream_write_submit", [] { return "begin"; },
+                admitted_session_rid ? &*admitted_session_rid : nullptr);
+              if (current->second.bound_session_stream_sink || !current->second.bound_session_route)
+                  submitted.emplace ((*sink) (std::move (packet_name), codec, payload));
+              return result_t<void>::success ();
+          });
+          if (!admitted)
+              return admitted;
+          if (!submitted)
+              submitted.emplace ((*sink) (std::move (packet_name), codec, payload));
+          auto terminal = submitted->result ();
           const auto *session_rid = admitted_session_rid ? &*admitted_session_rid : nullptr;
           actor_gateway.trace_bound_session_send_stage (
-            actor_id, "session_node_stream_write_submit", [] { return "begin"; }, session_rid);
-          auto sent = (*sink) (std::move (packet_name), codec, payload).result ();
-          if (!sent) {
-              //  The error kind alone does not name a site: `unavailable` is returned from several
-              //  places in the STREAM host. Carry the message so a trace identifies which one.
-              actor_gateway.trace_bound_session_send_stage (
-                actor_id, "session_node_stream_write_terminal",
-                [&] {
-                    return "failed error_kind="
-                           + std::to_string (static_cast<int> (sent.error_kind ()))
-                           + " error=" + (sent.error () ? sent.error ()->what () : "none");
-                },
-                session_rid);
+            actor_id, "session_node_stream_write_terminal",
+            [&] () -> std::string {
+                //  The error kind alone does not name a site: `unavailable` is returned from several
+                //  places in the STREAM host. Carry the message so a trace identifies which one.
+                if (terminal)
+                    return "ok";
+                return "failed error_kind="
+                       + std::to_string (static_cast<int> (terminal.error_kind ()))
+                       + " error=" + (terminal.error () ? terminal.error ()->what () : "none");
+            },
+            session_rid);
+          if (!terminal)
               trace_detached_bound_session_send_failure (
                 state, actor_id, "session_node_stream_write_terminal failed",
                 message_flow_reason_t::target_closed, session_rid, nullptr);
-              return result_t<void>::failure (
-                sent.error_kind (),
-                sent.error () ? sent.error ()->what () : "actor bound session dispatch failed");
-          }
-          actor_gateway.trace_bound_session_send_stage (
-            actor_id, "session_node_stream_write_terminal", [] { return "ok"; }, session_rid);
-          return result_t<void>::success ();
+          return terminal;
       }};
 }
 

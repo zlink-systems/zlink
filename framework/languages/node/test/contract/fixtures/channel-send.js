@@ -63,7 +63,7 @@ async function channelSendFixture(dist, backend = false) {
     sourceRid: 'peer',
     sourceRoute: Buffer.from('peer'),
     routeGeneration: 1n,
-    parts: [wire.encodeRouteMeshAdmission(wire.M6aServiceWireCommand.hello, descriptor('peer'))],
+    parts: [wire.encodeRouteMeshAdmission(wire.M6aServiceWireCommand.admit, descriptor('peer'))],
     close() {}
   });
   if (backend) {

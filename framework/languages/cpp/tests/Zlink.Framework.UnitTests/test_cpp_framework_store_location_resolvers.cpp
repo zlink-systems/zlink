@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+#include <zlink/json.hpp>
 #include "../support/runtime_failure_fixture.hpp"
 
 #include "runtime/locations/in_memory_location_store.hpp"
@@ -73,7 +74,6 @@ using zlink::framework::runtime::location_auto_connect_host_service_t;
 using zlink::framework::runtime::location_runtime_t;
 using zlink::framework::runtime::store_location_resolvers_t;
 using zlink::framework::runtime::store_location_runtime_query_t;
-
 
 location_owner_token_t live_owner_token (zlink::framework::location_repository_t &store,
                                          const std::string &owner_id)
@@ -561,7 +561,7 @@ class no_op_stream_session_t final : public zlink::framework::packet_stream_sess
 
     zlink::framework::task_t<void> on_packet (zlink::framework::stream_t &,
                                               const zlink::framework::session_message_context_t &,
-                                              const zlink::message_t &) override
+                                              const zlink::framework::message_t &) override
     {
         return success ();
     }
@@ -594,7 +594,7 @@ class echo_stream_session_t final : public zlink::framework::packet_stream_sessi
 
     zlink::framework::task_t<void> on_packet (zlink::framework::stream_t &stream,
                                               const zlink::framework::session_message_context_t &,
-                                              const zlink::message_t &payload) override
+                                              const zlink::framework::message_t &payload) override
     {
         stream.reply_packet (payload).async ();
         return success ();
@@ -737,7 +737,8 @@ class stream_roundtrip_client_t final : public zlink::framework::hosted_service_
         auto header = _runtime.decode_header (header_bytes);
         if (!header
             || header.value ().kind () != zlink::framework::detail::stream_message_kind_t::response
-            || header.value ().request_seq () != 91) {
+            || header.value ().request_seq () != 91
+            || header.value ().codec () != zlink::framework::stream_codec_t::raw) {
             if (!header) {
                 throw std::runtime_error ("failed to decode stream reply header");
             }
@@ -835,75 +836,52 @@ struct user_spot_delivery_probe_t
     int value{};
 };
 
-void to_json (nlohmann::json &json, const auto_connect_request_t &value)
-{
-    json = nlohmann::json{{"value", value.value}};
 }
 
-void from_json (const nlohmann::json &json, auto_connect_request_t &value)
+template <> struct zlink::json::dto_traits<auto_connect_request_t>
 {
-    value.value = json.at ("value").get<int> ();
-}
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("value", &auto_connect_request_t::value)};
+};
 
-void to_json (nlohmann::json &json, const auto_connect_reply_t &value)
+template <> struct zlink::json::dto_traits<auto_connect_reply_t>
 {
-    json = nlohmann::json{{"value", value.value}};
-}
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("value", &auto_connect_reply_t::value)};
+};
 
-void from_json (const nlohmann::json &json, auto_connect_reply_t &value)
+template <> struct zlink::json::dto_traits<auto_connect_event_t>
 {
-    value.value = json.at ("value").get<int> ();
-}
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("value", &auto_connect_event_t::value)};
+};
 
-void to_json (nlohmann::json &json, const auto_connect_event_t &value)
+template <> struct zlink::json::dto_traits<blocked_auto_connect_event_t>
 {
-    json = nlohmann::json{{"value", value.value}};
-}
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("value", &blocked_auto_connect_event_t::value)};
+};
 
-void from_json (const nlohmann::json &json, auto_connect_event_t &value)
+template <> struct zlink::json::dto_traits<lease_target_request_t>
 {
-    value.value = json.at ("value").get<int> ();
-}
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("value", &lease_target_request_t::value)};
+};
 
-void to_json (nlohmann::json &json, const blocked_auto_connect_event_t &value)
+template <> struct zlink::json::dto_traits<lease_target_reply_t>
 {
-    json = nlohmann::json{{"value", value.value}};
-}
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("nodeRid", &lease_target_reply_t::node_rid)};
+};
 
-void from_json (const nlohmann::json &json, blocked_auto_connect_event_t &value)
+template <> struct zlink::json::dto_traits<user_spot_delivery_probe_t>
 {
-    value.value = json.at ("value").get<int> ();
-}
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("value", &user_spot_delivery_probe_t::value)};
+};
 
-void to_json (nlohmann::json &json, const lease_target_request_t &value)
+namespace
 {
-    json = nlohmann::json{{"value", value.value}};
-}
-
-void from_json (const nlohmann::json &json, lease_target_request_t &value)
-{
-    value.value = json.at ("value").get<int> ();
-}
-
-void to_json (nlohmann::json &json, const lease_target_reply_t &value)
-{
-    json = nlohmann::json{{"nodeRid", value.node_rid}};
-}
-
-void from_json (const nlohmann::json &json, lease_target_reply_t &value)
-{
-    value.node_rid = json.at ("nodeRid").get<std::string> ();
-}
-
-void to_json (nlohmann::json &json, const user_spot_delivery_probe_t &value)
-{
-    json = nlohmann::json{{"value", value.value}};
-}
-
-void from_json (const nlohmann::json &json, user_spot_delivery_probe_t &value)
-{
-    value.value = json.at ("value").get<int> ();
-}
 
 class auto_connect_request_handler_t
 {
@@ -4295,7 +4273,6 @@ TEST (ZLinkFrameworkStoreLocationResolvers, AppStreamHostStartsAndStopsTcpListen
     ASSERT_NE (nullptr, client_ptr);
     EXPECT_TRUE (client_ptr->observed) << client_ptr->last_error_message ();
 }
-
 
 /* The descriptor owner order checks above rely on this observation: only the
  * observed flow's reads count, and a wrong order or a read from another flow

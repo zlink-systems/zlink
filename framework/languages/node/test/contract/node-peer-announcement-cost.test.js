@@ -2,12 +2,13 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const { RawServiceMeshRuntime } = require('../../packages/framework/dist/runtime/foundation/raw-service-mesh-runtime');
+const { ServiceTopologyRegistry } = require('../../packages/framework/dist/runtime/foundation/service-topology-registry');
 const { M6aServiceWireCommand } = require('../../packages/framework/dist/runtime/foundation/service-wire-m6a-codec');
 
 function admittedFixture() {
   const runtime = Object.create(RawServiceMeshRuntime.prototype);
   Object.assign(runtime, { closed: false, selectedRoutes: new Map([['peer', 1n]]), controlSends: new Map(),
-    topology: { routeAdmission: () => ({ connectionId: 'route:1', remoteAdmitReceived: true }) } });
+    topology: { hasRemoteAdmit: ServiceTopologyRegistry.prototype.hasRemoteAdmit, routeAdmission: () => ({ connectionId: 'route:1', remoteAdmitReceived: true }) } });
   return runtime;
 }
 

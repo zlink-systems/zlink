@@ -1,0 +1,135 @@
+#pragma once
+#include <optional>
+#include <type_traits>
+#pragma once
+#include "domain.hpp"
+#include "data.hpp"
+#include <zlink/framework.hpp>
+#include <iostream>
+namespace MyGame
+{
+namespace fx = zlink::framework;
+class Player final : public fx::actor_t
+{
+    fx::actor_context_t context_;
+    PlayerData &data_;
+
+  public:
+    template <class Message> fx::task_t<void> deliver (const Message &message, bool visible = true)
+    {
+        std::optional<std::string> source;
+        if constexpr (std::is_same_v<Message, PlayerView>)
+            source = Names::zone_id (message.channel);
+        else if constexpr (std::is_same_v<Message, ChannelView>)
+            source = Names::zone_id (message.channelId);
+        if (source && (context_.spot_id () != *source || !visible))
+            return fx::task_t<void> (fx::result_t<void>::success ());
+        return context_.bound_session ().send (message).async ();
+    }
+    GoldBalance gold;
+    Player (fx::actor_context_t context, PlayerData &data, std::int64_t initial) :
+        context_ (std::move (context)), data_ (data), gold (initial)
+    {
+    }
+    fx::actor_context_t &context () noexcept override { return context_; }
+    const fx::actor_context_t &context () const noexcept override { return context_; }
+    // The world database write runs on an I/O worker of the Spot turn that handles the
+    // request; the turn stays held, and gold changes only after the write is stored.
+    fx::task_t<GoldEarnDecision> earn (fx::spot_context_t &spot)
+    {
+        const auto decision = gold.evaluate_earn ();
+        if (!decision.accepted ())
+            co_return decision;
+        const auto next = *decision.newValue;
+        co_await spot
+          .run_io_worker ([&data = data_, id = std::string (context_.actor_id ().value ()), next] {
+              return data.save (id, next);
+          })
+          .async ();
+        gold.commit_earn (decision);
+        co_return decision;
+    }
+    fx::task_t<void> on_join_completed (const fx::actor_join_completion_t &completion) override
+    {
+        if (const auto *failed = std::get_if<fx::actor_join_failed_t> (&completion))
+            throw fx::framework_exception_t (
+              failed->error_kind,
+              "Zone join failed: " + std::to_string (static_cast<int> (failed->error_kind)));
+        if (std::holds_alternative<fx::actor_join_rejected_t> (completion))
+            throw fx::framework_exception_t (fx::framework_error_kind_t::rejected,
+                                             "Zone join rejected");
+        co_return;
+    }
+};
+class PlayerFactory final : public fx::actor_factory_t<Player>
+{
+    PlayerData data_;
+    const NodeConfig &config_;
+
+  public:
+    explicit PlayerFactory (const NodeConfig &config) : data_ (config), config_ (config) {}
+    fx::task_t<std::shared_ptr<Player>> create (fx::actor_context_t context,
+                                                std::stop_token) override
+    {
+        const auto id = std::string (context.actor_id ().value ());
+        const auto gold = co_await data_.load (id);
+        auto player = std::make_shared<Player> (std::move (context), data_, gold);
+        std::cout << Control::player_created
+                  << nlohmann::json{{"actorId", id}, {"nodeId", config_.Id}}.dump () << std::endl;
+        co_return player;
+    }
+};
+class PlayerRelocation final : public fx::actor_relocation_adapter_t<Player>
+{
+  public:
+    fx::task_t<std::vector<std::byte>> capture (Player &actor, std::stop_token) override
+    {
+        const auto payload = zlink::message_t::from_json (actor.gold.capture ());
+        co_return std::vector<std::byte> (payload.bytes ().begin (), payload.bytes ().end ());
+    }
+    fx::task_t<void>
+    restore (Player &actor, std::vector<std::byte> payload, std::stop_token) override
+    {
+        actor.gold.restore (zlink::message_t::from (std::span<const std::byte> (payload))
+                              .parse_json<GoldSnapshot> ());
+        co_return;
+    }
+};
+class WorldEntry final : public fx::entry_spot_t<Player>
+{
+    fx::entry_spot_context_t context_;
+
+  public:
+    explicit WorldEntry (fx::entry_spot_context_t context) : context_ (std::move (context)) {}
+    fx::entry_spot_context_t &context () noexcept override { return context_; }
+    const fx::entry_spot_context_t &context () const noexcept override { return context_; }
+    void configure () override
+    {
+        context_.handlers ().add_actor_send<&WorldEntry::notification_PlayerView> ();
+        context_.handlers ().add_actor_send<&WorldEntry::notification_ChannelView> ();
+        context_.handlers ().add_actor_send<&WorldEntry::enter> ();
+    }
+    fx::task_t<void>
+    enter (Player &actor, fx::message_context_t &, const EnterWorldRequest &request)
+    {
+        if (request.playerId != actor.context ().actor_id ().value ())
+            throw std::invalid_argument ("Player identity mismatch");
+        actor.context ().join_spot (Names::zone_id (Names::first_channel), request).defer ();
+        co_return;
+    }
+    fx::task_t<void> on_actor_joined (Player &) override { co_return; }
+    fx::task_t<void> on_leave_actor (Player &) override { co_return; }
+
+    fx::task_t<void>
+    notification_PlayerView (Player &actor, fx::message_context_t &, const PlayerView &message)
+    {
+        return actor.deliver (message);
+    }
+
+    fx::task_t<void>
+    notification_ChannelView (Player &actor, fx::message_context_t &, const ChannelView &message)
+    {
+        return actor.deliver (message);
+    }
+};
+}

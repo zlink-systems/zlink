@@ -53,6 +53,8 @@
         <Compile Include="Runtime/BoundSessionDisconnectTests.cs"/>
         <Compile Include="Runtime/BoundSessionReplacementCloseTests.cs"/>
         <Compile Include="AssemblyInfo.cs"/>
+        <Compile Include="Support/PerCallAllocation.cs"/>
+        <Compile Include="Support/PerCallAllocationTests.cs"/>
         <Compile Include="Runtime/InstanceReadyAdmissionTests.cs"/>
         <Compile Include="Runtime/SessionFailureClassificationTests.cs"/>
         <Compile Include="Runtime/SpotShutdownExecutionTests.cs"/>
@@ -107,6 +109,7 @@
         <Compile Include="Runtime/ActorHandoffTests.cs"/>
         <Compile Include="Runtime/ActorHandoffDrainTests.cs"/>
         <Compile Include="Runtime/JoinCallbackSendTests.cs"/>
+        <Compile Include="Runtime/JoinCommitGenerationTests.cs"/>
         <Compile Include="Runtime/ActorJoinPrewarmRegistryTests.cs"/>
         <Compile Include="Runtime/ActorHandlerActivationTests.cs"/>
         <Compile Include="Runtime/ActorClientTests.cs"/>
@@ -114,6 +117,7 @@
         <Compile Include="Runtime/ProtobufNativePayloadTests.cs"/>
         <Compile Include="Runtime/MeshMailboxReadinessTests.cs"/>
         <Compile Include="Runtime/MeshPermitHandoffTests.cs"/>
+        <Compile Include="Runtime/IsolatedTestProcess.cs"/>
         <Compile Include="Runtime/MeshReceiveWakeTests.cs"/>
         <Compile Include="Runtime/ReceiveClaimCostTests.cs"/>
         <Compile Include="Runtime/MeshReplyPayloadOwnershipTests.cs"/>
@@ -224,6 +228,7 @@
         <Compile Include="Runtime/MeshNodeShutdownSealTests.cs"/>
         <Compile Include="Runtime/MeshNodeLifecycleStateTests.cs"/>
         <Compile Include="Runtime/MeshNodeHelloSubmissionTests.cs"/>
+        <Compile Include="Runtime/RawMeshPeerAdmission.cs"/>
         <Compile Include="Runtime/PublicContractSnapshotTests.cs"/>
         <Compile Include="Runtime/SerialExecutionQueueBenchmarkTests.cs"/>
         <Compile Include="Runtime/SerialExecutorLayerContractTests.cs"/>
