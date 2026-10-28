@@ -5816,8 +5816,14 @@ test('live Instance route fences reject an older reconcile snapshot', async () =
   runtime.registerInstanceIntent('TenantWorker', routeV2, routeV1);
   runtime.rememberSpotRoute(directV2, directV1);
 
-  assert.equal(runtime[inspectRuntime]().instanceRoute(routeV1.targetSpotId)?.storeVersion, 'store-v2');
-  assert.equal(runtime[inspectRuntime]().directSpotRoute(routeV1.targetSpotId)?.storeVersion, 'store-v2');
+  assert.equal(
+    runtime[inspectRuntime]().instanceRoute(routeV1.targetSpotId)?.storeVersion,
+    'store-v2'
+  );
+  assert.equal(
+    runtime[inspectRuntime]().directSpotRoute(routeV1.targetSpotId)?.storeVersion,
+    'store-v2'
+  );
   runtime.close();
 });
 

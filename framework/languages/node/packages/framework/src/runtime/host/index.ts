@@ -264,7 +264,8 @@ export class ZLinkFrameworkRuntimeHost
       ownerAdmissionOpen: this.admission.ownerAdmissionOpen(),
       channelRuntimeStarted: this.channelRuntime !== undefined,
       fanoutStoreIsLocationStore:
-        this.locationOwner.currentStores?.fanoutStore === this.locationOwner.currentStores?.locationStore,
+        this.locationOwner.currentStores?.fanoutStore ===
+        this.locationOwner.currentStores?.locationStore,
       fanoutStoreMethods: Object.freeze({
         update: typeof this.locationOwner.currentStores?.fanoutStore?.updateFanoutPublisher,
         remove: typeof this.locationOwner.currentStores?.fanoutStore?.removeFanoutPublisher,
