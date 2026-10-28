@@ -11,12 +11,24 @@ int main ()
     {
         std::string_view name;
         std::string actual;
-        nlohmann::json expected;
+        nlohmann::json expected = nlohmann::json::object ();
     };
     zlink::framework::serializer_registry_t serializers;
     const std::array samples{
       Sample{"QueueRequest", serializers.get<QueueRequest> ().serialize (QueueRequest{"p1", "duel"}).to_string (),
              nlohmann::json::parse (R"({"playerId":"p1","mode":"duel"})")},
+      Sample{"MoveRequest", serializers.get<MoveRequest> ().serialize (MoveRequest{1, 0, 7}).to_string (),
+             nlohmann::json::parse (R"({"dx":1,"dy":0,"sequence":"7"})")},
+      Sample{"ShootRequest", serializers.get<ShootRequest> ().serialize (ShootRequest{"p2", 9'007'199'254'740'993LL}).to_string (),
+             nlohmann::json::parse (R"({"targetId":"p2","sequence":"9007199254740993"})")},
+      Sample{"MoveResult", serializers.get<MoveResult> ().serialize (MoveResult{41, 10, 7}).to_string (),
+             nlohmann::json::parse (R"({"x":41,"y":10,"sequence":"7"})")},
+      Sample{"ShotResult", serializers.get<ShotResult> ().serialize (ShotResult{"hit", "p2", 9'007'199'254'740'993LL}).to_string (),
+             nlohmann::json::parse (R"({"outcome":"hit","targetId":"p2","sequence":"9007199254740993"})")},
+      Sample{"RoomView", serializers.get<RoomView> ().serialize (
+               RoomView{"room-x", "matchA", "Playing", std::nullopt,
+                        {PlayerView{"p1", 41, 10, 75, 9'007'199'254'740'993LL}}}).to_string (),
+             nlohmann::json::parse (R"({"roomId":"room-x","nodeId":"matchA","phase":"Playing","winner":null,"players":[{"playerId":"p1","x":41,"y":10,"hp":75,"lastSequence":"9007199254740993"}]})")},
       Sample{"ActionRejected", serializers.get<ActionRejected> ().serialize (ActionRejected{"move-budget", 120}).to_string (),
              nlohmann::json::parse (R"({"reason":"move-budget","retryAfterMs":120})")},
       Sample{"MatchEnded", serializers.get<MatchEnded> ().serialize (MatchEnded{"p1"}).to_string (),
@@ -27,6 +39,5 @@ int main ()
             return 1;
         }
     }
-    // #1694: Exclude MoveRequest, ShootRequest, MoveResult, ShotResult and RoomView because they contain int64 fields.
-    std::cout << "Wire golden: 3/3 common samples passed; int64 samples excluded (#1694)" << std::endl;
+    std::cout << "Wire golden: 8/8 passed" << std::endl;
 }

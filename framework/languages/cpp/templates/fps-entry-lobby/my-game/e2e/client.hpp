@@ -1,5 +1,6 @@
 #pragma once
 #include "world.hpp"
+#include "test_json.hpp"
 #include <zlink/stream_connector.hpp>
 #include <type_traits>
 #include <variant>
@@ -37,7 +38,8 @@ class Client
             {
                 std::lock_guard lock (mutex_);
                 received_.push_back (message.payload);
-                log_ << nlohmann::json{{"packet", T::packet_name}, {"payload", message.payload}}
+                const auto payload = test_json_fps_entry_domain::object (message.payload);
+                log_ << nlohmann::json{{"packet", T::packet_name}, {"payload", payload}}
                           .dump ()
                      << std::endl;
                 if (!log_)

@@ -1,6 +1,8 @@
 package systems.zlink.framework.execution;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import jdk.jfr.Recording;
 import jdk.jfr.consumer.RecordingFile;
@@ -15,6 +17,12 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
 public final class ZLinkSerialTurnAllocationTest {
+    private static final int UNFILTERED_DISPATCHES = 1000;
+    // HEAD440cf6a4fa: 40991 objects / 1584176 bytes over 1000 dispatches.
+    // Round each per-dispatch mean to the nearest integer; .5 rounds up (Math.round).
+    private static final long EXPECTED_OBJECTS_PER_DISPATCH = 41;
+    private static final long EXPECTED_BYTES_PER_DISPATCH = 1584;
+
     @Test
     void synchronousTurnsAllocateOnlyTheirGateAndCompletionObserver() throws Exception {
         var classpath = new LinkedHashSet<String>();
@@ -27,6 +35,38 @@ public final class ZLinkSerialTurnAllocationTest {
         }
         classpath.addAll(
                 List.of(System.getProperty("java.class.path").split(java.io.File.pathSeparator)));
+        String currentClasspath = String.join(java.io.File.pathSeparator, classpath);
+        long[] actual = allocationTotals(runProbe(currentClasspath, false));
+        assertUnfilteredAllocationBudget(actual);
+        long[] mutation = allocationTotals(runProbe(currentClasspath, true));
+        assertEquals(
+                actual[0] + UNFILTERED_DISPATCHES,
+                mutation[0],
+                "one added object per dispatch must be detected");
+        assertTrue(mutation[1] > actual[1], "the added objects must increase allocated bytes");
+        assertThrows(
+                AssertionError.class,
+                () -> assertUnfilteredAllocationBudget(mutation),
+                "the same allocation budget must reject one added object per dispatch");
+        System.out.println(
+                "one-object negative control: objects=+"
+                        + (mutation[0] - actual[0])
+                        + " bytes=+"
+                        + (mutation[1] - actual[1]));
+    }
+
+    private static void assertUnfilteredAllocationBudget(long[] totals) {
+        assertEquals(
+                EXPECTED_OBJECTS_PER_DISPATCH,
+                Math.round((double) totals[0] / UNFILTERED_DISPATCHES),
+                "rounded objects per unfiltered dispatch");
+        assertEquals(
+                EXPECTED_BYTES_PER_DISPATCH,
+                Math.round((double) totals[1] / UNFILTERED_DISPATCHES),
+                "rounded bytes per unfiltered dispatch");
+    }
+
+    private String runProbe(String classpath, boolean addObject) throws Exception {
         var output = Files.createTempFile("zlink-turn-allocation", ".log");
         try {
             var process =
@@ -38,8 +78,9 @@ public final class ZLinkSerialTurnAllocationTest {
                                     "-XX:-UseTLAB",
                                     "-XX:FlightRecorderOptions=stackdepth=128",
                                     "-cp",
-                                    String.join(java.io.File.pathSeparator, classpath),
-                                    getClass().getName())
+                                    classpath,
+                                    getClass().getName(),
+                                    Boolean.toString(addObject))
                             .redirectErrorStream(true)
                             .redirectOutput(output.toFile())
                             .start();
@@ -47,10 +88,22 @@ public final class ZLinkSerialTurnAllocationTest {
             String log = Files.readString(output);
             System.out.print(log);
             assertEquals(0, exit, log);
+            return log;
         } finally {
             Files.deleteIfExists(output);
         }
     }
+
+    private static long[] allocationTotals(String log) {
+        var totals =
+                java.util.regex.Pattern.compile(
+                                "channel unfiltered allocation totals: objects=(\\d+) bytes=(\\d+)")
+                        .matcher(log);
+        assertTrue(totals.find(), "allocation totals must be present");
+        return new long[] {Long.parseLong(totals.group(1)), Long.parseLong(totals.group(2))};
+    }
+
+    private static volatile Object extraAllocation;
 
     private static void observeCompleted(CompletableFuture<Void> completed) {
         completed.whenComplete((value, failure) -> {});
@@ -124,7 +177,11 @@ public final class ZLinkSerialTurnAllocationTest {
             var unfilteredWork =
                     new java.util.concurrent.FutureTask<Void>(
                             () -> {
-                                for (int i = 0; i < 1000; i++) unfiltered.run();
+                                for (int i = 0; i < UNFILTERED_DISPATCHES; i++) {
+                                    unfiltered.run();
+                                    if (args.length != 0 && Boolean.parseBoolean(args[0]))
+                                        extraAllocation = new Object();
+                                }
                                 return null;
                             });
             var filteredWork =
@@ -169,6 +226,10 @@ public final class ZLinkSerialTurnAllocationTest {
             long actions = 0;
             long iterators = 0;
             long turnContextEntries = 0;
+            long unfilteredObjects = 0;
+            long unfilteredTotalBytes = 0;
+            long unfilteredOwnerContainers = 0;
+            long unfilteredActivations = 0;
             long unfilteredActions = 0;
             long unfilteredBytes = 0;
             long filteredActions = 0;
@@ -182,6 +243,20 @@ public final class ZLinkSerialTurnAllocationTest {
                     if (!event.getEventType().getName().equals("jdk.ObjectAllocationOutsideTLAB"))
                         continue;
                     String allocatedClass = event.getClass("objectClass").getName();
+                    if (event.getThread("eventThread").getJavaThreadId()
+                            == unfilteredThread.threadId()) {
+                        unfilteredObjects++;
+                        unfilteredTotalBytes += event.getLong("allocationSize");
+                        if (allocatedClass.equals(
+                                        "systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerInstanceOwner")
+                                || allocatedClass.equals("java.util.LinkedHashMap")
+                                || allocatedClass.startsWith(
+                                        "systems.zlink.framework.runtime.internal.execution.ZLinkStateLane"))
+                            unfilteredOwnerContainers++;
+                        if (allocatedClass.equals(
+                                "systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerInstanceOwner$SingleActivation"))
+                            unfilteredActivations++;
+                    }
                     if (allocatedClass.equals("[Ljava.lang.Object;")) {
                         var stack = event.getStackTrace().getFrames();
                         var owner =
@@ -351,12 +426,34 @@ public final class ZLinkSerialTurnAllocationTest {
             long plainArguments = unfilteredArguments;
             long permittedArguments = filteredArguments;
             long skippedArguments = rejectedArguments;
+            System.out.println(
+                    "channel unfiltered owner/map/lane allocations: "
+                            + unfilteredOwnerContainers
+                            + "/1000; single activations="
+                            + unfilteredActivations);
+            System.out.println(
+                    "channel unfiltered allocation totals: objects="
+                            + unfilteredObjects
+                            + " bytes="
+                            + unfilteredTotalBytes);
+            long ownerContainers = unfilteredOwnerContainers;
+            long singleActivations = unfilteredActivations;
             long channelActions = unfilteredActions;
             long contextEntries = turnContextEntries;
             long finishIterators = iterators;
             long submittedActions = actions;
             long turnFutures = futures - baseline;
             org.junit.jupiter.api.Assertions.assertAll(
+                    () ->
+                            assertEquals(
+                                    0,
+                                    ownerContainers,
+                                    "unfiltered dispatch needs no owner/map/lane"),
+                    () ->
+                            assertEquals(
+                                    0,
+                                    singleActivations,
+                                    "successful unfiltered dispatch needs no lease or release record"),
                     () ->
                             assertEquals(
                                     1000,
@@ -374,10 +471,10 @@ public final class ZLinkSerialTurnAllocationTest {
                                     "a skipped handler must not prepare invocation arguments"),
                     () ->
                             assertEquals(
-                                    3000,
+                                    2000,
                                     channelActions,
-                                    "unfiltered dispatch only needs its scope operation, reply"
-                                            + " mapping and scope cleanup actions"),
+                                    "unfiltered dispatch only needs reply mapping and terminal scope"
+                                            + " cleanup actions"),
                     () ->
                             assertEquals(
                                     1000,

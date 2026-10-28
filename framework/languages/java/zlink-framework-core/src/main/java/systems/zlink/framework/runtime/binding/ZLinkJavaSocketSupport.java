@@ -35,7 +35,7 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BiConsumer;
 import java.util.function.BooleanSupplier;
-import java.util.function.Supplier;
+import java.util.function.Function;
 
 final class ZLinkJavaSocketSupport {
     private ZLinkJavaSocketSupport() {}
@@ -94,8 +94,8 @@ final class ZLinkJavaSocketSupport {
         if (result == SubmitResult.BACKPRESSURED) {
             return operations.submitSend(submission::admitted);
         }
-        // The admission supplier is consumed only for BACKPRESSURED, handled above.
-        return admission(result, null);
+        // The admission accessor is consumed only for BACKPRESSURED, handled above.
+        return admission(result, null, null);
     }
 
     static CompletionStage<List<Message>> reply(
@@ -138,12 +138,13 @@ final class ZLinkJavaSocketSupport {
             // Admitted at submit: nothing waits for admission and only the reply can be cancelled.
             if (requestAdmission != null) requestAdmission.complete(null);
         } else {
-            admitted = admission(submitResult, submission::admitted);
-            admitted.whenComplete(
-                    (ignored, failure) -> {
-                        if (failure == null && requestAdmission != null)
-                            requestAdmission.complete(null);
-                    });
+            admitted = admission(submitResult, submission, RequestSubmission::admitted);
+            if (requestAdmission != null) {
+                admitted.whenComplete(
+                        (ignored, failure) -> {
+                            if (failure == null) requestAdmission.complete(null);
+                        });
+            }
         }
         // Binding completes reply with the same cause when admission fails. Reply is the
         // single terminal source, including the payload cleanup performed by its observer.
@@ -182,10 +183,10 @@ final class ZLinkJavaSocketSupport {
         }
     }
 
-    private static CompletionStage<Void> admission(
-            SubmitResult result, Supplier<CompletionStage<Void>> admitted) {
+    private static <T> CompletionStage<Void> admission(
+            SubmitResult result, T owner, Function<T, CompletionStage<Void>> admitted) {
         if (result == SubmitResult.OK) return ZLinkOneWayCalls.immediateAdmission();
-        if (result == SubmitResult.BACKPRESSURED) return admitted.get();
+        if (result == SubmitResult.BACKPRESSURED) return admitted.apply(owner);
         return ZLinkOneWayCalls.adaptOneWay(
                 CompletableFuture.failedFuture(
                         new systems.zlink.contracts.errors.ZlinkSubmitException(result)),

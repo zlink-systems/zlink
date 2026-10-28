@@ -77,7 +77,8 @@ internal sealed class ZLinkActorHandoffState(
                 var terminal = Task.WhenAll(terminals);
                 ObserveTerminal(terminal);
                 _canonicalMaintenanceDrain = new DurablePrefix(terminal, admit);
-                _targetPhase = ZLinkActorTargetHandoffPhase.AdmissionOpenDraining;
+                // Queue ownership is established, but public Join completion
+                // still owns admission. Complete releases the reserved prefix.
                 return terminal;
             })
         );
@@ -300,13 +301,16 @@ internal sealed class ZLinkActorHandoffState(
     }
 
     private bool IsTargetHandoffActiveLocked() =>
+        IsTargetAdmissionClosedLocked()
+        || _targetPhase == ZLinkActorTargetHandoffPhase.AdmissionOpenDraining;
+
+    private bool IsTargetAdmissionClosedLocked() =>
         _targetPhase
             is ZLinkActorTargetHandoffPhase.Importing
                 or ZLinkActorTargetHandoffPhase.AuthorityCommitted
                 or ZLinkActorTargetHandoffPhase.NotifyingJoined
                 or ZLinkActorTargetHandoffPhase.Prepared
-                or ZLinkActorTargetHandoffPhase.Replaying
-                or ZLinkActorTargetHandoffPhase.AdmissionOpenDraining;
+                or ZLinkActorTargetHandoffPhase.Replaying;
 
     public void EndDeferredJoinCapture(Func<ZLinkActorHandoffFrame, Task, Task> admit)
     {
@@ -377,13 +381,9 @@ internal sealed class ZLinkActorHandoffState(
             is ZLinkActorSourceHandoffPhase.Capturing
                 or ZLinkActorSourceHandoffPhase.AbortRestoring
                 or ZLinkActorSourceHandoffPhase.MessageFollowCommitted
+        || IsTargetAdmissionClosedLocked()
         || _targetPhase
-            is ZLinkActorTargetHandoffPhase.Importing
-                or ZLinkActorTargetHandoffPhase.AuthorityCommitted
-                or ZLinkActorTargetHandoffPhase.NotifyingJoined
-                or ZLinkActorTargetHandoffPhase.Prepared
-                or ZLinkActorTargetHandoffPhase.Replaying
-                or ZLinkActorTargetHandoffPhase.Failed
+            is ZLinkActorTargetHandoffPhase.Failed
                 or ZLinkActorTargetHandoffPhase.Quarantined;
 
     public void CompleteSourceMigration()
@@ -539,12 +539,7 @@ internal sealed class ZLinkActorHandoffState(
             _deferredJoinCapture || _sourcePhase == ZLinkActorSourceHandoffPhase.Capturing;
         var capturesSourceHold = capturesSourceIngress && _sourceCaptureSealed;
         var capturesTargetIngress =
-            _targetPhase
-                is ZLinkActorTargetHandoffPhase.Importing
-                    or ZLinkActorTargetHandoffPhase.AuthorityCommitted
-                    or ZLinkActorTargetHandoffPhase.NotifyingJoined
-                    or ZLinkActorTargetHandoffPhase.Prepared
-                    or ZLinkActorTargetHandoffPhase.Replaying
+            IsTargetAdmissionClosedLocked()
             || _canonicalMaintenanceDrain?.Admit is not null
                 && _frames.LastOrDefault()?.Withdraw is not null;
         if (!capturesSourceIngress && !capturesTargetIngress)
@@ -1284,7 +1279,10 @@ internal sealed class ZLinkActorHandoffState(
             return true;
         }
         if (
-            (_targetPhase != ZLinkActorTargetHandoffPhase.Replaying || _frames.Count != 0)
+            (
+                _targetPhase != ZLinkActorTargetHandoffPhase.Replaying
+                || (_frames.Count != 0 && _canonicalMaintenanceDrain?.Admit is null)
+            )
             && _targetPhase != ZLinkActorTargetHandoffPhase.AdmissionOpenDraining
         )
             return false;

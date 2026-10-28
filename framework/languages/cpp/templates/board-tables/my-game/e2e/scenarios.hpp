@@ -6,6 +6,8 @@
 #include <numeric>
 #include <set>
 
+#include "test_json.hpp"
+
 namespace MyGame::E2E
 {
 struct Bets
@@ -102,11 +104,11 @@ inline int domain_checks ()
         require (accepted.rejection.empty () && !accepted.result && state.pot == maximum
                    && state.seats[0].chips == 0,
                  "Maximum in-range bet was not accepted");
-        const nlohmann::json before = state;
+        const nlohmann::json before = test_json_board_scenarios::object (state);
         const auto outcome = state.bet ("p2", BetRequest{1, maximum + 1});
         require (outcome.rejection == Rules::integer_out_of_range,
                  "Over-limit bet amount did not return integer-out-of-range");
-        require (nlohmann::json (state) == before,
+        require (test_json_board_scenarios::object (state) == before,
                  "Over-limit bet rejection changed state");
     }
     ++passed;
@@ -121,11 +123,11 @@ inline int domain_checks ()
         state.inHand = true;
         state.turnSeat = 0;
         state.pot = maximum;
-        const nlohmann::json before = state;
+        const nlohmann::json before = test_json_board_scenarios::object (state);
         const auto outcome = state.bet ("p1", BetRequest{1, 1});
         require (outcome.rejection == Rules::integer_out_of_range,
                  "Pot overflow did not return integer-out-of-range");
-        require (nlohmann::json (state) == before, "Pot overflow rejection changed state");
+        require (test_json_board_scenarios::object (state) == before, "Pot overflow rejection changed state");
     }
     ++passed;
 
@@ -142,11 +144,11 @@ inline int domain_checks ()
         const auto first = state.bet ("p1", BetRequest{1, 0});
         require (first.rejection.empty () && !first.result,
                  "First payout-boundary bet ended the hand");
-        const nlohmann::json before = state;
+        const nlohmann::json before = test_json_board_scenarios::object (state);
         const auto outcome = state.bet ("p2", BetRequest{1, 1});
         require (outcome.rejection == Rules::integer_out_of_range,
                  "Payout overflow did not return integer-out-of-range");
-        require (nlohmann::json (state) == before, "Payout overflow rejection changed state");
+        require (test_json_board_scenarios::object (state) == before, "Payout overflow rejection changed state");
     }
     ++passed;
 
@@ -155,10 +157,10 @@ inline int domain_checks ()
         require (state.admit ("p1") && state.admit ("p2"),
                  "Could not prepare hand-number boundary");
         state.handNumber = maximum;
-        const nlohmann::json before = state;
+        const nlohmann::json before = test_json_board_scenarios::object (state);
         require (state.start ("p1") == Rules::integer_out_of_range,
                  "Maximum hand number did not reject the next hand");
-        require (nlohmann::json (state) == before,
+        require (test_json_board_scenarios::object (state) == before,
                  "Hand number overflow rejection changed state");
     }
     ++passed;

@@ -32,6 +32,12 @@ class raw_dealer_port_t
              std::chrono::milliseconds timeout,
              runtime::mesh::service_liveness_registry_t::connection_t admission = {},
              std::shared_ptr<task_completion_source_t<void>> admitted = {});
+    task_t<zlink::submit_result_t> send_result (std::vector<zlink::message_t> messages);
+    task_t<raw_request_completion_t>
+    request (std::vector<zlink::message_t> messages,
+             std::chrono::milliseconds timeout,
+             runtime::mesh::service_liveness_registry_t::connection_t admission = {},
+             std::shared_ptr<task_completion_source_t<void>> admitted = {});
     std::optional<raw_message_t> try_receive ();
     void close ();
 

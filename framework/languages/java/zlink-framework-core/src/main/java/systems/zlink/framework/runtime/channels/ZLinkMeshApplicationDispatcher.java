@@ -364,7 +364,8 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
                         try (ZLinkApplicationJobContext.Scope ignored =
                                 ZLinkApplicationJobContext.enter(permit)) {
                             boolean accepted =
-                                    namespace.sendQueue.tryEnqueue(
+                                    ZLinkHandlerDispatch.tryEnqueue(
+                                            namespace.queue,
                                             () -> {
                                                 CompletionStage<Void> invocation;
                                                 try {
@@ -393,19 +394,16 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
                                                             CompletableFuture.failedFuture(
                                                                     handlerFailure);
                                                 }
-                                                return invocation.whenComplete(
-                                                        (unused, error) -> {
-                                                            try {
-                                                                finishSend(
-                                                                        null,
-                                                                        packetName,
-                                                                        sourceNodeRid,
-                                                                        error);
-                                                            } finally {
-                                                                closeLocalSubmission(
-                                                                        ownedPayload, claim);
-                                                            }
-                                                        });
+                                                return invocation;
+                                            },
+                                            claim,
+                                            error -> {
+                                                try {
+                                                    finishSend(
+                                                            null, packetName, sourceNodeRid, error);
+                                                } finally {
+                                                    closeLocalSubmission(ownedPayload, null);
+                                                }
                                             });
                             if (!accepted) {
                                 traceLocalNodeSend(
@@ -470,64 +468,61 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
                     () -> traceFlow(ZLinkMessageFlowOutcome.ADMITTED, record, packetName));
         }
         try {
-            CompletionStage<Void> queued =
-                    namespace.sendQueue.enqueue(
-                            () -> {
-                                ByteBuffer payload =
-                                        ZLinkFrameworkMultipartView.buffer(record.parts(), 1);
-                                CompletionStage<Void> invocation =
-                                        route != null
-                                                ? invoker.executeHandler(
-                                                        () ->
-                                                                invoker.invokeRouteSendHandler(
-                                                                        record.receive()
-                                                                                .channelName(),
-                                                                        route,
-                                                                        record.receive()
-                                                                                .sourceNodeRid(),
-                                                                        payload,
-                                                                        metadata,
-                                                                        contentType,
-                                                                        flow.enabled(
+            ZLinkHandlerDispatch.enqueue(
+                    namespace.queue,
+                    () -> {
+                        ByteBuffer payload = ZLinkFrameworkMultipartView.buffer(record.parts(), 1);
+                        CompletionStage<Void> invocation =
+                                route != null
+                                        ? invoker.executeHandler(
+                                                () ->
+                                                        invoker.invokeRouteSendHandler(
+                                                                record.receive().channelName(),
+                                                                route,
+                                                                record.receive().sourceNodeRid(),
+                                                                payload,
+                                                                metadata,
+                                                                contentType,
+                                                                flow.enabled(
+                                                                                ZLinkMessageFlowOutcome
+                                                                                        .DISPATCHED)
+                                                                        ? () ->
+                                                                                traceFlow(
                                                                                         ZLinkMessageFlowOutcome
-                                                                                                .DISPATCHED)
-                                                                                ? () ->
-                                                                                        traceFlow(
-                                                                                                ZLinkMessageFlowOutcome
-                                                                                                        .DISPATCHED,
-                                                                                                record,
-                                                                                                packetName)
-                                                                                : null))
-                                                : invoker.executeHandler(
-                                                        () ->
-                                                                invoker.invokeSendHandler(
-                                                                        record.receive()
-                                                                                .channelName(),
-                                                                        channel,
-                                                                        payload,
-                                                                        metadata,
-                                                                        contentType,
-                                                                        flow.enabled(
+                                                                                                .DISPATCHED,
+                                                                                        record,
+                                                                                        packetName)
+                                                                        : null))
+                                        : invoker.executeHandler(
+                                                () ->
+                                                        invoker.invokeSendHandler(
+                                                                record.receive().channelName(),
+                                                                channel,
+                                                                payload,
+                                                                metadata,
+                                                                contentType,
+                                                                flow.enabled(
+                                                                                ZLinkMessageFlowOutcome
+                                                                                        .DISPATCHED)
+                                                                        ? () ->
+                                                                                traceFlow(
                                                                                         ZLinkMessageFlowOutcome
-                                                                                                .DISPATCHED)
-                                                                                ? () ->
-                                                                                        traceFlow(
-                                                                                                ZLinkMessageFlowOutcome
-                                                                                                        .DISPATCHED,
-                                                                                                record,
-                                                                                                packetName)
-                                                                                : null));
-                                return invocation;
-                            },
-                            admission);
-            queued.whenComplete(
-                    (ignored, error) -> {
+                                                                                                .DISPATCHED,
+                                                                                        record,
+                                                                                        packetName)
+                                                                        : null));
+                        return invocation;
+                    },
+                    admission,
+                    claim,
+                    error -> {
                         try {
                             finishSend(record, packetName, record.receive().sourceNodeRid(), error);
                         } finally {
-                            closeRecord(record, claim);
+                            closeRecord(record, null);
                         }
                     });
+
         } catch (RuntimeException error) {
             try {
                 finishSend(record, packetName, record.receive().sourceNodeRid(), error);
@@ -615,96 +610,76 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
                     () -> traceFlow(ZLinkMessageFlowOutcome.ADMITTED, record, packetName));
         }
         try {
-            CompletionStage<Void> queued =
-                    namespace
-                            .requestQueue
-                            .enqueue(
-                                    () -> {
-                                        try {
-                                            CompletionStage<Message> invocation =
-                                                    route != null
-                                                            ? invoker.executeHandler(
-                                                                    () ->
-                                                                            invoker
-                                                                                    .invokeRouteRequestHandler(
-                                                                                            null,
-                                                                                            route,
-                                                                                            record.receive()
-                                                                                                    .sourceNodeRid(),
-                                                                                            payload,
-                                                                                            metadata,
-                                                                                            contentType,
-                                                                                            flow
-                                                                                                            .enabled(
-                                                                                                                    ZLinkMessageFlowOutcome
-                                                                                                                            .DISPATCHED)
-                                                                                                    ? () ->
-                                                                                                            traceFlow(
-                                                                                                                    ZLinkMessageFlowOutcome
-                                                                                                                            .DISPATCHED,
-                                                                                                                    record,
-                                                                                                                    packetName)
-                                                                                                    : null))
-                                                            : invoker.executeHandler(
-                                                                    () ->
-                                                                            invoker
-                                                                                    .invokeRequestHandler(
-                                                                                            record.receive()
-                                                                                                    .channelName(),
-                                                                                            channel,
-                                                                                            payload,
-                                                                                            metadata,
-                                                                                            contentType,
-                                                                                            flow
-                                                                                                            .enabled(
-                                                                                                                    ZLinkMessageFlowOutcome
-                                                                                                                            .DISPATCHED)
-                                                                                                    ? () ->
-                                                                                                            traceFlow(
-                                                                                                                    ZLinkMessageFlowOutcome
-                                                                                                                            .DISPATCHED,
-                                                                                                                    record,
-                                                                                                                    packetName)
-                                                                                                    : null));
-                                            return invocation.<Void>handle(
-                                                    (reply, error) -> {
-                                                        if (error == null) {
-                                                            try {
-                                                                replyAndClose(
-                                                                        record,
-                                                                        token,
-                                                                        replyParts(
-                                                                                envelope, reply));
-                                                                traceFlow(
-                                                                        ZLinkMessageFlowOutcome
-                                                                                .REPLIED,
-                                                                        record,
-                                                                        packetName);
-                                                            } catch (
-                                                                    RuntimeException replyFailure) {
-                                                                reportReplyPathMissing(
-                                                                        record,
-                                                                        packetName,
-                                                                        replyFailure);
-                                                            }
-                                                        } else {
-                                                            replyError(
-                                                                    record, token, envelope, error);
-                                                        }
-                                                        return null;
-                                                    });
-                                        } catch (RuntimeException failure) {
-                                            return CompletableFuture.<Void>failedFuture(failure);
+            ZLinkHandlerDispatch.enqueue(
+                    namespace.queue,
+                    () -> {
+                        try {
+                            CompletionStage<Message> invocation =
+                                    route != null
+                                            ? invoker.executeHandler(
+                                                    () ->
+                                                            invoker.invokeRouteRequestHandler(
+                                                                    null,
+                                                                    route,
+                                                                    record.receive()
+                                                                            .sourceNodeRid(),
+                                                                    payload,
+                                                                    metadata,
+                                                                    contentType,
+                                                                    flow.enabled(
+                                                                                    ZLinkMessageFlowOutcome
+                                                                                            .DISPATCHED)
+                                                                            ? () ->
+                                                                                    traceFlow(
+                                                                                            ZLinkMessageFlowOutcome
+                                                                                                    .DISPATCHED,
+                                                                                            record,
+                                                                                            packetName)
+                                                                            : null))
+                                            : invoker.executeHandler(
+                                                    () ->
+                                                            invoker.invokeRequestHandler(
+                                                                    record.receive().channelName(),
+                                                                    channel,
+                                                                    payload,
+                                                                    metadata,
+                                                                    contentType,
+                                                                    flow.enabled(
+                                                                                    ZLinkMessageFlowOutcome
+                                                                                            .DISPATCHED)
+                                                                            ? () ->
+                                                                                    traceFlow(
+                                                                                            ZLinkMessageFlowOutcome
+                                                                                                    .DISPATCHED,
+                                                                                            record,
+                                                                                            packetName)
+                                                                            : null));
+                            return invocation.<Void>handle(
+                                    (reply, error) -> {
+                                        if (error == null) {
+                                            try {
+                                                replyAndClose(
+                                                        record, token, replyParts(envelope, reply));
+                                                traceFlow(
+                                                        ZLinkMessageFlowOutcome.REPLIED,
+                                                        record,
+                                                        packetName);
+                                            } catch (RuntimeException replyFailure) {
+                                                reportReplyPathMissing(
+                                                        record, packetName, replyFailure);
+                                            }
+                                        } else {
+                                            replyError(record, token, envelope, error);
                                         }
-                                    },
-                                    admission)
-                            .whenComplete((ignored, error) -> closeRecord(record, claim));
-            queued.whenComplete(
-                    (ignored, error) -> {
-                        if (error != null) {
-                            closeRecord(record, claim);
+                                        return null;
+                                    });
+                        } catch (RuntimeException failure) {
+                            return CompletableFuture.<Void>failedFuture(failure);
                         }
-                    });
+                    },
+                    admission,
+                    claim,
+                    error -> closeRecord(record, null));
         } catch (RuntimeException error) {
             closeRecord(record, claim);
             throw error;
@@ -1027,13 +1002,10 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
         private final Map<String, ChannelSendHandlerRegistration> channelSends = new HashMap<>();
         private final Map<String, ChannelRequestHandlerRegistration> channelRequests =
                 new HashMap<>();
-        private final ZLinkSerialExecutionQueue sendQueue;
-        private final ZLinkSerialExecutionQueue requestQueue;
+        private final ZLinkSerialExecutionQueue queue;
 
         Namespace(Executor executor) {
-            sendQueue = new ZLinkSerialExecutionQueue(executor, ZLinkExecutionLanePolicy.generic());
-            requestQueue =
-                    new ZLinkSerialExecutionQueue(executor, ZLinkExecutionLanePolicy.generic());
+            queue = new ZLinkSerialExecutionQueue(executor, ZLinkExecutionLanePolicy.generic());
         }
     }
 }

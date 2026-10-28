@@ -136,12 +136,13 @@ class raw_route_port_t
              std::chrono::milliseconds timeout,
              runtime::mesh::service_liveness_registry_t::connection_t admission = {},
              std::shared_ptr<task_completion_source_t<void>> admitted = {});
-    zlink::poll_event_flag_t poll (std::chrono::milliseconds timeout,
-                                   bool accept_application_receive = true);
+    std::optional<zlink::poll_event_flag_t> poll (std::chrono::milliseconds timeout,
+                                                  bool accept_application_receive = true);
     void signal_activity () noexcept;
     std::optional<raw_received_t> receive_if_ready (zlink::poll_event_flag_t revents);
     std::optional<raw_received_t> try_receive ();
     bool reply (const raw_received_t &request, raw_message_t parts);
+    bool reply (const raw_received_t &request, std::vector<zlink::message_t> messages);
     void close ();
 
   private:

@@ -44,7 +44,7 @@ connector 하나는 연결 하나를 대표한다. 연결은 만들고, 연결�
 ## 2. 연결과 종료
 
 연결 호출은 연결과 receive 준비가 끝나야 완료된다. 종료 호출은 아직 쓰지 않은 frame을 쓰지 않고
-transport를 닫으며, 그 frame의 Send·Request와 응답을 기다리던 request를 `disconnected`로 실패시킨다.
+transport를 닫으며, 그 frame의 Send·Request와 응답을 기다리던 request를 `Disconnected`로 실패시킨다.
 Send의 frame이 쓰였는지 확인하려면 종료 전에 그 Send의 완료를 기다린다.
 
 ```typescript

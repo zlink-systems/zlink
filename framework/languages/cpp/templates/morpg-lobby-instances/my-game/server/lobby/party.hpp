@@ -1,6 +1,7 @@
 #pragma once
 #include "domain.hpp"
 #include "server/shared/relocation.hpp"
+#include <algorithm>
 namespace MyGame
 {
 class Party final : public fx::spot_t<Player>
@@ -94,7 +95,8 @@ class Party final : public fx::spot_t<Player>
         if (prepared.dungeonId != id || !state.prepared(prepared.runId).empty())
             throw std::runtime_error ("Dungeon preparation identity mismatch");
         for (const auto &member : members)
-            if (!state.entered.contains(member)) co_await actors_.send(fx::actor_id_t(member), JoinDungeon{id, run}).async();
+            if (!std::binary_search(state.entered.begin(), state.entered.end(), member))
+                co_await actors_.send(fx::actor_id_t(member), JoinDungeon{id, run}).async();
     }
     fx::task_t<void> arrived(const DungeonMemberEntered &r) { const auto reason = state.arrived(r.runId, r.playerId); if (!reason.empty()) throw std::runtime_error(reason); co_return; }
     fx::task_t<void> started(const RunStarted &r) { const auto reason = state.started(r.runId); if (!reason.empty()) throw std::runtime_error(reason); co_return; }
