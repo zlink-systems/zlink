@@ -1,11 +1,101 @@
+using Microsoft.Extensions.DependencyInjection;
 using Zlink.Framework.Runtime.Backend.Contracts;
 using Zlink.Framework.Runtime.Channels;
+using Zlink.Framework.Runtime.Dispatch;
+using Zlink.Framework.Runtime.Host;
+using Zlink.Framework.Runtime.Locations;
 using Zlink.Framework.Runtime.Messaging;
+using Zlink.Framework.Runtime.Service;
 
 namespace Zlink.Framework.UnitTests.Runtime;
 
 public sealed partial class EntrySpotActorDispatchTests
 {
+    [Theory]
+    [InlineData("channel", false)]
+    [InlineData("node", false)]
+    [InlineData("spot", false)]
+    [InlineData("channel", true)]
+    [InlineData("node", true)]
+    [InlineData("spot", true)]
+    public async Task StoppedRouteChannel_RejectsRetainedSendAndRequestWithShuttingDown(
+        string path,
+        bool request
+    )
+    {
+        var node = new CapturingSpotNode { SpotSendResult = SubmitResult.Ok };
+        var (runtime, _) = await CreateStartedRuntimeAsync(
+            node,
+            includeInstanceSpotRoute: true,
+            includeEntryChannelMembership: true
+        );
+        try
+        {
+            var route = new ZLinkRouteClient(runtime);
+            var target = Assert.IsType<ZLinkResolvedSpotHandle>(
+                (
+                    await runtime.ResolveInstanceSpotAsync(
+                        new InstanceSpotIntentAddress(string.Empty, string.Empty, "spot-ready"),
+                        CancellationToken.None
+                    )
+                ).Handle
+            );
+            var payload = new ProbeRouteMessage("stopped");
+            IZLinkSendCall MakeSend() =>
+                path switch
+                {
+                    "channel" => route.SendToChannel("entry", payload),
+                    "node" => route.SendToNode("entry", RoutingId.From("target-node"), payload),
+                    _ => new ZLinkRouteSpotSendCall<ProbeRouteMessage>(runtime, target, payload),
+                };
+            var send = MakeSend();
+            IZLinkRequestCall call = path switch
+            {
+                "channel" => route.RequestToChannel("entry", payload),
+                "node" => route.RequestToNode("entry", RoutingId.From("target-node"), payload),
+                _ => new ZLinkRouteSpotRequestCall<ProbeRouteMessage>(runtime, target, payload),
+            };
+            // The same route accepts a send before shutdown without a native socket.
+            if (path != "channel")
+                await MakeSend().Async();
+            await runtime.StopAsync(CancellationToken.None);
+            var submissions = node.NodeSendAsyncCalls;
+            var spotSubmissions = node.SpotSends.Count;
+            var failure = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+            {
+                if (request)
+                    await call.Async<ProbeReply>();
+                else
+                    await send.Async();
+            });
+            Assert.Equal(ZLinkFrameworkErrorKind.ShuttingDown, failure.Kind);
+            Assert.Equal(submissions, node.NodeSendAsyncCalls);
+            Assert.Equal(spotSubmissions, node.SpotSends.Count);
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public async Task UnstartedRouteChannel_StateAccessPreservesInvalidOperation()
+    {
+        var registration = new ZLinkFrameworkRegistration();
+        await using var services = new ServiceCollection().BuildServiceProvider();
+        var runtime = new ZLinkFrameworkRuntime(
+            services,
+            new CapturingBackendAdapterFactory(new CapturingSpotNode()),
+            registration,
+            new ZLinkHandlerRegistry([]),
+            new ZLinkHandlerDispatcher(
+                services.GetRequiredService<IServiceScopeFactory>(),
+                registration
+            )
+        );
+        Assert.Throws<InvalidOperationException>(() => runtime.GetMeshNodeRuntime("entry"));
+    }
+
     public static IEnumerable<object[]> RequestSubmissionFailures()
     {
         foreach (var path in new[] { "node", "channel", "spot" })
