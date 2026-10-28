@@ -11,7 +11,7 @@ namespace Zlink.Framework.UnitTests;
 public sealed class FanoutSubscriptionTests
 {
     [Fact]
-    public async Task AutomaticSubscribers_SerializeHandlersAcrossPublishers()
+    public async Task AutomaticSubscribers_StartNextHandlerBeforePriorTerminal()
     {
         var store = new ZLinkInMemoryProviderLocationStore();
         var probe = new FanoutConcurrencyProbe();
@@ -21,6 +21,7 @@ public sealed class FanoutSubscriptionTests
         await first.StartAsync();
         await second.StartAsync();
         await subscriber.StartAsync();
+        Task? stop = null;
         try
         {
             var runtime = subscriber.Services.GetRequiredService<IZLinkFanoutRuntime>();
@@ -37,27 +38,21 @@ public sealed class FanoutSubscriptionTests
                 .Services.GetRequiredService<IZLinkFanoutClient>()
                 .Publish("events", new FanoutSubscriptionEvent("second"))
                 .Async();
-            var state = await subscriber
-                .Services.GetRequiredService<ZLinkFrameworkRuntime>()
-                .EnsureStartedStateAsync(timeout.Token);
-            while (
-                !probe.SecondStarted.Task.IsCompleted
-                && state.ApplicationJobQueue.GetStatus().QueuedApplicationJobs == 0
-            )
-                await Task.Delay(TimeSpan.FromMilliseconds(10), timeout.Token);
-
-            await Task.WhenAny(
-                probe.SecondStarted.Task,
-                Task.Delay(TimeSpan.FromMilliseconds(200), timeout.Token)
-            );
-            Assert.False(probe.SecondStarted.Task.IsCompleted);
+            await probe.SecondCompleted.Task.WaitAsync(timeout.Token);
+            Assert.Equal(new[] { "first", "second" }, probe.Starts.ToArray());
+            Assert.Equal(new[] { "second" }, probe.Completions.ToArray());
+            Assert.DoesNotContain("first", probe.DisposedScopes);
+            stop = subscriber.StopAsync();
+            Assert.False(stop.IsCompleted);
             probe.ReleaseFirst.TrySetResult();
-            await probe.SecondStarted.Task.WaitAsync(timeout.Token);
+            await stop.WaitAsync(timeout.Token);
+            Assert.Equal(new[] { "second", "first" }, probe.Completions.ToArray());
+            Assert.Equal(new[] { "first", "second" }, probe.DisposedScopes.Order().ToArray());
         }
         finally
         {
             probe.ReleaseFirst.TrySetResult();
-            await subscriber.StopAsync();
+            await (stop ?? subscriber.StopAsync());
             await second.StopAsync();
             await first.StopAsync();
         }
@@ -71,6 +66,7 @@ public sealed class FanoutSubscriptionTests
     {
         var builder = Host.CreateApplicationBuilder();
         builder.Services.AddSingleton(probe);
+        builder.Services.AddScoped<FanoutTurnScope>();
         builder.Services.AddZLinkFramework(options =>
         {
             options.AddLocationStore(store);
@@ -87,6 +83,11 @@ public sealed class FanoutSubscriptionTests
 
     private sealed class FanoutConcurrencyProbe
     {
+        internal ConcurrentQueue<string> Starts { get; } = new();
+        internal ConcurrentQueue<string> Completions { get; } = new();
+        internal ConcurrentQueue<string> DisposedScopes { get; } = new();
+        internal TaskCompletionSource SecondCompleted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource FirstStarted { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource ReleaseFirst { get; } =
@@ -95,8 +96,23 @@ public sealed class FanoutSubscriptionTests
             new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
 
-    private sealed class FanoutConcurrencyHandler(FanoutConcurrencyProbe probe)
-        : IZLinkFanoutHandler<FanoutSubscriptionEvent>
+    private sealed class FanoutTurnScope(FanoutConcurrencyProbe probe) : IDisposable
+    {
+        internal string Value { get; set; } = "unset";
+        internal bool Disposed { get; private set; }
+
+        public void Dispose()
+        {
+            Assert.False(Disposed);
+            Disposed = true;
+            probe.DisposedScopes.Enqueue(Value);
+        }
+    }
+
+    private sealed class FanoutConcurrencyHandler(
+        FanoutConcurrencyProbe probe,
+        FanoutTurnScope scope
+    ) : IZLinkFanoutHandler<FanoutSubscriptionEvent>
     {
         public async ValueTask HandleAsync(
             FanoutSubscriptionEvent message,
@@ -104,13 +120,20 @@ public sealed class FanoutSubscriptionTests
             CancellationToken cancellationToken
         )
         {
+            scope.Value = message.Value;
+            probe.Starts.Enqueue(message.Value);
+            Assert.False(scope.Disposed);
             if (message.Value == "first")
             {
                 probe.FirstStarted.TrySetResult();
-                await probe.ReleaseFirst.Task.WaitAsync(cancellationToken);
+                await probe.ReleaseFirst.Task;
             }
             else
                 probe.SecondStarted.TrySetResult();
+            Assert.False(scope.Disposed);
+            probe.Completions.Enqueue(message.Value);
+            if (message.Value == "second")
+                probe.SecondCompleted.TrySetResult();
         }
     }
 
