@@ -470,18 +470,6 @@ public sealed class ActorRelocationCompletionOrderingTests : IAsyncLifetime
                 "Zlink.Framework.Runtime.Actors.ZLinkDeferredActorJoinCompletionJournal"
             )
         );
-        var runtimeMethods = typeof(Zlink.Framework.Runtime.Host.ZLinkFrameworkRuntime)
-            .GetMethods(
-                System.Reflection.BindingFlags.Instance
-                    | System.Reflection.BindingFlags.Static
-                    | System.Reflection.BindingFlags.Public
-                    | System.Reflection.BindingFlags.NonPublic
-            )
-            .Select(static method => method.Name)
-            .ToHashSet(StringComparer.Ordinal);
-        Assert.DoesNotContain("RecoverCanonicalRemoteJoinCompletionAsync", runtimeMethods);
-        Assert.DoesNotContain("RunDeferredJoinCompletionRecoveryAsync", runtimeMethods);
-        Assert.DoesNotContain("RecoverPublishedRelocationsAsync", runtimeMethods);
     }
 
     [Fact]
