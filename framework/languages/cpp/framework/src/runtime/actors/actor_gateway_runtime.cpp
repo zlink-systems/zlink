@@ -2066,8 +2066,9 @@ session_actor_manager_t::bind_current_session (actor_ref_t actor_ref, bool reuse
     std::uint16_t actor_slot = 0;
     std::optional<stream_t> stream;
     std::string session_id;
-    std::function<request_task_t<void> (
-      actor_ref_t, std::uint64_t, std::uint16_t, std::function<void ()>)> native_binder;
+    std::function<request_task_t<void> (actor_ref_t, std::uint64_t, std::uint16_t,
+                                        std::function<void ()>)>
+      native_binder;
     stream_codec_t codec = stream_codec_t::message_pack;
     std::optional<std::uint64_t> previous_context_token;
     bool previous_ready = false;
@@ -2196,8 +2197,8 @@ session_actor_manager_t::bind_current_session (actor_ref_t actor_ref, bool reuse
             else
                 binding_context->actor_streams.erase (actor_id);
             if (publication->previous)
-                detail::restore_session_stream_on_lane (
-                  state, actor_id, session_id, token, std::move (*publication->previous));
+                detail::restore_session_stream_on_lane (state, actor_id, session_id, token,
+                                                        std::move (*publication->previous));
         });
         throw;
     }
@@ -2921,8 +2922,9 @@ prepared_session_stream_t actor_gateway_runtime_t::prepare_session_stream_on_lan
   std::uint16_t actor_slot)
 {
     prepared_session_stream_t prepared;
-    prepared.previous = bind_session_stream_owned (
-      state, actor_id, std::move (stream), codec, session_id, binding_token, actor_ref, actor_slot, {});
+    prepared.previous =
+      bind_session_stream_owned (state, actor_id, std::move (stream), codec, session_id,
+                                 binding_token, actor_ref, actor_slot, {});
     prepared.actor = state->actors_by_id.at (actor_id).ref;
     prepared.registrar = state->bound_session_registrar;
     return prepared;
