@@ -3,6 +3,8 @@
 #include "server/instance/domain.hpp"
 #include "server/town/domain.hpp"
 
+#include "test_json.hpp"
+
 namespace MyGame::E2E
 {
 using PartyRunState = MyGame::PartyRun;
@@ -14,7 +16,7 @@ inline void run_domain_checks ()
         ++count;
     };
     const auto same_json = [] (const auto &left, const auto &right) {
-        return nlohmann::json (left) == nlohmann::json (right);
+        return test_json_morpg_channel_domain::encode (left) == test_json_morpg_channel_domain::encode (right);
     };
     check (ChannelRules::validate (Names::maximum_integer + 1) == "integer-out-of-range",
            "channel above maximum");
@@ -35,7 +37,7 @@ inline void run_domain_checks ()
             sample.phase = phase;
             if (phase != RunPhase::Forming)
                 sample.runId = run_id;
-            const auto snapshot = nlohmann::json (sample);
+            const auto snapshot = test_json_morpg_channel_domain::object (sample);
             std::optional<std::string> result;
             if (std::string_view (action) == "enter")
                 result = sample.enter ("leader");
@@ -53,7 +55,7 @@ inline void run_domain_checks ()
                                  || (std::string_view (action) == "completed"
                                      && (phase == RunPhase::Active || phase == RunPhase::Completed));
             check (allowed ? !result
-                           : result == "run-mismatch" && nlohmann::json (sample) == snapshot,
+                           : result == "run-mismatch" && test_json_morpg_channel_domain::object (sample) == snapshot,
                    "transition table");
         }
         PartyRunState original;
@@ -61,8 +63,8 @@ inline void run_domain_checks ()
         original.phase = phase;
         if (phase != RunPhase::Forming)
             original.runId = run_id;
-        const auto encoded = nlohmann::json (original);
-        check (same_json (encoded.get<PartyRunState> (), original), "party phase snapshot");
+        const auto encoded = test_json_morpg_channel_domain::object (original);
+        check (same_json (test_json_morpg_channel_domain::decode<PartyRunState> (encoded), original), "party phase snapshot");
     }
 
     PartyRunState party;
@@ -70,8 +72,8 @@ inline void run_domain_checks ()
     check (DungeonState::valid_id (party.partyId, "party-"), "party ID");
     check (party.phase == RunPhase::Forming && !party.runId, "forming");
     check (!party.change_channel (), "forming channel");
-    auto before = nlohmann::json (party);
-    check (party.enter ("member") == "not-leader" && before == nlohmann::json (party),
+    auto before = test_json_morpg_channel_domain::object (party);
+    check (party.enter ("member") == "not-leader" && before == test_json_morpg_channel_domain::object (party),
            "nonleader unchanged");
     check (party.started ("unknown") == "run-mismatch", "forming start rejected");
     check (party.completed ("unknown") == "run-mismatch", "forming completion rejected");
@@ -111,7 +113,7 @@ inline void run_domain_checks ()
     check (party.change_channel () == "run-in-progress", "completed channel");
     party.leave ("member");
     check (party.members.size () == 2, "completed retains member");
-    check (same_json (nlohmann::json (party).get<PartyRunState> (), party), "party snapshot");
+    check (same_json (test_json_morpg_channel_domain::decode<PartyRunState> (test_json_morpg_channel_domain::object (party)), party), "party snapshot");
     check (!party.enter ("leader") && party.runId != run_id
              && party.phase == RunPhase::Preparing,
            "new completed run");
@@ -125,25 +127,28 @@ inline void run_domain_checks ()
     const PrepareDungeon request{run_id, party.partyId, "town-2", {"leader", "member"}};
     check (dungeon.advance () == "run-not-active" && dungeon.stage == 0, "unprepared advance");
     check (!dungeon.prepare (dungeon_id, request), "prepare dungeon");
-    before = nlohmann::json (dungeon);
-    check (!dungeon.prepare (dungeon_id, request) && before == nlohmann::json (dungeon),
+    const auto dungeon_json = [&] {
+        return test_json_morpg_channel_domain::object (dungeon);
+    };
+    before = dungeon_json ();
+    check (!dungeon.prepare (dungeon_id, request) && before == dungeon_json (),
            "idempotent prepare");
     auto wrong_run = request;
     wrong_run.runId = *party.runId;
     check (dungeon.prepare (dungeon_id, wrong_run) == "run-mismatch"
-             && before == nlohmann::json (dungeon),
+             && before == dungeon_json (),
            "wrong run unchanged");
     auto wrong_members = request;
     wrong_members.members = {"member", "leader"};
     check (dungeon.prepare (dungeon_id, wrong_members) == "run-mismatch"
-             && before == nlohmann::json (dungeon),
+             && before == dungeon_json (),
            "wrong members unchanged");
     auto wrong_owner = request;
     wrong_owner.ownerSpotId = "town-1";
     check (dungeon.prepare (dungeon_id, wrong_owner) == "run-mismatch"
-             && before == nlohmann::json (dungeon),
+             && before == dungeon_json (),
            "wrong owner unchanged");
-    check (dungeon.advance () == "run-not-active" && before == nlohmann::json (dungeon),
+    check (dungeon.advance () == "run-not-active" && before == dungeon_json (),
            "entering advance unchanged");
     const JoinDungeon join{dungeon_id, run_id};
     check (!dungeon.accepts ("other", dungeon_id, join), "nonmember admission");
@@ -159,19 +164,20 @@ inline void run_domain_checks ()
     check (!dungeon.advance () && dungeon.stage == Names::final_stage
              && dungeon.phase == RunPhase::Completed,
            "final stage");
-    before = nlohmann::json (dungeon);
-    check (dungeon.advance () == "run-not-active" && before == nlohmann::json (dungeon),
+    before = dungeon_json ();
+    check (dungeon.advance () == "run-not-active" && before == dungeon_json (),
            "completed advance unchanged");
-    check (same_json (nlohmann::json (dungeon).get<DungeonState> (), dungeon),
-           "dungeon snapshot");
+    check (same_json (test_json_morpg_channel_domain::decode<DungeonState> (dungeon_json ()),
+                      dungeon),
+           "dungeon state");
     dungeon.stage = Names::maximum_integer;
-    before = nlohmann::json (dungeon);
-    check (dungeon.advance () == "integer-out-of-range" && nlohmann::json (dungeon) == before,
+    before = dungeon_json ();
+    check (dungeon.advance () == "integer-out-of-range" && dungeon_json () == before,
            "integer boundary unchanged");
     dungeon.stage = Names::maximum_integer + 1;
     check (dungeon.advance () == "integer-out-of-range", "integer above bound");
-    check (nlohmann::json (RunPhase::Active) == "Active", "enum name");
-    check (nlohmann::json (PartyRunState{}).at ("runId").is_null (), "nullable run");
+    check (test_json_morpg_channel_domain::object (RunPhase::Active) == "Active", "enum name");
+    check (test_json_morpg_channel_domain::object (PartyRunState{}).at ("runId").is_null (), "nullable run");
     check (ActionRejected{"run-not-active"}.retryAfterMs == 0, "rejection time");
     require (count == 91, "Domain check count differs from .NET baseline");
     std::cout << "Domain checks: " << count << "/" << count << " passed" << std::endl;

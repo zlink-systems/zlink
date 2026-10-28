@@ -1,5 +1,6 @@
 #pragma once
 #include "server/shared/contracts.hpp"
+#include <zlink/json.hpp>
 #include <algorithm>
 #include <cmath>
 #include <functional>
@@ -49,14 +50,12 @@ class ZonePositionDomain
         std::int64_t sequence = 0;
         std::int32_t remainingMs = 0;
         bool connected = false;
-        NLOHMANN_DEFINE_TYPE_INTRUSIVE (PlayerSnapshot, position, sequence, remainingMs, connected)
     };
     struct Snapshot
     {
         std::string zoneId;
         std::map<std::string, PlayerSnapshot> players;
         std::map<std::string, EnterZone> arrivals;
-        NLOHMANN_DEFINE_TYPE_INTRUSIVE (Snapshot, zoneId, players, arrivals)
     };
 
   private:
@@ -304,3 +303,25 @@ class ZonePositionDomain
     }
 };
 }
+
+namespace zlink::json
+{
+template <> struct dto_traits<::MyGame::ZonePositionDomain::PlayerSnapshot>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("position", &::MyGame::ZonePositionDomain::PlayerSnapshot::position),
+      zlink::json::field ("sequence", &::MyGame::ZonePositionDomain::PlayerSnapshot::sequence),
+      zlink::json::field ("remainingMs", &::MyGame::ZonePositionDomain::PlayerSnapshot::remainingMs),
+      zlink::json::field ("connected", &::MyGame::ZonePositionDomain::PlayerSnapshot::connected)
+    };
+};
+
+template <> struct dto_traits<::MyGame::ZonePositionDomain::Snapshot>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("zoneId", &::MyGame::ZonePositionDomain::Snapshot::zoneId),
+      zlink::json::field ("players", &::MyGame::ZonePositionDomain::Snapshot::players),
+      zlink::json::field ("arrivals", &::MyGame::ZonePositionDomain::Snapshot::arrivals)
+    };
+};
+} // namespace zlink::json
