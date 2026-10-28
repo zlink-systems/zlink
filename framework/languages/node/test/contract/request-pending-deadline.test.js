@@ -13,9 +13,6 @@ const {
 const {
   waitRequestReply
 } = require('../../packages/framework/dist/runtime/messaging/request-deadline');
-const {
-  ZLinkNodeRawMeshBackend
-} = require('../../packages/framework/dist/runtime/backend/node/node-raw-mesh-backend');
 const { ZLinkFrameworkErrorKind } = require('../../packages/framework/dist/internal');
 function deferred() {
   let resolve;
@@ -55,7 +52,8 @@ test('caller cancellation takes the same explicitly supplied entry immediately',
   const cancelled = assert.rejects(pending.promise, { name: 'AbortError' });
   controller.abort();
   assert.equal(registry.size, 0);
-  assert.equal(registry.entries.size, 0);
+  assert.equal(registry.nextDeadlineMs(), Number.POSITIVE_INFINITY);
+  assert.throws(() => registry.handle(pending.id), /has no active registry entry/);
   assert.equal(registry.complete(pending.id, 0), false);
   await cancelled;
   table.dispose();
@@ -96,23 +94,26 @@ test('reply removes every deadline entry reference immediately', async () => {
   const pending = Array.from({ length: 1000 }, () => registry.register(60_000));
   for (const operation of pending) operation.complete('reply');
   await Promise.all(pending.map((operation) => operation.promise));
-  assert.equal(registry.entries.size, 0);
+  assert.equal(registry.nextDeadlineMs(), Number.POSITIVE_INFINITY);
+  for (const operation of pending) {
+    assert.throws(() => registry.handle(operation.id), /has no active registry entry/);
+  }
   registry.close();
 });
-test('overdue management visit is not deferred by a fixed lower bound', (t) => {
-  const now = performance.now();
-  t.mock.method(performance, 'now', () => now);
-  const backend = Object.create(ZLinkNodeRawMeshBackend.prototype);
-  backend.onMaintenance = () => {};
-  backend.runtime = { nextMaintenanceDeadlineMs: () => now - 10, pendingOperationCount: 1 };
-  const timer = t.mock.method(globalThis, 'setTimeout');
-  backend.scheduleMaintenance();
-  try {
-    assert.equal(backend.maintenanceDueMs, now - 10);
-    assert.ok(timer.mock.calls[0].arguments[1] <= 0);
-  } finally {
-    clearTimeout(backend.maintenanceTimer);
-  }
+test('overdue request management visit is not deferred by a fixed lower bound', async (t) => {
+  let timeReads = 0;
+  t.mock.method(performance, 'now', () => (timeReads++ < 2 ? 0 : 10));
+  const timer = t.mock.method(globalThis, 'setTimeout', () => ({
+    ref() {},
+    unref() {},
+    hasRef() { return true; }
+  }));
+  const owner = new RequestRuntime();
+  const pending = owner.begin(0);
+  const rejected = assert.rejects(pending.promise);
+  assert.ok(timer.mock.calls[0].arguments[1] <= 0);
+  owner.close();
+  await rejected;
 });
 test('1000 deadline expirations use bounded owner visits', async (t) => {
   const owner = new RequestRuntime();
