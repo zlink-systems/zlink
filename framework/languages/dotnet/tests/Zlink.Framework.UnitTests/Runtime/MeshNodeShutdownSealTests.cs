@@ -56,14 +56,20 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
                 )!
         );
 
-        // Hot-path E3: a timer wheel rounds deadlines up to the next 1ms occupied tick.
-        // §4.2: the rotation's expiry turn also returns the next wait bound.
-        Assert.Equal(TimeSpan.FromMilliseconds(11), expire.Invoke(node, null));
+        // Approved §10.1 schedules the earliest absolute deadline in L+R,
+        // rather than a rounds-only slot. It must never expire before that value.
+        Assert.Equal(
+            TimeSpan.FromMilliseconds(10) + TimeSpan.FromTicks(1),
+            expire.Invoke(node, null)
+        );
         clock.Timestamp = 9 * TimeSpan.TicksPerMillisecond;
-        Assert.Equal(TimeSpan.FromMilliseconds(2), expire.Invoke(node, null));
+        Assert.Equal(
+            TimeSpan.FromMilliseconds(1) + TimeSpan.FromTicks(1),
+            expire.Invoke(node, null)
+        );
         Assert.Equal(2, count.GetValue(operations));
         clock.Timestamp = 10 * TimeSpan.TicksPerMillisecond;
-        Assert.Equal(TimeSpan.FromMilliseconds(1), expire.Invoke(node, null));
+        Assert.Equal(TimeSpan.FromTicks(1), expire.Invoke(node, null));
         Assert.Equal(2, count.GetValue(operations));
         clock.Timestamp = 11 * TimeSpan.TicksPerMillisecond;
         Assert.Equal(TimeSpan.FromMilliseconds(9), expire.Invoke(node, null));
@@ -200,6 +206,376 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
         Assert.Equal(0, deadline.Count);
     }
 
+    [Fact]
+    public async Task RequestTerminal_TakesWithoutEnteringTheOperationLane()
+    {
+        var clock = new OperationDeadlineClock();
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new ZLinkManagedMeshNode(
+            context,
+            MeshName,
+            deadlineTimeProvider: clock
+        );
+        var deadline = OperationDeadlineAccess.For(node);
+        var operation = deadline.Begin(TimeSpan.FromSeconds(30));
+        const System.Reflection.BindingFlags flags =
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+        var lane = (Zlink.Framework.Runtime.Execution.ZLinkStateLane)
+            typeof(ZLinkManagedMeshNode).GetField("_operationLane", flags)!.GetValue(node)!;
+
+        // A terminal notification must also work while the owner is occupied.
+        await lane.RunAsync(() => Assert.True(deadline.TakeForReply(operation)));
+        Assert.Equal(0, deadline.Count);
+        clock.Timestamp = 256 * TimeSpan.TicksPerMillisecond;
+        deadline.Expire();
+        var deadlineIndex = typeof(ZLinkManagedMeshNode)
+            .GetField("_operationDeadlines", flags)!
+            .GetValue(node)!;
+        Assert.Null(deadlineIndex.GetType().GetProperty("Head", flags)!.GetValue(deadlineIndex));
+        Assert.Null(deadlineIndex.GetType().GetField("_tail", flags)!.GetValue(deadlineIndex));
+        Assert.Null(deadlineIndex.GetType().GetField("_cursor", flags)!.GetValue(deadlineIndex));
+    }
+
+    [Fact]
+    public async Task RequestDeadline_IncludesTimeWaitingForTheOperationOwner()
+    {
+        var clock = new OperationDeadlineClock();
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new ZLinkManagedMeshNode(
+            context,
+            MeshName,
+            deadlineTimeProvider: clock
+        );
+        var deadline = OperationDeadlineAccess.For(node);
+        const System.Reflection.BindingFlags flags =
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+        var lane = (Zlink.Framework.Runtime.Execution.ZLinkStateLane)
+            typeof(ZLinkManagedMeshNode).GetField("_operationLane", flags)!.GetValue(node)!;
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var occupied = lane.RunAsync(async () =>
+        {
+            entered.SetResult();
+            await release.Task;
+        });
+        await entered.Task;
+        var registration = Task.Run(() => deadline.Begin(TimeSpan.FromMilliseconds(10)));
+        // Wait until registration is queued, without changing the request budget.
+        var mailboxField = lane.GetType().GetField("_mailbox", flags)!;
+        Assert.True(
+            SpinWait.SpinUntil(
+                () =>
+                {
+                    var mailbox = mailboxField.GetValue(lane);
+                    return mailbox is not null
+                        && !(bool)mailbox.GetType().GetProperty("IsEmpty")!.GetValue(mailbox)!;
+                },
+                TimeSpan.FromSeconds(5)
+            )
+        );
+        clock.Timestamp = 20 * TimeSpan.TicksPerMillisecond;
+        release.SetResult();
+        await occupied;
+        await registration;
+        Assert.Equal(Timeout.InfiniteTimeSpan, deadline.Expire());
+        Assert.Equal(0, deadline.Count);
+    }
+
+    [Fact]
+    public async Task RequestIndex_ThousandEntriesUseNoRequestTimersAndReleaseCompletedReferences()
+    {
+        var clock = new OperationDeadlineClock();
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new ZLinkManagedMeshNode(
+            context,
+            MeshName,
+            deadlineTimeProvider: clock
+        );
+        var deadline = OperationDeadlineAccess.For(node);
+        var before = Timer.ActiveCount;
+        var pending = Enumerable
+            .Range(0, 1000)
+            .Select(_ => deadline.Begin(TimeSpan.FromMinutes(1)))
+            .ToArray();
+        var after = Timer.ActiveCount;
+        output.WriteLine($"request_count=1000 timers_before={before} timers_after={after}");
+        Assert.True(after <= before);
+        using var canceled = new CancellationTokenSource();
+        canceled.Cancel();
+        foreach (var entry in pending)
+        {
+            Assert.True(deadline.TakeForReply(entry));
+            ((ZLinkManagedMeshNode.PendingOperation)entry).Cancel(canceled.Token);
+        }
+        Assert.Equal(0, deadline.Count);
+        clock.Timestamp = 256 * TimeSpan.TicksPerMillisecond;
+        Assert.Equal(Timeout.InfiniteTimeSpan, deadline.Expire());
+        const System.Reflection.BindingFlags flags =
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+        var deadlineIndex = typeof(ZLinkManagedMeshNode)
+            .GetField("_operationDeadlines", flags)!
+            .GetValue(node)!;
+        Assert.Null(deadlineIndex.GetType().GetProperty("Head", flags)!.GetValue(deadlineIndex));
+        Assert.Null(deadlineIndex.GetType().GetField("_tail", flags)!.GetValue(deadlineIndex));
+        Assert.Null(deadlineIndex.GetType().GetField("_cursor", flags)!.GetValue(deadlineIndex));
+        output.WriteLine("framework_pending_after_cancel=0 index_references_after_256ms=0");
+    }
+
+    [Fact]
+    public async Task RequestIndex_DoesNotEnterOwnerBeforeNextVisit()
+    {
+        var clock = new OperationDeadlineClock();
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new ZLinkManagedMeshNode(
+            context,
+            MeshName,
+            deadlineTimeProvider: clock
+        );
+        var deadline = OperationDeadlineAccess.For(node);
+        deadline.Begin(TimeSpan.FromMilliseconds(20));
+        const System.Reflection.BindingFlags flags =
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+        var lane = (Zlink.Framework.Runtime.Execution.ZLinkStateLane)
+            typeof(ZLinkManagedMeshNode).GetField("_operationLane", flags)!.GetValue(node)!;
+        await lane.RunAsync(() => Assert.Equal(TimeSpan.FromMilliseconds(20), deadline.Expire()));
+    }
+
+    [Fact]
+    public async Task ActorCallerCancellation_RemovesTheFrameworkEntryImmediately()
+    {
+        var clock = new OperationDeadlineClock();
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new ZLinkManagedMeshNode(
+            context,
+            MeshName,
+            deadlineTimeProvider: clock
+        );
+        await using var wrapper =
+            new Zlink.Framework.Runtime.Backend.DotNet.Wrappers.ZLinkBackendSpotNodeWrapper(node);
+        using var canceled = new CancellationTokenSource();
+        canceled.Cancel();
+        using var part = Message.From("request");
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            wrapper
+                .RequestToActorAsync(
+                    new Zlink.Framework.Runtime.Backend.Contracts.ZLinkBackendActorRef(
+                        RoutingId.From("target"),
+                        "actor",
+                        1
+                    ),
+                    [part],
+                    TimeSpan.FromMinutes(1),
+                    canceled.Token
+                )
+                .AsTask()
+        );
+        Assert.Equal(0, OperationDeadlineAccess.For(node).Count);
+        clock.Timestamp = 256 * TimeSpan.TicksPerMillisecond;
+        Assert.Equal(Timeout.InfiniteTimeSpan, OperationDeadlineAccess.For(node).Expire());
+    }
+
+    [Fact]
+    public async Task RequestIndex_ThousandExpiriesUseOneManagementTurn()
+    {
+        var clock = new OperationDeadlineClock();
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new ZLinkManagedMeshNode(
+            context,
+            MeshName,
+            deadlineTimeProvider: clock
+        );
+        var deadline = OperationDeadlineAccess.For(node);
+        const System.Reflection.BindingFlags flags =
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+        var lane = (Zlink.Framework.Runtime.Execution.ZLinkStateLane)
+            typeof(ZLinkManagedMeshNode).GetField("_operationLane", flags)!.GetValue(node)!;
+        var first = deadline.Begin(TimeSpan.FromMilliseconds(1));
+        for (var index = 1; index < 1000; index++)
+            deadline.Begin(TimeSpan.FromMilliseconds(1));
+        Task<int>? interposedRead = null;
+        using var queued = new ManualResetEventSlim();
+        using var terminal = deadline
+            .Token(first)
+            .Register(() =>
+            {
+                interposedRead = Task.Run(async () =>
+                {
+                    var read = lane.RunAsync(() => deadline.Count);
+                    queued.Set();
+                    return await read;
+                });
+                Assert.True(queued.Wait(TimeSpan.FromSeconds(5)));
+            });
+        clock.Timestamp = TimeSpan.TicksPerMillisecond;
+        Assert.Equal(Timeout.InfiniteTimeSpan, deadline.Expire());
+        Assert.Equal(0, await interposedRead!.WaitAsync(TimeSpan.FromSeconds(5)));
+        output.WriteLine("request_count=1000 expiry_management_turns=1");
+    }
+
+    [Fact]
+    public async Task RequestShutdown_CompletesManagedCallersBeforeDispatcherDrain()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new ZLinkManagedMeshNode(context, MeshName);
+        const System.Reflection.BindingFlags flags =
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+        var register = typeof(ZLinkManagedMeshNode)
+            .GetMethods(flags)
+            .Single(method =>
+                method.Name == "CreateOperation" && method.GetParameters().Length == 5
+            );
+        object?[] arguments =
+        [
+            MeshOperationKind.ActorRequest,
+            null,
+            null,
+            true,
+            TimeSpan.FromMinutes(1),
+        ];
+        var completion =
+            (Task<ZLinkManagedMeshNode.ManagedRequestCompletion>)register.Invoke(node, arguments)!;
+        Assert.False(node.Completions.CompletionDrained.IsCompleted);
+        node.CloseSubmissions();
+        Assert.Equal(
+            RequestResult.Terminated,
+            (await completion.WaitAsync(TimeSpan.FromSeconds(5))).Result
+        );
+        await node.Completions.CompletionDrained.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(0, OperationDeadlineAccess.For(node).Count);
+    }
+
+    [Fact]
+    public async Task RequestIndex_UsesAbsoluteWindowAndDoesNotVisitRoundsOnlySlots()
+    {
+        var clock = new OperationDeadlineClock();
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new ZLinkManagedMeshNode(
+            context,
+            MeshName,
+            deadlineTimeProvider: clock
+        );
+        var index = OperationDeadlineAccess.For(node);
+        index.Begin(TimeSpan.FromMilliseconds(1000));
+        // L=0, R=256. Slot 232 has only a remaining rotation; it is not a visit candidate.
+        Assert.Equal(TimeSpan.FromMilliseconds(256), index.Expire());
+        clock.Timestamp = 232 * TimeSpan.TicksPerMillisecond;
+        Assert.Equal(TimeSpan.FromMilliseconds(24), index.Expire());
+        clock.Timestamp = 256 * TimeSpan.TicksPerMillisecond;
+        Assert.Equal(TimeSpan.FromMilliseconds(256), index.Expire());
+        // A registration outside [L,L+R] must not pull a management visit forward.
+        index.Begin(TimeSpan.FromMilliseconds(500));
+        Assert.Equal(TimeSpan.FromMilliseconds(256), index.Expire());
+        index.Begin(TimeSpan.FromMilliseconds(20));
+        Assert.Equal(TimeSpan.FromMilliseconds(20), index.Expire());
+        clock.Timestamp = 276 * TimeSpan.TicksPerMillisecond;
+        Assert.Equal(TimeSpan.FromMilliseconds(256), index.Expire());
+        Assert.Equal(2, index.Count);
+    }
+
+    [Fact]
+    public async Task RequestIndex_ThousandRegistrationsDoNotEnumerateTheIndex()
+    {
+        // Spec 01 §10.1: registration is O(1); only management visits inspect existing entries.
+        var clock = new OperationDeadlineClock();
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new ZLinkManagedMeshNode(
+            context,
+            MeshName,
+            deadlineTimeProvider: clock
+        );
+        var index = OperationDeadlineAccess.For(node);
+        for (var i = 0; i < 1000; i++)
+            index.Begin(TimeSpan.FromMinutes(1));
+        Assert.Equal(1000, index.Count);
+        var method = typeof(ZLinkManagedMeshNode).GetMethod(
+            "IndexOperationDeadline",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic
+        )!;
+        Assert.DoesNotContain(CalledMethods(method), called => called.Name == "Visit");
+        output.WriteLine("concurrent_pending=1000 registration_index_traversals=0");
+    }
+
+    [Fact]
+    public async Task RequestIndex_ReplyRetainsReservationUntilTheManagementVisit()
+    {
+        var clock = new OperationDeadlineClock();
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new ZLinkManagedMeshNode(
+            context,
+            MeshName,
+            deadlineTimeProvider: clock
+        );
+        var index = OperationDeadlineAccess.For(node);
+        var first = index.Begin(TimeSpan.FromMilliseconds(10));
+        Assert.Equal(TimeSpan.FromMilliseconds(10), index.Expire());
+        Assert.True(index.TakeForReply(first));
+        // Spec 01 §10.1 (PR #2889): retain reservations until a visit; stop after an empty visit.
+        Assert.Equal(TimeSpan.FromMilliseconds(10), index.Expire());
+        index.Begin(TimeSpan.FromMilliseconds(1000));
+        Assert.Equal(TimeSpan.FromMilliseconds(10), index.Expire());
+        clock.Timestamp = 10 * TimeSpan.TicksPerMillisecond;
+        Assert.Equal(TimeSpan.FromMilliseconds(256), index.Expire());
+    }
+
+    [Fact]
+    public async Task RequestIndex_EmptyAtVisitStopsAndRegistrationStartsANewWindow()
+    {
+        var clock = new OperationDeadlineClock();
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new ZLinkManagedMeshNode(
+            context,
+            MeshName,
+            deadlineTimeProvider: clock
+        );
+        var index = OperationDeadlineAccess.For(node);
+        index.Begin(TimeSpan.FromMilliseconds(257));
+        Assert.Equal(TimeSpan.FromMilliseconds(256), index.Expire());
+        clock.Timestamp = 256 * TimeSpan.TicksPerMillisecond;
+        Assert.Equal(TimeSpan.FromMilliseconds(1), index.Expire());
+        clock.Timestamp = 257 * TimeSpan.TicksPerMillisecond;
+        Assert.Equal(Timeout.InfiniteTimeSpan, index.Expire());
+        clock.Timestamp = 10_000 * TimeSpan.TicksPerMillisecond;
+        Assert.Equal(Timeout.InfiniteTimeSpan, index.Expire());
+        index.Begin(TimeSpan.FromMilliseconds(50));
+        Assert.Equal(TimeSpan.FromMilliseconds(50), index.Expire());
+    }
+
+    private static IEnumerable<System.Reflection.MethodBase> CalledMethods(
+        System.Reflection.MethodInfo method
+    )
+    {
+        var codes = typeof(System.Reflection.Emit.OpCodes)
+            .GetFields(
+                System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static
+            )
+            .Where(f => f.FieldType == typeof(System.Reflection.Emit.OpCode))
+            .Select(f => (System.Reflection.Emit.OpCode)f.GetValue(null)!)
+            .ToDictionary(c => unchecked((ushort)c.Value));
+        var il = method.GetMethodBody()!.GetILAsByteArray()!;
+        for (var offset = 0; offset < il.Length; )
+        {
+            ushort value = il[offset++];
+            if (value == 0xfe)
+                value = (ushort)(0xfe00 | il[offset++]);
+            var code = codes[value];
+            if (code.OperandType == System.Reflection.Emit.OperandType.InlineMethod)
+                yield return method.Module.ResolveMethod(BitConverter.ToInt32(il, offset))!;
+            offset += code.OperandType switch
+            {
+                System.Reflection.Emit.OperandType.InlineNone => 0,
+                System.Reflection.Emit.OperandType.ShortInlineBrTarget
+                or System.Reflection.Emit.OperandType.ShortInlineI
+                or System.Reflection.Emit.OperandType.ShortInlineVar => 1,
+                System.Reflection.Emit.OperandType.InlineVar => 2,
+                System.Reflection.Emit.OperandType.InlineI8
+                or System.Reflection.Emit.OperandType.InlineR => 8,
+                System.Reflection.Emit.OperandType.InlineSwitch => 4
+                    + 4 * BitConverter.ToInt32(il, offset),
+                _ => 4,
+            };
+        }
+    }
+
     private sealed class OperationDeadlineAccess
     {
         private const System.Reflection.BindingFlags Flags =
@@ -248,7 +624,7 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
         {
             var identity = (MeshOperationId)
                 operation.GetType().GetProperty("OperationId", Flags)!.GetValue(operation)!;
-            return (bool)TakeMethod.Invoke(_node, [identity.Low, null, true])!;
+            return (bool)TakeMethod.Invoke(_node, [identity.Low, null])!;
         }
 
         internal CancellationToken Token(object operation) =>
@@ -257,7 +633,7 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
     }
 
     [Fact]
-    public async Task OperationDeadline_PreservesRoundsAndResumesABudgetedSlot()
+    public async Task OperationDeadline_PreservesAbsoluteDeadlineAndResumesABudgetedVisit()
     {
         var clock = new OperationDeadlineClock();
         await using var context = Systems.Zlink.Zlink.CreateContext();
@@ -283,7 +659,7 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
             null,
         ];
         Assert.True((bool)begin.Invoke(node, longRegistration)!);
-        // Hot-path E3: occupied-slot visits cannot expire an entry with remaining rounds.
+        // §10.1: skipped rotations cannot expire an entry before its absolute deadline.
         foreach (var tick in new[] { 1, 257, 512 })
         {
             clock.Timestamp = tick * TimeSpan.TicksPerMillisecond;
@@ -325,7 +701,7 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
     }
 
     [Fact]
-    public async Task OperationDeadline_RoundsOnlyVisitsYieldAtTheBudgetAndResumeFromTheCursor()
+    public async Task OperationDeadline_VisitsBeyondWindowYieldAtTheBudgetAndResumeFromTheCursor()
     {
         var clock = new OperationDeadlineClock();
         await using var context = Systems.Zlink.Zlink.CreateContext();
@@ -418,7 +794,7 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
                 method.Name == "TryRemoveOperation"
                 && method.GetParameters()[0].ParameterType == typeof(ulong)
             );
-        object?[] terminal = [identity.Low, null, false];
+        object?[] terminal = [identity.Low, null];
         Assert.True((bool)take.Invoke(node, terminal)!);
         type.GetMethod("RemoveManagedOperation", flags)!.Invoke(node, [pending]);
         var token = (CancellationToken)pendingType.GetProperty("Token", flags)!.GetValue(pending)!;

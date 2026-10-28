@@ -23,6 +23,9 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
             return;
         await using var context = Systems.Zlink.Zlink.CreateContext();
         var poller = new ControlledReceivePoller { CaptureIdleWait = true };
+        // Pool bootstrap can wait while monitor registration is still queued.
+        // Measure the configured node's idle wait, preserving the same deadline assertion.
+        poller.CanObserveIdleWait = () => poller.MonitorRegistered.Task.IsCompleted;
         await using var node = new ZLinkManagedMeshNode(
             context,
             "idle-wait",
@@ -340,9 +343,11 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
         }
     }
 
-    // Spec 08 §4.2: a receive rotation runs its management work once. With no
-    // peer activity due, that work is the two uncontended node turns that read
-    // liveness and operation deadlines; it creates no empty result container.
+    // Supervisor ruling for #2758: adapting this contract to spec 01 §10.1 is
+    // classification A. After the reserved empty visit (if any), spec 01 §10.1
+    // requires zero idle operation-owner turns. This node starts without a reservation. The
+    // allocation baseline therefore includes only liveness's existing turn.
+    // The second phase adds one turn and must fail that same cost assertion.
     [Fact]
     public async Task IdleReceiveRotationManagementAddsNoAllocationBeyondItsNodeTurns()
     {
@@ -350,13 +355,24 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
         const int iterations = 1000;
         var poller = new ControlledReceivePoller();
         await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var operationLane = new ZLinkStateLane();
         var node = new ZLinkManagedMeshNode(
             context,
             "idle-rotation-allocation",
-            receivePollerFactory: () => poller
+            receivePollerFactory: () => poller,
+            operationLane: operationLane
         );
         node.SetRoutingId(RoutingId.From("idle-rotation-allocation"));
         await using var lane = new ZLinkStateLane();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var occupied = operationLane.RunAsync(async () =>
+        {
+            entered.SetResult();
+            await release.Task;
+        });
+        await entered.Task;
+        var addTurn = false;
         long actual = 0;
         long baseline = 0;
         var rotations = 0;
@@ -364,13 +380,17 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
         SemaphoreSlim rotated = new(0);
         // The window opens after the controlled poller returns and closes before
         // its next wait, so it holds only the node's own rotation.
-        poller.AfterWait = () => last = GC.GetAllocatedBytesForCurrentThread();
+        poller.AfterWait = () =>
+        {
+            last = GC.GetAllocatedBytesForCurrentThread();
+            if (addTurn)
+                _ = lane.RunAsync(static value => value, 0).GetAwaiter().GetResult();
+        };
         poller.BeforeWait = () =>
         {
             var now = GC.GetAllocatedBytesForCurrentThread();
             var measured = now - last;
             var start = GC.GetAllocatedBytesForCurrentThread();
-            _ = lane.RunAsync(static value => value, 0).GetAwaiter().GetResult();
             _ = lane.RunAsync(static value => value, 0).GetAwaiter().GetResult();
             var control = GC.GetAllocatedBytesForCurrentThread() - start;
             if (rotations > warmup)
@@ -399,9 +419,23 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
                 actual == baseline,
                 $"idle rotation={actual}B, node turns={baseline}B, excess={actual - baseline}B/{iterations}"
             );
+            addTurn = true;
+            actual = baseline = 0;
+            rotations = 0;
+            for (var index = 0; index < warmup + iterations; index++)
+            {
+                node.SignalReceiveOwner();
+                Assert.True(await rotated.WaitAsync(CompletionBound));
+            }
+            Assert.Throws<Xunit.Sdk.TrueException>(() => Assert.True(actual == baseline));
+            output.WriteLine(
+                $"negative control: extra owner turn actual={actual}B baseline={baseline}B"
+            );
         }
         finally
         {
+            release.SetResult();
+            await occupied;
             var shutdown = node.DisposeAsync();
             poller.ReleaseWait();
             await shutdown;
@@ -747,6 +781,7 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
         internal bool FailRearm { get; init; }
         internal bool RespectTimeoutAfterWake { get; init; }
         internal bool CaptureIdleWait { get; init; }
+        internal Func<bool>? CanObserveIdleWait { get; set; }
         internal readonly TaskCompletionSource MonitorRegistered = new(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
@@ -780,7 +815,7 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
             {
                 // Zero-time turns apply startup registrations and pending wakes.
                 // Observe the first blocking wait, preserving even a finite deadline.
-                if (timeout != TimeSpan.Zero)
+                if (timeout != TimeSpan.Zero && (CanObserveIdleWait?.Invoke() ?? true))
                     IdleWait.TrySetResult(timeout);
                 return _inner.Wait(destination, timeout);
             }
