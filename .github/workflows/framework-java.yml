@@ -143,7 +143,7 @@ jobs:
           Add-Content -LiteralPath $env:GITHUB_ENV -Value "ZLINK_LIBRARY_PATH=$runtime"
           Add-Content -LiteralPath $env:GITHUB_PATH -Value (Join-Path $corePrefix "bin")
 
-      - name: Run Framework Java core tests
+      - name: Run Framework Java core and integration tests
         working-directory: framework/languages/java
         shell: bash
         env:
@@ -151,6 +151,7 @@ jobs:
         run: |
           ./gradlew --no-daemon --max-workers=2 \
             :zlink-framework-core:test \
+            :zlink-framework-core:integrationTest \
             -Pzlink.includeSamples=false
 
       # 위 step은 `-Pzlink.includeSamples=false`로 샘플 composite build를 아예 등록하지
@@ -171,7 +172,7 @@ jobs:
         run: |
           .\scripts\ci\framework-java-test-results.ps1 `
             -Mode summarize `
-            -InputPath "framework/languages/java/zlink-framework-core/build/test-results/test" `
+            -InputPath "framework/languages/java/zlink-framework-core/build/test-results" `
             -OutputPath ".artifacts/framework-java-results/${{ matrix.target.name }}" `
             -Platform "${{ matrix.target.name }}" `
             -MinimumTests $env:FRAMEWORK_JAVA_MIN_TESTS
