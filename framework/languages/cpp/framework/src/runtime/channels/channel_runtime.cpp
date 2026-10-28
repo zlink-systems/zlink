@@ -17,7 +17,6 @@
 #include "runtime/diagnostics/dispatch_error_reporter.hpp"
 #include "runtime/diagnostics/message_flow_tracer.hpp"
 #include "runtime/diagnostics/runtime_metrics.hpp"
-#include "runtime/dispatch/offload_executor.hpp"
 #include "runtime/dispatch/coroutine_executor.hpp"
 #include "runtime/locations/spot_address_resolvers.hpp"
 #include "runtime/messaging/client_call_codec.hpp"
@@ -30,7 +29,6 @@
 #include <algorithm>
 #include <exception>
 #include <stdexcept>
-#include <thread>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -132,58 +130,12 @@ bool has_route_channel (const std::shared_ptr<channel_runtime_state_t> &state,
     return index->route_channels.contains (channel_name);
 }
 
-using route_reply_result_t = result_t<runtime::messaging::message_parts_t>;
-
-task_t<route_reply_result_t>
-offload_route_reply (const std::shared_ptr<runtime::offload_executor_t> &executor,
-                     std::function<route_reply_result_t ()> work)
-{
-    auto source = std::make_shared<task_completion_source_t<route_reply_result_t>> ();
-    auto output = source->task ();
-    const auto complete = [source] (route_reply_result_t reply) {
-        source->complete (result_t<route_reply_result_t>::success (std::move (reply)));
-    };
-    if (!executor || !executor->try_submit ([complete, work = std::move (work)] () mutable {
-            try {
-                complete (work ());
-            }
-            catch (const framework_exception_t &error) {
-                complete (result_access_t::failure<runtime::messaging::message_parts_t> (error));
-            }
-            catch (const std::exception &error) {
-                complete (route_reply_result_t::failure (framework_error_kind_t::internal_failure,
-                                                         error.what ()));
-            }
-            catch (...) {
-                complete (route_reply_result_t::failure (framework_error_kind_t::internal_failure,
-                                                         "route request failed"));
-            }
-        })) {
-        complete (route_reply_result_t::failure (framework_error_kind_t::internal_failure,
-                                                 "route client executor is stopped"));
-    }
-    return output;
-}
-
-constexpr std::chrono::milliseconds route_client_worker_idle_timeout{100};
-
 } // namespace
 
 route_client_state_t::route_client_state_t (std::shared_ptr<channel_runtime_state_t> runtime,
                                             serializer_registry_t &serializers) :
     runtime (std::move (runtime)), serializers (&serializers)
 {
-    this->runtime->lane
-      .run_checked ([&] {
-          if (this->runtime->route_client_executor)
-              return;
-          const auto hardware_workers =
-            static_cast<std::size_t> (std::max (1u, std::thread::hardware_concurrency ()));
-          this->runtime->route_client_executor =
-            std::make_shared<zlink::framework::runtime::offload_executor_t> (
-              0, hardware_workers, route_client_worker_idle_timeout, "zlink-route-cli");
-      })
-      .get ();
 }
 
 channel_capability_snapshot_t &select_capability (channel_builder_state_t &state,
@@ -371,29 +323,17 @@ std::vector<channel_snapshot_t> channel_runtime_t::channel_snapshots () const
 namespace
 {
 
-void drain_route_client_executor (channel_runtime_state_t &state) noexcept
-{
-    const auto executor =
-      state.lane.run_checked ([&] { return state.route_client_executor; }).get ();
-    if (executor)
-        executor->drain ();
-}
-
 void drain_zlink_builder_state_runtime (zlink_builder_state_t &state) noexcept
 {
     if (state.runtime
         && state.runtime->lane
              .run_checked ([&] {
                  return !state.runtime->native_clients.empty ()
-                        || !state.runtime->native_publishers.empty ()
-                        || state.runtime->route_client_executor != nullptr;
+                        || !state.runtime->native_publishers.empty ();
              })
              .get ()) {
         auto failures = runtime_failures_for (state.runtime->monitoring);
-        if (!failures->capture ([&] {
-                drain_route_client_executor (*state.runtime);
-                close_native_channel_transports (state.runtime);
-            }))
+        if (!failures->capture ([&] { close_native_channel_transports (state.runtime); }))
             return;
     }
     state.stream_runtime.reset ();
@@ -676,7 +616,6 @@ void channel_runtime_t::shutdown ()
         route_channel->stop ();
     }
     close_native_channel_transports (_state);
-    drain_route_client_executor (*_state);
     drain ();
 }
 
@@ -1689,79 +1628,14 @@ route_client_t::submit_spot_send_erased (const std::shared_ptr<detail::route_cli
         }
         detail::channel_runtime_manager_t manager (state->runtime);
         auto &runtime = manager.get_route_channel (router_channel_id);
-        co_return runtime.submit_spot_send_parts (target_node_rid, spot_id, std::move (parts));
+        co_await runtime.submit_spot_send_parts (target_node_rid, spot_id, std::move (parts));
+        co_return result_t<void>::success ();
     }
     catch (const framework_exception_t &error) {
         co_return detail::result_access_t::failure<void> (error);
     }
     catch (const std::exception &error) {
         co_return result_t<void>::failure (framework_error_kind_t::internal_failure, error.what ());
-    }
-}
-
-task_t<std::uint64_t> route_client_t::submit_spot_request_erased (
-  const std::shared_ptr<detail::route_client_state_t> &state,
-  const std::string &router_channel_id,
-  const zlink::routing_id_t &target_node_rid,
-  const spot_id_t &target_spot_id,
-  const std::string &packet_name,
-  std::type_index request_type,
-  payload_encoder_t encode_payload,
-  std::chrono::milliseconds timeout,
-  const channel_request_call_t::metadata_map_t &metadata)
-{
-    auto submit_flow = runtime::flow_context_t::enter_current_or_create (
-      flow_origin_t::application,
-      state && state->runtime ? detail::message_flow_tracer_t (state->runtime->dispatch).mode ()
-                              : message_flow_log_mode_t::off);
-    if (!state || !state->runtime || state->serializers == nullptr) {
-        return task_t<std::uint64_t> (result_t<std::uint64_t>::failure (
-          framework_error_kind_t::protocol_error, "route client is not configured"));
-    }
-    runtime::messaging::message_parts_t parts;
-    const auto &spot_id = target_spot_id;
-    try {
-        detail::channel_runtime_manager_t manager (state->runtime);
-        auto &runtime = manager.get_route_channel (router_channel_id);
-        const auto effective_timeout = timeout > std::chrono::milliseconds::zero ()
-                                         ? timeout
-                                         : runtime.default_request_timeout ();
-        runtime::messaging::client_call_codec_t codec;
-        auto header = codec.create_envelope (runtime::messaging::message_kind_t::request,
-                                             router_channel_id, packet_name, effective_timeout);
-        header.metadata = metadata;
-        detail::message_flow_tracer_t (state->runtime->dispatch)
-          .trace (message_flow_outcome_t::sent, [&] {
-              return message_flow_event_t{message_flow_outcome_t::sent,
-                                          dispatch_error_surface_t::spot_route,
-                                          dispatch_message_kind_t::request,
-                                          packet_name,
-                                          router_channel_id,
-                                          std::nullopt,
-                                          header.correlation_id,
-                                          target_node_rid.to_string (),
-                                          spot_id,
-                                          std::nullopt,
-                                          std::nullopt};
-          });
-        parts =
-          codec.encode_payload_parts (std::move (header), encode_payload (*state->serializers));
-    }
-    catch (const framework_exception_t &error) {
-        return task_t<std::uint64_t> (detail::result_access_t::failure<std::uint64_t> (error));
-    }
-    try {
-        detail::channel_runtime_manager_t manager (state->runtime);
-        auto &runtime = manager.get_route_channel (router_channel_id);
-        return task_t<std::uint64_t> (
-          runtime.request_to_spot_parts (target_node_rid, spot_id, std::move (parts)));
-    }
-    catch (const framework_exception_t &error) {
-        return task_t<std::uint64_t> (detail::result_access_t::failure<std::uint64_t> (error));
-    }
-    catch (const std::exception &error) {
-        return task_t<std::uint64_t> (result_t<std::uint64_t>::failure (
-          framework_error_kind_t::internal_failure, error.what ()));
     }
 }
 
@@ -1837,29 +1711,13 @@ try {
     catch (const framework_exception_t &error) {
         return detail::result_access_t::failure<zlink::message_t> (error);
     }
-    // The conversion must not retain a route channel whose final release drains
-    // its executor. The worker resolves that channel through the runtime state.
-    if (route)
-        route->reset ();
     const auto ambient_guard = detail::enter_ambient_context (ambient_context);
     try {
         auto reply_task = [&] () -> request_task_t<result_t<runtime::messaging::message_parts_t>> {
             if (mesh)
                 return (*mesh)->request (*target_owner, std::move (parts), effective_timeout);
-            auto admitted = std::make_shared<task_completion_source_t<void>> ();
-            return request_task_t<result_t<runtime::messaging::message_parts_t>> (
-              detail::offload_route_reply (
-                state->runtime->route_client_executor,
-                [runtime_state = state->runtime, router_channel_id, target_owner,
-                 parts = std::move (parts), effective_timeout, ambient_context,
-                 admitted] () mutable {
-                    const auto worker_context = detail::enter_ambient_context (ambient_context);
-                    detail::channel_runtime_manager_t manager (runtime_state);
-                    auto &runtime = manager.get_route_channel (router_channel_id);
-                    return runtime.request_reply_parts (*target_owner, std::move (parts),
-                                                        effective_timeout, admitted);
-                }),
-              admitted);
+            return (*route)->request_reply_parts (*target_owner, std::move (parts),
+                                                  effective_timeout);
         }();
         // The reply decodes the selected operation's terminal once (hot path E5).
         return detail::project_request_reply<zlink::message_t> (
@@ -2114,6 +1972,7 @@ request_task_t<zlink::message_t> route_client_t::submit_spot_request_reply_messa
   std::map<std::string, std::string> metadata)
 try {
     // The reply owns this copy: the referenced state lives in the caller.
+    const auto request_started = std::chrono::steady_clock::now ();
     const auto state = state_ref;
     auto submit_flow = runtime::flow_context_t::enter_current_or_create (
       flow_origin_t::application,
@@ -2180,24 +2039,20 @@ try {
             if (mesh_requester)
                 return (*mesh_requester) (target_rid, spot_id, target_spot_generation,
                                           std::move (parts), effective_timeout);
-            auto admitted = std::make_shared<task_completion_source_t<void>> ();
-            return request_task_t<result_t<runtime::messaging::message_parts_t>> (
-              detail::offload_route_reply (
-                state->runtime->route_client_executor,
-                [runtime_state = state->runtime, router_channel_id, target_node_rid = target_rid,
-                 spot_id = std::string (spot_id), packet_name, parts = std::move (parts),
-                 effective_timeout, ambient_context, admitted] () mutable {
-                    const auto worker_context = detail::enter_ambient_context (ambient_context);
-                    detail::channel_runtime_manager_t manager (runtime_state);
-                    auto &runtime = manager.get_route_channel (router_channel_id);
-                    return detail::is_internal_spot_route_packet (packet_name)
-                             ? runtime.request_reply_parts (target_node_rid, std::move (parts),
-                                                            effective_timeout, admitted)
-                             : runtime.request_reply_spot_parts (target_node_rid, spot_id,
-                                                                 std::move (parts),
-                                                                 effective_timeout, admitted);
-                }),
-              admitted);
+            if (detail::is_internal_spot_route_packet (packet_name)) {
+                detail::channel_runtime_manager_t manager (state->runtime);
+                return manager.get_route_channel (router_channel_id)
+                  .request_reply_parts (target_rid, std::move (parts), effective_timeout);
+            }
+            const auto deadline = request_started + effective_timeout;
+            detail::channel_runtime_manager_t manager (state->runtime);
+            auto pending =
+              manager.get_route_channel (router_channel_id)
+                .request_reply_spot_parts (target_rid, spot_id, std::move (parts), deadline);
+            return detail::project_request_reply<result_t<runtime::messaging::message_parts_t>> (
+              pending, [] (const result_t<runtime::messaging::message_parts_t> &reply) {
+                  return result_t<result_t<runtime::messaging::message_parts_t>>::success (reply);
+              });
         }();
         // The reply decodes the selected operation's terminal once (hot path
         // E5) and owns the selected callable and its target until that terminal.
