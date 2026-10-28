@@ -81,7 +81,8 @@ final class ZLinkJavaRawMeshNodeIngressAdmissionTest {
             ZLinkJavaRawServicePort.Inbound inbound;
             do {
                 assertTrue(port.waitForReadable(router, java.time.Duration.ofSeconds(2)));
-                inbound = port.receiveNow(router).orElseThrow();
+                inbound = port.receiveNow(router);
+                assertNotNull(inbound);
                 if (inbound.frames().getFirst().length != 0) break;
                 inbound.close();
             } while (true);
