@@ -68,10 +68,8 @@ jobs:
             runner: ubuntu-24.04
             core_platform: linux-x64
             local_package_root: .artifacts/wsl
-          - name: win-x64
-            runner: windows-latest
-            core_platform: windows-x64
-            local_package_root: .artifacts/windows
+        # Windows runs on schedule, manual and release runs; merge-queue batches check Linux only.
+        include: ${{ fromJSON(startsWith(github.ref_name, 'mergify/merge-queue/') && '[]' || '[{"target":{"name":"win-x64","runner":"windows-latest","core_platform":"windows-x64","local_package_root":".artifacts/windows"}}]') }}
 
     steps:
       - name: Checkout repository
@@ -188,7 +186,7 @@ jobs:
   framework-java-compare:
     name: Compare Linux and Windows Java results
     runs-on: ${{ vars.ZLINK_LINUX_RUNNER && fromJSON(vars.ZLINK_LINUX_RUNNER) || 'ubuntu-24.04' }}
-    if: always()
+    if: always() && !startsWith(github.ref_name, 'mergify/merge-queue/')
     needs: framework-java
     steps:
       - name: Checkout repository

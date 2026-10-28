@@ -158,7 +158,6 @@ class handler_t
     std::thread::id last_thread;
 };
 
-
 struct spot_actor_t
 {
     int id = 0;
@@ -303,23 +302,42 @@ class duplicate_next_filter_t
     int duplicate_rejections = 0;
 };
 
-template <typename T>
-    requires (std::is_same_v<T, request_t> || std::is_same_v<T, reply_t>
-              || std::is_same_v<T, command_t> || std::is_same_v<T, event_t>
-              || std::is_same_v<T, async_request_t> || std::is_same_v<T, delayed_request_t>)
-void to_json (nlohmann::json &json, const T &value)
-{
-    json = value.value;
 }
 
-template <typename T>
-    requires (std::is_same_v<T, request_t> || std::is_same_v<T, reply_t>
-              || std::is_same_v<T, command_t> || std::is_same_v<T, event_t>
-              || std::is_same_v<T, async_request_t> || std::is_same_v<T, delayed_request_t>)
-void from_json (const nlohmann::json &json, T &value)
+template <> struct zlink::json::dto_traits<request_t>
 {
-    value.value = json.get<int> ();
-}
+    static constexpr auto fields = std::tuple{zlink::json::field ("value", &request_t::value)};
+};
+
+template <> struct zlink::json::dto_traits<reply_t>
+{
+    static constexpr auto fields = std::tuple{zlink::json::field ("value", &reply_t::value)};
+};
+
+template <> struct zlink::json::dto_traits<command_t>
+{
+    static constexpr auto fields = std::tuple{zlink::json::field ("value", &command_t::value)};
+};
+
+template <> struct zlink::json::dto_traits<event_t>
+{
+    static constexpr auto fields = std::tuple{zlink::json::field ("value", &event_t::value)};
+};
+
+template <> struct zlink::json::dto_traits<async_request_t>
+{
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("value", &async_request_t::value)};
+};
+
+template <> struct zlink::json::dto_traits<delayed_request_t>
+{
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("value", &delayed_request_t::value)};
+};
+
+namespace
+{
 
 zlink::framework::task_t<reply_t> delayed_reply_task (int value)
 {
@@ -386,8 +404,8 @@ bool verify_filter_snapshot_reuse (zlink::framework::service_provider_t &provide
     const auto registered_copies = copies;
     for (int i = 0; i < 2; ++i) {
         auto result = registry.invoke ("game", "snapshot", "request", provider, serializers,
-                                       zlink::message_t::from (std::string ("7")));
-        if (!result || result.value ().to_string () != "8")
+                                       zlink::message_t::from (std::string (R"({"value":7})")));
+        if (!result || result.value ().to_string () != R"({"value":8})")
             return false;
     }
     if (copies != registered_copies)
@@ -397,8 +415,9 @@ bool verify_filter_snapshot_reuse (zlink::framework::service_provider_t &provide
                                                           {.packet_name = "request"});
     detail::inbound_message_context_t inbound;
     inbound.before_application_handler = [] { throw std::runtime_error ("terminal failure"); };
-    const auto failure = no_filters.invoke ("game", "snapshot", "request", provider, serializers,
-                                            zlink::message_t::from (std::string ("7")), inbound);
+    const auto failure =
+      no_filters.invoke ("game", "snapshot", "request", provider, serializers,
+                         zlink::message_t::from (std::string (R"({"value":7})")), inbound);
     return !failure && failure.error ()
            && failure.error ()->kind () == framework_error_kind_t::internal_failure
            && std::string (failure.error ()->what ()) == "terminal failure";
@@ -461,7 +480,7 @@ int main ()
     filter_registry.add_filter (worker_filter).add_filter (worker_filter);
     auto filtered =
       filter_registry.invoke ("game", "worker", "worker", filter_provider, filter_serializers,
-                              zlink::message_t::from (std::string ("7")));
+                              zlink::message_t::from (std::string (R"({"value":7})")));
     if (hold_worker) {
         release_worker->complete (zlink::framework::result_t<void>::success ());
     }
@@ -531,7 +550,7 @@ int main ()
     }
 
     auto request_result = handlers.invoke ("game", "move", "request", provider, serializers,
-                                           zlink::message_t::from (std::string ("7")));
+                                           zlink::message_t::from (std::string (R"({"value":7})")));
     if (!request_result
         || serializers.get<reply_t> ()
                .deserialize (
@@ -552,8 +571,9 @@ int main ()
         return 35;
     }
 
-    auto blocked_result = handlers.invoke ("game", "blocked", "blocked", provider, serializers,
-                                           zlink::message_t::from (std::string ("123")));
+    auto blocked_result =
+      handlers.invoke ("game", "blocked", "blocked", provider, serializers,
+                       zlink::message_t::from (std::string (R"({"value":123})")));
     if (blocked_result
         || blocked_result.error_kind () != zlink::framework::framework_error_kind_t::rejected) {
         return 36;
@@ -569,7 +589,7 @@ int main ()
 
     auto duplicate_result =
       handlers.invoke ("game", "duplicate", "duplicate", provider, serializers,
-                       zlink::message_t::from (std::string ("321")));
+                       zlink::message_t::from (std::string (R"({"value":321})")));
     if (duplicate_result
         || duplicate_result.error_kind ()
              != zlink::framework::framework_error_kind_t::invalid_operation
@@ -579,20 +599,23 @@ int main ()
     }
 
     provider.get_required<handler_t> ().last_command = 0;
-    auto blocked_send = handlers.invoke ("game", "blocked-send", "blocked-send", provider,
-                                         serializers, zlink::message_t::from (std::string ("41")));
+    auto blocked_send =
+      handlers.invoke ("game", "blocked-send", "blocked-send", provider, serializers,
+                       zlink::message_t::from (std::string (R"({"value":41})")));
     if (!blocked_send || provider.get_required<handler_t> ().last_command != 0) {
         return 40;
     }
 
     provider.get_required<handler_t> ().last_event = 0;
-    auto blocked_event = handlers.invoke ("game", "blocked-event", "blocked-event", provider,
-                                          serializers, zlink::message_t::from (std::string ("51")));
+    auto blocked_event =
+      handlers.invoke ("game", "blocked-event", "blocked-event", provider, serializers,
+                       zlink::message_t::from (std::string (R"({"value":51})")));
     if (!blocked_event || provider.get_required<handler_t> ().last_event != 0) {
         return 41;
     }
-    auto isolated_event = handlers.invoke ("game", "event", "event", provider, serializers,
-                                           zlink::message_t::from (std::string ("52")));
+    auto isolated_event =
+      handlers.invoke ("game", "event", "event", provider, serializers,
+                       zlink::message_t::from (std::string (R"({"value":52})")));
     if (!isolated_event || provider.get_required<handler_t> ().last_event != 52
         || audit_filter.last_dispatch_kind
              != zlink::framework::handler_dispatch_kind_t::classic_fanout) {
@@ -606,7 +629,7 @@ int main ()
     inbound.message.metadata = zlink::framework::message_metadata_t ({{"trace-id", "trace-abc"}});
     auto context_request_result =
       handlers.invoke ("game", "context-move", "context-request", provider, serializers,
-                       zlink::message_t::from (std::string ("8")), inbound);
+                       zlink::message_t::from (std::string (R"({"value":8})")), inbound);
     auto &handler = provider.get_required<handler_t> ();
     if (!context_request_result
         || serializers.get<reply_t> ()
@@ -623,14 +646,14 @@ int main ()
     }
 
     auto send_result = handlers.invoke ("game", "command", "command", provider, serializers,
-                                        zlink::message_t::from (std::string ("9")));
+                                        zlink::message_t::from (std::string (R"({"value":9})")));
     if (!send_result || provider.get_required<handler_t> ().last_command != 9) {
         return 4;
     }
 
     auto context_send_result =
       handlers.invoke ("game", "context-command", "context-command", provider, serializers,
-                       zlink::message_t::from (std::string ("10")), inbound);
+                       zlink::message_t::from (std::string (R"({"value":10})")), inbound);
     if (!context_send_result || handler.last_command != 10 || handler.last_context_mesh != "rooms"
         || handler.last_context_channel != "game"
         || handler.last_context_packet != "context-command"
@@ -640,7 +663,7 @@ int main ()
     }
 
     auto event_result = handlers.invoke ("game", "event", "event", provider, serializers,
-                                         zlink::message_t::from (std::string ("11")));
+                                         zlink::message_t::from (std::string (R"({"value":11})")));
     if (!event_result || provider.get_required<handler_t> ().last_event != 11) {
         return 5;
     }
@@ -655,7 +678,7 @@ int main ()
     publish_inbound.topic = "context-event";
     auto context_event_result =
       handlers.invoke ("game", "context-event", "context-event", provider, serializers,
-                       zlink::message_t::from (std::string ("12")), publish_inbound);
+                       zlink::message_t::from (std::string (R"({"value":12})")), publish_inbound);
     if (!context_event_result || handler.last_event != 12 || handler.last_context_mesh != "rooms"
         || handler.last_context_channel != "game" || handler.last_context_packet != "context-event"
         || handler.last_context_correlation != "corr-77"
@@ -673,7 +696,7 @@ int main ()
     packet_event_inbound.topic = "received-topic";
     auto packet_event_result = packet_event_handlers.invoke (
       "game", "received-topic", packet_event_name, provider, serializers,
-      zlink::message_t::from (std::string ("21")), packet_event_inbound);
+      zlink::message_t::from (std::string (R"({"value":21})")), packet_event_inbound);
     if (!packet_event_result || handler.last_event != 21) {
         return 43;
     }
@@ -697,7 +720,7 @@ int main ()
       "game", "send-topic", &handler_t::on_command, {.packet_name = packet_event_name});
     auto same_packet_send_result =
       packet_event_handlers.invoke ("game", "send-topic", packet_event_name, provider, serializers,
-                                    zlink::message_t::from (std::string ("22")));
+                                    zlink::message_t::from (std::string (R"({"value":22})")));
     const auto *same_packet_send =
       packet_event_handlers.find ("game", "send-topic", packet_event_name);
     if (!same_packet_send_result || handler.last_command != 22 || handler.last_event != 21
@@ -707,7 +730,7 @@ int main ()
     }
 
     auto async_result = handlers.invoke ("game", "async", "async", provider, serializers,
-                                         zlink::message_t::from (std::string ("5")));
+                                         zlink::message_t::from (std::string (R"({"value":5})")));
     if (!async_result
         || serializers.get<reply_t> ()
                .deserialize (
@@ -718,7 +741,7 @@ int main ()
     }
 
     auto delayed_result = handlers.invoke ("game", "delayed", "delayed", provider, serializers,
-                                           zlink::message_t::from (std::string ("6")));
+                                           zlink::message_t::from (std::string (R"({"value":6})")));
     if (!delayed_result
         || serializers.get<reply_t> ()
                .deserialize (
@@ -768,7 +791,7 @@ int main ()
     }
 
     auto missing_result = handlers.invoke ("game", "missing", "request", provider, serializers,
-                                           zlink::message_t::from (std::string ("1")));
+                                           zlink::message_t::from (std::string (R"({"value":1})")));
     if (missing_result
         || missing_result.error_kind () != zlink::framework::framework_error_kind_t::not_found) {
         return 8;
@@ -787,7 +810,7 @@ int main ()
     }
 
     auto thrown_result = handlers.invoke ("game", "throw", "throw", provider, serializers,
-                                          zlink::message_t::from (std::string ("1")));
+                                          zlink::message_t::from (std::string (R"({"value":1})")));
     if (thrown_result
         || thrown_result.error_kind ()
              != zlink::framework::framework_error_kind_t::internal_failure) {
@@ -801,7 +824,7 @@ int main ()
     zlink::framework::service_collection_t empty_services;
     auto empty_provider = empty_services.build_provider ();
     auto owner_result = handlers.invoke ("game", "move", "request", empty_provider, serializers,
-                                         zlink::message_t::from (std::string ("1")));
+                                         zlink::message_t::from (std::string (R"({"value":1})")));
     if (owner_result
         || owner_result.error_kind () != zlink::framework::framework_error_kind_t::not_found) {
         return 13;
@@ -816,7 +839,7 @@ int main ()
     provider.get_required<handler_t> ().last_command = 0;
     const auto mismatched_result =
       handlers.invoke ("game", "command", "command", provider, serializers,
-                       zlink::message_t::from (std::string ("91")), mismatched_codec);
+                       zlink::message_t::from (std::string (R"({"value":91})")), mismatched_codec);
     if (mismatched_result
         || mismatched_result.error_kind ()
              != zlink::framework::framework_error_kind_t::protocol_error
@@ -888,7 +911,7 @@ int main ()
     spot_actor_t spot_actor{42};
     auto spot_actor_result = spot_handlers.invoke_actor_packet (
       "spot-actor-packet", spot, spot_actor, provider, serializers,
-      zlink::message_t::from (std::string ("21")), spot_inbound);
+      zlink::message_t::from (std::string (R"({"value":21})")), spot_inbound);
     if (!spot_actor_result || spot.last_actor != 42 || spot.last_payload != 21
         || spot.last_mesh != "rooms" || spot.last_channel != "<none>"
         || spot.last_packet != "spot-actor-packet" || spot.last_content_type != "application/json"
