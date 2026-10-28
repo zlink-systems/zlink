@@ -188,8 +188,11 @@ raw_client_server_server_t::raw_client_server_server_t (
   std::shared_ptr<zlink::context_t> context,
   runtime::offload_executor_t *infrastructure_executor) :
     _options (std::move (options)),
-    _lane (infrastructure_executor ? runtime::state_lane_t (*infrastructure_executor)
-                                   : runtime::state_lane_t ()),
+    _lane ([infrastructure_executor] () -> runtime::state_lane_t {
+        if (infrastructure_executor)
+            return runtime::state_lane_t (*infrastructure_executor);
+        return runtime::state_lane_t ();
+    }()),
     _context (context ? std::move (context) : std::make_shared<zlink::context_t> ()),
     _mailbox (),
     _liveness (_lane)
