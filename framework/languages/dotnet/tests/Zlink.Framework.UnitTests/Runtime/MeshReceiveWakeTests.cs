@@ -294,30 +294,42 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
             }
             const int iterations = 1000;
             var calls = router.Calls;
-            var start = GC.GetAllocatedBytesForCurrentThread();
-            for (var index = 0; index < iterations; index++)
-            {
-                router.Remaining = 1;
-                do node.DrainRawSocket(CancellationToken.None);
-                while (router.Remaining != 0);
-            }
-            var actual = GC.GetAllocatedBytesForCurrentThread() - start;
-            Assert.Equal(iterations, router.Accepted - 128);
-            Assert.True(router.Calls - calls >= iterations);
-            // Match the number of receipt containers the bounded drain really
-            // attempted; no platform-specific object size is embedded here.
-            start = GC.GetAllocatedBytesForCurrentThread();
-            for (var index = 0; index < router.Calls - calls; index++)
-            {
-                using var receipt = Received.Create();
-                if (index < iterations)
-                    _ = receipt.Parts;
-                _ = receipt.RoutingId;
-            }
-            var baseline = GC.GetAllocatedBytesForCurrentThread() - start;
+            var receiptsPerDrain = new int[iterations];
+            var drains = 0;
+            // Alternating windows give both sides the same JIT tiering state.
+            var (actual, baseline) = PerCallAllocation.MinWindowPair(
+                index =>
+                {
+                    drains++;
+                    var before = router.Calls;
+                    router.Remaining = 1;
+                    do node.DrainRawSocket(CancellationToken.None);
+                    while (router.Remaining != 0);
+                    receiptsPerDrain[index] = router.Calls - before;
+                },
+                // Match the number of receipt containers each bounded drain really
+                // attempted; no platform-specific object size is embedded here.
+                index =>
+                {
+                    for (
+                        var receiptIndex = 0;
+                        receiptIndex < receiptsPerDrain[index];
+                        receiptIndex++
+                    )
+                    {
+                        using var receipt = Received.Create();
+                        if (receiptIndex == 0)
+                            _ = receipt.Parts;
+                        _ = receipt.RoutingId;
+                    }
+                },
+                iterations
+            );
+            Assert.Equal(drains, router.Accepted - 128);
+            Assert.True(router.Calls - calls >= drains);
             Assert.True(
                 actual == baseline,
-                $"ingress={actual}B, receipt baseline={baseline}B, excess={actual - baseline}B/{iterations}"
+                $"ingress={actual}B, receipt baseline={baseline}B, excess={actual - baseline}B/window"
             );
         }
         finally
@@ -460,10 +472,11 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
             var ready = new TaskCompletionSource(
                 TaskCreationOptions.RunContinuationsAsynchronously
             );
-            long actual = 0;
-            long baseline = 0;
+            var actualSamples = new List<long>();
+            var baselineSamples = new List<long>();
             long lastActual = 0;
             long lastBaseline = 0;
+            var lastPaused = false;
             var samples = 0;
             var key = MeshMailboxKey.ForNode(MeshReadyDomains.Application);
             var readyMap = new ConcurrentDictionary<MeshMailboxKey, bool>();
@@ -489,6 +502,7 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
                 )
                     throw new InvalidOperationException("Baseline mailbox refused the record.");
                 lastBaseline = GC.GetAllocatedBytesForCurrentThread() - start;
+                lastPaused = GC.GetTotalPauseDuration() != router.RecordPause;
                 samples++;
                 ready.TrySetResult();
                 return domains;
@@ -501,10 +515,11 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
             {
                 Assert.Equal(SubmitResult.Ok, source.SendToNode(targetRid, [payload]));
                 await ready.Task.WaitAsync(CompletionBound);
-                if (index >= warmup)
+                // A sample that overlapped a GC pause can carry a retired allocation context.
+                if (index >= warmup && !lastPaused)
                 {
-                    actual += lastActual;
-                    baseline += lastBaseline;
+                    actualSamples.Add(lastActual);
+                    baselineSamples.Add(lastBaseline);
                 }
                 Assert.False(
                     target.DrainReady(MeshReadyDomains.Application, readyBatch, RecvFlags.DontWait)
@@ -527,12 +542,14 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
                 );
             }
             Assert.Equal(warmup + iterations, samples);
+            var actual = PerCallAllocation.MinWindow(actualSamples);
+            var baseline = PerCallAllocation.MinWindow(baselineSamples);
             output.WriteLine(
-                $"node ingress={actual}B, lane + owner baseline={baseline}B, excess={actual - baseline}B/{iterations}"
+                $"node ingress={actual}B, lane + owner baseline={baseline}B, excess={actual - baseline}B/window"
             );
             Assert.True(
                 actual == baseline,
-                $"node ingress={actual}B, lane + owner baseline={baseline}B, excess={actual - baseline}B/{iterations}"
+                $"node ingress={actual}B, lane + owner baseline={baseline}B, excess={actual - baseline}B/window"
             );
         }
         finally
@@ -605,6 +622,7 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
         internal IRouterSocket Inner => inner;
         internal bool ReceiveRealRecords;
         internal long RecordStart;
+        internal TimeSpan RecordPause;
         internal int Remaining;
         internal int Calls;
         internal int Accepted;
@@ -633,6 +651,7 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
                     if (head.Length >= 5 && head[3] == (byte)ServiceWireConstants.Command.NodeSend)
                     {
                         _ = result.RoutingId;
+                        RecordPause = GC.GetTotalPauseDuration();
                         RecordStart = GC.GetAllocatedBytesForCurrentThread();
                     }
                 }

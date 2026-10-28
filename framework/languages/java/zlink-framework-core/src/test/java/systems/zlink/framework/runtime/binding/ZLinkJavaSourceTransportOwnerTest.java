@@ -57,9 +57,7 @@ final class ZLinkJavaSourceTransportOwnerTest {
             field.setAccessible(true);
             var port = (ZLinkJavaRawServicePort) field.get(node);
             var socket = port.openRouter(RoutingId.from("owner-source"));
-            var ownerField = ZLinkJavaRawMeshNode.class.getDeclaredField("transportStateLane");
-            ownerField.setAccessible(true);
-            var selectedOwner = (ZLinkStateLane) ownerField.get(node);
+            var selectedOwner = node.sourceTransportLane();
             selectedOwner
                     .runNowOrQueue(
                             () -> {

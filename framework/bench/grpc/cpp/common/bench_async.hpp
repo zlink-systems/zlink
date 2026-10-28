@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
-// A single-threaded coroutine driver for the raw ZLink rows.
+// Completion notifications and single-threaded coroutine driving for C++ bench rows.
 //
 // The C++ binding's request terminal is `async()` (an awaitable) or `submit()`
 // (a blocking wait). A blocking terminal can hold exactly one request open at a
@@ -9,12 +9,16 @@
 // thread, one ready queue, `poller_t::wait` driving the socket-local completion
 // drain.
 //
-// G4: everything here is public binding API. There is no second poller, no
-// reflection, and no retry inside a measured window.
+// Raw traffic uses public binding API. Framework completion notifications use the
+// existing internal task observer. Neither path adds a second poller or retries.
 #ifndef ZLINK_CPP_BENCH_ASYNC_HPP
 #define ZLINK_CPP_BENCH_ASYNC_HPP
 
 #include <zlink.hpp>
+#include <zlink/framework/contracts/dispatch/task.hpp>
+
+#include <chrono>
+#include <condition_variable>
 
 #include <coroutine>
 #include <deque>
@@ -28,6 +32,52 @@
 
 namespace zlink_cpp_bench
 {
+
+class completion_signal_t
+{
+  public:
+    // Already-completed sends need no cross-thread completion notification.
+    template <typename T>
+    void notify (zlink::framework::task_t<T> &task,
+                 size_t slot,
+                 std::vector<size_t> &completed,
+                 const std::shared_ptr<completion_signal_t> &self)
+    {
+        if (task.await_ready ())
+            completed.push_back (slot);
+        else
+            zlink::framework::detail::observe_task_completion (
+              task, [self, slot] (const auto &) { self->notify (slot); });
+    }
+
+    void notify (size_t slot)
+    {
+        {
+            std::lock_guard<std::mutex> lock (_mutex);
+            _completed.push_back (slot);
+        }
+        _ready.notify_one ();
+    }
+
+    void take_completed (std::vector<size_t> &completed)
+    {
+        std::lock_guard<std::mutex> lock (_mutex);
+        completed.assign (_completed.begin (), _completed.end ());
+        _completed.clear ();
+    }
+
+    void wait_until (std::chrono::steady_clock::time_point deadline)
+    {
+        std::unique_lock<std::mutex> lock (_mutex);
+        _ready.wait_until (lock, deadline, [&] { return !_completed.empty (); });
+    }
+
+  private:
+    std::mutex _mutex;
+    std::condition_variable _ready;
+    std::deque<size_t> _completed;
+};
+
 
 // Continuations may be published from Core's completion drain; only the
 // application thread runs them. `_ready` is touched by the application thread
@@ -54,7 +104,7 @@ class ready_queue_t
         template <typename TPromise>
         void await_suspend (std::coroutine_handle<TPromise> continuation)
         {
-            if constexpr (requires (TPromise &promise) {
+            if constexpr (requires (TPromise & promise) {
                               promise.zlink_bind_continuation_scheduler (_queue);
                           }) {
                 continuation.promise ().zlink_bind_continuation_scheduler (_queue);
@@ -174,7 +224,7 @@ class task_t
 
     std::exception_ptr failure () const
     {
-        return _handle ? _handle.promise ().failure : std::exception_ptr {};
+        return _handle ? _handle.promise ().failure : std::exception_ptr{};
     }
 
   private:
@@ -186,7 +236,7 @@ class task_t
         }
     }
 
-    promise_type::handle_t _handle {};
+    promise_type::handle_t _handle{};
 };
 
 } // namespace zlink_cpp_bench

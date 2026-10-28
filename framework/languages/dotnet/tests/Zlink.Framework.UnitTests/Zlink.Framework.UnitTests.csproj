@@ -53,6 +53,8 @@
         <Compile Include="Runtime/BoundSessionDisconnectTests.cs"/>
         <Compile Include="Runtime/BoundSessionReplacementCloseTests.cs"/>
         <Compile Include="AssemblyInfo.cs"/>
+        <Compile Include="Support/PerCallAllocation.cs"/>
+        <Compile Include="Support/PerCallAllocationTests.cs"/>
         <Compile Include="Runtime/InstanceReadyAdmissionTests.cs"/>
         <Compile Include="Runtime/SessionFailureClassificationTests.cs"/>
         <Compile Include="Runtime/SpotShutdownExecutionTests.cs"/>
@@ -226,6 +228,7 @@
         <Compile Include="Runtime/MeshNodeShutdownSealTests.cs"/>
         <Compile Include="Runtime/MeshNodeLifecycleStateTests.cs"/>
         <Compile Include="Runtime/MeshNodeHelloSubmissionTests.cs"/>
+        <Compile Include="Runtime/RawMeshPeerAdmission.cs"/>
         <Compile Include="Runtime/PublicContractSnapshotTests.cs"/>
         <Compile Include="Runtime/SerialExecutionQueueBenchmarkTests.cs"/>
         <Compile Include="Runtime/SerialExecutorLayerContractTests.cs"/>

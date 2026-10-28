@@ -84,10 +84,6 @@ jobs:
           - 20
           - 22
         target:
-          - name: win-x64
-            runner: windows-latest
-            msvc_arch: x64
-            core_platform: windows-x64
           - name: linux-x64
             runner: ubuntu-24.04
             core_platform: linux-x64
@@ -97,6 +93,8 @@ jobs:
           - name: darwin-arm64
             runner: macos-15
             core_platform: macos-arm64
+        # Windows runs on schedule, manual and release runs; merge-queue batches check Linux only.
+        include: ${{ fromJSON(startsWith(github.ref_name, 'mergify/merge-queue/') && '[]' || '[{"node-version":20,"target":{"name":"win-x64","runner":"windows-latest","msvc_arch":"x64","core_platform":"windows-x64"}},{"node-version":22,"target":{"name":"win-x64","runner":"windows-latest","msvc_arch":"x64","core_platform":"windows-x64"}}]') }}
 
     env:
       # Node 20 exposes the platform WebSocket API behind this flag.

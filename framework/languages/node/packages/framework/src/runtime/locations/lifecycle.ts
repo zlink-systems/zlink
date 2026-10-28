@@ -125,7 +125,8 @@ export class ZLinkLocationLifecycle {
     spotId: RoutingId,
     spotGeneration: bigint,
     spotKind: ZLinkSpotKind.Entry | ZLinkSpotKind.User,
-    ownerNodeGeneration: bigint
+    ownerNodeGeneration: bigint,
+    signal?: AbortSignal
   ): Promise<void> {
     await this.actorClaims.commitMembership(
       actorType,
@@ -134,7 +135,8 @@ export class ZLinkLocationLifecycle {
       spotId,
       spotGeneration,
       spotKind,
-      ownerNodeGeneration
+      ownerNodeGeneration,
+      signal
     );
   }
 
