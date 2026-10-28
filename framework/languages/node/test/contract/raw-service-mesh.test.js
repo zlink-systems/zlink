@@ -10,7 +10,6 @@ const { ServiceStatefulRuntime } = require('../../packages/framework/dist/runtim
 const { ZLinkMeshCompletionTable } = require('../../packages/framework/dist/runtime/backend/mesh-completion-table');
 const wire = require('../../packages/framework/dist/runtime/foundation/service-stateful-wire-codec');
 const { encodeMultipartApplicationPayload } = require('../../packages/framework/dist/runtime/foundation/service-wire-m6a-codec');
-const { OperationKind } = require('../../packages/framework/dist/runtime/foundation/service-runtime-contracts');
 const {
   registerServiceSessionBindingIngressPort
 } = require('../../packages/framework/dist/runtime/foundation/service-session-binding-ingress-port');
@@ -72,7 +71,7 @@ function sessionFixture(disconnectFailure, nativeSocket, routingId = zlink.Routi
   };
   const service = backend.createStreamSessionService(native);
   service.start();
-  service.lookupActor = (_node, actorId) => backend.observeStateful(OperationKind.ActorLookup, {
+  stateful.lookupRemoteActor = (_node, actorId) => ({
     id: 100n,
     promise: Promise.resolve({ terminalResult: zlink.RequestResult.Ok, failureCode: 0,
       kindData: { kind: 'actorLookupCompletion', location: { actor: actorId === actor.actorId ? actor : nextActor } } })
