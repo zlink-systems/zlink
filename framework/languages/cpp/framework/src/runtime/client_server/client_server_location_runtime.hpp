@@ -127,6 +127,8 @@ class client_server_location_runtime_t final : public client_server_runtime_t
                              const std::shared_ptr<observer_t> &initial_observer = {}) const;
     boost::asio::awaitable<result_t<void>>
     drain_server_owner (std::shared_ptr<raw_client_server_server_t> server, std::string owner);
+    task_t<void> dispatch_server_record (std::shared_ptr<raw_client_server_server_t> server,
+                                         mesh::service_mailbox_record_t record);
     void stop_servers ();
     void stop_clients ();
 

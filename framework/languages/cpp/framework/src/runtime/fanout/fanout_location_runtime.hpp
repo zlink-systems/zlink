@@ -22,6 +22,8 @@
 #include <zlink/Contracts/Eventing/poller.hpp>
 
 #include <atomic>
+#include <condition_variable>
+#include <mutex>
 #include <map>
 #include <memory>
 #include <optional>
@@ -56,6 +58,9 @@ class fanout_location_runtime_t final : public fanout_runtime_t
 
     void start ();
     void stop ();
+    void seal_application_dispatch () noexcept;
+    bool
+    wait_for_accepted_callbacks_until (std::chrono::steady_clock::time_point deadline) noexcept;
     bool republish_after_store_recovery (
       location_write_intent_t intent = location_write_intent_t::new_claim);
     bool empty () const noexcept;
@@ -76,6 +81,7 @@ class fanout_location_runtime_t final : public fanout_runtime_t
     struct subscriber_resource_t;
     struct resource_snapshot_t;
 
+    static bool accepted_callbacks_drained (const resource_snapshot_t &resources);
     void publish_resources_on_lane ();
 
     void start_publisher (const channel_snapshot_t &channel,
@@ -123,6 +129,13 @@ class fanout_location_runtime_t final : public fanout_runtime_t
     const handler_registry_t *_handlers;
     std::shared_ptr<application_job_queue_t> _application_jobs;
     std::unique_ptr<application_supply_slot_t> _application_supply;
+    struct dispatch_progress_t
+    {
+        std::mutex mutex;
+        std::condition_variable changed;
+    };
+    const std::shared_ptr<dispatch_progress_t> _dispatch_progress =
+      std::make_shared<dispatch_progress_t> ();
     std::shared_ptr<offload_executor_t> _dispatch_executor;
     std::unique_ptr<zlink::poller_t> _subscriber_poller;
     eventing::runtime_wake_timer_t _wake_timer;

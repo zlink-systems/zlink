@@ -66,13 +66,20 @@ struct fanout_location_runtime_t::subscriber_resource_t
     std::string channel_name;
     std::shared_ptr<raw_fanout_subscriber_t> owner;
     std::shared_ptr<serial_execution_queue_t> dispatch_queue;
+    std::shared_ptr<std::atomic_size_t> active_dispatches =
+      std::make_shared<std::atomic_size_t> (0);
 };
 
 struct fanout_location_runtime_t::subscriber_entry_t : subscriber_resource_t
 {
-    explicit subscriber_entry_t (offload_executor_t &executor)
+    subscriber_entry_t (offload_executor_t &executor,
+                        std::shared_ptr<runtime_failure_collector_t> failures)
     {
-        dispatch_queue = std::make_shared<serial_execution_queue_t> (executor);
+        dispatch_queue = std::make_shared<serial_execution_queue_t> (
+          executor, serial_execution_queue_options_t{},
+          [failures = std::move (failures)] (const std::string &, const std::exception_ptr &error) {
+              failures->report (error);
+          });
     }
     std::vector<fanout_publisher_intent_t> desired;
 };
@@ -271,7 +278,8 @@ void fanout_location_runtime_t::start_publisher (const channel_snapshot_t &chann
 
 void fanout_location_runtime_t::start_subscriber (const channel_snapshot_t &channel)
 {
-    auto entry = std::make_unique<subscriber_entry_t> (*_dispatch_executor);
+    auto entry = std::make_unique<subscriber_entry_t> (*_dispatch_executor,
+                                                       _channel_runtime.runtime_failures ());
     entry->channel_name = channel.name;
     entry->owner = std::make_shared<raw_fanout_subscriber_t> (
       _channel_runtime.core_context (), _subscriber_poller.get (),
@@ -671,51 +679,89 @@ void fanout_location_runtime_t::pump ()
                 auto packet_name = received->payload.packet_name;
                 auto channel_name = subscriber.channel_name;
                 auto topic = received->topic;
-                subscriber.dispatch_queue->post_async (
-                  subscriber.channel_name,
-                  [this, message = std::move (message), inbound = std::move (inbound),
-                   retained = std::move (retained), runtime = std::move (runtime),
-                   packet_name = std::move (packet_name), channel_name = std::move (channel_name),
-                   topic = std::move (topic)] (auto complete) mutable {
-                      auto scope = std::make_shared<zlink::framework::detail::service_scope_t> (
-                        zlink::framework::detail::service_scope_t::create (
-                          _services,
-                          zlink::framework::detail::service_scope_kind_t::handler_invocation));
-                      auto dispatched = runtime.dispatch_send_async (
-                        channel_name, topic, packet_name, scope->provider (), *_serializers,
-                        *_handlers, std::move (message), std::move (inbound));
-                      detail::observe_task_completion (
-                        dispatched,
-                        [scope = std::move (scope), retained = std::move (retained),
-                         runtime = std::move (runtime), packet_name = std::move (packet_name),
-                         channel_name = std::move (channel_name), topic = std::move (topic),
-                         complete = std::move (complete)] (const result_t<void> &result) mutable {
-                            static_cast<void> (scope);
-                            static_cast<void> (retained);
-                            if (!result) {
-                                zlink::framework::detail::dispatch_error_reporter_t (
-                                  runtime.dispatch_options_ref ())
-                                  .report_lazy ([&] {
-                                      return message_dispatch_error_event_t{
-                                        .surface = dispatch_error_surface_t::classic_fanout,
-                                        .message_kind = dispatch_message_kind_t::send,
-                                        .reason =
-                                          zlink::framework::detail::dispatch_reason_from_error (
-                                            result.error ()),
-                                        .action = dispatch_error_action_t::drop,
-                                        .packet_name = packet_name,
-                                        .channel_name = channel_name,
-                                        .topic = topic,
-                                        .exception = result.error ()
-                                                       ? std::make_exception_ptr (*result.error ())
-                                                       : std::exception_ptr{}};
-                                  });
-                            }
-                            complete ([] {});
-                        });
-                  });
+                const auto finish_dispatch = [active = subscriber.active_dispatches,
+                                              progress = _dispatch_progress] {
+                    {
+                        std::lock_guard lock (progress->mutex);
+                        active->fetch_sub (1, std::memory_order_acq_rel);
+                    }
+                    progress->changed.notify_all ();
+                };
+                std::unique_lock lock (_dispatch_progress->mutex);
+                subscriber.active_dispatches->fetch_add (1, std::memory_order_acq_rel);
+                bool accepted = false;
+                try {
+                    accepted = subscriber.dispatch_queue->try_post_async (
+                      subscriber.channel_name,
+                      [this, finish_dispatch, message = std::move (message),
+                       inbound = std::move (inbound), retained = std::move (retained),
+                       runtime = std::move (runtime), packet_name = std::move (packet_name),
+                       channel_name = std::move (channel_name),
+                       topic = std::move (topic)] (auto complete) mutable {
+                          try {
+                              auto scope =
+                                std::make_shared<zlink::framework::detail::service_scope_t> (
+                                  zlink::framework::detail::service_scope_t::create (
+                                    _services, zlink::framework::detail::service_scope_kind_t::
+                                                 handler_invocation));
+                              // A ChannelName pipeline does not inherit the FIFO's serial turn.
+                              // The hot task enters before this start turn advances to the next record.
+                              detail::serial_turn_scope_t pipeline_turn ({});
+                              auto dispatched = runtime.dispatch_send_on_handler_executor (
+                                channel_name, topic, packet_name, scope->provider (), *_serializers,
+                                *_handlers, std::move (message), std::move (inbound));
+                              detail::observe_task_terminal (
+                                dispatched,
+                                [scope = std::move (scope), retained = std::move (retained),
+                                 runtime = std::move (runtime),
+                                 packet_name = std::move (packet_name),
+                                 channel_name = std::move (channel_name), topic = std::move (topic),
+                                 finish_dispatch] (const result_t<void> &result) mutable {
+                                    static_cast<void> (scope);
+                                    static_cast<void> (retained);
+                                    if (!result) {
+                                        zlink::framework::detail::dispatch_error_reporter_t (
+                                          runtime.dispatch_options_ref ())
+                                          .report_lazy ([&] {
+                                              return message_dispatch_error_event_t{
+                                                .surface = dispatch_error_surface_t::classic_fanout,
+                                                .message_kind = dispatch_message_kind_t::send,
+                                                .reason = zlink::framework::detail::
+                                                  dispatch_reason_from_error (result.error ()),
+                                                .action = dispatch_error_action_t::drop,
+                                                .packet_name = packet_name,
+                                                .channel_name = channel_name,
+                                                .topic = topic,
+                                                .exception =
+                                                  result.error ()
+                                                    ? std::make_exception_ptr (*result.error ())
+                                                    : std::exception_ptr{}};
+                                          });
+                                    }
+                                    scope.reset ();
+                                    retained.reset ();
+                                    finish_dispatch ();
+                                });
+                          }
+                          catch (...) {
+                              finish_dispatch ();
+                              throw;
+                          }
+                          complete ([] {});
+                      });
+                }
+                catch (...) {
+                    subscriber.active_dispatches->fetch_sub (1, std::memory_order_acq_rel);
+                    _dispatch_progress->changed.notify_all ();
+                    throw;
+                }
+                if (!accepted) {
+                    subscriber.active_dispatches->fetch_sub (1, std::memory_order_acq_rel);
+                    _dispatch_progress->changed.notify_all ();
+                }
             }
             catch (...) {
+                _channel_runtime.runtime_failures ()->report (std::current_exception ());
             }
             if (budget.exhausted ())
                 break;
@@ -753,6 +799,31 @@ task_t<void> fanout_location_runtime_t::publish (const std::string &channel_name
     auto encoded = protocol::application_payload_t{std::move (packet_name),
                                                    std::move (content_type), message.to_bytes ()};
     co_await publisher->publish (channel_name, topic, encoded);
+}
+
+bool fanout_location_runtime_t::accepted_callbacks_drained (const resource_snapshot_t &resources)
+{
+    return std::all_of (
+      resources.subscribers.begin (), resources.subscribers.end (), [] (const auto &subscriber) {
+          return subscriber.active_dispatches->load (std::memory_order_acquire) == 0;
+      });
+}
+
+void fanout_location_runtime_t::seal_application_dispatch () noexcept
+{
+    const auto resources = std::atomic_load_explicit (&_resources, std::memory_order_acquire);
+    std::lock_guard lock (_dispatch_progress->mutex);
+    for (const auto &subscriber : resources->subscribers)
+        subscriber.dispatch_queue->close ();
+}
+
+bool fanout_location_runtime_t::wait_for_accepted_callbacks_until (
+  std::chrono::steady_clock::time_point deadline) noexcept
+{
+    const auto resources = std::atomic_load_explicit (&_resources, std::memory_order_acquire);
+    std::unique_lock lock (_dispatch_progress->mutex);
+    return _dispatch_progress->changed.wait_until (
+      lock, deadline, [&] { return accepted_callbacks_drained (*resources); });
 }
 
 void fanout_location_runtime_t::stop ()
@@ -821,6 +892,11 @@ void fanout_location_runtime_t::stop_subscribers ()
         subscriber.dispatch_queue->close ();
     for (const auto &subscriber : resources->subscribers)
         failures.capture ([&] { subscriber.dispatch_queue->drain (); });
+    {
+        std::unique_lock lock (_dispatch_progress->mutex);
+        _dispatch_progress->changed.wait (lock,
+                                          [&] { return accepted_callbacks_drained (*resources); });
+    }
     for (const auto &subscriber : resources->subscribers)
         failures.capture ([&] { subscriber.owner->close (); });
     failures.rethrow_if_failed ();
