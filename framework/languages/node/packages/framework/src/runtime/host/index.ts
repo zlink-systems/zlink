@@ -349,6 +349,7 @@ export class ZLinkFrameworkRuntimeHost
   ) {
     const factories = internalOptions as
       | {
+          readonly spotNodeRuntime?: ZLinkSpotNodeRuntimeManager;
           readonly createBoundSessionRelay?: (
             options: ZLinkBoundSessionRelayOptions
           ) => ZLinkBoundSessionRelay;
@@ -358,6 +359,7 @@ export class ZLinkFrameworkRuntimeHost
           readonly createAdmissionGate?: (ownerOpen: () => boolean) => ZLinkRuntimeAdmissionGate;
         }
       | undefined;
+    this.spotNodeRuntime = factories?.spotNodeRuntime;
     this.admission = (
       factories?.createAdmissionGate ?? ((ownerOpen) => new ZLinkRuntimeAdmissionGate(ownerOpen))
     )(() => this.ownerAdmissionOpen());
