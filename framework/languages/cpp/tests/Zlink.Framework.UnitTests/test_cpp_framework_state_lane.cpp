@@ -19,6 +19,9 @@
 #include <gtest/gtest.h>
 
 #include <atomic>
+#include <chrono>
+#include <condition_variable>
+#include <mutex>
 #include <array>
 #include <cstdio>
 #include <cstdlib>
@@ -109,6 +112,58 @@ TEST (ZLinkStateLane, RunReturnsTheResultOfTheWork)
     state_lane_t lane (executor);
 
     EXPECT_EQ (42, lane.run ([] { return 42; }).get ());
+}
+
+TEST (ZLinkStateLane, CloseWaitsUntilAbandonedWorkCapturesAreDestroyed)
+{
+    using namespace std::chrono_literals;
+
+    struct destruction_gate_t
+    {
+        std::promise<void> entered;
+        std::promise<void> release;
+        std::shared_future<void> released = release.get_future ().share ();
+    };
+    struct blocking_capture_t
+    {
+        std::shared_ptr<destruction_gate_t> gate;
+
+        ~blocking_capture_t ()
+        {
+            gate->entered.set_value ();
+            gate->released.wait ();
+        }
+    };
+
+    offload_executor_t executor (1);
+    executor.drain ();
+    state_lane_t lane (executor);
+    auto gate = std::make_shared<destruction_gate_t> ();
+    std::future<void> entered = gate->entered.get_future ();
+    auto capture = std::make_shared<blocking_capture_t> ();
+    capture->gate = gate;
+    std::atomic<bool> accepted{false};
+    std::thread poster ([&] {
+        accepted.store (lane.try_post ([capture = std::move (capture)] {}),
+                        std::memory_order_release);
+    });
+    const bool capture_destruction_entered = entered.wait_for (2s) == std::future_status::ready;
+
+    std::promise<void> close_started;
+    auto close = std::async (std::launch::async, [&] {
+        close_started.set_value ();
+        lane.close ();
+    });
+    close_started.get_future ().wait ();
+    const auto close_status = close.wait_for (50ms);
+
+    gate->release.set_value ();
+    poster.join ();
+    ASSERT_EQ (std::future_status::ready, close.wait_for (2s));
+    close.get ();
+    EXPECT_TRUE (accepted.load (std::memory_order_acquire));
+    EXPECT_TRUE (capture_destruction_entered);
+    EXPECT_EQ (std::future_status::timeout, close_status);
 }
 
 TEST (ZLinkStateLane, UncontendedRunOnlyAllocatesItsReturnedFuture)

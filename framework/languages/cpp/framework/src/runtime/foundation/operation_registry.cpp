@@ -52,6 +52,7 @@ struct operation_completion_item_t
 
     ~operation_completion_item_t ()
     {
+        callback = nullptr;
         if (drain_state)
             drain_state->release ();
     }
