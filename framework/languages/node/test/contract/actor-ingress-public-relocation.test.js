@@ -1,7 +1,6 @@
 'use strict';
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const net = require('node:net');
 const { randomUUID } = require('node:crypto');
 const { Module, Injectable } = require('@nestjs/common');
 const { NestFactory } = require('@nestjs/core');
@@ -25,13 +24,6 @@ async function until(read, label) {
     await new Promise((done) => setTimeout(done, 10));
   }
   throw new Error(label);
-}
-async function port() {
-  const server = net.createServer();
-  await new Promise((done) => server.listen(0, '127.0.0.1', done));
-  const value = server.address().port;
-  await new Promise((done) => server.close(done));
-  return value;
 }
 class Move {
   constructor(target, pause = false) {
@@ -185,7 +177,6 @@ test(
     );
     const apps = [];
     let client;
-    const wsPort = await port();
     async function start(role, peer) {
       const builder = n.zlinkFramework();
       builder.configureDispatch().messageFlow('normal');
@@ -218,7 +209,7 @@ test(
       if (role === 'source')
         builder
           .addStreamNode('gateway')
-          .bind(`ws://127.0.0.1:${wsPort}`)
+          .bind('ws://127.0.0.1:0')
           .enableActorDispatch()
           .registerSession(SessionFactory);
       class AppModule {}
@@ -245,6 +236,9 @@ test(
     telemetry.reset();
     try {
       const source = await start('source');
+      const wsEndpoint = source
+        .get(n.ZLINK_FRAMEWORK_RUNTIME)
+        .getListenerStatus('stream', 'gateway').endpoint;
       sourceActors = source.get(n.ZLINK_ACTOR_MANAGER);
       const sourceSpots = source.get(n.ZLINK_SPOT_MANAGER);
       await sourceSpots.getOrCreate('source-room', 'SourceRoom').inMesh(mesh).submit();
@@ -283,7 +277,7 @@ test(
         value: 'prime'
       });
       client = connector.zlinkStreamConnectorFactory.create({
-        endpoint: `ws://127.0.0.1:${wsPort}`
+        endpoint: wsEndpoint
       });
       await client.connect();
       assert.deepEqual(await client.request({}).packetName('Bind').submit(), { bound: true });
