@@ -1,3 +1,4 @@
+const { inspectRuntime } = require('../../packages/framework/dist/runtime/internal-observation');
 const routingIds = require('../../packages/framework/dist/runtime/routing-id');
 const assert = require('node:assert/strict');
 const test = require('node:test');
@@ -239,7 +240,7 @@ for (const targetRid of ['C', 'D']) {
       await f.receiver.handleReplyRelay('mesh', f.relays[0], targetRid);
       assert.equal(f.acks[1].status, 'alreadyTerminal');
       await f.target.acceptReplyRelayAck('mesh', f.acks[0], 'A');
-      assert.equal(f.target.pendingReplyRelays.size, 0);
+      assert.equal(f.target[inspectRuntime]().pendingReplyRelays, 0);
       assert.equal(f.requester.pendingOperationCount, 0);
       assert.equal(
         f.requester.acceptRelocatedActorTerminal(
@@ -272,7 +273,7 @@ test('command 33 and 46 preserve the original requester binary RID', async () =>
     assert.equal((await f.pending.promise).terminalResult, RequestResult.Ok);
     assert.equal(routingIds.encodeRoutingIdStorageHex(f.acks[0].requestSource.nodeRid), 'ff');
     assert.equal(f.acks[0].status, 'terminalReceived');
-    assert.equal(f.target.pendingReplyRelays.size, 0);
+    assert.equal(f.target[inspectRuntime]().pendingReplyRelays, 0);
   } finally {
     f.requester.close();
   }
@@ -295,7 +296,7 @@ test('the target clears an expired original source lease without consulting B', 
     assert.equal(delivery, 'sourceLeaseExpired');
     assert.deepEqual(f.leaseReads, ['owner-A']);
     assert.equal(f.relays.length, 0);
-    assert.equal(f.target.pendingReplyRelays.size, 0);
+    assert.equal(f.target[inspectRuntime]().pendingReplyRelays, 0);
   } finally {
     const closed = assert.rejects(f.pending.promise);
     f.requester.close();
@@ -338,7 +339,7 @@ test('the target rejects an ACK whose original source generation changed', async
       'A'
     );
     await rejected;
-    assert.equal(f.target.pendingReplyRelays.size, 0);
+    assert.equal(f.target[inspectRuntime]().pendingReplyRelays, 0);
   } finally {
     const closed = assert.rejects(f.pending.promise);
     f.requester.close();
