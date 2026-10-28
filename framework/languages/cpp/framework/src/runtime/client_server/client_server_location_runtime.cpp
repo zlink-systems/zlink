@@ -568,7 +568,8 @@ std::unique_ptr<mesh_runtime_observation_t> client_server_location_runtime_t::ob
 {
     if (channel_name.empty () || capacity == 0 || !observer)
         throw std::invalid_argument ("ClientServer observation requires a channel and callback");
-    auto value = std::make_shared<observer_t> (capacity, std::move (observer));
+    auto value =
+      std::make_shared<observer_t> (capacity, std::move (observer), _locations->monitoring ());
     value->start ();
     auto source = _lane
                     .run_checked ([this, &channel_name, &value] {

@@ -693,7 +693,8 @@ std::unique_ptr<mesh_runtime_observation_t> route_mesh_runtime_service_t::observ
         throw invalid_runtime_call ("observer is required");
     const auto hub = _state->require_hub (mesh_name);
     auto initial = snapshot (mesh_name);
-    auto registered = std::make_shared<state_t::observer_t> (capacity, std::move (observer));
+    auto registered =
+      std::make_shared<state_t::observer_t> (capacity, std::move (observer), _state->monitoring);
     registered->start ();
     {
         std::lock_guard lock (hub->mutex);
