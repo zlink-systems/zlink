@@ -7283,7 +7283,6 @@ task_t<std::size_t> public_host_runtime_t::dispatch_ready (
     (void) _relocation_wire->reap_terminal_tombstones (now);
     (void) _transport->tick_liveness (now);
     std::size_t count = 0;
-    (void) _transport->expire_requests (foundation::operation_registry_t::clock_t::now ());
     count += co_await dispatch_user_spot_operations ();
 
     std::vector<stateful::object_ref_t> stateful_owners;

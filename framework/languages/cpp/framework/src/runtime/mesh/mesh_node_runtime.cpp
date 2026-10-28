@@ -3844,11 +3844,6 @@ mesh_node_runtime_t::bind_application_actor_session (const actor_ref_t &actor,
               framework_error_kind_t::invalid_operation,
               "Remote Actor session binding fence is invalid");
         }
-        auto completion =
-          std::make_shared<task_completion_source_t<runtime::protocol::stream_bind_reply_t>> ();
-        auto output = completion->task ();
-        auto admitted = co_await detail::request_admission_source_t{};
-        detail::observe_request_failure (output, admitted);
         const auto actor_fence = runtime::protocol::actor_route_fence_t{
           std::string (actor.actor_id ().value ()),
           actor.object_generation (),
@@ -3856,8 +3851,13 @@ mesh_node_runtime_t::bind_application_actor_session (const actor_ref_t &actor,
           actor_route.node_generation,
           actor_route.authority_owner_generation,
           static_cast<std::uint64_t> (actor_route.owner.lease_generation)};
+        auto completion =
+          std::make_shared<task_completion_source_t<runtime::protocol::stream_bind_reply_t>> ();
+        auto output = completion->task ();
+        auto admitted = co_await detail::request_admission_source_t{};
+        detail::observe_request_failure (output, admitted);
         const auto submitted = co_await _node->transport ().request_bound_session_bind (
-          actor_route.node_rid.to_bytes (),
+          actor_fence.target_node_routing_id,
           runtime::protocol::bound_session_bind_t{
             0,
             actor_fence,
