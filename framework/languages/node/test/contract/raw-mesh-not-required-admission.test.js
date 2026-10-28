@@ -1,3 +1,4 @@
+const { inspectRuntime } = require('../../packages/framework/dist/runtime/internal-observation');
 const { ZLinkBackendResultError, SubmitResult } = require('../../packages/framework/dist/runtime/backend/runtime-values');
 const assert = require('node:assert/strict');
 const test = require('node:test');
@@ -69,7 +70,7 @@ async function assertTerminalPair({ left, right, disconnected, sent, selectRoute
   assert.equal(await left.announceExpectedPeers(), 0);
   assert.equal(await right.announceExpectedPeers(), 0);
   assert.equal(sent.length, sentBeforeReady + 1);
-  assert.equal(left.expectedPeers.size, 0);
+  assert.equal(left[inspectRuntime]().expectedPeers, 0);
   assert.equal(left.endpointOnlyPeers.size, 0);
   assert.deepEqual(disconnected, [right.topology.localDescriptor().advertisedEndpoint]);
   assert.equal(left.topology.notRequiredPeers().length, 1);
@@ -96,7 +97,7 @@ test('HELLO repeats on liveness maintenance until NotRequired ADMIT retires the 
     left.tickLiveness();
     assert.equal(await left.announcePeer('right'), false);
     assert.equal(sent.length, admitted, 'remote ADMIT stops HELLO on the admitted route');
-    assert.equal(left.expectedPeers.size, 0);
+    assert.equal(left[inspectRuntime]().expectedPeers, 0);
     assert.equal(left.liveness.size, 0);
   } finally { left.close(); right.close(); }
 });
