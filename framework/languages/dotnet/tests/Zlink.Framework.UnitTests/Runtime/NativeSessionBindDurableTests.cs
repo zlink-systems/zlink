@@ -1,5 +1,9 @@
+using System.Collections.Concurrent;
+using System.Diagnostics;
 using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Runtime.Backend.Contracts;
+using Zlink.Framework.Runtime.Diagnostics;
+using Zlink.Framework.Runtime.Dispatch;
 using Zlink.Framework.Runtime.Host;
 using Zlink.Framework.Runtime.Messaging;
 using Zlink.Framework.Runtime.Service;
@@ -8,6 +12,269 @@ namespace Zlink.Framework.UnitTests;
 
 public sealed partial class StatefulServiceRuntimeTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task NativeSessionBind_UsesIngressLifecycleWhenPeerChanges(bool retirePeer)
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        var peers = new Dictionary<RoutingId, ZLinkMeshPeer>();
+        await using var node = new ZLinkManagedMeshNode(context, "mesh", peersByRid: peers);
+        node.SetRoutingId(RoutingId.From("bind-ingress-target"));
+        var replyToken = await CaptureCompletedBindRequestTokenAsync(context);
+        var sourceRid = RoutingId.From("bind-ingress-source");
+        const ulong ingressGeneration = 17;
+        const ulong routeGeneration = 23;
+        var peer = new ZLinkMeshPeer(1)
+        {
+            RoutingId = sourceRid,
+            LifecycleGeneration = ingressGeneration,
+            RouteGeneration = routeGeneration,
+            State = MeshPeerState.Admitted,
+            Admitted = true,
+            Admission = new ZLinkServiceWireCodec.AdmissionRecord(
+                "mesh",
+                ZLinkServiceSecurityIdentity.Plaintext,
+                "inproc://bind-ingress",
+                ingressGeneration,
+                1,
+                new Dictionary<string, uint>(),
+                0,
+                0,
+                0,
+                1,
+                0,
+                0,
+                0,
+                0,
+                new Dictionary<byte, byte[]>(),
+                Array.Empty<byte>()
+            ),
+        };
+        peers.Add(sourceRid, peer);
+        Assert.True(node.HasCurrentSource(sourceRid, routeGeneration, out var sourceGeneration));
+        Assert.Equal(ingressGeneration, sourceGeneration);
+        node.SetBoundSessionBindHandler(
+            (_, generation, _, reply, _) =>
+            {
+                if (generation != ingressGeneration)
+                    throw new ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.Unavailable,
+                        "The bind lost its ingress lifecycle."
+                    );
+                reply();
+                return ValueTask.CompletedTask;
+            }
+        );
+        var terminal = new CapturedBindReply();
+        InvokeBindControl(
+            node,
+            sourceRid,
+            sourceGeneration,
+            replyToken,
+            terminal,
+            () =>
+            {
+                if (retirePeer)
+                    peers.Remove(sourceRid);
+                else
+                {
+                    peer.LifecycleGeneration = 19;
+                    peer.RouteGeneration = 29;
+                    peer.Admission = peer.Admission!.Value with { LifecycleGeneration = 19 };
+                }
+            }
+        );
+        var reply = await terminal.Completed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(
+            (ServiceWireCodec.RequestTerminalResult.Ok, ServiceWireCodec.FrameworkErrorCode.None),
+            (reply.TerminalResult, reply.FailureCode)
+        );
+    }
+
+    [Theory]
+    [InlineData(ZLinkDiagnosticsLevel.Normal)]
+    [InlineData(ZLinkDiagnosticsLevel.Off)]
+    public async Task NativeSessionBind_FailurePreservesOriginalExceptionInFlow(
+        ZLinkDiagnosticsLevel level
+    )
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = NewNode(context, "bind-failure-target");
+        var replyToken = await CaptureCompletedBindRequestTokenAsync(context);
+        var options = new ZLinkDispatchOptionsModel();
+        options.Diagnostics.SetLevel(level);
+        node.SetFlowTracer(new ZLinkMessageFlowTracer(options));
+        var events = new ConcurrentQueue<Activity>();
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == ZLinkTelemetry.ActivitySourceName,
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) =>
+                ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStopped = events.Enqueue,
+        };
+        ActivitySource.AddActivityListener(listener);
+        using var flow = ZLinkFlowContext.EnterCurrentOrCreate(
+            ZLinkFlowOrigin.Application,
+            captureEnabled: true
+        );
+        var flowId = ZLinkFlowContext.Current!.Value.FlowId;
+        var cause = new InvalidOperationException("original bound-session cause");
+        node.SetBoundSessionBindHandler((_, _, _, _, _) => ValueTask.FromException(cause));
+        var terminal = new CapturedBindReply();
+        var sourceRid = RoutingId.From("bind-failure-source");
+        InvokeBindControl(node, sourceRid, 17, replyToken, terminal);
+        var reply = await terminal.Completed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(ServiceWireCodec.RequestTerminalResult.InternalError, reply.TerminalResult);
+        var failures = events.Where(item =>
+            Equals(item.GetTagItem("event_id"), "zlink.message_flow")
+            && Equals(item.GetTagItem("packet_name"), "BoundSessionBind")
+        );
+        if (level == ZLinkDiagnosticsLevel.Off)
+        {
+            Assert.Empty(failures);
+            return;
+        }
+        var failure = Assert.Single(failures);
+        Assert.Equal("replied", failure.GetTagItem("phase"));
+        Assert.Equal("failed", failure.GetTagItem("outcome"));
+        Assert.Equal("stream", failure.GetTagItem("surface"));
+        Assert.Equal("control", failure.GetTagItem("message_kind"));
+        Assert.Equal(nameof(InvalidOperationException), failure.GetTagItem("error_type"));
+        Assert.Equal(cause.Message, failure.GetTagItem("error_message"));
+        Assert.Equal("bind-actor", failure.GetTagItem("actor_id"));
+        Assert.Equal(sourceRid.ToHex(), failure.GetTagItem("source_rid"));
+        Assert.Equal(node.RoutingId.ToHex(), failure.GetTagItem("target_rid"));
+        Assert.Equal(flowId, failure.GetTagItem("flow_id"));
+    }
+
+    [Theory]
+    [InlineData(false, 17UL, true)]
+    [InlineData(false, 19UL, false)]
+    [InlineData(true, 17UL, true)]
+    [InlineData(true, 19UL, false)]
+    public async Task NativeSessionNotification_FenceUsesIngressLifecycle(
+        bool replaced,
+        ulong wireGeneration,
+        bool accepted
+    )
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        var peers = new Dictionary<RoutingId, ZLinkMeshPeer>();
+        await using var node = new ZLinkManagedMeshNode(context, "mesh", peersByRid: peers);
+        node.SetRoutingId(RoutingId.From("notification-ingress-target"));
+        var source = RoutingId.From("notification-ingress-source");
+        var localGeneration = node.Status().LifecycleGeneration;
+        peers.Add(source, new ZLinkMeshPeer(1) { LifecycleGeneration = 19 });
+        var valid = replaced
+            ? node.IsValidBoundSessionReplacedSource(
+                source,
+                17UL,
+                new ZLinkServiceWireCodec.BoundSessionReplacedRecord(
+                    new("bind-actor", 1, source, wireGeneration, 3, 5),
+                    new(
+                        node.RoutingId,
+                        localGeneration,
+                        "bind-owner",
+                        7,
+                        RoutingId.From("bind-session"),
+                        1
+                    )
+                )
+            )
+            : node.IsValidMessageFollowSource(
+                source,
+                17UL,
+                new ZLinkServiceWireCodec.MessageFollowRecord(
+                    new(1, "bind-actor", 1, source, wireGeneration, 3, 5),
+                    new(1, "bind-actor", 1, node.RoutingId, localGeneration, 4, 7),
+                    1,
+                    0,
+                    0,
+                    new MeshOperationId(1, 2),
+                    0
+                )
+            );
+        Assert.Equal(accepted, valid);
+    }
+
+    private static void InvokeBindControl(
+        ZLinkManagedMeshNode node,
+        RoutingId source,
+        ulong sourceGeneration,
+        ReplyToken replyToken,
+        CapturedBindReply reply,
+        Action? beforeBind = null
+    )
+    {
+        var request = CanonicalBindRequest(node.RoutingId, 7);
+        var encoded = ServiceWireCodec.EncodeBoundSessionBind38(
+            request,
+            ServiceWireCodec.DecodeContext.Empty
+        );
+        using var head = Message.From(encoded[0]);
+        var handled = node.ProcessInfrastructureControl(
+            source,
+            23UL,
+            sourceGeneration,
+            replyToken,
+            new[] { head },
+            encoded[0],
+            () =>
+            {
+                beforeBind?.Invoke();
+                return reply;
+            },
+            null!
+        );
+        Assert.True(handled);
+    }
+
+    private static async Task<ReplyToken> CaptureCompletedBindRequestTokenAsync(IContext context)
+    {
+        await using var router = context.CreateRouterSocket();
+        await using var dealer = context.CreateDealerSocket();
+        var endpoint = $"inproc://bind-control-token-{Guid.NewGuid():N}";
+        router.Bind(endpoint);
+        dealer.Connect(endpoint);
+        using var driver = new TestCompletionPollerDriver(dealer);
+        using var request = Message.From("bind-token");
+        var submission = dealer.Request().Message(request).Timeout(TimeSpan.FromSeconds(5)).Async();
+        using var received = Received.Create();
+        Assert.True(router.Recv(received));
+        var token = Assert.IsType<ReplyToken>(received.ReplyToken);
+        using var response = Message.From("bound");
+        received.Reply().Message(response).Submit();
+        var parts = await submission.Reply.WaitAsync(TimeSpan.FromSeconds(5));
+        foreach (var part in parts)
+            part.Dispose();
+        return token;
+    }
+
+    private sealed class CapturedBindReply : ReplyOperation, ReplySubmitOperation
+    {
+        private readonly List<Message> _parts = [];
+        internal TaskCompletionSource<ServiceWireCodec.Reply20> Completed { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public ReplySubmitOperation Message(Message message)
+        {
+            _parts.Add(message);
+            return this;
+        }
+
+        public void Submit() =>
+            Completed.TrySetResult(
+                ServiceWireCodec.DecodeReply20(
+                    _parts.Select(part => part.ToArray()).ToArray(),
+                    ServiceWireCodec.DecodeContext.Empty with
+                    {
+                        OriginalOperationKind = ServiceWireCodec.MeshOperationKind.StreamBind,
+                    }
+                )
+            );
+    }
+
     [Fact]
     public async Task NativeSessionBind_IntentRemovalEndsWithoutWaitingForDeadline()
     {
