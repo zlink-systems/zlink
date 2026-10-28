@@ -262,7 +262,15 @@ export class ZLinkFrameworkRuntimeHost
       ownerId: this.locationOwner.currentRuntime?.ownerId,
       hasOwnerToken: this.locationOwner.currentRuntime?.currentOwnerToken !== undefined,
       ownerAdmissionOpen: this.admission.ownerAdmissionOpen(),
-      channelRuntimeStarted: this.channelRuntime !== undefined
+      channelRuntimeStarted: this.channelRuntime !== undefined,
+      fanoutStoreIsLocationStore:
+        this.locationOwner.currentStores?.fanoutStore ===
+        this.locationOwner.currentStores?.locationStore,
+      fanoutStoreMethods: Object.freeze({
+        update: typeof this.locationOwner.currentStores?.fanoutStore?.updateFanoutPublisher,
+        remove: typeof this.locationOwner.currentStores?.fanoutStore?.removeFanoutPublisher,
+        list: typeof this.locationOwner.currentStores?.fanoutStore?.listFanoutPublishers
+      })
     });
   }
 

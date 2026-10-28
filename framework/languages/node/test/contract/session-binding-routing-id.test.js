@@ -1,3 +1,4 @@
+const { inspectRuntime } = require('../../packages/framework/dist/runtime/internal-observation');
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const {
@@ -90,9 +91,9 @@ test('Actor tenure lookup uses the byte identity in its canonical owner fence', 
     })
   });
   const actor = { actorId: 'actor', nodeRid: decodeRoutingId('different-display', '00000001') };
-  assert.equal(coordinator.tenureAuthorityOwnerGeneration('actor', actor), 4n);
+  assert.equal(coordinator[inspectRuntime]().tenureAuthorityOwnerGeneration('actor', actor), 4n);
   assert.equal(
-    coordinator.tenureAuthorityOwnerGeneration('actor', {
+    coordinator[inspectRuntime]().tenureAuthorityOwnerGeneration('actor', {
       ...actor,
       nodeRid: decodeRoutingId('display-one', '00000002')
     }),
