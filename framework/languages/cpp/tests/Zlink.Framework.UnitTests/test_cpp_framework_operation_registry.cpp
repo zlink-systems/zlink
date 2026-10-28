@@ -385,6 +385,68 @@ void verify_handoff_excludes_application_system_handlers ()
     assert (!external_on_receiver);
 }
 
+void verify_shutdown_waits_for_callback_capture_destruction ()
+{
+    std::latch capture_destruction_entered (1);
+    std::latch release_capture_destruction (1);
+    std::atomic_bool shutdown_returned{false};
+    std::atomic_bool shutdown_returned_before_capture_destruction{false};
+    struct capture_t
+    {
+        std::latch &entered;
+        std::latch &release;
+        std::atomic_bool &shutdown_returned;
+        std::atomic_bool &returned_before_destruction;
+
+        capture_t (std::latch &entered_,
+                   std::latch &release_,
+                   std::atomic_bool &shutdown_returned_,
+                   std::atomic_bool &returned_before_destruction_) :
+            entered (entered_),
+            release (release_),
+            shutdown_returned (shutdown_returned_),
+            returned_before_destruction (returned_before_destruction_)
+        {
+        }
+
+        ~capture_t ()
+        {
+            entered.count_down ();
+            release.wait ();
+            returned_before_destruction.store (shutdown_returned.load (std::memory_order_acquire),
+                                               std::memory_order_release);
+        }
+    };
+
+    foundation::operation_registry_t registry;
+    auto capture =
+      std::make_shared<capture_t> (capture_destruction_entered, release_capture_destruction,
+                                   shutdown_returned, shutdown_returned_before_capture_destruction);
+    foundation::operation_registry_t::callback_t callback = [capture] (auto terminal, auto) {
+        assert (terminal == foundation::operation_terminal_t::shutdown);
+    };
+    capture.reset ();
+    assert (registry.register_operation (
+      {45, 1}, foundation::operation_registry_t::clock_t::time_point::max (),
+      std::move (callback)));
+
+    auto shutdown_finished = std::make_shared<std::promise<void>> ();
+    auto shutdown_done = shutdown_finished->get_future ();
+    std::thread shutdown ([&] {
+        assert (registry.shutdown () == 1);
+        shutdown_returned.store (true, std::memory_order_release);
+        shutdown_finished->set_value ();
+    });
+    capture_destruction_entered.wait ();
+    const bool returned_while_capture_destruction_was_blocked =
+      shutdown_done.wait_for (std::chrono::milliseconds (100)) == std::future_status::ready;
+    release_capture_destruction.count_down ();
+    shutdown.join ();
+
+    assert (!returned_while_capture_destruction_was_blocked);
+    assert (!shutdown_returned_before_capture_destruction.load (std::memory_order_acquire));
+}
+
 void verify_completion_resource_transitions ()
 {
     namespace detail = zlink::framework::detail;
@@ -491,6 +553,11 @@ int main (int argc, char **argv)
         verify_dispatcher_shutdown_drains ();
         return 0;
     }
+    if (argc == 2 && std::string_view (argv[1]) == "--callback-capture-lifetime") {
+        zlink::framework::completion_owner_t owner;
+        verify_shutdown_waits_for_callback_capture_destruction ();
+        return 0;
+    }
     if (argc == 2 && std::string_view (argv[1]) == "--isolation-only") {
         verify_handoff_excludes_application_system_handlers ();
         return 0;
@@ -502,6 +569,7 @@ int main (int argc, char **argv)
         return 0;
     }
     verify_idle_completion_precedes_handoff ();
+    verify_shutdown_waits_for_callback_capture_destruction ();
     verify_completion_resource_transitions ();
     verify_independent_completion_turns (1);
     verify_independent_completion_turns (4);
