@@ -401,9 +401,10 @@ declines isn't an error, so it's `Rejected`, not `Failed`.
 | The Actor's relocation policy forbids cross-node moves. | `Rejected` |
 | The location change wasn't committed by the deadline. | `DeadlineExceeded` |
 | Capture/factory/restore/staging fails with an internal error. | `InternalFailure` |
+| Authority generation issuance fails with `GenerationExhausted` as defined in [Location runtime §3.2](../05-location-relocation/01-location-runtime.en.md#32-object-re-creation-and-owner-change-use-different-generation-numbers). | `InternalFailure` |
 | Chunk assembly or checksum verification of the transferred relocation payload fails. | `DataLost` |
 | The Actor generation differs from the current value. | `InvalidOperation` |
-| The owner or membership fence differs, or the Actor is moving. | `Unavailable` |
+| The owner or membership fence differs, or the Actor is moving. This also includes a membership change to the target User Spot rejected under the `SpotWide` aggregate constraints in [Location runtime §8.1](../05-location-relocation/01-location-runtime.en.md#81-values-distinguishing-the-same-move-and-target-request). | `Unavailable` |
 | Runtime shutdown started first and interrupted before relay-ready was accepted. | `ShuttingDown` |
 
 `Accepted` means location and membership change was committed. It doesn't

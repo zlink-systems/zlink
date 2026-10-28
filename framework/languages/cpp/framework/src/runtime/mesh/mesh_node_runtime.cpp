@@ -77,11 +77,18 @@ struct mesh_node_runtime_t::message_follow_subscription_state_t
         {
             std::lock_guard lock (mutex);
             assert (in_flight != 0);
-            --in_flight;
-            if (!active && in_flight == 0)
+            if (!active && in_flight == 1) {
                 retired_handler = std::move (handler);
-            terminal.notify_all ();
+            } else {
+                --in_flight;
+                terminal.notify_all ();
+                return;
+            }
         }
+        retired_handler = nullptr;
+        std::lock_guard lock (mutex);
+        --in_flight;
+        terminal.notify_all ();
     }
 
     void deactivate_and_wait () noexcept
@@ -1845,8 +1852,8 @@ void mesh_node_runtime_t::dispatch_message_follow (
 
             ~dispatch_guard_t ()
             {
-                message_follow_subscription_state_t::current_dispatch = frame.previous;
                 state->finish_dispatch ();
+                message_follow_subscription_state_t::current_dispatch = frame.previous;
             }
         } dispatch_guard (subscription.get ());
         try {

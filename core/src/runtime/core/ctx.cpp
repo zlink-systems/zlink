@@ -388,7 +388,7 @@ int zlink::ctx_t::materialize_pending_inproc (const std::string &addr_,
     if (!bind_socket)
         return -1;
 
-    (void) _inproc_registry.materialize_pending_for_socket (addr_, connect_socket_, bind_socket);
+    (void) _inproc_registry.materialize_pending (addr_, connect_socket_, bind_socket);
     bind_socket->close ();
     return 0;
 }

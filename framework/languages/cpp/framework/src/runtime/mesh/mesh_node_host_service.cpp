@@ -219,11 +219,11 @@ void application_dispatch_terminal_owner_t::settle () noexcept
 
     invoke (_complete_stateful_dispatch);
     invoke (_release_mailbox_reservation);
-    if (const auto node = _node.lock ())
-        node->application_work_finished ();
-
+    const auto node = _node.lock ();
     _complete_stateful_dispatch = {};
     _release_mailbox_reservation = {};
+    if (node)
+        node->application_work_finished ();
     _node.reset ();
 }
 

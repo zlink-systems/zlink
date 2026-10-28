@@ -249,7 +249,11 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     private readonly applicationJobQueue?: ApplicationJobQueuePort,
     private readonly applicationJobReceiveFlowFailureSink?: (error: unknown) => void,
     private readonly peerAdmissionSealed?: () => boolean,
-    private readonly infrastructureTaskRunner?: import('../../spots/spot-actor-join-dispatch').ZLinkDetachedTaskRunner
+    private readonly infrastructureTaskRunner?: import('../../spots/spot-actor-join-dispatch').ZLinkDetachedTaskRunner,
+    runtimeDependencies?: {
+      readonly raw?: RawServiceMeshRuntime;
+      readonly stateful?: ServiceStatefulRuntime;
+    }
   ) {
     if (meshName.length === 0) throw new TypeError('MeshName must be non-empty.');
     if (routingId === undefined || routingId.length === 0) {
@@ -257,6 +261,8 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     }
     this.routingId = routingId;
     this.lifecycleGeneration = createLifecycleGeneration();
+    this.runtime = runtimeDependencies?.raw;
+    this.stateful = runtimeDependencies?.stateful;
   }
 
   configureObjectPlacement(options: {

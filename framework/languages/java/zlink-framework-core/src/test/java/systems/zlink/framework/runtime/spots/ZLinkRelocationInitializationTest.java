@@ -293,9 +293,7 @@ final class ZLinkRelocationInitializationTest {
         try (var framework = ZLinkFrameworkRuntimeTestAccess.start(options);
                 var pool = Executors.newFixedThreadPool(Math.min(count, 8))) {
             var host = (ZLinkSpotRuntime) framework.spotManager();
-            var field = ZLinkSpotRuntime.class.getDeclaredField("spotLifecycle");
-            field.setAccessible(true);
-            var lifecycle = (ZLinkSpotLifecycle) field.get(host);
+            var lifecycle = host.spotLifecycle();
             var envelope =
                     ZLinkSpotTimerRelocationEnvelope.encode(
                             new ZLinkSpotTimerRegistry.FrozenTimers(List.of()));

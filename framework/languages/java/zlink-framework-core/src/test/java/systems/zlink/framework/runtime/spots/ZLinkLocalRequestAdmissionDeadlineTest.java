@@ -83,12 +83,8 @@ final class ZLinkLocalRequestAdmissionDeadlineTest {
                     .submit()
                     .toCompletableFuture()
                     .get(5, TimeUnit.SECONDS);
-            var hostField = runtime.getClass().getDeclaredField("spots");
-            hostField.setAccessible(true);
-            var host = hostField.get(runtime);
-            var queueField = host.getClass().getDeclaredField("applicationJobQueue");
-            queueField.setAccessible(true);
-            var queue = (ZLinkApplicationJobQueue) queueField.get(host);
+            var host = runtime.spotManager();
+            var queue = options.registration().applicationJobQueue();
             var nodeField = host.getClass().getDeclaredField("primaryNode");
             nodeField.setAccessible(true);
             var node =
@@ -377,7 +373,8 @@ final class ZLinkLocalRequestAdmissionDeadlineTest {
                                                                                         || frame.getMethodName()
                                                                                                 .equals(
                                                                                                         "publishApplicationJob")),
-                                                        "application continuation ran on the infrastructure publication stack");
+                                                        "application continuation ran on the"
+                                                                + " infrastructure publication stack");
                                                 return runtime.route()
                                                         .requestToSpot("room-a", new Probe(false))
                                                         .submit_sync(String.class);
@@ -514,9 +511,7 @@ final class ZLinkLocalRequestAdmissionDeadlineTest {
 
     private ZLinkApplicationJobQueue applicationQueue(
             systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime runtime) throws Exception {
-        var hostField = runtime.getClass().getDeclaredField("spots");
-        hostField.setAccessible(true);
-        var host = hostField.get(runtime);
+        var host = runtime.spotManager();
         var queueField = host.getClass().getDeclaredField("applicationJobQueue");
         queueField.setAccessible(true);
         return (ZLinkApplicationJobQueue) queueField.get(host);

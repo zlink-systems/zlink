@@ -2266,7 +2266,10 @@ void verify_client_server_independent_raw_path ()
     assert (result.terminal == foundation::operation_terminal_t::completed);
     assert (!result.error_code);
     assert (result.content_type == "application/json");
-    assert (result.payload == bytes ("reply"));
+    const auto expected_reply = bytes ("reply");
+    assert (result.payload.size () == expected_reply.size ());
+    assert (std::memcmp (result.payload.data (), expected_reply.data (), expected_reply.size ())
+            == 0);
 
     const protocol::application_payload_t rejected_payload{"RejectedRequest", "application/json",
                                                            bytes ("request")};
@@ -2333,7 +2336,9 @@ void verify_client_server_independent_raw_path ()
     const auto large_result = large_task.result ().value ();
     assert (large_result.terminal == foundation::operation_terminal_t::completed);
     assert (!large_result.error_code);
-    assert (large_result.payload == large_reply);
+    assert (large_result.payload.size () == large_reply.size ());
+    assert (std::memcmp (large_result.payload.data (), large_reply.data (), large_reply.size ())
+            == 0);
 }
 
 void verify_client_server_admits_before_monitor_drain ()

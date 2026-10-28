@@ -288,14 +288,16 @@ class FieldRelocation final : public fx::spot_relocation_adapter_t<Field>
   public:
     fx::task_t<std::vector<std::byte>> capture (Field &field, std::stop_token) override
     {
-        const auto payload = zlink::message_t::from_json (field.capture ());
-        co_return std::vector<std::byte> (payload.bytes ().begin (), payload.bytes ().end ());
+        const auto snapshot = field.capture ();
+        const auto payload = fx::serializer_registry_t{}.get<FieldSnapshot> ().serialize (snapshot);
+        const auto bytes = payload.bytes ();
+        co_return std::vector<std::byte> (bytes.begin (), bytes.end ());
     }
     fx::task_t<void>
     restore (Field &field, std::vector<std::byte> payload, std::stop_token) override
     {
-        const auto snapshot =
-          zlink::message_t::from (std::span<const std::byte> (payload)).parse_json<FieldSnapshot> ();
+        const auto snapshot = fx::serializer_registry_t{}.get<FieldSnapshot> ().deserialize (
+          fx::encoded_payload_t::from_bytes (std::span<const std::byte> (payload)));
         field.restore (snapshot);
         co_return;
     }
