@@ -289,7 +289,7 @@ public final class ZLinkRequestCallerAllocationTest {
                                             }
                                             case "classifyNodeSendTarget" -> Optional.empty();
                                             case "name" -> MESH;
-                                            case "sourceTransportLane" -> null;
+                                            case "sourceTransportLane", "operationRegistry" -> null;
                                             case "close" -> null;
                                             default ->
                                                     throw new AssertionError(
