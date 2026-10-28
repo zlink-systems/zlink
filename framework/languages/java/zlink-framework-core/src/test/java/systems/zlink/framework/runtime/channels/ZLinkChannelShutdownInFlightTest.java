@@ -39,6 +39,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -69,12 +70,30 @@ final class ZLinkChannelShutdownInFlightTest {
         if (!dealerLiveness)
             options.addFanoutChannel("fanout").enablePublisher("inproc://c1876-beacon");
 
+        var scheduler =
+                Executors.newSingleThreadScheduledExecutor(
+                        Thread.ofPlatform()
+                                .daemon()
+                                .name("channel-shutdown-test-timeout")
+                                .factory());
         ZLinkChannelRuntime runtime =
                 new ZLinkChannelRuntime(
                         backend,
+                        backend.createContext(),
+                        true,
+                        null,
+                        null,
                         options.registration(),
                         new ZLinkJsonMessageSerializer(),
-                        ZLinkHandlerActivator.services());
+                        ZLinkHandlerActivator.services(),
+                        null,
+                        (ignoredBackend, ignoredKey) ->
+                                (ignoredSubmission, ignoredCleanup) -> {
+                                    throw new AssertionError("unexpected one-way admission");
+                                },
+                        System::nanoTime,
+                        java.util.concurrent.locks.LockSupport::parkNanos,
+                        scheduler);
         var executorField = ZLinkChannelRuntime.class.getDeclaredField("infrastructureExecutor");
         executorField.setAccessible(true);
         ExecutorService executor = (ExecutorService) executorField.get(runtime);
@@ -137,7 +156,8 @@ final class ZLinkChannelShutdownInFlightTest {
                             "liveness",
                             descriptor,
                             sockets.clientServerTransportReady("liveness")));
-            installLocationOwner(runtime, backend, sockets, executor, descriptor, dealer);
+            installLocationOwner(
+                    runtime, backend, sockets, executor, scheduler, descriptor, dealer);
             // Advance the liveness input, without a timer or wall-clock wait, on the same
             // infrastructure executor used by the production periodic source.
             executor.execute(
@@ -186,11 +206,10 @@ final class ZLinkChannelShutdownInFlightTest {
             BlockingChannelBackend backend,
             ZLinkChannelSocketRegistry sockets,
             ExecutorService executor,
+            ScheduledExecutorService scheduler,
             ZLinkClientServerServerDescriptor descriptor,
             ZLinkBackendDealerSocket dealer)
             throws Exception {
-        var schedulerField = ZLinkChannelRuntime.class.getDeclaredField("timeoutExecutor");
-        schedulerField.setAccessible(true);
         var repository =
                 (ZLinkLocationRepository)
                         Proxy.newProxyInstance(
@@ -219,7 +238,7 @@ final class ZLinkChannelShutdownInFlightTest {
                         backend.context,
                         new ZLinkBackendAdapterOptions(Duration.ofSeconds(WAIT_SECONDS)),
                         sockets,
-                        (ScheduledExecutorService) schedulerField.get(runtime),
+                        scheduler,
                         executor,
                         Duration.ofSeconds(WAIT_SECONDS),
                         1);
