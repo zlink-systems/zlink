@@ -45,20 +45,22 @@ final class ZLinkChannelHandlerPermitBoundaryTest {
 
     @ParameterizedTest
     @EnumSource(Dispatch.class)
-    void retainsPermitThroughDecodeAndActivationUntilFirstCallback(Dispatch dispatch) {
+    void retainsPermitThroughDecodeAndActivationUntilFirstHandlerInstruction(Dispatch dispatch) {
         var jobs = queue();
         var continuation = new CompletableFuture<Void>();
         var handlerCalls = new AtomicInteger();
         var preparationCalls = new AtomicInteger();
-        var handler = new ProbeHandler(jobs, dispatch, continuation, handlerCalls);
+        var expectedException = new IllegalStateException("expected " + dispatch);
+        var handler =
+                new ProbeHandler(jobs, dispatch, continuation, handlerCalls, expectedException);
         ZLinkHandlerFilter filter =
                 new ZLinkHandlerFilter() {
                     @Override
                     public <T> CompletionStage<T> invoke(
                             ZLinkHandlerFilterContext context, ZLinkHandlerFilterNext<T> next) {
-                        assertEquals(0, jobs.snapshot().permitsInUse());
-                        if (dispatch == Dispatch.FILTER_THROW)
-                            throw new IllegalStateException("filter");
+                        assertEquals(1, jobs.snapshot().queuedApplicationJobs());
+                        assertEquals(1, jobs.snapshot().permitsInUse());
+                        if (dispatch == Dispatch.FILTER_THROW) throw expectedException;
                         if (dispatch == Dispatch.FILTER_STOP)
                             return CompletableFuture.completedFuture(null);
                         return next.invoke();
@@ -83,8 +85,7 @@ final class ZLinkChannelHandlerPermitBoundaryTest {
                                 jobs.snapshot().queuedApplicationJobs(),
                                 "decode precedes callback");
                         preparationCalls.incrementAndGet();
-                        if (dispatch == Dispatch.DECODE_THROW)
-                            throw new IllegalStateException("decode");
+                        if (dispatch == Dispatch.DECODE_THROW) throw expectedException;
                         return new ZLinkStringMessageSerializer().deserialize(payload, type);
                     }
                 };
@@ -93,14 +94,12 @@ final class ZLinkChannelHandlerPermitBoundaryTest {
                         serializer,
                         new ZLinkCodecRegistration(),
                         type -> {
-                            long expected = filtered && type == ProbeHandler.class ? 0 : 1;
                             assertEquals(
-                                    expected,
+                                    1,
                                     jobs.snapshot().permitsInUse(),
                                     "activation precedes callback");
                             preparationCalls.incrementAndGet();
-                            if (dispatch == Dispatch.ACTIVATION_THROW)
-                                throw new IllegalStateException("activation");
+                            if (dispatch == Dispatch.ACTIVATION_THROW) throw expectedException;
                             return type == ProbeHandler.class ? handler : filter;
                         },
                         Runnable::run,
@@ -152,9 +151,18 @@ final class ZLinkChannelHandlerPermitBoundaryTest {
                     nextPermit.close();
                 }
             } else if (expectedFailure) {
-                assertThrows(
-                        java.util.concurrent.CompletionException.class,
-                        () -> completed.toCompletableFuture().join());
+                var failure =
+                        assertThrows(
+                                java.util.concurrent.CompletionException.class,
+                                () -> completed.toCompletableFuture().join());
+                if (dispatch == Dispatch.DECODE_THROW) {
+                    var decodeFailure =
+                            assertInstanceOf(
+                                    PayloadDecodeDispatchException.class, failure.getCause());
+                    assertSame(expectedException, decodeFailure.getCause());
+                } else {
+                    assertSame(expectedException, failure.getCause());
+                }
             } else {
                 completed.toCompletableFuture().join();
             }
@@ -301,23 +309,26 @@ final class ZLinkChannelHandlerPermitBoundaryTest {
         private final Dispatch dispatch;
         private final CompletableFuture<Void> continuation;
         private final AtomicInteger calls;
+        private final IllegalStateException expectedException;
 
         ProbeHandler(
                 ZLinkApplicationJobQueue jobs,
                 Dispatch dispatch,
                 CompletableFuture<Void> continuation,
-                AtomicInteger calls) {
+                AtomicInteger calls,
+                IllegalStateException expectedException) {
             this.jobs = jobs;
             this.dispatch = dispatch;
             this.continuation = continuation;
             this.calls = calls;
+            this.expectedException = expectedException;
         }
 
         @Override
         public CompletionStage<Void> handle(String message, ZLinkMessageContext context) {
             assertEquals(0, jobs.snapshot().permitsInUse());
             calls.incrementAndGet();
-            if (dispatch == Dispatch.THROW) throw new IllegalStateException("handler");
+            if (dispatch == Dispatch.THROW) throw expectedException;
             if (dispatch == Dispatch.AWAIT) return continuation;
             if (dispatch == Dispatch.YIELD)
                 return ZLinkSerialExecutionQueue.yieldCurrent(continuation);
