@@ -1,3 +1,4 @@
+import { inspectRuntime } from '../internal-observation';
 import {
   isValidPublicWeight,
   ZLINK_MAX_PUBLIC_WEIGHT
@@ -36,6 +37,12 @@ export interface SelectedClientServer {
 
 /** Dedicated discovery state; fanout publishers never reuse RouteMesh peer rows. */
 export class ServiceDiscoveryRegistry {
+  [inspectRuntime]() {
+    return Object.freeze({
+      clientServerObservers: this.clientServerChanged.size
+    });
+  }
+
   private readonly clientServerChanged = new Set<(error?: Error) => void>();
 
   onClientServerChanged(listener: (error?: Error) => void): () => void {
