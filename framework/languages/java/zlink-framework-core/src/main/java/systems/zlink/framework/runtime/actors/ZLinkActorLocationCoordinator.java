@@ -134,7 +134,11 @@ final class ZLinkActorLocationCoordinator {
         return findStoredActorRef(actorId);
     }
 
-    CompletionStage<Void> actorJoinedSpot(ZLinkActor actor, String spotId) {
+    CompletionStage<Void> actorJoinedSpot(
+            ZLinkActor actor,
+            String spotId,
+            systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation
+                    cancellation) {
         if (lifecycle == null) {
             return CompletableFuture.completedFuture(null);
         }
@@ -148,7 +152,7 @@ final class ZLinkActorLocationCoordinator {
         }
         CompletionStage<Void> joined =
                 lifecycle.notifyActorJoinedSpot(
-                        actorType, actor.context().actorId(), meshName, spotId);
+                        actorType, actor.context().actorId(), meshName, spotId, cancellation);
         return joined.thenRun(
                 () -> {
                     if (resolvers != null) {
@@ -169,7 +173,12 @@ final class ZLinkActorLocationCoordinator {
     }
 
     CompletionStage<Void> actorMovedToEntrySpot(
-            ZLinkActor actor, RoutingId nodeRid, String entrySpotId, long entrySpotGeneration) {
+            ZLinkActor actor,
+            RoutingId nodeRid,
+            String entrySpotId,
+            long entrySpotGeneration,
+            systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation
+                    cancellation) {
         if (lifecycle == null) {
             return CompletableFuture.completedFuture(null);
         }
@@ -183,7 +192,8 @@ final class ZLinkActorLocationCoordinator {
                         actor.context().actorId(),
                         nodeRid,
                         entrySpotId,
-                        entrySpotGeneration)
+                        entrySpotGeneration,
+                        cancellation)
                 .thenRun(
                         () -> {
                             if (resolvers != null) {

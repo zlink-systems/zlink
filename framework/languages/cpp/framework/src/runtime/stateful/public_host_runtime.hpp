@@ -5,6 +5,7 @@
 #include "runtime/diagnostics/instance_spot_metrics.hpp"
 #include "runtime/dispatch/application_record.hpp"
 #include "runtime/dispatch/application_job_queue.hpp"
+#include "runtime/dispatch/receive_batch_budget.hpp"
 #include "runtime/dispatch/blocking_task.hpp"
 #include "runtime/execution/state_lane.hpp"
 #include <runtime/locations/location_repository.hpp>
@@ -935,7 +936,7 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     call_id_t next_operation ();
     task_t<std::optional<mesh::raw_mesh_node_owner_t::local_operation_reservation_t>>
     prepare_local_completion (pending_operation_t &operation);
-    void register_local_completion (
+    std::chrono::steady_clock::time_point register_local_completion (
       pending_operation_t &operation,
       const mesh::raw_mesh_node_owner_t::local_operation_reservation_t &reservation,
       std::chrono::milliseconds timeout,
@@ -990,6 +991,9 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
                              foundation::operation_terminal_t terminal,
                              zlink::message_t payload);
     task_t<std::size_t> dispatch_user_spot_operations ();
+    task_t<std::size_t>
+    dispatch_user_spot_operations (std::shared_ptr<mesh::service_mailbox_claim_t> &&first_claim,
+                                   receive_batch_budget_t infrastructure_budget);
     using application_claim_result_t = std::variant<std::size_t, task_t<std::size_t>>;
     task_t<std::size_t>
     dispatch_application_claim (std::shared_ptr<mesh::service_mailbox_claim_t> claim,

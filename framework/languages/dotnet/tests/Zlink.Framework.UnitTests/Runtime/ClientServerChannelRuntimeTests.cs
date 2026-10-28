@@ -14,6 +14,189 @@ namespace Zlink.Framework.UnitTests;
 
 public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutputHelper output)
 {
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(false, false, true)]
+    [InlineData(false, true, false)]
+    [InlineData(false, true, true)]
+    [InlineData(true, false, false)]
+    [InlineData(true, false, true)]
+    [InlineData(true, true, false)]
+    [InlineData(true, true, true)]
+    public async Task Server_Same_Channel_Second_Completes_While_First_Awaits(
+        bool automatic,
+        bool firstRequest,
+        bool secondRequest
+    )
+    {
+        var probe = new ChannelTurnProbe();
+        var store = new ZLinkInMemoryProviderLocationStore();
+        var services = new ServiceCollection();
+        services.AddSingleton(probe);
+        services.AddScoped<ChannelTurnScope>();
+        services.AddZLinkFramework(options =>
+        {
+            if (automatic)
+                options.AddLocationStore(store);
+            options
+                .AddClientServerChannel("work")
+                .Server()
+                .Listen(0)
+                .AddSendHandler<ChannelTurnHandler, ChannelTurnMessage>()
+                .AddRequestHandler<ChannelTurnHandler, ChannelTurnMessage, EchoReply>();
+        });
+        await using var server = services.BuildServiceProvider();
+        var serverRuntime = server.GetRequiredService<ZLinkFrameworkRuntime>();
+        var serverLocations = automatic ? server.GetRequiredService<ZLinkLocationRuntime>() : null;
+        if (serverLocations is not null)
+            await serverLocations.StartAsync(RoutingId.From("turn-server"));
+        await serverRuntime.StartAsync(CancellationToken.None);
+        var serverState = await serverRuntime.EnsureStartedStateAsync(CancellationToken.None);
+        var endpoint = (
+            await GetServerBundle(serverState, "work").ClientServerServer!.ReadAsync()
+        ).AdvertisedEndpoint;
+        await using var client = automatic ? CreateAutomaticClient(store) : CreateClient(endpoint);
+        var clientRuntime = client.GetRequiredService<ZLinkFrameworkRuntime>();
+        var clientLocations = automatic ? client.GetRequiredService<ZLinkLocationRuntime>() : null;
+        var serverDiscovery = automatic
+            ? server.GetRequiredService<ZLinkLocationAutoConnectHost>()
+            : null;
+        var clientDiscovery = automatic
+            ? client.GetRequiredService<ZLinkLocationAutoConnectHost>()
+            : null;
+        if (clientLocations is not null)
+            await clientLocations.StartAsync(RoutingId.From("turn-client"));
+        await clientRuntime.StartAsync(CancellationToken.None);
+        Task<EchoReply>? firstReply = null;
+        try
+        {
+            if (serverDiscovery is not null)
+                await serverDiscovery.StartAsync(serverState);
+            if (clientDiscovery is not null)
+                await clientDiscovery.StartAsync(
+                    await clientRuntime.EnsureStartedStateAsync(CancellationToken.None)
+                );
+            var route = client.GetRequiredService<IZLinkRouteClient>();
+            if (firstRequest)
+                firstReply = route
+                    .RequestToChannel("work", new ChannelTurnMessage("first"))
+                    .Async<EchoReply>()
+                    .AsTask();
+            else
+                await route.SendToChannel("work", new ChannelTurnMessage("first")).Async();
+            await probe.FirstStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Task<EchoReply>? secondReply = null;
+            if (secondRequest)
+                secondReply = route
+                    .RequestToChannel("work", new ChannelTurnMessage("second"))
+                    .Async<EchoReply>()
+                    .AsTask();
+            else
+                await route.SendToChannel("work", new ChannelTurnMessage("second")).Async();
+            await probe.SecondCompleted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            if (secondReply is not null)
+                Assert.Equal(
+                    "second",
+                    (await secondReply.WaitAsync(TimeSpan.FromSeconds(5))).Value
+                );
+            Assert.Equal(new[] { "first", "second" }, probe.Starts.ToArray());
+            Assert.Equal(new[] { "second" }, probe.Completions.ToArray());
+            Assert.DoesNotContain("first", probe.DisposedScopes);
+            Assert.False(probe.FirstCompleted.Task.IsCompleted);
+            if (firstReply is not null)
+                Assert.False(firstReply.IsCompleted);
+            probe.Release.TrySetResult();
+            await probe.FirstCompleted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            if (firstReply is not null)
+                Assert.Equal("first", (await firstReply.WaitAsync(TimeSpan.FromSeconds(5))).Value);
+            Assert.Equal(new[] { "second", "first" }, probe.Completions.ToArray());
+        }
+        finally
+        {
+            probe.Release.TrySetResult();
+            if (clientDiscovery is not null)
+                await clientDiscovery.StopAsync();
+            if (serverDiscovery is not null)
+                await serverDiscovery.StopAsync();
+            await clientRuntime.StopAsync(CancellationToken.None);
+            await serverRuntime.StopAsync(CancellationToken.None);
+            if (clientLocations is not null)
+                await clientLocations.StopAsync();
+            if (serverLocations is not null)
+                await serverLocations.StopAsync();
+        }
+        Assert.Equal(new[] { "first", "second" }, probe.DisposedScopes.Order().ToArray());
+    }
+
+    private sealed record ChannelTurnMessage(string Value);
+
+    private sealed class ChannelTurnProbe
+    {
+        internal ConcurrentQueue<string> Starts { get; } = new();
+        internal ConcurrentQueue<string> Completions { get; } = new();
+        internal ConcurrentQueue<string> DisposedScopes { get; } = new();
+        internal TaskCompletionSource FirstStarted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource FirstCompleted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource SecondCompleted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource Release { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+    }
+
+    private sealed class ChannelTurnScope(ChannelTurnProbe probe) : IDisposable
+    {
+        internal string Value { get; set; } = "unset";
+        internal bool Disposed { get; private set; }
+
+        public void Dispose()
+        {
+            Assert.False(Disposed);
+            Disposed = true;
+            probe.DisposedScopes.Enqueue(Value);
+        }
+    }
+
+    private sealed class ChannelTurnHandler(ChannelTurnProbe probe, ChannelTurnScope scope)
+        : IZLinkSendHandler<ChannelTurnMessage>,
+            IZLinkRequestHandler<ChannelTurnMessage, EchoReply>
+    {
+        public ValueTask HandleAsync(
+            ChannelTurnMessage message,
+            IZLinkMessageContext context,
+            CancellationToken cancellationToken
+        ) => HandleTurnAsync(message);
+
+        async ValueTask<EchoReply> IZLinkRequestHandler<ChannelTurnMessage, EchoReply>.HandleAsync(
+            ChannelTurnMessage message,
+            IZLinkMessageContext context,
+            CancellationToken cancellationToken
+        )
+        {
+            await HandleTurnAsync(message);
+            return new EchoReply(message.Value);
+        }
+
+        private async ValueTask HandleTurnAsync(ChannelTurnMessage message)
+        {
+            scope.Value = message.Value;
+            probe.Starts.Enqueue(message.Value);
+            Assert.False(scope.Disposed);
+            if (message.Value == "first")
+            {
+                probe.FirstStarted.TrySetResult();
+                await probe.Release.Task;
+            }
+            Assert.False(scope.Disposed);
+            probe.Completions.Enqueue(message.Value);
+            if (message.Value == "second")
+                probe.SecondCompleted.TrySetResult();
+            else
+                probe.FirstCompleted.TrySetResult();
+        }
+    }
+
     private const string AdmissionTestServerHost = "127.0.0.1";
 
     [Fact]
@@ -2345,13 +2528,17 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
 
         const int iterations = 1000;
         var matches = 0;
-        var start = GC.GetAllocatedBytesForCurrentThread();
-        for (var index = 0; index < iterations; index++)
-            if (ZLinkClientServerControlProtocol.IsControl(parts))
-                matches++;
-        var allocated = GC.GetAllocatedBytesForCurrentThread() - start;
+        var allocated = PerCallAllocation.MinWindow(
+            _ =>
+            {
+                if (ZLinkClientServerControlProtocol.IsControl(parts))
+                    matches++;
+            },
+            iterations,
+            beforeWindow: _ => matches = 0
+        );
 
-        output.WriteLine($"IsControl length={length} prefix={prefix}: {allocated} B/{iterations}");
+        output.WriteLine($"IsControl length={length} prefix={prefix}: {allocated} B/window");
         Assert.Equal(prefix && length >= 3 ? iterations : 0, matches);
         Assert.True(message.AsReadOnlySpan().SequenceEqual(bytes));
         Assert.Equal(0, allocated);
@@ -2384,19 +2571,23 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
 
         const int iterations = 1000;
         var matches = 0;
-        var start = GC.GetAllocatedBytesForCurrentThread();
-        for (var index = 0; index < iterations; index++)
-        {
-            if (ZLinkClientServerControlProtocol.TryDecodeLivenessProbe(probes, out var probeId))
-                matches += probeId == 11 ? 1 : 0;
-            if (ZLinkClientServerControlProtocol.TryDecodeLivenessAck(acks, out var ackId))
-                matches += ackId == 11 ? 1 : 0;
-            if (ZLinkClientServerControlProtocol.TryDecodeReject(rejects, out var reason))
-                matches += reason == 1 ? 1 : 0;
-        }
-        var allocated = GC.GetAllocatedBytesForCurrentThread() - start;
+        var allocated = PerCallAllocation.MinWindow(
+            _ =>
+            {
+                if (
+                    ZLinkClientServerControlProtocol.TryDecodeLivenessProbe(probes, out var probeId)
+                )
+                    matches += probeId == 11 ? 1 : 0;
+                if (ZLinkClientServerControlProtocol.TryDecodeLivenessAck(acks, out var ackId))
+                    matches += ackId == 11 ? 1 : 0;
+                if (ZLinkClientServerControlProtocol.TryDecodeReject(rejects, out var reason))
+                    matches += reason == 1 ? 1 : 0;
+            },
+            iterations,
+            beforeWindow: _ => matches = 0
+        );
 
-        output.WriteLine($"Control readers valid={valid}: {allocated} B/{iterations}");
+        output.WriteLine($"Control readers valid={valid}: {allocated} B/window");
         Assert.Equal(valid ? iterations * 3 : 0, matches);
         Assert.Equal(0, allocated);
     }

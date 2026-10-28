@@ -3,6 +3,7 @@
 #include "allocation_counter.hpp"
 #include "runtime/stateful/public_host_runtime.hpp"
 #include "runtime/execution/serial_application_record.hpp"
+#include "runtime/dispatch/dispatch_limits.hpp"
 #include <gtest/gtest.h>
 #include <cstdio>
 #include <thread>
@@ -22,7 +23,7 @@ std::shared_ptr<host::public_host_runtime_t> make_host ()
                               .node_routing_id = {'n'},
                               .lifecycle_generation = 1,
                               .descriptor_revision = 1,
-                              .advertised_endpoint = "tcp://127.0.0.1:7182"},
+                              .advertised_endpoint = "tcp://127.0.0.1:0"},
                .runtime_failures = std::make_shared<fw::runtime::runtime_failure_collector_t> ()}});
     runtime->configure_stateful_dispatch (
       [] (const stateful::accepted_record_authority_query_t &)
@@ -155,7 +156,7 @@ void enqueue_native_spot (stateful::stateful_object_runtime_t &objects,
                stateful::stateful_error_t::none);
 }
 
-TEST (OwnerInventory, StandaloneDrainKeepsOwnerOrderAndFindsConcurrentEnqueueOnNextDrain)
+void check_standalone_drain (bool exhaust_time_budget)
 {
     auto runtime = make_host ();
     auto &objects = runtime->objects ();
@@ -174,18 +175,54 @@ TEST (OwnerInventory, StandaloneDrainKeepsOwnerOrderAndFindsConcurrentEnqueueOnN
             // enqueue remains queued until the next bounded receive turn.
             std::thread producer ([&] { enqueue_native_spot (objects, late); });
             producer.join ();
+            if (exhaust_time_budget)
+                // Start after the receive budget's clock, so expiry is certain
+                // even without CPU contention. This does not change the budget.
+                std::this_thread::sleep_for (fw::runtime::dispatch_limits::receive_batch_time);
         }
     };
     EXPECT_EQ (runtime->dispatch_ready (dispatch, false).result ().value (), 0u);
     EXPECT_TRUE (seen.empty ());
     const auto first = runtime->dispatch_ready (dispatch, true, [] { return true; }).result ();
-    EXPECT_EQ (first.value (), 2u);
-    EXPECT_EQ (seen, (std::vector<std::string>{"a", "z"}));
+    // 04-application-job-queue-and-backpressure section 4 and
+    // 08-messaging-hot-path I1/I2: the next-receive permit does not override
+    // count/byte/elapsed-time limits. producer.join() may exhaust this turn.
+    // The captured projection must retain its order and exclude late, whether
+    // one or both original owners fit in the turn.
+    ASSERT_GE (first.value (), 1u);
+    ASSERT_LE (first.value (), 2u);
+    if (exhaust_time_budget)
+        EXPECT_EQ (first.value (), 1u);
+    const std::vector<std::string> original{"a", "z"};
+    EXPECT_EQ (seen,
+               (std::vector<std::string> (original.begin (), original.begin () + first.value ())));
+    EXPECT_EQ (objects.pending (z, stateful::turn_domain_t::application), 2u - first.value ());
     EXPECT_EQ (objects.pending (late, stateful::turn_domain_t::application), 1u);
+    // A fresh projection includes late before any remaining z. The default
+    // drain admits one application owner, independently of elapsed time.
     EXPECT_EQ (runtime->dispatch_ready (dispatch).result ().value (), 1u);
-    EXPECT_EQ (seen, (std::vector<std::string>{"a", "z", "late"}));
+    auto expected =
+      std::vector<std::string> (original.begin (), original.begin () + first.value ());
+    expected.push_back ("late");
+    EXPECT_EQ (seen, expected);
+    EXPECT_EQ (objects.pending (late, stateful::turn_domain_t::application), 0u);
+    if (first.value () == 1u) {
+        EXPECT_EQ (runtime->dispatch_ready (dispatch).result ().value (), 1u);
+        expected.push_back ("z");
+        EXPECT_EQ (seen, expected);
+    }
     EXPECT_TRUE (objects.application_owner_refs_async ("n").result ().value ().empty ());
     runtime->close ();
+}
+
+TEST (OwnerInventory, StandaloneDrainKeepsOwnerOrderAndFindsConcurrentEnqueueOnNextDrain)
+{
+    check_standalone_drain (false);
+}
+
+TEST (OwnerInventory, StandaloneDrainKeepsOwnerOrderWhenTimeBudgetExpires)
+{
+    check_standalone_drain (true);
 }
 
 TEST (OwnerInventory, DefaultDrainStopsAfterOneApplicationOwner)

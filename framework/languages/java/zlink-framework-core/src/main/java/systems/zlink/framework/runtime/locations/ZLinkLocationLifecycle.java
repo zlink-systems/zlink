@@ -4,6 +4,7 @@ import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.actors.ActorRef;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityConflict;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityDelete;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityDeleted;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityExpectFound;
@@ -101,6 +102,15 @@ public final class ZLinkLocationLifecycle implements AutoCloseable {
 
     public CompletionStage<Void> notifyActorJoinedSpot(
             String actorType, String actorId, String meshName, String spotId) {
+        return notifyActorJoinedSpot(actorType, actorId, meshName, spotId, NEVER_CANCEL);
+    }
+
+    public CompletionStage<Void> notifyActorJoinedSpot(
+            String actorType,
+            String actorId,
+            String meshName,
+            String spotId,
+            ZLinkStoreCancellation cancellation) {
         ActorRef actorRef = actors.get(actorId);
         if (actorRef == null) {
             return CompletableFuture.failedFuture(
@@ -109,12 +119,14 @@ public final class ZLinkLocationLifecycle implements AutoCloseable {
         }
         String actorKey = ZLinkAuthorityKeyCodec.actor(actorId);
         String spotKey = ZLinkAuthorityKeyCodec.spot(spotId);
-        return store.read(actorKey, NEVER_CANCEL)
+        return CompletableFuture.completedFuture(null)
+                .thenCompose(ignored -> store.read(actorKey, cancellation))
                 .thenCompose(
                         actorRead -> {
                             if (!(actorRead instanceof ZLinkAuthoritySnapshot actorSnapshot)) {
                                 return CompletableFuture.failedFuture(
-                                        new IllegalStateException(
+                                        new ZLinkFrameworkException(
+                                                ZLinkFrameworkErrorKind.UNAVAILABLE,
                                                 "Actor authority is unavailable: " + actorId));
                             }
                             var actor =
@@ -126,24 +138,23 @@ public final class ZLinkLocationLifecycle implements AutoCloseable {
                                                                     "Actor authority payload is"
                                                                             + " invalid: "
                                                                             + actorId));
-                            if (actor.state() != ZLinkActorAuthorityPayloadCodec.State.READY
-                                    || !actor.actorId().equals(actorId)
-                                    || !actor.stableType().equals(actorType)
-                                    || actorSnapshot.objectGeneration()
-                                            != actorRef.objectGeneration()) {
-                                return CompletableFuture.failedFuture(
-                                        new IllegalStateException(
-                                                "Actor authority changed before durable Spot join: "
-                                                        + actorId));
-                            }
-                            return store.read(spotKey, NEVER_CANCEL)
+                            requireJoinActor(
+                                    actorSnapshot,
+                                    actor,
+                                    actorRef,
+                                    actorType,
+                                    actorId,
+                                    actorRef.nodeRid());
+                            return store.read(spotKey, cancellation)
                                     .thenCompose(
                                             spotRead -> {
                                                 if (!(spotRead
                                                         instanceof
                                                         ZLinkAuthoritySnapshot spotSnapshot)) {
                                                     return CompletableFuture.failedFuture(
-                                                            new IllegalStateException(
+                                                            new ZLinkFrameworkException(
+                                                                    ZLinkFrameworkErrorKind
+                                                                            .NOT_FOUND,
                                                                     "Spot authority is unavailable:"
                                                                             + " "
                                                                             + spotId));
@@ -168,7 +179,9 @@ public final class ZLinkLocationLifecycle implements AutoCloseable {
                                                         || !spot.nodeRid()
                                                                 .equals(actorRef.nodeRid())) {
                                                     return CompletableFuture.failedFuture(
-                                                            new IllegalStateException(
+                                                            new ZLinkFrameworkException(
+                                                                    ZLinkFrameworkErrorKind
+                                                                            .UNAVAILABLE,
                                                                     "Spot authority changed before"
                                                                             + " durable Actor join: "
                                                                             + spotId));
@@ -177,14 +190,17 @@ public final class ZLinkLocationLifecycle implements AutoCloseable {
                                                         actorKey,
                                                         actorSnapshot,
                                                         actor,
+                                                        actorRef,
                                                         spot.spotId(),
                                                         spotSnapshot.objectGeneration(),
                                                         ZLinkSpotKind.USER,
                                                         spot.meshName(),
                                                         spot.nodeRid(),
-                                                        spot.nodeGeneration());
+                                                        spot.nodeGeneration(),
+                                                        cancellation);
                                             });
-                        });
+                        })
+                .exceptionallyCompose(error -> joinFailure(error, cancellation));
     }
 
     public CompletionStage<Void> notifyActorMovedToEntrySpot(
@@ -198,15 +214,28 @@ public final class ZLinkLocationLifecycle implements AutoCloseable {
             RoutingId nodeRid,
             String entrySpotId,
             long entrySpotGeneration) {
+        return notifyActorMovedToEntrySpot(
+                actorType, actorId, nodeRid, entrySpotId, entrySpotGeneration, NEVER_CANCEL);
+    }
+
+    public CompletionStage<Void> notifyActorMovedToEntrySpot(
+            String actorType,
+            String actorId,
+            RoutingId nodeRid,
+            String entrySpotId,
+            long entrySpotGeneration,
+            ZLinkStoreCancellation cancellation) {
         ActorRef actorRef = actors.get(actorId);
         String actorKey = ZLinkAuthorityKeyCodec.actor(actorId);
-        return store.read(actorKey, NEVER_CANCEL)
+        return CompletableFuture.completedFuture(null)
+                .thenCompose(ignored -> store.read(actorKey, cancellation))
                 .thenCompose(
                         read -> {
                             if (!(read instanceof ZLinkAuthoritySnapshot snapshot)
                                     || actorRef == null) {
                                 return CompletableFuture.failedFuture(
-                                        new IllegalStateException(
+                                        new ZLinkFrameworkException(
+                                                ZLinkFrameworkErrorKind.UNAVAILABLE,
                                                 "Actor authority is unavailable: " + actorId));
                             }
                             var actor =
@@ -217,40 +246,74 @@ public final class ZLinkLocationLifecycle implements AutoCloseable {
                                                             new IllegalStateException(
                                                                     "Actor authority payload is invalid: "
                                                                             + actorId));
-                            if (actor.state() != ZLinkActorAuthorityPayloadCodec.State.READY
-                                    || !actor.actorId().equals(actorId)
-                                    || !actor.stableType().equals(actorType)
-                                    || snapshot.objectGeneration() != actorRef.objectGeneration()
-                                    || !actor.nodeRid().equals(nodeRid)
-                                    || !actorRef.nodeRid().equals(nodeRid)) {
-                                return CompletableFuture.failedFuture(
-                                        new IllegalStateException(
-                                                "Actor authority changed before Entry Spot membership commit: "
-                                                        + actorId));
-                            }
+                            requireJoinActor(
+                                    snapshot, actor, actorRef, actorType, actorId, nodeRid);
                             return commitActorMembership(
                                     actorKey,
                                     snapshot,
                                     actor,
+                                    actorRef,
                                     entrySpotId,
                                     entrySpotGeneration,
                                     ZLinkSpotKind.ENTRY,
                                     actor.meshName(),
                                     actor.nodeRid(),
-                                    actor.nodeGeneration());
-                        });
+                                    actor.nodeGeneration(),
+                                    cancellation);
+                        })
+                .exceptionallyCompose(error -> joinFailure(error, cancellation));
+    }
+
+    private void requireJoinActor(
+            ZLinkAuthoritySnapshot snapshot,
+            ZLinkActorAuthorityPayloadCodec.ActorAuthority actor,
+            ActorRef actorRef,
+            String actorType,
+            String actorId,
+            RoutingId nodeRid) {
+        if (snapshot.objectGeneration() != actorRef.objectGeneration())
+            throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                    "Actor authority changed before durable Spot join: " + actorId);
+        if (actor.state() != ZLinkActorAuthorityPayloadCodec.State.READY
+                || !actor.actorId().equals(actorId)
+                || !actor.stableType().equals(actorType)
+                || !actor.nodeRid().equals(nodeRid)
+                || !actorRef.nodeRid().equals(nodeRid))
+            throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.UNAVAILABLE,
+                    "Actor authority changed before durable Spot join: " + actorId);
+    }
+
+    private CompletionStage<Void> joinFailure(
+            Throwable error, ZLinkStoreCancellation cancellation) {
+        while ((error instanceof java.util.concurrent.CompletionException
+                        || error instanceof java.util.concurrent.ExecutionException)
+                && error.getCause() != null) error = error.getCause();
+        if (error instanceof java.util.concurrent.CancellationException)
+            requireJoinDeadline(cancellation);
+        return CompletableFuture.failedFuture(error);
+    }
+
+    private void requireJoinDeadline(ZLinkStoreCancellation cancellation) {
+        if (cancellation.isCancellationRequested())
+            throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED, "Actor Join deadline elapsed");
     }
 
     private CompletionStage<Void> commitActorMembership(
             String actorKey,
             ZLinkAuthoritySnapshot snapshot,
             ZLinkActorAuthorityPayloadCodec.ActorAuthority actor,
+            ActorRef actorRef,
             String spotId,
             long spotGeneration,
             ZLinkSpotKind kind,
             String meshName,
             RoutingId nodeRid,
-            long nodeGeneration) {
+            long nodeGeneration,
+            ZLinkStoreCancellation cancellation) {
+        requireJoinDeadline(cancellation);
         byte[] next =
                 actorAuthorities.encode(
                         ZLinkActorAuthorityPayloadCodec.State.READY,
@@ -268,15 +331,66 @@ public final class ZLinkLocationLifecycle implements AutoCloseable {
                         actorKey,
                         new ZLinkAuthorityExpectFound(snapshot.storeVersion()),
                         new ZLinkAuthorityPut(next),
-                        NEVER_CANCEL)
+                        cancellation)
                 .thenCompose(
-                        written ->
-                                written instanceof ZLinkAuthorityStored
-                                        ? CompletableFuture.completedFuture(null)
-                                        : CompletableFuture.failedFuture(
-                                                new IllegalStateException(
-                                                        "Actor Spot join authority CAS conflicted: "
-                                                                + actor.actorId())));
+                        written -> {
+                            if (written instanceof ZLinkAuthorityStored)
+                                return CompletableFuture.completedFuture(null);
+                            String message =
+                                    "Actor Spot join authority CAS conflicted: " + actor.actorId();
+                            if (written instanceof ZLinkAuthorityConflict conflict) {
+                                if (conflict.membershipFailure() != null)
+                                    return CompletableFuture.failedFuture(
+                                            new ZLinkFrameworkException(
+                                                    conflict.membershipFailure(), message));
+                                requireJoinDeadline(cancellation);
+                                return store.read(actorKey, cancellation)
+                                        .thenComposeAsync(
+                                                current -> {
+                                                    if (!(current
+                                                            instanceof
+                                                            ZLinkAuthoritySnapshot refreshed))
+                                                        return CompletableFuture.failedFuture(
+                                                                new ZLinkFrameworkException(
+                                                                        ZLinkFrameworkErrorKind
+                                                                                .UNAVAILABLE,
+                                                                        message));
+                                                    var authority =
+                                                            actorAuthorities
+                                                                    .decode(refreshed.payload())
+                                                                    .orElseThrow();
+                                                    requireJoinActor(
+                                                            refreshed,
+                                                            authority,
+                                                            actorRef,
+                                                            actor.stableType(),
+                                                            actor.actorId(),
+                                                            actor.nodeRid());
+                                                    if (!refreshed
+                                                            .storeVersion()
+                                                            .equals(snapshot.storeVersion()))
+                                                        return CompletableFuture.failedFuture(
+                                                                new ZLinkFrameworkException(
+                                                                        ZLinkFrameworkErrorKind
+                                                                                .UNAVAILABLE,
+                                                                        message));
+                                                    return commitActorMembership(
+                                                            actorKey,
+                                                            snapshot,
+                                                            actor,
+                                                            actorRef,
+                                                            spotId,
+                                                            spotGeneration,
+                                                            kind,
+                                                            meshName,
+                                                            nodeRid,
+                                                            nodeGeneration,
+                                                            cancellation);
+                                                });
+                            }
+                            return CompletableFuture.failedFuture(
+                                    new IllegalStateException(message));
+                        });
     }
 
     public CompletionStage<Void> releaseActor(String actorType, String actorId) {

@@ -62,14 +62,7 @@ public sealed class StreamSessionForcedCleanupTests
         };
         node.Start();
         // Observe the receive task itself before shutdown cancels unrelated node loops.
-        var ended = (Task)
-            typeof(ZLinkStreamNodeRuntime)
-                .GetField(
-                    "_receiveLoop",
-                    System.Reflection.BindingFlags.Instance
-                        | System.Reflection.BindingFlags.NonPublic
-                )!
-                .GetValue(node)!;
+        var ended = node.ReceiveCompletion;
         try
         {
             await poller.FirstWait.Task.WaitAsync(TimeSpan.FromSeconds(5));
