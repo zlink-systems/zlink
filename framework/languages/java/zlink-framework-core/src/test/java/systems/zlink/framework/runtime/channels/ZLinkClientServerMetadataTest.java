@@ -98,6 +98,10 @@ final class ZLinkClientServerMetadataTest {
                                     getClass().getClassLoader(),
                                     new Class<?>[] {ZLinkBackendDealerSocket.class},
                                     (proxy, method, args) -> {
+                                        if (method.isDefault()
+                                                && method.getName().equals("requestTo"))
+                                            return java.lang.reflect.InvocationHandler
+                                                    .invokeDefault(proxy, method, args);
                                         if (method.getName().equals("send")
                                                 || method.getName().equals("request")) {
                                             @SuppressWarnings("unchecked")

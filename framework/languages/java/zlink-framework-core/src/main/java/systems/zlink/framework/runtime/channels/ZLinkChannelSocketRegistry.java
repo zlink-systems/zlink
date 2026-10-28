@@ -24,6 +24,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSocketMonito
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpotRouteBridge;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSubscriberSocket;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
+import systems.zlink.framework.runtime.internal.calls.ZLinkBlockingCalls;
 import systems.zlink.framework.runtime.internal.calls.ZLinkRequestCalls;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
@@ -69,6 +70,7 @@ final class ZLinkChannelSocketRegistry {
     private final ZLinkApplicationJobQueue applicationJobQueue;
 
     private final ZLinkStateLane stateLane = new ZLinkStateLane();
+
     private final Map<ZLinkBackendObject, ZLinkApplicationJobReceiveFlowController.Registration>
             receiveFlowRegistrations = new IdentityHashMap<>();
     private final Map<String, ZLinkBackendDealerSocket> clients = new HashMap<>();
@@ -102,6 +104,10 @@ final class ZLinkChannelSocketRegistry {
     private static final Duration CLIENT_SERVER_CONTROL_RECEIVE_WAIT = Duration.ofMillis(100);
     private volatile BiConsumer<String, Throwable> clientServerReceiveFailures = (channel, f) -> {};
 
+    ZLinkStateLane operationLane() {
+        return stateLane;
+    }
+
     ZLinkChannelSocketRegistry() {
         this(null);
     }
@@ -128,11 +134,16 @@ final class ZLinkChannelSocketRegistry {
             new java.util.concurrent.CopyOnWriteArrayList<>();
 
     void rejectPendingAdmission() {
-        inStateLane(
-                () -> {
-                    topologySignals.forEach(signal -> signal.shutdown().run());
-                    return null;
-                });
+        var nodes =
+                inStateLane(
+                        () -> {
+                            topologySignals.forEach(signal -> signal.shutdown().run());
+                            return List.copyOf(spotRouterNodes.values());
+                        });
+        for (var node : nodes) {
+            var operations = node.operationRegistry();
+            if (operations != null) operations.closeAsync();
+        }
     }
 
     void onTopologyChanged(Runnable signal) {
@@ -543,12 +554,11 @@ final class ZLinkChannelSocketRegistry {
                     ChannelRegistration registration = registrations.get(channelName);
                     if (registration != null && registration.kind() == ChannelKind.ROUTE_MESH) {
                         var bridge = requireSpotRouteBridgeCore(channelName, bridgeOwner);
-                        var submitted =
+                        return () ->
                                 bridgeSubmit.apply(
                                         bridge,
                                         ZLinkRequestCalls.remainingTimeout(
                                                 timeout, started, requestNanoTime));
-                        return () -> submitted;
                     }
                     ZLinkInternalSpotNode node = spotRouterNodes.get(channelName);
                     if (node != null) {
@@ -583,7 +593,15 @@ final class ZLinkChannelSocketRegistry {
             var submitted = submission.get();
             return () -> submitted;
         }
-        return () -> owner.isOnLane() ? submission.get() : owner.awaitTurn(submission);
+        return () -> {
+            if (owner.isOnLane()) return submission.get();
+            var flow = ZLinkFlowContext.current();
+            if (!ZLinkBlockingCalls.isRuntimeExecutionContext()) {
+                return owner.awaitTurn(() -> ZLinkFlowContext.call(flow, submission));
+            }
+            return owner.runAsync(() -> ZLinkFlowContext.call(flow, submission))
+                    .thenCompose(stage -> stage);
+        };
     }
 
     private <T> CompletionStage<T> selectAndSubmit(

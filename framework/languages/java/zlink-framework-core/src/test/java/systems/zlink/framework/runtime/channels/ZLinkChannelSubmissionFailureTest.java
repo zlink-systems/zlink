@@ -400,6 +400,9 @@ final class ZLinkChannelSubmissionFailureTest {
                         ZLinkChannelSubmissionFailureTest.class.getClassLoader(),
                         new Class<?>[] {ZLinkBackendRouterSocket.class},
                         (proxy, method, arguments) -> {
+                            if (method.isDefault() && method.getName().equals("requestTo"))
+                                return java.lang.reflect.InvocationHandler.invokeDefault(
+                                        proxy, method, arguments);
                             if (method.getName().equals("request")) {
                                 attempts.incrementAndGet();
                                 throw failure;
