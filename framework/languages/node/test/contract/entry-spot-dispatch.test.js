@@ -545,7 +545,7 @@ test('runtime host reports joined Spot route before stale remote actor packet ta
       routeChannels: ['bingo.room.route']
     })
   });
-  runtime.actorManager = {
+  runtime.setActorManager({
     getState(actorId) {
       assert.equal(actorId, 'player-2');
       return {
@@ -562,7 +562,7 @@ test('runtime host reports joined Spot route before stale remote actor packet ta
         }
       };
     }
-  };
+  });
 
   //  캐시된 packet target이 가리키는 Spot과 Actor의 현재 membership이 다르면 hint를
   //  내지 않는다. stale target의 node에 새 Spot ID를 붙이면 authority fence가 없는
@@ -618,7 +618,7 @@ test('runtime host legacy remote actor join admits the actor', async () => {
   const { host: runtime, relay: runtimeRelay } = createRelayHost({
     registration: framework.createFrameworkRegistration({})
   });
-  runtime.actorManager = {
+  runtime.setActorManager({
     async getOrCreateActor(actorId) {
       assert.equal(actorId, 'player-1');
       return actor;
@@ -630,15 +630,15 @@ test('runtime host legacy remote actor join admits the actor', async () => {
         setJoinedSpot() {}
       };
     }
-  };
-  runtime.spotManager = {
+  });
+  runtime.setSpotManager({
     async admitActorJoin(_spotId, joinedActor, request, commit) {
       assert.equal(joinedActor, actor);
       assert.equal(request.data().toString(), 'join-request');
       commit({});
       return { accepted: true };
     }
-  };
+  });
 
   const result = await runtimeRelay.actorJoins.receive({
     packetName: '__zlink.actor.join_spot.request',
