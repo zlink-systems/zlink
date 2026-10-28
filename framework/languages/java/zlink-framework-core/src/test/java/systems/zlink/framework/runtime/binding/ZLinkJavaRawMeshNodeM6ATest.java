@@ -231,16 +231,63 @@ final class ZLinkJavaRawMeshNodeM6ATest {
     void handshakeAdmissionIsReadyBeforeAnyAck_PerTransportLivenessSection5() throws Exception {
         // 05-transport-liveness.ko.md:228: Ready has no probe-ACK prerequisite.
         RoutingId peerRid = RoutingId.from("handshake-ready-peer");
+        RoutingId localRid = RoutingId.from("handshake-ready-local");
+        var wire = new ZLinkServiceM6AWireCodec();
         try (var context = Zlink.createContext();
-                var node = meshNode(context)) {
-            var topology = new ZLinkServiceTopologyRegistry(descriptor(RoutingId.from("local")));
-            topology.admit(descriptor(peerRid), "pair", ServiceWireConstants.COMMAND_HELLO);
-            var topologyField = ZLinkJavaRawMeshNode.class.getDeclaredField("topology");
-            topologyField.setAccessible(true);
-            topologyField.set(node, topology);
-            assertEquals(MeshPeerState.CONNECTING, node.peers().getFirst().state());
-            topology.admit(descriptor(peerRid), "pair", ServiceWireConstants.COMMAND_ADMIT);
-            assertEquals(MeshPeerState.ADMITTED, node.peers().getFirst().state());
+                var peerPort = new ZLinkJavaRawServicePort(context)) {
+            var port = new ZLinkJavaRawServicePort(context);
+            var router = port.openRouter(localRid, true);
+            var topology = new ZLinkServiceTopologyRegistry(descriptor(localRid), port.stateLane());
+            try (var node =
+                    ZLinkJavaRawMeshNodeTesting.create(
+                            "mesh",
+                            port,
+                            router,
+                            descriptor(localRid),
+                            topology,
+                            java.util.Map.of(),
+                            Runnable::run)) {
+                var peer = peerPort.openRouter(peerRid);
+                peer.options().probe(true);
+                String endpoint = "inproc://handshake-ready-" + java.util.UUID.randomUUID();
+                router.bind(endpoint);
+                peer.connect(endpoint);
+                for (int command :
+                        new int[] {
+                            ServiceWireConstants.COMMAND_HELLO, ServiceWireConstants.COMMAND_ADMIT
+                        }) {
+                    peerPort.send(
+                                    peer,
+                                    localRid,
+                                    List.of(wire.encodeAdmission(command, descriptor(peerRid))))
+                            .toCompletableFuture()
+                            .get(2, TimeUnit.SECONDS);
+                    long deadline = System.nanoTime() + Duration.ofSeconds(2).toNanos();
+                    while (true) {
+                        assertTrue(System.nanoTime() < deadline);
+                        assertTrue(
+                                port.waitForReadable(
+                                        router, Duration.ofNanos(deadline - System.nanoTime())));
+                        var inbound = port.receiveNow(router);
+                        assertNotNull(inbound);
+                        if (inbound.frames().getFirst().length == 0) {
+                            inbound.close();
+                            continue;
+                        }
+                        assertEquals(
+                                command, wire.decodeHeader(inbound.frames().getFirst()).command());
+                        node.dispatch(inbound);
+                        break;
+                    }
+                    assertEquals(
+                            command == ServiceWireConstants.COMMAND_HELLO
+                                    ? MeshPeerState.CONNECTING
+                                    : MeshPeerState.ADMITTED,
+                            node.peers().getFirst().state());
+                }
+                assertEquals(1, node.status().admittedPeerCount());
+                assertTrue(node.observePeerRoute(peerRid).ready());
+            }
         }
     }
 
@@ -552,7 +599,8 @@ final class ZLinkJavaRawMeshNodeM6ATest {
         while (System.nanoTime() < deadline) {
             assertTrue(
                     port.waitForReadable(router, Duration.ofNanos(deadline - System.nanoTime())));
-            var received = port.receive(router).orElseThrow();
+            var received = port.receive(router);
+            assertNotNull(received);
             if (received.frames().size() != 1 || received.frames().getFirst().length != 0) {
                 var codec = new ZLinkServiceM6AWireCodec();
                 if (codec.decodeHeader(received.frames().getFirst()).command()

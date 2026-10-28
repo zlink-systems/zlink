@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+#include <zlink/json.hpp>
 #include "../support/stateful_object_sync.hpp"
 #include "../support/manual_internal_scheduler.hpp"
 #include <zlink/framework.hpp>
@@ -382,6 +383,7 @@ struct observations_t
     int entry_joined = 0;
     int entry_left = 0;
     std::atomic<fw::actor_client_t *> joined_sender{nullptr};
+    std::function<fw::task_t<void> (fw::actor_id_t)> joined_view;
     bool release_replay_post = false;
     bool next_join_attempted = false;
     bool send_after_close = false;
@@ -427,43 +429,107 @@ struct move_t
     static constexpr const char *packet_name = "maintenance-join-move";
     std::string target;
 };
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE (move_t, target)
+}
+
+template <> struct zlink::json::dto_traits<move_t>
+{
+    static constexpr auto fields = std::tuple{zlink::json::field ("target", &move_t::target)};
+};
+
+namespace
+{
+
 struct probe_t
 {
     static constexpr const char *packet_name = "maintenance-join-probe";
     int value{};
 };
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE (probe_t, value)
+}
+
+template <> struct zlink::json::dto_traits<probe_t>
+{
+    static constexpr auto fields = std::tuple{zlink::json::field ("value", &probe_t::value)};
+};
+
+namespace
+{
+
 struct close_session_t
 {
     static constexpr const char *packet_name = "bound-session-close";
     int value{};
 };
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE (close_session_t, value)
+}
+
+template <> struct zlink::json::dto_traits<close_session_t>
+{
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("value", &close_session_t::value)};
+};
+
+namespace
+{
+
 struct ready_t
 {
     static constexpr const char *packet_name = "maintenance-join-ready";
     int value{};
 };
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE (ready_t, value)
+}
+
+template <> struct zlink::json::dto_traits<ready_t>
+{
+    static constexpr auto fields = std::tuple{zlink::json::field ("value", &ready_t::value)};
+};
+
+namespace
+{
+
 struct view_request_t
 {
     static constexpr const char *packet_name = "maintenance-join-view-request";
     int value{};
 };
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE (view_request_t, value)
+}
+
+template <> struct zlink::json::dto_traits<view_request_t>
+{
+    static constexpr auto fields = std::tuple{zlink::json::field ("value", &view_request_t::value)};
+};
+
+namespace
+{
+
 struct view_t
 {
     static constexpr const char *packet_name = "maintenance-join-view";
     int instance{};
 };
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE (view_t, instance)
+}
+
+template <> struct zlink::json::dto_traits<view_t>
+{
+    static constexpr auto fields = std::tuple{zlink::json::field ("instance", &view_t::instance)};
+};
+
+namespace
+{
+
 struct record_t
 {
     static constexpr const char *packet_name = "maintenance-join-record";
     int value{};
 };
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE (record_t, value)
+}
+
+template <> struct zlink::json::dto_traits<record_t>
+{
+    static constexpr auto fields = std::tuple{zlink::json::field ("value", &record_t::value)};
+};
+
+namespace
+{
+
 class actor_t final : public fw::actor_t
 {
   public:
@@ -822,6 +888,8 @@ class room_t final : public fw::spot_t<actor_t>
     }
     fw::task_t<void> on_actor_joined (actor_t &actor) override
     {
+        if (observations->joined_view)
+            co_await observations->joined_view (actor.context ().actor_id ());
         if (observations->joined_sender && _context.spot_id () == local_spot) {
             {
                 std::lock_guard lock (observations->mutex);
@@ -1198,6 +1266,18 @@ class view_client_t
     {
         std::unique_lock lock (_mutex);
         return _changed.wait_for (lock, wait_budget, [&] { return _closed; });
+    }
+    std::optional<int> wait_view (std::size_t index)
+    {
+        std::unique_lock lock (_mutex);
+        if (!_changed.wait_for (lock, wait_budget, [&] { return _views.size () > index; }))
+            return std::nullopt;
+        return _views[index];
+    }
+    std::size_t received_views ()
+    {
+        std::lock_guard lock (_mutex);
+        return _views.size ();
     }
     // Sends one View request on this connection and returns the View it produced.
     std::optional<int> view ()
@@ -2134,6 +2214,104 @@ TEST (ActorMaintenanceJoin, AssignmentAfterMoveClosesReachesSession)
     joined_actor_chain (true);
 }
 
+void joined_first_view_reaches_client (bool remote)
+{
+    auto evidence = std::make_shared<observations_t> ();
+    auto store = std::make_shared<fw::runtime::in_memory_location_store_t> ();
+    auto relocations = std::make_shared<fw::runtime::in_memory_relocation_store_t> ();
+    host_t source, target;
+    configure (source, evidence, first_rid, store, relocations);
+    source.app.advanced ().services ().add_factory<relay_session_t> (
+      [evidence] (fw::service_provider_t &provider) {
+          return std::make_unique<relay_session_t> (provider.get_required<fw::actor_manager_t> (),
+                                                    evidence);
+      },
+      fw::service_lifetime_t::scoped);
+    source.app.add_zlink_framework ()
+      .add_stream_node (stream_name)
+      .bind ("tcp://127.0.0.1:0")
+      .register_session<relay_session_t> ();
+    source.start ();
+    ASSERT_TRUE (ready (source));
+    auto services = source.app.advanced ().services ().build_provider ();
+    ASSERT_TRUE (services.get_required<fw::actor_manager_t> ()
+                   .get_or_create (fw::actor_id_t (actor_id), actor_type)
+                   .async ()
+                   .result ());
+    view_client_t connection (services.get_required<fw::framework_runtime_t> ()
+                                .listener_status (fw::listener_kind_t::stream, stream_name)
+                                .endpoint);
+    ASSERT_TRUE (connection.connect ());
+    ASSERT_TRUE (connection.view ().has_value ());
+
+    std::optional<fw::service_provider_t> target_services;
+    auto *destination = &services;
+    if (remote) {
+        configure (target, evidence, second_rid, store, relocations);
+        target.start ();
+        ASSERT_TRUE (ready (target));
+        target_services.emplace (target.app.advanced ().services ().build_provider ());
+        ASSERT_TRUE (peer_ready (services.get_required<fw::route_mesh_runtime_t> (), second_rid));
+        ASSERT_TRUE (
+          peer_ready (target_services->get_required<fw::route_mesh_runtime_t> (), first_rid));
+        services.get_required<fw::route_mesh_runtime_options_t> ()
+          .mesh (mesh_name)
+          .placement_weight (0);
+        destination = &*target_services;
+    }
+    ASSERT_TRUE (destination->get_required<fw::spot_manager_t> ()
+                   .get_or_create (fw::spot_id_t (local_spot), room_type)
+                   .async ()
+                   .result ());
+
+    auto submitted = std::make_shared<fw::task_completion_source_t<void>> ();
+    auto release = std::make_shared<fw::task_completion_source_t<void>> ();
+    auto *sender = &destination->get_required<fw::actor_client_t> ();
+    evidence->joined_view = [sender, submitted, release] (fw::actor_id_t id) -> fw::task_t<void> {
+        // The same public path as Table::publish -> deliver -> bound_session.send.
+        co_await sender->send (std::move (id), view_request_t{}).async ();
+        submitted->complete (fw::result_t<void>::success ());
+        co_await release->task ();
+    };
+    struct release_joined_t
+    {
+        std::shared_ptr<fw::task_completion_source_t<void>> release;
+        ~release_joined_t () { release->complete (fw::result_t<void>::success ()); }
+    } release_joined{release};
+    ASSERT_TRUE (services.get_required<fw::actor_client_t> ()
+                   .send (fw::actor_id_t (actor_id), move_t{local_spot})
+                   .async ()
+                   .result ());
+    const auto admitted = submitted->task ().result_for (wait_budget);
+    ASSERT_TRUE (admitted.has_value ());
+    ASSERT_TRUE (*admitted);
+    // Membership §4: payload dispatch waits for the joined callback and completion.
+    EXPECT_EQ (connection.received_views (), 1u);
+    {
+        std::lock_guard lock (evidence->mutex);
+        EXPECT_TRUE (evidence->completions.empty ());
+    }
+    release->complete (fw::result_t<void>::success ());
+    EXPECT_TRUE (connection.wait_view (1).has_value ());
+    {
+        std::lock_guard lock (evidence->mutex);
+        ASSERT_EQ (evidence->completions.size (), 1u);
+        EXPECT_TRUE (
+          std::holds_alternative<fw::actor_join_accepted_t> (evidence->completions.front ()));
+        EXPECT_EQ (evidence->completion_owners.front (), remote ? second_rid : first_rid);
+        EXPECT_EQ (evidence->completion_spots.front (), fw::spot_id_t (local_spot));
+    }
+}
+
+TEST (ActorMaintenanceJoin, JoinedFirstViewReachesClientLocal)
+{
+    joined_first_view_reaches_client (false);
+}
+TEST (ActorMaintenanceJoin, JoinedFirstViewReachesClientRemote)
+{
+    joined_first_view_reaches_client (true);
+}
+
 enum class backlog_case_t
 {
     ordinary_order,
@@ -2221,7 +2399,7 @@ void local_join_backlog (backlog_case_t scenario)
         header.message_name = probe_t::packet_name;
         header.content_type = "application/json";
         auto encoded = fw::detail::encode_actor_packet (
-          header, zlink::message_t::from (nlohmann::json (probe_t{-1}).dump ()));
+          header, zlink::message_t::from (zlink::detail::json_profile::encode (probe_t{-1})));
         namespace wire = fw::runtime::protocol;
         wire::frozen_application_record_t frozen;
         frozen.kind = wire::frozen_record_kind_t::actor_send;
@@ -2315,8 +2493,9 @@ void local_join_backlog (backlog_case_t scenario)
                     fw::runtime::protocol::decode_application_parts (payload));
                   const auto body = fw::runtime::messaging::envelope_codec_t{}.decode_body (parts);
                   ASSERT_TRUE (body);
-                  durable_payloads.push_back (
-                    nlohmann::json::parse (body.value ().to_string ()).get<probe_t> ().value);
+                  durable_payloads.push_back (zlink::detail::json_profile::decode_value<probe_t> (
+                                                nlohmann::json::parse (body.value ().to_string ()))
+                                                .value);
               });
         }
         std::sort (durable_payloads.begin (), durable_payloads.end ());
@@ -7255,7 +7434,6 @@ TEST (ActorMaintenanceJoin, MissingAfterTargetCommitAndDestroyDoesNotCompleteOnS
 
 } // namespace
 
-
 namespace deferred_join_reservation_probe
 {
 namespace fw = zlink::framework;
@@ -7943,7 +8121,7 @@ TEST (ActorMaintenanceJoin, CanonicalReplayMaterializesBodyWithoutInvocationCach
     header.content_type = "application/json";
     wire::application_payload_t::multipart_t parts;
     parts.push_back (fw::runtime::messaging::envelope_codec_t{}.encode_header (header));
-    parts.push_back (zlink::message_t::from (nlohmann::json (record_t{73}).dump ()));
+    parts.push_back (zlink::message_t::from (zlink::detail::json_profile::encode (record_t{73})));
     wire::frozen_application_record_t frozen;
     frozen.kind = wire::frozen_record_kind_t::actor_send;
     frozen.body = wire::frozen_actor_application_body_t{

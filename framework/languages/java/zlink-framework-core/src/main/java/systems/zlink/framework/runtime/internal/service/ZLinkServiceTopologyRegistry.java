@@ -13,7 +13,6 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.BiConsumer;
 import java.util.function.Predicate;
 
@@ -24,8 +23,8 @@ public final class ZLinkServiceTopologyRegistry {
 
     private final ZLinkStateLane stateLane;
     private final Map<RoutingId, Peer> peers = new HashMap<>();
-    // Admission writes run on the owner lane; management reads need no separate owner turn.
-    private final Map<RoutingId, String> readyConnections = new ConcurrentHashMap<>();
+    // Admission and its prepared selection plans share this owner lane.
+    private final Map<RoutingId, String> readyConnections;
     private final Map<String, ChannelSelectionPlan> channelPlans = new HashMap<>();
     private final Map<String, ChannelSelectionPlan> readyChannelPlans = new HashMap<>();
     private final Map<String, Map<String, Long>> dynamicSelectionCurrents = new HashMap<>();
@@ -38,12 +37,20 @@ public final class ZLinkServiceTopologyRegistry {
 
     public ZLinkServiceTopologyRegistry(
             ZLinkServiceNodeDescriptor local, ZLinkStateLane stateLane) {
+        this(local, stateLane, new HashMap<>());
+    }
+
+    ZLinkServiceTopologyRegistry(
+            ZLinkServiceNodeDescriptor local,
+            ZLinkStateLane stateLane,
+            Map<RoutingId, String> readyConnections) {
+        this.readyConnections = Objects.requireNonNull(readyConnections, "readyConnections");
         this.stateLane = Objects.requireNonNull(stateLane, "stateLane");
         this.local = Objects.requireNonNull(local, "local");
     }
 
     private <T> T inStateLane(java.util.function.Supplier<T> work) {
-        return stateLane.awaitTurn(work);
+        return stateLane.isOnLane() ? work.get() : stateLane.awaitTurn(work);
     }
 
     public ZLinkServiceNodeDescriptor localDescriptor() {
@@ -177,10 +184,12 @@ public final class ZLinkServiceTopologyRegistry {
         inStateLane(
                 () -> {
                     Peer peer = peers.get(nodeRoutingId);
-                    if (peer != null)
+                    if (peer != null && peer.liveness() != liveness) {
                         peers.put(
                                 nodeRoutingId,
                                 new Peer(peer.descriptor(), peer.connectionId(), liveness));
+                        rebuildChannelPlansOnLane();
+                    }
                     return null;
                 });
     }
@@ -302,7 +311,7 @@ public final class ZLinkServiceTopologyRegistry {
 
     /** Whether the currently admitted peer has received ADMIT. */
     public boolean isReady(RoutingId peer) {
-        return readyConnections.containsKey(peer);
+        return inStateLane(() -> readyConnections.containsKey(peer));
     }
 
     /** Whether this peer received ADMIT on its currently admitted route. */
@@ -312,7 +321,8 @@ public final class ZLinkServiceTopologyRegistry {
 
     /** Reads the route's ADMIT receipt without entering a second owner turn. */
     public boolean isRouteReady(RoutingId peer, String connectionId) {
-        return connectionId != null && connectionId.equals(readyConnections.get(peer));
+        return inStateLane(
+                () -> connectionId != null && connectionId.equals(readyConnections.get(peer)));
     }
 
     /**

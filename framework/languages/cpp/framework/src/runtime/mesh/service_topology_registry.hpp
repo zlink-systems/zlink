@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #pragma once
+#include "runtime/diagnostics/metric_provider.hpp"
 
 #include "runtime/execution/state_lane.hpp"
 #include "runtime/mesh/service_liveness_registry.hpp"
@@ -117,7 +118,8 @@ class service_topology_registry_t
   public:
     explicit service_topology_registry_t (service_node_descriptor_t local,
                                           std::vector<std::string> metric_channel_names = {},
-                                          service_liveness_registry_t *liveness_owner = nullptr);
+                                          service_liveness_registry_t *liveness_owner = nullptr,
+                                          metric_provider_t provider = noop_metric_provider ());
 
     void publish_local (service_node_descriptor_t descriptor);
     std::vector<admitted_peer_t> publish_local_snapshot (service_node_descriptor_t descriptor);
@@ -195,6 +197,7 @@ class service_topology_registry_t
 
     // The registry publishes its sole descriptor/peer state at mutation turns.
     // Readers retain the immutable publication without entering the state lane.
+    metric_provider_t _metric_provider;
     std::shared_ptr<std::shared_ptr<const topology_state_t>> _topology;
     service_liveness_registry_t *const _liveness_owner;
     std::map<std::vector<std::uint8_t>, service_node_descriptor_t, byte_vector_less_t>

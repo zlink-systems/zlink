@@ -1,9 +1,11 @@
 #pragma once
+#include <zlink/framework/contracts/codecs/serializer.hpp>
 #include "matchmaker.hpp"
 #include "server/shared/http.hpp"
 #include "server/shared/http_lobby_contracts.hpp"
 #include "server/shared/hosting.hpp"
 #include <functional>
+#include <nlohmann/json.hpp>
 namespace MyGame
 {
 // All lobby queue and HTTP socket state belongs to this single IO executor.
@@ -17,12 +19,12 @@ class HttpLobby final : public fx::hosted_service_t
         http::request<http::string_body> request;
         http::response<http::string_body> response;
         explicit Connection (Tcp::socket socket) : stream (std::move (socket)) {}
-        void reply (http::status status, const nlohmann::json &body)
+        void reply (http::status status, std::string body)
         {
             response = {status, request.version ()};
             response.set (http::field::content_type, "application/json");
             response.keep_alive (false);
-            response.body () = body.dump ();
+            response.body () = std::move (body);
             response.prepare_payload ();
             stream.expires_after (Limits::packet);
             http::async_write (stream, response, [self = shared_from_this ()] (auto error, auto) {
@@ -72,22 +74,31 @@ class HttpLobby final : public fx::hosted_service_t
     {
         if (connection->request.method () != http::verb::post
             || connection->request.target () != LobbyNames::match_path) {
-            connection->reply (http::status::not_found, {{"error", "POST /match required"}});
+            connection->reply (http::status::not_found,
+                               nlohmann::json{{"error", "POST /match required"}}.dump ());
             return;
         }
         MatchRequest request;
         std::optional<Matchmaker::Pairing> pairing;
         try {
-            const auto body = nlohmann::json::parse (connection->request.body ());
-            request = body.get<MatchRequest> ();
+            const auto &body = connection->request.body ();
+            auto input = nlohmann::json::parse (body);
+            if (input.is_object () && !input.contains ("mode"))
+                input["mode"] = Names::default_mode;
+            fx::serializer_registry_t serializers;
+            request = serializers.get<MatchRequest> ().deserialize (
+              fx::encoded_payload_t::from_string (input.dump ()));
             pairing = matchmaker_.enqueue (
               request, connection.get (),
               [connection] (const MatchResponse &response) {
-                  connection->reply (http::status::ok, nlohmann::json (response));
+                  fx::serializer_registry_t serializers;
+                  connection->reply (
+                    http::status::ok,
+                    serializers.get<MatchResponse> ().serialize (response).to_string ());
               },
               [connection] (std::exception_ptr error) {
                   connection->reply (http::status::internal_server_error,
-                                     {{"error", HttpLobby::message (error)}});
+                                     nlohmann::json{{"error", HttpLobby::message (error)}}.dump ());
               },
               [connection] {
                   boost::system::error_code ignored;
@@ -96,7 +107,8 @@ class HttpLobby final : public fx::hosted_service_t
         }
         catch (const std::exception &error) {
             std::cerr << "HTTP matching failed: " << error.what () << std::endl;
-            connection->reply (http::status::bad_request, {{"error", error.what ()}});
+            connection->reply (http::status::bad_request,
+                               nlohmann::json{{"error", error.what ()}}.dump ());
             return;
         }
         if (!pairing) {

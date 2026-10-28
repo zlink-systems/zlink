@@ -36,7 +36,7 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
     private final ZLinkServiceCompletionDispatcher completions =
             ZLinkServiceCompletionDispatcher.INSTANCE;
     private final ZLinkStateLane owner;
-    private final ConcurrentHashMap<UUID, Entry<?>> pending = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<UUID, Entry<?>> pending;
     private final Throwable closeFailure;
     private static final long DEADLINE_TICK_NANOS = TimeUnit.MILLISECONDS.toNanos(1);
     private static final int DEADLINE_SLOTS = 256;
@@ -52,6 +52,55 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
     private static final long VISIT_IN_FLIGHT = -2;
     private Entry<?> deadlineCursor;
     private volatile boolean closed;
+
+    long maintenanceTickForTest() {
+        return maintenanceTick;
+    }
+
+    ZLinkStateLane ownerLaneForTest() {
+        return owner;
+    }
+
+    Object[] deadlineHeadsForTest() {
+        return deadlineHeads.clone();
+    }
+
+    Object[] deadlineTailsForTest() {
+        return deadlineTails.clone();
+    }
+
+    Object deadlineCursorForTest() {
+        return deadlineCursor;
+    }
+
+    int deadlineEntryCountForTest() {
+        int count = 0;
+        for (Entry<?> entry : deadlineHeads) {
+            while (entry != null) {
+                count++;
+                entry = entry.deadlineNext;
+            }
+        }
+        return count;
+    }
+
+    Object pendingEntryForTest(UUID id) {
+        return pending.get(id);
+    }
+
+    java.util.Set<UUID> pendingIdsForTest() {
+        return java.util.Set.copyOf(pending.keySet());
+    }
+
+    Object pendingReceiverForTest() {
+        if (pending.size() != 1) throw new IllegalStateException("expected one pending operation");
+        return pending.values().iterator().next().completion;
+    }
+
+    boolean pendingRegisteredForTest() {
+        if (pending.size() != 1) throw new IllegalStateException("expected one pending operation");
+        return pending.values().iterator().next().registeredForTest();
+    }
 
     public ZLinkServiceOperationRegistry() {
         this(new IllegalStateException("service runtime is closed"));
@@ -124,12 +173,29 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
                 nanoTime);
     }
 
-    private ZLinkServiceOperationRegistry(
+    ZLinkServiceOperationRegistry(
             ZLinkStateLane owner,
             ThreadFactory maintenanceFactory,
             Throwable closeFailure,
             Supplier<? extends Throwable> timeoutFailure,
             LongSupplier nanoTime) {
+        this(
+                owner,
+                maintenanceFactory,
+                closeFailure,
+                timeoutFailure,
+                nanoTime,
+                new ConcurrentHashMap<>());
+    }
+
+    ZLinkServiceOperationRegistry(
+            ZLinkStateLane owner,
+            ThreadFactory maintenanceFactory,
+            Throwable closeFailure,
+            Supplier<? extends Throwable> timeoutFailure,
+            LongSupplier nanoTime,
+            ConcurrentHashMap<UUID, Entry<?>> pending) {
+        this.pending = Objects.requireNonNull(pending, "pending");
         this.owner = Objects.requireNonNull(owner, "owner");
         this.maintenanceFactory = Objects.requireNonNull(maintenanceFactory, "maintenanceFactory");
         this.closeFailure = Objects.requireNonNull(closeFailure, "closeFailure");
@@ -763,7 +829,7 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
         SEND
     }
 
-    private static final class Entry<T> extends ZLinkServiceCompletionDispatcher.WorkItem {
+    static final class Entry<T> extends ZLinkServiceCompletionDispatcher.WorkItem {
         private static final int NONE = 0;
         private static final int VALUE = 1;
         private static final int FAILURE = 2;

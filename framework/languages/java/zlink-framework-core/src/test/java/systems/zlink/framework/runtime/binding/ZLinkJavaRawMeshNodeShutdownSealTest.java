@@ -15,6 +15,7 @@ import systems.zlink.framework.runtime.internal.drain.ZLinkMeshDrainCoordinator;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6AWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceNodeDescriptor;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceTopologyRegistry;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceTopologyRegistryTesting;
 import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 
 import java.lang.reflect.Field;
@@ -80,8 +81,8 @@ final class ZLinkJavaRawMeshNodeShutdownSealTest {
                 long deadline = System.nanoTime() + Duration.ofMillis(200).toNanos();
                 do {
                     var inbound = remote.receive(peer);
-                    if (inbound.isPresent()) {
-                        try (var message = inbound.orElseThrow()) {
+                    if (inbound != null) {
+                        try (var message = inbound) {
                             // ROUTER probe is an empty transport frame, not admission.
                             assertEquals(
                                     -1,
@@ -107,10 +108,10 @@ final class ZLinkJavaRawMeshNodeShutdownSealTest {
                                 return true;
                             }
                             var inbound = remote.receive(peer);
-                            if (inbound.isEmpty()) {
+                            if (inbound == null) {
                                 return false;
                             }
-                            try (var message = inbound.orElseThrow()) {
+                            try (var message = inbound) {
                                 receivedAdmit.set(
                                         ZLinkJavaRawMeshNode.allowedInfrastructureControlCommand(
                                                         message.frames())
@@ -299,25 +300,27 @@ final class ZLinkJavaRawMeshNodeShutdownSealTest {
     @Test
     void repeatedHelloOrAdmitOnTheSelectedConnectionNeverClearsAdmissionReadiness()
             throws Exception {
+        var readiness = new RecordingReadiness(java.util.Map.of());
         try (var context = Zlink.createContext();
                 var left = new ZLinkJavaRawMeshNode(context, "mesh");
-                var right = new ZLinkJavaRawMeshNode(context, "mesh")) {
+                var right =
+                        ZLinkJavaRawMeshNodeTesting.create(
+                                context,
+                                "mesh",
+                                (descriptor, lane) ->
+                                        ZLinkServiceTopologyRegistryTesting.create(
+                                                descriptor, lane, readiness))) {
             start(left, "repeat-left");
             start(right, "repeat-right");
             left.connectPeer(endpoint(right), right.routingId());
             await(() -> admitted(left) && admitted(right));
             await(() -> ready(right, left.routingId()));
+            // Match the original observation window, after the initial handshake is ready.
+            readiness.resetObservations();
             // Observe the admission-ready marker itself: the transient a
             // concurrent peers()/send caller could hit lies inside one
             // dispatch turn, so sampling readiness from outside cannot
             // pin it deterministically.
-            var field = ZLinkServiceTopologyRegistry.class.getDeclaredField("readyConnections");
-            field.setAccessible(true);
-            var topology = (ZLinkServiceTopologyRegistry) field(right, "topology");
-            @SuppressWarnings("unchecked")
-            var readiness =
-                    new RecordingReadiness((java.util.Map<RoutingId, String>) field.get(topology));
-            field.set(topology, readiness);
             for (int command :
                     new int[] {
                         ServiceWireConstants.COMMAND_HELLO,
@@ -367,6 +370,11 @@ final class ZLinkJavaRawMeshNodeShutdownSealTest {
         public boolean remove(Object key, Object value) {
             clears.merge((RoutingId) key, 1, Integer::sum);
             return super.remove(key, value);
+        }
+
+        void resetObservations() {
+            marks.clear();
+            clears.clear();
         }
 
         int marks(RoutingId peer) {

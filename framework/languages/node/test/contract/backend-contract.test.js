@@ -1,3 +1,4 @@
+const { createPublisherRuntime } = require('./fixtures/publisher-runtime');
 const assert = require('node:assert/strict');
 const failUnexpectedRuntimeTask = {
   reportRuntimeTaskException(task, error) {
@@ -368,7 +369,7 @@ test('backend managed DONTWAIT Spot send surfaces terminal binding failure', asy
   );
 });
 
-test('RouteMesh runtime weight changes reject invalid values as configuration errors', () => {
+test('RouteMesh runtime weight changes reject invalid values as configuration errors', async () => {
   const registration = framework.createFrameworkRegistrationWithBuilder((builder) => {
     builder.addRouteMesh('game')
       .channel('events')
@@ -376,12 +377,15 @@ test('RouteMesh runtime weight changes reject invalid values as configuration er
       .setWeight(100);
   });
   const calls = [];
-  const manager = Object.create(framework.ZLinkSpotNodeRuntimeManager.prototype);
-  manager.options = { registration };
-  manager.meshNodes = new Map([['game', {
+  const manager = await createPublisherRuntime('game', {}, {
+    registration, errorSink: failUnexpectedRuntimeTask, detachedTaskRunner
+  }, {
+    addChannelName() {},
     setPlacementWeight() { calls.push('placement'); },
     setChannelWeight() { calls.push('channel'); }
-  }]]);
+  });
+  // Startup applies configured channel weight; observe only rejected updates.
+  calls.length = 0;
 
   for (const invalid of [-1, 10_001, 1.5, Number.NaN]) {
     assert.throws(
@@ -403,31 +407,25 @@ test('MeshNode descriptors keep an explicit Spot stable type instead of adding a
       .objects().server()
       .addSpotFactory('game.room', ConfiguredRoomSpot, (factory) => factory.disableRelocation());
   });
-  const manager = new framework.ZLinkSpotNodeRuntimeManager({
-    errorSink: failUnexpectedRuntimeTask,
-    detachedTaskRunner: detachedTaskRunner,
-    registration
-  });
-  manager.meshNodes.set('game', {
+  const manager = await createPublisherRuntime('game', {}, {
+    errorSink: failUnexpectedRuntimeTask, detachedTaskRunner, registration
+  }, {
     status: () => ({
-      routingId: 'game-node',
-      lifecycleGeneration: 1n,
+      routingId: 'game-node', lifecycleGeneration: 1n,
       localEndpoint: 'tcp://127.0.0.1:9400'
     })
   });
   let published;
-  manager.locationAutoConnect = {
-    runtime: {
-      currentOwnerToken: { ownerId: 'owner-a', leaseGeneration: 1n },
-      writeMeshNode: async (descriptor) => {
-        published = descriptor;
-        return {
-          status: framework.ZLinkLocationWriteStatus.Stored,
-          updatedAt: new Date()
-        };
-      }
+  manager.configureLocationAutoConnect({
+    currentOwnerToken: { ownerId: 'owner-a', leaseGeneration: 1n },
+    writeMeshNode: async (descriptor) => {
+      published = descriptor;
+      return {
+        status: framework.ZLinkLocationWriteStatus.Stored,
+        updatedAt: new Date()
+      };
     }
-  };
+  }, {}, {});
 
   await manager.publishMeshNodeState(framework.ZLinkFrameworkRuntimeState.Serving);
 
@@ -447,31 +445,25 @@ test('Object Server descriptor publishes an Entry Spot ID without application En
       .objects().server()
       .addActorFactory('player', PlayerActorFactory, (factory) => factory.disableRelocation());
   });
-  const manager = new framework.ZLinkSpotNodeRuntimeManager({
-    errorSink: failUnexpectedRuntimeTask,
-    detachedTaskRunner: detachedTaskRunner,
-    registration
-  });
-  manager.meshNodes.set('game', {
+  const manager = await createPublisherRuntime('game', {}, {
+    errorSink: failUnexpectedRuntimeTask, detachedTaskRunner, registration
+  }, {
     status: () => ({
-      routingId: 'game-node',
-      lifecycleGeneration: 1n,
+      routingId: 'game-node', lifecycleGeneration: 1n,
       localEndpoint: 'tcp://127.0.0.1:9400'
     })
   });
   let published;
-  manager.locationAutoConnect = {
-    runtime: {
-      currentOwnerToken: { ownerId: 'owner-a', leaseGeneration: 1n },
-      writeMeshNode: async (descriptor) => {
-        published = descriptor;
-        return {
-          status: framework.ZLinkLocationWriteStatus.Stored,
-          updatedAt: new Date()
-        };
-      }
+  manager.configureLocationAutoConnect({
+    currentOwnerToken: { ownerId: 'owner-a', leaseGeneration: 1n },
+    writeMeshNode: async (descriptor) => {
+      published = descriptor;
+      return {
+        status: framework.ZLinkLocationWriteStatus.Stored,
+        updatedAt: new Date()
+      };
     }
-  };
+  }, {}, {});
 
   assert.equal(registration.spotNodes.get('game').entrySpotType, undefined);
   await manager.publishMeshNodeState(framework.ZLinkFrameworkRuntimeState.Serving);
@@ -1666,19 +1658,19 @@ test('MeshNode runtime manager owns lifecycle and forwards pull-dispatch records
 });
 
 test('Logical Multicast completion does not expose or record target admission results', async () => {
-  const runtime = new framework.ZLinkSpotNodeRuntimeManager({
+  const runtimeOptions = {
     errorSink: failUnexpectedRuntimeTask,
     detachedTaskRunner: detachedTaskRunner,
     registration: framework.createFrameworkRegistration({}),
     backendAdapterFactory: {},
     context: {}
-  });
+  };
   let coreCalls = 0;
-  runtime.publishers.set('play', {
+  const runtime = await createPublisherRuntime('play', {
     async publishAsync() {
       coreCalls += 1;
     }
-  });
+  }, runtimeOptions);
 
   const result = await runtime.publish('play', 'events', 'score', 'ProfileChanged', { sequence: 1 });
 
@@ -1687,21 +1679,21 @@ test('Logical Multicast completion does not expose or record target admission re
 });
 
 test('Logical Multicast terminal completes while target processing remains blocked', async () => {
-  const runtime = new framework.ZLinkSpotNodeRuntimeManager({
+  const runtimeOptions = {
     errorSink: failUnexpectedRuntimeTask,
     detachedTaskRunner: detachedTaskRunner,
     registration: framework.createFrameworkRegistration({}),
     backendAdapterFactory: {},
     context: {}
-  });
+  };
   let coreCalls = 0;
   let completeTarget;
-  runtime.publishers.set('play', {
+  const runtime = await createPublisherRuntime('play', {
     publishAsync() {
       coreCalls += 1;
       return new Promise((resolve) => { completeTarget = resolve; });
     }
-  });
+  }, runtimeOptions);
 
   const result = await runtime.publish(
     'play', 'events', 'score', 'ProfileChanged', { sequence: 1 }
@@ -1712,19 +1704,19 @@ test('Logical Multicast terminal completes while target processing remains block
 });
 
 test('Logical Multicast post-start failure does not change the caller terminal', async () => {
-  const runtime = new framework.ZLinkSpotNodeRuntimeManager({
+  const runtimeOptions = {
     errorSink: failUnexpectedRuntimeTask,
     detachedTaskRunner: detachedTaskRunner,
     registration: framework.createFrameworkRegistration({}),
     backendAdapterFactory: {},
     context: {}
-  });
+  };
   let failTarget;
-  runtime.publishers.set('play', {
+  const runtime = await createPublisherRuntime('play', {
     publishAsync() {
       return new Promise((_resolve, reject) => { failTarget = reject; });
     }
-  });
+  }, runtimeOptions);
 
   const result = await runtime.publish(
     'play', 'events', 'score', 'ProfileChanged', { sequence: 1 }
@@ -1735,21 +1727,21 @@ test('Logical Multicast post-start failure does not change the caller terminal',
 });
 
 test('Logical Multicast shutdown after handoff does not change the caller terminal', async () => {
-  const runtime = new framework.ZLinkSpotNodeRuntimeManager({
+  const runtimeOptions = {
     errorSink: failUnexpectedRuntimeTask,
     detachedTaskRunner: detachedTaskRunner,
     registration: framework.createFrameworkRegistration({}),
     backendAdapterFactory: {},
     context: {}
-  });
+  };
   let coreCalls = 0;
-  runtime.publishers.set('play', {
+  const runtime = await createPublisherRuntime('play', {
     publishAsync() {
       coreCalls += 1;
       return new Promise(() => undefined);
     },
     async close() {}
-  });
+  }, runtimeOptions);
 
   const submitted = await runtime.publish(
     'play', 'events', 'score', 'ProfileChanged', { sequence: 1 }
@@ -1768,17 +1760,17 @@ test('Logical Multicast shutdown after handoff does not change the caller termin
 });
 
 test('Logical Multicast accepts zero subscribers as normal completion', async () => {
-  const runtime = new framework.ZLinkSpotNodeRuntimeManager({
+  const runtimeOptions = {
     errorSink: failUnexpectedRuntimeTask,
     detachedTaskRunner: detachedTaskRunner,
     registration: framework.createFrameworkRegistration({}),
     backendAdapterFactory: {},
     context: {}
-  });
-  runtime.publishers.set('play', {
+  };
+  const runtime = await createPublisherRuntime('play', {
     async publishAsync() {
     }
-  });
+  }, runtimeOptions);
 
   const result = await runtime.publish(
     'play', 'events', 'score', 'ProfileChanged', { sequence: 1 }
@@ -1788,19 +1780,19 @@ test('Logical Multicast accepts zero subscribers as normal completion', async ()
 });
 
 test('Logical Multicast remains usable after envelope encoding fails', async () => {
-  const runtime = new framework.ZLinkSpotNodeRuntimeManager({
+  const runtimeOptions = {
     errorSink: failUnexpectedRuntimeTask,
     detachedTaskRunner: detachedTaskRunner,
     registration: framework.createFrameworkRegistration({}),
     backendAdapterFactory: {},
     context: {}
-  });
+  };
   let coreCalls = 0;
-  runtime.publishers.set('play', {
+  const runtime = await createPublisherRuntime('play', {
     async publishAsync() {
       coreCalls += 1;
     }
-  });
+  }, runtimeOptions);
   const cyclic = {};
   cyclic.self = cyclic;
 
@@ -1818,20 +1810,20 @@ test('Logical Multicast remains usable after envelope encoding fails', async () 
 });
 
 test('Logical Multicast abort before handoff calls Core zero times', async () => {
-  const runtime = new framework.ZLinkSpotNodeRuntimeManager({
+  const runtimeOptions = {
     errorSink: failUnexpectedRuntimeTask,
     detachedTaskRunner: detachedTaskRunner,
     registration: framework.createFrameworkRegistration({}),
     backendAdapterFactory: {},
     context: {}
-  });
+  };
   let coreCalls = 0;
-  runtime.publishers.set('play', {
+  const runtime = await createPublisherRuntime('play', {
     async publishAsync() {
       coreCalls += 1;
       throw new Error('must not run');
     }
-  });
+  }, runtimeOptions);
   const controller = new AbortController();
   const reason = new Error('cancel before commit');
   controller.abort(reason);
@@ -1844,23 +1836,23 @@ test('Logical Multicast abort before handoff calls Core zero times', async () =>
 });
 
 test('Logical Multicast abort after Core start preserves committed completion', async () => {
-  const runtime = new framework.ZLinkSpotNodeRuntimeManager({
+  const runtimeOptions = {
     errorSink: failUnexpectedRuntimeTask,
     detachedTaskRunner: detachedTaskRunner,
     registration: framework.createFrameworkRegistration({}),
     backendAdapterFactory: {},
     context: {}
-  });
+  };
   let coreCalls = 0;
   let complete;
   let forwardedSignal;
-  runtime.publishers.set('play', {
+  const runtime = await createPublisherRuntime('play', {
     publishAsync(channelName, topic, parts, options, signal) {
       coreCalls += 1;
       forwardedSignal = signal;
       return new Promise((resolve) => { complete = resolve; });
     }
-  });
+  }, runtimeOptions);
   const controller = new AbortController();
   const pending = runtime.publish(
     'play', 'events', 'score', 'ProfileChanged', { sequence: 1 }, controller.signal
@@ -2630,9 +2622,15 @@ test('subscriber receive loop parks on backend readiness instead of a fixed inte
   }
 });
 
-test('subscriber receive loop keeps receiving while an earlier handler is awaiting', async () => {
+test('subscriber receive loop starts the next pipeline before prior terminal at one queued permit', async () => {
   const queued = [messageRecord('first'), messageRecord('second')];
   const receiveFlags = [];
+  const started = [];
+  const completed = [];
+  const closes = [0, 0];
+  queued.forEach((record, index) => {
+    record.parts.forEach((part) => { part.close = () => { closes[index] += 1; }; });
+  });
   let releaseFirst;
   const firstPending = new Promise((resolve) => { releaseFirst = resolve; });
   let observeFirst;
@@ -2641,7 +2639,6 @@ test('subscriber receive loop keeps receiving while an earlier handler is awaiti
   const secondReceived = new Promise((resolve) => { observeSecondReceive = resolve; });
   let observeSecond;
   const secondObserved = new Promise((resolve) => { observeSecond = resolve; });
-  let secondStarted = 0;
   const queue = applicationJobQueue(1n);
   const loop = new framework.ZLinkSubscriberReceiveLoop(
     {
@@ -2674,14 +2671,13 @@ test('subscriber receive loop keeps receiving while an earlier handler is awaiti
     {
       async dispatch(topicMessage) {
         releaseApplicationJobPermitBeforeHandler();
+        started.push(topicMessage.topic);
         if (topicMessage.topic === 'first') {
           observeFirst();
           await firstPending;
         }
-        if (topicMessage.topic === 'second') {
-          secondStarted += 1;
-          observeSecond();
-        }
+        completed.push(topicMessage.topic);
+        if (topicMessage.topic === 'second') observeSecond();
       }
     },
     queue
@@ -2698,15 +2694,25 @@ test('subscriber receive loop keeps receiving while an earlier handler is awaiti
       ))
     ]);
     assert.deepEqual(receiveFlags, [1, 1]);
-    assert.equal(secondStarted, 0);
-    releaseFirst();
     await Promise.race([
       secondObserved,
       new Promise((_, reject) => setTimeout(
-        () => reject(new Error('Second subscriber handler did not start after the first terminal.')),
+        () => reject(new Error('Second subscriber handler did not complete before the first terminal.')),
         1_000
       ))
     ]);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(started, ['first', 'second']);
+    assert.deepEqual(completed, ['second']);
+    assert.deepEqual(closes, [0, 2]);
+    let stopped = false;
+    const stopping = loop.stop().then(() => { stopped = true; });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(stopped, false, 'stop waits for the first record terminal');
+    releaseFirst();
+    await stopping;
+    assert.deepEqual(completed, ['second', 'first']);
+    assert.deepEqual(closes, [2, 2]);
   } finally {
     releaseFirst();
     await loop.stop();

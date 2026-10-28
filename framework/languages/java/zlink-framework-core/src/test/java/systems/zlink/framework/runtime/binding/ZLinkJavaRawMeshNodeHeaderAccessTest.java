@@ -113,6 +113,100 @@ final class ZLinkJavaRawMeshNodeHeaderAccessTest {
         }
     }
 
+    @Test
+    void ownerMutationFailureClosesTheClaimAndDoesNotPublishPartialAdmission() {
+        var local = descriptor(RoutingId.from("header-local"), 1);
+        var original = descriptor(SOURCE, 1);
+        var fault = new java.util.concurrent.atomic.AtomicBoolean();
+        var readiness =
+                new java.util.HashMap<RoutingId, String>() {
+                    @Override
+                    public String put(RoutingId rid, String connection) {
+                        if (fault.get()) throw new IllegalStateException("owner mutation");
+                        return super.put(rid, connection);
+                    }
+                };
+        try (var context = Zlink.createContext()) {
+            var port = new ZLinkJavaRawServicePort(context);
+            var topology =
+                    systems.zlink.framework.runtime.internal.service
+                            .ZLinkServiceTopologyRegistryTesting.create(
+                            local, port.stateLane(), readiness);
+            topology.admit(original, "0", ServiceWireConstants.COMMAND_ADMIT);
+            try (var node =
+                            ZLinkJavaRawMeshNodeTesting.create(
+                                    "header",
+                                    port,
+                                    null,
+                                    local,
+                                    topology,
+                                    java.util.Map.of(),
+                                    Runnable::run);
+                    var record =
+                            new Record(
+                                    new ZLinkServiceM6AWireCodec()
+                                            .encodeAdmission(
+                                                    ServiceWireConstants.COMMAND_UPDATE,
+                                                    descriptor(SOURCE, 2)))) {
+                fault.set(true);
+                var failure =
+                        assertThrows(
+                                IllegalStateException.class, () -> node.dispatch(record.inbound));
+                assertEquals("owner mutation", failure.getMessage());
+                record.assertClosed();
+                assertEquals(1, record.frames.headerReads);
+                assertEquals(
+                        2,
+                        topology.peer(SOURCE).orElseThrow().descriptor().descriptorRevision(),
+                        "the original mutation is not rolled back by a new compensation policy");
+                assertEquals(
+                        1,
+                        node.peers().getFirst().descriptorRevision(),
+                        "an incomplete commit must not replace the observation root");
+                fault.set(false);
+            }
+        }
+    }
+
+    @Test
+    void headMaterializationFailureClosesTheReceivedRecordAndPropagates() {
+        try (var context = Zlink.createContext()) {
+            var port = new ZLinkJavaRawServicePort(context);
+            var local = descriptor(RoutingId.from("header-local"), 1);
+            var topology = new ZLinkServiceTopologyRegistry(local, port.stateLane());
+            try (var node =
+                            ZLinkJavaRawMeshNodeTesting.create(
+                                    "header",
+                                    port,
+                                    null,
+                                    local,
+                                    topology,
+                                    java.util.Map.of(),
+                                    Runnable::run);
+                    var received =
+                            new Received(SOURCE, new Message[] {Message.from(new byte[] {1})})) {
+                var frames =
+                        new AbstractList<byte[]>() {
+                            @Override
+                            public int size() {
+                                return 1;
+                            }
+
+                            @Override
+                            public byte[] get(int index) {
+                                throw new IllegalStateException("head access");
+                            }
+                        };
+                var inbound = new ZLinkJavaRawServicePort.Inbound(SOURCE, null, frames, received);
+                assertEquals(
+                        "head access",
+                        assertThrows(IllegalStateException.class, () -> node.dispatch(inbound))
+                                .getMessage());
+                assertThrows(IllegalStateException.class, received::parts);
+            }
+        }
+    }
+
     private static ZLinkJavaRawMeshNode node(Context context) throws Exception {
         var node = new ZLinkJavaRawMeshNode(context, "header");
         var local = descriptor(RoutingId.from("header-local"), 1);

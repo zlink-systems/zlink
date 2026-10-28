@@ -338,11 +338,9 @@ final class ZLinkChannelSubmitTurnTest {
                                     options.registration().dispatchOptions(), null, Runnable::run),
                             null,
                             null,
-                            null);
-            var operations = field(runtime, "operations");
-            var owner = ZLinkServiceOperationRegistry.class.getDeclaredField("owner");
-            owner.setAccessible(true);
-            owner.set(operations, operationLane);
+                            null,
+                            System::nanoTime,
+                            operationLane);
         }
 
         void register(Duration timeout) {

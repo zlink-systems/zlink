@@ -25,7 +25,6 @@ import java.util.AbstractList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Objects;
-import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.function.BiConsumer;
@@ -63,6 +62,14 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
                             .PeerState>
             receiveSource;
 
+    ZLinkStateLane stateLane() {
+        return stateLane;
+    }
+
+    ZLinkServiceOperationRegistry operationRegistry() {
+        return operations;
+    }
+
     void setReceiveSource(
             Function<
                             RoutingId,
@@ -88,8 +95,23 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
         this(context, false, stateLane);
     }
 
+    ZLinkJavaRawServicePort(
+            Context context,
+            ZLinkStateLane stateLane,
+            BiFunction<RouterSocket, Boolean, ZLinkJavaSocketReceivePoller> receivePollerFactory) {
+        this(context, false, stateLane, receivePollerFactory);
+    }
+
     private ZLinkJavaRawServicePort(
             Context context, boolean ownsContext, ZLinkStateLane stateLane) {
+        this(context, ownsContext, stateLane, DEFAULT_RECEIVE_POLLER);
+    }
+
+    private ZLinkJavaRawServicePort(
+            Context context,
+            boolean ownsContext,
+            ZLinkStateLane stateLane,
+            BiFunction<RouterSocket, Boolean, ZLinkJavaSocketReceivePoller> receivePollerFactory) {
         this(
                 context,
                 ownsContext,
@@ -98,7 +120,8 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
                         stateLane,
                         ZLinkOneWayCalls.failureForStatus(ZLinkOneWayCalls.SHUTDOWN),
                         ZLinkJavaSocketSupport::requestTimeout,
-                        System::nanoTime));
+                        System::nanoTime),
+                receivePollerFactory);
     }
 
     ZLinkJavaRawServicePort(
@@ -534,10 +557,10 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
                 });
     }
 
-    Optional<Inbound> receive(RouterSocket router) {
+    Inbound receive(RouterSocket router) {
         ZLinkJavaSocketReceivePoller receivePoller = inStateLane(() -> receivePollerOnLane(router));
         if (receivePoller == null || !receivePoller.waitForReadable(Duration.ZERO)) {
-            return Optional.empty();
+            return null;
         }
         return inStateLane(() -> receiveOnLane(router));
     }
@@ -591,11 +614,11 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
                 });
     }
 
-    Optional<Inbound> receiveNow(RouterSocket router) {
+    Inbound receiveNow(RouterSocket router) {
         return inStateLane(() -> receiveOnLane(router));
     }
 
-    private Optional<Inbound> receiveOnLane(RouterSocket router) {
+    private Inbound receiveOnLane(RouterSocket router) {
         ensureOwnedOnLane(router);
         Received received = new Received();
         boolean transferred = false;
@@ -606,12 +629,12 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
             } catch (ZlinkRecvException noData) {
                 if (noData.getResult() == RecvResult.NO_DATA
                         || noData.getResult() == RecvResult.BUSY) {
-                    return Optional.empty();
+                    return null;
                 }
                 throw noData;
             }
             if (!receivedRecord) {
-                return Optional.empty();
+                return null;
             }
             RoutingId source =
                     received.getRoutingId()
@@ -623,7 +646,7 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
             // borrow received.parts() directly while this owner is retained.
             Inbound inbound = new Inbound(source, received.replyToken().orElse(null), received);
             transferred = true;
-            return Optional.of(inbound);
+            return inbound;
         } finally {
             if (!transferred) {
                 received.close();

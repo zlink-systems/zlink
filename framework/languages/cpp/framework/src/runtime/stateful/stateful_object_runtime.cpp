@@ -45,13 +45,15 @@ stateful_object_runtime_t::stateful_object_runtime_t () = default;
 
 stateful_object_runtime_t::~stateful_object_runtime_t ()
 {
-    retire_population_metrics_async ().result ().value ();
+    retire_population_metrics_async ().get ();
     _lane.close ();
 }
 
-task_t<void> stateful_object_runtime_t::retire_population_metrics_async ()
+std::future<void> stateful_object_runtime_t::retire_population_metrics_async ()
 {
-    return _lane.run_task ([this] {
+    // Object teardown can follow the last completion owner. Its existing lane
+    // keeps metric retirement ordered until the object storage is released.
+    return _lane.run ([this] {
         if (!_actor_metric)
             return;
         // Lifecycle teardown may visit retained objects. Observable collection
@@ -420,14 +422,12 @@ bool stateful_object_runtime_t::finalized_relocation_source (object_kind_t kind,
                                                              const std::string &key,
                                                              std::uint64_t object_generation) const
 {
-    return _lane
-      .run ([&] {
-          const auto object = _objects.find (object_key_t{kind, key});
-          return object != _objects.end ()
-                 && object->second.reference.object_generation == object_generation
-                 && finalized_relocation_source_on_lane (object->second);
-      })
-      .get ();
+    return _lane.run_sync ([&] {
+        const auto object = _objects.find (object_key_t{kind, key});
+        return object != _objects.end ()
+               && object->second.reference.object_generation == object_generation
+               && finalized_relocation_source_on_lane (object->second);
+    });
 }
 
 bool stateful_object_runtime_t::finalized_relocation_source_on_lane (

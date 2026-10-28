@@ -346,7 +346,8 @@ internal sealed class ZLinkActorOwnershipCoordinator(
         ZLinkActorId actorId,
         ZLinkSpotId spotId,
         ulong spotGeneration,
-        CancellationToken cancellationToken = default
+        CancellationToken cancellationToken = default,
+        ActorRef? expectedActorRef = null
     )
     {
         await RenewOwnedActorAsync(
@@ -358,7 +359,7 @@ internal sealed class ZLinkActorOwnershipCoordinator(
                         CurrentSpotId = spotId.Value,
                         CurrentSpotGeneration = spotGeneration,
                     },
-                expectedActorRef: null,
+                expectedActorRef: expectedActorRef,
                 cancellationToken: cancellationToken
             )
             .ConfigureAwait(false);
@@ -368,13 +369,15 @@ internal sealed class ZLinkActorOwnershipCoordinator(
         string actorId,
         string spotId,
         ulong spotGeneration,
-        CancellationToken cancellationToken = default
+        CancellationToken cancellationToken = default,
+        ActorRef? expectedActorRef = null
     ) =>
         NotifyActorJoinedSpotAsync(
             ZLinkActorId.FromBoundary(actorId, nameof(actorId)),
             ZLinkSpotId.FromBoundary(spotId, nameof(spotId)),
             spotGeneration,
-            cancellationToken
+            cancellationToken,
+            expectedActorRef
         );
 
     internal async ValueTask AdvanceTransferredActorAuthorityPhaseAsync(
@@ -795,6 +798,12 @@ internal sealed class ZLinkActorOwnershipCoordinator(
                     meshName,
                     target.LifecycleGeneration,
                     checked((ulong)targetOwner.LeaseGeneration)
+                );
+
+            case ZLinkAuthorityCompareExchangeResult.Conflict { MembershipFailure: { } failure }:
+                throw new ZLinkFrameworkException(
+                    failure,
+                    $"Actor '{actorId}' target membership authority rejected the commit."
                 );
 
             case ZLinkAuthorityCompareExchangeResult.Conflict conflict:
@@ -1482,8 +1491,26 @@ internal sealed class ZLinkActorOwnershipCoordinator(
         await tracked.WriteGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            for (var attempt = 0; attempt < 4; attempt++)
+            var original = await _lane
+                .RunAsync(() => new RenewAttempt(tracked.Snapshot, tracked.Payload))
+                .ConfigureAwait(false);
+            var authorityKey = ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorId.Value);
+            string? firstStoreVersion = null;
+            for (; ; )
             {
+                cancellationToken.ThrowIfCancellationRequested();
+                var read = await runtime
+                    .Store.ReadAuthorityAsync(authorityKey, cancellationToken)
+                    .ConfigureAwait(false);
+                if (
+                    read is not ZLinkAuthorityReadResult.Found found
+                    || !ZLinkActorAuthorityPayloadCodec.TryDecodeRelocating(
+                        found.Snapshot.Payload.Span,
+                        out var payload
+                    )
+                )
+                    break;
+                firstStoreVersion ??= found.Snapshot.StoreVersion;
                 var update = await _lane
                     .RunAsync(() =>
                     {
@@ -1501,33 +1528,72 @@ internal sealed class ZLinkActorOwnershipCoordinator(
                                 $"Actor '{actorId}' location is being released."
                             );
 
-                        var snapshot = tracked.Snapshot;
+                        var snapshot = found.Snapshot;
                         if (
-                            expectedActorRef is { } actorRef
-                            && (
-                                actorRef.ObjectGeneration != snapshot.ObjectGeneration
-                                || actorRef.NodeRid != tracked.Payload.NodeRid
+                            snapshot.ObjectGeneration
+                            != (
+                                expectedActorRef?.ObjectGeneration
+                                ?? original.Snapshot.ObjectGeneration
                             )
                         )
-                            throw new ZLinkFrameworkException(
-                                ZLinkFrameworkErrorKind.InvalidOperation,
-                                $"Actor '{actorId}' reference no longer matches its authority."
-                            );
-                        var proposed = mutate(tracked.Payload);
-                        return new RenewAttempt(snapshot, proposed);
+                            return (RenewAttempt?)
+                                new RenewAttempt(
+                                    snapshot,
+                                    payload,
+                                    ZLinkFrameworkErrorKind.InvalidOperation
+                                );
+                        if (
+                            snapshot.StoreVersion != firstStoreVersion
+                            || snapshot.OwnerId != original.Snapshot.OwnerId
+                            || snapshot.OwnerLeaseGeneration
+                                != original.Snapshot.OwnerLeaseGeneration
+                            || snapshot.AuthorityOwnerGeneration
+                                != original.Snapshot.AuthorityOwnerGeneration
+                            || payload != original.Proposed
+                            || (
+                                expectedActorRef is { } actorRef
+                                && actorRef.NodeRid != payload.NodeRid
+                            )
+                        )
+                            return (RenewAttempt?)null;
+                        var proposed = mutate(payload);
+                        if (
+                            proposed.CurrentSpotKind == ZLinkSpotKind.User
+                            && (
+                                proposed.CurrentSpotId != payload.CurrentSpotId
+                                || proposed.CurrentSpotGeneration != payload.CurrentSpotGeneration
+                                || payload.CurrentSpotKind != ZLinkSpotKind.User
+                            )
+                            && !ZLinkActorAuthorityPayloadCodec.IsSteadyReady(snapshot.Payload.Span)
+                        )
+                            return (RenewAttempt?)null;
+                        return (RenewAttempt?)new RenewAttempt(snapshot, proposed);
                     })
                     .ConfigureAwait(false);
 
-                if (ReferenceEquals(update.Proposed, tracked.Payload))
+                if (update is not { } attempt)
+                    break;
+                if (attempt.Failure is { } failureKind)
+                {
+                    if (attempt.Snapshot.StoreVersion != original.Snapshot.StoreVersion)
+                        runtime.NotifyAuthorityOwnershipLost(
+                            ZLinkLocationKind.Actor,
+                            ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorId.Value)
+                        );
+                    throw new ZLinkFrameworkException(
+                        failureKind,
+                        $"Actor '{actorId}' generation no longer matches its authority."
+                    );
+                }
+                if (ReferenceEquals(attempt.Proposed, payload))
                     return;
 
-                var authorityKey = ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorId.Value);
                 var result = await runtime
                     .Store.CompareExchangeAuthorityAsync(
                         authorityKey,
-                        update.Snapshot.StoreVersion,
+                        attempt.Snapshot.StoreVersion,
                         new ZLinkAuthorityMutation.Put(
-                            EncodeAuthorityPayload(update.Snapshot.Payload, update.Proposed),
+                            EncodeAuthorityPayload(attempt.Snapshot.Payload, attempt.Proposed),
                             ZLinkAuthorityGenerationTransition.Preserve,
                             TargetOwner: null,
                             TargetAllocation: null
@@ -1545,7 +1611,7 @@ internal sealed class ZLinkActorOwnershipCoordinator(
                                 && ReferenceEquals(current, tracked)
                             )
                             {
-                                tracked.Payload = update.Proposed;
+                                tracked.Payload = attempt.Proposed;
                                 tracked.Snapshot = stored.Snapshot;
                             }
                         })
@@ -1553,36 +1619,22 @@ internal sealed class ZLinkActorOwnershipCoordinator(
                     return;
                 }
 
-                if (result is not ZLinkAuthorityCompareExchangeResult.Conflict)
-                    break;
-                var refreshed = await runtime
-                    .Store.ReadAuthorityAsync(authorityKey, cancellationToken)
-                    .ConfigureAwait(false);
                 if (
-                    refreshed is not ZLinkAuthorityReadResult.Found found
-                    || found.Snapshot.OwnerId != update.Snapshot.OwnerId
-                    || found.Snapshot.OwnerLeaseGeneration != update.Snapshot.OwnerLeaseGeneration
-                    || found.Snapshot.ObjectGeneration != update.Snapshot.ObjectGeneration
-                    || !ZLinkActorAuthorityPayloadCodec.TryDecodeRelocating(
-                        found.Snapshot.Payload.Span,
-                        out var payload
-                    )
-                )
-                    break;
-                var continueRetry = await _lane
-                    .RunAsync(() =>
+                    result is ZLinkAuthorityCompareExchangeResult.Conflict
                     {
-                        if (
-                            !_actors.TryGetValue(canonical, out var current)
-                            || !ReferenceEquals(current, tracked)
-                        )
-                            return false;
-                        tracked.Snapshot = found.Snapshot;
-                        tracked.Payload = payload;
-                        return true;
-                    })
-                    .ConfigureAwait(false);
-                if (!continueRetry)
+                        MembershipFailure: { } failure
+                    }
+                )
+                    throw new ZLinkFrameworkException(
+                        failure,
+                        $"Actor '{actorId}' target membership authority rejected the commit."
+                    );
+                if (result is ZLinkAuthorityCompareExchangeResult.GenerationExhausted)
+                    throw new ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.InternalFailure,
+                        $"Actor '{actorId}' authority generation is exhausted."
+                    );
+                if (result is not ZLinkAuthorityCompareExchangeResult.Conflict)
                     break;
             }
 
@@ -1865,7 +1917,8 @@ internal sealed class ZLinkActorOwnershipCoordinator(
 
     private readonly record struct RenewAttempt(
         ZLinkAuthoritySnapshot Snapshot,
-        ZLinkActorAuthorityPayload Proposed
+        ZLinkActorAuthorityPayload Proposed,
+        ZLinkFrameworkErrorKind? Failure = null
     );
 
     private readonly record struct BackgroundDrainStart(CancellationTokenSource Stop, Task[] Tasks);

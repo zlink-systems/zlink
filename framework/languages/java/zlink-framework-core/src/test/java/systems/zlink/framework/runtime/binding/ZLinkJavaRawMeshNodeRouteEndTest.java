@@ -31,7 +31,8 @@ final class ZLinkJavaRawMeshNodeRouteEndTest {
             // selected-route observation is delivered.
             try (var router = port.openRouter(localRid)) {
                 setField(node, "router", router);
-                var topology = new ZLinkServiceTopologyRegistry(descriptor(localRid));
+                var topology =
+                        new ZLinkServiceTopologyRegistry(descriptor(localRid), port.stateLane());
                 setField(node, "topology", topology);
                 assertEquals(
                         ZLinkServiceTopologyRegistry.AdmissionResult.ADMITTED,
@@ -47,6 +48,7 @@ final class ZLinkJavaRawMeshNodeRouteEndTest {
                         mapField(node, "helloExchanges");
                 var exchange =
                         new ZLinkJavaRawMeshNode.HelloExchange(
+                                peerRid,
                                 admittedGeneration,
                                 java.util.concurrent.CompletableFuture.completedFuture(null),
                                 null);

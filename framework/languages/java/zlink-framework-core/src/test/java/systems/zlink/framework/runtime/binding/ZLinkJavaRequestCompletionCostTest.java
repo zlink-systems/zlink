@@ -22,6 +22,7 @@ import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.internal.calls.ZLinkRequestStages;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistryTesting;
 
 import java.lang.reflect.Proxy;
 import java.net.URLClassLoader;
@@ -55,18 +56,23 @@ public final class ZLinkJavaRequestCompletionCostTest {
     @Test
     void actorRequestsRegisterFrameworkCompletionBeforeBindingSubmit() throws Exception {
         try (var fixture = new Fixture(false)) {
-            var mesh = new ZLinkJavaRawMeshNode(fixture.context, "actor-completion");
-            var meshOperations = (ZLinkServiceOperationRegistry) field(mesh, "operations");
+            var local = RoutingId.from("actor-source");
+            var remote = RoutingId.from("actor-target");
+            var topology =
+                    new systems.zlink.framework.runtime.internal.service
+                            .ZLinkServiceTopologyRegistry(actorDescriptor(local));
+            topology.admit(actorDescriptor(remote), "actor-route", 1);
+            var mesh =
+                    ZLinkJavaRawMeshNodeTesting.create(
+                            "actor-completion",
+                            fixture.port,
+                            fixture.router,
+                            null,
+                            topology,
+                            java.util.Map.of(),
+                            Runnable::run);
+            var meshOperations = mesh.operationRegistry();
             try {
-                setField(mesh, "port", fixture.port);
-                setField(mesh, "router", fixture.router);
-                var local = RoutingId.from("actor-source");
-                var remote = RoutingId.from("actor-target");
-                var topology =
-                        new systems.zlink.framework.runtime.internal.service
-                                .ZLinkServiceTopologyRegistry(actorDescriptor(local));
-                topology.admit(actorDescriptor(remote), "actor-route", 1);
-                setField(mesh, "topology", topology);
                 var reply = new CompletableFuture<List<Message>>();
                 fixture.pending.set(new Pending(CompletableFuture.completedFuture(null), reply));
                 var target =
@@ -88,26 +94,15 @@ public final class ZLinkJavaRequestCompletionCostTest {
                                     meshOperations.pendingCount(),
                                     "Framework entry and dispatcher slot must precede binding"
                                             + " submit");
-                            try {
-                                var entries =
-                                        (java.util.Map<?, ?>) field(meshOperations, "pending");
-                                var entry = entries.values().iterator().next();
-                                var registered =
-                                        entry.getClass()
-                                                .getSuperclass()
-                                                .getDeclaredField("registered");
-                                registered.setAccessible(true);
-                                assertTrue(
-                                        registered.getBoolean(entry),
-                                        "dispatcher slot must precede submit");
-                                assertSame(
-                                        result,
-                                        field(entry, "completion"),
-                                        "registry must dispatch straight to the final typed"
-                                                + " receiver");
-                            } catch (Exception failure) {
-                                throw new AssertionError(failure);
-                            }
+                            assertTrue(
+                                    ZLinkServiceOperationRegistryTesting.pendingRegistered(
+                                            meshOperations),
+                                    "dispatcher slot must precede submit");
+                            assertSame(
+                                    result,
+                                    ZLinkServiceOperationRegistryTesting.pendingReceiver(
+                                            meshOperations),
+                                    "registry must dispatch straight to the final typed receiver");
                         };
                 var requestPart = Message.from(new byte[] {1});
                 try {
@@ -165,18 +160,6 @@ public final class ZLinkJavaRequestCompletionCostTest {
                 meshOperations.close();
             }
         }
-    }
-
-    private static Object field(Object target, String name) throws Exception {
-        var field = target.getClass().getDeclaredField(name);
-        field.setAccessible(true);
-        return field.get(target);
-    }
-
-    private static void setField(Object target, String name, Object value) throws Exception {
-        var field = target.getClass().getDeclaredField(name);
-        field.setAccessible(true);
-        field.set(target, value);
     }
 
     private static systems.zlink.framework.runtime.internal.service.ZLinkServiceNodeDescriptor
@@ -548,9 +531,10 @@ public final class ZLinkJavaRequestCompletionCostTest {
         private final AtomicInteger discards = new AtomicInteger();
         private final AtomicReference<Pending> pending = new AtomicReference<>();
         private final CompletableFuture<Void> cancellationReached = new CompletableFuture<>();
+        private final ZLinkStateLane operationLane = new ZLinkStateLane();
         private final ZLinkServiceOperationRegistry operations =
                 new ZLinkServiceOperationRegistry(
-                        new ZLinkStateLane(),
+                        operationLane,
                         new IllegalStateException("service runtime is closed"),
                         ZLinkJavaSocketSupport::requestTimeout,
                         System::nanoTime);
@@ -679,10 +663,7 @@ public final class ZLinkJavaRequestCompletionCostTest {
                                             null,
                                             admission),
                             ignored -> discards.incrementAndGet());
-            ((ZLinkStateLane) field(operations, "owner"))
-                    .runAsync(() -> {})
-                    .toCompletableFuture()
-                    .get(1, TimeUnit.SECONDS);
+            operationLane.runAsync(() -> {}).toCompletableFuture().get(1, TimeUnit.SECONDS);
             var observed = ZLinkRequestStages.observe(completion, admission);
             return new Submitted(pending.get(), admission, observed.toCompletableFuture());
         }

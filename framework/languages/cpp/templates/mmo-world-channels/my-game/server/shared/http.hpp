@@ -1,4 +1,5 @@
 #pragma once
+#include <zlink/framework/contracts/codecs/serializer.hpp>
 #include "contracts.hpp"
 #include <boost/asio.hpp>
 #include <boost/beast.hpp>
@@ -34,6 +35,8 @@ inline std::vector<WorldInfo> fetch_worlds (const std::string &endpoint)
     http::read (stream, buffer, response);
     if (response.result () != http::status::ok)
         throw std::runtime_error ("World list HTTP request failed");
-    return nlohmann::json::parse (response.body ()).get<std::vector<WorldInfo>> ();
+    zlink::framework::serializer_registry_t serializers;
+    return serializers.get<std::vector<WorldInfo>> ().deserialize (
+      zlink::framework::encoded_payload_t::from_string (response.body ()));
 }
 }

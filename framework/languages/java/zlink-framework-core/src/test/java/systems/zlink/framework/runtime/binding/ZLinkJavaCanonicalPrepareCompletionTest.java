@@ -18,7 +18,9 @@ import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceNodeDescriptor;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistryTesting;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceTopologyRegistry;
+import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 
 import java.lang.reflect.Proxy;
 import java.nio.file.Files;
@@ -84,8 +86,7 @@ final class ZLinkJavaCanonicalPrepareCompletionTest {
 
     @Test
     void remoteReplyDecodesDirectlyIntoItsSingleRegisteredReceiver() throws Exception {
-        try (var fixture = new Fixture()) {
-            fixture.connectRemote();
+        try (var fixture = new Fixture(true)) {
             assertTrue(fixture.node.observePeerRoute(REMOTE).ready());
             var admitted = new CompletableFuture<Void>();
             var reply =
@@ -112,6 +113,33 @@ final class ZLinkJavaCanonicalPrepareCompletionTest {
         }
     }
 
+    @Test
+    void durableSubmissionUsesCurrentOwnerAdmissionEvenWhenTheObservationIsStillReady()
+            throws Exception {
+        try (var fixture = new Fixture(true)) {
+            assertTrue(fixture.node.observePeerRoute(REMOTE).ready());
+            assertTrue(fixture.topology.disconnect(REMOTE, "1"));
+            assertTrue(
+                    fixture.node.observePeerRoute(REMOTE).ready(),
+                    "the read-only root still describes its earlier commit");
+            var admitted = new CompletableFuture<Void>();
+            var reply =
+                    fixture.node
+                            .requestCanonicalRelocationPrepare(
+                                    REMOTE, command(40), Duration.ofMillis(20), admitted)
+                            .toCompletableFuture();
+            var failure =
+                    assertThrows(ExecutionException.class, () -> reply.get(1, TimeUnit.SECONDS));
+            assertEquals(
+                    ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+                    assertInstanceOf(ZLinkFrameworkException.class, failure.getCause()).kind());
+            assertFalse(
+                    fixture.submitted.isDone(),
+                    "a stale projection must never authorize native submission");
+            assertEquals(0, fixture.operations.pendingCount());
+        }
+    }
+
     private static final class Fixture implements AutoCloseable {
         final List<Message> requestParts = new ArrayList<>();
         final CompletableFuture<List<Message>> physicalReply = new CompletableFuture<>();
@@ -120,8 +148,13 @@ final class ZLinkJavaCanonicalPrepareCompletionTest {
         final RouterSocket router;
         final ZLinkJavaRawMeshNode node;
         final ZLinkServiceOperationRegistry operations;
+        final ZLinkServiceTopologyRegistry topology;
 
         Fixture() throws Exception {
+            this(false);
+        }
+
+        Fixture(boolean remote) throws Exception {
             RequestSubmission submission =
                     (RequestSubmission)
                             Proxy.newProxyInstance(
@@ -175,27 +208,28 @@ final class ZLinkJavaCanonicalPrepareCompletionTest {
                                             return router;
                                         throw new AssertionError(method);
                                     });
-            node = new ZLinkJavaRawMeshNode(context, "prepare-completion");
+            var port = new ZLinkJavaRawServicePort(context);
+            topology = new ZLinkServiceTopologyRegistry(descriptor(LOCAL), port.stateLane());
+            if (remote) {
+                port.openRouter(LOCAL);
+                topology.admit(descriptor(REMOTE), "1", ServiceWireConstants.COMMAND_ADMIT);
+            }
+            node =
+                    ZLinkJavaRawMeshNodeTesting.create(
+                            "prepare-completion",
+                            port,
+                            remote ? router : null,
+                            null,
+                            remote ? topology : null,
+                            remote ? Map.of(REMOTE, 1L) : Map.of(),
+                            Runnable::run);
             node.setRoutingId(LOCAL);
             operations = node.operationRegistry();
         }
 
-        void connectRemote() throws Exception {
-            ((ZLinkJavaRawServicePort) field(node, "port")).openRouter(LOCAL);
-            setField(node, "router", router);
-            var topology =
-                    new ZLinkServiceTopologyRegistry(descriptor(LOCAL), node.sourceTransportLane());
-            topology.admit(descriptor(REMOTE), "1", 1);
-            setField(node, "topology", topology);
-            setField(node, "selectedRoutes", Map.of(REMOTE, 1L));
-            ((Map<RoutingId, String>) field(node, "admissionControlReadyConnections"))
-                    .put(REMOTE, "1");
-        }
-
-        Object pendingReceiver() throws Exception {
-            var pending = (Map<?, ?>) field(operations, "pending");
-            assertEquals(1, pending.size());
-            return field(pending.values().iterator().next(), "completion");
+        Object pendingReceiver() {
+            assertEquals(1, operations.pendingCount());
+            return ZLinkServiceOperationRegistryTesting.pendingReceiver(operations);
         }
 
         @Override
@@ -222,18 +256,6 @@ final class ZLinkJavaCanonicalPrepareCompletionTest {
                 0,
                 0,
                 0);
-    }
-
-    private static Object field(Object target, String name) throws Exception {
-        var field = target.getClass().getDeclaredField(name);
-        field.setAccessible(true);
-        return field.get(target);
-    }
-
-    private static void setField(Object target, String name, Object value) throws Exception {
-        var field = target.getClass().getDeclaredField(name);
-        field.setAccessible(true);
-        field.set(target, value);
     }
 
     private static byte[] command(int command) throws Exception {

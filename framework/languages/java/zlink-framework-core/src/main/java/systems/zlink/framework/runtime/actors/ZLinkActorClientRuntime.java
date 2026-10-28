@@ -62,6 +62,10 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
     private final BooleanSupplier flowCaptureEnabled;
     private final AtomicInteger runtimeReadyWaiters = new AtomicInteger();
 
+    int runtimeReadyWaiterCountForTest() {
+        return runtimeReadyWaiters.get();
+    }
+
     public ZLinkActorClientRuntime(
             Supplier<ZLinkInternalSpotNode> spotNode,
             ZLinkStoreLocationResolvers locations,
@@ -358,7 +362,7 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
                             parts,
                             SendFlags.NONE,
                             systems.zlink.framework.runtime.internal.calls.ZLinkRequestCalls
-                                    .remainingTimeout(timeout, requestStarted, System.nanoTime()),
+                                    .remainingTimeout(timeout, requestStarted, System::nanoTime),
                             requestAdmission,
                             replyParts -> {
                                 try {

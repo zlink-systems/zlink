@@ -1,3 +1,4 @@
+const { createMeshHost } = require('./fixtures/mesh-host');
 'use strict';
 
 const { mapZLinkRequestReply } = require('../../packages/framework/dist/runtime/messaging/request-result');
@@ -304,7 +305,7 @@ test('RMETRIC-007 server catalog does not publish connector-only session bind me
   assert.equal(records.some((record) => record.name === 'zlink.stream.session.bind.duration'), false);
 });
 
-test('RMETRIC Entry Spot activation records entry count and lifecycle counters', async () => {
+test('RMETRIC Entry Spot activation records the shared Spot count labels', async () => {
   const { provider, records } = collector();
   const metrics = new framework.ZLinkRuntimeMetrics(provider);
   class EntrySpot {
@@ -335,9 +336,57 @@ test('RMETRIC Entry Spot activation records entry count and lifecycle counters',
     value,
     attributes
   })), [
-    { name: 'zlink.spot.count', kind: 'updown', value: 1, attributes: { kind: 'entry' } },
-    { name: 'zlink.spot.count', kind: 'updown', value: -1, attributes: { kind: 'entry' } }
+    { name: 'zlink.spot.count', kind: 'updown', value: 1, attributes: { mesh_name: 'play', spot_kind: 'entry' } },
+    { name: 'zlink.spot.count', kind: 'updown', value: -1, attributes: { mesh_name: 'play', spot_kind: 'entry' } }
   ]);
+  const row = require('../../../../runtime/protocol/fixtures/runtime-metrics-v1.json')
+    .metrics.find(metric => metric.name === 'zlink.spot.count');
+  for (const record of records) {
+    assert.equal(record.kind, row.kind);
+    assert.deepEqual(Object.keys(record.attributes).sort(), [...row.labels].sort());
+  }
+});
+
+test('RMETRIC User Spot population keeps mesh labels through removal and relocation', () => {
+  const { ZLinkSpotActivationRegistry } = require('../../packages/framework/dist/runtime/spots/spot-activation-registry');
+  const { provider, records } = collector();
+  const registry = new ZLinkSpotActivationRegistry(new framework.ZLinkRuntimeMetrics(provider));
+  const first = { meshName: 'first', spotId: 'same-id', domain: { kind: 'user' } };
+  const second = { meshName: 'second', spotId: 'same-id', domain: { kind: 'user' } };
+  registry.register(first);
+  registry.register(first);
+  registry.register(second);
+  registry.detachRelocated('first', 'same-id');
+  registry.finishClose('second', 'same-id');
+  registry.finishClose('second', 'same-id');
+  assert.deepEqual(records.map(({ value, attributes }) => ({ value, attributes })), [
+    { value: 1, attributes: { mesh_name: 'first', spot_kind: 'user' } },
+    { value: 1, attributes: { mesh_name: 'second', spot_kind: 'user' } },
+    { value: -1, attributes: { mesh_name: 'first', spot_kind: 'user' } },
+    { value: -1, attributes: { mesh_name: 'second', spot_kind: 'user' } }
+  ]);
+});
+
+test('RMETRIC Instance Spot population is one after creation and zero after release', async () => {
+  const { provider, records } = collector();
+  class Room {}
+  const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner,
+    spotFactories: [Room],
+    instanceSpotFactories: new Map([['mesh', new Map([['Room', Room]])]]),
+    metrics: new framework.ZLinkRuntimeMetrics(provider)
+  });
+  const population = kind => records
+    .filter(record => record.name === 'zlink.spot.count' && record.attributes.mesh_name === 'mesh' && record.attributes.spot_kind === kind)
+    .reduce((count, record) => count + record.value, 0);
+  try {
+    await manager.materializeInstance('mesh', 'Room', 'room', 1n);
+    assert.equal(population('instance'), 1);
+    assert.equal(population('user'), 0);
+  } finally {
+    await manager.discardInstance('mesh', 'room');
+  }
+  assert.equal(population('instance'), 0);
 });
 
 test('RMETRIC-009 classic fanout drops are excluded from mesh-node drop metrics', async () => {
@@ -502,11 +551,11 @@ test('channel terminal metrics normalize all five outcomes including caller canc
 
 test('host capacity metrics use the repository observation rather than the publication descriptor', () => {
   const registration = framework.createFrameworkRegistrationWithBuilder(builder => builder.addRouteMesh('metric-mesh').objects().server());
-  const host = new framework.ZLinkFrameworkRuntimeHost({ registration });
+  const { host, meshRuntime: hostMesh } = createMeshHost({ registration });
   host.routeMeshCoordinator.snapshot = () => ({ peers: [], channels: [], readyPeerCount: 0 });
   const zero = { active: 0, reserved: 0, limit: 12 };
   const descriptor = { rid: 'metric-node', populationCapacity: { actors: zero, spots: zero, spotTypes: [] } };
-  host.spotNodeRuntime = { meshNodeDescriptor: () => descriptor };
+  Object.assign(hostMesh, { meshNodeDescriptor: () => descriptor });
   let confirmed;
   host.locationOwner.stores = { locationStore: { confirmedCapacity(key, limits) {
     assert.deepEqual(key, { meshName: 'metric-mesh', rid: 'metric-node' });

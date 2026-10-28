@@ -280,9 +280,7 @@ final class ZLinkServiceOperationRegistryTest {
                         maintenance, new IllegalStateException("closed"), clock::get)) {
             for (int request = 0; request < 1_000; request++)
                 ZLinkCompletionBridge.await(registry.register(Duration.ofMillis(10_000 + request)));
-            var tick = ZLinkServiceOperationRegistry.class.getDeclaredField("maintenanceTick");
-            tick.setAccessible(true);
-            assertEquals(256, tick.getLong(registry));
+            assertEquals(256, registry.maintenanceTickForTest());
             clock.set(TimeUnit.MILLISECONDS.toNanos(256));
             assertEquals(0, ZLinkCompletionBridge.await(registry.expire(clock.get())));
             assertEquals(1_000, registry.pendingCount());
@@ -305,9 +303,7 @@ final class ZLinkServiceOperationRegistryTest {
             assertEquals(0, registry.pendingCount());
             clock.set(TimeUnit.MILLISECONDS.toNanos(256));
             ZLinkCompletionBridge.await(registry.expire(clock.get()));
-            var heads = ZLinkServiceOperationRegistry.class.getDeclaredField("deadlineHeads");
-            heads.setAccessible(true);
-            for (Object entry : (Object[]) heads.get(registry)) assertNull(entry);
+            for (Object entry : registry.deadlineHeadsForTest()) assertNull(entry);
         }
     }
 
@@ -356,6 +352,61 @@ final class ZLinkServiceOperationRegistryTest {
             registry.close();
         }
         assertEquals(Thread.State.TERMINATED, worker.get().getState());
+    }
+
+    @Test
+    void parkedWorkerWithQueuedVisitIsNotIndefinitelyIdle() throws Exception {
+        var worker = new AtomicReference<Thread>();
+        var clock = new AtomicLong();
+        var entered = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
+        try (var registry =
+                new ZLinkServiceOperationRegistry(
+                        command -> {
+                            var thread = Thread.ofVirtual().unstarted(command);
+                            worker.set(thread);
+                            return thread;
+                        },
+                        new IllegalStateException("closed"),
+                        clock::get)) {
+            var occupied =
+                    CompletableFuture.runAsync(
+                            () ->
+                                    registry.ownerLaneForTest()
+                                            .awaitTurn(
+                                                    () -> {
+                                                        var operation =
+                                                                ZLinkCompletionBridge.await(
+                                                                        registry.register(
+                                                                                Duration.ofMillis(
+                                                                                        1)));
+                                                        clock.set(TimeUnit.MILLISECONDS.toNanos(2));
+                                                        assertTrue(
+                                                                registry.discard(operation.id()));
+                                                        entered.countDown();
+                                                        await(release);
+                                                        return null;
+                                                    }));
+            try {
+                assertTrue(entered.await(5, TimeUnit.SECONDS));
+                long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+                while (registry.maintenanceTickForTest() != -2
+                        || worker.get().getState() != Thread.State.WAITING
+                        || java.util.concurrent.locks.LockSupport.getBlocker(worker.get())
+                                != registry) {
+                    if (System.nanoTime() - deadline >= 0)
+                        throw new AssertionError("visit was not queued");
+                    Thread.yield();
+                }
+                assertFalse(
+                        isParkedIndefinitely(worker.get(), registry),
+                        "a queued owner visit must finish before idle clock reads are sampled");
+            } finally {
+                release.countDown();
+                occupied.get(5, TimeUnit.SECONDS);
+            }
+            parkedIndefinitely(worker.get(), registry);
+        }
     }
 
     @Test
@@ -454,6 +505,12 @@ final class ZLinkServiceOperationRegistryTest {
             assertTrue(registry.discard(later.id()));
         }
         assertEquals(Thread.State.TERMINATED, worker.get().getState());
+    }
+
+    private static void awaitWorkerState(Thread worker, Thread.State expected) {
+        long limit = System.nanoTime() + TimeUnit.SECONDS.toNanos(1);
+        while (worker.getState() != expected && System.nanoTime() < limit) Thread.onSpinWait();
+        assertEquals(expected, worker.getState());
     }
 
     @Test
@@ -668,15 +725,12 @@ final class ZLinkServiceOperationRegistryTest {
             var oldBinding = new CompletableFuture<Void>();
             var old = registry.submitSend(() -> oldBinding);
             ownerLane(registry).runAsync(() -> {}).toCompletableFuture().get(1, TimeUnit.SECONDS);
-            var pendingField = ZLinkServiceOperationRegistry.class.getDeclaredField("pending");
-            pendingField.setAccessible(true);
-            var pending = (java.util.Map<?, ?>) pendingField.get(registry);
-            var oldId = (UUID) pending.keySet().iterator().next();
+            var oldId = registry.pendingIdsForTest().iterator().next();
             assertTrue(registry.discard(oldId));
             var nextBinding = new CompletableFuture<Void>();
             var next = registry.submitSend(() -> nextBinding);
             ownerLane(registry).runAsync(() -> {}).toCompletableFuture().get(1, TimeUnit.SECONDS);
-            assertNotEquals(oldId, pending.keySet().iterator().next());
+            assertNotEquals(oldId, registry.pendingIdsForTest().iterator().next());
             oldBinding.complete(null);
             assertEquals(1, registry.pendingCount());
             assertFalse(next.toCompletableFuture().isDone());
@@ -808,12 +862,8 @@ final class ZLinkServiceOperationRegistryTest {
             assertTrue(registry.isClosed());
             assertEquals(0, registry.pendingCount());
             assertEquals(0, wheelEntryCount(registry));
-            var tails = ZLinkServiceOperationRegistry.class.getDeclaredField("deadlineTails");
-            tails.setAccessible(true);
-            for (Object tail : (Object[]) tails.get(registry)) assertNull(tail);
-            var cursor = ZLinkServiceOperationRegistry.class.getDeclaredField("deadlineCursor");
-            cursor.setAccessible(true);
-            assertNull(cursor.get(registry));
+            for (Object tail : registry.deadlineTailsForTest()) assertNull(tail);
+            assertNull(registry.deadlineCursorForTest());
         } finally {
             registry.close();
         }
@@ -823,16 +873,20 @@ final class ZLinkServiceOperationRegistryTest {
     void maintenanceTerminatesWhenItsOwnerLaneRejectsTheVisit() throws Exception {
         AtomicLong clock = new AtomicLong();
         var owner = new ZLinkStateLane();
+        var workerReference = new AtomicReference<Thread>();
         var registry =
                 new ZLinkServiceOperationRegistry(
                         owner,
+                        command -> {
+                            var thread = Thread.ofVirtual().unstarted(command);
+                            workerReference.set(thread);
+                            return thread;
+                        },
                         new IllegalStateException("closed"),
                         () -> new TimeoutException("expired"),
                         clock::get);
         var operation = ZLinkCompletionBridge.await(registry.register(Duration.ofSeconds(30)));
-        var field = ZLinkServiceOperationRegistry.class.getDeclaredField("maintenance");
-        field.setAccessible(true);
-        Thread worker = (Thread) field.get(registry);
+        Thread worker = workerReference.get();
         try {
             ZLinkCompletionBridge.await(owner.closeAsync());
             clock.set(TimeUnit.SECONDS.toNanos(30));
@@ -849,30 +903,7 @@ final class ZLinkServiceOperationRegistryTest {
 
     private static int wheelEntryCount(ZLinkServiceOperationRegistry registry) throws Exception {
         return ZLinkCompletionBridge.await(
-                ownerLane(registry)
-                        .runAsync(
-                                () -> {
-                                    try {
-                                        var heads =
-                                                ZLinkServiceOperationRegistry.class
-                                                        .getDeclaredField("deadlineHeads");
-                                        heads.setAccessible(true);
-                                        int count = 0;
-                                        for (Object entry : (Object[]) heads.get(registry)) {
-                                            while (entry != null) {
-                                                count++;
-                                                var next =
-                                                        entry.getClass()
-                                                                .getDeclaredField("deadlineNext");
-                                                next.setAccessible(true);
-                                                entry = next.get(entry);
-                                            }
-                                        }
-                                        return count;
-                                    } catch (ReflectiveOperationException failure) {
-                                        throw new AssertionError(failure);
-                                    }
-                                }));
+                ownerLane(registry).runAsync(registry::deadlineEntryCountForTest));
     }
 
     @Test
@@ -1226,9 +1257,7 @@ final class ZLinkServiceOperationRegistryTest {
     void pendingEntryDoesNotAllocateAnExceptionForASuccessfulRequest() throws Exception {
         try (var registry = new ZLinkServiceOperationRegistry()) {
             var operation = ZLinkCompletionBridge.await(registry.register(Duration.ofSeconds(1)));
-            var pendingField = ZLinkServiceOperationRegistry.class.getDeclaredField("pending");
-            pendingField.setAccessible(true);
-            Object entry = ((java.util.Map<?, ?>) pendingField.get(registry)).get(operation.id());
+            Object entry = registry.pendingEntryForTest(operation.id());
             for (var field : entry.getClass().getDeclaredFields()) {
                 if (Throwable.class.isAssignableFrom(field.getType())) {
                     field.setAccessible(true);
@@ -1590,21 +1619,21 @@ final class ZLinkServiceOperationRegistryTest {
 
     private static systems.zlink.framework.runtime.internal.execution.ZLinkStateLane ownerLane(
             ZLinkServiceOperationRegistry registry) throws Exception {
-        var field = ZLinkServiceOperationRegistry.class.getDeclaredField("owner");
-        field.setAccessible(true);
-        return (systems.zlink.framework.runtime.internal.execution.ZLinkStateLane)
-                field.get(registry);
+        return registry.ownerLaneForTest();
     }
 
     private static void parkedIndefinitely(Thread worker, Object blocker) throws Exception {
-        var tick = ZLinkServiceOperationRegistry.class.getDeclaredField("maintenanceTick");
-        tick.setAccessible(true);
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
-        while (tick.getLong(blocker) >= 0
-                || worker.getState() != Thread.State.WAITING
-                || java.util.concurrent.locks.LockSupport.getBlocker(worker) != blocker) {
+        while (!isParkedIndefinitely(worker, (ZLinkServiceOperationRegistry) blocker)) {
             if (System.nanoTime() - deadline >= 0) throw new AssertionError("worker did not park");
             Thread.yield();
         }
+    }
+
+    private static boolean isParkedIndefinitely(
+            Thread worker, ZLinkServiceOperationRegistry registry) {
+        return registry.maintenanceTickForTest() == -1
+                && worker.getState() == Thread.State.WAITING
+                && java.util.concurrent.locks.LockSupport.getBlocker(worker) == registry;
     }
 }

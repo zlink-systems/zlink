@@ -1,3 +1,4 @@
+const { createRelayHost, createRelayMeshHost } = require('./fixtures/relay-host');
 const assert = require('node:assert/strict');
 const test = require('node:test');
 
@@ -31,7 +32,7 @@ function entryActorRuntime(resolveActor) {
     resolveActor,
     async commitActorTransaction(_actor, onJoined) { await onJoined(); },
     async destroyActor() {},
-    async routePacket() {
+    routePacket() {
       return { handled: false };
     }
   };
@@ -372,7 +373,7 @@ test('Entry Spot materializes a remotely returning actor with its original Entry
         }
       },
       async destroyActor() {},
-      async routePacket() { return { handled: false }; }
+      routePacket() { return { handled: false }; }
     },
     actorTransferRuntime: {
       async materializeRoutedActor(actorId, actorType, adapterKey, state, actorEntryNodeRid) {
@@ -538,13 +539,13 @@ test('Entry Spot routed bound session command decodes registered channel seriali
 });
 
 test('runtime host reports joined Spot route before stale remote actor packet target', () => {
-  const runtime = new framework.ZLinkFrameworkRuntimeHost({
+  const { host: runtime, relay: runtimeRelay } = createRelayHost({
     registration: framework.createFrameworkRegistration({
       locations: { useInMemoryStores: true },
       routeChannels: ['bingo.room.route']
     })
   });
-  runtime.actorManager = {
+  runtime.setActorManager({
     getState(actorId) {
       assert.equal(actorId, 'player-2');
       return {
@@ -561,7 +562,7 @@ test('runtime host reports joined Spot route before stale remote actor packet ta
         }
       };
     }
-  };
+  });
 
   //  캐시된 packet target이 가리키는 Spot과 Actor의 현재 membership이 다르면 hint를
   //  내지 않는다. stale target의 node에 새 Spot ID를 붙이면 authority fence가 없는
@@ -570,13 +571,13 @@ test('runtime host reports joined Spot route before stale remote actor packet ta
   //  lease fence를 검증하며 새 incarnation으로 다시 지정하지 않는다". caller는 hint 없이
   //  owner를 다시 조회한다.
   assert.equal(
-    runtime.boundSessionRelay.actorPackets.actorPacketTargetForState('player-2'),
+    runtimeRelay.actorPackets.actorPacketTargetForState('player-2'),
     undefined
   );
 });
 
 test('runtime host publishes only the resolved authority route for User membership', () => {
-  const runtime = new framework.ZLinkFrameworkRuntimeHost({
+  const { host: runtime, relay: runtimeRelay } = createRelayHost({
     registration: framework.createFrameworkRegistration({
       locations: { useInMemoryStores: true },
       routeChannels: ['bingo.room.route']
@@ -590,7 +591,7 @@ test('runtime host publishes only the resolved authority route for User membersh
   runtime.setActorManager({ getState() { return state; } });
 
   assert.equal(
-    runtime.boundSessionRelay.actorPackets.actorPacketTargetForState('player-2'),
+    runtimeRelay.actorPackets.actorPacketTargetForState('player-2'),
     undefined
   );
   const readyRoute = {
@@ -607,17 +608,17 @@ test('runtime host publishes only the resolved authority route for User membersh
   };
   state.remoteActorPacketTarget = readyRoute;
   assert.strictEqual(
-    runtime.boundSessionRelay.actorPackets.actorPacketTargetForState('player-2'),
+    runtimeRelay.actorPackets.actorPacketTargetForState('player-2'),
     readyRoute
   );
 });
 
 test('runtime host legacy remote actor join admits the actor', async () => {
   const actor = { actorId: 'player-1' };
-  const runtime = new framework.ZLinkFrameworkRuntimeHost({
+  const { host: runtime, relay: runtimeRelay } = createRelayHost({
     registration: framework.createFrameworkRegistration({})
   });
-  runtime.actorManager = {
+  runtime.setActorManager({
     async getOrCreateActor(actorId) {
       assert.equal(actorId, 'player-1');
       return actor;
@@ -629,17 +630,17 @@ test('runtime host legacy remote actor join admits the actor', async () => {
         setJoinedSpot() {}
       };
     }
-  };
-  runtime.spotManager = {
+  });
+  runtime.setSpotManager({
     async admitActorJoin(_spotId, joinedActor, request, commit) {
       assert.equal(joinedActor, actor);
       assert.equal(request.data().toString(), 'join-request');
       commit({});
       return { accepted: true };
     }
-  };
+  });
 
-  const result = await runtime.boundSessionRelay.actorJoins.receive({
+  const result = await runtimeRelay.actorJoins.receive({
     packetName: '__zlink.actor.join_spot.request',
     spotId: 'room-1',
     actorId: 'player-1',
@@ -655,7 +656,7 @@ test('runtime host legacy remote actor join admits the actor', async () => {
 
 test('runtime host remembers routed packet target for stream-bound actors without actor manager', async () => {
   const routedTargets = [];
-  const runtime = new framework.ZLinkFrameworkRuntimeHost({
+  const { host: runtime, relay: runtimeRelay } = createRelayHost({
     registration: framework.createFrameworkRegistration({
       locations: { useInMemoryStores: true },
       routeChannels: ['bingo.room.route']
@@ -694,8 +695,8 @@ test('runtime host remembers routed packet target for stream-bound actors withou
   };
   const payload = zlink.Message.from(Buffer.from(JSON.stringify({ value: 'ping' })));
 
-  await runtime.boundSessionRelay.actorPackets.relayRemoteActorPacket(actor, header, payload);
-  await runtime.boundSessionRelay.actorPackets.relayRemoteActorPacket(actor, { ...header, requestSeq: 2n, name: 'Submit' }, payload);
+  await runtimeRelay.actorPackets.relayRemoteActorPacket(actor, header, payload);
+  await runtimeRelay.actorPackets.relayRemoteActorPacket(actor, { ...header, requestSeq: 2n, name: 'Submit' }, payload);
 
   payload.close();
   assert.deepEqual(routedTargets, ['bingo.room.route:play-node-1', 'bingo.room.route:play-node-1']);
@@ -703,7 +704,7 @@ test('runtime host remembers routed packet target for stream-bound actors withou
 
 test('runtime host keeps routed packet target across stream actor wrappers', async () => {
   const routedTargets = [];
-  const runtime = new framework.ZLinkFrameworkRuntimeHost({
+  const { host: runtime, relay: runtimeRelay } = createRelayHost({
     registration: framework.createFrameworkRegistration({
       locations: { useInMemoryStores: true },
       routeChannels: ['bingo.room.route']
@@ -740,8 +741,8 @@ test('runtime host keeps routed packet target across stream actor wrappers', asy
   };
   const payload = zlink.Message.from(Buffer.from(JSON.stringify({ value: 'ping' })));
 
-  await runtime.boundSessionRelay.actorPackets.relayRemoteActorPacket({ actorId: 'player-2', ref: actorRef }, header, payload);
-  await runtime.boundSessionRelay.actorPackets.relayRemoteActorPacket(
+  await runtimeRelay.actorPackets.relayRemoteActorPacket({ actorId: 'player-2', ref: actorRef }, header, payload);
+  await runtimeRelay.actorPackets.relayRemoteActorPacket(
     { actorId: 'player-2', ref: actorRef },
     { ...header, requestSeq: 2n, name: 'Submit' },
     payload
@@ -756,17 +757,17 @@ test('runtime host keeps routed packet target across stream actor wrappers', asy
 
 test('runtime host raw actor relay reply updates actor packet target for the next request', async () => {
   const routedTargets = [];
-  const runtime = new framework.ZLinkFrameworkRuntimeHost({
+  const { host: runtime, relay: runtimeRelay, meshRuntime } = createRelayMeshHost({
     registration: framework.createFrameworkRegistration({
       locations: { useInMemoryStores: true },
       routeChannels: ['bingo.room.route']
     })
   });
-  runtime.spotNodeRuntime = {
+  Object.assign(meshRuntime, {
     primaryNode: {
       routingId: 'bingo-session-node-b'
     }
-  };
+  });
   const state = new framework.ZLinkActorRuntimeState('player-2');
   state.setRemoteActorPacketTarget({
     routerChannelId: 'bingo.room.route',
@@ -814,8 +815,8 @@ test('runtime host raw actor relay reply updates actor packet target for the nex
   };
   const payload = zlink.Message.from(Buffer.from(JSON.stringify({ value: 'ping' })));
 
-  await runtime.boundSessionRelay.actorPackets.relayRemoteActorPacket(actor, header, payload);
-  await runtime.boundSessionRelay.actorPackets.relayRemoteActorPacket(
+  await runtimeRelay.actorPackets.relayRemoteActorPacket(actor, header, payload);
+  await runtimeRelay.actorPackets.relayRemoteActorPacket(
     actor,
     { ...header, requestSeq: 2n, name: 'SubmitBingoCardReq' },
     payload

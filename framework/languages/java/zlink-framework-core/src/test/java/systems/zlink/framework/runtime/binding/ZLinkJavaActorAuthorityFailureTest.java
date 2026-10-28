@@ -8,6 +8,7 @@ import systems.zlink.contracts.core.Context;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.messaging.Received;
+import systems.zlink.contracts.messaging.ReceivedTesting;
 import systems.zlink.contracts.messaging.ReplyOperation;
 import systems.zlink.contracts.messaging.ReplySubmitOperation;
 import systems.zlink.contracts.messaging.ReplyToken;
@@ -28,7 +29,6 @@ import systems.zlink.framework.runtime.internal.service.ZLinkServiceNodeDescript
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceTopologyRegistry;
 import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 
-import java.lang.reflect.Field;
 import java.lang.reflect.Proxy;
 import java.util.ArrayList;
 import java.util.List;
@@ -36,7 +36,6 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.logging.Handler;
 import java.util.logging.Level;
@@ -117,7 +116,7 @@ final class ZLinkJavaActorAuthorityFailureTest {
             assertEquals(
                     List.of(new ZLinkServiceM6AWireCodec.Reply(1, pair[0], pair[1])),
                     fixture.replies);
-            assertTrue((boolean) field(Received.class, "closed").get(inbound.received()));
+            assertTrue(ReceivedTesting.isClosed(inbound.received()));
             assertEquals(2, fixture.lookups.get());
             assertEquals(0, fixture.reporter.reportedCount());
         }
@@ -138,7 +137,7 @@ final class ZLinkJavaActorAuthorityFailureTest {
             var inbound = fixture.dispatch(1, false);
             fixture.authority.completeExceptionally(failure);
             assertTrue(fixture.replies.isEmpty());
-            assertTrue((boolean) field(Received.class, "closed").get(inbound.received()));
+            assertTrue(ReceivedTesting.isClosed(inbound.received()));
             fixture.assertReported(failure, "drop");
             fixture.authority = CompletableFuture.completedFuture(Optional.empty());
             fixture.dispatch(2);
@@ -160,7 +159,7 @@ final class ZLinkJavaActorAuthorityFailureTest {
             assertEquals(
                     List.of(new ZLinkServiceM6AWireCodec.Reply(1, terminal, code)),
                     fixture.replies);
-            assertTrue((boolean) field(Received.class, "closed").get(failed.received()));
+            assertTrue(ReceivedTesting.isClosed(failed.received()));
             fixture.assertReported(failure, "reply_error");
             fixture.synchronousFailure = null;
             fixture.authority = CompletableFuture.completedFuture(Optional.empty());
@@ -174,14 +173,8 @@ final class ZLinkJavaActorAuthorityFailureTest {
             assertEquals(
                     new ZLinkServiceM6AWireCodec.Reply(2, unavailable[0], unavailable[1]),
                     fixture.replies.get(1));
-            assertTrue((boolean) field(Received.class, "closed").get(suffix.received()));
+            assertTrue(ReceivedTesting.isClosed(suffix.received()));
         }
-    }
-
-    private static Field field(Class<?> owner, String name) throws Exception {
-        Field field = owner.getDeclaredField(name);
-        field.setAccessible(true);
-        return field;
     }
 
     private static final class Fixture implements AutoCloseable {
@@ -213,15 +206,6 @@ final class ZLinkJavaActorAuthorityFailureTest {
                 };
 
         Fixture() throws Exception {
-            Context context =
-                    (Context)
-                            Proxy.newProxyInstance(
-                                    Context.class.getClassLoader(),
-                                    new Class<?>[] {Context.class},
-                                    (proxy, method, args) -> {
-                                        throw new AssertionError(
-                                                "unexpected context call: " + method.getName());
-                                    });
             ReplySubmitOperation submit =
                     (ReplySubmitOperation)
                             Proxy.newProxyInstance(
@@ -245,15 +229,45 @@ final class ZLinkJavaActorAuthorityFailureTest {
                                     (proxy, method, args) -> {
                                         return switch (method.getName()) {
                                             case "reply" -> reply;
+                                            case "setRoutingId" -> null;
                                             case "hashCode" -> System.identityHashCode(proxy);
                                             case "equals" -> proxy == args[0];
                                             default -> throw new AssertionError(method.getName());
                                         };
                                     });
-            var ctor = ReplyToken.class.getDeclaredConstructor(Object.class, long.class);
-            ctor.setAccessible(true);
-            token = ctor.newInstance(router, 1L);
-            node = new ZLinkJavaRawMeshNode(context, "authority-mesh");
+            Context context =
+                    (Context)
+                            Proxy.newProxyInstance(
+                                    Context.class.getClassLoader(),
+                                    new Class<?>[] {Context.class},
+                                    (proxy, method, args) -> {
+                                        if (method.getName().equals("createRouterSocket"))
+                                            return router;
+                                        throw new AssertionError(
+                                                "unexpected context call: " + method.getName());
+                                    });
+            token = ReceivedTesting.replyToken(router, 1L);
+            var descriptor = descriptor(target);
+            var topology = new ZLinkServiceTopologyRegistry(descriptor);
+            assertEquals(
+                    ZLinkServiceTopologyRegistry.AdmissionResult.ADMITTED,
+                    topology.admit(descriptor(source), "1", ServiceWireConstants.COMMAND_HELLO));
+            var port =
+                    new ZLinkJavaRawServicePort(
+                            context,
+                            new systems.zlink.framework.runtime.internal.execution.ZLinkStateLane(),
+                            (socket, observesRoutes) -> null);
+            assertSame(router, port.openRouter(target));
+            node =
+                    ZLinkJavaRawMeshNodeTesting.create(
+                            "authority-mesh",
+                            port,
+                            router,
+                            descriptor,
+                            topology,
+                            Map.of(),
+                            Runnable::run);
+            node.setRoutingId(target);
             var options = new ZLinkDispatchOptionsRegistration();
             options.messageFlow(ZLinkMessageFlowLogMode.NORMAL);
             reporter =
@@ -262,23 +276,6 @@ final class ZLinkJavaActorAuthorityFailureTest {
             node.setDispatchErrorReporter(reporter);
             logger.addHandler(logHandler);
             logger.setLevel(Level.ALL);
-            field(ZLinkJavaRawMeshNode.class, "router").set(node, router);
-            field(ZLinkJavaRawMeshNode.class, "applicationDispatch")
-                    .set(node, (Executor) Runnable::run);
-            node.setRoutingId(target);
-            var descriptor = descriptor(target);
-            field(ZLinkJavaRawMeshNode.class, "localDescriptor").set(node, descriptor);
-            var topology = new ZLinkServiceTopologyRegistry(descriptor);
-            assertEquals(
-                    ZLinkServiceTopologyRegistry.AdmissionResult.ADMITTED,
-                    topology.admit(descriptor(source), "1", ServiceWireConstants.COMMAND_HELLO));
-            field(ZLinkJavaRawMeshNode.class, "topology").set(node, topology);
-            var port = field(ZLinkJavaRawMeshNode.class, "port").get(node);
-            @SuppressWarnings("unchecked")
-            var owned =
-                    (Map<RouterSocket, ZLinkJavaSocketReceivePoller>)
-                            field(ZLinkJavaRawServicePort.class, "receivePollers").get(port);
-            owned.put(router, null);
             node.setPeerAuthorityResolver(
                     (mesh, rid, generation) -> {
                         lookups.incrementAndGet();
@@ -306,7 +303,7 @@ final class ZLinkJavaActorAuthorityFailureTest {
                 payload = ZLinkServiceM6AWireCodec.encodeFrameworkMultipartFrame(List.of(message));
             }
             var received = new Received();
-            field(Received.class, "routeGeneration").setLong(received, 1);
+            ReceivedTesting.setRouteGeneration(received, 1);
             var inbound =
                     new ZLinkJavaRawServicePort.Inbound(
                             source,
@@ -323,11 +320,7 @@ final class ZLinkJavaActorAuthorityFailureTest {
                                             header.target()),
                                     payload),
                             received);
-            var dispatch =
-                    ZLinkJavaRawMeshNode.class.getDeclaredMethod(
-                            "dispatch", ZLinkJavaRawServicePort.Inbound.class);
-            dispatch.setAccessible(true);
-            dispatch.invoke(node, inbound);
+            node.dispatch(inbound);
             return inbound;
         }
 

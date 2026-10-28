@@ -135,7 +135,9 @@ start_role() {
   local name="$1"
   shift
   stdbuf -oL -eL "$@" >"$LOG_DIR/${name}.log" 2>&1 &
-  PIDS+=("$!")
+  local pid=$!
+  PIDS+=("$pid")
+  zlink_cpp_sample_log_step "process start: $name pid=$pid"
 }
 
 read -r -a PORTS <<<"$(zlink_sample_allocate_ports 17)"
@@ -156,11 +158,13 @@ WORKFLOW_B_SPOT_ROUTER="tcp://127.0.0.1:${PORTS[14]}"
 API_A_SPOT_ROUTER="tcp://127.0.0.1:${PORTS[15]}"
 API_B_SPOT_ROUTER="tcp://127.0.0.1:${PORTS[16]}"
 
+zlink_cpp_sample_log_step "build"
 cmake --build "$BUILD_DIR" --parallel 2 --target \
   sample_cpp_framework_shoppingmall_commerce_api \
   sample_cpp_framework_shoppingmall_order_workflow \
-  sample_cpp_framework_shoppingmall_client >/dev/null
+  sample_cpp_framework_shoppingmall_client
 
+zlink_cpp_sample_log_step "Redis start"
 zlink_redis_start_scoped_assign REDIS_CONTAINER_NAME redis_port \
   "zlink-redis-cpp-sample-shoppingmall" "redis:7-alpine"
 REDIS_ENDPOINT="tcp://127.0.0.1:${redis_port}"

@@ -54,7 +54,7 @@ public final class ZLinkServiceLivenessRegistry {
     }
 
     private <T> T inStateLane(Supplier<T> work) {
-        return stateLane.awaitTurn(work);
+        return stateLane.isOnLane() ? work.get() : stateLane.awaitTurn(work);
     }
 
     public PeerState admit(RoutingId nodeRoutingId, String connectionId, long nowNanos) {

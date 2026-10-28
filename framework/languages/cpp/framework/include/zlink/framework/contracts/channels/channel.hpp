@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #pragma once
 
+#include <zlink/framework/contracts/detail/handler_invocation.hpp>
+
 #include <zlink/Contracts/Core/byte_count.hpp>
 #include <zlink/Contracts/Core/routing_id.hpp>
 #include <zlink/framework/contracts/channels/call.hpp>
@@ -122,7 +124,8 @@ struct route_handler_registration_t
     std::function<task_t<zlink::message_t> (service_provider_t &,
                                             serializer_registry_t &,
                                             const zlink::message_t &,
-                                            const route_message_context_t &)>
+                                            const route_message_context_t &,
+                                            detail::handler_start_callback_ref_t)>
       invoker;
 };
 
@@ -216,13 +219,15 @@ class route_channel_builder_t
           route_handler_kind_t::send, packet, std::type_index (typeid (TOwner)),
           std::type_index (typeid (TMessage)), std::type_index (typeid (void)),
           [method] (service_provider_t &services, serializer_registry_t &serializers,
-                    const zlink::message_t &message,
-                    const route_message_context_t &context) -> task_t<zlink::message_t> {
+                    const zlink::message_t &message, const route_message_context_t &context,
+                    detail::handler_start_callback_ref_t before_application_handler)
+            -> task_t<zlink::message_t> {
               try {
                   auto &owner = services.get_required<TOwner> ();
                   auto payload = detail::deserialize_typed_payload<TMessage> (
                     serializers, message, context.content_type.value_or (""));
-                  (owner.*method) (payload, context);
+                  detail::invoke_prepared_handler (before_application_handler, method, owner,
+                                                   payload, context);
                   return task_t<zlink::message_t> (
                     result_t<zlink::message_t>::success (zlink::message_t{}));
               }
@@ -248,13 +253,15 @@ class route_channel_builder_t
           route_handler_kind_t::send, packet, std::type_index (typeid (TOwner)),
           std::type_index (typeid (TMessage)), std::type_index (typeid (void)),
           [method] (service_provider_t &services, serializer_registry_t &serializers,
-                    const zlink::message_t &message,
-                    const route_message_context_t &context) -> task_t<zlink::message_t> {
+                    const zlink::message_t &message, const route_message_context_t &context,
+                    detail::handler_start_callback_ref_t before_application_handler)
+            -> task_t<zlink::message_t> {
               try {
                   auto &owner = services.get_required<TOwner> ();
                   auto payload = detail::deserialize_typed_payload<TMessage> (
                     serializers, message, context.content_type.value_or (""));
-                  (owner.*method) (payload);
+                  detail::invoke_prepared_handler (before_application_handler, method, owner,
+                                                   payload);
                   return task_t<zlink::message_t> (
                     result_t<zlink::message_t>::success (zlink::message_t{}));
               }
@@ -280,13 +287,15 @@ class route_channel_builder_t
           route_handler_kind_t::send, packet, std::type_index (typeid (TOwner)),
           std::type_index (typeid (TMessage)), std::type_index (typeid (void)),
           [method] (service_provider_t &services, serializer_registry_t &serializers,
-                    const zlink::message_t &message,
-                    const route_message_context_t &context) -> task_t<zlink::message_t> {
+                    const zlink::message_t &message, const route_message_context_t &context,
+                    detail::handler_start_callback_ref_t before_application_handler)
+            -> task_t<zlink::message_t> {
               try {
                   auto &owner = services.get_required<TOwner> ();
                   auto payload = detail::deserialize_typed_payload<TMessage> (
                     serializers, message, context.content_type.value_or (""));
-                  co_await (owner.*method) (payload);
+                  co_await detail::invoke_prepared_handler (before_application_handler, method,
+                                                            owner, payload);
                   co_return result_t<zlink::message_t>::success (zlink::message_t{});
               }
               catch (const framework_exception_t &error) {
@@ -311,13 +320,15 @@ class route_channel_builder_t
           route_handler_kind_t::request, packet, std::type_index (typeid (TOwner)),
           std::type_index (typeid (TRequest)), std::type_index (typeid (TReply)),
           [method] (service_provider_t &services, serializer_registry_t &serializers,
-                    const zlink::message_t &message,
-                    const route_message_context_t &context) -> task_t<zlink::message_t> {
+                    const zlink::message_t &message, const route_message_context_t &context,
+                    detail::handler_start_callback_ref_t before_application_handler)
+            -> task_t<zlink::message_t> {
               try {
                   auto &owner = services.get_required<TOwner> ();
                   auto request = detail::deserialize_typed_payload<TRequest> (
                     serializers, message, context.content_type.value_or (""));
-                  auto reply = (owner.*method) (request, context);
+                  auto reply = detail::invoke_prepared_handler (before_application_handler, method,
+                                                                owner, request, context);
                   return task_t<zlink::message_t> (result_t<zlink::message_t>::success (
                     detail::encoded_payload_to_raw (serializers.get<TReply> ().serialize (reply))));
               }
@@ -343,13 +354,15 @@ class route_channel_builder_t
           route_handler_kind_t::request, packet, std::type_index (typeid (TOwner)),
           std::type_index (typeid (TRequest)), std::type_index (typeid (TReply)),
           [method] (service_provider_t &services, serializer_registry_t &serializers,
-                    const zlink::message_t &message,
-                    const route_message_context_t &context) -> task_t<zlink::message_t> {
+                    const zlink::message_t &message, const route_message_context_t &context,
+                    detail::handler_start_callback_ref_t before_application_handler)
+            -> task_t<zlink::message_t> {
               try {
                   auto &owner = services.get_required<TOwner> ();
                   auto request = detail::deserialize_typed_payload<TRequest> (
                     serializers, message, context.content_type.value_or (""));
-                  auto reply = (owner.*method) (request);
+                  auto reply = detail::invoke_prepared_handler (before_application_handler, method,
+                                                                owner, request);
                   return task_t<zlink::message_t> (result_t<zlink::message_t>::success (
                     detail::encoded_payload_to_raw (serializers.get<TReply> ().serialize (reply))));
               }
@@ -376,13 +389,15 @@ class route_channel_builder_t
           route_handler_kind_t::request, packet, std::type_index (typeid (TOwner)),
           std::type_index (typeid (TRequest)), std::type_index (typeid (TReply)),
           [method] (service_provider_t &services, serializer_registry_t &serializers,
-                    const zlink::message_t &message,
-                    const route_message_context_t &context) -> task_t<zlink::message_t> {
+                    const zlink::message_t &message, const route_message_context_t &context,
+                    detail::handler_start_callback_ref_t before_application_handler)
+            -> task_t<zlink::message_t> {
               try {
                   auto &owner = services.get_required<TOwner> ();
                   auto request = detail::deserialize_typed_payload<TRequest> (
                     serializers, message, context.content_type.value_or (""));
-                  auto reply = co_await (owner.*method) (request);
+                  auto reply = co_await detail::invoke_prepared_handler (before_application_handler,
+                                                                         method, owner, request);
                   co_return result_t<zlink::message_t>::success (
                     detail::encoded_payload_to_raw (serializers.get<TReply> ().serialize (reply)));
               }
@@ -651,23 +666,23 @@ class route_send_call_t
 {
   public:
     using metadata_map_t = std::map<std::string, std::string>;
-    using submit_fn_t = std::function<result_t<void> (const std::string &, const metadata_map_t &)>;
-    using async_submit_fn_t =
-      std::function<task_t<result_t<void>> (const std::string &, const metadata_map_t &)>;
-
-    route_send_call_t (std::string packet_name, submit_fn_t submit);
-    route_send_call_t (std::string packet_name, async_submit_fn_t submit);
 
     route_send_call_t &metadata (std::string key, std::string value);
     task_t<void> async ();
 
   private:
-    result_t<void> submit_now ();
+    friend class route_client_t;
+    friend class spot_send_call_t;
+
+    /* Only the route runtime binds a call. Its transport boundary completes the
+     * returned task with the public Framework result. */
+    using submit_fn_t = std::function<task_t<void> (const std::string &, const metadata_map_t &)>;
+
+    route_send_call_t (std::string packet_name, submit_fn_t submit);
 
     std::string _packet_name;
     metadata_map_t _metadata;
     submit_fn_t _submit;
-    async_submit_fn_t _async_submit;
     std::shared_ptr<detail::submit_once_t> _submission = std::make_shared<detail::submit_once_t> ();
 };
 
@@ -684,22 +699,6 @@ struct spot_activation_intent_t
 class spot_send_call_t : public route_send_call_t
 {
   public:
-    spot_send_call_t (std::string packet_name,
-                      submit_fn_t submit,
-                      std::shared_ptr<detail::spot_activation_intent_t> intent) :
-        route_send_call_t (std::move (packet_name), std::move (submit)),
-        _intent (std::move (intent))
-    {
-    }
-
-    spot_send_call_t (std::string packet_name,
-                      async_submit_fn_t submit,
-                      std::shared_ptr<detail::spot_activation_intent_t> intent) :
-        route_send_call_t (std::move (packet_name), std::move (submit)),
-        _intent (std::move (intent))
-    {
-    }
-
     spot_send_call_t &metadata (std::string key, std::string value)
     {
         route_send_call_t::metadata (std::move (key), std::move (value));
@@ -721,6 +720,16 @@ class spot_send_call_t : public route_send_call_t
     }
 
   private:
+    friend class route_client_t;
+
+    spot_send_call_t (std::string packet_name,
+                      submit_fn_t submit,
+                      std::shared_ptr<detail::spot_activation_intent_t> intent) :
+        route_send_call_t (std::move (packet_name), std::move (submit)),
+        _intent (std::move (intent))
+    {
+    }
+
     spot_send_call_t &set_instance (std::optional<std::string> stable_type)
     {
         if (_intent->instance) {
@@ -737,15 +746,6 @@ class spot_send_call_t : public route_send_call_t
 class spot_request_call_t : public channel_request_call_t
 {
   public:
-    spot_request_call_t (std::string packet_name,
-                         serializer_registry_t *serializers,
-                         submit_fn_t submit,
-                         std::shared_ptr<detail::spot_activation_intent_t> intent) :
-        channel_request_call_t (std::move (packet_name), serializers, std::move (submit)),
-        _intent (std::move (intent))
-    {
-    }
-
     spot_request_call_t &timeout (std::chrono::milliseconds value)
     {
         channel_request_call_t::timeout (value);
@@ -772,6 +772,17 @@ class spot_request_call_t : public channel_request_call_t
     }
 
   private:
+    friend class route_client_t;
+
+    spot_request_call_t (std::string packet_name,
+                         serializer_registry_t *serializers,
+                         submit_fn_t submit,
+                         std::shared_ptr<detail::spot_activation_intent_t> intent) :
+        channel_request_call_t (std::move (packet_name), serializers, std::move (submit)),
+        _intent (std::move (intent))
+    {
+    }
+
     spot_request_call_t &set_instance (std::optional<std::string> stable_type)
     {
         if (_intent->instance) {
@@ -808,17 +819,17 @@ class route_client_t
         return route_send_call_t (
           detail::message_name<TMessage> (),
           [state, router_channel_id = std::move (router_channel_id),
-           target_node_rid = std::move (target_node_rid), message_value] (
-            const std::string &packet_name,
-            const route_send_call_t::metadata_map_t &metadata) -> task_t<result_t<void>> {
-              return submit_send_erased (
-                state, router_channel_id, target_node_rid, packet_name,
-                std::type_index (typeid (TMessage)),
-                [message_value] (serializer_registry_t &serializers) {
-                    return serializers.template get<TMessage> ().serialize_with_content_type (
-                      *message_value);
-                },
-                metadata);
+           target_node_rid = std::move (target_node_rid),
+           message_value] (const std::string &packet_name,
+                           const route_send_call_t::metadata_map_t &metadata) -> task_t<void> {
+              auto encode_payload = [message_value] (serializer_registry_t &serializers) {
+                  return serializers.template get<TMessage> ().serialize_with_content_type (
+                    *message_value);
+              };
+              // Erased submit consumes this encoder before its first suspension.
+              return submit_send_erased (state, router_channel_id, target_node_rid, packet_name,
+                                         std::type_index (typeid (TMessage)),
+                                         std::ref (encode_payload), metadata);
           });
     }
 
@@ -829,16 +840,16 @@ class route_client_t
         auto message_value = std::make_shared<TMessage> (std::move (message));
         return route_send_call_t (
           detail::message_name<TMessage> (),
-          [state, channel_name = std::move (channel_name), message_value] (
-            const std::string &packet_name,
-            const route_send_call_t::metadata_map_t &metadata) -> task_t<result_t<void>> {
-              return submit_channel_send_erased (
-                state, channel_name, packet_name, std::type_index (typeid (TMessage)),
-                [message_value] (serializer_registry_t &serializers) {
-                    return serializers.template get<TMessage> ().serialize_with_content_type (
-                      *message_value);
-                },
-                metadata);
+          [state, channel_name = std::move (channel_name),
+           message_value] (const std::string &packet_name,
+                           const route_send_call_t::metadata_map_t &metadata) -> task_t<void> {
+              auto encode_payload = [message_value] (serializer_registry_t &serializers) {
+                  return serializers.template get<TMessage> ().serialize_with_content_type (
+                    *message_value);
+              };
+              return submit_channel_send_erased (state, channel_name, packet_name,
+                                                 std::type_index (typeid (TMessage)),
+                                                 std::ref (encode_payload), metadata);
           });
     }
 
@@ -849,9 +860,9 @@ class route_client_t
         auto intent = std::make_shared<detail::spot_activation_intent_t> ();
         return spot_send_call_t (
           detail::message_name<TMessage> (),
-          [state, target = std::move (target), intent, message_value] (
-            const std::string &packet_name,
-            const route_send_call_t::metadata_map_t &metadata) -> task_t<result_t<void>> {
+          [state, target = std::move (target), intent,
+           message_value] (const std::string &packet_name,
+                           const route_send_call_t::metadata_map_t &metadata) -> task_t<void> {
               return submit_spot_id_send_erased (
                 state, target, *intent, packet_name, std::type_index (typeid (TMessage)),
                 [message_value] (serializer_registry_t &serializers) {
@@ -877,14 +888,14 @@ class route_client_t
            request_value] (const std::string &packet_name, std::chrono::milliseconds timeout,
                            const channel_request_call_t::metadata_map_t &metadata)
             -> request_task_t<zlink::message_t> {
+              auto encode_payload = [request_value] (serializer_registry_t &serializers) {
+                  return serializers.template get<TRequest> ().serialize_with_content_type (
+                    *request_value);
+              };
+              // Erased submit consumes this encoder before its first suspension.
               return submit_request_reply_message_erased (
                 state, router_channel_id, target_node_rid, packet_name,
-                std::type_index (typeid (TRequest)),
-                [request_value] (serializer_registry_t &serializers) {
-                    return serializers.template get<TRequest> ().serialize_with_content_type (
-                      *request_value);
-                },
-                timeout, metadata);
+                std::type_index (typeid (TRequest)), std::ref (encode_payload), timeout, metadata);
           });
     }
 
@@ -899,13 +910,14 @@ class route_client_t
            request_value] (const std::string &packet_name, std::chrono::milliseconds timeout,
                            const channel_request_call_t::metadata_map_t &metadata)
             -> request_task_t<zlink::message_t> {
+              auto encode_payload = [request_value] (serializer_registry_t &serializers) {
+                  return serializers.template get<TRequest> ().serialize_with_content_type (
+                    *request_value);
+              };
+              // Erased submit consumes this encoder before its first suspension.
               return submit_channel_request_reply_message_erased (
                 state, channel_name, packet_name, std::type_index (typeid (TRequest)),
-                [request_value] (serializer_registry_t &serializers) {
-                    return serializers.template get<TRequest> ().serialize_with_content_type (
-                      *request_value);
-                },
-                timeout, metadata);
+                std::ref (encode_payload), timeout, metadata);
           });
     }
 
@@ -939,7 +951,7 @@ class route_client_t
     explicit route_client_t (std::shared_ptr<detail::route_client_state_t> state,
                              serializer_registry_t &serializers);
 
-    static task_t<result_t<void>>
+    static task_t<void>
     submit_send_erased (const std::shared_ptr<detail::route_client_state_t> &state,
                         const std::string &router_channel_id,
                         const zlink::routing_id_t &target_node_rid,
@@ -948,7 +960,7 @@ class route_client_t
                         payload_encoder_t encode_payload,
                         const route_send_call_t::metadata_map_t &metadata);
 
-    static task_t<result_t<void>>
+    static task_t<void>
     submit_channel_send_erased (std::shared_ptr<detail::route_client_state_t> state,
                                 std::string channel_name,
                                 std::string packet_name,
@@ -1019,7 +1031,7 @@ class route_client_t
       std::chrono::milliseconds timeout,
       std::map<std::string, std::string> metadata);
 
-    static task_t<result_t<void>>
+    static task_t<void>
     submit_spot_id_send_erased (const std::shared_ptr<detail::route_client_state_t> &state,
                                 spot_id_t target,
                                 detail::spot_activation_intent_t intent,
