@@ -192,6 +192,62 @@ void empty_role_list_preserves_retirement_and_internal_drain ()
     assert (!executor.try_submit_internal ([] {}));
 }
 
+void application_drain_waits_for_work_capture_destruction ()
+{
+    rt::offload_executor_t executor (1);
+    std::promise<void> capture_destruction_entered;
+    std::promise<void> release_capture_destruction;
+    auto release = release_capture_destruction.get_future ().share ();
+    std::atomic_bool drain_returned{false};
+    std::atomic_bool capture_destroyed_after_drain{false};
+    struct capture_t
+    {
+        std::promise<void> &entered;
+        std::shared_future<void> release;
+        std::atomic_bool &drain_returned;
+        std::atomic_bool &destroyed_after_drain;
+
+        capture_t (std::promise<void> &entered_,
+                   std::shared_future<void> release_,
+                   std::atomic_bool &drain_returned_,
+                   std::atomic_bool &destroyed_after_drain_) :
+            entered (entered_),
+            release (std::move (release_)),
+            drain_returned (drain_returned_),
+            destroyed_after_drain (destroyed_after_drain_)
+        {
+        }
+
+        ~capture_t ()
+        {
+            entered.set_value ();
+            release.wait ();
+            destroyed_after_drain.store (drain_returned.load (std::memory_order_acquire),
+                                         std::memory_order_release);
+        }
+    };
+
+    auto capture = std::make_shared<capture_t> (capture_destruction_entered, release,
+                                                drain_returned, capture_destroyed_after_drain);
+    assert (executor.try_submit ([capture] {}));
+    capture.reset ();
+    auto draining = std::async (std::launch::async, [&] {
+        executor.drain_application ();
+        drain_returned.store (true, std::memory_order_release);
+    });
+
+    auto entered = capture_destruction_entered.get_future ();
+    await (entered);
+    const bool returned_while_capture_destruction_was_blocked =
+      draining.wait_for (100ms) == std::future_status::ready;
+    release_capture_destruction.set_value ();
+    await (draining);
+    executor.drain ();
+
+    assert (!returned_while_capture_destruction_was_blocked);
+    assert (!capture_destroyed_after_drain.load (std::memory_order_acquire));
+}
+
 void continuous_handoffs_stop_without_losing_turns ()
 {
     rt::offload_executor_t executor (2);
@@ -288,6 +344,7 @@ void rotation_exception_terminates ()
 
 int main ()
 {
+    application_drain_waits_for_work_capture_destruction ();
     rotation_exception_terminates ();
     handoff_keeps_receiving_and_drains_application_before_roles ();
     no_idle_worker_preserves_holder_and_existing_queue ();
