@@ -2285,7 +2285,11 @@ for (const observed of [
         'A must never resume beside a committed owner'
       );
       assert.equal(harness.location.preserves, preserves, 'A must not Preserve after B→C commit');
-      assert.equal(window?.frameCount, undefined, 'settlement releases the retained boundary batch');
+      assert.equal(
+        window?.frameCount,
+        undefined,
+        'settlement releases the retained boundary batch'
+      );
       if (
         observed === 'normalized-target' ||
         observed === 'second-commit' ||
@@ -3787,8 +3791,7 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
     joinTargetControl: () => Promise.all(targetDeliveries),
     sourceCutoverWindows: () => [sourceRuntime[inspectRuntime]().sourceCutoverWindow],
     sourceLeaveSpotIds,
-    sourceProfileCount: () =>
-      sourceRuntime[inspectRuntime]().sourceActorJoinProfiles,
+    sourceProfileCount: () => sourceRuntime[inspectRuntime]().sourceActorJoinProfiles,
     completeSourceCleanup: () => sourceRuntime.completeActorJoinSourceCleanup(actorId),
     async targetIdle() {
       await waitUntil(() => targetRuntime[inspectRuntime]().targetStages === 0);

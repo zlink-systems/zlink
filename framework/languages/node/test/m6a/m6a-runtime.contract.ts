@@ -1786,7 +1786,9 @@ test('terminal reply completion progresses while ordinary job flow is saturated'
     );
     assert.equal(result.terminalResult, 0);
     assert.equal(Buffer.from(result.payload!.payload).toString(), 'reply');
-    assert.ok(left.topology.admittedPeer('m6a-r6-right')!.liveness!.deadlineMs >= submittedAt + 15_000);
+    assert.ok(
+      left.topology.admittedPeer('m6a-r6-right')!.liveness!.deadlineMs >= submittedAt + 15_000
+    );
     //  The ordinary job flow stayed saturated the whole time: the reply
     //  terminal did not consume (or wait for) an application permit.
     assert.equal(leftJobs.snapshot().capacityWaiters, 1n);
@@ -1883,7 +1885,10 @@ test('normal receive pump carries application and liveness traffic on one route'
     await pollUntil(async () => {
       await right.pumpOne();
       await left.pumpOne();
-      return left.topology.admittedPeer(rightDescriptor.nodeRoutingId)?.liveness?.outstandingProbe === undefined;
+      return (
+        left.topology.admittedPeer(rightDescriptor.nodeRoutingId)?.liveness?.outstandingProbe ===
+        undefined
+      );
     });
     assert.equal(right.mailbox.pendingMessages('application'), 1);
 
