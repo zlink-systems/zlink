@@ -1,10 +1,12 @@
 #pragma once
 #include "server/shared/http.hpp"
 #include "server/shared/hosting.hpp"
+#include <zlink/framework/contracts/codecs/serializer.hpp>
 #include <algorithm>
 #include <functional>
 #include <map>
 #include <set>
+#include <nlohmann/json.hpp>
 #include <boost/uuid/uuid_generators.hpp>
 #include <boost/uuid/uuid_io.hpp>
 namespace MyGame
@@ -20,12 +22,12 @@ class HttpLobby final : public fx::hosted_service_t
         http::request<http::string_body> request;
         http::response<http::string_body> response;
         explicit Connection (Tcp::socket socket) : stream (std::move (socket)) {}
-        void reply (http::status status, const nlohmann::json &body)
+        void reply (http::status status, std::string body)
         {
             response = {status, request.version ()};
             response.set (http::field::content_type, "application/json");
             response.keep_alive (false);
-            response.body () = body.dump ();
+            response.body () = std::move (body);
             response.prepare_payload ();
             stream.expires_after (Limits::packet);
             http::async_write (stream, response, [self = shared_from_this ()] (auto error, auto) {
@@ -70,15 +72,19 @@ class HttpLobby final : public fx::hosted_service_t
     {
         if (connection->request.method () != http::verb::post
             || connection->request.target () != Names::match_path) {
-            connection->reply (http::status::not_found, {{"error", "POST /match required"}});
+            connection->reply (http::status::not_found,
+                               nlohmann::json{{"error", "POST /match required"}}.dump ());
             return;
         }
         std::shared_ptr<Connection> partner;
         std::string player;
         try {
-            const auto body = nlohmann::json::parse (connection->request.body ());
-            const MatchRequest request{body.at ("playerId").get<std::string> (),
-                                       body.value ("mode", std::string (Names::default_mode))};
+            auto input = nlohmann::json::parse (connection->request.body ());
+            if (input.is_object () && !input.contains ("mode"))
+                input["mode"] = Names::default_mode;
+            fx::serializer_registry_t serializers;
+            const auto request = serializers.get<MatchRequest> ().deserialize (
+              fx::encoded_payload_t::from_string (input.dump ()));
             if (request.playerId.find_first_not_of (" \t\r\n") == std::string::npos
                 || request.mode.find_first_not_of (" \t\r\n") == std::string::npos
                 || participants_.contains (request.playerId))
@@ -103,13 +109,15 @@ class HttpLobby final : public fx::hosted_service_t
                              room_uuid.end ());
             const auto room = std::string (Names::room_prefix) + room_uuid;
             const std::vector<std::string> members{partner_player, player};
-            const nlohmann::json assignment = prepare_ (room, members);
+            fx::serializer_registry_t response_serializers;
+            const auto assignment = response_serializers.get<MatchResponse> ().serialize (
+              prepare_ (room, members)).to_string ();
             partner->reply (http::status::ok, assignment);
             connection->reply (http::status::ok, assignment);
         }
         catch (const std::exception &error) {
             std::cerr << "HTTP matching failed: " << error.what () << std::endl;
-            const nlohmann::json body{{"error", error.what ()}};
+            const auto body = nlohmann::json{{"error", error.what ()}}.dump ();
             if (partner)
                 partner->reply (http::status::internal_server_error, body);
             connection->reply (

@@ -4,14 +4,20 @@ import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 
 import java.time.Duration;
+import java.util.function.LongSupplier;
 
 /** Preserves one request budget across logical readiness and binding admission. */
 public final class ZLinkRequestCalls {
     private ZLinkRequestCalls() {}
 
-    public static Duration remainingTimeout(Duration timeout, long started, long now) {
+    public static long startTime(
+            Duration timeoutOverride, Duration defaultTimeout, LongSupplier nanoTime) {
+        return timeoutOverride == null && defaultTimeout == null ? 0 : nanoTime.getAsLong();
+    }
+
+    public static Duration remainingTimeout(Duration timeout, long started, LongSupplier nanoTime) {
         if (timeout == null) return null;
-        long remaining = timeout.toNanos() - (now - started);
+        long remaining = timeout.toNanos() - (nanoTime.getAsLong() - started);
         if (remaining <= 0) {
             throw new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,

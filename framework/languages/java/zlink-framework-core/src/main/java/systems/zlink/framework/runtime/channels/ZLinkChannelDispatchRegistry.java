@@ -3,6 +3,7 @@ package systems.zlink.framework.runtime.channels;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.execution.ZLinkExecutionLanePolicy;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
+import systems.zlink.framework.runtime.internal.drain.ZLinkMeshDrainCoordinator;
 
 import java.util.HashMap;
 import java.util.List;
@@ -11,10 +12,13 @@ import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Executor;
+import java.util.function.Supplier;
 import java.util.stream.Stream;
 
 final class ZLinkChannelDispatchRegistry {
     private final Executor executor;
+    private final ZLinkMeshDrainCoordinator handlerDrains =
+            new ZLinkMeshDrainCoordinator(List.of("channels"));
     private final Map<String, Map<String, ChannelRequestHandlerRegistration>> requestHandlers =
             new HashMap<>();
     private final Map<String, Map<String, ChannelSendHandlerRegistration>> sendHandlers =
@@ -110,14 +114,24 @@ final class ZLinkChannelDispatchRegistry {
         return routeQueues.get(channelName);
     }
 
+    CompletionStage<Void> enqueueChannel(
+            ZLinkSerialExecutionQueue queue,
+            Supplier<CompletionStage<Void>> operation,
+            CompletableFuture<Void> admission) {
+        return ZLinkHandlerDispatch.enqueue(
+                queue, operation, admission, handlerDrains.tryClaim("channels"), null);
+    }
+
     CompletionStage<Void> awaitQuiescence() {
         List<CompletableFuture<Void>> waiters =
                 queues().map(queue -> queue.awaitQuiescence().toCompletableFuture()).toList();
-        return CompletableFuture.allOf(waiters.toArray(CompletableFuture[]::new));
+        return CompletableFuture.allOf(waiters.toArray(CompletableFuture[]::new))
+                .thenCompose(ignored -> handlerDrains.sealAndAwaitZero("channels"));
     }
 
     void sealClosingAdmission() {
         queues().forEach(ZLinkSerialExecutionQueue::sealClosingAdmission);
+        handlerDrains.sealAll();
     }
 
     private Stream<ZLinkSerialExecutionQueue> queues() {

@@ -1,6 +1,8 @@
 #include "server/match/domain.hpp"
 #include <iostream>
 
+#include "test_json.hpp"
+
 using namespace MyGame;
 
 namespace
@@ -12,7 +14,7 @@ void require (bool condition, const char *message)
 }
 template <class T> bool equal (const T &a, const T &b)
 {
-    return nlohmann::json (a) == nlohmann::json (b);
+    return test_json_fps_entry_domain::object (a) == test_json_fps_entry_domain::object (b);
 }
 }
 
@@ -160,7 +162,8 @@ void run_domain_checks ()
         check (equal (snapshot, source.capture ()), "capture does not mutate live state");
         auto destinationNow = 900000.0;
         RoomState destination ([&] { return destinationNow; });
-        destination.restore (nlohmann::json (snapshot).get<RoomSnapshot> ());
+        destination.restore (test_json_fps_entry_domain::decode<RoomSnapshot> (
+          test_json_fps_entry_domain::object (snapshot)));
         check (equal (source.view (), destination.view ()) && source.phase () == destination.phase (),
                "relocation keeps view under new clock origin");
         const auto relocatedMove = destination.move ("a", {{0, 0, -2}, 3});

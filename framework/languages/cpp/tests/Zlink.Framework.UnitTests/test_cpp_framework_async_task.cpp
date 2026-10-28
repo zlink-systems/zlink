@@ -1711,10 +1711,60 @@ bool verify_yield_continuation_owned_by_spot_queue (yield_reply_order_t order)
     return probe.ran_after_await.load () && kept_turn && !probe.overlapped.load ();
 }
 
+bool verify_coroutine_executor_destroys_work_before_completing ()
+{
+    using namespace std::chrono_literals;
+    using namespace zlink::framework;
+
+    struct destruction_gate_t
+    {
+        std::promise<void> entered;
+        std::promise<void> release;
+        std::shared_future<void> released = release.get_future ().share ();
+    };
+    struct blocking_capture_t
+    {
+        std::shared_ptr<destruction_gate_t> gate;
+
+        ~blocking_capture_t ()
+        {
+            gate->entered.set_value ();
+            gate->released.wait ();
+        }
+    };
+
+    runtime::coroutine_executor_t executor (1);
+    auto gate = std::make_shared<destruction_gate_t> ();
+    auto capture = std::make_shared<blocking_capture_t> ();
+    capture->gate = gate;
+    auto destruction_entered = gate->entered.get_future ();
+    auto task = executor.submit<void> (
+      [capture = std::move (capture)] () mutable -> boost::asio::awaitable<result_t<void>> {
+          static_cast<void> (capture);
+          co_return result_t<void>::success ();
+      });
+
+    const bool capture_destruction_started =
+      destruction_entered.wait_for (2s) == std::future_status::ready;
+    const bool task_completed_before_release = task.await_ready ();
+    gate->release.set_value ();
+    executor.drain ();
+    const bool passed = capture_destruction_started && !task_completed_before_release
+                        && task.await_ready () && static_cast<bool> (task.result ());
+    if (!passed)
+        std::cerr << "coroutine work capture destruction started=" << capture_destruction_started
+                  << " task completed before capture release=" << task_completed_before_release
+                  << '\n';
+    return passed;
+}
+
 } // namespace
 
 int main (int argc, char **argv)
 {
+    if (argc == 2 && std::string_view (argv[1]) == "--coroutine-executor-capture-lifetime")
+        return verify_coroutine_executor_destroys_work_before_completing () ? EXIT_SUCCESS
+                                                                            : EXIT_FAILURE;
     zlink::framework::completion_owner_t completion_owner;
     if (!verify_released_turn_wrapper_handoff ())
         return 39;

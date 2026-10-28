@@ -2631,9 +2631,15 @@ test('subscriber receive loop parks on backend readiness instead of a fixed inte
   }
 });
 
-test('subscriber receive loop keeps receiving while an earlier handler is awaiting', async () => {
+test('subscriber receive loop starts the next pipeline before prior terminal at one queued permit', async () => {
   const queued = [messageRecord('first'), messageRecord('second')];
   const receiveFlags = [];
+  const started = [];
+  const completed = [];
+  const closes = [0, 0];
+  queued.forEach((record, index) => {
+    record.parts.forEach((part) => { part.close = () => { closes[index] += 1; }; });
+  });
   let releaseFirst;
   const firstPending = new Promise((resolve) => { releaseFirst = resolve; });
   let observeFirst;
@@ -2642,7 +2648,6 @@ test('subscriber receive loop keeps receiving while an earlier handler is awaiti
   const secondReceived = new Promise((resolve) => { observeSecondReceive = resolve; });
   let observeSecond;
   const secondObserved = new Promise((resolve) => { observeSecond = resolve; });
-  let secondStarted = 0;
   const queue = applicationJobQueue(1n);
   const loop = new framework.ZLinkSubscriberReceiveLoop(
     {
@@ -2675,14 +2680,13 @@ test('subscriber receive loop keeps receiving while an earlier handler is awaiti
     {
       async dispatch(topicMessage) {
         releaseApplicationJobPermitBeforeHandler();
+        started.push(topicMessage.topic);
         if (topicMessage.topic === 'first') {
           observeFirst();
           await firstPending;
         }
-        if (topicMessage.topic === 'second') {
-          secondStarted += 1;
-          observeSecond();
-        }
+        completed.push(topicMessage.topic);
+        if (topicMessage.topic === 'second') observeSecond();
       }
     },
     queue
@@ -2699,15 +2703,25 @@ test('subscriber receive loop keeps receiving while an earlier handler is awaiti
       ))
     ]);
     assert.deepEqual(receiveFlags, [1, 1]);
-    assert.equal(secondStarted, 0);
-    releaseFirst();
     await Promise.race([
       secondObserved,
       new Promise((_, reject) => setTimeout(
-        () => reject(new Error('Second subscriber handler did not start after the first terminal.')),
+        () => reject(new Error('Second subscriber handler did not complete before the first terminal.')),
         1_000
       ))
     ]);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(started, ['first', 'second']);
+    assert.deepEqual(completed, ['second']);
+    assert.deepEqual(closes, [0, 2]);
+    let stopped = false;
+    const stopping = loop.stop().then(() => { stopped = true; });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(stopped, false, 'stop waits for the first record terminal');
+    releaseFirst();
+    await stopping;
+    assert.deepEqual(completed, ['second', 'first']);
+    assert.deepEqual(closes, [2, 2]);
   } finally {
     releaseFirst();
     await loop.stop();
