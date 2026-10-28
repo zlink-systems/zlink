@@ -187,6 +187,9 @@ final class ZLinkTopologyRuntimeViewsTest {
                                 ZLinkBackendDealerSocket.class.getClassLoader(),
                                 new Class<?>[] {ZLinkBackendDealerSocket.class},
                                 (proxy, method, arguments) -> {
+                                    if (method.isDefault() && method.getName().equals("requestTo"))
+                                        return java.lang.reflect.InvocationHandler.invokeDefault(
+                                                proxy, method, arguments);
                                     throw new UnsupportedOperationException(method.getName());
                                 });
         sockets.addClientServerConnection(
@@ -270,6 +273,9 @@ final class ZLinkTopologyRuntimeViewsTest {
                                 ZLinkBackendRouterSocket.class.getClassLoader(),
                                 new Class<?>[] {ZLinkBackendRouterSocket.class},
                                 (proxy, method, arguments) -> {
+                                    if (method.isDefault() && method.getName().equals("requestTo"))
+                                        return java.lang.reflect.InvocationHandler.invokeDefault(
+                                                proxy, method, arguments);
                                     if (method.getName().equals("peerWeight")) {
                                         return 100;
                                     }

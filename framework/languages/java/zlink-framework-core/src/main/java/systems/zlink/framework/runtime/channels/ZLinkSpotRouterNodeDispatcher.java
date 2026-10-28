@@ -28,8 +28,7 @@ final class ZLinkSpotRouterNodeDispatcher {
             long targetSpotGeneration,
             long authorityOwnerGeneration,
             long ownerLeaseGeneration,
-            List<Message> spotParts,
-            Duration timeout) {
+            List<Message> spotParts) {
         CompletableFuture<Void> result = new CompletableFuture<>();
         var entrySpot = node.entrySpot();
         rememberAuthority(
