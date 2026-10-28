@@ -47,26 +47,12 @@ export type ZLinkMeshCompletionHandler = (
 
 export class ZLinkMeshCompletionTable {
   private buckets = new Int32Array(0);
-  private readonly slots: CompletionSlot[];
+  private readonly slots: CompletionSlot[] = [];
   private free = -1;
   private activeCount = 0;
   private disposed = false;
 
-  constructor(
-    private readonly onDiagnostic?: (diagnostic: ZLinkMeshCompletionDiagnostic) => void,
-    internalOptions?: { readonly onSlotVisit: () => void }
-  ) {
-    const slots: CompletionSlot[] = [];
-    // Instrument indexed reads only when requested; normal tables retain a plain array.
-    this.slots =
-      internalOptions === undefined
-        ? slots
-        : new Proxy(slots, {
-            get(target, key, receiver) {
-              if (typeof key === 'string' && /^\d+$/.test(key)) internalOptions.onSlotVisit();
-              return Reflect.get(target, key, receiver);
-            }
-          });
+  constructor(private readonly onDiagnostic?: (diagnostic: ZLinkMeshCompletionDiagnostic) => void) {
     this.prepareSlots();
   }
 
