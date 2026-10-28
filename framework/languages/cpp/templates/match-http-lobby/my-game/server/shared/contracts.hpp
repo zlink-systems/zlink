@@ -1,4 +1,5 @@
 #pragma once
+#include <zlink/json.hpp>
 #include <nlohmann/json.hpp>
 #include <chrono>
 #include <cstdint>
@@ -7,27 +8,6 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
-
-NLOHMANN_JSON_NAMESPACE_BEGIN
-template <typename T>
-struct adl_serializer<std::optional<T>>
-{
-    static void to_json (json &json_, const std::optional<T> &value_)
-    {
-        if (value_)
-            json_ = *value_;
-        else
-            json_ = nullptr;
-    }
-    static void from_json (const json &json_, std::optional<T> &value_)
-    {
-        if (json_.is_null ())
-            value_.reset ();
-        else
-            value_ = json_.template get<T> ();
-    }
-};
-NLOHMANN_JSON_NAMESPACE_END
 
 namespace MyGame
 {
@@ -93,52 +73,40 @@ struct SessionInfoRequest
 {
     static constexpr auto packet_name = "SessionInfoRequest";
 };
-inline void to_json (nlohmann::json &j, const SessionInfoRequest &)
-{
-    j = nlohmann::json::object ();
-}
-inline void from_json (const nlohmann::json &, SessionInfoRequest &)
-{
-}
+
 struct SessionInfo
 {
     static constexpr auto packet_name = "SessionInfo";
     std::string sessionId, actorId;
     std::uint64_t objectGeneration = 0;
     bool operator== (const SessionInfo &) const = default;
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (SessionInfo, sessionId, actorId, objectGeneration)
 };
 struct MatchRequest
 {
     static constexpr auto packet_name = "MatchRequest";
     std::string playerId;
     std::string mode = Names::default_mode;
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (MatchRequest, playerId, mode)
 };
 struct MatchResponse
 {
     static constexpr auto packet_name = "MatchResponse";
     std::string roomId, sessionEndpoint;
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (MatchResponse, roomId, sessionEndpoint)
 };
 struct JoinRoomRequest
 {
     static constexpr auto packet_name = "JoinRoomRequest";
     std::string playerId, roomId;
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (JoinRoomRequest, playerId, roomId)
 };
 struct PrepareRoom
 {
     static constexpr auto packet_name = "PrepareRoom";
     std::string matchId;
     std::vector<std::string> members;
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (PrepareRoom, matchId, members)
 };
 struct RoomPrepared
 {
     static constexpr auto packet_name = "RoomPrepared";
     std::string matchId;
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (RoomPrepared, matchId)
 };
 struct MoveRequest
 {
@@ -147,7 +115,6 @@ struct MoveRequest
     double dy{};
     std::int64_t sequence{};
     bool operator== (const MoveRequest &) const = default;
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (MoveRequest, dx, dy, sequence)
 };
 struct ShootRequest
 {
@@ -155,7 +122,6 @@ struct ShootRequest
     std::string targetId{};
     std::int64_t sequence{};
     bool operator== (const ShootRequest &) const = default;
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (ShootRequest, targetId, sequence)
 };
 struct PlayerView
 {
@@ -165,7 +131,6 @@ struct PlayerView
     int hp = Game::initial_hp;
     std::int64_t lastSequence = 0;
     bool operator== (const PlayerView &) const = default;
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (PlayerView, playerId, x, y, hp, lastSequence)
 };
 struct RoomView
 {
@@ -176,7 +141,6 @@ struct RoomView
     std::optional<std::string> winner{};
     std::vector<PlayerView> players{};
     bool operator== (const RoomView &) const = default;
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (RoomView, roomId, nodeId, phase, winner, players)
 };
 struct ActionRejected
 {
@@ -184,13 +148,11 @@ struct ActionRejected
     std::string reason;
     std::int32_t retryAfterMs{};
     bool operator== (const ActionRejected &) const = default;
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (ActionRejected, reason, retryAfterMs)
 };
 struct MatchEnded
 {
     static constexpr auto packet_name = "MatchEnded";
     std::string winner;
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (MatchEnded, winner)
 };
 struct MoveResult
 {
@@ -199,7 +161,6 @@ struct MoveResult
     double y{};
     std::int64_t sequence{};
     bool operator== (const MoveResult &) const = default;
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (MoveResult, x, y, sequence)
 };
 struct ShotResult
 {
@@ -208,17 +169,143 @@ struct ShotResult
     std::string targetId{};
     std::int64_t sequence{};
     bool operator== (const ShotResult &) const = default;
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (ShotResult, outcome, targetId, sequence)
 };
 struct RoomViewRequest
 {
     static constexpr auto packet_name = "RoomViewRequest";
 };
-inline void to_json (nlohmann::json &j, const RoomViewRequest &)
+
+}
+
+namespace zlink::json
 {
-    j = nlohmann::json::object ();
-}
-inline void from_json (const nlohmann::json &, RoomViewRequest &)
+template <> struct dto_traits<::MyGame::SessionInfo>
 {
-}
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("sessionId", &::MyGame::SessionInfo::sessionId),
+      zlink::json::field ("actorId", &::MyGame::SessionInfo::actorId),
+      zlink::json::field ("objectGeneration", &::MyGame::SessionInfo::objectGeneration)
+    };
+};
+
+template <> struct dto_traits<::MyGame::MatchRequest>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("playerId", &::MyGame::MatchRequest::playerId),
+      zlink::json::field ("mode", &::MyGame::MatchRequest::mode)
+    };
+};
+
+template <> struct dto_traits<::MyGame::MatchResponse>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("roomId", &::MyGame::MatchResponse::roomId),
+      zlink::json::field ("sessionEndpoint", &::MyGame::MatchResponse::sessionEndpoint)
+    };
+};
+
+template <> struct dto_traits<::MyGame::JoinRoomRequest>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("playerId", &::MyGame::JoinRoomRequest::playerId),
+      zlink::json::field ("roomId", &::MyGame::JoinRoomRequest::roomId)
+    };
+};
+
+template <> struct dto_traits<::MyGame::PrepareRoom>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("matchId", &::MyGame::PrepareRoom::matchId),
+      zlink::json::field ("members", &::MyGame::PrepareRoom::members)
+    };
+};
+
+template <> struct dto_traits<::MyGame::RoomPrepared>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("matchId", &::MyGame::RoomPrepared::matchId)
+    };
+};
+
+template <> struct dto_traits<::MyGame::MoveRequest>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("dx", &::MyGame::MoveRequest::dx),
+      zlink::json::field ("dy", &::MyGame::MoveRequest::dy),
+      zlink::json::field ("sequence", &::MyGame::MoveRequest::sequence)
+    };
+};
+
+template <> struct dto_traits<::MyGame::ShootRequest>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("targetId", &::MyGame::ShootRequest::targetId),
+      zlink::json::field ("sequence", &::MyGame::ShootRequest::sequence)
+    };
+};
+
+template <> struct dto_traits<::MyGame::PlayerView>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("playerId", &::MyGame::PlayerView::playerId),
+      zlink::json::field ("x", &::MyGame::PlayerView::x),
+      zlink::json::field ("y", &::MyGame::PlayerView::y),
+      zlink::json::field ("hp", &::MyGame::PlayerView::hp),
+      zlink::json::field ("lastSequence", &::MyGame::PlayerView::lastSequence)
+    };
+};
+
+template <> struct dto_traits<::MyGame::RoomView>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("roomId", &::MyGame::RoomView::roomId),
+      zlink::json::field ("nodeId", &::MyGame::RoomView::nodeId),
+      zlink::json::field ("phase", &::MyGame::RoomView::phase),
+      zlink::json::field ("winner", &::MyGame::RoomView::winner),
+      zlink::json::field ("players", &::MyGame::RoomView::players)
+    };
+};
+
+template <> struct dto_traits<::MyGame::ActionRejected>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("reason", &::MyGame::ActionRejected::reason),
+      zlink::json::field ("retryAfterMs", &::MyGame::ActionRejected::retryAfterMs)
+    };
+};
+
+template <> struct dto_traits<::MyGame::MatchEnded>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("winner", &::MyGame::MatchEnded::winner)
+    };
+};
+
+template <> struct dto_traits<::MyGame::MoveResult>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("x", &::MyGame::MoveResult::x),
+      zlink::json::field ("y", &::MyGame::MoveResult::y),
+      zlink::json::field ("sequence", &::MyGame::MoveResult::sequence)
+    };
+};
+
+template <> struct dto_traits<::MyGame::ShotResult>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("outcome", &::MyGame::ShotResult::outcome),
+      zlink::json::field ("targetId", &::MyGame::ShotResult::targetId),
+      zlink::json::field ("sequence", &::MyGame::ShotResult::sequence)
+    };
+};
+
+template <> struct dto_traits<::MyGame::SessionInfoRequest>
+{
+    static constexpr auto fields = std::tuple{};
+};
+
+template <> struct dto_traits<::MyGame::RoomViewRequest>
+{
+    static constexpr auto fields = std::tuple{};
+};
+} // namespace zlink::json

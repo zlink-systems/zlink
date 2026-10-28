@@ -1,5 +1,6 @@
 #pragma once
 #include "server/shared/contracts.hpp"
+#include <zlink/json.hpp>
 #include <chrono>
 #include <functional>
 #include <optional>
@@ -18,7 +19,6 @@ struct GoldSnapshot
 {
     std::int64_t gold = 0;
     std::int64_t earnCooldownRemainingMs = 0;
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (GoldSnapshot, gold, earnCooldownRemainingMs)
 };
 
 class GoldBalance
@@ -93,3 +93,14 @@ class GoldBalance
     }
 };
 }
+
+namespace zlink::json
+{
+template <> struct dto_traits<::MyGame::GoldSnapshot>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("gold", &::MyGame::GoldSnapshot::gold),
+      zlink::json::field ("earnCooldownRemainingMs", &::MyGame::GoldSnapshot::earnCooldownRemainingMs)
+    };
+};
+} // namespace zlink::json

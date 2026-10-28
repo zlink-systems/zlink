@@ -80,8 +80,8 @@ class NodeControl final : public fx::hosted_service_t
           config_.HttpEndpoint.empty ()
             ? std::nullopt
             : std::optional<std::string> (config_.HttpEndpoint)};
-        const nlohmann::json output = ready;
-        std::cout << Control::ready << output.dump () << std::endl;
+        const auto output = fx::serializer_registry_t{}.get<HttpNodeReady> ().serialize (ready);
+        std::cout << Control::ready << output.to_string () << std::endl;
         co_return;
     }
 
