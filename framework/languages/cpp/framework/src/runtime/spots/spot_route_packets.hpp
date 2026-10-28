@@ -189,8 +189,7 @@ struct actor_bound_session_route_reply_t
     bool accepted = true;
 };
 
-// These declarations make the framework's normal typed JSON serializer the
-// single codec path for internal Spot route packets. Definitions stay in the
+// Internal service packets retain their service-wire codec. Definitions stay in the
 // implementation file with the wire-field validation.
 void to_json (nlohmann::json &json, const spot_actor_admission_route_request_t &value);
 void from_json (const nlohmann::json &json, spot_actor_admission_route_request_t &value);
@@ -246,4 +245,82 @@ actor_ref_t actor_ref_from_bound_session_route (const actor_bound_session_route_
 actor_ref_t
 actor_ref_from_bound_session_route (const actor_bound_session_bind_route_request_t &request);
 
+} // namespace zlink::framework::detail
+
+namespace zlink::framework::detail
+{
+// Service-wire bodies are independent of the application typed JSON profile.
+template <typename T> struct spot_service_packet_codec_t
+{
+    static serializer_t<T> make_serializer ()
+    {
+        return serializer_t<T> (
+          [] (const T &value) {
+              return encoded_payload_t::from_string (
+                zlink::detail::json_profile::dump (nlohmann::json (value)));
+          },
+          [] (const encoded_payload_t &payload) {
+              const auto bytes = payload.bytes ();
+              const auto *begin = reinterpret_cast<const char *> (bytes.data ());
+              const auto *end = begin ? begin + bytes.size () : begin;
+              return zlink::detail::json_profile::parse (begin, end).template get<T> ();
+          },
+          zlink::detail::json_profile::content_type);
+    }
+};
+template <>
+struct service_packet_codec_t<spot_actor_admission_route_request_t>
+    : spot_service_packet_codec_t<spot_actor_admission_route_request_t>
+{
+};
+template <>
+struct service_packet_codec_t<spot_actor_admission_route_reply_t>
+    : spot_service_packet_codec_t<spot_actor_admission_route_reply_t>
+{
+};
+template <>
+struct service_packet_codec_t<spot_actor_handoff_packet_t>
+    : spot_service_packet_codec_t<spot_actor_handoff_packet_t>
+{
+};
+template <>
+struct service_packet_codec_t<spot_actor_commit_route_request_t>
+    : spot_service_packet_codec_t<spot_actor_commit_route_request_t>
+{
+};
+template <>
+struct service_packet_codec_t<spot_actor_leave_route_command_t>
+    : spot_service_packet_codec_t<spot_actor_leave_route_command_t>
+{
+};
+template <>
+struct service_packet_codec_t<spot_actor_join_route_reply_t>
+    : spot_service_packet_codec_t<spot_actor_join_route_reply_t>
+{
+};
+template <>
+struct service_packet_codec_t<spot_actor_packet_route_request_t>
+    : spot_service_packet_codec_t<spot_actor_packet_route_request_t>
+{
+};
+template <>
+struct service_packet_codec_t<spot_actor_packet_route_reply_t>
+    : spot_service_packet_codec_t<spot_actor_packet_route_reply_t>
+{
+};
+template <>
+struct service_packet_codec_t<actor_bound_session_route_request_t>
+    : spot_service_packet_codec_t<actor_bound_session_route_request_t>
+{
+};
+template <>
+struct service_packet_codec_t<actor_bound_session_bind_route_request_t>
+    : spot_service_packet_codec_t<actor_bound_session_bind_route_request_t>
+{
+};
+template <>
+struct service_packet_codec_t<actor_bound_session_route_reply_t>
+    : spot_service_packet_codec_t<actor_bound_session_route_reply_t>
+{
+};
 } // namespace zlink::framework::detail

@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+#include <zlink/json.hpp>
 #include "../support/runtime_failure_fixture.hpp"
 
 #include <zlink/framework.hpp>
@@ -21,6 +22,17 @@ struct fanout_record_t
     static constexpr const char *packet_name = "fanout.admission.record";
     std::string payload;
 };
+}
+
+template <> struct zlink::json::dto_traits<fanout_record_t>
+{
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("payload", &fanout_record_t::payload)};
+};
+
+namespace
+{
+
 
 struct fanout_test_runtime_t
 {
