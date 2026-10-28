@@ -71,7 +71,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     private readonly Func<IPoller> _receivePollerFactory;
     private readonly Dictionary<ZLinkChannelName, uint> _channels = new();
     private readonly Dictionary<ulong, ZLinkMeshConnectionIntent> _peersByIntent = new();
-    private readonly Dictionary<RoutingId, Peer> _peersByRid = new();
+    private readonly Dictionary<RoutingId, Peer> _peersByRid;
     private readonly Dictionary<RoutingId, ZLinkMeshPeerExpectation> _peerExpectations = new();
     private event Func<RoutingId, Action?>? PeerConnectionIntentRemoved;
     private readonly ZLinkMeshSelectedRoutes _selectedRoutes = new();
@@ -252,10 +252,12 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         TaskScheduler? routedSubmitScheduler = null,
         Func<ISocketMonitor, ISocketMonitor>? decorateSocketMonitor = null,
         ILogger<ZLinkManagedMeshNode>? logger = null,
-        Func<IPoller>? receivePollerFactory = null
+        Func<IPoller>? receivePollerFactory = null,
+        Dictionary<RoutingId, Peer>? peersByRid = null
     )
     {
         _context = context ?? throw new ArgumentNullException(nameof(context));
+        _peersByRid = peersByRid ?? new();
         ArgumentException.ThrowIfNullOrWhiteSpace(meshName);
         if (remoteUserSpotTerminalRetention is { } retention && retention < TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(remoteUserSpotTerminalRetention));
@@ -6225,7 +6227,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     // its route is current, its liveness (mesh-node/transport-liveness) and
     // the lifecycle generation the record carries. The state travels as a
     // value, so the per-record check creates no closure or delegate.
-    private bool HasCurrentSource(
+    internal bool HasCurrentSource(
         RoutingId sourceRid,
         ulong routeGeneration,
         out ulong sourceGeneration
@@ -6421,7 +6423,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         return ZLinkApplicationPayloadEnvelopeCodec.TryDecode(parts[1], out _);
     }
 
-    private bool ProcessInfrastructureControl(
+    internal bool ProcessInfrastructureControl(
         RoutingId sourceRid,
         ulong routeGeneration,
         ulong sourceGeneration,
@@ -6695,7 +6697,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         return false;
     }
 
-    private bool IsValidMessageFollowSource(
+    internal bool IsValidMessageFollowSource(
         RoutingId sourceRid,
         ulong sourceGeneration,
         ZLinkServiceWireCodec.MessageFollowRecord record
@@ -6717,7 +6719,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         });
     }
 
-    private bool IsValidBoundSessionReplacedSource(
+    internal bool IsValidBoundSessionReplacedSource(
         RoutingId sourceRid,
         ulong sourceGeneration,
         ZLinkServiceWireCodec.BoundSessionReplacedRecord record

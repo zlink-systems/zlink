@@ -1,6 +1,5 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
-using System.Reflection;
 using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Runtime.Backend.Contracts;
 using Zlink.Framework.Runtime.Diagnostics;
@@ -19,7 +18,9 @@ public sealed partial class StatefulServiceRuntimeTests
     public async Task NativeSessionBind_UsesIngressLifecycleWhenPeerChanges(bool retirePeer)
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();
-        await using var node = NewNode(context, "bind-ingress-target");
+        var peers = new Dictionary<RoutingId, ZLinkMeshPeer>();
+        await using var node = new ZLinkManagedMeshNode(context, "mesh", peersByRid: peers);
+        node.SetRoutingId(RoutingId.From("bind-ingress-target"));
         var replyToken = await CaptureCompletedBindRequestTokenAsync(context);
         var sourceRid = RoutingId.From("bind-ingress-source");
         const ulong ingressGeneration = 17;
@@ -50,20 +51,9 @@ public sealed partial class StatefulServiceRuntimeTests
                 Array.Empty<byte>()
             ),
         };
-        var peers =
-            (Dictionary<RoutingId, ZLinkMeshPeer>)
-                typeof(ZLinkManagedMeshNode)
-                    .GetField("_peersByRid", BindingFlags.Instance | BindingFlags.NonPublic)!
-                    .GetValue(node)!;
         peers.Add(sourceRid, peer);
-        object?[] ingress = [sourceRid, routeGeneration, 0UL];
-        Assert.Equal(
-            true,
-            typeof(ZLinkManagedMeshNode)
-                .GetMethod("HasCurrentSource", BindingFlags.Instance | BindingFlags.NonPublic)!
-                .Invoke(node, ingress)
-        );
-        Assert.Equal(ingressGeneration, ingress[2]);
+        Assert.True(node.HasCurrentSource(sourceRid, routeGeneration, out var sourceGeneration));
+        Assert.Equal(ingressGeneration, sourceGeneration);
         node.SetBoundSessionBindHandler(
             (_, generation, _, reply, _) =>
             {
@@ -80,7 +70,7 @@ public sealed partial class StatefulServiceRuntimeTests
         InvokeBindControl(
             node,
             sourceRid,
-            (ulong)ingress[2]!,
+            sourceGeneration,
             replyToken,
             terminal,
             () =>
@@ -170,43 +160,42 @@ public sealed partial class StatefulServiceRuntimeTests
     )
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();
-        await using var node = NewNode(context, "notification-ingress-target");
+        var peers = new Dictionary<RoutingId, ZLinkMeshPeer>();
+        await using var node = new ZLinkManagedMeshNode(context, "mesh", peersByRid: peers);
+        node.SetRoutingId(RoutingId.From("notification-ingress-target"));
         var source = RoutingId.From("notification-ingress-source");
         var localGeneration = node.Status().LifecycleGeneration;
-        var peers =
-            (Dictionary<RoutingId, ZLinkMeshPeer>)
-                typeof(ZLinkManagedMeshNode)
-                    .GetField("_peersByRid", BindingFlags.Instance | BindingFlags.NonPublic)!
-                    .GetValue(node)!;
         peers.Add(source, new ZLinkMeshPeer(1) { LifecycleGeneration = 19 });
-        object record = replaced
-            ? new ZLinkServiceWireCodec.BoundSessionReplacedRecord(
-                new("bind-actor", 1, source, wireGeneration, 3, 5),
-                new(
-                    node.RoutingId,
-                    localGeneration,
-                    "bind-owner",
-                    7,
-                    RoutingId.From("bind-session"),
-                    1
+        var valid = replaced
+            ? node.IsValidBoundSessionReplacedSource(
+                source,
+                17UL,
+                new ZLinkServiceWireCodec.BoundSessionReplacedRecord(
+                    new("bind-actor", 1, source, wireGeneration, 3, 5),
+                    new(
+                        node.RoutingId,
+                        localGeneration,
+                        "bind-owner",
+                        7,
+                        RoutingId.From("bind-session"),
+                        1
+                    )
                 )
             )
-            : new ZLinkServiceWireCodec.MessageFollowRecord(
-                new(1, "bind-actor", 1, source, wireGeneration, 3, 5),
-                new(1, "bind-actor", 1, node.RoutingId, localGeneration, 4, 7),
-                1,
-                0,
-                0,
-                new MeshOperationId(1, 2),
-                0
+            : node.IsValidMessageFollowSource(
+                source,
+                17UL,
+                new ZLinkServiceWireCodec.MessageFollowRecord(
+                    new(1, "bind-actor", 1, source, wireGeneration, 3, 5),
+                    new(1, "bind-actor", 1, node.RoutingId, localGeneration, 4, 7),
+                    1,
+                    0,
+                    0,
+                    new MeshOperationId(1, 2),
+                    0
+                )
             );
-        var method = replaced ? "IsValidBoundSessionReplacedSource" : "IsValidMessageFollowSource";
-        Assert.Equal(
-            accepted,
-            typeof(ZLinkManagedMeshNode)
-                .GetMethod(method, BindingFlags.Instance | BindingFlags.NonPublic)!
-                .Invoke(node, [source, 17UL, record])
-        );
+        Assert.Equal(accepted, valid);
     }
 
     private static void InvokeBindControl(
@@ -224,31 +213,21 @@ public sealed partial class StatefulServiceRuntimeTests
             ServiceWireCodec.DecodeContext.Empty
         );
         using var head = Message.From(encoded[0]);
-        var handled = typeof(ZLinkManagedMeshNode)
-            .GetMethod(
-                "ProcessInfrastructureControl",
-                BindingFlags.Instance | BindingFlags.NonPublic
-            )!
-            .Invoke(
-                node,
-                [
-                    source,
-                    23UL,
-                    sourceGeneration,
-                    replyToken,
-                    new[] { head },
-                    encoded[0],
-                    (Func<ReplyOperation>)(
-                        () =>
-                        {
-                            beforeBind?.Invoke();
-                            return reply;
-                        }
-                    ),
-                    null,
-                ]
-            );
-        Assert.Equal(true, handled);
+        var handled = node.ProcessInfrastructureControl(
+            source,
+            23UL,
+            sourceGeneration,
+            replyToken,
+            new[] { head },
+            encoded[0],
+            () =>
+            {
+                beforeBind?.Invoke();
+                return reply;
+            },
+            null!
+        );
+        Assert.True(handled);
     }
 
     private static async Task<ReplyToken> CaptureCompletedBindRequestTokenAsync(IContext context)
