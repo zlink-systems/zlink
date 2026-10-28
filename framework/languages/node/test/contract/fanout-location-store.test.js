@@ -106,11 +106,12 @@ test('location runtime owner exposes the dedicated fanout capability from in-mem
   });
 
   host.createActorManagerOptions();
-  const stores = host.locationOwner.currentStores;
-  assert.equal(stores.fanoutStore, stores.locationStore);
-  assert.equal(typeof stores.fanoutStore.updateFanoutPublisher, 'function');
-  assert.equal(typeof stores.fanoutStore.removeFanoutPublisher, 'function');
-  assert.equal(typeof stores.fanoutStore.listFanoutPublishers, 'function');
+  const { inspectRuntime } = require('../../packages/framework/dist/runtime/internal-observation');
+  const stores = host[inspectRuntime]();
+  assert.equal(stores.fanoutStoreIsLocationStore, true);
+  assert.equal(stores.fanoutStoreMethods.update, 'function');
+  assert.equal(stores.fanoutStoreMethods.remove, 'function');
+  assert.equal(stores.fanoutStoreMethods.list, 'function');
 });
 
 test('automatic fanout registration requires only the opaque location provider SPI', () => {
