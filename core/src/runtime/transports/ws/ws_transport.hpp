@@ -75,6 +75,10 @@ class ws_transport_t : public i_asio_transport
 
     //  WebSocket-specific overrides
     bool requires_handshake () const ZLINK_OVERRIDE { return true; }
+    uint32_t connection_attempt_handshake_stage () const ZLINK_OVERRIDE
+    {
+        return ZLINK_CONNECTION_STAGE_WEBSOCKET;
+    }
     void async_handshake (int handshake_type, completion_handler_t handler) ZLINK_OVERRIDE;
     bool supports_speculative_write () const ZLINK_OVERRIDE { return false; }
     // STREAM 64 KiB echo relies on this capability to avoid copying the body
