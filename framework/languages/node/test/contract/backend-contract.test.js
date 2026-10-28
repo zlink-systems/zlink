@@ -1,3 +1,4 @@
+const { createPublisherRuntime } = require('./fixtures/publisher-runtime');
 const assert = require('node:assert/strict');
 const failUnexpectedRuntimeTask = {
   reportRuntimeTaskException(task, error) {
@@ -1666,19 +1667,19 @@ test('MeshNode runtime manager owns lifecycle and forwards pull-dispatch records
 });
 
 test('Logical Multicast completion does not expose or record target admission results', async () => {
-  const runtime = new framework.ZLinkSpotNodeRuntimeManager({
+  const runtimeOptions = {
     errorSink: failUnexpectedRuntimeTask,
     detachedTaskRunner: detachedTaskRunner,
     registration: framework.createFrameworkRegistration({}),
     backendAdapterFactory: {},
     context: {}
-  });
+  };
   let coreCalls = 0;
-  runtime.publishers.set('play', {
+  const runtime = await createPublisherRuntime('play', {
     async publishAsync() {
       coreCalls += 1;
     }
-  });
+  }, runtimeOptions);
 
   const result = await runtime.publish('play', 'events', 'score', 'ProfileChanged', { sequence: 1 });
 
@@ -1687,21 +1688,21 @@ test('Logical Multicast completion does not expose or record target admission re
 });
 
 test('Logical Multicast terminal completes while target processing remains blocked', async () => {
-  const runtime = new framework.ZLinkSpotNodeRuntimeManager({
+  const runtimeOptions = {
     errorSink: failUnexpectedRuntimeTask,
     detachedTaskRunner: detachedTaskRunner,
     registration: framework.createFrameworkRegistration({}),
     backendAdapterFactory: {},
     context: {}
-  });
+  };
   let coreCalls = 0;
   let completeTarget;
-  runtime.publishers.set('play', {
+  const runtime = await createPublisherRuntime('play', {
     publishAsync() {
       coreCalls += 1;
       return new Promise((resolve) => { completeTarget = resolve; });
     }
-  });
+  }, runtimeOptions);
 
   const result = await runtime.publish(
     'play', 'events', 'score', 'ProfileChanged', { sequence: 1 }
@@ -1712,19 +1713,19 @@ test('Logical Multicast terminal completes while target processing remains block
 });
 
 test('Logical Multicast post-start failure does not change the caller terminal', async () => {
-  const runtime = new framework.ZLinkSpotNodeRuntimeManager({
+  const runtimeOptions = {
     errorSink: failUnexpectedRuntimeTask,
     detachedTaskRunner: detachedTaskRunner,
     registration: framework.createFrameworkRegistration({}),
     backendAdapterFactory: {},
     context: {}
-  });
+  };
   let failTarget;
-  runtime.publishers.set('play', {
+  const runtime = await createPublisherRuntime('play', {
     publishAsync() {
       return new Promise((_resolve, reject) => { failTarget = reject; });
     }
-  });
+  }, runtimeOptions);
 
   const result = await runtime.publish(
     'play', 'events', 'score', 'ProfileChanged', { sequence: 1 }
@@ -1735,21 +1736,21 @@ test('Logical Multicast post-start failure does not change the caller terminal',
 });
 
 test('Logical Multicast shutdown after handoff does not change the caller terminal', async () => {
-  const runtime = new framework.ZLinkSpotNodeRuntimeManager({
+  const runtimeOptions = {
     errorSink: failUnexpectedRuntimeTask,
     detachedTaskRunner: detachedTaskRunner,
     registration: framework.createFrameworkRegistration({}),
     backendAdapterFactory: {},
     context: {}
-  });
+  };
   let coreCalls = 0;
-  runtime.publishers.set('play', {
+  const runtime = await createPublisherRuntime('play', {
     publishAsync() {
       coreCalls += 1;
       return new Promise(() => undefined);
     },
     async close() {}
-  });
+  }, runtimeOptions);
 
   const submitted = await runtime.publish(
     'play', 'events', 'score', 'ProfileChanged', { sequence: 1 }
@@ -1768,17 +1769,17 @@ test('Logical Multicast shutdown after handoff does not change the caller termin
 });
 
 test('Logical Multicast accepts zero subscribers as normal completion', async () => {
-  const runtime = new framework.ZLinkSpotNodeRuntimeManager({
+  const runtimeOptions = {
     errorSink: failUnexpectedRuntimeTask,
     detachedTaskRunner: detachedTaskRunner,
     registration: framework.createFrameworkRegistration({}),
     backendAdapterFactory: {},
     context: {}
-  });
-  runtime.publishers.set('play', {
+  };
+  const runtime = await createPublisherRuntime('play', {
     async publishAsync() {
     }
-  });
+  }, runtimeOptions);
 
   const result = await runtime.publish(
     'play', 'events', 'score', 'ProfileChanged', { sequence: 1 }
@@ -1788,19 +1789,19 @@ test('Logical Multicast accepts zero subscribers as normal completion', async ()
 });
 
 test('Logical Multicast remains usable after envelope encoding fails', async () => {
-  const runtime = new framework.ZLinkSpotNodeRuntimeManager({
+  const runtimeOptions = {
     errorSink: failUnexpectedRuntimeTask,
     detachedTaskRunner: detachedTaskRunner,
     registration: framework.createFrameworkRegistration({}),
     backendAdapterFactory: {},
     context: {}
-  });
+  };
   let coreCalls = 0;
-  runtime.publishers.set('play', {
+  const runtime = await createPublisherRuntime('play', {
     async publishAsync() {
       coreCalls += 1;
     }
-  });
+  }, runtimeOptions);
   const cyclic = {};
   cyclic.self = cyclic;
 
@@ -1818,20 +1819,20 @@ test('Logical Multicast remains usable after envelope encoding fails', async () 
 });
 
 test('Logical Multicast abort before handoff calls Core zero times', async () => {
-  const runtime = new framework.ZLinkSpotNodeRuntimeManager({
+  const runtimeOptions = {
     errorSink: failUnexpectedRuntimeTask,
     detachedTaskRunner: detachedTaskRunner,
     registration: framework.createFrameworkRegistration({}),
     backendAdapterFactory: {},
     context: {}
-  });
+  };
   let coreCalls = 0;
-  runtime.publishers.set('play', {
+  const runtime = await createPublisherRuntime('play', {
     async publishAsync() {
       coreCalls += 1;
       throw new Error('must not run');
     }
-  });
+  }, runtimeOptions);
   const controller = new AbortController();
   const reason = new Error('cancel before commit');
   controller.abort(reason);
@@ -1844,23 +1845,23 @@ test('Logical Multicast abort before handoff calls Core zero times', async () =>
 });
 
 test('Logical Multicast abort after Core start preserves committed completion', async () => {
-  const runtime = new framework.ZLinkSpotNodeRuntimeManager({
+  const runtimeOptions = {
     errorSink: failUnexpectedRuntimeTask,
     detachedTaskRunner: detachedTaskRunner,
     registration: framework.createFrameworkRegistration({}),
     backendAdapterFactory: {},
     context: {}
-  });
+  };
   let coreCalls = 0;
   let complete;
   let forwardedSignal;
-  runtime.publishers.set('play', {
+  const runtime = await createPublisherRuntime('play', {
     publishAsync(channelName, topic, parts, options, signal) {
       coreCalls += 1;
       forwardedSignal = signal;
       return new Promise((resolve) => { complete = resolve; });
     }
-  });
+  }, runtimeOptions);
   const controller = new AbortController();
   const pending = runtime.publish(
     'play', 'events', 'score', 'ProfileChanged', { sequence: 1 }, controller.signal
