@@ -1,3 +1,4 @@
+const { inspectRuntime } = require('../../packages/framework/dist/runtime/internal-observation');
 const { createMeshHost } = require('./fixtures/mesh-host');
 const assert = require('node:assert/strict');
 const test = require('node:test');
@@ -501,7 +502,7 @@ test('framework runtime host starts location runtime and injects lifecycle into 
 
   const preStartActorOptions = runtime.createActorManagerOptions();
   const preStartSpotOptions = runtime.createSpotManagerOptions();
-  const ownerId = runtime.locationOwner.currentRuntime.ownerId;
+  const ownerId = runtime[inspectRuntime]().ownerId;
   assert.equal(typeof preStartActorOptions.locationLifecycle, 'object');
   assert.equal(preStartSpotOptions.locationLifecycle, undefined);
   assert.equal((await store.readOwnerLease(ownerId)).kind, 'missing');
@@ -942,13 +943,13 @@ test('framework host retries recovery publication after the first owner lease pu
 
     scenario.recover();
     await waitForCondition(() => publicationAttempts >= 1
-      && !scenario.runtime.locationOwner.currentRuntime.ownerLeaseUsable);
+      && !scenario.runtime[inspectRuntime]().ownerLeaseUsable);
     await waitForCondition(async () =>
       (await scenario.store.listMeshNodes('play')).items.length === 1
     );
 
     assert.ok(publicationAttempts >= 3);
-    assert.equal(scenario.runtime.locationOwner.currentRuntime.ownerLeaseUsable, true);
+    assert.equal(scenario.runtime[inspectRuntime]().ownerLeaseUsable, true);
   } finally {
     scenario.recover();
     await scenario.runtime.stop();
@@ -995,7 +996,7 @@ test('degraded host rejects object messages and timers until owner lease recover
     assert.equal(timerTicks, 0);
 
     scenario.recover();
-    await waitForCondition(() => scenario.runtime.locationOwner.currentRuntime.ownerLeaseUsable);
+    await waitForCondition(() => scenario.runtime[inspectRuntime]().ownerLeaseUsable);
     await scenario.runtime.dispatchMeshRecord(() => 'remote',
       'play',
       { ownerKind: framework.ReadyOwnerKind.Node },
@@ -1044,7 +1045,7 @@ test('degraded host rejects factory and restore confirmation until owner lease r
     );
 
     scenario.recover();
-    await waitForCondition(() => scenario.runtime.locationOwner.currentRuntime.ownerLeaseUsable);
+    await waitForCondition(() => scenario.runtime[inspectRuntime]().ownerLeaseUsable);
     const created = await scenario.runtime.spotManager.create('play', LeaseOwnedSpot);
     const restored = await scenario.runtime.spotManager.getOrCreateWithAuthority(
       'play',
@@ -1097,7 +1098,7 @@ test('degraded host rejects stateful target, relocation and peer capacity admiss
     assert.equal(blocked.reason, framework.ZLinkFrameworkRelocationReason.RuntimeNotReady);
 
     scenario.recover();
-    await waitForCondition(() => scenario.runtime.locationOwner.currentRuntime.ownerLeaseUsable);
+    await waitForCondition(() => scenario.runtime[inspectRuntime]().ownerLeaseUsable);
     assert.equal(scenario.runtime.status.acceptingWork, true);
     assert.equal(scenario.runtime.spotNodeRuntime.options.peerAdmissionSealed('play'), false);
     await scenario.runtime.dispatchMeshRecord(() => 'remote',
