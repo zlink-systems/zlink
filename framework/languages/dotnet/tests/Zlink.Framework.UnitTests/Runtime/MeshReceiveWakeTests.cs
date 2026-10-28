@@ -355,17 +355,15 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
         const int iterations = 1000;
         var poller = new ControlledReceivePoller();
         await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var operationLane = new ZLinkStateLane();
         var node = new ZLinkManagedMeshNode(
             context,
             "idle-rotation-allocation",
-            receivePollerFactory: () => poller
+            receivePollerFactory: () => poller,
+            operationLane: operationLane
         );
         node.SetRoutingId(RoutingId.From("idle-rotation-allocation"));
         await using var lane = new ZLinkStateLane();
-        const System.Reflection.BindingFlags flags =
-            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
-        var operationLane = (ZLinkStateLane)
-            typeof(ZLinkManagedMeshNode).GetField("_operationLane", flags)!.GetValue(node)!;
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var occupied = operationLane.RunAsync(async () =>

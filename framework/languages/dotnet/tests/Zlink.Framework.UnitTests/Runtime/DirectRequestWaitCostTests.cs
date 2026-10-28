@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using System.Diagnostics.Tracing;
-using System.Reflection;
 using System.Runtime.CompilerServices;
 using Zlink.Framework.Runtime.Messaging;
 using Zlink.Framework.Runtime.Service;
@@ -21,7 +20,11 @@ public sealed class DirectRequestWaitCostTests
         using var server = context.CreateRouterSocket();
         using var client = context.CreateRouterSocket();
         using var poller = Systems.Zlink.Zlink.CreatePoller();
-        await using var node = new ZLinkManagedMeshNode(context, "direct-request-waits");
+        await using var node = new ZLinkManagedMeshNode(
+            context,
+            "direct-request-waits",
+            directRequestSocket: client
+        );
         var target = RoutingId.From("direct-request-waits-target");
         server.SetRoutingId(target);
         client.SetRoutingId(RoutingId.From("direct-request-waits-source"));
@@ -35,95 +38,53 @@ public sealed class DirectRequestWaitCostTests
             Assert.True(poller.Wait(events, TestGuard) > 0);
         poller.Modify(client, PollEventFlags.PollCompletion);
 
-        // Only Framework state is injected. The socket and request builders
-        // use the public binding surface, including its completion poller.
-        const BindingFlags flags = BindingFlags.Instance | BindingFlags.NonPublic;
-        var nodeType = typeof(ZLinkManagedMeshNode);
-        var socketField = nodeType.GetField("_socket", flags)!;
-        socketField.SetValue(node, client);
-        nodeType
-            .GetField("_activeSocketGeneration", flags)!
-            .SetValue(node, nodeType.GetField("_lifecycleGeneration", flags)!.GetValue(node));
-        var request = nodeType.GetMethod(
-            "RequestDirectWireAsync",
-            flags,
-            [
-                typeof(RoutingId),
-                encodedWire
-                    ? typeof(IReadOnlyList<ReadOnlyMemory<byte>>)
-                    : typeof(IReadOnlyList<Message>),
-                typeof(TimeSpan),
-                typeof(CancellationToken),
-                typeof(ZLinkServiceLiveness),
-                typeof(ZLinkRequestAdmission),
-                typeof(TimeSpan?),
-                typeof(MeshOperationId),
-            ]
-        )!;
         using var waits = new SubmissionWaitListener();
-        try
+        for (var index = 0; index < RequestCount; index++)
         {
-            for (var index = 0; index < RequestCount; index++)
+            using var payload = Message.From(BitConverter.GetBytes(index));
+            ValueTask<IReadOnlyList<Message>> pending;
+            waits.Begin();
+            try
             {
-                using var payload = Message.From(BitConverter.GetBytes(index));
-                ValueTask<IReadOnlyList<Message>> pending;
-                waits.Begin();
-                try
-                {
-                    pending =
-                        (ValueTask<IReadOnlyList<Message>>)
-                            request.Invoke(
-                                node,
-                                [
-                                    target,
-                                    encodedWire
-                                        ? new ReadOnlyMemory<byte>[]
-                                        {
-                                            BitConverter.GetBytes(index),
-                                        }
-                                        : new[] { payload },
-                                    TestGuard,
-                                    default(CancellationToken),
-                                    null,
-                                    null,
-                                    null,
-                                    default(MeshOperationId),
-                                ]
-                            )!;
-                }
-                finally
-                {
-                    waits.End();
-                }
-                // The server cannot reply until submission returns and its
-                // pending awaits are registered, independent of scheduling.
-                Assert.False(pending.IsCompleted);
-                using var received = Received.Create();
-                Assert.True(server.Recv(received));
-                Assert.Equal(
-                    index,
-                    BitConverter.ToInt32(received.SinglePartOrThrow().AsReadOnlySpan())
-                );
-                using var reply = Message.From(BitConverter.GetBytes(index));
-                received.Reply().Message(reply).Submit();
-                Assert.True(poller.Wait(events, TestGuard) > 0);
-                var parts = await pending;
-                try
-                {
-                    Assert.Equal(
-                        index,
-                        BitConverter.ToInt32(Assert.Single(parts).AsReadOnlySpan())
+                pending = encodedWire
+                    ? node.RequestDirectWireAsync(
+                        target,
+                        new ReadOnlyMemory<byte>[] { BitConverter.GetBytes(index) },
+                        TestGuard,
+                        CancellationToken.None
+                    )
+                    : node.RequestDirectWireAsync(
+                        target,
+                        new[] { payload },
+                        TestGuard,
+                        CancellationToken.None
                     );
-                }
-                finally
-                {
-                    ZLinkMessageParts.DisposeAll(parts);
-                }
             }
-        }
-        finally
-        {
-            socketField.SetValue(node, null);
+            finally
+            {
+                waits.End();
+            }
+            // The server cannot reply until submission returns and its
+            // pending awaits are registered, independent of scheduling.
+            Assert.False(pending.IsCompleted);
+            using var received = Received.Create();
+            Assert.True(server.Recv(received));
+            Assert.Equal(
+                index,
+                BitConverter.ToInt32(received.SinglePartOrThrow().AsReadOnlySpan())
+            );
+            using var reply = Message.From(BitConverter.GetBytes(index));
+            received.Reply().Message(reply).Submit();
+            Assert.True(poller.Wait(events, TestGuard) > 0);
+            var parts = await pending;
+            try
+            {
+                Assert.Equal(index, BitConverter.ToInt32(Assert.Single(parts).AsReadOnlySpan()));
+            }
+            finally
+            {
+                ZLinkMessageParts.DisposeAll(parts);
+            }
         }
         Assert.Equal(RequestCount, waits.ReplyObservations);
         Assert.Equal(0, waits.ForwardingWaits);
@@ -134,79 +95,36 @@ public sealed class DirectRequestWaitCostTests
     {
         using var context = Systems.Zlink.Zlink.CreateContext();
         using var client = context.CreateRouterSocket();
-        await using var node = new ZLinkManagedMeshNode(context, "direct-request-cancellation");
+        await using var node = new ZLinkManagedMeshNode(
+            context,
+            "direct-request-cancellation",
+            directRequestSocket: client
+        );
         using var cancellation = new CancellationTokenSource();
         cancellation.Cancel();
-        const BindingFlags flags = BindingFlags.Instance | BindingFlags.NonPublic;
-        var nodeType = typeof(ZLinkManagedMeshNode);
-        var socketField = nodeType.GetField("_socket", flags)!;
-        socketField.SetValue(node, client);
-        nodeType
-            .GetField("_activeSocketGeneration", flags)!
-            .SetValue(node, nodeType.GetField("_lifecycleGeneration", flags)!.GetValue(node));
-        var signature = new[]
-        {
-            typeof(RoutingId),
-            typeof(IReadOnlyList<Message>),
-            typeof(TimeSpan),
-            typeof(CancellationToken),
-            typeof(ZLinkServiceLiveness),
-            typeof(ZLinkRequestAdmission),
-            typeof(TimeSpan?),
-            typeof(MeshOperationId),
-        };
-        var forwarding = nodeType.GetMethod("RequestDirectWireAsync", flags, signature)!;
-        var submitting = nodeType.GetMethod(
-            "SubmitNativeWireAsync",
-            flags,
-            signature
-                .Take(6)
-                .Take(3)
-                .Concat(new[] { typeof(Task).MakeByRefType() })
-                .Concat(signature.Take(6).Skip(3))
-                .ToArray()
-        )!;
-        object?[] Arguments(bool includeAdmission)
-        {
-            var arguments = new List<object?>
-            {
-                RoutingId.From("direct-request-cancellation-target"),
+        var target = RoutingId.From("direct-request-cancellation-target");
+        // Submission must throw synchronously before forwarding converts its status.
+        Assert.ThrowsAny<OperationCanceledException>(() =>
+            node.SubmitNativeWireAsync(
+                target,
                 new[] { Message.From("cancelled") },
                 TestGuard,
-            };
-            if (includeAdmission)
-                arguments.Add(null);
-            arguments.Add(cancellation.Token);
-            arguments.Add(null);
-            arguments.Add(null);
-            if (!includeAdmission)
-            {
-                arguments.Add(null);
-                arguments.Add(default(MeshOperationId));
-            }
-            return arguments.ToArray();
-        }
-        try
-        {
-            // Prove submission throws synchronously, rather than returning a
-            // canceled reply that would bypass the forwarding catch entirely.
-            var synchronous = Assert.Throws<TargetInvocationException>(() =>
-                submitting.Invoke(node, Arguments(true))
-            );
-            Assert.IsAssignableFrom<OperationCanceledException>(synchronous.InnerException);
-            var pending =
-                (ValueTask<IReadOnlyList<Message>>)forwarding.Invoke(node, Arguments(false))!;
-            // §10.1 requires dispatch through the logical entry. Terminal status
-            // is checked after delivery, rather than before its dispatcher turn.
-            var task = pending.AsTask();
-            var failure = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => task);
-            Assert.Equal(TaskStatus.Canceled, task.Status);
-            Assert.Equal(cancellation.Token, failure.CancellationToken);
-        }
-        finally
-        {
-            socketField.SetValue(node, null);
-        }
+                out _,
+                cancellation.Token
+            )
+        );
+        var pending = node.RequestDirectWireAsync(
+            target,
+            new[] { Message.From("cancelled") },
+            TestGuard,
+            cancellation.Token
+        );
+        // §10.1 requires dispatch through the logical entry. Terminal status
+        // is checked after delivery, rather than before its dispatcher turn.
+        var task = pending.AsTask();
+        var failure = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => task);
+        Assert.Equal(TaskStatus.Canceled, task.Status);
+        Assert.Equal(cancellation.Token, failure.CancellationToken);
     }
 
     [Fact]
@@ -214,35 +132,12 @@ public sealed class DirectRequestWaitCostTests
     {
         using var context = Systems.Zlink.Zlink.CreateContext();
         await using var node = new ZLinkManagedMeshNode(context, "direct-request-disposed");
-        var forwarding = typeof(ZLinkManagedMeshNode).GetMethod(
-            "RequestDirectWireAsync",
-            BindingFlags.Instance | BindingFlags.NonPublic,
-            [
-                typeof(RoutingId),
-                typeof(IReadOnlyList<Message>),
-                typeof(TimeSpan),
-                typeof(CancellationToken),
-                typeof(ZLinkServiceLiveness),
-                typeof(ZLinkRequestAdmission),
-                typeof(TimeSpan?),
-                typeof(MeshOperationId),
-            ]
-        )!;
-        var pending =
-            (ValueTask<IReadOnlyList<Message>>)
-                forwarding.Invoke(
-                    node,
-                    [
-                        RoutingId.From("direct-request-disposed-target"),
-                        new[] { Message.From("disposed") },
-                        TestGuard,
-                        CancellationToken.None,
-                        null,
-                        null,
-                        null,
-                        default(MeshOperationId),
-                    ]
-                )!;
+        var pending = node.RequestDirectWireAsync(
+            RoutingId.From("direct-request-disposed-target"),
+            new[] { Message.From("disposed") },
+            TestGuard,
+            CancellationToken.None
+        );
         var task = pending.AsTask();
         await Assert.ThrowsAsync<ObjectDisposedException>(() => task);
         Assert.Equal(TaskStatus.Faulted, task.Status);

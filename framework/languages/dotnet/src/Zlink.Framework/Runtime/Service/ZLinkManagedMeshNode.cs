@@ -61,7 +61,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         SubmitResult?
     >? NativeTerminalReplySubmitOverride { get; set; }
     private readonly ZLinkStateLane _lane = new();
-    private readonly ZLinkStateLane _operationLane = new();
+    private readonly ZLinkStateLane _operationLane;
     private readonly ZLinkStateLane _inboundOperationLane = new();
     private readonly ZLinkStateLane _remoteUserSpotLane = new();
     private readonly ZLinkStateLane _remoteActorCreateLane = new();
@@ -245,7 +245,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         TaskScheduler? routedSubmitScheduler = null,
         Func<ISocketMonitor, ISocketMonitor>? decorateSocketMonitor = null,
         ILogger<ZLinkManagedMeshNode>? logger = null,
-        Func<IPoller>? receivePollerFactory = null
+        Func<IPoller>? receivePollerFactory = null,
+        IRouterSocket? directRequestSocket = null,
+        ZLinkStateLane? operationLane = null
     )
     {
         _context = context ?? throw new ArgumentNullException(nameof(context));
@@ -276,9 +278,13 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         _decorateSocketMonitor = decorateSocketMonitor;
         _receivePollerFactory = receivePollerFactory ?? Systems.Zlink.Zlink.CreatePoller;
         _logger = logger;
+        _operationLane = operationLane ?? new();
+        _socket = directRequestSocket;
+        _activeSocketGeneration = directRequestSocket is null ? 0 : _lifecycleGeneration;
     }
 
     public RoutingId RoutingId => _routingId;
+    internal int PendingOperationCount => _operations.Count;
     internal string MeshName => _meshName;
     internal CancellationToken ReceiveStopToken => _stop?.Token ?? CancellationToken.None;
     internal bool HasReservedRawApplicationAdmission =>
@@ -10726,7 +10732,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         return SendDirectWireAsync(target, messages, cancellationToken);
     }
 
-    private ValueTask<IReadOnlyList<Message>> RequestDirectWireAsync(
+    internal ValueTask<IReadOnlyList<Message>> RequestDirectWireAsync(
         RoutingId target,
         IReadOnlyList<ReadOnlyMemory<byte>> wire,
         TimeSpan timeout,
@@ -10762,7 +10768,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         );
     }
 
-    private ValueTask<IReadOnlyList<Message>> RequestDirectWireAsync(
+    internal ValueTask<IReadOnlyList<Message>> RequestDirectWireAsync(
         RoutingId target,
         IReadOnlyList<Message> messages,
         TimeSpan timeout,
@@ -10995,7 +11001,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             requestAdmission
         );
 
-    private ValueTask<IReadOnlyList<Message>> SubmitNativeWireAsync(
+    internal ValueTask<IReadOnlyList<Message>> SubmitNativeWireAsync(
         RoutingId target,
         IReadOnlyList<Message> messages,
         TimeSpan timeout,

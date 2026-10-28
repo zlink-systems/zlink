@@ -281,15 +281,13 @@ public sealed class CompletionDispatcherIsolationTests
         {
             get
             {
-                const System.Reflection.BindingFlags flags =
-                    System.Reflection.BindingFlags.Instance
-                    | System.Reflection.BindingFlags.NonPublic;
                 var runtime =
                     host.Services.GetRequiredService<Zlink.Framework.Runtime.Host.ZLinkFrameworkRuntime>();
-                var wrapper = runtime.GetActorSpotNode()!;
-                var node = wrapper.GetType().GetField("_node", flags)!.GetValue(wrapper)!;
-                var operations = node.GetType().GetField("_operations", flags)!.GetValue(node)!;
-                return (int)operations.GetType().GetProperty("Count")!.GetValue(operations)!;
+                var wrapper =
+                    Assert.IsType<Zlink.Framework.Runtime.Backend.DotNet.Wrappers.ZLinkBackendSpotNodeWrapper>(
+                        runtime.GetActorSpotNode()
+                    );
+                return wrapper.NativeNode.PendingOperationCount;
             }
         }
 
