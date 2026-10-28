@@ -551,7 +551,8 @@ void verify_client_server_terminal_overlap_matrix (int selected = -1)
                         std::optional<overlap_wire_reply_t> second;
                         const auto submit = [&] (bool request, int id, bool fail, auto &result) {
                             const auto payload = std::string (4096, static_cast<char> ('0' + id));
-                            auto body = zlink::message_t::from_json (overlap_send_t{id, fail, payload});
+                            auto body =
+                              zlink::message_t::from_json (overlap_send_t{id, fail, payload});
                             const auto header =
                               nlohmann::json{
                                 {"formatMarker", 242},
