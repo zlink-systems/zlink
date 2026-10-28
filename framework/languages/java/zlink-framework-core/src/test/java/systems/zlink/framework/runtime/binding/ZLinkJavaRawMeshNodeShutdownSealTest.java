@@ -80,8 +80,8 @@ final class ZLinkJavaRawMeshNodeShutdownSealTest {
                 long deadline = System.nanoTime() + Duration.ofMillis(200).toNanos();
                 do {
                     var inbound = remote.receive(peer);
-                    if (inbound.isPresent()) {
-                        try (var message = inbound.orElseThrow()) {
+                    if (inbound != null) {
+                        try (var message = inbound) {
                             // ROUTER probe is an empty transport frame, not admission.
                             assertEquals(
                                     -1,
@@ -107,10 +107,10 @@ final class ZLinkJavaRawMeshNodeShutdownSealTest {
                                 return true;
                             }
                             var inbound = remote.receive(peer);
-                            if (inbound.isEmpty()) {
+                            if (inbound == null) {
                                 return false;
                             }
-                            try (var message = inbound.orElseThrow()) {
+                            try (var message = inbound) {
                                 receivedAdmit.set(
                                         ZLinkJavaRawMeshNode.allowedInfrastructureControlCommand(
                                                         message.frames())
