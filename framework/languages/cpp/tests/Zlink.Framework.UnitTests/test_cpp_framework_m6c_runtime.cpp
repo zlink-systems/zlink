@@ -29,6 +29,7 @@
 #include "runtime/actors/actor_gateway_runtime.hpp"
 
 #include <nlohmann/json.hpp>
+#include <zlink/json.hpp>
 
 #include <zlink/framework.hpp>
 
@@ -1324,6 +1325,20 @@ void test_actor_return_to_entry_spot_skips_admission_and_runs_lifecycle_callback
     run_case (false, true, true, true);
 }
 
+struct temporary_channel_reply_t
+{
+    int value = 0;
+};
+}
+
+template <> struct zlink::json::dto_traits<temporary_channel_reply_t>
+{
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("value", &temporary_channel_reply_t::value)};
+};
+
+namespace
+{
 void test_temporary_channel_request_yield_owns_call_state (test_context_t &test)
 {
     namespace detail = zlink::framework::detail;
@@ -1333,10 +1348,7 @@ void test_temporary_channel_request_yield_owns_call_state (test_context_t &test)
     using zlink::framework::serializer_registry_t;
     using zlink::framework::task_t;
 
-    struct reply_t
-    {
-        int value = 0;
-    };
+    using reply_t = temporary_channel_reply_t;
 
     serializer_registry_t serializers;
     serializers.add<reply_t> (
@@ -1408,38 +1420,28 @@ int successful_payload_deserializations = 0;
 int other_payload_deserializations = 0;
 int failed_payload_deserializations = 0;
 
-void to_json (nlohmann::json &json, const accepted_decode_payload_t &payload)
-{
-    json = nlohmann::json{{"value", payload.value}};
 }
 
-void to_json (nlohmann::json &json, const rejected_decode_payload_t &payload)
+template <> struct zlink::json::dto_traits<accepted_decode_payload_t>
 {
-    json = nlohmann::json{{"value", payload.value}};
-}
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("value", &accepted_decode_payload_t::value)};
+};
 
-void to_json (nlohmann::json &json, const failed_decode_payload_t &payload)
+template <> struct zlink::json::dto_traits<rejected_decode_payload_t>
 {
-    json = nlohmann::json{{"value", payload.value}};
-}
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("value", &rejected_decode_payload_t::value)};
+};
 
-void from_json (const nlohmann::json &json, accepted_decode_payload_t &payload)
+template <> struct zlink::json::dto_traits<failed_decode_payload_t>
 {
-    ++successful_payload_deserializations;
-    payload.value = json.at ("value").get<int> ();
-}
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("value", &failed_decode_payload_t::value)};
+};
 
-void from_json (const nlohmann::json &json, rejected_decode_payload_t &payload)
+namespace
 {
-    ++other_payload_deserializations;
-    payload.value = json.at ("value").get<int> ();
-}
-
-void from_json (const nlohmann::json &, failed_decode_payload_t &)
-{
-    ++failed_payload_deserializations;
-    throw std::runtime_error ("expected accepted-payload decode failure");
-}
 
 class payload_decode_spot_t final : public zlink::framework::spot_t<zlink::framework::actor_t>
 {
@@ -1535,6 +1537,42 @@ void test_accepted_message_payload_is_deserialized_once (test_context_t &test)
       },
       [] (auto &factory) { factory.disable_relocation (); });
     zlink::framework::serializer_registry_t serializers;
+    zlink::framework::codec_registration_context_t decode_codecs (serializers);
+    decode_codecs.add_serializer<accepted_decode_payload_t> (
+      [] (const auto &v) {
+          return zlink::framework::encoded_payload_t::from_string (
+            zlink::detail::json_profile::encode (v));
+      },
+      [] (const auto &p) {
+          ++successful_payload_deserializations;
+          const auto text = p.to_string ();
+          return zlink::detail::json_profile::decode<accepted_decode_payload_t> (text.begin (),
+                                                                                 text.end ());
+      },
+      zlink::detail::json_profile::content_type);
+    decode_codecs.add_serializer<rejected_decode_payload_t> (
+      [] (const auto &v) {
+          return zlink::framework::encoded_payload_t::from_string (
+            zlink::detail::json_profile::encode (v));
+      },
+      [] (const auto &p) {
+          ++other_payload_deserializations;
+          const auto text = p.to_string ();
+          return zlink::detail::json_profile::decode<rejected_decode_payload_t> (text.begin (),
+                                                                                 text.end ());
+      },
+      zlink::detail::json_profile::content_type);
+    decode_codecs.add_serializer<failed_decode_payload_t> (
+      [] (const auto &v) {
+          return zlink::framework::encoded_payload_t::from_string (
+            zlink::detail::json_profile::encode (v));
+      },
+      [] (const zlink::framework::encoded_payload_t &) -> failed_decode_payload_t {
+          ++failed_payload_deserializations;
+          throw std::runtime_error ("expected accepted-payload decode failure");
+      },
+      zlink::detail::json_profile::content_type);
+
     zlink::framework::detail::channel_runtime_t::from (builder.message_bus ())
       .bind_serializers (serializers);
     auto found_runtime =
@@ -3859,7 +3897,6 @@ void test_relocation_target_cutover_and_authority_settlement (test_context_t &te
     target.stop ();
 }
 
-
 void test_source_relocation_metric_outcomes (test_context_t &test)
 {
     namespace fw = zlink::framework;
@@ -4485,7 +4522,6 @@ class settlement_authority_t final : public authority_relocation_port_t
             return relocation_authority_t::unsettled;
         return observed_authority;
     }
-
 
     std::mutex mutex;
     std::optional<relocation_authority_fence_t> observed;
@@ -5763,7 +5799,6 @@ void test_source_relocation_settles_by_authority (test_context_t &test,
       "a Store-confirmed expired source lease ends settlement and fails retained requests");
 }
 
-
 void test_delay_owner_final_join_closes_accepted_registration (test_context_t &test)
 {
     namespace framework = zlink::framework;
@@ -5782,7 +5817,6 @@ void test_delay_owner_final_join_closes_accepted_registration (test_context_t &t
       "final teardown must complete existing accepted waits and reject accepted "
       "registration after its final fence");
 }
-
 
 void test_source_completion_wait_scope (test_context_t &test)
 {
@@ -6531,6 +6565,16 @@ class aggregate_materialized_actor_adapter_t final
     static inline std::atomic_int restored_value{-1};
 };
 
+struct aggregate_lifecycle_probe_message_t
+{
+};
+
+template <> struct zlink::json::dto_traits<aggregate_lifecycle_probe_message_t>
+{
+    static constexpr auto fields = std::tuple{};
+};
+
+
 class aggregate_materialized_spot_t final
     : public zlink::framework::spot_t<aggregate_materialized_actor_t>
 {
@@ -6544,9 +6588,7 @@ class aggregate_materialized_spot_t final
     const zlink::framework::spot_context_t &context () const noexcept override { return _context; }
     void configure () override { configure_lifecycle_probe (); }
 
-    struct lifecycle_probe_message_t
-    {
-    };
+    using lifecycle_probe_message_t = aggregate_lifecycle_probe_message_t;
 
     zlink::framework::task_t<void> lifecycle_probe (aggregate_materialized_actor_t &,
                                                     zlink::framework::message_context_t &,
@@ -7180,15 +7222,11 @@ struct entry_relocation_test_payload_t
     int value = 0;
 };
 
-void to_json (nlohmann::json &json, const entry_relocation_test_payload_t &payload)
+template <> struct zlink::json::dto_traits<entry_relocation_test_payload_t>
 {
-    json = nlohmann::json{{"value", payload.value}};
-}
-
-void from_json (const nlohmann::json &json, entry_relocation_test_payload_t &payload)
-{
-    payload.value = json.at ("value").get<int> ();
-}
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("value", &entry_relocation_test_payload_t::value)};
+};
 
 class entry_relocation_test_actor_t final : public zlink::framework::actor_t
 {
@@ -7542,7 +7580,6 @@ void test_return_actor_relocation_replaces_departed_spot_instance (
           .result ()
           .value ();
     }
-
 
     const auto cleanup = std::find_if (
       state->pending_remote_source_cleanups.begin (), state->pending_remote_source_cleanups.end (),
