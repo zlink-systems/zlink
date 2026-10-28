@@ -1,3 +1,4 @@
+import { ZLinkFrameworkException, ZLinkFrameworkErrorKind } from '../../contracts/Errors';
 import type { ActorRef, RoutingId } from '../../contracts/Common';
 import {
   ZLinkLocationKind,
@@ -214,7 +215,8 @@ export class ZLinkActorLocationClaims {
     spotId: RoutingId,
     spotGeneration: bigint,
     spotKind: ZLinkSpotKind.Entry | ZLinkSpotKind.User,
-    ownerNodeGeneration: bigint
+    ownerNodeGeneration: bigint,
+    signal?: AbortSignal
   ): Promise<void> {
     const actorId = actorRef.actorId;
     const store = this.authorityStore;
@@ -223,14 +225,19 @@ export class ZLinkActorLocationClaims {
       throw new Error('Actor membership commit requires Location Store authority and owner.');
     }
     const key = encodeAuthorityKey('actor', actorId);
-    const current = await store.readAuthority(key);
+    const current = await store.readAuthority(key, signal);
     if (
       !matchesActorAuthority(current, actorRef, owner) ||
       current.allocation.stableType !== actorType ||
       current.authorityOwnerGeneration !== authorityOwnerGeneration ||
       current.allocation.descriptorLifecycleGeneration !== ownerNodeGeneration
     ) {
-      throw new Error(`Actor '${actorId}' membership authority fence does not match.`);
+      throw new ZLinkFrameworkException(
+        current.kind === 'snapshot' && current.objectGeneration !== actorRef.objectGeneration
+          ? ZLinkFrameworkErrorKind.InvalidOperation
+          : ZLinkFrameworkErrorKind.Unavailable,
+        `Actor '${actorId}' membership authority fence does not match.`
+      );
     }
     const identity = decodeActorAuthorityIdentity(current.payload, current.objectGeneration);
     if (
@@ -242,21 +249,32 @@ export class ZLinkActorLocationClaims {
       !routingIdsEqual(identity.actor.nodeRid, actorRef.nodeRid) ||
       identity.meshName !== actorRef.meshName
     ) {
-      throw new Error(`Actor '${actorId}' membership authority identity does not match.`);
+      throw new ZLinkFrameworkException(
+        ZLinkFrameworkErrorKind.Unavailable,
+        `Actor '${actorId}' membership authority identity does not match.`
+      );
     }
-    const result = await store.compareExchangeAuthority(key, current.storeVersion, {
-      kind: 'put',
-      generationTransition: 'preserve',
-      payload: rewriteActorAuthorityRoute(
-        current.payload,
-        actorRef,
-        String(spotId),
-        spotGeneration,
-        spotKind
-      )
-    });
+    const result = await store.compareExchangeAuthority(
+      key,
+      current.storeVersion,
+      {
+        kind: 'put',
+        generationTransition: 'preserve',
+        payload: rewriteActorAuthorityRoute(
+          current.payload,
+          actorRef,
+          String(spotId),
+          spotGeneration,
+          spotKind
+        )
+      },
+      signal
+    );
     if (result.kind !== 'stored') {
-      throw new Error(
+      throw new ZLinkFrameworkException(
+        result.kind === 'conflict'
+          ? (result.membershipFailure ?? ZLinkFrameworkErrorKind.Unavailable)
+          : ZLinkFrameworkErrorKind.InternalFailure,
         `Actor '${actorId}' membership commit was rejected with status ${result.kind}.`
       );
     }
