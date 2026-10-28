@@ -1,3 +1,5 @@
+const { inspectRuntime } = require('../../packages/framework/dist/runtime/internal-observation');
+const { createPublisherRuntime } = require('./fixtures/publisher-runtime');
 'use strict';
 
 const assert = require('node:assert/strict');
@@ -157,14 +159,14 @@ test('start rollback propagates failed socket cleanup and defers context disposa
 });
 
 test('raw mesh backend retains its failed transport owner', async () => {
-  const backend = new ZLinkNodeRawMeshBackend('play', 'close-failure', {});
   let attempts = 0;
   const failure = new Error('first transport close failed');
-  backend.runtime = {
+  const raw = {
     close() {
       if (++attempts === 1) throw failure;
     }
   };
+  const backend = new ZLinkNodeRawMeshBackend('play', 'close-failure', {}, undefined, undefined, undefined, undefined, { raw });
   await assert.rejects(
     () => backend.close(),
     (error) => error === failure
@@ -374,8 +376,8 @@ test('spot disposal rejects work while close is pending and shares close', async
   let release;
   const gate = new Promise((resolve) => { release = resolve; });
   let attempts = 0;
-  const manager = new ZLinkSpotNodeRuntimeManager({ detachedTaskRunner: {} });
-  manager.publishers.set('mesh', { async close() { ++attempts; await gate; } });
+  const managerOptions = { detachedTaskRunner: {} };
+  const manager = await createPublisherRuntime('mesh', { async close() { ++attempts; await gate; } }, managerOptions);
   const first = manager.dispose();
   const second = manager.dispose();
   try {
@@ -403,8 +405,8 @@ for (const kind of ['client', 'fanout']) {
       assert.throws(() => kind === 'client'
         ? registry.openClientServerConnection('work', 'broken', 'tcp://127.0.0.1:1', {})
         : registry.openFanoutSubscriberConnection('work', 'broken', 'tcp://127.0.0.1:1', {}), (error) => error === failure);
-      assert.equal(registry.clientServerConnections.size, 0);
-      assert.equal(registry.fanoutConnections.size, 0);
+      assert.equal(registry[inspectRuntime]().clientServerConnections, 0);
+      assert.equal(registry[inspectRuntime]().fanoutConnections, 0);
       await new Promise((resolve) => setImmediate(resolve));
       assert.equal(attempts, 1);
       assert.ok(reported.includes(closeFailure));

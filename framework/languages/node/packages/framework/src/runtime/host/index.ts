@@ -1,3 +1,4 @@
+import { inspectRuntime } from '../internal-observation';
 import { ZLinkProviderRelocationRepository } from '../locations/relocation-blob';
 import type { ApplicationJobOrigin } from '../application-jobs/contracts';
 import { currentApplicationJobOrigin } from '../application-jobs/application-job-queue-scope';
@@ -255,6 +256,16 @@ export interface ZLinkFrameworkRuntimeHostOptions {
 export class ZLinkFrameworkRuntimeHost
   implements ZLinkFrameworkRuntimeLifecycle, ZLinkFrameworkRuntime, ZLinkMessageFlowControl
 {
+  [inspectRuntime]() {
+    return Object.freeze({
+      ownerLeaseUsable: this.locationOwner.currentRuntime?.ownerLeaseUsable,
+      ownerId: this.locationOwner.currentRuntime?.ownerId,
+      hasOwnerToken: this.locationOwner.currentRuntime?.currentOwnerToken !== undefined,
+      ownerAdmissionOpen: this.admission.ownerAdmissionOpen(),
+      channelRuntimeStarted: this.channelRuntime !== undefined
+    });
+  }
+
   private readonly backendAdapterFactory: ZLinkBackendAdapterFactory;
   private readonly lifecycleSink?: string[];
   private executionState?: ZLinkFrameworkExecutionState;

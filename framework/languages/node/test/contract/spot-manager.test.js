@@ -3914,10 +3914,6 @@ test('formal Actor Join runtime port preserves fixture order through target Read
 
   const events = [];
   const detached = [];
-  let observeJoinedCallback;
-  const joinedCallbackObserved = new Promise((resolve) => {
-    observeJoinedCallback = resolve;
-  });
   class PlayerActor {
     constructor() {
       this.actorId = 'player-1';
@@ -3980,7 +3976,6 @@ test('formal Actor Join runtime port preserves fixture order through target Read
     async onJoinedActor(joinedActor) {
       assert.equal(joinedActor, actor);
       events.push('joined-callback-completed');
-      observeJoinedCallback();
     }
   }
   class SavedHandler {
@@ -4094,14 +4089,12 @@ test('formal Actor Join runtime port preserves fixture order through target Read
     assert.equal(detached.length, 1);
     assert.match(detached[0].name, /target commit/);
     const targetCommit = detached[0].callback();
-    const joinedBeforeSourceLeaveSubmission = await Promise.race([
-      joinedCallbackObserved.then(() => true),
-      new Promise((resolve) => setImmediate(() => resolve(false)))
-    ]);
-    assert.equal(
-      joinedBeforeSourceLeaveSubmission,
-      true,
-      `OnJoinedActor must complete before the source leave submission fence; observed ${events.join(' -> ')}`
+    // The source leave terminal below is completed by the test itself, so OnJoinedActor must
+    // complete without it. Wait for that completion rather than a single event-loop turn.
+    await waitFor(
+      () => events.includes('joined-callback-completed'),
+      undefined,
+      () => `OnJoinedActor must complete before the source leave submission fence; observed ${events.join(' -> ')}`
     );
     assert.equal(events.includes('public-join-completed'), false);
     assert.equal(
