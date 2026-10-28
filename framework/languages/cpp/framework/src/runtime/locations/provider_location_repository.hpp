@@ -392,9 +392,17 @@ class provider_location_repository_t final : public location_repository_t
                                 authority_mutation_t mutation,
                                 std::stop_token cancellation = {}) override
     {
+        const auto *put = std::get_if<authority_put_t> (&mutation);
+        const auto operation_deadline = put ? put->operation_deadline : std::nullopt;
+        const auto check_deadline = [&] {
+            if (operation_deadline && std::chrono::steady_clock::now () >= *operation_deadline)
+                throw framework_exception_t (framework_error_kind_t::deadline_exceeded,
+                                             "Actor membership operation deadline expired");
+        };
         for (;;) {
             if (cancellation.stop_requested ())
                 co_return co_await cancelled<authority_compare_exchange_result_t> ();
+            check_deadline ();
             const auto row_key = key_authority (key.value);
             auto current = co_await _store.read (row_key);
             auto *found = std::get_if<store_found_t> (&current);
@@ -545,11 +553,12 @@ class provider_location_repository_t final : public location_repository_t
                   store_put_t{row_key, encode_authority (snapshot), std::nullopt});
             }
             if (snapshot.allocation.object_kind == placement_object_kind_t::actor) {
-                const auto membership_valid = co_await append_user_membership_conditions (
+                const auto membership_failure = co_await append_user_membership_conditions (
                   old_member, snapshot.payload, write_request);
-                if (!membership_valid)
-                    co_return co_await authority_conflict (std::move (current));
+                if (membership_failure)
+                    co_return co_await authority_conflict (std::move (current), membership_failure);
             }
+            check_deadline ();
             auto written = co_await write_async (std::move (write_request));
             const auto *applied = std::get_if<store_write_applied_t> (&written);
             if (!applied) {
@@ -691,7 +700,7 @@ class provider_location_repository_t final : public location_repository_t
         co_return co_await owner_is_live_async (owner);
     }
 
-    task_t<bool>
+    task_t<std::optional<framework_error_kind_t>>
     append_user_membership_conditions (const std::optional<actor_authority_payload_t> &old_member,
                                        const std::vector<std::byte> &payload,
                                        store_write_request_t &write_request)
@@ -706,7 +715,12 @@ class provider_location_repository_t final : public location_repository_t
             const auto spot_read = co_await _store.read (spot_key);
             const auto *spot_row = std::get_if<store_found_t> (&spot_read);
             if (!spot_row)
-                co_return false;
+                co_return framework_error_kind_t::not_found;
+            store_condition_t aggregate_condition;
+            if (co_await authority_mutation_locked_async (
+                  spot_authority_key (member->current_spot_id).value, &aggregate_condition))
+                co_return framework_error_kind_t::unavailable;
+            write_request.conditions.push_back (std::move (aggregate_condition));
             const auto spot = decode_authority (spot_row->value.bytes, spot_row->value.version,
                                                 spot_row->value.store_now);
             const auto ready =
@@ -715,10 +729,10 @@ class provider_location_repository_t final : public location_repository_t
                 || spot.allocation.object_kind != placement_object_kind_t::user_spot
                 || spot.allocation.state != placement_allocation_state_t::active
                 || spot.object_generation != member->current_spot_generation)
-                co_return false;
+                co_return framework_error_kind_t::unavailable;
             const auto owner_live = co_await owner_is_live_async (spot.owner);
             if (!owner_live)
-                co_return false;
+                co_return framework_error_kind_t::unavailable;
             write_request.conditions.push_back (
               version_condition (spot_key, spot_row->value.version));
             auto required_owner = owner_condition (spot.owner);
@@ -736,10 +750,10 @@ class provider_location_repository_t final : public location_repository_t
                 const auto *existing_value =
                   std::get_if<store_value_condition_t> (&*existing_owner);
                 if (!existing_value || existing_value->expected != owner_value.expected)
-                    co_return false;
+                    co_return framework_error_kind_t::unavailable;
             }
         }
-        co_return true;
+        co_return std::nullopt;
     }
 
     enum class stale_authority_reclaim_result_t
@@ -1303,9 +1317,9 @@ class provider_location_repository_t final : public location_repository_t
                version_condition (target->key, target->provider_version), capacity.condition},
               {}};
             if (snapshot.allocation.object_kind == placement_object_kind_t::actor) {
-                const auto membership_valid = co_await append_user_membership_conditions (
+                const auto membership_failure = co_await append_user_membership_conditions (
                   std::nullopt, request.ready_payload, write_request);
-                if (!membership_valid)
+                if (membership_failure)
                     co_return object_commit_result_t{
                       object_commit_conflict_t{std::move (snapshot)}};
             }
@@ -3513,14 +3527,16 @@ class provider_location_repository_t final : public location_repository_t
                && encode_bundle (left.capacity_bundle) == encode_bundle (right.capacity_bundle);
     }
 
-    task_t<authority_compare_exchange_result_t> authority_conflict (store_read_result_t current)
+    task_t<authority_compare_exchange_result_t>
+    authority_conflict (store_read_result_t current,
+                        std::optional<framework_error_kind_t> membership_failure = std::nullopt)
     {
         if (const auto *found = std::get_if<store_found_t> (&current))
-            return completed (
-              authority_compare_exchange_result_t{authority_conflict_t{decode_authority (
-                found->value.bytes, found->value.version, found->value.store_now)}});
+            return completed (authority_compare_exchange_result_t{authority_conflict_t{
+              decode_authority (found->value.bytes, found->value.version, found->value.store_now),
+              membership_failure}});
         return completed (authority_compare_exchange_result_t{authority_conflict_t{
-          authority_missing_t{std::get<store_missing_t> (current).store_now}}});
+          authority_missing_t{std::get<store_missing_t> (current).store_now}, membership_failure}});
     }
 
     // The post-write CAS token for a row: the provider's own opaque
