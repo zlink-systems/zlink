@@ -74,6 +74,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       - name: Setup JDK 25
         uses: actions/setup-java@v5
@@ -93,6 +95,9 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: '3.x'
+
+      - name: Check Java test private access
+        run: python scripts/ci/check-java-test-private-access.py --base-ref origin/main
 
       - name: Setup Node.js for Core package verification
         if: startsWith(matrix.target.name, 'linux-')
