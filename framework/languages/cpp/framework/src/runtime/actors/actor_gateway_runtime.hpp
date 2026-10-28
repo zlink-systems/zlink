@@ -164,7 +164,9 @@ class session_actor_binding_context_t
     std::map<std::string, std::uint64_t> actor_tokens;
     std::set<std::string> ready_actors;
     std::map<std::string, std::weak_ptr<stream_state_t>> actor_streams;
-    std::function<request_task_t<void> (actor_ref_t, std::uint64_t, std::uint16_t)> native_binder;
+    std::function<request_task_t<void> (
+      actor_ref_t, std::uint64_t, std::uint16_t, std::function<void ()>)>
+      native_binder;
     std::function<std::optional<runtime::stateful::stream_binding_t> (const actor_ref_t &,
                                                                       std::uint64_t)>
       disconnect_snapshot;
@@ -180,6 +182,10 @@ class session_actor_manager_access_t
     static void bind_native (
       session_actor_manager_t &manager,
       std::function<request_task_t<void> (actor_ref_t, std::uint64_t, std::uint16_t)> binder);
+    static void
+    bind_native (session_actor_manager_t &manager,
+                 std::function<request_task_t<void> (
+                   actor_ref_t, std::uint64_t, std::uint16_t, std::function<void ()>)> binder);
     static void bind_native (session_actor_manager_t &manager,
                              std::function<task_t<void> (actor_ref_t, std::uint64_t)> binder);
     static std::optional<session_actor_t> find_slot (session_actor_manager_t &manager,
@@ -251,7 +257,7 @@ class actor_gateway_state_t
     struct pending_bound_session_send_t
     {
         std::function<task_t<result_t<void>> ()> dispatch;
-        std::shared_ptr<bound_session_delivery_fence_t> completion_fence;
+        std::function<void (result_t<void>)> completion;
     };
 
     struct bound_session_send_queue_key_t
@@ -354,6 +360,16 @@ class actor_gateway_runtime_t
     result_t<void> update_actor_ref (const actor_ref_t &actor_ref);
     result_t<void> destroy_actor (const actor_ref_t &actor_ref);
     task_t<result_t<void>> destroy_actor_async (actor_ref_t actor_ref);
+    static actor_session_binding_snapshot_t
+    bind_session_stream_owned (const std::shared_ptr<actor_gateway_state_t> &state,
+                               const std::string &actor_id,
+                               stream_t stream,
+                               stream_codec_t codec,
+                               const std::string &session_id,
+                               std::uint64_t binding_token,
+                               const std::optional<actor_ref_t> &actor_ref,
+                               std::uint16_t actor_slot,
+                               const std::function<void ()> &publish);
     actor_session_binding_snapshot_t
     bind_session_stream (std::string actor_id,
                          stream_t stream,

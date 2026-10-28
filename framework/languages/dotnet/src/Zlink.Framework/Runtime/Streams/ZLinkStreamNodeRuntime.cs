@@ -27,6 +27,8 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
     private const int DisconnectedRoutingIdLimit = 4096;
     private Task? _disposeTask;
     private Task? _receiveLoop;
+
+    internal Task ReceiveCompletion => _receiveLoop ?? Task.CompletedTask;
     private Task? _livenessLoop;
 
     // The monitor loop closes the monitor when it returns.

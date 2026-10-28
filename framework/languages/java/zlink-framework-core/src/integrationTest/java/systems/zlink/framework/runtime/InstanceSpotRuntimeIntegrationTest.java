@@ -647,9 +647,7 @@ final class InstanceSpotRuntimeIntegrationTest {
                 } else if (failureStage == CloseScenario.CAS_WINDOW) {
                     store.holdNextAuthorityPutAfterApply.set(true);
                 }
-                var field = ZLinkFrameworkRuntime.class.getDeclaredField("spots");
-                field.setAccessible(true);
-                var spots = field.get(target);
+                var spots = target.spotManager();
                 AtomicInteger completedBackendOperation =
                         failureStage == CloseScenario.RESOURCE
                                 ? installBackendFailure(spots, spotId, "closeInstanceSpot")
@@ -827,9 +825,7 @@ final class InstanceSpotRuntimeIntegrationTest {
                 ZLinkFrameworkRuntime runtime, String targetSpotId, boolean holdBeforeRead)
                 throws Exception {
             this.spotId = targetSpotId;
-            var spotsField = ZLinkFrameworkRuntime.class.getDeclaredField("spots");
-            spotsField.setAccessible(true);
-            Object spots = spotsField.get(runtime);
+            Object spots = runtime.spotManager();
             var meshesField = spots.getClass().getDeclaredField("routeMeshNodesByName");
             meshesField.setAccessible(true);
             var mesh =
@@ -870,7 +866,8 @@ final class InstanceSpotRuntimeIntegrationTest {
                                                         return CompletableFuture.completedFuture(
                                                                 rejection);
                                                     logger.info(
-                                                            "test_lifecycle=admission_read owner_generation="
+                                                            "test_lifecycle=admission_read"
+                                                                    + " owner_generation="
                                                                     + ownerGeneration);
                                                     reached.complete(null);
                                                     return resume.thenApply(ignored -> rejection);
@@ -907,9 +904,7 @@ final class InstanceSpotRuntimeIntegrationTest {
         RetainedAdmissionBoundary(
                 ZLinkFrameworkRuntime runtime, String spotId, boolean instanceIntent)
                 throws Exception {
-            var spotsField = ZLinkFrameworkRuntime.class.getDeclaredField("spots");
-            spotsField.setAccessible(true);
-            Object spots = spotsField.get(runtime);
+            Object spots = runtime.spotManager();
             var activations = spots.getClass().getDeclaredField("instanceSpotActivations");
             activations.setAccessible(true);
             Object activation = ((java.util.Map<?, ?>) activations.get(spots)).get(spotId);
@@ -1258,9 +1253,7 @@ final class InstanceSpotRuntimeIntegrationTest {
                 SourceEntrySpot.closeStart.complete(null);
                 EchoInstanceSpot.closingEntered.get(5, TimeUnit.SECONDS);
                 if (drain) {
-                    var field = ZLinkFrameworkRuntime.class.getDeclaredField("spots");
-                    field.setAccessible(true);
-                    ((systems.zlink.framework.runtime.spots.ZLinkSpotRuntime) field.get(target))
+                    ((systems.zlink.framework.runtime.spots.ZLinkSpotRuntime) target.spotManager())
                             .beginDrain()
                             .toCompletableFuture()
                             .get(5, TimeUnit.SECONDS);
@@ -1268,17 +1261,13 @@ final class InstanceSpotRuntimeIntegrationTest {
                 if (expectedKind == null) {
                     // The target's background route scan drops the Closing authority before the
                     // probe arrives, so the probe's admission cannot rely on that scan.
-                    var spotsField = ZLinkFrameworkRuntime.class.getDeclaredField("spots");
-                    spotsField.setAccessible(true);
-                    awaitClosingRouteDropped(spotsField.get(target), spotId);
+                    awaitClosingRouteDropped(target.spotManager(), spotId);
                 }
                 SourceEntrySpot.probeStart.complete(null);
                 if (expectedKind == null) {
                     // OnClosing stays held until the probe waits in the owner queue, so step 3
                     // sees the pending Instance intent message and creates the next incarnation.
-                    var spotsField = ZLinkFrameworkRuntime.class.getDeclaredField("spots");
-                    spotsField.setAccessible(true);
-                    awaitPendingMessage(spotsField.get(target), spotId);
+                    awaitPendingMessage(target.spotManager(), spotId);
                     EchoInstanceSpot.closingRelease.complete(null);
                     assertEquals(
                             "echo:during-close",
@@ -1514,7 +1503,8 @@ final class InstanceSpotRuntimeIntegrationTest {
                                                         probeFailure.complete(
                                                                 failure == null
                                                                         ? new AssertionError(
-                                                                                "Closing request was admitted")
+                                                                                "Closing request"
+                                                                                        + " was admitted")
                                                                         : failure
                                                                                         instanceof
                                                                                         CompletionException
