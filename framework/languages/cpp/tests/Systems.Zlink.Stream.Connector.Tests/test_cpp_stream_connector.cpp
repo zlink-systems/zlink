@@ -41,6 +41,7 @@
 #include <memory>
 #include <mutex>
 #include <nlohmann/json.hpp>
+#include <zlink/json.hpp>
 #include <optional>
 #include <semaphore>
 #include <stdexcept>
@@ -137,15 +138,16 @@ struct unnamed_payload_t
     std::string text;
 };
 
-void to_json (nlohmann::json &json, const unnamed_payload_t &payload)
-{
-    json = nlohmann::json{{"text", payload.text}};
 }
 
-void from_json (const nlohmann::json &json, unnamed_payload_t &payload)
+template <> struct zlink::json::dto_traits<unnamed_payload_t>
 {
-    payload.text = json.value ("text", std::string{});
-}
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("text", &unnamed_payload_t::text)};
+};
+
+namespace
+{
 
 class counting_typed_codec_t final : public zlink::stream_connector::typed_codec_t
 {
@@ -814,34 +816,35 @@ static_assert (
                              .async<auto_payload_t> ()),
                  zlink::stream_e2e_client::task_t<auto_payload_t>>);
 
-void to_json (nlohmann::json &json, const auto_payload_t &payload)
-{
-    json = nlohmann::json{{"text", payload.text}};
 }
 
-void to_json (nlohmann::json &json, const login_request_t &)
+template <> struct zlink::json::dto_traits<auto_payload_t>
 {
-    json = nlohmann::json::object ();
-}
+    static constexpr auto fields = std::tuple{zlink::json::field ("text", &auto_payload_t::text)};
+};
 
-void from_json (const nlohmann::json &, login_reply_t &)
+template <> struct zlink::json::dto_traits<login_request_t>
 {
-}
+    static constexpr auto fields = std::tuple{};
+};
 
-void from_json (const nlohmann::json &json, auto_payload_t &payload)
+template <> struct zlink::json::dto_traits<login_reply_t>
 {
-    payload.text = json.at ("text").get<std::string> ();
-}
+    static constexpr auto fields = std::tuple{};
+};
+
+namespace
+{
 
 std::vector<std::uint8_t> to_stream_payload (const auto_payload_t &payload)
 {
-    return as_bytes (zlink::detail::json_profile::dump (nlohmann::json (payload)));
+    return as_bytes (zlink::detail::json_profile::encode (payload));
 }
 
 void from_stream_payload (const std::vector<std::uint8_t> &payload, auto_payload_t &message)
 {
     message =
-      zlink::detail::json_profile::parse (payload.begin (), payload.end ()).get<auto_payload_t> ();
+      zlink::detail::json_profile::decode<auto_payload_t> (payload.begin (), payload.end ());
 }
 
 zlink::stream_e2e_client::task_t<void>
