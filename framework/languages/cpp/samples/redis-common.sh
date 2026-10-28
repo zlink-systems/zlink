@@ -22,6 +22,14 @@ zlink_cpp_sample_role_name_for_pid() {
   printf 'pid-%s\n' "${pid}"
 }
 
+zlink_cpp_sample_remove_pid() {
+  local target="$1" remaining=() pid
+  for pid in "${PIDS[@]:-}"; do
+    [[ "$pid" == "$target" ]] || remaining+=("$pid")
+  done
+  PIDS=("${remaining[@]}")
+}
+
 # A role that has to be SIGKILLed to stop is a sample failure, not a teardown
 # detail. This is the only place where C++ sample runners escalate a role from
 # SIGTERM to SIGKILL, so it records the role and the common EXIT trap turns that
@@ -70,6 +78,7 @@ zlink_cpp_sample_stop_processes() {
     [[ "${pid}" =~ ^[0-9]+$ ]] || continue
     status=0
     wait "${pid}" >/dev/null 2>&1 || status=$?
+    zlink_cpp_sample_log_step "process exit: ${roles[${pid}]:-pid-${pid}} status=${status}"
     if [[ -n "${forced[${pid}]:-}" ]]; then
       continue
     fi
