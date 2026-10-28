@@ -105,10 +105,7 @@ inline task_t<void> invoke_spot_closing (
 class spot_node_builder_state_t
 {
   public:
-    explicit spot_node_builder_state_t (std::string name) :
-        lane_executor (), lane (lane_executor), snapshot{.name = std::move (name)}
-    {
-    }
+    explicit spot_node_builder_state_t (std::string name) : snapshot{.name = std::move (name)} {}
     ~spot_node_builder_state_t ();
     std::shared_ptr<runtime::runtime_failure_collector_t> runtime_failures () const;
 
@@ -116,7 +113,6 @@ class spot_node_builder_state_t
     // MeshNode start path takes its configuration projection only after those
     // turns have completed, so a caller observes registration before the
     // configuring API returns (discovery 9).
-    runtime::offload_executor_t lane_executor;
     runtime::state_lane_t lane;
     spot_node_snapshot_t snapshot;
     std::map<std::string, std::type_index> spot_factories;

@@ -25,6 +25,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <exception>
 #include <memory>
 #include <map>
 #include <mutex>
@@ -42,6 +43,15 @@ namespace zlink
 class context_t;
 class poller_t;
 class router_socket_t;
+}
+
+namespace zlink::framework
+{
+struct mesh_peer_connection_t;
+namespace detail
+{
+std::uint64_t next_connection_intent_id ();
+}
 }
 
 namespace zlink::framework::runtime
@@ -155,6 +165,25 @@ class raw_mesh_node_owner_t
     void disconnect_peer (const std::string &endpoint) noexcept;
     bool disconnect_peer (const std::vector<std::uint8_t> &expected_routing_id,
                           const std::string &endpoint) noexcept;
+    bool connect_peer_endpoint (const std::string &endpoint,
+                                std::optional<zlink::routing_id_t> expected,
+                                std::uint64_t expected_lifecycle_generation,
+                                std::string security_identity,
+                                bool automatic);
+    void disconnect_peer_endpoint (const std::string &endpoint) noexcept;
+    bool disconnect_peer_endpoint (const std::vector<std::uint8_t> &expected_routing_id,
+                                   const std::string &endpoint) noexcept;
+    void connect_peer_intent (const std::string &endpoint,
+                              std::optional<zlink::routing_id_t> expected,
+                              std::uint64_t expected_lifecycle_generation,
+                              std::string security_identity,
+                              bool automatic);
+    void connect_peer_intent (const mesh_peer_connection_t &configured);
+    void disconnect_peer_intent (const std::string &endpoint);
+    void disconnect_peer_intent (const zlink::routing_id_t &expected_routing_id,
+                                 const std::string &endpoint,
+                                 bool automatic);
+    void clear_peer_connection_intents ();
     void expect_peer (service_node_descriptor_t expected_descriptor);
     // The auto-connect owner's per-peer reconcile request (MeshNode 7.1).
     using peer_reconcile_t = std::function<void (const std::vector<std::uint8_t> &)>;
@@ -449,6 +478,27 @@ class raw_mesh_node_owner_t
                 std::optional<std::uint64_t> lifecycle_generation = std::nullopt) const;
 
   private:
+    bool connect_peer_owned (const std::string &endpoint,
+                             std::optional<service_node_descriptor_t> expected_descriptor);
+    bool disconnect_peer_owned (const std::vector<std::uint8_t> &expected_routing_id,
+                                const std::string &endpoint,
+                                std::vector<std::function<void ()>> &notifications);
+    std::pair<std::uint64_t, bool>
+    peer_route_on_lane (const std::vector<std::uint8_t> &rid,
+                        std::optional<std::uint64_t> lifecycle_generation) const;
+    bool connect_peer_endpoint_owned (const std::string &endpoint,
+                                      std::optional<zlink::routing_id_t> expected,
+                                      std::uint64_t expected_lifecycle_generation,
+                                      std::string security_identity,
+                                      bool automatic);
+    void disconnect_peer_endpoint_owned (const std::string &endpoint,
+                                         std::vector<std::function<void ()>> &notifications);
+    bool disconnect_peer_endpoint_owned (const std::vector<std::uint8_t> &expected_routing_id,
+                                         const std::string &endpoint,
+                                         std::vector<std::function<void ()>> &notifications);
+    std::exception_ptr
+    deliver_topology_notifications (std::vector<std::function<void ()>> &notifications,
+                                    std::exception_ptr failure = {}) noexcept;
     task_t<service_liveness_tick_t>
     tick_due_liveness (service_liveness_registry_t::clock_t::time_point now);
     static std::string owner_key (const std::vector<std::uint8_t> &routing_id);
@@ -553,8 +603,8 @@ class raw_mesh_node_owner_t
     raw_mesh_pump_result_t enqueue_received (service_mailbox_record_t record,
                                              raw_mesh_pump_result_t accepted_result);
     raw_mesh_node_options_t _options;
-    runtime::offload_executor_t _lane_executor;
-    mutable runtime::state_lane_t _lane{_lane_executor};
+
+    mutable runtime::state_lane_t _lane;
     // These gates serialize native socket and lifecycle work whose critical
     // section extends beyond a state turn (discovery 7).  Mutable owner state
     // itself is admitted through _lane.
@@ -599,6 +649,8 @@ class raw_mesh_node_owner_t
     std::map<std::string,
              std::optional<std::tuple<std::vector<std::uint8_t>, std::string, std::uint64_t>>>
       _outbound_endpoints;
+    std::map<std::string, std::uint64_t> _peer_connection_intents;
+    std::map<std::string, std::string> _peer_endpoints;
     std::uint64_t _next_reply_route_id = 1;
     std::uint64_t _next_operation_sequence = 1;
     bool _closed = false;
