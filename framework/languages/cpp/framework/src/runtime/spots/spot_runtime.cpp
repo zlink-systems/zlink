@@ -2607,9 +2607,8 @@ void spot_context_state_t::close_now (
         if (result && result.value ()) {
             runtime::runtime_metrics_t metrics (owner->monitoring);
             if (metrics.enabled ())
-                metrics.updown (
-                  "zlink.spot.count", "{spot}", -1,
-                  {{"mesh_name", owner->snapshot.name}, {"spot_kind", kind}});
+                metrics.updown ("zlink.spot.count", "{spot}", -1,
+                                {{"mesh_name", owner->snapshot.name}, {"spot_kind", kind}});
         }
         done (result);
         for (auto &waiter : merged)

@@ -168,10 +168,12 @@ void population_retirement_orders_after_pending_configuration ()
 
 void stopped_population_retirement ()
 {
-    metric_test::provider_t provider;
+    metric_test::provider_t provider (false);
     completion_owner_t owner;
     auto objects = std::make_unique<stateful::stateful_object_runtime_t> ();
-    objects->configure_population_metrics ("stopped-population").result ().value ();
+    objects->configure_population_metrics ("stopped-population", provider.api ())
+      .result ()
+      .value ();
     objects->replace_placement_candidates ({{.mesh_name = "stopped-population",
                                              .node_id = "node",
                                              .stable_types = {"player"},
