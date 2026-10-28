@@ -151,7 +151,12 @@ public sealed partial class StatefulServiceRuntimeTests
             target.DisconnectPeer(source.RoutingId);
         await WaitUntilAsync(() => source.Status().AdmittedPeerCount == 0);
         if (!removeIntent && observeExpectation)
-            await WaitUntilAsync(() => deadlineTime.ActiveTimerCount > 0);
+        {
+            // §10.1 removes the request timer that formerly served as this
+            // fixture's barrier. The admitted-peer transition above remains
+            // the transport barrier; replay must require no request timer.
+            Assert.Equal(0, deadlineTime.ActiveTimerCount);
+        }
 
         if (removeIntent)
         {
@@ -381,7 +386,8 @@ public sealed partial class StatefulServiceRuntimeTests
         Assert.Equal(kind, completion.OperationKind);
         var expected = scenario switch
         {
-            "absent" => RequestResult.NotConnected,
+            // §9: deadline before binding starts is still DeadlineExceeded.
+            "absent" => RequestResult.TimedOut,
             "withheld" => RequestResult.TimedOut,
             _ => RequestResult.Ok,
         };
@@ -391,12 +397,7 @@ public sealed partial class StatefulServiceRuntimeTests
             var error = Assert.IsType<ZLinkFrameworkException>(
                 ZLinkRequestFailureMapper.CreateCompletionException(expected, "matrix")
             );
-            Assert.Equal(
-                scenario == "absent"
-                    ? ZLinkFrameworkErrorKind.Unavailable
-                    : ZLinkFrameworkErrorKind.DeadlineExceeded,
-                error.Kind
-            );
+            Assert.Equal(ZLinkFrameworkErrorKind.DeadlineExceeded, error.Kind);
         }
         else
             Assert.True(Stopwatch.GetElapsedTime(started) < timeout);
