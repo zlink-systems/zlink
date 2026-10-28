@@ -441,6 +441,11 @@ final class ZLinkSpringHandlerFactory implements ZLinkHandlerActivator {
     }
 
     private HandlerPlan handlerPlan(Class<?> handlerType) {
+        // Keep the bound mapping callback off the prepared dispatch path.
+        HandlerPlan prepared = handlerPlans.get(handlerType);
+        if (prepared != null) {
+            return prepared;
+        }
         return handlerPlans.computeIfAbsent(handlerType, this::createHandlerPlan);
     }
 
