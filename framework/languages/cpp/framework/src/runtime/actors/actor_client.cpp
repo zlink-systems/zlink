@@ -92,8 +92,7 @@ class actor_create_call_state_t
     bool request_set = false;
     bool timeout_set = false;
     bool submitted = false;
-    std::shared_ptr<runtime::offload_executor_t> lane_executor{handler_invocation_executor ()};
-    runtime::state_lane_t lane{*lane_executor};
+    runtime::state_lane_t lane;
 };
 } // namespace detail
 

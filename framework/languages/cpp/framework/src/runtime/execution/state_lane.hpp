@@ -8,7 +8,6 @@
 #endif
 
 #include <atomic>
-#include <condition_variable>
 #include <deque>
 #include <exception>
 #include <functional>
@@ -229,11 +228,14 @@ class state_lane_t
     friend struct state_lane_test_access_t;
 
   public:
+    state_lane_t ();
     explicit state_lane_t (offload_executor_t &executor) noexcept;
     ~state_lane_t ();
 
     state_lane_t (const state_lane_t &) = delete;
     state_lane_t &operator= (const state_lane_t &) = delete;
+
+    offload_executor_t &executor () const noexcept { return _executor; }
 
     template <typename Work>
     auto run (Work &&work) -> typename state_lane_internal::result_bridge_t<
@@ -425,6 +427,7 @@ class state_lane_t
     // Stops admission and waits for the already accepted FIFO mailbox to
     // finish.  Repeated calls are safe.
     void close ();
+    task_t<void> close_async ();
     bool closed () const noexcept { return _closed.load (std::memory_order_acquire); }
 
   private:
@@ -435,6 +438,7 @@ class state_lane_t
     };
 
     bool enqueue (std::function<void ()> work, std::function<void (std::exception_ptr)> abandon);
+    std::shared_ptr<task_completion_source_t<void>> begin_close ();
     bool schedule_drain (bool inline_drain, const std::function<void ()> &own_work = {});
     void drain_loop ();
     void abandon_pending (std::exception_ptr error) noexcept;
@@ -473,9 +477,10 @@ class state_lane_t
 #endif
     };
 
+    std::shared_ptr<offload_executor_t> _executor_owner;
     offload_executor_t &_executor;
     mutable std::mutex _mailbox_mutex;
-    std::condition_variable _drained;
+    std::shared_ptr<task_completion_source_t<void>> _close_completion;
     std::deque<mailbox_item_t> _mailbox;
     std::atomic_bool _scheduled{false};
     std::atomic_bool _closed{false};

@@ -17,6 +17,8 @@
 #include <chrono>
 #include <cstdint>
 #include <functional>
+#include <exception>
+#include <stdexcept>
 #include <future>
 #include <memory>
 #include <optional>
@@ -33,23 +35,259 @@ namespace foundation = zlink::framework::runtime::foundation;
 namespace mesh = zlink::framework::runtime::mesh;
 namespace protocol = zlink::framework::runtime::protocol;
 
-// Access the owner's lane only in this white-box test. Closing it makes any
-// additional topology turn fail deterministically, without a timing assertion.
-struct topology_lane_access_t
+TEST (CppFrameworkRawMeshStarted, ResourceQueryDoesNotWaitForPeerControlOwner)
 {
-    using member_t = zlink::framework::runtime::state_lane_t mesh::service_topology_registry_t::*;
-    friend member_t topology_lane_member (topology_lane_access_t);
-};
+    mesh::service_node_descriptor_t descriptor{
+      "started-query", {'s'}, 1, 1, "inproc://started-query-owner", {{"X", 100}}};
+    mesh::raw_mesh_node_owner_t source (zlink::framework::test::runtime_failure_options (
+      mesh::raw_mesh_node_options_t{std::move (descriptor)}));
+    EXPECT_FALSE (source.started ());
+    source.start ();
+    EXPECT_TRUE (source.started ());
+    std::promise<void> entered;
+    auto callback_entered = entered.get_future ();
+    std::promise<void> release;
+    const auto released = release.get_future ().share ();
+    bool owner_held = false;
+    std::promise<void> published;
+    auto publication = published.get_future ();
+    std::thread publisher ([&] {
+        try {
+            source.publish_descriptor_update ([&] (auto &value) {
+                ++value.descriptor_revision;
+                owner_held = zlink::framework::runtime::state_lane_t::current () != nullptr;
+                entered.set_value ();
+                released.wait ();
+            });
+            published.set_value ();
+        }
+        catch (...) {
+            published.set_exception (std::current_exception ());
+        }
+    });
+    const auto entered_status = callback_entered.wait_for (2s);
+    std::promise<bool> queried;
+    auto query = queried.get_future ();
+    std::thread reader ([&] { queried.set_value (source.started ()); });
+    const auto query_before_release = query.wait_for (2s);
+    // Both the original owner-hop negative control and the resource query must clean up.
+    release.set_value ();
+    publisher.join ();
+    reader.join ();
+    const auto observed = query.get ();
+    source.close ();
+    EXPECT_FALSE (source.started ());
+    EXPECT_TRUE (owner_held);
+    EXPECT_EQ (std::future_status::ready, entered_status);
+    EXPECT_NO_THROW (publication.get ());
+    EXPECT_EQ (std::future_status::ready, query_before_release);
+    EXPECT_TRUE (observed);
+}
 
-template <topology_lane_access_t::member_t Member> struct topology_lane_member_t
+TEST (CppFrameworkTopologyNotifications, RawPublicationCanReadCommittedMonitoringSnapshot)
 {
-    friend topology_lane_access_t::member_t topology_lane_member (topology_lane_access_t)
-    {
-        return Member;
+    mesh::service_node_descriptor_t descriptor{"notification-snapshot",          {'s'},       1, 1,
+                                               "inproc://notification-snapshot", {{"X", 100}}};
+    mesh::raw_mesh_node_owner_t source (
+      zlink::framework::test::runtime_failure_options (mesh::raw_mesh_node_options_t{descriptor}));
+    const auto before = source.topology ().observe_peer ({'p'}) ();
+    int calls = 0;
+    bool on_lane = true;
+    mesh::service_node_descriptor_t observed;
+    std::size_t peer_count = 1;
+    source.topology ().set_change_handler ([&] {
+        ++calls;
+        on_lane = zlink::framework::runtime::state_lane_t::current () != nullptr;
+        auto snapshot = source.topology ().monitoring_snapshot_async ();
+        const auto &actual = snapshot.result ().value ();
+        observed = std::get<0> (actual);
+        peer_count = std::get<1> (actual).size ();
+    });
+    const auto committed =
+      source.publish_descriptor_update ([] (auto &value) { ++value.descriptor_revision; });
+    source.topology ().set_change_handler ({});
+    source.close ();
+    EXPECT_EQ (1, calls);
+    EXPECT_FALSE (on_lane);
+    EXPECT_EQ (committed, observed);
+    EXPECT_EQ (descriptor.descriptor_revision + 1, observed.descriptor_revision);
+    EXPECT_EQ (0u, peer_count);
+    ASSERT_TRUE (before.changed.await_ready ());
+    EXPECT_TRUE (before.changed.result ());
+}
+
+TEST (CppFrameworkTopologyNotifications, StandalonePublicationKeepsOutsideOwnerSnapshot)
+{
+    mesh::service_node_descriptor_t descriptor{
+      "notification-standalone", {'s'}, 1, 1, "inproc://notification-standalone", {{"X", 100}}};
+    zlink::framework::runtime::state_lane_t lane;
+    mesh::service_topology_registry_t topology (lane, descriptor);
+    const auto before = topology.observe_peer ({'p'}) ();
+    int calls = 0;
+    bool on_lane = true;
+    mesh::service_node_descriptor_t observed;
+    topology.set_change_handler ([&] {
+        ++calls;
+        on_lane = zlink::framework::runtime::state_lane_t::current () != nullptr;
+        auto snapshot = topology.monitoring_snapshot_async ();
+        observed = std::get<0> (snapshot.result ().value ());
+    });
+    ++descriptor.descriptor_revision;
+    topology.publish_local (descriptor);
+    topology.set_change_handler ({});
+    EXPECT_EQ (1, calls);
+    EXPECT_FALSE (on_lane);
+    EXPECT_EQ (descriptor, observed);
+    ASSERT_TRUE (before.changed.await_ready ());
+    EXPECT_TRUE (before.changed.result ());
+}
+
+TEST (CppFrameworkTopologyNotifications, CommittedBatchDeliversEverySignalDespiteHandlerFailure)
+{
+    auto failures = std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ();
+    mesh::service_node_descriptor_t descriptor{"notification-batch",          {'s'},       1, 1,
+                                               "inproc://notification-batch", {{"X", 100}}};
+    mesh::raw_mesh_node_options_t options{descriptor};
+    options.runtime_failures = failures;
+    mesh::raw_mesh_node_owner_t source (std::move (options));
+    source.start ();
+    auto first = source.topology ().local_descriptor ();
+    first.node_routing_id = {'a'};
+    first.advertised_endpoint = "inproc://notification-batch-first";
+    auto second = first;
+    second.node_routing_id = {'b'};
+    second.advertised_endpoint = "inproc://notification-batch-second";
+    const auto now = mesh::service_liveness_registry_t::clock_t::now ();
+    const auto injected = std::make_exception_ptr (std::runtime_error ("notification failure"));
+    std::vector<std::size_t> observed_peers;
+    int on_lane = 0;
+    bool same_peer_state = true;
+    source.topology ().set_change_handler ([&] {
+        on_lane += zlink::framework::runtime::state_lane_t::current () != nullptr;
+        auto snapshot = source.topology ().monitoring_snapshot_async ();
+        const auto &actual = snapshot.result ().value ();
+        same_peer_state =
+          same_peer_state && std::get<0> (actual) == source.topology ().local_descriptor ();
+        for (const auto &peer : std::get<1> (actual)) {
+            const auto published = source.topology ().peer (peer.descriptor.node_routing_id);
+            same_peer_state =
+              same_peer_state && published && published->descriptor == peer.descriptor
+              && published->connection_id == peer.connection_id
+              && published->admission_epoch == peer.admission_epoch
+              && published->ready == peer.ready && published->liveness == peer.liveness;
+        }
+        observed_peers.push_back (std::get<1> (actual).size ());
+        std::rethrow_exception (injected);
+    });
+    const auto before_first = source.topology ().observe_peer (first.node_routing_id) ();
+    std::exception_ptr first_error;
+    try {
+        (void) source.admit_peer (first, {1}, now);
     }
-};
+    catch (...) {
+        first_error = std::current_exception ();
+    }
+    EXPECT_EQ (injected, first_error);
+    ASSERT_TRUE (source.topology ().peer (first.node_routing_id));
+    ASSERT_TRUE (before_first.changed.await_ready ());
+    EXPECT_TRUE (before_first.changed.result ());
+    const auto before_second = source.topology ().observe_peer (second.node_routing_id) ();
+    std::exception_ptr second_error;
+    try {
+        (void) source.admit_peer (second, {2}, now);
+    }
+    catch (...) {
+        second_error = std::current_exception ();
+    }
+    EXPECT_EQ (injected, second_error);
+    ASSERT_TRUE (source.topology ().peer (second.node_routing_id));
+    ASSERT_TRUE (before_second.changed.await_ready ());
+    EXPECT_TRUE (before_second.changed.result ());
+    EXPECT_EQ ((std::vector<std::size_t>{1, 2}), observed_peers);
+    const auto before_batch = source.topology ().observe_peer (first.node_routing_id) ();
+    const auto tick =
+      source.tick_liveness (now + mesh::service_liveness_registry_t::default_peer_timeout);
+    const auto &terminal = tick.result ();
+    EXPECT_FALSE (terminal);
+    EXPECT_EQ (injected, terminal.exception ());
+    EXPECT_EQ ((std::vector<std::size_t>{1, 2, 0, 0}), observed_peers);
+    EXPECT_EQ (0, on_lane);
+    EXPECT_TRUE (same_peer_state);
+    EXPECT_TRUE (source.topology ().peers ().empty ());
+    ASSERT_TRUE (before_batch.changed.await_ready ());
+    EXPECT_TRUE (before_batch.changed.result ());
+    std::exception_ptr secondary;
+    try {
+        failures->rethrow_if_failed ();
+    }
+    catch (...) {
+        secondary = std::current_exception ();
+    }
+    EXPECT_EQ (injected, secondary); // Exactly one additional callback failure was reported.
+    source.topology ().set_change_handler ({});
+    source.close ();
+}
 
-template struct topology_lane_member_t<&mesh::service_topology_registry_t::_lane>;
+TEST (CppFrameworkTopologyNotifications, DisconnectSurfacesKeepTheirCallbackFailureContainment)
+{
+    for (const std::string_view surface :
+         {"raw", "raw-void", "endpoint", "endpoint-void", "intent", "intent-rid"}) {
+        SCOPED_TRACE (surface);
+        auto failures = std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ();
+        mesh::service_node_descriptor_t descriptor{
+          "notification-disconnect", {'s'}, 1, 1, "inproc://notification-disconnect", {{"X", 100}}};
+        mesh::raw_mesh_node_options_t options{descriptor};
+        options.runtime_failures = failures;
+        mesh::raw_mesh_node_owner_t source (std::move (options));
+        source.start ();
+        auto remote = source.topology ().local_descriptor ();
+        remote.node_routing_id = {'p'};
+        remote.advertised_endpoint = "inproc://notification-disconnect-remote";
+        ASSERT_EQ (
+          mesh::peer_admission_result_t::admitted,
+          source.admit_peer (remote, {1}, mesh::service_liveness_registry_t::clock_t::now ()));
+        const auto before = source.topology ().observe_peer (remote.node_routing_id) ();
+        int calls = 0;
+        bool on_lane = true;
+        std::size_t peers = 1;
+        source.topology ().set_change_handler ([&] {
+            ++calls;
+            on_lane = zlink::framework::runtime::state_lane_t::current () != nullptr;
+            auto snapshot = source.topology ().monitoring_snapshot_async ();
+            peers = std::get<1> (snapshot.result ().value ()).size ();
+            throw std::runtime_error ("contained notification failure");
+        });
+        bool retained = true;
+        EXPECT_NO_THROW ({
+            if (surface == "raw")
+                retained =
+                  source.disconnect_peer (remote.node_routing_id, remote.advertised_endpoint);
+            else if (surface == "raw-void")
+                source.disconnect_peer (remote.advertised_endpoint);
+            else if (surface == "endpoint")
+                retained = source.disconnect_peer_endpoint (remote.node_routing_id,
+                                                            remote.advertised_endpoint);
+            else if (surface == "endpoint-void")
+                source.disconnect_peer_endpoint (remote.advertised_endpoint);
+            else if (surface == "intent")
+                source.disconnect_peer_intent (remote.advertised_endpoint);
+            else
+                source.disconnect_peer_intent (zlink::routing_id_t::from (remote.node_routing_id),
+                                               remote.advertised_endpoint, false);
+        });
+        if (surface == "raw" || surface == "endpoint")
+            EXPECT_FALSE (retained);
+        EXPECT_EQ (1, calls);
+        EXPECT_FALSE (on_lane);
+        EXPECT_EQ (0u, peers);
+        EXPECT_FALSE (source.topology ().peer (remote.node_routing_id));
+        ASSERT_TRUE (before.changed.await_ready ());
+        EXPECT_TRUE (before.changed.result ());
+        EXPECT_NO_THROW (failures->rethrow_if_failed ());
+        source.topology ().set_change_handler ({});
+        source.close ();
+    }
+}
 
 TEST (ServiceTopologyPreparedFacts, ReadsDoNotRequestTopologyTurns)
 {
@@ -60,12 +298,12 @@ TEST (ServiceTopologyPreparedFacts, ReadsDoNotRequestTopologyTurns)
                                           "tcp://127.0.0.1:1",
                                           {{"X", 100}},
                                           mesh::service_node_state_t::serving};
-    mesh::service_topology_registry_t topology (local);
+    zlink::framework::runtime::state_lane_t topology_lane;
+    mesh::service_topology_registry_t topology (topology_lane, local);
     auto remote = local;
     remote.node_routing_id = {'b'};
     ASSERT_EQ (mesh::peer_admission_result_t::admitted, topology.admit (remote, {1}));
-    auto &lane = topology.*topology_lane_member (topology_lane_access_t{});
-    lane.close ();
+    topology_lane.close ();
 
     // These are the facts read by the message receive/send paths (spec 08 §3 E2).
     EXPECT_NO_THROW (EXPECT_EQ (local, topology.local_descriptor ()));
@@ -87,7 +325,8 @@ TEST (ServiceTopologyPreparedFacts, PublishesChangesBeforeNotification)
                                           "tcp://127.0.0.1:1",
                                           {{"X", 100}},
                                           mesh::service_node_state_t::serving};
-    mesh::service_topology_registry_t topology (local);
+    zlink::framework::runtime::state_lane_t topology_lane;
+    mesh::service_topology_registry_t topology (topology_lane, local);
     auto remote = local;
     remote.node_routing_id = {'b'};
     std::shared_ptr<const mesh::admitted_peer_t> notified_peer;
@@ -137,7 +376,8 @@ TEST (ServiceTopologyPreparedFacts, ConcurrentReadsRetainCompleteDescriptors)
                                           "tcp://127.0.0.1:1",
                                           {{"X", 100}},
                                           mesh::service_node_state_t::serving};
-    mesh::service_topology_registry_t topology (local);
+    zlink::framework::runtime::state_lane_t topology_lane;
+    mesh::service_topology_registry_t topology (topology_lane, local);
     auto remote = local;
     remote.node_routing_id = {'b'};
     remote.active_capacity_used = static_cast<std::uint32_t> (remote.descriptor_revision);

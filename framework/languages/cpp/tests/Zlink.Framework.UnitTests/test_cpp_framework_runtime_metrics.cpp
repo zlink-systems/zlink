@@ -479,7 +479,9 @@ void provider_failure_preserves_shutdown ()
     options.descriptor.lifecycle_generation = options.descriptor.descriptor_revision = 1;
     options.descriptor.advertised_endpoint = "tcp://127.0.0.1:0";
     options.metric_channel_names = {"unavailable-channel"};
-    mesh::service_topology_registry_t available (options.descriptor, options.metric_channel_names);
+    zlink::framework::runtime::state_lane_t available_lane;
+    mesh::service_topology_registry_t available (available_lane, options.descriptor,
+                                                 options.metric_channel_names);
     const auto expected_missing = available.select ("unavailable-channel");
     require (!expected_missing, "missing channel unexpectedly selected a member");
     opentelemetry::metrics::Provider::SetMeterProvider (
