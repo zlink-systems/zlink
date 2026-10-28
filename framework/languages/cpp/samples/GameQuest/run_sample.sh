@@ -38,11 +38,13 @@ if [[ -z "$GAMEQUEST_RESERVED_PORT" || -z "$GAMEQUEST_API_B_SPOT_ROUTER_PORT" ]]
   exit 1
 fi
 
+zlink_cpp_sample_log_step "build"
 cmake --build "$BUILD_DIR" --parallel 2 --target \
   sample_cpp_framework_gamequest_game_api \
   sample_cpp_framework_gamequest_quest_mission \
-  sample_cpp_framework_gamequest_client >/dev/null
+  sample_cpp_framework_gamequest_client
 
+zlink_cpp_sample_log_step "Redis start"
 zlink_redis_start_scoped_assign REDIS_CONTAINER_NAME redis_port \
   "zlink-redis-cpp-sample-gamequest" "redis:7-alpine"
 GAMEQUEST_REDIS_ENDPOINT="tcp://127.0.0.1:${redis_port}"
@@ -101,7 +103,9 @@ start_role() {
   local name="$1"
   shift
   stdbuf -oL -eL "$@" >"$LOG_DIR/${name}.log" 2>&1 &
-  PIDS+=("$!")
+  local pid=$!
+  PIDS+=("$pid")
+  zlink_cpp_sample_log_step "process start: $name pid=$pid"
 }
 
 wait_port redis "$GAMEQUEST_REDIS_ENDPOINT"
@@ -227,16 +231,6 @@ wait_for_prefix_exact_count () {
   return 1
 }
 
-remove_pid () {
-  local target="$1"
-  local remaining=()
-  local pid
-  for pid in "${PIDS[@]}"; do
-    [[ "$pid" == "$target" ]] || remaining+=("$pid")
-  done
-  PIDS=("${remaining[@]}")
-}
-
 wait_for_exact_count "mission-a instance factory readiness" 1 \
   "gamequest-ready kind=instance-factory node=mission-a" "$LOG_DIR/mission-a.log"
 wait_for_exact_count "mission-b instance factory readiness" 1 \
@@ -313,18 +307,20 @@ set +e
 wait "$OWNER_PID"
 OWNER_STATUS=$?
 set -e
+zlink_cpp_sample_log_step "process exit: $OWNER_NODE status=$OWNER_STATUS"
 if [[ "$OWNER_STATUS" != "137" ]]; then
   echo "owner Mission process exited with unexpected status ${OWNER_STATUS}" >&2
   exit 1
 fi
-remove_pid "$OWNER_PID"
+zlink_cpp_sample_remove_pid "$OWNER_PID"
 : >"$OWNER_LOSS_RELEASE_FILE"
 
 set +e
 wait "$CLIENT_PID"
 CLIENT_STATUS=$?
 set -e
-remove_pid "$CLIENT_PID"
+zlink_cpp_sample_log_step "process exit: client status=$CLIENT_STATUS"
+zlink_cpp_sample_remove_pid "$CLIENT_PID"
 if [[ "$CLIENT_STATUS" != "0" ]]; then
   cat "$LOG_DIR/client.log" >&2
   dump_logs
