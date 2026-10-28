@@ -339,12 +339,10 @@
   "zlink-framework-core/src/test/java/systems/zlink/framework/runtime/binding/ZLinkJavaSubmissionTest.java": {
     "reason": "공개 동작 관찰로 바꾸려면 monitor·비동기 제출 완료·transport 종료 실패를 생성 시 주입하고 공개 backend 결과로 확인하는 fixture와 감독자 socket 검증가 필요하다. 후속 작업은 #2309에서 이어서 처리한다.",
     "accesses": {
-      "4e6054ce4cc53e26b19d2d9f7606700f76fb66569570006ed5cf79af407e1d97": 1,
       "62d3491a93c9fa8f2b0eb231239b3e77105c1753c068ce476f2fb28a5d82eca8": 1,
       "a4ba7f5a13d4caa41b635bc79a7355a60d151c6d1a0a4329629c83dc0f4c5623": 1,
       "b0f65dc0c876e9d931741a93cbe689fd4d0dd789c9beb6855ff2fc19a98d6586": 1,
       "ee3796ebe62e27493663704320a8d86f8fc0b6e36f60914b00870a0ed7fb2dc4": 1,
-      "eecd00c301e19fa574db731531c0335f9a4c3f20bd8bc7350c6813f78196d7c4": 1,
       "f1dd979437ba45ebbcda3ca0f747af1f47ebe9f173aa472e61353554585396f0": 2
     }
   },
@@ -474,10 +472,7 @@
   "zlink-framework-core/src/test/java/systems/zlink/framework/runtime/internal/service/ZLinkServiceOperationRegistryTest.java": {
     "reason": "공개 동작 관찰로 바꾸려면 공개 등록·완료·해제로 slot 재사용과 예외 객체 수명까지 구분하는 할당 관찰 fixture가 필요하다. 후속 작업은 #2309에서 이어서 처리한다.",
     "accesses": {
-      "158c896e07c9e64b843133ca1998f88ff5728b0542344567a6ca42bc69a1c0af": 1,
-      "4d784ae46bbda5a6e0134ee616206bfd2349694d3389ba4c11ea3438f88986cd": 1,
-      "6f8a62a89535fbd26185b9765e9a1392b0be1393ea68ad917d3390d71df0daca": 1,
-      "ecdfa3508de68287211b7554a2ccd44b4ba4f9471316cbf09a81c358c632f923": 1
+      "4d784ae46bbda5a6e0134ee616206bfd2349694d3389ba4c11ea3438f88986cd": 1
     }
   },
   "zlink-framework-core/src/test/java/systems/zlink/framework/runtime/locations/ZLinkAutoConnectLoopTest.java": {

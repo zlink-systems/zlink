@@ -122,6 +122,10 @@ final class ZLinkChannelShutdownInFlightTest {
                                     ZLinkBackendDealerSocket.class.getClassLoader(),
                                     new Class<?>[] {ZLinkBackendDealerSocket.class},
                                     (proxy, method, args) -> {
+                                        if (method.isDefault()
+                                                && method.getName().equals("requestTo"))
+                                            return java.lang.reflect.InvocationHandler
+                                                    .invokeDefault(proxy, method, args);
                                         return switch (method.getName()) {
                                             case "send" -> {
                                                 @SuppressWarnings("unchecked")
