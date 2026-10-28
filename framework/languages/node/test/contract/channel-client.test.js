@@ -4835,7 +4835,7 @@ test('self-RID RouteMesh waits on the shared application job queue without local
   const secondDispatch = scheduled.shift()();
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(handled, 1);
-  assert.equal(host.applicationJobQueue.snapshot().capacityWaiters, 1n);
+  assert.equal(host.status.capacity.applicationJobQueue.capacityWaiters, 1n);
   releaseFirstHandler();
   await Promise.all([firstDispatch, secondDispatch]);
   assert.equal(scheduled.length, 1);
@@ -4847,7 +4847,7 @@ test('self-RID RouteMesh waits on the shared application job queue without local
   assert.equal(scheduled.length, 1);
   await scheduled.shift()();
   assert.equal(handled, 4);
-  assert.equal(host.applicationJobQueue.snapshot().permitsInUse, 0n);
+  assert.equal(host.status.capacity.applicationJobQueue.permitsInUse, 0n);
 });
 
 test('DERR-009 ZLinkChannelRequestDispatcher writes structured dispatch errors to the logger provider', async () => {

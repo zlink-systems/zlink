@@ -156,7 +156,6 @@ struct actor_session_binding_snapshot_t
 class session_actor_binding_context_t
 {
   public:
-    std::mutex mutex;
     std::optional<stream_t> stream;
     std::shared_ptr<stream_state_t> stream_state;
     std::string session_id;
@@ -335,9 +334,26 @@ void trace_detached_bound_session_send_stage (const std::shared_ptr<actor_gatewa
       });
 }
 
+struct prepared_session_stream_t
+{
+    actor_session_binding_snapshot_t previous;
+    std::optional<actor_ref_t> actor;
+    actor_gateway_state_t::bound_session_registrar_t registrar;
+};
+
 class actor_gateway_runtime_t
 {
   public:
+    static prepared_session_stream_t
+    prepare_session_stream_on_lane (const std::shared_ptr<actor_gateway_state_t> &state,
+                                    const std::string &actor_id,
+                                    stream_t stream,
+                                    stream_codec_t codec,
+                                    const std::string &session_id,
+                                    std::uint64_t binding_token,
+                                    const std::optional<actor_ref_t> &actor_ref,
+                                    std::uint16_t actor_slot);
+
     actor_gateway_runtime_t ();
     explicit actor_gateway_runtime_t (std::shared_ptr<actor_gateway_state_t> state);
 

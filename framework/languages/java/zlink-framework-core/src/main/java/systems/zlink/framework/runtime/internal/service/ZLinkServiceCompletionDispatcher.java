@@ -92,6 +92,10 @@ public final class ZLinkServiceCompletionDispatcher {
         private WorkItem dispatchNext;
         private volatile boolean registered;
 
+        final boolean registeredForTest() {
+            return registered;
+        }
+
         final void setDispatchNext(WorkItem value) {
             dispatchNext = value;
         }

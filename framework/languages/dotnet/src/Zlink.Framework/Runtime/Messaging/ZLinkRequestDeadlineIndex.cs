@@ -57,6 +57,12 @@ internal sealed class ZLinkDeadlineIndex<T>(long rotation)
         // A terminal never cancels an already reserved visit.
     }
 
+    internal void RollbackRegistration(T entry, long previousVisit)
+    {
+        Remove(entry);
+        NextVisit = previousVisit;
+    }
+
     internal void Visit(
         long now,
         Func<T, long, bool> visit,
@@ -92,6 +98,8 @@ internal sealed class ZLinkDeadlineIndex<T>(long rotation)
 // timer, and one atomic terminal table. MeshNode uses the same index without a timer.
 internal sealed class ZLinkRequestDeadlineIndex : IAsyncDisposable
 {
+    internal static readonly TimeSpan DefaultRotation = TimeSpan.FromMilliseconds(256);
+
     private readonly ZLinkStateLane _lane;
     private readonly TimeProvider _time;
     private readonly IZLinkRuntimeFailureReporter _errors;
@@ -109,7 +117,7 @@ internal sealed class ZLinkRequestDeadlineIndex : IAsyncDisposable
         _lane = lane;
         _time = time ?? TimeProvider.System;
         _errors = errors ?? new ZLinkRuntimeErrorSink();
-        _index = new((long)Math.Ceiling(.256 * _time.TimestampFrequency));
+        _index = new((long)Math.Ceiling(DefaultRotation.TotalSeconds * _time.TimestampFrequency));
         _timer = _time.CreateTimer(
             static state => ((ZLinkRequestDeadlineIndex)state!).OnTimer(),
             this,
@@ -119,58 +127,96 @@ internal sealed class ZLinkRequestDeadlineIndex : IAsyncDisposable
     }
 
     internal async ValueTask<(Entry Entry, Task<IReadOnlyList<Message>> Completion)> RegisterAsync(
-        TimeSpan timeout
+        TimeSpan timeout,
+        Entry? entry = null
     )
     {
-        var started = _time.GetTimestamp();
-        var entry = new Entry(
-            this,
-            started + (long)Math.Ceiling(timeout.TotalSeconds * _time.TimestampFrequency)
-        );
+        entry ??= new Entry(this, timeout);
         var completion = entry.Source!.Task;
         await _lane
             .RunAsync(() =>
             {
                 ObjectDisposedException.ThrowIf(_timer is null, this);
                 var previous = _index.NextVisit;
+                var now = _time.GetTimestamp();
                 _pending.TryAdd(entry, 0);
-                _index.Register(entry, _time.GetTimestamp());
-                if (_index.NextVisit < previous)
-                    Schedule();
+                _index.Register(entry, now);
+                try
+                {
+                    if (_index.NextVisit < previous)
+                        Schedule();
+                }
+                catch
+                {
+                    _pending.TryRemove(entry, out _);
+                    _index.RollbackRegistration(entry, previous);
+                    throw;
+                }
             })
             .ConfigureAwait(false);
         return (entry, completion);
     }
 
-    internal async Task<IReadOnlyList<Message>> RunAsync(
+    internal Task<IReadOnlyList<Message>> RunAsync(
         TimeSpan timeout,
         CancellationToken cancellation,
-        Func<Entry, Task<IReadOnlyList<Message>>, Task<IReadOnlyList<Message>>> produce
+        Func<Entry, Task<IReadOnlyList<Message>>, Task<IReadOnlyList<Message>>> produce,
+        IReadOnlyList<Message>? sourceParts = null
     )
     {
-        var registered = await RegisterAsync(timeout).ConfigureAwait(false);
-        using var registration = cancellation.Register(() =>
-            registered.Entry.Fail(new OperationCanceledException(cancellation))
-        );
-        _ = ProduceAsync(registered.Entry, registered.Completion, produce);
-        return await registered.Completion.ConfigureAwait(false);
+        Entry entry;
+        try
+        {
+            entry = new Entry(this, timeout);
+        }
+        catch
+        {
+            if (sourceParts is not null)
+                ZLinkMessageParts.DisposeAll(sourceParts);
+            throw;
+        }
+        var completion = entry.Source!.Task;
+        _ = ProduceAsync(entry, completion, timeout, cancellation, produce, sourceParts);
+        return completion;
     }
 
-    private static async Task ProduceAsync(
+    private async Task ProduceAsync(
         Entry entry,
         Task<IReadOnlyList<Message>> completion,
-        Func<Entry, Task<IReadOnlyList<Message>>, Task<IReadOnlyList<Message>>> produce
+        TimeSpan timeout,
+        CancellationToken cancellation,
+        Func<Entry, Task<IReadOnlyList<Message>>, Task<IReadOnlyList<Message>>> produce,
+        IReadOnlyList<Message>? sourceParts
     )
     {
         try
         {
-            if (entry.IsPending)
-                entry.Complete(await produce(entry, completion).ConfigureAwait(false));
+            await RegisterAsync(timeout, entry).ConfigureAwait(false);
+            try
+            {
+                using var registration = cancellation.Register(() =>
+                    entry.Fail(new OperationCanceledException(cancellation))
+                );
+                if (entry.IsPending)
+                    entry.Complete(await produce(entry, completion).ConfigureAwait(false));
+            }
+            catch (Exception error)
+            {
+                entry.Fail(error);
+            }
+            return;
         }
         catch (Exception error)
         {
-            entry.Fail(error);
+            entry.Error = error;
         }
+        finally
+        {
+            if (sourceParts is not null)
+                ZLinkMessageParts.DisposeAll(sourceParts);
+        }
+        // Registration failed before the entry acquired terminal authority.
+        ZLinkCompletionDispatcher.Post(entry);
     }
 
     internal int PendingCount => _pending.Count;
@@ -244,12 +290,14 @@ internal sealed class ZLinkRequestDeadlineIndex : IAsyncDisposable
         long IZLinkDeadlineEntry<Entry>.AbsoluteDeadline => Deadline;
         internal TaskCompletionSource<IReadOnlyList<Message>>? Source = new();
         private IReadOnlyList<Message>? _parts;
-        private Exception? _error;
+        internal Exception? Error;
 
-        internal Entry(ZLinkRequestDeadlineIndex owner, long deadline)
+        internal Entry(ZLinkRequestDeadlineIndex owner, TimeSpan timeout)
         {
             _owner = owner;
-            Deadline = deadline;
+            Deadline =
+                owner._time.GetTimestamp()
+                + (long)Math.Ceiling(timeout.TotalSeconds * owner._time.TimestampFrequency);
         }
 
         internal bool IsPending => _owner._pending.ContainsKey(this);
@@ -271,15 +319,15 @@ internal sealed class ZLinkRequestDeadlineIndex : IAsyncDisposable
         {
             if (!_owner._pending.TryRemove(this, out _))
                 return;
-            _error = error;
+            Error = error;
             ZLinkCompletionDispatcher.Post(this);
         }
 
         internal override void Execute()
         {
-            if (_error is OperationCanceledException canceled)
+            if (Error is OperationCanceledException canceled)
                 Source!.TrySetCanceled(canceled.CancellationToken);
-            else if (_error is { } error)
+            else if (Error is { } error)
                 Source!.TrySetException(error);
             else
                 Source!.TrySetResult(_parts!);
@@ -289,7 +337,7 @@ internal sealed class ZLinkRequestDeadlineIndex : IAsyncDisposable
         {
             Source = null;
             _parts = null;
-            _error = null;
+            Error = null;
             if (failure is not null)
                 ZLinkFrameworkDebugLog.TaskFailure("request-dispatch", failure);
         }

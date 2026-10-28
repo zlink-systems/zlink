@@ -181,7 +181,11 @@ final class ZLinkChannelSubmissionClockTest {
                                 ZLinkChannelSubmissionClockTest.class.getClassLoader(),
                                 new Class<?>[] {ZLinkInternalSpotNode.class},
                                 (proxy, method, arguments) -> {
-                                    if (method.getName().equals("sourceTransportLane")) return null;
+                                    // Both default to null on ZLinkInternalSpotNode: no node-owned
+                                    // turn.
+                                    if (method.getName().equals("sourceTransportLane")
+                                            || method.getName().equals("operationRegistry"))
+                                        return null;
                                     throw new AssertionError("unexpected node call: " + method);
                                 });
         sockets.registerSpotRouterNode("orders", node);

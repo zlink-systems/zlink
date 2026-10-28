@@ -259,7 +259,8 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                             completion,
                             cancellationToken,
                             requestAdmission
-                        )
+                        ),
+                    sourceParts: parts
                 )
                 .ConfigureAwait(false);
         }
@@ -289,21 +290,11 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
     {
         try
         {
-            ReadyWaitResult readiness;
-            try
-            {
-                readiness = await WaitForReadyAsync(cancellationToken, completion)
-                    .ConfigureAwait(false);
-            }
-            catch
-            {
-                ZLinkMessageParts.DisposeAll(parts);
-                throw;
-            }
+            var readiness = await WaitForReadyAsync(cancellationToken, completion)
+                .ConfigureAwait(false);
             var target = readiness.Target;
             if (target is null)
             {
-                ZLinkMessageParts.DisposeAll(parts);
                 ZLinkOneWaySubmitOutcome.EnsureAccepted(
                     new ZLinkOneWaySubmitResult(readiness.Status),
                     $"ClientServer channel '{_channelName}' request"
@@ -312,7 +303,6 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
             }
             if (!ZLinkClientServerMessageBound.Fits(parts, target.AdmittedMaximumMessageBytes))
             {
-                ZLinkMessageParts.DisposeAll(parts);
                 throw ZLinkClientServerMessageBound.CreateExceededException(
                     target.AdmittedMaximumMessageBytes
                 );
@@ -333,32 +323,30 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                     )
                 );
             if (!entry.IsPending || entry.Remaining <= TimeSpan.Zero)
-            {
-                try
-                {
-                    return await completion.ConfigureAwait(false);
-                }
-                finally
-                {
-                    ZLinkMessageParts.DisposeAll(parts);
-                }
-            }
+                return await completion.ConfigureAwait(false);
             var reply = await ZLinkRawRequestSubmitter
                 .SubmitAsync(
-                    (Target: target, Admission: requestAdmission, ChannelName: _channelName),
-                    parts,
-                    static (state, pending, nativeTimeout, token) =>
+                    (
+                        Target: target,
+                        Admission: requestAdmission,
+                        ChannelName: _channelName,
+                        Parts: parts,
+                        Timeout: entry.Remaining,
+                        Token: cancellationToken
+                    ),
+                    static state =>
                         ZLinkRequestSubmissionOutcome.SubmitAndAwaitReplyAsync(
-                            state.Target.Socket.Request().Messages(pending).Timeout(nativeTimeout),
-                            nativeTimeout,
-                            token,
+                            state
+                                .Target.Socket.Request()
+                                .Messages(state.Parts)
+                                .Timeout(state.Timeout),
+                            state.Timeout,
+                            state.Token,
                             state.Target.Liveness,
                             requestAdmission: state.Admission
                         ),
-                    entry.Remaining,
                     static (state, result) =>
-                        $"ClientServer request failed for '{state.ChannelName}': {result}.",
-                    cancellationToken
+                        $"ClientServer request failed for '{state.ChannelName}': {result}."
                 )
                 .ConfigureAwait(false);
             target.Liveness.RecordReceived(_time.GetTimestamp());
@@ -366,7 +354,6 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         }
         catch (TimeoutException)
         {
-            ZLinkMessageParts.DisposeAll(parts);
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.DeadlineExceeded,
                 $"ClientServer channel '{_channelName}' request timed out."

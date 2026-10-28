@@ -2,6 +2,7 @@ package systems.zlink.framework.runtime.binding;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
@@ -18,6 +19,7 @@ import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.internal.calls.ZLinkRequestStages;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry;
 
 import java.time.Duration;
 import java.util.List;
@@ -25,9 +27,47 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 
 final class ZLinkJavaRequestCapacityContractTest {
+    private final ZLinkServiceOperationRegistry operations =
+            new ZLinkServiceOperationRegistry(
+                    new IllegalStateException("closed"), ZLinkJavaSocketSupport::requestTimeout);
+
+    @AfterEach
+    void closeOperations() {
+        operations.close();
+    }
+
+    @Test
+    void registeredRequestUsesOnePendingEntryThroughHwmAdmission() throws Exception {
+        var request = new PendingRequest(SubmitResult.BACKPRESSURED);
+        var id = systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationIds.next();
+        try (var message = Message.from(new byte[] {1})) {
+            var completion =
+                    operations.submitTerminal(
+                            id,
+                            Duration.ofSeconds(1),
+                            terminal ->
+                                    ZLinkJavaSocketSupport.submitRequestTo(
+                                            request,
+                                            List.of(message),
+                                            operations.remainingTimeout(id),
+                                            null,
+                                            null,
+                                            terminal),
+                            systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived
+                                    ::close);
+            assertEquals(1, operations.pendingCount());
+            request.admitted.complete(null);
+            assertEquals(1, operations.pendingCount());
+            request.completeReply(List.of(Message.from(new byte[] {2})));
+            try (var received = completion.get(1, TimeUnit.SECONDS)) {
+                assertEquals(1, received.parts().size());
+            }
+            assertEquals(0, operations.pendingCount());
+        }
+    }
+
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
     void rawMeshServiceRequestUsesTheSameAdmissionDeadline(boolean admitBeforeDeadline)
@@ -99,7 +139,12 @@ final class ZLinkJavaRequestCapacityContractTest {
         try (var message = Message.from(new byte[] {1})) {
             var completion =
                     ZLinkJavaSocketSupport.submitRequest(
-                                    request, List.of(message), Duration.ofMillis(100), null, null)
+                                    request,
+                                    List.of(message),
+                                    Duration.ofMillis(100),
+                                    null,
+                                    null,
+                                    operations)
                             .toCompletableFuture();
             if (admitBeforeDeadline) request.admitted.complete(null);
             var failure =
@@ -121,19 +166,31 @@ final class ZLinkJavaRequestCapacityContractTest {
     }
 
     @Test
-    void immediatelyAdmittedRequestHasNoFrameworkDeadline() throws Exception {
+    void immediatelyAdmittedRequestSharesTheLogicalRequestDeadline() throws Exception {
         var request = new PendingRequest(SubmitResult.OK);
         try (var message = Message.from(new byte[] {1})) {
             var completion =
                     ZLinkJavaSocketSupport.submitRequest(
-                                    request, List.of(message), Duration.ofMillis(30), null, null)
+                                    request,
+                                    List.of(message),
+                                    Duration.ofMillis(30),
+                                    null,
+                                    null,
+                                    operations)
                             .toCompletableFuture();
-            assertThrows(TimeoutException.class, () -> completion.get(150, TimeUnit.MILLISECONDS));
-            assertFalse(request.reply.isCancelled());
-            request.completeReply(List.of(Message.from(new byte[] {2})));
-            try (var received = completion.get(1, TimeUnit.SECONDS)) {
-                assertEquals(1, received.parts().size());
-            }
+            // Spec §9 and §10.1 keep the logical deadline after immediate admission.
+            var failure =
+                    assertThrows(
+                            java.util.concurrent.ExecutionException.class,
+                            () -> completion.get(1, TimeUnit.SECONDS));
+            assertEquals(
+                    ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+                    assertInstanceOf(ZLinkFrameworkException.class, failure.getCause()).kind());
+            assertEquals(0, operations.pendingCount());
+            assertFalse(request.reply.isDone(), "physical reply remains binding-owned");
+            var lateReply = Message.from(new byte[] {2});
+            request.completeReply(List.of(lateReply));
+            assertEquals(0, lateReply.size(), "late physical payload must be released");
         }
     }
 
@@ -151,7 +208,8 @@ final class ZLinkJavaRequestCapacityContractTest {
                                     List.of(message),
                                     Duration.ofSeconds(1),
                                     null,
-                                    admission),
+                                    admission,
+                                    operations),
                             admission);
             assertEquals(!backpressured, result.admitted().toCompletableFuture().isDone());
             assertFalse(result.toCompletableFuture().isDone());
@@ -177,7 +235,8 @@ final class ZLinkJavaRequestCapacityContractTest {
                                     List.of(message),
                                     Duration.ofMillis(100),
                                     null,
-                                    admission),
+                                    admission,
+                                    operations),
                             admission);
             var replyFailure =
                     assertThrows(
@@ -210,7 +269,8 @@ final class ZLinkJavaRequestCapacityContractTest {
                                     List.of(message),
                                     Duration.ofSeconds(1),
                                     null,
-                                    admission),
+                                    admission,
+                                    operations),
                             admission);
             assertTrue(result.toCompletableFuture().cancel(false));
             var replyFailure =
@@ -242,7 +302,8 @@ final class ZLinkJavaRequestCapacityContractTest {
                                     List.of(firstMessage),
                                     Duration.ofSeconds(1),
                                     null,
-                                    firstAdmission),
+                                    firstAdmission,
+                                    operations),
                             firstAdmission);
             var second =
                     ZLinkRequestStages.observe(
@@ -251,7 +312,8 @@ final class ZLinkJavaRequestCapacityContractTest {
                                     List.of(secondMessage),
                                     Duration.ofSeconds(1),
                                     null,
-                                    secondAdmission),
+                                    secondAdmission,
+                                    operations),
                             secondAdmission);
             first.admitted()
                     .toCompletableFuture()
@@ -348,7 +410,8 @@ final class ZLinkJavaRequestCapacityContractTest {
                                         List.of(message),
                                         Duration.ofSeconds(1),
                                         null,
-                                        null)
+                                        null,
+                                        operations)
                                 .toCompletableFuture();
                 if (!initial) reply.completeExceptionally(failure);
                 var terminal =
@@ -372,13 +435,18 @@ final class ZLinkJavaRequestCapacityContractTest {
         try (var message = Message.from(new byte[] {1})) {
             var completion =
                     ZLinkJavaSocketSupport.submitRequest(
-                                    request, List.of(message), Duration.ofSeconds(1), null, null)
+                                    request,
+                                    List.of(message),
+                                    Duration.ofSeconds(1),
+                                    null,
+                                    null,
+                                    operations)
                             .toCompletableFuture();
             if (!initialSubmission) {
                 assertFalse(completion.isDone());
                 reply.completeExceptionally(failure);
             }
-            assertTrue(completion.isDone());
+            // Spec §11 delivers even a submission failure through a completion turn.
             if (initialSubmission) {
                 assertFalse(reply.isDone(), "a slot rejection must not wait for a reply");
             }
@@ -429,7 +497,12 @@ final class ZLinkJavaRequestCapacityContractTest {
         try (var message = Message.from(new byte[] {1})) {
             var completion =
                     ZLinkJavaSocketSupport.submitRequest(
-                                    request, List.of(message), Duration.ofSeconds(1), null, null)
+                                    request,
+                                    List.of(message),
+                                    Duration.ofSeconds(1),
+                                    null,
+                                    null,
+                                    operations)
                             .toCompletableFuture();
             if (!initialSubmission) reply.completeExceptionally(failure);
             var terminal = assertThrows(CompletionException.class, completion::join);

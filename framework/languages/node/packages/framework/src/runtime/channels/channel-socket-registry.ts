@@ -1,3 +1,4 @@
+import { inspectRuntime } from '../internal-observation';
 import { RuntimeDisposal } from '../disposal';
 import { UINT64_MAX } from '@zlink-systems/stream-wire';
 import { randomBytes, randomUUID } from 'node:crypto';
@@ -135,6 +136,14 @@ interface FanoutPublisherConnection {
 }
 
 export class ZLinkChannelSocketRegistry {
+  [inspectRuntime]() {
+    return Object.freeze({
+      clientServerConnections: this.clientServerConnections.size,
+      fanoutConnections: this.fanoutConnections.size,
+      clientServerObservers: this.clientServerDiscovery[inspectRuntime]().clientServerObservers
+    });
+  }
+
   private readonly clientDealers = new Map<string, ZLinkBackendDealerSocket>();
   private readonly channelRouters = new Map<string, ZLinkBackendRouterSocket>();
   private readonly publishers = new Map<string, ZLinkBackendPublisherSocket>();

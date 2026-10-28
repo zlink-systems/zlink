@@ -817,6 +817,7 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
                 // Observe the first blocking wait, preserving even a finite deadline.
                 if (timeout != TimeSpan.Zero && (CanObserveIdleWait?.Invoke() ?? true))
                     IdleWait.TrySetResult(timeout);
+                BeforeWait?.Invoke();
                 return _inner.Wait(destination, timeout);
             }
             if (++_waitCount == 1)

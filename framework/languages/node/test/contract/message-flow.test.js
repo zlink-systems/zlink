@@ -1,3 +1,4 @@
+const { createPublisherRuntime } = require('./fixtures/publisher-runtime');
 'use strict';
 
 const { mapZLinkRequestReply, createZLinkRequest } = require('../../packages/framework/dist/runtime/messaging/request-result');
@@ -843,15 +844,15 @@ test('logical multicast target submission failure reports stale target without c
     dispatchErrors: reporter,
     dispatchErrorMeshName: 'play'
   });
-  const runtime = new framework.ZLinkSpotNodeRuntimeManager({
+  const runtimeOptions = {
     detachedTaskRunner: detachedTaskRunner,
     registration: framework.createFrameworkRegistration({}),
     backendAdapterFactory: {},
     context: {},
     dispatchErrors: reporter,
     errorSink: { reportRuntimeTaskException() { assert.fail('unexpected runtime task error'); } }
-  });
-  runtime.publishers.set('play', {
+  };
+  const runtime = await createPublisherRuntime('play', {
     publishAsync(channelName, topic) {
       return stateful.publishLogicalMulticast(channelName, topic, {
         packetName: 'ProfileChanged',
@@ -859,7 +860,7 @@ test('logical multicast target submission failure reports stale target without c
         payload: Buffer.from('{"sequence":1}')
       });
     }
-  });
+  }, runtimeOptions);
 
   const result = await runtime.publish('play', 'events', 'score', 'ProfileChanged', {
     sequence: 1

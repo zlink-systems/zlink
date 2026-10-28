@@ -1,3 +1,4 @@
+const { inspectRuntime } = require('../../packages/framework/dist/runtime/internal-observation');
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const framework = require('../../packages/framework/dist/internal');
@@ -165,7 +166,7 @@ for (const warningStarted of [false, true]) {
         assert.equal(fixture.stage.cutoverReceived, false);
         assert.equal(fixture.events.filter((event) => event === 'abort').length, 1);
         assert.equal(fixture.events.includes('cas'), false);
-        assert.equal(fixture.runtime.targetStages.size, 0);
+        assert.equal(fixture.runtime[inspectRuntime]().targetStages, 0);
         await fixture.cutover();
         assert.equal(fixture.events.includes('cas'), false);
         read.resolve({ kind: 'source' });
@@ -320,7 +321,7 @@ test('a Shutdown-sealed target rejects a new PREPARE with ShuttingDown before st
       return true;
     }
   );
-  assert.equal(runtime.targetStages.size, 0);
+  assert.equal(runtime[inspectRuntime]().targetStages, 0);
 });
 
 test('an open target does not report ShuttingDown for a new PREPARE', async () => {

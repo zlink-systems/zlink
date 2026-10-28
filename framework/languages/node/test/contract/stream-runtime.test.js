@@ -1,3 +1,5 @@
+const { rawMeshFixture } = require('./fixtures/raw-mesh-binding');
+const { createRelayMeshHost } = require('./fixtures/relay-host');
 const { createMeshHost } = require('./fixtures/mesh-host');
 const { createRelayHost } = require('./fixtures/relay-host');
 const { prepareZLinkRequestReply, identityRequestReply } = require('../../packages/framework/dist/runtime/messaging/request-result');
@@ -4861,13 +4863,16 @@ test('command 36 refused as not current is traced with the closed flow vocabular
 
 test('actual raw command 36 from an authenticated peer is admitted by the current binding alone', async () => {
   const actorId = 'actor-command36-authenticated-source';
-  const raw = new RawServiceMeshRuntime({
+  const { runtime: raw, records } = rawMeshFixture({
     descriptor: testServiceNodeDescriptor('session-owner', 4n),
-    bindingPort: {},
     applicationJobQueue: new ApplicationJobQueue(resolveApplicationJobQueueConfiguration())
-  });
-  assert.equal(raw.admitPeer(testServiceNodeDescriptor('source', 4n), 1n, 0), 'admitted');
-  assert.equal(raw.admitPeer(testServiceNodeDescriptor('target', 5n), 2n, 0), 'admitted');
+  }, { submitSend: () => ({ result: SubmitResult.Ok, admitted: Promise.resolve() }) });
+  for (const [peer, generation, route] of [['source', 4n, 1n], ['target', 5n, 2n]]) {
+    records.push({ sourceRid: peer, sourceRoute: Buffer.from(peer), routeGeneration: route,
+      parts: [serviceWire.encodeRouteMeshAdmission(serviceWire.M6aServiceWireCommand.hello, testServiceNodeDescriptor(peer, generation))], close() {} });
+    assert.equal(await raw.pumpOne(0), 'infrastructure');
+    assert.equal(raw.topology.peer(peer).descriptor.lifecycleGeneration, generation);
+  }
   const serviceRuntime = withTestSessionOwners(
     new ServiceStatefulRuntime(raw, 'session-owner', 4n)
   );
@@ -4908,17 +4913,11 @@ test('actual raw command 36 from an authenticated peer is admitted by the curren
     contentType: 'application/json',
     payload: Buffer.from('{"accepted":true}')
   });
-  const ingress = (sourceRid) =>
-    raw.processReceived(
-      {
-        sourceRid,
-        routeGeneration: sourceRid === 'source' ? 1n : 2n,
-        sourceRoute: Buffer.from(sourceRid),
-        parts: [header, payload]
-      },
-      0,
-      false
-    );
+  const ingress = (sourceRid) => {
+    records.push({ sourceRid, routeGeneration: sourceRid === 'source' ? 1n : 2n,
+      sourceRoute: Buffer.from(sourceRid), parts: [header, payload], close() {} });
+    return raw.pumpOne(0);
+  };
 
   // The transport boundary authenticated both peers. Which peer produced the
   // push is not compared with the header's Actor route (Session-Actor binding
@@ -5085,7 +5084,7 @@ test('relocation target binding republish delivers the post-Join bound-session p
   const { host: sessionHost, relay: sessionHostRelay } = createRelayHost({
     registration: framework.createFrameworkRegistration()
   });
-  const { host: targetHost, relay: targetHostRelay } = createRelayHost({
+  const { host: targetHost, relay: targetHostRelay , meshRuntime: targetHostMesh } = createRelayMeshHost({
     registration: framework.createFrameworkRegistration()
   });
   const context = sessionHost.streamBindingRuntime.createSessionContext(
@@ -5124,7 +5123,7 @@ test('relocation target binding republish delivers the post-Join bound-session p
       return requestedActorId === actorId ? targetState : undefined;
     }
   });
-  targetHost.spotNodeRuntime = {
+  Object.assign(targetHostMesh, {
     meshNode(meshName) {
       assert.equal(meshName, 'callback.mesh');
       return {
@@ -5132,7 +5131,7 @@ test('relocation target binding republish delivers the post-Join bound-session p
         peers: () => [{ routingId: 'session-owner', lifecycleGeneration: 4n }]
       };
     }
-  };
+  });
   targetHostRelay.boundSessions.resolveRemoteBoundSessionTarget = (
     sessionNodeRid,
     sessionRid
@@ -6033,15 +6032,15 @@ test('runtime host routed bound session receiver forwards through actor remote t
 });
 
 test('runtime host actor packet target prefers stored remote room target', () => {
-  const { host, relay: hostRelay } = createRelayHost({
+  const { host, relay: hostRelay , meshRuntime: hostMesh } = createRelayMeshHost({
     registration: framework.createFrameworkRegistration()
   });
-  host.spotNodeRuntime = {
+  Object.assign(hostMesh, {
     primaryMeshNode: {
       status: () => ({ routingId: zlink.RoutingId.from('node-local') }),
       routingId: 'local-node'
     }
-  };
+  });
   host.setActorManager({
     getState(actorId) {
       assert.equal(actorId, 'actor-remote-room');
@@ -6318,15 +6317,15 @@ test('remote actor packet route failure is submitted once and stays Unavailable'
 //  spot id: that fabricated route has no complete Ready authority fence and
 //  the next request fails the fence check instead of re-resolving.
 test('runtime host joined Spot route invalidates a stale entry target instead of fabricating a room route', () => {
-  const { host, relay: hostRelay } = createRelayHost({
+  const { host, relay: hostRelay , meshRuntime: hostMesh } = createRelayMeshHost({
     registration: framework.createFrameworkRegistration()
   });
-  host.spotNodeRuntime = {
+  Object.assign(hostMesh, {
     primaryMeshNode: {
       status: () => ({ routingId: zlink.RoutingId.from('node-local') }),
       routingId: 'session-node'
     }
-  };
+  });
   host.setActorManager({
     getState(actorId) {
       assert.equal(actorId, 'actor-remote-room');
@@ -6352,7 +6351,7 @@ test('runtime host joined Spot route invalidates a stale entry target instead of
 });
 
 test('runtime host actor packet target requires a Ready spot mesh snapshot when route mesh also exists', () => {
-  const { host, relay: hostRelay } = createRelayHost({
+  const { host, relay: hostRelay , meshRuntime: hostMesh } = createRelayMeshHost({
     registration: framework.createFrameworkRegistration({
       routeChannels: [{ routerChannelId: 'spot.control' }],
       spotNodes: {
@@ -6362,12 +6361,12 @@ test('runtime host actor packet target requires a Ready spot mesh snapshot when 
       }
     })
   });
-  host.spotNodeRuntime = {
+  Object.assign(hostMesh, {
     primaryMeshNode: {
       status: () => ({ routingId: zlink.RoutingId.from('node-local') }),
       routingId: 'session-node'
     }
-  };
+  });
   const state = {
     spotId: 'room-spot',
     nativeActorRef: { nodeRid: 'play-node', actorId: 'actor-remote-room', generation: 1n }
@@ -6645,25 +6644,23 @@ test('Actor binding owner turn uses the three-value Actor fence independently of
   state.setOwnerLeaseGeneration(10n);
   assert.equal(state.ownsLocation, false);
   let localRetireCalls = 0;
-  const host = Object.create(framework.ZLinkFrameworkRuntimeHost.prototype);
+  const { host, meshRuntime, relay } = createRelayMeshHost({
+    registration: framework.createFrameworkRegistration()
+  });
   host.setActorManager({ getState: () => state });
-  host.spotNodeRuntime = {
+  Object.assign(meshRuntime, {
     meshNode: () => ({
       status: () => ({ routingId: actor.nodeRid, lifecycleGeneration: 5n }),
       peers: () => {
         throw new Error('bind approval must not re-read the peer projection');
       }
     })
-  };
-  host.boundSessionRelay = {
-    boundSessions: {
-      resolveRemoteBoundSessionTarget: () => ({
-        routerChannelId: 'room.route',
-        targetNodeRid: 'session-node',
-        spotId: 'session-entry'
-      })
-    }
-  };
+  });
+  relay.boundSessions.resolveRemoteBoundSessionTarget = () => ({
+    routerChannelId: 'room.route',
+    targetNodeRid: 'session-node',
+    spotId: 'session-entry'
+  });
   host.streamBindingRuntime = {
     async retireRemoteBinding() {
       localRetireCalls += 1;
@@ -6904,15 +6901,15 @@ test('target Actor reentry clears the binding so the arriving relocation install
   assert.equal(state.boundSessionBindingGeneration, 0n);
 });
 test('runtime host actor packet target lets local joined actors use native gateway', () => {
-  const { host, relay: hostRelay } = createRelayHost({
+  const { host, relay: hostRelay , meshRuntime: hostMesh } = createRelayMeshHost({
     registration: framework.createFrameworkRegistration()
   });
-  host.spotNodeRuntime = {
+  Object.assign(hostMesh, {
     primaryMeshNode: {
       status: () => ({ routingId: zlink.RoutingId.from('node-local') }),
       routingId: 'local-node'
     }
-  };
+  });
   host.setActorManager({
     getState(actorId) {
       assert.equal(actorId, 'actor-local-room');
@@ -7541,16 +7538,16 @@ test('service-wire relocation replaces a learned source packet route before the 
     meshName: 'play.route'
   };
   const stream = recordingStream('session', 'session-owner');
-  const { host: sessionHost, relay: sessionHostRelay } = createRelayHost({
+  const { host: sessionHost, relay: sessionHostRelay , meshRuntime: sessionHostMesh } = createRelayMeshHost({
     registration: framework.createFrameworkRegistration({
       routeChannels: [{ routerChannelId: 'play.route' }]
     })
   });
-  sessionHost.spotNodeRuntime = {
+  Object.assign(sessionHostMesh, {
     primaryMeshNode: {
       status: () => ({ routingId: zlink.RoutingId.from('session-owner') })
     }
-  };
+  });
   sessionHost.createActorLocationResolver = () => ({
     // A Session owner must still use its command-44 ActorRef while the
     // durable location lookup is converging.
@@ -7591,12 +7588,12 @@ test('service-wire relocation replaces a learned source packet route before the 
     boundSession: targetBinding,
     remoteBoundSessionTarget: targetBinding
   };
-  const { host: targetHost, relay: targetHostRelay } = createRelayHost({
+  const { host: targetHost, relay: targetHostRelay , meshRuntime: targetHostMesh } = createRelayMeshHost({
     registration: framework.createFrameworkRegistration({
       routeChannels: [{ routerChannelId: 'play.route' }]
     })
   });
-  targetHost.spotNodeRuntime = {
+  Object.assign(targetHostMesh, {
     async dispatchEntryActorPacket(origin, actorId, parts, response, bound, ref) {
       const result = await targetHost.entryActorRuntime.routePacket(actorId, parts, response, bound, ref, origin);
       assert.equal(result.handled, true);
@@ -7605,7 +7602,7 @@ test('service-wire relocation replaces a learned source packet route before the 
     primaryMeshNode: {
       status: () => ({ routingId: zlink.RoutingId.from('target') })
     }
-  };
+  });
   targetHost.setActorManager({
     getState(requestedActorId) {
       return requestedActorId === actorId ? targetState : undefined;
