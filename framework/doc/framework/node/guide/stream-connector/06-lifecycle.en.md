@@ -45,7 +45,7 @@ dropped" changes the reconnection decision.
 
 The connect call completes once the connection and the receive path are ready. The close call closes
 the transport without writing frames that have not gone out, and fails their Sends and Requests,
-together with the requests waiting for a reply, with `disconnected`. To know that a Send's frame was
+together with the requests waiting for a reply, with `Disconnected`. To know that a Send's frame was
 written, wait for that Send to complete before closing.
 
 ```typescript

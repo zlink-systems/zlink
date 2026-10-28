@@ -2,6 +2,7 @@
 #pragma once
 
 #include <nlohmann/json.hpp>
+#include <zlink/json_profile.hpp>
 
 #include <cstdint>
 #include <optional>
@@ -365,26 +366,18 @@ struct crash_relocation_probe_res_t
     std::optional<std::string> error;
 };
 
-#define ZW_WRITE(field, wire) j[wire] = value.field;
-#define ZW_READ(field, wire) j.at (wire).get_to (value.field);
-#define ZW_JSON_FIELDS(type, fields)                                                               \
-    inline void to_json (nlohmann::json &j, const type &value)                                     \
-    {                                                                                              \
-        j = nlohmann::json::object ();                                                             \
-        fields (ZW_WRITE)                                                                          \
+#define ZW_DESCRIPTOR(member, wire) zlink::json::field (wire, &dto_type::member),
+#define ZW_JSON_FIELDS(type, field_list)                                                           \
     }                                                                                              \
-    inline void from_json (const nlohmann::json &j, type &value)                                   \
+    template <> struct zlink::json::dto_traits<zlink::samples::zoneworld::type>                    \
     {                                                                                              \
-        fields (ZW_READ)                                                                           \
-    }
-#define ZW_EMPTY_JSON(type)                                                                        \
-    inline void to_json (nlohmann::json &j, const type &)                                          \
-    {                                                                                              \
-        j = nlohmann::json::object ();                                                             \
-    }                                                                                              \
-    inline void from_json (const nlohmann::json &, type &)                                         \
-    {                                                                                              \
-    }
+        using dto_type = zlink::samples::zoneworld::type;                                          \
+        static constexpr auto fields = std::tuple{field_list (ZW_DESCRIPTOR)};                     \
+    };                                                                                             \
+    namespace zlink::samples::zoneworld                                                            \
+    {
+#define ZW_EMPTY_JSON(type) ZW_JSON_FIELDS (type, ZW_NO_FIELDS)
+#define ZW_NO_FIELDS(F)
 
 #define PLAYER_VIEW_FIELDS(F)                                                                      \
     F (player_id, "playerId")                                                                      \
@@ -613,3 +606,20 @@ ZW_JSON_FIELDS (crash_relocation_probe_res_t, ERROR_FIELDS)
 #undef ZW_PACKET
 
 } // namespace zlink::samples::zoneworld
+
+// Explicit JSON state-store conversion shares the typed messaging profile.
+namespace zlink::samples::zoneworld
+{
+template <typename T>
+    requires zlink::detail::json_profile::has_dto<T>
+void to_json (nlohmann::json &out, const T &value)
+{
+    out = zlink::detail::json_profile::encode_value (value);
+}
+template <typename T>
+    requires zlink::detail::json_profile::has_dto<T>
+void from_json (const nlohmann::json &in, T &value)
+{
+    value = zlink::detail::json_profile::decode_value<T> (in);
+}
+}

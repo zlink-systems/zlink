@@ -486,6 +486,13 @@ class in_memory_location_repository_t : public location_repository_t
             return cancelled<authority_compare_exchange_result_t> ();
         return _lane
           .run ([&] {
+              if (const auto *put = std::get_if<authority_put_t> (&mutation);
+                  put && put->operation_deadline
+                  && std::chrono::steady_clock::now () >= *put->operation_deadline)
+                  return task_t<authority_compare_exchange_result_t> (
+                    result_t<authority_compare_exchange_result_t>::failure (
+                      framework_error_kind_t::deadline_exceeded,
+                      "Actor membership operation deadline expired"));
               const auto now = clock_t::now ();
               auto found = _authorities.find (key.value);
               if (found == _authorities.end ()
@@ -510,9 +517,9 @@ class in_memory_location_repository_t : public location_repository_t
                         return std::optional<actor_authority_payload_t>{};
                 },
                 mutation);
-              if (!user_membership_can_commit (old_member, member, now))
-                  return completed (
-                    authority_compare_exchange_result_t{authority_conflict_t{found->second}});
+              if (const auto failure = user_membership_commit_failure (old_member, member, now))
+                  return completed (authority_compare_exchange_result_t{
+                    authority_conflict_t{found->second, failure}});
 
               if (std::holds_alternative<authority_delete_t> (mutation)) {
                   if (found->second.allocation.state != placement_allocation_state_t::active
@@ -951,7 +958,7 @@ class in_memory_location_repository_t : public location_repository_t
                   return completed (object_commit_result_t{authority_generation_exhausted_t{}});
 
               if (authority->second.allocation.object_kind == placement_object_kind_t::actor
-                  && !user_membership_can_commit (
+                  && user_membership_commit_failure (
                     std::nullopt, decode_direct_actor_authority_payload (request.ready_payload),
                     now))
                   return completed (
@@ -1341,9 +1348,10 @@ class in_memory_location_repository_t : public location_repository_t
           detail::make_cancellation_exception ("location store operation was cancelled")));
     }
 
-    bool user_membership_can_commit (const std::optional<actor_authority_payload_t> &old_member,
-                                     const std::optional<actor_authority_payload_t> &member,
-                                     clock_t::time_point now) const
+    std::optional<framework_error_kind_t>
+    user_membership_commit_failure (const std::optional<actor_authority_payload_t> &old_member,
+                                    const std::optional<actor_authority_payload_t> &member,
+                                    clock_t::time_point now) const
     {
         if (member && member->current_spot_kind == actor_authority_spot_kind_t::user
             && (!old_member || old_member->current_spot_kind != member->current_spot_kind
@@ -1351,19 +1359,19 @@ class in_memory_location_repository_t : public location_repository_t
                 || old_member->current_spot_generation != member->current_spot_generation)) {
             const auto spot =
               _authorities.find (spot_authority_key (member->current_spot_id).value);
+            if (spot == _authorities.end ())
+                return framework_error_kind_t::not_found;
             const auto ready =
-              spot == _authorities.end ()
-                ? std::optional<user_spot_authority_payload_t>{}
-                : stateful::authority_relocation_payload_codec_t::decode_ready_user_spot (
-                    spot->second);
-            if (!ready || ready->spot_id != member->current_spot_id
+              stateful::authority_relocation_payload_codec_t::decode_ready_user_spot (spot->second);
+            if (authority_mutation_locked_on_lane (spot->first) || !ready
+                || ready->spot_id != member->current_spot_id
                 || spot->second.allocation.object_kind != placement_object_kind_t::user_spot
                 || spot->second.allocation.state != placement_allocation_state_t::active
                 || spot->second.object_generation != member->current_spot_generation
                 || !owner_token_is_live (spot->second.owner, now))
-                return false;
+                return framework_error_kind_t::unavailable;
         }
-        return true;
+        return std::nullopt;
     }
 
     bool authority_mutation_locked_on_lane (const std::string &key) const

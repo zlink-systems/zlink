@@ -156,9 +156,8 @@ final class ZLinkJavaMeshNodeIsolationTest {
 
     private static ZLinkStateLane lane(ZLinkFrameworkRuntime runtime, String mesh)
             throws Exception {
-        var ownerField = ZLinkJavaRawMeshNode.class.getDeclaredField("transportStateLane");
-        ownerField.setAccessible(true);
-        return (ZLinkStateLane) ownerField.get(nodes(runtime).nodesByName().get(mesh));
+        return ((ZLinkJavaRawMeshNode) nodes(runtime).nodesByName().get(mesh))
+                .sourceTransportLane();
     }
 
     private static ZLinkMeshNodesRuntime nodes(ZLinkFrameworkRuntime runtime) throws Exception {

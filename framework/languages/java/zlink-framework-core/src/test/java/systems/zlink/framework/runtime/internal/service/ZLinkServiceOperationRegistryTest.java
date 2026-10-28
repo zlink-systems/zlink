@@ -456,6 +456,12 @@ final class ZLinkServiceOperationRegistryTest {
         assertEquals(Thread.State.TERMINATED, worker.get().getState());
     }
 
+    private static void awaitWorkerState(Thread worker, Thread.State expected) {
+        long limit = System.nanoTime() + TimeUnit.SECONDS.toNanos(1);
+        while (worker.getState() != expected && System.nanoTime() < limit) Thread.onSpinWait();
+        assertEquals(expected, worker.getState());
+    }
+
     @Test
     void requestAfterLongIdleDoesNotReplayEmptyWheelRevolutions() {
         AtomicLong clock = new AtomicLong();

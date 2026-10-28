@@ -14,6 +14,13 @@ public sealed class StreamSessionForcedCleanupTests
     [Fact]
     public async Task Fatal_pool_failure_ends_stream_source_and_is_reported_once()
     {
+        if (
+            await IsolatedTestProcess.RunIsolatedAsync(
+                typeof(StreamSessionForcedCleanupTests),
+                nameof(Fatal_pool_failure_ends_stream_source_and_is_reported_once)
+            )
+        )
+            return;
         var registration = new ZLinkFrameworkRegistration();
         ZLinkFrameworkRuntime runtime = null!;
         await using var provider = new ServiceCollection()
@@ -55,14 +62,7 @@ public sealed class StreamSessionForcedCleanupTests
         };
         node.Start();
         // Observe the receive task itself before shutdown cancels unrelated node loops.
-        var ended = (Task)
-            typeof(ZLinkStreamNodeRuntime)
-                .GetField(
-                    "_receiveLoop",
-                    System.Reflection.BindingFlags.Instance
-                        | System.Reflection.BindingFlags.NonPublic
-                )!
-                .GetValue(node)!;
+        var ended = node.ReceiveCompletion;
         try
         {
             await poller.FirstWait.Task.WaitAsync(TimeSpan.FromSeconds(5));

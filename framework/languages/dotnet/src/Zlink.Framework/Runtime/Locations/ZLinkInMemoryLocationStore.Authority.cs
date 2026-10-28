@@ -29,7 +29,7 @@ internal sealed partial class ZLinkInMemoryLocationStore
     private long _authorityObjectGeneration;
     private long _authorityOwnerGeneration;
 
-    private bool MembershipCommitAllowed(
+    private ZLinkFrameworkErrorKind? MembershipCommitFailure(
         ReadOnlyMemory<byte> payload,
         ZLinkAuthoritySnapshot current,
         DateTimeOffset now,
@@ -41,7 +41,7 @@ internal sealed partial class ZLinkInMemoryLocationStore
             || !ZLinkActorAuthorityPayloadCodec.TryDecodeRelocating(payload.Span, out var actor)
             || actor.CurrentSpotKind != ZLinkSpotKind.User
         )
-            return true;
+            return null;
         if (
             ZLinkActorAuthorityPayloadCodec.TryDecodeRelocating(
                 current.Payload.Span,
@@ -52,20 +52,26 @@ internal sealed partial class ZLinkInMemoryLocationStore
             && previous.CurrentSpotId == actor.CurrentSpotId
             && previous.CurrentSpotGeneration == actor.CurrentSpotGeneration
         )
-            return true;
+            return null;
         var key = ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey(actor.CurrentSpotId);
+        if (!_authorities.TryGetValue(key.Value, out var spot))
+            return ZLinkFrameworkErrorKind.NotFound;
         if (
-            !_authorities.TryGetValue(key.Value, out var spot)
-            || spot.ObjectGeneration != actor.CurrentSpotGeneration
+            spot.ObjectGeneration != actor.CurrentSpotGeneration
             || spot.Allocation.ObjectKind != ZLinkPlacementObjectKind.UserSpot
+            || spot.Allocation.State != ZLinkPlacementAllocationState.Active
+            || !ZLinkUserSpotAuthorityPayloadCodec.TryDecode(spot.Payload.Span, out var target)
+            || target.State != ZLinkUserSpotAuthorityState.Ready
         )
-            return false;
+            return ZLinkFrameworkErrorKind.Unavailable;
         var participant = aggregate?.Participants.SingleOrDefault(p => p.Key == key);
+        if (participant is null && IsAuthorityInPreparedAggregate(key))
+            return ZLinkFrameworkErrorKind.Unavailable;
         var token =
             participant?.OwnerTransition == ZLinkAuthorityGenerationTransition.NewOwner
                 ? aggregate!.TargetOwner
                 : new ZLinkLocationOwnerToken(spot.OwnerId, spot.OwnerLeaseGeneration);
-        return MatchesLiveOwnerLease(token, now);
+        return MatchesLiveOwnerLease(token, now) ? null : ZLinkFrameworkErrorKind.Unavailable;
     }
 
     public ValueTask<ZLinkAuthorityReadResult> ReadAuthorityAsync(
@@ -131,10 +137,16 @@ internal sealed partial class ZLinkInMemoryLocationStore
                     return new ZLinkAuthorityCompareExchangeResult.Conflict(
                         new ZLinkAuthorityReadResult.Found(current with { StoreNow = now })
                     );
-                if (!MembershipCommitAllowed(restore.Payload, current, now))
+                if (
+                    MembershipCommitFailure(restore.Payload, current, now) is
+                    { } restoreMembershipFailure
+                )
                     return new ZLinkAuthorityCompareExchangeResult.Conflict(
                         new ZLinkAuthorityReadResult.Found(current with { StoreNow = now })
-                    );
+                    )
+                    {
+                        MembershipFailure = restoreMembershipFailure,
+                    };
                 if (!CanIncrement(_authorityRevision))
                     return new ZLinkAuthorityCompareExchangeResult.GenerationExhausted();
                 var restored = current with
@@ -180,12 +192,18 @@ internal sealed partial class ZLinkInMemoryLocationStore
                     current is null
                         ? new ZLinkAuthorityReadResult.Missing(now)
                         : new ZLinkAuthorityReadResult.Found(current with { StoreNow = now })
-                );
+                )
+                {
+                    MembershipFailure = ZLinkFrameworkErrorKind.Unavailable,
+                };
             }
-            if (!MembershipCommitAllowed(put.Payload, current, now))
+            if (MembershipCommitFailure(put.Payload, current, now) is { } membershipFailure)
                 return new ZLinkAuthorityCompareExchangeResult.Conflict(
                     new ZLinkAuthorityReadResult.Found(current with { StoreNow = now })
-                );
+                )
+                {
+                    MembershipFailure = membershipFailure,
+                };
             var nextAllocation = current.Allocation;
             var nextObjectGeneration = current.ObjectGeneration;
             var nextAuthorityOwnerGeneration = current.AuthorityOwnerGeneration;
@@ -501,7 +519,7 @@ internal sealed partial class ZLinkInMemoryLocationStore
             if (!CanIncrement(_authorityRevision))
                 return new ZLinkObjectCommitResult.GenerationExhausted();
 
-            if (!MembershipCommitAllowed(readyPayload, current, now))
+            if (MembershipCommitFailure(readyPayload, current, now) is not null)
                 return new ZLinkObjectCommitResult.Stale();
             var stored = current with
             {
@@ -582,7 +600,7 @@ internal sealed partial class ZLinkInMemoryLocationStore
                 return new ZLinkObjectCreationCompleteResult.Stale();
             if (
                 completion is ZLinkObjectCreationCompletion.Created membership
-                && !MembershipCommitAllowed(membership.ReadyPayload, current, now)
+                && MembershipCommitFailure(membership.ReadyPayload, current, now) is not null
             )
                 return new ZLinkObjectCreationCompleteResult.Stale();
             if (!CanIncrement(_authorityRevision))
@@ -1018,12 +1036,13 @@ internal sealed partial class ZLinkInMemoryLocationStore
 
             if (
                 aggregate.Request.Participants.Any(participant =>
-                    !MembershipCommitAllowed(
+                    MembershipCommitFailure(
                         participant.AuthorityPayload,
                         _authorities[participant.Key.Value],
                         now,
                         aggregate.Request
                     )
+                        is not null
                 )
             )
                 return ZLinkAggregateCommitResult.Stale;

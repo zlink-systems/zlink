@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <nlohmann/json.hpp>
+#include <zlink/json_profile.hpp>
 #include <optional>
 #include <string>
 #include <vector>
@@ -116,7 +117,6 @@ struct offer_delivery_notify_t
     std::string dropoff_address;
 };
 
-
 struct courier_decision_msg_t
 {
     static constexpr const char *packet_name = "CourierDecisionMsg";
@@ -201,265 +201,247 @@ json_optional_string (const nlohmann::json &json, const char *camel, const char 
     return json.at (name).get<std::string> ();
 }
 
-inline void to_json (nlohmann::json &json, const create_delivery_req_t &value)
-{
-    json = {{"deliveryId", value.delivery_id},
-            {"customerId", value.customer_id},
-            {"pickupAddress", value.pickup_address},
-            {"dropoffAddress", value.dropoff_address}};
 }
 
-inline void from_json (const nlohmann::json &json, create_delivery_req_t &value)
+template <> struct zlink::json::dto_traits<zlink::samples::deliverydispatch::create_delivery_req_t>
 {
-    value.delivery_id = json_string (json, "deliveryId", "delivery_id");
-    value.customer_id = json_string (json, "customerId", "customer_id");
-    value.pickup_address = json_string (json, "pickupAddress", "pickup_address");
-    value.dropoff_address = json_string (json, "dropoffAddress", "dropoff_address");
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("deliveryId",
+                          &zlink::samples::deliverydispatch::create_delivery_req_t::delivery_id),
+      zlink::json::field ("customerId",
+                          &zlink::samples::deliverydispatch::create_delivery_req_t::customer_id),
+      zlink::json::field ("pickupAddress",
+                          &zlink::samples::deliverydispatch::create_delivery_req_t::pickup_address),
+      zlink::json::field (
+        "dropoffAddress",
+        &zlink::samples::deliverydispatch::create_delivery_req_t::dropoff_address)};
+};
 
-inline void to_json (nlohmann::json &json, const create_delivery_res_t &value)
+template <> struct zlink::json::dto_traits<zlink::samples::deliverydispatch::create_delivery_res_t>
 {
-    json = {{"deliveryId", value.delivery_id}};
-}
+    static constexpr auto fields = std::tuple{zlink::json::field (
+      "deliveryId", &zlink::samples::deliverydispatch::create_delivery_res_t::delivery_id)};
+};
 
-inline void from_json (const nlohmann::json &json, create_delivery_res_t &value)
+template <>
+struct zlink::json::dto_traits<zlink::samples::deliverydispatch::ensure_customer_actor_req_t>
 {
-    value.delivery_id = json_string (json, "deliveryId", "delivery_id");
-}
+    static constexpr auto fields = std::tuple{zlink::json::field (
+      "customerId", &zlink::samples::deliverydispatch::ensure_customer_actor_req_t::customer_id)};
+};
 
-inline void to_json (nlohmann::json &json, const ensure_customer_actor_req_t &value)
+template <>
+struct zlink::json::dto_traits<zlink::samples::deliverydispatch::bind_courier_session_req_t>
 {
-    json = {{"customerId", value.customer_id}};
-}
+    static constexpr auto fields = std::tuple{zlink::json::field (
+      "courierId", &zlink::samples::deliverydispatch::bind_courier_session_req_t::courier_id)};
+};
 
-inline void from_json (const nlohmann::json &json, ensure_customer_actor_req_t &value)
+template <>
+struct zlink::json::dto_traits<zlink::samples::deliverydispatch::bind_courier_session_res_t>
 {
-    value.customer_id = json_string (json, "customerId", "customer_id");
-}
+    static constexpr auto fields = std::tuple{zlink::json::field (
+      "courierId", &zlink::samples::deliverydispatch::bind_courier_session_res_t::courier_id)};
+};
 
-inline void to_json (nlohmann::json &json, const bind_courier_session_req_t &value)
+template <>
+struct zlink::json::dto_traits<zlink::samples::deliverydispatch::ensure_courier_actor_req_t>
 {
-    json = {{"courierId", value.courier_id}};
-}
+    static constexpr auto fields = std::tuple{zlink::json::field (
+      "courierId", &zlink::samples::deliverydispatch::ensure_courier_actor_req_t::courier_id)};
+};
 
-inline void from_json (const nlohmann::json &json, bind_courier_session_req_t &value)
+template <>
+struct zlink::json::dto_traits<zlink::samples::deliverydispatch::subscribe_delivery_req_t>
 {
-    value.courier_id = json_string (json, "courierId", "courier_id");
-}
+    static constexpr auto fields = std::tuple{zlink::json::field (
+      "deliveryId", &zlink::samples::deliverydispatch::subscribe_delivery_req_t::delivery_id)};
+};
 
-inline void to_json (nlohmann::json &json, const bind_courier_session_res_t &value)
+template <>
+struct zlink::json::dto_traits<zlink::samples::deliverydispatch::subscribe_delivery_res_t>
 {
-    json = {{"courierId", value.courier_id}};
-}
+    static constexpr auto fields = std::tuple{zlink::json::field (
+      "deliveryId", &zlink::samples::deliverydispatch::subscribe_delivery_res_t::delivery_id)};
+};
 
-inline void from_json (const nlohmann::json &json, bind_courier_session_res_t &value)
+template <> struct zlink::json::dto_traits<zlink::samples::deliverydispatch::assign_delivery_msg_t>
 {
-    value.courier_id = json_string (json, "courierId", "courier_id");
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("deliveryId",
+                          &zlink::samples::deliverydispatch::assign_delivery_msg_t::delivery_id),
+      zlink::json::field ("customerId",
+                          &zlink::samples::deliverydispatch::assign_delivery_msg_t::customer_id),
+      zlink::json::field ("pickupAddress",
+                          &zlink::samples::deliverydispatch::assign_delivery_msg_t::pickup_address),
+      zlink::json::field (
+        "dropoffAddress",
+        &zlink::samples::deliverydispatch::assign_delivery_msg_t::dropoff_address)};
+};
 
-inline void to_json (nlohmann::json &json, const ensure_courier_actor_req_t &value)
+template <> struct zlink::json::dto_traits<zlink::samples::deliverydispatch::offer_delivery_msg_t>
 {
-    json = {{"courierId", value.courier_id}};
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("courierId",
+                          &zlink::samples::deliverydispatch::offer_delivery_msg_t::courier_id),
+      zlink::json::field ("deliveryId",
+                          &zlink::samples::deliverydispatch::offer_delivery_msg_t::delivery_id),
+      zlink::json::field ("attempt",
+                          &zlink::samples::deliverydispatch::offer_delivery_msg_t::attempt),
+      zlink::json::field ("pickupAddress",
+                          &zlink::samples::deliverydispatch::offer_delivery_msg_t::pickup_address),
+      zlink::json::field (
+        "dropoffAddress",
+        &zlink::samples::deliverydispatch::offer_delivery_msg_t::dropoff_address)};
+};
 
-inline void from_json (const nlohmann::json &json, ensure_courier_actor_req_t &value)
+template <>
+struct zlink::json::dto_traits<zlink::samples::deliverydispatch::offer_delivery_result_msg_t>
 {
-    value.courier_id = json_string (json, "courierId", "courier_id");
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field (
+        "deliveryId", &zlink::samples::deliverydispatch::offer_delivery_result_msg_t::delivery_id),
+      zlink::json::field (
+        "courierId", &zlink::samples::deliverydispatch::offer_delivery_result_msg_t::courier_id),
+      zlink::json::field ("attempt",
+                          &zlink::samples::deliverydispatch::offer_delivery_result_msg_t::attempt),
+      zlink::json::field ("accepted",
+                          &zlink::samples::deliverydispatch::offer_delivery_result_msg_t::accepted),
+      zlink::json::field ("reason",
+                          &zlink::samples::deliverydispatch::offer_delivery_result_msg_t::reason)};
+};
 
-inline void to_json (nlohmann::json &json, const subscribe_delivery_req_t &value)
+template <>
+struct zlink::json::dto_traits<zlink::samples::deliverydispatch::offer_delivery_notify_t>
 {
-    json = {{"deliveryId", value.delivery_id}};
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("courierId",
+                          &zlink::samples::deliverydispatch::offer_delivery_notify_t::courier_id),
+      zlink::json::field ("deliveryId",
+                          &zlink::samples::deliverydispatch::offer_delivery_notify_t::delivery_id),
+      zlink::json::field (
+        "pickupAddress",
+        &zlink::samples::deliverydispatch::offer_delivery_notify_t::pickup_address),
+      zlink::json::field (
+        "dropoffAddress",
+        &zlink::samples::deliverydispatch::offer_delivery_notify_t::dropoff_address)};
+};
 
-inline void from_json (const nlohmann::json &json, subscribe_delivery_req_t &value)
+template <> struct zlink::json::dto_traits<zlink::samples::deliverydispatch::courier_decision_msg_t>
 {
-    value.delivery_id = json_string (json, "deliveryId", "delivery_id");
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("deliveryId",
+                          &zlink::samples::deliverydispatch::courier_decision_msg_t::delivery_id),
+      zlink::json::field ("courierId",
+                          &zlink::samples::deliverydispatch::courier_decision_msg_t::courier_id),
+      zlink::json::field ("accepted",
+                          &zlink::samples::deliverydispatch::courier_decision_msg_t::accepted),
+      zlink::json::field ("reason",
+                          &zlink::samples::deliverydispatch::courier_decision_msg_t::reason)};
+};
 
-inline void to_json (nlohmann::json &json, const subscribe_delivery_res_t &value)
+template <>
+struct zlink::json::dto_traits<zlink::samples::deliverydispatch::delivery_status_changed_req_t>
 {
-    json = {{"deliveryId", value.delivery_id}};
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field (
+        "deliveryId",
+        &zlink::samples::deliverydispatch::delivery_status_changed_req_t::delivery_id),
+      zlink::json::field (
+        "customerId",
+        &zlink::samples::deliverydispatch::delivery_status_changed_req_t::customer_id),
+      zlink::json::field ("status",
+                          &zlink::samples::deliverydispatch::delivery_status_changed_req_t::status),
+      zlink::json::field (
+        "courierId", &zlink::samples::deliverydispatch::delivery_status_changed_req_t::courier_id),
+      zlink::json::field (
+        "occurredAtUnixMs",
+        &zlink::samples::deliverydispatch::delivery_status_changed_req_t::occurred_at_unix_ms)};
+};
 
-inline void from_json (const nlohmann::json &json, subscribe_delivery_res_t &value)
+template <>
+struct zlink::json::dto_traits<zlink::samples::deliverydispatch::delivery_status_updated_msg_t>
 {
-    value.delivery_id = json_string (json, "deliveryId", "delivery_id");
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field (
+        "deliveryId",
+        &zlink::samples::deliverydispatch::delivery_status_updated_msg_t::delivery_id),
+      zlink::json::field (
+        "customerId",
+        &zlink::samples::deliverydispatch::delivery_status_updated_msg_t::customer_id),
+      zlink::json::field ("status",
+                          &zlink::samples::deliverydispatch::delivery_status_updated_msg_t::status),
+      zlink::json::field (
+        "courierId", &zlink::samples::deliverydispatch::delivery_status_updated_msg_t::courier_id),
+      zlink::json::field (
+        "occurredAtUnixMs",
+        &zlink::samples::deliverydispatch::delivery_status_updated_msg_t::occurred_at_unix_ms)};
+};
 
-inline void to_json (nlohmann::json &json, const assign_delivery_msg_t &value)
+template <>
+struct zlink::json::dto_traits<zlink::samples::deliverydispatch::delivery_status_changed_res_t>
 {
-    json = {{"deliveryId", value.delivery_id},
-            {"customerId", value.customer_id},
-            {"pickupAddress", value.pickup_address},
-            {"dropoffAddress", value.dropoff_address}};
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field (
+        "deliveryId",
+        &zlink::samples::deliverydispatch::delivery_status_changed_res_t::delivery_id),
+      zlink::json::field (
+        "status", &zlink::samples::deliverydispatch::delivery_status_changed_res_t::status)};
+};
 
-inline void from_json (const nlohmann::json &json, assign_delivery_msg_t &value)
+template <>
+struct zlink::json::dto_traits<zlink::samples::deliverydispatch::delivery_status_notify_t>
 {
-    value.delivery_id = json_string (json, "deliveryId", "delivery_id");
-    value.customer_id = json_string (json, "customerId", "customer_id");
-    value.pickup_address = json_string (json, "pickupAddress", "pickup_address");
-    value.dropoff_address = json_string (json, "dropoffAddress", "dropoff_address");
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("deliveryId",
+                          &zlink::samples::deliverydispatch::delivery_status_notify_t::delivery_id),
+      zlink::json::field ("status",
+                          &zlink::samples::deliverydispatch::delivery_status_notify_t::status),
+      zlink::json::field ("courierId",
+                          &zlink::samples::deliverydispatch::delivery_status_notify_t::courier_id),
+      zlink::json::field (
+        "occurredAtUnixMs",
+        &zlink::samples::deliverydispatch::delivery_status_notify_t::occurred_at_unix_ms)};
+};
 
-inline void to_json (nlohmann::json &json, const offer_delivery_msg_t &value)
+template <> struct zlink::json::dto_traits<zlink::samples::deliverydispatch::server_assertion_req_t>
 {
-    json = {{"courierId", value.courier_id},
-            {"deliveryId", value.delivery_id},
-            {"attempt", value.attempt},
-            {"pickupAddress", value.pickup_address},
-            {"dropoffAddress", value.dropoff_address}};
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field (
+        "successfulDeliveryId",
+        &zlink::samples::deliverydispatch::server_assertion_req_t::successful_delivery_id),
+      zlink::json::field (
+        "reassignedDeliveryId",
+        &zlink::samples::deliverydispatch::server_assertion_req_t::reassigned_delivery_id)};
+};
 
-inline void from_json (const nlohmann::json &json, offer_delivery_msg_t &value)
+template <> struct zlink::json::dto_traits<zlink::samples::deliverydispatch::server_assertion_res_t>
 {
-    value.courier_id = json_string (json, "courierId", "courier_id");
-    value.delivery_id = json_string (json, "deliveryId", "delivery_id");
-    value.attempt = json.value ("attempt", 0);
-    value.pickup_address = json_string (json, "pickupAddress", "pickup_address");
-    value.dropoff_address = json_string (json, "dropoffAddress", "dropoff_address");
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("passed",
+                          &zlink::samples::deliverydispatch::server_assertion_res_t::passed),
+      zlink::json::field ("evidence",
+                          &zlink::samples::deliverydispatch::server_assertion_res_t::evidence)};
+};
 
-inline void to_json (nlohmann::json &json, const offer_delivery_result_msg_t &value)
+namespace zlink::samples::deliverydispatch
 {
-    json = {{"deliveryId", value.delivery_id},
-            {"courierId", value.courier_id},
-            {"attempt", value.attempt},
-            {"accepted", value.accepted},
-            {"reason", value.reason ? nlohmann::json (*value.reason) : nlohmann::json (nullptr)}};
-}
-
-inline void from_json (const nlohmann::json &json, offer_delivery_result_msg_t &value)
-{
-    value.delivery_id = json_string (json, "deliveryId", "delivery_id");
-    value.courier_id = json_string (json, "courierId", "courier_id");
-    value.attempt = json.value ("attempt", 0);
-    value.accepted = json.value ("accepted", false);
-    value.reason = json_optional_string (json, "reason", "reason");
-}
-
-inline void to_json (nlohmann::json &json, const offer_delivery_notify_t &value)
-{
-    json = {{"courierId", value.courier_id},
-            {"deliveryId", value.delivery_id},
-            {"pickupAddress", value.pickup_address},
-            {"dropoffAddress", value.dropoff_address}};
-}
-
-inline void from_json (const nlohmann::json &json, offer_delivery_notify_t &value)
-{
-    value.courier_id = json_string (json, "courierId", "courier_id");
-    value.delivery_id = json_string (json, "deliveryId", "delivery_id");
-    value.pickup_address = json_string (json, "pickupAddress", "pickup_address");
-    value.dropoff_address = json_string (json, "dropoffAddress", "dropoff_address");
-}
-
-inline void to_json (nlohmann::json &json, const courier_decision_msg_t &value)
-{
-    json = {{"deliveryId", value.delivery_id},
-            {"courierId", value.courier_id},
-            {"accepted", value.accepted},
-            {"reason", value.reason ? nlohmann::json (*value.reason) : nlohmann::json (nullptr)}};
-}
-
-inline void from_json (const nlohmann::json &json, courier_decision_msg_t &value)
-{
-    value.delivery_id = json_string (json, "deliveryId", "delivery_id");
-    value.courier_id = json_string (json, "courierId", "courier_id");
-    value.accepted = json.value ("accepted", false);
-    value.reason = json_optional_string (json, "reason", "reason");
-}
-
-inline void to_json (nlohmann::json &json, const delivery_status_changed_req_t &value)
-{
-    json = {{"deliveryId", value.delivery_id},
-            {"customerId", value.customer_id},
-            {"status", value.status},
-            {"courierId",
-             value.courier_id ? nlohmann::json (*value.courier_id) : nlohmann::json (nullptr)},
-            {"occurredAtUnixMs", value.occurred_at_unix_ms}};
-}
-
-inline void from_json (const nlohmann::json &json, delivery_status_changed_req_t &value)
-{
-    value.delivery_id = json_string (json, "deliveryId", "delivery_id");
-    value.customer_id = json_string (json, "customerId", "customer_id");
-    value.status = json.value ("status", "");
-    value.courier_id = json_optional_string (json, "courierId", "courier_id");
-    value.occurred_at_unix_ms = json.value ("occurredAtUnixMs", std::int64_t{0});
-}
-
-inline void to_json (nlohmann::json &json, const delivery_status_updated_msg_t &value)
-{
-    json = {{"deliveryId", value.delivery_id},
-            {"customerId", value.customer_id},
-            {"status", value.status},
-            {"courierId",
-             value.courier_id ? nlohmann::json (*value.courier_id) : nlohmann::json (nullptr)},
-            {"occurredAtUnixMs", value.occurred_at_unix_ms}};
-}
-
-inline void from_json (const nlohmann::json &json, delivery_status_updated_msg_t &value)
-{
-    value.delivery_id = json_string (json, "deliveryId", "delivery_id");
-    value.customer_id = json_string (json, "customerId", "customer_id");
-    value.status = json.value ("status", "");
-    value.courier_id = json_optional_string (json, "courierId", "courier_id");
-    value.occurred_at_unix_ms = json.value ("occurredAtUnixMs", std::int64_t{0});
-}
-
-inline void to_json (nlohmann::json &json, const delivery_status_changed_res_t &value)
-{
-    json = {{"deliveryId", value.delivery_id}, {"status", value.status}};
-}
-
-inline void from_json (const nlohmann::json &json, delivery_status_changed_res_t &value)
-{
-    value.delivery_id = json_string (json, "deliveryId", "delivery_id");
-    value.status = json.value ("status", "");
-}
-
-inline void to_json (nlohmann::json &json, const delivery_status_notify_t &value)
-{
-    json = {{"deliveryId", value.delivery_id},
-            {"status", value.status},
-            {"courierId",
-             value.courier_id ? nlohmann::json (*value.courier_id) : nlohmann::json (nullptr)},
-            {"occurredAtUnixMs", value.occurred_at_unix_ms}};
-}
-
-inline void from_json (const nlohmann::json &json, delivery_status_notify_t &value)
-{
-    value.delivery_id = json_string (json, "deliveryId", "delivery_id");
-    value.status = json.value ("status", "");
-    value.courier_id = json_optional_string (json, "courierId", "courier_id");
-    value.occurred_at_unix_ms = json.value ("occurredAtUnixMs", std::int64_t{0});
-}
-
-inline void to_json (nlohmann::json &json, const server_assertion_req_t &value)
-{
-    json = {{"successfulDeliveryId", value.successful_delivery_id},
-            {"reassignedDeliveryId", value.reassigned_delivery_id}};
-}
-
-inline void from_json (const nlohmann::json &json, server_assertion_req_t &value)
-{
-    value.successful_delivery_id = json_string (
-      json, "successfulDeliveryId", "successful_delivery_id");
-    value.reassigned_delivery_id = json_string (
-      json, "reassignedDeliveryId", "reassigned_delivery_id");
-}
-
-inline void to_json (nlohmann::json &json, const server_assertion_res_t &value)
-{
-    json = {{"passed", value.passed}, {"evidence", value.evidence}};
-}
-
-inline void from_json (const nlohmann::json &json, server_assertion_res_t &value)
-{
-    value.passed = json.value ("passed", false);
-    value.evidence = json.value ("evidence", std::vector<std::string>{});
-}
 
 } // namespace zlink::samples::deliverydispatch
+
+// Explicit JSON state-store conversion shares the typed messaging profile.
+namespace zlink::samples::deliverydispatch
+{
+template <typename T>
+    requires zlink::detail::json_profile::has_dto<T>
+void to_json (nlohmann::json &out, const T &value)
+{
+    out = zlink::detail::json_profile::encode_value (value);
+}
+template <typename T>
+    requires zlink::detail::json_profile::has_dto<T>
+void from_json (const nlohmann::json &in, T &value)
+{
+    value = zlink::detail::json_profile::decode_value<T> (in);
+}
+}

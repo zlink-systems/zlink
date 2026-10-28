@@ -5,6 +5,83 @@ namespace Zlink.Framework.UnitTests.Runtime;
 
 public sealed class ChannelApplicationDispatchQueueShutdownTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Retained_dispatches_finish_and_report_before_disposal(bool reporterThrows)
+    {
+        var started = new TaskCompletionSource[2];
+        var release = new TaskCompletionSource[2];
+        for (var i = 0; i < 2; i++)
+        {
+            started[i] = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            release[i] = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        }
+        var failure = new InvalidOperationException("retained dispatch failed");
+        var reportingFailure = new InvalidOperationException("retained reporting failed");
+        var audit = new AuditRuntimeFailureReporter();
+        var finished = 0;
+        var queue = new ZLinkChannelApplicationDispatchQueue<int>(
+            "retained-shutdown",
+            reporterThrows ? new ThrowingReporter(reportingFailure) : audit,
+            CancellationToken.None,
+            CancellationToken.None,
+            (index, _) => DispatchAsync(index),
+            _ => Assert.Fail("Accepted record was rejected")
+        );
+        Task? disposal = null;
+        try
+        {
+            Assert.True(await queue.PostAsync(0, CancellationToken.None));
+            await started[0].Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.True(await queue.PostAsync(1, CancellationToken.None));
+            await started[1].Task.WaitAsync(TimeSpan.FromSeconds(5));
+            disposal = queue.DisposeAsync().AsTask();
+            Assert.False(disposal.IsCompleted);
+            release[1].TrySetResult();
+            await queue.ReplyGate.TryInvokeAsync(() => { });
+            Assert.False(disposal.IsCompleted);
+        }
+        finally
+        {
+            release[0].TrySetResult();
+            release[1].TrySetResult();
+            disposal ??= queue.DisposeAsync().AsTask();
+            if (reporterThrows)
+            {
+                var error = await Assert.ThrowsAnyAsync<Exception>(() =>
+                    disposal.WaitAsync(TimeSpan.FromSeconds(5))
+                );
+                var errors = Assert.IsType<AggregateException>(error).Flatten().InnerExceptions;
+                Assert.Contains(failure, errors);
+                Assert.Contains(reportingFailure, errors);
+            }
+            else
+                await disposal.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        Assert.Equal(2, Volatile.Read(ref finished));
+        if (!reporterThrows)
+            Assert.Same(failure, Assert.Single(audit.Failures));
+        Assert.False(
+            await queue.ReplyGate.TryInvokeAsync(() => Assert.Fail("Reply gate stayed open"))
+        );
+
+        async ValueTask DispatchAsync(int index)
+        {
+            started[index].TrySetResult();
+            try
+            {
+                await release[index].Task;
+                if (index == 0)
+                    throw failure;
+            }
+            finally
+            {
+                Interlocked.Increment(ref finished);
+            }
+        }
+    }
+
     [Fact]
     public async Task Dispose_waits_for_in_flight_dispatch_without_its_own_time_budget()
     {
@@ -86,8 +163,8 @@ public sealed class ChannelApplicationDispatchQueueShutdownTests
         );
         Assert.True(await queue.PostAsync(1, CancellationToken.None));
         await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.True(await queue.PostAsync(2, CancellationToken.None));
         var disposal = queue.DisposeAsync().AsTask();
+        Assert.False(await queue.PostAsync(2, CancellationToken.None));
         release.TrySetResult();
         var failure = await Assert.ThrowsAnyAsync<Exception>(() =>
             disposal.WaitAsync(TimeSpan.FromSeconds(5))
@@ -116,6 +193,7 @@ public sealed class ChannelApplicationDispatchQueueShutdownTests
     {
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var terminal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         using var deadline = new CancellationTokenSource();
         var rejected = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var queue = new ZLinkChannelApplicationDispatchQueue<int>(
@@ -127,20 +205,21 @@ public sealed class ChannelApplicationDispatchQueueShutdownTests
             {
                 started.SetResult();
                 await release.Task;
+                terminal.TrySetResult();
             },
             _ => rejected.TrySetResult()
         );
 
         await queue.PostAsync(1, CancellationToken.None);
         await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.True(await queue.PostAsync(2, CancellationToken.None));
         var dispose = queue.DisposeAsync().AsTask();
+        Assert.False(await queue.PostAsync(2, CancellationToken.None));
         await Task.Delay(100);
         Assert.False(dispose.IsCompleted);
         deadline.Cancel();
         await dispose.WaitAsync(TimeSpan.FromSeconds(5));
         release.SetResult();
-        // Late cleanup must release its process source before the next test starts.
+        await terminal.Task.WaitAsync(TimeSpan.FromSeconds(5));
         await rejected.Task.WaitAsync(TimeSpan.FromSeconds(5));
     }
 }

@@ -834,16 +834,19 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                                                                     "injected target joined"
                                                                             + " failure")
                                                             && message.contains(
-                                                                    scenario
-                                                                                    == Scenario
-                                                                                            .JOINED_TYPED_FAILURE
+                                                                    scenario.joinedFailure()
+                                                                                    instanceof
+                                                                                    ZLinkFrameworkException
                                                                             ? "ZLinkFrameworkException"
                                                                             : "IllegalStateException")),
                             diagnostics.errors.toString());
                     assertEquals(
-                            scenario == Scenario.JOINED_TYPED_FAILURE
-                                    ? ZLinkFrameworkErrorKind.DATA_LOST
-                                    : ZLinkFrameworkErrorKind.INTERNAL_FAILURE,
+                            switch (scenario) {
+                                case JOINED_TYPED_FAILURE -> ZLinkFrameworkErrorKind.DATA_LOST;
+                                case JOINED_NOT_FOUND -> ZLinkFrameworkErrorKind.NOT_FOUND;
+                                case JOINED_UNAVAILABLE -> ZLinkFrameworkErrorKind.UNAVAILABLE;
+                                default -> ZLinkFrameworkErrorKind.INTERNAL_FAILURE;
+                            },
                             failed.kind());
                     assertFalse(
                             EVENTS.contains("leave.submit"),
@@ -1490,6 +1493,8 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
         RELOCATE_BEFORE_SOURCE_LEAVE(LeaveMode.FAILED_FUTURE),
         LEAVE_THROW(LeaveMode.THROW),
         JOINED_TYPED_FAILURE(LeaveMode.DELIVER),
+        JOINED_NOT_FOUND(LeaveMode.DELIVER),
+        JOINED_UNAVAILABLE(LeaveMode.DELIVER),
         JOINED_GENERIC_FAILURE(LeaveMode.DELIVER),
         COMPLETION_FAILURE(LeaveMode.DELIVER),
         SHUTDOWN_DURING_RESTORE(LeaveMode.DELIVER),
@@ -1506,6 +1511,14 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                 case JOINED_TYPED_FAILURE ->
                         new ZLinkFrameworkException(
                                 ZLinkFrameworkErrorKind.DATA_LOST,
+                                "injected target joined failure");
+                case JOINED_NOT_FOUND ->
+                        new ZLinkFrameworkException(
+                                ZLinkFrameworkErrorKind.NOT_FOUND,
+                                "injected target joined failure");
+                case JOINED_UNAVAILABLE ->
+                        new ZLinkFrameworkException(
+                                ZLinkFrameworkErrorKind.UNAVAILABLE,
                                 "injected target joined failure");
                 case JOINED_GENERIC_FAILURE ->
                         new IllegalStateException("injected target joined failure");

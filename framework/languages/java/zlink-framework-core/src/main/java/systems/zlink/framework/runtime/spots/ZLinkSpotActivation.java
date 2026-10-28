@@ -543,7 +543,8 @@ final class SpotActivation extends SpotActivationBase<DefaultSpotContext> {
     }
 
     CompletionStage<Void> closeAsync() {
-        return closeAsync(ZLinkSpotCloseReason.EXPLICIT_CLOSE, Instant.now());
+        return closeAsync(
+                ZLinkSpotCloseReason.EXPLICIT_CLOSE, host.defaultCloseDeadline(Instant.now()));
     }
 
     CompletionStage<Void> closeAsync(ZLinkSpotCloseReason reason, Instant deadline) {

@@ -207,7 +207,7 @@ void test_snapshot_polling_and_recv_generation ()
     TEST_ASSERT_EQUAL_INT (-1, zlink_poll (&item, 1, 0, &error));
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_NOT_SUPPORTED, error);
     TEST_ASSERT_EQUAL_INT (ENOTSUP, errno);
-    item.events = 128;
+    item.events = 256;
     TEST_ASSERT_EQUAL_INT (-1, zlink_poll (&item, 1, 0, &error));
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_INVALID_ARGUMENT, error);
     TEST_ASSERT_EQUAL_INT (EINVAL, errno);
@@ -218,7 +218,7 @@ void test_snapshot_polling_and_recv_generation ()
                            zlink_poller_add (poller, pair, NULL, ZLINK_POLLROUTE));
     TEST_ASSERT_EQUAL_INT (ENOTSUP, errno);
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_INVALID_ARGUMENT,
-                           zlink_poller_add (poller, client, NULL, 128));
+                           zlink_poller_add (poller, client, NULL, 256));
     TEST_ASSERT_EQUAL_INT (EINVAL, errno);
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
                            zlink_poller_add (poller, client, client, ZLINK_POLLROUTE));

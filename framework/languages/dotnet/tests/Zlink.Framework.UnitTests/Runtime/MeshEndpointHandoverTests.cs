@@ -94,8 +94,10 @@ public sealed partial class StatefulServiceRuntimeTests
         try
         {
             var replacementIntent = owner.ConnectPeer(endpoint, replacement.RoutingId);
-            // MeshNode §7.1: the replacement records the owner as admitted when it
-            // accepts the Hello, then submits its Admit; the owner admits on receipt.
+            // Complete the HELLO exchange before holding application submissions.
+            // Ready requires the owner's ADMIT; the join below remains queued.
+            await scheduler.Queued.WaitAsync(TimeSpan.FromSeconds(2));
+            await scheduler.ReleaseNextAsync();
             await WaitUntilAsync(() => replacement.Status().AdmittedPeerCount == 1);
             Assert.Equal(MeshPeerState.Admitted, Assert.Single(replacement.Peers()).State);
             await WaitUntilAsync(() => owner.Status().AdmittedPeerCount == 1);
@@ -307,7 +309,6 @@ public sealed partial class StatefulServiceRuntimeTests
         {
             private IRouterSocket _inner = null!;
             private Action? _beforeDisconnectRid;
-            internal IRouterSocket Inner => _inner;
 
             public void Initialize(IRouterSocket inner, Action beforeDisconnectRid)
             {
