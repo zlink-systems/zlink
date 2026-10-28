@@ -14,6 +14,16 @@ export function dispatchReasonFromError(error: unknown): ZLinkDispatchErrorReaso
   if (origin === ZLinkFrameworkInternalErrorKind.PayloadDecodeFailed)
     return ZLinkDispatchErrorReason.PayloadDecodeFailed;
   if (
+    origin === ZLinkFrameworkInternalErrorKind.HandlerNotFound ||
+    origin === ZLinkFrameworkInternalErrorKind.RouteHandlerNotFound ||
+    origin === ZLinkFrameworkInternalErrorKind.ActorDispatchHandlerNotFound
+  )
+    return ZLinkDispatchErrorReason.HandlerMissing;
+  if (
+    origin === ZLinkFrameworkInternalErrorKind.ActorRouteNotFound ||
+    origin === ZLinkFrameworkInternalErrorKind.SpotRouteNotFound ||
+    origin === ZLinkFrameworkInternalErrorKind.RequestTargetNotFound ||
+    origin === ZLinkFrameworkInternalErrorKind.MeshNotFound ||
     origin === ZLinkFrameworkInternalErrorKind.SpotGenerationStale ||
     origin === ZLinkFrameworkInternalErrorKind.ActorGenerationStale ||
     origin === ZLinkFrameworkInternalErrorKind.SpotMoving ||
@@ -22,8 +32,6 @@ export function dispatchReasonFromError(error: unknown): ZLinkDispatchErrorReaso
   )
     return ZLinkDispatchErrorReason.StaleTarget;
   switch (error.kind) {
-    case ZLinkFrameworkErrorKind.NotFound:
-      return ZLinkDispatchErrorReason.HandlerMissing;
     case ZLinkFrameworkErrorKind.ProtocolError:
       return ZLinkDispatchErrorReason.InvalidFrame;
     case ZLinkFrameworkErrorKind.ShuttingDown:

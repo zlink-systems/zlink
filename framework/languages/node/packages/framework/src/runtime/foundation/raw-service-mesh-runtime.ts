@@ -418,7 +418,7 @@ export class RawServiceMeshRuntime {
     const admitted = this.topology.admittedPeer(nodeRoutingId)?.liveness?.connectionId;
     return {
       generation: selected ?? (typeof admitted === 'bigint' ? admitted : undefined),
-      ready: admitted !== undefined && (selected === undefined || admitted === selected)
+      ready: this.isPeerRouteReady(nodeRoutingId)
     };
   }
 
@@ -507,20 +507,16 @@ export class RawServiceMeshRuntime {
   }
 
   private isPeerAnnouncementCurrent(nodeRoutingId: string, generation: bigint): boolean {
-    const admission = this.topology.routeAdmission(nodeRoutingId);
     return (
       this.selectedRoutes.get(nodeRoutingId) === generation &&
-      !(
-        admission?.connectionId === routeConnectionId(generation) &&
-        admission.remoteAdmitReceived === true
-      )
+      !this.topology.hasRemoteAdmit(nodeRoutingId, routeConnectionId(generation))
     );
   }
 
   isPeerRouteReady(nodeRoutingId: string, lifecycleGeneration?: bigint): boolean {
     // Admission is bound to the observed selected route: the route observer
     // removes the peer when that route ends or is replaced.
-    const peer = this.topology.admittedPeer(nodeRoutingId);
+    const peer = this.topology.readyPeer(nodeRoutingId);
     return (
       peer !== undefined &&
       (lifecycleGeneration === undefined ||
@@ -720,9 +716,7 @@ export class RawServiceMeshRuntime {
   }
 
   private selectChannelTarget(channelName: string): RawServiceChannelTargetSelection {
-    const selected = this.topology.selectChannel(channelName, (peer) =>
-      this.isPeerRouteReady(peer.descriptor.nodeRoutingId)
-    );
+    const selected = this.topology.selectChannel(channelName);
     if (selected !== undefined) return { kind: 'selected', peer: selected };
     return this.topology.hasKnownChannelTarget(channelName)
       ? {
@@ -1239,7 +1233,7 @@ export class RawServiceMeshRuntime {
       ]);
     } else if (header.command === M6aServiceWireCommand.admit) {
       this.controlSends.delete(helloKey);
-      this.refreshAdmissionPending(nowMs);
+      this.progressPeerAdmission(nowMs);
       if (result === 'notRequired') {
         this.retireNotRequiredExpectedPeer(received.sourceRid, descriptor.advertisedEndpoint);
       } else if (
@@ -1415,20 +1409,21 @@ export class RawServiceMeshRuntime {
    * ADMIT, which keeps the existing announce cadence.
    */
   nextMaintenanceDeadlineMs(nowMs: number): number {
-    this.refreshAdmissionPending(nowMs);
+    this.progressPeerAdmission(nowMs);
     return Math.min(this.operations.nextDeadlineMs(), this.liveness.nextDeadlineMs());
   }
 
-  private refreshAdmissionPending(nowMs: number): void {
+  private progressPeerAdmission(nowMs: number): void {
     let pending = false;
     if (!this.closed && this.controlSends.size !== 0) {
       for (const nodeRoutingId of this.selectedRoutes.keys()) {
-        const exchange = this.controlSends.get(
-          controlSendKey(nodeRoutingId, M6aServiceWireCommand.hello)
-        );
+        const key = controlSendKey(nodeRoutingId, M6aServiceWireCommand.hello);
+        const exchange = this.controlSends.get(key);
+        // An unsent HELLO intent may resume after the host admission seal opens.
+        // Only retransmission of submitted bytes waits for the management cadence.
         if (exchange?.current?.() === true) {
+          if (exchange.hello === undefined) this.announcePeer(nodeRoutingId);
           pending = true;
-          break;
         }
       }
     }
@@ -1436,7 +1431,7 @@ export class RawServiceMeshRuntime {
   }
 
   tickLiveness(nowMs = performance.now()): ServiceLivenessTick {
-    this.refreshAdmissionPending(nowMs);
+    this.progressPeerAdmission(nowMs);
     const admissionDue = this.liveness.tickAdmission(nowMs);
     const result = this.liveness.tick(nowMs);
     this.requireStarted();
@@ -1458,8 +1453,7 @@ export class RawServiceMeshRuntime {
     for (const nodeRoutingId of result.timedOutNodes) {
       const peer = this.topology.peer(nodeRoutingId);
       if (peer === undefined) continue;
-      this.requireStarted().disconnectRid!(nodeRoutingId);
-      this.removePeer(peer);
+      this.removePeer(peer, () => this.requireStarted().disconnectRid!(nodeRoutingId));
     }
     return result;
   }
@@ -1495,9 +1489,9 @@ export class RawServiceMeshRuntime {
     }
     this.selectedRoutes = observed;
     for (const nodeRoutingId of selected) this.notifyPeerRouteChanged(nodeRoutingId);
-    // A new selected route admits only through a new handshake.
+    // Selected routes begin admission before waiting for the management cadence.
     for (const nodeRoutingId of selected) await this.announcePeer(nodeRoutingId);
-    this.refreshAdmissionPending(performance.now());
+    this.progressPeerAdmission(performance.now());
     return changes;
   }
 
@@ -1615,7 +1609,7 @@ export class RawServiceMeshRuntime {
       return pending;
     }
     const pending = this.registerRequest(timeoutMs, observer, operationKind);
-    const selectedPeer = this.topology.admittedPeer(selectedTargetNodeRoutingId);
+    const selectedPeer = this.topology.readyPeer(selectedTargetNodeRoutingId);
     if (selectedPeer === undefined) {
       // Logical target selection is the requester's decision: an RID that is
       // not an admitted peer is not a target. Whether an admitted target's
@@ -1701,7 +1695,7 @@ export class RawServiceMeshRuntime {
     command: number = M6aServiceWireCommand.hello,
     descriptorBytes?: Uint8Array
   ): PeerAdmissionResult {
-    const previous = this.topology.peer(descriptor.nodeRoutingId);
+    const previous = this.topology.admittedPeer(descriptor.nodeRoutingId);
     const topologyConnectionId =
       typeof connectionId === 'bigint' ? routeConnectionId(connectionId) : connectionId;
     const result = this.topology.admit(
@@ -1727,7 +1721,14 @@ export class RawServiceMeshRuntime {
         previous.liveness?.connectionId ?? previous.connectionId
       );
     }
-    if (result === 'admitted') this.notifyPeerRouteChanged(descriptor.nodeRoutingId);
+    if (
+      result === 'admitted' &&
+      (previous?.connectionId !== topologyConnectionId ||
+        previous.descriptor.lifecycleGeneration !== descriptor.lifecycleGeneration ||
+        previous.remoteAdmitReceived !==
+          this.topology.admittedPeer(descriptor.nodeRoutingId)?.remoteAdmitReceived)
+    )
+      this.notifyPeerRouteChanged(descriptor.nodeRoutingId);
     return result;
   }
 
@@ -1761,17 +1762,22 @@ export class RawServiceMeshRuntime {
     this.endpointOnlyPeers.delete(endpoint);
   }
 
-  private removePeer(peer: AdmittedServicePeer): void {
+  private removePeer(peer: AdmittedServicePeer, disconnectPhysical?: () => void): void {
     this.topology.disconnect(peer.descriptor.nodeRoutingId, peer.connectionId);
     this.liveness.disconnect(
       peer.descriptor.nodeRoutingId,
       peer.liveness?.connectionId ?? peer.connectionId
     );
-    this.onPeerDisconnected?.(
-      peer.descriptor.nodeRoutingId,
-      peer.descriptor.advertisedEndpoint,
-      peer.descriptor.lifecycleGeneration
-    );
+    try {
+      disconnectPhysical?.();
+    } finally {
+      // The logical admission has ended even when the physical disconnect reports a failure.
+      this.onPeerDisconnected?.(
+        peer.descriptor.nodeRoutingId,
+        peer.descriptor.advertisedEndpoint,
+        peer.descriptor.lifecycleGeneration
+      );
+    }
   }
 
   private requireStarted(): ZLinkRawRouterPort {
@@ -1882,6 +1888,7 @@ export class RawServiceMeshRuntime {
     targetNodeRoutingId: string,
     parts: readonly Uint8Array[]
   ): boolean | Promise<boolean> {
+    if (!this.isPeerRouteReady(targetNodeRoutingId)) return false;
     try {
       const submission = this.requireStarted().submitSend(targetNodeRoutingId, parts);
       if (submission.result === SubmitResult.Ok) return true;

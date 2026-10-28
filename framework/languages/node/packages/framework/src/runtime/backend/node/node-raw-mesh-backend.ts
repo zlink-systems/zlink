@@ -182,6 +182,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       readonly endpoint: string;
       readonly nodeRoutingId?: string;
       readonly lifecycleGeneration?: bigint;
+      readonly securityIdentity?: string;
     }
   >();
   private completionHandler?: ZLinkMeshCompletionHandler;
@@ -248,7 +249,11 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     private readonly applicationJobQueue?: ApplicationJobQueuePort,
     private readonly applicationJobReceiveFlowFailureSink?: (error: unknown) => void,
     private readonly peerAdmissionSealed?: () => boolean,
-    private readonly infrastructureTaskRunner?: import('../../spots/spot-actor-join-dispatch').ZLinkDetachedTaskRunner
+    private readonly infrastructureTaskRunner?: import('../../spots/spot-actor-join-dispatch').ZLinkDetachedTaskRunner,
+    runtimeDependencies?: {
+      readonly raw?: RawServiceMeshRuntime;
+      readonly stateful?: ServiceStatefulRuntime;
+    }
   ) {
     if (meshName.length === 0) throw new TypeError('MeshName must be non-empty.');
     if (routingId === undefined || routingId.length === 0) {
@@ -256,6 +261,8 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     }
     this.routingId = routingId;
     this.lifecycleGeneration = createLifecycleGeneration();
+    this.runtime = runtimeDependencies?.raw;
+    this.stateful = runtimeDependencies?.stateful;
   }
 
   configureObjectPlacement(options: {
@@ -550,19 +557,34 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     const runtime = this.requireRuntime();
     const nodeRoutingId =
       options.expectedRid === undefined ? undefined : String(options.expectedRid);
+    const securityIdentity =
+      options.expectedSecurityIdentity ?? runtime.topology.localDescriptor().securityIdentity;
+    for (const [id, existing] of this.peerIntents) {
+      if (existing.endpoint !== options.endpoint) continue;
+      if (
+        existing.nodeRoutingId === nodeRoutingId &&
+        existing.securityIdentity === securityIdentity &&
+        existing.lifecycleGeneration === options.expectedLifecycleGeneration
+      ) {
+        return id;
+      }
+      runtime.disconnectPeerEndpoint(existing.endpoint);
+      this.peerIntents.delete(id);
+    }
     if (nodeRoutingId === undefined) {
       runtime.connectPeerEndpoint(options.endpoint);
     } else {
       runtime.connectPeerByRoutingId(
         options.endpoint,
         nodeRoutingId,
-        options.expectedSecurityIdentity ?? runtime.topology.localDescriptor().securityIdentity,
+        securityIdentity,
         options.expectedLifecycleGeneration
       );
     }
     const intent = this.nextPeerIntent++;
     this.peerIntents.set(intent, {
       endpoint: options.endpoint,
+      securityIdentity,
       ...(nodeRoutingId === undefined
         ? {}
         : {
@@ -803,7 +825,9 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
 
   status() {
     const descriptor = this.runtime?.topology.localDescriptor() ?? this.createDescriptor();
-    const peers = this.runtime?.topology.peers() ?? [];
+    const peers = (this.runtime?.topology.peers() ?? []).filter(
+      (peer) => this.runtime?.isPeerRouteReady(peer.descriptor.nodeRoutingId) === true
+    );
     return {
       state: stateCode(descriptor.state),
       routingId: descriptor.nodeRoutingId as RoutingId,

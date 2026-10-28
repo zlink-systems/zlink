@@ -81,7 +81,6 @@ final class ZLinkServiceOperationRegistryTest {
     void maintenanceParksWithoutClockPollingAndCloseJoinsItsWorker() throws Exception {
         AtomicReference<Thread> worker = new AtomicReference<>();
         AtomicReference<ZLinkServiceOperationRegistry> owner = new AtomicReference<>();
-        AtomicReference<Object> gate = new AtomicReference<>();
         AtomicLong clock = new AtomicLong();
         AtomicInteger clockReads = new AtomicInteger();
         CountDownLatch emptyWait = new CountDownLatch(1);
@@ -96,40 +95,25 @@ final class ZLinkServiceOperationRegistryTest {
                         () -> {
                             clockReads.incrementAndGet();
                             if (Thread.currentThread() == worker.get()
-                                    && Thread.holdsLock(gate.get())
                                     && owner.get().pendingCount() == 0) {
                                 emptyWait.countDown();
                             }
                             return clock.get();
                         });
         owner.set(registry);
-        var gateField = ZLinkServiceOperationRegistry.class.getDeclaredField("gate");
-        gateField.setAccessible(true);
-        gate.set(gateField.get(registry));
         try (registry) {
             assertNull(worker.get());
-            synchronized (gate.get()) {
-                var first = registry.register(Duration.ofMillis(1));
-                clock.set(TimeUnit.MILLISECONDS.toNanos(2));
-                assertTrue(registry.discard(first.id()));
-            }
+            var first = registry.register(Duration.ofMillis(1));
+            assertTrue(registry.discard(first.id()));
+            clock.set(TimeUnit.MILLISECONDS.toNanos(2));
             assertTrue(emptyWait.await(1, TimeUnit.SECONDS));
-            int idleReads;
-            synchronized (gate.get()) {
-                // The worker signalled while holding this monitor. Acquiring it proves
-                // that its next action released the monitor through the empty-wheel wait.
-                idleReads = clockReads.get();
-            }
+            awaitWorkerState(worker.get(), Thread.State.WAITING);
+            int idleReads = clockReads.get();
             for (int tick = 0; tick < 1_000; tick++)
                 clock.addAndGet(TimeUnit.MILLISECONDS.toNanos(1));
-            synchronized (gate.get()) {
-                assertEquals(idleReads, clockReads.get());
-            }
-            ZLinkServiceOperationRegistry.Operation<Object> second;
-            synchronized (gate.get()) {
-                second = registry.register(Duration.ofMillis(1));
-                clock.addAndGet(TimeUnit.MILLISECONDS.toNanos(2));
-            }
+            assertEquals(idleReads, clockReads.get());
+            var second = registry.register(Duration.ofMillis(1));
+            clock.addAndGet(TimeUnit.MILLISECONDS.toNanos(2));
             assertTrue(
                     assertThrows(
                                             java.util.concurrent.ExecutionException.class,
@@ -159,18 +143,13 @@ final class ZLinkServiceOperationRegistryTest {
                             if (Thread.currentThread() == worker.get()) observed.get().countDown();
                             return clock.get();
                         });
-        var gateField = ZLinkServiceOperationRegistry.class.getDeclaredField("gate");
-        gateField.setAccessible(true);
-        Object gate = gateField.get(registry);
         try (registry) {
             var later = registry.register(Duration.ofMillis(255));
             assertTrue(firstWait.await(1, TimeUnit.SECONDS));
-            ZLinkServiceOperationRegistry.Operation<Object> earlier;
-            synchronized (gate) {
-                observed.set(nextWait);
-                earlier = registry.register(Duration.ofNanos(1));
-                clock.set(TimeUnit.MILLISECONDS.toNanos(2));
-            }
+            awaitWorkerState(worker.get(), Thread.State.TIMED_WAITING);
+            observed.set(nextWait);
+            var earlier = registry.register(Duration.ofNanos(1));
+            clock.set(TimeUnit.MILLISECONDS.toNanos(2));
             assertTrue(nextWait.await(1, TimeUnit.SECONDS));
             assertTrue(
                     assertThrows(
@@ -182,6 +161,12 @@ final class ZLinkServiceOperationRegistryTest {
             assertTrue(registry.discard(later.id()));
         }
         assertEquals(Thread.State.TERMINATED, worker.get().getState());
+    }
+
+    private static void awaitWorkerState(Thread worker, Thread.State expected) {
+        long limit = System.nanoTime() + TimeUnit.SECONDS.toNanos(1);
+        while (worker.getState() != expected && System.nanoTime() < limit) Thread.onSpinWait();
+        assertEquals(expected, worker.getState());
     }
 
     @Test
@@ -415,17 +400,24 @@ final class ZLinkServiceOperationRegistryTest {
         try (var registry = new ZLinkServiceOperationRegistry(maintenance)) {
             var binding = new CompletableFuture<Void>();
             var send = registry.submitSend(() -> binding);
-            var gateField = ZLinkServiceOperationRegistry.class.getDeclaredField("gate");
-            gateField.setAccessible(true);
-            var gate = gateField.get(registry);
             var callback =
                     send.thenRun(
                             () -> {
                                 assertSame(ForkJoinPool.commonPool(), ForkJoinTask.getPool());
                                 assertTrue(ZLinkServiceCompletionDispatcher.isCurrentCompletion());
-                                assertFalse(Thread.holdsLock(gate));
-                                var request = registry.register(Duration.ofSeconds(1));
-                                assertTrue(registry.discard(request.id()));
+                                // Another thread must enter the registry while this callback runs.
+                                // Reentry on this thread alone would also pass under a held
+                                // monitor.
+                                var entered =
+                                        CompletableFuture.supplyAsync(
+                                                () -> {
+                                                    var request =
+                                                            registry.register(
+                                                                    Duration.ofSeconds(1));
+                                                    return registry.discard(request.id());
+                                                },
+                                                command -> Thread.ofVirtual().start(command));
+                                assertTrue(entered.orTimeout(1, TimeUnit.SECONDS).join());
                             });
             binding.complete(null);
             callback.toCompletableFuture().get(5, TimeUnit.SECONDS);

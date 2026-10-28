@@ -1,0 +1,9 @@
+{
+  "regionLimit": 2,
+  "redisEndpoint": "127.0.0.1:6379",
+  "meshEndpoint": "tcp://127.0.0.1:0",
+  "keyPrefix": "my-game:",
+  "id": "regionA",
+  "streamEndpoint": null,
+  "capacity": 2
+}

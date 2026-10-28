@@ -55,7 +55,7 @@ for (const phase of ['commit', 'after-reserve', 'shutdown', 'initialization']) {
       const deadlineUnixMs = BigInt(Date.now() + 1);
       const outcomes = [];
       const metrics = {
-        change() {},
+        recordSpotCount() {},
         startInstanceSpotActivation: () => ({ complete: (outcome) => outcomes.push(outcome) })
       };
       class Room {}

@@ -210,7 +210,6 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
             ZLinkHandlerActivator handlerFactory) {
         options.validate();
         registration.codecs().freeze();
-        handlerFactory.prepare(registration.applicationTypes());
         ZLinkMessageSerializer serializer = serializerFor(options);
         ZLinkBackendAdapterOptions adapterOptions =
                 new ZLinkBackendAdapterOptions(options.defaultRequestTimeout());
@@ -428,6 +427,8 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                         this.backendContext,
                         this.spots,
                         this.actors);
+        // Spot·Actor service 등록을 마친 catalog로 STREAM 시작 전에 생성 절차를 준비한다.
+        prepareConstruction(runtimeHandlers);
         this.streams = streamSubsystem.streams();
         if (this.streams != null) {
             this.streams.start();
@@ -820,6 +821,15 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                 .codecs()
                 .streamCodecForCustomSerializer()
                 .orElse(ZLinkStreamCodec.JSON);
+    }
+
+    private void prepareConstruction(ZLinkHandlerActivator.MutableServices runtimeHandlers) {
+        var constructionTypes = new HashSet<>(registration.constructionTypes());
+        constructionTypes.removeAll(
+                ZLinkSpotRuntime.prepareConstruction(registration, runtimeHandlers));
+        constructionTypes.removeAll(
+                ZLinkStreamRuntime.prepareConstruction(registration, runtimeHandlers));
+        runtimeHandlers.prepare(constructionTypes);
     }
 
     public ZLinkClient client() {

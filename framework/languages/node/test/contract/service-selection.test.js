@@ -56,7 +56,7 @@ test('RouteMesh excludes its own serving node from selectable and known targets'
 
 test('RouteMesh selects only the admitted peer when its own node has higher weight', () => {
   const topology = new ServiceTopologyRegistry(serviceNode('local', 10000));
-  assert.equal(topology.admit(serviceNode('peer', 1), 'peer-connection'), 'admitted');
+  assert.equal(topology.admit(serviceNode('peer', 1), 'peer-connection', undefined, undefined, ServiceWireCommand.admit), 'admitted');
   for (let index = 0; index < 10; index++) {
     assert.equal(topology.selectChannel('orders')?.descriptor.nodeRoutingId, 'peer');
   }
@@ -71,8 +71,8 @@ test('object placement uses current descriptor capacity and keeps selection unch
     ...overrides
   });
   const topology = new ServiceTopologyRegistry(objectNode('local', 0));
-  assert.equal(topology.admit(objectNode('a', 5), 'a'), 'admitted');
-  assert.equal(topology.admit(objectNode('b', 1), 'b'), 'admitted');
+  assert.equal(topology.admit(objectNode('a', 5), 'a', undefined, undefined, ServiceWireCommand.admit), 'admitted');
+  assert.equal(topology.admit(objectNode('b', 1), 'b', undefined, undefined, ServiceWireCommand.admit), 'admitted');
   assert.equal(topology.selectObjectPlacementWithStatus('T', () => false).status, 'unavailable');
   assert.equal(topology.selectObjectPlacement('T').nodeRoutingId, 'a');
   assert.equal(
@@ -85,8 +85,8 @@ test('object placement uses current descriptor capacity and keeps selection unch
 test('RouteMesh weighted selection uses smooth cumulative credit with RID tiebreak', () => {
   // Channel messaging §2 excludes the requesting node from select-one targets.
   const topology = new ServiceTopologyRegistry(serviceNode('local', 0));
-  assert.equal(topology.admit(serviceNode('node-a', 5), 'connection-a'), 'admitted');
-  assert.equal(topology.admit(serviceNode('node-b', 1), 'connection-b'), 'admitted');
+  assert.equal(topology.admit(serviceNode('node-a', 5), 'connection-a', undefined, undefined, ServiceWireCommand.admit), 'admitted');
+  assert.equal(topology.admit(serviceNode('node-b', 1), 'connection-b', undefined, undefined, ServiceWireCommand.admit), 'admitted');
 
   const selected = Array.from(
     { length: 12 },
@@ -111,8 +111,8 @@ test('RouteMesh weighted selection uses smooth cumulative credit with RID tiebre
 
 test('weighted selection keeps its cumulative state across descriptor updates', () => {
   const topology = new ServiceTopologyRegistry(serviceNode('local', 0));
-  assert.equal(topology.admit(serviceNode('node-a', 1), 'connection-a'), 'admitted');
-  assert.equal(topology.admit(serviceNode('node-b', 1), 'connection-b'), 'admitted');
+  assert.equal(topology.admit(serviceNode('node-a', 1), 'connection-a', undefined, undefined, ServiceWireCommand.admit), 'admitted');
+  assert.equal(topology.admit(serviceNode('node-b', 1), 'connection-b', undefined, undefined, ServiceWireCommand.admit), 'admitted');
 
   assert.equal(topology.selectChannel('orders').descriptor.nodeRoutingId, 'node-a');
   assert.equal(
@@ -129,18 +129,18 @@ test('weighted selection keeps its cumulative state across descriptor updates', 
   assert.equal(topology.selectChannel('orders').descriptor.nodeRoutingId, 'node-b');
 });
 
-test('cycle selection materializes cumulative state only when candidates rebuild', () => {
+test('cycle selection materializes cumulative state only when candidates rebuild', (t) => {
   const candidates = [
     { id: 'A', value: 'A', weight: 5 },
     { id: 'B', value: 'B', weight: 1 }
   ];
   const selection = new SmoothWeightedSelection(() => candidates);
   let clears = 0;
-  const originalClear = selection.current.clear.bind(selection.current);
-  selection.current.clear = () => {
+  const originalClear = Map.prototype.clear;
+  t.mock.method(Map.prototype, 'clear', function () {
     clears += 1;
-    originalClear();
-  };
+    return originalClear.call(this);
+  });
 
   Array.from({ length: 12 }, () => selection.select());
   assert.equal(clears, 0);

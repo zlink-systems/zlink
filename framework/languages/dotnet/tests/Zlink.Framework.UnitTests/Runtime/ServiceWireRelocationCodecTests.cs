@@ -305,19 +305,6 @@ public sealed class ServiceWireRelocationCodecTests
             },
             PublicPropertyNames<ZLinkServiceWireCodec.RelocationPrepareRecord>()
         );
-
-        var methodNames = typeof(ZLinkServiceWireCodec)
-            .GetMethods(BindingFlags.Static | BindingFlags.NonPublic)
-            .Select(static method => method.Name)
-            .ToHashSet(StringComparer.Ordinal);
-        Assert.DoesNotContain("EncodeRelocationAck", methodNames);
-        Assert.DoesNotContain("TryDecodeRelocationAck", methodNames);
-        Assert.DoesNotContain("EncodeRelocationComplete", methodNames);
-        Assert.DoesNotContain("TryDecodeRelocationComplete", methodNames);
-        Assert.DoesNotContain("EncodeRelocationReserved", methodNames);
-        Assert.DoesNotContain("TryDecodeRelocationReserved", methodNames);
-        Assert.DoesNotContain("EncodeRelocationSeal", methodNames);
-        Assert.DoesNotContain("TryDecodeRelocationSeal", methodNames);
     }
 
     [Fact]

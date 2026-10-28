@@ -14,7 +14,7 @@ const {
 } = require('../../packages/framework/dist/runtime/foundation/service-wire-m6a-codec');
 const { ApplicationJobQueue, resolveApplicationJobQueueConfiguration } = require('../../packages/framework/dist/runtime/host/application-job-queue');
 const { SubmitResult } = require('../../packages/framework/dist/runtime/backend/runtime-values');
-const { SERVICE_WIRE_REQUIRED_CAPABILITY } = require('../../packages/framework/dist/runtime/foundation/service-wire-constants.generated');
+const { SERVICE_WIRE_REQUIRED_CAPABILITY, ServiceWireCommand } = require('../../packages/framework/dist/runtime/foundation/service-wire-constants.generated');
 
 function descriptor(nodeRoutingId, channels = []) {
   return {
@@ -148,12 +148,13 @@ test('generic channel send writes one valid multipart application frame before s
   raw.start();
   // Channel messaging §2 requires an admitted remote channel target.
   const target = descriptor('target-node', [{ name: 'orders', weight: 100 }]);
-  raw.topology.admit(target, 'connection');
+  raw.topology.admit(target, 'connection', undefined, undefined, ServiceWireCommand.admit);
   raw.liveness.admit(target.nodeRoutingId, 'connection', 0);
   const probe = raw.liveness.tick(0).probes[0];
   raw.liveness.acknowledge(target.nodeRoutingId, 'connection', probe.probeId, 0);
-  const backend = new ZLinkNodeRawMeshBackend('payload-ownership', 'source-node', {});
-  backend.runtime = raw;
+  const backend = new ZLinkNodeRawMeshBackend(
+    'payload-ownership', 'source-node', {}, undefined, undefined, undefined, undefined, { raw }
+  );
   const source = zlink.Message.from(Buffer.from('first'));
   try {
     assert.equal(

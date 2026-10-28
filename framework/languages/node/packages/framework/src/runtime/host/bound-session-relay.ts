@@ -50,7 +50,6 @@ export class ZLinkBoundSessionRelay {
       actorManager: options.actorManager,
       streamBindingRuntime: options.streamBindingRuntime,
       meshRouters: options.meshRouters,
-      spotManager: options.spotManager,
       spotNodeRuntime: options.spotNodeRuntime,
       detachedTaskRunner: options.detachedTaskRunner,
       errorSink: options.errorSink,

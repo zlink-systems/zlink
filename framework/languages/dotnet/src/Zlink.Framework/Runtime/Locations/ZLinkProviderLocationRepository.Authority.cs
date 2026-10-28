@@ -36,7 +36,7 @@ internal sealed partial class ZLinkProviderLocationRepository
     private readonly SemaphoreSlim aggregateRecoveryGate = new(1, 1);
     private int aggregateStagingRecoveryCompleted;
 
-    private async ValueTask<bool> AddMembershipCommitConditionsAsync(
+    private async ValueTask<ZLinkFrameworkErrorKind?> AddMembershipCommitConditionsAsync(
         ReadOnlyMemory<byte> payload,
         ZLinkAuthoritySnapshot current,
         List<ZLinkStoreCondition> conditions,
@@ -49,7 +49,7 @@ internal sealed partial class ZLinkProviderLocationRepository
             || !ZLinkActorAuthorityPayloadCodec.TryDecodeRelocating(payload.Span, out var actor)
             || actor.CurrentSpotKind != ZLinkSpotKind.User
         )
-            return true;
+            return null;
         if (
             ZLinkActorAuthorityPayloadCodec.TryDecodeRelocating(
                 current.Payload.Span,
@@ -60,7 +60,7 @@ internal sealed partial class ZLinkProviderLocationRepository
             && previous.CurrentSpotId == actor.CurrentSpotId
             && previous.CurrentSpotGeneration == actor.CurrentSpotGeneration
         )
-            return true;
+            return null;
         var key = ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey(actor.CurrentSpotId);
         var spot = await ReadAuthorityRecordAsync(
                 key,
@@ -69,12 +69,13 @@ internal sealed partial class ZLinkProviderLocationRepository
                 cancellationToken
             )
             .ConfigureAwait(false);
+        if (spot is null)
+            return ZLinkFrameworkErrorKind.NotFound;
         if (
-            spot is null
-            || spot.Snapshot.ObjectGeneration != actor.CurrentSpotGeneration
+            spot.Snapshot.ObjectGeneration != actor.CurrentSpotGeneration
             || spot.Snapshot.Allocation.ObjectKind != ZLinkPlacementObjectKind.UserSpot
         )
-            return false;
+            return ZLinkFrameworkErrorKind.Unavailable;
         var participant = aggregate?.Participants.SingleOrDefault(p => p.Key == key);
         var token =
             participant?.OwnerTransition == ZLinkAuthorityGenerationTransition.NewOwner
@@ -85,7 +86,7 @@ internal sealed partial class ZLinkProviderLocationRepository
                 );
         var owner = await ReadLiveOwnerAsync(token, cancellationToken).ConfigureAwait(false);
         if (owner is null)
-            return false;
+            return ZLinkFrameworkErrorKind.Unavailable;
         AddCondition(
             conditions,
             new ZLinkStoreCondition.Version(AuthorityMetaKey(key), spot.Version)
@@ -94,7 +95,7 @@ internal sealed partial class ZLinkProviderLocationRepository
             conditions,
             new ZLinkStoreCondition.Value(OwnerKey(token.OwnerId), owner.Value)
         );
-        return true;
+        return null;
     }
 
     public async ValueTask<ZLinkAuthorityReadResult> ReadAuthorityAsync(
@@ -192,15 +193,23 @@ internal sealed partial class ZLinkProviderLocationRepository
                 )
                     return Conflict(current);
                 if (
-                    !await AddMembershipCommitConditionsAsync(
-                            restore.Payload,
-                            current.Snapshot,
-                            conditions,
-                            cancellationToken
-                        )
-                        .ConfigureAwait(false)
+                    (
+                        await AddMembershipCommitConditionsAsync(
+                                restore.Payload,
+                                current.Snapshot,
+                                conditions,
+                                cancellationToken
+                            )
+                            .ConfigureAwait(false)
+                    ) is
+                    { } membershipFailure
                 )
-                    return Conflict(current);
+                    return new ZLinkAuthorityCompareExchangeResult.Conflict(
+                        new ZLinkAuthorityReadResult.Found(current.Snapshot)
+                    )
+                    {
+                        MembershipFailure = membershipFailure,
+                    };
                 meta = current.Meta with { Payload = restore.Payload.ToArray() };
             }
             else if (mutation is ZLinkAuthorityMutation.Delete)
@@ -234,15 +243,23 @@ internal sealed partial class ZLinkProviderLocationRepository
                 var put = (ZLinkAuthorityMutation.Put)mutation;
                 ValidateAuthorityPayload(put.Payload);
                 if (
-                    !await AddMembershipCommitConditionsAsync(
-                            put.Payload,
-                            current.Snapshot,
-                            conditions,
-                            cancellationToken
-                        )
-                        .ConfigureAwait(false)
+                    (
+                        await AddMembershipCommitConditionsAsync(
+                                put.Payload,
+                                current.Snapshot,
+                                conditions,
+                                cancellationToken
+                            )
+                            .ConfigureAwait(false)
+                    ) is
+                    { } membershipFailure
                 )
-                    return Conflict(current);
+                    return new ZLinkAuthorityCompareExchangeResult.Conflict(
+                        new ZLinkAuthorityReadResult.Found(current.Snapshot)
+                    )
+                    {
+                        MembershipFailure = membershipFailure,
+                    };
                 var changesOwner =
                     put.GenerationTransition == ZLinkAuthorityGenerationTransition.NewOwner;
                 var targetOwner =
@@ -1076,13 +1093,16 @@ internal sealed partial class ZLinkProviderLocationRepository
             {
                 ValidateAuthorityPayload(created.ReadyPayload);
                 if (
-                    !await AddMembershipCommitConditionsAsync(
-                            created.ReadyPayload,
-                            current.Snapshot,
-                            conditions,
-                            cancellationToken
-                        )
-                        .ConfigureAwait(false)
+                    (
+                        await AddMembershipCommitConditionsAsync(
+                                created.ReadyPayload,
+                                current.Snapshot,
+                                conditions,
+                                cancellationToken
+                            )
+                            .ConfigureAwait(false)
+                    )
+                    is not null
                 )
                     return new ZLinkObjectCreationCompleteResult.Stale();
                 readyMeta = current.Meta with
@@ -1704,14 +1724,17 @@ internal sealed partial class ZLinkProviderLocationRepository
             };
             for (var index = 0; index < request.Participants.Count; index++)
                 if (
-                    !await AddMembershipCommitConditionsAsync(
-                            request.Participants[index].AuthorityPayload,
-                            authorities[index]!.Snapshot,
-                            conditions,
-                            cancellationToken,
-                            request
-                        )
-                        .ConfigureAwait(false)
+                    (
+                        await AddMembershipCommitConditionsAsync(
+                                request.Participants[index].AuthorityPayload,
+                                authorities[index]!.Snapshot,
+                                conditions,
+                                cancellationToken,
+                                request
+                            )
+                            .ConfigureAwait(false)
+                    )
+                    is not null
                 )
                     return ZLinkAggregateCommitResult.Stale;
             var mutations = new List<ZLinkStoreMutation>();
@@ -4261,13 +4284,16 @@ internal sealed partial class ZLinkProviderLocationRepository
                 capacity.Condition,
             };
             if (
-                !await AddMembershipCommitConditionsAsync(
-                        readyPayload,
-                        current.Snapshot,
-                        conditions,
-                        cancellationToken
-                    )
-                    .ConfigureAwait(false)
+                (
+                    await AddMembershipCommitConditionsAsync(
+                            readyPayload,
+                            current.Snapshot,
+                            conditions,
+                            cancellationToken
+                        )
+                        .ConfigureAwait(false)
+                )
+                is not null
             )
                 return new ZLinkObjectCommitResult.Stale();
             var result = await _provider

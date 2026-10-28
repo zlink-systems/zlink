@@ -19,6 +19,7 @@
 #include "runtime/protocol/service_wire_codec.hpp"
 
 #include <nlohmann/json.hpp>
+#include <zlink/json.hpp>
 
 #include <atomic>
 #include <chrono>
@@ -117,10 +118,17 @@ struct test_host_spot_route_missing_request_t
     std::string value;
 };
 
-inline void to_json (nlohmann::json &json, const test_host_profile_request_t &value)
-{
-    json = nlohmann::json{{"value", value.value}};
 }
+
+template <> struct zlink::json::dto_traits<test_host_profile_request_t>
+{
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("value", &test_host_profile_request_t::value)};
+};
+
+namespace
+{
+
 /* Peer languages emit the field with their own naming policy; accept both so
  * the codec row does not depend on a case convention. */
 inline std::string read_value_field (const nlohmann::json &json)
@@ -134,66 +142,52 @@ inline std::string read_value_field (const nlohmann::json &json)
     throw std::runtime_error ("cross-language payload has no value field");
 }
 
-inline void from_json (const nlohmann::json &json, test_host_profile_request_t &value)
-{
-    value.value = read_value_field (json);
 }
-inline void to_json (nlohmann::json &json, const test_host_profile_reply_t &value)
+
+template <> struct zlink::json::dto_traits<test_host_profile_reply_t>
 {
-    json = nlohmann::json{{"value", value.value}};
-}
-inline void from_json (const nlohmann::json &json, test_host_profile_reply_t &value)
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("value", &test_host_profile_reply_t::value)};
+};
+
+template <> struct zlink::json::dto_traits<test_host_profile_send_t>
 {
-    value.value = read_value_field (json);
-}
-inline void to_json (nlohmann::json &json, const test_host_profile_send_t &value)
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("value", &test_host_profile_send_t::value)};
+};
+
+template <> struct zlink::json::dto_traits<test_host_published_event_t>
 {
-    json = nlohmann::json{{"value", value.value}};
-}
-inline void from_json (const nlohmann::json &json, test_host_profile_send_t &value)
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("value", &test_host_published_event_t::value)};
+};
+
+template <> struct zlink::json::dto_traits<test_host_spot_route_request_t>
 {
-    value.value = read_value_field (json);
-}
-inline void to_json (nlohmann::json &json, const test_host_published_event_t &value)
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("value", &test_host_spot_route_request_t::value)};
+};
+
+template <> struct zlink::json::dto_traits<test_host_spot_route_reply_t>
 {
-    json = nlohmann::json{{"value", value.value}};
-}
-inline void from_json (const nlohmann::json &json, test_host_published_event_t &value)
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("value", &test_host_spot_route_reply_t::value)};
+};
+
+template <> struct zlink::json::dto_traits<test_host_spot_route_fail_request_t>
 {
-    value.value = read_value_field (json);
-}
-inline void to_json (nlohmann::json &json, const test_host_spot_route_request_t &value)
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("value", &test_host_spot_route_fail_request_t::value)};
+};
+
+template <> struct zlink::json::dto_traits<test_host_spot_route_missing_request_t>
 {
-    json = nlohmann::json{{"value", value.value}};
-}
-inline void from_json (const nlohmann::json &json, test_host_spot_route_request_t &value)
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("value", &test_host_spot_route_missing_request_t::value)};
+};
+
+namespace
 {
-    value.value = read_value_field (json);
-}
-inline void to_json (nlohmann::json &json, const test_host_spot_route_reply_t &value)
-{
-    json = nlohmann::json{{"value", value.value}};
-}
-inline void from_json (const nlohmann::json &json, test_host_spot_route_reply_t &value)
-{
-    value.value = read_value_field (json);
-}
-inline void to_json (nlohmann::json &json, const test_host_spot_route_fail_request_t &value)
-{
-    json = nlohmann::json{{"value", value.value}};
-}
-inline void from_json (const nlohmann::json &json, test_host_spot_route_fail_request_t &value)
-{
-    value.value = read_value_field (json);
-}
-inline void to_json (nlohmann::json &json, const test_host_spot_route_missing_request_t &value)
-{
-    json = nlohmann::json{{"value", value.value}};
-}
-inline void from_json (const nlohmann::json &json, test_host_spot_route_missing_request_t &value)
-{
-    value.value = read_value_field (json);
-}
 
 /* Snake_case error-code table (mirrors channel_reply_writer.cpp
  * error_code_name) so the recorded client markers use the wire names. */
@@ -608,10 +602,11 @@ class raw_stream_session_t final : public fw::packet_stream_session_t
 
     fw::task_t<void> on_packet (fw::stream_t &stream,
                                 const fw::session_message_context_t &dispatch,
-                                const zlink::message_t &payload) override
+                                const zlink::framework::message_t &payload) override
     {
-        _sink.append ("raw|" + std::string (dispatch.packet_name) + "|" + payload.to_string ());
-        stream.reply_packet (zlink::message_t::from_json (std::string ("pong"))).async ();
+        _sink.append ("raw|" + std::string (dispatch.packet_name) + "|"
+                      + payload.decode<std::string> ());
+        stream.reply_packet (zlink::framework::message_t::from (std::string ("pong"))).async ();
         co_return;
     }
 
@@ -816,104 +811,76 @@ struct user_spot_discovery_probe_res_t
     std::string node_rid;
 };
 
-inline void to_json (nlohmann::json &json, const cross_lang_actor_create_req_t &value)
-{
-    json = nlohmann::json{{"stateVersion", value.state_version},
-                          {"applicationStateBytes", value.application_state_bytes}};
 }
-inline void from_json (const nlohmann::json &json, cross_lang_actor_create_req_t &value)
+
+template <> struct zlink::json::dto_traits<cross_lang_actor_create_req_t>
 {
-    value.state_version = read_int (json, "stateVersion", "StateVersion");
-    value.application_state_bytes =
-      read_int (json, "applicationStateBytes", "ApplicationStateBytes");
-}
-inline void to_json (nlohmann::json &json, const user_spot_create_req_t &value)
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("stateVersion", &cross_lang_actor_create_req_t::state_version),
+                 zlink::json::field ("applicationStateBytes",
+                                     &cross_lang_actor_create_req_t::application_state_bytes)};
+};
+
+template <> struct zlink::json::dto_traits<user_spot_create_req_t>
 {
-    json = nlohmann::json{{"marker", value.marker}};
-}
-inline void from_json (const nlohmann::json &json, user_spot_create_req_t &value)
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("marker", &user_spot_create_req_t::marker)};
+};
+
+template <> struct zlink::json::dto_traits<begin_user_spot_join_req_t>
 {
-    value.marker = read_string (json, "marker", "Marker");
-}
-inline void to_json (nlohmann::json &json, const begin_user_spot_join_req_t &value)
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("targetSpotId", &begin_user_spot_join_req_t::target_spot_id),
+                 zlink::json::field ("marker", &begin_user_spot_join_req_t::marker)};
+};
+
+template <> struct zlink::json::dto_traits<user_spot_join_req_t>
 {
-    json = nlohmann::json{{"targetSpotId", value.target_spot_id}, {"marker", value.marker}};
-}
-inline void from_json (const nlohmann::json &json, begin_user_spot_join_req_t &value)
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("marker", &user_spot_join_req_t::marker)};
+};
+
+template <> struct zlink::json::dto_traits<user_spot_join_res_t>
 {
-    value.target_spot_id = read_string (json, "targetSpotId", "TargetSpotId");
-    value.marker = read_string (json, "marker", "Marker");
-}
-inline void to_json (nlohmann::json &json, const user_spot_join_req_t &value)
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("accepted", &user_spot_join_res_t::accepted),
+                 zlink::json::field ("actorId", &user_spot_join_res_t::actor_id),
+                 zlink::json::field ("spotId", &user_spot_join_res_t::spot_id),
+                 zlink::json::field ("nodeRid", &user_spot_join_res_t::node_rid),
+                 zlink::json::field ("marker", &user_spot_join_res_t::marker)};
+};
+
+template <> struct zlink::json::dto_traits<user_spot_probe_req_t>
 {
-    json = nlohmann::json{{"marker", value.marker}};
-}
-inline void from_json (const nlohmann::json &json, user_spot_join_req_t &value)
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("marker", &user_spot_probe_req_t::marker)};
+};
+
+template <> struct zlink::json::dto_traits<user_spot_probe_res_t>
 {
-    value.marker = read_string (json, "marker", "Marker");
-}
-inline void to_json (nlohmann::json &json, const user_spot_join_res_t &value)
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("actorId", &user_spot_probe_res_t::actor_id),
+                 zlink::json::field ("spotId", &user_spot_probe_res_t::spot_id),
+                 zlink::json::field ("nodeRid", &user_spot_probe_res_t::node_rid),
+                 zlink::json::field ("stateVersion", &user_spot_probe_res_t::state_version),
+                 zlink::json::field ("marker", &user_spot_probe_res_t::marker)};
+};
+
+template <> struct zlink::json::dto_traits<user_spot_discovery_probe_req_t>
 {
-    json = nlohmann::json{{"accepted", value.accepted},
-                          {"actorId", value.actor_id},
-                          {"spotId", value.spot_id},
-                          {"nodeRid", value.node_rid},
-                          {"marker", value.marker}};
-}
-inline void from_json (const nlohmann::json &json, user_spot_join_res_t &value)
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("marker", &user_spot_discovery_probe_req_t::marker)};
+};
+
+template <> struct zlink::json::dto_traits<user_spot_discovery_probe_res_t>
 {
-    value.accepted = read_bool (json, "accepted", "Accepted");
-    value.actor_id = read_string (json, "actorId", "ActorId");
-    /* The Node source's local BeginUserSpotJoinReq reply names the field
-     * targetSpotId; accept that spelling too so one DTO covers both. */
-    value.spot_id = read_string (json, "spotId", "SpotId");
-    if (value.spot_id.empty ()) {
-        value.spot_id = read_string (json, "targetSpotId", "TargetSpotId");
-    }
-    value.node_rid = read_string (json, "nodeRid", "NodeRid");
-    value.marker = read_string (json, "marker", "Marker");
-}
-inline void to_json (nlohmann::json &json, const user_spot_probe_req_t &value)
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("marker", &user_spot_discovery_probe_res_t::marker),
+                 zlink::json::field ("nodeRid", &user_spot_discovery_probe_res_t::node_rid)};
+};
+
+namespace
 {
-    json = nlohmann::json{{"marker", value.marker}};
-}
-inline void from_json (const nlohmann::json &json, user_spot_probe_req_t &value)
-{
-    value.marker = read_string (json, "marker", "Marker");
-}
-inline void to_json (nlohmann::json &json, const user_spot_probe_res_t &value)
-{
-    json = nlohmann::json{{"actorId", value.actor_id},
-                          {"spotId", value.spot_id},
-                          {"nodeRid", value.node_rid},
-                          {"stateVersion", value.state_version},
-                          {"marker", value.marker}};
-}
-inline void from_json (const nlohmann::json &json, user_spot_probe_res_t &value)
-{
-    value.actor_id = read_string (json, "actorId", "ActorId");
-    value.spot_id = read_string (json, "spotId", "SpotId");
-    value.node_rid = read_string (json, "nodeRid", "NodeRid");
-    value.state_version = read_int (json, "stateVersion", "StateVersion");
-    value.marker = read_string (json, "marker", "Marker");
-}
-inline void to_json (nlohmann::json &json, const user_spot_discovery_probe_req_t &value)
-{
-    json = nlohmann::json{{"marker", value.marker}};
-}
-inline void from_json (const nlohmann::json &json, user_spot_discovery_probe_req_t &value)
-{
-    value.marker = read_string (json, "marker", "Marker");
-}
-inline void to_json (nlohmann::json &json, const user_spot_discovery_probe_res_t &value)
-{
-    json = nlohmann::json{{"marker", value.marker}, {"nodeRid", value.node_rid}};
-}
-inline void from_json (const nlohmann::json &json, user_spot_discovery_probe_res_t &value)
-{
-    value.marker = read_string (json, "marker", "Marker");
-    value.node_rid = read_string (json, "nodeRid", "NodeRid");
-}
 
 /* Spot/Actor instances are built by framework factories that receive only a
  * context, so the event sink and this node's own routing id travel through

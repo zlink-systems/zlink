@@ -12,11 +12,11 @@ import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.channels.ZLinkRouteMessageContext;
 import systems.zlink.framework.channels.ZLinkRouteRequestHandler;
+import systems.zlink.framework.monitoring.ZLinkListenerKind;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess;
 
-import java.net.ServerSocket;
 import java.net.URLClassLoader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -142,18 +142,14 @@ public final class ZLinkRouteRequestPartCostTest {
     }
 
     private static void exercise(Path recordingPath) throws Exception {
-        int port;
-        try (var socket = new ServerSocket(0)) {
-            port = socket.getLocalPort();
-        }
-        String endpoint = "tcp://127.0.0.1:" + port;
         var targetOptions = new DefaultZLinkFrameworkOptions();
         targetOptions
                 .addRouteMesh(MESH)
-                .listen(endpoint)
+                .listen("tcp://127.0.0.1:0")
                 .setRoutingId(TARGET)
                 .addRouteRequestHandler(Echo.class, Probe.class, Probe.class);
         try (var target = ZLinkFrameworkRuntimeTestAccess.start(targetOptions)) {
+            String endpoint = target.listenerStatus(ZLinkListenerKind.ROUTE_MESH, MESH).endpoint();
             var sourceOptions = new DefaultZLinkFrameworkOptions();
             sourceOptions
                     .addRouteMesh(MESH)

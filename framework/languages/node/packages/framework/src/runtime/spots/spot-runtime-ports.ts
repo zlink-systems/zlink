@@ -36,8 +36,11 @@ export interface ZLinkEntryActorRuntime {
     parts: readonly Message[],
     returnResponse?: boolean,
     remoteBoundSessionTarget?: ZLinkRemoteBoundSessionTarget,
-    fallbackActorRef?: ActorRef
-  ): Promise<{ readonly handled: boolean; readonly response?: unknown }>;
+    fallbackActorRef?: ActorRef,
+    origin?: ApplicationJobOrigin,
+    requestTerminal?: import('./spot-actor-packet-dispatch').ZLinkActorRequestTerminal,
+    messageFollowOrigin?: ZLinkMessageFollowOrigin
+  ): { readonly handled: boolean; readonly response?: unknown };
 }
 
 export interface ZLinkSpotActorTransferRuntime {
