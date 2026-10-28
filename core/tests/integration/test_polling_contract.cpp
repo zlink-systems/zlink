@@ -17,7 +17,13 @@ SETUP_TEARDOWN_TESTCONTEXT
 
 namespace
 {
-const short undefined_event_bit = 128;
+constexpr unsigned defined_event_mask = ZLINK_POLLIN | ZLINK_POLLOUT | ZLINK_POLLERR | ZLINK_POLLPRI
+                                        | ZLINK_POLLITEMS_DFLT | ZLINK_POLLCOMPLETION
+                                        | ZLINK_POLLROUTE | ZLINK_POLLCONNECT;
+constexpr short undefined_event_bit =
+  static_cast<short> ((defined_event_mask + 1u) & ~defined_event_mask);
+static_assert (undefined_event_bit > 0 && (undefined_event_bit & defined_event_mask) == 0,
+               "The invalid event input must be outside the defined mask");
 
 void test_poll_timeout_and_socket_mask_validation ()
 {

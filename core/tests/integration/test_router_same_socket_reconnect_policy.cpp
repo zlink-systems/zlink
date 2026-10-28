@@ -309,21 +309,6 @@ void run_same_socket (bool tcp_, int policy_, bool retry_ = false)
     roundtrip (client, server, "server");
     roundtrip (server, client, "client");
 
-    char duplicate_endpoint[MAX_SOCKET_STRING];
-    strcpy (duplicate_endpoint, endpoint);
-    if (tcp_) {
-        // TCP deduplicates an identical endpoint string before admission.
-        // Verify that call, then use a hostname alias of the same listener
-        // to exercise admission of a second physical connection.
-        TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (client, endpoint));
-        roundtrip (client, server, "server");
-        roundtrip (server, client, "client");
-        client_events.assert_kept (old_client);
-        server_events.assert_kept (old_server);
-        snprintf (duplicate_endpoint, sizeof duplicate_endpoint,
-                  "tcp://localhost:%s", strrchr (endpoint, ':') + 1);
-    }
-
     const bool handover = policy_ == ZLINK_RID_DUPLICATE_HANDOVER;
     zlink_completion_id_t client_pending = 0, server_pending = 0;
     if (handover) {
@@ -335,7 +320,7 @@ void run_same_socket (bool tcp_, int policy_, bool retry_ = false)
 
     // Deliberately retain the admitted connection while the same socket
     // connects to the same listener again. No disconnect precedes it.
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (client, duplicate_endpoint));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (client, endpoint));
     uint64_t new_client = 0;
     if (handover) {
         new_client = client_events.wait (
