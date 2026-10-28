@@ -2,6 +2,8 @@
 #include "client.hpp"
 #include "server/instance/domain.hpp"
 
+#include "test_json.hpp"
+
 namespace MyGame::E2E
 {
 inline void same_actor (const SessionInfo &before, const SessionInfo &after)
@@ -30,7 +32,7 @@ inline const PartyView &party_for (const TownView &view, const std::vector<std::
 }
 inline bool same_town (const TownView &a, const TownView &b)
 {
-    return nlohmann::json (a) == nlohmann::json (b);
+    return test_json_morpg_channel_domain::encode (a) == test_json_morpg_channel_domain::encode (b);
 }
 
 inline void channel (const std::string &endpoint)

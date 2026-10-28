@@ -1,5 +1,6 @@
 #pragma once
 #include "contracts.hpp"
+#include <zlink/json.hpp>
 namespace MyGame
 {
 struct PlayerState
@@ -12,6 +13,17 @@ struct PlayerState
         x = arrival.x;
         sequence = arrival.sequence;
     }
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (PlayerState, x, sequence, partyId)
 };
 }
+
+namespace zlink::json
+{
+template <> struct dto_traits<::MyGame::PlayerState>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("x", &::MyGame::PlayerState::x),
+      zlink::json::field ("sequence", &::MyGame::PlayerState::sequence),
+      zlink::json::field ("partyId", &::MyGame::PlayerState::partyId)
+    };
+};
+} // namespace zlink::json
