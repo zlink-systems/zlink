@@ -1,3 +1,4 @@
+import { macrotaskBoundary } from '../abort';
 import type { ZLinkRuntimeMetrics } from '../diagnostics/runtime-metrics';
 import { routingIdsEqual, toBackendRoutingId } from '../routing-id';
 import {
@@ -461,7 +462,10 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
           },
           signal
         );
-        if (result.kind === 'conflict') continue;
+        if (result.kind === 'conflict') {
+          await macrotaskBoundary();
+          continue;
+        }
         const storeVersion = result.putVersions.find(
           (entry) => entry.key.value === rowKey.value
         )?.version;
@@ -547,7 +551,12 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
               }
             )
           : [];
-      if (membershipConditions === undefined) return { kind: 'conflict', current: snapshot };
+      if (!Array.isArray(membershipConditions))
+        return {
+          kind: 'conflict',
+          current: snapshot,
+          membershipFailure: membershipConditions.failureKind
+        };
       const result = await this.provider.write(
         {
           conditions: [
@@ -610,7 +619,10 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         },
         signal
       );
-      if (result.kind === 'conflict') continue;
+      if (result.kind === 'conflict') {
+        await macrotaskBoundary();
+        continue;
+      }
       const storeVersion = result.putVersions.find(
         (entry) => entry.key.value === rowKey.value
       )?.version;
@@ -1191,7 +1203,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
           signal,
           aggregate.targetOwner
         );
-        if (conditions === undefined) return { kind: 'stale' };
+        if (!Array.isArray(conditions)) return { kind: 'stale' };
         membershipConditions.push(
           ...conditions.filter(
             (condition) =>
@@ -1964,7 +1976,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
               request.target.owner
             )
           : [];
-      if (membershipConditions === undefined) return { kind: 'stale' };
+      if (!Array.isArray(membershipConditions)) return { kind: 'stale' };
       const mutations =
         request.completion.kind === 'created'
           ? [
@@ -3214,10 +3226,16 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     objectGeneration: bigint,
     signal?: AbortSignal,
     conditionedOwner?: ZLinkLocationOwnerToken
-  ): Promise<ZLinkStoreCondition[] | undefined> {
+  ): Promise<
+    | ZLinkStoreCondition[]
+    | {
+        readonly failureKind:
+          ZLinkFrameworkErrorKind.NotFound | ZLinkFrameworkErrorKind.Unavailable;
+      }
+  > {
     const key = authorityKey(encodeAuthorityKey('user_spot', spotId).value);
     const read = await this.provider.read(key, signal);
-    if (read.kind === 'missing') return undefined;
+    if (read.kind === 'missing') return { failureKind: ZLinkFrameworkErrorKind.NotFound };
     const record = decodeAuthorityRecord(read.value.bytes);
     const snapshot = record.snapshot;
     if (
@@ -3227,10 +3245,11 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       snapshot.objectGeneration !== objectGeneration ||
       decodeServiceReadySpotAuthority(snapshot.payload)?.kind !== 'user_spot'
     )
-      return undefined;
+      return { failureKind: ZLinkFrameworkErrorKind.Unavailable };
     const leaseKey = ownerKey(snapshot.ownerId);
     const lease = await this.provider.read(leaseKey, signal);
-    if (!sameLiveOwner(lease, snapshot)) return undefined;
+    if (!sameLiveOwner(lease, snapshot))
+      return { failureKind: ZLinkFrameworkErrorKind.Unavailable };
     return [
       { kind: 'version', key, expected: read.value.version },
       ...(conditionedOwner?.ownerId === snapshot.ownerId &&
@@ -3320,7 +3339,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
             { ownerId: location.ownerId, leaseGeneration: locationOwnerGeneration(location) }
           )
         : [];
-    if (membershipConditions === undefined) return rejected(lease.value.storeNow);
+    if (!Array.isArray(membershipConditions)) return rejected(lease.value.storeNow);
 
     const result = await this.provider.write(
       {
