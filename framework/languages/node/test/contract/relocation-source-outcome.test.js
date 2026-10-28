@@ -70,6 +70,9 @@ for (const path of ['coordinator', 'shell']) {
       };
       const runtime = new ZLinkHostServiceRelocationRuntime({
         metrics,
+        registration: { spotNodes: new Map([['mesh', {
+          spotFactoryRegistrations: { player: { relocation: { kind: 'recreate' } } }
+        }]]) },
         meshNode: () => ({
           status: () => ({ routingId: 'source', lifecycleGeneration: 1n }),
           sealSpotMessageFollowIngress: () => ({}),
@@ -93,9 +96,8 @@ for (const path of ['coordinator', 'shell']) {
         return { ...prepare, kind: 'ready', senderRole: 'target' };
       };
       runtime.submitControlFrame = async () => {
-        if (scenario === 'shutdown') runtime.disposed = true;
+        if (scenario === 'shutdown') await runtime.dispose();
       };
-      runtime.spotRegistration = () => ({ relocation: { kind: 'recreate' } });
       const settle = runtime.settleSourceAuthority.bind(runtime);
       runtime.settleSourceAuthority = async (...args) => {
         if (scenario === 'preserve') return 'source';
@@ -192,8 +194,7 @@ for (const path of ['coordinator', 'shell']) {
           String(error)
         );
       } finally {
-        for (const window of runtime.sourceCutoverWindows.values())
-          clearTimeout(window.followTimer);
+        await runtime.dispose();
       }
       const expected =
         scenario === 'preserve'
