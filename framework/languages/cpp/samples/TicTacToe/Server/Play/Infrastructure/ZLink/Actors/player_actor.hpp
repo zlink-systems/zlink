@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: Apache-2.0 */
+#include <zlink/json.hpp>
 #pragma once
 
 #include <deque>
@@ -136,25 +137,23 @@ struct player_actor_t : framework::actor_t
     int increment_wins () const { return ++player.wins; }
 };
 
-inline void to_json (nlohmann::json &json, const player_actor_t &value)
-{
-    json = nlohmann::json{{"actorId", value.actor_id},
-                          {"nodeRid", value.node_rid},
-                          {"generation", value.generation},
-                          {"destroyAfterEntrySpotJoin", value.destroy_after_entry_spot_join},
-                          {"disconnected", value.disconnected},
-                          {"player", value.player}};
 }
 
-inline void from_json (const nlohmann::json &json, player_actor_t &value)
+template <> struct zlink::json::dto_traits<zlink::samples::tictactoe::player_actor_t>
 {
-    value.actor_id = json.value ("actorId", std::string{});
-    value.node_rid = json.value ("nodeRid", std::string{});
-    value.generation = json.value ("generation", 1ull);
-    value.destroy_after_entry_spot_join = json.value ("destroyAfterEntrySpotJoin", false);
-    value.disconnected = json.value ("disconnected", false);
-    value.player = json.value ("player", player_info_t{});
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("actorId", &zlink::samples::tictactoe::player_actor_t::actor_id),
+      zlink::json::field ("nodeRid", &zlink::samples::tictactoe::player_actor_t::node_rid),
+      zlink::json::field ("generation", &zlink::samples::tictactoe::player_actor_t::generation),
+      zlink::json::field (
+        "destroyAfterEntrySpotJoin",
+        &zlink::samples::tictactoe::player_actor_t::destroy_after_entry_spot_join),
+      zlink::json::field ("disconnected", &zlink::samples::tictactoe::player_actor_t::disconnected),
+      zlink::json::field ("player", &zlink::samples::tictactoe::player_actor_t::player)};
+};
+
+namespace zlink::samples::tictactoe
+{
 
 struct player_actor_factory_t final : framework::actor_factory_t<player_actor_t>
 {
