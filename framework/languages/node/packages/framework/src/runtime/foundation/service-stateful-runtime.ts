@@ -1,3 +1,4 @@
+import { inspectRuntime } from '../internal-observation';
 import { awaitWithAbort, isAbortError } from '../abort';
 import { decodeChannelHeader } from '../channels/channel-envelope';
 import { ZLinkBufferMessage } from '../backend/runtime-message';
@@ -442,6 +443,12 @@ export interface ServiceUserSpotOperationHandler {
  * remain in the common mailbox, where a claimed Spot or Actor owner is serial.
  */
 export class ServiceStatefulRuntime {
+  [inspectRuntime]() {
+    return Object.freeze({
+      canonicalActorJoinHandoffs: this.canonicalActorJoinHandoffs.size
+    });
+  }
+
   //  Captured at module load, before any application turn exists: running a
   //  callback through this snapshot detaches every AsyncLocalStorage context
   //  (Spot serial turn, execution area, flow) so local loopback ingress
