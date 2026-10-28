@@ -150,7 +150,6 @@ class client_server_location_runtime_t final : public client_server_runtime_t
                          std::optional<std::chrono::steady_clock::time_point> deadline);
     task_t<void> complete_ready_waiters ();
 
-    static std::uint64_t make_lifecycle_generation ();
     static std::uint32_t
     effective_max_message_bytes (const channel_capability_snapshot_t &capability);
     static std::vector<std::uint8_t> client_routing_id (const channel_snapshot_t &channel);
