@@ -5,13 +5,17 @@
 #
 #   repository  samples/ sits inside framework/languages/cpp. Its own build
 #               tree (with tests) is the fallback when bootstrap.cmake has not
-#               configured samples/build. The canonical package versions are
-#               reapplied before each repository build.
+#               configured samples/build. The tree owner configures it once;
+#               runners only verify its cached package versions.
 #   package     bootstrap.cmake configured samples/build against the installed
 #               framework; the runner only builds its own targets there.
 #
 # Both set BUILD_DIR (preferring ZLINK_CPP_BUILD_DIR) and BIN_DIR.
 CPP_SAMPLES_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+zlink_cpp_sample_log_step() {
+  printf '[%s] %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$*" >&2
+}
 
 zlink_cpp_sample_uses_repository_build() {
   local cpp_root="$CPP_SAMPLES_DIR/.."
@@ -21,6 +25,7 @@ zlink_cpp_sample_uses_repository_build() {
 }
 
 zlink_cpp_sample_prepare_build() {
+  zlink_cpp_sample_log_step "provenance check"
   if zlink_cpp_sample_uses_repository_build; then
     zlink_cpp_sample_prepare_repository_build "$(cd "$CPP_SAMPLES_DIR/.." && pwd)"
   else
@@ -43,9 +48,9 @@ zlink_cpp_sample_prepare_package_build() {
 # zlink_cpp version.
 zlink_cpp_sample_prepare_repository_build() {
   local cpp_root="$1"
-  # All C++ tests and samples share the framework build tree. Reapply the
-  # canonical package versions before each sample build so a stale cache
-  # cannot silently select a second build provenance.
+  # All C++ tests and samples share the framework build tree. Its owner
+  # configures the package versions; a runner rejects a mismatch without
+  # changing the configured tree.
   BUILD_DIR="${ZLINK_CPP_BUILD_DIR:-$cpp_root/build}"
   local repository_root
   repository_root="$(cd "$cpp_root/../../.." && pwd)"
@@ -58,54 +63,55 @@ zlink_cpp_sample_prepare_repository_build() {
     echo "Failed to read canonical C++ binding/Core versions." >&2
     return 1
   fi
-  local dependency_prefix=""
-  local toolchain_file=""
-  local build_type="Release"
 
-  if [[ -z "$dependency_prefix" && -f "$BUILD_DIR/CMakeCache.txt" ]]; then
-    dependency_prefix="$(sed -n 's/^CMAKE_PREFIX_PATH:[^=]*=//p' \
-      "$BUILD_DIR/CMakeCache.txt" | head -n 1)"
-    toolchain_file="$(sed -n 's/^CMAKE_TOOLCHAIN_FILE:[^=]*=//p' \
-      "$BUILD_DIR/CMakeCache.txt" | head -n 1)"
-    local cached_build_type
-    cached_build_type="$(sed -n 's/^CMAKE_BUILD_TYPE:[^=]*=//p' \
-      "$BUILD_DIR/CMakeCache.txt" | head -n 1)"
-    if [[ -n "$cached_build_type" ]]; then
-      build_type="$cached_build_type"
+  local cache_file="$BUILD_DIR/CMakeCache.txt"
+  if [[ -f "$cache_file" ]]; then
+    local cached_cpp_version cached_core_version mismatch=0
+    cached_cpp_version="$(sed -n 's/^ZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION:[^=]*=//p' \
+      "$cache_file" | head -n 1)"
+    cached_core_version="$(sed -n 's/^ZLINK_FRAMEWORK_CPP_ZLINK_CORE_VERSION:[^=]*=//p' \
+      "$cache_file" | head -n 1)"
+    if [[ "$cached_cpp_version" != "$cpp_version" ]]; then
+      printf 'CMake build tree provenance mismatch at %s:\n' "$BUILD_DIR" >&2
+      printf '  ZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION: cache=%s canonical=%s\n' \
+        "${cached_cpp_version:-<missing>}" "$cpp_version" >&2
+      mismatch=1
     fi
-  fi
+    if [[ "$cached_core_version" != "$core_version" ]]; then
+      if [[ "$mismatch" == "0" ]]; then
+        printf 'CMake build tree provenance mismatch at %s:\n' "$BUILD_DIR" >&2
+      fi
+      printf '  ZLINK_FRAMEWORK_CPP_ZLINK_CORE_VERSION: cache=%s canonical=%s\n' \
+        "${cached_core_version:-<missing>}" "$core_version" >&2
+      mismatch=1
+    fi
+    [[ "$mismatch" == "0" ]] || return 1
+  else
+    local toolchain_file=""
+    local build_type="Release"
 
-  if [[ -z "$toolchain_file" && -n "${VCPKG_ROOT:-}" \
-    && -f "$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" ]]; then
-    toolchain_file="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
-  fi
+    if [[ -z "$toolchain_file" && -n "${VCPKG_ROOT:-}" \
+      && -f "$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" ]]; then
+      toolchain_file="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
+    fi
 
-  local -a cmake_args=(
-    -S "$cpp_root"
-    -B "$BUILD_DIR"
-    -DCMAKE_BUILD_TYPE="$build_type"
-    -DZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION="$cpp_version"
-    -DZLINK_FRAMEWORK_CPP_ZLINK_CORE_VERSION="$core_version"
-    -DZLINK_FRAMEWORK_CPP_BUILD_TESTS=ON
-    -DZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS=ON
-    -DZLINK_FRAMEWORK_CPP_BUILD_SAMPLES=ON
-  )
-  if [[ -n "$dependency_prefix" ]]; then
-    cmake_args+=("-DCMAKE_PREFIX_PATH=$dependency_prefix")
-  fi
-  if [[ -n "$toolchain_file" ]]; then
-    cmake_args+=("-DCMAKE_TOOLCHAIN_FILE=$toolchain_file")
-  fi
+    local -a cmake_args=(
+      -S "$cpp_root"
+      -B "$BUILD_DIR"
+      -DCMAKE_BUILD_TYPE="$build_type"
+      -DZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION="$cpp_version"
+      -DZLINK_FRAMEWORK_CPP_ZLINK_CORE_VERSION="$core_version"
+      -DZLINK_FRAMEWORK_CPP_BUILD_TESTS=ON
+      -DZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS=ON
+      -DZLINK_FRAMEWORK_CPP_BUILD_SAMPLES=ON
+    )
+    if [[ -n "$toolchain_file" ]]; then
+      cmake_args+=("-DCMAKE_TOOLCHAIN_FILE=$toolchain_file")
+    fi
 
-  # The package prefixes and find-package directories are derived cache
-  # entries. Drop them when applying the canonical package versions so an
-  # existing build tree cannot keep resolving an older zlink_cpp/Core pair.
-  cmake \
-    -U ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CPP_PREFIX \
-    -U ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX \
-    -U zlink_cpp_DIR \
-    -U zlink_DIR \
-    "${cmake_args[@]}" >/dev/null
+    zlink_cpp_sample_log_step "configure repository build"
+    cmake "${cmake_args[@]}"
+  fi
   BIN_DIR="$BUILD_DIR"
   if [[ ! -x "$BIN_DIR/sample_cpp_framework_tictactoe_play" \
     && -d "$BIN_DIR/linux-ninja-debug" ]]; then
@@ -129,5 +135,6 @@ zlink_cpp_sample_run_framework_tests() {
     echo "framework tests: skipped (package tree; no framework test targets)"
     return 0
   fi
+  zlink_cpp_sample_log_step "framework tests"
   "${CTEST_BIN:-ctest}" --test-dir "$BUILD_DIR" -R "$regex" --output-on-failure
 }

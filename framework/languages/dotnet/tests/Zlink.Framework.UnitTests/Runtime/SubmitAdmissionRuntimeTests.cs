@@ -345,10 +345,10 @@ public sealed class SubmitAdmissionRuntimeTests
         Assert.Equal(SubmitResult.Ok, submission.Result);
         Assert.Same(Task.CompletedTask, submission.EnsureAcceptedAsync());
 
-        var before = GC.GetAllocatedBytesForCurrentThread();
-        for (var index = 0; index < 10_000; index++)
-            _ = submission.EnsureAcceptedAsync();
-        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+        Assert.Equal(
+            0,
+            PerCallAllocation.MinWindow(() => _ = submission.EnsureAcceptedAsync(), 10_000)
+        );
     }
 
     [Fact]
@@ -361,27 +361,25 @@ public sealed class SubmitAdmissionRuntimeTests
             pair.Client.Request().Message(requestPart).Timeout(TimeSpan.FromSeconds(5))
         );
 
-        using var cancellation = new CancellationTokenSource();
-        var frameworkAllocated = 0L;
-        Task<IReadOnlyList<Message>>? completion = null;
-        var requestResult = ZLinkRequestAdmission.Run<IReadOnlyList<Message>>(admission =>
-        {
-            var allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
-            completion = ZLinkRequestSubmissionOutcome.SubmitAndAwaitReplyAsync(
-                operation,
-                TimeSpan.FromSeconds(5),
-                cancellation.Token,
-                requestAdmission: admission
-            );
-            frameworkAllocated =
-                GC.GetAllocatedBytesForCurrentThread() - allocatedBefore - operation.AllocatedBytes;
-            return new ValueTask<IReadOnlyList<Message>>(completion!);
-        });
-        Assert.Equal(1, operation.SubmissionCount);
-        Assert.Equal(SubmitResult.Ok, operation.LastSubmission.Result);
         // Measure only the Framework submission adapter. The public binding's
         // allocations are counted separately inside Async on the same thread.
-        Assert.Equal(0, frameworkAllocated);
+        // One submission is one call, so earlier submissions on fresh pairs supply the
+        // other samples, 32 per window, and a one-time runtime allocation cannot decide the result.
+        var samples = new List<long>();
+        for (var round = 0; round < 255; round++)
+            if (await SampleFrameworkSubmissionAsync() is { } sample)
+                samples.Add(sample);
+
+        using var cancellation = new CancellationTokenSource();
+        var (requestResult, completion, mainAllocated) = SubmitMeasured(
+            operation,
+            cancellation.Token
+        );
+        if (mainAllocated is { } main)
+            samples.Add(main);
+        Assert.Equal(1, operation.SubmissionCount);
+        Assert.Equal(SubmitResult.Ok, operation.LastSubmission.Result);
+        Assert.Equal(0, PerCallAllocation.MinWindow(samples));
         Assert.Equal(cancellation.Token, operation.SubmissionToken);
         Assert.Same(operation.LastSubmission.Reply, completion);
         Assert.True(requestResult.Admitted.IsCompletedSuccessfully);
@@ -415,6 +413,53 @@ public sealed class SubmitAdmissionRuntimeTests
 
         using var extra = Received.Create();
         Assert.False(pair.Server.Recv(extra, RecvFlags.DontWait));
+    }
+
+    // Allocation of the Framework submission adapter for one request, or null when a GC
+    // pause overlapped the call.
+    private static (
+        ZLinkRequest<IReadOnlyList<Message>> Request,
+        Task<IReadOnlyList<Message>>? Completion,
+        long? Allocated
+    ) SubmitMeasured(CountingRequestSubmitOperation operation, CancellationToken token)
+    {
+        long? allocated = null;
+        Task<IReadOnlyList<Message>>? completion = null;
+        var request = ZLinkRequestAdmission.Run<IReadOnlyList<Message>>(admission =>
+        {
+            var pause = GC.GetTotalPauseDuration();
+            var allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
+            completion = ZLinkRequestSubmissionOutcome.SubmitAndAwaitReplyAsync(
+                operation,
+                TimeSpan.FromSeconds(5),
+                token,
+                requestAdmission: admission
+            );
+            var bytes =
+                GC.GetAllocatedBytesForCurrentThread() - allocatedBefore - operation.AllocatedBytes;
+            if (GC.GetTotalPauseDuration() == pause)
+                allocated = bytes;
+            return new ValueTask<IReadOnlyList<Message>>(completion!);
+        });
+        return (request, completion, allocated);
+    }
+
+    private static async Task<long?> SampleFrameworkSubmissionAsync()
+    {
+        using var pair = new AdmissionPair();
+        using var requestPart = Message.From("request-sample");
+        var operation = new CountingRequestSubmitOperation(
+            pair.Client.Request().Message(requestPart).Timeout(TimeSpan.FromSeconds(5))
+        );
+        using var cancellation = new CancellationTokenSource();
+        var (request, _, allocated) = SubmitMeasured(operation, cancellation.Token);
+        cancellation.Cancel();
+        try
+        {
+            ZLinkMessageParts.DisposeAll(await request.Reply.ConfigureAwait(false));
+        }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
+        return allocated;
     }
 
     [Fact]
@@ -462,6 +507,7 @@ public sealed class SubmitAdmissionRuntimeTests
         for (var sequence = 0; sequence < recordCount; sequence++)
         {
             using var received = Received.Create();
+            Assert.True(await pair.WaitForReceiveAsync());
             Assert.True(pair.Server.Recv(received));
             pair.DrainCompletions();
             Assert.Equal(AdmissionPair.Payload(sequence), received.SinglePartOrThrow().ToArray());
@@ -1018,6 +1064,35 @@ public sealed class SubmitAdmissionRuntimeTests
 
         internal void DrainCompletions() =>
             _completionPoller.Wait(_completionEvents, TimeSpan.Zero);
+
+        internal async Task<bool> WaitForReceiveAsync()
+        {
+            _completionPoller.Add(Server, PollEventFlags.PollIn, 2);
+            try
+            {
+                var events = new PollEvent[2];
+                var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+                // Keep the sole completion owner progressing while yielding to
+                // the producer continuation before receiving the next record.
+                // A completion event can wake the poller first; keep waiting for PollIn.
+                while (DateTime.UtcNow < deadline)
+                {
+                    var remaining = deadline - DateTime.UtcNow;
+                    var count = await Task.Run(() => _completionPoller.Wait(events, remaining));
+                    if (
+                        events
+                            .Take(count)
+                            .Any(e => e.Slot == 2 && (e.Revents & PollEventFlags.PollIn) != 0)
+                    )
+                        return true;
+                }
+                return false;
+            }
+            finally
+            {
+                _completionPoller.Remove(Server);
+            }
+        }
 
         internal static byte[] Payload(int sequence)
         {

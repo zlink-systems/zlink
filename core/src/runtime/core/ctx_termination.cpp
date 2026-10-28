@@ -41,7 +41,7 @@ void zlink::ctx_t::flush_pending_inproc_locked ()
          it != end; ++it) {
         socket_base_t *socket = create_socket (ZLINK_CORE_SOCKET_PAIR);
         zlink_assert (socket);
-        socket->bind (it->c_str ());
+        (void) _inproc_registry.materialize_pending (*it, NULL, socket);
         socket->close ();
     }
     _slot_sync.lock ();

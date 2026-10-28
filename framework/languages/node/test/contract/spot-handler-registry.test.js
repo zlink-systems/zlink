@@ -61,9 +61,10 @@ test('empty Spot topic and duplicate packet fail with InvalidOperation', () => {
 test('Spot subscriptions require channel membership and accept a registered channel', () => {
   const { ZLinkNodeRawMeshBackend } = require('../../packages/framework/dist/runtime/backend/node/node-raw-mesh-backend');
   const { ServiceStatefulRuntime } = require('../../packages/framework/dist/runtime/foundation/service-stateful-runtime');
-  const backend = new ZLinkNodeRawMeshBackend('mesh', 'node', {});
   const stateful = new ServiceStatefulRuntime({ setServiceIngress() {} }, 'node', 1n);
-  backend.stateful = stateful;
+  const backend = new ZLinkNodeRawMeshBackend(
+    'mesh', 'node', {}, undefined, undefined, undefined, undefined, { stateful }
+  );
   const spot = stateful.createSpot('spot');
   assert.throws(() => backend.setSpotSubscription(spot, 'unjoined-channel', 'topic'),
     (error) => error instanceof ZLinkFrameworkException && error.kind === ZLinkFrameworkErrorKind.InvalidOperation);
