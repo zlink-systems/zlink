@@ -161,6 +161,10 @@ public final class ZLinkApplicationJobContext {
                     && RESERVATION.compareAndSet(this, current, Optional.of(current));
         }
 
+        boolean hasReservation() {
+            return reservation != null;
+        }
+
         public boolean isDurable() {
             return !(reservation instanceof ZLinkApplicationJobQueue.Permit);
         }
