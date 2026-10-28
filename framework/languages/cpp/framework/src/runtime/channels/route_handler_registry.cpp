@@ -25,44 +25,17 @@ route_handler_registry_t::find (std::string_view router_channel_id,
                                 runtime::messaging::message_kind_t kind,
                                 std::string_view packet_name) const
 {
-    const auto found =
-      _handlers.find (key_t{std::string (router_channel_id), kind, std::string (packet_name)});
-    if (found == _handlers.end ()) {
-        return nullptr;
-    }
-    return &found->second.descriptor;
+    const auto *entry = resolve (router_channel_id, kind, packet_name);
+    return entry ? &entry->descriptor : nullptr;
 }
 
-result_t<zlink::message_t>
-route_handler_registry_t::invoke (std::string_view router_channel_id,
-                                  runtime::messaging::message_kind_t kind,
-                                  std::string_view packet_name,
-                                  service_provider_t &services,
-                                  serializer_registry_t &serializers,
-                                  const zlink::message_t &message,
-                                  const framework::route_message_context_t &context) const
+const route_handler_registry_t::entry_t *
+route_handler_registry_t::resolve (std::string_view router_channel_id,
+                                   runtime::messaging::message_kind_t kind,
+                                   std::string_view packet_name) const
 {
-    return invoke_async (router_channel_id, kind, packet_name, services, serializers, message,
-                         context)
-      .result ();
-}
-
-task_t<zlink::message_t>
-route_handler_registry_t::invoke_async (std::string_view router_channel_id,
-                                        runtime::messaging::message_kind_t kind,
-                                        std::string_view packet_name,
-                                        service_provider_t &services,
-                                        serializer_registry_t &serializers,
-                                        const zlink::message_t &message,
-                                        const framework::route_message_context_t &context) const
-{
-    const auto found =
-      _handlers.find (key_t{std::string (router_channel_id), kind, std::string (packet_name)});
-    if (found == _handlers.end ()) {
-        return task_t<zlink::message_t> (result_t<zlink::message_t>::failure (
-          framework_error_kind_t::not_found, "routed handler is not registered"));
-    }
-    return found->second.invoker (services, serializers, message, context);
+    const auto found = _handlers.find (key_view_t{router_channel_id, kind, packet_name});
+    return found == _handlers.end () ? nullptr : &found->second;
 }
 
 } // namespace zlink::framework::detail
