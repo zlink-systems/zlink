@@ -500,10 +500,12 @@ void verify_binding_completion_bypasses_handler_executor ()
     std::optional<backend::raw_received_t> received;
     const auto deadline = std::chrono::steady_clock::now () + 2s;
     while (!received && std::chrono::steady_clock::now () < deadline)
-        received = target_port.receive_if_ready (target_port.poll (10ms));
+        received = target_port.receive_if_ready (
+          target_port.poll (10ms).value_or (zlink::poll_event_flag_t::none));
     assert (received && received->reply_token);
     assert (target_port.reply (*received, request_parts ()));
-    assert (!target_port.receive_if_ready (target_port.poll (0ms)));
+    assert (!target_port.receive_if_ready (
+      target_port.poll (0ms).value_or (zlink::poll_event_flag_t::none)));
     const auto completion_deadline = std::chrono::steady_clock::now () + 2s;
     while (observed_count.load (std::memory_order_acquire) == 0
            && std::chrono::steady_clock::now () < completion_deadline) {
@@ -547,12 +549,15 @@ void verify_completion_only_wait_keeps_ordinary_record_unclaimed ()
         (void) source_port.poll (10ms);
     assert (sent.await_ready ());
     assert (sent.result ().value () == zlink::submit_result_t::ok);
-    assert (target_port.poll (2s) == zlink::poll_event_flag_t::pollin);
+    assert (target_port.poll (2s).value_or (zlink::poll_event_flag_t::none)
+            == zlink::poll_event_flag_t::pollin);
     // Queued DATA does not turn a completion-only wait into a busy loop.
     const auto started = std::chrono::steady_clock::now ();
-    assert (target_port.poll (20ms, false) == zlink::poll_event_flag_t::none);
+    assert (target_port.poll (20ms, false).value_or (zlink::poll_event_flag_t::none)
+            == zlink::poll_event_flag_t::none);
     assert (std::chrono::steady_clock::now () - started >= 15ms);
-    const auto received = target_port.receive_if_ready (target_port.poll (0ms));
+    const auto received = target_port.receive_if_ready (
+      target_port.poll (0ms).value_or (zlink::poll_event_flag_t::none));
     assert (received
             && zlink::framework::detail::backend::copy_binding_parts (received->parts)
                  == request_parts ());
@@ -747,7 +752,8 @@ void verify_backpressured_send_waits_for_admission ()
            && std::chrono::steady_clock::now () < deadline) {
         zlink::poll_event_t event;
         (void) source_poller.wait (&event, 1, raw_route_fixture_poll_interval);
-        auto received = target_port.receive_if_ready (target_port.poll (0ms));
+        auto received = target_port.receive_if_ready (
+          target_port.poll (0ms).value_or (zlink::poll_event_flag_t::none));
         if (received && received->reply_token) {
             assert (target_port.reply (*received, request_parts ()));
             ++replies;
@@ -760,7 +766,8 @@ void verify_backpressured_send_waits_for_admission ()
     auto healthy = source_port.request (request_parts (), raw_route_fixture_timeout);
     while (!healthy.await_ready () && std::chrono::steady_clock::now () < deadline) {
         auto received =
-          target_port.receive_if_ready (target_port.poll (raw_route_fixture_poll_interval));
+          target_port.receive_if_ready (target_port.poll (raw_route_fixture_poll_interval)
+                                          .value_or (zlink::poll_event_flag_t::none));
         if (received && received->reply_token) {
             assert (target_port.reply (*received, request_parts ()));
             ++replies;
@@ -822,7 +829,8 @@ void verify_missing_rid_is_initial_not_connected_without_wait_token ()
     assert (settled.value ().failure->internal_errno == EHOSTUNREACH);
     // A token-bearing rejection would remain pending until a WRITABLE record.
     // Synchronous completion here pins the D-B85 ID/token-zero path.
-    assert (port.poll (0ms) == zlink::poll_event_flag_t::none);
+    assert (port.poll (0ms).value_or (zlink::poll_event_flag_t::none)
+            == zlink::poll_event_flag_t::none);
     port.close ();
 }
 
@@ -850,7 +858,8 @@ void verify_handover_request_completion_is_replayable ()
     auto pending = source_port.request (target_rid.to_bytes (), request_parts (), 2s);
     std::optional<backend::raw_received_t> admitted;
     while (!admitted && std::chrono::steady_clock::now () < deadline)
-        admitted = target_port.receive_if_ready (target_port.poll (1ms));
+        admitted = target_port.receive_if_ready (
+          target_port.poll (1ms).value_or (zlink::poll_event_flag_t::none));
     assert (admitted && admitted->reply_token);
     assert (!pending.await_ready ());
 

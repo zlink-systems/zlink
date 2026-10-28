@@ -44,10 +44,14 @@ task_t<bool> raw_dealer_port_t::send (const raw_message_t &parts)
 
 task_t<zlink::submit_result_t> raw_dealer_port_t::send_result (const raw_message_t &parts)
 {
-    if (parts.empty ()) {
+    return send_result (materialize_binding_parts (parts));
+}
+
+task_t<zlink::submit_result_t>
+raw_dealer_port_t::send_result (std::vector<zlink::message_t> messages)
+{
+    if (messages.empty ())
         throw std::invalid_argument ("raw dealer send requires message parts");
-    }
-    auto messages = materialize_binding_parts (parts);
     std::optional<zlink::async_result_t<void>> pending;
     try {
         {
@@ -78,11 +82,19 @@ raw_dealer_port_t::request (const raw_message_t &parts,
                             runtime::mesh::service_liveness_registry_t::connection_t admission,
                             std::shared_ptr<task_completion_source_t<void>> admitted)
 {
-    if (parts.empty () || timeout <= std::chrono::milliseconds::zero ()) {
+    return request (materialize_binding_parts (parts), timeout, std::move (admission),
+                    std::move (admitted));
+}
+
+task_t<raw_request_completion_t>
+raw_dealer_port_t::request (std::vector<zlink::message_t> messages,
+                            std::chrono::milliseconds timeout,
+                            runtime::mesh::service_liveness_registry_t::connection_t admission,
+                            std::shared_ptr<task_completion_source_t<void>> admitted)
+{
+    if (messages.empty () || timeout <= std::chrono::milliseconds::zero ())
         throw std::invalid_argument ("raw dealer request requires parts and timeout");
-    }
     const auto deadline = std::chrono::steady_clock::now () + timeout;
-    auto messages = materialize_binding_parts (parts);
     auto source = std::make_shared<task_completion_source_t<raw_request_completion_t>> ();
     auto observation = source->task ();
     observe_raw_request_admission_failure (observation, admitted);

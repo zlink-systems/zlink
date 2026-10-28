@@ -95,6 +95,25 @@ bool offload_executor_t::try_submit_internal (std::function<void ()> work)
     return true;
 }
 
+std::shared_ptr<void> offload_executor_t::retain_internal_work ()
+{
+    struct retained_work_t
+    {
+        offload_executor_t &executor;
+        explicit retained_work_t (offload_executor_t &owner) : executor (owner)
+        {
+            std::lock_guard lock (executor._mutex);
+            ++executor._active;
+        }
+        ~retained_work_t ()
+        {
+            std::lock_guard lock (executor._mutex);
+            executor.complete_work_locked ();
+        }
+    };
+    return std::make_shared<retained_work_t> (*this);
+}
+
 bool offload_executor_t::try_submit_cancellable (std::function<void (std::stop_token)> work)
 {
     {
@@ -253,6 +272,13 @@ void offload_executor_t::join_retired_workers_locked ()
     _workers.erase (retired, _workers.end ());
 }
 
+void offload_executor_t::complete_work_locked ()
+{
+    --_active;
+    if (_queue.empty () && _active == _role_active)
+        _empty.notify_all ();
+}
+
 void offload_executor_t::worker_loop ()
 {
 #ifdef ZLINK_FRAMEWORK_DEBUG_WAIT_GUARD
@@ -318,7 +344,8 @@ void offload_executor_t::worker_loop ()
             ++_active;
         }
 
-        // A receive role is deliberately outside the application exception boundary.
+        // A receive role is deliberately outside the application exception
+        // boundary.
         const bool handed_off = role && role->run_until_handoff ();
         run_application_turn ([&] {
             if (work.work) {
@@ -338,10 +365,7 @@ void offload_executor_t::worker_loop ()
             }
             if (role && !handed_off)
                 --_role_active;
-            --_active;
-            if (_queue.empty () && _active == _role_active) {
-                _empty.notify_all ();
-            }
+            complete_work_locked ();
         }
     }
 }
