@@ -11,9 +11,13 @@ namespace zlink::framework::runtime
 class host_state_metric_t
 {
   public:
-    host_state_metric_t ()
+    host_state_metric_t () = default;
+    void connect (metric_provider_t provider)
     {
-        auto provider = opentelemetry::metrics::Provider::GetMeterProvider ();
+        if (_instrument)
+            _instrument->RemoveCallback (&observe, this);
+        _instrument = {};
+        _provider = provider;
         if (dynamic_cast<opentelemetry::metrics::NoopMeterProvider *> (provider.get ()))
             return;
         auto meter = provider->GetMeter ("zlink.framework");
@@ -60,6 +64,7 @@ class host_state_metric_t
             observer->Observe (i == static_cast<unsigned> (state) ? 1.0 : 0.0,
                                {{"state", names[i]}});
     }
+    metric_provider_t _provider;
     std::atomic<framework_runtime_state_t> _state{framework_runtime_state_t::preparing};
     opentelemetry::nostd::shared_ptr<opentelemetry::metrics::ObservableInstrument> _instrument;
 };

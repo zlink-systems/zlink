@@ -2565,7 +2565,8 @@ void verify_raw_owner_node_send_and_liveness (
         .descriptor = descriptor ("raw-b"),
         .dispatch = dispatch,
         .runtime_failures =
-          std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()},
+          std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> (),
+        .metric_provider = metric_provider.api ()},
       second_context);
     assert (first.topology ().local_descriptor ().state == mesh::service_node_state_t::preparing);
     assert (second.topology ().local_descriptor ().state == mesh::service_node_state_t::preparing);
