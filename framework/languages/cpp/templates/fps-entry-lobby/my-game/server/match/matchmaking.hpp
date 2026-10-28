@@ -1,19 +1,25 @@
 #pragma once
 #include "domain.hpp"
+#include <zlink/json.hpp>
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
 #include <limits>
 #include <stdexcept>
 #include <string>
-#include <utility>
 #include <vector>
 
 namespace MyGame
 {
+struct ModeQueue
+{
+    std::string mode;
+    std::vector<QueueRequest> requests;
+};
+
 struct MatchmakingState
 {
-    std::vector<std::pair<std::string, std::vector<QueueRequest>>> waiting;
+    std::vector<ModeQueue> waiting;
     std::int64_t roomSequence{};
 
     void enqueue (const QueueRequest &request)
@@ -23,26 +29,24 @@ struct MatchmakingState
         });
         if (!nonblank)
             throw std::invalid_argument ("Mode required");
-        for (const auto &[mode, queue] : waiting) {
-            (void) mode;
-            for (const auto &player : queue)
+        for (const auto &entry : waiting) {
+            for (const auto &player : entry.requests)
                 if (player.playerId == request.playerId)
                     return;
         }
         auto found = std::find_if (waiting.begin (), waiting.end (), [&] (const auto &entry) {
-            return entry.first == request.mode;
+            return entry.mode == request.mode;
         });
         if (found == waiting.end ())
             waiting.push_back ({request.mode, {request}});
         else
-            found->second.push_back (request);
+            found->requests.push_back (request);
     }
     std::vector<QueueRequest> pair () const
     {
-        for (const auto &[mode, queue] : waiting) {
-            (void) mode;
-            if (queue.size () >= Game::players_per_room)
-                return {queue.begin (), queue.begin () + Game::players_per_room};
+        for (const auto &entry : waiting) {
+            if (entry.requests.size () >= Game::players_per_room)
+                return {entry.requests.begin (), entry.requests.begin () + Game::players_per_room};
         }
         return {};
     }
@@ -57,14 +61,32 @@ struct MatchmakingState
         if (players.empty ())
             return;
         auto queue = std::find_if (waiting.begin (), waiting.end (), [&] (const auto &entry) {
-            return entry.first == players.front ().mode;
+            return entry.mode == players.front ().mode;
         });
-        if (queue == waiting.end () || queue->second.size () < Game::players_per_room)
+        if (queue == waiting.end () || queue->requests.size () < Game::players_per_room)
             throw std::invalid_argument ("Matchmaking pair is not queued");
-        queue->second.erase (queue->second.begin (), queue->second.begin () + Game::players_per_room);
-        if (queue->second.empty ())
+        queue->requests.erase (queue->requests.begin (), queue->requests.begin () + Game::players_per_room);
+        if (queue->requests.empty ())
             waiting.erase (queue);
     }
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (MatchmakingState, waiting, roomSequence)
 };
 }
+
+namespace zlink::json
+{
+template <> struct dto_traits<::MyGame::ModeQueue>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("mode", &::MyGame::ModeQueue::mode),
+      zlink::json::field ("requests", &::MyGame::ModeQueue::requests)
+    };
+};
+
+template <> struct dto_traits<::MyGame::MatchmakingState>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("waiting", &::MyGame::MatchmakingState::waiting),
+      zlink::json::field ("roomSequence", &::MyGame::MatchmakingState::roomSequence)
+    };
+};
+} // namespace zlink::json

@@ -1,4 +1,5 @@
 #pragma once
+#include <zlink/json.hpp>
 #include <nlohmann/json.hpp>
 #include <chrono>
 #include <cstdint>
@@ -69,13 +70,7 @@ struct SessionInfoRequest
 {
     static constexpr auto packet_name = "SessionInfoRequest";
 };
-inline void to_json (nlohmann::json &j, const SessionInfoRequest &)
-{
-    j = nlohmann::json::object ();
-}
-inline void from_json (const nlohmann::json &, SessionInfoRequest &)
-{
-}
+
 struct SessionInfo
 {
     static constexpr auto packet_name = "SessionInfo";
@@ -83,27 +78,23 @@ struct SessionInfo
     std::string actorId;
     std::int64_t objectGeneration = 0;
     bool operator== (const SessionInfo &) const = default;
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (SessionInfo, sessionId, actorId, objectGeneration)
 };
 struct JoinWorldRequest
 {
     static constexpr auto packet_name = "JoinWorldRequest";
     std::string playerId;
     double x = 0;
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (JoinWorldRequest, playerId, x)
 };
 struct Position
 {
     double x = 0;
     bool operator== (const Position &) const = default;
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (Position, x)
 };
 struct MoveRequest
 {
     static constexpr auto packet_name = "MoveRequest";
     double delta = 0;
     std::int64_t sequence = 0;
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (MoveRequest, delta, sequence)
 };
 struct EnterZone
 {
@@ -111,7 +102,6 @@ struct EnterZone
     Position position;
     std::int64_t sequence = 0;
     std::int32_t remainingMs = 0;
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (EnterZone, position, sequence, remainingMs)
 };
 struct WorldState
 {
@@ -119,14 +109,12 @@ struct WorldState
     std::string zoneId, nodeId;
     double x = 0;
     std::int64_t sequence = 0;
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (WorldState, zoneId, nodeId, x, sequence)
 };
 struct ActionRejected
 {
     static constexpr auto packet_name = "ActionRejected";
     std::string reason;
     std::int32_t retryAfterMs = 0;
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (ActionRejected, reason, retryAfterMs)
 };
 enum class PlayerLeftReason
 {
@@ -134,27 +122,20 @@ enum class PlayerLeftReason
     disconnected,
     out_of_range,
 };
-NLOHMANN_JSON_SERIALIZE_ENUM (PlayerLeftReason,
-                              {{PlayerLeftReason::left_zone, "left-zone"},
-                               {PlayerLeftReason::disconnected, "disconnected"},
-                               {PlayerLeftReason::out_of_range, "out-of-range"}})
+
 enum class BorderPresenceKind
 {
     appeared,
     moved,
     left,
 };
-NLOHMANN_JSON_SERIALIZE_ENUM (BorderPresenceKind,
-                              {{BorderPresenceKind::appeared, "appeared"},
-                               {BorderPresenceKind::moved, "moved"},
-                               {BorderPresenceKind::left, "left"}})
+
 struct PlayerAppeared
 {
     static constexpr auto packet_name = "PlayerAppeared";
     std::string playerId;
     Position position;
     std::string sourceSpotId;
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (PlayerAppeared, playerId, position, sourceSpotId)
 };
 struct PlayerMoved
 {
@@ -163,7 +144,6 @@ struct PlayerMoved
     Position position;
     std::int64_t sequence = 0;
     std::string sourceSpotId;
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (PlayerMoved, playerId, position, sequence, sourceSpotId)
 };
 struct PlayerLeft
 {
@@ -171,7 +151,6 @@ struct PlayerLeft
     std::string playerId;
     PlayerLeftReason reason = PlayerLeftReason::left_zone;
     std::string sourceSpotId;
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (PlayerLeft, playerId, reason, sourceSpotId)
 };
 struct BorderPresence
 {
@@ -182,37 +161,155 @@ struct BorderPresence
     BorderPresenceKind kind = BorderPresenceKind::appeared;
     std::optional<PlayerLeftReason> reason;
 };
-inline void to_json (nlohmann::json &j, const BorderPresence &value)
-{
-    j = { {"sourceZoneId", value.sourceZoneId},
-          {"playerId", value.playerId},
-          {"position", value.position},
-          {"sequence", value.sequence},
-          {"kind", value.kind},
-          {"reason", value.reason ? nlohmann::json (*value.reason) : nlohmann::json (nullptr)} };
-}
-inline void from_json (const nlohmann::json &j, BorderPresence &value)
-{
-    j.at ("sourceZoneId").get_to (value.sourceZoneId);
-    j.at ("playerId").get_to (value.playerId);
-    j.at ("position").get_to (value.position);
-    j.at ("sequence").get_to (value.sequence);
-    j.at ("kind").get_to (value.kind);
-    const auto &reason = j.at ("reason");
-    value.reason = reason.is_null () ? std::nullopt
-                                    : std::optional<PlayerLeftReason> (
-                                        reason.get<PlayerLeftReason> ());
-}
+
 struct OpenDungeonRequest
 {
     static constexpr auto packet_name = "OpenDungeonRequest";
     std::string dungeonId;
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (OpenDungeonRequest, dungeonId)
 };
 struct DungeonOpened
 {
     static constexpr auto packet_name = "DungeonOpened";
     std::string dungeonId, nodeId;
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (DungeonOpened, dungeonId, nodeId)
 };
 }
+
+namespace zlink::json
+{
+template <> struct dto_traits<::MyGame::SessionInfo>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("sessionId", &::MyGame::SessionInfo::sessionId),
+      zlink::json::field ("actorId", &::MyGame::SessionInfo::actorId),
+      zlink::json::field ("objectGeneration", &::MyGame::SessionInfo::objectGeneration)
+    };
+};
+
+template <> struct dto_traits<::MyGame::JoinWorldRequest>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("playerId", &::MyGame::JoinWorldRequest::playerId),
+      zlink::json::field ("x", &::MyGame::JoinWorldRequest::x)
+    };
+};
+
+template <> struct dto_traits<::MyGame::Position>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("x", &::MyGame::Position::x)
+    };
+};
+
+template <> struct dto_traits<::MyGame::MoveRequest>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("delta", &::MyGame::MoveRequest::delta),
+      zlink::json::field ("sequence", &::MyGame::MoveRequest::sequence)
+    };
+};
+
+template <> struct dto_traits<::MyGame::EnterZone>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("position", &::MyGame::EnterZone::position),
+      zlink::json::field ("sequence", &::MyGame::EnterZone::sequence),
+      zlink::json::field ("remainingMs", &::MyGame::EnterZone::remainingMs)
+    };
+};
+
+template <> struct dto_traits<::MyGame::WorldState>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("zoneId", &::MyGame::WorldState::zoneId),
+      zlink::json::field ("nodeId", &::MyGame::WorldState::nodeId),
+      zlink::json::field ("x", &::MyGame::WorldState::x),
+      zlink::json::field ("sequence", &::MyGame::WorldState::sequence)
+    };
+};
+
+template <> struct dto_traits<::MyGame::ActionRejected>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("reason", &::MyGame::ActionRejected::reason),
+      zlink::json::field ("retryAfterMs", &::MyGame::ActionRejected::retryAfterMs)
+    };
+};
+
+template <> struct dto_traits<::MyGame::PlayerAppeared>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("playerId", &::MyGame::PlayerAppeared::playerId),
+      zlink::json::field ("position", &::MyGame::PlayerAppeared::position),
+      zlink::json::field ("sourceSpotId", &::MyGame::PlayerAppeared::sourceSpotId)
+    };
+};
+
+template <> struct dto_traits<::MyGame::PlayerMoved>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("playerId", &::MyGame::PlayerMoved::playerId),
+      zlink::json::field ("position", &::MyGame::PlayerMoved::position),
+      zlink::json::field ("sequence", &::MyGame::PlayerMoved::sequence),
+      zlink::json::field ("sourceSpotId", &::MyGame::PlayerMoved::sourceSpotId)
+    };
+};
+
+template <> struct dto_traits<::MyGame::PlayerLeft>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("playerId", &::MyGame::PlayerLeft::playerId),
+      zlink::json::field ("reason", &::MyGame::PlayerLeft::reason),
+      zlink::json::field ("sourceSpotId", &::MyGame::PlayerLeft::sourceSpotId)
+    };
+};
+
+template <> struct dto_traits<::MyGame::OpenDungeonRequest>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("dungeonId", &::MyGame::OpenDungeonRequest::dungeonId)
+    };
+};
+
+template <> struct dto_traits<::MyGame::DungeonOpened>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("dungeonId", &::MyGame::DungeonOpened::dungeonId),
+      zlink::json::field ("nodeId", &::MyGame::DungeonOpened::nodeId)
+    };
+};
+
+template <> struct dto_traits<::MyGame::SessionInfoRequest>
+{
+    static constexpr auto fields = std::tuple{};
+};
+
+template <> struct dto_traits<::MyGame::BorderPresence>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("sourceZoneId", &::MyGame::BorderPresence::sourceZoneId),
+      zlink::json::field ("playerId", &::MyGame::BorderPresence::playerId),
+      zlink::json::field ("position", &::MyGame::BorderPresence::position),
+      zlink::json::field ("sequence", &::MyGame::BorderPresence::sequence),
+      zlink::json::field ("kind", &::MyGame::BorderPresence::kind),
+      zlink::json::field ("reason", &::MyGame::BorderPresence::reason)
+    };
+};
+
+template <> struct enum_traits<::MyGame::PlayerLeftReason>
+{
+    static constexpr auto values = std::array{
+      zlink::json::enum_value (::MyGame::PlayerLeftReason::left_zone, "left-zone"),
+      zlink::json::enum_value (::MyGame::PlayerLeftReason::disconnected, "disconnected"),
+      zlink::json::enum_value (::MyGame::PlayerLeftReason::out_of_range, "out-of-range")
+    };
+};
+
+template <> struct enum_traits<::MyGame::BorderPresenceKind>
+{
+    static constexpr auto values = std::array{
+      zlink::json::enum_value (::MyGame::BorderPresenceKind::appeared, "appeared"),
+      zlink::json::enum_value (::MyGame::BorderPresenceKind::moved, "moved"),
+      zlink::json::enum_value (::MyGame::BorderPresenceKind::left, "left")
+    };
+};
+} // namespace zlink::json
