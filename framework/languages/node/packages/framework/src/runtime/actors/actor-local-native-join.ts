@@ -210,7 +210,8 @@ export class ZLinkLocalNativeActorJoin {
         storeSpotId,
         spotGeneration,
         target.spotKind === ZLinkSpotKind.Entry ? ZLinkSpotKind.Entry : ZLinkSpotKind.User,
-        node.status().lifecycleGeneration
+        node.status().lifecycleGeneration,
+        signal
       );
       const committedActor = node.restoreActorAuthority!(
         actor.context.actorId,

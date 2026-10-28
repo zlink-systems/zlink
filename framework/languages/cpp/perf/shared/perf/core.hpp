@@ -7,6 +7,7 @@
 #include <zlink/framework.hpp>
 
 #include <nlohmann/json.hpp>
+#include <zlink/json_profile.hpp>
 
 #include <cmath>
 #include <cstdlib>
@@ -61,8 +62,14 @@ class validation_error_t : public std::runtime_error
 };
 
 // ---- decimal strings (§15.2 U64 / I64: canonical, no sign on U64, no leading zero) ----
-inline std::string dec (std::uint64_t value) { return std::to_string (value); }
-inline std::string dec (std::int64_t value) { return std::to_string (value); }
+inline std::string dec (std::uint64_t value)
+{
+    return std::to_string (value);
+}
+inline std::string dec (std::int64_t value)
+{
+    return std::to_string (value);
+}
 inline std::string dec (unsigned __int128 value)
 {
     if (value == 0)
@@ -96,7 +103,8 @@ inline std::int64_t parse_i64 (const std::string &text)
     if (negative ? magnitude > static_cast<std::uint64_t> (INT64_MAX) + 1 || magnitude == 0
                  : magnitude > static_cast<std::uint64_t> (INT64_MAX))
         throw validation_error_t ("SchemaMismatch", "Noncanonical I64 decimal string.");
-    return negative ? static_cast<std::int64_t> (0 - magnitude) : static_cast<std::int64_t> (magnitude);
+    return negative ? static_cast<std::int64_t> (0 - magnitude)
+                    : static_cast<std::int64_t> (magnitude);
 }
 
 // ---- clock (§15.2: nanosecond ticks from the monotonic clock; Unix time is for display only) ----
@@ -124,16 +132,18 @@ inline const std::string &clock_domain ()
 }
 inline json clock_metadata ()
 {
-    return {{"source", "clock_gettime(CLOCK_MONOTONIC)"},
-            {"nativeFrequencyHz", "1000000000"},
-            {"ticksUnit", "ns"},
-            {"clockDomainId", clock_domain ()},
-            {"scope", "process"},
-            {"alignmentMethod", nullptr},
-            {"maxErrorNs", nullptr},
-            {"validFromTicks", nullptr},
-            {"validThroughTicks", nullptr},
-            {"evidence", json::array ({"RTT uses only this process clock; remote receivedTicks is diagnostic."})}};
+    return {
+      {"source", "clock_gettime(CLOCK_MONOTONIC)"},
+      {"nativeFrequencyHz", "1000000000"},
+      {"ticksUnit", "ns"},
+      {"clockDomainId", clock_domain ()},
+      {"scope", "process"},
+      {"alignmentMethod", nullptr},
+      {"maxErrorNs", nullptr},
+      {"validFromTicks", nullptr},
+      {"validThroughTicks", nullptr},
+      {"evidence",
+       json::array ({"RTT uses only this process clock; remote receivedTicks is diagnostic."})}};
 }
 
 inline std::string type_name (const std::type_info &info)
@@ -150,109 +160,108 @@ inline const char *kind_name (zlink::framework::framework_error_kind_t kind)
 {
     using k = zlink::framework::framework_error_kind_t;
     switch (kind) {
-        case k::not_found: return "NotFound";
-        case k::already_exists: return "AlreadyExists";
-        case k::type_mismatch: return "TypeMismatch";
-        case k::not_configured: return "NotConfigured";
-        case k::rejected: return "Rejected";
-        case k::unavailable: return "Unavailable";
-        case k::deadline_exceeded: return "DeadlineExceeded";
-        case k::shutting_down: return "ShuttingDown";
-        case k::protocol_error: return "ProtocolError";
-        case k::invalid_operation: return "InvalidOperation";
-        case k::data_lost: return "DataLost";
-        case k::internal_failure: return "InternalFailure";
+        case k::not_found:
+            return "NotFound";
+        case k::already_exists:
+            return "AlreadyExists";
+        case k::type_mismatch:
+            return "TypeMismatch";
+        case k::not_configured:
+            return "NotConfigured";
+        case k::rejected:
+            return "Rejected";
+        case k::unavailable:
+            return "Unavailable";
+        case k::deadline_exceeded:
+            return "DeadlineExceeded";
+        case k::shutting_down:
+            return "ShuttingDown";
+        case k::protocol_error:
+            return "ProtocolError";
+        case k::invalid_operation:
+            return "InvalidOperation";
+        case k::data_lost:
+            return "DataLost";
+        case k::internal_failure:
+            return "InternalFailure";
     }
     return "InternalFailure";
 }
 
 // ---- §12 / §15.2 application DTOs. Field names on the wire are the lowerCamelCase of §15.2. ----
-struct identity_t
+struct echo_request_t
 {
     std::string run_id, cell_id, reset_seq, phase;
-};
-inline void identity_to_json (json &out, const identity_t &v)
-{
-    out["runId"] = v.run_id;
-    out["cellId"] = v.cell_id;
-    out["resetSeq"] = v.reset_seq;
-    out["phase"] = v.phase;
-}
-inline void identity_from_json (const json &in, identity_t &v)
-{
-    v.run_id = in.at ("runId").get<std::string> ();
-    v.cell_id = in.at ("cellId").get<std::string> ();
-    v.reset_seq = in.at ("resetSeq").get<std::string> ();
-    v.phase = in.at ("phase").get<std::string> ();
-}
-
-struct echo_request_t : identity_t
-{
     static constexpr const char *packet_name = "PerfEchoRequest";
     int client_id = 0;
     std::string sequence, correlation_id, sent_ticks, clock_domain_id;
     std::optional<std::string> return_spot_id, return_channel;
     std::string payload;
 };
-inline void to_json (json &out, const echo_request_t &v)
-{
-    identity_to_json (out, v);
-    out["clientId"] = v.client_id;
-    out["sequence"] = v.sequence;
-    out["correlationId"] = v.correlation_id;
-    out["sentTicks"] = v.sent_ticks;
-    out["clockDomainId"] = v.clock_domain_id;
-    out["returnSpotId"] = v.return_spot_id;
-    out["returnChannel"] = v.return_channel;
-    out["payload"] = v.payload;
-}
-inline void from_json (const json &in, echo_request_t &v)
-{
-    identity_from_json (in, v);
-    v.client_id = in.at ("clientId").get<int> ();
-    v.sequence = in.at ("sequence").get<std::string> ();
-    v.correlation_id = in.at ("correlationId").get<std::string> ();
-    v.sent_ticks = in.at ("sentTicks").get<std::string> ();
-    v.clock_domain_id = in.at ("clockDomainId").get<std::string> ();
-    v.return_spot_id = in.at ("returnSpotId").get<std::optional<std::string>> ();
-    v.return_channel = in.at ("returnChannel").get<std::optional<std::string>> ();
-    v.payload = in.at ("payload").get<std::string> ();
 }
 
-struct echo_reply_t : identity_t
+template <> struct zlink::json::dto_traits<perf::echo_request_t>
 {
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("runId", &perf::echo_request_t::run_id),
+                 zlink::json::field ("cellId", &perf::echo_request_t::cell_id),
+                 zlink::json::field ("resetSeq", &perf::echo_request_t::reset_seq),
+                 zlink::json::field ("phase", &perf::echo_request_t::phase),
+                 zlink::json::field ("clientId", &perf::echo_request_t::client_id),
+                 zlink::json::field ("sequence", &perf::echo_request_t::sequence),
+                 zlink::json::field ("correlationId", &perf::echo_request_t::correlation_id),
+                 zlink::json::field ("sentTicks", &perf::echo_request_t::sent_ticks),
+                 zlink::json::field ("clockDomainId", &perf::echo_request_t::clock_domain_id),
+                 zlink::json::field ("returnSpotId", &perf::echo_request_t::return_spot_id),
+                 zlink::json::field ("returnChannel", &perf::echo_request_t::return_channel),
+                 zlink::json::field ("payload", &perf::echo_request_t::payload)};
+};
+
+namespace perf
+{
+
+struct echo_reply_t
+{
+    std::string run_id, cell_id, reset_seq, phase;
     static constexpr const char *packet_name = "PerfEchoReply";
     int client_id = 0;
     std::string sequence, correlation_id, received_ticks, clock_domain_id, payload;
 };
-inline void to_json (json &out, const echo_reply_t &v)
-{
-    identity_to_json (out, v);
-    out["clientId"] = v.client_id;
-    out["sequence"] = v.sequence;
-    out["correlationId"] = v.correlation_id;
-    out["receivedTicks"] = v.received_ticks;
-    out["clockDomainId"] = v.clock_domain_id;
-    out["payload"] = v.payload;
 }
-inline void from_json (const json &in, echo_reply_t &v)
+
+template <> struct zlink::json::dto_traits<perf::echo_reply_t>
 {
-    identity_from_json (in, v);
-    v.client_id = in.at ("clientId").get<int> ();
-    v.sequence = in.at ("sequence").get<std::string> ();
-    v.correlation_id = in.at ("correlationId").get<std::string> ();
-    v.received_ticks = in.at ("receivedTicks").get<std::string> ();
-    v.clock_domain_id = in.at ("clockDomainId").get<std::string> ();
-    v.payload = in.at ("payload").get<std::string> ();
-}
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("runId", &perf::echo_reply_t::run_id),
+                 zlink::json::field ("cellId", &perf::echo_reply_t::cell_id),
+                 zlink::json::field ("resetSeq", &perf::echo_reply_t::reset_seq),
+                 zlink::json::field ("phase", &perf::echo_reply_t::phase),
+                 zlink::json::field ("clientId", &perf::echo_reply_t::client_id),
+                 zlink::json::field ("sequence", &perf::echo_reply_t::sequence),
+                 zlink::json::field ("correlationId", &perf::echo_reply_t::correlation_id),
+                 zlink::json::field ("receivedTicks", &perf::echo_reply_t::received_ticks),
+                 zlink::json::field ("clockDomainId", &perf::echo_reply_t::clock_domain_id),
+                 zlink::json::field ("payload", &perf::echo_reply_t::payload)};
+};
+
+namespace perf
+{
 
 struct drive_request_t
 {
     static constexpr const char *packet_name = "PerfDriveRequest";
     echo_request_t echo;
 };
-inline void to_json (json &out, const drive_request_t &v) { out = {{"echo", v.echo}}; }
-inline void from_json (const json &in, drive_request_t &v) { v.echo = in.at ("echo").get<echo_request_t> (); }
+}
+
+template <> struct zlink::json::dto_traits<perf::drive_request_t>
+{
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("echo", &perf::drive_request_t::echo)};
+};
+
+namespace perf
+{
 
 struct drive_reply_t
 {
@@ -260,68 +269,85 @@ struct drive_reply_t
     bool started = false;
     std::optional<echo_reply_t> echo;
 };
-inline void to_json (json &out, const drive_reply_t &v)
-{
-    out = {{"started", v.started}, {"echo", v.echo}};
-}
-inline void from_json (const json &in, drive_reply_t &v)
-{
-    v.started = in.at ("started").get<bool> ();
-    v.echo = in.at ("echo").get<std::optional<echo_reply_t>> ();
 }
 
-struct trigger_request_t : identity_t
+template <> struct zlink::json::dto_traits<perf::drive_reply_t>
 {
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("started", &perf::drive_reply_t::started),
+                 zlink::json::field ("echo", &perf::drive_reply_t::echo)};
 };
-inline void from_json (const json &in, trigger_request_t &v) { identity_from_json (in, v); }
-inline void to_json (json &out, const trigger_request_t &v) { identity_to_json (out, v); }
 
-struct trigger_reply_t : identity_t
+namespace perf
 {
+
+struct trigger_request_t
+{
+    std::string run_id, cell_id, reset_seq, phase;
+};
+}
+
+template <> struct zlink::json::dto_traits<perf::trigger_request_t>
+{
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("runId", &perf::trigger_request_t::run_id),
+                 zlink::json::field ("cellId", &perf::trigger_request_t::cell_id),
+                 zlink::json::field ("resetSeq", &perf::trigger_request_t::reset_seq),
+                 zlink::json::field ("phase", &perf::trigger_request_t::phase)};
+};
+
+namespace perf
+{
+
+struct trigger_reply_t
+{
+    std::string run_id, cell_id, reset_seq, phase;
     bool accepted = false;
     std::string state, config_hash;
     std::optional<std::string> reason;
 };
-inline void to_json (json &out, const trigger_reply_t &v)
-{
-    identity_to_json (out, v);
-    out["accepted"] = v.accepted;
-    out["state"] = v.state;
-    out["configHash"] = v.config_hash;
-    out["reason"] = v.reason;
-}
-inline void from_json (const json &in, trigger_reply_t &v)
-{
-    identity_from_json (in, v);
-    v.accepted = in.at ("accepted").get<bool> ();
-    v.state = in.at ("state").get<std::string> ();
-    v.config_hash = in.at ("configHash").get<std::string> ();
-    v.reason = in.at ("reason").get<std::optional<std::string>> ();
 }
 
-struct publish_event_t : identity_t
+template <> struct zlink::json::dto_traits<perf::trigger_reply_t>
 {
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("runId", &perf::trigger_reply_t::run_id),
+                 zlink::json::field ("cellId", &perf::trigger_reply_t::cell_id),
+                 zlink::json::field ("resetSeq", &perf::trigger_reply_t::reset_seq),
+                 zlink::json::field ("phase", &perf::trigger_reply_t::phase),
+                 zlink::json::field ("accepted", &perf::trigger_reply_t::accepted),
+                 zlink::json::field ("state", &perf::trigger_reply_t::state),
+                 zlink::json::field ("configHash", &perf::trigger_reply_t::config_hash),
+                 zlink::json::field ("reason", &perf::trigger_reply_t::reason)};
+};
+
+namespace perf
+{
+
+struct publish_event_t
+{
+    std::string run_id, cell_id, reset_seq, phase;
     static constexpr const char *packet_name = "PerfPublishEvent";
     std::string sequence, topic, sent_ticks, clock_domain_id, payload;
 };
-inline void to_json (json &out, const publish_event_t &v)
-{
-    identity_to_json (out, v);
-    out["sequence"] = v.sequence;
-    out["topic"] = v.topic;
-    out["sentTicks"] = v.sent_ticks;
-    out["clockDomainId"] = v.clock_domain_id;
-    out["payload"] = v.payload;
 }
-inline void from_json (const json &in, publish_event_t &v)
+
+template <> struct zlink::json::dto_traits<perf::publish_event_t>
 {
-    identity_from_json (in, v);
-    v.sequence = in.at ("sequence").get<std::string> ();
-    v.topic = in.at ("topic").get<std::string> ();
-    v.sent_ticks = in.at ("sentTicks").get<std::string> ();
-    v.clock_domain_id = in.at ("clockDomainId").get<std::string> ();
-    v.payload = in.at ("payload").get<std::string> ();
-}
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("runId", &perf::publish_event_t::run_id),
+                 zlink::json::field ("cellId", &perf::publish_event_t::cell_id),
+                 zlink::json::field ("resetSeq", &perf::publish_event_t::reset_seq),
+                 zlink::json::field ("phase", &perf::publish_event_t::phase),
+                 zlink::json::field ("sequence", &perf::publish_event_t::sequence),
+                 zlink::json::field ("topic", &perf::publish_event_t::topic),
+                 zlink::json::field ("sentTicks", &perf::publish_event_t::sent_ticks),
+                 zlink::json::field ("clockDomainId", &perf::publish_event_t::clock_domain_id),
+                 zlink::json::field ("payload", &perf::publish_event_t::payload)};
+};
+
+namespace perf
+{
 
 struct worker_observation_t
 {
@@ -329,42 +355,47 @@ struct worker_observation_t
     std::string started_ticks, ended_ticks, clock_domain_id, iterations;
     std::uint32_t checksum = 0;
 };
-inline void to_json (json &out, const worker_observation_t &v)
-{
-    out = {{"startedTicks", v.started_ticks},
-           {"endedTicks", v.ended_ticks},
-           {"clockDomainId", v.clock_domain_id},
-           {"iterations", v.iterations},
-           {"checksum", v.checksum}};
 }
-inline void from_json (const json &in, worker_observation_t &v)
+
+template <> struct zlink::json::dto_traits<perf::worker_observation_t>
 {
-    v.started_ticks = in.at ("startedTicks").get<std::string> ();
-    v.ended_ticks = in.at ("endedTicks").get<std::string> ();
-    v.clock_domain_id = in.at ("clockDomainId").get<std::string> ();
-    v.iterations = in.at ("iterations").get<std::string> ();
-    v.checksum = in.at ("checksum").get<std::uint32_t> ();
-}
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("startedTicks", &perf::worker_observation_t::started_ticks),
+                 zlink::json::field ("endedTicks", &perf::worker_observation_t::ended_ticks),
+                 zlink::json::field ("clockDomainId", &perf::worker_observation_t::clock_domain_id),
+                 zlink::json::field ("iterations", &perf::worker_observation_t::iterations),
+                 zlink::json::field ("checksum", &perf::worker_observation_t::checksum)};
+};
+
+namespace perf
+{
 
 struct reset_request_t
 {
     std::string run_id, cell_id, reset_seq;
 };
-inline void from_json (const json &in, reset_request_t &v)
-{
-    v.run_id = in.at ("runId").get<std::string> ();
-    v.cell_id = in.at ("cellId").get<std::string> ();
-    v.reset_seq = in.at ("resetSeq").get<std::string> ();
-}
-inline void to_json (json &out, const reset_request_t &v)
-{
-    out = {{"runId", v.run_id}, {"cellId", v.cell_id}, {"resetSeq", v.reset_seq}};
 }
 
-inline json null_reason (const std::string &code, const std::string &reason,
-                         const std::string &owner = "perf/README.ko.md", json lower_bound_ms = nullptr)
+template <> struct zlink::json::dto_traits<perf::reset_request_t>
 {
-    return {{"code", code}, {"reason", reason}, {"owner", owner}, {"lowerBoundMs", std::move (lower_bound_ms)}};
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("runId", &perf::reset_request_t::run_id),
+                 zlink::json::field ("cellId", &perf::reset_request_t::cell_id),
+                 zlink::json::field ("resetSeq", &perf::reset_request_t::reset_seq)};
+};
+
+namespace perf
+{
+
+inline json null_reason (const std::string &code,
+                         const std::string &reason,
+                         const std::string &owner = "perf/README.ko.md",
+                         json lower_bound_ms = nullptr)
+{
+    return {{"code", code},
+            {"reason", reason},
+            {"owner", owner},
+            {"lowerBoundMs", std::move (lower_bound_ms)}};
 }
 
 // ---- §15.2 payload pattern: b[i] = (31*i + 17*floor(i/251) + 29) mod 256, carried as canonical padded Base64 ----
@@ -377,15 +408,17 @@ class payload_pattern_t
     void validate (const std::string &payload) const
     {
         if (payload != _base64)
-            throw validation_error_t ("PayloadMismatch", "Payload is not the canonical Base64 pattern.");
+            throw validation_error_t ("PayloadMismatch",
+                                      "Payload is not the canonical Base64 pattern.");
     }
     static void validate_identity (const echo_request_t &request, const echo_reply_t &reply)
     {
-        if (request.run_id != reply.run_id || request.cell_id != reply.cell_id || request.reset_seq != reply.reset_seq
-            || request.phase != reply.phase || request.client_id != reply.client_id
-            || request.sequence != reply.sequence || request.correlation_id != reply.correlation_id
-            || reply.clock_domain_id.empty ())
-            throw validation_error_t ("IdentityMismatch", "Echo identity differs from the submitted operation.");
+        if (request.run_id != reply.run_id || request.cell_id != reply.cell_id
+            || request.reset_seq != reply.reset_seq || request.phase != reply.phase
+            || request.client_id != reply.client_id || request.sequence != reply.sequence
+            || request.correlation_id != reply.correlation_id || reply.clock_domain_id.empty ())
+            throw validation_error_t ("IdentityMismatch",
+                                      "Echo identity differs from the submitted operation.");
         (void) parse_i64 (reply.received_ticks);
     }
     static echo_reply_t reply (const echo_request_t &request, std::int64_t received_ticks)
@@ -407,14 +440,17 @@ class payload_pattern_t
   private:
     static std::string generate (int length)
     {
-        static const char alphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        static const char alphabet[] =
+          "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
         std::vector<unsigned char> bytes (static_cast<std::size_t> (length));
         for (int i = 0; i < length; ++i)
-            bytes[static_cast<std::size_t> (i)] = static_cast<unsigned char> ((31 * i + 17 * (i / 251) + 29) % 256);
+            bytes[static_cast<std::size_t> (i)] =
+              static_cast<unsigned char> ((31 * i + 17 * (i / 251) + 29) % 256);
         std::string out;
         for (std::size_t i = 0; i < bytes.size (); i += 3) {
             const std::size_t left = bytes.size () - i;
-            const unsigned value = (bytes[i] << 16) | (left > 1 ? bytes[i + 1] << 8 : 0) | (left > 2 ? bytes[i + 2] : 0);
+            const unsigned value =
+              (bytes[i] << 16) | (left > 1 ? bytes[i + 1] << 8 : 0) | (left > 2 ? bytes[i + 2] : 0);
             out += alphabet[(value >> 18) & 63];
             out += alphabet[(value >> 12) & 63];
             out += left > 1 ? alphabet[(value >> 6) & 63] : '=';
@@ -477,7 +513,10 @@ class histogram_t
                 {"percentileMethod", "nearest-rank-bucket-upper-bound-capped-by-max"}};
     }
     // Writes the histogram and its dotted latency keys; a null carries its reason (§15.5).
-    void export_to (const std::string &histogram_key, const std::string &prefix, json &metrics, json &histograms,
+    void export_to (const std::string &histogram_key,
+                    const std::string &prefix,
+                    json &metrics,
+                    json &histograms,
                     json &reasons) const
     {
         histograms[histogram_key] = snapshot ();
@@ -496,9 +535,11 @@ class histogram_t
             metrics[key] = value;
             if (value.is_null ())
                 reasons["/metrics/" + key] =
-                  _count == 0 ? null_reason ("NO_SAMPLES", "No successful samples in this cohort and window.")
-                              : null_reason ("HISTOGRAM_OVERFLOW", "Nearest rank lies above the final bucket.",
-                                             "perf/README.ko.md §15.3", histogram_bounds ().back ());
+                  _count == 0
+                    ? null_reason ("NO_SAMPLES", "No successful samples in this cohort and window.")
+                    : null_reason ("HISTOGRAM_OVERFLOW",
+                                   "Nearest rank lies above the final bucket.",
+                                   "perf/README.ko.md §15.3", histogram_bounds ().back ());
         }
         if (_count == 0)
             reasons["/histograms/" + histogram_key + "/maxNs"] =
@@ -508,7 +549,8 @@ class histogram_t
   private:
     json percentile (int percent) const
     {
-        const unsigned __int128 rank = (static_cast<unsigned __int128> (percent) * _count + 99) / 100;
+        const unsigned __int128 rank =
+          (static_cast<unsigned __int128> (percent) * _count + 99) / 100;
         unsigned __int128 cumulative = 0;
         for (std::size_t i = 0; i < _counts.size (); ++i) {
             cumulative += _counts[i];
@@ -524,3 +566,20 @@ class histogram_t
 };
 
 } // namespace perf
+
+// Explicit JSON state-store conversion shares the typed messaging profile.
+namespace perf
+{
+template <typename T>
+    requires zlink::detail::json_profile::has_dto<T>
+void to_json (nlohmann::json &out, const T &value)
+{
+    out = zlink::detail::json_profile::encode_value (value);
+}
+template <typename T>
+    requires zlink::detail::json_profile::has_dto<T>
+void from_json (const nlohmann::json &in, T &value)
+{
+    value = zlink::detail::json_profile::decode_value<T> (in);
+}
+}

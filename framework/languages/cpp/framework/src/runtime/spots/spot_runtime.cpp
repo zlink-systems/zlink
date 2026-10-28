@@ -78,12 +78,18 @@ constexpr std::size_t max_spot_relocation_state_bytes = 64u * 1024u * 1024u;
 
 constexpr std::uint32_t actor_recv_info_no_bind_flag = 1u;
 
+struct spot_handler_terminal_t : task_completion_source_t<zlink::message_t>
+{
+    std::function<void ()> release_admission;
+    std::optional<std::pair<zlink::message_t, spot_inbound_message_t>> carrier;
+};
+
 void settle_handler_admission_once (
-  const std::shared_ptr<std::function<void ()>> &terminal) noexcept
+  const std::shared_ptr<spot_handler_terminal_t> &terminal) noexcept
 {
     if (!terminal)
         return;
-    auto owned = std::move (*terminal);
+    auto owned = std::move (terminal->release_admission);
     if (!owned)
         return;
     try {
@@ -1036,7 +1042,38 @@ spot_node_builder_state_t::runtime_failures () const
 
 spot_node_builder_state_t::~spot_node_builder_state_t () = default;
 
-void drain_spot_node_executors (spot_node_builder_state_t &node)
+namespace
+{
+struct spot_execution_snapshot_t
+{
+    std::vector<std::shared_ptr<spot_context_state_t>> contexts;
+    std::vector<std::shared_future<void>> creations;
+};
+
+spot_execution_snapshot_t snapshot_spot_execution_owned (spot_node_builder_state_t &node)
+{
+    spot_execution_snapshot_t result;
+    result.contexts.reserve (node.spot_contexts_by_id.size ()
+                             + node.pending_spot_creations_by_id.size ());
+    const auto include = [&] (std::shared_ptr<spot_context_state_t> state) {
+        if (state
+            && std::find (result.contexts.begin (), result.contexts.end (), state)
+                 == result.contexts.end ())
+            result.contexts.push_back (std::move (state));
+    };
+    for (const auto &[_, context] : node.spot_contexts_by_id)
+        include (spot_context_access_t::state (context));
+    for (const auto &[_, creation] : node.pending_spot_creations_by_id) {
+        include (creation.context.lock ());
+        if (creation.future.valid ())
+            result.creations.push_back (creation.future);
+    }
+    return result;
+}
+} // namespace
+
+void drain_spot_node_executors (spot_node_builder_state_t &node,
+                                std::chrono::steady_clock::time_point deadline)
 {
     struct drain_plan_t
     {
@@ -1045,21 +1082,25 @@ void drain_spot_node_executors (spot_node_builder_state_t &node)
             std::shared_ptr<spot_context_state_t> state;
             std::vector<std::shared_ptr<runtime::serial_execution_queue_t>> retained_queues;
             std::shared_ptr<runtime::serial_execution_queue_t> serial_queue;
+            task_t<void> admitted_callbacks;
         };
         std::vector<context_t> contexts;
+        std::vector<std::shared_future<void>> creations;
         std::shared_ptr<runtime::offload_executor_t> deadline_executor;
         std::shared_ptr<runtime::offload_executor_t> worker_executor;
+        std::stop_source cancellation;
     };
-    const auto plan =
+    auto plan =
       node.lane
         .run ([&] {
             drain_plan_t result;
-            result.contexts.reserve (node.spot_contexts_by_id.size ());
-            for (const auto &[_, context] : node.spot_contexts_by_id) {
-                const auto state = context._state;
-                if (!state)
-                    continue;
-                result.contexts.push_back (drain_plan_t::context_t{state, {}, state->serial_queue});
+            node.stopping.store (true, std::memory_order_release);
+            auto execution = snapshot_spot_execution_owned (node);
+            result.creations = std::move (execution.creations);
+            result.contexts.reserve (execution.contexts.size ());
+            for (const auto &state : execution.contexts) {
+                result.contexts.push_back (drain_plan_t::context_t{
+                  state, {}, state->serial_queue, state->admitted_callbacks_terminal ()});
                 auto &context_plan = result.contexts.back ();
                 if (state->spot_serial_executor) {
                     context_plan.retained_queues = state->spot_serial_executor->timer_queues ();
@@ -1069,28 +1110,51 @@ void drain_spot_node_executors (spot_node_builder_state_t &node)
                             context_plan.retained_queues.push_back (actor->queue ());
                 }
             }
+            result.cancellation = node.worker_cancellation;
             result.deadline_executor = node.deadline_executor;
             result.worker_executor = node.worker_executor;
             return result;
         })
         .get ();
 
+    // Host relocation §14: accepted callbacks retain their execution resources
+    // until the host deadline. Only deadline expiry cancels their owned waits.
+    bool expired = false;
     for (const auto &context : plan.contexts) {
-        for (const auto &queue : context.retained_queues)
-            if (queue)
-                queue->cancel_pending ();
-        if (context.serial_queue)
-            context.serial_queue->cancel_pending ();
+        const auto remaining = std::chrono::ceil<std::chrono::milliseconds> (
+          deadline - std::chrono::steady_clock::now ());
+        if (!context.admitted_callbacks.result_for (
+              std::max (remaining, std::chrono::milliseconds::zero ()))) {
+            expired = true;
+            break;
+        }
+    }
+    if (expired || std::chrono::steady_clock::now () >= deadline) {
+        plan.cancellation.request_stop ();
+        if (plan.worker_executor)
+            plan.worker_executor->request_stop ();
+        if (plan.deadline_executor)
+            plan.deadline_executor->request_stop ();
+        for (const auto &context : plan.contexts) {
+            for (const auto &queue : context.retained_queues)
+                if (queue)
+                    queue->cancel_pending ();
+            if (context.serial_queue)
+                context.serial_queue->cancel_pending ();
+        }
     }
     for (const auto &context : plan.contexts) {
         for (const auto &queue : context.retained_queues)
             if (queue)
                 queue->drain ();
-        if (context.serial_queue) {
-            context.serial_queue->cancel_pending ();
+        if (context.serial_queue)
             context.serial_queue->drain ();
-        }
+        context.admitted_callbacks.result ().value ();
     }
+    // The creation caller owns its result. Keep its execution resources until
+    // that existing terminal has settled, including cancellation cleanup.
+    for (const auto &creation : plan.creations)
+        creation.wait ();
     if (plan.deadline_executor)
         plan.deadline_executor->drain ();
     if (plan.worker_executor)
@@ -1102,7 +1166,6 @@ void drain_spot_node_executors (spot_node_builder_state_t &node)
               context.state->serial_executor.reset ();
               if (context.state->spot_serial_executor)
                   context.state->spot_serial_executor->close ();
-              context.state->spot_serial_executor.reset ();
               context.state->worker_scheduler.reset ();
           }
           node.deadline_executor.reset ();
@@ -1119,11 +1182,11 @@ void visit_spot_node_dispatch_queues (
       node.lane
         .run ([&] {
             std::vector<std::shared_ptr<runtime::serial_execution_queue_t>> result;
-            result.reserve (node.spot_contexts_by_id.size ());
-            for (const auto &[_, context] : node.spot_contexts_by_id) {
-                if (const auto queue = context._state ? context._state->serial_queue : nullptr)
-                    result.push_back (queue);
-            }
+            const auto execution = snapshot_spot_execution_owned (node);
+            result.reserve (execution.contexts.size ());
+            for (const auto &state : execution.contexts)
+                if (state->serial_queue)
+                    result.push_back (state->serial_queue);
             return result;
         })
         .get ();
@@ -1904,18 +1967,15 @@ resolve_target_spot_generation (std::shared_ptr<detail::spot_node_builder_state_
     std::shared_ptr<runtime::spot_address_resolver_t> resolver;
     std::string mesh_name;
     std::shared_ptr<service::spot_t> local_spot;
-    state->lane
-      .run ([&] {
-          mesh_name = state->snapshot.name;
-          resolver = state->spot_location_resolver;
-          const auto local = state->native_spots_by_id.find (target_spot_id);
-          if (local != state->native_spots_by_id.end ()
-              && detail::effective_spot_node_rid (state->snapshot)
-                   == target_node_rid.to_string ()) {
-              local_spot = local->second;
-          }
-      })
-      .get ();
+    state->lane.run_sync ([&] {
+        mesh_name = state->snapshot.name;
+        resolver = state->spot_location_resolver;
+        const auto local = state->native_spots_by_id.find (target_spot_id);
+        if (local != state->native_spots_by_id.end ()
+            && detail::effective_spot_node_rid (state->snapshot) == target_node_rid.to_string ()) {
+            local_spot = local->second;
+        }
+    });
     if (local_spot) {
         const auto generation = local_spot->status ().lifecycle_generation ();
         if (generation != 0) {
@@ -2177,7 +2237,9 @@ bool spot_context_state_t::idle_quiescent () const
 bool spot_context_state_t::admit_core (
   bool claim, const instance_spot_retained_message_t *retained_record) noexcept
 {
-    if (admission_sealed || (closed && claim && !retained_record))
+    if ((claim && node
+         && (node->host_draining () || node->stopping.load (std::memory_order_acquire)))
+        || admission_sealed || (closed && claim && !retained_record))
         return false;
     if (claim)
         ++callback_depth;
@@ -2197,7 +2259,8 @@ framework_exception_t spot_context_state_t::admission_error () const
         // Spot 주소 메시징 §9의 Closing·Draining 분류를 이곳에서 결정합니다.
         // Relocation ingress는 이 분류 전에 native seal의 hold에 보관됩니다.
         // 미확정 idle reservation과 relocation 정리의 기존 오류는 유지합니다.
-        if (closed == spot_close_reason_t::host_shutdown)
+        if ((node && (node->host_draining () || node->stopping.load (std::memory_order_acquire)))
+            || closed == spot_close_reason_t::host_shutdown)
             return detail::make_framework_origin_exception (framework_error_kind_t::shutting_down,
                                                             "Spot host is shutting down");
         if (closed == spot_close_reason_t::explicit_close
@@ -2217,22 +2280,18 @@ spot_context_state_t::discard_preparation (std::shared_ptr<service::spot_t> nati
                                               release_admitted_work = std::move (
                                                 release_admitted_work)] () -> task_t<void> {
         const auto owner = self->state_lane_owner ();
-        const auto callbacks = owner->lane
-                                 .run ([self] {
-                                     self->closed = spot_close_reason_t::explicit_close;
-                                     self->preparation_callback_terminal =
-                                       std::make_shared<task_completion_source_t<void>> ();
-                                     auto terminal = self->preparation_callback_terminal;
-                                     self->settle_preparation_callbacks_core ();
-                                     return terminal;
-                                 })
-                                 .get ();
+        auto callbacks = owner->lane
+                           .run ([self] {
+                               self->closed = spot_close_reason_t::explicit_close;
+                               return self->admitted_callbacks_terminal ();
+                           })
+                           .get ();
         self->cancel_timers ();
         // Only the operation that owns preparation may release its admission.
         // A borrowed Close keeps the old incarnation's pending messages held.
         if (release_admitted_work)
             release_admitted_work ();
-        co_await callbacks->task ();
+        co_await callbacks;
         // Completion can arrive on the state lane; synchronous teardown
         // remains on the existing infrastructure executor.
         std::exception_ptr teardown_failure;
@@ -2245,10 +2304,27 @@ spot_context_state_t::discard_preparation (std::shared_ptr<service::spot_t> nati
                       if (const auto found = owner->native_spots_by_id.find (id_value);
                           found != owner->native_spots_by_id.end () && found->second == native)
                           owner->native_spots_by_id.erase (found);
-                      if (const auto found = owner->spot_contexts_by_id.find (id_value);
-                          found != owner->spot_contexts_by_id.end ()
-                          && spot_context_access_t::state (found->second) == self)
-                          owner->spot_contexts_by_id.erase (found);
+                      const auto release_context = [self, owner,
+                                                    id_value] (const result_t<void> &) {
+                          self->state_sync ([&] {
+                              if (const auto found = owner->spot_contexts_by_id.find (id_value);
+                                  found != owner->spot_contexts_by_id.end ()
+                                  && spot_context_access_t::state (found->second) == self)
+                                  owner->spot_contexts_by_id.erase (found);
+                          });
+                      };
+                      const auto preparation =
+                        self->spot_serial_executor
+                          ? self->spot_serial_executor->preparation_operation ()
+                          : nullptr;
+                      if (preparation) {
+                          // Preparation cleanup remains in the node's execution snapshot
+                          // until its existing lifecycle terminal releases the queue.
+                          auto terminal = preparation->lifecycle->terminal ();
+                          detail::observe_task_terminal (terminal, release_context);
+                      } else {
+                          release_context (result_t<void>::success ());
+                      }
                       if (const auto found = owner->spot_names_by_id.find (id_value);
                           found != owner->spot_names_by_id.end ()
                           && found->second == self->spot_name)
@@ -2329,7 +2405,7 @@ void spot_context_state_t::leave_callback (std::function<void ()> settle_owner_s
                     current.settle_error = std::current_exception ();
                 }
             }
-            settle_preparation_callbacks_core ();
+            settle_admitted_callbacks_core ();
             return current;
         });
     }
@@ -4521,7 +4597,7 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
                       std::string ("serial_dispatch=") + (serial_dispatch ? "true" : "false")};
               });
         }
-        auto completion = std::make_shared<task_completion_source_t<zlink::message_t>> ();
+        auto completion = std::make_shared<spot_handler_terminal_t> ();
         auto task = completion->task ();
         if (retained_message) {
             const auto original =
@@ -4551,19 +4627,20 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
                 return task_t<zlink::message_t> (
                   detail::result_access_t::failure<zlink::message_t> (state->admission_error ()));
             }
-            auto admission_terminal = std::make_shared<std::function<void ()>> (
+            completion->release_admission =
               admission_preclaimed ? std::move (application_admission_terminal)
-                                   : std::function<void ()>{[state] { state->leave_callback (); }});
+                                   : std::function<void ()>{[state] { state->leave_callback (); }};
+            const auto admission_terminal = completion;
             try {
                 detail::callback_context_scope_t callback_scope (state.get ());
                 std::shared_ptr<std::pair<zlink::message_t, spot_inbound_message_t>> carrier;
                 if (application_record) {
                     application_record->set_invocation (std::move (message), std::move (metadata));
                     carrier = {application_record, &*application_record->invocation ()};
-                } else
-                    carrier =
-                      std::make_shared<std::pair<zlink::message_t, spot_inbound_message_t>> (
-                        std::move (message), std::move (metadata));
+                } else {
+                    completion->carrier.emplace (std::move (message), std::move (metadata));
+                    carrier = {completion, &*completion->carrier};
+                }
                 runtime::actor_execution_scope_t actor_execution (
                   std::move (actor_execution_key), std::move (actor_execution_spot_id));
                 if (after_application_admission)
@@ -4636,9 +4713,10 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
         if (application_record) {
             application_record->set_invocation (std::move (message), std::move (metadata));
             carrier = {application_record, &*application_record->invocation ()};
-        } else
-            carrier = std::make_shared<std::pair<zlink::message_t, spot_inbound_message_t>> (
-              std::move (message), std::move (metadata));
+        } else {
+            completion->carrier.emplace (std::move (message), std::move (metadata));
+            carrier = {completion, &*completion->carrier};
+        }
         if (application_record) {
             if (before_application_handler)
                 application_record->admission.retain_initial (
@@ -4673,7 +4751,8 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
             post_serial = [state] (std::string name,
                                    runtime::serial_execution_queue_t::async_work_t work,
                                    runtime::serial_work_options_t options) {
-                return state->try_post_serial_async (std::move (name), std::move (work), options);
+                return state->try_post_serial_async (std::move (name), std::move (work),
+                                                     std::move (options));
             };
         }
         const bool admission_preclaimed = static_cast<bool> (application_admission_terminal);
@@ -4685,9 +4764,10 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
             return task_t<zlink::message_t> (
               detail::result_access_t::failure<zlink::message_t> (state->admission_error ()));
         }
-        auto admission_terminal = std::make_shared<std::function<void ()>> (
+        completion->release_admission =
           admission_preclaimed ? std::move (application_admission_terminal)
-                               : std::function<void ()>{[state] { state->leave_callback (); }});
+                               : std::function<void ()>{[state] { state->leave_callback (); }};
+        const auto admission_terminal = completion;
         if (application_record) {
             application_record->retire_invocation =
               [completion, admission_terminal,
@@ -4731,17 +4811,14 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
                       }
                   }
                   const auto owner = state->state_lane_owner ();
-                  const auto current =
-                    owner ? owner->lane
-                              .run ([&] {
-                                  const auto found =
-                                    owner->spot_contexts_by_id.find (std::string (state->spot_id));
-                                  return found == owner->spot_contexts_by_id.end ()
-                                           ? std::shared_ptr<detail::spot_context_state_t>{}
-                                           : detail::spot_context_access_t::state (found->second);
-                              })
-                              .get ()
-                          : std::shared_ptr<detail::spot_context_state_t>{};
+                  const auto current = owner ? owner->lane.run_sync ([&] {
+                      const auto found =
+                        owner->spot_contexts_by_id.find (std::string (state->spot_id));
+                      return found == owner->spot_contexts_by_id.end ()
+                               ? std::shared_ptr<detail::spot_context_state_t>{}
+                               : detail::spot_context_access_t::state (found->second);
+                  })
+                                             : std::shared_ptr<detail::spot_context_state_t>{};
                   if (retained_message && !current) {
                       const auto original =
                         std::static_pointer_cast<const detail::instance_spot_retained_message_t> (
@@ -4903,6 +4980,13 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
                     framework_error_kind_t::internal_failure, "spot handler threw an exception"));
               }
           };
+        work_options.completion = [admission_terminal] (result_t<void> terminal) {
+            if (!terminal) {
+                settle_handler_admission_once (admission_terminal);
+                admission_terminal->complete (detail::propagate_failure<zlink::message_t> (
+                  terminal, "Spot handler queue stopped"));
+            }
+        };
         const auto submit = [&] {
             return post_serial ("spot-handler", std::move (work), std::move (work_options));
         };
@@ -5496,7 +5580,7 @@ task_t<std::optional<zlink::message_t>> spot_manager_t::relay_actor_packet (
   const runtime::protocol::actor_route_fence_t *admitted_message_follow_target)
 {
     const auto actor_packet_relay =
-      _state->lane.run ([&] { return _state->actor_packet_relay; }).get ();
+      _state->lane.run_sync ([&] { return _state->actor_packet_relay; });
     if (actor_packet_relay) {
         co_return co_await actor_packet_relay (
           actor_ref, std::move (actor_context), message_kind, packet_name, message, services,
@@ -5537,7 +5621,7 @@ publish_call_t spot_publisher_client_t::publish_raw (std::string channel_name,
     }
 
     auto native_node =
-      _manager._state->lane.run ([&] { return _manager._state->native_node.lock (); }).get ();
+      _manager._state->lane.run_sync ([&] { return _manager._state->native_node.lock (); });
     if (!native_node) {
         return publish_call_t (result_t<void>::failure (
           framework_error_kind_t::unavailable, "logical multicast route mesh is not connected"));
@@ -5557,7 +5641,7 @@ publish_call_t spot_publisher_client_t::publish_raw (std::string channel_name,
         auto publisher = native_node->entry_spot ();
         auto encoded_metadata = detail::mesh_metadata_codec_t::encode (metadata);
         if (capture) {
-            const auto mesh_name = state->lane.run ([&] { return state->snapshot.name; }).get ();
+            const auto mesh_name = state->lane.run_sync ([&] { return state->snapshot.name; });
             co_await publisher.publish (
               channel_name, topic, std::move (parts), std::move (encoded_metadata),
               [state, channel_name, mesh_name, topic] (const zlink::routing_id_t &target,
@@ -6769,23 +6853,11 @@ spot_node_runtime_t::join_remote_actor_to_spot_erased (const actor_ref_t &actor_
 }
 
 task_t<std::optional<std::chrono::steady_clock::time_point>>
-spot_node_runtime_t::next_management_activity_async () const
+spot_node_runtime_t::next_management_activity_on_lane_async (
+  std::shared_ptr<spot_node_builder_state_t> state,
+  std::optional<std::chrono::steady_clock::time_point> next)
 {
-    const auto state = _state;
-    auto next = _state->actor_transfer_coordinator->next_activity ();
-    // Pending leaves and source cleanups keep the bound at due_now; only then
-    // the exact next instant is read on the lane, as each one may be blocked.
-    if (const auto own = _state->management_next_due.load (std::memory_order_acquire);
-        own != spot_node_builder_state_t::management_due_now) {
-        if (own != spot_node_builder_state_t::management_never_due) {
-            const auto deadline =
-              std::chrono::steady_clock::time_point (std::chrono::steady_clock::duration (own));
-            if (!next || deadline < *next)
-                next = deadline;
-        }
-        co_return next;
-    }
-    const auto pending = co_await _state->lane.run_task ([state = _state, next] () mutable {
+    const auto pending = co_await state->lane.run_task ([state, next] () mutable {
         std::vector<std::pair<std::string, std::chrono::steady_clock::time_point>> cleanups;
         for (const auto &entry : state->pending_handoff_requests) {
             if (!next || entry.second.deadline < *next)
@@ -6807,6 +6879,34 @@ spot_node_runtime_t::next_management_activity_async () const
             next = deadline;
     }
     co_return next;
+}
+
+task_t<std::optional<std::chrono::steady_clock::time_point>>
+spot_node_runtime_t::next_management_activity_async () const
+{
+    std::optional<std::chrono::steady_clock::time_point> next;
+    try {
+        next = _state->actor_transfer_coordinator->next_activity ();
+        // The owner already published an exact bound unless pending cleanup
+        // requires its lane. Keep that decision before creating an awaitable frame.
+        if (const auto own = _state->management_next_due.load (std::memory_order_acquire);
+            own != spot_node_builder_state_t::management_due_now) {
+            if (own != spot_node_builder_state_t::management_never_due) {
+                const auto deadline =
+                  std::chrono::steady_clock::time_point (std::chrono::steady_clock::duration (own));
+                if (!next || deadline < *next)
+                    next = deadline;
+            }
+            return task_t<std::optional<std::chrono::steady_clock::time_point>> (
+              result_t<std::optional<std::chrono::steady_clock::time_point>>::success (next));
+        }
+    }
+    catch (...) {
+        return task_t<std::optional<std::chrono::steady_clock::time_point>> (
+          result_access_t::failure<std::optional<std::chrono::steady_clock::time_point>> (
+            std::current_exception ()));
+    }
+    return next_management_activity_on_lane_async (_state, next);
 }
 
 // Runs on the spot state lane after the management sweep.
@@ -6835,23 +6935,39 @@ std::size_t spot_node_runtime_t::cleanup_expired_actor_admissions ()
 }
 
 static task_t<std::optional<std::chrono::steady_clock::time_point>>
-advance_spot_management_async (std::shared_ptr<spot_node_builder_state_t> state,
-                               bool include_next_activity)
+advance_due_spot_management_async (std::shared_ptr<spot_node_builder_state_t> state,
+                                   std::chrono::steady_clock::time_point now,
+                                   bool include_next_activity)
 {
-    const auto now = std::chrono::steady_clock::now ();
-    // Spec 08 section 4.2: a rotation with nothing due runs no Actor
-    // management. Each owner decides from its own published bound.
-    if (!spot_management_due (*state, now) && !state->actor_transfer_coordinator->due (now)) {
-        if (!include_next_activity)
-            co_return std::nullopt;
-        co_return co_await spot_node_runtime_t (std::move (state))
-          .next_management_activity_async ();
-    }
     spot_node_runtime_t owner (std::move (state));
     co_await owner.cleanup_expired_actor_admissions_at_async (now);
     if (!include_next_activity)
         co_return std::nullopt;
     co_return co_await owner.next_management_activity_async ();
+}
+
+static task_t<std::optional<std::chrono::steady_clock::time_point>>
+advance_spot_management_async (std::shared_ptr<spot_node_builder_state_t> state,
+                               bool include_next_activity)
+{
+    const auto now = std::chrono::steady_clock::now ();
+    // Spec 08 section 4.2: the existing published bounds decide whether a
+    // sweep is due. A known result does not need another coroutine owner.
+    if (!spot_management_due (*state, now) && !state->actor_transfer_coordinator->due (now)) {
+        try {
+            if (!include_next_activity)
+                return task_t<std::optional<std::chrono::steady_clock::time_point>> (
+                  result_t<std::optional<std::chrono::steady_clock::time_point>>::success (
+                    std::nullopt));
+            return spot_node_runtime_t (std::move (state)).next_management_activity_async ();
+        }
+        catch (...) {
+            return task_t<std::optional<std::chrono::steady_clock::time_point>> (
+              result_access_t::failure<std::optional<std::chrono::steady_clock::time_point>> (
+                std::current_exception ()));
+        }
+    }
+    return advance_due_spot_management_async (std::move (state), now, include_next_activity);
 }
 
 task_t<std::optional<std::chrono::steady_clock::time_point>>
@@ -12186,20 +12302,18 @@ task_t<std::optional<zlink::message_t>> spot_node_runtime_t::relay_actor_packet 
                                                 admission_token->initial_authority_fence ()
                                                   .has_value (),
                                                 admission_token->initial_authority_fence ()}
-        : _state->lane
-            .run ([&] {
-                actor_relay_prefence_state_snapshot_t snapshot;
-                snapshot.retiring = _state->retiring_actor_keys.contains (key);
-                if (snapshot.retiring)
-                    return snapshot;
-                snapshot.authority_projected = admitted_message_follow_target != nullptr;
-                const auto current = _state->actor_authority_fences.find (key);
-                snapshot.has_current_authority = current != _state->actor_authority_fences.end ();
-                if (snapshot.has_current_authority && snapshot.authority_projected)
-                    snapshot.authority_fence = current->second;
-                return snapshot;
-            })
-            .get ();
+        : _state->lane.run_sync ([&] {
+              actor_relay_prefence_state_snapshot_t snapshot;
+              snapshot.retiring = _state->retiring_actor_keys.contains (key);
+              if (snapshot.retiring)
+                  return snapshot;
+              snapshot.authority_projected = admitted_message_follow_target != nullptr;
+              const auto current = _state->actor_authority_fences.find (key);
+              snapshot.has_current_authority = current != _state->actor_authority_fences.end ();
+              if (snapshot.has_current_authority && snapshot.authority_projected)
+                  snapshot.authority_fence = current->second;
+              return snapshot;
+          });
     if (prefence_snapshot.retiring) {
         co_return result_t<std::optional<zlink::message_t>>::failure (
           framework_error_kind_t::not_found, "actor destruction is pending");
@@ -12224,14 +12338,12 @@ task_t<std::optional<zlink::message_t>> spot_node_runtime_t::relay_actor_packet 
     if (admitted_message_follow_target != nullptr) {
         auto current_fence = prefence_snapshot.authority_fence;
         if (!prefence_snapshot.authority_projected) {
-            current_fence = _state->lane
-                              .run ([&] {
-                                  const auto current = _state->actor_authority_fences.find (key);
-                                  return current == _state->actor_authority_fences.end ()
-                                           ? std::optional<runtime::protocol::actor_route_fence_t>{}
-                                           : std::make_optional (current->second);
-                              })
-                              .get ();
+            current_fence = _state->lane.run_sync ([&] {
+                const auto current = _state->actor_authority_fences.find (key);
+                return current == _state->actor_authority_fences.end ()
+                         ? std::optional<runtime::protocol::actor_route_fence_t>{}
+                         : std::make_optional (current->second);
+            });
         }
         // The exact adoption fence gates only when this node retains state
         // that could be confused with an older incarnation: a recorded
@@ -12343,15 +12455,12 @@ task_t<std::optional<zlink::message_t>> spot_node_runtime_t::relay_actor_packet 
     bool targets_current_authority = admitted_message_follow_target == nullptr;
     if (admitted_message_follow_target != nullptr) {
         const auto current_fence =
-          admission_token ? phase_authority_fence
-                          : _state->lane
-                              .run ([&] {
-                                  const auto current = _state->actor_authority_fences.find (key);
-                                  return current == _state->actor_authority_fences.end ()
-                                           ? std::optional<runtime::protocol::actor_route_fence_t>{}
-                                           : std::make_optional (current->second);
-                              })
-                              .get ();
+          admission_token ? phase_authority_fence : _state->lane.run_sync ([&] {
+              const auto current = _state->actor_authority_fences.find (key);
+              return current == _state->actor_authority_fences.end ()
+                       ? std::optional<runtime::protocol::actor_route_fence_t>{}
+                       : std::make_optional (current->second);
+          });
         targets_current_authority =
           current_fence ? *current_fence == *admitted_message_follow_target
                         : !_state->actor_transfer_coordinator->has_message_follow_route (key);
@@ -12372,8 +12481,7 @@ task_t<std::optional<zlink::message_t>> spot_node_runtime_t::relay_actor_packet 
         auto relay =
           admission_token
             ? admission_token->actor_message_follow_relay ()
-            : state_owner->lane.run ([&] { return state_owner->actor_message_follow_relay; })
-                .get ();
+            : state_owner->lane.run_sync ([&] { return state_owner->actor_message_follow_relay; });
         if (!relay)
             co_return result_t<std::optional<zlink::message_t>>::failure (
               framework_error_kind_t::unavailable, "Actor Message Follow relay is unavailable");
@@ -13057,6 +13165,7 @@ local_spot_create_result_t spot_node_runtime_t::create_spot_context (
   std::shared_ptr<spot_serial_executor_t::preparation_t> inherited_operation)
 {
     auto context_state = std::make_shared<spot_context_state_t> ();
+    const auto id_value = std::string (spot_id);
     struct creation_plan_t
     {
         spot_lifecycle_callbacks_t lifecycle;
@@ -13072,7 +13181,7 @@ local_spot_create_result_t spot_node_runtime_t::create_spot_context (
         .run ([&] {
             /* graceful-drain-handoff §4-2: a draining node blocks new spot creation.
          * Existing spots (and in-progress transfer commits) keep running. */
-            if (_state->host_draining ()) {
+            if (_state->host_draining () || _state->stopping.load (std::memory_order_acquire)) {
                 throw framework_exception_t (framework_error_kind_t::shutting_down,
                                              "spot node is draining and rejects new spot creation");
             }
@@ -13123,6 +13232,10 @@ local_spot_create_result_t spot_node_runtime_t::create_spot_context (
                 context_state->relocation_coordination_mode = mode->second;
             }
             context_state->lifecycle = result.lifecycle;
+            configure_spot_execution (context_state, result.worker_executor, retained_queue);
+            if (const auto pending = _state->pending_spot_creations_by_id.find (id_value);
+                pending != _state->pending_spot_creations_by_id.end ())
+                pending->second.context = context_state;
             return result;
         })
         .get ();
@@ -13147,11 +13260,9 @@ local_spot_create_result_t spot_node_runtime_t::create_spot_context (
                                                           ? service_scope_kind_t::entry_spot
                                                           : service_scope_kind_t::spot_activation));
     }
-    configure_spot_execution (context_state, plan.worker_executor, retained_queue);
     spot_context_t context (context_state);
     std::optional<message_t> create_reply;
     std::shared_ptr<service::spot_t> staged_native;
-    const auto id_value = std::string (spot_id);
     // Barrier cancellation can settle this caller while the creation turn still runs, so
     // the turn's coroutine frame owns its inputs and outputs; parameters live in the frame,
     // unlike lambda captures. It is declared before the preparation scope so a failed
@@ -13195,13 +13306,6 @@ local_spot_create_result_t spot_node_runtime_t::create_spot_context (
                                             std::current_exception ());
           }
       });
-    _state->lane
-      .run ([&] {
-          const auto pending = _state->pending_spot_creations_by_id.find (id_value);
-          if (pending != _state->pending_spot_creations_by_id.end ())
-              pending->second.context = context_state;
-      })
-      .get ();
     // The barrier may keep this callable after the turn, so it holds only weak references
     // and the running frame alone owns the turn; a failed creation then releases the
     // staged native Spot when this caller returns.
@@ -13843,15 +13947,13 @@ std::optional<spot_route_t> spot_node_runtime_t::resolve_spot (spot_id_t spot_id
 
 std::optional<spot_id_t> spot_node_runtime_t::actor_spot (const actor_ref_t &actor_ref) const
 {
-    return _state->lane
-      .run ([&] () -> std::optional<spot_id_t> {
-          const auto found = _state->actor_spot_ids.find (actor_key (actor_ref));
-          if (found == _state->actor_spot_ids.end ()) {
-              return std::nullopt;
-          }
-          return found->second;
-      })
-      .get ();
+    return _state->lane.run_sync ([&] () -> std::optional<spot_id_t> {
+        const auto found = _state->actor_spot_ids.find (actor_key (actor_ref));
+        if (found == _state->actor_spot_ids.end ()) {
+            return std::nullopt;
+        }
+        return found->second;
+    });
 }
 
 task_t<result_t<bool>> spot_node_runtime_t::release_local_actor_async (actor_ref_t actor)
@@ -13954,15 +14056,13 @@ void spot_node_runtime_t::record_actor_spot (const actor_ref_t &actor_ref, spot_
 
 std::optional<spot_route_t> spot_node_runtime_t::actor_route (const actor_ref_t &actor_ref) const
 {
-    return _state->lane
-      .run ([&] () -> std::optional<spot_route_t> {
-          const auto found = _state->actor_routes.find (actor_key (actor_ref));
-          if (found == _state->actor_routes.end ()) {
-              return std::nullopt;
-          }
-          return found->second;
-      })
-      .get ();
+    return _state->lane.run_sync ([&] () -> std::optional<spot_route_t> {
+        const auto found = _state->actor_routes.find (actor_key (actor_ref));
+        if (found == _state->actor_routes.end ()) {
+            return std::nullopt;
+        }
+        return found->second;
+    });
 }
 
 bool spot_node_runtime_t::matches_actor_message_follow_source (
@@ -14043,10 +14143,11 @@ std::optional<std::string> spot_node_runtime_t::actor_route_transport_name () co
       .get ();
 }
 
-void spot_node_runtime_t::cancel_pending_work () noexcept
+void spot_node_runtime_t::cancel_pending_work (
+  std::chrono::steady_clock::time_point deadline) noexcept
 {
     try {
-        detail::drain_spot_node_executors (*_state);
+        detail::drain_spot_node_executors (*_state, deadline);
     }
     catch (...) {
     }
@@ -14097,18 +14198,6 @@ void spot_node_runtime_t::release_native_handles () noexcept
 void spot_node_runtime_t::request_stop () noexcept
 {
     _state->stopping.store (true, std::memory_order_release);
-    auto [cancellation, worker, deadline] =
-      _state->lane
-        .run ([&] {
-            return std::make_tuple (_state->worker_cancellation, _state->worker_executor,
-                                    _state->deadline_executor);
-        })
-        .get ();
-    cancellation.request_stop ();
-    if (worker)
-        worker->request_stop ();
-    if (deadline)
-        deadline->request_stop ();
 }
 
 void spot_node_runtime_t::bind_service_provider (service_provider_t &services)
@@ -14156,28 +14245,26 @@ void spot_node_runtime_t::cancel_timers () noexcept
 std::optional<actor_ref_t>
 spot_node_runtime_t::current_actor_ref (const actor_ref_t &actor_ref) const
 {
-    return _state->lane
-      .run ([&] () -> std::optional<actor_ref_t> {
-          const auto key = actor_key (actor_ref);
-          const auto found = _state->actor_generations.find (key);
-          if (found == _state->actor_generations.end ()) {
-              return std::nullopt;
-          }
-          // The recorded location can be this node's own local spot, or (after a
-          // relocation this node followed away, e.g. a Message Follow route) a
-          // route naming the remote current owner; report whichever this node
-          // actually knows rather than always claiming local ownership.
-          auto node_rid_value = detail::effective_spot_node_rid (_state->snapshot);
-          if (const auto routed = _state->actor_routes.find (key);
-              routed != _state->actor_routes.end ()) {
-              node_rid_value = std::string (routed->second.node_rid.value ());
-          }
-          return ::zlink::framework::detail::actor_ref_access_t::make (
-            node_rid_t::from_string (node_rid_value),
-            std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (actor_ref)),
-            std::string (actor_ref.actor_id ().value ()), found->second);
-      })
-      .get ();
+    return _state->lane.run_sync ([&] () -> std::optional<actor_ref_t> {
+        const auto key = actor_key (actor_ref);
+        const auto found = _state->actor_generations.find (key);
+        if (found == _state->actor_generations.end ()) {
+            return std::nullopt;
+        }
+        // The recorded location can be this node's own local spot, or (after a
+        // relocation this node followed away, e.g. a Message Follow route) a
+        // route naming the remote current owner; report whichever this node
+        // actually knows rather than always claiming local ownership.
+        auto node_rid_value = detail::effective_spot_node_rid (_state->snapshot);
+        if (const auto routed = _state->actor_routes.find (key);
+            routed != _state->actor_routes.end ()) {
+            node_rid_value = std::string (routed->second.node_rid.value ());
+        }
+        return ::zlink::framework::detail::actor_ref_access_t::make (
+          node_rid_t::from_string (node_rid_value),
+          std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (actor_ref)),
+          std::string (actor_ref.actor_id ().value ()), found->second);
+    });
 }
 
 void spot_node_runtime_t::attach_native_node (std::shared_ptr<service::mesh_node_t> node)
@@ -14565,14 +14652,12 @@ spot_node_runtime_t::send_spot_mesh_parts_exact (const spot_id_t &source_spot_id
                                                  std::uint64_t target_spot_generation,
                                                  runtime::messaging::message_parts_t parts) const
 {
-    const auto source = _state->lane
-                          .run ([&] {
-                              const auto found = _state->native_spots_by_id.find (source_spot_id);
-                              if (found != _state->native_spots_by_id.end ())
-                                  return found->second;
-                              return std::shared_ptr<service::spot_t>{};
-                          })
-                          .get ();
+    const auto source = _state->lane.run_sync ([&] {
+        const auto found = _state->native_spots_by_id.find (source_spot_id);
+        if (found != _state->native_spots_by_id.end ())
+            return found->second;
+        return std::shared_ptr<service::spot_t>{};
+    });
     if (!source || target_spot_generation == 0) {
         throw framework_exception_t (
           framework_error_kind_t::not_found,

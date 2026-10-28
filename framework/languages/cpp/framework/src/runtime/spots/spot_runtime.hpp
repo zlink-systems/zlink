@@ -401,7 +401,9 @@ struct spot_create_call_state_t
     bool submitted = false;
 };
 
-void drain_spot_node_executors (spot_node_builder_state_t &node);
+void drain_spot_node_executors (
+  spot_node_builder_state_t &node,
+  std::chrono::steady_clock::time_point deadline = std::chrono::steady_clock::now ());
 
 void report_logical_multicast_failure (const std::shared_ptr<spot_node_builder_state_t> &state,
                                        std::string_view channel_name,
@@ -1084,10 +1086,10 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
     friend class ::zlink::framework::spot_handler_registry_t;
 
   private:
-    void settle_preparation_callbacks_core ()
+    void settle_admitted_callbacks_core ()
     {
-        if (preparation_callback_terminal && callback_depth == 0) {
-            auto terminal = std::exchange (preparation_callback_terminal, {});
+        if (admitted_callback_terminal && callback_depth == 0) {
+            auto terminal = std::exchange (admitted_callback_terminal, {});
             terminal->complete (result_t<void>::success ());
         }
     }
@@ -1105,6 +1107,17 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
     }
 
   public:
+    task_t<void> admitted_callbacks_terminal ()
+    {
+        return state_sync ([this] {
+            if (!admitted_callback_terminal)
+                admitted_callback_terminal = std::make_shared<task_completion_source_t<void>> ();
+            const auto terminal = admitted_callback_terminal;
+            settle_admitted_callbacks_core ();
+            return terminal->task ();
+        });
+    }
+
     task_t<void> complete_preparation (bool ready);
     task_t<void> discard_preparation (std::shared_ptr<service::spot_t> native,
                                       std::function<void ()> release_admitted_work = {});
@@ -1338,9 +1351,9 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
     // A token acquired in a node turn can therefore retain this depth through
     // queue wait, Yield, and handler terminal without a second owner claim.
     std::size_t callback_depth = 0;
-    // The failed preparation awaits the existing admitted-callback count.
+    // Preparation cleanup and node drain observe the same admitted-callback count.
     // Only the incarnation state lane registers and consumes this notification.
-    std::shared_ptr<task_completion_source_t<void>> preparation_callback_terminal;
+    std::shared_ptr<task_completion_source_t<void>> admitted_callback_terminal;
     // Close requests that merged into the running Close receive its result.
     std::vector<service::spot_close_done_t> merged_close_results;
 
@@ -1871,7 +1884,8 @@ class spot_node_runtime_t
     void cancel_timers () noexcept;
     void cancel_dispatch_waits () noexcept;
     void cancel_pending_dispatch () noexcept;
-    void cancel_pending_work () noexcept;
+    void cancel_pending_work (
+      std::chrono::steady_clock::time_point deadline = std::chrono::steady_clock::now ()) noexcept;
 
     /* Releases the native SPOT/actor handles this node created on its own
      * zlink context. The host service must call this before terminating the
@@ -2313,6 +2327,10 @@ class spot_node_runtime_t
     }
 
   private:
+    static task_t<std::optional<std::chrono::steady_clock::time_point>>
+    next_management_activity_on_lane_async (
+      std::shared_ptr<spot_node_builder_state_t> state,
+      std::optional<std::chrono::steady_clock::time_point> next);
     friend struct spot_node_runtime_test_access_t;
     result_t<bool> release_local_actor_on_lane (const actor_ref_t &actor_ref);
     static task_t<void>

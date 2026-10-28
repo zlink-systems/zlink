@@ -1174,6 +1174,17 @@ struct local_route_probe_message_t
 {
     std::string value;
 };
+}
+
+template <> struct zlink::json::dto_traits<local_route_probe_message_t>
+{
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("value", &local_route_probe_message_t::value)};
+};
+
+namespace
+{
+
 
 struct local_route_probe_state_t
 {
@@ -2384,6 +2395,7 @@ void verify_monitor_pump_does_not_wait_for_spot_lane ()
 
 void verify_management_does_not_wait_for_spot_lane ()
 {
+    zlink::framework::completion_owner_t completion_owner;
     auto registration = make_node ("tcp://127.0.0.1:0", "management-pump-node");
     std::promise<void> lane_entered;
     std::promise<void> release_lane;

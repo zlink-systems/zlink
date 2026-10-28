@@ -1,0 +1,44 @@
+name: Main-owned cache
+description: Restore on every ref and save successful jobs only on main.
+inputs:
+  path:
+    description: Files or directories to cache
+    required: true
+  key:
+    description: Primary cache key
+    required: true
+  restore-keys:
+    description: Ordered fallback key prefixes
+    required: false
+    default: ''
+outputs:
+  cache-hit:
+    description: Whether the primary key matched exactly
+    value: ${{ steps.main.outputs.cache-hit || steps.read.outputs.cache-hit }}
+runs:
+  using: composite
+  steps:
+    - name: Select cache policy
+      id: policy
+      shell: bash
+      env:
+        SAVE_CACHE: ${{ github.ref == 'refs/heads/main' }}
+      run: echo "save=${SAVE_CACHE}" >> "${GITHUB_OUTPUT}"
+    # The combined action saves in its successful-job post step, after consumers
+    # have populated the directory. Other refs never register a save post step.
+    - name: Restore and register main cache save
+      if: steps.policy.outputs.save == 'true'
+      id: main
+      uses: actions/cache@v5
+      with:
+        path: ${{ inputs.path }}
+        key: ${{ inputs.key }}
+        restore-keys: ${{ inputs.restore-keys }}
+    - name: Restore cache without saving
+      if: steps.policy.outputs.save != 'true'
+      id: read
+      uses: actions/cache/restore@v5
+      with:
+        path: ${{ inputs.path }}
+        key: ${{ inputs.key }}
+        restore-keys: ${{ inputs.restore-keys }}

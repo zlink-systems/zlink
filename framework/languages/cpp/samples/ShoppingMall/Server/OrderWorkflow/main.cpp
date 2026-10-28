@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: Apache-2.0 */
+#include <zlink/json.hpp>
 
 #include "../Common/workflow_logic.hpp"
 #include "../Configuration/sample_configuration.hpp"
@@ -205,26 +206,25 @@ struct planned_relocation_res_t
     std::uint64_t generation{};
 };
 
-inline void to_json (nlohmann::json &json, const planned_relocation_req_t &value)
-{
-    json = {{"orderId", value.order_id}};
 }
 
-inline void from_json (const nlohmann::json &json, planned_relocation_req_t &value)
+template <> struct zlink::json::dto_traits<zlink::samples::shoppingmall::planned_relocation_req_t>
 {
-    value.order_id = json_string (json, "orderId", "order_id");
-}
+    static constexpr auto fields = std::tuple{zlink::json::field (
+      "orderId", &zlink::samples::shoppingmall::planned_relocation_req_t::order_id)};
+};
 
-inline void to_json (nlohmann::json &json, const planned_relocation_res_t &value)
+template <> struct zlink::json::dto_traits<zlink::samples::shoppingmall::planned_relocation_res_t>
 {
-    json = {{"accepted", value.accepted}, {"generation", value.generation}};
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("accepted",
+                          &zlink::samples::shoppingmall::planned_relocation_res_t::accepted),
+      zlink::json::field ("generation",
+                          &zlink::samples::shoppingmall::planned_relocation_res_t::generation)};
+};
 
-inline void from_json (const nlohmann::json &json, planned_relocation_res_t &value)
+namespace zlink::samples::shoppingmall
 {
-    value.accepted = json.value ("accepted", false);
-    value.generation = json.value ("generation", std::uint64_t{});
-}
 
 class planned_relocation_workflow_spot_t final : public spot_t<actor_t>
 {

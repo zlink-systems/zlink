@@ -13,6 +13,7 @@
 #include "../support/runtime_failure_fixture.hpp"
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
+#include <zlink/json.hpp>
 #include <zlink/framework.hpp>
 
 #include <algorithm>
@@ -521,7 +522,7 @@ TEST (ZLinkFrameworkSpotCloseConformance, FailedPreparationDrainsYieldedTimerAnd
     state->spot_serial_executor->close_preparation_admission ();
     proceed.complete (result_t<void>::success ());
     cancellation_started.get ();
-    auto drained = node->lane.run ([&] { return state->preparation_callback_terminal; }).get ();
+    auto drained = node->lane.run ([&] { return state->admitted_callback_terminal; }).get ();
     ASSERT_TRUE (drained);
     auto early_close = created.context.close ();
     resume.complete (result_t<void>::success ());
@@ -675,30 +676,27 @@ struct join_room_t
     std::string room;
 };
 
-void to_json (nlohmann::json &json, const close_probe_request_t &value)
-{
-    json = nlohmann::json{{"value", value.value}};
 }
-void from_json (const nlohmann::json &json, close_probe_request_t &value)
+
+template <> struct zlink::json::dto_traits<close_probe_request_t>
 {
-    value.value = json.at ("value").get<int> ();
-}
-void to_json (nlohmann::json &json, const close_probe_reply_t &value)
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("value", &close_probe_request_t::value)};
+};
+
+template <> struct zlink::json::dto_traits<close_probe_reply_t>
 {
-    json = nlohmann::json{{"value", value.value}};
-}
-void from_json (const nlohmann::json &json, close_probe_reply_t &value)
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("value", &close_probe_reply_t::value)};
+};
+
+template <> struct zlink::json::dto_traits<join_room_t>
 {
-    value.value = json.at ("value").get<int> ();
-}
-void to_json (nlohmann::json &json, const join_room_t &value)
+    static constexpr auto fields = std::tuple{zlink::json::field ("room", &join_room_t::room)};
+};
+
+namespace
 {
-    json = nlohmann::json{{"room", value.room}};
-}
-void from_json (const nlohmann::json &json, join_room_t &value)
-{
-    value.room = json.at ("room").get<std::string> ();
-}
 
 // ---------------------------------------------------------------------------
 // Application types.

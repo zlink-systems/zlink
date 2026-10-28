@@ -10,6 +10,7 @@ import { flowIfEnabled } from '../diagnostics';
 import { encodeFrameworkPayloadMessage } from '../messaging/payload-codec';
 import { ZLinkSubmitStatus, type ZLinkSubmitResult } from '../messaging/submission-result';
 import {
+  type ZLinkActorSessionAuthorityFence,
   ZLinkActorSessionBindingRegistry,
   ZLinkActorSessionBindingTermination
 } from './actor-session-binding-registry';
@@ -38,7 +39,8 @@ export interface ZLinkBoundActorRelaySenderOptions {
   readonly notifyDisconnected?: (
     actor: ZLinkSessionActor,
     signal?: AbortSignal,
-    binding?: ServiceStreamSessionBinding
+    binding?: ServiceStreamSessionBinding,
+    authorityFence?: ZLinkActorSessionAuthorityFence
   ) => Promise<void>;
 }
 
@@ -269,7 +271,12 @@ export class ZLinkBoundActorRelaySender {
         signal
       );
     }
-    await this.options.notifyDisconnected?.(actor, signal, detached.binding);
+    await this.options.notifyDisconnected?.(
+      actor,
+      signal,
+      detached.binding,
+      detached.route.authorityFence
+    );
   }
 
   async notifyPhysicalDisconnect(context: DefaultZLinkSessionContext): Promise<void> {
@@ -300,15 +307,19 @@ export class ZLinkBoundActorRelaySender {
             actor.bindingToken,
             ZLinkActorSessionBindingTermination.PhysicalDisconnect
           );
-          return { binding };
+          return { binding, authorityFence: route.authorityFence };
         });
         if (detached === false) return;
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), timeoutMs);
         try {
           await Promise.race([
-            this.options.notifyDisconnected?.(actor, controller.signal, detached.binding) ??
-              Promise.resolve(),
+            this.options.notifyDisconnected?.(
+              actor,
+              controller.signal,
+              detached.binding,
+              detached.authorityFence
+            ) ?? Promise.resolve(),
             new Promise<never>((_, reject) => {
               controller.signal.addEventListener(
                 'abort',

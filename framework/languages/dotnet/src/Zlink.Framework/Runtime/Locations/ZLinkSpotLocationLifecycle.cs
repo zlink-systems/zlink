@@ -1,7 +1,6 @@
 using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Identifiers;
 using Zlink.Framework.Runtime.Spots;
-using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
 
 namespace Zlink.Framework.Runtime.Locations;
 
@@ -86,13 +85,6 @@ internal sealed class ZLinkSpotLocationLifecycle(ZLinkLocationRuntime runtime)
         _lane.RunAsync(() =>
             _spots.TryGetValue(spotId, out var tracked) ? tracked.SpotGeneration : (ulong?)null
         );
-
-    internal bool TryGetTrackedGeneration(ZLinkSpotId spotId, out ulong generation)
-    {
-        var trackedGeneration = AwaitStateLane(GetTrackedGenerationAsync(spotId));
-        generation = trackedGeneration.GetValueOrDefault();
-        return trackedGeneration.HasValue;
-    }
 
     internal async ValueTask<ZLinkLocationWriteStatus> TrackRelocatedAsync(
         ZLinkMeshName meshName,
