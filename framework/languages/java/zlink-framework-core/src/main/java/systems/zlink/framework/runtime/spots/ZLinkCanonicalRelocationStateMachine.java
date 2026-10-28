@@ -4,7 +4,6 @@ import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
-import systems.zlink.framework.runtime.binding.ZLinkJavaDurableRequest;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
 import systems.zlink.framework.runtime.internal.backend.ZLinkRequestFailureMapping;
 import systems.zlink.framework.runtime.internal.binding.spot.MeshNodeState;
@@ -2043,107 +2042,56 @@ final class ZLinkCanonicalRelocationStateMachine
         }
     }
 
-    /** Actor model §8.1 owns replay for PREPARE and its ordered state chunks. */
+    /** The PREPARE request owns its deadline and is submitted once (Actor model §8.1). */
     private CompletionStage<Void> awaitReady(
             RoutingId targetNodeRid, SourceAttempt attempt, Duration timeout) {
         if (attempt.ready().isDone()) return attempt.ready();
-        return ZLinkJavaDurableRequest.request(
-                        () ->
-                                List.of(
-                                        ZLinkCanonicalRelocationProtocol.encodePrepare(
-                                                attempt.prepare())),
-                        (frames, remaining, admission) -> {
-                            var result = new CompletableFuture<List<byte[]>>();
-                            attempt.ready()
-                                    .whenComplete(
-                                            (ignored, failure) -> {
-                                                if (failure == null) result.complete(List.of());
-                                                else result.completeExceptionally(unwrap(failure));
-                                            });
-                            CompletionStage<byte[]> nativeReply;
-                            CompletionStage<Void> submitted;
-                            if (node
-                                    instanceof
-                                    ZLinkInternalMeshNode
-                                            .CanonicalRelocationPrepareRequestReplySupport) {
-                                nativeReply =
-                                        node.requestCanonicalRelocationPrepare(
-                                                targetNodeRid,
-                                                frames.getFirst(),
-                                                remaining,
-                                                admission);
-                                nativeReply
-                                        .thenCompose(
-                                                encoded ->
-                                                        apply(
-                                                                targetNodeRid,
-                                                                Byte.toUnsignedInt(encoded[3]),
-                                                                encoded))
-                                        .whenComplete(
-                                                (ignored, failure) -> {
-                                                    if (failure != null)
-                                                        result.completeExceptionally(
-                                                                unwrap(failure));
-                                                });
-                                submitted = CompletableFuture.completedFuture(null);
-                            } else {
-                                nativeReply = null;
-                                submitted =
-                                        send(targetNodeRid, frames.getFirst())
-                                                .thenRun(() -> admission.complete(null));
-                            }
-                            submitted
-                                    .thenCompose(ignored -> sendStateChunks(targetNodeRid, attempt))
-                                    .whenComplete(
-                                            (ignored, failure) -> {
-                                                if (failure != null)
-                                                    result.completeExceptionally(unwrap(failure));
-                                            });
-                            result.whenComplete(
-                                    (ignored, failure) -> {
-                                        if (result.isCancelled() && nativeReply != null)
-                                            nativeReply.toCompletableFuture().cancel(false);
-                                    });
-                            return result;
-                        },
-                        () -> node.observePeerRoute(targetNodeRid),
-                        (changed, ended) -> node.onPeerStateChanged(targetNodeRid, changed, ended),
-                        action -> {
-                            if (stateLane.isOnLane()) {
-                                action.run();
-                                return CompletableFuture.completedStage(null);
-                            }
-                            return stateLane.runAsync(
-                                    () -> {
-                                        action.run();
-                                        return null;
-                                    });
-                        },
+        // Each stage caller owns its request terminal. A duplicate caller's transport
+        // timeout must not fail the transaction's shared protocol-ready notification.
+        var completion = new CompletableFuture<Void>();
+        java.util.function.BiConsumer<Void, Throwable> finish =
+                (ignored, failure) -> {
+                    if (failure == null) {
+                        completion.complete(null);
+                        return;
+                    }
+                    Throwable cause = unwrap(failure);
+                    // The host relocation owner consumes TimeoutException as DeadlineExceeded.
+                    if (cause instanceof ZLinkFrameworkException framework
+                            && framework.kind() == ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED) {
+                        var timeoutFailure = new TimeoutException(framework.getMessage());
+                        timeoutFailure.initCause(framework);
+                        cause = timeoutFailure;
+                    }
+                    completion.completeExceptionally(cause);
+                };
+        attempt.ready().whenComplete(finish);
+        var admission = new CompletableFuture<Void>();
+        CompletionStage<byte[]> reply =
+                node.requestCanonicalRelocationPrepare(
+                        targetNodeRid,
+                        ZLinkCanonicalRelocationProtocol.encodePrepare(attempt.prepare()),
                         timeout,
-                        monotonicNanos)
-                .<Void>thenApply(ignored -> null)
-                .exceptionallyCompose(
-                        failure -> {
-                            Throwable cause = unwrap(failure);
-                            // Preserve the relocation stage boundary's timeout representation:
-                            // the host relocation owner consumes TimeoutException as
-                            // DeadlineExceeded.
-                            if (cause instanceof ZLinkFrameworkException framework
-                                    && framework.kind()
-                                            == ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED) {
-                                var timeoutFailure = new TimeoutException(framework.getMessage());
-                                timeoutFailure.initCause(framework);
-                                return failed(timeoutFailure);
-                            }
-                            return failed(cause);
+                        admission);
+        reply.thenCompose(encoded -> apply(targetNodeRid, Byte.toUnsignedInt(encoded[3]), encoded))
+                .whenComplete(
+                        (ignored, failure) -> {
+                            if (failure != null) finish.accept(null, failure);
                         });
+        admission
+                .thenCompose(ignored -> sendStateChunks(targetNodeRid, attempt))
+                .whenComplete(
+                        (ignored, failure) -> {
+                            if (failure != null) finish.accept(null, failure);
+                        });
+        completion.whenComplete((ignored, failure) -> reply.toCompletableFuture().cancel(false));
+        return completion;
     }
 
     /**
      * Streams the captured payload as command 52 chunks on the same ordered connection, one
      * submission at a time, each charged against the in-flight payload budget until its transport
-     * terminal (spec 28 §4.2, §5.3). A resent PREPARE resends the chunks; identical chunks are
-     * idempotent on the target.
+     * terminal (spec 28 §4.2, §5.3). The chunks are submitted once with their PREPARE.
      */
     private CompletionStage<Void> sendStateChunks(RoutingId targetNodeRid, SourceAttempt attempt) {
         if (attempt.ready().isDone()) {
