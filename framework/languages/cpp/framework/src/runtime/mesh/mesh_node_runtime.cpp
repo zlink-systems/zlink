@@ -1930,7 +1930,9 @@ void mesh_node_runtime_t::stop ()
         _peer_callback_gate->changed.wait (callback_lock,
                                            [this] { return _peer_callback_gate->active == 0; });
     }
-    spot_runtime.cancel_pending_work ();
+    spot_runtime.cancel_pending_work (
+      _delay_owner ? _delay_owner->stop_deadline ().value_or (std::chrono::steady_clock::now ())
+                   : std::chrono::steady_clock::now ());
     if (!_node) {
         spot_runtime.release_native_handles ();
         return;

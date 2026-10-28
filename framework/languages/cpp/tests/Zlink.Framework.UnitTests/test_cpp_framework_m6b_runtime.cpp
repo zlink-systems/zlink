@@ -54,6 +54,7 @@
 #include <zlink/framework.hpp>
 
 #include <nlohmann/json.hpp>
+#include <zlink/json.hpp>
 #include <filesystem>
 #include <fstream>
 #include "runtime/locations/live_location_reader.hpp"
@@ -247,14 +248,15 @@ struct quest_probe_t
     static constexpr const char *packet_name = "quest.start";
 };
 
-void to_json (nlohmann::json &json, const quest_probe_t &)
-{
-    json = nlohmann::json::object ();
 }
 
-void from_json (const nlohmann::json &, quest_probe_t &)
+template <> struct zlink::json::dto_traits<quest_probe_t>
 {
-}
+    static constexpr auto fields = std::tuple{};
+};
+
+namespace
+{
 
 zlink::framework::task_t<zlink::request_result_t>
 await_native_request_terminal (zlink::async_result_t<std::vector<zlink::message_t>> pending)

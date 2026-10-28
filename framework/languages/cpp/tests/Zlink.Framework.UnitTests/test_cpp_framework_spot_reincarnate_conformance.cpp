@@ -11,6 +11,7 @@
 #include "runtime/messaging/request_failure_mapper.hpp"
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
+#include <zlink/json.hpp>
 #include <zlink/framework.hpp>
 
 #include <algorithm>
@@ -99,33 +100,48 @@ struct reply_t
     int restored_value = 0;
 };
 
-#define EMPTY_REQUEST_JSON(Type)                                                                   \
-    void to_json (nlohmann::json &json, const Type &)                                              \
-    {                                                                                              \
-        json = nlohmann::json::object ();                                                          \
-    }                                                                                              \
-    void from_json (const nlohmann::json &, Type &)                                                \
-    {                                                                                              \
-    }
-EMPTY_REQUEST_JSON (warm_request_t)
-EMPTY_REQUEST_JSON (close_request_t)
-EMPTY_REQUEST_JSON (intent_request_t)
-EMPTY_REQUEST_JSON (intent_send_t)
-EMPTY_REQUEST_JSON (followup_intent_request_t)
-EMPTY_REQUEST_JSON (no_intent_request_t)
-#undef EMPTY_REQUEST_JSON
-void to_json (nlohmann::json &json, const reply_t &reply)
-{
-    json = {{"generation", reply.generation},
-            {"ownerNode", reply.owner_node},
-            {"restoredValue", reply.restored_value}};
 }
-void from_json (const nlohmann::json &json, reply_t &reply)
+
+template <> struct zlink::json::dto_traits<warm_request_t>
 {
-    reply.generation = json.at ("generation").get<std::uint64_t> ();
-    reply.owner_node = json.at ("ownerNode").get<std::string> ();
-    reply.restored_value = json.at ("restoredValue").get<int> ();
-}
+    static constexpr auto fields = std::tuple{};
+};
+
+template <> struct zlink::json::dto_traits<close_request_t>
+{
+    static constexpr auto fields = std::tuple{};
+};
+
+template <> struct zlink::json::dto_traits<intent_request_t>
+{
+    static constexpr auto fields = std::tuple{};
+};
+
+template <> struct zlink::json::dto_traits<intent_send_t>
+{
+    static constexpr auto fields = std::tuple{};
+};
+
+template <> struct zlink::json::dto_traits<followup_intent_request_t>
+{
+    static constexpr auto fields = std::tuple{};
+};
+
+template <> struct zlink::json::dto_traits<no_intent_request_t>
+{
+    static constexpr auto fields = std::tuple{};
+};
+
+template <> struct zlink::json::dto_traits<reply_t>
+{
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("generation", &reply_t::generation),
+                 zlink::json::field ("ownerNode", &reply_t::owner_node),
+                 zlink::json::field ("restoredValue", &reply_t::restored_value)};
+};
+
+namespace
+{
 
 struct evidence_t
 {

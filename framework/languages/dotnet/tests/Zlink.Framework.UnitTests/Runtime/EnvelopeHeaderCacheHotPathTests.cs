@@ -24,24 +24,26 @@ public sealed class EnvelopeHeaderCacheHotPathTests(Xunit.Abstractions.ITestOutp
             using var encoded = ZLinkEnvelopeCodec.EncodeHeader(header);
         }
         const int iterations = 1024;
-        var start = GC.GetAllocatedBytesForCurrentThread();
-        for (var index = 0; index < iterations; index++)
-        {
-            using var direct = Message.From(bytes);
-        }
-        var directBytes = GC.GetAllocatedBytesForCurrentThread() - start;
-        start = GC.GetAllocatedBytesForCurrentThread();
-        for (var index = 0; index < iterations; index++)
-        {
-            using var encoded = ZLinkEnvelopeCodec.EncodeHeader(header);
-        }
-        var encodedBytes = GC.GetAllocatedBytesForCurrentThread() - start;
+        var directBytes = PerCallAllocation.MinWindow(
+            () =>
+            {
+                using var direct = Message.From(bytes);
+            },
+            iterations
+        );
+        var encodedBytes = PerCallAllocation.MinWindow(
+            () =>
+            {
+                using var encoded = ZLinkEnvelopeCodec.EncodeHeader(header);
+            },
+            iterations
+        );
         output.WriteLine(
             $"request={request}: header={encodedBytes / iterations} B/message, native={directBytes / iterations} B/message"
         );
         Assert.True(
             encodedBytes <= directBytes + iterations * 16L,
-            $"Warm encoding allocated {encodedBytes} bytes; owned Message allocated {directBytes} bytes."
+            $"Warm encoding allocated {encodedBytes} B per {iterations} calls; owned Message allocated {directBytes} B."
         );
     }
 
@@ -211,18 +213,20 @@ public sealed class EnvelopeHeaderCacheHotPathTests(Xunit.Abstractions.ITestOutp
         }
 
         const int iterations = 128;
-        var start = GC.GetAllocatedBytesForCurrentThread();
-        for (var index = 0; index < iterations; index++)
-        {
-            using var encoded = ZLinkEnvelopeCodec.EncodeHeader(small);
-        }
-        var smallBytes = GC.GetAllocatedBytesForCurrentThread() - start;
-        start = GC.GetAllocatedBytesForCurrentThread();
-        for (var index = 0; index < iterations; index++)
-        {
-            using var encoded = ZLinkEnvelopeCodec.EncodeHeader(large);
-        }
-        var largeBytes = GC.GetAllocatedBytesForCurrentThread() - start;
+        var smallBytes = PerCallAllocation.MinWindow(
+            () =>
+            {
+                using var encoded = ZLinkEnvelopeCodec.EncodeHeader(small);
+            },
+            iterations
+        );
+        var largeBytes = PerCallAllocation.MinWindow(
+            () =>
+            {
+                using var encoded = ZLinkEnvelopeCodec.EncodeHeader(large);
+            },
+            iterations
+        );
 
         Assert.True(
             largeBytes <= smallBytes + iterations * 16L,

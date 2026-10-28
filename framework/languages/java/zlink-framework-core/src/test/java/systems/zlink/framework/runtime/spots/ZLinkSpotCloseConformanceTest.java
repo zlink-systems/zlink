@@ -330,6 +330,35 @@ final class ZLinkSpotCloseConformanceTest {
     }
 
     @Test
+    void explicitCloseUsesConfiguredRequestDeadline() throws Exception {
+        resetStatics();
+        String spotId = "deadline-" + UUID.randomUUID();
+        var options = new DefaultZLinkFrameworkOptions();
+        options.setDefaultRequestTimeout(Duration.ofSeconds(7));
+        options.addLocationStore(new ZLinkInMemoryLocationStore());
+        options.addRouteMesh("close-mesh")
+                .listen("inproc://" + spotId)
+                .setRoutingId(RoutingId.from(spotId))
+                .objects()
+                .server()
+                .addSpotFactory(SPOT_TYPE, CloseSpot.class, factory -> factory.disableRelocation());
+        try (var runtime =
+                ZLinkFrameworkRuntimeTestAccess.start(
+                        options, new ZLinkJavaBackendAdapterFactory())) {
+            var ref = create(runtime, spotId);
+            var before = java.time.Instant.ofEpochMilli(System.currentTimeMillis());
+            assertTrue(closeStage(runtime, ref).get(WAIT_SECONDS, TimeUnit.SECONDS));
+            var after = java.time.Instant.ofEpochMilli(System.currentTimeMillis());
+            assertTrue(
+                    !closingDeadline.isBefore(before.plusSeconds(7)),
+                    "Close deadline must include the configured request timeout");
+            assertTrue(
+                    !closingDeadline.isAfter(after.plusSeconds(7)),
+                    "Close deadline must be fixed during the Close operation");
+        }
+    }
+
+    @Test
     void drainingRejectsNewSpotAdmissionWithShuttingDown() throws Exception {
         resetStatics();
         handlerBlock = new CompletableFuture<>();
@@ -1108,6 +1137,8 @@ final class ZLinkSpotCloseConformanceTest {
 
     public record JoinRequest(String spotId) {}
 
+    private static volatile java.time.Instant closingDeadline;
+
     public static final class CloseSpot implements ZLinkSpot<Player> {
         private final ZLinkSpotContext context;
 
@@ -1127,6 +1158,7 @@ final class ZLinkSpotCloseConformanceTest {
 
         @Override
         public CompletionStage<Void> onClosing(ZLinkSpotClosingContext closing) {
+            closingDeadline = closing.deadline();
             ON_CLOSING_CALLS.incrementAndGet();
             EVENTS.add("onClosing");
             if (ON_CLOSING_THROWS.get()) {
