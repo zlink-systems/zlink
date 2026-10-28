@@ -1517,7 +1517,7 @@ void zlink::socket_base_t::process_scheduled_inproc_reconnects ()
 
     socket_inproc_reconnect_runtime_t &runtime =
       inproc_reconnect_runtime ();
-    control_runtime_t *const control = get_ctx ()->control_runtime ();
+    control_runtime_t *const control = get_ctx ()->control_runtime_if_started ();
     zlink_assert (control);
 
     // Extract and consume one preallocated queue node at a time. Unlike a
@@ -1588,7 +1588,7 @@ bool zlink::socket_base_t::cancel_scheduled_inproc_reconnects (
     if (runtime.task_id == 0)
         return cancelled;
 
-    control_runtime_t *const control = get_ctx ()->control_runtime ();
+    control_runtime_t *const control = get_ctx ()->control_runtime_if_started ();
     if (!control)
         return cancelled;
     if (runtime.pending.empty ()) {
