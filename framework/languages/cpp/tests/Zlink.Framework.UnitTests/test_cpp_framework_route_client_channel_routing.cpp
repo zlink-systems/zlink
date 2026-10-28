@@ -1037,6 +1037,7 @@ TEST (CppFrameworkRouteClientChannelRouting, RoutePresenceKeepsPriorityOverRebou
     manager.initialize_route_channels (std::vector<std::string>{"admission-mesh"});
     // A stopped route gives an immediate, identifiable rejection without waiting
     // for a peer. Its presence must still take precedence over the mesh transport.
+    // Submit §3 admission table and §7 require ShuttingDown for stopped admission.
     manager.get_route_channel ("admission-mesh").stop ();
     unsigned mesh_calls = 0;
     auto client = builder.route_client (serializers);
@@ -1056,19 +1057,19 @@ TEST (CppFrameworkRouteClientChannelRouting, RoutePresenceKeepsPriorityOverRebou
           });
         const auto sent =
           client.send_to_spot ("admission-spot", route_event_t{7}).async ().result ();
-        EXPECT_EQ (sent.error_kind (), framework_error_kind_t::unavailable);
+        EXPECT_EQ (sent.error_kind (), framework_error_kind_t::shutting_down);
         EXPECT_EQ (error_message (sent), "route channel runtime is not running");
         const auto reply = client.request_to_spot ("admission-spot", route_request_t{7})
                              .async<route_reply_t> ()
                              .result ();
-        EXPECT_EQ (reply.error_kind (), framework_error_kind_t::unavailable);
+        EXPECT_EQ (reply.error_kind (), framework_error_kind_t::shutting_down);
         EXPECT_EQ (error_message (reply), "route channel runtime is not running");
         EXPECT_EQ (mesh_calls, 0u);
     }
     channel.close ();
     EXPECT_EQ (
       client.send_to_spot ("admission-spot", route_event_t{7}).async ().result ().error_kind (),
-      framework_error_kind_t::unavailable);
+      framework_error_kind_t::shutting_down);
     EXPECT_EQ (mesh_calls, 0u);
 }
 
