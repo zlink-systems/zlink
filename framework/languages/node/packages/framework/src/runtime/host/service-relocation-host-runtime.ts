@@ -416,10 +416,21 @@ interface TerminalSessionRelocationControl {
 /** Production host bridge from Retire inventory to remote RouteMesh owners. */
 export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocation {
   [inspectRuntime]() {
+    const sourceWindow = this.sourceCutoverWindows.values().next().value;
     return Object.freeze({
       targetStages: this.targetStages.size,
       targetAssemblies: this.targetAssemblies.size,
-      pendingReplyRelays: this.pendingReplyRelays.size
+      pendingReplyRelays: this.pendingReplyRelays.size,
+      sourceActorJoinProfiles: this.sourceActorJoinProfiles.size,
+      sourceCutoverWindow:
+        sourceWindow === undefined
+          ? undefined
+          : Object.freeze({
+              get frameCount() {
+                return sourceWindow.frames?.length;
+              }
+            }),
+      terminalTargets: [...this.terminalTargets].length
     });
   }
 
