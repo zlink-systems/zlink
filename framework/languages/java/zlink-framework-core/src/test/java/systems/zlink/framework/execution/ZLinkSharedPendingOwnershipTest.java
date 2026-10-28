@@ -6,12 +6,11 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 import org.junit.jupiter.api.Test;
 
 import systems.zlink.framework.configuration.ZLinkApplicationJobQueueProfile;
+import systems.zlink.framework.runtime.internal.dispatch.QueuedOwnershipProbe;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
 
-import java.lang.reflect.Field;
 import java.util.ArrayDeque;
-import java.util.Deque;
 import java.util.Iterator;
 import java.util.List;
 import java.util.OptionalLong;
@@ -102,12 +101,11 @@ final class ZLinkSharedPendingOwnershipTest {
     @Test
     void gateTakeNextInvalidatesProducerIterator() throws Exception {
         var tasks = new LinkedBlockingQueue<Runnable>();
-        var queue = new ZLinkSerialExecutionQueue(tasks::add, ZLinkExecutionLanePolicy.spot());
-        new ZLinkSerialExecutionQueue.SharedSpotGate(queue);
         var pending = new PausingDeque();
-        Field field = ZLinkSerialExecutionQueue.class.getDeclaredField("lifecyclePending");
-        field.setAccessible(true);
-        field.set(queue, pending);
+        var queue =
+                new ZLinkSerialExecutionQueue(
+                        tasks::add, ZLinkExecutionLanePolicy.spot(), () -> pending);
+        new ZLinkSerialExecutionQueue.SharedSpotGate(queue);
         queue.enqueueBarrierNext(() -> CompletableFuture.completedFuture(null), null);
         queue.enqueueBarrierNext(() -> CompletableFuture.completedFuture(null), null);
         var produced = new CompletableFuture<Void>();
@@ -142,18 +140,6 @@ final class ZLinkSharedPendingOwnershipTest {
         assertFalse(producer.isAlive());
         assertFalse(gate.isAlive());
         queue.close();
-    }
-
-    static Object read(Object owner, String name) throws Exception {
-        Field field = owner.getClass().getDeclaredField(name);
-        field.setAccessible(true);
-        return field.get(owner);
-    }
-
-    private static void materialize(ZLinkSerialExecutionQueue queue) throws Exception {
-        var method = ZLinkSerialExecutionQueue.class.getDeclaredMethod("materializePublished");
-        method.setAccessible(true);
-        method.invoke(queue);
     }
 
     @Test
@@ -198,20 +184,20 @@ final class ZLinkSharedPendingOwnershipTest {
                                                                     jobs)
                                                             .toCompletableFuture()
                                                             .join();
-                                            materialize(actor);
-                                            var pending =
-                                                    (Deque<?>) read(actor, "applicationPending");
+                                            actor.materializePublished();
+                                            var pending = actor.applicationPendingSnapshot();
                                             if (pending.size() != 2)
                                                 throw new AssertionError("prefix not pending");
                                             terminals.get(1).cancel(false);
+                                            assertEquals(
+                                                    2,
+                                                    pending.size(),
+                                                    "snapshot retains the original prefix");
+                                            pending = actor.applicationPendingSnapshot();
                                             if (pending.size() != 1)
                                                 throw new AssertionError(
                                                         "tail cancellation not removed");
-                                            var previous =
-                                                    (ZLinkApplicationJobContext.QueuedOwnership)
-                                                            read(
-                                                                    pending.peekLast(),
-                                                                    "applicationJobOwnership");
+                                            var previous = pending.getLast();
                                             if (!previous.isDurable())
                                                 throw new AssertionError(
                                                         "surviving predecessor not durable");
@@ -225,27 +211,18 @@ final class ZLinkSharedPendingOwnershipTest {
                                                         () -> {},
                                                         null);
                                             }
-                                            var published =
-                                                    (Deque<?>) read(actor, "publishedApplication");
-                                            var posted =
-                                                    (ZLinkApplicationJobContext.QueuedOwnership)
-                                                            read(
-                                                                    published.peekLast(),
-                                                                    "applicationJobOwnership");
+                                            var published = actor.publishedApplicationSnapshot();
+                                            var posted = published.getLast();
                                             assertTrue(
                                                     posted.isDurable(),
                                                     "inheritance is decided at publication");
-                                            assertNull(
-                                                    read(posted, "reservation"),
+                                            assertFalse(
+                                                    QueuedOwnershipProbe.hasReservation(posted),
                                                     "publication settles the permit before gate import");
-                                            materialize(actor);
-                                            var next =
-                                                    (ZLinkApplicationJobContext.QueuedOwnership)
-                                                            read(
-                                                                    pending.peekLast(),
-                                                                    "applicationJobOwnership");
-                                            assertNull(
-                                                    read(next, "reservation"),
+                                            actor.materializePublished();
+                                            var next = actor.applicationPendingSnapshot().getLast();
+                                            assertFalse(
+                                                    QueuedOwnershipProbe.hasReservation(next),
                                                     "inherited permit must be released");
                                             assertTrue(previous.isDurable());
                                             assertTrue(
@@ -309,7 +286,7 @@ final class ZLinkSharedPendingOwnershipTest {
                         try {
                             assertEquals(
                                     change != TailChange.IMPORT,
-                                    ((Deque<?>) read(actor, "applicationPending")).isEmpty());
+                                    actor.applicationPendingSnapshot().isEmpty());
                             try (var scope = ZLinkApplicationJobContext.enter(held)) {
                                 actor.enqueueRelocatable(
                                         new byte[] {2},
@@ -317,21 +294,19 @@ final class ZLinkSharedPendingOwnershipTest {
                                         () -> {},
                                         null);
                             }
-                            var published = (Deque<?>) read(actor, "publishedApplication");
-                            var ownership =
-                                    (ZLinkApplicationJobContext.QueuedOwnership)
-                                            read(published.peekLast(), "applicationJobOwnership");
+                            var published = actor.publishedApplicationSnapshot();
+                            var ownership = published.getLast();
                             assertEquals(
                                     change == TailChange.IMPORT,
                                     ownership.isDurable(),
                                     "publication uses the tail after the owning gate mutation");
                             if (change == TailChange.IMPORT)
-                                assertNull(
-                                        read(ownership, "reservation"),
+                                assertFalse(
+                                        QueuedOwnershipProbe.hasReservation(ownership),
                                         "durable transfer returns the initial permit");
                             else
-                                assertNotNull(
-                                        read(ownership, "reservation"),
+                                assertTrue(
+                                        QueuedOwnershipProbe.hasReservation(ownership),
                                         "ordinary work retains its initial permit");
                             checked.complete(null);
                         } catch (Throwable failure) {
@@ -361,11 +336,7 @@ final class ZLinkSharedPendingOwnershipTest {
                                                         .toCompletableFuture()
                                                         .join();
                                         if (change != TailChange.DEQUEUE) {
-                                            try {
-                                                materialize(actor);
-                                            } catch (Exception failure) {
-                                                throw new RuntimeException(failure);
-                                            }
+                                            actor.materializePublished();
                                             if (change == TailChange.CANCEL)
                                                 terminals.getFirst().cancel(false);
                                             publish.run();
@@ -384,14 +355,14 @@ final class ZLinkSharedPendingOwnershipTest {
         }
     }
 
-    private static final class PausingDeque extends ArrayDeque<Object> {
+    private static final class PausingDeque extends ArrayDeque<ZLinkSerialExecutionQueue.Entry> {
         final CountDownLatch iterating = new CountDownLatch(1);
         final CountDownLatch removed = new CountDownLatch(1);
         final CountDownLatch releaseGate = new CountDownLatch(1);
         final AtomicInteger removals = new AtomicInteger();
 
         @Override
-        public Iterator<Object> iterator() {
+        public Iterator<ZLinkSerialExecutionQueue.Entry> iterator() {
             var delegate = super.iterator();
             return new Iterator<>() {
                 boolean first = true;
@@ -411,15 +382,15 @@ final class ZLinkSharedPendingOwnershipTest {
                     return more;
                 }
 
-                public Object next() {
+                public ZLinkSerialExecutionQueue.Entry next() {
                     return delegate.next();
                 }
             };
         }
 
         @Override
-        public Object removeFirst() {
-            Object result = super.removeFirst();
+        public ZLinkSerialExecutionQueue.Entry removeFirst() {
+            var result = super.removeFirst();
             removals.incrementAndGet();
             removed.countDown();
             try {

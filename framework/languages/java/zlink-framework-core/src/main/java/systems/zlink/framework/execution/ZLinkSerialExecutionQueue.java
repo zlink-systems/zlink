@@ -72,7 +72,7 @@ public final class ZLinkSerialExecutionQueue {
     // A resumed application turn is kept separate so it can pass a relocation
     // boundary without inserting at the front of the application FIFO.
     private final ArrayDeque<Entry> continuationPending = new ArrayDeque<>();
-    private final ArrayDeque<Entry> lifecyclePending = new ArrayDeque<>();
+    private final ArrayDeque<Entry> lifecyclePending;
     // Only producers append here. The shared gate moves the published prefix into the
     // corresponding owner lane before selecting a record.
     private ConcurrentLinkedDeque<Entry> publishedApplication;
@@ -404,7 +404,16 @@ public final class ZLinkSerialExecutionQueue {
         updatePendingApplicationTailDurable();
     }
 
-    private synchronized void materializePublished() {
+    // Observed only while the caller owns the queue's execution turn.
+    List<ZLinkApplicationJobContext.QueuedOwnership> applicationPendingSnapshot() {
+        return applicationPending.stream().map(entry -> entry.applicationJobOwnership).toList();
+    }
+
+    List<ZLinkApplicationJobContext.QueuedOwnership> publishedApplicationSnapshot() {
+        return publishedApplication.stream().map(entry -> entry.applicationJobOwnership).toList();
+    }
+
+    synchronized void materializePublished() {
         if (sharedSpotGate == null) return;
         Entry entry;
         while ((entry = publishedApplication.poll()) != null) appendApplicationPending(entry);
@@ -734,6 +743,37 @@ public final class ZLinkSerialExecutionQueue {
             int lifecycleBurstLimit,
             Duration ownerTimeBudget,
             ZLinkSerialExecutionQueue timerOwner) {
+        this(
+                executor,
+                lanePolicy,
+                lifecycleBurstLimit,
+                ownerTimeBudget,
+                timerOwner,
+                ArrayDeque::new);
+    }
+
+    ZLinkSerialExecutionQueue(
+            Executor executor,
+            ZLinkExecutionLanePolicy lanePolicy,
+            Supplier<? extends ArrayDeque<Entry>> lifecyclePendingFactory) {
+        this(
+                executor,
+                lanePolicy,
+                DEFAULT_LIFECYCLE_BURST_LIMIT,
+                DEFAULT_OWNER_TIME_BUDGET,
+                null,
+                lifecyclePendingFactory);
+    }
+
+    private ZLinkSerialExecutionQueue(
+            Executor executor,
+            ZLinkExecutionLanePolicy lanePolicy,
+            int lifecycleBurstLimit,
+            Duration ownerTimeBudget,
+            ZLinkSerialExecutionQueue timerOwner,
+            Supplier<? extends ArrayDeque<Entry>> lifecyclePendingFactory) {
+        this.lifecyclePending =
+                Objects.requireNonNull(lifecyclePendingFactory.get(), "lifecyclePending");
         if (lifecycleBurstLimit <= 0
                 || ownerTimeBudget == null
                 || ownerTimeBudget.isNegative()
@@ -3127,7 +3167,7 @@ public final class ZLinkSerialExecutionQueue {
         }
     }
 
-    private static final class Entry {
+    static final class Entry {
         private final long sequence;
         private volatile boolean yieldAdmitted;
         private byte[] record;
