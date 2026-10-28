@@ -1,4 +1,5 @@
 #pragma once
+#include <zlink/json.hpp>
 #include <nlohmann/json.hpp>
 #include <chrono>
 #include <cstdint>
@@ -79,36 +80,22 @@ struct StartHandRequest
 {
     static constexpr auto packet_name = "StartHandRequest";
 };
-template <class T>
-requires (std::is_same_v<T, SessionInfoRequest> || std::is_same_v<T, TableViewRequest>
-          || std::is_same_v<T, StartHandRequest>) void to_json (nlohmann::json &j, const T &)
-{
-    j = nlohmann::json::object ();
-}
-template <class T>
-requires (std::is_same_v<T, SessionInfoRequest> || std::is_same_v<T, TableViewRequest>
-          || std::is_same_v<T, StartHandRequest>) void from_json (const nlohmann::json &, T &)
-{
-}
 struct SessionInfo
 {
     static constexpr auto packet_name = "SessionInfo";
     std::string sessionId, actorId;
     std::uint64_t objectGeneration = 0;
     bool operator== (const SessionInfo &) const = default;
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (SessionInfo, sessionId, actorId, objectGeneration)
 };
 struct JoinTableRequest
 {
     static constexpr auto packet_name = "JoinTableRequest";
     std::string playerId, tableId;
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (JoinTableRequest, playerId, tableId)
 };
 struct BetRequest
 {
     static constexpr auto packet_name = "BetRequest";
     std::int64_t handNumber = 0, amount = 0;
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (BetRequest, handNumber, amount)
 };
 struct SeatView
 {
@@ -118,7 +105,6 @@ struct SeatView
     bool acted = false;
     int cardCount = 0;
     bool operator== (const SeatView &) const = default;
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (SeatView, seat, playerId, chips, acted, cardCount)
 };
 struct TableView
 {
@@ -130,8 +116,7 @@ struct TableView
     int turnSeat = Rules::no_seat;
     std::int64_t pot = 0;
     std::vector<SeatView> seats;
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (
-      TableView, tableId, nodeId, yourSeat, handNumber, inHand, turnSeat, pot, seats)
+
 };
 struct HandDealt
 {
@@ -139,7 +124,6 @@ struct HandDealt
     std::int64_t handNumber = 0;
     std::vector<int> cards;
     bool operator== (const HandDealt &) const = default;
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (HandDealt, handNumber, cards)
 };
 struct RevealedHand
 {
@@ -147,7 +131,6 @@ struct RevealedHand
     std::string playerId;
     std::vector<int> cards;
     bool operator== (const RevealedHand &) const = default;
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (RevealedHand, seat, playerId, cards)
 };
 struct HandResult
 {
@@ -157,13 +140,115 @@ struct HandResult
     std::vector<RevealedHand> hands;
     std::vector<SeatView> seats;
     bool operator== (const HandResult &) const = default;
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (HandResult, handNumber, pot, winners, hands, seats)
 };
 struct ActionRejected
 {
     static constexpr auto packet_name = "ActionRejected";
     std::string reason;
     std::int32_t retryAfterMs = 0;
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (ActionRejected, reason, retryAfterMs)
 };
 }
+
+namespace zlink::json
+{
+template <> struct dto_traits<::MyGame::SessionInfo>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("sessionId", &::MyGame::SessionInfo::sessionId),
+      zlink::json::field ("actorId", &::MyGame::SessionInfo::actorId),
+      zlink::json::field ("objectGeneration", &::MyGame::SessionInfo::objectGeneration)
+    };
+};
+
+template <> struct dto_traits<::MyGame::JoinTableRequest>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("playerId", &::MyGame::JoinTableRequest::playerId),
+      zlink::json::field ("tableId", &::MyGame::JoinTableRequest::tableId)
+    };
+};
+
+template <> struct dto_traits<::MyGame::BetRequest>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("handNumber", &::MyGame::BetRequest::handNumber),
+      zlink::json::field ("amount", &::MyGame::BetRequest::amount)
+    };
+};
+
+template <> struct dto_traits<::MyGame::SeatView>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("seat", &::MyGame::SeatView::seat),
+      zlink::json::field ("playerId", &::MyGame::SeatView::playerId),
+      zlink::json::field ("chips", &::MyGame::SeatView::chips),
+      zlink::json::field ("acted", &::MyGame::SeatView::acted),
+      zlink::json::field ("cardCount", &::MyGame::SeatView::cardCount)
+    };
+};
+
+template <> struct dto_traits<::MyGame::TableView>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("tableId", &::MyGame::TableView::tableId),
+      zlink::json::field ("nodeId", &::MyGame::TableView::nodeId),
+      zlink::json::field ("yourSeat", &::MyGame::TableView::yourSeat),
+      zlink::json::field ("handNumber", &::MyGame::TableView::handNumber),
+      zlink::json::field ("inHand", &::MyGame::TableView::inHand),
+      zlink::json::field ("turnSeat", &::MyGame::TableView::turnSeat),
+      zlink::json::field ("pot", &::MyGame::TableView::pot),
+      zlink::json::field ("seats", &::MyGame::TableView::seats)
+    };
+};
+
+template <> struct dto_traits<::MyGame::HandDealt>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("handNumber", &::MyGame::HandDealt::handNumber),
+      zlink::json::field ("cards", &::MyGame::HandDealt::cards)
+    };
+};
+
+template <> struct dto_traits<::MyGame::RevealedHand>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("seat", &::MyGame::RevealedHand::seat),
+      zlink::json::field ("playerId", &::MyGame::RevealedHand::playerId),
+      zlink::json::field ("cards", &::MyGame::RevealedHand::cards)
+    };
+};
+
+template <> struct dto_traits<::MyGame::HandResult>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("handNumber", &::MyGame::HandResult::handNumber),
+      zlink::json::field ("pot", &::MyGame::HandResult::pot),
+      zlink::json::field ("winners", &::MyGame::HandResult::winners),
+      zlink::json::field ("hands", &::MyGame::HandResult::hands),
+      zlink::json::field ("seats", &::MyGame::HandResult::seats)
+    };
+};
+
+template <> struct dto_traits<::MyGame::ActionRejected>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("reason", &::MyGame::ActionRejected::reason),
+      zlink::json::field ("retryAfterMs", &::MyGame::ActionRejected::retryAfterMs)
+    };
+};
+
+template <> struct dto_traits<::MyGame::SessionInfoRequest>
+{
+    static constexpr auto fields = std::tuple{};
+};
+
+template <> struct dto_traits<::MyGame::TableViewRequest>
+{
+    static constexpr auto fields = std::tuple{};
+};
+
+template <> struct dto_traits<::MyGame::StartHandRequest>
+{
+    static constexpr auto fields = std::tuple{};
+};
+} // namespace zlink::json
