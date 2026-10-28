@@ -936,7 +936,7 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     call_id_t next_operation ();
     task_t<std::optional<mesh::raw_mesh_node_owner_t::local_operation_reservation_t>>
     prepare_local_completion (pending_operation_t &operation);
-    void register_local_completion (
+    std::chrono::steady_clock::time_point register_local_completion (
       pending_operation_t &operation,
       const mesh::raw_mesh_node_owner_t::local_operation_reservation_t &reservation,
       std::chrono::milliseconds timeout,
