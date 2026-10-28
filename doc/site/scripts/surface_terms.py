@@ -43,6 +43,20 @@ SPEC_DIRS = {
 #  관례로 안 되는 자리. 이름 자체가 갈리므로 표가 소유한다.
 #  키는 공통 산문이 쓰는 표기(`.NET` 모양)다.
 OVERRIDES: dict[str, dict[str, str]] = {
+    #  TypeScript `ZlinkStreamErrorCode`의 member 이름은 PascalCase다. 같은 철자의 camelCase
+    #  멤버(`options.requestTimeout` 등)가 Node 표면에 있어도 오류 코드는 바꾸지 않는다.
+    "Disconnected": {"Node/TypeScript": "Disconnected"},
+    "ConfigurationError": {"Node/TypeScript": "ConfigurationError"},
+    "ValidationFailed": {"Node/TypeScript": "ValidationFailed"},
+    "RequestTimeout": {"Node/TypeScript": "RequestTimeout"},
+    "ConnectTimeout": {"Node/TypeScript": "ConnectTimeout"},
+    "FrameDecodeFailed": {"Node/TypeScript": "FrameDecodeFailed"},
+    "FrameTooLarge": {"Node/TypeScript": "FrameTooLarge"},
+    "SendFailed": {"Node/TypeScript": "SendFailed"},
+    "CompressionFailed": {"Node/TypeScript": "CompressionFailed"},
+    "DecompressionFailed": {"Node/TypeScript": "DecompressionFailed"},
+    "TlsValidationFailed": {"Node/TypeScript": "TlsValidationFailed"},
+    "UserCallbackFailed": {"Node/TypeScript": "UserCallbackFailed"},
     #  Java·Kotlin의 Spot handler 등록은 종류별 메서드가 아니라 addHandler 하나다.
     #  무엇을 받는 handler인지는 구현한 interface와 annotation이 정한다.
     "AddPacket": {"Java": "addHandler", "Kotlin": "addHandler"},
