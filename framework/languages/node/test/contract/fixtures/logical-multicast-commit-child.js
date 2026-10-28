@@ -47,14 +47,14 @@ async function main() {
   subscriber.setSubscription('events', 'pre-start');
   subscriber.setSubscription('events', 'post-start');
   const publisher = node.createPublisher();
-  const runtime = new framework.ZLinkSpotNodeRuntimeManager({
+  const { createPublisherRuntime } = require('./publisher-runtime');
+  const runtime = await createPublisherRuntime('play', publisher, {
     detachedTaskRunner: detachedTaskRunner,
     registration: framework.createFrameworkRegistration({}),
     backendAdapterFactory: {},
     context: {},
     errorSink: { reportRuntimeTaskException() { assert.fail('unexpected runtime task error'); } }
-  });
-  runtime.publishers.set('play', publisher);
+  }, { createPublisher: () => publisher });
 
   try {
     const afterStart = new AbortController();
