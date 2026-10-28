@@ -7,6 +7,7 @@
 #include <zlink/Contracts/Messaging/message.hpp>
 #include <zlink/framework/contracts/actors/actor.hpp>
 
+#include <chrono>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -159,6 +160,7 @@ struct receive_record_t
     std::function<void ()> complete_stateful_dispatch;
     std::function<void ()> before_application_handler;
     std::shared_ptr<serial_application_record_t> application_record;
+    std::optional<std::chrono::steady_clock::time_point> operation_deadline;
 };
 
 struct ready_record_t
