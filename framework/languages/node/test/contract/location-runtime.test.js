@@ -1,3 +1,4 @@
+const { inspectRuntime } = require('../../packages/framework/dist/runtime/internal-observation');
 const { liveUserSpotAuthority } = require('../helpers/live-user-spot-authority');
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
@@ -2077,8 +2078,7 @@ test('actor resolver keeps the current Actor route while its enclosing Spot proj
   assert.equal(current.objectGeneration, 6n);
 });
 
-test('Spot Message Follow invalidates only resolver entries for the source owner fence', () => {
-  const resolvers = resolversFor(new internal.ZLinkInMemoryLocationStore());
+test('Spot Message Follow invalidates only resolver entries for the source owner fence', async () => {
   const fence = {
     spotId: 'spot-follow',
     objectGeneration: 7n,
@@ -2141,22 +2141,20 @@ test('Spot Message Follow invalidates only resolver entries for the source owner
       authorityStoreVersion: 'spot-version'
     }
   };
-  resolvers.spotRoutes.set('play\0spot-follow', { row: spotRow, expiresAtMs: Infinity });
-  resolvers.actorRoutes.set('play\0actor-follow', { row: actorRow, expiresAtMs: Infinity });
-  resolvers.directActorRoutes.set('actor-follow', { row: directActorRoute, expiresAtMs: Infinity });
+  const resolvers = await cachedFollowRoutes(spotRow, actorRow, directActorRoute);
 
   assert.equal(resolvers.invalidateSpotRouteIfMatches({
     ...fence,
     objectGeneration: 6n
   }), false);
-  assert.equal(resolvers.spotRoutes.size, 1);
-  assert.equal(resolvers.actorRoutes.size, 1);
-  assert.equal(resolvers.directActorRoutes.size, 1);
+  assert.equal(resolvers[inspectRuntime]().spotRouteKeys.length, 1);
+  assert.equal(resolvers[inspectRuntime]().actorRouteKeys.length, 1);
+  assert.equal(resolvers[inspectRuntime]().directActorRouteKeys.length, 1);
 
   assert.equal(resolvers.invalidateSpotRouteIfMatches(fence), true);
-  assert.equal(resolvers.spotRoutes.size, 0);
-  assert.equal(resolvers.actorRoutes.size, 0);
-  assert.equal(resolvers.directActorRoutes.size, 0);
+  assert.equal(resolvers[inspectRuntime]().spotRouteKeys.length, 0);
+  assert.equal(resolvers[inspectRuntime]().actorRouteKeys.length, 0);
+  assert.equal(resolvers[inspectRuntime]().directActorRouteKeys.length, 0);
 });
 
 test('store location resolver returns a live remote ActorRef', async () => {
@@ -2184,8 +2182,7 @@ test('store location resolver returns a live remote ActorRef', async () => {
   await runtime.stop();
 });
 
-test('Actor Message Follow invalidation preserves a newer cached owner fence', () => {
-  const resolver = resolversFor(new internal.ZLinkInMemoryLocationStore());
+test('Actor Message Follow invalidation preserves a newer cached owner fence', async () => {
   const route = {
     meshName: 'play',
     actorRef: {
@@ -2201,22 +2198,14 @@ test('Actor Message Follow invalidation preserves a newer cached owner fence', (
     authorityOwnerGeneration: 17n,
     authorityStoreVersion: 'v2'
   };
-  resolver.directActorRoutes.set('alice', {
-    row: route,
-    expiresAtMs: Number.MAX_SAFE_INTEGER,
-    storeVersion: 'v2'
-  });
-  resolver.actorRoutes.set('play\0alice', {
-    row: {
-      ...actor('owner-new', 9n),
-      actorId: 'alice',
-      actorRef: route.actorRef,
-      ownerNodeRid: route.actorRef.nodeRid,
-      ownerNodeGeneration: 11n,
-      leaseGeneration: 13n
-    },
-    expiresAtMs: Number.MAX_SAFE_INTEGER
-  });
+  const resolver = await cachedFollowRoutes(undefined, {
+    ...actor('owner-new', 9n),
+    actorId: 'alice',
+    actorRef: route.actorRef,
+    ownerNodeRid: route.actorRef.nodeRid,
+    ownerNodeGeneration: 11n,
+    leaseGeneration: 13n
+  }, route);
 
   assert.equal(resolver.invalidateActorRouteIfMatches({
     actorId: 'alice',
@@ -2226,8 +2215,8 @@ test('Actor Message Follow invalidation preserves a newer cached owner fence', (
     authorityOwnerGeneration: 5n,
     ownerLeaseGeneration: 3n
   }), false);
-  assert.equal(resolver.directActorRoutes.has('alice'), true);
-  assert.equal(resolver.actorRoutes.has('play\0alice'), true);
+  assert.equal(resolver[inspectRuntime]().directActorRouteKeys.includes('alice'), true);
+  assert.equal(resolver[inspectRuntime]().actorRouteKeys.includes('play\0alice'), true);
 
   assert.equal(resolver.invalidateActorRouteIfMatches({
     actorId: 'alice',
@@ -2237,8 +2226,8 @@ test('Actor Message Follow invalidation preserves a newer cached owner fence', (
     authorityOwnerGeneration: 17n,
     ownerLeaseGeneration: 13n
   }), true);
-  assert.equal(resolver.directActorRoutes.has('alice'), false);
-  assert.equal(resolver.actorRoutes.has('play\0alice'), false);
+  assert.equal(resolver[inspectRuntime]().directActorRouteKeys.includes('alice'), false);
+  assert.equal(resolver[inspectRuntime]().actorRouteKeys.includes('play\0alice'), false);
 });
 
 test('location spot route resolver bridges internal routed transport', async () => {
@@ -3439,6 +3428,77 @@ async function lifecycleNode(store, ownerId, nodeRid, entryMeshName = 'play') {
     runtime,
     lifecycle: new internal.ZLinkLocationLifecycle(runtime, store, entryMeshName)
   };
+}
+
+// Populate resolver caches through their normal store-backed resolution paths.
+async function cachedFollowRoutes(spotRow, actorRow, route) {
+  const { encodeActorAuthorityIdentity } = require(
+    '../../packages/framework/dist/runtime/actors/actor-authority-publication'
+  );
+  const { encodeServiceUserSpotAuthorityPayload } = require(
+    '../../packages/framework/dist/runtime/foundation/service-authority-payload-codec'
+  );
+  const enclosing = route.enclosingSpotRoute;
+  const snapshot = (kind, generation, ownerGeneration, payload) => ({
+    kind: 'snapshot',
+    objectGeneration: generation,
+    authorityOwnerGeneration: ownerGeneration,
+    ownerLeaseGeneration: route.ownerLeaseGeneration,
+    ownerId: route.ownerId,
+    storeVersion: { value: route.authorityStoreVersion },
+    allocation: {
+      objectKind: kind,
+      state: 'active',
+      stableType: kind === 'actor' ? route.actorType : 'game',
+      descriptor: { meshName: route.meshName, rid: route.actorRef.nodeRid },
+      descriptorLifecycleGeneration: route.ownerNodeGeneration
+    },
+    payload
+  });
+  const stores = {
+    async resolveSpot() { return spotRow; },
+    async resolveActor() { return actorRow; },
+    async readAuthority(key) {
+      if (key.value === authorityKeys.encodeAuthorityKey('actor', route.actorRef.actorId).value)
+        return snapshot('actor', route.actorRef.objectGeneration, route.authorityOwnerGeneration,
+          encodeActorAuthorityIdentity({
+            actorType: route.actorType,
+            actor: route.actorRef,
+            meshName: route.meshName,
+            ownerNodeGeneration: route.ownerNodeGeneration,
+            owner: { ownerId: route.ownerId, leaseGeneration: route.ownerLeaseGeneration },
+            spotId: enclosing?.spotId ?? actorRow.spotId,
+            spotGeneration: enclosing?.targetSpotGeneration ?? actorRow.spotGeneration,
+            spotKind: enclosing ? framework.ZLinkSpotKind.User : framework.ZLinkSpotKind.Entry
+          }));
+      assert.ok(enclosing, 'only the enclosing Spot authority may be resolved');
+      assert.equal(key.value, authorityKeys.encodeAuthorityKey('user_spot', enclosing.spotId).value);
+      return snapshot('user_spot', enclosing.targetSpotGeneration, enclosing.authorityOwnerGeneration,
+        encodeServiceUserSpotAuthorityPayload({
+          state: 'ready', stableType: 'game', spotId: enclosing.spotId,
+          ownerId: route.ownerId, ownerLeaseGeneration: route.ownerLeaseGeneration,
+          ownerMeshName: route.meshName, ownerNodeRid: String(route.actorRef.nodeRid),
+          ownerNodeGeneration: route.ownerNodeGeneration
+        }));
+    }
+  };
+  const resolver = new internal.ZLinkStoreLocationResolvers({
+    stores: { authorityStore: stores, spotStore: stores, actorStore: stores },
+    leaseTracker: {
+      async isOwnerTokenLive() { return true; },
+      async remainingOwnerTokenLeaseMs() { return 60_000; }
+    },
+    spotMeshNames: ['play']
+  });
+  if (spotRow) assert.deepEqual(await resolver.resolveSpotRow({ meshName: 'play', spotId: spotRow.spotId }), spotRow);
+  assert.deepEqual(await resolver.resolveActorRow({ meshName: 'play', actorId: route.actorRef.actorId }), actorRow);
+  const direct = await resolver.resolveDirectActorRoute(route.actorRef.actorId);
+  assert.equal(direct.kind, 'ready');
+  assert.deepEqual(direct.route.actorRef, route.actorRef);
+  const observed = resolver[inspectRuntime]();
+  assert.ok(Object.isFrozen(observed));
+  for (const keys of Object.values(observed)) assert.ok(Object.isFrozen(keys));
+  return resolver;
 }
 
 function resolversFor(store, events, ownerLeaseStore = store, locationStore = store) {
