@@ -1,3 +1,4 @@
+import { inspectRuntime } from '../internal-observation';
 import { DEFAULT_REQUEST_TIMEOUT_MS } from '../../contracts/Configuration/Registration';
 import { encodeActorReply } from '../actors/actor-reply';
 import { boundSessionErrorPayload } from '../streams/bound-session-response-target';
@@ -336,6 +337,14 @@ interface ZLinkTargetSpotCloseOperation {
 }
 
 export class DefaultZLinkSpotManager {
+  [inspectRuntime]() {
+    return Object.freeze({
+      activeActivationCount: this.activations.activeActivations().length,
+      hasCloseableActivation: (meshName: string, spotId: RoutingId) =>
+        this.activations.activationForClose(meshName, spotId) !== undefined
+    });
+  }
+
   private readonly factories: ReadonlySet<Type<ZLinkSpot>>;
   private readonly activations: ZLinkSpotActivationRegistry;
   private readonly workerRuntime: ZLinkWorkerRuntime;
