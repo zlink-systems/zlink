@@ -166,14 +166,12 @@ bool zlink::ctx_inproc_registry_t::has_pending_for_socket (
     return false;
 }
 
-size_t zlink::ctx_inproc_registry_t::materialize_pending_for_socket (
-  const std::string &addr_, const socket_base_t *socket_, socket_base_t *bind_socket_)
+size_t zlink::ctx_inproc_registry_t::materialize_pending (const std::string &addr_,
+                                                          const socket_base_t *socket_,
+                                                          socket_base_t *bind_socket_)
 {
-    if (!socket_ || !bind_socket_)
+    if (!bind_socket_)
         return 0;
-
-    options_t bind_options;
-    bind_options.type = ZLINK_CORE_SOCKET_PAIR;
 
     std::vector<pending_connection_t> pending_connections;
     {
@@ -186,23 +184,35 @@ size_t zlink::ctx_inproc_registry_t::materialize_pending_for_socket (
         // selected entries so allocation failure cannot orphan their pipes.
         for (pending_connections_t::iterator it = pending.first;
              it != pending.second; ++it) {
-            if (it->second.endpoint.socket == socket_)
+            if (!socket_ || it->second.endpoint.socket == socket_)
                 pending_connections.push_back (it->second);
         }
         pending_connections_t::iterator it = pending.first;
         while (it != pending.second) {
-            if (it->second.endpoint.socket == socket_)
+            if (!socket_ || it->second.endpoint.socket == socket_)
                 it = _pending_connections.erase (it);
             else
                 ++it;
         }
     }
 
-    for (std::vector<pending_connection_t>::const_iterator it =
-           pending_connections.begin ();
-         it != pending_connections.end (); ++it)
-        connect_inproc_sockets (bind_socket_, bind_options, *it, bind_side,
-                                true);
+    for (std::vector<pending_connection_t>::const_iterator it = pending_connections.begin ();
+         it != pending_connections.end (); ++it) {
+        // The helper owns termination only; it does not negotiate a peer or
+        // write a routing preamble to a pipe the connector may have closed.
+        it->bind_pipe->set_tid (bind_socket_->get_tid ());
+        command_t cmd;
+        cmd.type = command_t::bind;
+        cmd.args.bind.pipe = it->bind_pipe;
+        const bool retained = it->bind_pipe->retain_lifetime_ref ();
+        zlink_assert (retained);
+        it->bind_pipe->terminate (false);
+        bind_socket_->inc_seqnum ();
+        bind_socket_->process_command (cmd);
+        // No connector bind is needed: its pending pipe already has a sink.
+        // Balance the sequence reservation taken by pend_connection().
+        bind_socket_->send_inproc_connected (it->endpoint.socket);
+    }
     return pending_connections.size ();
 }
 
@@ -224,8 +234,7 @@ void zlink::ctx_inproc_registry_t::connect_inproc_sockets (
   socket_base_t *bind_socket_,
   const options_t &bind_options_,
   const pending_connection_t &pending_connection_,
-  side side_,
-  bool materialization_)
+  side side_)
 {
     pending_connection_.bind_pipe->set_tid (bind_socket_->get_tid ());
 
@@ -237,16 +246,10 @@ void zlink::ctx_inproc_registry_t::connect_inproc_sockets (
     const bool completion =
       paired && pending_connection_.connect_pipe->get_transport_lane ()
                   == transport_lane_completion;
-    unsigned char lane_count =
+    const unsigned char lane_count =
       paired ? zmp_control::expected_transport_lane_count (
-                 pending_connection_.endpoint.options.type,
-                 bind_options_.type)
+                 pending_connection_.endpoint.options.type, bind_options_.type)
              : 0;
-    // Closing a connect-first socket materializes its otherwise ownerless
-    // pending half through an internal PAIR helper solely so the pipe
-    // termination handshake can complete. It is not a negotiated peer.
-    if (paired && lane_count == 0 && materialization_)
-        lane_count = 1;
     if (paired && lane_count == 0) {
         pending_connection_.connect_pipe->terminate (false);
         pending_connection_.bind_pipe->terminate (false);
