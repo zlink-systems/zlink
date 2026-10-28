@@ -30,7 +30,7 @@ function record(kind) {
   };
 }
 
-function receiveLoop(channelName, records, dispatch, queue) {
+function receiveLoop(channelName, records, dispatch, queue, readablePoller, reportError) {
   const stopped = deferred();
   const loop = new ZLinkChannelReceiveLoop(
     channelName,
@@ -38,7 +38,7 @@ function receiveLoop(channelName, records, dispatch, queue) {
     { flowEnabled() { return false; }, dispatch },
     undefined,
     undefined,
-    {
+    readablePoller ?? {
       wait() { return records.length > 0; },
       waitForReadable(signal) {
         if (signal.aborted) return Promise.resolve(false);
@@ -48,7 +48,8 @@ function receiveLoop(channelName, records, dispatch, queue) {
       markDrained() {},
       dispose() {}
     },
-    queue
+    queue,
+    reportError
   );
   return { loop, running: loop.run() };
 }
@@ -75,102 +76,220 @@ async function until(check, label) {
   assert.fail(`${label} was not observed`);
 }
 
-test('ChannelName gate retains an asynchronous request turn through send, request, and stop', async () => {
-  const queue = new ApplicationJobQueue(resolveApplicationJobQueueConfiguration());
-  const firstEntered = deferred();
-  const releaseFirst = deferred();
-  const otherCompleted = deferred();
-  const sameRecords = [record('first'), record('send'), record('request')];
-  const otherRecords = [record('other')];
-  const allRecords = [...sameRecords, ...otherRecords];
-  const started = [];
-  let active = 0;
-  let peak = 0;
-  const same = receiveLoop('orders', sameRecords, async (received) => {
-    started.push(received.kind);
-    active += 1;
-    peak = Math.max(peak, active);
-    try {
-      if (received.kind === 'first') {
-        firstEntered.resolve();
-        await releaseFirst.promise;
-      }
-      if (received.replyToken !== null) received.complete();
-    } finally {
-      active -= 1;
-    }
-  }, queue);
-  const other = receiveLoop('support', otherRecords, async () => {
-    otherCompleted.resolve();
-  }, queue);
-  let stopped = false;
-  try {
-    await firstEntered.promise;
-    await until(() => sameRecords.length === 0, 'later send and request receive');
-    await otherCompleted.promise;
-    assert.deepEqual(started, ['first']);
-    const stopping = same.loop.stop().then(() => { stopped = true; });
-    await new Promise((resolve) => setImmediate(resolve));
-    assert.equal(stopped, false);
-    releaseFirst.resolve();
-    await stopping;
-    assert.deepEqual(started, ['first', 'send', 'request']);
-    assert.equal(peak, 1);
-    assert.deepEqual(allRecords.map((received) => received.closes), [1, 1, 1, 1]);
-    assert.deepEqual(allRecords.map((received) => received.terminals), [1, 0, 1, 0]);
-  } finally {
-    releaseFirst.resolve();
-    await Promise.all([same.loop.stop(), other.loop.stop()]);
-    await Promise.all([same.running, other.running]);
-  }
-});
+function notifyingPoller(records) {
+  let notify;
+  return {
+    wait() { return records.length > 0; },
+    waitForReadable(signal) {
+      if (signal.aborted) return Promise.resolve(false);
+      if (records.length > 0) return Promise.resolve(true);
+      return new Promise((resolve) => {
+        notify = resolve;
+        signal.addEventListener('abort', () => resolve(false), { once: true });
+      });
+    },
+    wake() { notify?.(true); },
+    markDrained() {},
+    dispose() {}
+  };
+}
 
-for (const kind of ['route', 'subscriber']) {
-  test(`${kind} ChannelName gate retains the asynchronous terminal`, async () => {
-    const records = [record('first'), record('send'), record('request')];
+for (const path of ['client-server', 'route']) {
+  for (const firstKind of ['send', 'request']) {
+    for (const secondKind of ['send', 'request']) {
+      for (const batch of ['same', 'next', 'failure']) {
+        test(`${path} ${firstKind}->${secondKind} ${batch} batch starts FIFO without awaiting terminal`, async () => {
+          const queue = new ApplicationJobQueue(resolveApplicationJobQueueConfiguration());
+          const release = deferred();
+          const first = record(firstKind);
+          const second = record(secondKind);
+          const records = batch === 'next' ? [first] : [first, second];
+          const readable = notifyingPoller(records);
+          const started = [];
+          const completed = [];
+          const errors = [];
+          const failure = new Error('first handler rejected');
+          const disposed = [];
+          class Dependency {
+            dispose() { disposed.push(this.id); }
+          }
+          const {
+            runInHandlerInstanceScope
+          } = require('../../packages/framework/dist/runtime/handlers/handler-instance-scope');
+          const dispatch = (received) =>
+            runInHandlerInstanceScope(
+              {
+                create(type) {
+                  return new type();
+                }
+              },
+              undefined,
+              async (scope) => {
+                const id = received === first ? 1 : 2;
+                started.push(id);
+                const dependency = await scope.resolve(Dependency);
+                dependency.id = id;
+                if (id === 1) {
+                  if (batch === 'next') {
+                    records.push(second);
+                    readable.wake();
+                  }
+                  await release.promise;
+                  assert.equal(first.closes, 0, 'payload and reply token survive suspension');
+                  assert.deepEqual(disposed, [2]);
+                  if (batch === 'failure') {
+                    completed.push(id);
+                    throw failure;
+                  }
+                }
+                if (received.replyToken !== null) received.complete();
+                completed.push(id);
+              }
+            );
+          let loop;
+          let running;
+          if (path === 'client-server') {
+            ({ loop, running } = receiveLoop(
+              'orders',
+              records,
+              dispatch,
+              queue,
+              readable,
+              (error) => errors.push(error)
+            ));
+          } else {
+            loop = new ZLinkRouteReceiveLoop(
+              {
+                recv() { return records.shift(); },
+                reply() { throw new Error('unexpected reply'); }
+              },
+              {
+                flowEnabled() { return false; },
+                dispatchInfrastructure() { return false; },
+                dispatch
+              },
+              readable,
+              queue,
+              undefined,
+              (error) => errors.push(error)
+            );
+            running = loop.run();
+          }
+          try {
+            await until(() => second.closes === 1, 'second terminal before first release');
+            assert.deepEqual(started, [1, 2]);
+            assert.deepEqual(completed, [2]);
+            assert.equal(first.closes, 0);
+            assert.equal(first.terminals, 0);
+            assert.equal(second.terminals, secondKind === 'request' ? 1 : 0);
+            let stopped = false;
+            const stopping = loop.stop().then(() => { stopped = true; });
+            await new Promise((resolve) => setImmediate(resolve));
+            assert.equal(stopped, false, 'stop waits for terminal after queue drain');
+            release.resolve();
+            await stopping;
+            assert.deepEqual(completed, [2, 1]);
+            assert.deepEqual([first.closes, second.closes], [1, 1]);
+            assert.equal(first.terminals, firstKind === 'request' && batch !== 'failure' ? 1 : 0);
+            assert.deepEqual(disposed, [2, 1]);
+            assert.equal(queue.snapshot().permitsInUse, 0n);
+            assert.deepEqual(errors, batch === 'failure' ? [failure] : []);
+          } finally {
+            release.resolve();
+            await loop.stop();
+            await running;
+          }
+        });
+      }
+    }
+  }
+}
+
+function subscriberRecord(id) {
+  const received = { id, topic: 'orders', closes: 0 };
+  received.parts = [
+    {
+      data() {
+        return Buffer.from(String(id));
+      },
+      close() {
+        received.closes += 1;
+      }
+    }
+  ];
+  return received;
+}
+
+function subscriberLoop(records, queue, dispatch, reportError, shared) {
+  const readable = notifyingPoller(records);
+  const loop = new ZLinkSubscriberReceiveLoop(
+    {
+      createTopicMessage() { return { topic: '', parts: [], close() {} }; },
+      createReadablePoller() { return readable; }
+    },
+    {
+      subscribe(message) {
+        const next = records.shift();
+        if (next === undefined) return false;
+        Object.assign(message, next);
+        return true;
+      }
+    },
+    { dispatch },
+    queue,
+    undefined,
+    undefined,
+    reportError,
+    shared
+  );
+  return { loop, readable };
+}
+
+for (const batch of ['same', 'next', 'failure']) {
+  test(`subscriber starts FIFO without awaiting the asynchronous terminal: ${batch} batch`, async () => {
     const queue = new ApplicationJobQueue(resolveApplicationJobQueueConfiguration());
-    const entered = deferred();
+    const first = subscriberRecord(1);
+    const second = subscriberRecord(2);
+    const records = batch === 'next' ? [first] : [first, second];
     const release = deferred();
     const started = [];
-    const dispatch = async (received) => {
-      started.push(received.kind);
-      if (received.kind === 'first') {
-        entered.resolve();
-        await release.promise;
-      }
-    };
-    let loop;
-    if (kind === 'route') {
-      loop = new ZLinkRouteReceiveLoop(
-        { recv() { return records.shift(); }, reply() { throw new Error('unexpected reply'); } },
-        { flowEnabled() { return false; }, dispatchInfrastructure() { return false; }, dispatch },
-        poller(records),
-        queue
-      );
-    } else {
-      const subscriber = {
-        subscribe(message) {
-          const next = records.shift();
-          if (next === undefined) return false;
-          message.kind = next.kind;
-          return true;
+    const completed = [];
+    const errors = [];
+    const failure = new Error('first subscriber handler rejected');
+    const { loop, readable } = subscriberLoop(
+      records,
+      queue,
+      async (received) => {
+        started.push(received.id);
+        if (received.id === 1) {
+          if (batch === 'next') {
+            records.push(second);
+            readable.wake();
+          }
+          await release.promise;
+          assert.equal(first.closes, 0, 'first payload survives suspension');
         }
-      };
-      loop = new ZLinkSubscriberReceiveLoop(
-        { createTopicMessage() { return { topic: '', parts: [] }; }, createReadablePoller() { return poller(records); } },
-        subscriber,
-        { dispatch },
-        queue
-      );
-    }
+        completed.push(received.id);
+        if (received.id === 1 && batch === 'failure') throw failure;
+      },
+      (error) => errors.push(error)
+    );
     const running = loop.run();
     try {
-      await entered.promise;
-      await until(() => records.length === 0, `${kind} later records`);
-      assert.deepEqual(started, ['first']);
+      await until(() => second.closes === 1, 'second subscriber terminal before first release');
+      assert.deepEqual(started, [1, 2]);
+      assert.deepEqual(completed, [2]);
+      assert.equal(first.closes, 0);
+      let stopped = false;
+      const stopping = loop.stop().then(() => { stopped = true; });
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(stopped, false, 'stop waits for the first subscriber terminal');
       release.resolve();
-      await until(() => started.length === 3, `${kind} terminal drain`);
-      assert.deepEqual(started, ['first', 'send', 'request']);
+      await stopping;
+      assert.deepEqual(completed, [2, 1]);
+      assert.deepEqual([first.closes, second.closes], [1, 1]);
+      assert.equal(queue.snapshot().permitsInUse, 0n);
+      assert.deepEqual(errors, batch === 'failure' ? [failure] : []);
     } finally {
       release.resolve();
       await loop.stop();
@@ -179,55 +298,62 @@ for (const kind of ['route', 'subscriber']) {
   });
 }
 
-test('subscriber connections of one ChannelName share the application gate', async () => {
+test('subscriber connections of one ChannelName start FIFO without holding an application gate', async () => {
   const shared = createChannelApplicationDispatchQueue();
   const queue = new ApplicationJobQueue(resolveApplicationJobQueueConfiguration());
+  const first = subscriberRecord(1);
+  const second = subscriberRecord(2);
   const entered = deferred();
   const release = deferred();
-  const firstRecords = [record('first')];
-  const secondRecords = [record('send')];
   const started = [];
-  const makeSubscriber = (records) => new ZLinkSubscriberReceiveLoop(
-    {
-      createTopicMessage() { return { topic: '', parts: [] }; },
-      createReadablePoller() { return poller(records); }
-    },
-    {
-      subscribe(message) {
-        const next = records.shift();
-        if (next === undefined) return false;
-        message.kind = next.kind;
-        return true;
-      }
-    },
-    {
-      async dispatch(message) {
-        started.push(message.kind);
-        if (message.kind === 'first') {
-          entered.resolve();
-          await release.promise;
-        }
-      }
-    },
+  const completed = [];
+  const errors = [];
+  const dispatch = async (received) => {
+    started.push(received.id);
+    if (received.id === 1) {
+      entered.resolve();
+      await release.promise;
+      assert.equal(first.closes, 0);
+    }
+    completed.push(received.id);
+  };
+  const firstLoop = subscriberLoop(
+    [first],
     queue,
-    undefined,
-    undefined,
-    undefined,
+    dispatch,
+    (error) => errors.push(error),
     shared
-  );
-  const first = makeSubscriber(firstRecords);
-  const second = makeSubscriber(secondRecords);
-  const running = [first.run(), second.run()];
+  ).loop;
+  const secondLoop = subscriberLoop(
+    [second],
+    queue,
+    dispatch,
+    (error) => errors.push(error),
+    shared
+  ).loop;
+  const firstRunning = firstLoop.run();
+  let secondRunning;
   try {
     await entered.promise;
-    await until(() => secondRecords.length === 0, 'second subscriber receive');
-    assert.deepEqual(started, ['first']);
+    secondRunning = secondLoop.run();
+    await until(() => second.closes === 1, 'second connection terminal before first release');
+    assert.deepEqual(started, [1, 2]);
+    assert.deepEqual(completed, [2]);
+    assert.equal(first.closes, 0);
+    let stopped = false;
+    const stopping = firstLoop.stop().then(() => { stopped = true; });
+    await secondLoop.stop();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(stopped, false, 'first connection stop waits for its terminal');
     release.resolve();
-    await until(() => started.length === 2, 'second subscriber dispatch');
-    assert.deepEqual(started, ['first', 'send']);
+    await stopping;
+    assert.deepEqual(completed, [2, 1]);
+    assert.deepEqual([first.closes, second.closes], [1, 1]);
+    assert.equal(queue.snapshot().permitsInUse, 0n);
+    assert.deepEqual(errors, []);
   } finally {
     release.resolve();
-    await Promise.all([first.stop(), second.stop()]);
-    await Promise.all(running);
+    await Promise.all([firstLoop.stop(), secondLoop.stop()]);
+    await Promise.all([firstRunning, secondRunning]);
   }
 });
