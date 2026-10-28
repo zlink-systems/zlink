@@ -140,9 +140,9 @@ for (const departed of [false, true]) {
       Message.from(Buffer.from('{}'))
     ];
     const probe = async () => {
-      await spotManager.activationLifecycle.dispatchActorPacket(
+      await spotManager.dispatchRoutedActorPacket(
         'remote',
-        activation,
+        spotId,
         actorId,
         parts
       );
@@ -153,9 +153,9 @@ for (const departed of [false, true]) {
         Buffer.from(JSON.stringify({ order: admission.get('move').parked.length + 1 }))
       );
       try {
-        await spotManager.activationLifecycle.dispatchActorPacket(
+        await spotManager.dispatchRoutedActorPacket(
           'remote',
-          activation,
+          spotId,
           actorId,
           [parts[0], payload],
           false,
@@ -242,9 +242,9 @@ for (const departed of [false, true]) {
       assert.equal(admission.get('move').parked.length, 0);
       assert.equal(admission.get('move').migrated, true);
       const payload = Message.from(Buffer.from('{"order":3}'));
-      const ordinary = spotManager.activationLifecycle.dispatchActorPacket(
+      const ordinary = spotManager.dispatchRoutedActorPacket(
         'local',
-        activation,
+        spotId,
         actorId,
         [parts[0], payload]
       );
