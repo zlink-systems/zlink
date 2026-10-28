@@ -25,9 +25,7 @@ class actor_serial_executor_t
     explicit actor_serial_executor_t (std::shared_ptr<offload_executor_t> worker_executor,
                                       queue_ptr_t queue = {},
                                       queue_ptr_t spot_gate = {}) :
-        _worker_executor (std::move (worker_executor)),
-        _state_lane (*_worker_executor),
-        _queue (std::move (queue))
+        _worker_executor (std::move (worker_executor)), _queue (std::move (queue))
     {
         if (!_queue) {
             _queue = std::make_shared<queue_t> (

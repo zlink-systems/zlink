@@ -17,6 +17,7 @@
 namespace zlink::framework::runtime::client_server
 {
 class raw_client_server_server_t;
+class raw_client_server_client_t;
 }
 
 namespace zlink::framework::runtime::mesh
@@ -42,10 +43,14 @@ class service_liveness_registry_t
 
     static constexpr std::chrono::milliseconds default_probe_interval{std::chrono::seconds (5)};
     static constexpr std::chrono::milliseconds default_peer_timeout{std::chrono::seconds (15)};
+    // The caller owns this lane and keeps it alive until the registry is destroyed.
     explicit service_liveness_registry_t (
+      runtime::state_lane_t &lane,
       std::chrono::milliseconds probe_interval = default_probe_interval,
-      std::chrono::milliseconds peer_timeout = default_peer_timeout,
-      runtime::offload_executor_t *infrastructure_executor = nullptr);
+      std::chrono::milliseconds peer_timeout = default_peer_timeout);
+
+    service_liveness_registry_t (const service_liveness_registry_t &) = delete;
+    service_liveness_registry_t &operator= (const service_liveness_registry_t &) = delete;
 
     struct peer_t
     {
@@ -105,10 +110,13 @@ class service_liveness_registry_t
     std::size_t size () const;
 
   private:
-    // The raw server already serializes these operations in its receive owner
-    // (manual) or raw state lane (automatic). Re-entering a registry lane would
-    // add a second owner for exactly the same private state.
+    // Raw mesh, ClientServer and topology already enter the borrowed owner.
+    // Their mutation bodies must not schedule a second turn on that owner.
     friend class client_server::raw_client_server_server_t;
+    friend class client_server::raw_client_server_client_t;
+    friend class raw_mesh_node_owner_t;
+    friend class service_topology_registry_t;
+    void set_admission_pending_owned (bool pending);
     connection_t admit_owned (std::vector<std::uint8_t> node_routing_id,
                               std::vector<std::uint8_t> connection_id,
                               clock_t::time_point now);
@@ -134,8 +142,8 @@ class service_liveness_registry_t
 
     const std::chrono::milliseconds _probe_interval;
     const std::chrono::milliseconds _peer_timeout;
-    std::unique_ptr<runtime::offload_executor_t> _lane_executor;
-    mutable runtime::state_lane_t _lane;
+
+    runtime::state_lane_t &_lane;
     std::map<std::vector<std::uint8_t>, connection_t, byte_vector_less_t> _peers;
     std::uint64_t _next_probe_id = 1;
     // Earliest instant a peer or admission retry can be due, written by its owner. A receive only

@@ -34,8 +34,8 @@ class serializer_registry_state_t
     std::map<std::string, std::set<std::type_index>> types_by_content_type;
     std::shared_ptr<const resolved_serializer_cache_t> resolved_serializers =
       std::make_shared<const resolved_serializer_cache_t> ();
-    runtime::offload_executor_t resolved_serializers_lane_executor;
-    runtime::state_lane_t resolved_serializers_lane{resolved_serializers_lane_executor};
+
+    runtime::state_lane_t resolved_serializers_lane;
     std::atomic_size_t resolved_serializer_cache_capacity{serializer_send_type_cache_capacity};
     std::atomic_bool frozen{false};
     std::size_t next_registration = 1;

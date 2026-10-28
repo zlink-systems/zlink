@@ -4249,8 +4249,8 @@ int relocation_barrier_fences_late_actor_fifo_admission (bool commit_before_post
     auto node = zlink::framework::test::runtime_failure_fixture<
       zlink::framework::detail::spot_node_builder_state_t> ("actor-a");
     auto scheduler = std::make_shared<zlink::framework::test::manual_internal_scheduler_t> ();
-    scheduler->publication_fence (
-      zlink::framework::test::state_lane_publication_fence (node->lane, node->lane_executor));
+    scheduler->publication_fence (zlink::framework::test::state_lane_publication_fence (
+      node->lane, *::zlink::framework::runtime::infrastructure_executor ()));
     node->worker_executor = scheduler;
     node->channel_runtime =
       zlink::framework::test::runtime_failure_fixture<channel_runtime_state_t> ();
@@ -4483,8 +4483,8 @@ int relocation_barrier_fences_late_actor_request_without_deadlock ()
     auto node = zlink::framework::test::runtime_failure_fixture<
       zlink::framework::detail::spot_node_builder_state_t> ("actor-a");
     auto scheduler = std::make_shared<zlink::framework::test::manual_internal_scheduler_t> ();
-    scheduler->publication_fence (
-      zlink::framework::test::state_lane_publication_fence (node->lane, node->lane_executor));
+    scheduler->publication_fence (zlink::framework::test::state_lane_publication_fence (
+      node->lane, *::zlink::framework::runtime::infrastructure_executor ()));
     node->worker_executor = scheduler;
     node->channel_runtime =
       zlink::framework::test::runtime_failure_fixture<channel_runtime_state_t> ();
