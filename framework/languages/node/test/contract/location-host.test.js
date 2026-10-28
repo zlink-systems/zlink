@@ -403,6 +403,7 @@ test('actor handoff source fence uses the Actor mesh node and rejects a cross-me
       ownerLeaseGeneration: 5n
     }]
   ]);
+  const handoff = host.createSpotManagerOptions().actorHandoffRuntime;
   host.locationOwner = {
     currentRuntime: {
       currentOwnerToken: { ownerId: 'owner-b', leaseGeneration: 5n }
@@ -416,8 +417,8 @@ test('actor handoff source fence uses the Actor mesh node and rejects a cross-me
   });
   host.setActorManager({ getState: actorId => states.get(actorId) });
 
-  host.actorHandoff.begin('actor-b', 7n);
-  assert.deepEqual(host.actorHandoff.activeSourceOwner('actor-b'), {
+  handoff.begin('actor-b', 7n);
+  assert.deepEqual(handoff.activeSourceOwner('actor-b'), {
     ownerId: 'owner-b',
     ownerLeaseGeneration: '5',
     nodeRid: 'mesh-b-node',
@@ -425,13 +426,13 @@ test('actor handoff source fence uses the Actor mesh node and rejects a cross-me
     nodeGeneration: '22',
     authorityOwnerGeneration: '13'
   });
-  host.actorHandoff.cancel('actor-b');
+  handoff.cancel('actor-b');
 
   assert.throws(
-    () => host.actorHandoff.begin('actor-mismatch', 8n),
+    () => handoff.begin('actor-mismatch', 8n),
     /committed source owner fence/u
   );
-  assert.equal(host.actorHandoff.isActive('actor-mismatch'), false);
+  assert.equal(handoff.isActive('actor-mismatch'), false);
 });
 
 test('framework host republishes the current lifecycle state after owner lease recovery', async () => {
@@ -719,7 +720,7 @@ for (const fault of ['error', 'noAnswer']) {
     });
 
     const locationStoreErrorOperations = [];
-    runtime.metrics.recordLocationStoreError = operation =>
+    runtime.createSpotManagerOptions().metrics.recordLocationStoreError = operation =>
       locationStoreErrorOperations.push(operation);
     const runtimeTaskFailures = [];
     let removeRuntimeTaskFailureHandler;
@@ -731,12 +732,11 @@ for (const fault of ['error', 'noAnswer']) {
         runtimeTaskFailures.push(taskName)
       );
       assert.ok(faultedWrites > 0);
-      const locationRuntime = runtime.locationOwner.currentRuntime;
-      assert.equal(locationRuntime.currentOwnerToken !== undefined, true);
+      assert.equal(runtime[inspectRuntime]().hasOwnerToken, true);
       assert.deepEqual(
         {
-          ownerLeaseUsable: locationRuntime.ownerLeaseUsable,
-          ownerAdmissionOpen: runtime.admission.ownerAdmissionOpen(),
+          ownerLeaseUsable: runtime[inspectRuntime]().ownerLeaseUsable,
+          ownerAdmissionOpen: runtime[inspectRuntime]().ownerAdmissionOpen,
           ownerLeaseRecoveryRecorded: locationStoreErrorOperations.includes(
             'owner_lease_recovery'
           )
@@ -755,8 +755,8 @@ for (const fault of ['error', 'noAnswer']) {
       assert.deepEqual(
         {
           retryFailureTask: runtimeTaskFailures.at(-1),
-          ownerLeaseUsable: locationRuntime.ownerLeaseUsable,
-          ownerAdmissionOpen: runtime.admission.ownerAdmissionOpen(),
+          ownerLeaseUsable: runtime[inspectRuntime]().ownerLeaseUsable,
+          ownerAdmissionOpen: runtime[inspectRuntime]().ownerAdmissionOpen,
           ownerLeaseRecoveryRecorded: locationStoreErrorOperations.includes(
             'owner_lease_recovery'
           ),
@@ -963,7 +963,7 @@ test('degraded host rejects object messages and timers until owner lease recover
   let registry;
   try {
     await scenario.runtime.start();
-    scenario.runtime.spotManager.dispatchMeshActor = (_origin, _mesh, _owner, _record, admit) =>
+    scenario.spotManager.dispatchMeshActor = (_origin, _mesh, _owner, _record, admit) =>
       admit(async () => { actorMessages += 1; });
     registry = new framework.ZLinkSpotTimerRegistry(
       undefined,
@@ -1016,20 +1016,21 @@ test('degraded host rejects factory and restore confirmation until owner lease r
     async onCreate() { return { accepted: true }; }
   }
   const scenario = recoverableHostScenario();
-  scenario.runtime.setSpotManager(new framework.DefaultZLinkSpotManager({
+  scenario.spotManager = new framework.DefaultZLinkSpotManager({
     detachedTaskRunner: detachedTaskRunner,
     ...scenario.runtime.createSpotManagerOptions(),
     spotFactories: [LeaseOwnedSpot]
-  }));
+  });
+  scenario.runtime.setSpotManager(scenario.spotManager);
   try {
     await scenario.runtime.start();
     installFakeNativeSpotFactory(scenario.runtime);
     await assert.rejects(
-      scenario.runtime.spotManager.create('play', LeaseOwnedSpot),
+      scenario.spotManager.create('play', LeaseOwnedSpot),
       /admission is closed/u
     );
     await assert.rejects(
-      scenario.runtime.spotManager.getOrCreateWithAuthority(
+      scenario.spotManager.getOrCreateWithAuthority(
         'play',
         LeaseOwnedSpot,
         rid('restore-before-lease'),
@@ -1046,8 +1047,8 @@ test('degraded host rejects factory and restore confirmation until owner lease r
 
     scenario.recover();
     await waitForCondition(() => scenario.runtime[inspectRuntime]().ownerLeaseUsable);
-    const created = await scenario.runtime.spotManager.create('play', LeaseOwnedSpot);
-    const restored = await scenario.runtime.spotManager.getOrCreateWithAuthority(
+    const created = await scenario.spotManager.create('play', LeaseOwnedSpot);
+    const restored = await scenario.spotManager.getOrCreateWithAuthority(
       'play',
       LeaseOwnedSpot,
       rid('restore-after-lease'),
@@ -1072,7 +1073,7 @@ test('degraded host rejects stateful target, relocation and peer capacity admiss
   let targetCallbacks = 0;
   try {
     await scenario.runtime.start();
-    scenario.runtime.spotManager.dispatchMeshInstance = (_mesh, _owner, _record, admit) =>
+    scenario.spotManager.dispatchMeshInstance = (_mesh, _owner, _record, admit) =>
       admit(async () => {
         targetCallbacks += 1;
         return true;
@@ -1410,11 +1411,11 @@ function recoverableHostScenario(ownerLeaseRenewIntervalMs = 20) {
   }, {
     backendAdapterFactory: fakeBackendAdapterFactory(calls, rid('play-node'))
   });
-  runtime.setSpotManager(new framework.DefaultZLinkSpotManager(
-    runtime.createSpotManagerOptions()
-  ));
+  const spotManager = new framework.DefaultZLinkSpotManager(runtime.createSpotManagerOptions());
+  runtime.setSpotManager(spotManager);
   return {
     runtime,
+    spotManager,
     store: new framework.ZLinkLocationStoreRepository(inner, now),
     recover() { unavailable = false; }
   };
