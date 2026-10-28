@@ -35,6 +35,7 @@ function descriptor(nodeRoutingId) {
 
 function fixture(deferred, options = {}) {
   const sent = [];
+  const received = [];
   let complete;
   const runtime = new RawServiceMeshRuntime({
     descriptor: descriptor('local'),
@@ -44,6 +45,7 @@ function fixture(deferred, options = {}) {
     bindingPort: {
       createHost: () => ({
         createRouter: () => ({
+          receive: () => received.shift(),
           setRoutingId() {},
           setReceiveFlowState() {},
           setReadableHandler() {},
@@ -75,23 +77,19 @@ function fixture(deferred, options = {}) {
     runtime,
     hellos: () => sent.filter((command) => command === wire.M6aServiceWireCommand.hello).length,
     async completeHello() {
-      const pending = [...runtime.controlSends.values()].find(
-        (exchange) => exchange.hello !== undefined
-      )?.task;
       complete?.();
-      await pending;
+      await new Promise(setImmediate);
     },
     receive(command) {
-      return runtime.processReceived(
-        {
-          sourceRid: 'peer',
-          sourceRoute: Buffer.from('peer'),
-          routeGeneration: 11n,
-          parts: [wire.encodeRouteMeshAdmission(command, descriptor('peer'))],
-          close() {}
-        },
-        performance.now()
-      );
+      received.push({
+        sourceRid: 'peer', sourceRoute: Buffer.from('peer'), routeGeneration: 11n,
+        parts: [wire.encodeRouteMeshAdmission(command, descriptor('peer'))], close() {}
+      });
+      return runtime.pumpOne();
+    },
+    receiveRecord(record) {
+      received.push(record);
+      return runtime.pumpOne();
     }
   };
 }

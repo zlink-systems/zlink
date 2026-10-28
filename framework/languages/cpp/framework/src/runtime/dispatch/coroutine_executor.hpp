@@ -73,6 +73,7 @@ class coroutine_executor_t
                   result = result_t<TResult>::failure (framework_error_kind_t::internal_failure,
                                                        "coroutine handler threw an exception");
               }
+              work = nullptr;
               completion.complete (std::move (result));
           },
           boost::asio::detached);

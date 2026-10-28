@@ -52,8 +52,7 @@ zlink::xsub_t::xsub_t (class ctx_t *parent_, uint32_t tid_, int sid_) :
     _recv_part_index (0),
     _recv_protocol_error_pending (false),
     _process_subscribe (false),
-    _has_empty_subscription (false),
-    _delivery_ready_count (0)
+    _has_empty_subscription (false)
 {
     options.type = ZLINK_CORE_SOCKET_XSUB;
     options.in_batch_size = xsub_transport_read_batch_size;
@@ -64,26 +63,6 @@ zlink::xsub_t::xsub_t (class ctx_t *parent_, uint32_t tid_, int sid_) :
 
     const int rc = _message.init ();
     errno_assert (rc == 0);
-}
-
-uint32_t zlink::xsub_t::compute_delivery_ready_count () const
-{
-    const bool has_filters = _subscriptions.num_prefixes () > 0;
-    if (!has_filters)
-        return 0;
-    return has_attached_pipes () ? 1u : 0u;
-}
-
-void zlink::xsub_t::refresh_delivery_ready_state (const endpoint_uri_pair_t &endpoint_uri_pair_)
-{
-    LIBZLINK_UNUSED (endpoint_uri_pair_);
-    const uint32_t ready_count = compute_delivery_ready_count ();
-    _delivery_ready_count.store (ready_count, std::memory_order_release);
-}
-
-uint32_t zlink::xsub_t::monitor_ready_count () const
-{
-    return _delivery_ready_count.load (std::memory_order_acquire);
 }
 
 zlink::xsub_t::~xsub_t ()
@@ -138,7 +117,6 @@ void zlink::xsub_t::xattach_pipe (pipe_t *pipe_, bool subscribe_to_all_, bool lo
         send_subscription (data, subscriptions[i].filter.size (), pipe_);
     }
     pipe_->flush ();
-    refresh_delivery_ready_state (pipe_->get_endpoint_pair ());
 }
 
 void zlink::xsub_t::xread_activated (pipe_t *pipe_)
@@ -149,17 +127,12 @@ void zlink::xsub_t::xread_activated (pipe_t *pipe_)
 void zlink::xsub_t::xwrite_activated (pipe_t *pipe_)
 {
     _dist.activated (pipe_);
-    if (pipe_)
-        refresh_delivery_ready_state (pipe_->get_endpoint_pair ());
 }
 
 void zlink::xsub_t::xpipe_terminated (pipe_t *pipe_)
 {
-    const endpoint_uri_pair_t endpoint_pair =
-      pipe_ ? pipe_->get_endpoint_pair () : endpoint_uri_pair_t ();
     _fq.pipe_terminated (pipe_);
     _dist.pipe_terminated (pipe_);
-    refresh_delivery_ready_state (endpoint_pair);
 }
 
 void zlink::xsub_t::xhiccuped (pipe_t *pipe_)
@@ -227,9 +200,7 @@ int zlink::xsub_t::xsend (msg_t *msg_, pipe_message_admission_t *admission_out_)
         if (size == 0)
             _has_empty_subscription = true;
         _process_subscribe = true;
-        const int rc = _dist.send_to_all (msg_);
-        refresh_delivery_ready_state (endpoint_uri_pair_t ());
-        return rc;
+        return _dist.send_to_all (msg_);
     }
     if (msg_->is_cancel () || (size > 0 && *data == 0)) {
         //  Process unsubscribe message
@@ -241,11 +212,8 @@ int zlink::xsub_t::xsend (msg_t *msg_, pipe_message_admission_t *admission_out_)
         const bool rm_result = _subscriptions.rm (data, size);
         if (size == 0 && rm_result)
             _has_empty_subscription = false;
-        if (rm_result || _verbose_unsubs) {
-            const int rc = _dist.send_to_all (msg_);
-            refresh_delivery_ready_state (endpoint_uri_pair_t ());
-            return rc;
-        }
+        if (rm_result || _verbose_unsubs)
+            return _dist.send_to_all (msg_);
     } else
         //  User message sent upstream to XPUB socket
         return _dist.send_to_all (msg_);
@@ -254,7 +222,6 @@ int zlink::xsub_t::xsend (msg_t *msg_, pipe_message_admission_t *admission_out_)
     errno_assert (rc == 0);
     rc = msg_->init ();
     errno_assert (rc == 0);
-    refresh_delivery_ready_state (endpoint_uri_pair_t ());
 
     return 0;
 }
