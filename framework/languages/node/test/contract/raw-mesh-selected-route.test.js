@@ -1,3 +1,4 @@
+const { inspectRuntime } = require('../../packages/framework/dist/runtime/internal-observation');
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const {
@@ -53,6 +54,7 @@ function descriptor(nodeRoutingId) {
 
 function selectedRouteRuntime(routes, submit, options = {}) {
   const sent = [];
+  const records = [];
   const requested = [];
   const disconnected = [];
   const admissionsEnded = [];
@@ -89,7 +91,7 @@ function selectedRouteRuntime(routes, submit, options = {}) {
       requested.push(target);
       throw new ZLinkBackendResultError('request', RequestResult.Busy);
     },
-    receive: () => undefined,
+    receive: () => records.shift(),
     close() {}
   };
   const runtime = new RawServiceMeshRuntime({
@@ -108,12 +110,10 @@ function selectedRouteRuntime(routes, submit, options = {}) {
     disconnected,
     admissionsEnded,
     monitorOpened: () => monitorOpened,
-    processReceived: (record) =>
-      runtime.processReceived(
-        { ...record, sourceRoute: Buffer.from(record.sourceRid), close() {} },
-        performance.now(),
-        undefined
-      )
+    processReceived(record) {
+      records.push({ ...record, sourceRoute: Buffer.from(record.sourceRid), close() {} });
+      return runtime.pumpOne(performance.now());
+    }
   };
 }
 
@@ -258,12 +258,12 @@ test('route replacement retires a pending HELLO snapshot before its send complet
     );
     routes.clear();
     await h.runtime.observeSelectedRoutes();
-    assert.equal(h.runtime.controlSends.size, 0);
+    assert.equal(h.runtime[inspectRuntime]().pendingControlSends, 0);
   } finally {
     complete?.();
     h.runtime.close();
   }
-  assert.equal(h.runtime.controlSends.size, 0);
+  assert.equal(h.runtime[inspectRuntime]().pendingControlSends, 0);
 });
 
 test('RouteMesh admission follows the observed Core selected route (FW01)', async () => {
@@ -517,10 +517,10 @@ for (const admittedGeneration of [undefined, 11n]) {
     const h = selectedRouteRuntime(new Map([['peer', 12n]]));
     let dispatches = 0;
     let replies = 0;
-    h.runtime.serviceIngress = () => {
+    h.runtime.setServiceIngress(() => {
       dispatches++;
       return 'infrastructure';
-    };
+    });
     try {
       if (admittedGeneration !== undefined)
         h.runtime.admitPeer(descriptor('peer'), admittedGeneration, 0);
@@ -660,14 +660,14 @@ test('peer route readiness wait uses existing admission notifications and remove
       parts: [Buffer.from(wire.encodeRouteMeshAdmission(wire.M6aServiceWireCommand.admit, peer))] });
     await ready;
     assert.equal(h.runtime.pendingOperationCount, 0);
-    assert.equal(h.runtime.peerRouteChanged.size, 0);
+    assert.equal(h.runtime[inspectRuntime]().peerRouteObservers, 0);
     // A different lifecycle must wait even when the RID has a ready route.
     const stale = h.runtime.waitForPeerRoute('peer', 2n, BigInt(Date.now() + 10000));
     const rejected = assert.rejects(stale, { name: 'OperationTimeoutError' });
     h.runtime.expireOperations(performance.now() + 20000, performance.now() + 1000);
     await rejected;
     assert.equal(h.runtime.pendingOperationCount, 0);
-    assert.equal(h.runtime.peerRouteChanged.size, 0);
+    assert.equal(h.runtime[inspectRuntime]().peerRouteObservers, 0);
   } finally { h.runtime.close(); }
 });
 
@@ -683,7 +683,7 @@ for (const terminal of ['deadline', 'cancel', 'close']) {
       if (terminal === 'close') h.runtime.close();
       await rejected;
       assert.equal(h.runtime.pendingOperationCount, 0);
-      assert.equal(h.runtime.peerRouteChanged.size, 0);
+      assert.equal(h.runtime[inspectRuntime]().peerRouteObservers, 0);
     } finally { h.runtime.close(); }
   });
 }
@@ -702,7 +702,7 @@ test('idle liveness maintenance does not enumerate routes or control sends', asy
     });
     assert.equal(h.runtime.tickLiveness(0).probes.length, 1);
     assert.equal(h.runtime.liveness.nextDeadlineMs(), 5000);
-    assert.equal(h.runtime.controlSends.size, 0);
+    assert.equal(h.runtime[inspectRuntime]().pendingControlSends, 0);
     const routes = t.mock.method(h.runtime.selectedRoutes, 'keys');
     const controls = t.mock.method(h.runtime.controlSends, 'values');
     const peers = t.mock.method(h.runtime.liveness.peers, Symbol.iterator);
@@ -733,10 +733,10 @@ for (const requestCount of [1, 64]) {
       });
       h.runtime.tickLiveness(0);
       t.mock.method(performance, 'now', () => 1000);
-      h.runtime.serviceIngress = () => {
+      h.runtime.setServiceIngress(() => {
         received++;
         return 'infrastructure';
-      };
+      });
       t.mock.method(h.router, 'receive', () =>
         received < requestCount
           ? {
@@ -914,7 +914,7 @@ test('a pending non-HELLO control with a current route waits for completion read
     assert.equal(attempts, 1);
     complete(true);
     await pending;
-    assert.equal(h.runtime.controlSends.size, 0);
+    assert.equal(h.runtime[inspectRuntime]().pendingControlSends, 0);
     assert.equal(h.runtime.nextMaintenanceDeadlineMs(now), Infinity);
   } finally {
     complete?.(true);
